@@ -14,7 +14,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
-	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || !resolved.Spot || resolved.MarketType != "spot" || resolved.SourceDatasetID != "ds_kline" || resolved.RetentionBars != 720 {
+	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || !resolved.Spot || resolved.MarketType != "spot" || resolved.SourceDatasetID != "ds_kline" {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
 	if resolved.Factors["ma"] != "sha256:ma" || resolved.Factors["bias"] != "sha256:bias" || resolved.Factors["qv"] != "sha256:qv" || len(resolved.Factors) != 3 {
@@ -211,5 +211,21 @@ rules:
 `)
 	if _, _, err := Resolve(context.Background(), noClose, "space", "view_factor_1h", plain); err == nil || !strings.Contains(err.Error(), "close") {
 		t.Fatalf("没有 close 列时不能使用 min_age_bars：%v", err)
+	}
+}
+
+// 启用时校验 DSL 引用的标签存在、固定写出的标的在数据集中（区分大小写），避免池悄悄变空或排除失效。
+func TestResolveChecksTagsAndInstruments(t *testing.T) {
+	client := newFakeClient("spot")
+	typoTag := parseStrategy(t, strings.Replace(exampleDSL, "exclude_tags: [stablecoins]", "exclude_tags: [stablecoin]", 1))
+	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", typoTag); err == nil || !strings.Contains(err.Error(), "stablecoin") {
+		t.Fatalf("不存在的标签应拒绝：%v", err)
+	}
+	lowercase := parseStrategy(t, strings.Replace(exampleDSL, "pool: [BTC-USDT]", "pool: [btc-usdt]", 1))
+	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", lowercase); err == nil || !strings.Contains(err.Error(), "btc-usdt") {
+		t.Fatalf("大小写不符的标的应拒绝：%v", err)
+	}
+	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err != nil {
+		t.Fatalf("正确的引用应通过：%v", err)
 	}
 }

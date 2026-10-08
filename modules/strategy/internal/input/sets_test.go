@@ -183,3 +183,36 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 		t.Fatalf("A 股探针窗口不符：%s ~ %s", from.In(shanghai(t)), to.In(shanghai(t)))
 	}
 }
+
+// 探针窗口内候选全部没有行时，先确认整个数据集在窗口内是否有数据：有数据说明候选确实是新上市，照常剔除；
+// 一行都没有说明是历史缺口，整期 history_insufficient，不能把全部标的当作新上市。
+func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
+	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
+	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "NEW-USDT": subject("NEW-USDT", true)}
+	client := newFakeClient("spot")
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		for _, selected := range query.Subjects {
+			if selected.SubjectID == "BTC-USDT" {
+				return []Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
+			}
+		}
+		return nil, 7, nil
+	}
+	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], subjects, barStart, 7)
+	satisfied, err := probe(context.Background(), []string{"NEW-USDT"})
+	if err != nil || len(satisfied) != 0 {
+		t.Fatalf("数据集有数据时新标的应正常剔除：%v err=%v", satisfied, err)
+	}
+	if last := client.queries[len(client.queries)-1]; last.Limit != 1 || len(last.Subjects) != 2 || last.ExpectedRevision != 7 {
+		t.Fatalf("确认查询应覆盖全部活跃标的、只读一行并固定修订号：%+v", last)
+	}
+
+	gap := newFakeClient("spot")
+	gap.rows = func(Query) ([]Row, uint64, error) { return nil, 7, nil }
+	probe = NewAgeProbe(gap, "space", resolved, gap.views["view_factor_1h"], subjects, barStart, 7)
+	_, err = probe(context.Background(), []string{"BTC-USDT", "NEW-USDT"})
+	var skip *SkipError
+	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "历史缺口") {
+		t.Fatalf("窗口内整个数据集都没有数据应记 history_insufficient：%v", err)
+	}
+}

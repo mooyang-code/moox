@@ -61,11 +61,13 @@ func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]strin
 }
 
 func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (TagInfo, error) {
-	marketType, ok := f.tagMarkets[tagID]
-	if !ok {
-		return TagInfo{}, fmt.Errorf("标签 %s 不存在", tagID)
+	if marketType, ok := f.tagMarkets[tagID]; ok {
+		return TagInfo{TagID: tagID, MarketType: marketType}, nil
 	}
-	return TagInfo{TagID: tagID, MarketType: marketType}, nil
+	if _, ok := f.tags[tagID]; ok {
+		return TagInfo{TagID: tagID}, nil
+	}
+	return TagInfo{}, fmt.Errorf("标签 %s 不存在", tagID)
 }
 
 func (f *fakeClient) QueryRows(_ context.Context, _ string, query Query) ([]Row, uint64, error) {

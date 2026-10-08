@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/conf"
 	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
 )
@@ -101,11 +103,17 @@ func (e *Expression) Run(env map[string]any) (any, error) {
 
 // Analyze 解析并校验一条表达式，不编译。用于保存 DSL 时的语法检查。
 func Analyze(source string, stage Stage) (*Expression, error) {
+	if err := checkSourceLength(source); err != nil {
+		return nil, err
+	}
 	return analyze(source, stage)
 }
 
 // CompileExpression 分析并编译一条表达式。columns 是绑定 View 的全部列，引用不存在的列会报错。
 func CompileExpression(source string, stage Stage, columns map[string]struct{}) (*Expression, error) {
+	if err := checkSourceLength(source); err != nil {
+		return nil, err
+	}
 	expression, err := analyze(source, stage)
 	if err != nil {
 		return nil, err
@@ -116,16 +124,26 @@ func CompileExpression(source string, stage Stage, columns map[string]struct{}) 
 	return expression, nil
 }
 
+// checkSourceLength 按字符数检查用户写下的表达式原文；截面函数参数是程序重新序列化的子串，不再单独限制长度。
+func checkSourceLength(source string) error {
+	if utf8.RuneCountInString(strings.TrimSpace(source)) > maxExpressionLength {
+		return fmt.Errorf("表达式超过 %d 个字符", maxExpressionLength)
+	}
+	return nil
+}
+
 func analyze(source string, stage Stage) (*Expression, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return nil, errors.New("表达式为空")
 	}
-	if len(source) > maxExpressionLength {
-		return nil, fmt.Errorf("表达式超过 %d 个字符", maxExpressionLength)
-	}
-	tree, err := parser.Parse(source)
+	config := conf.CreateNew()
+	config.MaxNodes = maxExpressionNodes
+	tree, err := parser.ParseWithConfig(source, config)
 	if err != nil {
+		if strings.Contains(err.Error(), "exceeds maximum allowed nodes") {
+			return nil, fmt.Errorf("表达式过于复杂：超过 %d 个语法节点", maxExpressionNodes)
+		}
 		return nil, fmt.Errorf("语法错误：%w", err)
 	}
 	expression := &Expression{Source: source, Stage: stage, Numeric: stage == StageScore || stage == stageInner}
@@ -291,7 +309,7 @@ func (w *walker) member(n *ast.MemberNode) error {
 	}
 	field, ok := memberName(n.Property)
 	if !ok {
-		return errors.New("bars[...] 之后必须跟列名")
+		return errors.New("bars[...] 之后必须用 .列名 引用列，例如 bars[-1].close")
 	}
 	if field == identifierScore || field == identifierInstrument || strings.HasPrefix(field, "__") {
 		return fmt.Errorf("bars 不能访问 %q", field)
@@ -352,15 +370,13 @@ func barOffset(node ast.Node) (int, error) {
 	return 0, errors.New("bars 的下标只能是常量 0 或 -1")
 }
 
+// memberName 只接受 .列名（或等价的 ["列名"]）形式的属性；bars[0][close] 里的 close 是变量引用，拒绝。
 func memberName(node ast.Node) (string, bool) {
-	switch property := node.(type) {
-	case *ast.IdentifierNode:
-		return property.Value, property.Value != ""
-	case *ast.StringNode:
-		return property.Value, property.Value != ""
-	default:
+	property, ok := node.(*ast.StringNode)
+	if !ok {
 		return "", false
 	}
+	return property.Value, property.Value != ""
 }
 
 func sortedKeys(set map[string]struct{}) []string {

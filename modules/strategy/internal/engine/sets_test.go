@@ -164,7 +164,14 @@ rules:
 
 	allAged := frameOf(program, map[string]Row{"A": values("m", 1), "B": values("m", 2)})
 	allAged.AgedOut = map[string][]string{"r": {"A", "B"}}
-	assertSkipped(t, evaluate(t, program, allAged, previous), SkipUniverseTooSmall)
+	assertSkipped(t, evaluate(t, program, allAged, State{}), SkipUniverseTooSmall)
+	// 上期持有的 A 在建仓时已满足年龄要求，探针窗口内的数据缺口不能把它当作新上市剔除。
+	kept := evaluate(t, program, allAged, previous)
+	assertOK(t, kept)
+	assertWeights(t, kept, map[string]string{"A": "1"})
+	if item := findItem(t, kept, "r", "B"); item.Stage != StageAgedOut {
+		t.Fatalf("未持有的 B 仍按年龄剔除：%+v", item)
+	}
 
 	noData := frameOf(program, map[string]Row{})
 	decision = evaluate(t, program, noData, previous)

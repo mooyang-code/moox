@@ -15,9 +15,18 @@ type ruleSets struct {
 }
 
 // partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列所属因子对该标的失败，都算缺数。
-func partitionRule(rule *dsl.CompiledRule, frame Frame) ruleSets {
+// 年龄剔除只拦住新进入的标的：规则上期已持有的标的在建仓时已经满足 min_age_bars，不会因为探针窗口内恰好
+// 缺数（历史数据缺口）被当作新上市剔除。
+func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string)}
+	heldSet := make(map[string]struct{}, len(held))
+	for _, id := range held {
+		heldSet[id] = struct{}{}
+	}
 	for _, id := range frame.AgedOut[rule.Rule.ID] {
+		if _, isHeld := heldSet[id]; isHeld {
+			continue
+		}
 		sets.agedOut[id] = struct{}{}
 	}
 	expected := append([]string(nil), frame.Expected[rule.Rule.ID]...)

@@ -107,7 +107,7 @@ func scalarDecimal(node *yaml.Node, path string) (quant.Decimal, error) {
 	if node == nil || node.Kind != yaml.ScalarNode || (node.Tag != "!!int" && node.Tag != "!!float" && node.Tag != "!!str") {
 		return quant.Decimal{}, fmt.Errorf("%s 必须是数字", path)
 	}
-	value, err := quant.Parse(strings.TrimSpace(node.Value))
+	value, err := quant.ParseLiteral(node.Value)
 	if err != nil {
 		return quant.Decimal{}, fmt.Errorf("%s 必须是数字：%w", path, err)
 	}
@@ -118,6 +118,7 @@ func stringList(node *yaml.Node, path string) ([]string, error) {
 	if node == nil || node.Kind != yaml.SequenceNode {
 		return nil, fmt.Errorf("%s 必须是字符串列表", path)
 	}
+	// 标的与标签 ID 区分大小写：去重与匹配使用同一规则，拼写不存在的 ID 在启用时报错。
 	values := make([]string, 0, len(node.Content))
 	seen := make(map[string]struct{}, len(node.Content))
 	for i, item := range node.Content {
@@ -125,11 +126,10 @@ func stringList(node *yaml.Node, path string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		key := strings.ToUpper(value)
-		if _, exists := seen[key]; exists {
+		if _, exists := seen[value]; exists {
 			return nil, fmt.Errorf("%s 包含重复项 %q", path, value)
 		}
-		seen[key] = struct{}{}
+		seen[value] = struct{}{}
 		values = append(values, value)
 	}
 	return values, nil

@@ -4,12 +4,24 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 )
+
+// rowIDs 返回帧中有行的标的（排序）。
+func rowIDs(frame engine.Frame) []string {
+	ids := make([]string, 0, len(frame.Rows))
+	for id := range frame.Rows {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
 
 func rowsAt(at time.Time, values map[string]map[string]float64) []Row {
 	rows := make([]Row, 0, len(values))
@@ -43,8 +55,8 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 	if !frame.BarEnd.Equal(barStart.Add(time.Hour)) || !frame.Spot || loaded.IndexID != "idx_a" || loaded.Revision != 9 {
 		t.Fatalf("帧元数据不符：%+v loaded=%+v", frame, loaded)
 	}
-	if !reflect.DeepEqual(SortedInstruments(frame), []string{"BTC-USDT", "ETH-USDT"}) {
-		t.Fatalf("帧中的标的不符：%v", SortedInstruments(frame))
+	if !reflect.DeepEqual(rowIDs(frame), []string{"BTC-USDT", "ETH-USDT"}) {
+		t.Fatalf("帧中的标的不符：%v", rowIDs(frame))
 	}
 	btc := frame.Rows["BTC-USDT"]
 	if btc.Values["close"] != 101 || btc.Previous["close"] != 99 {
@@ -142,17 +154,6 @@ func TestLoadBarDetectsConfigDrift(t *testing.T) {
 	}
 }
 
-func TestInstrumentFailuresMapsSubjectIDs(t *testing.T) {
-	subjects := map[string]Subject{"BTCUSDT": {SubjectID: "btc", InstrumentID: "BTCUSDT"}}
-	mapped := InstrumentFailures(map[string]map[string]struct{}{"close": {"btc": {}, "unknown": {}}}, subjects)
-	if _, ok := mapped["close"]["BTCUSDT"]; !ok {
-		t.Fatalf("subject_id 应映射为 instrument_id：%v", mapped)
-	}
-	if _, ok := mapped["close"]["unknown"]; !ok {
-		t.Fatalf("未知标的应原样保留：%v", mapped)
-	}
-}
-
 // 只在 bars[-1] 中引用的列、min_age_bars 探针读取的 close 被删除，都是确定性的 config_error，不能当基础设施错误重试。
 func TestLoadBarChecksPreviousAndProbeColumns(t *testing.T) {
 	client := newFakeClient("spot")
@@ -227,5 +228,22 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "min_age_bars=24") {
 		t.Fatalf("View 覆盖不足应记为 history_insufficient：%v", err)
+	}
+}
+
+// View 被停用或删除是确定性的配置问题，记 config_error，不按基础设施错误重试。
+func TestLoadBarRejectsInactiveView(t *testing.T) {
+	client := newFakeClient("spot")
+	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := client.views["view_factor_1h"]
+	view.Status = "disabled"
+	client.views["view_factor_1h"] = view
+	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
+	var skip *SkipError
+	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "disabled") {
+		t.Fatalf("非 active 的 View 应记 config_error：%v", err)
 	}
 }

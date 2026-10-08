@@ -469,3 +469,74 @@ portfolio:
 		t.Fatalf("B 应由延续批次持有：%+v", item)
 	}
 }
+
+// 外层结果无效（除以名次 0）只淘汰该标的本身，不触发截面函数重算，不会一轮淘汰一个直到只剩一个。
+func TestOuterInvalidScoreDoesNotCascade(t *testing.T) {
+	program := compile(t, `name: ratio
+rules:
+  - id: r
+    type: rank
+    score: "rank(a) / rank(b)"
+    select: {top: 5}
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`, "a", "b")
+	rows := map[string]Row{}
+	for i, id := range numberedIDs("X", 20) {
+		rows[id] = values("a", i, "b", 20-i)
+	}
+	decision := evaluate(t, program, frameOf(program, rows), State{})
+	assertOK(t, decision)
+	if summary := decision.Summary.Rules["r"]; summary.Scored != 19 || summary.Selected != 5 {
+		t.Fatalf("只有 rank(b)=0 的一个标的无效：%+v", summary)
+	}
+	invalid := 0
+	for _, item := range decision.Items {
+		if item.Reason == "score_invalid" {
+			invalid++
+		}
+	}
+	if invalid != 1 {
+		t.Fatalf("应只有 1 条 score_invalid，实际 %d", invalid)
+	}
+}
+
+// 通过 filter 的候选全部分数无效时整期 config_error，不能当作"选不出标的"清仓。
+func TestAllScoresInvalidSkips(t *testing.T) {
+	program := compile(t, `name: broken
+rules:
+  - id: r
+    type: rank
+    score: "x / y"
+    select: {top: 1}
+    weight: {total: 1}
+`, "x", "y")
+	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A": "1"}}
+	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("x", 1, "y", 0), "B": values("x", 2, "y", 0)}), previous)
+	assertSkipped(t, decision, SkipConfigError)
+	if decision.State.Targets["A"] != "1" {
+		t.Fatalf("跳过时应沿用前序：%+v", decision.State)
+	}
+}
+
+// buffer 按全样本名次（与解释明细一致）判断"前 N+B 名"：select.where 剔除第 1 名后，名次 3 的上期持仓不在前 2 名。
+func TestBufferUsesFullSampleRanks(t *testing.T) {
+	program := compile(t, `name: buffered
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1, buffer: 1, where: "score < 3"}
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`, "m")
+	frame := frameOf(program, map[string]Row{"A": values("m", 3), "B": values("m", 2), "C": values("m", 1)})
+	decision := evaluate(t, program, frame, State{Rules: map[string]RuleState{"r": {Held: []string{"C"}}}})
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"B": "1"})
+	if item := findItem(t, decision, "r", "C"); item.Rank != 3 || item.Reason != "not_selected" {
+		t.Fatalf("C 的全样本名次为 3，超出 buffer：%+v", item)
+	}
+}

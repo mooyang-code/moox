@@ -33,7 +33,7 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 	}
 	for i := range program.Rules {
 		rule := &program.Rules[i]
-		sets := partitionRule(rule, frame)
+		sets := partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held)
 		partitions[i] = sets
 		decision.Summary.Rules[rule.Rule.ID] = RuleSummary{
 			Expected:  len(sets.expected),
@@ -43,10 +43,10 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 			Budget:    rule.Rule.Weight.Total.String(),
 		}
 		decision.Items = append(decision.Items, sets.items(rule.Rule.ID)...)
-		if skipReason != "" || rule.Rule.Type != dsl.RuleTypeRank {
+		if skipReason != "" {
 			continue
 		}
-		if reason := guard(program.Strategy.Portfolio, sets); reason != "" {
+		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets); reason != "" {
 			skipReason = reason
 			skipNote = fmt.Sprintf("规则 %s：预期 %d、年龄剔除 %d、可用 %d、缺数 %d", rule.Rule.ID, len(sets.expected), len(sets.agedOut), len(sets.available), len(sets.missing))
 		}
@@ -102,14 +102,16 @@ func skipped(decision Decision, previous State, reason, note string) Decision {
 	return decision
 }
 
-// guard 是 rank 规则的守门：没有可评估的候选（预期集合为空或全部年龄剔除）、进入 filter 的可用标的太少，
-// 或缺数占（预期 − 年龄剔除）的比例过高，都整期跳过。空候选不能当作"选不出标的"去清仓。
-func guard(portfolio dsl.Portfolio, sets ruleSets) string {
+// guard 是规则的守门，任一规则不通过都整期跳过，空候选与大面积缺数不能当作"选不出标的"或"退出"去清仓：
+// rank 规则没有可评估的候选（预期集合为空或全部年龄剔除）、进入 filter 的可用标的少于 min_universe 时
+// 记 universe_too_small；rank 与 signal 规则的缺数占（预期 − 年龄剔除）的比例超过 max_missing 时记
+// too_many_missing。signal 规则的池是显式的，不受 min_universe 约束，池为空时不守门。
+func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets) string {
 	denominator := len(sets.expected) - len(sets.agedOut)
-	if denominator <= 0 || len(sets.available) < portfolio.MinUniverse {
+	if ruleType == dsl.RuleTypeRank && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
 		return SkipUniverseTooSmall
 	}
-	if len(sets.missing) > 0 {
+	if denominator > 0 && len(sets.missing) > 0 {
 		ratio := quant.Must(fmt.Sprint(len(sets.missing))).Div(quant.Must(fmt.Sprint(denominator)))
 		if ratio.Cmp(portfolio.MaxMissing) > 0 {
 			return SkipTooManyMissing

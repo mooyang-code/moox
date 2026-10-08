@@ -10,61 +10,11 @@ import (
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
+// ErrUnsupportedCalendar 表示策略日历与频率的组合不受支持。
 var ErrUnsupportedCalendar = errors.New("不支持的策略日历")
 
-// ClosedBar maps a trigger timestamp to the most recent closed bar end. It
-// supports the two calendars used by the personal system without pretending
-// stock intraday sessions are continuous.
-func ClosedBar(calendar, bar string, trigger time.Time, tradingDays []time.Time) (time.Time, error) {
-	if trigger.IsZero() {
-		return time.Time{}, errors.New("缺少触发时间")
-	}
-	bar = strings.ToLower(strings.TrimSpace(bar))
-	if len(bar) < 2 {
-		return time.Time{}, fmt.Errorf("bar %q 无效", bar)
-	}
-	n, err := strconv.Atoi(bar[:len(bar)-1])
-	if err != nil || n <= 0 {
-		return time.Time{}, fmt.Errorf("bar %q 无效", bar)
-	}
-	suffix := bar[len(bar)-1]
-	duration := time.Duration(n) * time.Minute
-	if suffix == 'h' {
-		duration = time.Duration(n) * time.Hour
-	}
-	if suffix == 'd' {
-		duration = time.Duration(n) * 24 * time.Hour
-	}
-	if suffix != 'm' && suffix != 'h' && suffix != 'd' {
-		return time.Time{}, fmt.Errorf("bar %q 无效", bar)
-	}
-	calendar = normalizeCalendar(calendar)
-	trigger = trigger.UTC()
-	switch calendar {
-	case "crypto_24x7":
-		unix := trigger.UnixNano()
-		end := (unix / duration.Nanoseconds()) * duration.Nanoseconds()
-		return time.Unix(0, end).UTC(), nil
-	case "cn_stock":
-		if len(tradingDays) == 0 {
-			return time.Time{}, errors.New("cn_stock 日历缺少交易日数据")
-		}
-		for i := len(tradingDays) - 1; i >= 0; i-- {
-			day := tradingDays[i].UTC()
-			end := time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, time.UTC)
-			if !trigger.Before(end) {
-				return end, nil
-			}
-		}
-		return time.Time{}, errors.New("触发时间早于日历覆盖范围")
-	default:
-		return time.Time{}, fmt.Errorf("%w：%s", ErrUnsupportedCalendar, calendar)
-	}
-}
-
-// PeriodBoundaries is the calendar-normalized identity of one completed bar.
-// Storage uses StorageStart, while Strategy/Trade use BarEnd. PreviousStart
-// and NextEnd advance by valid bars rather than by wall-clock duration.
+// PeriodBoundaries 是一根已闭合 bar 在日历上的标识：Storage 用 StorageStart（bar_start）作行键，
+// Strategy 与 Trade 用 BarEnd。PreviousStart 与 NextEnd 按有效 bar 推进，而不是按墙钟时长。
 type PeriodBoundaries struct {
 	StorageStart  time.Time
 	PreviousStart time.Time
@@ -73,10 +23,8 @@ type PeriodBoundaries struct {
 	BarIndex      int64
 }
 
-// ClosedPeriod returns the most recent completed bar at trigger. For the
-// stock daily feed the persisted BarStart is local midnight, while the
-// strategy boundary is the exchange close; the calendar bridges those two
-// conventions and skips weekends/holidays.
+// ClosedPeriod 返回 trigger 时刻最近一根已闭合的 bar。A 股日线的 bar_start 是上海时间零点，
+// 策略边界是 15:00 收盘，日历负责在两者之间换算并跳过周末与节假日。
 func ClosedPeriod(calendarID, frequency string, trigger time.Time) (PeriodBoundaries, error) {
 	if trigger.IsZero() {
 		return PeriodBoundaries{}, errors.New("缺少触发时间")
@@ -84,11 +32,7 @@ func ClosedPeriod(calendarID, frequency string, trigger time.Time) (PeriodBounda
 	calendarID = normalizeCalendar(calendarID)
 	frequency = strings.TrimSpace(strings.ToLower(frequency))
 	if calendarID == "cn_stock" && frequency == "1d" {
-		calendar, err := marketcalendar.Load("cn_stock")
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		location, err := time.LoadLocation("Asia/Shanghai")
+		calendar, location, err := stockCalendar()
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
@@ -110,23 +54,20 @@ func ClosedPeriod(calendarID, frequency string, trigger time.Time) (PeriodBounda
 		}
 		return boundariesForStockDay(calendar, location, day)
 	}
-	if calendarID == "crypto_24x7" {
+	if calendarID == DefaultCalendar {
 		duration, err := parseBarDuration(frequency)
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
-		end, err := ClosedBar(calendarID, frequency, trigger, nil)
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
+		// 加密货币 24x7：bar 按 Unix 纪元对齐，最近闭合的 bar_end 是 trigger 向下取整到 bar 时长的整数倍。
+		end := time.Unix(0, (trigger.UTC().UnixNano()/duration.Nanoseconds())*duration.Nanoseconds()).UTC()
 		start := end.Add(-duration)
 		return PeriodBoundaries{StorageStart: start, PreviousStart: start.Add(-duration), BarEnd: end, NextEnd: end.Add(duration), BarIndex: end.UnixNano() / duration.Nanoseconds()}, nil
 	}
-	return PeriodBoundaries{}, fmt.Errorf("策略日历 %q 不支持频率 %q", calendarID, frequency)
+	return PeriodBoundaries{}, fmt.Errorf("%w：日历 %q 不支持频率 %q", ErrUnsupportedCalendar, calendarID, frequency)
 }
 
-// FromStorageStart maps a Storage row key to the same public strategy
-// boundary used by a scheduled trigger.
+// FromStorageStart 把 Storage 的行键（bar_start）映射为策略使用的周期边界。
 func FromStorageStart(calendarID, frequency string, storageStart time.Time) (PeriodBoundaries, error) {
 	if storageStart.IsZero() {
 		return PeriodBoundaries{}, errors.New("缺少 Storage 周期时间")
@@ -134,11 +75,7 @@ func FromStorageStart(calendarID, frequency string, storageStart time.Time) (Per
 	calendarID = normalizeCalendar(calendarID)
 	frequency = strings.TrimSpace(strings.ToLower(frequency))
 	if calendarID == "cn_stock" && frequency == "1d" {
-		calendar, err := marketcalendar.Load("cn_stock")
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		location, err := time.LoadLocation("Asia/Shanghai")
+		calendar, location, err := stockCalendar()
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
@@ -156,7 +93,7 @@ func FromStorageStart(calendarID, frequency string, storageStart time.Time) (Per
 		}
 		return boundariesForStockDay(calendar, location, day)
 	}
-	if calendarID == "crypto_24x7" {
+	if calendarID == DefaultCalendar {
 		duration, err := parseBarDuration(frequency)
 		if err != nil {
 			return PeriodBoundaries{}, err
@@ -165,7 +102,34 @@ func FromStorageStart(calendarID, frequency string, storageStart time.Time) (Per
 		end := start.Add(duration)
 		return PeriodBoundaries{StorageStart: start, PreviousStart: start.Add(-duration), BarEnd: end, NextEnd: end.Add(duration), BarIndex: end.UnixNano() / duration.Nanoseconds()}, nil
 	}
-	return PeriodBoundaries{}, fmt.Errorf("策略日历 %q 不支持频率 %q", calendarID, frequency)
+	return PeriodBoundaries{}, fmt.Errorf("%w：日历 %q 不支持频率 %q", ErrUnsupportedCalendar, calendarID, frequency)
+}
+
+// FromBarEnd 把 bar_end 映射为周期边界。
+func FromBarEnd(calendarID, frequency string, end time.Time) (PeriodBoundaries, error) {
+	calendarID = normalizeCalendar(calendarID)
+	frequency = strings.ToLower(strings.TrimSpace(frequency))
+	if calendarID == "cn_stock" && frequency == "1d" {
+		calendar, location, err := stockCalendar()
+		if err != nil {
+			return PeriodBoundaries{}, err
+		}
+		local := end.In(location)
+		day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+		if err != nil {
+			return PeriodBoundaries{}, err
+		}
+		return boundariesForStockDay(calendar, location, day)
+	}
+	if calendarID == DefaultCalendar {
+		duration, err := parseBarDuration(frequency)
+		if err != nil {
+			return PeriodBoundaries{}, err
+		}
+		end = end.UTC()
+		return PeriodBoundaries{StorageStart: end.Add(-duration), PreviousStart: end.Add(-2 * duration), BarEnd: end, NextEnd: end.Add(duration), BarIndex: end.UnixNano() / duration.Nanoseconds()}, nil
+	}
+	return PeriodBoundaries{}, fmt.Errorf("%w：日历 %q 不支持频率 %q", ErrUnsupportedCalendar, calendarID, frequency)
 }
 
 func boundariesForStockDay(calendar marketcalendar.TradingCalendar, location *time.Location, day marketcalendar.CivilDate) (PeriodBoundaries, error) {
@@ -188,24 +152,19 @@ func boundariesForStockDay(calendar marketcalendar.TradingCalendar, location *ti
 	return PeriodBoundaries{StorageStart: start, PreviousStart: previousStart, BarEnd: barEnd, NextEnd: nextEnd, BarIndex: int64(len(tradingDays) - 1)}, nil
 }
 
-// AdvanceBarEnd moves by valid bars. n may be negative for calendar-aware
-// lookups; zero returns end unchanged.
+// AdvanceBarEnd 按有效 bar 移动 bar_end：n 为负表示向前回溯，0 原样返回。
 func AdvanceBarEnd(calendarID, frequency string, end time.Time, n int) (time.Time, error) {
 	if n == 0 {
 		return end.UTC(), nil
 	}
-	if normalizeCalendar(calendarID) == "crypto_24x7" {
+	if normalizeCalendar(calendarID) == DefaultCalendar {
 		duration, durationErr := parseBarDuration(strings.ToLower(strings.TrimSpace(frequency)))
 		if durationErr != nil {
 			return time.Time{}, durationErr
 		}
 		return end.UTC().Add(time.Duration(n) * duration), nil
 	}
-	calendar, err := marketcalendar.Load("cn_stock")
-	if err != nil {
-		return time.Time{}, err
-	}
-	location, err := time.LoadLocation("Asia/Shanghai")
+	calendar, location, err := stockCalendar()
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -227,85 +186,35 @@ func AdvanceBarEnd(calendarID, frequency string, end time.Time, n int) (time.Tim
 	return time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, location).UTC(), nil
 }
 
-func FromBarEnd(calendarID, frequency string, end time.Time) (PeriodBoundaries, error) {
-	calendarID = normalizeCalendar(calendarID)
-	frequency = strings.ToLower(strings.TrimSpace(frequency))
-	if calendarID == "cn_stock" && frequency == "1d" {
-		calendar, err := marketcalendar.Load("cn_stock")
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		location, err := time.LoadLocation("Asia/Shanghai")
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		local := end.In(location)
-		day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		return boundariesForStockDay(calendar, location, day)
-	}
-	if calendarID == "crypto_24x7" {
-		duration, err := parseBarDuration(frequency)
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		end = end.UTC()
-		return PeriodBoundaries{StorageStart: end.Add(-duration), PreviousStart: end.Add(-2 * duration), BarEnd: end, NextEnd: end.Add(duration), BarIndex: end.UnixNano() / duration.Nanoseconds()}, nil
-	}
-	return PeriodBoundaries{}, fmt.Errorf("策略日历 %q 不支持频率 %q", calendarID, frequency)
-}
-
+// PreviousStorageStart 返回上一根 bar 的 bar_start。
 func PreviousStorageStart(calendarID, frequency string, storageStart time.Time) (time.Time, error) {
-	if strings.TrimSpace(calendarID) == "" {
-		duration, err := parseBarDuration(strings.ToLower(strings.TrimSpace(frequency)))
-		if err != nil {
-			return time.Time{}, err
-		}
-		return storageStart.UTC().Add(-duration), nil
-	}
-	p, err := FromStorageStart(calendarID, frequency, storageStart)
+	period, err := FromStorageStart(calendarID, frequency, storageStart)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if p.PreviousStart.IsZero() {
+	if period.PreviousStart.IsZero() {
 		return time.Time{}, errors.New("无法确定上一周期")
 	}
-	return p.PreviousStart, nil
+	return period.PreviousStart, nil
 }
 
-// HistoryStart returns the start key for count completed bars ending at the
-// supplied StorageStart. It intentionally uses the market calendar for
-// session-based daily bars.
+// HistoryStart 返回以 storageStart 为最后一根、共 count 根 bar 的第一根 bar_start；A 股日线按交易日回退。
 func HistoryStart(calendarID, frequency string, storageStart time.Time, count int) (time.Time, error) {
 	if count <= 1 {
 		return storageStart.UTC(), nil
-	}
-	if strings.TrimSpace(calendarID) == "" {
-		duration, err := parseBarDuration(strings.ToLower(strings.TrimSpace(frequency)))
-		if err != nil {
-			return time.Time{}, err
-		}
-		return storageStart.UTC().Add(-time.Duration(count-1) * duration), nil
 	}
 	period, err := FromStorageStart(calendarID, frequency, storageStart)
 	if err != nil {
 		return time.Time{}, err
 	}
-	calendarID = normalizeCalendar(calendarID)
-	if calendarID == "crypto_24x7" {
+	if normalizeCalendar(calendarID) == DefaultCalendar {
 		duration, durationErr := parseBarDuration(strings.ToLower(strings.TrimSpace(frequency)))
 		if durationErr != nil {
 			return time.Time{}, durationErr
 		}
 		return storageStart.UTC().Add(-time.Duration(count-1) * duration), nil
 	}
-	calendar, err := marketcalendar.Load("cn_stock")
-	if err != nil {
-		return time.Time{}, err
-	}
-	location, err := time.LoadLocation("Asia/Shanghai")
+	calendar, location, err := stockCalendar()
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -321,6 +230,19 @@ func HistoryStart(calendarID, frequency string, storageStart time.Time, count in
 		}
 	}
 	return time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location).UTC(), nil
+}
+
+// stockCalendar 加载 A 股交易日历与上海时区。
+func stockCalendar() (marketcalendar.TradingCalendar, *time.Location, error) {
+	calendar, err := marketcalendar.Load("cn_stock")
+	if err != nil {
+		return marketcalendar.TradingCalendar{}, nil, err
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return marketcalendar.TradingCalendar{}, nil, err
+	}
+	return calendar, location, nil
 }
 
 func parseBarDuration(bar string) (time.Duration, error) {

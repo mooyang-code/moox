@@ -237,7 +237,7 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	var loaded input.Loaded
 	for reread := 0; ; reread++ {
 		var err error
-		loaded, err = h.Loader.LoadBar(ctx, p.instance.SpaceID, rt.resolved, rt.program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: payload.GetUniverseSubjectIds(), Readiness: ready, EventID: p.eventID})
+		loaded, err = h.Loader.LoadBar(ctx, p.instance.SpaceID, rt.resolved, rt.program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: eventUniverse(payload), Readiness: ready})
 		if err == nil {
 			break
 		}
@@ -259,7 +259,6 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 		}
 		return nil, input.Loaded{}, fmt.Errorf("读取输入（第 %d 次）：%w", h.attempts[key], err)
 	}
-	loaded.Frame.FailedColumns = input.InstrumentFailures(loaded.Frame.FailedColumns, loaded.Sets.Subjects)
 	previous := engine.State{}
 	if last, ok, err := h.Store.LatestOk(ctx, p.instance.InstanceID, rt.sessionID); err != nil {
 		return nil, input.Loaded{}, err
@@ -378,6 +377,15 @@ func (h *Handler) logf(format string, args ...any) {
 	if h.Logf != nil {
 		h.Logf(format, args...)
 	}
+}
+
+// eventUniverse 返回事件的标的名单。ViewDataReady 总是携带名单，protobuf 解码会把空列表变成 nil，
+// 这里改回空列表：空名单表示本期没有任何标的，按 no_data 跳过，而不是退化为数据集的全部标的。
+func eventUniverse(payload *storagepb.ViewDataReady) []string {
+	if universe := payload.GetUniverseSubjectIds(); universe != nil {
+		return universe
+	}
+	return []string{}
 }
 
 func advance(calendar, bar string, at time.Time, n int) (time.Time, error) {

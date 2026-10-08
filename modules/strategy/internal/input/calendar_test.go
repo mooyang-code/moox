@@ -5,28 +5,15 @@ import (
 	"time"
 )
 
-func TestClosedBarCryptoUsesMostRecentClosedBoundary(t *testing.T) {
+func TestClosedPeriodCryptoUsesMostRecentClosedBoundary(t *testing.T) {
 	trigger := time.Date(2026, 8, 29, 11, 7, 30, 0, time.UTC)
-	got, err := ClosedBar("crypto_24x7", "1h", trigger, nil)
+	got, err := ClosedPeriod("crypto_24x7", "1h", trigger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Fatalf("closed bar = %s, want %s", got, want)
-	}
-}
-
-func TestClosedBarStockUsesTradingDayClose(t *testing.T) {
-	trigger := time.Date(2026, 8, 31, 16, 0, 0, 0, time.UTC)
-	days := []time.Time{time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)}
-	got, err := ClosedBar("cn_stock", "1d", trigger, days)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := time.Date(2026, 8, 31, 15, 0, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Fatalf("closed bar = %s, want %s", got, want)
+	if !got.BarEnd.Equal(want) || !got.StorageStart.Equal(want.Add(-time.Hour)) {
+		t.Fatalf("最近闭合的 bar 不符：%+v，期望 bar_end %s", got, want)
 	}
 }
 

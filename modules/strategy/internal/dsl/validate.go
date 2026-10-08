@@ -146,11 +146,11 @@ func validateRankRule(prefix string, rule *Rule) error {
 		return fmt.Errorf("%s 缺少 select", prefix)
 	}
 	sel := rule.Select
-	if (sel.Top > 0) == (sel.Bottom > 0) {
-		return fmt.Errorf("%s 的 select 必须且只能设置 top 或 bottom 之一", prefix)
-	}
 	if sel.Top < 0 || sel.Bottom < 0 || sel.Buffer < 0 {
 		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能为负数", prefix)
+	}
+	if (sel.Top > 0) == (sel.Bottom > 0) {
+		return fmt.Errorf("%s 的 select 必须且只能设置 top 或 bottom 之一", prefix)
 	}
 	// 能同时持有的标的数上限：普通规则是选中数量，holding 规则是各批次之和。
 	slots := sel.Top

@@ -97,6 +97,9 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		explain.reject(id, StageDropped, reason, nil, 0)
 	}
 	live := without(passed, scored.failed)
+	if len(passed) > 0 && len(live) == 0 {
+		return ruleResult{}, fmt.Errorf("score 对全部 %d 个通过 filter 的候选都无效", len(passed))
+	}
 	result.scored = len(live)
 	bottom := rule.Rule.Select.Bottom > 0
 	ordered := orderByRank(live, scored.values, bottom)
@@ -145,7 +148,7 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 			notChosenReason = reasonNotRebalanced
 		}
 	} else {
-		chosen = selectWithBuffer(ordered, count, rule.Rule.Select.Buffer, previous.Held)
+		chosen = selectWithBuffer(ordered, rankOf, count, rule.Rule.Select.Buffer, previous.Held)
 		weights = allocate(chosen, rule.Rule.Weight)
 		for _, id := range chosen {
 			if rule.FilterAfter != nil {

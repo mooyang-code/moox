@@ -81,7 +81,6 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 		}
 	}
 	if bars, ok := retentionBars(dataset.Retention, resolved.Bar); ok {
-		resolved.RetentionBars = bars
 		if strategy.Universe.MinAgeBars > bars {
 			return Resolved{}, nil, fmt.Errorf("universe.min_age_bars=%d 超过 View 的保留根数 %d", strategy.Universe.MinAgeBars, bars)
 		}
@@ -99,6 +98,9 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 		if err := checkAgeCoverage(view, resolved, strategy.Universe.MinAgeBars); err != nil {
 			return Resolved{}, nil, err
 		}
+	}
+	if err := checkReferences(ctx, client, spaceID, view, strategy); err != nil {
+		return Resolved{}, nil, err
 	}
 	referenced, err := dsl.ReferencedColumns(strategy)
 	if err != nil {
@@ -139,6 +141,47 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	}
 	resolved.UsesPreviousBar = program.UsesPreviousBar
 	return resolved, program, nil
+}
+
+// checkReferences 校验 DSL 引用的标签存在、固定写出的标的（pool 列表、universe 的 include 与 exclude）
+// 在 View 的数据集中有绑定。ID 区分大小写；拼写错误会让池悄悄变空或排除失效，必须在启用时报出。
+func checkReferences(ctx context.Context, client Client, spaceID string, view ViewInfo, strategy dsl.Strategy) error {
+	tags := make([]string, 0)
+	instruments := make([]string, 0)
+	tags = append(tags, strategy.Universe.Tags...)
+	tags = append(tags, strategy.Universe.ExcludeTags...)
+	instruments = append(instruments, strategy.Universe.Include...)
+	instruments = append(instruments, strategy.Universe.Exclude...)
+	for _, rule := range strategy.Rules {
+		tags = append(tags, rule.Pool.Tags...)
+		instruments = append(instruments, rule.Pool.Fixed...)
+	}
+	for _, tag := range uniqueSorted(tags) {
+		if _, err := client.GetTag(ctx, spaceID, tag); err != nil {
+			return fmt.Errorf("DSL 引用的标签 %s 无法读取（不存在或拼写错误）：%w", tag, err)
+		}
+	}
+	if len(instruments) == 0 {
+		return nil
+	}
+	subjects, err := client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
+	if err != nil {
+		return err
+	}
+	known := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		known[subject.InstrumentID] = struct{}{}
+	}
+	var unknown []string
+	for _, id := range uniqueSorted(instruments) {
+		if _, ok := known[id]; !ok {
+			unknown = append(unknown, id)
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("DSL 写出的标的 %s 不在 View %s 的数据集中（ID 区分大小写）", strings.Join(unknown, "、"), view.ViewID)
+	}
+	return nil
 }
 
 // checkAgeCoverage 校验 View 当前覆盖的历史足以判断 min_age_bars：以最新一根为 T，T − (N−1) 根不能早于覆盖起点。

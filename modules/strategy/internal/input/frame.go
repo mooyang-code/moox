@@ -3,7 +3,6 @@ package input
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -19,10 +18,10 @@ type Loader struct {
 
 // Bar 是一期的输入参数。
 type Bar struct {
-	BarStart      time.Time
+	BarStart time.Time
+	// EventUniverse 为 nil 表示没有事件名单（试算），基础集合取数据集全部活跃标的；非 nil（含空列表）以名单为准。
 	EventUniverse []string
 	Readiness     readiness.Result
-	EventID       string
 }
 
 // Loaded 是装配完成的一期输入。
@@ -48,6 +47,9 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	view, err := l.Client.GetView(ctx, spaceID, resolved.ViewID)
 	if err != nil {
 		return Loaded{}, err
+	}
+	if view.Status != "" && view.Status != "active" {
+		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的状态是 %s，不再提供数据，请重新绑定实例", resolved.ViewID, view.Status)}
 	}
 	if view.ActiveIndexID == "" {
 		return Loaded{}, fmt.Errorf("View %s 没有活动索引", resolved.ViewID)
@@ -188,36 +190,6 @@ func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Res
 			}
 		}
 	}
-	// 失败标的以 subject_id 给出；引擎按 instrument_id 匹配，两者相同时直接可用，不同时由调用方映射。
+	// 失败标的以 subject_id 给出；标的的 instrument_id 与 subject_id 相同，引擎可直接匹配。
 	return failed
-}
-
-// InstrumentFailures 把以 subject_id 表示的失败集合改写为 instrument_id。
-func InstrumentFailures(failed map[string]map[string]struct{}, subjects map[string]Subject) map[string]map[string]struct{} {
-	bySubject := make(map[string]string, len(subjects))
-	for id, subject := range subjects {
-		bySubject[subject.SubjectID] = id
-	}
-	out := make(map[string]map[string]struct{}, len(failed))
-	for column, ids := range failed {
-		out[column] = make(map[string]struct{}, len(ids))
-		for id := range ids {
-			if instrument, ok := bySubject[id]; ok {
-				out[column][instrument] = struct{}{}
-			} else {
-				out[column][id] = struct{}{}
-			}
-		}
-	}
-	return out
-}
-
-// SortedInstruments 返回帧中标的的排序列表（测试与解释使用）。
-func SortedInstruments(frame engine.Frame) []string {
-	ids := make([]string, 0, len(frame.Rows))
-	for id := range frame.Rows {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
 }

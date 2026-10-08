@@ -153,3 +153,66 @@ func TestValidationReportsStagesInFixedOrder(t *testing.T) {
 		}
 	}
 }
+
+// YAML 合法的数字写法都按定点数接受；超出定点精度或分数形式拒绝。
+func TestNumericLiterals(t *testing.T) {
+	t.Parallel()
+	for _, literal := range []string{".5", "+0.5", "5e-1", "0.50", "\"0.5\""} {
+		strategy, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: " + literal + "}\n"))
+		if err != nil {
+			t.Fatalf("%s 应被接受：%v", literal, err)
+		}
+		if got := strategy.Rules[0].Weight.Total.String(); got != "0.5" {
+			t.Fatalf("%s 应解析为 0.5，实际 %s", literal, got)
+		}
+	}
+	for _, literal := range []string{"1e-19", "\"1/2\"", "\"0x1p-1\"", "\"inf\""} {
+		if _, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: " + literal + "}\n")); err == nil {
+			t.Fatalf("%s 应被拒绝", literal)
+		}
+	}
+}
+
+// 标的与标签 ID 区分大小写：去重与匹配使用同一规则。
+func TestIdentifierListsAreCaseSensitive(t *testing.T) {
+	t.Parallel()
+	strategy, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: signal, pool: [BTC-USDT, btc-usdt], entry: \"close > 1\", exit: \"close < 1\", weight: 1}\n"))
+	if err != nil || len(strategy.Rules[0].Pool.Fixed) != 2 {
+		t.Fatalf("大小写不同的两项都应保留：%+v err=%v", strategy.Rules, err)
+	}
+	if _, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: signal, pool: [BTC-USDT, BTC-USDT], entry: \"close > 1\", exit: \"close < 1\", weight: 1}\n")); err == nil || !strings.Contains(err.Error(), "重复") {
+		t.Fatalf("完全相同的两项应拒绝：%v", err)
+	}
+}
+
+// 表达式上限：长度按字符计、只校验用户原文；语法节点数在保存时检查；bars[...] 只接受 .列名；负数先报。
+func TestExpressionLimitsAtSaveTime(t *testing.T) {
+	t.Parallel()
+	rules := "name: x\nrules:\n  - {id: a, type: rank, score: SCORE, select: {top: 1}, weight: 1}\n"
+	parse := func(score string) error {
+		_, err := Parse([]byte(strings.Replace(rules, "SCORE", "\""+score+"\"", 1)))
+		return err
+	}
+	terms := make([]string, 70)
+	for i := range terms {
+		terms[i] = "aaaaaaaaaaaaa"
+	}
+	if err := parse("rank(" + strings.Join(terms, "+") + ")"); err != nil {
+		t.Fatalf("原文不超过上限的截面函数参数不应因重新序列化变长而被拒：%v", err)
+	}
+	if err := parse("instrument_id == '" + strings.Repeat("比", 1000) + "'"); err != nil {
+		t.Fatalf("1000 个汉字的表达式按字符计未超限：%v", err)
+	}
+	if err := parse(strings.Repeat("a", 1025)); err == nil || !strings.Contains(err.Error(), "1024") {
+		t.Fatalf("超过 1024 个字符应拒绝：%v", err)
+	}
+	if err := parse(strings.TrimSuffix(strings.Repeat("a+", 200), "+")); err == nil || !strings.Contains(err.Error(), "过于复杂") {
+		t.Fatalf("超过节点上限应在保存时拒绝：%v", err)
+	}
+	if err := parse("bars[0][close]"); err == nil || !strings.Contains(err.Error(), ".列名") {
+		t.Fatalf("bars[0][close] 应拒绝：%v", err)
+	}
+	if _, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, score: close, select: {top: -1}, weight: 1}\n")); err == nil || !strings.Contains(err.Error(), "负数") {
+		t.Fatalf("负数应明确报出：%v", err)
+	}
+}

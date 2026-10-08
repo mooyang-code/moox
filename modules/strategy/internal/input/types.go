@@ -102,6 +102,8 @@ type Query struct {
 	Columns          []string
 	ExpectedIndexID  string
 	ExpectedRevision uint64
+	// Limit 大于 0 时只读第一页、最多 Limit 行（用于存在性检查）。
+	Limit int
 }
 
 // Client 是 Storage 与 Factor 的窄适配。
@@ -143,7 +145,6 @@ type Resolved struct {
 	Factors         map[string]string        `json:"factors,omitempty"`
 	UsesPreviousBar bool                     `json:"uses_previous_bar"`
 	MinAgeBars      int                      `json:"min_age_bars,omitempty"`
-	RetentionBars   int                      `json:"retention_bars,omitempty"`
 	ViewColumns     []string                 `json:"view_columns"`
 }
 

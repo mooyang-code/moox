@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
@@ -46,71 +47,65 @@ type numericResult struct {
 	failed map[string]string
 }
 
-// evaluateNumeric 在样本 ids 上执行数值表达式。截面函数的样本是"全部内层表达式与外层表达式都有效"的标的：
-// 任一环节失败的标的被剔除后，在剩余样本上整体重算，直到不再有新的失败。这样结果与截面函数的书写顺序无关，
-// 名次与标准化也不会包含最终被淘汰的标的。
+// evaluateNumeric 在样本 ids 上执行数值表达式。同一层的截面函数在同一个样本上计算：先在该样本上求出全部参数
+// （参数中嵌套的截面函数按同样的规则在下一层计算），任一参数无效的标的从这一层的名次与标准化中剔除；
+// 外层结果无效（例如除以名次 0）的标的只淘汰自身，不触发重算。每层只计算一次，结果与书写顺序无关。
 func evaluateNumeric(expression *dsl.Expression, ids []string, rows map[string]Row) numericResult {
-	result := numericResult{failed: make(map[string]string)}
-	live := append([]string(nil), ids...)
-	for {
-		values, failed := evaluateOnSample(expression, live, rows)
-		if len(failed) == 0 {
-			result.values = values
-			return result
-		}
-		for id, reason := range failed {
-			result.failed[id] = reason
-		}
-		live = without(live, failed)
-	}
-}
-
-// evaluateOnSample 在固定样本上求值一次：内层有失败时先返回失败，不再计算外层。
-func evaluateOnSample(expression *dsl.Expression, ids []string, rows map[string]Row) (map[string]float64, map[string]string) {
-	failed := make(map[string]string)
+	result := numericResult{values: make(map[string]float64, len(ids)), failed: make(map[string]string)}
 	inners := make([]numericResult, len(expression.Normalizers))
 	for i, normalizer := range expression.Normalizers {
 		inners[i] = evaluateNumeric(normalizer.Inner, ids, rows)
-		for id, reason := range inners[i].failed {
-			if _, seen := failed[id]; !seen {
-				failed[id] = reason
+		for _, id := range ids {
+			if reason, failed := inners[i].failed[id]; failed {
+				if _, seen := result.failed[id]; !seen {
+					result.failed[id] = reason
+				}
 			}
 		}
 	}
-	if len(failed) > 0 {
-		return nil, failed
-	}
-	vars := make(map[string]map[string]float64, len(ids))
-	for _, id := range ids {
+	sample := without(ids, result.failed)
+	vars := make(map[string]map[string]float64, len(sample))
+	for _, id := range sample {
 		vars[id] = make(map[string]float64, len(expression.Normalizers))
 	}
 	for i, normalizer := range expression.Normalizers {
 		var normalized map[string]float64
 		switch normalizer.Kind {
 		case "rank":
-			normalized = percentileRank(ids, inners[i].values)
+			normalized = percentileRank(sample, inners[i].values)
 		default:
-			normalized = zScore(ids, inners[i].values)
+			normalized = zScore(sample, inners[i].values)
 		}
 		for id, value := range normalized {
 			vars[id][normalizer.Variable] = value
 		}
 	}
-	values := make(map[string]float64, len(ids))
-	for _, id := range ids {
+	for _, id := range sample {
 		value, err := expression.Run(rowEnv(id, rows[id], 0, vars[id]))
 		if err != nil {
-			failed[id] = "score_error:" + err.Error()
+			result.failed[id] = scoreErrorReason(err)
 			continue
 		}
 		number, ok := toFloat(value)
 		if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
-			failed[id] = "score_invalid"
+			result.failed[id] = "score_invalid"
 			continue
 		}
-		values[id] = number
+		result.values[id] = number
 	}
-	return values, failed
+	return result
+}
+
+// scoreErrorReason 把表达式运行错误压缩成一行、最多 120 个字符的明细原因。
+func scoreErrorReason(err error) string {
+	message := strings.TrimSpace(err.Error())
+	if line, _, found := strings.Cut(message, "\n"); found {
+		message = strings.TrimSpace(line)
+	}
+	if runes := []rune(message); len(runes) > 120 {
+		message = string(runes[:120]) + "…"
+	}
+	return "score_error:" + message
 }
 
 func without(ids []string, failed map[string]string) []string {

@@ -89,17 +89,21 @@ func orderByRank(ids []string, scores map[string]float64, bottom bool) []string 
 	return ordered
 }
 
-// selectWithBuffer 实现排名缓冲区：上期持有且仍在前 count+buffer 名的标的保留，空位按名次补足。
-func selectWithBuffer(ordered []string, count, buffer int, previouslyHeld []string) []string {
+// selectWithBuffer 实现排名缓冲区：上期持有、仍在候选中且全样本名次（与解释明细一致，select.where 之前）
+// 不超过 count+buffer 的标的保留，空位按 ordered 的顺序补足。
+func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int, previouslyHeld []string) []string {
 	if count <= 0 || len(ordered) == 0 {
 		return nil
 	}
-	rankOf := make(map[string]int, len(ordered))
-	for i, id := range ordered {
-		rankOf[id] = i + 1
+	candidate := make(map[string]struct{}, len(ordered))
+	for _, id := range ordered {
+		candidate[id] = struct{}{}
 	}
 	kept := make([]string, 0, count)
 	for _, id := range previouslyHeld {
+		if _, ok := candidate[id]; !ok {
+			continue
+		}
 		if rank, ok := rankOf[id]; ok && rank <= count+buffer {
 			kept = append(kept, id)
 		}

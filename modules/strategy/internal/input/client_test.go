@@ -109,3 +109,30 @@ func TestQueryRowsMapsMissingColumnToConfigError(t *testing.T) {
 		t.Fatalf("列不存在应记为 config_error：%v", err)
 	}
 }
+
+// 调用 Storage 失败时错误信息不带服务地址，原始错误只经 RawCause 留给日志；Limit 只读第一页。
+func TestQueryRowsHidesTransportDetailsAndHonorsLimit(t *testing.T) {
+	failing := &RPCClient{DataView: &failingDataView{err: errors.New("dial tcp 10.0.0.1:443: connect: connection refused")}}
+	_, _, err := failing.QueryRows(context.Background(), "space", baseQuery())
+	var transportErr *TransportError
+	if !errors.As(err, &transportErr) || strings.Contains(err.Error(), "10.0.0.1") || !strings.Contains(RawCause(err).Error(), "10.0.0.1") {
+		t.Fatalf("传输错误应只给概述并保留原始原因：%v", err)
+	}
+	stub := &dataViewStub{pages: []*storagepb.QueryTimeSeriesRowsRsp{page(true, 3, "idx_a", tsRow("BTC-USDT", barStart, double(1)))}}
+	query := baseQuery()
+	query.Limit = 1
+	rows, _, err := (&RPCClient{DataView: stub}).QueryRows(context.Background(), "space", query)
+	if err != nil || len(rows) != 1 || len(stub.requests) != 1 || stub.requests[0].GetPage().GetSize() != 1 {
+		t.Fatalf("Limit 应只读一页且页大小为 Limit：rows=%d requests=%d err=%v", len(rows), len(stub.requests), err)
+	}
+}
+
+// failingDataView 让每次查询都返回传输错误。
+type failingDataView struct {
+	storagepb.DataViewClientProxy
+	err error
+}
+
+func (f *failingDataView) QueryTimeSeriesRows(context.Context, *storagepb.QueryTimeSeriesRowsReq, ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error) {
+	return nil, f.err
+}

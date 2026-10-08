@@ -2,6 +2,7 @@ package quant
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"regexp"
 	"strings"
@@ -17,6 +18,30 @@ var scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDigits), nil)
 
 type Decimal struct {
 	units *big.Int
+}
+
+// literalPattern 是 DSL 数字字面量允许的写法：可选符号、整数或小数（可省略整数部分）、可选指数。
+var literalPattern = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$`)
+
+// ParseLiteral 解析 DSL 中的数字字面量：除 Parse 接受的写法外，还接受 YAML 合法的 .5、+0.5、2e-1 等；
+// 精度不能超过定点小数位数。
+func ParseLiteral(raw string) (Decimal, error) {
+	raw = strings.TrimSpace(raw)
+	if decimalPattern.MatchString(raw) {
+		return Parse(raw)
+	}
+	if !literalPattern.MatchString(raw) {
+		return Decimal{}, ErrInvalidDecimal
+	}
+	value, ok := new(big.Rat).SetString(raw)
+	if !ok {
+		return Decimal{}, ErrInvalidDecimal
+	}
+	units := value.Mul(value, new(big.Rat).SetInt(scale))
+	if !units.IsInt() {
+		return Decimal{}, fmt.Errorf("%w：小数位数不能超过 %d 位", ErrInvalidDecimal, scaleDigits)
+	}
+	return Decimal{units: new(big.Int).Set(units.Num())}, nil
 }
 
 func Parse(raw string) (Decimal, error) {

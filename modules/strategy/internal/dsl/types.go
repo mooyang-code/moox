@@ -110,13 +110,3 @@ func Hash(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
-
-// RuleByID 按稳定标识查找规则。
-func (s Strategy) RuleByID(id string) (Rule, bool) {
-	for _, rule := range s.Rules {
-		if rule.ID == id {
-			return rule, true
-		}
-	}
-	return Rule{}, false
-}

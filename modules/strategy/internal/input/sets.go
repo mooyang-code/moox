@@ -237,6 +237,22 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 				satisfied[id] = struct{}{}
 			}
 		}
+		if len(satisfied) == 0 {
+			// 候选全部不满足时，确认窗口内整个数据集是否有数据：一行都没有说明是历史缺口（停机、维护），
+			// 不能把全部标的当作新上市剔除。
+			all := make([]Subject, 0, len(subjects))
+			for _, subject := range subjects {
+				all = append(all, subject)
+			}
+			sort.Slice(all, func(i, j int) bool { return all[i].SubjectID < all[j].SubjectID })
+			present, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision, Limit: 1})
+			if err != nil {
+				return nil, fmt.Errorf("年龄探针确认查询：%w", err)
+			}
+			if len(present) == 0 {
+				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars, from.Format(time.RFC3339), to.Add(-time.Nanosecond).Format(time.RFC3339))}
+			}
+		}
 		return satisfied, nil
 	}
 }

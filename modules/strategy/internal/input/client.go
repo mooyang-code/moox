@@ -39,7 +39,10 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 	}
 	rsp, err := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
-		return ViewInfo{}, fmt.Errorf("读取 View %s：%w", viewID, err)
+		return ViewInfo{}, transport("读取 View "+viewID, err)
+	}
+	if code := rsp.GetRetInfo().GetCode(); code == commonpb.ErrorCode_VIEW_NOT_FOUND || code == commonpb.ErrorCode_NOT_FOUND {
+		return ViewInfo{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 已不存在，请重新绑定实例", viewID)}
 	}
 	if err := retError("GetView", rsp.GetRetInfo()); err != nil {
 		return ViewInfo{}, err
@@ -62,7 +65,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 	for page := uint32(1); ; page++ {
 		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
-			return ViewInfo{}, fmt.Errorf("读取 View %s 的列：%w", viewID, err)
+			return ViewInfo{}, transport("读取 View "+viewID+" 的列", err)
 		}
 		if err := retError("ListViewColumns", columns.GetRetInfo()); err != nil {
 			return ViewInfo{}, err
@@ -91,7 +94,7 @@ func (c *RPCClient) GetDataset(ctx context.Context, spaceID, datasetID string) (
 	}
 	rsp, err := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
-		return DatasetInfo{}, fmt.Errorf("读取数据集 %s：%w", datasetID, err)
+		return DatasetInfo{}, transport("读取数据集 "+datasetID, err)
 	}
 	if err := retError("GetDataset", rsp.GetRetInfo()); err != nil {
 		return DatasetInfo{}, err
@@ -114,7 +117,7 @@ func (c *RPCClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo,
 	}
 	rsp, err := c.Metadata.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: c.Auth, SpaceId: spaceID, TagId: tagID})
 	if err != nil {
-		return TagInfo{}, fmt.Errorf("读取标签 %s：%w", tagID, err)
+		return TagInfo{}, transport("读取标签 "+tagID, err)
 	}
 	if err := retError("GetTag", rsp.GetRetInfo()); err != nil {
 		return TagInfo{}, err
@@ -136,7 +139,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 	for page := uint32(1); ; page++ {
 		rsp, err := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
-			return nil, fmt.Errorf("读取数据集 %s 的标的绑定：%w", datasetID, err)
+			return nil, transport("读取数据集 "+datasetID+" 的标的绑定", err)
 		}
 		if err := retError("ListDatasetSubjects", rsp.GetRetInfo()); err != nil {
 			return nil, err
@@ -165,7 +168,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 		for page := uint32(1); ; page++ {
 			rsp, err := c.Metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{AuthInfo: c.Auth, SpaceId: spaceID, SubjectIds: order[start:end], Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 			if err != nil {
-				return nil, fmt.Errorf("读取标的详情：%w", err)
+				return nil, transport("读取标的详情", err)
 			}
 			if err := retError("ListSubjects", rsp.GetRetInfo()); err != nil {
 				return nil, err
@@ -188,9 +191,6 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 			subject.Attributes = make(map[string]string, len(attributes))
 			for key, value := range attributes {
 				subject.Attributes[key] = value
-			}
-			if instrument := strings.TrimSpace(attributes["instrument_id"]); instrument != "" {
-				subject.InstrumentID = instrument
 			}
 			subject.SeriesTag = seriesTag(attributes)
 			subject.Active = subject.Active && detail.GetStatus() == "active"
@@ -222,7 +222,7 @@ func (c *RPCClient) ListTagMembers(ctx context.Context, spaceID, tagID string) (
 	for page := uint32(1); ; page++ {
 		rsp, err := c.Metadata.ListTagMembers(ctx, &storagepb.ListTagMembersReq{AuthInfo: c.Auth, SpaceId: spaceID, TagId: tagID, Status: "active", Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
-			return nil, fmt.Errorf("读取标签 %s 的成员：%w", tagID, err)
+			return nil, transport("读取标签 "+tagID+" 的成员", err)
 		}
 		if err := retError("ListTagMembers", rsp.GetRetInfo()); err != nil {
 			return nil, err
@@ -268,15 +268,19 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 	}
 	rows := make([]Row, 0, len(selectors))
 	revision := query.ExpectedRevision
+	size := c.pageSize()
+	if query.Limit > 0 {
+		size = uint32(query.Limit)
+	}
 	for page := uint32(1); ; page++ {
 		rsp, err := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: spaceID, ViewId: query.ViewID, Selectors: selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: query.Start.UTC().Format(time.RFC3339Nano), EndTime: query.End.UTC().Format(time.RFC3339Nano)},
-			ColumnNames: query.Columns, Page: &commonpb.Page{Page: page, Size: c.pageSize()}, TotalMode: commonpb.TotalMode_NONE,
+			ColumnNames: query.Columns, Page: &commonpb.Page{Page: page, Size: size}, TotalMode: commonpb.TotalMode_NONE,
 			ExpectedActiveIndexId: query.ExpectedIndexID, ExpectedActiveIndexRevision: revision,
 		})
 		if err != nil {
-			return nil, 0, fmt.Errorf("读取 View %s 的行：%w", query.ViewID, err)
+			return nil, 0, transport("读取 View "+query.ViewID+" 的行", err)
 		}
 		if err := viewRetError(rsp.GetRetInfo()); err != nil {
 			return nil, 0, err
@@ -297,7 +301,7 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 			}
 			rows = append(rows, converted)
 		}
-		if !rsp.GetPageResult().GetHasMore() {
+		if query.Limit > 0 || !rsp.GetPageResult().GetHasMore() {
 			break
 		}
 	}
@@ -352,7 +356,7 @@ func (c *RPCClient) GetFactor(ctx context.Context, factorID string) (FactorInfo,
 	}
 	rsp, err := c.Factor.GetFactor(ctx, &factorpb.GetFactorReq{FactorId: factorID})
 	if err != nil {
-		return FactorInfo{}, fmt.Errorf("读取因子 %s：%w", factorID, err)
+		return FactorInfo{}, transport("读取因子 "+factorID, err)
 	}
 	if err := retError("GetFactor", rsp.GetRetInfo()); err != nil {
 		return FactorInfo{}, err
@@ -368,7 +372,35 @@ func retError(method string, info *commonpb.RetInfo) error {
 	if info == nil || info.GetCode() == commonpb.ErrorCode_SUCCESS {
 		return nil
 	}
-	return fmt.Errorf("%s 返回 %s：%s", method, info.GetCode().String(), info.GetMsg())
+	return fmt.Errorf("%s 失败（%s）：%s", method, info.GetCode().String(), info.GetMsg())
+}
+
+// TransportError 是调用 Storage 或 Factor 失败、结果未知的错误。Error 只给出中文概述；
+// 原始错误可能包含服务地址，经 Unwrap 保留给日志，不写入结果记录，也不返回给接口调用方。
+type TransportError struct {
+	Operation string
+	Err       error
+}
+
+func (e *TransportError) Error() string {
+	return e.Operation + "失败：Storage 或 Factor 暂时不可用"
+}
+
+func (e *TransportError) Unwrap() error { return e.Err }
+
+func transport(operation string, err error) error {
+	return &TransportError{Operation: operation, Err: err}
+}
+
+// RawCause 返回错误链最内层的原始错误，只用于写日志。
+func RawCause(err error) error {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err
+		}
+		err = next
+	}
 }
 
 // viewRetError 把 Storage 的"索引已变化"错误映射为 ErrStale，其余原样返回。

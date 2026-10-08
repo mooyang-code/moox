@@ -43,7 +43,6 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 		rsp.Diagnostics = append(rsp.Diagnostics, "试算未完成："+err.Error())
 		return rsp, nil
 	}
-	loaded.Frame.FailedColumns = input.InstrumentFailures(loaded.Frame.FailedColumns, loaded.Sets.Subjects)
 	decision, err := engine.Evaluate(program, loaded.Frame, engine.State{})
 	if err != nil {
 		rsp.Diagnostics = append(rsp.Diagnostics, "试算失败："+err.Error())
