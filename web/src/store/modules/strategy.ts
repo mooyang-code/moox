@@ -1,15 +1,24 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
 import {
+  deleteInstance,
+  deleteStrategy,
   getInstance,
   getStrategy,
+  getStrategyResult,
   listInstances,
   listStrategies,
   listStrategyResults,
   listStrategyTargets,
   setInstanceEnabled
 } from "@/api/strategy";
-import type { Strategy, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type {
+  Strategy,
+  StrategyInstance,
+  StrategyResult,
+  StrategyResultDetail,
+  StrategyTargetSnapshot
+} from "@/api/strategy-types";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -21,6 +30,7 @@ export const useStrategyStore = defineStore("strategy", () => {
   const instance = ref<StrategyInstance | null>(null);
   const strategy = ref<Strategy | null>(null);
   const results = ref<StrategyResult[]>([]);
+  const resultDetails = ref<Record<string, StrategyResultDetail>>({});
   const targetSnapshot = ref<StrategyTargetSnapshot | null>(null);
   const totalStrategies = ref(0);
   const strategiesComplete = ref(false);
@@ -62,16 +72,14 @@ export const useStrategyStore = defineStore("strategy", () => {
     error.value = "";
     try {
       const items: Strategy[] = [];
-      let page = 1;
       let total = 0;
-      do {
+      for (let page = 1; ; page += 1) {
         const response = await listStrategies({ page, page_size: pageSize });
         if (requestId !== strategiesRequest) return;
         items.push(...response.items);
         total = response.page.total;
         if (!response.items.length || items.length >= total) break;
-        page += 1;
-      } while (true);
+      }
       strategies.value = items;
       totalStrategies.value = total || items.length;
       strategiesComplete.value = true;
@@ -100,39 +108,43 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
+  /** 读取实例详情：实例 → 定义 → 最新目标；历史结果异步加载，不阻塞目标显示。 */
   async function loadInstanceDetail(instanceId: string, page = 1, pageSize = 20, allHistory = false) {
     const requestId = ++detailRequest;
     const resultRequestId = ++resultRequest;
     detailLoading.value = true;
     detailError.value = "";
     try {
-      const instanceResponse = await getInstance(instanceId);
+      const current = await getInstance(instanceId);
       if (requestId !== detailRequest) return false;
-      const current = instanceResponse.instance;
       instance.value = current;
-      const strategyResponse = await getStrategy(current.strategy_id);
+      const definition = await getStrategy(current.strategy_id).catch(() => null);
       if (requestId !== detailRequest) return false;
-      strategy.value = strategyResponse.strategy;
-      const resultTask = current.session_id || allHistory
-        ? listStrategyResults(instanceId, { session_id: allHistory ? undefined : current.session_id, page, page_size: pageSize })
-        : Promise.resolve(null);
-      void resultTask.then(resultResponse => {
-        if (requestId !== detailRequest || resultRequestId !== resultRequest) return;
-        results.value = resultResponse?.items ?? [];
-        totalResults.value = resultResponse?.page.total ?? 0;
-      }).catch(err => {
-        if (requestId === detailRequest && resultRequestId === resultRequest) {
-          detailError.value = errorMessage(err, "策略结果加载失败");
-        }
-      });
-      const targetResponse = await listStrategyTargets(instanceId);
+      strategy.value = definition;
+      const resultTask =
+        current.session_id || allHistory
+          ? listStrategyResults(instanceId, {
+              session_id: allHistory ? undefined : current.session_id,
+              page,
+              page_size: pageSize
+            })
+          : Promise.resolve(null);
+      void resultTask
+        .then(response => {
+          if (requestId !== detailRequest || resultRequestId !== resultRequest) return;
+          results.value = response?.items ?? [];
+          totalResults.value = response?.page.total ?? 0;
+        })
+        .catch(err => {
+          if (requestId === detailRequest && resultRequestId === resultRequest)
+            detailError.value = errorMessage(err, "策略结果加载失败");
+        });
+      const targets = await listStrategyTargets(instanceId);
       if (requestId !== detailRequest) return false;
-      targetSnapshot.value = targetResponse;
+      targetSnapshot.value = targets;
       return true;
     } catch (err) {
-      if (requestId === detailRequest) {
-        detailError.value = errorMessage(err, "实例详情加载失败");
-      }
+      if (requestId === detailRequest) detailError.value = errorMessage(err, "实例详情加载失败");
       throw err;
     } finally {
       if (requestId === detailRequest) detailLoading.value = false;
@@ -164,10 +176,41 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
+  /** 读取一个结果的解释明细；同一结果只请求一次。 */
+  async function loadResultDetail(resultId: string): Promise<StrategyResultDetail> {
+    const cached = resultDetails.value[resultId];
+    if (cached) return cached;
+    const detail = await getStrategyResult(resultId);
+    resultDetails.value = { ...resultDetails.value, [resultId]: detail };
+    return detail;
+  }
+
   async function changeEnabled(instanceId: string, enabled: boolean) {
     operationLoading.value = true;
     try {
-      await setInstanceEnabled(instanceId, enabled);
+      return await setInstanceEnabled(instanceId, enabled);
+    } finally {
+      operationLoading.value = false;
+    }
+  }
+
+  async function removeInstance(instanceId: string) {
+    operationLoading.value = true;
+    try {
+      await deleteInstance(instanceId);
+      instances.value = instances.value.filter(item => item.instance_id !== instanceId);
+      totalInstances.value = Math.max(0, totalInstances.value - 1);
+    } finally {
+      operationLoading.value = false;
+    }
+  }
+
+  async function removeStrategy(strategyId: string) {
+    operationLoading.value = true;
+    try {
+      await deleteStrategy(strategyId);
+      strategies.value = strategies.value.filter(item => item.strategy_id !== strategyId);
+      totalStrategies.value = Math.max(0, totalStrategies.value - 1);
     } finally {
       operationLoading.value = false;
     }
@@ -194,12 +237,13 @@ export const useStrategyStore = defineStore("strategy", () => {
 
   function clearDetail() {
     detailRequest += 1;
+    resultRequest += 1;
     instance.value = null;
     strategy.value = null;
     results.value = [];
+    resultDetails.value = {};
     targetSnapshot.value = null;
     totalResults.value = 0;
-    resultRequest += 1;
     detailError.value = "";
   }
 
@@ -209,6 +253,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     instance,
     strategy,
     results,
+    resultDetails,
     targetSnapshot,
     totalStrategies,
     strategiesComplete,
@@ -224,7 +269,10 @@ export const useStrategyStore = defineStore("strategy", () => {
     loadInstances,
     loadInstanceDetail,
     loadResultPage,
+    loadResultDetail,
     changeEnabled,
+    removeInstance,
+    removeStrategy,
     startPolling,
     stopPolling,
     clearDetail

@@ -37,6 +37,7 @@ export default {
     ["strategy-definition-new"]: "新建策略",
     ["strategy-definition-edit"]: "编辑策略",
     ["strategy-detail"]: "策略详情",
+    ["strategy-replay"]: "策略回放",
     ["data-import"]: "数据导入",
     ["compute-collector"]: "数据采集",
     ["collector-cloudnodes"]: "云节点",

@@ -68,6 +68,7 @@ export const systemMenu = [
   directory("0250", "0", "/strategy/running", "strategy", "strategy", 4, { svgIcon: "mind-mapping", icon: "" }),
   menu("025002", "0250", "/strategy/overview", "strategy-overview", "strategy-definitions", "strategy/overview/index", 1),
   menu("025001", "0250", "/strategy/running", "strategy-running", "strategy-running", "strategy/running/index", 2),
+  menu("025003", "0250", "/strategy/replay", "strategy-replay", "strategy-replay", "strategy/replay/index", 3),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-workbench/index", 1),
