@@ -10,7 +10,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -144,7 +144,7 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 	snapshot, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "trade-node")
 	require.NoError(t, err)
 	require.Len(t, snapshot.Routes, 2)
-	var owner, console gatewayproxy.Route
+	var owner, console gatewayroute.Route
 	for _, candidate := range snapshot.Routes {
 		switch candidate.ServiceID {
 		case "trade_owner":

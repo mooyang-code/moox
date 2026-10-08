@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 )
 
@@ -140,7 +140,7 @@ func TestNativeRoutesRejectInvalidIdentityBeforeStartup(t *testing.T) {
 		t.Run(config.name, func(t *testing.T) {
 			dir := t.TempDir()
 			ready, nonces := filepath.Join(dir, "ready"), filepath.Join(dir, "nonces")
-			routes := []gatewayproxy.Route{{ServiceID: "collector-market-runtime", Address: "127.0.0.1:23456", ServicePath: "trpc.moox.collector.MarketFetchRuntime", AllowedMethods: []string{"ClaimTimerBatch"}, AllowedCallers: []string{"collector"}}}
+			routes := []gatewayroute.Route{{ServiceID: "collector-market-runtime", Address: "127.0.0.1:23456", ServicePath: "trpc.moox.collector.MarketFetchRuntime", AllowedMethods: []string{"ClaimTimerBatch"}, AllowedCallers: []string{"collector"}}}
 			err := runNativeRoutes(config.node, routes, "collector", "invalid-listener", ready, nonces, config.key, config.secret)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "native gateway identity")

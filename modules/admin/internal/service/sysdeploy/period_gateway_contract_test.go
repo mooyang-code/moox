@@ -7,13 +7,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"gopkg.in/yaml.v3"
 )
 
 func TestCollectorPeriodGatewayContract(t *testing.T) {
 	methods := []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}
-	tables := make(map[string]*gatewayproxy.Table)
+	tables := make(map[string]*gatewayroute.Table)
 	for _, source := range []string{"defaults", "deployment_yaml"} {
 		table := collectorPeriodGatewayTable(t, source)
 		tables[source] = table
@@ -42,7 +42,7 @@ func TestCollectorPeriodGatewayContract(t *testing.T) {
 	}
 }
 
-func collectorPeriodGatewayTable(t *testing.T, source string) *gatewayproxy.Table {
+func collectorPeriodGatewayTable(t *testing.T, source string) *gatewayroute.Table {
 	t.Helper()
 	rows := DefaultDeployments("control")
 	if source == "deployment_yaml" {
@@ -77,7 +77,7 @@ func collectorPeriodGatewayTable(t *testing.T, source string) *gatewayproxy.Tabl
 				GatewayPath: item.GatewayPath, GatewayServiceID: item.GatewayServiceID, ExtraConfig: string(extra)})
 		}
 	}
-	var routes []gatewayproxy.Route
+	var routes []gatewayroute.Route
 	for _, row := range rows {
 		if row.ServiceName != "storage-primary" {
 			continue
@@ -95,11 +95,11 @@ func collectorPeriodGatewayTable(t *testing.T, source string) *gatewayproxy.Tabl
 	if len(routes) == 0 {
 		t.Fatal("production storage-primary routes are missing")
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHash("control", routes)
+	snapshot, err := gatewayroute.NormalizeAndHash("control", routes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	table := &gatewayproxy.Table{}
+	table := &gatewayroute.Table{}
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func collectorPeriodGatewayTable(t *testing.T, source string) *gatewayproxy.Tabl
 func TestFactorPrimaryStoreGatewayContract(t *testing.T) {
 	factorOnly := []string{"WriteFactorRows"}
 	factorShared := []string{"ReadTimeSeriesRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}
-	tables := make(map[string]*gatewayproxy.Table)
+	tables := make(map[string]*gatewayroute.Table)
 	for _, source := range []string{"defaults", "deployment_yaml"} {
 		table := collectorPeriodGatewayTable(t, source)
 		tables[source] = table

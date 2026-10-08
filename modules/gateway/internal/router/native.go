@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -18,11 +18,11 @@ import (
 )
 
 type nativeRouteTable interface {
-	ResolveRPC(string) (gatewayproxy.Route, string, bool)
+	ResolveRPC(string) (gatewayroute.Route, string, bool)
 }
 
 type callerAwareNativeRouteTable interface {
-	ResolveRPCForCaller(string, string) (gatewayproxy.Route, string, bool)
+	ResolveRPCForCaller(string, string) (gatewayroute.Route, string, bool)
 }
 
 type NativeOptions struct {
@@ -85,7 +85,7 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 		if err != nil {
 			return nil, err
 		}
-		var route gatewayproxy.Route
+		var route gatewayroute.Route
 		if callerTable, supported := proxy.options.Table.(callerAwareNativeRouteTable); supported {
 			route, method, ok = callerTable.ResolveRPCForCaller(rpcName, claims.Caller)
 		} else {
@@ -149,7 +149,7 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 // makes tRPC report it as a full-link timeout, and the tRPC server drops the
 // reply for any framework timeout except RetClientTimeout, so the caller would
 // wait for its own, longer deadline instead of learning the upstream timed out.
-func upstreamError(route gatewayproxy.Route, method string, err error) error {
+func upstreamError(route gatewayroute.Route, method string, err error) error {
 	var frameErr *errs.Error
 	if errors.As(err, &frameErr) && frameErr.IsTimeout(errs.ErrorTypeFramework) {
 		return errs.NewFrameError(errs.RetClientTimeout, fmt.Sprintf(

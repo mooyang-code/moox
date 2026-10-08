@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 const maxRouteFileBytes = 16 << 20
@@ -34,7 +34,7 @@ func (routes *Routes) Check() error {
 	return file.Close()
 }
 
-func (routes *Routes) Save(snapshot gatewayproxy.Snapshot) (resultErr error) {
+func (routes *Routes) Save(snapshot gatewayroute.Snapshot) (resultErr error) {
 	if err := validateSnapshot(snapshot); err != nil {
 		return err
 	}
@@ -86,37 +86,37 @@ func (routes *Routes) Save(snapshot gatewayproxy.Snapshot) (resultErr error) {
 	return nil
 }
 
-func (routes *Routes) Load() (gatewayproxy.Snapshot, error) {
+func (routes *Routes) Load() (gatewayroute.Snapshot, error) {
 	if err := ensureSecureRouteDirectory(routes.directory, false); err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayroute.Snapshot{}, err
 	}
 	if err := ensureSecureCacheFile(routes.Path(), false); err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayroute.Snapshot{}, err
 	}
 	file, err := os.Open(routes.Path())
 	if err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("open routes: %w", err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("open routes: %w", err)
 	}
 	defer file.Close()
 	encoded, err := io.ReadAll(io.LimitReader(file, maxRouteFileBytes+1))
 	if err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("read routes: %w", err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("read routes: %w", err)
 	}
 	if len(encoded) > maxRouteFileBytes {
-		return gatewayproxy.Snapshot{}, errors.New("route file is too large")
+		return gatewayroute.Snapshot{}, errors.New("route file is too large")
 	}
-	var snapshot gatewayproxy.Snapshot
+	var snapshot gatewayroute.Snapshot
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&snapshot); err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("decode routes: %w", err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("decode routes: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return gatewayproxy.Snapshot{}, errors.New("route file contains trailing JSON")
+		return gatewayroute.Snapshot{}, errors.New("route file contains trailing JSON")
 	}
 	if err := validateSnapshot(snapshot); err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayroute.Snapshot{}, err
 	}
 	return snapshot, nil
 }
@@ -158,11 +158,11 @@ func ensureSecureCacheFile(path string, allowMissing bool) error {
 	return nil
 }
 
-func validateSnapshot(snapshot gatewayproxy.Snapshot) error {
+func validateSnapshot(snapshot gatewayroute.Snapshot) error {
 	if snapshot.NodeID == "" {
 		return errors.New("route snapshot node_id is required")
 	}
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	if err := table.Replace(snapshot); err != nil {
 		return fmt.Errorf("validate route snapshot: %w", err)
 	}

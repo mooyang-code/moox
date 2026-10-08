@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 func TestLogicalAccountOwnerUsesConfiguredSignedGateway(t *testing.T) {
@@ -44,8 +44,8 @@ func TestLogicalAccountOwnerUsesConfiguredSignedGateway(t *testing.T) {
 			return
 		}
 		seen++
-		route := gatewayproxy.Route{ServiceID: "trade_console", ServicePath: "trpc.moox.trade.TradeConsoleService", Address: strings.TrimPrefix(upstreamTarget, "ip://"), AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}, TimeoutMS: 1000, MaxBodyBytes: 1048576}
-		rsp, err := gatewayproxy.Forward(r.Context(), nil, route, "GetLogicalAccount", body, r.Header)
+		route := gatewayroute.Route{ServiceID: "trade_console", ServicePath: "trpc.moox.trade.TradeConsoleService", Address: strings.TrimPrefix(upstreamTarget, "ip://"), AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}, TimeoutMS: 1000, MaxBodyBytes: 1048576}
+		rsp, err := gatewayroute.Forward(r.Context(), nil, route, "GetLogicalAccount", body, r.Header)
 		if err != nil {
 			t.Error(err)
 			w.WriteHeader(502)

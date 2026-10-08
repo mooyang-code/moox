@@ -23,7 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/router"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"gopkg.in/yaml.v3"
 )
 
@@ -69,7 +69,7 @@ func runMonitorHTTP(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secre
 	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.Path != "" {
 		return fmt.Errorf("upstream-url must be a loopback HTTP origin")
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{
+	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, []gatewayroute.Route{{
 		ServiceID: "monitor", Address: parsed.Host, ServicePath: "trpc.moox.monitor.MonitorMgr",
 		AllowedMethods: []string{"GetPeerSnapshot"},
 		AllowedCallers: []string{"monitor"},
@@ -77,7 +77,7 @@ func runMonitorHTTP(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secre
 	if err != nil {
 		return err
 	}
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	if err := table.Replace(snapshot); err != nil {
 		return err
 	}
@@ -125,22 +125,22 @@ func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDire
 	if err != nil || (host != "127.0.0.1" && host != "::1") {
 		return fmt.Errorf("upstream-addr must be a loopback host:port")
 	}
-	return runNativeRoutes(nodeID, []gatewayproxy.Route{{
+	return runNativeRoutes(nodeID, []gatewayroute.Route{{
 		ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
 		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-skill"},
 	}}, "moox-skill", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
-func runNativeRoutes(nodeID string, routes []gatewayproxy.Route, caller, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+func runNativeRoutes(nodeID string, routes []gatewayroute.Route, caller, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	credentials := gatewayauth.Credentials{KeyID: keyID, Caller: caller, Secret: secret}
 	if _, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: http.MethodPost, Path: "/", TargetNode: nodeID}, time.Now()); err != nil {
 		return fmt.Errorf("native gateway identity: %w", err)
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, routes)
+	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, routes)
 	if err != nil {
 		return err
 	}
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	if err := table.Replace(snapshot); err != nil {
 		return err
 	}
@@ -207,7 +207,7 @@ func runCollectorPeriodNative(path, scope, upstreamAddress, metadataUpstreamAddr
 	return runNativeRoutes(nodeID, routes, "collector", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
-func loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress string) ([]gatewayproxy.Route, error) {
+func loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress string) ([]gatewayroute.Route, error) {
 	routes, err := loadCollectorPeriodRoutes(path, scope, upstreamAddress)
 	if err != nil {
 		return nil, err
@@ -225,7 +225,7 @@ func loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadat
 	return append(routes, metadataRoutes...), nil
 }
 
-func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewayproxy.Route, error) {
+func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewayroute.Route, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("deployment-yaml must be an absolute path")
 	}
@@ -273,7 +273,7 @@ func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewaypr
 		return nil, fmt.Errorf("decode deployment-yaml: %w", err)
 	}
 	counts := make(map[string]int)
-	var selected []gatewayproxy.Route
+	var selected []gatewayroute.Route
 	for _, service := range seed.Services {
 		id := service.GatewayServiceID
 		if id == "" && service.Name == serviceID {
@@ -289,7 +289,7 @@ func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewaypr
 			return nil, fmt.Errorf("required service %s must have active status", id)
 		}
 		appendRoute := func(path string, port int, policy deploymentRoutePolicy) error {
-			route := gatewayproxy.Route{ServiceID: id, Address: net.JoinHostPort(service.Host, fmt.Sprint(port)), ServicePath: path,
+			route := gatewayroute.Route{ServiceID: id, Address: net.JoinHostPort(service.Host, fmt.Sprint(port)), ServicePath: path,
 				TimeoutMS: policy.TimeoutMS, MaxBodyBytes: policy.MaxBodyBytes,
 				AllowedMethods: policy.GatewayMethods, AllowedCallers: policy.GatewayCallers}
 			chosen := false
@@ -305,7 +305,7 @@ func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewaypr
 			if path != servicePath || !route.AllowsCaller("collector") {
 				return fmt.Errorf("required route %s must use %s and allow collector", id, servicePath)
 			}
-			if _, err := gatewayproxy.NormalizeAndHash("validate-production-route", []gatewayproxy.Route{route}); err != nil {
+			if _, err := gatewayroute.NormalizeAndHash("validate-production-route", []gatewayroute.Route{route}); err != nil {
 				return fmt.Errorf("invalid production route: %w", err)
 			}
 			route.Address = upstreamAddress
@@ -329,7 +329,7 @@ func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewaypr
 			return nil, fmt.Errorf("required method %s must have exactly one route (got %d)", method, counts[method])
 		}
 	}
-	if _, err := gatewayproxy.NormalizeAndHash("validate-selected-routes", selected); err != nil {
+	if _, err := gatewayroute.NormalizeAndHash("validate-selected-routes", selected); err != nil {
 		return nil, err
 	}
 	return selected, nil

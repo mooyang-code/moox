@@ -11,7 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/controlplane"
 	"github.com/mooyang-code/moox/modules/gateway/internal/health"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 func TestInitializeLoadsCacheBeforeInitialPull(t *testing.T) {
@@ -227,9 +227,9 @@ func TestRefreshReportFailureDegradesReadinessWithoutDiscardingRoutes(t *testing
 	}
 }
 
-func testSnapshot(t *testing.T, nodeID, serviceID string) gatewayproxy.Snapshot {
+func testSnapshot(t *testing.T, nodeID, serviceID string) gatewayroute.Snapshot {
 	t.Helper()
-	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{ServiceID: serviceID, Address: "127.0.0.1:1234", ServicePath: "trpc.moox.test.Service", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
+	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, []gatewayroute.Route{{ServiceID: serviceID, Address: "127.0.0.1:1234", ServicePath: "trpc.moox.test.Service", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,18 +237,18 @@ func testSnapshot(t *testing.T, nodeID, serviceID string) gatewayproxy.Snapshot 
 }
 
 type fakeRoutes struct {
-	load             gatewayproxy.Snapshot
+	load             gatewayroute.Snapshot
 	loadErr, saveErr error
 	events           *[]string
 }
 
-func (routes *fakeRoutes) Load() (gatewayproxy.Snapshot, error) {
+func (routes *fakeRoutes) Load() (gatewayroute.Snapshot, error) {
 	if routes.events != nil {
 		*routes.events = append(*routes.events, "load")
 	}
 	return routes.load, routes.loadErr
 }
-func (routes *fakeRoutes) Save(gatewayproxy.Snapshot) error {
+func (routes *fakeRoutes) Save(gatewayroute.Snapshot) error {
 	if routes.events != nil {
 		*routes.events = append(*routes.events, "save")
 	}
@@ -256,12 +256,12 @@ func (routes *fakeRoutes) Save(gatewayproxy.Snapshot) error {
 }
 
 type fakeControl struct {
-	pull               gatewayproxy.Snapshot
+	pull               gatewayroute.Snapshot
 	pullErr, reportErr error
 	events             *[]string
 }
 
-func (control *fakeControl) Pull(_ context.Context, hash string) (gatewayproxy.Snapshot, error) {
+func (control *fakeControl) Pull(_ context.Context, hash string) (gatewayroute.Snapshot, error) {
 	if control.events != nil {
 		*control.events = append(*control.events, "pull:"+hash)
 	}

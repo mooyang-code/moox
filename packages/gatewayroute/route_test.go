@@ -1,4 +1,4 @@
-package gatewayproxy
+package gatewayroute
 
 import (
 	"testing"

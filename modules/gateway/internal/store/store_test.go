@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 func TestRoutesSaveLoadAndRejectInvalidSnapshotWithoutReplacingFile(t *testing.T) {
@@ -18,7 +18,7 @@ func TestRoutesSaveLoadAndRejectInvalidSnapshotWithoutReplacingFile(t *testing.T
 		t.Fatal(err)
 	}
 	routes := NewRoutes(dir)
-	valid, err := gatewayproxy.NormalizeAndHash("node-a", []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
+	valid, err := gatewayroute.NormalizeAndHash("node-a", []gatewayroute.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestRoutesRejectsInsecureOrSymlinkedCache(t *testing.T) {
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		snapshot, _ := gatewayproxy.NormalizeAndHash("node-a", nil)
+		snapshot, _ := gatewayroute.NormalizeAndHash("node-a", nil)
 		if err := NewRoutes(dir).Save(snapshot); err == nil {
 			t.Fatal("Save() accepted insecure directory")
 		}
@@ -89,7 +89,7 @@ func TestRoutesRejectsInsecureOrSymlinkedCache(t *testing.T) {
 		if err := os.Symlink(realDir, link); err != nil {
 			t.Fatal(err)
 		}
-		snapshot, _ := gatewayproxy.NormalizeAndHash("node-a", nil)
+		snapshot, _ := gatewayroute.NormalizeAndHash("node-a", nil)
 		if err := NewRoutes(link).Save(snapshot); err == nil {
 			t.Fatal("Save() accepted symlinked directory")
 		}
@@ -156,7 +156,7 @@ func TestPersistentStoreHealthChecks(t *testing.T) {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _ := gatewayproxy.NormalizeAndHash("node-a", nil)
+	snapshot, _ := gatewayroute.NormalizeAndHash("node-a", nil)
 	routes := NewRoutes(dir)
 	if err := routes.Save(snapshot); err != nil {
 		t.Fatal(err)

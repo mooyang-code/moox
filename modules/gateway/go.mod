@@ -7,7 +7,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayproxy v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/trpcretry v0.0.0-00010101000000-000000000000
@@ -89,7 +89,7 @@ require (
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
-replace github.com/mooyang-code/moox/packages/gatewayproxy => ../../packages/gatewayproxy
+replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute
 
 replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
 

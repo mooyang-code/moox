@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 const (
@@ -23,8 +23,8 @@ const (
 )
 
 type GatewayControlProvider interface {
-	CompileGatewaySnapshot(context.Context, string) (gatewayproxy.Snapshot, error)
-	ReportGatewayStatus(context.Context, gatewayproxy.GatewayStatusReport) error
+	CompileGatewaySnapshot(context.Context, string) (gatewayroute.Snapshot, error)
+	ReportGatewayStatus(context.Context, gatewayroute.GatewayStatusReport) error
 }
 
 type GatewayProvider interface {
@@ -82,7 +82,7 @@ func (hr *HTTPRouter) handleGatewayStatus(w http.ResponseWriter, r *http.Request
 	if !hr.authenticateGatewayControl(w, r, request.NodeID, body) {
 		return
 	}
-	report := gatewayproxy.GatewayStatusReport{
+	report := gatewayroute.GatewayStatusReport{
 		NodeID: request.NodeID, AppliedRouteHash: request.AppliedRouteHash,
 		RouteCount: request.RouteCount, LastSeenAt: time.Now().UTC(), LastError: request.LastError,
 	}
@@ -175,9 +175,9 @@ func hasRequestBody(r *http.Request) bool {
 
 func writeGatewayControlProviderError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
-	if errors.Is(err, gatewayproxy.ErrGatewayNodeNotFound) {
+	if errors.Is(err, gatewayroute.ErrGatewayNodeNotFound) {
 		status = http.StatusNotFound
-	} else if errors.Is(err, gatewayproxy.ErrInvalidGatewayRoute) {
+	} else if errors.Is(err, gatewayroute.ErrInvalidGatewayRoute) {
 		status = http.StatusBadRequest
 	}
 	writeGatewayControlError(w, status, http.StatusText(status))

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/healthz"
 )
 
@@ -21,7 +21,7 @@ func TestCLICommandsAndFailureModes(t *testing.T) {
 		t.Fatalf("check-config exit = %d", code)
 	}
 
-	snapshot, _ := gatewayproxy.NormalizeAndHash("gateway-test", []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:1234", ServicePath: "trpc.moox.monitor.Monitor", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
+	snapshot, _ := gatewayroute.NormalizeAndHash("gateway-test", []gatewayroute.Route{{ServiceID: "monitor", Address: "127.0.0.1:1234", ServicePath: "trpc.moox.monitor.Monitor", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err := store.NewRoutes(storePath).Save(snapshot); err != nil {
 		t.Fatal(err)
 	}

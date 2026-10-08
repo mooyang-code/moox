@@ -15,7 +15,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/config"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 const DefaultControlKeyID = "moox-gateway-control"
@@ -65,10 +65,10 @@ func New(options Options) (*Client, error) {
 	return &Client{nodeID: options.NodeID, baseURL: baseURL, credentials: gatewayauth.Credentials{KeyID: keyID, Secret: secret}, httpClient: httpClient, now: now}, nil
 }
 
-func (client *Client) Pull(ctx context.Context, currentHash string) (gatewayproxy.Snapshot, error) {
+func (client *Client) Pull(ctx context.Context, currentHash string) (gatewayroute.Snapshot, error) {
 	endpoint, err := url.Parse(client.baseURL + "/api/gateway-control/routes")
 	if err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayroute.Snapshot{}, err
 	}
 	query := endpoint.Query()
 	query.Set("node_id", client.nodeID)
@@ -78,43 +78,43 @@ func (client *Client) Pull(ctx context.Context, currentHash string) (gatewayprox
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayroute.Snapshot{}, err
 	}
 	if err := client.sign(request, nil); err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayroute.Snapshot{}, err
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("pull gateway routes: %w", err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("pull gateway routes: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		return gatewayproxy.Snapshot{}, fmt.Errorf("pull gateway routes: unexpected HTTP status %d", response.StatusCode)
+		return gatewayroute.Snapshot{}, fmt.Errorf("pull gateway routes: unexpected HTTP status %d", response.StatusCode)
 	}
 	encoded, err := io.ReadAll(io.LimitReader(response.Body, maxSnapshotBytes+1))
 	if err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("read gateway routes: %w", err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("read gateway routes: %w", err)
 	}
 	if len(encoded) > maxSnapshotBytes {
-		return gatewayproxy.Snapshot{}, errors.New("gateway route snapshot is too large")
+		return gatewayroute.Snapshot{}, errors.New("gateway route snapshot is too large")
 	}
-	var snapshot gatewayproxy.Snapshot
+	var snapshot gatewayroute.Snapshot
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&snapshot); err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("decode gateway routes: %w", err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("decode gateway routes: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return gatewayproxy.Snapshot{}, errors.New("gateway route snapshot contains trailing JSON")
+		return gatewayroute.Snapshot{}, errors.New("gateway route snapshot contains trailing JSON")
 	}
 	if snapshot.NodeID != client.nodeID {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: targets %q, want %q", ErrInvalidSnapshot, snapshot.NodeID, client.nodeID)
+		return gatewayroute.Snapshot{}, fmt.Errorf("%w: targets %q, want %q", ErrInvalidSnapshot, snapshot.NodeID, client.nodeID)
 	}
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	if err := table.Replace(snapshot); err != nil {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: %v", ErrInvalidSnapshot, err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("%w: %v", ErrInvalidSnapshot, err)
 	}
 	return snapshot, nil
 }

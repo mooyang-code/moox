@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 func TestPullSignsRequestAndValidatesSnapshot(t *testing.T) {
 	const nodeID = "gateway-test"
 	const secret = "control-secret"
-	snapshot, _ := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
+	snapshot, _ := gatewayroute.NormalizeAndHash(nodeID, []gatewayroute.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/gateway-control/routes" || r.URL.Query().Get("node_id") != nodeID || r.URL.Query().Get("current_hash") != "old" {
 			t.Errorf("request URL = %s", r.URL.String())
@@ -82,12 +82,12 @@ func TestPullRejectsRedirectWithoutLeakingAuthentication(t *testing.T) {
 }
 
 func TestPullRejectsWrongNodeAndInvalidRouteHash(t *testing.T) {
-	for name, mutate := range map[string]func(*gatewayproxy.Snapshot){
-		"wrong node":   func(snapshot *gatewayproxy.Snapshot) { snapshot.NodeID = "other-node" },
-		"invalid hash": func(snapshot *gatewayproxy.Snapshot) { snapshot.RouteHash = "invalid" },
+	for name, mutate := range map[string]func(*gatewayroute.Snapshot){
+		"wrong node":   func(snapshot *gatewayroute.Snapshot) { snapshot.NodeID = "other-node" },
+		"invalid hash": func(snapshot *gatewayroute.Snapshot) { snapshot.RouteHash = "invalid" },
 	} {
 		t.Run(name, func(t *testing.T) {
-			snapshot, _ := gatewayproxy.NormalizeAndHash("gateway-test", nil)
+			snapshot, _ := gatewayroute.NormalizeAndHash("gateway-test", nil)
 			mutate(&snapshot)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(snapshot) }))
 			defer server.Close()

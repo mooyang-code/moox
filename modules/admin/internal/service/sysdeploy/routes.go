@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -34,16 +34,16 @@ type routeExtraConfig struct {
 
 type RouteConfigError struct{ Err error }
 
-var ErrInvalidGatewayRoute = gatewayproxy.ErrInvalidGatewayRoute
+var ErrInvalidGatewayRoute = gatewayroute.ErrInvalidGatewayRoute
 
 func (err *RouteConfigError) Error() string { return err.Err.Error() }
 func (err *RouteConfigError) Unwrap() error { return err.Err }
 func (err *RouteConfigError) Is(target error) bool {
-	return target == gatewayproxy.ErrInvalidGatewayRoute
+	return target == gatewayroute.ErrInvalidGatewayRoute
 }
 
-func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
-	var snapshot gatewayproxy.Snapshot
+func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayroute.Snapshot, error) {
+	var snapshot gatewayroute.Snapshot
 	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		compiled, err := (&DAO{db: tx}).compileGatewaySnapshot(ctx, nodeID)
 		if err != nil {
@@ -53,7 +53,7 @@ func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 		return nil
 	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: %w", gatewayproxy.ErrGatewayNodeNotFound, err)
+		return gatewayroute.Snapshot{}, fmt.Errorf("%w: %w", gatewayroute.ErrGatewayNodeNotFound, err)
 	}
 	if err == nil {
 		// Keep operator-facing route bookkeeping outside the read transaction.
@@ -69,37 +69,37 @@ func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 	return snapshot, err
 }
 
-func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
+func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayroute.Snapshot, error) {
 	node, err := d.GetGatewayNode(ctx, nodeID)
 	if err != nil {
-		return gatewayproxy.Snapshot{}, err
+		return gatewayroute.Snapshot{}, err
 	}
-	routes := []gatewayproxy.Route{}
+	routes := []gatewayroute.Route{}
 	if node.Status == "enabled" {
 		var rows []Deployment
 		if err := d.db.WithContext(ctx).Where("c_node_id = ? AND c_status = ? AND c_gateway_enabled = ?", nodeID, "active", true).Order("c_gateway_service_id ASC").Find(&rows).Error; err != nil {
-			return gatewayproxy.Snapshot{}, err
+			return gatewayroute.Snapshot{}, err
 		}
 		for _, row := range rows {
 			extra, err := parseRouteExtraConfig(row.ExtraConfig)
 			if err != nil {
-				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: fmt.Errorf("deployment %s/%s extra_config: %w", row.NodeID, row.ServiceName, err)}
+				return gatewayroute.Snapshot{}, &RouteConfigError{Err: fmt.Errorf("deployment %s/%s extra_config: %w", row.NodeID, row.ServiceName, err)}
 			}
 			compiled, err := deploymentGatewayRoutes(row, extra)
 			if err != nil {
-				return gatewayproxy.Snapshot{}, &RouteConfigError{Err: err}
+				return gatewayroute.Snapshot{}, &RouteConfigError{Err: err}
 			}
 			routes = append(routes, compiled...)
 		}
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHashState(nodeID, node.Status == "disabled", routes)
+	snapshot, err := gatewayroute.NormalizeAndHashState(nodeID, node.Status == "disabled", routes)
 	if err != nil {
-		return gatewayproxy.Snapshot{}, &RouteConfigError{Err: err}
+		return gatewayroute.Snapshot{}, &RouteConfigError{Err: err}
 	}
 	return snapshot, nil
 }
 
-func updateGatewayNodeRouteBookkeeping(ctx context.Context, db *gorm.DB, nodeID string, snapshot gatewayproxy.Snapshot) error {
+func updateGatewayNodeRouteBookkeeping(ctx context.Context, db *gorm.DB, nodeID string, snapshot gatewayroute.Snapshot) error {
 	values := map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -127,7 +127,7 @@ func isSQLiteLockError(err error) bool {
 	return strings.Contains(message, "database is locked") || strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database table is locked")
 }
 
-func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayproxy.Route, error) {
+func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayroute.Route, error) {
 	basePort := row.Port
 	switch row.GatewayServiceID {
 	case "storage-primary":
@@ -146,19 +146,19 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayp
 		// native service gateway must speak tRPC to the dedicated loopback port.
 		basePort = 11422
 	}
-	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
+	base := gatewayroute.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {
 		base.TimeoutMS = *extra.TimeoutMS
 	}
 	if extra.MaxBodyBytes != nil {
 		base.MaxBodyBytes = *extra.MaxBodyBytes
 	}
-	routes := []gatewayproxy.Route{base}
+	routes := []gatewayroute.Route{base}
 	for _, item := range extra.GatewayRoutes {
 		if item.ServicePath == "" || item.Port < 1 {
 			return nil, fmt.Errorf("gateway_routes entries require service_path and positive port")
 		}
-		route := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(item.Port))), ServicePath: item.ServicePath, AllowedMethods: item.GatewayMethods, AllowedCallers: item.GatewayCallers}
+		route := gatewayroute.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(item.Port))), ServicePath: item.ServicePath, AllowedMethods: item.GatewayMethods, AllowedCallers: item.GatewayCallers}
 		if item.TimeoutMS != nil {
 			route.TimeoutMS = *item.TimeoutMS
 		}

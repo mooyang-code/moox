@@ -21,7 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/router"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 const (
@@ -193,13 +193,13 @@ func callGateway(t *testing.T, baseURL, targetNode string) (int, string) {
 	return response.StatusCode, strings.TrimSpace(string(raw))
 }
 
-func snapshotFor(t *testing.T, nodeID, upstreamURL string, disabled bool) gatewayproxy.Snapshot {
+func snapshotFor(t *testing.T, nodeID, upstreamURL string, disabled bool) gatewayroute.Snapshot {
 	t.Helper()
 	parsed, err := url.Parse(upstreamURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHashState(nodeID, disabled, []gatewayproxy.Route{{
+	snapshot, err := gatewayroute.NormalizeAndHashState(nodeID, disabled, []gatewayroute.Route{{
 		ServiceID: "echo", Address: parsed.Host, ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"}, AllowedCallers: []string{"*"},
 	}})
 	if err != nil {
@@ -225,13 +225,13 @@ func newTRPCUpstream(t *testing.T, name string) *httptest.Server {
 type fakeAdmin struct {
 	*httptest.Server
 	mu       sync.Mutex
-	snapshot gatewayproxy.Snapshot
+	snapshot gatewayroute.Snapshot
 	outage   bool
 	pulls    int
 	reports  int
 }
 
-func newFakeAdmin(t *testing.T, initial gatewayproxy.Snapshot) *fakeAdmin {
+func newFakeAdmin(t *testing.T, initial gatewayroute.Snapshot) *fakeAdmin {
 	t.Helper()
 	admin := &fakeAdmin{snapshot: initial}
 	admin.Server = httptest.NewServer(http.HandlerFunc(admin.serveHTTP))
@@ -281,7 +281,7 @@ func verifyControlRequest(request *http.Request, nodeID string, body []byte) boo
 	return err == nil
 }
 
-func (admin *fakeAdmin) setSnapshot(snapshot gatewayproxy.Snapshot) {
+func (admin *fakeAdmin) setSnapshot(snapshot gatewayroute.Snapshot) {
 	admin.mu.Lock()
 	defer admin.mu.Unlock()
 	admin.snapshot = snapshot
