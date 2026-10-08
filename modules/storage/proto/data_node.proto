@@ -163,7 +163,8 @@ message CleanupExpiredBucketsReq {
 
 message CleanupExpiredBucketsRsp {
   common.RetInfo ret_info = 1;
-  uint64 deleted_buckets = 2;
+  // deleted_ranges is the number of key ranges the cleanup deleted.
+  uint64 deleted_ranges = 2;
 }
 
 message DeleteDatasetRowsReq {

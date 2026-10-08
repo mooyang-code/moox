@@ -33,24 +33,59 @@ backup_count = 5
 # View 维护策略。每个时序序列超过 max_periods_per_series 即触发 A/B 重建，
 # 新 View 尝试回溯 rebuild_lookback_periods 根已完成 K 线；历史不足时使用已有数据激活，
 # 后续由实时事件继续补齐。
+# Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
+# 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据，发布前用 moox-cli config plan 核对。
+[storage_retention]
+view_bars = 5000   # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N) 根时整理
+
+# 7×24 小时交易的空间（crypto 等，以及没有单独配置的空间）
+[storage_retention.defaults]
+"30s" = "48h"
+"1m" = "7d"
+"5m" = "30d"
+"15m" = "90d"
+"30m" = "180d"
+"1h" = "365d"
+"4h" = "1095d"
+"1d" = "forever"
+"1w" = "forever"
+"1mo" = "forever"
+
+# 有交易时段的市场同样根数需要更多自然日
+[storage_retention.spaces.stockcn]
+"1m" = "45d"
+"5m" = "240d"
+"15m" = "730d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.stockhk]
+"1m" = "30d"
+"5m" = "240d"
+"15m" = "730d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.stockus]
+"1m" = "30d"
+"5m" = "240d"
+"15m" = "730d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.mooxsys]
+"30s" = "48h"
+"1m" = "180d"
+
+# View 维护的检查节奏与单个 View 文件上限。
 [storage_view]
 maintenance_check_interval = "1m"
 capacity_check_interval = "1h"
 capacity_check_jitter = "1h"
-rebuild_lookback_periods = 5000
-max_periods_per_series = 6000
 max_view_file_bytes = 1073741824
-
-# 系统监控 View 可单独配置；省略字段继承 storage_view 全局值。
-[storage_view.system_monitor]
-max_periods_per_series = 6000
-
-# 单个 View 覆盖优先级最高；省略字段继承 system_monitor 或全局值。
-[[storage_view.views]]
-space_id = "crypto"
-view_id = "view_dasftksvjhj2jom4vhd0_kline_1m"
-rebuild_lookback_periods = 5000
-max_periods_per_series = 6000
 
 # Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
 # 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。

@@ -127,6 +127,15 @@ func Open(opts Options) (*Store, error) {
 	return store, nil
 }
 
+// DiskSpaceUsage returns the on-disk size of the store, including files that
+// compaction has made obsolete but not yet deleted.
+func (s *Store) DiskSpaceUsage() uint64 {
+	if s == nil || s.db == nil {
+		return 0
+	}
+	return s.db.Metrics().DiskSpaceUsage()
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil

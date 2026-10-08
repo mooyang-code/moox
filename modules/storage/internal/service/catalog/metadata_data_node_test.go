@@ -114,7 +114,7 @@ func TestListDataNodesAggregatesDatasetsWithOneUnpaginatedQuery(t *testing.T) {
 			{NodeId: "node-b", Name: "B", Status: "disabled"},
 		},
 		datasets: []*pb.Dataset{
-			{SpaceId: "space-a", DatasetId: "dataset-a", DataNodeId: "node-a", Name: "A Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "24h", Status: "active"},
+			{SpaceId: "space-a", DatasetId: "dataset-a", DataNodeId: "node-a", Name: "A Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
 			{SpaceId: "space-b", DatasetId: "dataset-b", DataNodeId: "node-a", Name: "B Dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "disabled"},
 		},
 	}
@@ -240,7 +240,7 @@ func TestCreateDatasetRequiresDataNodeID(t *testing.T) {
 
 	rsp, err := svc.CreateDataset(context.Background(), &pb.CreateDatasetReq{Dataset: &pb.Dataset{
 		SpaceId: "space-a", DatasetId: "dataset_a", DataSourceId: "source-a", Name: "测试集",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "24h",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())

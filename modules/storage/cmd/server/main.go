@@ -35,6 +35,7 @@ import (
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 	_ "trpc.group/trpc-go/trpc-database/timer"
@@ -162,14 +163,22 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, OperatorAuthSecret: primarySecret})
+	policy, err := loadStoragePolicy()
+	if err != nil {
+		return err
+	}
+	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, OperatorAuthSecret: primarySecret, Retention: policy.Retention})
+	if err != nil {
+		return err
+	}
+	cleanupMetrics, err := observability.NewCleanupMetrics(prometheus.DefaultRegisterer)
 	if err != nil {
 		return err
 	}
 	cleanupCtx, stopCleanup := context.WithCancel(trpc.BackgroundContext())
 	defer stopCleanup()
 	cleanupAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
-	go runCleanupLoop(cleanupCtx, cached, resolver, cleanupAuth, time.Hour)
+	go runCleanupLoop(cleanupCtx, datasetCleanup{reader: cached, resolver: resolver, auth: cleanupAuth, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
 	go runViewPeriodCleanupLoop(cleanupCtx, meta, time.Hour, storageViewPeriodRetention())
 	s := trpc.NewServer()
 	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc", "trpc.moox.storage.PrimaryStore.http"} {
@@ -195,11 +204,11 @@ type datasetReader interface {
 	ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 }
 
-func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, interval time.Duration) {
+func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	if err := cleanupDatasets(ctx, reader, resolver, auth, time.Now().UTC()); err != nil {
+	if err := cleanup.run(ctx, time.Now().UTC()); err != nil {
 		log.Printf("storage cleanup initial run failed: %v", err)
 	}
 	ticker := time.NewTicker(interval)
@@ -209,7 +218,7 @@ func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarys
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			if err := cleanupDatasets(ctx, reader, resolver, auth, now.UTC()); err != nil {
+			if err := cleanup.run(ctx, now.UTC()); err != nil {
 				log.Printf("storage cleanup run failed: %v", err)
 			}
 		}
@@ -258,43 +267,68 @@ func storageViewPeriodRetention() time.Duration {
 	return 7 * 24 * time.Hour
 }
 
-func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, now time.Time) error {
+// datasetCleanup deletes the rows of each active time-series Dataset that
+// are older than its retention in the Storage policy.
+type datasetCleanup struct {
+	reader    datasetReader
+	resolver  primarystore.NodeResolver
+	auth      *pb.AuthInfo
+	retention storagepolicy.Retention
+	metrics   *observability.CleanupMetrics
+}
+
+func (c datasetCleanup) run(ctx context.Context, now time.Time) error {
 	var result error
 	for pageNo := uint32(1); ; pageNo++ {
-		datasets, page, err := reader.ListDatasets(ctx, metadata.DatasetQuery{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Page: &pb.Page{Page: pageNo, Size: 1000}})
+		datasets, page, err := c.reader.ListDatasets(ctx, metadata.DatasetQuery{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Page: &pb.Page{Page: pageNo, Size: 1000}})
 		if err != nil {
 			return err
 		}
 		for _, dataset := range datasets {
-			if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") || dataset.GetKeepDuration() == "0" {
+			if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {
 				continue
 			}
-			keep, err := time.ParseDuration(dataset.GetKeepDuration())
-			if err != nil || keep <= 0 {
-				result = errors.Join(result, fmt.Errorf("dataset %s/%s has invalid keep_duration %q", dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetKeepDuration()))
-				continue
-			}
-			node, err := resolver(ctx, dataset.GetSpaceId(), dataset.GetDatasetId())
-			if err != nil {
-				result = errors.Join(result, err)
-				continue
-			}
-			before := now.UTC().Add(-keep).Truncate(cleanupBucketDuration()).Format("2006-01-02T15:04:05.000000000Z")
-			rsp, err := node.CleanupExpiredBuckets(ctx, &pb.CleanupExpiredBucketsReq{
-				AuthInfo: auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), BeforeBucketStart: before,
-			})
-			if err != nil {
-				result = errors.Join(result, err)
-				continue
-			}
-			if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-				result = errors.Join(result, errors.New(rsp.GetRetInfo().GetMsg()))
+			if err := c.cleanupDataset(ctx, dataset, now); err != nil {
+				c.metrics.ObserveFailure(dataset.GetSpaceId(), dataset.GetDatasetId())
+				result = errors.Join(result, fmt.Errorf("dataset %s/%s: %w", dataset.GetSpaceId(), dataset.GetDatasetId(), err))
 			}
 		}
 		if page == nil || !page.GetHasMore() || len(datasets) == 0 {
 			return result
 		}
 	}
+}
+
+func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset, now time.Time) error {
+	period, _, err := c.retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	if err != nil {
+		return err
+	}
+	if period.Forever {
+		return nil
+	}
+	node, err := c.resolver(ctx, dataset.GetSpaceId(), dataset.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	// Rows are deleted by whole day buckets, so a Dataset keeps between its
+	// retention and one more bucket of history.
+	cutoff := now.UTC().Add(-period.Duration).Truncate(cleanupBucketDuration())
+	started := time.Now()
+	rsp, err := node.CleanupExpiredBuckets(ctx, &pb.CleanupExpiredBucketsReq{
+		AuthInfo: c.auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), BeforeBucketStart: cutoff.Format("2006-01-02T15:04:05.000000000Z"),
+	})
+	if err != nil {
+		return err
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return errors.New(rsp.GetRetInfo().GetMsg())
+	}
+	elapsed := time.Since(started)
+	c.metrics.ObserveCleanup(dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff, elapsed, rsp.GetDeletedRanges())
+	log.Printf("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
+		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), rsp.GetDeletedRanges(), elapsed.Round(time.Millisecond))
+	return nil
 }
 
 func cleanupBucketDuration() time.Duration {
@@ -352,7 +386,7 @@ func runViewRole() error {
 	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	rebuildCheckInterval, rebuildLookback, _, rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	rebuildLookback, rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil {
 		return err
 	}
@@ -360,18 +394,14 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
-	maintenancePolicy, err := storageViewMaintenancePolicy()
+	policy, err := loadStoragePolicy()
 	if err != nil {
 		return err
 	}
-	if policyInterval, parseErr := time.ParseDuration(strings.TrimSpace(maintenancePolicy.MaintenanceCheckInterval)); parseErr != nil || policyInterval < 30*time.Second {
-		return fmt.Errorf("storage view maintenance_check_interval must be at least 30s")
-	} else {
-		rebuildCheckInterval = policyInterval
-	}
-	if maintenancePolicy.MaxViewFileBytes <= 0 || maintenancePolicy.MaxPeriodsPerSeries <= maintenancePolicy.RebuildLookbackPeriods {
-		return errors.New("storage view maintenance policy limits are invalid")
-	}
+	// The policy is validated on load, so its durations parse.
+	rebuildCheckInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
+	capacityCheckInterval, _ := time.ParseDuration(policy.View.CapacityCheckInterval)
+	capacityCheckJitter, _ := time.ParseDuration(policy.View.CapacityCheckJitter)
 	maintenanceOptions := viewservice.MaintenanceOptions{
 		Metadata:                    metadataProxy,
 		Primary:                     primaryProxy,
@@ -379,15 +409,16 @@ func runViewRole() error {
 		OwnerID:                     "storage-view",
 		Interval:                    rebuildCheckInterval,
 		RebuildLookback:             rebuildLookback,
-		RebuildLookbackPeriods:      map[string]uint64{"default": maintenancePolicy.RebuildLookbackPeriods},
+		RebuildLookbackPeriods:      map[string]uint64{"default": policy.View.Bars},
 		Grace:                       time.Minute,
-		MaxViewFileBytes:            maintenancePolicy.MaxViewFileBytes,
+		MaxViewFileBytes:            policy.View.MaxViewFileBytes,
+		CapacityCheckInterval:       capacityCheckInterval,
+		CapacityCheckJitter:         capacityCheckJitter,
 		RebuildMaxPending:           rebuildMaxPending,
 		RebuildIdleChecks:           rebuildIdleChecks,
 		RebuildMaxPendingConfigured: maxPendingConfigured,
 		RebuildIdleChecksConfigured: idleChecksConfigured,
-		Policy:                      maintenancePolicy,
-		MaxPeriodsPerSeries:         maintenancePolicy.MaxPeriodsPerSeries,
+		MaxPeriodsPerSeries:         policy.View.TrimBars,
 		BackfillPageSize:            backfillPageSize,
 		BackfillRequestInterval:     backfillRequestInterval,
 	}
@@ -588,35 +619,29 @@ func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewserv
 	return clone
 }
 
-func storageViewMaintenancePolicy() (storageconfig.ViewMaintenancePolicy, error) {
-	policy := storageconfig.ViewMaintenancePolicy{
-		MaintenanceCheckInterval: "1m",
-		CapacityCheckInterval:    "1h",
-		CapacityCheckJitter:      "1h",
-		RebuildLookbackPeriods:   5000,
-		MaxPeriodsPerSeries:      6000,
-		MaxViewFileBytes:         1 << 30,
-	}
+// loadStoragePolicy loads storage-policy.json named by storage.policy_file.
+// Without MOOX_STORAGE_CONFIG (tests and local tools) the recommended policy
+// applies; a configured role refuses to start without a valid file.
+func loadStoragePolicy() (storagepolicy.Policy, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		return policy, nil
+		return storagepolicy.Default(), nil
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return policy, fmt.Errorf("load storage view maintenance config: %w", err)
+		return storagepolicy.Policy{}, fmt.Errorf("load storage config: %w", err)
 	}
-	policyPath := strings.TrimSpace(runtimeConfig.Storage.View.MaintenancePolicyFile)
+	policyPath := strings.TrimSpace(runtimeConfig.Storage.PolicyFile)
 	if policyPath == "" {
-		return policy, nil
+		return storagepolicy.Policy{}, errors.New("storage.policy_file is required")
 	}
 	if !filepath.IsAbs(policyPath) {
 		// MOOX_STORAGE_CONFIG points at <package>/config/*.yaml while the
-		// deployed policy path is expressed from the package root.
-		packageRoot := filepath.Dir(filepath.Dir(path))
-		policyPath = filepath.Join(packageRoot, policyPath)
+		// policy path is expressed from the package root.
+		policyPath = filepath.Join(filepath.Dir(filepath.Dir(path)), policyPath)
 	}
-	return storageconfig.LoadViewMaintenancePolicy(policyPath)
+	return storagepolicy.Load(policyPath)
 }
 
 func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb.MetadataClientProxy, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
@@ -837,37 +862,26 @@ func storageViewDeliverPolicy(configured string) string {
 	return configured
 }
 
-func storageViewRebuildSettings() (time.Duration, time.Duration, int64, uint64, uint32, bool, bool, error) {
-	const defaultInterval = time.Minute
+func storageViewRebuildSettings() (time.Duration, uint64, uint32, bool, bool, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		return defaultInterval, 24 * time.Hour, 1 << 30, 32, 3, false, false, nil
+		return 24 * time.Hour, 32, 3, false, false, nil
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return 0, 0, 0, 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
-	}
-	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.MaintenanceCheckInterval))
-	if err != nil || interval <= 0 {
-		return 0, 0, 0, 0, 0, false, false, fmt.Errorf("storage view maintenance_check_interval must be a positive duration")
-	}
-	if interval < 30*time.Second {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view maintenance_check_interval must be at least 30s")
+		return 0, 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
 	}
 	lookback, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.RebuildLookback))
 	if err != nil || lookback <= 0 {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view rebuild_lookback must be a positive duration")
-	}
-	if runtimeConfig.Storage.View.MaxViewFileBytes <= 0 {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view max_view_file_bytes must be positive")
+		return 0, 0, 0, false, false, errors.New("storage view rebuild_lookback must be a positive duration")
 	}
 	maxPendingConfigured := runtimeConfig.Storage.View.HasRebuildMaxPendingSetting()
 	idleChecksConfigured := runtimeConfig.Storage.View.HasRebuildIdleChecksSetting()
 	if idleChecksConfigured && runtimeConfig.Storage.View.RebuildIdleChecks == 0 {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
+		return 0, 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
 	}
-	return interval, lookback, runtimeConfig.Storage.View.MaxViewFileBytes, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
+	return lookback, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
 		maxPendingConfigured, idleChecksConfigured, nil
 }
 
@@ -1161,6 +1175,9 @@ func runDataNodeRole() error {
 		return err
 	}
 	defer svc.Close()
+	if err := observability.RegisterPebbleDiskUsage(prometheus.DefaultRegisterer, nodeID, svc.Store().DiskSpaceUsage); err != nil {
+		return err
+	}
 	client, err := jetstream.Connect(trpc.BackgroundContext(), eventConfig)
 	if err != nil {
 		return err

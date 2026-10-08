@@ -1010,7 +1010,7 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 		return result, errors.New("storage_e2e_data_source_failed")
 	}
 	result.Assertions = append(result.Assertions, "data_source_created")
-	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: "E2E 临时集", DataKind: storagepb.DataKind_DATA_KIND_RECORD, KeepDuration: "0", Status: "disabled", DataNodeId: deployedNode.GetNodeId()}
+	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: "E2E 临时集", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "disabled", DataNodeId: deployedNode.GetNodeId()}
 	datasetResponse, err := session.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: session.auth, Dataset: dataset})
 	if err != nil || datasetResponse == nil || datasetResponse.GetRetInfo() == nil || datasetResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || datasetResponse.GetDataset() == nil {
 		return result, errors.New("storage_e2e_dataset_failed")
@@ -1254,7 +1254,7 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 		return fixture, cleanup, errors.New("browser_e2e_data_source_create_failed")
 	}
 	source = sourceResponse.GetDataSource()
-	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: fixture.DatasetName, DataKind: storagepb.DataKind_DATA_KIND_RECORD, KeepDuration: "0", Status: "disabled", DataNodeId: storageDeploymentNodeID}
+	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: fixture.DatasetName, DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "disabled", DataNodeId: storageDeploymentNodeID}
 	items, err := listAllStorageDataNodes(ctx, session.metadata, session.auth)
 	if err != nil {
 		return fixture, cleanup, errors.New("browser_e2e_data_node_list_failed")

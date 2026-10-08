@@ -159,9 +159,8 @@ type CollectionTaskResultSummary struct {
 // ResultConfig contains optional storage settings for a newly created task
 // result. It cannot select an existing Dataset or View.
 type ResultConfig struct {
-	DataNodeID   string `json:"data_node_id,omitempty"`
-	KeepDuration string `json:"keep_duration,omitempty"`
-	Description  string `json:"description,omitempty"`
+	DataNodeID  string `json:"data_node_id,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // CreateTask creates a disabled task through the Collector control plane.

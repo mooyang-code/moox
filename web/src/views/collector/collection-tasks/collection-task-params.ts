@@ -11,7 +11,7 @@ export interface CollectionSourceOption {
   data_kind: string | number;
   attributes?: Record<string, string>;
   freq?: string;
-  keep_duration?: string;
+  retention?: string;
 }
 
 export interface CollectionTaskInput {

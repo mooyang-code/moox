@@ -18,6 +18,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -356,14 +357,14 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "moox.toml"), []byte("placeholder"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "moox-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntest \"$MOOX_SSH_PASSWORD\" = build-password\ntest \"$MOOX_STORAGE_BUILD_HOST\" = compile\ntest \"$MOOX_STORAGE_BUILD_HOST_ROLE\" = compile\ntest \"$MOOX_STORAGE_BUILD_GOARCH\" = amd64\ntouch ./compiled\n"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest -n \"$MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64\"\ntest \"$MOOX_LOCAL_LOG_MAX_SIZE_MB\" = 88\ntest \"$MOOX_LOCAL_LOG_BACKUP_COUNT\" = 9\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then\n    dir=$(mktemp -d)\n    trap 'rm -rf \"$dir\"' EXIT\n    printf '%s' '{\"schema_version\":1,\"commit\":\"0123456789012345678901234567890123456789\",\"dirty\":false,\"binary_hashes\":{\"moox-storage-primary\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-node\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-view\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}' >\"$dir/build-provenance.json\"\n    tar -czf \"$2\" -C \"$dir\" build-provenance.json\n    exit 0\n  fi\n  shift\ndone\nexit 3\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest -n \"$MOOX_STORAGE_POLICY_B64\"\ntest \"$MOOX_LOCAL_LOG_MAX_SIZE_MB\" = 88\ntest \"$MOOX_LOCAL_LOG_BACKUP_COUNT\" = 9\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then\n    dir=$(mktemp -d)\n    trap 'rm -rf \"$dir\"' EXIT\n    printf '%s' '{\"schema_version\":1,\"commit\":\"0123456789012345678901234567890123456789\",\"dirty\":false,\"binary_hashes\":{\"moox-storage-primary\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-node\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"moox-storage-view\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}' >\"$dir/build-provenance.json\"\n    tar -czf \"$2\" -C \"$dir\" build-provenance.json\n    exit 0\n  fi\n  shift\ndone\nexit 3\n"), 0o700))
 
 	archive, err := (StoragePackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64", StorageBuildPassword: "build-password", StorageBuildHost: "compile", StorageBuildHostRole: "compile",
 		UseControlGateway: true, EventBusPublicAddress: "eventbus.example.test",
 		EventBusPort: 4222, EventBusTLSEnabled: true,
 		StoragePrimarySecret: "primary-secret", StorageViewSecret: "view-secret",
-		StorageViewPolicy: setupconfig.StorageView{MaintenanceCheckInterval: "1m", CapacityCheckInterval: "1h", CapacityCheckJitter: "1h", RebuildLookbackPeriods: 5000, MaxPeriodsPerSeries: 6000, MaxViewFileBytes: 805306368},
+		StoragePolicy:     storagepolicy.Default(),
 		LocalLogs:         setupconfig.LocalLogs{MaxSizeMB: 88, BackupCount: 9},
 		HealthAuthVersion: "moox-health-v1", HealthAuthAccessKey: "monitor", HealthAuthSecretKey: "health-secret",
 	})

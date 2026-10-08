@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -10,13 +11,13 @@ import (
 var collectorOwner = map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": "task"}
 
 func TestUpdateDatasetAssignsDataSourceOnceThenKeepsItImmutable(t *testing.T) {
-	ctx, store := newKeepDurationStore(t)
+	ctx, store := newDatasetSourceStore(t)
 	if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: "other", Name: "Other", Kind: "internal", Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "unsourced", DataNodeId: "node",
-		Name: "unsourced", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "0",
+		Name: "unsourced", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		Attributes: collectorOwner,
 	})
 	if err != nil {
@@ -26,7 +27,7 @@ func TestUpdateDatasetAssignsDataSourceOnceThenKeepsItImmutable(t *testing.T) {
 		t.Fatalf("created data source = %q", created.GetDataSourceId())
 	}
 
-	assign := &pb.Dataset{SpaceId: "space", DatasetId: "unsourced", Name: "unsourced", DataSourceId: "source", KeepDuration: "0", Attributes: collectorOwner}
+	assign := &pb.Dataset{SpaceId: "space", DatasetId: "unsourced", Name: "unsourced", DataSourceId: "source", Attributes: collectorOwner}
 	if _, err := store.UpdateDataset(ctx, assign); err != nil {
 		t.Fatalf("assigning a data source to an unsourced Dataset: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestUpdateDatasetAssignsDataSourceOnceThenKeepsItImmutable(t *testing.T) {
 		t.Fatalf("data source after assignment = %q err=%v", got.GetDataSourceId(), err)
 	}
 
-	unchanged := &pb.Dataset{SpaceId: "space", DatasetId: "unsourced", Name: "renamed", KeepDuration: "0", Attributes: collectorOwner}
+	unchanged := &pb.Dataset{SpaceId: "space", DatasetId: "unsourced", Name: "renamed", Attributes: collectorOwner}
 	if _, err := store.UpdateDataset(ctx, unchanged); err != nil {
 		t.Fatalf("update without data source: %v", err)
 	}
@@ -43,8 +44,17 @@ func TestUpdateDatasetAssignsDataSourceOnceThenKeepsItImmutable(t *testing.T) {
 		t.Fatalf("an update that omits data_source_id must keep it, got %q", got.GetDataSourceId())
 	}
 
-	change := &pb.Dataset{SpaceId: "space", DatasetId: "unsourced", Name: "renamed", DataSourceId: "other", KeepDuration: "0", Attributes: collectorOwner}
+	change := &pb.Dataset{SpaceId: "space", DatasetId: "unsourced", Name: "renamed", DataSourceId: "other", Attributes: collectorOwner}
 	if _, err := store.UpdateDataset(ctx, change); err == nil {
 		t.Fatal("changing an assigned data source must be rejected")
 	}
+}
+
+func newDatasetSourceStore(t *testing.T) (context.Context, *Store) {
+	t.Helper()
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node")
+	return ctx, store
 }

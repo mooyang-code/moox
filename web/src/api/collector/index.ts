@@ -53,7 +53,6 @@ export interface CollectionTaskPayload {
 
 export interface CollectionTaskResultConfig {
   data_node_id?: string;
-  keep_duration?: string;
   description?: string;
 }
 

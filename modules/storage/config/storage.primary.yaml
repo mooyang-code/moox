@@ -1,5 +1,7 @@
 storage:
   root: ./var/storage
+  # Dataset retention and View limits rendered by moox-cli from moox.toml.
+  policy_file: ../config/storage-policy.json
   roles:
     - primary
   metadata:
@@ -17,8 +19,6 @@ storage:
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
-    maintenance_check_interval: 1m
     rebuild_lookback: 72h
-    max_view_file_bytes: 1073741824
   health:
     addr: ":20210"

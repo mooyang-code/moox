@@ -9,7 +9,9 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/mooyang-code/snapshotcache"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -21,6 +23,7 @@ type Service struct {
 	operatorSecret string
 	viewAuthSecret string
 	nodeState      NodeStateChecker
+	retention      storagepolicy.Retention
 }
 
 type Options struct {
@@ -33,6 +36,9 @@ type Options struct {
 	// ViewAuthSecret authenticates the View role's append-only active-schema CAS.
 	ViewAuthSecret   string
 	NodeStateChecker NodeStateChecker
+	// Retention resolves the read-only Dataset retention. Tools and tests
+	// without a policy file get the recommended defaults.
+	Retention storagepolicy.Retention
 }
 
 func NewMetadataService(store metadata.Store, cache *metacache.Store, options Options) (*Service, error) {
@@ -57,7 +63,42 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if options.NodeStateChecker == nil {
 		options.NodeStateChecker = rpcNodeStateChecker{}
 	}
-	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker}, nil
+	if options.Retention.Defaults == nil {
+		options.Retention = storagepolicy.Default().Retention
+	}
+	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker, retention: options.Retention}, nil
+}
+
+// withRetention returns a copy of dataset carrying its effective retention.
+func (s *Service) withRetention(dataset *pb.Dataset) *pb.Dataset {
+	if dataset == nil {
+		return nil
+	}
+	out := proto.Clone(dataset).(*pb.Dataset)
+	out.Retention, out.RetentionSource = s.datasetRetention(dataset)
+	return out
+}
+
+func (s *Service) withRetentions(items []*pb.Dataset) []*pb.Dataset {
+	out := make([]*pb.Dataset, len(items))
+	for i, item := range items {
+		out[i] = s.withRetention(item)
+	}
+	return out
+}
+
+// datasetRetention resolves a Dataset's retention from the Storage policy. A
+// record Dataset is never trimmed; a time-series Dataset whose frequency the
+// policy cannot resolve reports no retention.
+func (s *Service) datasetRetention(dataset *pb.Dataset) (string, string) {
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+		return storagepolicy.Forever, storagepolicy.SourceRecord
+	}
+	period, source, err := s.retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	if err != nil {
+		return "", ""
+	}
+	return period.String(), source
 }
 
 func (s *Service) refreshMetadataCache(ctx context.Context) error {

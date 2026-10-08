@@ -14,8 +14,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// CleanupExpiredBuckets deletes only time-series field/attribute keys older
-// than beforeBucket. Record versions are intentionally never removed here.
+// CleanupExpiredBuckets deletes the time-series rows and history markers of
+// a Dataset older than beforeBucket and returns the number of key ranges it
+// deleted. Record versions are never removed here.
 func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID string, beforeBucket time.Time) (uint64, error) {
 	if s == nil || s.db == nil {
 		return 0, errors.New("pebble store is closed")
@@ -37,37 +38,17 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 	batch := s.db.NewBatch()
 	defer batch.Close()
 	ranges := make([][2][]byte, 0, 4)
-	buckets := make(map[string]struct{})
+	// Field and attribute keys start with the day bucket, so one range per
+	// namespace removes every expired bucket without reading a key.
 	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
 		prefix := []byte{namespace, timeSeriesKind}
 		prefix = appendRawPart(prefix, []byte(spaceID))
 		prefix = appendRawPart(prefix, []byte(datasetID))
 		upper := appendPart(append([]byte(nil), prefix...), before)
-		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: upper})
-		if err != nil {
+		if err := batch.DeleteRange(prefix, upper, s.writeOptions); err != nil {
 			return 0, err
 		}
-		for valid := iter.First(); valid; valid = iter.Next() {
-			if err := ctx.Err(); err != nil {
-				_ = iter.Close()
-				return 0, err
-			}
-			parts, ok := decodePhysicalParts(iter.Key()[2:])
-			if ok && len(parts) == 8 && parts[0] == spaceID && parts[1] == datasetID {
-				buckets[parts[2]] = struct{}{}
-			}
-		}
-		iterErr := iter.Error()
-		_ = iter.Close()
-		if iterErr != nil {
-			return 0, iterErr
-		}
-		if !bytes.Equal(prefix, upper) {
-			if err := batch.DeleteRange(prefix, upper, s.writeOptions); err != nil {
-				return 0, err
-			}
-			ranges = append(ranges, [2][]byte{append([]byte(nil), prefix...), append([]byte(nil), upper...)})
-		}
+		ranges = append(ranges, [2][]byte{prefix, upper})
 	}
 	// History markers are ordered by logical data time, so they can be
 	// removed with one bounded range instead of scanning every field key.
@@ -151,7 +132,7 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		seriesCompactPrefix = appendRawPart(seriesCompactPrefix, []byte(datasetID))
 		s.compactAsync(seriesCompactPrefix, nextPrefix(seriesCompactPrefix))
 	}
-	return uint64(len(buckets)), nil
+	return uint64(len(ranges)), nil
 }
 
 // DeleteDatasetRows physically removes every row and materialized history

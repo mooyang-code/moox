@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -107,7 +106,6 @@ type MaintenanceOptions struct {
 	RebuildIdleChecks           uint32
 	RebuildMaxPendingConfigured bool
 	RebuildIdleChecksConfigured bool
-	Policy                      storageconfig.ViewMaintenancePolicy
 	// MaxHistoryScanRows bounds the Primary discovery scan used by a
 	// period-based rebuild. It is a safety fuse: the per-series bar target
 	// limits writes, while this limit prevents an incomplete/huge catalog from
@@ -285,32 +283,14 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 func normalizeCapacityCheckSchedule(opts MaintenanceOptions) (time.Duration, time.Duration, error) {
 	interval := opts.CapacityCheckInterval
 	if interval == 0 {
-		configured := strings.TrimSpace(opts.Policy.CapacityCheckInterval)
-		if configured == "" {
-			interval = defaultCapacityCheckInterval
-		} else {
-			parsed, err := time.ParseDuration(configured)
-			if err != nil {
-				return 0, 0, fmt.Errorf("parse capacity_check_interval: %w", err)
-			}
-			interval = parsed
-		}
+		interval = defaultCapacityCheckInterval
 	}
 	if interval <= 0 || interval > 24*time.Hour {
 		return 0, 0, errors.New("capacity_check_interval must be greater than 0 and at most 24h")
 	}
 	jitter := opts.CapacityCheckJitter
 	if jitter == 0 {
-		configured := strings.TrimSpace(opts.Policy.CapacityCheckJitter)
-		if configured == "" {
-			jitter = interval
-		} else {
-			parsed, err := time.ParseDuration(configured)
-			if err != nil {
-				return 0, 0, fmt.Errorf("parse capacity_check_jitter: %w", err)
-			}
-			jitter = parsed
-		}
+		jitter = interval
 	}
 	if jitter <= 0 || jitter > interval {
 		return 0, 0, errors.New("capacity_check_jitter must be greater than 0 and at most capacity_check_interval")
@@ -728,12 +708,6 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	}
 	if opts.Metadata != nil {
 		s.setMetadataClient(opts.Metadata)
-	}
-	if opts.Policy.MaxPeriodsPerSeries > 0 {
-		resolved := opts.Policy.ResolvePolicy(view.GetSpaceId(), view.GetViewId())
-		opts.MaxViewFileBytes = resolved.MaxViewFileBytes
-		opts.MaxPeriodsPerSeries = resolved.MaxPeriodsPerSeries
-		opts.RebuildLookbackPeriods = map[string]uint64{"default": resolved.RebuildLookbackPeriods}
 	}
 	capacityCheckInterval, capacityCheckJitter, err := normalizeCapacityCheckSchedule(opts)
 	if err != nil {

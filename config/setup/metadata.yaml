@@ -221,7 +221,6 @@ datasets:
   name: A股分钟行情
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 8760h
   freq: 1m
   status: disabled
   attributes:
@@ -235,7 +234,6 @@ datasets:
   name: 指数行情
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 8760h
   freq: 1d
   status: disabled
   attributes:
@@ -249,7 +247,6 @@ datasets:
   name: 可转债行情
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 8760h
   freq: 1m
   status: disabled
   attributes:
@@ -264,7 +261,6 @@ datasets:
   name: 财报指标明细
   data_kind: record
   data_node_id: storage-node-0
-  keep_duration: '0'
   freq: quarter
   status: disabled
   attributes:
@@ -276,7 +272,6 @@ datasets:
   name: 财务摘要
   data_kind: record
   data_node_id: storage-node-0
-  keep_duration: '0'
   freq: quarter
   status: disabled
   attributes:
@@ -289,7 +284,6 @@ datasets:
   name: 港股行情
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 8760h
   freq: 1d
   status: disabled
   attributes:
@@ -304,7 +298,6 @@ datasets:
   name: 美股行情
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 8760h
   freq: 1d
   status: disabled
   attributes:
@@ -322,7 +315,6 @@ datasets:
   description: Per-minute host CPU and memory snapshots
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 4320h
   freq: 1m
   status: disabled
 - space_id: mooxsys
@@ -332,7 +324,6 @@ datasets:
   description: Per-minute filesystem snapshots
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 4320h
   freq: 1m
   status: disabled
 - space_id: mooxsys
@@ -342,7 +333,6 @@ datasets:
   description: Per-minute disk counters and rates
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 4320h
   freq: 1m
   status: disabled
 - space_id: mooxsys
@@ -352,7 +342,6 @@ datasets:
   description: Per-minute network counters and rates
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 4320h
   freq: 1m
   status: disabled
 - space_id: mooxsys
@@ -362,7 +351,6 @@ datasets:
   description: Historical tRPC application and business metrics
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 24h
   freq: 30s
   status: disabled
 
@@ -2166,7 +2154,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 24h
   status: active
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
@@ -2178,7 +2165,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 8760h
   status: active
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
@@ -2190,7 +2176,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 24h
   status: active
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
@@ -2202,7 +2187,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 8760h
   status: active
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
@@ -2214,7 +2198,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 8760h
   status: active
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
@@ -2226,7 +2209,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 4320h
   status: active
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
@@ -2238,7 +2220,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 4320h
   status: active
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
@@ -2250,7 +2231,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 4320h
   status: active
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
@@ -2262,7 +2242,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 4320h
   status: active
 - space_id: mooxsys
   view_id: view_mooxsys_service_metrics
@@ -2274,7 +2253,6 @@ views:
   - data_time
   - series_tag
   engine: duckdb
-  keep_duration: 24h
   status: active
 view_columns:
 - space_id: stockcn

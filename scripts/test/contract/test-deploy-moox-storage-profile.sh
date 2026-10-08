@@ -34,7 +34,7 @@ for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-stora
 done
 printf '#!/usr/bin/env bash\nprintf "%%064d\\n" 0\n' >"${FIXTURE_ROOT}/bin/moox-admin-cli"
 chmod +x "${FIXTURE_ROOT}/bin/moox-admin-cli"
-export MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64="$(printf '%s' '{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":6000},"views":[]}' | base64 | tr -d '\n')"
+export MOOX_STORAGE_POLICY_B64="$(printf '%s' '{"retention":{"defaults":{"30s":"48h","1m":"168h","5m":"720h","15m":"2160h","30m":"4320h","1h":"8760h","4h":"26280h","1d":"forever","1w":"forever","1mo":"forever"}},"view":{"bars":5000,"trim_bars":6000,"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","max_view_file_bytes":1073741824}}' | base64 | tr -d '\n')"
 
 mkdir "${TMP_ROOT}/fake-path"
 for command in ssh scp rsync; do
@@ -80,12 +80,12 @@ grep -Eq '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked
 grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 [[ -d "${TMP_ROOT}/unpacked/storage/config" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml" ]]
-[[ -f "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json" ]]
-grep -q '"max_periods_per_series": 6000' "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json"
-grep -q '"maintenance_check_interval": "1m"' "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json"
-grep -q '"capacity_check_interval": "1h"' "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json"
-grep -q '"capacity_check_jitter": "1h"' "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json"
-grep -q '"rebuild_lookback_periods": 5000' "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json"
+[[ -f "${TMP_ROOT}/unpacked/config/storage-policy.json" ]]
+[[ ! -e "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json" ]]
+grep -Eq '"bars": ?5000' "${TMP_ROOT}/unpacked/config/storage-policy.json"
+grep -Eq '"trim_bars": ?6000' "${TMP_ROOT}/unpacked/config/storage-policy.json"
+grep -Eq '"1m": ?"168h"' "${TMP_ROOT}/unpacked/config/storage-policy.json"
+grep -q 'policy_file: ../config/storage-policy.json' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 [[ -f "${TMP_ROOT}/unpacked/storage-node/config/trpc_go.yaml" ]]
 [[ $(find "${TMP_ROOT}/unpacked/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]]
 [[ ! -e "${TMP_ROOT}/unpacked/admin" ]]

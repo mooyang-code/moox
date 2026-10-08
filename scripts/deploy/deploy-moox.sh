@@ -3939,7 +3939,7 @@ EOF
 
 prepare_stage() {
   local storage_view_duckdb_memory_limit="${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}"
-  local storage_view_maintenance_policy_b64="${MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64:-}"
+  local storage_policy_b64="${MOOX_STORAGE_POLICY_B64:-}"
   local local_log_max_size_mb="${MOOX_LOCAL_LOG_MAX_SIZE_MB:-50}"
   local local_log_backup_count="${MOOX_LOCAL_LOG_BACKUP_COUNT:-5}"
   # Keep the storage route placement durable across lifecycle restarts.  A
@@ -3954,8 +3954,8 @@ prepare_stage() {
   [[ "${local_log_backup_count}" =~ ^[1-9][0-9]*$ && "${local_log_backup_count}" -le 100 ]] || \
     fail "MOOX_LOCAL_LOG_BACKUP_COUNT must be between 1 and 100"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
-    [[ -n "${storage_view_maintenance_policy_b64}" ]] || fail "MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64 is required for Storage"
-    command -v python3 >/dev/null 2>&1 || fail "python3 is required to validate Storage View maintenance policy"
+    [[ -n "${storage_policy_b64}" ]] || fail "MOOX_STORAGE_POLICY_B64 is required for Storage"
+    command -v python3 >/dev/null 2>&1 || fail "python3 is required to validate the Storage policy"
   fi
   rm -rf "${STAGE_DIR}"
   mkdir -p \
@@ -4415,11 +4415,13 @@ EOF
     cat "${STAGE_DIR}/storage/config/storage.primary.yaml" >> "${STAGE_DIR}/storage/config/trpc_go.yaml"
     rm -f "${STAGE_DIR}/storage/config/trpc_go.primary.yaml" "${STAGE_DIR}/storage/config/storage.primary.yaml"
     cp "${ROOT}/modules/storage/config/storage_view/trpc_go.yaml" "${STAGE_DIR}/storage-view/config/trpc_go.yaml"
-    policy_tmp="${STAGE_DIR}/storage-view/config/maintenance.json.tmp"
-    printf '%s' "${storage_view_maintenance_policy_b64}" | python3 -c 'import base64, json, sys; raw = base64.b64decode(sys.stdin.read(), validate=True); obj = json.loads(raw); print(json.dumps(obj, sort_keys=True, indent=2))' >"${policy_tmp}" || fail "invalid Storage View maintenance policy"
-    python3 -m json.tool "${policy_tmp}" >/dev/null || fail "invalid Storage View maintenance policy JSON"
-    mv "${policy_tmp}" "${STAGE_DIR}/storage-view/config/maintenance.json"
-    chmod 0600 "${STAGE_DIR}/storage-view/config/maintenance.json"
+    # moox-cli renders the policy (Dataset retention, View limits) from
+    # moox.toml; storage-primary and storage-view share this one file.
+    policy_tmp="${STAGE_DIR}/config/storage-policy.json.tmp"
+    printf '%s' "${storage_policy_b64}" | python3 -c 'import base64, sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read(), validate=True))' >"${policy_tmp}" || fail "invalid Storage policy encoding"
+    python3 -m json.tool "${policy_tmp}" >/dev/null || fail "invalid Storage policy JSON"
+    mv "${policy_tmp}" "${STAGE_DIR}/config/storage-policy.json"
+    chmod 0600 "${STAGE_DIR}/config/storage-policy.json"
     rm -rf "${STAGE_DIR}/storage/config/storage_view"
     cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
   fi
@@ -4749,7 +4751,7 @@ sync_local_stage() {
       fi
     fi
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/storage/' --exclude '/storage-view/' --exclude '/storage-node/' \
+      rsync_excludes+=(--exclude '/storage/' --exclude '/storage-view/' --exclude '/storage-node/' --exclude '/config/storage-policy.json' \
         --exclude '/build-provenance.json' --exclude '/reset-storage-view-indexes.sh' \
         --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-primary' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-node')
     fi
@@ -5124,12 +5126,12 @@ sync_remote_stage() {
   quoted_local_storage_gateway_target="$(shell_quote "${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-}")"
   quoted_local_storage_gateway_node_id="$(shell_quote "${MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID:-}")"
   quoted_storage_view_duckdb_memory_limit="$(shell_quote "${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-}")"
-  quoted_storage_view_maintenance_policy_b64="$(shell_quote "${MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64:-}")"
+  quoted_storage_policy_b64="$(shell_quote "${MOOX_STORAGE_POLICY_B64:-}")"
   quoted_control_root="$(shell_quote "${MOOX_CONTROL_ROOT:-}")"
   quoted_storage_root="$(shell_quote "${MOOX_STORAGE_ROOT:-}")"
   quoted_space_config_explicit="$(shell_quote "${MOOX_SPACE_CONFIG_EXPLICIT}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_ACCESS=${quoted_with_storage_access} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR_MGR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_SPACE_CONFIG_EXPLICIT=${quoted_space_config_explicit} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_LOCAL_URL=${quoted_eventbus_local_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NODE_ID=${quoted_node_id} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_ACCESS=${quoted_with_storage_access} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR_MGR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_SPACE_CONFIG_EXPLICIT=${quoted_space_config_explicit} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_LOCAL_URL=${quoted_eventbus_local_url} MOOX_STORAGE_EVENTBUS_URL=${quoted_storage_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_TRADE_GATEWAY_HEALTH_ADDR=${quoted_trade_gateway_health_addr} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_POLICY_B64=${quoted_storage_policy_b64} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 MOOX_SPACE_CONFIG_EXPLICIT="${MOOX_SPACE_CONFIG_EXPLICIT:-0}"
 MOOX_OBSERVABILITY_CONFIG_EXPLICIT=0

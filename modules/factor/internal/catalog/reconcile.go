@@ -92,7 +92,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 	}
 	if result.SpaceID != set.SpaceID || result.DatasetID != set.ResultDatasetID ||
 		result.DataSourceID != source.DataSourceID || result.DataNodeID != source.DataNodeID ||
-		result.KeepDuration != source.KeepDuration || result.DataKind != storageio.DataKindTimeSeries ||
+		result.DataKind != storageio.DataKindTimeSeries ||
 		result.Freq != set.Freq ||
 		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
 		result.Attributes["source_dataset_id"] != set.SourceDatasetID || result.Attributes["write_owner"] != "factor" {

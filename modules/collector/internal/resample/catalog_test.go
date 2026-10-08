@@ -197,7 +197,7 @@ func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, dom
 func TestPrepareTargetCompensatesCreatedDatasetWhenViewCreationFails(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("create_view")
 
-	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.Equal(t, taskresult.ResultIDs(rule.SpaceID, rule.TaskID).DatasetID, params.TargetDatasetID)
 	require.Empty(t, metadata.datasets)
@@ -220,7 +220,7 @@ func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *
 		t.Run(testCase.failAt, func(t *testing.T) {
 			metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture(testCase.failAt)
 
-			err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+			err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 			require.Error(t, err)
 			require.Empty(t, metadata.datasets)
 			require.Empty(t, metadata.views)
@@ -249,7 +249,7 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 		Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID},
 	}
 
-	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.Empty(t, metadata.deleteOrder)
 	require.Contains(t, metadata.datasets, ids.DatasetID)
@@ -260,7 +260,7 @@ func TestPrepareTargetMergesOriginalAndCompensationErrors(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_sync")
 	metadata.failCleanup = true
 
-	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "wait target View sync point")
 	require.ErrorContains(t, err, "cleanup view failed")

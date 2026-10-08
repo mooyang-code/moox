@@ -28,6 +28,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -65,7 +66,7 @@ type Options struct {
 	StorageBuildPassword   string
 	StorageBuildHost       string
 	StorageBuildHostRole   string
-	StorageViewPolicy      setupconfig.StorageView
+	StoragePolicy          storagepolicy.Policy
 	LocalLogs              setupconfig.LocalLogs
 	Observability          setupconfig.Observability
 	HealthAuthVersion      string
@@ -1062,14 +1063,14 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET="+opts.StoragePrimarySecret,
 		"MOOX_STORAGE_VIEW_AUTH_SECRET="+opts.StorageViewSecret,
 	)
-	policyPayload, err := json.Marshal(opts.StorageViewPolicy)
+	policyPayload, err := opts.StoragePolicy.Encode()
 	if err != nil {
 		_ = os.Remove(archive)
-		return "", fmt.Errorf("encode storage view maintenance policy: %w", err)
+		return "", fmt.Errorf("encode storage policy: %w", err)
 	}
 	// Keep standard padding: the deployment shell validates the payload with
 	// Python's strict base64 decoder, which intentionally rejects raw encoding.
-	command.Env = setCommandEnv(command.Env, "MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64", base64.StdEncoding.EncodeToString(policyPayload))
+	command.Env = setCommandEnv(command.Env, "MOOX_STORAGE_POLICY_B64", base64.StdEncoding.EncodeToString(policyPayload))
 	if strings.TrimSpace(opts.HealthAuthVersion) == "" ||
 		strings.TrimSpace(opts.HealthAuthAccessKey) == "" ||
 		strings.TrimSpace(opts.HealthAuthSecretKey) == "" {

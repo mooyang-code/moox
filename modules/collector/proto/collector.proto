@@ -56,7 +56,6 @@ message TaskResult {
 // ResultConfig 是结果存储的高级配置，不允许指定既有结果。
 message ResultConfig {
   string data_node_id = 1;
-  string keep_duration = 2;
   string description = 3;
 }
 

@@ -73,7 +73,6 @@ type entry struct {
 	DatasetIDs     []string `json:"dataset_ids,omitempty"`
 	DataKind       int32    `json:"data_kind,omitempty"`
 	Freq           string   `json:"freq,omitempty"`
-	KeepDuration   string   `json:"keep_duration,omitempty"`
 	DataNodeID     string   `json:"data_node_id,omitempty"`
 	BindingLocked  bool     `json:"binding_locked,omitempty"`
 	Revision       uint64   `json:"revision,omitempty"`
@@ -716,7 +715,7 @@ func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error)
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freq: item.GetFreq(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freq: item.GetFreq(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

@@ -626,18 +626,11 @@ func sourceRetentionExpired(ctx context.Context, source subjectSource, spaceID, 
 	if err != nil {
 		return false, ""
 	}
-	raw := strings.TrimSpace(info.KeepDuration)
-	if raw == "" || raw == "0" {
+	window, bounded := info.RetentionWindow()
+	if !bounded || !bucket.Before(time.Now().UTC().Add(-window)) {
 		return false, ""
 	}
-	keep, err := time.ParseDuration(raw)
-	if err != nil || keep <= 0 {
-		return false, ""
-	}
-	if !bucket.Before(time.Now().UTC().Add(-keep)) {
-		return false, ""
-	}
-	return true, fmt.Sprintf("source Dataset retention expired for bucket %s (keep_duration=%s)", bucket.UTC().Format(time.RFC3339), raw)
+	return true, fmt.Sprintf("source Dataset retention expired for bucket %s (retention=%s)", bucket.UTC().Format(time.RFC3339), info.Retention)
 }
 
 func (r *Runner) ensureReadiness(ctx context.Context, task domain.CollectionTask, now time.Time) error {

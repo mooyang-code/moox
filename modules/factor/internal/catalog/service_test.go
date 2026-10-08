@@ -27,7 +27,6 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	require.Equal(t, domain.ResultDatasetID("dataset_prices", "1m"), set.ResultDatasetID)
 	require.Equal(t, domain.SetStatusEnabled, set.Status)
 	require.Equal(t, "storage-node-0", meta.createdSpec.DataNodeID)
-	require.Equal(t, "720h", meta.createdSpec.KeepDuration)
 	require.Equal(t, storageio.DatasetRoleFactorResult, meta.createdSpec.Attributes["dataset_role"])
 	require.Equal(t, "factor", meta.createdSpec.Attributes["owner_module"])
 	require.Equal(t, "factor", meta.createdSpec.Attributes["write_owner"])
@@ -382,7 +381,7 @@ func TestUnlimitedRetentionBackfillStartsAtEarliestSourcePeriod(t *testing.T) {
 	set, err := db.GetSet(context.Background(), domain.SetID("dataset_prices", "1m"))
 	require.NoError(t, err)
 	result := meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)]
-	result.KeepDuration = "0"
+	result.Retention = "forever"
 	meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)] = result
 	earliest := time.Date(2025, 1, 2, 3, 4, 25, 0, time.UTC)
 	provider := &earliestPeriodFake{period: earliest, found: true}
@@ -404,7 +403,7 @@ func TestUnlimitedRetentionWithoutSourceRowsUsesOneCompletedPeriod(t *testing.T)
 	set, err := db.GetSet(context.Background(), domain.SetID("dataset_prices", "1m"))
 	require.NoError(t, err)
 	result := meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)]
-	result.KeepDuration = "0"
+	result.Retention = "forever"
 	meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)] = result
 	svc.earliestPeriod = &earliestPeriodFake{}
 
@@ -659,7 +658,7 @@ func TestReconcileContinuesAfterOneSetFailure(t *testing.T) {
 	secondSource := meta.datasets[resultKey("crypto", "dataset_zzz")]
 	secondSource = storageio.DatasetInfo{
 		SpaceID: "crypto", DatasetID: "dataset_zzz", DataSourceID: "other", DataNodeID: "storage-node-0",
-		Name: "Other", DataKind: storageio.DataKindTimeSeries, Freq: "1m", KeepDuration: "720h",
+		Name: "Other", DataKind: storageio.DataKindTimeSeries, Freq: "1m", Retention: "720h",
 		Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
 	}
 	meta.datasets[resultKey("crypto", "dataset_zzz")] = secondSource
@@ -814,8 +813,7 @@ type metadataFake struct {
 func newMetadataFake() *metadataFake {
 	source := storageio.DatasetInfo{
 		SpaceID: "crypto", DatasetID: "dataset_prices", DataSourceID: "binance", DataNodeID: "storage-node-0",
-		Name: "Prices", Description: "Price bars", DataKind: storageio.DataKindTimeSeries, Freq: "1m",
-		KeepDuration: "720h", Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
+		Name: "Prices", Description: "Price bars", DataKind: storageio.DataKindTimeSeries, Freq: "1m", Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
 	}
 	cols := []storageio.ColumnInfo{sourceColumn("close"), {
 		ColumnName: "subject_id", OriginType: storageio.ColumnOriginSystem, ValueType: storageio.ColumnTypeString, Status: storageio.ColumnStatusActive,
@@ -867,8 +865,7 @@ func (f *metadataFake) CreateResultDataset(_ context.Context, spec storageio.Res
 		}
 		f.datasets[key] = storageio.DatasetInfo{
 			SpaceID: spec.SpaceID, DatasetID: spec.DatasetID, DataSourceID: spec.DataSourceID, DataNodeID: spec.DataNodeID,
-			Name: spec.Name, Description: spec.Description, DataKind: spec.DataKind, Freq: spec.Frequency,
-			KeepDuration: spec.KeepDuration, Status: storageio.DatasetStatusDisabled, Attributes: attrs,
+			Name: spec.Name, Description: spec.Description, DataKind: spec.DataKind, Freq: spec.Frequency, Retention: "720h", Status: storageio.DatasetStatusDisabled, Attributes: attrs,
 		}
 		f.columns[key] = append([]storageio.ColumnInfo(nil), spec.Columns...)
 	}

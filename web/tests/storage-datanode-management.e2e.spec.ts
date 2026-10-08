@@ -34,7 +34,8 @@ function makeFixture() {
         dataset_id: `dataset-${index + 1}`,
         name,
         data_kind: "DATA_KIND_TIME_SERIES",
-        keep_duration: "30d",
+        retention: "720h",
+        retention_source: "default",
         status: "active"
       }))
     },

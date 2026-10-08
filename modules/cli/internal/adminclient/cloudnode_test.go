@@ -166,7 +166,7 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 		resultConfig, ok := body["result_config"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "node-1", resultConfig["data_node_id"])
-		assert.Equal(t, "30d", resultConfig["keep_duration"])
+		assert.NotContains(t, resultConfig, "keep_duration")
 		assert.Equal(t, "A 股 K 线结果", resultConfig["description"])
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"task_id":"d5v5n3p8r7c9m2k4j6h1"}`))
 	}))
@@ -174,7 +174,7 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 
 	taskID, err := New(server.URL).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
 		"frequency": "1m",
-	}, &ResultConfig{DataNodeID: "node-1", KeepDuration: "30d", Description: "A 股 K 线结果"})
+	}, &ResultConfig{DataNodeID: "node-1", Description: "A 股 K 线结果"})
 	require.NoError(t, err)
 	assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", taskID)
 }

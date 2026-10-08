@@ -22,7 +22,7 @@ func (resampleE2ESource) GetDataset(context.Context, string, string) (storagesou
 	return storagesource.DatasetInfo{
 		DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 		Status: "active", Freq: "1m",
-		Attributes: map[string]string{"market_type": "spot"}, KeepDuration: "4320h",
+		Attributes: map[string]string{"market_type": "spot"},
 	}, nil
 }
 

@@ -191,7 +191,6 @@ type seedDataset struct {
 	Description  string   `yaml:"description"`
 	DataKind     string   `yaml:"data_kind"`
 	DataNodeID   string   `yaml:"data_node_id"`
-	KeepDuration string   `yaml:"keep_duration"`
 	Freq         string   `yaml:"freq"`
 	SubjectTags  []string `yaml:"subject_tags"`
 	seedCommon   `yaml:",inline"`
@@ -241,7 +240,6 @@ type seedView struct {
 	PrimaryDatasetID string   `yaml:"dataset_id"`
 	GrainKeys        []string `yaml:"grain_keys"`
 	Engine           string   `yaml:"engine"`
-	KeepDuration     string   `yaml:"keep_duration"`
 	seedCommon       `yaml:",inline"`
 }
 

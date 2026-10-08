@@ -369,7 +369,6 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     c_description TEXT NOT NULL DEFAULT '',
     c_data_kind TEXT NOT NULL,
     c_freq TEXT NOT NULL DEFAULT '',
-    c_keep_duration TEXT NOT NULL,
     c_binding_locked INTEGER NOT NULL DEFAULT 0 CHECK (c_binding_locked IN (0, 1)),
     c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0),
     c_status TEXT NOT NULL DEFAULT 'disabled' CHECK (c_status IN ('active', 'disabled')),

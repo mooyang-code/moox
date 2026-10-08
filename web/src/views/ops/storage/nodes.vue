@@ -175,7 +175,12 @@
                 <template #cell="{ record }">{{ record.name || record.dataset_id }}</template>
               </a-table-column>
               <a-table-column title="数据类型" :width="150" data-index="data_kind" />
-              <a-table-column title="保留时长" :width="120" data-index="keep_duration" />
+              <a-table-column title="保留期" :width="150">
+                <template #cell="{ record }">
+                  {{ formatRetention(record.retention) }}
+                  <span class="retention-source">{{ retentionSourceLabel(record.retention_source) }}</span>
+                </template>
+              </a-table-column>
               <a-table-column title="状态" :width="90">
                 <template #cell="{ record }">
                   <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
@@ -211,6 +216,7 @@ import { Message } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
 import { deleteDataNode, listDataNodes, updateDataNode } from "@/api/storage/metadata";
 import type { DataNodeListItem, DatasetSummary } from "@/api/storage/types";
+import { formatRetention, retentionSourceLabel } from "@/utils/retention";
 import {
   applyPageResult,
   defaultPagination,
@@ -330,6 +336,12 @@ onMounted(load);
 </script>
 
 <style scoped>
+.retention-source {
+  margin-left: 6px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .page-head {
   display: flex;
   align-items: center;

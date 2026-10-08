@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -24,7 +25,7 @@ const (
 var activationCheckIDs = []string{
 	"dataset_state",
 	"dataset_schema",
-	"keep_duration",
+	"retention",
 	"data_node",
 	"service_target",
 	"data_node_readiness",
@@ -53,17 +54,18 @@ func (rpcNodeStateChecker) GetNodeState(ctx context.Context, target string, req 
 }
 
 type activationChecker struct {
-	reader  metadata.Reader
-	node    NodeStateChecker
-	secret  string
-	timeout time.Duration
+	reader    metadata.Reader
+	node      NodeStateChecker
+	secret    string
+	retention storagepolicy.Retention
+	timeout   time.Duration
 }
 
-func newActivationChecker(reader metadata.Reader, node NodeStateChecker, secret string) *activationChecker {
+func newActivationChecker(reader metadata.Reader, node NodeStateChecker, secret string, retention storagepolicy.Retention) *activationChecker {
 	if node == nil {
 		node = rpcNodeStateChecker{}
 	}
-	return &activationChecker{reader: reader, node: node, secret: secret, timeout: activationTimeout}
+	return &activationChecker{reader: reader, node: node, secret: secret, retention: retention, timeout: activationTimeout}
 }
 
 func (c *activationChecker) checks(ctx context.Context, dataset *pb.Dataset) []*pb.DatasetActivationCheck {
@@ -85,8 +87,8 @@ func (c *activationChecker) checks(ctx context.Context, dataset *pb.Dataset) []*
 
 	schemaErr := validateDatasetActivationSchema(dataset)
 	add("dataset_schema", schemaErr == nil, activationSummary("Dataset schema", schemaErr))
-	keepErr := validateDatasetActivationKeepDuration(dataset)
-	add("keep_duration", keepErr == nil, activationSummary("keep_duration", keepErr))
+	retentionErr := validateDatasetActivationRetention(c.retention, dataset)
+	add("retention", retentionErr == nil, activationSummary("retention", retentionErr))
 
 	var node *pb.DataNode
 	if c.reader == nil {
@@ -193,19 +195,14 @@ func validateDatasetActivationSchema(dataset *pb.Dataset) error {
 	}
 }
 
-func validateDatasetActivationKeepDuration(dataset *pb.Dataset) error {
-	value := strings.TrimSpace(dataset.GetKeepDuration())
-	if value == "" || value == "0" {
+// validateDatasetActivationRetention requires a time-series Dataset to have
+// an effective retention in the Storage policy.
+func validateDatasetActivationRetention(retention storagepolicy.Retention, dataset *pb.Dataset) error {
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return nil
 	}
-	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_RECORD {
-		return errors.New("record Dataset keep_duration must be 0")
-	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 {
-		return errors.New("keep_duration must be 0 or a positive duration")
-	}
-	return nil
+	_, _, err := retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	return err
 }
 
 func parseIPTarget(raw string) (string, error) {

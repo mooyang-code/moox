@@ -13,12 +13,15 @@ import (
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -27,13 +30,19 @@ import (
 type cleanupDatasetReader struct{}
 
 func (cleanupDatasetReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
-	return []*pb.Dataset{{
-		SpaceId: "space", DatasetId: "prices", DataNodeId: "node-a",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "48h", Status: "active",
-	}}, &pb.PageResult{Page: 1, Size: 1000}, nil
+	dataset := func(spaceID, datasetID, freq string) *pb.Dataset {
+		return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataNodeId: "node-a", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: freq, Status: "active"}
+	}
+	return []*pb.Dataset{
+		dataset("crypto", "prices_1m", "1m"),
+		dataset("crypto", "prices_1d", "1d"),
+		dataset("stockcn", "equity_1m", "1m"),
+	}, &pb.PageResult{Page: 1, Size: 1000}, nil
 }
 
-type cleanupNode struct{ request *pb.CleanupExpiredBucketsReq }
+type cleanupNode struct {
+	requests map[string]*pb.CleanupExpiredBucketsReq
+}
 
 func (*cleanupNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return nil, nil
@@ -48,21 +57,39 @@ func (*cleanupNode) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*p
 	return nil, nil
 }
 func (n *cleanupNode) CleanupExpiredBuckets(_ context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
-	n.request = req
-	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+	n.requests[req.GetSpaceId()+"/"+req.GetDatasetId()] = req
+	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, DeletedRanges: 3}, nil
 }
-func TestCleanupDatasetsUsesSpaceAndKeepDuration(t *testing.T) {
-	node := &cleanupNode{}
-	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	err := cleanupDatasets(context.Background(), cleanupDatasetReader{}, func(context.Context, string, string) (pb.DataNodeRuntimeService, error) {
-		return node, nil
-	}, &pb.AuthInfo{AppId: "primary", AppKey: "key"}, now)
+
+func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
+	node := &cleanupNode{requests: map[string]*pb.CleanupExpiredBucketsReq{}}
+	metrics, err := observability.NewCleanupMetrics(prometheus.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if node.request == nil || node.request.GetSpaceId() != "space" || node.request.GetDatasetId() != "prices" ||
-		node.request.GetBeforeBucketStart() != "2026-07-18T00:00:00.000000000Z" {
-		t.Fatalf("request=%v", node.request)
+	cleanup := datasetCleanup{
+		reader: cleanupDatasetReader{},
+		resolver: func(context.Context, string, string) (pb.DataNodeRuntimeService, error) {
+			return node, nil
+		},
+		auth: &pb.AuthInfo{AppId: "primary", AppKey: "key"}, retention: storagepolicy.Default().Retention, metrics: metrics,
+	}
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	if err := cleanup.run(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		// crypto 1m keeps 7 days, stockcn 1m 45 days; whole day buckets.
+		"crypto/prices_1m":  "2026-07-13T00:00:00.000000000Z",
+		"stockcn/equity_1m": "2026-06-05T00:00:00.000000000Z",
+	}
+	if len(node.requests) != len(want) {
+		t.Fatalf("cleanup requests = %v; a forever (1d) Dataset must not be cleaned", node.requests)
+	}
+	for key, cutoff := range want {
+		if got := node.requests[key].GetBeforeBucketStart(); got != cutoff {
+			t.Fatalf("%s cutoff = %q, want %q", key, got, cutoff)
+		}
 	}
 }
 
@@ -122,14 +149,66 @@ func TestIsTransientStorageViewEventBusError(t *testing.T) {
 	}
 }
 
-func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 10s\n    max_view_file_bytes: 1048576\n"), 0o600); err != nil {
+func TestLoadStoragePolicyFromThePackageRoot(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "storage", "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, _, _, _, _, _, _, err := storageViewRebuildSettings(); err == nil {
-		t.Fatal("accepted a rebuild interval below the safety floor")
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "storage.yaml")
+	t.Setenv("MOOX_STORAGE_CONFIG", configPath)
+
+	if err := os.WriteFile(configPath, []byte("storage:\n  root: ./var/storage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadStoragePolicy(); err == nil || !strings.Contains(err.Error(), "storage.policy_file is required") {
+		t.Fatalf("missing policy_file error = %v", err)
+	}
+
+	if err := os.WriteFile(configPath, []byte("storage:\n  policy_file: ../config/storage-policy.json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := storagepolicy.Default()
+	policy.Retention.Defaults = map[string]string{}
+	for frequency, retention := range storagepolicy.Default().Retention.Defaults {
+		policy.Retention.Defaults[frequency] = retention
+	}
+	policy.Retention.Defaults["1m"] = "14d"
+	raw, err := policy.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(root, "config", "storage-policy.json")
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStoragePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Retention.Defaults["1m"]; got != "336h" {
+		t.Fatalf("loaded 1m retention = %q, want the file's 336h", got)
+	}
+
+	if err := os.WriteFile(policyPath, []byte(`{"retention":{"defaults":{"1m":"7d"}},"view":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadStoragePolicy(); err == nil {
+		t.Fatal("an incomplete policy file was accepted")
+	}
+}
+
+func TestLoadStoragePolicyDefaultsWithoutStorageConfig(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	policy, err := loadStoragePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.View.Bars != 5000 || policy.View.TrimBars != 6000 || policy.Retention.Defaults["1m"] != "168h" {
+		t.Fatalf("default policy = %#v", policy)
 	}
 }
 
@@ -154,19 +233,16 @@ func TestStorageViewMaintenanceDisabled(t *testing.T) {
 
 func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 2097152\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_lookback: 48h\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	interval, lookback, maxBytes, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	lookback, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if interval != 2*time.Minute || maxBytes != 2097152 {
-		t.Fatalf("settings = %s/%d", interval, maxBytes)
-	}
-	if lookback != 24*time.Hour {
-		t.Fatalf("lookback = %s, want 24h", lookback)
+	if lookback != 48*time.Hour {
+		t.Fatalf("lookback = %s, want 48h", lookback)
 	}
 	if maxPending != 32 || idleChecks != 3 {
 		t.Fatalf("gate defaults = %d/%d", maxPending, idleChecks)
@@ -176,36 +252,19 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	}
 }
 
-func TestStorageViewMaintenancePolicyDirectDefaults(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_CONFIG", "")
-	policy, err := storageViewMaintenancePolicy()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if policy.MaintenanceCheckInterval != "1m" || policy.CapacityCheckInterval != "1h" || policy.CapacityCheckJitter != "1h" {
-		t.Fatalf("maintenance intervals = %q/%q/%q", policy.MaintenanceCheckInterval, policy.CapacityCheckInterval, policy.CapacityCheckJitter)
-	}
-	if policy.RebuildLookbackPeriods != 5000 || policy.MaxPeriodsPerSeries != 6000 || policy.MaxViewFileBytes != 1<<30 {
-		t.Fatalf("maintenance limits = %#v", policy)
-	}
-	if err := policy.Validate(); err != nil {
-		t.Fatalf("direct defaults are invalid: %v", err)
-	}
-}
-
 func TestStorageViewRebuildSettingsAllowsExplicitZeroMaxPending(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, _, _, _, _, _, _, err := storageViewRebuildSettings(); err == nil {
+	if _, _, _, _, _, err := storageViewRebuildSettings(); err == nil {
 		t.Fatal("accepted explicit zero idle checks")
 	}
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 3\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	_, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil || maxPending != 0 || idleChecks != 3 || !maxPendingConfigured || !idleChecksConfigured {
 		t.Fatalf("explicit zero max pending settings = %d/%d configured=%v/%v err=%v", maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err)
 	}

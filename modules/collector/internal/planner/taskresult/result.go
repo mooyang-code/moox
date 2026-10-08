@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -202,7 +200,6 @@ func NewManagerWithAPI(metadata metadataAPI, auth *storagepb.AuthInfo) *Manager 
 type Config struct {
 	ViewID       string
 	DataNodeID   string
-	KeepDuration string
 	Name         string
 	Description  string
 	Frequency    string
@@ -504,14 +501,6 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
 		kind = storagepb.DataKind_DATA_KIND_RECORD
 	}
-	keep := strings.TrimSpace(cfg.KeepDuration)
-	if keep == "" {
-		keep = "0"
-	}
-	keep, err := normalizeKeepDuration(keep)
-	if err != nil {
-		return IDs{}, err
-	}
 	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID}
 	if marketType = strings.TrimSpace(marketType); marketType != "" {
 		attrs["market_type"] = marketType
@@ -532,7 +521,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID, DataNodeId: cfg.DataNodeID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freq: datasetFrequency(kind, cfg.Frequency), Attributes: attrs, SubjectTags: subjectTags,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", Freq: datasetFrequency(kind, cfg.Frequency), Attributes: attrs, SubjectTags: subjectTags,
 		}})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
@@ -615,11 +604,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			}()))
 		}
 	}
-	viewKeep := keep
-	if datasetKeep := strings.TrimSpace(get.GetDataset().GetKeepDuration()); datasetKeep != "" && datasetKeep != "0" && (keep == "" || keep == "0") {
-		viewKeep = datasetKeep
-	}
-	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, viewKeep, cfg); err != nil {
+	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, cfg); err != nil {
 		return cleanupCreated(err)
 	}
 	if err := m.ensureViewColumns(ctx, spaceID, ids, cfg.OutputFields); err != nil {
@@ -1075,7 +1060,7 @@ func resultColumnDisplayName(name string) string {
 	return "结果字段"
 }
 
-func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, keep string, cfg Config) error {
+func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, cfg Config) error {
 	get, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return fmt.Errorf("get result view: %w", err)
@@ -1089,7 +1074,7 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		if kind == storagepb.DataKind_DATA_KIND_RECORD {
 			engine, grain = "bleve", []string{"subject_id", "version"}
 		}
-		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, KeepDuration: keep, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
+		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result view", createErr, retInfoView(created))
 		}
@@ -1102,32 +1087,6 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		return fmt.Errorf("result view %s is owned by another task", ids.ViewID)
 	}
 	return nil
-}
-
-func normalizeKeepDuration(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "0" {
-		return "0", nil
-	}
-	duration, err := time.ParseDuration(raw)
-	if err != nil && len(raw) > 1 {
-		unit := raw[len(raw)-1]
-		if unit == 'd' || unit == 'D' || unit == 'w' || unit == 'W' {
-			count, parseErr := strconv.ParseInt(raw[:len(raw)-1], 10, 64)
-			if parseErr == nil && count > 0 {
-				multiplier := 24 * time.Hour
-				if unit == 'w' || unit == 'W' {
-					multiplier *= 7
-				}
-				duration = time.Duration(count) * multiplier
-				err = nil
-			}
-		}
-	}
-	if err != nil || duration <= 0 {
-		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", raw)
-	}
-	return duration.String(), nil
 }
 
 func resultDisplayName(cfg Config, taskID string) string {

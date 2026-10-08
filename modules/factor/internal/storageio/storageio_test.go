@@ -228,7 +228,6 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	dataset := metadata.createRequests[0].GetDataset()
 	require.Equal(t, spec.DataSourceID, dataset.GetDataSourceId())
 	require.Equal(t, spec.DataNodeID, dataset.GetDataNodeId())
-	require.Equal(t, spec.KeepDuration, dataset.GetKeepDuration())
 	require.Equal(t, spec.Frequency, dataset.GetFreq())
 	require.Equal(t, []string{"tag-b", "tag-a"}, dataset.GetSubjectTags())
 	require.Equal(t, DatasetRoleFactorResult, dataset.GetAttributes()["dataset_role"])
@@ -337,7 +336,7 @@ func resultDatasetSpec() ResultDatasetSpec {
 	return ResultDatasetSpec{
 		SpaceID: "crypto", DatasetID: "factor_result", SourceDatasetID: "bars", Name: "因子结果",
 		Description: "derived factors", DataSourceID: "binance", DataNodeID: "storage-node-0",
-		DataKind: DataKindTimeSeries, Frequency: "1m", KeepDuration: "720h",
+		DataKind: DataKindTimeSeries, Frequency: "1m",
 		SubjectTags: []string{"tag-b", "tag-a"}, Attributes: map[string]string{"owner": "factor"},
 		Columns: []ColumnInfo{{ColumnName: "close", OriginType: ColumnOriginField, OriginID: "close", ValueType: ColumnTypeDouble}},
 	}

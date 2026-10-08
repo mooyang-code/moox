@@ -133,7 +133,6 @@ type KlineResampleConfig struct {
 	StaleRunningAfter           time.Duration `yaml:"stale_running_after"`
 	DefaultSettleDelay          time.Duration `yaml:"default_settle_delay"`
 	RepairLookbackBuckets       int           `yaml:"repair_lookback_buckets"`
-	TargetKeepDuration          time.Duration `yaml:"target_keep_duration"`
 }
 
 // SysDeployConfig describes optional dependency discovery through admin SysDeploy.
@@ -368,7 +367,7 @@ func (c *Config) validateDNSResolver() error {
 }
 
 func (c *Config) validateKlineResample() error {
-	if c.KlineResample.ScanTimeout <= 0 || c.KlineResample.WorkerJobTimeout <= 0 || c.KlineResample.WorkerPollInterval <= 0 || c.KlineResample.StaleRunningAfter <= 0 || c.KlineResample.DefaultSettleDelay < 0 || c.KlineResample.TargetKeepDuration <= 0 {
+	if c.KlineResample.ScanTimeout <= 0 || c.KlineResample.WorkerJobTimeout <= 0 || c.KlineResample.WorkerPollInterval <= 0 || c.KlineResample.StaleRunningAfter <= 0 || c.KlineResample.DefaultSettleDelay < 0 {
 		return fmt.Errorf("kline_resample durations must be positive, except default_settle_delay")
 	}
 	if c.KlineResample.WorkerConcurrency <= 0 || c.KlineResample.WorkerConcurrency > 250 || c.KlineResample.MaxClaimsPerTick < 3 || c.KlineResample.MaxClaimsPerTick > 1000 || c.KlineResample.WorkerSubjectBatchSize <= 0 || c.KlineResample.WorkerSubjectBatchSize > 200 || c.KlineResample.WorkerMaxSourceKeysPerClaim <= 0 {
@@ -500,7 +499,7 @@ func Default() *Config {
 			WorkerSubjectBatchSize: 50, WorkerJobTimeout: 30 * time.Second,
 			WorkerPollInterval: 5 * time.Second, WorkerMaxSourceKeysPerClaim: 20000,
 			StaleRunningAfter: 2 * time.Minute, DefaultSettleDelay: 10 * time.Second,
-			RepairLookbackBuckets: 3, TargetKeepDuration: 4320 * time.Hour,
+			RepairLookbackBuckets: 3,
 		},
 		SysDeploy: SysDeployConfig{
 			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},

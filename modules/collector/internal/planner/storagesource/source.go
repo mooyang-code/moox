@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/transport"
@@ -49,8 +50,20 @@ type DatasetInfo struct {
 	Columns      []string
 	ColumnTypes  map[string]storagepb.FieldValueType
 	Attributes   map[string]string
-	KeepDuration string
-	Revision     uint64
+	// Retention is the Dataset's effective retention from the Storage policy:
+	// "<n>h", "forever", or empty when Storage could not resolve it.
+	Retention string
+	Revision  uint64
+}
+
+// RetentionWindow returns how far back the Dataset keeps rows, and false when
+// it keeps every row or its retention is unknown.
+func (d DatasetInfo) RetentionWindow() (time.Duration, bool) {
+	period, err := storagepolicy.ParsePeriod(d.Retention)
+	if err != nil || period.Forever {
+		return 0, false
+	}
+	return period.Duration, true
 }
 
 // DatasetSource loads Dataset metadata and resolves the active Subject union
@@ -108,7 +121,7 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 		Freq:         dataset.GetFreq(),
 		SubjectTags:  append([]string(nil), dataset.GetSubjectTags()...),
 		Attributes:   cloneAttributes(dataset.GetAttributes()),
-		KeepDuration: strings.TrimSpace(dataset.GetKeepDuration()),
+		Retention:    dataset.GetRetention(),
 		Revision:     dataset.GetRevision(),
 		ColumnTypes:  make(map[string]storagepb.FieldValueType),
 	}

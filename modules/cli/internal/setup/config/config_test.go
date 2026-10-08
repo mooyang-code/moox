@@ -9,6 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -591,12 +592,13 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	assert.Equal(t, "1m", manifest.StorageView.MaintenanceCheckInterval)
 	assert.Equal(t, "1h", manifest.StorageView.CapacityCheckInterval)
 	assert.Equal(t, "1h", manifest.StorageView.CapacityCheckJitter)
-	assert.Equal(t, uint64(5000), manifest.StorageView.RebuildLookbackPeriods)
-	assert.Equal(t, uint64(6000), manifest.StorageView.MaxPeriodsPerSeries)
-	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_kline_1m").RebuildLookbackPeriods)
-	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_kline_1m").MaxPeriodsPerSeries)
-	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").RebuildLookbackPeriods)
-	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").MaxPeriodsPerSeries)
+	// The example spells out the recommended policy, so it renders the same
+	// storage-policy.json as an omitted [storage_retention].
+	examplePolicy, err := manifest.StoragePolicy().Encode()
+	require.NoError(t, err)
+	recommended, err := storagepolicy.Default().Encode()
+	require.NoError(t, err)
+	assert.Equal(t, string(recommended), string(examplePolicy))
 	manifest.SCFFetcher.Enabled = true
 	for index := range manifest.SCFFetcher.Spaces {
 		space := &manifest.SCFFetcher.Spaces[index]
@@ -736,9 +738,12 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, "1m", snapshot.Manifest.StorageView.MaintenanceCheckInterval)
 	assert.Equal(t, "1h", snapshot.Manifest.StorageView.CapacityCheckInterval)
 	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
-	assert.Equal(t, uint64(5000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
-	assert.Equal(t, uint64(6000), snapshot.Manifest.StorageView.MaxPeriodsPerSeries)
 	assert.Equal(t, int64(1<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
+	policy := snapshot.Manifest.StoragePolicy()
+	assert.Equal(t, storagepolicy.Default().Retention, policy.Retention, "an omitted [storage_retention] uses the recommended retention")
+	assert.Equal(t, uint64(5000), policy.View.Bars)
+	assert.Equal(t, uint64(6000), policy.View.TrimBars)
+	require.NoError(t, policy.Validate())
 	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
 	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
@@ -921,15 +926,30 @@ storage_root = "/data/moox/storage"
 	assert.Contains(t, err.Error(), "paths.control_root")
 }
 
-func TestLoadStorageViewRebuildLookbackPeriodsFromManifest(t *testing.T) {
+func TestLoadStorageRetentionFromManifest(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-[storage_view]
-rebuild_lookback_periods = 777
+[storage_retention]
+view_bars = 777
+
+[storage_retention.spaces.crypto]
+"1m" = "14d"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(777), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
+	policy := snapshot.Manifest.StoragePolicy()
+	assert.Equal(t, uint64(777), policy.View.Bars)
+	assert.Equal(t, uint64(933), policy.View.TrimBars)
+	period, source, err := policy.Retention.Resolve("crypto", "1m")
+	require.NoError(t, err)
+	assert.Equal(t, "336h", period.String())
+	assert.Equal(t, storagepolicy.SourceSpace, source)
+	// The omitted defaults table is the recommended one; a given spaces table
+	// replaces the recommended space overrides instead of merging with them.
+	period, source, err = policy.Retention.Resolve("stockcn", "1m")
+	require.NoError(t, err)
+	assert.Equal(t, "168h", period.String())
+	assert.Equal(t, storagepolicy.SourceDefault, source)
 }
 
 func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
@@ -995,27 +1015,24 @@ func TestLoadAcceptsMinimumCollectorRetentionBudget(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestLoadRejectsSystemMonitorIdentityOverride(t *testing.T) {
-	body := validManifest + `
-[storage_view.system_monitor]
-space_id = "mooxsys"
-view_id = "view_mooxsys_host_disk"
-`
-	root := t.TempDir()
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	if err == nil || !strings.Contains(err.Error(), "system_monitor must not set space_id or view_id") {
-		t.Fatalf("expected system monitor identity validation error, got %v", err)
+func TestLoadRejectsInvalidStorageRetention(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "no bars", body: "[storage_retention]\nview_bars = 0", want: "view.bars"},
+		{name: "incomplete defaults", body: "[storage_retention.defaults]\n\"1m\" = \"7d\"", want: "must cover every frequency"},
+		{name: "alias frequency", body: "[storage_retention.spaces.crypto]\n\"1H\" = \"7d\"", want: "not a canonical frequency"},
+		{name: "invalid period", body: "[storage_retention.spaces.crypto]\n\"1m\" = \"7 days\"", want: "retention"},
+		{name: "retention shorter than view bars", body: "[storage_retention.spaces.crypto]\n\"1m\" = \"3d\"", want: "fewer than view.bars"},
 	}
-}
-
-func TestLoadRejectsInvalidStorageViewRebuildLookbackPeriods(t *testing.T) {
-	for _, value := range []string{"0", "1000001"} {
-		t.Run(value, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
-			body := validManifest + fmt.Sprintf("\n[storage_view]\nrebuild_lookback_periods = %s\n", value)
-			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			_, err := Load(writeManifest(t, root, validManifest+"\n"+tt.body+"\n", 0o600), root)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "storage_view.rebuild_lookback_periods")
+			require.Contains(t, err.Error(), tt.want)
 		})
 	}
 }
@@ -1031,26 +1048,6 @@ func TestLoadRejectsInvalidStorageViewCapacitySchedule(t *testing.T) {
 		{name: "zero jitter", body: "capacity_check_jitter = \"0s\"", want: "capacity_check_jitter"},
 		{name: "nonpositive jitter", body: "capacity_check_jitter = \"-1s\"", want: "capacity_check_jitter"},
 		{name: "jitter exceeds interval", body: "capacity_check_interval = \"30m\"\ncapacity_check_jitter = \"1h\"", want: "capacity_check_jitter"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			body := validManifest + "\n[storage_view]\n" + tt.body + "\n"
-			_, err := Load(writeManifest(t, root, body, 0o600), root)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), tt.want)
-		})
-	}
-}
-
-func TestLoadRejectsStorageViewCapacityNotAboveLookback(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "equal global limits", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 5000", want: "max_periods_per_series"},
-		{name: "invalid View override", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 6000\n\n[[storage_view.views]]\nspace_id = \"crypto\"\nview_id = \"view_binance_kline_1m\"\nrebuild_lookback_periods = 6000\nmax_periods_per_series = 6000", want: "invalid limits"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -14,12 +14,11 @@ import (
 // Preparer asynchronously makes the target catalog ready. Metadata calls are
 // intentionally outside the Collector SQLite transaction.
 type Preparer struct {
-	Tasks        *store.TaskRepository
-	Source       subjectSource
-	Catalog      *Catalog
-	KeepDuration string
-	Limit        int
-	mu           sync.Mutex
+	Tasks   *store.TaskRepository
+	Source  subjectSource
+	Catalog *Catalog
+	Limit   int
+	mu      sync.Mutex
 }
 
 func (p *Preparer) RunOnce(ctx context.Context) error {
@@ -49,7 +48,7 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 			subjects, resolveErr := p.Source.ResolveSubjects(ctx, task.SpaceID, source.SubjectTags)
 			sourceErr = resolveErr
 			if sourceErr == nil {
-				sourceErr = p.Catalog.PrepareTarget(ctx, task, params, source, subjects, p.KeepDuration)
+				sourceErr = p.Catalog.PrepareTarget(ctx, task, params, source, subjects)
 			}
 		}
 		if sourceErr != nil {

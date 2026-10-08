@@ -154,7 +154,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
 			Freq: item.Freq, Status: "disabled", Attributes: item.Attributes,
-			DataNodeId: item.DataNodeID, KeepDuration: item.KeepDuration, SubjectTags: subjectTags,
+			DataNodeId: item.DataNodeID, SubjectTags: subjectTags,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
@@ -198,7 +198,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		if _, err := store.UpsertView(ctx, &pb.View{
 			SpaceId: item.SpaceID, ViewId: item.ViewID, Name: item.Name, Description: item.Description,
 			DatasetId: item.PrimaryDatasetID, GrainKeys: item.GrainKeys,
-			Engine: item.Engine, KeepDuration: item.KeepDuration,
+			Engine: item.Engine,
 			Status: item.Status,
 		}); err != nil {
 			return result, seedErr("view", item.ViewID, err)
@@ -250,9 +250,6 @@ func validateSeedDatasets(ctx context.Context, store metadata.Reader, datasets [
 		dataNodeID := strings.TrimSpace(item.DataNodeID)
 		if dataNodeID == "" {
 			return fmt.Errorf("dataset %q data_node_id is required", item.DatasetID)
-		}
-		if strings.TrimSpace(item.KeepDuration) == "" {
-			return fmt.Errorf("dataset %q keep_duration is required", item.DatasetID)
 		}
 		node, err := store.GetDataNode(ctx, dataNodeID)
 		if err != nil {
@@ -446,7 +443,6 @@ type seedDataset struct {
 	Description  string            `yaml:"description"`
 	DataKind     string            `yaml:"data_kind"`
 	Freq         string            `yaml:"freq"`
-	KeepDuration string            `yaml:"keep_duration"`
 	SubjectTags  []string          `yaml:"subject_tags"`
 	Status       string            `yaml:"status"`
 	Attributes   map[string]string `yaml:"attributes"`
@@ -500,7 +496,6 @@ type seedView struct {
 	PrimaryDatasetID string   `yaml:"dataset_id"`
 	GrainKeys        []string `yaml:"grain_keys"`
 	Engine           string   `yaml:"engine"`
-	KeepDuration     string   `yaml:"keep_duration"`
 	Status           string   `yaml:"status"`
 }
 

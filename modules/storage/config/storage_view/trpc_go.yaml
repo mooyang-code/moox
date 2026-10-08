@@ -97,6 +97,8 @@ plugins:
 
 storage:
   root: ./var/storage
+  # Dataset retention and View limits rendered by moox-cli from moox.toml.
+  policy_file: ../config/storage-policy.json
   roles:
     - view
   metadata:
@@ -175,18 +177,15 @@ storage:
         ordering: dataset
         deliver_policy: new
         max_retry_attempts: -1
-    maintenance_check_interval: 1m
     # Serialize Primary requests during large View rebuilds.
     backfill_page_size: 2000
     backfill_request_interval: 100ms
-    maintenance_policy_file: config/maintenance.json
     rebuild_lookback: 24h
     rebuild_lookback_periods:
       1m: 5000
       1h: 5000
       1d: 5000
       default: 5000
-    max_view_file_bytes: 1073741824
     rebuild_max_pending: 32
     rebuild_idle_checks: 3
   health:

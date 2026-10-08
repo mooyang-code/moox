@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,7 +63,7 @@ func newActivationReader(status, target string) *activationMetadataReader {
 		dataset: &pb.Dataset{
 			SpaceId: "space-a", DatasetId: "dataset_a", DataSourceId: "source-a",
 			Name: "数据集", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
-			DataNodeId: "node-a", KeepDuration: "24h", Status: status, Revision: 7,
+			DataNodeId: "node-a", Status: status, Revision: 7,
 		},
 		node: &pb.DataNode{NodeId: "node-a", ServiceTarget: target, Status: "active"},
 	}
@@ -71,7 +72,7 @@ func newActivationReader(status, target string) *activationMetadataReader {
 func TestDatasetActivationChecksAreOrderedAndSigned(t *testing.T) {
 	reader := newActivationReader("disabled", "ip://127.0.0.1:19090")
 	node := &fakeNodeStateChecker{rsp: readyNodeState("node-a")}
-	checker := newActivationChecker(reader, node, "secret")
+	checker := newActivationChecker(reader, node, "secret", storagepolicy.Default().Retention)
 
 	checks := checker.checks(context.Background(), reader.dataset)
 	require.Equal(t, activationCheckIDs, checkIDs(checks))
@@ -107,7 +108,7 @@ func TestDatasetActivationCheckerRedactsRuntimeFailures(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			checks := newActivationChecker(tc.reader, tc.checker, "secret").checks(context.Background(), tc.reader.dataset)
+			checks := newActivationChecker(tc.reader, tc.checker, "secret", storagepolicy.Default().Retention).checks(context.Background(), tc.reader.dataset)
 			failed := checkByID(checks, tc.wantCheck)
 			require.NotNil(t, failed)
 			require.False(t, failed.GetReady())
@@ -122,7 +123,7 @@ func TestDatasetActivationCheckerRedactsRuntimeFailures(t *testing.T) {
 func TestDatasetActivationCheckerBoundsTimeout(t *testing.T) {
 	reader := newActivationReader("disabled", "ip://127.0.0.1:1")
 	fake := &fakeNodeStateChecker{wait: true}
-	checker := newActivationChecker(reader, fake, "secret")
+	checker := newActivationChecker(reader, fake, "secret", storagepolicy.Default().Retention)
 	checker.timeout = 10 * time.Millisecond
 
 	start := time.Now()
@@ -136,7 +137,7 @@ func TestDatasetActivationSchemaValidatesChineseName(t *testing.T) {
 	dataset := newActivationReader("disabled", "ip://127.0.0.1:19090").dataset
 	dataset.Name = "dataset"
 
-	checks := newActivationChecker(newActivationReader("disabled", "ip://127.0.0.1:19090"), &fakeNodeStateChecker{rsp: readyNodeState("node-a")}, "secret").checks(context.Background(), dataset)
+	checks := newActivationChecker(newActivationReader("disabled", "ip://127.0.0.1:19090"), &fakeNodeStateChecker{rsp: readyNodeState("node-a")}, "secret", storagepolicy.Default().Retention).checks(context.Background(), dataset)
 	schemaCheck := checkByID(checks, "dataset_schema")
 	require.NotNil(t, schemaCheck)
 	require.False(t, schemaCheck.GetReady())

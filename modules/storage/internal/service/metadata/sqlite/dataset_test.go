@@ -21,7 +21,7 @@ func TestDatasetCreateDefaultsAndRequiresActiveDataNode(t *testing.T) {
 	}
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "4320h",
+		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		Status: "active", BindingLocked: true, Revision: 99,
 	})
 	if err != nil {
@@ -30,8 +30,8 @@ func TestDatasetCreateDefaultsAndRequiresActiveDataNode(t *testing.T) {
 	if created.GetStatus() != "disabled" || created.GetBindingLocked() || created.GetRevision() != 1 {
 		t.Fatalf("create defaults = status=%q locked=%t revision=%d", created.GetStatus(), created.GetBindingLocked(), created.GetRevision())
 	}
-	if created.GetKeepDuration() != "4320h0m0s" {
-		t.Fatalf("keep_duration = %q, want 4320h0m0s", created.GetKeepDuration())
+	if created.GetRetention() != "" || created.GetRetentionSource() != "" {
+		t.Fatalf("stored retention = %q/%q; retention is resolved on read, never stored", created.GetRetention(), created.GetRetentionSource())
 	}
 
 	if _, err := store.RegisterDataNode(ctx, "node-disabled", "trpc://disabled", "Disabled"); err != nil {
@@ -56,7 +56,7 @@ func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
 	registerActiveNode(t, ctx, store, "node-a")
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", KeepDuration: "0",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h",
 		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
 	}); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 	registerActiveNode(t, ctx, store, "node-a")
 	dataset := &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", KeepDuration: "0",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h",
 		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
 	}
 	if _, err := store.CreateDataset(ctx, dataset); err != nil {
@@ -187,8 +187,7 @@ func TestDatasetUpdateRevisionAndStatusInvariants(t *testing.T) {
 
 	updated, err := store.UpdateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", Name: "Dataset v2", Description: "updated",
-		DataSourceId: "source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
-		KeepDuration: "24h", Status: "disabled", Revision: created.GetRevision(),
+		DataSourceId: "source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "disabled", Revision: created.GetRevision(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -266,8 +265,8 @@ func TestDatasetRebindRejectsLockedDatasetAndPreservesFullRow(t *testing.T) {
 	}
 	locked, err := store.UpdateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", Name: active.GetName(),
-		Description: "locked row", KeepDuration: "48h",
-		Attributes: map[string]string{"owner": "storage"}, Status: "disabled", Revision: active.GetRevision(),
+		Description: "locked row",
+		Attributes:  map[string]string{"owner": "storage"}, Status: "disabled", Revision: active.GetRevision(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -433,7 +432,7 @@ func createTestDataset(t *testing.T, ctx context.Context, store *Store, datasetI
 	t.Helper()
 	item, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: datasetID, DataSourceId: "source", DataNodeId: nodeID,
-		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "24h",
+		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	if err != nil {
 		t.Fatal(err)

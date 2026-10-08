@@ -87,7 +87,7 @@ func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "space", DataSourceID: "source", Name: "Source", Kind: "internal", Status: "active"}},
 		Datasets: []seedDataset{{
 			SpaceID: "space", DatasetID: "dataset", DataSourceID: "source", Name: "Dataset",
-			DataKind: "time_series", Freq: "1m", DataNodeID: "storage-node-0", KeepDuration: "1h", Status: "active",
+			DataKind: "time_series", Freq: "1m", DataNodeID: "storage-node-0", Status: "active",
 		}},
 	}
 
@@ -107,7 +107,6 @@ func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 	dataset, err := store.GetDataset(ctx, "space", "dataset")
 	require.NoError(t, err)
 	require.Equal(t, "storage-node-0", dataset.GetDataNodeId())
-	require.Equal(t, "1h0m0s", dataset.GetKeepDuration())
 	require.Equal(t, "disabled", dataset.GetStatus(), "seed status must not activate a Dataset")
 }
 
@@ -118,11 +117,11 @@ func TestImportEntitiesValidatesDatasetBindingBeforeWrites(t *testing.T) {
 	require.NoError(t, err)
 	seed := seedFile{
 		Spaces:   []seedSpace{{SpaceID: "space", Name: "Space"}},
-		Datasets: []seedDataset{{SpaceID: "space", DatasetID: "dataset", DataNodeID: "storage-node-0"}},
+		Datasets: []seedDataset{{SpaceID: "space", DatasetID: "dataset", DataNodeID: "storage-node-1"}},
 	}
 
 	_, err = importEntities(ctx, store, seed)
-	require.ErrorContains(t, err, "keep_duration is required")
+	require.ErrorIs(t, err, sql.ErrNoRows, "a Dataset on an unregistered DataNode is rejected before any write")
 	_, err = store.GetSpace(ctx, "space")
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }

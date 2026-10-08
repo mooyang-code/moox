@@ -33,13 +33,9 @@ func newFactorResultActivationFixtureWithSchema(t *testing.T, role string, kind 
 	require.NoError(t, err)
 	_, err = store.RegisterDataNode(ctx, "factor-node", "ip://127.0.0.1:19090", "因子节点")
 	require.NoError(t, err)
-	keepDuration := "720h"
-	if kind == pb.DataKind_DATA_KIND_RECORD {
-		keepDuration = "0"
-	}
 	dataset, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "factor-space", DatasetId: "dataset_factor_btc_1m", DataSourceId: "factor", DataNodeId: "factor-node",
-		Name: "BTC 因子", DataKind: kind, Freq: freq, KeepDuration: keepDuration,
+		Name: "BTC 因子", DataKind: kind, Freq: freq,
 		Attributes: map[string]string{"dataset_role": role, "owner_module": "factor"},
 	})
 	require.NoError(t, err)
@@ -78,7 +74,6 @@ func TestActivateFactorResultDatasetCreatesDefaultView(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, dataset.GetDatasetId(), view.GetDatasetId())
 	require.Equal(t, dataset.GetName(), view.GetName())
-	require.Equal(t, dataset.GetKeepDuration(), view.GetKeepDuration())
 	require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, view.GetGrainKeys())
 	require.Equal(t, "1m", view.GetFreq())
 	require.Equal(t, "duckdb", view.GetEngine())
@@ -204,7 +199,6 @@ func TestEnsureFactorResultDefaultViewRejectsManagedContractConflicts(t *testing
 		{name: "engine", mutate: func(view *pb.View) { view.Engine = "bleve" }},
 		{name: "status", mutate: func(view *pb.View) { view.Status = "disabled" }},
 		{name: "grain", mutate: func(view *pb.View) { view.GrainKeys = []string{"subject_id"} }},
-		{name: "retention", mutate: func(view *pb.View) { view.KeepDuration = "24h" }},
 		{name: "columns", mutate: func(view *pb.View) { view.Columns[0].ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_STRING }},
 	}
 	for _, tc := range cases {
@@ -265,4 +259,26 @@ func viewColumnNames(columns []*pb.ViewColumn) []string {
 		}
 	}
 	return names
+}
+
+func TestMetadataReturnsDatasetRetentionFromPolicy(t *testing.T) {
+	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	ctx := context.Background()
+	got, err := service.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, got.GetRetInfo().GetCode(), got.GetRetInfo().GetMsg())
+	require.Equal(t, "168h", got.GetDataset().GetRetention(), "a 1m Dataset in a space without overrides keeps 7 days")
+	require.Equal(t, "default", got.GetDataset().GetRetentionSource())
+
+	listed, err := service.ListDatasets(ctx, &pb.ListDatasetsReq{SpaceId: dataset.GetSpaceId()})
+	require.NoError(t, err)
+	require.Len(t, listed.GetDatasets(), 1)
+	require.Equal(t, "168h", listed.GetDatasets()[0].GetRetention())
+
+	retention, source := service.datasetRetention(&pb.Dataset{DataKind: pb.DataKind_DATA_KIND_RECORD})
+	require.Equal(t, "forever", retention)
+	require.Equal(t, "record", source)
+	retention, source = service.datasetRetention(&pb.Dataset{SpaceId: "stockcn", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m"})
+	require.Equal(t, "1080h", retention)
+	require.Equal(t, "space", source)
 }

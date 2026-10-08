@@ -45,7 +45,8 @@ const nodeResponse = {
           dataset_id: "dataset-a",
           name: "行情数据",
           data_kind: "DATA_KIND_TIME_SERIES",
-          keep_duration: "30d",
+          retention: "720h",
+          retention_source: "default",
           status: "active"
         }
       ]

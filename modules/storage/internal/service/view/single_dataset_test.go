@@ -30,12 +30,12 @@ func TestSingleDatasetView(t *testing.T) {
 	require.NoError(t, err)
 	prices, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_prices", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "0",
+		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	require.NoError(t, err)
 	_, err = store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_fundamentals", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "基本面", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "0",
+		Name: "基本面", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	require.NoError(t, err)
 

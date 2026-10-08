@@ -245,21 +245,6 @@ func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	require.Empty(t, fake.views[ids.ViewID].GetFreq(), "Storage fills the View freq from its Dataset")
 }
 
-func TestNormalizeKeepDurationAcceptsDaysAndWeeks(t *testing.T) {
-	require.Equal(t, "720h0m0s", mustNormalizeKeepDuration(t, "30d"))
-	require.Equal(t, "168h0m0s", mustNormalizeKeepDuration(t, "1w"))
-	require.Equal(t, "0", mustNormalizeKeepDuration(t, "0"))
-	_, err := normalizeKeepDuration("invalid")
-	require.Error(t, err)
-}
-
-func mustNormalizeKeepDuration(t *testing.T, raw string) string {
-	t.Helper()
-	value, err := normalizeKeepDuration(raw)
-	require.NoError(t, err)
-	return value
-}
-
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
 	fake := newResultMetadataFake()
 	fake.failView = true

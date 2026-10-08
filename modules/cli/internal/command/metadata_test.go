@@ -141,38 +141,19 @@ func TestBuildMetadataImportCalls_AcceptsEmptySeed(t *testing.T) {
 	}
 }
 
-func TestBuildMetadataImportCallsRequiresDatasetBindingAndRetention(t *testing.T) {
-	_, err := buildMetadataImportCalls(metadataSeed{Datasets: []seedDataset{{DatasetID: "missing-node", KeepDuration: "1h"}}})
+func TestBuildMetadataImportCallsRequiresDatasetBinding(t *testing.T) {
+	_, err := buildMetadataImportCalls(metadataSeed{Datasets: []seedDataset{{DatasetID: "missing-node"}}})
 	require.ErrorContains(t, err, "data_node_id is required")
-	_, err = buildMetadataImportCalls(metadataSeed{Datasets: []seedDataset{{DatasetID: "missing-retention", DataNodeID: "storage-node-0"}}})
-	require.ErrorContains(t, err, "keep_duration is required")
-}
-
-func TestBuildMetadataImportCallsCanonicalizesKeepDurations(t *testing.T) {
-	calls, err := buildMetadataImportCalls(metadataSeed{
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance",
-			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "4320h",
-			Freq: "1h",
-		}},
-		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline", KeepDuration: "4320h",
-		}},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "4320h0m0s", calls[0].Request.(*pb.CreateDatasetReq).GetDataset().GetKeepDuration())
-	require.Equal(t, "4320h0m0s", calls[1].Request.(*pb.CreateViewReq).GetView().GetKeepDuration())
 }
 
 func TestSeedDatasetToPBAlwaysStartsDisabled(t *testing.T) {
 	dataset, err := (seedDataset{
 		SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "Kline",
-		DataKind: "TIME_SERIES", DataNodeID: " storage-node-0 ", KeepDuration: " 1h ",
+		DataKind: "TIME_SERIES", DataNodeID: " storage-node-0 ",
 		seedCommon: seedCommon{Status: "active"},
 	}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, "storage-node-0", dataset.GetDataNodeId())
-	assert.Equal(t, "1h0m0s", dataset.GetKeepDuration())
 	assert.Equal(t, "disabled", dataset.GetStatus())
 }
 
@@ -180,13 +161,12 @@ func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 	calls, err := buildMetadataImportCalls(metadataSeed{
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h",
+			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0",
 			Freq: "1h",
 		}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
 			GrainKeys: []string{"wrong"}, Engine: "pebble",
-			KeepDuration: "1h",
 		}},
 	})
 	require.NoError(t, err)
@@ -194,7 +174,6 @@ func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 	require.Equal(t, "kline", view.GetDatasetId())
 	require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, view.GetGrainKeys())
 	require.Equal(t, "duckdb", view.GetEngine())
-	require.Equal(t, "1h0m0s", view.GetKeepDuration())
 }
 
 func TestParseDataKind(t *testing.T) {
@@ -266,7 +245,7 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 		DataSources:    []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
 		Subjects:       []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
 		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Source: "binance", MarketType: "spot"}},
-		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freq: "1m", SubjectTags: []string{"binance_spot"}}},
+		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", Freq: "1m", SubjectTags: []string{"binance_spot"}}},
 		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
 		Views: []seedView{{
@@ -390,8 +369,8 @@ func TestMetadataContractsEqualAcceptsActivatedLockedDataset(t *testing.T) {
 	expected := &pb.Dataset{
 		SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance",
 		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
-		DataNodeId: "storage-node-0", KeepDuration: "8760h",
-		Freq: "1h", Status: "disabled",
+		DataNodeId: "storage-node-0",
+		Freq:       "1h", Status: "disabled",
 	}
 	actual := proto.Clone(expected).(*pb.Dataset)
 	actual.Status = "active"
@@ -788,8 +767,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "行情",
-			Description: "小时行情", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0",
-			KeepDuration: "8760h", Freq: "1h",
+			Description: "小时行情", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", Freq: "1h",
 		}},
 		FieldGroups: []seedFieldGroup{{
 			SpaceID: "crypto", GroupID: "quote", Name: "行情", Description: "行情字段", SortOrder: 1,
@@ -812,7 +790,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
 			PrimaryDatasetID: "kline",
 			GrainKeys:        []string{"subject_id", "freq", "data_time", "series_tag"},
-			Engine:           "duckdb", KeepDuration: "8760h",
+			Engine:           "duckdb",
 		}},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
@@ -855,9 +833,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			writeProtoJSON(w, &pb.GetDeviceRsp{RetInfo: storageOK(), Device: seed.Devices[0].toPB()})
 		},
 		"GetView": func(w http.ResponseWriter, _ *http.Request) {
-			view := seed.Views[0].toPB()
-			view.KeepDuration, _ = canonicalMetadataKeepDuration(view.GetKeepDuration())
-			writeProtoJSON(w, &pb.GetViewRsp{RetInfo: storageOK(), View: view})
+			writeProtoJSON(w, &pb.GetViewRsp{RetInfo: storageOK(), View: seed.Views[0].toPB()})
 		},
 		"ListViewColumns": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.ListViewColumnsRsp{RetInfo: storageOK(), Columns: []*pb.ViewColumn{viewColumn}})

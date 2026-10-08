@@ -68,7 +68,7 @@ func (s *Service) factorResultDefaultView(ctx context.Context, dataset *pb.Datas
 	view := &pb.View{
 		SpaceId: dataset.GetSpaceId(), ViewId: viewID, Name: dataset.GetName(), DatasetId: dataset.GetDatasetId(),
 		GrainKeys: defaultViewGrainKeys(dataset.GetDataKind()), Freq: dataset.GetFreq(),
-		Engine: defaultViewEngine(dataset.GetDataKind()), KeepDuration: dataset.GetKeepDuration(), Status: "active", Columns: columns,
+		Engine: defaultViewEngine(dataset.GetDataKind()), Status: "active", Columns: columns,
 		Attributes: map[string]string{
 			"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage",
 			"primary_dataset_role": "factor_result",
@@ -87,7 +87,6 @@ func validateFactorResultDefaultView(existing, expected *pb.View) error {
 	if existing.GetSpaceId() != expected.GetSpaceId() || existing.GetViewId() != expected.GetViewId() ||
 		existing.GetDatasetId() != expected.GetDatasetId() ||
 		existing.GetEngine() != expected.GetEngine() || existing.GetStatus() != "active" ||
-		existing.GetKeepDuration() != expected.GetKeepDuration() ||
 		!slicesEqual(existing.GetGrainKeys(), expected.GetGrainKeys()) ||
 		existing.GetFreq() != expected.GetFreq() ||
 		!proto.Equal(&pb.View{Columns: existing.GetColumns()}, &pb.View{Columns: expected.GetColumns()}) {

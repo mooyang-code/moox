@@ -29,7 +29,7 @@ func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 }
 
 func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error) {
-	item, keepDuration, err := normalizeDatasetForCreate(item)
+	item, err := normalizeDatasetForCreate(item)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,6 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
 		return nil, err
 	}
-	item.KeepDuration = keepDuration
 	item.Status = "disabled"
 	item.BindingLocked = false
 	item.Revision = 1
@@ -63,11 +62,11 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO t_datasets (
 			c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name,
-			c_description, c_data_kind, c_freq, c_keep_duration,
+			c_description, c_data_kind, c_freq,
 			c_binding_locked, c_revision, c_status, c_attrs_json, c_subject_tags_json, c_ctime, c_mtime
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), item.GetFreq(), item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), item.GetFreq(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -128,26 +127,15 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		}
 		status = candidate
 	}
-	keepDuration := item.GetKeepDuration()
-	if keepDuration == "" {
-		keepDuration = existing.GetKeepDuration()
-	}
-	keepDuration, err = normalizeKeepDuration(keepDuration, existing.GetDataKind())
-	if err != nil {
-		return nil, err
-	}
-	if err := validateDatasetKeepDuration(ctx, tx, item.GetSpaceId(), item.GetDatasetId(), keepDuration); err != nil {
-		return nil, err
-	}
 	item.DataSourceId = dataSourceID
 	item.DataNodeId = existing.GetDataNodeId()
 	item.DataKind = existing.GetDataKind()
 	item.Freq = existing.GetFreq()
+	item.Retention, item.RetentionSource = "", ""
 	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
 	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
 		return nil, err
 	}
-	item.KeepDuration = keepDuration
 	item.Status = status
 	item.BindingLocked = existing.GetBindingLocked()
 	item.Revision = existing.GetRevision() + 1
@@ -163,10 +151,10 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE t_datasets SET
-			c_data_source_id = ?, c_name = ?, c_description = ?, c_keep_duration = ?,
+			c_data_source_id = ?, c_name = ?, c_description = ?,
 			c_status = ?, c_attrs_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
 		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
-	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetDescription(), item.GetKeepDuration(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
+	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetDescription(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
 	if err != nil {
 		return nil, err
 	}
@@ -179,24 +167,6 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		return nil, err
 	}
 	return item, nil
-}
-
-func normalizeKeepDuration(value string, kind pb.DataKind) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		value = "0"
-	}
-	if value == "0" {
-		return value, nil
-	}
-	if kind == pb.DataKind_DATA_KIND_RECORD {
-		return "", errors.New("record dataset keep_duration must be 0")
-	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 {
-		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
-	}
-	return duration.String(), nil
 }
 
 func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
@@ -265,7 +235,7 @@ func isManagedFactorResultDefaultView(dataset *pb.Dataset, view *pb.View) bool {
 	}
 	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
 	if err != nil || view.GetViewId() != viewID || view.GetDatasetId() != dataset.GetDatasetId() || view.GetStatus() != "active" ||
-		view.GetEngine() != "duckdb" || view.GetKeepDuration() != dataset.GetKeepDuration() ||
+		view.GetEngine() != "duckdb" ||
 		!equalStrings(view.GetGrainKeys(), []string{"subject_id", "freq", "data_time", "series_tag"}) {
 		return false
 	}
@@ -453,9 +423,9 @@ func (s *Store) CommitDatasetActivation(ctx context.Context, spaceID, datasetID 
 	return updated, nil
 }
 
-func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, string, error) {
+func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	if item == nil {
-		return nil, "", errors.New("dataset is required")
+		return nil, errors.New("dataset is required")
 	}
 	item = proto.Clone(item).(*pb.Dataset)
 	item.SpaceId = strings.TrimSpace(item.GetSpaceId())
@@ -464,20 +434,21 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, string, error) {
 	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	item.Name = strings.TrimSpace(item.GetName())
 	if item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDataNodeId() == "" || item.GetName() == "" {
-		return nil, "", errors.New("space_id, dataset_id, data_node_id and name are required")
+		return nil, errors.New("space_id, dataset_id, data_node_id and name are required")
 	}
 	if item.GetDataSourceId() == "" && !collectorOwnedDataset(item) {
-		return nil, "", errors.New("data_source_id is required unless owner_module is collector")
+		return nil, errors.New("data_source_id is required unless owner_module is collector")
 	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
-		return nil, "", errors.New("data_kind must be record or time_series")
+		return nil, errors.New("data_kind must be record or time_series")
 	}
+	// Retention is resolved from the Storage policy on read, never stored.
+	item.Retention, item.RetentionSource = "", ""
 	item.Freq = strings.TrimSpace(item.GetFreq())
 	if item.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && !frequencypkg.IsCanonical(item.GetFreq()) {
-		return nil, "", fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.Strings(), ", "), item.GetFreq())
+		return nil, fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.Strings(), ", "), item.GetFreq())
 	}
-	keepDuration, err := normalizeKeepDuration(item.GetKeepDuration(), item.GetDataKind())
-	return item, keepDuration, err
+	return item, nil
 }
 
 func collectorOwnedDataset(item *pb.Dataset) bool {

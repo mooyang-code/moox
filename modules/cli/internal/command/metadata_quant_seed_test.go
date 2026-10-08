@@ -70,18 +70,11 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	require.Empty(t, viewIDs)
 	for _, item := range seed.Datasets {
 		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
-		require.NotEmpty(t, item.KeepDuration, item.DatasetID)
 		require.Equal(t, "disabled", item.Status, item.DatasetID)
-		if item.SpaceID == "mooxsys" && item.DatasetID == "dataset_mooxsys_service_metrics" {
-			require.Equal(t, "24h", item.KeepDuration)
-		}
 	}
 	for _, item := range seed.Views {
 		if item.SpaceID == "crypto" {
 			require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, item.GrainKeys, item.ViewID)
-		}
-		if item.SpaceID == "mooxsys" && item.ViewID == "view_mooxsys_service_metrics" {
-			require.Equal(t, "24h", item.KeepDuration)
 		}
 	}
 }

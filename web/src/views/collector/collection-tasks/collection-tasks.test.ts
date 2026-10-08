@@ -23,7 +23,7 @@ describe("collector task workbench", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     expect(source).toContain('header="高级设置"');
     expect(source).toContain("resultConfig.data_node_id");
-    expect(source).toContain("resultConfig.keep_duration");
+    expect(source).not.toContain("keep_duration");
     expect(source).toContain("resultConfig.description");
     expect(source).toContain("result_config:");
     expect(source).toContain("delete_result_data:");
@@ -58,7 +58,7 @@ describe("collector task workbench", () => {
     const backfill = fs.readFileSync(path.resolve(__dirname, "resample-backfill.vue"), "utf8");
     expect(source).toContain("kline_resample");
     expect(source).toContain("ResampleBackfillDialog");
-    expect(source).toContain("sourceKeepDuration");
+    expect(source).toContain("sourceRetention");
     expect(backfill).toContain("开始回填");
     expect(backfill).toContain("内部行情 `crypto`");
     expect(backfill).not.toContain("ruleId");

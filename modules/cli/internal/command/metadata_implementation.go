@@ -11,7 +11,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
@@ -251,10 +250,6 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	}
 	for _, item := range seed.Views {
 		view := item.toPB()
-		view.KeepDuration, err = canonicalMetadataKeepDuration(view.GetKeepDuration())
-		if err != nil {
-			return nil, fmt.Errorf("view %q: %w", item.ViewID, err)
-		}
 		calls = append(calls, metadataImportCall{
 			Resource: "views",
 			Method:   "CreateView",
@@ -308,9 +303,6 @@ func validateSeedDatasets(datasets []seedDataset) error {
 	for _, item := range datasets {
 		if strings.TrimSpace(item.DataNodeID) == "" {
 			return fmt.Errorf("dataset %q data_node_id is required", item.DatasetID)
-		}
-		if strings.TrimSpace(item.KeepDuration) == "" {
-			return fmt.Errorf("dataset %q keep_duration is required", item.DatasetID)
 		}
 	}
 	return nil
@@ -635,7 +627,6 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetFreq() == y.GetFreq() &&
 			statusMatches &&
 			x.GetDataNodeId() == y.GetDataNodeId() &&
-			x.GetKeepDuration() == y.GetKeepDuration() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "fields" {
@@ -696,7 +687,6 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetDatasetId() == y.GetDatasetId() &&
 			slices.Equal(x.GetGrainKeys(), y.GetGrainKeys()) &&
 			x.GetEngine() == y.GetEngine() &&
-			x.GetKeepDuration() == y.GetKeepDuration() &&
 			x.GetStatus() == y.GetStatus() &&
 			metadataViewAttributesEqual(x.GetAttributes(), y.GetAttributes())
 	}
@@ -817,26 +807,7 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	if err != nil {
 		return nil, err
 	}
-	keepDuration, err := canonicalMetadataKeepDuration(s.KeepDuration)
-	if err != nil {
-		return nil, fmt.Errorf("dataset %q: %w", s.DatasetID, err)
-	}
-	if dataKind == pb.DataKind_DATA_KIND_RECORD && keepDuration != "0" {
-		return nil, fmt.Errorf("dataset %q: record keep_duration must be 0", s.DatasetID)
-	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: keepDuration, Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
-}
-
-func canonicalMetadataKeepDuration(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" || value == "0" {
-		return "0", nil
-	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 {
-		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
-	}
-	return duration.String(), nil
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func (s seedField) toPB() (*pb.Field, error) {
@@ -868,7 +839,7 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 }
 
 func (s seedView) toPB() *pb.View {
-	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, Engine: s.Engine, KeepDuration: s.KeepDuration, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, Engine: s.Engine, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {

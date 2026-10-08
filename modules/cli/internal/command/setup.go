@@ -1204,7 +1204,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		StorageBuildPassword:             buildHost.Password,
 		StorageBuildHost:                 buildHost.Name,
 		StorageBuildHostRole:             buildHostRole,
-		StorageViewPolicy:                snapshot.Manifest.StorageView,
+		StoragePolicy:                    snapshot.Manifest.StoragePolicy(),
 		LocalLogs:                        snapshot.Manifest.LocalLogs,
 		InstallStorageWatchdog:           true,
 		HealthAuthVersion:                healthVersion,

@@ -16,6 +16,7 @@ replace (
 
 require (
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/blevesearch/bleve/v2 v2.5.5
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
@@ -180,5 +181,7 @@ require (
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
 replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
+
+replace github.com/mooyang-code/moox/packages/storagepolicy => ../../packages/storagepolicy
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb

@@ -41,11 +41,13 @@ type DatasetInfo struct {
 	Description  string
 	DataKind     string
 	Freq         string
-	KeepDuration string
-	Status       string
-	SubjectTags  []string
-	Attributes   map[string]string
-	Revision     uint64
+	// Retention is the read-only effective retention from the Storage
+	// policy: "<n>h" or "forever".
+	Retention   string
+	Status      string
+	SubjectTags []string
+	Attributes  map[string]string
+	Revision    uint64
 }
 
 type ColumnInfo struct {
@@ -69,7 +71,6 @@ type ResultDatasetSpec struct {
 	DataNodeID      string
 	DataKind        string
 	Frequency       string
-	KeepDuration    string
 	SubjectTags     []string
 	Attributes      map[string]string
 	Columns         []ColumnInfo
@@ -425,7 +426,7 @@ func datasetFromResultSpec(spec ResultDatasetSpec) *storagepb.Dataset {
 		SpaceId: spec.SpaceID, DatasetId: spec.DatasetID, DataSourceId: spec.DataSourceID,
 		Name: spec.Name, Description: spec.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 		Freq: spec.Frequency, Status: DatasetStatusDisabled, Attributes: attributes,
-		DataNodeId: spec.DataNodeID, KeepDuration: spec.KeepDuration,
+		DataNodeId:  spec.DataNodeID,
 		SubjectTags: append([]string(nil), spec.SubjectTags...),
 	}
 }
@@ -436,7 +437,7 @@ func validateExistingResultDataset(expected, actual *storagepb.Dataset) error {
 	}
 	if actual.GetSpaceId() != expected.GetSpaceId() || actual.GetDatasetId() != expected.GetDatasetId() ||
 		actual.GetDataSourceId() != expected.GetDataSourceId() || actual.GetDataNodeId() != expected.GetDataNodeId() ||
-		actual.GetKeepDuration() != expected.GetKeepDuration() || actual.GetDataKind() != expected.GetDataKind() ||
+		actual.GetDataKind() != expected.GetDataKind() ||
 		actual.GetName() != expected.GetName() || actual.GetDescription() != expected.GetDescription() ||
 		actual.GetAttributes()["dataset_role"] != DatasetRoleFactorResult ||
 		actual.GetAttributes()["source_dataset_id"] != expected.GetAttributes()["source_dataset_id"] ||
@@ -453,7 +454,7 @@ func datasetInfoFromProto(item *storagepb.Dataset) DatasetInfo {
 		SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(),
 		DataNodeID: item.GetDataNodeId(), Name: item.GetName(), Description: item.GetDescription(),
 		DataKind: dataKindFromProto(item.GetDataKind()),
-		Freq:     item.GetFreq(), KeepDuration: item.GetKeepDuration(),
+		Freq:     item.GetFreq(), Retention: item.GetRetention(),
 		Status: item.GetStatus(), SubjectTags: append([]string(nil), item.GetSubjectTags()...),
 		Attributes: cloneStringMap(item.GetAttributes()), Revision: item.GetRevision(),
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 
 const (
@@ -27,9 +28,6 @@ const (
 	DefaultDeployRoot  = "/data/moox"
 	DefaultControlRoot = "/data/moox/prod"
 	DefaultStorageRoot = "/data/moox/storage"
-	// DefaultStorageViewRebuildLookbackPeriods is the number of completed bars
-	// every View rebuild replays when no explicit manifest value is supplied.
-	DefaultStorageViewRebuildLookbackPeriods uint64 = 5000
 	// SCFCLSReserveMilliseconds is injected into every short-lived market SCF.
 	// Keep setup validation aligned with the runtime's CLS flush reservation.
 	SCFCLSReserveMilliseconds = 3000
@@ -153,25 +151,40 @@ type DNSResolver struct {
 	Domains                []string `toml:"domains"`
 }
 
-// StorageView contains the deployment-wide View maintenance policy. Zero values
-// in nested overrides inherit the global value.
-type StorageView struct {
-	MaintenanceCheckInterval string                      `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
-	CapacityCheckInterval    string                      `toml:"capacity_check_interval" json:"capacity_check_interval"`
-	CapacityCheckJitter      string                      `toml:"capacity_check_jitter" json:"capacity_check_jitter"`
-	RebuildLookbackPeriods   uint64                      `toml:"rebuild_lookback_periods" json:"rebuild_lookback_periods"`
-	MaxPeriodsPerSeries      uint64                      `toml:"max_periods_per_series" json:"max_periods_per_series"`
-	MaxViewFileBytes         int64                       `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
-	SystemMonitor            StorageViewPolicyOverride   `toml:"system_monitor" json:"system_monitor"`
-	Views                    []StorageViewPolicyOverride `toml:"views" json:"views"`
+// StorageRetention is the [storage_retention] table: how long each
+// time-series Dataset keeps its rows, by space and frequency, and how many
+// bars a View keeps. An omitted defaults or spaces table takes the
+// recommended values from storagepolicy.Default; a given table is used as is,
+// so defaults must cover every frequency.
+type StorageRetention struct {
+	ViewBars uint64                       `toml:"view_bars" json:"view_bars"`
+	Defaults map[string]string            `toml:"defaults" json:"defaults"`
+	Spaces   map[string]map[string]string `toml:"spaces" json:"spaces"`
 }
 
-type StorageViewPolicyOverride struct {
-	SpaceID                string `toml:"space_id" json:"space_id"`
-	ViewID                 string `toml:"view_id" json:"view_id"`
-	RebuildLookbackPeriods uint64 `toml:"rebuild_lookback_periods" json:"rebuild_lookback_periods"`
-	MaxPeriodsPerSeries    uint64 `toml:"max_periods_per_series" json:"max_periods_per_series"`
-	MaxViewFileBytes       int64  `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
+// StorageView is the [storage_view] table: the View maintenance schedule
+// and the View file size limit.
+type StorageView struct {
+	MaintenanceCheckInterval string `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
+	CapacityCheckInterval    string `toml:"capacity_check_interval" json:"capacity_check_interval"`
+	CapacityCheckJitter      string `toml:"capacity_check_jitter" json:"capacity_check_jitter"`
+	MaxViewFileBytes         int64  `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
+}
+
+// StoragePolicy renders storage-policy.json, the file storage-primary and
+// storage-view load at startup.
+func (m Manifest) StoragePolicy() storagepolicy.Policy {
+	return storagepolicy.Policy{
+		Retention: storagepolicy.Retention{Defaults: m.StorageRetention.Defaults, Spaces: m.StorageRetention.Spaces},
+		View: storagepolicy.View{
+			Bars:                     m.StorageRetention.ViewBars,
+			TrimBars:                 storagepolicy.TrimBarsFor(m.StorageRetention.ViewBars),
+			MaintenanceCheckInterval: m.StorageView.MaintenanceCheckInterval,
+			CapacityCheckInterval:    m.StorageView.CapacityCheckInterval,
+			CapacityCheckJitter:      m.StorageView.CapacityCheckJitter,
+			MaxViewFileBytes:         m.StorageView.MaxViewFileBytes,
+		},
+	}
 }
 
 // CollectorRetention describes the Collector maintenance worker and terminal
@@ -185,46 +198,6 @@ type CollectorRetention struct {
 	ScheduledRunSummaryRetention string `toml:"scheduled_run_summary_retention" json:"scheduled_run_summary_retention"`
 	TerminalRetryRetention       string `toml:"terminal_retry_retention" json:"terminal_retry_retention"`
 	PeriodSnapshotRetention      string `toml:"period_snapshot_retention" json:"period_snapshot_retention"`
-}
-
-type ResolvedStorageViewPolicy struct {
-	MaintenanceCheckInterval string `json:"maintenance_check_interval"`
-	CapacityCheckInterval    string `json:"capacity_check_interval"`
-	CapacityCheckJitter      string `json:"capacity_check_jitter"`
-	RebuildLookbackPeriods   uint64 `json:"rebuild_lookback_periods"`
-	MaxPeriodsPerSeries      uint64 `json:"max_periods_per_series"`
-	MaxViewFileBytes         int64  `json:"max_view_file_bytes"`
-}
-
-func (s StorageView) ResolvePolicy(spaceID, viewID string) ResolvedStorageViewPolicy {
-	policy := ResolvedStorageViewPolicy{
-		MaintenanceCheckInterval: s.MaintenanceCheckInterval,
-		CapacityCheckInterval:    s.CapacityCheckInterval,
-		CapacityCheckJitter:      s.CapacityCheckJitter,
-		RebuildLookbackPeriods:   s.RebuildLookbackPeriods,
-		MaxPeriodsPerSeries:      s.MaxPeriodsPerSeries,
-		MaxViewFileBytes:         s.MaxViewFileBytes,
-	}
-	apply := func(override StorageViewPolicyOverride) {
-		if override.RebuildLookbackPeriods > 0 {
-			policy.RebuildLookbackPeriods = override.RebuildLookbackPeriods
-		}
-		if override.MaxPeriodsPerSeries > 0 {
-			policy.MaxPeriodsPerSeries = override.MaxPeriodsPerSeries
-		}
-		if override.MaxViewFileBytes > 0 {
-			policy.MaxViewFileBytes = override.MaxViewFileBytes
-		}
-	}
-	if spaceID == "mooxsys" {
-		apply(s.SystemMonitor)
-	}
-	for _, override := range s.Views {
-		if strings.TrimSpace(override.SpaceID) == strings.TrimSpace(spaceID) && strings.TrimSpace(override.ViewID) == strings.TrimSpace(viewID) {
-			apply(override)
-		}
-	}
-	return policy
 }
 
 type Notification struct {
@@ -816,6 +789,7 @@ type Manifest struct {
 	EventBus           EventBus                  `toml:"eventbus"`
 	Paths              Paths                     `toml:"paths"`
 	DNSResolver        DNSResolver               `toml:"dns_resolver"`
+	StorageRetention   StorageRetention          `toml:"storage_retention"`
 	StorageView        StorageView               `toml:"storage_view"`
 	CollectorRetention CollectorRetention        `toml:"collector_retention"`
 	LocalLogs          LocalLogs                 `toml:"local_logs"`
@@ -978,8 +952,15 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = false
 	}
-	if !md.IsDefined("storage_view", "rebuild_lookback_periods") {
-		out.StorageView.RebuildLookbackPeriods = DefaultStorageViewRebuildLookbackPeriods
+	recommended := storagepolicy.Default()
+	if !md.IsDefined("storage_retention", "view_bars") {
+		out.StorageRetention.ViewBars = recommended.View.Bars
+	}
+	if !md.IsDefined("storage_retention", "defaults") {
+		out.StorageRetention.Defaults = recommended.Retention.Defaults
+	}
+	if !md.IsDefined("storage_retention", "spaces") {
+		out.StorageRetention.Spaces = recommended.Retention.Spaces
 	}
 	if !md.IsDefined("storage_view", "maintenance_check_interval") {
 		out.StorageView.MaintenanceCheckInterval = "1m"
@@ -993,9 +974,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 			jitter = interval
 		}
 		out.StorageView.CapacityCheckJitter = jitter.String()
-	}
-	if !md.IsDefined("storage_view", "max_periods_per_series") {
-		out.StorageView.MaxPeriodsPerSeries = 6000
 	}
 	if !md.IsDefined("storage_view", "max_view_file_bytes") {
 		out.StorageView.MaxViewFileBytes = 1 << 30
@@ -1249,8 +1227,14 @@ func validate(manifest *Manifest) error {
 	if err := validateFactorSetup(&manifest.Factors); err != nil {
 		return err
 	}
-	if err := validateStorageView(&manifest.StorageView); err != nil {
-		return err
+	policy := manifest.StoragePolicy()
+	if err := policy.Validate(); err != nil {
+		return fmt.Errorf("config_invalid: storage policy: %w", err)
+	}
+	// Session-market estimates are only warnings; `moox-cli config plan`
+	// reports them. A 7×24 retention that cannot hold view_bars is an error.
+	if errs, _ := policy.Coverage(); len(errs) > 0 {
+		return fmt.Errorf("config_invalid: storage policy: %s", strings.Join(errs, "; "))
 	}
 	if err := validateCollectorRetention(&manifest.CollectorRetention); err != nil {
 		return err
@@ -1351,66 +1335,6 @@ func pathContains(parent, child string) bool {
 		return false
 	}
 	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
-func validateStorageView(cfg *StorageView) error {
-	if cfg.RebuildLookbackPeriods == 0 || cfg.RebuildLookbackPeriods > 1_000_000 {
-		return fmt.Errorf("config_invalid: storage_view.rebuild_lookback_periods must be between 1 and 1000000")
-	}
-	interval, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceCheckInterval))
-	if err != nil || interval < 30*time.Second {
-		return fmt.Errorf("config_invalid: storage_view.maintenance_check_interval must be at least 30s")
-	}
-	capacityInterval, err := time.ParseDuration(strings.TrimSpace(cfg.CapacityCheckInterval))
-	if err != nil || capacityInterval <= 0 || capacityInterval > 24*time.Hour {
-		return fmt.Errorf("config_invalid: storage_view.capacity_check_interval must be greater than 0 and at most 24h")
-	}
-	capacityJitter, err := time.ParseDuration(strings.TrimSpace(cfg.CapacityCheckJitter))
-	if err != nil || capacityJitter <= 0 || capacityJitter > capacityInterval {
-		return fmt.Errorf("config_invalid: storage_view.capacity_check_jitter must be greater than 0 and at most capacity_check_interval")
-	}
-	if cfg.MaxPeriodsPerSeries == 0 || cfg.MaxPeriodsPerSeries > 1_000_000 {
-		return fmt.Errorf("config_invalid: storage_view.max_periods_per_series must be between 1 and 1000000")
-	}
-	if cfg.MaxPeriodsPerSeries <= cfg.RebuildLookbackPeriods {
-		return fmt.Errorf("config_invalid: storage_view.max_periods_per_series must be greater than rebuild_lookback_periods")
-	}
-	if cfg.MaxViewFileBytes <= 0 {
-		return fmt.Errorf("config_invalid: storage_view.max_view_file_bytes must be positive")
-	}
-	seen := make(map[string]struct{}, len(cfg.Views))
-	for i, override := range cfg.Views {
-		spaceID := strings.TrimSpace(override.SpaceID)
-		viewID := strings.TrimSpace(override.ViewID)
-		if spaceID == "" || viewID == "" {
-			return fmt.Errorf("config_invalid: storage_view.views[%d] requires space_id and view_id", i)
-		}
-		key := spaceID + "\x00" + viewID
-		if _, ok := seen[key]; ok {
-			return fmt.Errorf("config_invalid: duplicate storage_view.views entry %s/%s", spaceID, viewID)
-		}
-		seen[key] = struct{}{}
-		if override.RebuildLookbackPeriods > 1_000_000 || override.MaxPeriodsPerSeries > 1_000_000 || (override.MaxPeriodsPerSeries > 0 && override.RebuildLookbackPeriods > 0 && override.MaxPeriodsPerSeries <= override.RebuildLookbackPeriods) || override.MaxViewFileBytes < 0 {
-			return fmt.Errorf("config_invalid: storage_view.views[%d] contains invalid limits", i)
-		}
-	}
-	if cfg.SystemMonitor.MaxPeriodsPerSeries > 1_000_000 || cfg.SystemMonitor.RebuildLookbackPeriods > 1_000_000 || (cfg.SystemMonitor.MaxPeriodsPerSeries > 0 && cfg.SystemMonitor.RebuildLookbackPeriods > 0 && cfg.SystemMonitor.MaxPeriodsPerSeries <= cfg.SystemMonitor.RebuildLookbackPeriods) || cfg.SystemMonitor.MaxViewFileBytes < 0 {
-		return fmt.Errorf("config_invalid: storage_view.system_monitor contains invalid limits")
-	}
-	if strings.TrimSpace(cfg.SystemMonitor.SpaceID) != "" || strings.TrimSpace(cfg.SystemMonitor.ViewID) != "" {
-		return fmt.Errorf("config_invalid: storage_view.system_monitor must not set space_id or view_id")
-	}
-	resolved := cfg.ResolvePolicy("mooxsys", "__default__")
-	if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods {
-		return fmt.Errorf("config_invalid: resolved system monitor max_periods_per_series must be greater than rebuild_lookback_periods")
-	}
-	for _, override := range cfg.Views {
-		resolved = cfg.ResolvePolicy(override.SpaceID, override.ViewID)
-		if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods {
-			return fmt.Errorf("config_invalid: resolved policy for %s/%s has max_periods_per_series not greater than rebuild_lookback_periods", override.SpaceID, override.ViewID)
-		}
-	}
-	return nil
 }
 
 func validateCollectorRetention(cfg *CollectorRetention) error {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -75,7 +76,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 	next.Columns = nil
 	next.IndexBuild = nil
 	next.Status = defaultStatus(next.GetStatus())
-	keepDuration, err := normalizeKeepDuration(next.GetKeepDuration(), s.viewDataKind(ctx, next.GetSpaceId(), next.GetDatasetId()))
+	keepDuration, err := normalizeViewKeepDuration(next.GetKeepDuration(), s.viewDataKind(ctx, next.GetSpaceId(), next.GetDatasetId()))
 	if err != nil {
 		return nil, err
 	}
@@ -101,16 +102,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := validateViewKeepDuration(
-		ctx,
-		tx,
-		next.GetSpaceId(),
-		next.GetViewId(),
-		next.GetKeepDuration(),
-		next.GetDatasetId(),
-	); err != nil {
-		return nil, err
-	}
 	if err := deriveViewFreq(ctx, tx, next); err != nil {
 		return nil, err
 	}
@@ -243,6 +234,9 @@ func deriveViewFreq(ctx context.Context, tx *sql.Tx, view *pb.View) error {
 	var freq string
 	err := tx.QueryRowContext(ctx, `SELECT c_freq FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`,
 		view.GetSpaceId(), view.GetDatasetId()).Scan(&freq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("dataset %s/%s does not exist", view.GetSpaceId(), view.GetDatasetId())
+	}
 	if err != nil {
 		return err
 	}
@@ -251,6 +245,24 @@ func deriveViewFreq(ctx context.Context, tx *sql.Tx, view *pb.View) error {
 	}
 	view.Freq = freq
 	return nil
+}
+
+func normalizeViewKeepDuration(value string, kind pb.DataKind) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "0"
+	}
+	if value == "0" {
+		return value, nil
+	}
+	if kind == pb.DataKind_DATA_KIND_RECORD {
+		return "", errors.New("record view keep_duration must be 0")
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
+	}
+	return duration.String(), nil
 }
 
 func (s *Store) viewDataKind(ctx context.Context, spaceID, datasetID string) pb.DataKind {

@@ -28,8 +28,8 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleted, err := s.CleanupExpiredBuckets(context.Background(), "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
-	if err != nil || deleted != 1 {
-		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	if err != nil || deleted == 0 {
+		t.Fatalf("cleanup deleted_ranges=%d err=%v", deleted, err)
 	}
 	removed, err := s.ReadFields(context.Background(), []*pb.RowKey{rows[0].GetKey(), rows[1].GetKey()}, []string{"f"}, nil)
 	if err != nil || len(removed) != 2 || len(removed[0].GetFields()) != 0 || len(removed[1].GetFields()) != 0 {
@@ -217,8 +217,8 @@ func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 	}
 
 	deleted, err := store.CleanupExpiredBuckets(ctx, "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
-	if err != nil || deleted != 1 {
-		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	if err != nil || deleted == 0 {
+		t.Fatalf("cleanup deleted_ranges=%d err=%v", deleted, err)
 	}
 	after, err := store.ListOutbox(ctx, 0, 10)
 	if err != nil {
@@ -245,8 +245,8 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleted, err := s.CleanupExpiredBuckets(context.Background(), "a", "shared", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
-	if err != nil || deleted != 1 {
-		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	if err != nil || deleted == 0 {
+		t.Fatalf("cleanup deleted_ranges=%d err=%v", deleted, err)
 	}
 	rows, err := s.ReadFields(context.Background(), []*pb.RowKey{row("b").GetKey()}, []string{"f"}, nil)
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {

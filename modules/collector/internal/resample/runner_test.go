@@ -19,12 +19,12 @@ import (
 )
 
 type runnerSource struct {
-	subjects     []domain.Subject
-	keepDuration string
+	subjects  []domain.Subject
+	retention string
 }
 
 func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
+	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", Retention: s.retention, SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}}, nil
 }
 func (s runnerSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
 	return s.subjects, nil
@@ -177,10 +177,12 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 }
 
 func TestSourceRetentionExpiredIsTerminal(t *testing.T) {
-	source := runnerSource{keepDuration: "1h"}
+	source := runnerSource{retention: "1h"}
 	expired, reason := sourceRetentionExpired(context.Background(), source, "crypto", "source", time.Now().UTC().Add(-2*time.Hour))
 	require.True(t, expired)
 	require.Contains(t, reason, "retention expired")
+	expired, _ = sourceRetentionExpired(context.Background(), runnerSource{retention: "forever"}, "crypto", "source", time.Unix(0, 0).UTC())
+	require.False(t, expired, "a Dataset kept forever never expires a bucket")
 }
 
 func TestChooseRepairBucketUsesDurableWindowCursor(t *testing.T) {

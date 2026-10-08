@@ -170,10 +170,10 @@ moox-cli storage force-rebuild-view \
 中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
 物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 
-Storage 服务的时序 View 默认按所有频率回溯 `5000` 根；任一序列超过 `6000` 根时触发安全重建。
+Storage 服务的时序 View 默认按所有频率回溯 `5000` 根；任一序列超过 `6000`（ceil(1.2 × 5000)）根时触发安全重建。
 昂贵的序列容量扫描默认每个 Storage View 进程、View 和 active index 每小时至多执行一次，首次扫描
 在一小时范围内随机错峰；轻量 View Maintainer 仍按 `maintenance_check_interval` 默认每分钟运行。可在根目录
-`moox.toml` 的 `[storage_view] rebuild_lookback_periods` 统一调整，适用于自动 A/B、启动恢复和手动
+`moox.toml` 的 `[storage_retention] view_bars` 统一调整，适用于自动 A/B、启动恢复和手动
 重建。无 frequency 的旧 View 才使用 `storage.view.rebuild_lookback`（默认 `24h`）兜底；若 Source
 历史不足配置根数，构建会保持未完成状态，不会发布一个短历史 View。
 

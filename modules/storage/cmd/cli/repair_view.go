@@ -855,7 +855,7 @@ func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, a
 	cmd.Stderr = stderr
 	cmd.Stdout = stderr
 	env := append([]string(nil), os.Environ()...)
-	// Rebuild lookback is owned by storage-view/config/maintenance.json. The
+	// Rebuild lookback is owned by the Storage policy file (view.bars). The
 	// lifecycle helper keeps the argument for readiness validation but never
 	// mutates the service's policy through an ad-hoc environment override.
 	_ = lookback

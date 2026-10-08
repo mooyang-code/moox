@@ -1,5 +1,7 @@
 storage:
   root: ./var/storage
+  # Dataset retention and View limits rendered by moox-cli from moox.toml.
+  policy_file: ../config/storage-policy.json
   roles:
     - primary
     - view
@@ -24,7 +26,6 @@ storage:
       backoff_base_ms: 200
       backoff_max_ms: 30000
   view:
-    maintenance_policy_file: config/maintenance.json
     storage_rpc:
       gateway_target: ip://127.0.0.1:11003
       gateway_node_id: ""
@@ -89,7 +90,6 @@ storage:
         ordering: dataset
         deliver_policy: new
         max_retry_attempts: -1
-    maintenance_check_interval: 1m
     # Keep history pages and Primary requests serialized during a View rebuild
     # so a large repair does not burst against Storage.
     backfill_page_size: 2000
@@ -102,7 +102,6 @@ storage:
       1h: 5000
       1d: 5000
       default: 5000
-    max_view_file_bytes: 1073741824
     rebuild_max_pending: 32
     rebuild_idle_checks: 3
   health:

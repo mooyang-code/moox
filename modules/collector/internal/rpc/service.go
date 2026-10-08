@@ -381,13 +381,10 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	}
 	resultConfig := req.GetResultConfig()
 	dataNodeID := s.resultDataNodeID
-	keepDuration, description := "0", task.Description
+	description := task.Description
 	if resultConfig != nil {
 		if strings.TrimSpace(resultConfig.GetDataNodeId()) != "" {
 			dataNodeID = strings.TrimSpace(resultConfig.GetDataNodeId())
-		}
-		if strings.TrimSpace(resultConfig.GetKeepDuration()) != "" {
-			keepDuration = strings.TrimSpace(resultConfig.GetKeepDuration())
 		}
 		if strings.TrimSpace(resultConfig.GetDescription()) != "" {
 			description = strings.TrimSpace(resultConfig.GetDescription())
@@ -409,7 +406,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
 		var err error
-		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, "", taskresult.Config{ViewID: resultIDs.ViewID, DataNodeID: dataNodeID, KeepDuration: keepDuration, Name: task.TaskName, Description: description, Frequency: firstTaskFrequency(params), SubjectTags: subjectTags, OutputFields: params.OutputFields})
+		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, "", taskresult.Config{ViewID: resultIDs.ViewID, DataNodeID: dataNodeID, Name: task.TaskName, Description: description, Frequency: firstTaskFrequency(params), SubjectTags: subjectTags, OutputFields: params.OutputFields})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
 				return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -843,19 +840,19 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	backfill := domain.ResampleBackfillRequest{RequestID: req.GetRequestId(), Start: start.UTC(), End: end.UTC()}
-	sourceKeepDuration := ""
+	var source storagesource.DatasetInfo
 	if s.datasetSrc != nil {
-		source, sourceErr := s.datasetSrc.GetDataset(ctx, req.GetSpaceId(), params.SourceDatasetID)
+		var sourceErr error
+		source, sourceErr = s.datasetSrc.GetDataset(ctx, req.GetSpaceId(), params.SourceDatasetID)
 		if sourceErr != nil {
 			return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, sourceErr.Error())}, nil
 		}
-		sourceKeepDuration = source.KeepDuration
 	}
 	settleDelay := s.defaultResampleSettleDelay
 	if settleDelay < 0 {
 		settleDelay = defaultResampleSettleDelay
 	}
-	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelayOr(settleDelay), sourceKeepDuration, time.Now().UTC()); err != nil {
+	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelayOr(settleDelay), source, time.Now().UTC()); err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if _, err := s.instanceRepo.StartResampleBackfill(ctx, req.GetSpaceId(), req.GetTaskId(), backfill); err != nil {
@@ -864,7 +861,7 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 	return &pb.StartKlineResampleBackfillRsp{RetInfo: retOK()}, nil
 }
 
-func validateResampleBackfillWindow(request domain.ResampleBackfillRequest, target time.Duration, settleDelay time.Duration, sourceKeepDuration string, now time.Time) error {
+func validateResampleBackfillWindow(request domain.ResampleBackfillRequest, target time.Duration, settleDelay time.Duration, source storagesource.DatasetInfo, now time.Time) error {
 	if err := request.ValidateForFrequency(target); err != nil {
 		return err
 	}
@@ -875,14 +872,8 @@ func validateResampleBackfillWindow(request domain.ResampleBackfillRequest, targ
 	if request.End.Add(settleDelay).After(now) {
 		return fmt.Errorf("backfill end must be a closed bucket after settle delay")
 	}
-	if raw := strings.TrimSpace(sourceKeepDuration); raw != "" && raw != "0" {
-		keep, err := time.ParseDuration(raw)
-		if err != nil || keep <= 0 {
-			return fmt.Errorf("source Dataset keep_duration %q is invalid", sourceKeepDuration)
-		}
-		if request.Start.Before(now.Add(-keep)) {
-			return fmt.Errorf("backfill start is older than source Dataset retention %s", raw)
-		}
+	if window, bounded := source.RetentionWindow(); bounded && request.Start.Before(now.Add(-window)) {
+		return fmt.Errorf("backfill start is older than source Dataset retention %s", source.Retention)
 	}
 	return nil
 }
@@ -1109,7 +1100,6 @@ func validateTaskResultConfigUpdate(config *pb.ResultConfig) error {
 		return nil
 	}
 	if strings.TrimSpace(config.GetDataNodeId()) != "" ||
-		strings.TrimSpace(config.GetKeepDuration()) != "" ||
 		strings.TrimSpace(config.GetDescription()) != "" {
 		return fmt.Errorf("result_config cannot change an existing task result")
 	}

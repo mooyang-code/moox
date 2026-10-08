@@ -211,9 +211,6 @@
                 </a-option>
               </a-select>
             </a-form-item>
-            <a-form-item label="保留时长">
-              <a-input v-model="resultConfig.keep_duration" placeholder="例如 30d，0 表示不限制" allow-clear />
-            </a-form-item>
             <a-form-item label="结果描述">
               <a-textarea v-model="resultConfig.description" :max-length="200" show-word-limit allow-clear />
             </a-form-item>
@@ -300,7 +297,7 @@
       :space-id="selectedSpaceId || ''"
       :task-id="backfillTarget.taskId"
       :target-frequency="backfillTarget.targetFrequency"
-      :source-keep-duration="backfillTarget.sourceKeepDuration"
+      :source-retention="backfillTarget.sourceRetention"
       :active-backfill="activeBackfill"
       @started="onBackfillChanged"
       @cancelled="onBackfillChanged"
@@ -386,7 +383,7 @@ const deleteResultData = ref(false);
 const deleteTarget = ref<CollectionTaskRecord>();
 const backfillVisible = ref(false);
 const activeBackfill = ref<ResampleBackfillSummary | null>(null);
-const backfillTarget = ref<{ taskId: string; targetFrequency: string; sourceKeepDuration: string }>();
+const backfillTarget = ref<{ taskId: string; targetFrequency: string; sourceRetention: string }>();
 
 const frequencyValue = ref("");
 const subjectTagIds = ref<string[]>([]);
@@ -452,7 +449,6 @@ const sourceSeriesTagValue = ref("");
 const settleDelayMSValue = ref<number>();
 const resultConfig = reactive({
   data_node_id: "",
-  keep_duration: "0",
   description: ""
 });
 
@@ -592,7 +588,6 @@ function resetEditor() {
   selectedOutputFields.value = [];
   taskTypeFields.value = [];
   resultConfig.data_node_id = "";
-  resultConfig.keep_duration = "0";
   resultConfig.description = "";
 }
 
@@ -815,7 +810,6 @@ async function handleOk(): Promise<boolean> {
         task,
         result_config: {
           data_node_id: resultConfig.data_node_id.trim(),
-          keep_duration: resultConfig.keep_duration.trim(),
           description: resultConfig.description.trim()
         }
       });
@@ -933,7 +927,7 @@ async function loadSources() {
           data_kind: source.data_kind,
           attributes: source.attributes,
           freq: source.freq,
-          keep_duration: source.keep_duration
+          retention: source.retention
         });
       }
       if (!response.page_result?.has_more || (response.datasets || []).length === 0) break;
@@ -1115,7 +1109,7 @@ async function openBackfill(record: CollectionTaskRecord) {
     backfillTarget.value = {
       taskId: record.task_id,
       targetFrequency: input.frequency,
-      sourceKeepDuration: source?.keep_duration || ""
+      sourceRetention: source?.retention || ""
     };
     activeBackfill.value = null;
     backfillVisible.value = true;

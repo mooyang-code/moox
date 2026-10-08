@@ -212,7 +212,7 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Success("success"), DeletedBuckets: deleted}, nil
+	return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Success("success"), DeletedRanges: deleted}, nil
 }
 
 func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error) {

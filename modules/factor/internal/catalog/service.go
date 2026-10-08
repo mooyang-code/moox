@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"gorm.io/gorm"
 )
 
@@ -672,9 +673,11 @@ func (s *Service) backfillWindow(ctx context.Context, set domain.FactorSet) (tim
 		return time.Time{}, time.Time{}, fmt.Errorf("get result dataset retention: %w", err)
 	}
 	var start time.Time
-	keepDuration := strings.TrimSpace(dataset.KeepDuration)
-	switch keepDuration {
-	case "0":
+	retention, err := storagepolicy.ParsePeriod(dataset.Retention)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("result dataset retention: %w", err)
+	}
+	if retention.Forever {
 		if s.earliestPeriod == nil {
 			return time.Time{}, time.Time{}, errors.New("earliest source period provider is required for unlimited retention backfill")
 		}
@@ -690,13 +693,8 @@ func (s *Service) backfillWindow(ctx context.Context, set domain.FactorSet) (tim
 			// accepted job bounded to the most recent completed period.
 			start = end.Add(-duration)
 		}
-	default:
-		keep, parseErr := time.ParseDuration(keepDuration)
-		if parseErr != nil || keep <= 0 {
-			return time.Time{}, time.Time{}, fmt.Errorf("invalid result dataset keep_duration %q", keepDuration)
-		}
-		start = now.Add(-keep)
-		start = floorPeriod(start, periodSeconds)
+	} else {
+		start = floorPeriod(now.Add(-retention.Duration), periodSeconds)
 	}
 	if _, err := clock.Align(start, set.Freq); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("align factor backfill start: %w", err)
@@ -749,7 +747,7 @@ func resultDatasetSpec(set domain.FactorSet, source storageio.DatasetInfo, colum
 		SpaceID: set.SpaceID, DatasetID: set.ResultDatasetID, SourceDatasetID: set.SourceDatasetID,
 		Name: resultDatasetName(source.Name), Description: "Factor results for " + source.DatasetID,
 		DataSourceID: source.DataSourceID, DataNodeID: source.DataNodeID,
-		DataKind: storageio.DataKindTimeSeries, Frequency: set.Freq, KeepDuration: source.KeepDuration,
+		DataKind: storageio.DataKindTimeSeries, Frequency: set.Freq,
 		SubjectTags: append([]string(nil), source.SubjectTags...), Attributes: map[string]string{
 			"owner_module": "factor", "dataset_role": storageio.DatasetRoleFactorResult, "source_dataset_id": source.DatasetID, "write_owner": "factor",
 		},

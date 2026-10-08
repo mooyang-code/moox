@@ -52,7 +52,6 @@ kline_resample:
   stale_running_after: 2m
   default_settle_delay: 10s
   repair_lookback_buckets: 3
-  target_keep_duration: 4320h
 
 sysdeploy:
   # Collector 控制面通过节点网关 /api/service/<service>/* 调用 CloudNode 等服务。

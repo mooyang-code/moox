@@ -271,14 +271,17 @@ message Dataset {
   map<string, string> attributes = 11;
   // data_node_id 是该 Dataset 的唯一 DataNode owner。
   string data_node_id = 17;
-  // keep_duration 是 TimeSeries Pebble 数据的保留时长；0 表示永久保存。
-  string keep_duration = 18;
+  // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
+  // "forever"；记录型 Dataset 为 "forever"。写接口忽略该字段。
+  string retention = 18;
   // binding_locked 表示 Dataset 首次激活后是否永久锁定 DataNode 绑定。
   bool binding_locked = 19;
   // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
   uint64 revision = 20;
   // subject_tags 是数据集标的范围，取值为 tag_id。
   repeated string subject_tags = 21;
+  // retention_source 是 retention 的来源（只读）：default、space 或 record。
+  string retention_source = 22;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -398,8 +401,10 @@ message DatasetSummary {
   string dataset_id = 2;
   string name = 3;
   DataKind data_kind = 4;
-  string keep_duration = 5;
+  // retention 与 retention_source 同 Dataset 中的只读字段。
+  string retention = 5;
   string status = 6;
+  string retention_source = 7;
 }
 
 // DataNodeListItem 是 DataNode 及其全部 Dataset 摘要的组合视图。

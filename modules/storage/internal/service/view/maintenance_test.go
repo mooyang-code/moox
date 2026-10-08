@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -879,10 +878,8 @@ func TestCapacityCheckInventoryDropsDeletedViewsAndStaleIndexes(t *testing.T) {
 	}
 }
 
-func TestNormalizeCapacityCheckScheduleRejectsZeroJitter(t *testing.T) {
-	_, _, err := normalizeCapacityCheckSchedule(MaintenanceOptions{
-		Policy: storageconfig.ViewMaintenancePolicy{CapacityCheckInterval: "1h", CapacityCheckJitter: "0s"},
-	})
+func TestNormalizeCapacityCheckScheduleRejectsJitterBeyondInterval(t *testing.T) {
+	_, _, err := normalizeCapacityCheckSchedule(MaintenanceOptions{CapacityCheckInterval: time.Hour, CapacityCheckJitter: 2 * time.Hour})
 	if err == nil || !strings.Contains(err.Error(), "capacity_check_jitter") {
 		t.Fatalf("normalizeCapacityCheckSchedule error = %v, want capacity_check_jitter validation", err)
 	}

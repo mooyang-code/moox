@@ -32,7 +32,7 @@ func TestMetadataSchemaV12Contract(t *testing.T) {
 		"c_service_target TEXT NOT NULL",
 		"c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled'))",
 		"c_data_node_id TEXT NOT NULL,",
-		"c_keep_duration TEXT NOT NULL,",
+		"c_freq TEXT NOT NULL DEFAULT '',",
 		"c_binding_locked INTEGER NOT NULL DEFAULT 0 CHECK (c_binding_locked IN (0, 1))",
 		"c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0)",
 		"c_status TEXT NOT NULL DEFAULT 'disabled' CHECK (c_status IN ('active', 'disabled'))",
@@ -171,7 +171,7 @@ func TestMetadataSchemaV12DDLExecutes(t *testing.T) {
 		typeName string
 	}{
 		{name: "c_data_node_id", typeName: "TEXT"},
-		{name: "c_keep_duration", typeName: "TEXT"},
+		{name: "c_freq", typeName: "TEXT"},
 		{name: "c_binding_locked", typeName: "INTEGER"},
 		{name: "c_revision", typeName: "INTEGER"},
 		{name: "c_status", typeName: "TEXT"},
@@ -199,8 +199,8 @@ func TestMetadataSchemaV12DDLExecutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO t_datasets (c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name, c_data_kind, c_keep_duration)
-		VALUES ('space', 'unknown-node', 'source', 'missing', 'Unknown Node', 'record', '0');
+		INSERT INTO t_datasets (c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name, c_data_kind)
+		VALUES ('space', 'unknown-node', 'source', 'missing', 'Unknown Node', 'record');
 	`); err == nil {
 		t.Fatal("dataset accepted an unknown data node")
 	}
@@ -211,8 +211,8 @@ func TestMetadataSchemaV12DDLExecutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO t_datasets (c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name, c_data_kind, c_keep_duration)
-		VALUES ('space', 'registered-node', 'source', 'node-1', 'Registered Node', 'record', '0');
+		INSERT INTO t_datasets (c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name, c_data_kind)
+		VALUES ('space', 'registered-node', 'source', 'node-1', 'Registered Node', 'record');
 	`); err != nil {
 		t.Fatalf("dataset rejected a registered data node: %v", err)
 	}
