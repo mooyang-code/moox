@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { equitySeries, parseMetrics, positionsSummary, replayStatusLabel } from "./model";
+import {
+  barSkipReason,
+  equitySeries,
+  formatUtcTime,
+  mergeBars,
+  parseMetrics,
+  positionsSummary,
+  replayStatusLabel
+} from "./model";
 
 describe("replay model helpers", () => {
   it("parses finished metrics and ignores empty ones", () => {
@@ -43,5 +51,36 @@ describe("replay model helpers", () => {
       frozen: 1
     });
     expect(replayStatusLabel("running")).toBe("运行中");
+  });
+
+  it("keeps annualized return optional", () => {
+    expect(parseMetrics('{"bars":3,"annualized_return":0.5}')?.annualized_return).toBe(0.5);
+    expect(parseMetrics('{"bars":3}')?.annualized_return).toBeNull();
+  });
+
+  it("formats UTC times, merges bars incrementally and reads skip reasons", () => {
+    expect(formatUtcTime("2026-09-01T03:00:00Z")).toBe("2026-09-01 03:00 UTC");
+    expect(formatUtcTime("")).toBe("-");
+    const bar = (time: string) => ({
+      bar_end_time: time,
+      status: "ok",
+      targets: [],
+      positions_json: "{}",
+      summary_json: "{}",
+      bar_return: 0,
+      equity: 1,
+      turnover: 0,
+      fee: 0
+    });
+    const known = [bar("2026-09-01T01:00:00Z"), bar("2026-09-01T02:00:00Z")];
+    const merged = mergeBars(known, [bar("2026-09-01T02:00:00Z"), bar("2026-09-01T03:00:00Z")]);
+    expect(merged.map(item => item.bar_end_time)).toEqual([
+      "2026-09-01T01:00:00Z",
+      "2026-09-01T02:00:00Z",
+      "2026-09-01T03:00:00Z"
+    ]);
+    expect(mergeBars(known, [])).toBe(known);
+    expect(barSkipReason('{"skip_reason":"no_data"}')).toBe("no_data");
+    expect(barSkipReason("oops")).toBe("");
   });
 });

@@ -68,22 +68,27 @@ const viewsLoading = ref(false);
 const running = ref(false);
 const result = ref<ValidateStrategyResult | null>(null);
 let loadedSpace = "";
+// 切换空间时两个计数都递增，让旧空间的 View 列表与试算结果作废。
+let viewsRequest = 0;
 let runRequest = 0;
 
 async function ensureViews(visible = true) {
-  if (!visible || !props.spaceId || loadedSpace === props.spaceId) return;
+  const spaceId = props.spaceId;
+  if (!visible || !spaceId || loadedSpace === spaceId) return;
+  const requestId = ++viewsRequest;
   viewsLoading.value = true;
   try {
     const items: View[] = [];
     for (let page = 1; ; page += 1) {
-      const rsp = await listViews({ space_id: props.spaceId, status: "active", page: { page, size: 200 } });
+      const rsp = await listViews({ space_id: spaceId, status: "active", page: { page, size: 200 } });
+      if (requestId !== viewsRequest) return;
       items.push(...(rsp.views || []));
       if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
     }
     views.value = items;
-    loadedSpace = props.spaceId;
+    loadedSpace = spaceId;
   } finally {
-    viewsLoading.value = false;
+    if (requestId === viewsRequest) viewsLoading.value = false;
   }
 }
 
@@ -109,10 +114,14 @@ async function run() {
 watch(
   () => props.spaceId,
   () => {
+    viewsRequest += 1;
+    runRequest += 1;
     loadedSpace = "";
     views.value = [];
     viewId.value = "";
     result.value = null;
+    viewsLoading.value = false;
+    running.value = false;
   }
 );
 </script>

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { deriveTargetState, parseResolved, parseSummary, percent, shortHash, skipReasonLabel, stageLabel } from "./model";
+import {
+  deriveTargetState,
+  itemReasonLabel,
+  parseResolved,
+  parseSummary,
+  percent,
+  shortHash,
+  skipReasonLabel,
+  stageLabel
+} from "./model";
 
 describe("strategy model helpers", () => {
   it("derives the target state from the instance session and validity", () => {
@@ -26,6 +35,8 @@ describe("strategy model helpers", () => {
     expect(shortHash("sha256:0123456789abcdef")).toBe("0123456789ab…");
     expect(skipReasonLabel("previous_version_unknown")).toContain("上一根版本未知");
     expect(skipReasonLabel("custom")).toBe("custom");
+    expect(skipReasonLabel("no_data")).toBe("本期无数据（no_data）");
+    expect(skipReasonLabel("history_insufficient")).toContain("历史覆盖不足");
     expect(stageLabel("weighted")).toBe("入选");
   });
 
@@ -43,5 +54,15 @@ describe("strategy model helpers", () => {
     expect(resolved?.columns.map(column => column.name)).toEqual(["close", "ma_20"]);
     expect(resolved?.columns[1]).toMatchObject({ factor_id: "ma", definition_hash: "sha256:x" });
     expect(parseResolved("{}")).toBeNull();
+  });
+
+  it("translates explanation reasons including prefixed ones", () => {
+    expect(itemReasonLabel("")).toBe("-");
+    expect(itemReasonLabel("not_selected")).toBe("名次未入选（not_selected）");
+    expect(itemReasonLabel("holding")).toBe("延续批次持有（holding）");
+    expect(itemReasonLabel("holding:filter")).toBe("延续批次持有，本期filter 未通过（holding:filter）");
+    expect(itemReasonLabel("missing:close")).toBe("缺少 close（missing:close）");
+    expect(itemReasonLabel("factor_failed:ma_20")).toContain("上游因子失败（ma_20）");
+    expect(itemReasonLabel("custom_reason")).toBe("custom_reason");
   });
 });

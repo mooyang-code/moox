@@ -10,7 +10,8 @@
           <span>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</span>
         </div>
         <div class="page-actions">
-          <a-switch v-model="autoRefresh" size="small" /><span class="muted">自动刷新</span
+          <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" /><span class="muted" aria-hidden="true"
+            >自动刷新</span
           ><a-button :disabled="!store.instance" @click="openReplay">回放</a-button
           ><a-button :loading="store.detailLoading" aria-label="刷新实例详情" @click="refresh"
             ><template #icon><icon-refresh /></template>刷新</a-button

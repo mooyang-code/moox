@@ -8,7 +8,8 @@ export interface ReplayMetrics {
   initial_equity: number;
   final_equity: number;
   total_return: number;
-  annualized_return: number;
+  /** 区间不足一周或结果溢出时后端省略年化，这里为 null。 */
+  annualized_return: number | null;
   max_drawdown: number;
   average_turnover: number;
   average_holdings: number;
@@ -33,7 +34,8 @@ export function parseMetrics(raw?: string): ReplayMetrics | null {
       initial_equity: Number(value.initial_equity ?? 1),
       final_equity: Number(value.final_equity ?? 1),
       total_return: Number(value.total_return ?? 0),
-      annualized_return: Number(value.annualized_return ?? 0),
+      annualized_return:
+        value.annualized_return === undefined || value.annualized_return === null ? null : Number(value.annualized_return),
       max_drawdown: Number(value.max_drawdown ?? 0),
       average_turnover: Number(value.average_turnover ?? 0),
       average_holdings: Number(value.average_holdings ?? 0),
@@ -82,5 +84,36 @@ export function positionsSummary(raw: string): { cash: number; holdings: number;
     };
   } catch {
     return { cash: 0, holdings: 0, frozen: 0 };
+  }
+}
+
+/** 按 UTC 显示时间（回放区间以 UTC 输入，列表与周期表保持一致）。 */
+export function formatUtcTime(value?: string): string {
+  if (!value) return "-";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "时间未知";
+  return `${new Date(timestamp).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+/** 把新读到的周期记录合并到已加载的列表：按 bar_end_time 去重并保持升序。 */
+export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[] {
+  if (!incoming.length) return known;
+  const seen = new Set(known.map(bar => bar.bar_end_time));
+  const merged = [...known];
+  for (const bar of incoming) {
+    if (seen.has(bar.bar_end_time)) continue;
+    seen.add(bar.bar_end_time);
+    merged.push(bar);
+  }
+  return merged.sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
+}
+
+/** 跳过周期的原因（summary_json.skip_reason）；无法解析时返回空串。 */
+export function barSkipReason(summaryJSON: string): string {
+  try {
+    const value = JSON.parse(summaryJSON || "{}");
+    return typeof value.skip_reason === "string" ? value.skip_reason : "";
+  } catch {
+    return "";
   }
 }

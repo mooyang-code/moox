@@ -52,6 +52,8 @@ const skipReasons: Record<string, string> = {
   too_many_missing: "缺数比例过高",
   config_error: "配置错误",
   ambiguous_series: "同一标的多个序列",
+  no_data: "本期无数据",
+  history_insufficient: "历史覆盖不足",
   out_of_order: "乱序周期",
   expired: "周期已过期",
   infra_retry_exhausted: "读取重试耗尽"
@@ -60,6 +62,37 @@ const skipReasons: Record<string, string> = {
 export function skipReasonLabel(reason?: string): string {
   if (!reason) return "-";
   return skipReasons[reason] ? `${skipReasons[reason]}（${reason}）` : reason;
+}
+
+const itemReasons: Record<string, string> = {
+  filter: "filter 未通过",
+  "select.where": "select.where 未通过",
+  not_selected: "名次未入选",
+  not_rebalanced: "非建仓 bar",
+  filter_after: "filter_after 剔除",
+  exit: "触发 exit",
+  no_entry: "未触发 entry",
+  entry_and_exit: "entry 与 exit 同时成立",
+  min_age_bars: "上市时间不足",
+  no_row: "本期无行",
+  score_invalid: "分数无效",
+  not_expected: "已不在预期集合",
+  holding: "延续批次持有"
+};
+
+function reasonText(reason: string): string {
+  if (reason.startsWith("holding:")) return `延续批次持有，本期${reasonText(reason.slice("holding:".length))}`;
+  if (reason.startsWith("missing:")) return `缺少 ${reason.slice("missing:".length)}`;
+  if (reason.startsWith("factor_failed:")) return `上游因子失败（${reason.slice("factor_failed:".length)}）`;
+  if (reason.startsWith("score_error:")) return `分数计算出错：${reason.slice("score_error:".length)}`;
+  return itemReasons[reason] ?? reason;
+}
+
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、missing:、factor_failed:、score_error:）逐段翻译。 */
+export function itemReasonLabel(reason?: string): string {
+  if (!reason) return "-";
+  const text = reasonText(reason);
+  return text === reason ? reason : `${text}（${reason}）`;
 }
 
 const stages: Record<string, { label: string; color: string }> = {

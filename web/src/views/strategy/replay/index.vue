@@ -42,15 +42,23 @@
           <div class="section-title list-title">回放记录</div>
           <a-list :data="replays" :loading="listLoading" :bordered="false" size="small">
             <template #item="{ item }">
-              <a-list-item :class="{ active: item.replay_id === selectedId }" @click="select(item.replay_id)">
+              <a-list-item
+                :class="{ active: item.replay_id === selectedId }"
+                role="button"
+                tabindex="0"
+                :aria-pressed="item.replay_id === selectedId"
+                @click="select(item.replay_id)"
+                @keydown.enter.prevent="select(item.replay_id)"
+                @keydown.space.prevent="select(item.replay_id)"
+              >
                 <div class="replay-row">
                   <div>
                     <a-tag size="small" :color="replayStatusColor(item.status)">{{ replayStatusLabel(item.status) }}</a-tag>
                     <span class="mono">{{ item.view_id }}</span>
                   </div>
-                  <div class="muted">{{ formatStrategyTime(item.start_time) }} → {{ formatStrategyTime(item.end_time) }}</div>
+                  <div class="muted">{{ formatUtcTime(item.start_time) }} → {{ formatUtcTime(item.end_time) }}</div>
                   <div v-if="item.status === 'running' && item.progress_time" class="muted">
-                    进度 {{ formatStrategyTime(item.progress_time) }}
+                    进度 {{ formatUtcTime(item.progress_time) }}
                   </div>
                 </div>
               </a-list-item>
@@ -66,13 +74,15 @@
                 <span class="mono">{{ selected.replay_id }}</span>
               </div>
               <a-space>
-                <a-button
+                <a-popconfirm
                   v-if="selected.status === 'pending' || selected.status === 'running'"
-                  status="warning"
-                  :loading="cancelling"
-                  @click="cancel"
-                  >取消回放</a-button
+                  content="回放不支持续跑，取消后只保留已写入的周期记录。确定取消？"
+                  ok-text="取消回放"
+                  cancel-text="继续运行"
+                  @ok="cancel"
                 >
+                  <a-button status="warning" :loading="cancelling">取消回放</a-button>
+                </a-popconfirm>
               </a-space>
             </div>
             <a-alert v-if="selected.status === 'failed'" type="error" show-icon class="top-alert"
@@ -86,7 +96,10 @@
                 ><strong :class="metrics.total_return >= 0 ? 'up' : 'down'">{{ pct(metrics.total_return) }}</strong>
               </div>
               <div class="metric">
-                <span>年化</span><strong>{{ pct(metrics.annualized_return) }}</strong>
+                <span>年化</span
+                ><strong :title="metrics.annualized_return === null ? '区间不足一周不计算年化' : undefined">{{
+                  pct(metrics.annualized_return)
+                }}</strong>
               </div>
               <div class="metric">
                 <span>最大回撤</span><strong class="down">{{ pct(metrics.max_drawdown) }}</strong>
@@ -132,13 +145,13 @@
               @page-change="barPage = $event"
             >
               <template #columns>
-                <a-table-column title="K 线结束" :width="170"
-                  ><template #cell="{ record }">{{ formatStrategyTime(record.bar_end_time) }}</template></a-table-column
+                <a-table-column title="K 线结束（UTC）" :width="170"
+                  ><template #cell="{ record }">{{ formatUtcTime(record.bar_end_time) }}</template></a-table-column
                 >
-                <a-table-column title="状态" :width="80"
+                <a-table-column title="状态" :width="150"
                   ><template #cell="{ record }"
                     ><a-tag size="small" :color="record.status === 'ok' ? 'green' : 'orange'">{{
-                      record.status
+                      record.status === "ok" ? "ok" : skipReasonLabel(barSkipReason(record.summary_json))
                     }}</a-tag></template
                   ></a-table-column
                 >
@@ -189,9 +202,12 @@ import { listViews } from "@/api/storage/metadata";
 import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
-import { formatStrategyTime, percent, skipReasonLabel } from "@/views/strategy/model";
+import { percent, skipReasonLabel } from "@/views/strategy/model";
 import {
+  barSkipReason,
   equitySeries,
+  formatUtcTime,
+  mergeBars,
   parseMetrics,
   positionsSummary,
   replayStatusColor,
@@ -222,7 +238,11 @@ const form = reactive<{ strategy_id: string; view_id: string; range: string[]; f
 });
 let chart: VChart | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
+let polling = false;
+// generation 随空间切换递增：旧空间发出的请求返回后一律丢弃；selectRequest 让被新选择取代的详情请求作废。
+let generation = 0;
 let selectRequest = 0;
+const barPageSize = 500;
 
 const metrics = computed(() => parseMetrics(selected.value?.metrics_json));
 const pagedBars = computed(() => bars.value.slice((barPage.value - 1) * 50, barPage.value * 50));
@@ -236,24 +256,28 @@ function defaultRange() {
   return [format(start), format(end)];
 }
 
-function pct(value: number) {
-  return Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
+function pct(value: number | null) {
+  return value !== null && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
 }
 
 async function loadReplays() {
+  const gen = generation;
   listLoading.value = true;
   error.value = "";
   try {
-    replays.value = (await listReplays({ page: 1, page_size: 50 })).items;
-    if (!selectedId.value && replays.value.length) await select(replays.value[0].replay_id);
+    const items = (await listReplays({ page: 1, page_size: 50 })).items;
+    if (gen !== generation) return;
+    replays.value = items;
+    if (!selectedId.value && items.length) await select(items[0].replay_id);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "回放列表加载失败";
+    if (gen === generation) error.value = err instanceof Error ? err.message : "回放列表加载失败";
   } finally {
-    listLoading.value = false;
+    if (gen === generation) listLoading.value = false;
   }
 }
 
 async function loadViews() {
+  const gen = generation;
   const spaceId = spaceStore.selectedSpaceId;
   if (!spaceId) return;
   viewsLoading.value = true;
@@ -261,46 +285,80 @@ async function loadViews() {
     const items: View[] = [];
     for (let page = 1; ; page += 1) {
       const rsp = await listViews({ space_id: spaceId, status: "active", page: { page, size: 200 } });
+      if (gen !== generation) return;
       items.push(...(rsp.views || []));
       if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
     }
     views.value = items;
+  } catch (err) {
+    if (gen === generation) error.value = err instanceof Error ? err.message : "View 列表加载失败";
   } finally {
-    viewsLoading.value = false;
+    if (gen === generation) viewsLoading.value = false;
+  }
+}
+
+/** 从已加载的周期之后增量读取；isCurrent 为假表示请求已被新选择或空间切换取代，返回 null。 */
+async function fetchBars(replayId: string, known: ReplayBar[], isCurrent: () => boolean): Promise<ReplayBar[] | null> {
+  let merged = known;
+  for (let page = Math.floor(known.length / barPageSize) + 1; ; page += 1) {
+    const next = await listReplayBars(replayId, { page, page_size: barPageSize });
+    if (!isCurrent()) return null;
+    merged = mergeBars(merged, next.items);
+    if (next.items.length < barPageSize || merged.length >= next.page.total) return merged;
   }
 }
 
 async function select(replayId: string) {
   const requestId = ++selectRequest;
+  const gen = generation;
+  const isCurrent = () => requestId === selectRequest && gen === generation;
   selectedId.value = replayId;
   barPage.value = 1;
   try {
-    const [replay, barPage1] = await Promise.all([getReplay(replayId), listReplayBars(replayId, { page: 1, page_size: 500 })]);
-    if (requestId !== selectRequest) return;
-    const all = [...barPage1.items];
-    for (let page = 2; all.length < barPage1.page.total; page += 1) {
-      const next = await listReplayBars(replayId, { page, page_size: 500 });
-      if (requestId !== selectRequest) return;
-      if (!next.items.length) break;
-      all.push(...next.items);
-    }
+    const replay = await getReplay(replayId);
+    if (!isCurrent()) return;
+    const all = await fetchBars(replayId, [], isCurrent);
+    if (all === null) return;
     selected.value = replay;
     bars.value = all;
-    await renderChart();
+    await renderChart(true);
   } catch (err) {
-    if (requestId === selectRequest) error.value = err instanceof Error ? err.message : "回放详情加载失败";
+    if (isCurrent()) error.value = err instanceof Error ? err.message : "回放详情加载失败";
   }
 }
 
-async function renderChart() {
+/** 轮询只刷新排队或运行中的所选回放：周期记录增量追加，图表就地更新数据。 */
+async function refreshSelected() {
+  const current = selected.value;
+  if (!current || (current.status !== "pending" && current.status !== "running")) return;
+  const requestId = selectRequest;
+  const gen = generation;
+  const isCurrent = () => requestId === selectRequest && gen === generation;
+  const replay = await getReplay(current.replay_id);
+  if (!isCurrent()) return;
+  const all = await fetchBars(current.replay_id, bars.value, isCurrent);
+  if (all === null) return;
+  selected.value = replay;
+  if (all.length !== bars.value.length) {
+    bars.value = all;
+    await renderChart(false);
+  }
+}
+
+async function renderChart(rebuild: boolean) {
   await nextTick();
+  const values = equitySeries(bars.value);
+  if (!rebuild && chart) {
+    await chart.updateData("equity", values);
+    return;
+  }
   chart?.release();
   chart = null;
-  if (!chartContainer.value || !bars.value.length) return;
+  if (!chartContainer.value || !values.length) return;
   chart = new VChart(
     {
       type: "line",
-      data: [{ id: "equity", values: equitySeries(bars.value) }],
+      data: [{ id: "equity", values }],
       xField: "time",
       yField: "value",
       axes: [
@@ -342,9 +400,12 @@ async function start() {
 
 async function cancel() {
   if (!selected.value) return;
+  const gen = generation;
   cancelling.value = true;
   try {
-    selected.value = await cancelReplay(selected.value.replay_id);
+    const cancelled = await cancelReplay(selected.value.replay_id);
+    if (gen !== generation) return;
+    if (selected.value?.replay_id === cancelled.replay_id) selected.value = cancelled;
     await loadReplays();
   } catch (err) {
     Message.error(err instanceof Error ? err.message : "取消失败");
@@ -355,11 +416,21 @@ async function cancel() {
 
 function startPolling() {
   poll = setInterval(async () => {
+    if (polling) return;
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-    const active = replays.value.some(item => item.status === "pending" || item.status === "running");
-    if (!active) return;
-    replays.value = (await listReplays({ page: 1, page_size: 50 }).catch(() => ({ items: replays.value }))).items;
-    if (selectedId.value) await select(selectedId.value);
+    if (!replays.value.some(item => item.status === "pending" || item.status === "running")) return;
+    polling = true;
+    const gen = generation;
+    try {
+      const items = (await listReplays({ page: 1, page_size: 50 })).items;
+      if (gen !== generation) return;
+      replays.value = items;
+      await refreshSelected();
+    } catch {
+      // 轮询失败等下一轮；页面上的数据保持不变。
+    } finally {
+      polling = false;
+    }
   }, 5000);
 }
 
@@ -372,9 +443,17 @@ onMounted(() => {
 watch(
   () => spaceStore.selectedSpaceId,
   () => {
+    generation += 1;
+    selectRequest += 1;
     selectedId.value = "";
     selected.value = null;
     bars.value = [];
+    views.value = [];
+    form.view_id = "";
+    listLoading.value = false;
+    viewsLoading.value = false;
+    chart?.release();
+    chart = null;
     loadViews();
     loadReplays();
   }

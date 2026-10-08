@@ -55,7 +55,9 @@
         <a-table-column title="权重" :width="100"
           ><template #cell="{ record }">{{ record.weight ? percent(record.weight) : "-" }}</template></a-table-column
         >
-        <a-table-column title="原因" data-index="reason" :ellipsis="true" :tooltip="true" />
+        <a-table-column title="原因" data-index="reason" :ellipsis="true" :tooltip="true"
+          ><template #cell="{ record }">{{ itemReasonLabel(record.reason) }}</template></a-table-column
+        >
       </template>
     </a-table>
   </div>
@@ -64,7 +66,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { StrategyResult, StrategyResultItem } from "@/api/strategy-types";
-import { parseSummary, percent, skipReasonLabel, stageColor, stageLabel } from "@/views/strategy/model";
+import { itemReasonLabel, parseSummary, percent, skipReasonLabel, stageColor, stageLabel } from "@/views/strategy/model";
 
 const props = defineProps<{ result: StrategyResult; items: StrategyResultItem[] }>();
 const ruleFilter = ref<string>();
