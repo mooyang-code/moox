@@ -193,7 +193,6 @@ function_count = 1
 	require.NoError(t, err)
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
 	writeMinimalSCFZip(t, zipPath, map[string]string{
-		"config.yaml":                 "system: {}\n",
 		"main":                        "binary",
 		"sources/market/binance.yaml": string(marketConfig),
 		"certs/eventbus-ca.pem":       string(eventBusCA),

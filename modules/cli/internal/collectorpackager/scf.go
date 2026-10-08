@@ -90,30 +90,24 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 		return nil, err
 	}
 
-	configPath := filepath.Join(configDir, "config.yaml")
-	if err := addFile(configPath, "config.yaml"); err != nil {
-		return nil, err
-	}
-
 	sourcesDir := filepath.Join(configDir, "sources")
-	if _, err := os.Stat(sourcesDir); err == nil {
-		err = filepath.WalkDir(sourcesDir, func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if d.IsDir() {
-				return nil
-			}
-			rel, err := filepath.Rel(configDir, path)
-			if err != nil {
-				return err
-			}
-			return addFile(path, rel)
-		})
-		if err != nil {
-			return nil, err
+	if info, err := os.Lstat(sourcesDir); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("SCF sources must be a regular directory: %s", sourcesDir)
+	}
+	err = filepath.WalkDir(sourcesDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-	} else if !os.IsNotExist(err) {
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(configDir, path)
+		if err != nil {
+			return err
+		}
+		return addFile(path, rel)
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -186,7 +180,7 @@ func ValidateSCFPackageZip(zipPath string) error {
 		if file.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("scf package symlinks are not permitted")
 		}
-		if name != "certs/eventbus-ca.pem" && name != "config.yaml" &&
+		if name != "certs/eventbus-ca.pem" &&
 			!((strings.HasPrefix(name, "sources/") || strings.HasPrefix(name, "markets/")) && (strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml"))) {
 			return fmt.Errorf("unexpected scf package payload %s", name)
 		}

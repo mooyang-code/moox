@@ -263,7 +263,7 @@ func TestCollectorZipUploadRejectsCredentialsBeforeControlAccess(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "test-service-secret")
 	zipPath := filepath.Join(t.TempDir(), "external.zip")
-	writeMinimalSCFZip(t, zipPath, map[string]string{"config.yaml": "password: leaked-test-password\n", "main": "binary", "certs/eventbus-ca.pem": string(mustTestEventBusCAPEM(t))})
+	writeMinimalSCFZip(t, zipPath, map[string]string{"sources/market/extra.yaml": "password: leaked-test-password\n", "main": "binary", "certs/eventbus-ca.pem": string(mustTestEventBusCAPEM(t))})
 	called := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
 	defer server.Close()
@@ -1933,7 +1933,7 @@ func writeMinimalSCFZip(t *testing.T, zipPath string, files map[string]string) {
 	require.NoError(t, err)
 	zw := zip.NewWriter(out)
 	if len(files) == 0 {
-		files = map[string]string{"config.yaml": "system: {}\n", "main": "binary"}
+		files = map[string]string{"main": "binary"}
 	}
 	for name, content := range files {
 		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
@@ -1959,7 +1959,7 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
 	require.NoError(t, err)
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
-	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "config.yaml": "system: {}\n", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1986,7 +1986,7 @@ func TestDeployCollectorFunctionBudgetAndMissingMasterFailBeforeUpload(t *testin
 	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
 	require.NoError(t, err)
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
-	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "config.yaml": "system: {}\n", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 	called := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
 	defer server.Close()
@@ -2011,7 +2011,7 @@ func TestCollectorPackageIDBudgetCheckedBeforeUpload(t *testing.T) {
 	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
 	require.NoError(t, err)
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
-	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "config.yaml": "system: {}\n", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 	base := collectorPublishOptions{SpaceID: "stockcn", TriggerType: "timer", BizType: "market_fetcher", ZipPath: zipPath, EventBusCredentialFile: credentialFile}
 	require.NoError(t, prepareCollectorPublicationTrust(&base))
 	env, err := collectorFunctionEnvironment(base, "preflight-package-id")
@@ -2064,7 +2064,6 @@ func TestCollectorRegionalPreflightChecksInvokeAndOverflowShards(t *testing.T) {
 func TestDeployCollectorFunctionRejectsPlaceholderAuth(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
 	writeMinimalSCFZip(t, zipPath, map[string]string{
-		"config.yaml":                 "system: {}\n",
 		"main":                        "binary",
 		"sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info:\n        app_id: \"moox-collector\"\n        app_key: \"binance-spot-collector\"\n",
 	})

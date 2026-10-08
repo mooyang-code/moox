@@ -492,7 +492,7 @@ func init() {
 	submitFlags.StringVar(&collectorPublishFlags.CollectorRPCGatewayTarget, "collector-rpc-gateway-target", "", "Collector Claim native tRPC endpoint, independent of Storage")
 	submitFlags.StringVar(&collectorPublishFlags.CollectorGatewayTargetNode, "collector-gateway-target-node", "", "Collector Claim gateway node identity")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
-	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
+	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; written to the function environment, not the SCF package")
 	submitFlags.StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/market-fetch-publisher.yaml", "0600 market-fetch-publisher EventBus credential YAML")
 	submitFlags.IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
 	submitFlags.StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "", "stable function name prefix used to identify the fleet")
@@ -1800,19 +1800,17 @@ func validateCollectorZipLogging(zipPath, _ string) error {
 		return fmt.Errorf("open SCF zip: %w", err)
 	}
 	defer archive.Close()
-	mainFound, configFound := false, false
+	mainFound := false
 	for _, file := range archive.File {
 		switch file.Name {
 		case "main":
 			mainFound = true
-		case "config.yaml":
-			configFound = true
-		case "trpc_go.yaml", "example_trpc_go.yaml":
+		case "config.yaml", "trpc_go.yaml", "example_trpc_go.yaml":
 			return fmt.Errorf("SCF zip must not contain %s", file.Name)
 		}
 	}
-	if !mainFound || !configFound {
-		return fmt.Errorf("SCF zip must contain main and config.yaml")
+	if !mainFound {
+		return fmt.Errorf("SCF zip must contain main")
 	}
 	return nil
 }
