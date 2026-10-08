@@ -62,6 +62,8 @@ type CloudNodeMgrService interface {
 	InitPackageUpload(ctx context.Context, req *InitPackageUploadReq) (*InitPackageUploadRsp, error)
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error)
+	// CollectGarbage CollectGarbage 只供 Admin 的每日清理定时器调用，不对浏览器开放。
+	CollectGarbage(ctx context.Context, req *CollectGarbageReq) (*CollectGarbageRsp, error)
 }
 
 func CloudNodeMgrService_GetNodeList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -460,6 +462,24 @@ func CloudNodeMgrService_CompletePackageUpload_Handler(svr interface{}, ctx cont
 	return rsp, nil
 }
 
+func CloudNodeMgrService_CollectGarbage_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CollectGarbageReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).CollectGarbage(ctx, reqbody.(*CollectGarbageReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CloudNodeMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.cloudnode.CloudNodeMgr",
@@ -553,6 +573,10 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/CompletePackageUpload",
 			Func: CloudNodeMgrService_CompletePackageUpload_Handler,
 		},
+		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/CollectGarbage",
+			Func: CloudNodeMgrService_CollectGarbage_Handler,
+		},
 	},
 }
 
@@ -634,6 +658,11 @@ func (s *UnimplementedCloudNodeMgr) CompletePackageUpload(ctx context.Context, r
 	return nil, errors.New("rpc CompletePackageUpload of service CloudNodeMgr is not implemented")
 }
 
+// CollectGarbage CollectGarbage 只供 Admin 的每日清理定时器调用，不对浏览器开放。
+func (s *UnimplementedCloudNodeMgr) CollectGarbage(ctx context.Context, req *CollectGarbageReq) (*CollectGarbageRsp, error) {
+	return nil, errors.New("rpc CollectGarbage of service CloudNodeMgr is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -685,6 +714,8 @@ type CloudNodeMgrClientProxy interface {
 	InitPackageUpload(ctx context.Context, req *InitPackageUploadReq, opts ...client.Option) (rsp *InitPackageUploadRsp, err error)
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq, opts ...client.Option) (rsp *CompletePackageUploadRsp, err error)
+	// CollectGarbage CollectGarbage 只供 Admin 的每日清理定时器调用，不对浏览器开放。
+	CollectGarbage(ctx context.Context, req *CollectGarbageReq, opts ...client.Option) (rsp *CollectGarbageRsp, err error)
 }
 
 type CloudNodeMgrClientProxyImpl struct {
@@ -1130,6 +1161,26 @@ func (c *CloudNodeMgrClientProxyImpl) CompletePackageUpload(ctx context.Context,
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CompletePackageUploadRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) CollectGarbage(ctx context.Context, req *CollectGarbageReq, opts ...client.Option) (*CollectGarbageRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/CollectGarbage")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("CollectGarbage")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CollectGarbageRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

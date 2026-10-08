@@ -344,6 +344,13 @@ func TestCollectorPublishMachineOnlyMethodClassification(t *testing.T) {
 	assert.False(t, isMachineOnlyAdminMethod("unrelated", "BeginCollectorPublishOperation"))
 }
 
+func TestCloudNodeGarbageCollectionIsMachineOnly(t *testing.T) {
+	for _, alias := range []string{"cloudnode", "trpc.moox.cloudnode.CloudNodeMgr"} {
+		assert.True(t, isMachineOnlyAdminMethod(alias, "CollectGarbage"), alias)
+		assert.False(t, isMachineOnlyAdminMethod(alias, "DeletePackage"), alias)
+	}
+}
+
 func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},

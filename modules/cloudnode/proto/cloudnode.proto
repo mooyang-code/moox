@@ -513,6 +513,27 @@ message CompletePackageUploadRsp {
   PackageDetail detail = 2;
 }
 
+// CollectGarbageReq 清理 CloudNode 中已无任何节点使用的数据。dry_run 只统计、不删除。
+message CollectGarbageReq {
+  bool dry_run = 1;
+}
+
+// CollectGarbageRsp 汇总一次清理删除（或 dry_run 时将删除）的数量。
+message CollectGarbageRsp {
+  common.RetInfo ret_info = 1;
+  // packages 是删除的代码包记录数；记录对应的 COS 对象一并删除。
+  uint32 packages = 2;
+  // cos_objects 和 cos_bytes 统计删除的 COS 对象，包括没有记录引用的孤立对象。
+  uint32 cos_objects = 3;
+  uint64 cos_bytes = 4;
+  // deleted_nodes 是彻底清除的已删除节点记录数。
+  uint32 deleted_nodes = 5;
+  // node_batches 是清除的已结束节点批次数，批次明细随批次一起删除。
+  uint32 node_batches = 6;
+  // skipped 列出本次跳过的清理项及原因，例如仍有进行中的批次时暂不清理代码包。
+  repeated string skipped = 7;
+}
+
 service CloudNodeMgr {
   rpc GetNodeList(GetNodeListReq) returns (GetNodeListRsp);
   rpc UpdateNode(UpdateNodeReq) returns (UpdateNodeRsp);
@@ -541,4 +562,7 @@ service CloudNodeMgr {
   rpc GetPackageDownloadURL(GetPackageDownloadURLReq) returns (GetPackageDownloadURLRsp);
   rpc InitPackageUpload(InitPackageUploadReq) returns (InitPackageUploadRsp);
   rpc CompletePackageUpload(CompletePackageUploadReq) returns (CompletePackageUploadRsp);
+
+  // CollectGarbage 只供 Admin 的每日清理定时器调用，不对浏览器开放。
+  rpc CollectGarbage(CollectGarbageReq) returns (CollectGarbageRsp);
 }

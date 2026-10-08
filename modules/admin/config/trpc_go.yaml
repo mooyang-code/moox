@@ -90,6 +90,12 @@ server:
       network: "0 0 0 * * *"
       protocol: timer
       timeout: 10000
+    # Daily system garbage collection, offset from midnight jobs and the top of the hour.
+    - name: trpc.moox.admin.garbage_collection.timer
+      port: 11308
+      network: "0 47 3 * * *"
+      protocol: timer
+      timeout: 900000
 
 client:
   filter:

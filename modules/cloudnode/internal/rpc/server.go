@@ -24,6 +24,7 @@ type Service struct {
 	nodeBatchTakenHook    func([]store.NodeBatchItem)
 	moduleMetrics         *report.ModuleMetrics
 	publishLeaseValidator CollectorPublishLeaseValidator
+	packageObjectsFactory func(store.CloudAccount, cloudcredential.TencentCredential) packageObjectStore
 }
 
 type scfProvisioner interface {
@@ -58,8 +59,9 @@ func WithCredentialResolver(resolver interface {
 // New creates a cloudnode RPC service.
 func New(dbm *store.Store, opts ...Option) *Service {
 	svc := &Service{
-		catalog:          dbm.Catalog(),
-		scfClientFactory: defaultSCFClientFactory,
+		catalog:               dbm.Catalog(),
+		scfClientFactory:      defaultSCFClientFactory,
+		packageObjectsFactory: defaultPackageObjectsFactory,
 	}
 	for _, opt := range opts {
 		opt(svc)

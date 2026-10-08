@@ -6,6 +6,7 @@ import (
 	"time"
 
 	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/garbage"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -48,6 +49,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment()); err != nil {
 		return nil, err
 	}
+	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.SysDeploy, cfg.AdminNodeID)
+	if err != nil {
+		return nil, err
+	}
+	if err := registerGarbageCollectionTimer(s, collector); err != nil {
+		return nil, err
+	}
 
 	// 4. 注册定时器
 
@@ -72,6 +80,28 @@ func registerAuthCacheCleanupTimer(s *server.Server, cleaner authCacheCleaner) e
 		return fmt.Errorf("auth cache cleanup timer service %q is not configured", authCacheCleanupTimerService)
 	}
 	job, err := timerjob.New("admin_auth_cache_cleanup", time.Minute, cleaner.RunValueLogGC)
+	if err != nil {
+		return err
+	}
+	timer.RegisterHandlerService(service, job.Handle)
+	return nil
+}
+
+const garbageCollectionTimerService = "trpc.moox.admin.garbage_collection.timer"
+
+// garbageCollectionTimeout bounds one daily run, which lists and deletes COS
+// objects through CloudNode.
+const garbageCollectionTimeout = 15 * time.Minute
+
+func registerGarbageCollectionTimer(s *server.Server, collector *garbage.Collector) error {
+	if s == nil || collector == nil {
+		return fmt.Errorf("garbage collection timer requires server and collector")
+	}
+	service := s.Service(garbageCollectionTimerService)
+	if service == nil {
+		return fmt.Errorf("garbage collection timer service %q is not configured", garbageCollectionTimerService)
+	}
+	job, err := timerjob.New("admin_garbage_collection", garbageCollectionTimeout, collector.Run)
 	if err != nil {
 		return err
 	}

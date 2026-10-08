@@ -377,6 +377,9 @@ func isMachineOnlyAdminMethod(serviceID, method string) bool {
 	switch canonicalAdminSegment(serviceID) {
 	case "secret", "secretmgr", "trpcmooxopssecretmgr":
 		return canonicalAdminSegment(method) == "getsecretvalue"
+	case "cloudnode", "trpcmooxcloudnodecloudnodemgr":
+		// Only Admin's daily garbage collection timer calls CollectGarbage.
+		return canonicalAdminSegment(method) == "collectgarbage"
 	case "publishlease", "collectorpublishlease", "trpcmooxadmincollectorpublishlease":
 		// Browser deletion still needs Acquire/Renew/Release lease access.
 		// Validation and operation claims belong only to machine callers.
