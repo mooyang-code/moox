@@ -18,7 +18,7 @@ ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
 ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
-ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
+ln -s "${ROOT}/modules/hostgateway" "${FIXTURE_ROOT}/modules/hostgateway"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/strategy" "${FIXTURE_ROOT}/modules/strategy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
@@ -26,7 +26,7 @@ ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/config" "${FIXTURE_ROOT}/config"
 
-for binary in moox-gateway moox-gateway-cli moox-strategy moox-strategy-cli moox-admin moox-admin-cli moox-cli; do
+for binary in moox-host-gateway moox-host-gateway-cli moox-strategy moox-strategy-cli moox-admin moox-admin-cli moox-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done

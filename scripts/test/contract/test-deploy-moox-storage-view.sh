@@ -77,8 +77,8 @@ ensure_required_binary moox-cli
 ensure_required_binary moox-eventbus
 ensure_required_binary moox-archive
 ensure_required_binary moox-archive-cli
-ensure_required_binary moox-gateway
-ensure_required_binary moox-gateway-cli
+ensure_required_binary moox-host-gateway
+ensure_required_binary moox-host-gateway-cli
 ensure_required_binary moox-storage-primary
 ensure_required_binary moox-storage-view
 ensure_required_binary moox-storage-node

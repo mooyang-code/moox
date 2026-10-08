@@ -113,7 +113,7 @@ fi
 binary_names=(
   moox-cli
   moox-admin moox-admin-cli
-  moox-gateway moox-gateway-cli
+  moox-host-gateway moox-host-gateway-cli
   moox-eventbus
   moox-web-host
   moox-cloudnode moox-cloudnode-cli

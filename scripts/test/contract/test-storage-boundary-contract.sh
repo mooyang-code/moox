@@ -73,14 +73,14 @@ grep -Fq '(模块/存储.md)' docs/总体设计.md || fail 'overall design does 
 [[ ! -d modules/storage/internal/errorcode ]] || fail 'storage internal/errorcode must be absent'
 [[ ! -d modules/storage/internal/rpcresult ]] || fail 'storage internal/rpcresult must be absent'
 
-assert_no_match 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|WriteViewIndex|ViewIndexBatch\b|active_coverage_(start|end)|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go packages/gatewayroute modules/admin modules/gateway web/src/api/storage examples
+assert_no_match 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|WriteViewIndex|ViewIndexBatch\b|active_coverage_(start|end)|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
 assert_no_match 'FactKey|RowMarker|content_hash|FACT_VERSION_IMMUTABLE|node_sequence|source_sequence|DatasetProgress|GetDatasetProgress|ViewIndexSourceProgress|expected_last_applied_sequence|base_progress|MergeRows|DeleteRows|ReadRows|ScanRows|keep_days' modules/storage/proto modules/storage/schema modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go
-assert_no_match 'ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayroute modules/admin modules/gateway web/src/api/storage examples
-assert_no_match 'storage[_-]access|moox-storage-access|internal/accessproxy|cmd/access' modules/storage/cmd modules/storage/internal packages/gatewayroute modules/admin modules/gateway web/src/api/storage examples --glob '!modules/storage/cmd/access/**' --glob '!modules/storage/internal/accessproxy/**'
+assert_no_match 'ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
+assert_no_match 'storage[_-]access|moox-storage-access|internal/accessproxy|cmd/access' modules/storage/cmd modules/storage/internal packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples --glob '!modules/storage/cmd/access/**' --glob '!modules/storage/internal/accessproxy/**'
 # Standalone CLIs and Storage's long-lived maintenance loops intentionally
 # create root contexts at process/lifecycle boundaries. Keep the boundary
 # check focused on request-serving code rather than those explicit roots.
-assert_no_match 'context\.Background\(\)' modules/storage packages/gatewayroute modules/admin modules/gateway \
+assert_no_match 'context\.Background\(\)' modules/storage packages/gatewayroute modules/admin modules/hostgateway \
   --glob '*.go' --glob '!**/*_test.go' --glob '!**/*pb.go' --glob '!**/*trpc.go' \
   --glob '!modules/storage/cmd/**' \
   --glob '!modules/storage/internal/service/view/maintenance.go' \
@@ -88,7 +88,7 @@ assert_no_match 'context\.Background\(\)' modules/storage packages/gatewayroute 
   --glob '!modules/storage/internal/service/datanode/pebble/store.go' \
   --glob '!modules/storage/internal/service/datanode/pebble/history.go' \
   --glob '!modules/storage/internal/service/viewindex/duckdb/index_manager.go'
-assert_no_match 'packages/crypto|package crypto' modules/storage packages/gatewayroute modules/admin modules/gateway
+assert_no_match 'packages/crypto|package crypto' modules/storage packages/gatewayroute modules/admin modules/hostgateway
 assert_no_legacy_series_identity
 
 while IFS= read -r match; do
@@ -102,6 +102,6 @@ while IFS= read -r match; do
 done < <(rg -n 'go-duckdb|blevesearch/bleve' modules/storage --glob '*.go' --glob '!**/*_test.go' || true)
 
 rg -n 'RowKey|ViewIndexApplyBatch|ViewSchemaHash|ViewRevision|indexed_from|indexed_to' modules/storage/internal/service/viewindex modules/storage/proto >/dev/null || fail 'ViewIndex write contract is not present'
-rg -n 'AllowedCallers|allowed_callers|AllowsCaller' packages/gatewayroute modules/admin/internal/service/sysdeploy modules/gateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
+rg -n 'AllowedCallers|allowed_callers|AllowsCaller' packages/gatewayroute modules/admin/internal/service/sysdeploy modules/hostgateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
 
 echo 'storage boundary contract passed'

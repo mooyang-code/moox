@@ -19,8 +19,8 @@ import (
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	trpc "trpc.group/trpc-go/trpc-go"
 	_ "trpc.group/trpc-go/trpc-filter/masking"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"
 )

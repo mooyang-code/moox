@@ -1,4 +1,4 @@
-# moox-gateway
+# moox-host-gateway
 
 每台机器一个的节点服务网关：校验服务签名，只把请求转发到 Admin 为本节点登记的本机服务。
 
@@ -8,7 +8,7 @@
 
 ```bash
 ./scripts/build/build.sh gateway
-go test -count=1 ./modules/gateway/...
+go test -count=1 ./modules/hostgateway/...
 ```
 
 ## 配置

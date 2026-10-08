@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/gateway/internal/config"
-	"github.com/mooyang-code/moox/modules/gateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/packages/requestauth"
 )
 

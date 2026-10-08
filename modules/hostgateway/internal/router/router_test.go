@@ -16,8 +16,8 @@ import (
 	"time"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	"github.com/mooyang-code/moox/modules/gateway/internal/health"
-	"github.com/mooyang-code/moox/modules/gateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
@@ -129,7 +129,7 @@ func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T)
 	desc, implementation := NativeServiceDesc(NativeOptions{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, Table: &table, Nonces: nonces})
 	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.gateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
 	require.NoError(t, gatewayServer.Register(desc, implementation))
 	gatewayServeErr := make(chan error, 1)
 	go func() { gatewayServeErr <- gatewayServer.Serve() }()
@@ -196,7 +196,7 @@ func TestNativeGatewayRoutesSkillReadToCanonicalPrimaryStoreEndpoint(t *testing.
 	})
 	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.gateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
 	require.NoError(t, gatewayServer.Register(desc, implementation))
 	gatewayServeErr := make(chan error, 1)
 	go func() { gatewayServeErr <- gatewayServer.Serve() }()
@@ -245,7 +245,7 @@ func TestNativeGatewayUsesSeededCollectorPeriodRoutesForGeneratedPrimaryStoreCli
 	})
 	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.gateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
 	require.NoError(t, gatewayServer.Register(desc, implementation))
 	gatewayServeErr := make(chan error, 1)
 	go func() { gatewayServeErr <- gatewayServer.Serve() }()
@@ -412,7 +412,7 @@ func TestNativeGatewayRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T
 	desc, implementation := NativeServiceDesc(NativeOptions{NodeID: testNode, Credentials: credentials, Table: &table})
 	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.gateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
 	require.NoError(t, gatewayServer.Register(desc, implementation))
 	gatewayServeErr := make(chan error, 1)
 	go func() { gatewayServeErr <- gatewayServer.Serve() }()
@@ -719,10 +719,10 @@ func TestUnauthenticatedRequestsUseBoundedMetricLabels(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	metrics := recorder.Body.String()
-	if strings.Count(metrics, "gateway_requests_total{") != 1 || strings.Count(metrics, "gateway_request_duration_seconds_sum{") != 1 {
+	if strings.Count(metrics, "host_gateway_requests_total{") != 1 || strings.Count(metrics, "host_gateway_request_duration_seconds_sum{") != 1 {
 		t.Fatalf("unauthenticated requests created unbounded series:\n%s", metrics)
 	}
-	if strings.Contains(metrics, "random-") || !strings.Contains(metrics, "gateway_auth_failures_total 50") {
+	if strings.Contains(metrics, "random-") || !strings.Contains(metrics, "host_gateway_auth_failures_total 50") {
 		t.Fatalf("unsafe labels or missing auth count:\n%s", metrics)
 	}
 }

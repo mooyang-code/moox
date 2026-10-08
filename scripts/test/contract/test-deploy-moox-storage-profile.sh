@@ -22,13 +22,13 @@ ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/config/setup" "${FIXTURE_ROOT}/config/setup"
 ln -s "${ROOT}/modules/storage" "${FIXTURE_ROOT}/modules/storage"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
-ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
+ln -s "${ROOT}/modules/hostgateway" "${FIXTURE_ROOT}/modules/hostgateway"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/scripts/runtime/reset-storage-view-indexes.sh" "${FIXTURE_ROOT}/scripts/runtime/reset-storage-view-indexes.sh"
 
-for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-storage-access moox-gateway moox-gateway-cli moox-admin moox-admin-cli moox-cli; do
+for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-storage-access moox-host-gateway moox-host-gateway-cli moox-admin moox-admin-cli moox-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
@@ -89,7 +89,7 @@ grep -q 'policy_file: ../config/storage-policy.json' "${TMP_ROOT}/unpacked/stora
 [[ -f "${TMP_ROOT}/unpacked/storage-node/config/trpc_go.yaml" ]]
 [[ $(find "${TMP_ROOT}/unpacked/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]]
 [[ ! -e "${TMP_ROOT}/unpacked/admin" ]]
-[[ -x "${TMP_ROOT}/unpacked/bin/moox-gateway" ]]
+[[ -x "${TMP_ROOT}/unpacked/bin/moox-host-gateway" ]]
 [[ -f "${TMP_ROOT}/unpacked/secrets/storage-node-auth.env" ]]
 [[ -f "${TMP_ROOT}/unpacked/build-provenance.json" ]]
 grep -q '"schema_version":1' "${TMP_ROOT}/unpacked/build-provenance.json"
@@ -182,7 +182,7 @@ MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003 \
   --gateway-control-url http://127.0.0.1:11000 >/dev/null
 mkdir "${TMP_ROOT}/unpacked-shared-gateway"
 tar -C "${TMP_ROOT}/unpacked-shared-gateway" -xzf "${SHARED_GATEWAY_ARCHIVE}"
-[[ ! -e "${TMP_ROOT}/unpacked-shared-gateway/bin/moox-gateway" ]]
+[[ ! -e "${TMP_ROOT}/unpacked-shared-gateway/bin/moox-host-gateway" ]]
 grep -q 'if \[\[ "${WITH_GATEWAY}" == "1" \]\]; then' "${TMP_ROOT}/unpacked-shared-gateway/start.sh"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \

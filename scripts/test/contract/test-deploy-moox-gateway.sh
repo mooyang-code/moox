@@ -21,13 +21,13 @@ file_mode() {
 }
 
 assert_contains "${BUILD}" 'gateway)'
-assert_contains "${BUILD}" 'modules/gateway ./cmd/server moox-gateway'
-assert_contains "${BUILD}" 'modules/gateway ./cmd/cli moox-gateway-cli'
+assert_contains "${BUILD}" 'modules/hostgateway ./cmd/server moox-host-gateway'
+assert_contains "${BUILD}" 'modules/hostgateway ./cmd/cli moox-host-gateway-cli'
 assert_contains "${RELEASE}" 'gateway/config'
 assert_contains "${RELEASE}" 'gateway/config/trpc_go.yaml'
 assert_contains "${RELEASE}" 'obsolete Gateway refresh_interval'
-assert_contains "${RELEASE}" 'copy_binary moox-gateway'
-assert_contains "${RELEASE}" 'copy_binary moox-gateway-cli'
+assert_contains "${RELEASE}" 'copy_binary moox-host-gateway'
+assert_contains "${RELEASE}" 'copy_binary moox-host-gateway-cli'
 assert_contains "${ROOT}/config/setup/service-deployments.yaml" 'gateway_methods: [EnsureDatasetPeriod, CommitTimeSeriesBatch, RecordDatasetPeriodFailures, GetDatasetPeriodStatus]'
 assert_contains "${ROOT}/modules/admin/internal/service/sysdeploy/defaults.go" 'const storageCollectorPeriodGatewayMethods ='
 assert_contains "${ROOT}/modules/admin/internal/service/sysdeploy/defaults.go" 'storageCollectorPeriodGatewayMethods, storageTimeSeriesGatewayCallers'
@@ -49,7 +49,7 @@ assert_contains "${DEPLOY}" 'chmod 0600'
 assert_contains "${DEPLOY}" 'certs/gateway/peers.pem'
 assert_contains "${DEPLOY}" 'start_gateway'
 assert_contains "${DEPLOY}" 'WITH_GATEWAY=${quoted_with_gateway}'
-assert_contains "${DEPLOY}" 'moox-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml'
+assert_contains "${DEPLOY}" 'moox-host-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml'
 assert_contains "${DEPLOY}" 'start_admin'
 assert_contains "${DEPLOY}" 'start_monitor'
 assert_contains "${DEPLOY}" 'gateway) url="http://$(gateway_health_addr)/readyz"'
@@ -60,7 +60,7 @@ assert_contains "${DEPLOY}" 'stop_service "gateway"'
 assert_contains "${DEPLOY}" 'services+=(gateway)'
 assert_contains "${DEPLOY}" '[[ "${WITH_EVENTBUS}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" eventbus || true'
 assert_contains "${DEPLOY}" '[[ "${WITH_GATEWAY}" == "1" ]] && MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/stop.sh" gateway || true'
-assert_contains "${DEPLOY}" 'moox-gateway (deleted)'
+assert_contains "${DEPLOY}" 'moox-host-gateway (deleted)'
 assert_contains "${DEPLOY}" 'gateway_ready()'
 assert_contains "${DEPLOY}" 'gateway-rollback'
 assert_contains "${DEPLOY}" 'previous Gateway restored'
@@ -105,10 +105,10 @@ assert_absent "${NO_ADMIN_CADDY}" 'MOOX_BROWSER_HTTPS_PORT'
 assert_contains "${NO_ADMIN_CADDY}" 'handle /api/service/*'
 assert_contains "${NO_ADMIN_CADDY}" 'reverse_proxy 127.0.0.1:11002'
 
-assert_contains "${ROOT}/modules/gateway/config/trpc_go.yaml" 'trpc.moox.gateway.route_refresh.timer'
-assert_contains "${ROOT}/modules/gateway/config/trpc_go.yaml" 'port: 11013'
-assert_absent "${ROOT}/modules/gateway/config/trpc_go.yaml" 'startAtOnce'
-assert_absent "${ROOT}/modules/gateway/config/app.yaml" 'refresh_interval'
+assert_contains "${ROOT}/modules/hostgateway/config/trpc_go.yaml" 'trpc.moox.hostgateway.route_refresh.timer'
+assert_contains "${ROOT}/modules/hostgateway/config/trpc_go.yaml" 'port: 11013'
+assert_absent "${ROOT}/modules/hostgateway/config/trpc_go.yaml" 'startAtOnce'
+assert_absent "${ROOT}/modules/hostgateway/config/app.yaml" 'refresh_interval'
 
 command -v openssl >/dev/null 2>&1 || fail 'openssl is required for the deployment fixture'
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/moox-gateway-deploy.XXXXXX")
@@ -123,7 +123,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "${ROOT}/bin"
-for name in moox-gateway moox-gateway-cli moox-cli moox-monitor moox-monitor-cli moox-eventbus; do
+for name in moox-host-gateway moox-host-gateway-cli moox-cli moox-monitor moox-monitor-cli moox-eventbus; do
   binary="${ROOT}/bin/${name}"
   if [[ ! -x "${binary}" ]]; then
     printf '#!/usr/bin/env bash\nexit 0\n' >"${binary}"
@@ -284,7 +284,7 @@ grep -Fxq 'full-secret-sentinel' "${TMP}/full-secret-sentinel" || \
 for script in start.sh stop.sh restart.sh status.sh healthcheck.sh; do
   bash -n "${DEPLOYED}/${script}" || fail "generated ${script} is invalid"
 done
-[[ -x "${DEPLOYED}/bin/moox-gateway" ]] || fail 'Gateway binary was not staged'
+[[ -x "${DEPLOYED}/bin/moox-host-gateway" ]] || fail 'Gateway binary was not staged'
 [[ -f "${DEPLOYED}/gateway/config/app.yaml" ]] || fail 'Gateway config was not staged'
 [[ -f "${DEPLOYED}/gateway/config/trpc_go.yaml" ]] || fail 'Gateway tRPC Timer config was not staged'
 grep -Fq 'id: gateway-test' "${DEPLOYED}/gateway/config/app.yaml" || fail 'node ID was not rendered'
@@ -468,7 +468,7 @@ grep -Fq 'credential_file: ~/.config/moox/eventbus/monitor-observability.yaml' \
 grep -Fq 'MOOX_OBSERVABILITY_CREDENTIAL_FILE=${MONITOR_OBSERVABILITY_CREDENTIAL_FILE}' \
   "${MONITOR_DEPLOY}/start.sh" || fail 'Monitor lifecycle did not pass observability credentials'
 mkdir -p "${TMP}/captures"
-cat >"${MONITOR_DEPLOY}/bin/moox-gateway" <<'SH'
+cat >"${MONITOR_DEPLOY}/bin/moox-host-gateway" <<'SH'
 #!/usr/bin/env bash
 env >"${MOOX_TEST_CAPTURE_DIR}/gateway.env"
 sleep 30
@@ -485,7 +485,7 @@ sleep 30
 SH
 printf '#!/usr/bin/env bash\nexit 0\n' >"${MONITOR_DEPLOY}/bin/moox-cli"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${MONITOR_DEPLOY}/bin/moox-monitor-cli"
-chmod +x "${MONITOR_DEPLOY}/bin/moox-gateway" "${MONITOR_DEPLOY}/bin/moox-monitor" "${MONITOR_DEPLOY}/bin/moox-eventbus" \
+chmod +x "${MONITOR_DEPLOY}/bin/moox-host-gateway" "${MONITOR_DEPLOY}/bin/moox-monitor" "${MONITOR_DEPLOY}/bin/moox-eventbus" \
   "${MONITOR_DEPLOY}/bin/moox-cli" "${MONITOR_DEPLOY}/bin/moox-monitor-cli"
 printf 'MOOX_NOTIFICATION_WEBHOOK_URL=https://example.invalid/webhook\n' >"${MONITOR_DEPLOY}/secrets/notification.env"
 metadata_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')

@@ -147,7 +147,7 @@ test-script-e2e:
 test-scripts: test-script-contracts test-script-e2e
 
 test-gateway-deploy:
-	bash scripts/test/contract/test-deploy-moox-gateway.sh
+	bash scripts/test/contract/test-deploy-moox-host-gateway.sh
 
 test-strategy-deploy:
 	bash scripts/test/contract/test-deploy-moox-strategy.sh

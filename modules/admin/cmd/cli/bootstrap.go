@@ -13,6 +13,8 @@ import (
 	"sort"
 	"time"
 
+	trpc "trpc.group/trpc-go/trpc-go"
+
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
@@ -68,7 +70,7 @@ func runBootstrapCommand(args []string, stdout, stderr io.Writer) error {
 	if err := loadCLIKey(dbPath, keyFile); err != nil {
 		return err
 	}
-	result, err := bootstrap(context.Background(), dbPath, pkiDir, outDir, spec, time.Now())
+	result, err := bootstrap(trpc.BackgroundContext(), dbPath, pkiDir, outDir, spec, time.Now())
 	if err != nil {
 		return err
 	}

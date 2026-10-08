@@ -200,12 +200,12 @@ func (state *State) Handler() http.Handler {
 }
 
 func (state *State) writeMetrics(response http.ResponseWriter) {
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_sync_errors_total counter\ngateway_route_sync_errors_total %d\n", state.syncErrors.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_validation_failures_total counter\ngateway_route_validation_failures_total %d\n", state.validationFailures.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_report_errors_total counter\ngateway_route_report_errors_total %d\n", state.reportErrors.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_auth_failures_total counter\ngateway_auth_failures_total %d\n", state.authFailures.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_replay_failures_total counter\ngateway_replay_failures_total %d\n", state.replayFailures.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_upstream_failures_total counter\ngateway_upstream_failures_total{type=\"connection\"} %d\ngateway_upstream_failures_total{type=\"timeout\"} %d\n", state.connectionFailures.Load(), state.timeoutFailures.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_sync_errors_total counter\nhost_gateway_route_sync_errors_total %d\n", state.syncErrors.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_validation_failures_total counter\nhost_gateway_route_validation_failures_total %d\n", state.validationFailures.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_report_errors_total counter\nhost_gateway_route_report_errors_total %d\n", state.reportErrors.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_auth_failures_total counter\nhost_gateway_auth_failures_total %d\n", state.authFailures.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_replay_failures_total counter\nhost_gateway_replay_failures_total %d\n", state.replayFailures.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_upstream_failures_total counter\nhost_gateway_upstream_failures_total{type=\"connection\"} %d\nhost_gateway_upstream_failures_total{type=\"timeout\"} %d\n", state.connectionFailures.Load(), state.timeoutFailures.Load())
 	hash, count := state.Current()
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_routes_current gauge\ngateway_routes_current %d\n", count)
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_info gauge\ngateway_route_info{route_hash=\"%s\"} 1\n", escapeLabel(hash))
@@ -215,7 +215,7 @@ func (state *State) writeMetrics(response http.ResponseWriter) {
 	if state.Ready() {
 		stale = 0
 	}
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_sync_stale gauge\ngateway_route_sync_stale %d\n", stale)
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_sync_stale gauge\nhost_gateway_route_sync_stale %d\n", stale)
 
 	state.mu.Lock()
 	requestKeys := make([]requestKey, 0, len(state.requests))
@@ -252,15 +252,15 @@ func (state *State) writeMetrics(response http.ResponseWriter) {
 	}
 	state.mu.Unlock()
 
-	_, _ = fmt.Fprintln(response, "# TYPE gateway_requests_total counter")
+	_, _ = fmt.Fprintln(response, "# TYPE host_gateway_requests_total counter")
 	for _, key := range requestKeys {
-		_, _ = fmt.Fprintf(response, "gateway_requests_total{service=\"%s\",method=\"%s\",status=\"%d\"} %d\n", escapeLabel(key.service), escapeLabel(key.method), key.status, requests[key])
+		_, _ = fmt.Fprintf(response, "host_gateway_requests_total{service=\"%s\",method=\"%s\",status=\"%d\"} %d\n", escapeLabel(key.service), escapeLabel(key.method), key.status, requests[key])
 	}
-	_, _ = fmt.Fprintln(response, "# TYPE gateway_request_duration_seconds summary")
+	_, _ = fmt.Fprintln(response, "# TYPE host_gateway_request_duration_seconds summary")
 	for _, key := range durationKeys {
 		labels := fmt.Sprintf("service=\"%s\",method=\"%s\"", escapeLabel(key.service), escapeLabel(key.method))
 		value := durations[key]
-		_, _ = fmt.Fprintf(response, "gateway_request_duration_seconds_sum{%s} %s\ngateway_request_duration_seconds_count{%s} %d\n", labels, strconv.FormatFloat(value.sum, 'g', -1, 64), labels, value.count)
+		_, _ = fmt.Fprintf(response, "host_gateway_request_duration_seconds_sum{%s} %s\nhost_gateway_request_duration_seconds_count{%s} %d\n", labels, strconv.FormatFloat(value.sum, 'g', -1, 64), labels, value.count)
 	}
 }
 

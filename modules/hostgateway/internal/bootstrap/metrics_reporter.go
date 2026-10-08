@@ -16,7 +16,7 @@ func registerMetricsReporter(s *server.Server) error {
 	if err != nil {
 		return err
 	}
-	service := s.Service("trpc.moox.gateway.metrics.timer")
+	service := s.Service("trpc.moox.hostgateway.metrics.timer")
 	if service == nil {
 		return fmt.Errorf("gateway metrics timer service is not configured")
 	}

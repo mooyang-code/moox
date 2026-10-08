@@ -66,7 +66,7 @@ func TestNativeUpstreamTimeoutAnswersCallerPromptly(t *testing.T) {
 		Address: upstream, ServicePath: "trpc.moox.storage.DataView", TimeoutMS: 1000, AllowedMethods: []string{"*"},
 	}}})
 	svc := server.New(server.WithAddress(gateway), server.WithNetwork("tcp"), server.WithProtocol("trpc"),
-		server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithServiceName("trpc.moox.gateway.ServiceGateway"))
+		server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"))
 	require.NoError(t, svc.Register(desc, impl))
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })

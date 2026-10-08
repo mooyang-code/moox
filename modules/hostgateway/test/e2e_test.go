@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/gateway/internal/bootstrap"
-	"github.com/mooyang-code/moox/modules/gateway/internal/controlplane"
-	"github.com/mooyang-code/moox/modules/gateway/internal/health"
-	"github.com/mooyang-code/moox/modules/gateway/internal/router"
-	"github.com/mooyang-code/moox/modules/gateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/bootstrap"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/controlplane"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 )

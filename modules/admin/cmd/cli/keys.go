@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 
+	trpc "trpc.group/trpc-go/trpc-go"
+
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
@@ -57,7 +59,7 @@ func runKeysCommand(args []string, stdout, stderr io.Writer) error {
 	if principal {
 		category = keys.CategoryPrincipal
 	}
-	ctx := context.Background()
+	ctx := trpc.BackgroundContext()
 	needCaller := func() error {
 		if caller == "" {
 			return fmt.Errorf("keys %s 需要 --caller", sub)

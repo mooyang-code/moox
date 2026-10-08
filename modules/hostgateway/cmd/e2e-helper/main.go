@@ -20,8 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
 
-	"github.com/mooyang-code/moox/modules/gateway/internal/router"
-	"github.com/mooyang-code/moox/modules/gateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"gopkg.in/yaml.v3"
@@ -161,7 +161,7 @@ func runNativeRoutes(nodeID string, routes []gatewayroute.Route, caller, listenA
 	service := server.New(
 		server.WithNetwork("tcp"),
 		server.WithProtocol("trpc"),
-		server.WithServiceName("trpc.moox.gateway.ServiceGateway"),
+		server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"),
 		server.WithListener(listener),
 		server.WithCurrentSerializationType(codec.SerializationTypeNoop),
 	)

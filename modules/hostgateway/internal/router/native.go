@@ -47,7 +47,7 @@ func NativeServiceDesc(options NativeOptions) (*server.ServiceDesc, interface{})
 	}
 	proxy := &nativeProxy{options: options}
 	return &server.ServiceDesc{
-		ServiceName: "trpc.moox.gateway.ServiceGateway",
+		ServiceName: "trpc.moox.hostgateway.ServiceGateway",
 		HandlerType: ((*interface{})(nil)),
 		Methods:     []server.Method{{Name: "*", Func: proxy.handle}},
 	}, proxy

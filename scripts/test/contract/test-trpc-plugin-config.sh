@@ -106,7 +106,7 @@ for module in admin trade; do
 done
 
 require_text packages/trpcretry/go.mod 'trpc.group/trpc-go/trpc-filter/slime v1.0.0' 'missing shared bounded read retry dependency'
-require_text modules/gateway/internal/router/native.go 'client.WithFilter(trpcretry.ReadOnly())' 'gateway retry must remain scoped to idempotent native reads'
+require_text modules/hostgateway/internal/router/native.go 'client.WithFilter(trpcretry.ReadOnly())' 'gateway retry must remain scoped to idempotent native reads'
 require_text modules/archive/internal/backfill/backfill.go 'client.WithFilter(trpcretry.ReadOnly())' 'archive retry must remain scoped to the read call'
 require_text modules/monitor/internal/hostmetrics/storage_reader.go 'client.WithFilter(trpcretry.ReadOnly())' 'host metrics retry must remain scoped to the read call'
 require_text modules/monitor/internal/metrics/storage.go 'client.WithFilter(trpcretry.ReadOnly())' 'metrics history retry must remain scoped to the read call'

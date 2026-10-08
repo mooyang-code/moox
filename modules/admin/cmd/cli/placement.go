@@ -1,11 +1,12 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+
+	trpc "trpc.group/trpc-go/trpc-go"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/placement"
 )
@@ -43,7 +44,7 @@ func runPlacementCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	defer closeAdminCLIDB(db)
 	service := placement.NewService(db, nil)
-	ctx := context.Background()
+	ctx := trpc.BackgroundContext()
 	if args[0] == "host" {
 		updated, err := service.SetHostStatus(ctx, host, status)
 		if err != nil {

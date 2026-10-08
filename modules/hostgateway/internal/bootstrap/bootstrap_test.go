@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/gateway/internal/controlplane"
-	"github.com/mooyang-code/moox/modules/gateway/internal/health"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/controlplane"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
@@ -73,7 +73,7 @@ func TestRefreshFailureKeepsReadinessAndIncrementsMetric(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(recorder.Body.String(), "gateway_route_sync_errors_total 1") {
+	if !strings.Contains(recorder.Body.String(), "host_gateway_route_sync_errors_total 1") {
 		t.Fatalf("metrics = %q", recorder.Body.String())
 	}
 	if _, ok := runtime.Table().Resolve("cached"); !ok {
@@ -116,7 +116,7 @@ func TestRefreshCountsControlPlaneRouteValidationFailures(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(recorder.Body.String(), "gateway_route_validation_failures_total 1") {
+	if !strings.Contains(recorder.Body.String(), "host_gateway_route_validation_failures_total 1") {
 		t.Fatalf("metrics = %q", recorder.Body.String())
 	}
 }
@@ -222,7 +222,7 @@ func TestRefreshReportFailureDegradesReadinessWithoutDiscardingRoutes(t *testing
 	}
 	recorder := httptest.NewRecorder()
 	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(recorder.Body.String(), "gateway_route_report_errors_total 1") {
+	if !strings.Contains(recorder.Body.String(), "host_gateway_route_report_errors_total 1") {
 		t.Fatalf("metrics = %q", recorder.Body.String())
 	}
 }

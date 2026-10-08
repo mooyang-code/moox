@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/gateway/internal/config"
-	"github.com/mooyang-code/moox/modules/gateway/internal/controlplane"
-	"github.com/mooyang-code/moox/modules/gateway/internal/health"
-	"github.com/mooyang-code/moox/modules/gateway/internal/router"
-	"github.com/mooyang-code/moox/modules/gateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/controlplane"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -287,7 +287,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	})
 	nativeService := trpcserver.New(
 		trpcserver.WithAddress(cfg.Server.NativeAddr), trpcserver.WithNetwork("tcp"), trpcserver.WithProtocol("trpc"),
-		trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop), trpcserver.WithServiceName("trpc.moox.gateway.ServiceGateway"),
+		trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop), trpcserver.WithServiceName("trpc.moox.hostgateway.ServiceGateway"),
 	)
 	if err := nativeService.Register(nativeDesc, nativeImpl); err != nil {
 		return fmt.Errorf("register native gateway service: %w", err)

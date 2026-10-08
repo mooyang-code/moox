@@ -194,7 +194,7 @@ func buildGatewayE2EHelper(t *testing.T) string {
 	t.Helper()
 	helper := filepath.Join(t.TempDir(), "gateway-e2e-helper")
 	build := exec.Command("go", "build", "-o", helper, "./cmd/e2e-helper")
-	build.Dir = filepath.Join("..", "..", "gateway")
+	build.Dir = filepath.Join("..", "..", "hostgateway")
 	output, err := build.CombinedOutput()
 	require.NoError(t, err, "build gateway helper: %s", output)
 	return helper

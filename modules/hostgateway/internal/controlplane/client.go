@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/gateway/internal/config"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 )

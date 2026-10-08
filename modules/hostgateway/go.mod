@@ -1,4 +1,4 @@
-module github.com/mooyang-code/moox/modules/gateway
+module github.com/mooyang-code/moox/modules/hostgateway
 
 go 1.25.0
 
