@@ -104,6 +104,7 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	}
 	raw, marshalErr := json.Marshal(metrics)
 	if marshalErr != nil {
+		r.logf("回放 %s 的指标无法编码：%v", job.ReplayID, marshalErr)
 		raw = []byte(`{}`)
 	}
 	status, message := store.ReplayDone, ""
@@ -157,15 +158,17 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if len(subjects) == 0 {
 		return Metrics{}, fmt.Errorf("View %s 的数据集没有标的绑定", job.ViewID)
 	}
-	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, job.EndTime, r.maxBars())
+	// 排队期间 View 可能已推进或重建：执行时复查起点并重新截断终点。
+	end, err := input.ReplayWindow(resolved, program, view, job.StartTime, job.EndTime)
+	if err != nil {
+		return Metrics{}, err
+	}
+	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, end, r.maxBars())
 	if err != nil {
 		return Metrics{}, err
 	}
 	if len(bars) == 0 {
 		return Metrics{}, errors.New("回放区间内没有完整的 bar")
-	}
-	if err := checkEffectiveStart(resolved, program, view, bars[0]); err != nil {
-		return Metrics{}, err
 	}
 	freq, err := frequency.Parse(resolved.Bar)
 	if err != nil {
@@ -174,21 +177,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	columns := uniqueStrings(append(append([]string{"close"}, program.Columns...), program.PreviousColumns...))
 	loader := &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: columns}
 	members := cachedMembership(r.Client, job.SpaceID)
-	presence := newPresence()
-	if resolved.MinAgeBars > 0 {
-		from, err := input.HistoryStart(resolved.Calendar, resolved.Bar, bars[0].StorageStart, resolved.MinAgeBars+2)
-		if err != nil {
-			return Metrics{}, err
-		}
-		history := &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}}
-		rows, err := history.Load(ctx, from, bars[0].StorageStart)
-		if err != nil {
-			return Metrics{}, fmt.Errorf("读取年龄判定所需的历史：%w", err)
-		}
-		if err := presence.add(resolved, rows); err != nil {
-			return Metrics{}, err
-		}
-	}
+	history := &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}}
 	ledger := NewLedger(r.initialEquity(), job.FeeBps, r.liquidateAfter())
 	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, freq.NominalDuration()))
 	acc.metrics.Factors = resolved.Factors
@@ -207,10 +196,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		if err != nil {
 			return acc.finish(), err
 		}
-		if resolved.MinAgeBars > 0 {
-			if err := presence.add(resolved, rows); err != nil {
-				return acc.finish(), err
-			}
+		presence, err := agePresence(ctx, history, resolved, segment)
+		if err != nil {
+			return acc.finish(), err
 		}
 		for _, bar := range segment {
 			if status, err := r.Store.ReplayStatus(ctx, job.ReplayID); err != nil {
@@ -312,35 +300,29 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	return r.Store.AppendReplayBar(ctx, store.ReplayBar{ReplayID: replayID, BarEndTime: barEnd, Status: decision.Status, TargetsJSON: targetsJSON, PositionsJSON: positions, SummaryJSON: summary, Return: barReturn, Equity: outcome.EquityAfter, Turnover: outcome.Turnover, Fee: outcome.Fee})
 }
 
-// checkEffectiveStart 拒绝早于 View 保留起点（加上年龄与 bars[-1] 所需根数）的区间，并给出可用起点。
-func checkEffectiveStart(resolved input.Resolved, program *dsl.Program, view input.ViewInfo, first input.PeriodBoundaries) error {
-	if view.IndexedFrom.IsZero() {
-		return nil
+// agePresence 为一段 bar 读取年龄判定所需的窗口 [首根 − (N+1), 末根 − (N−1)]（只读 close），
+// 每段重新构造，内存只与段长和标的数有关，不随 min_age_bars 或回放长度增长。
+func agePresence(ctx context.Context, history *input.RangeLoader, resolved input.Resolved, segment []input.PeriodBoundaries) (*presence, error) {
+	result := newPresence()
+	if resolved.MinAgeBars <= 0 {
+		return result, nil
 	}
-	need := resolved.MinAgeBars
-	if program.UsesPreviousBar && need < 2 {
-		need = 2
+	from, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, resolved.MinAgeBars+2)
+	if err != nil {
+		return nil, err
 	}
-	earliest := view.IndexedFrom
-	if need > 1 {
-		period, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, view.IndexedFrom)
-		if err != nil {
-			return nil
-		}
-		end, err := input.AdvanceBarEnd(resolved.Calendar, resolved.Bar, period.BarEnd, need-1)
-		if err != nil {
-			return nil
-		}
-		shifted, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, end)
-		if err != nil {
-			return nil
-		}
-		earliest = shifted.StorageStart
+	to, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[len(segment)-1].StorageStart, resolved.MinAgeBars)
+	if err != nil {
+		return nil, err
 	}
-	if first.StorageStart.Before(earliest) {
-		return fmt.Errorf("回放起点 %s 早于 View 保留起点 %s 加上所需的 %d 根历史；可用起点为 %s", first.StorageStart.Format(time.RFC3339), view.IndexedFrom.Format(time.RFC3339), need, earliest.Format(time.RFC3339))
+	rows, err := history.Load(ctx, from, to.Add(time.Nanosecond))
+	if err != nil {
+		return nil, fmt.Errorf("读取年龄判定所需的历史：%w", err)
 	}
-	return nil
+	if err := result.add(resolved, rows); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func usesTags(strategy dsl.Strategy) bool {

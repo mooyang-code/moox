@@ -9,7 +9,9 @@ import (
 const (
 	convergenceTolerance = 1e-9
 	maxIterations        = 10
-	dust                 = 1e-12
+	// dustRatio 是相对总权益的粉尘比例：不超过 dustRatio × max(权益, 1) 的金额视为浮点误差，
+	// 不交易、不算目标未达成，也不保留为持仓。绝对阈值会在初始权益较大时把迭代残差误报为未成交。
+	dustRatio = 1e-9
 )
 
 // Position 是一个标的的理论持仓。
@@ -50,7 +52,8 @@ type Outcome struct {
 	Turnover     float64  `json:"turnover"`
 	Unfilled     []string `json:"unfilled,omitempty"`
 	Liquidated   []string `json:"liquidated,omitempty"`
-	BuyScale     float64  `json:"buy_scale,omitempty"`
+	// BuyScale 只在现金不足、买入被按比例缩减时给出（现金为 0 时为 0）。
+	BuyScale *float64 `json:"buy_scale,omitempty"`
 }
 
 // Equity 返回当前估值下的总权益（含冻结持仓）。
@@ -83,6 +86,7 @@ func (l *Ledger) Step(step Step) Outcome {
 		position.Value = position.Quantity * position.LastPrice
 	}
 	outcome := Outcome{EquityBefore: l.Equity()}
+	dust := dustRatio * math.Max(outcome.EquityBefore, 1)
 	if !step.OK {
 		outcome.EquityAfter = outcome.EquityBefore
 		return outcome
@@ -175,7 +179,7 @@ func (l *Ledger) Step(step Step) Outcome {
 		l.Cash += sell - fee
 		outcome.Traded += sell
 		outcome.Fee += fee
-		l.adjust(id, -sell, tradable[id])
+		l.adjust(id, -sell, tradable[id], dust)
 	}
 	buys := make(map[string]float64)
 	total := 0.0
@@ -190,9 +194,10 @@ func (l *Ledger) Step(step Step) Outcome {
 		need := total * (1 + l.FeeRate)
 		if need > l.Cash {
 			scale = math.Max(l.Cash, 0) / need
-			// 迭代误差造成的极小缺口只做截断，不算目标未达成。
-			if scale < 1-convergenceTolerance {
-				outcome.BuyScale = scale
+			// 迭代误差造成的粉尘级缺口只做截断，不算目标未达成。
+			if need-l.Cash > dust {
+				reported := scale
+				outcome.BuyScale = &reported
 				for id := range buys {
 					unfilled[id] = struct{}{}
 				}
@@ -211,7 +216,7 @@ func (l *Ledger) Step(step Step) Outcome {
 			l.Cash -= buy + fee
 			outcome.Traded += buy
 			outcome.Fee += fee
-			l.adjust(id, buy, tradable[id])
+			l.adjust(id, buy, tradable[id], dust)
 		}
 		if l.Cash < 0 && l.Cash > -1e-9*math.Max(equity, 1) {
 			l.Cash = 0
@@ -228,8 +233,8 @@ func (l *Ledger) Step(step Step) Outcome {
 	return outcome
 }
 
-// adjust 按金额增减持仓（price 为成交价）；剩余价值低于粉尘阈值时删除持仓。
-func (l *Ledger) adjust(id string, amount, price float64) {
+// adjust 按金额增减持仓（price 为成交价）；剩余价值不超过粉尘阈值时删除持仓。
+func (l *Ledger) adjust(id string, amount, price, dust float64) {
 	position, ok := l.Positions[id]
 	if !ok {
 		position = &Position{LastPrice: price}

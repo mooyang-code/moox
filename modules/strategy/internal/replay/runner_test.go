@@ -20,6 +20,7 @@ var origin = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 type fakeClient struct {
 	marketType  string
 	indexedFrom time.Time
+	indexedTo   time.Time
 	missing     map[string]map[int]bool // 标的 → 小时 → 无行
 	queries     int
 	onQuery     func(query input.Query)
@@ -37,7 +38,7 @@ func price(id string, hour int) float64 {
 }
 
 func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
-	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", IndexedFrom: f.indexedFrom, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
+	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", IndexedFrom: f.indexedFrom, IndexedTo: f.indexedTo, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
 }
 
 func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
@@ -322,4 +323,63 @@ func TestRunnerDrainsQueueAndWakes(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("执行器应依次完成排队的回放")
+}
+
+// 整根 bar 没有任何行（数据缺口）记 skipped(no_data)：持仓只估值、不清算，规则状态保留。
+func TestReplayEmptyBarsAreSkippedWithoutLiquidation(t *testing.T) {
+	repo := openStore(t)
+	gap := map[int]bool{5: true, 6: true, 7: true}
+	client := &fakeClient{marketType: "spot", missing: map[string]map[int]bool{"A": gap, "B": gap, "C": gap}}
+	runner := &Runner{Store: repo, Client: client, ChunkBars: 4, MissingPriceLiquidateBars: 2}
+	job := startReplay(t, repo, "p1", replayDSL, 10)
+	runner.Execute(context.Background(), job)
+	done, _ := repo.GetReplay(context.Background(), "p1")
+	var metrics Metrics
+	if err := json.Unmarshal(done.MetricsJSON, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.SkipReasons["no_data"] != 3 || metrics.Liquidations != 0 {
+		t.Fatalf("数据缺口应记 3 期 no_data 且不清算：%+v", metrics)
+	}
+	for _, bar := range barsOf(t, repo, "p1") {
+		hour := int(bar.BarEndTime.Sub(origin)/time.Hour) - 1
+		if gap[hour] && bar.Status != "skipped" {
+			t.Fatalf("缺口中的周期应跳过：%+v", bar)
+		}
+	}
+}
+
+// 回放终点截到 View 最新一根：更晚的 bar 没有数据，不能当作空 bar 回放。
+func TestReplayClampsEndToLatestData(t *testing.T) {
+	repo := openStore(t)
+	client := &fakeClient{marketType: "spot", indexedTo: origin.Add(6 * time.Hour)}
+	job := startReplay(t, repo, "p1", replayDSL, 10)
+	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
+	done, _ := repo.GetReplay(context.Background(), "p1")
+	bars := barsOf(t, repo, "p1")
+	if done.Status != store.ReplayDone || len(bars) != 5 || !bars[len(bars)-1].BarEndTime.Equal(origin.Add(7*time.Hour)) {
+		t.Fatalf("应只回放到最新一根（bar_start 06:00）：status=%s bars=%d", done.Status, len(bars))
+	}
+}
+
+// 年龄判定按段只读所需窗口 [首根 − (N+1), 末根 − (N−1)]，不一次读入全部历史。
+func TestReplayAgeWindowsPerSegment(t *testing.T) {
+	repo := openStore(t)
+	var windows [][2]int
+	client := &fakeClient{marketType: "spot"}
+	client.onQuery = func(query input.Query) {
+		if len(query.Columns) == 1 && query.Columns[0] == "close" {
+			windows = append(windows, [2]int{int(query.Start.Sub(origin) / time.Hour), int(query.End.Add(-time.Nanosecond).Sub(origin) / time.Hour)})
+		}
+	}
+	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
+	job := startReplay(t, repo, "p1", aged, 10)
+	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v", done)
+	}
+	want := [][2]int{{-2, 3}, {2, 7}, {6, 9}}
+	if fmt.Sprint(windows) != fmt.Sprint(want) {
+		t.Fatalf("年龄窗口不符：%v，期望 %v", windows, want)
+	}
 }

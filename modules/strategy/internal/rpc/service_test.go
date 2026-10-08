@@ -29,13 +29,14 @@ rules:
     weight: {total: 1}
 `
 
-// fakeResolver 按 View 返回固定的解析结果；swap 结尾的 View 视为合约。
+// fakeResolver 按 View 返回固定的解析结果；swap 结尾的 View 视为合约。view 是回放区间校验使用的覆盖范围。
 type fakeResolver struct {
 	calls   int
 	err     error
 	columns []string
 	loaded  input.Loaded
 	loadErr error
+	view    input.ViewInfo
 }
 
 func (f *fakeResolver) Resolve(_ context.Context, _, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
@@ -61,6 +62,10 @@ func (f *fakeResolver) Resolve(_ context.Context, _, viewID string, strategy dsl
 
 func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.Program, time.Time) (input.Loaded, error) {
 	return f.loaded, f.loadErr
+}
+
+func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, error) {
+	return input.ReplayWindow(resolved, program, f.view, start, end)
 }
 
 // fakeOwner 记录认领与释放；claimErr 让下一次认领失败。
@@ -516,5 +521,23 @@ func TestStoreErrorsAreNormalized(t *testing.T) {
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "记录已存在")
 	if message := rsp.GetRetInfo().GetMsg(); strings.Contains(message, "t_strategy") || strings.Contains(message, "UNIQUE") {
 		t.Fatalf("不应暴露存储细节：%s", message)
+	}
+}
+
+// StartReplay：定义与 DSL 必须二选一；起点在提交时同步校验；终点截到 View 最新一根后保存。
+func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", DslYaml: demoDSL, ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只能给出其一")
+	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	requireFail(t, int32(neither.GetRetInfo().GetCode()), neither.GetRetInfo().GetMsg(), "只能给出其一")
+	h.resolver.view = input.ViewInfo{ViewID: "view_a", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
+	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
+	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-30"})
+	requireOK(t, int32(future.GetRetInfo().GetCode()), future.GetRetInfo().GetMsg())
+	if end := future.GetReplay().GetEndTime(); !strings.HasPrefix(end, "2026-09-03T05:00:00") {
+		t.Fatalf("终点应截到最新一根之后：%s", end)
 	}
 }

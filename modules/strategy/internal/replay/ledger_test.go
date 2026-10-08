@@ -1,8 +1,10 @@
 package replay
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -156,11 +158,40 @@ func TestScaledBuysChargeFeesOnActualTrades(t *testing.T) {
 	ledger := NewLedger(10, 100, 3)
 	ledger.Positions["A"] = &Position{Quantity: 9, LastPrice: 10, Value: 90}
 	outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{"B": 1}, Targets: map[string]float64{"A": 0.9, "B": 0.5}})
-	if outcome.BuyScale <= 0 || outcome.BuyScale >= 1 {
+	if outcome.BuyScale == nil || *outcome.BuyScale <= 0 || *outcome.BuyScale >= 1 {
 		t.Fatalf("应按比例缩减买单：%+v", outcome)
 	}
 	near(t, "费用等于实际成交额乘费率", outcome.Fee, outcome.Traded*0.01)
 	if ledger.Cash < 0 {
 		t.Fatalf("现金不能为负：%f", ledger.Cash)
+	}
+}
+
+// 初始权益较大时，迭代残差不能被当作目标未达成：粉尘阈值相对权益计算。
+// 构造上一期留下的残差：现金 1e-10，B 比目标少约 1e-10；补这笔粉尘级的仓不应报未达成。
+func TestLargeEquityResidualIsNotUnfilled(t *testing.T) {
+	ledger := NewLedger(1e-10, 10, 3)
+	ledger.Positions["A"] = &Position{Quantity: 10, LastPrice: 5, Value: 50}
+	ledger.Positions["B"] = &Position{Quantity: 4.99999999999, LastPrice: 10, Value: 49.9999999999}
+	outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{"A": 5, "B": 10}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
+	if len(outcome.Unfilled) != 0 || outcome.BuyScale != nil {
+		t.Fatalf("粉尘级缺口不应记为未达成：%+v", outcome)
+	}
+	if ledger.Cash < 0 {
+		t.Fatalf("现金不能为负：%g", ledger.Cash)
+	}
+}
+
+// 现金为 0 时买入全部无法成交，缩减比例 0 也要显式给出。
+func TestZeroCashReportsZeroBuyScale(t *testing.T) {
+	ledger := NewLedger(0, 10, 3)
+	ledger.Positions["A"] = &Position{Quantity: 10, LastPrice: 10, Value: 100}
+	outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{"B": 1}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
+	if outcome.BuyScale == nil || *outcome.BuyScale != 0 {
+		t.Fatalf("现金为 0 时缩减比例应为 0：%+v", outcome)
+	}
+	raw, err := json.Marshal(outcome)
+	if err != nil || !strings.Contains(string(raw), `"buy_scale":0`) {
+		t.Fatalf("JSON 应包含 buy_scale=0：%s err=%v", raw, err)
 	}
 }

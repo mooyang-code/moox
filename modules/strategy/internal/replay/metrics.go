@@ -15,7 +15,7 @@ type Metrics struct {
 	InitialEquity    float64           `json:"initial_equity"`
 	FinalEquity      float64           `json:"final_equity"`
 	TotalReturn      float64           `json:"total_return"`
-	AnnualizedReturn float64           `json:"annualized_return"`
+	AnnualizedReturn *float64          `json:"annualized_return,omitempty"`
 	MaxDrawdown      float64           `json:"max_drawdown"`
 	AverageTurnover  float64           `json:"average_turnover"`
 	AverageHoldings  float64           `json:"average_holdings"`
@@ -77,8 +77,14 @@ func (a *accumulator) finish() Metrics {
 	if m.InitialEquity > 0 {
 		m.TotalReturn = m.FinalEquity/m.InitialEquity - 1
 	}
-	if m.Bars > 0 && a.periodsPerYr > 0 && 1+m.TotalReturn > 0 {
-		m.AnnualizedReturn = math.Pow(1+m.TotalReturn, a.periodsPerYr/float64(m.Bars)) - 1
+	// 年化只在区间不短于一周时给出：更短的区间外推一年没有意义，还可能溢出为 +Inf 导致指标无法编码。
+	if m.Bars > 0 && a.periodsPerYr > 0 && 1+m.TotalReturn > 0 && float64(m.Bars) >= a.periodsPerYr/52 {
+		if annualized := math.Pow(1+m.TotalReturn, a.periodsPerYr/float64(m.Bars)) - 1; !math.IsNaN(annualized) && !math.IsInf(annualized, 0) {
+			m.AnnualizedReturn = &annualized
+		}
+	}
+	if m.AnnualizedReturn == nil && m.Bars > 0 {
+		m.Limitations = append(append([]string(nil), m.Limitations...), "区间不足一周或年化结果溢出，不给出年化收益")
 	}
 	if m.OKBars > 0 {
 		m.AverageTurnover = a.turnoverSum / float64(m.OKBars)

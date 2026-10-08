@@ -36,15 +36,17 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("view_id 不能为空"))}, nil
 	}
 	dslYaml := req.GetDslYaml()
+	id := strings.TrimSpace(req.GetStrategyId())
+	if (id == "") == (strings.TrimSpace(dslYaml) == "") {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("strategy_id 与 dsl_yaml 必须且只能给出其一"))}, nil
+	}
 	var strategyID *string
-	if id := strings.TrimSpace(req.GetStrategyId()); id != "" {
+	if id != "" {
 		def, err := s.Store.GetDefinition(ctx, id)
 		if err != nil || def.DeletedAt != nil {
 			return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", id))}, nil
 		}
-		if strings.TrimSpace(dslYaml) == "" {
-			dslYaml = def.DSLYaml
-		}
+		dslYaml = def.DSLYaml
 		strategyID = &def.StrategyID
 	}
 	strategy, _, err := parseDefinition(dslYaml)
@@ -68,12 +70,16 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
 	}
-	resolved, _, err := s.Resolver.Resolve(ctx, scoped, req.GetViewId(), strategy)
+	resolved, program, err := s.Resolver.Resolve(ctx, scoped, req.GetViewId(), strategy)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	if !resolved.Spot {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", req.GetViewId(), resolved.MarketType))}, nil
+	}
+	// 同步校验起点并截断终点，排队后才失败或回放没有数据的未来 bar 都会误导用户。
+	if end, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end); err != nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	replayID, err := store.NewID()
 	if err != nil {

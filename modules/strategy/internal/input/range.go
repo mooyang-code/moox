@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
 // ReplayBars 返回 bar_start 落在 [start, end) 内的全部周期，超过 limit 根返回错误。
@@ -12,14 +14,9 @@ func ReplayBars(calendar, bar string, start, end time.Time, limit int) ([]Period
 	if !end.After(start) {
 		return nil, errors.New("回放区间必须满足 start < end")
 	}
-	current, err := ClosedPeriod(calendar, bar, start)
+	current, err := firstBarAtOrAfter(calendar, bar, start)
 	if err != nil {
 		return nil, err
-	}
-	for current.StorageStart.Before(start) {
-		if current, err = FromBarEnd(calendar, bar, current.NextEnd); err != nil {
-			return nil, err
-		}
 	}
 	bars := make([]PeriodBoundaries, 0)
 	for current.StorageStart.Before(end) {
@@ -32,6 +29,66 @@ func ReplayBars(calendar, bar string, start, end time.Time, limit int) ([]Period
 		}
 	}
 	return bars, nil
+}
+
+// firstBarAtOrAfter 返回 bar_start 不早于 at 的第一根。
+func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, error) {
+	current, err := ClosedPeriod(calendar, bar, at)
+	if err != nil {
+		return PeriodBoundaries{}, err
+	}
+	for current.StorageStart.Before(at) {
+		if current, err = FromBarEnd(calendar, bar, current.NextEnd); err != nil {
+			return PeriodBoundaries{}, err
+		}
+	}
+	return current, nil
+}
+
+// ReplayWindow 校验并截断回放区间 [start, end)：
+// 起点不能早于 View 覆盖起点加上 min_age_bars 与 bars[-1] 所需的历史，否则报错并给出可用起点；
+// 终点截到 View 最新一根（IndexedTo）之后——更晚的 bar 还没有数据，不能当作空 bar 回放。
+func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start, end time.Time) (time.Time, error) {
+	if !end.After(start) {
+		return time.Time{}, errors.New("回放区间必须满足 start < end")
+	}
+	if !view.IndexedTo.IsZero() && end.After(view.IndexedTo) {
+		end = view.IndexedTo.Add(time.Nanosecond)
+	}
+	if !end.After(start) {
+		return time.Time{}, fmt.Errorf("回放区间内没有数据：View %s 最新一根的 bar_start 为 %s", resolved.ViewID, view.IndexedTo.Format(time.RFC3339))
+	}
+	if view.IndexedFrom.IsZero() {
+		return end, nil
+	}
+	need := resolved.MinAgeBars
+	if program != nil && program.UsesPreviousBar && need < 2 {
+		need = 2
+	}
+	earliest := view.IndexedFrom
+	if need > 1 {
+		period, err := FromStorageStart(resolved.Calendar, resolved.Bar, view.IndexedFrom)
+		if err != nil {
+			return time.Time{}, err
+		}
+		barEnd, err := AdvanceBarEnd(resolved.Calendar, resolved.Bar, period.BarEnd, need-1)
+		if err != nil {
+			return time.Time{}, err
+		}
+		shifted, err := FromBarEnd(resolved.Calendar, resolved.Bar, barEnd)
+		if err != nil {
+			return time.Time{}, err
+		}
+		earliest = shifted.StorageStart
+	}
+	first, err := firstBarAtOrAfter(resolved.Calendar, resolved.Bar, start)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if first.StorageStart.Before(earliest) {
+		return time.Time{}, fmt.Errorf("回放起点 %s 早于 View 保留起点 %s 加上所需的 %d 根历史；可用起点为 %s", first.StorageStart.Format(time.RFC3339), view.IndexedFrom.Format(time.RFC3339), need, earliest.Format(time.RFC3339))
+	}
+	return end, nil
 }
 
 // RangeLoader 为回放分段读取 View 的历史行：每段固定活动索引与修订号，索引切换时刷新后整段重读。

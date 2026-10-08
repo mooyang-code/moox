@@ -19,10 +19,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Resolver 解析绑定并装配最新周期（试算）。
+// Resolver 解析绑定、装配最新周期（试算）并校验回放区间。
 type Resolver interface {
 	Resolve(ctx context.Context, spaceID, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
+	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, error)
 }
 
 // Owner 是 Trade 组合账户的会话所有权接口。

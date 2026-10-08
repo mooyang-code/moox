@@ -22,6 +22,18 @@ func (s Service) Resolve(ctx context.Context, spaceID, viewID string, strategy d
 	return Resolve(ctx, s.Client, spaceID, viewID, strategy)
 }
 
+// ReplayWindow 读取 View 的覆盖范围，校验回放起点并截断终点，返回截断后的终点。
+func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, start, end time.Time) (time.Time, error) {
+	if s.Client == nil {
+		return time.Time{}, errors.New("Storage 与 Factor 依赖未配置，不能回放")
+	}
+	view, err := s.Client.GetView(ctx, spaceID, resolved.ViewID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return ReplayWindow(resolved, program, view, start, end)
+}
+
 // LoadLatest 装配 now 之前最近一个已闭合周期的输入；该周期没有行时向前最多再找两根。
 func (s Service) LoadLatest(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, now time.Time) (Loaded, error) {
 	if s.Client == nil {
