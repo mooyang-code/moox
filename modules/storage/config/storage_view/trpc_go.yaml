@@ -95,6 +95,14 @@ plugins:
           max_backups: 5
           compress: false
 
+# storage-view 经本机主机网关访问 Metadata、PrimaryStore；相对路径按安装包根目录解析。
+gateway_client:
+  mode: local
+  caller: storage-view
+  key_file: ../secrets/caller-storage-view.key
+  ca_file: ../certs/moox-ca.crt
+  cache_dir: ./var/gatewayclient
+
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
@@ -114,11 +122,6 @@ storage:
     # This field is retained for the primary/legacy config loader only.
     max_ack_pending: 256
   view:
-    storage_rpc:
-      gateway_target: ip://127.0.0.1:11003
-      gateway_node_id: ""
-      key_id: storage-view
-      hmac_key_file: ""
     metadata_service_name: trpc.moox.storage.Metadata
     primary_store_service_name: trpc.moox.storage.PrimaryStore
     index_service_name: trpc.moox.storage.ViewIndex

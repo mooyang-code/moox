@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v2"
 )
 
@@ -19,7 +20,9 @@ type ConfigLoader struct {
 
 // RuntimeConfig 保存运行时加载出的完整业务配置。
 type RuntimeConfig struct {
-	Storage StorageConfig `yaml:"storage"`
+	// GatewayClient 是 storage-view 访问 Metadata、PrimaryStore 使用的 gatewayclient 配置（storage-view 身份）。
+	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+	Storage       StorageConfig        `yaml:"storage"`
 }
 
 // StorageConfig 保存 storage.yaml 中的业务配置。
@@ -82,7 +85,6 @@ type StorageView struct {
 	RebuildMaxPending       uint64                         `yaml:"rebuild_max_pending"`
 	RebuildIdleChecks       uint32                         `yaml:"rebuild_idle_checks"`
 	ConsumerPartitions      []StorageViewConsumerPartition `yaml:"consumer_partitions"`
-	StorageRPC              StorageRPCConfig               `yaml:"storage_rpc"`
 	rebuildMaxPendingSet    bool
 	rebuildIdleChecksSet    bool
 }
@@ -336,13 +338,6 @@ func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
-type StorageRPCConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	GatewayNodeID string `yaml:"gateway_node_id"`
-	KeyID         string `yaml:"key_id"`
-	HMACKeyFile   string `yaml:"hmac_key_file"`
-}
-
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string        `yaml:"service_name"`
@@ -379,12 +374,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Primary.NodeID == "" {
 		c.Primary.NodeID = "storage-node-0"
-	}
-	if c.View.StorageRPC.GatewayTarget == "" {
-		c.View.StorageRPC.GatewayTarget = "ip://127.0.0.1:11003"
-	}
-	if c.View.StorageRPC.KeyID == "" {
-		c.View.StorageRPC.KeyID = "storage-view"
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")

@@ -375,6 +375,8 @@ components:
         port: 20102
         console_name: storage
         max_body_bytes: 33554432
+        # 存储视图重建时读取冷的历史索引可能需要几分钟；实际等待时间仍受调用方自己的超时约束。
+        timeout_ms: 300000
         rpcs: [UpsertFields, EnsureDatasetPeriod, GetDatasetPeriodStatus, CommitTimeSeriesBatch,
                RecordDatasetPeriodFailures, WriteFactorRows, ReadFields, DeleteDatasetRows, RestoreDatasetRows,
                ReadTimeSeriesRows, ListHistorySubjects, ReadRecordRows, ReportCollectorPeriodCompleted,

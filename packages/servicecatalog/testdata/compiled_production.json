@@ -1064,6 +1064,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "AppendDatasetSyncPoint",
@@ -1084,6 +1085,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "CommitTimeSeriesBatch",
@@ -1101,6 +1103,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "GetFactorPeriodComputed"
@@ -1120,6 +1123,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "ListHistorySubjects"
@@ -1132,6 +1136,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "ReadFields",
@@ -1152,6 +1157,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "ReadTimeSeriesRows"
@@ -1172,6 +1178,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "ReportFactorPeriodComputed",
@@ -1191,6 +1198,7 @@
           "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "WriteFactorRows"

@@ -31,6 +31,7 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -362,13 +363,16 @@ func runViewRole() error {
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
 	}
-	metadataTarget := envOrDefault("MOOX_STORAGE_METADATA_TARGET", "ip://127.0.0.1:20200")
-	metadataNetwork := envOrDefault("MOOX_STORAGE_METADATA_NETWORK", "tcp")
-	metadataProtocol := envOrDefault("MOOX_STORAGE_METADATA_PROTOCOL", "http")
-	metadataProxy := pb.NewMetadataClientProxy(client.WithTarget(metadataTarget), client.WithNetwork(metadataNetwork), client.WithProtocol(metadataProtocol))
-	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20201")
-	primaryNetwork := envOrDefault("MOOX_STORAGE_PRIMARY_NETWORK", "tcp")
-	primaryProtocol := envOrDefault("MOOX_STORAGE_PRIMARY_PROTOCOL", "http")
+	gatewayConfig, err := loadStorageGatewayClient()
+	if err != nil {
+		return err
+	}
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: gatewayConfig})
+	if err != nil {
+		return fmt.Errorf("创建 storage-view 的 gatewayclient: %w", err)
+	}
+	defer gateway.Close()
+	metadataProxy := pb.NewMetadataClientProxy(gateway.ClientOptions()...)
 	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for view role")
@@ -378,12 +382,7 @@ func runViewRole() error {
 	// 30s request budget while it is being compacted. Keep this timeout scoped
 	// to the view's rebuild reader; live PrimaryStore traffic keeps its normal
 	// service timeout.
-	primaryProxy := pb.NewPrimaryStoreClientProxy(
-		client.WithTarget(primaryTarget),
-		client.WithNetwork(primaryNetwork),
-		client.WithProtocol(primaryProtocol),
-		client.WithTimeout(5*time.Minute),
-	)
+	primaryProxy := pb.NewPrimaryStoreClientProxy(gateway.ClientOptions(gatewayclient.WithTimeout(5 * time.Minute))...)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
 	rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
@@ -621,6 +620,21 @@ func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewserv
 // loadStoragePolicy loads storage-policy.json named by storage.policy_file.
 // Without MOOX_STORAGE_CONFIG (tests and local tools) the recommended policy
 // applies; a configured role refuses to start without a valid file.
+// loadStorageGatewayClient 读取 MOOX_STORAGE_CONFIG 中的 gateway_client 段；相对路径按安装包根目录解析，
+// 与 policy_file 一致。
+func loadStorageGatewayClient() (gatewayclient.Config, error) {
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return gatewayclient.Config{}, errors.New("MOOX_STORAGE_CONFIG is required for view role")
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+		return gatewayclient.Config{}, fmt.Errorf("load storage config: %w", err)
+	}
+	return runtimeConfig.GatewayClient.ResolvePaths(filepath.Dir(filepath.Dir(path)))
+}
+
 func loadStoragePolicy() (storagepolicy.Policy, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
@@ -903,13 +917,6 @@ func storageViewBackfillSettings() (uint32, time.Duration, error) {
 		return 0, 0, errors.New("storage view backfill_request_interval must be a non-negative duration")
 	}
 	return runtimeConfig.Storage.View.BackfillPageSize, interval, nil
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 const dataNodeClientTimeout = 5 * time.Minute
