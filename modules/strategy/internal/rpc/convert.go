@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
@@ -70,6 +71,7 @@ func replayProto(value store.Replay) *strategypb.Replay {
 		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID, ViewId: value.ViewID,
 		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), FeeBps: value.FeeBps, Status: value.Status,
 		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
+		DslHash: dsl.Hash([]byte(value.DSLYaml)),
 	}
 	if value.ProgressTime != nil {
 		replay.ProgressTime = formatTime(*value.ProgressTime)
@@ -78,10 +80,14 @@ func replayProto(value store.Replay) *strategypb.Replay {
 }
 
 func replayBarProto(value store.ReplayBar) *strategypb.ReplayBar {
-	return &strategypb.ReplayBar{BarEndTime: formatTime(value.BarEndTime), Status: value.Status, Targets: targetProtos(value.TargetsJSON), PositionsJson: string(value.PositionsJSON), SummaryJson: string(value.SummaryJSON), BarReturn: value.Return, Equity: value.Equity, Turnover: value.Turnover, Fee: value.Fee}
+	return &strategypb.ReplayBar{
+		BarEndTime: formatTime(value.BarEndTime), Status: value.Status, Targets: targetProtos(value.TargetsJSON), PositionsJson: string(value.PositionsJSON), SummaryJson: string(value.SummaryJSON),
+		BarReturn: value.Return, Equity: value.Equity, Turnover: value.Turnover, Fee: value.Fee,
+		Holdings: int32(value.Holdings), Frozen: int32(value.Frozen), SkipReason: value.SkipReason, Unfilled: int32(value.Unfilled), Liquidated: int32(value.Liquidated),
+	}
 }
 
-// pageValues 返回页码与页大小（默认 1 / 20，上限 200）。
+// pageValues 返回页码与页大小（默认 1 / 20，上限 500）。
 func pageValues(value *strategypb.PageRequest) (int, int) {
 	page, size := 1, 20
 	if value != nil {

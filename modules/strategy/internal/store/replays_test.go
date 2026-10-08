@@ -42,7 +42,7 @@ func TestReplayLifecycle(t *testing.T) {
 	if err != nil || done.Status != ReplayDone || string(done.MetricsJSON) != `{"total_return":0.1}` || done.ProgressTime == nil {
 		t.Fatalf("完成状态不符：%+v err=%v", done, err)
 	}
-	bars, total, err := repo.ListReplayBars(ctx, "p1", 0, 10)
+	bars, total, err := repo.ListReplayBars(ctx, "p1", 0, 10, false)
 	if err != nil || total != 1 || len(bars) != 1 || bars[0].Equity != 100 {
 		t.Fatalf("回放周期不符：%+v total=%d err=%v", bars, total, err)
 	}
@@ -85,7 +85,7 @@ func TestMarkRunningReplaysInterruptedKeepsBars(t *testing.T) {
 	if err != nil || interrupted.Status != ReplayFailed || interrupted.Error != "interrupted" {
 		t.Fatalf("状态不符：%+v err=%v", interrupted, err)
 	}
-	if _, total, err := repo.ListReplayBars(ctx, "p1", 0, 10); err != nil || total != 1 {
+	if _, total, err := repo.ListReplayBars(ctx, "p1", 0, 10, false); err != nil || total != 1 {
 		t.Fatalf("已写入的周期应保留：total=%d err=%v", total, err)
 	}
 }
@@ -171,7 +171,7 @@ func TestRetentionDeletesReplaysInBatches(t *testing.T) {
 	if err != nil || deleted != 1 {
 		t.Fatalf("应删除 1 个回放：deleted=%d err=%v", deleted, err)
 	}
-	if _, total, err := repo.ListReplayBars(ctx, "p1", 0, 10); err != nil || total != 0 {
+	if _, total, err := repo.ListReplayBars(ctx, "p1", 0, 10, false); err != nil || total != 0 {
 		t.Fatalf("周期记录应全部删除：total=%d err=%v", total, err)
 	}
 }

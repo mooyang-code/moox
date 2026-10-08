@@ -114,13 +114,15 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
     c_fee_bps REAL NOT NULL DEFAULT 0,
+    c_factors_json TEXT NOT NULL DEFAULT '{}',
     c_status TEXT NOT NULL,
     c_progress_time INTEGER,
     c_metrics_json TEXT NOT NULL DEFAULT '{}',
     c_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('pending', 'running', 'done', 'failed', 'cancelled'))
+    CHECK (c_status IN ('pending', 'running', 'done', 'failed', 'cancelled')),
+    CHECK (c_fee_bps >= 0 AND c_fee_bps <= 1000)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_replays_space ON t_strategy_replays (c_space_id, c_ctime);
@@ -136,6 +138,11 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     c_equity REAL,
     c_turnover REAL,
     c_fee REAL,
+    c_holdings INTEGER NOT NULL DEFAULT 0,
+    c_frozen INTEGER NOT NULL DEFAULT 0,
+    c_skip_reason TEXT NOT NULL DEFAULT '',
+    c_unfilled INTEGER NOT NULL DEFAULT 0,
+    c_liquidated INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (c_replay_id, c_bar_end_time),
     FOREIGN KEY (c_replay_id) REFERENCES t_strategy_replays (c_replay_id) ON DELETE CASCADE
 );

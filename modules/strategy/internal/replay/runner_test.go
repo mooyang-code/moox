@@ -22,6 +22,8 @@ type fakeClient struct {
 	indexedFrom time.Time
 	indexedTo   time.Time
 	missing     map[string]map[int]bool // 标的 → 小时 → 无行
+	ambiguous   map[int]bool            // 小时 → 标的 A 在该小时有两个序列
+	panicOnRows bool
 	queries     int
 	onQuery     func(query input.Query)
 }
@@ -38,7 +40,14 @@ func price(id string, hour int) float64 {
 }
 
 func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
-	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", IndexedFrom: f.indexedFrom, IndexedTo: f.indexedTo, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
+	indexedFrom, indexedTo := f.indexedFrom, f.indexedTo
+	if indexedFrom.IsZero() {
+		indexedFrom = origin
+	}
+	if indexedTo.IsZero() {
+		indexedTo = origin.Add(1000 * time.Hour)
+	}
+	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", IndexedFrom: indexedFrom, IndexedTo: indexedTo, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
 }
 
 func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
@@ -59,6 +68,9 @@ func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]string, 
 
 func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) ([]input.Row, uint64, error) {
 	f.queries++
+	if f.panicOnRows {
+		panic("测试：读取行时崩溃")
+	}
 	if f.onQuery != nil {
 		f.onQuery(query)
 	}
@@ -73,7 +85,10 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 				continue
 			}
 			value := price(subject.SubjectID, hour)
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, Values: map[string]float64{"close": value, "mom": value - price(subject.SubjectID, hour-1)}})
+			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: map[string]float64{"close": value, "mom": value - price(subject.SubjectID, hour-1)}})
+			if subject.SubjectID == "A" && f.ambiguous[hour] {
+				rows = append(rows, input.Row{SubjectID: "A", DataTime: at, SeriesTag: "venue:other", Values: map[string]float64{"close": value * 2, "mom": 0}})
+			}
 		}
 	}
 	return rows, 1, nil
@@ -133,7 +148,7 @@ func startReplay(t *testing.T, repo *store.Store, id, dslYaml string, hours int)
 
 func barsOf(t *testing.T, repo *store.Store, id string) []store.ReplayBar {
 	t.Helper()
-	bars, _, err := repo.ListReplayBars(context.Background(), id, 0, 1000)
+	bars, _, err := repo.ListReplayBars(context.Background(), id, 0, 1000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +254,10 @@ func TestReplayCancellationKeepsWrittenBars(t *testing.T) {
 	}
 	if written := len(barsOf(t, repo, "p1")); written != 3 {
 		t.Fatalf("已写入的 bars 应保留：%d", written)
+	}
+	var metrics Metrics
+	if err := json.Unmarshal(cancelled.MetricsJSON, &metrics); err != nil || metrics.Bars != 3 {
+		t.Fatalf("取消后应保留截至取消时的指标：%s err=%v", cancelled.MetricsJSON, err)
 	}
 }
 
@@ -381,5 +400,68 @@ func TestReplayAgeWindowsPerSegment(t *testing.T) {
 	want := [][2]int{{-2, 3}, {2, 7}, {6, 9}}
 	if fmt.Sprint(windows) != fmt.Sprint(want) {
 		t.Fatalf("年龄窗口不符：%v，期望 %v", windows, want)
+	}
+}
+
+// 用到 bars[-1] 时，上一根的同一标的多个序列同样让本期跳过（与实时一致）；歧义周期的价格不用于估值。
+func TestReplayPreviousBarAmbiguitySkips(t *testing.T) {
+	repo := openStore(t)
+	client := &fakeClient{marketType: "spot", ambiguous: map[int]bool{4: true}}
+	job := startReplay(t, repo, "p1", previousDSL, 6)
+	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
+	bars := barsOf(t, repo, "p1")
+	reasons := map[int]string{}
+	for _, bar := range bars {
+		reasons[int(bar.BarEndTime.Sub(origin)/time.Hour)-1] = bar.SkipReason
+	}
+	if reasons[4] != "ambiguous_series" || reasons[5] != "ambiguous_series" || reasons[6] != "" {
+		t.Fatalf("当期与下一根（bars[-1] 指向歧义周期）都应跳过：%v", reasons)
+	}
+}
+
+// 发起时固化的因子指纹与执行时不一致：拒绝执行，提示重新发起。
+func TestReplayRejectsFactorDrift(t *testing.T) {
+	repo := openStore(t)
+	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
+	if err := repo.CreateReplay(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	claimed, _, err := repo.ClaimNextReplay(context.Background(), origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot"}}).Execute(context.Background(), claimed)
+	failed, _ := repo.GetReplay(context.Background(), "p1")
+	if failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "排队期间发生变化") {
+		t.Fatalf("因子定义变化应拒绝执行：%+v", failed)
+	}
+}
+
+// 回放路径上的 panic 只让这个回放失败，不会传出去拖垮进程。
+func TestReplayPanicIsContained(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot", panicOnRows: true}}).Execute(context.Background(), job)
+	failed, _ := repo.GetReplay(context.Background(), "p1")
+	if failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "执行异常") {
+		t.Fatalf("panic 应记为 failed：%+v", failed)
+	}
+}
+
+// 年龄窗口内整个数据集都没有数据是历史缺口：这些周期记 history_insufficient 跳过，不清仓。
+func TestReplayAgeGapSkipsInsteadOfAgingOut(t *testing.T) {
+	repo := openStore(t)
+	gap := map[int]bool{0: true, 1: true, 2: true}
+	client := &fakeClient{marketType: "spot", missing: map[string]map[int]bool{"A": gap, "B": gap, "C": gap}}
+	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
+	job := startReplay(t, repo, "p1", aged, 6)
+	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
+	done, _ := repo.GetReplay(context.Background(), "p1")
+	var metrics Metrics
+	if err := json.Unmarshal(done.MetricsJSON, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.SkipReasons["history_insufficient"] == 0 || metrics.Liquidations != 0 {
+		t.Fatalf("历史缺口应记 history_insufficient 且不清算：%+v", metrics)
 	}
 }

@@ -22,8 +22,8 @@ type Metrics struct {
 	TotalFee         float64           `json:"total_fee"`
 	UnfilledBars     int               `json:"unfilled_bars"`
 	Liquidations     int               `json:"liquidations"`
-	FirstBarEnd      time.Time         `json:"first_bar_end,omitempty"`
-	LastBarEnd       time.Time         `json:"last_bar_end,omitempty"`
+	FirstBarEnd      time.Time         `json:"first_bar_end,omitzero"`
+	LastBarEnd       time.Time         `json:"last_bar_end,omitzero"`
 	Factors          map[string]string `json:"factors,omitempty"`
 	Limitations      []string          `json:"limitations"`
 }
@@ -35,11 +35,15 @@ type accumulator struct {
 	turnoverSum  float64
 	holdingsSum  float64
 	periodsPerYr float64
+	barDuration  time.Duration
 }
 
-func newAccumulator(initialEquity, periodsPerYear float64) *accumulator {
-	return &accumulator{metrics: Metrics{InitialEquity: initialEquity, FinalEquity: initialEquity, SkipReasons: map[string]int{}}, peak: initialEquity, periodsPerYr: periodsPerYear}
+func newAccumulator(initialEquity, periodsPerYear float64, barDuration time.Duration) *accumulator {
+	return &accumulator{metrics: Metrics{InitialEquity: initialEquity, FinalEquity: initialEquity, SkipReasons: map[string]int{}}, peak: initialEquity, periodsPerYr: periodsPerYear, barDuration: barDuration}
 }
+
+// minAnnualizedSpan 是给出年化收益所需的最短区间：根数 × bar 时长不短于一周。
+const minAnnualizedSpan = 7 * 24 * time.Hour
 
 func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outcome, holdings int) {
 	m := &a.metrics
@@ -78,13 +82,8 @@ func (a *accumulator) finish() Metrics {
 		m.TotalReturn = m.FinalEquity/m.InitialEquity - 1
 	}
 	// 年化只在区间不短于一周时给出：更短的区间外推一年没有意义，还可能溢出为 +Inf 导致指标无法编码。
-	if m.Bars > 0 && a.periodsPerYr > 0 && 1+m.TotalReturn > 0 && float64(m.Bars) >= a.periodsPerYr/52 {
-		if annualized := math.Pow(1+m.TotalReturn, a.periodsPerYr/float64(m.Bars)) - 1; !math.IsNaN(annualized) && !math.IsInf(annualized, 0) {
-			m.AnnualizedReturn = &annualized
-		}
-	}
-	if m.AnnualizedReturn == nil && m.Bars > 0 {
-		m.Limitations = append(append([]string(nil), m.Limitations...), "区间不足一周或年化结果溢出，不给出年化收益")
+	if note := a.annualize(&m); note != "" {
+		m.Limitations = append(append([]string(nil), m.Limitations...), note)
 	}
 	if m.OKBars > 0 {
 		m.AverageTurnover = a.turnoverSum / float64(m.OKBars)
@@ -96,6 +95,25 @@ func (a *accumulator) finish() Metrics {
 		m.SkipReasons = nil
 	}
 	return m
+}
+
+// annualize 计算年化收益；不给出时返回说明原因的局限性条目。
+func (a *accumulator) annualize(m *Metrics) string {
+	if m.Bars == 0 || a.periodsPerYr <= 0 {
+		return ""
+	}
+	if time.Duration(m.Bars)*a.barDuration < minAnnualizedSpan {
+		return "区间不足一周，不给出年化收益"
+	}
+	if 1+m.TotalReturn <= 0 {
+		return "期末权益不为正，不给出年化收益"
+	}
+	annualized := math.Pow(1+m.TotalReturn, a.periodsPerYr/float64(m.Bars)) - 1
+	if math.IsNaN(annualized) || math.IsInf(annualized, 0) {
+		return "年化结果溢出，不给出年化收益"
+	}
+	m.AnnualizedReturn = &annualized
+	return ""
 }
 
 // periodsPerYear 返回一年的 bar 数：A 股日线按 244 个交易日，其余按自然时间。

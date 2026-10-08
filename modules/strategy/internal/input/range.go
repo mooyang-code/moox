@@ -9,6 +9,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
+// DefaultReplayMaxBars 是一次回放允许的最多 bar 数。
+const DefaultReplayMaxBars = 20000
+
 // ReplayBars 返回 bar_start 落在 [start, end) 内的全部周期，超过 limit 根返回错误。
 func ReplayBars(calendar, bar string, start, end time.Time, limit int) ([]PeriodBoundaries, error) {
 	if !end.After(start) {
@@ -52,14 +55,19 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	if !end.After(start) {
 		return time.Time{}, errors.New("回放区间必须满足 start < end")
 	}
-	if !view.IndexedTo.IsZero() && end.After(view.IndexedTo) {
-		end = view.IndexedTo.Add(time.Nanosecond)
+	if view.IndexedFrom.IsZero() || view.IndexedTo.IsZero() {
+		return time.Time{}, fmt.Errorf("View %s 的数据覆盖范围未知（索引尚未统计完成），暂不能回放", resolved.ViewID)
+	}
+	// 终点截到最新一根的 bar_end：它是整秒，落库按毫秒保存不会丢掉最新一根；两种日历下都满足左闭右开。
+	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, view.IndexedTo)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if end.After(latest.BarEnd) {
+		end = latest.BarEnd
 	}
 	if !end.After(start) {
 		return time.Time{}, fmt.Errorf("回放区间内没有数据：View %s 最新一根的 bar_start 为 %s", resolved.ViewID, view.IndexedTo.Format(time.RFC3339))
-	}
-	if view.IndexedFrom.IsZero() {
-		return end, nil
 	}
 	need := resolved.MinAgeBars
 	if program != nil && program.UsesPreviousBar && need < 2 {
@@ -100,10 +108,12 @@ type RangeLoader struct {
 	Columns  []string
 }
 
-// RangeRows 是一段读取的结果：bar_start（Unix 秒）→ subject_id → 行；Ambiguous 记录同一标的同一周期出现多个序列的 bar。
+// RangeRows 是一段读取的结果：bar_start（Unix 秒）→ subject_id → 行；Ambiguous 记录同一标的同一周期出现多个序列的 bar，
+// AmbiguousSubjects 记录这些 bar 上有歧义的标的（它们的行不能用于估值）。
 type RangeRows struct {
-	Bars      map[int64]map[string]Row
-	Ambiguous map[int64]string
+	Bars              map[int64]map[string]Row
+	Ambiguous         map[int64]string
+	AmbiguousSubjects map[int64]map[string]struct{}
 }
 
 // Load 读取 [start, end) 内全部标的的行。
@@ -130,7 +140,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 const maxRangeRereads = 3
 
 func groupRange(rows []Row) RangeRows {
-	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]string)}
+	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]string), AmbiguousSubjects: make(map[int64]map[string]struct{})}
 	tags := make(map[int64]map[string]string)
 	for _, row := range rows {
 		if row.SubjectID == "" {
@@ -143,6 +153,10 @@ func groupRange(rows []Row) RangeRows {
 		}
 		if tag, seen := tags[key][row.SubjectID]; seen && tag != row.SeriesTag {
 			result.Ambiguous[key] = fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
+			if result.AmbiguousSubjects[key] == nil {
+				result.AmbiguousSubjects[key] = make(map[string]struct{})
+			}
+			result.AmbiguousSubjects[key][row.SubjectID] = struct{}{}
 			continue
 		}
 		tags[key][row.SubjectID] = row.SeriesTag

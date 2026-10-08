@@ -82,6 +82,7 @@ message Replay {
   string error = 12;
   string created_at = 13;
   string updated_at = 14;
+  string dsl_hash = 15;                  // 被回放的 DSL 版本
 }
 
 // ReplayBar 是回放中一个周期的记录。
@@ -95,6 +96,11 @@ message ReplayBar {
   double equity = 7;
   double turnover = 8;
   double fee = 9;
+  int32 holdings = 10;                   // 持仓数（含冻结）
+  int32 frozen = 11;                     // 缺价冻结的持仓数
+  string skip_reason = 12;
+  int32 unfilled = 13;                   // 目标未达成的标的数
+  int32 liquidated = 14;                 // 本期清算的标的数
 }
 
 message PageRequest {
@@ -159,19 +165,20 @@ message ListStrategyTargetsRsp {
 }
 
 message StartReplayReq {
-  string strategy_id = 1;                // 与 dsl_yaml 二选一；给出时使用定义当前的 DSL
+  string strategy_id = 1;                // strategy_id、dsl_yaml、instance_id 三选一：定义当前的 DSL、给定文本或实例当前会话固化的 DSL
   string dsl_yaml = 2;
   string view_id = 3;
   string start_time = 4;
   string end_time = 5;
   double fee_bps = 6;
+  string instance_id = 7;
 }
-message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
+message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; int32 bar_count = 3; string first_bar_end = 4; string last_bar_end = 5; }
 message GetReplayReq { string replay_id = 1; }
 message GetReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
 message ListReplaysReq { PageRequest page = 1; }
 message ListReplaysRsp { common.RetInfo ret_info = 1; repeated Replay replays = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
-message ListReplayBarsReq { string replay_id = 1; PageRequest page = 2; }
+message ListReplayBarsReq { string replay_id = 1; PageRequest page = 2; bool brief = 3; }  // brief 只返回曲线与摘要字段，不含目标、持仓与摘要 JSON
 message ListReplayBarsRsp { common.RetInfo ret_info = 1; repeated ReplayBar bars = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
 message CancelReplayReq { string replay_id = 1; }
 message CancelReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }

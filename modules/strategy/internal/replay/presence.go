@@ -2,6 +2,7 @@ package replay
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 )
@@ -50,18 +51,29 @@ func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries, in
 			wanted[id] = struct{}{}
 		}
 		target := bar.BarIndex - int64(resolved.MinAgeBars-1)
-		satisfied := make(map[string]struct{}, len(instruments))
-		for subjectID, indexes := range p.indexes {
-			instrument := instrumentOf[subjectID]
-			if _, ok := wanted[instrument]; !ok {
-				continue
-			}
+		inWindow := func(indexes map[int64]struct{}) bool {
 			for offset := int64(0); offset <= 2; offset++ {
 				if _, ok := indexes[target-offset]; ok {
-					satisfied[instrument] = struct{}{}
-					break
+					return true
 				}
 			}
+			return false
+		}
+		satisfied := make(map[string]struct{}, len(instruments))
+		anyRows := false
+		for subjectID, indexes := range p.indexes {
+			if !inWindow(indexes) {
+				continue
+			}
+			anyRows = true
+			if instrument := instrumentOf[subjectID]; instrument != "" {
+				if _, ok := wanted[instrument]; ok {
+					satisfied[instrument] = struct{}{}
+				}
+			}
+		}
+		if len(instruments) > 0 && !anyRows {
+			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars)}
 		}
 		return satisfied, nil
 	}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
@@ -35,19 +37,9 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if req == nil || strings.TrimSpace(req.GetViewId()) == "" {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("view_id 不能为空"))}, nil
 	}
-	dslYaml := req.GetDslYaml()
-	id := strings.TrimSpace(req.GetStrategyId())
-	if (id == "") == (strings.TrimSpace(dslYaml) == "") {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("strategy_id 与 dsl_yaml 必须且只能给出其一"))}, nil
-	}
-	var strategyID *string
-	if id != "" {
-		def, err := s.Store.GetDefinition(ctx, id)
-		if err != nil || def.DeletedAt != nil {
-			return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", id))}, nil
-		}
-		dslYaml = def.DSLYaml
-		strategyID = &def.StrategyID
+	dslYaml, strategyID, err := s.replaySource(ctx, scoped, req)
+	if err != nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	strategy, _, err := parseDefinition(dslYaml)
 	if err != nil {
@@ -64,8 +56,8 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if !end.After(start) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("end_time 必须晚于 start_time"))}, nil
 	}
-	if req.GetFeeBps() < 0 {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("fee_bps 不能为负"))}, nil
+	if fee := req.GetFeeBps(); math.IsNaN(fee) || math.IsInf(fee, 0) || fee < 0 || fee > store.MaxReplayFeeBps {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("fee_bps 必须在 0 到 %d 之间", store.MaxReplayFeeBps))}, nil
 	}
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
@@ -77,15 +69,22 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if !resolved.Spot {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", req.GetViewId(), resolved.MarketType))}, nil
 	}
-	// 同步校验起点并截断终点，排队后才失败或回放没有数据的未来 bar 都会误导用户。
+	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
 	if end, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+	}
+	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, start, end, input.DefaultReplayMaxBars)
+	if err != nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+	}
+	if len(bars) == 0 {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("回放区间内没有完整的 bar"))}, nil
 	}
 	replayID, err := store.NewID()
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: strategyID, DSLYaml: dslYaml, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: strategyID, DSLYaml: dslYaml, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -96,7 +95,57 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	return &strategypb.StartReplayRsp{RetInfo: success(), Replay: replayProto(created)}, nil
+	return &strategypb.StartReplayRsp{RetInfo: success(), Replay: replayProto(created), BarCount: int32(len(bars)), FirstBarEnd: formatTime(bars[0].BarEnd), LastBarEnd: formatTime(bars[len(bars)-1].BarEnd)}, nil
+}
+
+// replaySource 按 strategy_id、dsl_yaml、instance_id 三选一确定被回放的 DSL 文本：定义当前的版本、给定文本，
+// 或实例当前（停用时为最近一次）会话固化的版本——后者与实例实际在跑的策略一致。
+func (s *Service) replaySource(ctx context.Context, scoped string, req *strategypb.StartReplayReq) (string, *string, error) {
+	strategyID := strings.TrimSpace(req.GetStrategyId())
+	instanceID := strings.TrimSpace(req.GetInstanceId())
+	text := req.GetDslYaml()
+	given := 0
+	for _, value := range []string{strategyID, instanceID, strings.TrimSpace(text)} {
+		if value != "" {
+			given++
+		}
+	}
+	if given != 1 {
+		return "", nil, errors.New("strategy_id、dsl_yaml、instance_id 必须且只能给出其一")
+	}
+	switch {
+	case strategyID != "":
+		def, err := s.Store.GetDefinition(ctx, strategyID)
+		if err != nil || def.DeletedAt != nil {
+			return "", nil, fmt.Errorf("策略定义 %s 不存在", strategyID)
+		}
+		return def.DSLYaml, &def.StrategyID, nil
+	case instanceID != "":
+		instance, err := s.Store.GetInstance(ctx, instanceID)
+		if err != nil || instance.SpaceID != scoped || instance.DeletedAt != nil {
+			return "", nil, fmt.Errorf("实例 %s 不存在或不在当前空间", instanceID)
+		}
+		sessionID := ""
+		if instance.SessionID != nil {
+			sessionID = *instance.SessionID
+		} else if sessions, err := s.Store.ListSessions(ctx, instance.InstanceID); err == nil && len(sessions) > 0 {
+			sessionID = sessions[0].SessionID
+		}
+		if sessionID == "" {
+			return "", nil, fmt.Errorf("实例 %s 还没有启用过，没有可回放的会话版本", instanceID)
+		}
+		session, err := s.Store.GetSession(ctx, sessionID)
+		if err != nil {
+			return "", nil, err
+		}
+		version, err := s.Store.GetDefinitionVersion(ctx, session.DSLHash)
+		if err != nil {
+			return "", nil, err
+		}
+		return version.DSLYaml, &instance.StrategyID, nil
+	default:
+		return text, nil, nil
+	}
 }
 
 func (s *Service) scopedReplay(ctx context.Context, replayID string) (store.Replay, error) {
@@ -159,11 +208,17 @@ func (s *Service) ListReplayBars(ctx context.Context, req *strategypb.ListReplay
 	if err != nil {
 		return &strategypb.ListReplayBarsRsp{RetInfo: invalid(err)}, nil
 	}
+	// 完整记录含目标与持仓 JSON，每页最多 100 根，避免报文超过网关的大小上限；brief 只有曲线与摘要字段，每页最多 5000 根。
 	page, size := pageValues(req.GetPage())
-	if req.GetPage() == nil || req.GetPage().GetPageSize() <= 0 {
-		size = 500
+	limit := 100
+	if req.GetBrief() {
+		limit = 5000
 	}
-	bars, total, err := s.Store.ListReplayBars(ctx, replay.ReplayID, (page-1)*size, size)
+	if req.GetPage() != nil && req.GetPage().GetPageSize() > 0 {
+		size = int(req.GetPage().GetPageSize())
+	}
+	size = min(size, limit)
+	bars, total, err := s.Store.ListReplayBars(ctx, replay.ReplayID, (page-1)*size, size, req.GetBrief())
 	if err != nil {
 		return &strategypb.ListReplayBarsRsp{RetInfo: failure(err)}, nil
 	}

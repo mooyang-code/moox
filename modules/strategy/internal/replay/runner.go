@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	defaultMaxBars       = 20000
 	defaultChunkBars     = 50
 	defaultLiquidateBars = 3
 	pollInterval         = 30 * time.Second
@@ -92,14 +91,19 @@ func (r *Runner) drain(ctx context.Context) {
 	}
 }
 
-// Execute 执行一个已认领（running）的回放并写入终态。
+// Execute 执行一个已认领（running）的回放并写入终态。回放与实时求值在同一进程，任何 panic 都在这里收住，
+// 记为 failed，不能拖垮实时求值。
 func (r *Runner) Execute(ctx context.Context, job store.Replay) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.logf("回放 %s 执行异常：%v", job.ReplayID, recovered)
+			if err := r.Store.FinishReplay(ctx, job.ReplayID, store.ReplayFailed, nil, "回放执行异常，请查看策略模块日志", r.now()); err != nil && !errors.Is(err, store.ErrNotFound) {
+				r.logf("写入回放 %s 的终态失败：%v", job.ReplayID, err)
+			}
+		}
+	}()
 	metrics, err := r.replay(ctx, job)
 	if ctx.Err() != nil {
-		return
-	}
-	if errors.Is(err, errCancelled) {
-		r.logf("回放 %s 已取消", job.ReplayID)
 		return
 	}
 	raw, marshalErr := json.Marshal(metrics)
@@ -107,9 +111,20 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 		r.logf("回放 %s 的指标无法编码：%v", job.ReplayID, marshalErr)
 		raw = []byte(`{}`)
 	}
+	if errors.Is(err, errCancelled) {
+		r.logf("回放 %s 已取消", job.ReplayID)
+		if metrics.Bars > 0 {
+			if recordErr := r.Store.RecordCancelledReplayMetrics(ctx, job.ReplayID, raw, r.now()); recordErr != nil {
+				r.logf("写入回放 %s 取消前的指标失败：%v", job.ReplayID, recordErr)
+			}
+		}
+		return
+	}
 	status, message := store.ReplayDone, ""
 	if err != nil {
+		// 记录里只保存不含服务地址的概述，原始错误写日志。
 		status, message = store.ReplayFailed, err.Error()
+		r.logf("回放 %s 失败：%v；原始错误：%v", job.ReplayID, err, input.RawCause(err))
 	}
 	if finishErr := r.Store.FinishReplay(ctx, job.ReplayID, status, raw, message, r.now()); finishErr != nil && !errors.Is(finishErr, store.ErrNotFound) {
 		r.logf("写入回放 %s 的终态失败：%v", job.ReplayID, finishErr)
@@ -131,6 +146,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if !resolved.Spot {
 		return Metrics{}, fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", job.ViewID, resolved.MarketType)
 	}
+	if drift := factorDrift(job.Factors, resolved.Factors); drift != "" {
+		return Metrics{}, fmt.Errorf("因子定义在排队期间发生变化（%s），请重新发起回放", drift)
+	}
 	view, err := r.Client.GetView(ctx, job.SpaceID, job.ViewID)
 	if err != nil {
 		return Metrics{}, err
@@ -148,6 +166,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if err != nil {
 		return Metrics{}, err
 	}
+	sort.Slice(bindings, func(i, j int) bool { return bindings[i].SubjectID < bindings[j].SubjectID })
 	subjects := make([]input.Subject, 0, len(bindings))
 	instrumentOf := make(map[string]string, len(bindings))
 	for _, subject := range bindings {
@@ -179,7 +198,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	members := cachedMembership(r.Client, job.SpaceID)
 	history := &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}}
 	ledger := NewLedger(r.initialEquity(), job.FeeBps, r.liquidateAfter())
-	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, freq.NominalDuration()))
+	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, freq.NominalDuration()), freq.NominalDuration())
 	acc.metrics.Factors = resolved.Factors
 	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy))
 	state := engine.State{}
@@ -210,8 +229,13 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			if err != nil {
 				return acc.finish(), err
 			}
+			// 同一标的同一周期有多个序列时，这根 bar 上它的价格不可信，按缺价处理。
+			key := bar.StorageStart.Unix()
 			prices := make(map[string]float64)
-			for subjectID, row := range rows.Bars[bar.StorageStart.Unix()] {
+			for subjectID, row := range rows.Bars[key] {
+				if _, ambiguous := rows.AmbiguousSubjects[key][subjectID]; ambiguous {
+					continue
+				}
 				if price, ok := row.Values["close"]; ok && price > 0 {
 					prices[instrumentOf[subjectID]] = price
 				}
@@ -247,7 +271,13 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved input.Resolved, subjects []input.Subject, instrumentOf map[string]string, members input.Membership, presence *presence, rows input.RangeRows, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
 	key := bar.StorageStart.Unix()
 	if detail, ambiguous := rows.Ambiguous[key]; ambiguous {
-		return engine.Decision{Status: engine.StatusSkipped, SkipReason: input.SkipAmbiguousSeries, State: state, Summary: engine.Summary{Notes: []string{detail}}}, nil
+		return skippedDecision(state, input.SkipAmbiguousSeries, detail), nil
+	}
+	// 与实时一致：用到 bars[-1] 时，上一根的歧义同样让本期跳过。
+	if program.UsesPreviousBar {
+		if detail, ambiguous := rows.Ambiguous[bar.PreviousStart.Unix()]; ambiguous {
+			return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+detail), nil
+		}
 	}
 	current := rows.Bars[key]
 	universe := make([]string, 0, len(current))
@@ -264,6 +294,10 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 		return engine.Decision{}, err
 	}
 	if err := sets.ApplyAge(ctx, resolved.MinAgeBars, probe); err != nil {
+		var skip *input.SkipError
+		if errors.As(err, &skip) {
+			return skippedDecision(state, skip.Reason, skip.Detail), nil
+		}
 		return engine.Decision{}, err
 	}
 	previous := rows.Bars[bar.PreviousStart.Unix()]
@@ -278,6 +312,34 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 		frame.Rows[instrumentOf[subjectID]] = engineRow
 	}
 	return engine.Evaluate(program, frame, state)
+}
+
+// skippedDecision 构造一个跳过的决策：没有目标，规则状态沿用前序。
+func skippedDecision(state engine.State, reason, detail string) engine.Decision {
+	return engine.Decision{Status: engine.StatusSkipped, SkipReason: reason, State: state, Summary: engine.Summary{Notes: []string{detail}}}
+}
+
+// factorDrift 比对发起回放时固化的因子指纹与执行时的定义，返回第一处差异；没有固化指纹时不比对。
+func factorDrift(pinned, current map[string]string) string {
+	if len(pinned) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(pinned)+len(current))
+	for id := range pinned {
+		ids = append(ids, id)
+	}
+	for id := range current {
+		if _, ok := pinned[id]; !ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if pinned[id] != current[id] {
+			return fmt.Sprintf("%s：%s → %s", id, pinned[id], current[id])
+		}
+	}
+	return ""
 }
 
 func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time, decision engine.Decision, ledger *Ledger, outcome Outcome, barReturn float64) error {
@@ -297,7 +359,17 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	if err != nil {
 		return err
 	}
-	return r.Store.AppendReplayBar(ctx, store.ReplayBar{ReplayID: replayID, BarEndTime: barEnd, Status: decision.Status, TargetsJSON: targetsJSON, PositionsJSON: positions, SummaryJSON: summary, Return: barReturn, Equity: outcome.EquityAfter, Turnover: outcome.Turnover, Fee: outcome.Fee})
+	frozen := 0
+	for _, position := range ledger.Positions {
+		if position.Frozen {
+			frozen++
+		}
+	}
+	return r.Store.AppendReplayBar(ctx, store.ReplayBar{
+		ReplayID: replayID, BarEndTime: barEnd, Status: decision.Status, TargetsJSON: targetsJSON, PositionsJSON: positions, SummaryJSON: summary,
+		Return: barReturn, Equity: outcome.EquityAfter, Turnover: outcome.Turnover, Fee: outcome.Fee,
+		Holdings: ledger.Holdings(), Frozen: frozen, SkipReason: decision.SkipReason, Unfilled: len(outcome.Unfilled), Liquidated: len(outcome.Liquidated),
+	})
 }
 
 // agePresence 为一段 bar 读取年龄判定所需的窗口 [首根 − (N+1), 末根 − (N−1)]（只读 close），
@@ -378,7 +450,7 @@ func (r *Runner) maxBars() int {
 	if r.MaxBars > 0 {
 		return r.MaxBars
 	}
-	return defaultMaxBars
+	return input.DefaultReplayMaxBars
 }
 
 func (r *Runner) chunkBars() int {

@@ -228,7 +228,8 @@ func (l *Ledger) Step(step Step) Outcome {
 	sort.Strings(outcome.Unfilled)
 	outcome.EquityAfter = l.Equity()
 	if outcome.EquityBefore > 0 {
-		outcome.Turnover = outcome.Traded / outcome.EquityBefore
+		// 单边换手：成交额（买卖之和）/ 2 / 成交前权益，与实时结果的 Σ|w_new − w_old| / 2 口径一致。
+		outcome.Turnover = outcome.Traded / 2 / outcome.EquityBefore
 	}
 	return outcome
 }

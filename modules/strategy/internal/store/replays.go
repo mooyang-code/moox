@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -23,14 +24,16 @@ const (
 
 // Replay 是一次基于 View 的研究回放任务。
 type Replay struct {
-	ReplayID     string
-	StrategyID   *string
-	DSLYaml      string
-	SpaceID      string
-	ViewID       string
-	StartTime    time.Time
-	EndTime      time.Time
-	FeeBps       float64
+	ReplayID   string
+	StrategyID *string
+	DSLYaml    string
+	SpaceID    string
+	ViewID     string
+	StartTime  time.Time
+	EndTime    time.Time
+	FeeBps     float64
+	// Factors 是发起回放时固化的因子定义指纹；执行时与当时的定义比对，排队期间变化即拒绝执行。
+	Factors      map[string]string
 	Status       string
 	ProgressTime *time.Time
 	MetricsJSON  json.RawMessage
@@ -38,6 +41,9 @@ type Replay struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
+
+// MaxReplayFeeBps 是回放单边手续费的上限（bps）。
+const MaxReplayFeeBps = 1000
 
 // ReplayBar 是回放中一个周期的记录。
 type ReplayBar struct {
@@ -51,6 +57,11 @@ type ReplayBar struct {
 	Equity        float64
 	Turnover      float64
 	Fee           float64
+	Holdings      int
+	Frozen        int
+	SkipReason    string
+	Unfilled      int
+	Liquidated    int
 }
 
 type replayRow struct {
@@ -62,6 +73,7 @@ type replayRow struct {
 	StartTime    int64          `gorm:"column:c_start_time"`
 	EndTime      int64          `gorm:"column:c_end_time"`
 	FeeBps       float64        `gorm:"column:c_fee_bps"`
+	FactorsJSON  string         `gorm:"column:c_factors_json"`
 	Status       string         `gorm:"column:c_status"`
 	ProgressTime sql.NullInt64  `gorm:"column:c_progress_time"`
 	MetricsJSON  string         `gorm:"column:c_metrics_json"`
@@ -80,10 +92,13 @@ func (r replayRow) replay() Replay {
 		at := fromMillis(r.ProgressTime.Int64)
 		replay.ProgressTime = &at
 	}
+	if r.FactorsJSON != "" {
+		_ = json.Unmarshal([]byte(r.FactorsJSON), &replay.Factors)
+	}
 	return replay
 }
 
-const replayColumns = "c_replay_id, c_strategy_id, c_dsl_yaml, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
+const replayColumns = "c_replay_id, c_strategy_id, c_dsl_yaml, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
 
 // CreateReplay 登记一个 pending 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
@@ -93,17 +108,25 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {
 		return errors.New("回放区间必须满足 start < end")
 	}
-	if replay.FeeBps < 0 {
-		return errors.New("手续费不能为负")
+	if math.IsNaN(replay.FeeBps) || replay.FeeBps < 0 || replay.FeeBps > MaxReplayFeeBps {
+		return fmt.Errorf("手续费必须在 0 到 %d bps 之间", MaxReplayFeeBps)
 	}
 	now, err := requireTime(replay.CreatedAt)
 	if err != nil {
 		return err
 	}
+	factors := replay.Factors
+	if factors == nil {
+		factors = map[string]string{}
+	}
+	factorsJSON, err := json.Marshal(factors)
+	if err != nil {
+		return err
+	}
 	return s.db.WithContext(ctx).Exec(`
 		INSERT INTO t_strategy_replays (`+replayColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-	`, replay.ReplayID, stringValue(replay.StrategyID), replay.DSLYaml, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, now, now).Error
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
+	`, replay.ReplayID, stringValue(replay.StrategyID), replay.DSLYaml, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
 }
 
 // GetReplay 读取回放任务。
@@ -209,6 +232,19 @@ func (s *Store) FinishReplay(ctx context.Context, replayID, status string, metri
 	return nil
 }
 
+// RecordCancelledReplayMetrics 为已取消的回放写入截至取消时的部分指标。
+func (s *Store) RecordCancelledReplayMetrics(ctx context.Context, replayID string, metricsJSON json.RawMessage, at time.Time) error {
+	now, err := requireTime(at)
+	if err != nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(metricsJSON, &object); err != nil || object == nil {
+		return errors.New("回放指标必须是 JSON 对象")
+	}
+	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_replays SET c_metrics_json = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'cancelled'`, string(metricsJSON), now, replayID).Error
+}
+
 // CancelReplay 取消 pending 或 running 的回放；运行中的任务由执行循环在下一期检查状态后停止。
 func (s *Store) CancelReplay(ctx context.Context, replayID string, at time.Time) error {
 	now, err := requireTime(at)
@@ -258,15 +294,16 @@ func (s *Store) AppendReplayBar(ctx context.Context, bar ReplayBar) error {
 		}
 	}
 	return s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, bar.ReplayID, millis(bar.BarEndTime), bar.Status, string(bar.TargetsJSON), string(bar.PositionsJSON), string(bar.SummaryJSON), bar.Return, bar.Equity, bar.Turnover, bar.Fee).Error
+		INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, bar.ReplayID, millis(bar.BarEndTime), bar.Status, string(bar.TargetsJSON), string(bar.PositionsJSON), string(bar.SummaryJSON), bar.Return, bar.Equity, bar.Turnover, bar.Fee, bar.Holdings, bar.Frozen, bar.SkipReason, bar.Unfilled, bar.Liquidated).Error
 }
 
-// ListReplayBars 按周期顺序分页读取回放记录。
-func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, limit int) ([]ReplayBar, int64, error) {
+// ListReplayBars 按周期顺序分页读取回放记录。brief 为 true 时不读目标、持仓与摘要 JSON（返回空值），
+// 用于绘制权益曲线与概览，单页可以取得很大而不受报文大小限制。
+func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, limit int, brief bool) ([]ReplayBar, int64, error) {
 	if limit <= 0 {
-		limit = 500
+		limit = 50
 	}
 	if offset < 0 {
 		offset = 0
@@ -286,13 +323,25 @@ func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, lim
 		Equity        float64 `gorm:"column:c_equity"`
 		Turnover      float64 `gorm:"column:c_turnover"`
 		Fee           float64 `gorm:"column:c_fee"`
+		Holdings      int     `gorm:"column:c_holdings"`
+		Frozen        int     `gorm:"column:c_frozen"`
+		SkipReason    string  `gorm:"column:c_skip_reason"`
+		Unfilled      int     `gorm:"column:c_unfilled"`
+		Liquidated    int     `gorm:"column:c_liquidated"`
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time LIMIT ? OFFSET ?`, replayID, limit, offset).Scan(&rows).Error; err != nil {
+	columns := "c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
+	if brief {
+		columns = "c_replay_id, c_bar_end_time, c_status, '[]' AS c_targets_json, '{}' AS c_positions_json, '{}' AS c_summary_json, c_return, c_equity, c_turnover, c_fee, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
+	}
+	if err := s.db.WithContext(ctx).Raw(`SELECT `+columns+` FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time LIMIT ? OFFSET ?`, replayID, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	bars := make([]ReplayBar, 0, len(rows))
 	for _, row := range rows {
-		bars = append(bars, ReplayBar{ReplayID: row.ReplayID, BarEndTime: fromMillis(row.BarEndTime), Status: row.Status, TargetsJSON: json.RawMessage(row.TargetsJSON), PositionsJSON: json.RawMessage(row.PositionsJSON), SummaryJSON: json.RawMessage(row.SummaryJSON), Return: row.Return, Equity: row.Equity, Turnover: row.Turnover, Fee: row.Fee})
+		bars = append(bars, ReplayBar{
+			ReplayID: row.ReplayID, BarEndTime: fromMillis(row.BarEndTime), Status: row.Status, TargetsJSON: json.RawMessage(row.TargetsJSON), PositionsJSON: json.RawMessage(row.PositionsJSON), SummaryJSON: json.RawMessage(row.SummaryJSON),
+			Return: row.Return, Equity: row.Equity, Turnover: row.Turnover, Fee: row.Fee, Holdings: row.Holdings, Frozen: row.Frozen, SkipReason: row.SkipReason, Unfilled: row.Unfilled, Liquidated: row.Liquidated,
+		})
 	}
 	return bars, total, nil
 }

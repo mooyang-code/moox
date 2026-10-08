@@ -50,7 +50,7 @@ func TestS22TargetsUseTotalEquityDenominator(t *testing.T) {
 	near(t, "B 的市值", ledger.Positions["B"].Value, 20)
 	near(t, "现金", ledger.Cash, 30)
 	near(t, "成交额", outcome.Traded, 30)
-	near(t, "换手", outcome.Turnover, 0.3)
+	near(t, "单边换手", outcome.Turnover, 0.15)
 	near(t, "成交后权益", outcome.EquityAfter, 100)
 }
 
@@ -91,7 +91,7 @@ func TestLedgerRebalancesAfterPriceDrift(t *testing.T) {
 	near(t, "A 再平衡到 75", ledger.Positions["A"].Value, 75)
 	near(t, "B 再平衡到 75", ledger.Positions["B"].Value, 75)
 	near(t, "再平衡成交额", drift.Traded, 50)
-	near(t, "再平衡换手", drift.Turnover, 50.0/150)
+	near(t, "再平衡单边换手", drift.Turnover, 50.0/2/150)
 	third := ledger.Step(Step{OK: true, Prices: map[string]float64{"A": 20, "B": 5}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
 	near(t, "第三期成交前权益", third.EquityBefore, 112.5)
 	near(t, "现金", ledger.Cash, 0)
