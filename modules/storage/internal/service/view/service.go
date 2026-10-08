@@ -69,6 +69,7 @@ type Service struct {
 	maintenanceReady           bool
 	pendingReadyMu             sync.Mutex
 	pendingReady               []pendingViewReady
+	readyFlushMu               sync.Mutex
 	readyFenceDir              string
 	appliedFenceMu             sync.Mutex
 	appliedFence               map[appliedFenceKey]uint64

@@ -878,7 +878,10 @@ func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) (
 		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
 	}
 	if _, err := validateDataNodeMarkerMessage(raw); err != nil {
-		return nil, fmt.Errorf("validate outbox event %d: %w", id, err)
+		if IsUnsupportedOutboxEvent(err) {
+			return nil, fmt.Errorf("validate outbox event %d: %w", id, err)
+		}
+		return nil, fmt.Errorf("%w %d: %v", ErrInvalidOutboxEvent, id, err)
 	}
 	return raw, nil
 }

@@ -14,11 +14,14 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type testPublisher struct {
@@ -536,5 +539,62 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 	}
 	if publisher.calls != 2 || secondMetrics.Snapshot().OutboxDuplicatePublishTotal != 1 {
 		t.Fatalf("calls=%d duplicate_metrics=%d, want one replay duplicate", publisher.calls, secondMetrics.Snapshot().OutboxDuplicatePublishTotal)
+	}
+}
+
+// 无法通过当前契约校验的记录（例如旧版本写入、缺少 definition_hash 的因子周期标记）永远发不出去：
+// relay 隔离它并继续投递其后的事件，不能堵住整个 DataNode 的出站队列。
+func TestRelayQuarantinesInvalidOutboxEventsAndPublishesTheRest(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := proto.Marshal(&storageeventpb.FactorPeriodComputed{
+		DatasetId: "result", SourceDatasetId: "source", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
+		UniverseSubjectIds: []string{"BTC"}, Factors: []*storageeventpb.FactorPeriodState{{FactorId: "momentum", Status: "complete", SourceHash: "hash-1"}},
+		TriggerEventId: "collector-event", ComputedAt: timestamppb.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, ok := registry.Lookup(events.FactorPeriodComputed.Name(), events.FactorPeriodComputed.Version())
+	if !ok {
+		t.Fatal("因子周期事件未注册")
+	}
+	legacy, err := proto.Marshal(&eventpb.EventMessage{
+		EventId: "legacy-factor-period", EventName: registered.Name(), EventVersion: registered.Version(),
+		SpaceId: "crypto", SubjectId: "result", OccurredAt: timestamppb.Now(), Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InsertOutboxPayloadForTest(legacy); err != nil {
+		t.Fatal(err)
+	}
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &testPublisher{}
+	relay, err := NewRelay(store, publisher, RelayOptions{BatchSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.values) != 1 {
+		t.Fatalf("应发布其后的 1 条有效事件，实际 %d 条", len(publisher.values))
+	}
+	entries, err := store.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("坏记录应被隔离删除：remaining=%v err=%v", entries, err)
 	}
 }

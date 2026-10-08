@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -56,6 +57,9 @@ func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID 
 	}
 }
 
+// FlushViewDataReady 按入队顺序发布已满足写入围栏的就绪事件。刷新串行执行：并发刷新会互相越过，
+// 打乱同一 View 的周期顺序（下游会把较早的周期记为乱序）。发布失败时，失败项与其后尚未尝试的项按原顺序
+// 放回队首；无法通过契约校验的事件永远发不出去，隔离并记日志，不能堵住其后所有 View 的就绪事件。
 func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string) error {
 	if s == nil {
 		return nil
@@ -63,6 +67,12 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 	publisher := s.readyPublisherLocked()
 	if publisher == nil {
 		return nil
+	}
+	s.readyFlushMu.Lock()
+	defer s.readyFlushMu.Unlock()
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
 	}
 	s.pendingReadyMu.Lock()
 	pending := append([]pendingViewReady(nil), s.pendingReady...)
@@ -79,11 +89,14 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 			remaining = append(remaining, item)
 			continue
 		}
+		if _, err := registry.Encode(events.ViewDataReady, item.payload, item.opts); err != nil {
+			log.Printf("View 就绪队列隔离无法通过契约校验的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
+			continue
+		}
 		if _, err := publisher.Publish(ctx, events.ViewDataReady, item.payload, item.opts); err != nil {
 			if s.metrics != nil {
 				s.metrics.ObserveReadyPublishRetry(item.viewID, "view_data_ready")
 			}
-			// 发布失败时保留这一条以及排在它后面、尚未尝试的全部事件，下次按原顺序重试。
 			remaining = append(remaining, pending[index:]...)
 			s.restorePending(remaining)
 			if persistErr := s.persistPendingReady(); persistErr != nil {
@@ -122,24 +135,25 @@ func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.Comm
 	_ = s.persistPendingReadyLocked()
 }
 
+// restorePending 把未发布的事件按原顺序放回队首，刷新期间新入队的事件排在它们之后。
 func (s *Service) restorePending(items []pendingViewReady) {
 	if len(items) == 0 {
 		return
 	}
 	s.pendingReadyMu.Lock()
 	defer s.pendingReadyMu.Unlock()
-	for _, item := range items {
-		dup := false
-		for _, existing := range s.pendingReady {
-			if existing.opts.EventID == item.opts.EventID {
-				dup = true
-				break
+	merged := make([]pendingViewReady, 0, len(items)+len(s.pendingReady))
+	seen := make(map[string]struct{}, len(items)+len(s.pendingReady))
+	for _, group := range [][]pendingViewReady{items, s.pendingReady} {
+		for _, item := range group {
+			if _, dup := seen[item.opts.EventID]; dup {
+				continue
 			}
-		}
-		if !dup {
-			s.pendingReady = append(s.pendingReady, item)
+			seen[item.opts.EventID] = struct{}{}
+			merged = append(merged, item)
 		}
 	}
+	s.pendingReady = merged
 	_ = s.persistPendingReadyLocked()
 }
 

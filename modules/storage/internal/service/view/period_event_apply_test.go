@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -449,5 +450,77 @@ func TestViewDataReadyPublishFailureKeepsLaterPendingEvents(t *testing.T) {
 	}
 	if len(inner.byID) != 3 {
 		t.Fatalf("重试后三条事件都应发布，实际 %d 条", len(inner.byID))
+	}
+}
+
+// enqueuingFailPublisher 在第一次发布时让另一个协程入队下一根（它的刷新会等当前刷新结束），然后发布失败。
+type enqueuingFailPublisher struct {
+	inner   *readyPublisherFake
+	enqueue func()
+	failed  bool
+}
+
+func (p *enqueuingFailPublisher) Publish(ctx context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	if !p.failed {
+		p.failed = true
+		p.enqueue()
+		return nil, errors.New("eventbus unavailable")
+	}
+	return p.inner.Publish(ctx, event, payload, opts)
+}
+
+// 发布失败后，失败项与其后的项按原顺序回到队首，刷新期间新入队的一根排在它们之后，之后按周期顺序发布。
+func TestViewDataReadyRestoresFailedEventsBeforeNewOnes(t *testing.T) {
+	metadata := newPeriodMetadataFake()
+	inner := newReadyPublisherFake()
+	publisher := &enqueuingFailPublisher{inner: inner}
+	service := newPeriodTestService(metadata, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	completed := func(id string, minute int) (*eventpb.EventMessage, *storageeventpb.CollectorPeriodCompleted) {
+		at := time.Date(2026, 9, 13, 16, minute, 0, 0, time.UTC)
+		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
+		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
+		return periodMessage(id, at), payload
+	}
+	for i, id := range []string{"prices-ready-1", "prices-ready-2"} {
+		message, payload := completed(id, i)
+		if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); !errors.Is(err, ErrViewDataReadyPending) {
+			t.Fatalf("%s 应等待行写入：%v", id, err)
+		}
+	}
+	var wg sync.WaitGroup
+	publisher.enqueue = func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			message, payload := completed("prices-ready-3", 2)
+			_ = service.HandleCollectorPeriodCompleted(context.Background(), message, payload)
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			service.pendingReadyMu.Lock()
+			queued := len(service.pendingReady)
+			service.pendingReadyMu.Unlock()
+			if queued > 0 {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)
+	if err := service.FlushViewDataReady(context.Background(), "quant", "source-view"); err == nil {
+		t.Fatal("发布失败应返回错误")
+	}
+	wg.Wait()
+	if err := service.FlushViewDataReady(context.Background(), "quant", "source-view"); err != nil {
+		t.Fatal(err)
+	}
+	var order []int64
+	for _, attempt := range inner.attempts {
+		order = append(order, attempt.payload.(*storageeventpb.ViewDataReady).GetPeriodTime())
+	}
+	if len(order) != 3 || !(order[0] < order[1] && order[1] < order[2]) {
+		t.Fatalf("重试后应按周期顺序发布：%v", order)
 	}
 }
