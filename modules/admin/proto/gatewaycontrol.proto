@@ -65,6 +65,8 @@ message ReportStatusReq {
   string applied_hash = 4;
   int32 route_count = 5;
   string last_error = 6;
+  // 主机网关服务端证书的到期时间（RFC3339），供 Admin 的证书巡检提前告警。
+  string certificate_not_after = 7;
 }
 
 message ReportStatusRsp {

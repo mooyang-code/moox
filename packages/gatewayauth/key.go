@@ -88,3 +88,60 @@ func ParseCallerKeyValue(caller, value string) (Credentials, error) {
 	}
 	return CallerKey{Caller: caller, KeyID: keyID, Secret: secret}.Credentials()
 }
+
+// KeySet 是一组签名密钥的文件内容，例如外部接入上登记的外部调用方密钥（secrets/access-principals.json）。
+// 轮换期间同一身份会有多把密钥。
+type KeySet struct {
+	Version int         `json:"version"`
+	Keys    []CallerKey `json:"keys"`
+}
+
+// MarshalKeySet 生成密钥集文件内容（末尾带换行）。
+func MarshalKeySet(keys []CallerKey) ([]byte, error) {
+	for _, key := range keys {
+		if _, err := key.Credentials(); err != nil {
+			return nil, err
+		}
+	}
+	encoded, err := json.MarshalIndent(KeySet{Version: 1, Keys: keys}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
+// LoadKeySet 读取密钥集文件，文件必须是权限为 0600 的普通文件。
+func LoadKeySet(path string) ([]Credentials, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取密钥集: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return nil, fmt.Errorf("密钥集 %s 必须是权限为 0600 的普通文件", path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取密钥集: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var set KeySet
+	if err := decoder.Decode(&set); err != nil {
+		return nil, fmt.Errorf("解析密钥集 %s: %w", path, err)
+	}
+	if set.Version != 1 {
+		return nil, fmt.Errorf("密钥集 %s 的版本必须为 1", path)
+	}
+	out := make([]Credentials, 0, len(set.Keys))
+	for _, key := range set.Keys {
+		credentials, err := key.Credentials()
+		if err != nil {
+			return nil, fmt.Errorf("密钥集 %s: %w", path, err)
+		}
+		out = append(out, credentials)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("密钥集 %s 为空", path)
+	}
+	return out, nil
+}

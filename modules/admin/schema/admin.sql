@@ -378,5 +378,6 @@ CREATE TABLE IF NOT EXISTS t_host_gateway_status (
     c_conflict_instance_id TEXT NOT NULL DEFAULT '',
     c_conflict_seen_at DATETIME,
     c_mismatch_since DATETIME,
+    c_certificate_not_after DATETIME,
     FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
 );

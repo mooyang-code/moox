@@ -109,10 +109,18 @@ func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*p
 	if err := authorize(ctx, hostID); err != nil {
 		return &pb.ReportStatusRsp{RetInfo: retError(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	_, err := s.placements.RecordGatewayReport(ctx, placement.GatewayReport{
+	report := placement.GatewayReport{
 		HostID: hostID, InstanceID: strings.TrimSpace(req.GetInstanceId()), Version: strings.TrimSpace(req.GetVersion()),
 		AppliedHash: strings.TrimSpace(req.GetAppliedHash()), RouteCount: req.GetRouteCount(), LastError: req.GetLastError(),
-	})
+	}
+	if raw := strings.TrimSpace(req.GetCertificateNotAfter()); raw != "" {
+		notAfter, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return &pb.ReportStatusRsp{RetInfo: retError(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("证书到期时间 %q 不是 RFC3339: %w", raw, err))}, nil
+		}
+		report.CertificateNotAfter = &notAfter
+	}
+	_, err := s.placements.RecordGatewayReport(ctx, report)
 	if err != nil {
 		return &pb.ReportStatusRsp{RetInfo: placementError(err)}, nil
 	}

@@ -54,6 +54,8 @@ type GatewayStatus struct {
 	ConflictInstanceID string     `gorm:"column:c_conflict_instance_id;not null;default:''"`
 	ConflictSeenAt     *time.Time `gorm:"column:c_conflict_seen_at"`
 	MismatchSince      *time.Time `gorm:"column:c_mismatch_since"`
+	// CertificateNotAfter 是主机网关在心跳中上报的服务端证书到期时间。
+	CertificateNotAfter *time.Time `gorm:"column:c_certificate_not_after"`
 }
 
 // TableName 返回表名。
@@ -84,6 +86,8 @@ type GatewayReport struct {
 	AppliedHash string
 	RouteCount  int32
 	LastError   string
+	// CertificateNotAfter 为空表示网关没有上报证书（例如测试环境）。
+	CertificateNotAfter *time.Time
 }
 
 // 网关状态的判定窗口（设计文档 3.8、3.10）。

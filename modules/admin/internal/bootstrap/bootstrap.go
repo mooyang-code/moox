@@ -46,7 +46,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment()); err != nil {
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.Placements)); err != nil {
 		return nil, err
 	}
 	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.SysDeploy, cfg.AdminNodeID)

@@ -451,6 +451,10 @@ func (s *Service) RecordGatewayReport(ctx context.Context, report GatewayReport)
 		seenAt := now
 		row.Version, row.AppliedHash, row.RouteCount, row.LastError, row.LastSeenAt =
 			report.Version, report.AppliedHash, report.RouteCount, report.LastError, &seenAt
+		if report.CertificateNotAfter != nil {
+			notAfter := report.CertificateNotAfter.UTC()
+			row.CertificateNotAfter = &notAfter
+		}
 		s.updateMismatch(&row)
 		if err := saveGatewayStatus(tx, row); err != nil {
 			return err
