@@ -87,6 +87,13 @@ View bar budget (`[storage_retention] view_bars`), and the high-risk full index 
 Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
 operation is available.
 
+When the user changes `moox.toml` (for example `[storage_retention]` retention periods or
+`[storage_view]`), publish it with `moox-cli config`: run `moox-cli config plan --file ./moox.toml`,
+show the user each target's status, changed keys, restarts, warnings and `retention_shrinks`, and
+only after the user confirms run `moox-cli config publish --file ./moox.toml --yes`. A retention
+shrink deletes rows at the next Storage cleanup; add `--allow-retention-shrink` only when the user
+explicitly accepts that. Do not edit host config files by hand.
+
 When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
 Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
