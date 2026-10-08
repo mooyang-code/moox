@@ -119,7 +119,7 @@ func startObservabilityConsumer(
 		return
 	}
 	if cfg.Metrics.Enabled && storage == nil {
-		storage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+		storage = newMetricsStorage(runtime, cfg)
 	}
 	var messageStore *monmetrics.MetricMessageStore
 	if runtime.MetricStores != nil {

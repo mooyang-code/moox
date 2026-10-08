@@ -10,6 +10,7 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -22,6 +23,7 @@ type Runtime struct {
 	closeOnce                sync.Once
 	closeErr                 error
 	Store                    *store.Store
+	Gateway                  *gatewayclient.Client
 	Repositories             *store.Repositories
 	MetricStores             *monmetrics.Stores
 	HostRuleCache            *hostmetrics.RuleCache
@@ -152,6 +154,9 @@ func (r *Runtime) Close() error {
 			_ = r.HostRuleCache.Stop(trpc.BackgroundContext())
 		}
 		r.workers.Wait()
+		if r.Gateway != nil {
+			r.Gateway.Close()
+		}
 		if r.Store != nil {
 			r.closeErr = r.Store.Close()
 		}

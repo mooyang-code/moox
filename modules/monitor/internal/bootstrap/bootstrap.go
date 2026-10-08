@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -54,6 +55,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
+	if runtime.Gateway, err = gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient}); err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("创建 monitor 的 gatewayclient: %w", err)
+	}
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
 		_ = runtime.Close()
@@ -108,12 +113,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	var hostGate *hostmetrics.StorageGate
 	var hostRuleCache *hostmetrics.RuleCache
 	if cfg.Metrics.HostStorage.Enabled {
-		credentials, credErr := gatewayauth.ResolveCredentials(cfg.Metrics.HostStorage.KeyID, cfg.Metrics.HostStorage.HMACKeyFile)
-		if credErr != nil {
-			_ = runtime.Close()
-			return nil, credErr
-		}
-		options := gatewayauth.NewTRPCClientOptions(normalizeHostStorageTarget(cfg.Metrics.HostStorage.GatewayTarget), cfg.Metrics.HostStorage.GatewayNodeID, credentials)
+		options := runtime.Gateway.ClientOptions()
 		hostAccess := storagepb.NewPrimaryStoreClientProxy(options...)
 		hostMetadata := storagepb.NewMetadataClientProxy(options...)
 		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
@@ -146,7 +146,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	var metricsStorage *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
 	if cfg.Metrics.Enabled {
-		metricsStorage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+		metricsStorage = newMetricsStorage(runtime, cfg)
 		metricStores, err := store.WithDatabase(mgr, monmetrics.NewStores)
 		if err != nil {
 			_ = runtime.Close()
@@ -280,7 +280,7 @@ func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInv
 	if cfg == nil || !cfg.KlineFreshness.Enabled {
 		return nil, nil
 	}
-	credentials, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile)
+	credentials, err := gatewayauth.LoadCallerKey(cfg.GatewayClient.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory credentials: %w", err)
 	}

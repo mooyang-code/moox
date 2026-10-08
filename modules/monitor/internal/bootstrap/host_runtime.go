@@ -2,11 +2,11 @@ package bootstrap
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -40,13 +40,10 @@ func startHostStorageGate(ctx context.Context, cfg *config.Config, runtime *Runt
 	})
 }
 
-func normalizeHostStorageTarget(raw string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:20102"
+// newMetricsStorage 创建经 gatewayclient 访问 Storage 的服务指标适配器；没有 gatewayclient 时（测试）返回不可用的适配器。
+func newMetricsStorage(runtime *Runtime, cfg *config.Config) *monmetrics.StorageAdapter {
+	if runtime == nil || runtime.Gateway == nil {
+		return monmetrics.NewStorageAdapter(nil, nil, cfg.Metrics.Storage)
 	}
-	if strings.Contains(raw, "://") {
-		return raw
-	}
-	return "ip://" + raw
+	return monmetrics.NewStorageAdapterWithOptions(runtime.Gateway.ClientOptions(), cfg.Metrics.Storage)
 }

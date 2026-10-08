@@ -36,7 +36,7 @@ const ForecastHistoryLimit = 7*24*60 + 8
 const maxHistoryPageSize = 500
 
 func NewStorageReader(access hostStorageRead, cfg monconfig.HostStorageConfig) *StorageReader {
-	return &StorageReader{access: access, auth: storageauth.Primary(cfg.KeyID), cfg: cfg}
+	return &StorageReader{access: access, auth: storageauth.Primary(cfg.AppID), cfg: cfg}
 }
 
 func (r *StorageReader) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {

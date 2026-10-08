@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -15,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/robfig/cron"
 	"gorm.io/gorm"
 )
@@ -84,15 +84,10 @@ func buildMonitorMarketCanary(
 	if runtime == nil || runtime.Repositories == nil {
 		return nil, nil, fmt.Errorf("monitor market canary requires repositories")
 	}
-	credentials, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("monitor market canary credentials: %w", err)
+	if runtime.Gateway == nil {
+		return nil, nil, fmt.Errorf("monitor market canary requires gatewayclient")
 	}
-	reader := storagepb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(
-		cfg.Metrics.Storage.GatewayTarget,
-		firstNonEmptyString(cfg.Metrics.Storage.GatewayNodeID, gatewayauth.ServiceGatewayNodeID()),
-		credentials,
-	)...)
+	reader := storagepb.NewPrimaryStoreClientProxy(runtime.Gateway.ClientOptions()...)
 	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
 	tagSpaces := make([]string, 0, len(cfg.MarketCanary.Subjects))
 	seenTagSpaces := make(map[string]struct{})

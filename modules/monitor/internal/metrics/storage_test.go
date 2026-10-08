@@ -2,13 +2,14 @@ package metrics
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -159,12 +160,6 @@ func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
 	adapter := NewStorageAdapter(&fakeAccess{}, f, metricsStorageConfig())
 	require.NoError(t, adapter.ValidateSchema(context.Background()))
 	assert.Equal(t, 1, f.nodeCalls)
-}
-
-func TestNormalizeTarget(t *testing.T) {
-	assert.Equal(t, "ip://127.0.0.1:20102", normalizeTarget("", "20102"))
-	assert.Equal(t, "ip://127.0.0.1:20102", normalizeTarget("127.0.0.1:20102", "20102"))
-	assert.Equal(t, "http://storage:20102", normalizeTarget("http://storage:20102", "20102"))
 }
 
 func TestStorageHelpers(t *testing.T) {

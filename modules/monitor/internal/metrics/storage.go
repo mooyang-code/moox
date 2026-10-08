@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -14,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -64,42 +62,12 @@ type cachedSubjectCatalog struct {
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName)}
-}
-func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	// Monitor's Storage target is a dedicated dependency setting. Do not let the
-	// process-local gateway default redirect it back to the control node.
-	target := cfg.GatewayTarget
-	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
-	if err != nil {
-		return NewStorageAdapter(nil, nil, cfg)
-	}
-	nodeID := cfg.GatewayNodeID
-	if strings.TrimSpace(nodeID) == "" {
-		nodeID = gatewayauth.ServiceGatewayNodeID()
-	}
-	options := gatewayauth.NewTRPCClientOptions(normalizeTarget(target, "11003"), nodeID, credentials)
-	return NewStorageAdapter(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), cfg)
+	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.AppID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName)}
 }
 
-func normalizeTarget(raw, port string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:" + port
-	}
-	if strings.HasPrefix(raw, "ip://") {
-		return raw
-	}
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
-		if u.Scheme == "http" || u.Scheme == "https" {
-			return raw
-		}
-		return raw
-	}
-	if !strings.Contains(raw, ":") {
-		return raw
-	}
-	return "ip://" + raw
+// NewStorageAdapterWithOptions 创建经给定 tRPC 客户端选项（gatewayclient）访问 Storage 的适配器。
+func NewStorageAdapterWithOptions(options []client.Option, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
+	return NewStorageAdapter(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), cfg)
 }
 
 type SchemaStatus struct {

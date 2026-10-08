@@ -7,11 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
+	// GatewayClient 是 Monitor 访问 Storage 等组件的 gatewayclient 配置（monitor 身份）。
+	GatewayClient  gatewayclient.Config `yaml:"gateway_client"`
 	Database       DatabaseConfig       `yaml:"database"`
 	Health         HealthConfig         `yaml:"health"`
 	HealthAuth     HealthAuthConfig     `yaml:"health_auth"`
@@ -137,10 +139,8 @@ type MarketCanarySubject struct {
 }
 
 type MetricsStorageConfig struct {
-	GatewayTarget              string        `yaml:"gateway_target"`
-	GatewayNodeID              string        `yaml:"gateway_node_id"`
-	KeyID                      string        `yaml:"key_id"`
-	HMACKeyFile                string        `yaml:"hmac_key_file"`
+	// AppID 是 Storage 应用鉴权使用的 app_id；请求经 gateway_client 发送。
+	AppID                      string        `yaml:"app_id"`
 	SpaceID                    string        `yaml:"space_id"`
 	DatasetID                  string        `yaml:"dataset_id"`
 	Frequency                  string        `yaml:"frequency"`
@@ -150,11 +150,9 @@ type MetricsStorageConfig struct {
 
 // HostStorageConfig controls the direct Storage path for host snapshots.
 type HostStorageConfig struct {
-	Enabled                 bool          `yaml:"enabled"`
-	GatewayTarget           string        `yaml:"gateway_target"`
-	GatewayNodeID           string        `yaml:"gateway_node_id"`
-	KeyID                   string        `yaml:"key_id"`
-	HMACKeyFile             string        `yaml:"hmac_key_file"`
+	Enabled bool `yaml:"enabled"`
+	// AppID 是 Storage 应用鉴权使用的 app_id；请求经 gateway_client 发送。
+	AppID                   string        `yaml:"app_id"`
 	SpaceID                 string        `yaml:"space_id"`
 	Frequency               string        `yaml:"frequency"`
 	WriteTimeout            time.Duration `yaml:"write_timeout"`
@@ -188,6 +186,11 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
+		// 与部署布局一致：密钥和 CA 在安装根目录，目录缓存在组件的数据目录。
+		GatewayClient: gatewayclient.Config{
+			Mode: gatewayclient.ModeLocal, Caller: "monitor", KeyFile: "../secrets/caller-monitor.key",
+			CAFile: "../certs/moox-ca.crt", CacheDir: "./data/monitor/gatewayclient",
+		},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/monitor/monitor.db",
@@ -224,7 +227,7 @@ func Default() *Config {
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, CollectorGatewayURL: "http://127.0.0.1:11002", EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{AppID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, AppID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -350,11 +353,8 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
 	}
-	if c.Metrics.Storage.GatewayTarget == "" {
-		c.Metrics.Storage.GatewayTarget = metricsDefaults.Storage.GatewayTarget
-	}
-	if c.Metrics.Storage.KeyID == "" {
-		c.Metrics.Storage.KeyID = metricsDefaults.Storage.KeyID
+	if c.Metrics.Storage.AppID == "" {
+		c.Metrics.Storage.AppID = metricsDefaults.Storage.AppID
 	}
 	if c.Metrics.Storage.SpaceID == "" {
 		c.Metrics.Storage.SpaceID = metricsDefaults.Storage.SpaceID
@@ -371,11 +371,8 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.Storage.WriteBatchSize == 0 {
 		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
 	}
-	if c.Metrics.HostStorage.GatewayTarget == "" {
-		c.Metrics.HostStorage.GatewayTarget = metricsDefaults.HostStorage.GatewayTarget
-	}
-	if c.Metrics.HostStorage.KeyID == "" {
-		c.Metrics.HostStorage.KeyID = metricsDefaults.HostStorage.KeyID
+	if c.Metrics.HostStorage.AppID == "" {
+		c.Metrics.HostStorage.AppID = metricsDefaults.HostStorage.AppID
 	}
 	if c.Metrics.HostStorage.SpaceID == "" {
 		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID
@@ -445,18 +442,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.TargetNode = v
-		c.Metrics.Storage.GatewayNodeID = v
-		c.Metrics.HostStorage.GatewayNodeID = v
-	}
-	// SysDeploy authenticates through the local control gateway, while Storage
-	// may live behind a different gateway node. Keep these overrides separate.
-	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET")); v != "" {
-		c.Metrics.Storage.GatewayTarget = v
-		c.Metrics.HostStorage.GatewayTarget = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID")); v != "" {
-		c.Metrics.Storage.GatewayNodeID = v
-		c.Metrics.HostStorage.GatewayNodeID = v
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_COLLECTOR_GATEWAY_URL")); v != "" {
 		c.KlineFreshness.CollectorGatewayURL = v
@@ -562,15 +547,8 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	for name, values := range map[string][2]string{
-		"metrics.storage":      {c.Metrics.Storage.KeyID, c.Metrics.Storage.HMACKeyFile},
-		"metrics.host_storage": {c.Metrics.HostStorage.KeyID, c.Metrics.HostStorage.HMACKeyFile},
-	} {
-		if strings.TrimSpace(values[1]) != "" {
-			if _, err := gatewayauth.CredentialsFromKeyFile(values[0], values[1]); err != nil {
-				return fmt.Errorf("%s hmac credentials: %w", name, err)
-			}
-		}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

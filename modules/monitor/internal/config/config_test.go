@@ -132,43 +132,27 @@ func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
 		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
 	}
-	if cfg.Metrics.Storage.GatewayNodeID != "gateway-hk-177" || cfg.Metrics.HostStorage.GatewayNodeID != "gateway-hk-177" {
-		t.Fatalf("metrics gateway nodes = storage %q host %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
-	}
 }
 
-func TestMonitorStorageGatewayEnvironmentOverridesMetricsOnly(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://10.0.0.8:11003")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "compute-1")
-	cfg := Default()
-	cfg.applyEnv()
-
-	if cfg.SysDeploy.ServiceAuth.TargetNode != "control" {
-		t.Fatalf("sysdeploy target = %q, want control", cfg.SysDeploy.ServiceAuth.TargetNode)
-	}
-	if cfg.Metrics.Storage.GatewayTarget != "ip://10.0.0.8:11003" || cfg.Metrics.HostStorage.GatewayTarget != "ip://10.0.0.8:11003" {
-		t.Fatalf("storage targets = %q, %q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.HostStorage.GatewayTarget)
-	}
-	if cfg.Metrics.Storage.GatewayNodeID != "compute-1" || cfg.Metrics.HostStorage.GatewayNodeID != "compute-1" {
-		t.Fatalf("storage nodes = %q, %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
-	}
-}
-
-func TestMonitorCollectorGatewayEnvironmentIsIndependentFromStorageRoute(t *testing.T) {
+func TestMonitorCollectorGatewayEnvironment(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
 	t.Setenv("MOOX_MONITOR_COLLECTOR_GATEWAY_URL", "https://collector-gateway:11002")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://storage-gateway:11003")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "storage-node")
 	cfg := Default()
 	cfg.applyEnv()
 
 	if cfg.KlineFreshness.CollectorGatewayURL != "https://collector-gateway:11002" || cfg.KlineFreshness.CollectorGatewayNodeID != "collector-node" {
 		t.Fatalf("collector route = %q/%q", cfg.KlineFreshness.CollectorGatewayURL, cfg.KlineFreshness.CollectorGatewayNodeID)
 	}
-	if cfg.Metrics.Storage.GatewayTarget != "ip://storage-gateway:11003" || cfg.Metrics.Storage.GatewayNodeID != "storage-node" {
-		t.Fatalf("storage route = %q/%q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.Storage.GatewayNodeID)
+}
+
+func TestMonitorDefaultGatewayClientFollowsDeploymentLayout(t *testing.T) {
+	cfg := Default()
+	if err := cfg.GatewayClient.Validate(); err != nil {
+		t.Fatalf("默认的 gateway_client 应当合法: %v", err)
+	}
+	if cfg.GatewayClient.Caller != "monitor" || cfg.Metrics.Storage.AppID != "monitor" || cfg.Metrics.HostStorage.AppID != "monitor" {
+		t.Fatalf("gateway client = %+v, storage app = %q/%q", cfg.GatewayClient, cfg.Metrics.Storage.AppID, cfg.Metrics.HostStorage.AppID)
 	}
 }
 
@@ -244,16 +228,11 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if !ok {
 		t.Fatal("metrics config is missing")
 	}
-	keyPath := filepath.Join(t.TempDir(), "gateway-monitor.key")
-	if err := os.WriteFile(keyPath, []byte("test-gateway-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	for _, name := range []string{"storage", "host_storage"} {
 		storage, ok := metrics[name].(map[string]any)
-		if !ok {
-			t.Fatalf("metrics.%s config is missing", name)
+		if !ok || storage["app_id"] != "monitor" {
+			t.Fatalf("metrics.%s 应当配置 Storage app_id: %v", name, metrics[name])
 		}
-		storage["hmac_key_file"] = keyPath
 	}
 	fixture, err := yaml.Marshal(app)
 	if err != nil {
