@@ -71,7 +71,7 @@ moox-cli storage repair-view \
   --dry-run
 ```
 
-执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`rebuild_lookback_periods`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
+执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_bars`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
 
 ### EventBus admin 地址
 

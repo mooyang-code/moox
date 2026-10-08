@@ -30,9 +30,8 @@ storage_root = "/data/moox/storage"
 max_size_mb = 50
 backup_count = 5
 
-# View 维护策略。每个时序序列超过 max_periods_per_series 即触发 A/B 重建，
-# 新 View 尝试回溯 rebuild_lookback_periods 根已完成 K 线；历史不足时使用已有数据激活，
-# 后续由实时事件继续补齐。
+# View 只按根数保留：每个时序序列保留最近 view_bars 根已完成 K 线，历史不足时用已有数据激活，
+# 后续由实时事件补齐。
 # Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
 # 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据，发布前用 moox-cli config plan 核对。
 [storage_retention]
