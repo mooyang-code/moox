@@ -65,10 +65,15 @@ type configTargetPlan struct {
 }
 
 const (
-	configStatusUnchanged = "unchanged"
-	configStatusChanged   = "changed"
-	configStatusMissing   = "missing"
+	configStatusUnchanged   = "unchanged"
+	configStatusChanged     = "changed"
+	configStatusMissing     = "missing"
+	configStatusNotDeployed = "not_deployed"
 )
+
+// errConfigNotDeployed marks a target whose module is not deployed on its
+// host; it is reported and skipped rather than created.
+var errConfigNotDeployed = errors.New("module is not deployed on the host")
 
 func init() {
 	rootCmd.AddCommand(newConfigCommand(defaultConfigDeps()))
@@ -158,7 +163,7 @@ func newConfigPublishCommand(deps configDeps) *cobra.Command {
 func configPlanOutput(plans []configTargetPlan, warnings []string) map[string]any {
 	changed := 0
 	for _, plan := range plans {
-		if plan.Status != configStatusUnchanged {
+		if plan.Status == configStatusChanged || plan.Status == configStatusMissing {
 			changed++
 		}
 	}
@@ -194,7 +199,7 @@ func configTargets(snapshot *setupconfig.Snapshot) ([]configTarget, error) {
 		Services: []string{"collector"},
 		render: func(current []byte) ([]byte, error) {
 			if current == nil {
-				return nil, errors.New("Collector config is missing on the host; deploy Collector first")
+				return nil, errConfigNotDeployed
 			}
 			return setupconfig.RenderCollectorDNSResolverConfig(snapshot, current)
 		},
@@ -210,7 +215,7 @@ func configTargets(snapshot *setupconfig.Snapshot) ([]configTarget, error) {
 			Services: []string{"trade"},
 			render: func(current []byte) ([]byte, error) {
 				if current == nil {
-					return nil, errors.New("Trade config is missing on the host; deploy Trade first")
+					return nil, errConfigNotDeployed
 				}
 				return setupconfig.RenderTradeDNSResolverConfigForNode(snapshot, tradeHost.Name, current)
 			},
@@ -286,6 +291,11 @@ func planConfigTarget(ctx context.Context, host configHost, target configTarget)
 		return plan, err
 	}
 	rendered, err := target.render(current)
+	if errors.Is(err, errConfigNotDeployed) {
+		plan.Status = configStatusNotDeployed
+		plan.Warnings = []string{"the module is not deployed on this host; deploy it first, config publish only updates deployed files"}
+		return plan, nil
+	}
 	if err != nil {
 		return plan, err
 	}
@@ -321,7 +331,9 @@ func planConfigTarget(ctx context.Context, host configHost, target configTarget)
 // publish; the file is nil when it does not exist.
 func readConfigFile(ctx context.Context, host configHost, file string) ([]byte, string, error) {
 	result, err := host.Run(ctx, []string{"sh", "-c", `if [ -f "$1" ]; then cat "$1"; else exit 3; fi`, "moox-config-read", file}, nil)
-	if err != nil {
+	// A non-zero exit returns both the result and an error; only an error
+	// without an exit status is a transport failure.
+	if err != nil && result.ExitCode == 0 {
 		return nil, "", fmt.Errorf("read %s: %w", file, err)
 	}
 	switch result.ExitCode {
@@ -381,7 +393,7 @@ func publishConfig(ctx context.Context, deps configDeps, plans []configTargetPla
 		}
 	}()
 	for _, plan := range plans {
-		if plan.Status == configStatusUnchanged {
+		if plan.Status == configStatusUnchanged || plan.Status == configStatusNotDeployed {
 			continue
 		}
 		host, ok := hosts[plan.target.Host.Name]
@@ -399,7 +411,7 @@ func publishConfig(ctx context.Context, deps configDeps, plans []configTargetPla
 		}
 		argv := append([]string{"bash", "-c", configPublishScript, "moox-config-publish", plan.target.Root, plan.Path, tmp}, plan.target.Services...)
 		result, err := host.Run(ctx, argv, nil)
-		if err != nil {
+		if err != nil && result.ExitCode == 0 {
 			return published, fmt.Errorf("%s: publish: %w", plan.ID, err)
 		}
 		if result.ExitCode != 0 {

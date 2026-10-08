@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -30,7 +31,7 @@ func (h *fakeConfigHost) Run(_ context.Context, argv []string, _ io.Reader) (set
 	case strings.Contains(script, "exit 3"):
 		raw, ok := h.files[argv[4]]
 		if !ok {
-			return setupssh.Result{ExitCode: 3}, nil
+			return setupssh.Result{ExitCode: 3}, errors.New("ssh_command_failed: Process exited with status 3")
 		}
 		return setupssh.Result{Stdout: string(raw)}, nil
 	case strings.Contains(script, ".sha256\" 2>/dev/null"):
@@ -46,7 +47,7 @@ func (h *fakeConfigHost) Run(_ context.Context, argv []string, _ io.Reader) (set
 			} else {
 				delete(h.files, file)
 			}
-			return setupssh.Result{ExitCode: 70, Stderr: "restart failed; restoring the previous file"}, nil
+			return setupssh.Result{ExitCode: 70, Stderr: "restart failed; restoring the previous file"}, errors.New("ssh_command_failed: Process exited with status 70")
 		}
 		h.files[file+".sha256"] = []byte(sha256Hex(h.files[file]) + "\n")
 		h.restarts = append(h.restarts, services...)
@@ -217,6 +218,16 @@ func TestConfigPlanWarnsAboutHandEditedFiles(t *testing.T) {
 	collector := targetPlan(t, plan, "collector-runtime")
 	require.Equal(t, configStatusChanged, collector["status"])
 	require.Contains(t, configJSON(t, collector["warnings"]), "edited after the last publish")
+}
+
+func TestConfigSkipsModulesNotDeployedOnTheHost(t *testing.T) {
+	deps, hosts, file := newConfigTestDeps(t, "")
+	delete(hosts["control"].files, "/data/moox/prod/collector/config/app.yaml")
+	result, err := configCommand(t, deps, file, "publish", "--yes")
+	require.NoError(t, err)
+	require.Equal(t, configStatusNotDeployed, targetPlan(t, result, "collector-runtime")["status"])
+	require.Equal(t, []any{"storage-policy"}, result["published"])
+	require.NotContains(t, hosts["control"].files, "/data/moox/prod/collector/config/app.yaml", "a missing module config is never created")
 }
 
 func TestRetentionShrinksComparesEffectiveRetention(t *testing.T) {
