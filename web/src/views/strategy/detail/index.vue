@@ -159,7 +159,7 @@ function handleControlFailed() {
 }
 function openReplay() {
   if (store.instance)
-    router.push({ name: "strategy-replay", query: { strategy_id: store.instance.strategy_id, view_id: store.instance.view_id } });
+    router.push({ name: "strategy-replay", query: { instance_id: store.instance.instance_id, view_id: store.instance.view_id } });
 }
 onMounted(() => {
   load();

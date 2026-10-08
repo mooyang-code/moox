@@ -13,11 +13,22 @@
         >
       </div>
       <a-alert v-if="error" type="error" show-icon class="top-alert">{{ error }}</a-alert>
+      <a-alert v-if="pollFailures >= 3" type="warning" show-icon class="top-alert"
+        >后台暂时无法访问，页面上的回放状态可能不是最新；恢复后会自动刷新。</a-alert
+      >
       <a-grid :cols="{ xs: 1, md: 3 }" :col-gap="20" :row-gap="16">
         <a-grid-item>
           <div class="section-title">发起回放</div>
           <a-form layout="vertical">
-            <a-form-item label="策略定义" required>
+            <a-form-item v-if="form.instance_id" label="回放对象">
+              <a-alert type="info" class="instance-alert"
+                >按实例 <span class="mono">{{ form.instance_id }}</span> 当前会话固化的 DSL 版本回放，与实例实际在跑的策略一致。
+                <template #action
+                  ><a-button size="mini" type="text" @click="form.instance_id = ''">改为选择定义</a-button></template
+                ></a-alert
+              >
+            </a-form-item>
+            <a-form-item v-else label="策略定义" required>
               <a-select v-model="form.strategy_id" allow-search placeholder="选择定义">
                 <a-option v-for="item in strategyStore.strategies" :key="item.strategy_id" :value="item.strategy_id"
                   >{{ item.name }}（{{ item.strategy_id }}）</a-option
@@ -25,14 +36,22 @@
               </a-select>
             </a-form-item>
             <a-form-item label="View" required>
-              <a-select v-model="form.view_id" allow-search :loading="viewsLoading" placeholder="选择现货 View">
+              <a-select v-model="form.view_id" allow-search :loading="viewsLoading" placeholder="选择 View（第一版只支持现货）">
                 <a-option v-for="view in views" :key="view.view_id" :value="view.view_id"
                   >{{ view.name || view.view_id }}（{{ view.view_id }} · {{ view.freq || "无周期" }}）</a-option
                 >
               </a-select>
             </a-form-item>
-            <a-form-item label="区间（UTC，左闭右开）" required>
-              <a-range-picker v-model="form.range" show-time value-format="YYYY-MM-DDTHH:mm:ss[Z]" style="width: 100%" />
+            <a-form-item label="区间（UTC，左闭右开，格式 YYYY-MM-DD HH:mm）" required>
+              <div class="range-inputs">
+                <a-input v-model="form.start" aria-label="开始时间（UTC）" placeholder="开始，例如 2026-09-01 00:00" />
+                <a-input v-model="form.end" aria-label="结束时间（UTC）" placeholder="结束，例如 2026-10-01 00:00" />
+              </div>
+              <a-space class="presets" :size="4">
+                <a-button size="mini" @click="applyPreset(1)">近 1 天</a-button>
+                <a-button size="mini" @click="applyPreset(7)">近 7 天</a-button>
+                <a-button size="mini" @click="applyPreset(30)">近 30 天</a-button>
+              </a-space>
             </a-form-item>
             <a-form-item label="单边手续费（bps）"
               ><a-input-number v-model="form.fee_bps" :min="0" :max="1000" :step="1"
@@ -64,6 +83,16 @@
               </a-list-item>
             </template>
           </a-list>
+          <a-pagination
+            v-if="replayTotal > replayPageSize"
+            class="replay-pager"
+            size="small"
+            simple
+            :current="replayPage"
+            :page-size="replayPageSize"
+            :total="replayTotal"
+            @change="changeReplayPage"
+          />
         </a-grid-item>
         <a-grid-item :span="{ xs: 1, md: 2 }">
           <a-empty v-if="!selected" description="选择或发起一个回放" />
@@ -72,6 +101,7 @@
               <div>
                 <a-tag :color="replayStatusColor(selected.status)">{{ replayStatusLabel(selected.status) }}</a-tag>
                 <span class="mono">{{ selected.replay_id }}</span>
+                <span class="muted" :title="selected.dsl_hash"> · DSL {{ shortHash(selected.dsl_hash) }}</span>
               </div>
               <a-space>
                 <a-popconfirm
@@ -85,6 +115,13 @@
                 </a-popconfirm>
               </a-space>
             </div>
+            <div class="muted detail-info">
+              View {{ selected.view_id }} · 区间 {{ formatUtcTime(selected.start_time) }} →
+              {{ formatUtcTime(selected.end_time) }} · 手续费 {{ selected.fee_bps }} bps
+              <template v-if="metrics?.first_bar_end">
+                · 实际首根 {{ formatUtcTime(metrics.first_bar_end) }}，末根 {{ formatUtcTime(metrics.last_bar_end) }}</template
+              >
+            </div>
             <a-alert v-if="selected.status === 'failed'" type="error" show-icon class="top-alert"
               >回放失败：{{
                 selected.error === "interrupted" ? "进程重启中断，已写入的周期保留，可重新发起" : selected.error
@@ -97,7 +134,7 @@
               </div>
               <div class="metric">
                 <span>年化</span
-                ><strong :title="metrics.annualized_return === null ? '区间不足一周不计算年化' : undefined">{{
+                ><strong :title="metrics.annualized_return === null ? '区间不足一周或无法年化，见局限性' : undefined">{{
                   pct(metrics.annualized_return)
                 }}</strong>
               </div>
@@ -105,7 +142,7 @@
                 <span>最大回撤</span><strong class="down">{{ pct(metrics.max_drawdown) }}</strong>
               </div>
               <div class="metric">
-                <span>平均换手</span><strong>{{ pct(metrics.average_turnover) }}</strong>
+                <span>平均单边换手</span><strong>{{ pct(metrics.average_turnover) }}</strong>
               </div>
               <div class="metric">
                 <span>平均持仓数</span><strong>{{ metrics.average_holdings.toFixed(2) }}</strong>
@@ -117,12 +154,12 @@
                 <span>总手续费</span><strong>{{ pct(metrics.total_fee / (metrics.initial_equity || 1)) }}</strong>
               </div>
               <div class="metric">
-                <span>目标未达成期数</span><strong>{{ metrics.unfilled_bars }}</strong>
+                <span>目标未达成期数 / 清算次数</span><strong>{{ metrics.unfilled_bars }} / {{ metrics.liquidations }}</strong>
               </div>
             </div>
             <div class="chart-wrap">
               <div ref="chartContainer" class="chart" />
-              <a-empty v-if="!bars.length" description="暂无周期记录" />
+              <a-empty v-if="!series.length" description="暂无周期记录" />
             </div>
             <a-collapse v-if="metrics" :default-active-key="['limits']" class="limits">
               <a-collapse-item key="limits" header="局限性">
@@ -134,15 +171,21 @@
                     >{{ skipReasonLabel(String(reason)) }} × {{ count }}；</span
                   >
                 </div>
+                <div v-if="Object.keys(metrics.factors || {}).length" class="muted">
+                  因子定义指纹：<span v-for="(hash, factor) in metrics.factors" :key="factor" :title="hash"
+                    >{{ factor }} {{ shortHash(hash) }}；</span
+                  >
+                </div>
               </a-collapse-item>
             </a-collapse>
             <a-table
               row-key="bar_end_time"
               size="small"
-              :data="pagedBars"
-              :pagination="barPagination"
-              :scroll="{ x: 860 }"
-              @page-change="barPage = $event"
+              :data="tableRows"
+              :loading="tableLoading"
+              :pagination="tablePagination"
+              :scroll="{ x: 960 }"
+              @page-change="changeTablePage"
             >
               <template #columns>
                 <a-table-column title="K 线结束（UTC）" :width="170"
@@ -151,7 +194,7 @@
                 <a-table-column title="状态" :width="150"
                   ><template #cell="{ record }"
                     ><a-tag size="small" :color="record.status === 'ok' ? 'green' : 'orange'">{{
-                      record.status === "ok" ? "ok" : skipReasonLabel(barSkipReason(record.summary_json))
+                      record.status === "ok" ? "ok" : skipReasonLabel(record.skip_reason)
                     }}</a-tag></template
                   ></a-table-column
                 >
@@ -163,15 +206,14 @@
                     ><span :class="record.bar_return >= 0 ? 'up' : 'down'">{{ pct(record.bar_return) }}</span></template
                   ></a-table-column
                 >
-                <a-table-column title="换手" :width="90"
+                <a-table-column title="单边换手" :width="90"
                   ><template #cell="{ record }">{{ pct(record.turnover) }}</template></a-table-column
                 >
                 <a-table-column title="持仓（冻结）" :width="110"
-                  ><template #cell="{ record }"
-                    >{{ positionsSummary(record.positions_json).holdings }}（{{
-                      positionsSummary(record.positions_json).frozen
-                    }}）</template
-                  ></a-table-column
+                  ><template #cell="{ record }">{{ record.holdings }}（{{ record.frozen }}）</template></a-table-column
+                >
+                <a-table-column title="未达成 / 清算" :width="110"
+                  ><template #cell="{ record }">{{ record.unfilled }} / {{ record.liquidated }}</template></a-table-column
                 >
                 <a-table-column title="目标"
                   ><template #cell="{ record }"
@@ -202,14 +244,14 @@ import { listViews } from "@/api/storage/metadata";
 import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
-import { percent, skipReasonLabel } from "@/views/strategy/model";
+import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
 import {
-  barSkipReason,
   equitySeries,
   formatUtcTime,
   mergeBars,
   parseMetrics,
-  positionsSummary,
+  parseUtcInput,
+  recentUtcRange,
   replayStatusColor,
   replayStatusLabel
 } from "@/views/strategy/replay/model";
@@ -218,9 +260,19 @@ defineOptions({ name: "StrategyReplay" });
 const route = useRoute();
 const spaceStore = useSpaceStore();
 const strategyStore = useStrategyStore();
+const replayPageSize = 20;
+const tablePageSize = 50;
+const seriesPageSize = 2000;
 const replays = ref<Replay[]>([]);
+const replayTotal = ref(0);
+const replayPage = ref(1);
 const views = ref<View[]>([]);
-const bars = ref<ReplayBar[]>([]);
+// series 是 brief 周期记录（只有曲线与摘要字段），tableRows 是表格当前页的完整记录。
+const series = ref<ReplayBar[]>([]);
+const tableRows = ref<ReplayBar[]>([]);
+const tableTotal = ref(0);
+const tablePage = ref(1);
+const tableLoading = ref(false);
 const selectedId = ref("");
 const selected = ref<Replay | null>(null);
 const listLoading = ref(false);
@@ -228,52 +280,65 @@ const viewsLoading = ref(false);
 const starting = ref(false);
 const cancelling = ref(false);
 const error = ref("");
-const barPage = ref(1);
+const pollFailures = ref(0);
 const chartContainer = ref<HTMLElement>();
-const form = reactive<{ strategy_id: string; view_id: string; range: string[]; fee_bps: number }>({
-  strategy_id: String(route.query.strategy_id || ""),
-  view_id: String(route.query.view_id || ""),
-  range: defaultRange(),
-  fee_bps: 10
-});
+const [presetStart, presetEnd] = recentUtcRange(30);
+const form = reactive<{ strategy_id: string; instance_id: string; view_id: string; start: string; end: string; fee_bps: number }>(
+  {
+    strategy_id: String(route.query.strategy_id || ""),
+    instance_id: String(route.query.instance_id || ""),
+    view_id: String(route.query.view_id || ""),
+    start: presetStart,
+    end: presetEnd,
+    fee_bps: 10
+  }
+);
 let chart: VChart | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 let polling = false;
 // generation 随空间切换递增：旧空间发出的请求返回后一律丢弃；selectRequest 让被新选择取代的详情请求作废。
 let generation = 0;
 let selectRequest = 0;
-const barPageSize = 500;
+let tableRequest = 0;
 
 const metrics = computed(() => parseMetrics(selected.value?.metrics_json));
-const pagedBars = computed(() => bars.value.slice((barPage.value - 1) * 50, barPage.value * 50));
-const barPagination = computed(() => ({ current: barPage.value, pageSize: 50, total: bars.value.length }));
-
-function defaultRange() {
-  const end = new Date();
-  end.setUTCMinutes(0, 0, 0);
-  const start = new Date(end.getTime() - 30 * 24 * 3600 * 1000);
-  const format = (value: Date) => value.toISOString().replace(/\.\d{3}Z$/, "Z");
-  return [format(start), format(end)];
-}
+const tablePagination = computed(() => ({ current: tablePage.value, pageSize: tablePageSize, total: tableTotal.value }));
 
 function pct(value: number | null) {
   return value !== null && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
 }
 
+function applyPreset(days: number) {
+  [form.start, form.end] = recentUtcRange(days);
+}
+
+async function loadStrategies() {
+  try {
+    await strategyStore.loadAllStrategies(200);
+  } catch (err) {
+    error.value = `策略定义加载失败：${err instanceof Error ? err.message : "未知错误"}`;
+  }
+}
+
 async function loadReplays() {
   const gen = generation;
   listLoading.value = true;
-  error.value = "";
   try {
-    const items = (await listReplays({ page: 1, page_size: 50 })).items;
+    const result = await listReplays({ page: replayPage.value, page_size: replayPageSize });
     if (gen !== generation) return;
-    replays.value = items;
-    if (!selectedId.value && items.length) await select(items[0].replay_id);
+    replays.value = result.items;
+    replayTotal.value = result.page.total;
+    if (!selectedId.value && result.items.length) await select(result.items[0].replay_id);
   } catch (err) {
     if (gen === generation) error.value = err instanceof Error ? err.message : "回放列表加载失败";
   } finally {
     if (gen === generation) listLoading.value = false;
   }
+}
+
+function changeReplayPage(page: number) {
+  replayPage.value = page;
+  loadReplays();
 }
 
 async function loadViews() {
@@ -297,14 +362,28 @@ async function loadViews() {
   }
 }
 
-/** 从已加载的周期之后增量读取；isCurrent 为假表示请求已被新选择或空间切换取代，返回 null。 */
-async function fetchBars(replayId: string, known: ReplayBar[], isCurrent: () => boolean): Promise<ReplayBar[] | null> {
+/** 从已加载的 brief 记录之后增量读取；isCurrent 为假表示请求已被新选择或空间切换取代，返回 null。 */
+async function fetchSeries(replayId: string, known: ReplayBar[], isCurrent: () => boolean): Promise<ReplayBar[] | null> {
   let merged = known;
-  for (let page = Math.floor(known.length / barPageSize) + 1; ; page += 1) {
-    const next = await listReplayBars(replayId, { page, page_size: barPageSize });
+  for (let page = Math.floor(known.length / seriesPageSize) + 1; ; page += 1) {
+    const next = await listReplayBars(replayId, { page, page_size: seriesPageSize, brief: true });
     if (!isCurrent()) return null;
     merged = mergeBars(merged, next.items);
-    if (next.items.length < barPageSize || merged.length >= next.page.total) return merged;
+    if (next.items.length < seriesPageSize || merged.length >= next.page.total) return merged;
+  }
+}
+
+/** 读取表格当前页的完整记录（含目标与持仓）。 */
+async function loadTablePage(replayId: string, isCurrent: () => boolean) {
+  const requestId = ++tableRequest;
+  tableLoading.value = true;
+  try {
+    const result = await listReplayBars(replayId, { page: tablePage.value, page_size: tablePageSize });
+    if (!isCurrent() || requestId !== tableRequest) return;
+    tableRows.value = result.items;
+    tableTotal.value = result.page.total;
+  } finally {
+    if (requestId === tableRequest) tableLoading.value = false;
   }
 }
 
@@ -313,41 +392,56 @@ async function select(replayId: string) {
   const gen = generation;
   const isCurrent = () => requestId === selectRequest && gen === generation;
   selectedId.value = replayId;
-  barPage.value = 1;
+  tablePage.value = 1;
   try {
     const replay = await getReplay(replayId);
     if (!isCurrent()) return;
-    const all = await fetchBars(replayId, [], isCurrent);
+    const all = await fetchSeries(replayId, [], isCurrent);
     if (all === null) return;
     selected.value = replay;
-    bars.value = all;
-    await renderChart(true);
+    series.value = all;
+    error.value = "";
+    await Promise.all([renderChart(true), loadTablePage(replayId, isCurrent)]);
   } catch (err) {
     if (isCurrent()) error.value = err instanceof Error ? err.message : "回放详情加载失败";
   }
 }
 
-/** 轮询只刷新排队或运行中的所选回放：周期记录增量追加，图表就地更新数据。 */
-async function refreshSelected() {
-  const current = selected.value;
-  if (!current || (current.status !== "pending" && current.status !== "running")) return;
+function changeTablePage(page: number) {
+  tablePage.value = page;
+  const replayId = selectedId.value;
   const requestId = selectRequest;
   const gen = generation;
-  const isCurrent = () => requestId === selectRequest && gen === generation;
-  const replay = await getReplay(current.replay_id);
+  loadTablePage(replayId, () => requestId === selectRequest && gen === generation && selectedId.value === replayId).catch(err => {
+    error.value = err instanceof Error ? err.message : "周期记录加载失败";
+  });
+}
+
+/** 轮询只刷新排队或运行中的所选回放：曲线增量追加并就地更新，表格停在末页时一并刷新。 */
+async function refreshSelected() {
+  const current = selected.value;
+  if (!current || current.replay_id !== selectedId.value) return;
+  if (current.status !== "pending" && current.status !== "running") return;
+  const replayId = current.replay_id;
+  const requestId = selectRequest;
+  const gen = generation;
+  const isCurrent = () => requestId === selectRequest && gen === generation && selectedId.value === replayId;
+  const replay = await getReplay(replayId);
   if (!isCurrent()) return;
-  const all = await fetchBars(current.replay_id, bars.value, isCurrent);
+  const all = await fetchSeries(replayId, series.value, isCurrent);
   if (all === null) return;
   selected.value = replay;
-  if (all.length !== bars.value.length) {
-    bars.value = all;
+  if (all.length !== series.value.length) {
+    series.value = all;
     await renderChart(false);
   }
+  const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
+  if (tablePage.value >= lastPage - 1 || replay.status !== current.status) await loadTablePage(replayId, isCurrent);
 }
 
 async function renderChart(rebuild: boolean) {
   await nextTick();
-  const values = equitySeries(bars.value);
+  const values = equitySeries(series.value);
   if (!rebuild && chart) {
     await chart.updateData("equity", values);
     return;
@@ -375,24 +469,36 @@ async function renderChart(rebuild: boolean) {
 
 async function start() {
   error.value = "";
-  if (!form.strategy_id || !form.view_id || form.range.length !== 2) {
-    error.value = "请选择定义、View 与区间";
+  const startTime = parseUtcInput(form.start);
+  const endTime = parseUtcInput(form.end);
+  if (!form.view_id || (!form.instance_id && !form.strategy_id)) {
+    error.value = "请选择定义（或从实例详情进入）与 View";
     return;
   }
+  if (!startTime || !endTime) {
+    error.value = "时间格式应为 YYYY-MM-DD HH:mm（UTC），例如 2026-09-01 00:00";
+    return;
+  }
+  const gen = generation;
   starting.value = true;
   try {
-    const replay = await startReplay({
-      strategy_id: form.strategy_id,
+    const started = await startReplay({
+      ...(form.instance_id ? { instance_id: form.instance_id } : { strategy_id: form.strategy_id }),
       view_id: form.view_id,
-      start_time: form.range[0],
-      end_time: form.range[1],
+      start_time: startTime,
+      end_time: endTime,
       fee_bps: Number(form.fee_bps) || 0
     });
-    Message.success("回放已排队");
+    if (gen !== generation) return;
+    Message.success(
+      `回放已排队：共 ${started.bar_count} 根，首根 ${formatUtcTime(started.first_bar_end)}，末根 ${formatUtcTime(started.last_bar_end)}`
+    );
+    replayPage.value = 1;
     await loadReplays();
-    await select(replay.replay_id);
+    if (gen !== generation) return;
+    await select(started.replay.replay_id);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "回放发起失败";
+    if (gen === generation) error.value = err instanceof Error ? err.message : "回放发起失败";
   } finally {
     starting.value = false;
   }
@@ -401,12 +507,14 @@ async function start() {
 async function cancel() {
   if (!selected.value) return;
   const gen = generation;
+  const replayId = selected.value.replay_id;
   cancelling.value = true;
   try {
-    const cancelled = await cancelReplay(selected.value.replay_id);
+    await cancelReplay(replayId);
     if (gen !== generation) return;
-    if (selected.value?.replay_id === cancelled.replay_id) selected.value = cancelled;
     await loadReplays();
+    // 取消后整体重读：补上取消前写入的最后几根与部分指标。
+    if (gen === generation && selectedId.value === replayId) await select(replayId);
   } catch (err) {
     Message.error(err instanceof Error ? err.message : "取消失败");
   } finally {
@@ -422,12 +530,14 @@ function startPolling() {
     polling = true;
     const gen = generation;
     try {
-      const items = (await listReplays({ page: 1, page_size: 50 })).items;
+      const result = await listReplays({ page: replayPage.value, page_size: replayPageSize });
       if (gen !== generation) return;
-      replays.value = items;
+      replays.value = result.items;
+      replayTotal.value = result.page.total;
       await refreshSelected();
+      pollFailures.value = 0;
     } catch {
-      // 轮询失败等下一轮；页面上的数据保持不变。
+      pollFailures.value += 1;
     } finally {
       polling = false;
     }
@@ -435,7 +545,7 @@ function startPolling() {
 }
 
 onMounted(() => {
-  strategyStore.loadAllStrategies(200).catch(() => undefined);
+  loadStrategies();
   loadViews();
   loadReplays();
   startPolling();
@@ -445,13 +555,20 @@ watch(
   () => {
     generation += 1;
     selectRequest += 1;
+    tableRequest += 1;
     selectedId.value = "";
     selected.value = null;
-    bars.value = [];
+    series.value = [];
+    tableRows.value = [];
+    tableTotal.value = 0;
     views.value = [];
     form.view_id = "";
+    form.instance_id = "";
+    replayPage.value = 1;
     listLoading.value = false;
     viewsLoading.value = false;
+    tableLoading.value = false;
+    pollFailures.value = 0;
     chart?.release();
     chart = null;
     loadViews();
@@ -483,6 +600,9 @@ onBeforeUnmount(() => {
 .top-alert {
   margin-bottom: var(--moox-space-2);
 }
+.instance-alert {
+  width: 100%;
+}
 .section-title {
   margin-bottom: 8px;
   font-weight: 600;
@@ -490,10 +610,21 @@ onBeforeUnmount(() => {
 .list-title {
   margin-top: 20px;
 }
+.range-inputs {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+.presets {
+  margin-top: 6px;
+}
 .replay-row {
   display: grid;
   gap: 2px;
   cursor: pointer;
+}
+.replay-pager {
+  margin-top: 8px;
 }
 .active {
   background: var(--color-fill-2);
@@ -506,6 +637,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 6px;
+}
+.detail-info {
   margin-bottom: 12px;
 }
 .metrics {

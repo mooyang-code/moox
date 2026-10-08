@@ -21,6 +21,7 @@
         viewId ? "校验并试算" : "仅校验 DSL"
       }}</a-button>
     </div>
+    <a-alert v-if="viewsError" type="error" show-icon class="block">View 列表加载失败：{{ viewsError }}</a-alert>
     <template v-if="result">
       <a-alert v-if="!result.diagnostics.length && !result.trial" type="success" show-icon class="block">DSL 校验通过</a-alert>
       <a-alert
@@ -67,6 +68,7 @@ const views = ref<View[]>([]);
 const viewsLoading = ref(false);
 const running = ref(false);
 const result = ref<ValidateStrategyResult | null>(null);
+const viewsError = ref("");
 let loadedSpace = "";
 // 切换空间时两个计数都递增，让旧空间的 View 列表与试算结果作废。
 let viewsRequest = 0;
@@ -87,6 +89,9 @@ async function ensureViews(visible = true) {
     }
     views.value = items;
     loadedSpace = spaceId;
+    viewsError.value = "";
+  } catch (err) {
+    if (requestId === viewsRequest) viewsError.value = err instanceof Error ? err.message : "View 列表加载失败";
   } finally {
     if (requestId === viewsRequest) viewsLoading.value = false;
   }
@@ -121,6 +126,7 @@ watch(
     viewId.value = "";
     result.value = null;
     viewsLoading.value = false;
+    viewsError.value = "";
     running.value = false;
   }
 );

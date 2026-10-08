@@ -106,8 +106,11 @@ export interface Replay {
   error: string;
   created_at: string;
   updated_at: string;
+  /** 被回放的 DSL 版本（内容哈希）。 */
+  dsl_hash: string;
 }
 
+/** 回放中一个周期的记录；brief 列表不含目标、持仓与摘要 JSON。 */
 export interface ReplayBar {
   bar_end_time: string;
   status: string;
@@ -118,13 +121,28 @@ export interface ReplayBar {
   equity: number;
   turnover: number;
   fee: number;
+  holdings: number;
+  frozen: number;
+  skip_reason: string;
+  unfilled: number;
+  liquidated: number;
 }
 
+/** strategy_id、dsl_yaml、instance_id 三选一。 */
 export interface StartReplayRequest {
   strategy_id?: string;
   dsl_yaml?: string;
+  instance_id?: string;
   view_id: string;
   start_time: string;
   end_time: string;
   fee_bps: number;
+}
+
+/** 发起回放的结果：任务与实际回放的根数、首末根 bar_end。 */
+export interface StartedReplay {
+  replay: Replay;
+  bar_count: number;
+  first_bar_end: string;
+  last_bar_end: string;
 }

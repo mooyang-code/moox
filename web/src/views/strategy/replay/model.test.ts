@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  barSkipReason,
-  equitySeries,
-  formatUtcTime,
-  mergeBars,
-  parseMetrics,
-  positionsSummary,
-  replayStatusLabel
-} from "./model";
+import { equitySeries, formatUtcTime, mergeBars, parseMetrics, parseUtcInput, recentUtcRange, replayStatusLabel } from "./model";
 
 describe("replay model helpers", () => {
   it("parses finished metrics and ignores empty ones", () => {
@@ -30,7 +22,12 @@ describe("replay model helpers", () => {
         bar_return: 0,
         equity: 1,
         turnover: 0,
-        fee: 0
+        fee: 0,
+        holdings: 0,
+        frozen: 0,
+        skip_reason: "",
+        unfilled: 0,
+        liquidated: 0
       },
       {
         bar_end_time: "bad",
@@ -41,15 +38,15 @@ describe("replay model helpers", () => {
         bar_return: 0,
         equity: 1.1,
         turnover: 0,
-        fee: 0
+        fee: 0,
+        holdings: 0,
+        frozen: 0,
+        skip_reason: "",
+        unfilled: 0,
+        liquidated: 0
       }
     ]);
     expect(series).toHaveLength(1);
-    expect(positionsSummary('{"cash":0.2,"positions":{"A":{"frozen":true},"B":{}}}')).toEqual({
-      cash: 0.2,
-      holdings: 2,
-      frozen: 1
-    });
     expect(replayStatusLabel("running")).toBe("运行中");
   });
 
@@ -70,7 +67,12 @@ describe("replay model helpers", () => {
       bar_return: 0,
       equity: 1,
       turnover: 0,
-      fee: 0
+      fee: 0,
+      holdings: 0,
+      frozen: 0,
+      skip_reason: "",
+      unfilled: 0,
+      liquidated: 0
     });
     const known = [bar("2026-09-01T01:00:00Z"), bar("2026-09-01T02:00:00Z")];
     const merged = mergeBars(known, [bar("2026-09-01T02:00:00Z"), bar("2026-09-01T03:00:00Z")]);
@@ -80,7 +82,14 @@ describe("replay model helpers", () => {
       "2026-09-01T03:00:00Z"
     ]);
     expect(mergeBars(known, [])).toBe(known);
-    expect(barSkipReason('{"skip_reason":"no_data"}')).toBe("no_data");
-    expect(barSkipReason("oops")).toBe("");
+  });
+
+  it("parses UTC text inputs and builds recent ranges", () => {
+    expect(parseUtcInput("2026-09-01 08:30")).toBe("2026-09-01T08:30:00Z");
+    expect(parseUtcInput("2026-09-01")).toBe("2026-09-01T00:00:00Z");
+    expect(parseUtcInput("2026-02-30 00:00")).toBeNull();
+    expect(parseUtcInput("2026-09-01 24:00")).toBeNull();
+    expect(parseUtcInput("09/01/2026")).toBeNull();
+    expect(recentUtcRange(7, new Date("2026-10-08T15:42:10Z"))).toEqual(["2026-10-01 15:00", "2026-10-08 15:00"]);
   });
 });

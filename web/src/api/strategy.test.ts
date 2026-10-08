@@ -9,6 +9,7 @@ import {
   listStrategies,
   listStrategyResults,
   listStrategyTargets,
+  listReplayBars,
   startReplay,
   validateStrategy
 } from "./strategy";
@@ -86,15 +87,38 @@ describe("strategy API", () => {
   });
 
   it("starts a replay with the requested window and fee", async () => {
-    callControl.mockResolvedValueOnce({ replay: { replay_id: "p1", status: "pending", fee_bps: 10 } });
+    callControl.mockResolvedValueOnce({
+      replay: { replay_id: "p1", status: "pending", fee_bps: 10, dsl_hash: "sha256:x" },
+      bar_count: 30,
+      first_bar_end: "2026-09-01T01:00:00Z",
+      last_bar_end: "2026-09-02T06:00:00Z"
+    });
     await expect(
       startReplay({
-        strategy_id: "s-1",
+        instance_id: "i-1",
         view_id: "view_a",
         start_time: "2026-09-01T00:00:00Z",
         end_time: "2026-09-30T00:00:00Z",
         fee_bps: 10
       })
-    ).resolves.toMatchObject({ replay_id: "p1", status: "pending", fee_bps: 10 });
+    ).resolves.toMatchObject({
+      replay: { replay_id: "p1", status: "pending", fee_bps: 10, dsl_hash: "sha256:x" },
+      bar_count: 30,
+      last_bar_end: "2026-09-02T06:00:00Z"
+    });
+  });
+
+  it("reads replay bars in brief or full pages", async () => {
+    callControl.mockResolvedValueOnce({
+      bars: [{ bar_end_time: "t", equity: 1.2, holdings: 3, skip_reason: "no_data" }],
+      total: 1
+    });
+    const page = await listReplayBars("p1", { page: 2, page_size: 2000, brief: true });
+    expect(callControl).toHaveBeenLastCalledWith("strategy", "ListReplayBars", {
+      replay_id: "p1",
+      page: { page: 2, page_size: 2000 },
+      brief: true
+    });
+    expect(page.items[0]).toMatchObject({ equity: 1.2, holdings: 3, skip_reason: "no_data", targets: [] });
   });
 });

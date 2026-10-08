@@ -18,6 +18,8 @@ export interface ReplayMetrics {
   liquidations: number;
   factors: Record<string, string>;
   limitations: string[];
+  first_bar_end: string;
+  last_bar_end: string;
 }
 
 /** 解析回放指标；任务未完成或指标缺失时返回 null。 */
@@ -43,7 +45,9 @@ export function parseMetrics(raw?: string): ReplayMetrics | null {
       unfilled_bars: Number(value.unfilled_bars ?? 0),
       liquidations: Number(value.liquidations ?? 0),
       factors: value.factors ?? {},
-      limitations: Array.isArray(value.limitations) ? value.limitations : []
+      limitations: Array.isArray(value.limitations) ? value.limitations : [],
+      first_bar_end: value.first_bar_end ?? "",
+      last_bar_end: value.last_bar_end ?? ""
     };
   } catch {
     return null;
@@ -72,19 +76,34 @@ export function replayStatusColor(status: string): string {
   );
 }
 
-/** 每期持仓账本中的现金与持仓数。 */
-export function positionsSummary(raw: string): { cash: number; holdings: number; frozen: number } {
-  try {
-    const value = JSON.parse(raw || "{}");
-    const positions = Object.values((value.positions ?? {}) as Record<string, { frozen?: boolean }>);
-    return {
-      cash: Number(value.cash ?? 0),
-      holdings: positions.length,
-      frozen: positions.filter(position => position.frozen).length
-    };
-  } catch {
-    return { cash: 0, holdings: 0, frozen: 0 };
-  }
+/** 把 "YYYY-MM-DD HH:mm"（或只有日期）的 UTC 文本转为 ISO 时间；格式或日期无效时返回 null。 */
+export function parseUtcInput(text: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(text.trim());
+  if (!match) return null;
+  const [, year, month, day, hour = "00", minute = "00"] = match;
+  const value = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
+  if (
+    value.getUTCFullYear() !== Number(year) ||
+    value.getUTCMonth() !== Number(month) - 1 ||
+    value.getUTCDate() !== Number(day) ||
+    value.getUTCHours() !== Number(hour) ||
+    value.getUTCMinutes() !== Number(minute)
+  )
+    return null;
+  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** 把时间格式化为 UTC 的 "YYYY-MM-DD HH:mm"，用于输入框。 */
+export function formatUtcInput(value: Date): string {
+  return value.toISOString().slice(0, 16).replace("T", " ");
+}
+
+/** 最近 days 天的 UTC 区间（终点取当前整点）。 */
+export function recentUtcRange(days: number, now = new Date()): [string, string] {
+  const end = new Date(now.getTime());
+  end.setUTCMinutes(0, 0, 0);
+  const start = new Date(end.getTime() - days * 24 * 3600 * 1000);
+  return [formatUtcInput(start), formatUtcInput(end)];
 }
 
 /** 按 UTC 显示时间（回放区间以 UTC 输入，列表与周期表保持一致）。 */
@@ -106,14 +125,4 @@ export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[
     merged.push(bar);
   }
   return merged.sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
-}
-
-/** 跳过周期的原因（summary_json.skip_reason）；无法解析时返回空串。 */
-export function barSkipReason(summaryJSON: string): string {
-  try {
-    const value = JSON.parse(summaryJSON || "{}");
-    return typeof value.skip_reason === "string" ? value.skip_reason : "";
-  } catch {
-    return "";
-  }
 }

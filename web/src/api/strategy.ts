@@ -5,6 +5,7 @@ import type {
   PageResponse,
   Replay,
   ReplayBar,
+  StartedReplay,
   StartReplayRequest,
   Strategy,
   StrategyInstance,
@@ -92,7 +93,8 @@ function normalizeReplay(value: any): Replay {
     metrics_json: value?.metrics_json || "{}",
     error: value?.error ?? "",
     created_at: value?.created_at ?? "",
-    updated_at: value?.updated_at ?? ""
+    updated_at: value?.updated_at ?? "",
+    dsl_hash: value?.dsl_hash ?? ""
   };
 }
 
@@ -106,7 +108,12 @@ function normalizeReplayBar(value: any): ReplayBar {
     bar_return: Number(value?.bar_return ?? 0),
     equity: Number(value?.equity ?? 0),
     turnover: Number(value?.turnover ?? 0),
-    fee: Number(value?.fee ?? 0)
+    fee: Number(value?.fee ?? 0),
+    holdings: Number(value?.holdings ?? 0),
+    frozen: Number(value?.frozen ?? 0),
+    skip_reason: value?.skip_reason ?? "",
+    unfilled: Number(value?.unfilled ?? 0),
+    liquidated: Number(value?.liquidated ?? 0)
   };
 }
 
@@ -285,9 +292,17 @@ export async function listStrategyTargets(instance_id: string): Promise<Strategy
   };
 }
 
-export async function startReplay(request: StartReplayRequest) {
-  const response = await call<StartReplayRequest, { replay?: Replay }>("StartReplay", request);
-  return normalizeReplay(response.replay);
+export async function startReplay(request: StartReplayRequest): Promise<StartedReplay> {
+  const response = await call<
+    StartReplayRequest,
+    { replay?: Replay; bar_count?: number; first_bar_end?: string; last_bar_end?: string }
+  >("StartReplay", request);
+  return {
+    replay: normalizeReplay(response.replay),
+    bar_count: Number(response.bar_count ?? 0),
+    first_bar_end: response.first_bar_end ?? "",
+    last_bar_end: response.last_bar_end ?? ""
+  };
 }
 
 export async function getReplay(replay_id: string) {
@@ -306,11 +321,22 @@ export async function listReplays(params: PageRequest = {}): Promise<PageResult<
   };
 }
 
-export async function listReplayBars(replay_id: string, params: PageRequest = {}): Promise<PageResult<ReplayBar>> {
+/**
+ * 分页读取回放的周期记录。brief 只返回曲线与摘要字段（每页最多 5000 根），用于权益曲线；
+ * 完整记录含目标与持仓（每页最多 100 根），用于表格当前页。
+ */
+export async function listReplayBars(
+  replay_id: string,
+  params: PageRequest & { brief?: boolean } = {}
+): Promise<PageResult<ReplayBar>> {
   const response = await call<
-    { replay_id: string; page: Required<PageRequest> },
+    { replay_id: string; page: Required<PageRequest>; brief: boolean },
     { bars?: ReplayBar[]; total?: number; page?: number; page_size?: number }
-  >("ListReplayBars", { replay_id, page: { page: params.page ?? 1, page_size: params.page_size ?? 500 } });
+  >("ListReplayBars", {
+    replay_id,
+    page: { page: params.page ?? 1, page_size: params.page_size ?? 50 },
+    brief: Boolean(params.brief)
+  });
   return {
     items: (response.bars ?? []).map(normalizeReplayBar),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
