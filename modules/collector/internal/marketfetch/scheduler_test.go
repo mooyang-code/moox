@@ -229,6 +229,20 @@ func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
 	assert.Equal(t, 10, scheduler.realtimeBatchSize(479, nodes))
 }
 
+func TestRealtimeBatchSizeKeepsAtLeastFifteenItemsPerInvoke(t *testing.T) {
+	nodes := make([]scfinvoker.Node, 80)
+	for index := range nodes {
+		nodes[index].Metadata = map[string]any{"realtime_batch_size": float64(30)}
+	}
+	scheduler := &Scheduler{BatchSize: MaxRealtimeItems}
+	assert.Equal(t, MinRealtimeBatchSize, scheduler.realtimeBatchSize(512, nodes), "512 items over 80 functions would be 7 per batch")
+	assert.Equal(t, 25, scheduler.realtimeBatchSize(2000, nodes), "a larger universe still fans out across the fleet")
+	assert.Equal(t, 5, scheduler.realtimeBatchSize(5, nodes), "a batch never exceeds the items it has")
+
+	nodes[3].Metadata["realtime_batch_size"] = float64(10)
+	assert.Equal(t, 10, scheduler.realtimeBatchSize(512, nodes), "a function's declared limit wins over the minimum")
+}
+
 func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
 	nodes := []scfinvoker.Node{{NodeID: "node-a"}, {NodeID: "node-b"}, {NodeID: "node-c"}}
 	got := invocationCandidates(nodes[1], nodes)

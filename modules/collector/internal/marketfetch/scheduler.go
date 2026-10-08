@@ -1607,11 +1607,15 @@ func (s *Scheduler) taskEnabled(ctx context.Context, spaceID, taskID string) (bo
 	return task != nil && task.Enabled, nil
 }
 
-// realtimeBatchSize makes one minute's work fan out to the current SCF fleet
-// first, then applies the smallest per-function limit declared by that fleet.
-// This keeps each node at one invocation for the common case while preventing
-// a stale or deliberately smaller function configuration from receiving an
-// oversized event.
+// MinRealtimeBatchSize 是实时批次的最小标的数。腾讯云 SCF Invoke 接口在每分钟开头的
+// 并发突发下会排队，单次调用偶尔超过 10 秒；按函数数平均分摊时每批只有约 7 个标的，
+// 每分钟调用次数翻倍。批次不小于 15 个标的，调用次数随之减半。
+const MinRealtimeBatchSize = 15
+
+// realtimeBatchSize spreads one minute's work across the current SCF fleet with
+// at least MinRealtimeBatchSize items per batch, then applies the smallest
+// per-function limit declared by that fleet so a stale or deliberately smaller
+// function configuration never receives an oversized event.
 func (s *Scheduler) realtimeBatchSize(itemCount int, nodes []scfinvoker.Node) int {
 	if itemCount <= 0 || len(nodes) == 0 {
 		return 1
@@ -1629,10 +1633,7 @@ func (s *Scheduler) realtimeBatchSize(itemCount int, nodes []scfinvoker.Node) in
 		limit = 1
 	}
 	perNode := (itemCount + len(nodes) - 1) / len(nodes)
-	if perNode < limit {
-		return perNode
-	}
-	return limit
+	return min(max(perNode, MinRealtimeBatchSize), limit, itemCount)
 }
 
 func nodeMetadataInt(metadata map[string]any, key string) (int, bool) {
