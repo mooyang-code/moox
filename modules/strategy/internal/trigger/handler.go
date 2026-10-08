@@ -219,6 +219,13 @@ func (h *Handler) process(ctx context.Context, instance store.Instance, message 
 			h.logf("实例 %s 在求值期间被停用，周期 %s 不再记录", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339))
 			return nil
 		default:
+			if store.IsPermanentWriteError(err) {
+				// 结果本身无法写入（校验失败或违反表约束），重投也不会成功：记一条不带明细的 skipped(config_error) 后 ACK，
+				// 不能让这条消息无限重投并压住同一消费者上的其他事件。
+				h.logf("实例 %s 周期 %s 的结果无法写入：%v", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339), err)
+				_ = h.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthDegraded, h.now())
+				return h.commitSkipped(ctx, p, input.SkipConfigError, "结果无法写入存储（确定性错误，详见策略模块日志）")
+			}
 			return fmt.Errorf("写入结果：%w", err)
 		}
 	}
@@ -239,7 +246,7 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 		}
 		var skip *input.SkipError
 		if errors.As(err, &skip) {
-			if skip.Reason == input.SkipConfigError {
+			if skip.Reason == input.SkipConfigError || skip.Reason == input.SkipHistoryInsufficient {
 				_ = h.Store.SetInstanceHealth(ctx, p.instance.InstanceID, store.HealthDegraded, h.now())
 			}
 			return nil, input.Loaded{}, h.commitSkipped(ctx, p, skip.Reason, skip.Detail)

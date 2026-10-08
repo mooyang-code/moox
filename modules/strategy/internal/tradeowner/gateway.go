@@ -3,6 +3,7 @@ package tradeowner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,19 +46,24 @@ func newGateway(cfg Config) *gateway {
 	return g
 }
 
+// configError 是网关配置或调用前提缺失：与传输失败不同，它不含远端地址，原样返回给调用方。
+type configError struct{ error }
+
+func (e configError) Unwrap() error { return e.error }
+
 func (g *gateway) post(ctx context.Context, method string, request, response proto.Message) error {
 	if g.initErr != nil {
-		return g.initErr
+		return configError{g.initErr}
 	}
 	if g.config.GatewayURL == "" {
-		return fmt.Errorf("Trade gateway_url 未配置")
+		return configError{errors.New("Trade gateway_url 未配置")}
 	}
 	if g.credentials.Caller != "strategy" {
-		return fmt.Errorf("Trade 网关调用方必须是 strategy")
+		return configError{errors.New("Trade 网关调用方必须是 strategy")}
 	}
 	spaceID, _ := ctx.Value(spaceKey{}).(string)
 	if spaceID == "" {
-		return fmt.Errorf("Trade 网关调用需要空间 ID")
+		return configError{errors.New("Trade 网关调用需要空间 ID")}
 	}
 	body, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(request)
 	if err != nil {

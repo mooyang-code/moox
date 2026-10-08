@@ -85,15 +85,16 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
-	// 先完成崩溃或网络中断留下的启停握手，再开始消费事件。
+	// 先尝试完成崩溃或网络中断留下的启停握手，再开始消费事件。Trade 暂不可达或个别实例不一致只告警：
+	// 停用侧由对账循环继续重试，启用侧不一致的实例已标记 degraded，进程与接口照常启动以便人工修复。
 	if err := service.ReconcileDisabledInstances(ctx); err != nil {
-		return nil, nil, fmt.Errorf("对账已停用实例失败：%w", err)
+		log.Warnf("启动对账：已停用实例的 Trade 释放未完成，稍后自动重试：%v", err)
 	}
 	if err := requireExecutionDependencies(ctx, db, cfg); err != nil {
 		return nil, nil, err
 	}
 	if err := service.ReconcileEnabledInstances(ctx); err != nil {
-		return nil, nil, fmt.Errorf("对账启用实例失败：%w", err)
+		log.Warnf("启动对账：%v", err)
 	}
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err

@@ -97,6 +97,19 @@ func (e *ResponseError) StatusCode() int32 {
 	return int32(e.Code)
 }
 
+// ErrSessionNotOwned 表示 Trade 账户当前的所有者不是该实例与会话。
+var ErrSessionNotOwned = errors.New("Trade 账户的会话所有者与本实例不符")
+
+// IsSessionRejected 判断会话校验失败是否是 Trade 的确定性结论：所有者已不是本会话，或账户不存在（错误码 5）。
+// 传输失败、网关配置错误等结果未知的情况不算。
+func IsSessionRejected(err error) bool {
+	if errors.Is(err, ErrSessionNotOwned) {
+		return true
+	}
+	var coded *ResponseError
+	return errors.As(err, &coded) && coded.StatusCode() == 5
+}
+
 // IsOwnerConflict 判断错误是否为所有权冲突（Trade 错误码 14）。
 func IsOwnerConflict(err error) bool {
 	var coded *ResponseError
@@ -185,7 +198,7 @@ func (c *Client) ValidateSession(ctx context.Context, spaceID, logicalAccountID,
 	}
 	account := response.GetLogicalAccount()
 	if account.GetOwnerInstanceId() != instanceID || account.GetOwnerSessionId() != sessionID {
-		return errors.New("Trade 账户的会话所有者与本实例不符")
+		return ErrSessionNotOwned
 	}
 	return nil
 }
@@ -223,11 +236,32 @@ func (c *Client) call(ctx context.Context, spaceID string) (context.Context, con
 	return callCtx, cancel, []client.Option{client.WithReqHead(reqHead), client.WithTimeout(timeout)}, nil
 }
 
-func (c *Client) transportError(ctx context.Context, operation string, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return fmt.Errorf("Trade 账户 %s 超时：%w", operation, ctxErr)
+// TransportError 表示与 Trade 通信失败、结果未知。Error 只给出中文概述；
+// 原始错误可能包含网关地址，经 Unwrap 保留给日志，不返回给接口调用方。
+type TransportError struct {
+	Operation string
+	Timeout   bool
+	Err       error
+}
+
+func (e *TransportError) Error() string {
+	if e.Timeout {
+		return fmt.Sprintf("Trade 账户%s超时，结果未知", e.Operation)
 	}
-	return fmt.Errorf("Trade 账户 %s 调用失败：%w", operation, err)
+	return fmt.Sprintf("Trade 账户%s失败：Trade 或网关不可达，结果未知", e.Operation)
+}
+
+func (e *TransportError) Unwrap() error { return e.Err }
+
+func (c *Client) transportError(ctx context.Context, operation string, err error) error {
+	var cfgErr configError
+	if errors.As(err, &cfgErr) {
+		return fmt.Errorf("Trade 账户%s失败：%w", operation, cfgErr.error)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return &TransportError{Operation: operation, Timeout: true, Err: errors.Join(ctxErr, err)}
+	}
+	return &TransportError{Operation: operation, Err: err}
 }
 
 func validateResponse(operation, spaceID, logicalAccountID string, retInfo *tradepb.RetInfo, account *tradepb.LogicalAccount) error {

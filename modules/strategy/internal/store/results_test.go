@@ -291,3 +291,26 @@ func TestListResultsPaging(t *testing.T) {
 		t.Fatalf("应找到第 3 根的记录：found=%v err=%v", found, err)
 	}
 }
+
+// 确定性写入错误：结果校验失败与违反表约束；上下文取消等可重试错误不算。
+func TestIsPermanentWriteError(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	seedEnabledInstance(t, repo, "i1", "session-1", nil)
+	result := okResult("r-dup", "i1", "session-1", 1, PublishNone)
+	items := []ResultItem{
+		{RuleID: "r", InstrumentID: "A", Stage: "weighted"},
+		{RuleID: "r", InstrumentID: "A", Stage: "filtered"},
+	}
+	_, _, err := repo.CommitResult(ctx, CommitRequest{Result: result, Items: items, Now: testNow})
+	if err == nil || !IsPermanentWriteError(err) {
+		t.Fatalf("重复明细应是确定性写入错误：%v", err)
+	}
+	_, _, err = repo.CommitResult(ctx, CommitRequest{Result: Result{ResultID: "r-bad"}, Now: testNow})
+	if err == nil || !IsPermanentWriteError(err) {
+		t.Fatalf("结果校验失败应是确定性写入错误：%v", err)
+	}
+	if IsPermanentWriteError(context.Canceled) || IsPermanentWriteError(ErrResultCASConflict) {
+		t.Fatal("可重试的错误不应判为确定性错误")
+	}
+}

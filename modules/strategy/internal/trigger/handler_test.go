@@ -498,3 +498,28 @@ func TestHandleAcksEventsWithoutInstances(t *testing.T) {
 		t.Fatalf("未配置的处理器应返回 ErrInvalidEvent：%v", err)
 	}
 }
+
+// 结果违反表约束等确定性写入错误不再无限重投：记一条不带明细的 skipped(config_error) 并 ACK，实例标记 degraded。
+func TestHandlePermanentWriteErrorRecordsConfigError(t *testing.T) {
+	h := newHarness(t, rankDSL, nil, false)
+	if err := h.repo.ApplySchema(`CREATE TRIGGER trg_test_reject_items
+BEFORE INSERT ON t_strategy_result_items
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, '测试：拒绝写入明细');
+END;`); err != nil {
+		t.Fatal(err)
+	}
+	h.frame(1, map[string]map[string]float64{"A": {"m": 1}, "B": {"m": 2}})
+	expectAck(t, h.deliver(1))
+	result := h.resultAt(1)
+	if result.Status != store.StatusSkipped || result.SkipReason != input.SkipConfigError {
+		t.Fatalf("确定性写入错误应记为 config_error：%+v", result)
+	}
+	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {
+		t.Fatalf("实例应标记 degraded：%+v", instance)
+	}
+	if got := h.observer.results; len(got) != 1 || got[0] != "02:skipped:config_error" {
+		t.Fatalf("观测结果不符：%v", got)
+	}
+}

@@ -10,22 +10,22 @@ import (
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
-var ErrUnsupportedCalendar = errors.New("unsupported strategy calendar")
+var ErrUnsupportedCalendar = errors.New("不支持的策略日历")
 
 // ClosedBar maps a trigger timestamp to the most recent closed bar end. It
 // supports the two calendars used by the personal system without pretending
 // stock intraday sessions are continuous.
 func ClosedBar(calendar, bar string, trigger time.Time, tradingDays []time.Time) (time.Time, error) {
 	if trigger.IsZero() {
-		return time.Time{}, errors.New("trigger time is required")
+		return time.Time{}, errors.New("缺少触发时间")
 	}
 	bar = strings.ToLower(strings.TrimSpace(bar))
 	if len(bar) < 2 {
-		return time.Time{}, fmt.Errorf("bar %q is invalid", bar)
+		return time.Time{}, fmt.Errorf("bar %q 无效", bar)
 	}
 	n, err := strconv.Atoi(bar[:len(bar)-1])
 	if err != nil || n <= 0 {
-		return time.Time{}, fmt.Errorf("bar %q is invalid", bar)
+		return time.Time{}, fmt.Errorf("bar %q 无效", bar)
 	}
 	suffix := bar[len(bar)-1]
 	duration := time.Duration(n) * time.Minute
@@ -36,7 +36,7 @@ func ClosedBar(calendar, bar string, trigger time.Time, tradingDays []time.Time)
 		duration = time.Duration(n) * 24 * time.Hour
 	}
 	if suffix != 'm' && suffix != 'h' && suffix != 'd' {
-		return time.Time{}, fmt.Errorf("bar %q is invalid", bar)
+		return time.Time{}, fmt.Errorf("bar %q 无效", bar)
 	}
 	calendar = normalizeCalendar(calendar)
 	trigger = trigger.UTC()
@@ -47,7 +47,7 @@ func ClosedBar(calendar, bar string, trigger time.Time, tradingDays []time.Time)
 		return time.Unix(0, end).UTC(), nil
 	case "cn_stock":
 		if len(tradingDays) == 0 {
-			return time.Time{}, errors.New("cn_stock trading days are required")
+			return time.Time{}, errors.New("cn_stock 日历缺少交易日数据")
 		}
 		for i := len(tradingDays) - 1; i >= 0; i-- {
 			day := tradingDays[i].UTC()
@@ -56,9 +56,9 @@ func ClosedBar(calendar, bar string, trigger time.Time, tradingDays []time.Time)
 				return end, nil
 			}
 		}
-		return time.Time{}, errors.New("trigger is before calendar range")
+		return time.Time{}, errors.New("触发时间早于日历覆盖范围")
 	default:
-		return time.Time{}, fmt.Errorf("%w: %s", ErrUnsupportedCalendar, calendar)
+		return time.Time{}, fmt.Errorf("%w：%s", ErrUnsupportedCalendar, calendar)
 	}
 }
 
@@ -79,7 +79,7 @@ type PeriodBoundaries struct {
 // conventions and skips weekends/holidays.
 func ClosedPeriod(calendarID, frequency string, trigger time.Time) (PeriodBoundaries, error) {
 	if trigger.IsZero() {
-		return PeriodBoundaries{}, errors.New("trigger time is required")
+		return PeriodBoundaries{}, errors.New("缺少触发时间")
 	}
 	calendarID = normalizeCalendar(calendarID)
 	frequency = strings.TrimSpace(strings.ToLower(frequency))
@@ -122,14 +122,14 @@ func ClosedPeriod(calendarID, frequency string, trigger time.Time) (PeriodBounda
 		start := end.Add(-duration)
 		return PeriodBoundaries{StorageStart: start, PreviousStart: start.Add(-duration), BarEnd: end, NextEnd: end.Add(duration), BarIndex: end.UnixNano() / duration.Nanoseconds()}, nil
 	}
-	return PeriodBoundaries{}, fmt.Errorf("strategy calendar %q with frequency %q is unsupported", calendarID, frequency)
+	return PeriodBoundaries{}, fmt.Errorf("策略日历 %q 不支持频率 %q", calendarID, frequency)
 }
 
 // FromStorageStart maps a Storage row key to the same public strategy
 // boundary used by a scheduled trigger.
 func FromStorageStart(calendarID, frequency string, storageStart time.Time) (PeriodBoundaries, error) {
 	if storageStart.IsZero() {
-		return PeriodBoundaries{}, errors.New("storage period is required")
+		return PeriodBoundaries{}, errors.New("缺少 Storage 周期时间")
 	}
 	calendarID = normalizeCalendar(calendarID)
 	frequency = strings.TrimSpace(strings.ToLower(frequency))
@@ -150,7 +150,7 @@ func FromStorageStart(calendarID, frequency string, storageStart time.Time) (Per
 		status, err := calendar.Status(day)
 		if err != nil || status != marketcalendar.TradingDay {
 			if err == nil {
-				err = fmt.Errorf("storage period %s is not a trading day", day)
+				err = fmt.Errorf("Storage 周期 %s 不是交易日", day)
 			}
 			return PeriodBoundaries{}, err
 		}
@@ -165,7 +165,7 @@ func FromStorageStart(calendarID, frequency string, storageStart time.Time) (Per
 		end := start.Add(duration)
 		return PeriodBoundaries{StorageStart: start, PreviousStart: start.Add(-duration), BarEnd: end, NextEnd: end.Add(duration), BarIndex: end.UnixNano() / duration.Nanoseconds()}, nil
 	}
-	return PeriodBoundaries{}, fmt.Errorf("strategy calendar %q with frequency %q is unsupported", calendarID, frequency)
+	return PeriodBoundaries{}, fmt.Errorf("策略日历 %q 不支持频率 %q", calendarID, frequency)
 }
 
 func boundariesForStockDay(calendar marketcalendar.TradingCalendar, location *time.Location, day marketcalendar.CivilDate) (PeriodBoundaries, error) {
@@ -254,7 +254,7 @@ func FromBarEnd(calendarID, frequency string, end time.Time) (PeriodBoundaries, 
 		end = end.UTC()
 		return PeriodBoundaries{StorageStart: end.Add(-duration), PreviousStart: end.Add(-2 * duration), BarEnd: end, NextEnd: end.Add(duration), BarIndex: end.UnixNano() / duration.Nanoseconds()}, nil
 	}
-	return PeriodBoundaries{}, fmt.Errorf("strategy calendar %q with frequency %q is unsupported", calendarID, frequency)
+	return PeriodBoundaries{}, fmt.Errorf("策略日历 %q 不支持频率 %q", calendarID, frequency)
 }
 
 func PreviousStorageStart(calendarID, frequency string, storageStart time.Time) (time.Time, error) {
@@ -270,7 +270,7 @@ func PreviousStorageStart(calendarID, frequency string, storageStart time.Time) 
 		return time.Time{}, err
 	}
 	if p.PreviousStart.IsZero() {
-		return time.Time{}, errors.New("previous period is unavailable")
+		return time.Time{}, errors.New("无法确定上一周期")
 	}
 	return p.PreviousStart, nil
 }
@@ -325,11 +325,11 @@ func HistoryStart(calendarID, frequency string, storageStart time.Time, count in
 
 func parseBarDuration(bar string) (time.Duration, error) {
 	if len(bar) < 2 {
-		return 0, fmt.Errorf("bar %q is invalid", bar)
+		return 0, fmt.Errorf("bar %q 无效", bar)
 	}
 	n, err := strconv.Atoi(bar[:len(bar)-1])
 	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("bar %q is invalid", bar)
+		return 0, fmt.Errorf("bar %q 无效", bar)
 	}
 	switch bar[len(bar)-1] {
 	case 'm':
@@ -339,7 +339,7 @@ func parseBarDuration(bar string) (time.Duration, error) {
 	case 'd':
 		return time.Duration(n) * 24 * time.Hour, nil
 	default:
-		return 0, fmt.Errorf("bar %q is invalid", bar)
+		return 0, fmt.Errorf("bar %q 无效", bar)
 	}
 }
 

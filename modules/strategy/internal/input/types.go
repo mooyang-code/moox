@@ -28,6 +28,8 @@ func (e *SkipError) Error() string {
 const (
 	SkipConfigError     = "config_error"
 	SkipAmbiguousSeries = "ambiguous_series"
+	// SkipHistoryInsufficient 表示 View 当前覆盖的历史不足以判断 min_age_bars，不能把标的当作新上市剔除。
+	SkipHistoryInsufficient = "history_insufficient"
 )
 
 // ViewInfo 是 View 的元数据。
@@ -37,8 +39,9 @@ type ViewInfo struct {
 	Frequency     string
 	Status        string
 	ActiveIndexID string
-	// IndexedFrom 是当前索引覆盖的最早业务时间（bar_start），零值表示未知。
+	// IndexedFrom 与 IndexedTo 是当前索引覆盖的最早与最晚业务时间（bar_start），零值表示未知。
 	IndexedFrom time.Time
+	IndexedTo   time.Time
 	Columns     []ViewColumn
 }
 

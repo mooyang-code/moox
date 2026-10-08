@@ -244,7 +244,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 			string(result.InputJSON), string(result.TargetsJSON), string(result.RuleStatesJSON), string(result.SummaryJSON), result.EventData, result.PublishStatus, result.CreatedAt.UTC()).Error; err != nil {
 			return err
 		}
-		if err := insertItems(tx, result.ResultID, request.Items); err != nil {
+		if err := insertItems(tx, result.ResultID, result.CreatedAt.UTC(), request.Items); err != nil {
 			return err
 		}
 		if result.Status == StatusOK && result.PublishStatus == PublishPending {
@@ -259,7 +259,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 	return committed, created, err
 }
 
-func insertItems(tx *gorm.DB, resultID string, items []ResultItem) error {
+func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []ResultItem) error {
 	const chunk = 200
 	for start := 0; start < len(items); start += chunk {
 		end := start + chunk
@@ -267,8 +267,8 @@ func insertItems(tx *gorm.DB, resultID string, items []ResultItem) error {
 			end = len(items)
 		}
 		var builder strings.Builder
-		builder.WriteString("INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_stage, c_score, c_rank, c_weight, c_reason) VALUES ")
-		args := make([]any, 0, (end-start)*8)
+		builder.WriteString("INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_stage, c_score, c_rank, c_weight, c_reason, c_ctime) VALUES ")
+		args := make([]any, 0, (end-start)*9)
 		for i, item := range items[start:end] {
 			if strings.TrimSpace(item.RuleID) == "" || strings.TrimSpace(item.InstrumentID) == "" || strings.TrimSpace(item.Stage) == "" {
 				return fmt.Errorf("%w：解释明细缺少规则、标的或阶段", ErrResultInvalid)
@@ -276,7 +276,7 @@ func insertItems(tx *gorm.DB, resultID string, items []ResultItem) error {
 			if i > 0 {
 				builder.WriteString(", ")
 			}
-			builder.WriteString("(?, ?, ?, ?, ?, ?, ?, ?)")
+			builder.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?)")
 			var score, rank, weight any
 			if item.Score != nil {
 				score = *item.Score
@@ -287,7 +287,7 @@ func insertItems(tx *gorm.DB, resultID string, items []ResultItem) error {
 			if item.Weight != nil {
 				weight = *item.Weight
 			}
-			args = append(args, resultID, item.RuleID, item.InstrumentID, item.Stage, score, rank, weight, item.Reason)
+			args = append(args, resultID, item.RuleID, item.InstrumentID, item.Stage, score, rank, weight, item.Reason, createdAt)
 		}
 		if err := tx.Exec(builder.String(), args...).Error; err != nil {
 			return err

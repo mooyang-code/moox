@@ -5,20 +5,37 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
 func TestDecideMapsHandlerOutcomes(t *testing.T) {
-	if got := decide(nil); got.Decision != jetstream.ACK {
+	if got := decide(nil, 1); got.Decision != jetstream.ACK {
 		t.Fatalf("全部落库应 ACK：%+v", got)
 	}
-	if got := decide(errors.New("sqlite busy")); got.Decision != jetstream.RETRY || got.Delay <= 0 {
+	if got := decide(errors.New("sqlite busy"), 1); got.Decision != jetstream.RETRY || got.Delay <= 0 {
 		t.Fatalf("可重试错误应带退避的 RETRY：%+v", got)
 	}
-	if got := decide(fmt.Errorf("%w：事件为空", trigger.ErrInvalidEvent)); got.Decision != jetstream.TERM {
+	if got := decide(fmt.Errorf("%w：事件为空", trigger.ErrInvalidEvent), 1); got.Decision != jetstream.TERM {
 		t.Fatalf("事件不可处理应 TERM：%+v", got)
+	}
+}
+
+// 重投按投递次数指数退避并封顶：默认 5 次预算的最后一次读取在首次失败约 30 秒之后。
+func TestRetryDelayBacksOffExponentially(t *testing.T) {
+	var total time.Duration
+	for count, want := range map[uint64]time.Duration{0: 2 * time.Second, 1: 2 * time.Second, 2: 4 * time.Second, 3: 8 * time.Second, 4: 16 * time.Second, 5: 30 * time.Second, 50: 30 * time.Second} {
+		if got := retryDelay(count); got != want {
+			t.Fatalf("第 %d 次投递的退避应为 %s，实际 %s", count, want, got)
+		}
+	}
+	for count := uint64(1); count <= 4; count++ {
+		total += retryDelay(count)
+	}
+	if total != 30*time.Second {
+		t.Fatalf("前 4 次退避之和应为 30 秒：%s", total)
 	}
 }
 

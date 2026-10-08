@@ -48,8 +48,13 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 			firstErr = err
 		}
 	}
+	// 列出之后、准备或迁移之前，更新的 ok 结果可能已把这一行取消：ErrNotFound 是正常竞争，跳过即可，
+	// 不能当作连接错误去断开重连。
 	for _, row := range rows {
 		prepared, valid, err := r.Store.PreparePendingResult(ctx, row.ResultID, time.Now().UTC())
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			keep(err)
 			continue
@@ -60,14 +65,14 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 		if err := r.Publisher.PublishResult(ctx, prepared); err != nil {
 			var permanent *PermanentPublishError
 			if errors.As(err, &permanent) {
-				if cancelErr := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishCancelled); cancelErr != nil {
+				if cancelErr := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishCancelled); cancelErr != nil && !errors.Is(cancelErr, store.ErrNotFound) {
 					err = errors.Join(err, cancelErr)
 				}
 			}
 			keep(err)
 			continue
 		}
-		if err := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent); err != nil {
+		if err := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent); err != nil && !errors.Is(err, store.ErrNotFound) {
 			keep(err)
 		}
 	}

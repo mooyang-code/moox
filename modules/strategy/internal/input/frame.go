@@ -55,14 +55,8 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	if view.DatasetID != resolved.DatasetID || !strings.EqualFold(view.Frequency, resolved.Bar) {
 		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的数据集或周期已变化（%s/%s → %s/%s），请重新启用实例", resolved.ViewID, resolved.DatasetID, resolved.Bar, view.DatasetID, view.Frequency)}
 	}
-	available := make(map[string]struct{}, len(view.Columns))
-	for _, column := range view.Columns {
-		available[column.Name] = struct{}{}
-	}
-	for _, column := range program.Columns {
-		if _, ok := available[column]; !ok {
-			return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", column, resolved.ViewID)}
-		}
+	if missing := MissingColumns(view, program, resolved.MinAgeBars); len(missing) > 0 {
+		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), resolved.ViewID)}
 	}
 	subjects, err := l.Client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
 	if err != nil {
@@ -77,12 +71,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	members := func(ctx context.Context, tagID string) ([]string, error) {
 		return l.Client.ListTagMembers(ctx, spaceID, tagID)
 	}
-	var revision uint64
-	probe := NewAgeProbe(l.Client, spaceID, resolved, view, activeSubjects, bar.BarStart, 0)
-	sets, err := BuildSets(ctx, members, program.Strategy, subjects, bar.EventUniverse, func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
-		satisfied, probeErr := probe(ctx, instruments)
-		return satisfied, probeErr
-	})
+	sets, err := BuildSets(ctx, members, program.Strategy, subjects, bar.EventUniverse)
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -102,6 +91,9 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	current, err := groupRows(currentRows)
 	if err != nil {
+		return Loaded{}, err
+	}
+	if err := sets.ApplyAge(ctx, resolved.MinAgeBars, NewAgeProbe(l.Client, spaceID, resolved, view, activeSubjects, bar.BarStart, revision)); err != nil {
 		return Loaded{}, err
 	}
 	previous := map[string]Row{}
@@ -134,6 +126,25 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		frame.Rows[instrument] = engineRow
 	}
 	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, IndexID: view.ActiveIndexID, Revision: revision}, nil
+}
+
+// MissingColumns 返回策略需要、但 View 已不提供的列：当期列、bars[-1] 列，以及 min_age_bars 探针读取的 close。
+func MissingColumns(view ViewInfo, program *dsl.Program, minAgeBars int) []string {
+	available := make(map[string]struct{}, len(view.Columns))
+	for _, column := range view.Columns {
+		available[column.Name] = struct{}{}
+	}
+	required := append(append([]string(nil), program.Columns...), program.PreviousColumns...)
+	if minAgeBars > 0 {
+		required = append(required, ageProbeColumn)
+	}
+	var missing []string
+	for _, column := range uniqueSorted(required) {
+		if _, ok := available[column]; !ok {
+			missing = append(missing, column)
+		}
+	}
+	return missing
 }
 
 // groupRows 按标的归并行；同一标的出现多个序列标签视为配置错误。

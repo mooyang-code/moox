@@ -12,9 +12,11 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Resolver 解析绑定并装配最新周期（试算）。
@@ -66,14 +68,35 @@ func success() *commonpb.RetInfo {
 }
 
 func invalid(err error) *commonpb.RetInfo {
-	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: err.Error()}
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: publicMessage(err)}
 }
 
 func failure(err error) *commonpb.RetInfo {
 	if errors.Is(err, store.ErrNotFound) {
-		return &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: err.Error()}
+		return &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: publicMessage(err)}
 	}
-	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: err.Error()}
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: publicMessage(err)}
+}
+
+// publicMessage 是返回给接口调用方的错误信息：存储驱动与 Trade 传输的原始错误只写日志。
+func publicMessage(err error) string {
+	message, replaced := store.FriendlyMessage(err)
+	var transport *tradeowner.TransportError
+	if replaced || errors.As(err, &transport) {
+		log.Warnf("策略接口返回错误：%s；原始错误：%v", message, rawCause(err))
+	}
+	return message
+}
+
+// rawCause 返回错误链最内层的原始错误，用于日志。
+func rawCause(err error) error {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err
+		}
+		err = next
+	}
 }
 
 func requestSpaceID(ctx context.Context) string {

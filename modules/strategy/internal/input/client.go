@@ -54,6 +54,11 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 			info.IndexedFrom = at.UTC()
 		}
 	}
+	if to := strings.TrimSpace(view.GetIndexedTo()); to != "" {
+		if at, err := time.Parse(time.RFC3339Nano, to); err == nil {
+			info.IndexedTo = at.UTC()
+		}
+	}
 	for page := uint32(1); ; page++ {
 		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
@@ -374,6 +379,10 @@ func viewRetError(info *commonpb.RetInfo) error {
 	message := strings.ToLower(info.GetMsg())
 	if info.GetCode() == commonpb.ErrorCode_VIEW_NOT_READY && (strings.Contains(message, "revision changed") || strings.Contains(message, "index changed") || strings.Contains(message, "updated during query")) {
 		return fmt.Errorf("%w：%s", ErrStale, info.GetMsg())
+	}
+	if info.GetCode() == commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND || info.GetCode() == commonpb.ErrorCode_FIELD_NOT_FOUND {
+		// 列不存在是确定性的配置问题，重试不会恢复。
+		return &SkipError{Reason: SkipConfigError, Detail: "View 的列已不存在：" + info.GetMsg()}
 	}
 	return fmt.Errorf("QueryTimeSeriesRows 返回 %s：%s", info.GetCode().String(), info.GetMsg())
 }

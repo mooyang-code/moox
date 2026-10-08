@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,5 +96,16 @@ func TestQueryRowsConcatenatesPagesAndConvertsValues(t *testing.T) {
 	empty, _, err := rpc.QueryRows(context.Background(), "space", Query{ViewID: "view", ExpectedIndexID: "idx_a"})
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("没有标的时应直接返回空：%v err=%v", empty, err)
+	}
+}
+
+// 列不存在是确定性的配置错误，不能按基础设施错误重试。
+func TestQueryRowsMapsMissingColumnToConfigError(t *testing.T) {
+	stub := &dataViewStub{pages: []*storagepb.QueryTimeSeriesRowsRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND, Msg: "column ma_20 not found"}}}}
+	client := &RPCClient{DataView: stub}
+	_, _, err := client.QueryRows(context.Background(), "space", baseQuery())
+	var skip *SkipError
+	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "ma_20") {
+		t.Fatalf("列不存在应记为 config_error：%v", err)
 	}
 }

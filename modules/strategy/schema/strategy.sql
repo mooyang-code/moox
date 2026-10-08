@@ -88,7 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_t_strategy_results_pending
 ON t_strategy_results (c_ctime, c_result_id)
 WHERE c_publish_status = 'pending';
 
--- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；按天数清理
+-- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；c_ctime 与所属结果相同，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_result_items (
     c_result_id TEXT NOT NULL,
     c_rule_id TEXT NOT NULL,
@@ -98,9 +98,12 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
     c_rank INTEGER,
     c_weight TEXT,
     c_reason TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL,
     PRIMARY KEY (c_result_id, c_rule_id, c_instrument_id),
     FOREIGN KEY (c_result_id) REFERENCES t_strategy_results (c_result_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_result_items (c_ctime);
 
 -- 回放任务：基于 View 的研究回放，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_replays (

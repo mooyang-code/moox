@@ -271,8 +271,11 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 	if resolved.MinAgeBars > 0 {
 		probe = presence.probe(resolved, bar, instrumentOf)
 	}
-	sets, err := input.BuildSets(ctx, members, program.Strategy, subjects, universe, probe)
+	sets, err := input.BuildSets(ctx, members, program.Strategy, subjects, universe)
 	if err != nil {
+		return engine.Decision{}, err
+	}
+	if err := sets.ApplyAge(ctx, resolved.MinAgeBars, probe); err != nil {
 		return engine.Decision{}, err
 	}
 	previous := rows.Bars[bar.PreviousStart.Unix()]

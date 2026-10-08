@@ -29,7 +29,7 @@ func membershipOf(client *fakeClient) Membership {
 func TestBuildSetsAppliesUniverseAndExplicitPools(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, exampleDSL)
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "USDC-USDT", "OLD-USDT", "GHOST-USDT"}, nil)
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "USDC-USDT", "OLD-USDT", "GHOST-USDT"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ rules:
     select: {top: 1}
     weight: {total: 0.5}
 `)
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil, nil)
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ rules:
 		t.Fatalf("按标签的 pool 不符：%v", sets.Expected["p"])
 	}
 	client.errors["tags"] = errors.New("storage down")
-	if _, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil, nil); err == nil || !strings.Contains(err.Error(), "storage down") {
+	if _, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil); err == nil || !strings.Contains(err.Error(), "storage down") {
 		t.Fatalf("标签查询失败应返回错误：%v", err)
 	}
 }
@@ -103,7 +103,7 @@ rules:
     select: {top: 1}
     weight: {total: 0.5}
 `)
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil, nil)
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +116,17 @@ rules:
 func TestBuildSetsAgeProbe(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
+	build := func() Sets {
+		t.Helper()
+		sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sets
+	}
 	failing := func(context.Context, []string) (map[string]struct{}, error) { return nil, errors.New("probe timeout") }
-	if _, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil, failing); err == nil || !strings.Contains(err.Error(), "probe timeout") {
+	failed := build()
+	if err := failed.ApplyAge(context.Background(), strategy.Universe.MinAgeBars, failing); err == nil || !strings.Contains(err.Error(), "probe timeout") {
 		t.Fatalf("探针失败应返回错误：%v", err)
 	}
 	var probed []string
@@ -125,8 +134,8 @@ func TestBuildSetsAgeProbe(t *testing.T) {
 		probed = instruments
 		return map[string]struct{}{"BTC-USDT": {}, "ETH-USDT": {}}, nil
 	}
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil, probe)
-	if err != nil {
+	sets := build()
+	if err := sets.ApplyAge(context.Background(), strategy.Universe.MinAgeBars, probe); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(probed, []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}) {
@@ -138,7 +147,8 @@ func TestBuildSetsAgeProbe(t *testing.T) {
 	if !reflect.DeepEqual(sets.Instruments(), []string{"BTC-USDT", "ETH-USDT"}) {
 		t.Fatalf("年龄剔除后的读取范围不符：%v", sets.Instruments())
 	}
-	if _, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil, nil); err == nil {
+	missingProbe := build()
+	if err := missingProbe.ApplyAge(context.Background(), strategy.Universe.MinAgeBars, nil); err == nil {
 		t.Fatal("设置了 min_age_bars 却没有探针应报错")
 	}
 }

@@ -152,3 +152,80 @@ func TestInstrumentFailuresMapsSubjectIDs(t *testing.T) {
 		t.Fatalf("未知标的应原样保留：%v", mapped)
 	}
 }
+
+// 只在 bars[-1] 中引用的列、min_age_bars 探针读取的 close 被删除，都是确定性的 config_error，不能当基础设施错误重试。
+func TestLoadBarChecksPreviousAndProbeColumns(t *testing.T) {
+	client := newFakeClient("spot")
+	strategy := parseStrategy(t, `name: prev_only
+universe:
+  min_age_bars: 2
+rules:
+  - id: r
+    type: rank
+    score: "bias_q_20 - bars[-1].ma_20"
+    select: {top: 1}
+    weight: {total: 1}
+`)
+	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(program.Columns, ","), "ma_20") {
+		t.Fatalf("ma_20 只应出现在上一根列中：%v", program.Columns)
+	}
+	for _, removed := range []string{"ma_20", "close"} {
+		drifted := newFakeClient("spot")
+		view := drifted.views["view_factor_1h"]
+		kept := view.Columns[:0:0]
+		for _, column := range view.Columns {
+			if column.Name != removed {
+				kept = append(kept, column)
+			}
+		}
+		view.Columns = kept
+		drifted.views["view_factor_1h"] = view
+		_, err := Loader{Client: drifted}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
+		var skip *SkipError
+		if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, removed) {
+			t.Fatalf("删除 %s 应记为 config_error：%v", removed, err)
+		}
+		if len(drifted.queries) != 0 {
+			t.Fatalf("缺列时不应再读行：%+v", drifted.queries)
+		}
+	}
+}
+
+// 年龄探针在当期主查询之后执行，并固定同一修订号；View 覆盖不到目标根时整期跳过（history_insufficient），
+// 不能把全部标的当作新上市剔除。
+func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
+	client := newFakeClient("spot")
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
+	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
+	}
+	if _, err := (Loader{Client: client}).LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
+		t.Fatalf("装配失败：%v", err)
+	}
+	if len(client.queries) != 3 || !client.queries[0].Start.Equal(barStart) || client.queries[0].ExpectedRevision != 0 {
+		t.Fatalf("第一个查询应是当期主查询：%+v", client.queries)
+	}
+	for _, query := range client.queries[1:] {
+		if query.ExpectedRevision != 11 {
+			t.Fatalf("探针与上一根应固定主查询的修订号：%+v", client.queries)
+		}
+	}
+
+	view := client.views["view_factor_1h"]
+	view.IndexedFrom = barStart.Add(-10 * time.Hour)
+	client.views["view_factor_1h"] = view
+	client.queries = nil
+	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
+	var skip *SkipError
+	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "min_age_bars=24") {
+		t.Fatalf("View 覆盖不足应记为 history_insufficient：%v", err)
+	}
+}

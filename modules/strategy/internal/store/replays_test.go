@@ -122,3 +122,26 @@ func TestRetentionDeletesOldItemsAndReplays(t *testing.T) {
 		t.Fatalf("已结束的旧回放应被清理：removed=%d err=%v", removed, err)
 	}
 }
+
+// 明细按自身的 c_ctime 分批删除，直到没有过期行。
+func TestRetentionDeletesItemsInBatches(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	seedEnabledInstance(t, repo, "i1", "session-1", nil)
+	items := []ResultItem{
+		{RuleID: "r", InstrumentID: "A", Stage: "weighted"}, {RuleID: "r", InstrumentID: "B", Stage: "scored"},
+		{RuleID: "r", InstrumentID: "C", Stage: "scored"}, {RuleID: "r", InstrumentID: "D", Stage: "missing"}, {RuleID: "r", InstrumentID: "E", Stage: "filtered"},
+	}
+	mustCommit(t, repo, okResult("r1", "i1", "session-1", 1, PublishNone), items, testNow)
+	mustCommit(t, repo, okResult("r2", "i1", "session-1", 3, PublishNone), items[:1], testNow)
+	previous := retentionBatch
+	retentionBatch = 2
+	t.Cleanup(func() { retentionBatch = previous })
+	deleted, err := repo.DeleteResultItemsBefore(ctx, testNow.Add(2*time.Hour))
+	if err != nil || deleted != 5 {
+		t.Fatalf("应分批删除 5 条明细：deleted=%d err=%v", deleted, err)
+	}
+	if kept, err := repo.ListResultItems(ctx, "r2"); err != nil || len(kept) != 1 {
+		t.Fatalf("未过期的明细应保留：%+v err=%v", kept, err)
+	}
+}

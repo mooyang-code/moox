@@ -12,6 +12,8 @@ import (
 type recordingResultStore struct {
 	rows  []store.Result
 	limit int
+	// cancelled 模拟列出之后被更新的 ok 结果取消的行：准备时返回 ErrNotFound。
+	cancelled map[string]bool
 }
 
 func (s *recordingResultStore) ListPendingResults(_ context.Context, limit int) ([]store.Result, error) {
@@ -30,6 +32,9 @@ func (s *recordingResultStore) ListPendingResults(_ context.Context, limit int) 
 }
 
 func (s *recordingResultStore) PreparePendingResult(_ context.Context, resultID string, _ time.Time) (store.Result, bool, error) {
+	if s.cancelled[resultID] {
+		return store.Result{}, false, store.ErrNotFound
+	}
 	for _, row := range s.rows {
 		if row.ResultID == resultID {
 			return row, true, nil
@@ -96,5 +101,21 @@ func TestRelayQuarantinesPermanentResultAndAdvancesPrefix(t *testing.T) {
 	}
 	if len(publisher.rows) != 1 || publisher.rows[0].ResultID != "good" {
 		t.Fatalf("published rows=%+v", publisher.rows)
+	}
+}
+
+// 列出之后被更新结果取消的行是正常竞争：跳过它继续投递，不返回错误（否则运行时会断开重连）。
+func TestRelaySkipsRowsCancelledAfterListing(t *testing.T) {
+	resultStore := &recordingResultStore{rows: []store.Result{
+		{ResultID: "old", PublishStatus: store.PublishPending},
+		{ResultID: "new", PublishStatus: store.PublishPending},
+	}, cancelled: map[string]bool{"old": true}}
+	publisher := &recordingResultPublisher{}
+	relay := &Relay{Store: resultStore, Publisher: publisher}
+	if err := relay.PublishPending(context.Background(), 10); err != nil {
+		t.Fatalf("被取消的行不应报错：%v", err)
+	}
+	if len(publisher.rows) != 1 || publisher.rows[0].ResultID != "new" {
+		t.Fatalf("应只投递未取消的行：%+v", publisher.rows)
 	}
 }

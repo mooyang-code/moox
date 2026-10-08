@@ -29,6 +29,7 @@ const (
 var failureReasons = map[string]bool{
 	trigger.SkipInfraRetryExhausted: true,
 	input.SkipConfigError:           true,
+	input.SkipHistoryInsufficient:   true,
 	input.SkipAmbiguousSeries:       true,
 }
 

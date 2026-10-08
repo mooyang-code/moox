@@ -99,7 +99,7 @@ func (f *fakeOwner) ValidateSession(_ context.Context, _, account, instance, ses
 		return f.validateErr
 	}
 	if f.owner[account] != instance+"/"+session {
-		return errors.New("所有者不符")
+		return tradeowner.ErrSessionNotOwned
 	}
 	return nil
 }
@@ -447,4 +447,74 @@ func TestS26StartReplayRejectsSwap(t *testing.T) {
 	trpc.SetMetaData(other, "X-Space-Id", []byte("other"))
 	foreign, _ := h.service.GetReplay(other, &strategypb.GetReplayReq{ReplayId: started.GetReplay().GetReplayId()})
 	requireFail(t, int32(foreign.GetRetInfo().GetCode()), foreign.GetRetInfo().GetMsg(), "空间")
+}
+
+// 停用时 Trade 释放未确认，随后再启用：不能沿用已关闭的旧会话；先在 Trade 侧确认释放，再新建会话并重新解析绑定。
+func TestReenableAfterUnconfirmedReleaseCreatesNewSession(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	first := h.createInstance("i1", "s1", "view_a", "acct-1", true).GetInstance()
+	h.owner.releaseErr = errors.New("trade unavailable")
+	disabled := h.setEnabled("i1", false)
+	requireFail(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg(), "释放未确认")
+	blocked := h.setEnabled("i1", true)
+	requireFail(t, int32(blocked.GetRetInfo().GetCode()), blocked.GetRetInfo().GetMsg(), "释放尚未确认")
+	if blocked.GetInstance().GetEnabled() || blocked.GetInstance().GetSessionId() != first.GetSessionId() {
+		t.Fatalf("释放未确认时不能启用，也不能丢掉待释放的会话：%+v", blocked.GetInstance())
+	}
+	h.owner.releaseErr = nil
+	reenabled := h.setEnabled("i1", true)
+	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
+	if reenabled.GetInstance().GetSessionId() == first.GetSessionId() {
+		t.Fatalf("不能沿用已关闭的会话：%+v", reenabled.GetInstance())
+	}
+	if h.resolver.calls != 2 {
+		t.Fatalf("新会话应重新解析绑定：calls=%d", h.resolver.calls)
+	}
+	released := false
+	for _, session := range h.owner.releases {
+		released = released || session == first.GetSessionId()
+	}
+	if !released {
+		t.Fatalf("旧会话应在 Trade 侧释放：%v", h.owner.releases)
+	}
+}
+
+// 启动对账只隔离不一致的实例：Trade 明确拒绝的会话自动停用；结果未知时保持启用并标记 degraded。
+func TestReconcileEnabledInstancesIsolatesInstances(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	h.createInstance("i1", "s1", "view_a", "acct-1", true)
+	h.createInstance("i2", "s1", "view_a", "acct-2", true)
+	h.owner.owner["acct-1"] = "other/session"
+	err := h.service.ReconcileEnabledInstances(h.ctx)
+	if err == nil || !strings.Contains(err.Error(), "已自动停用") {
+		t.Fatalf("被拒绝的会话应自动停用并告警：%v", err)
+	}
+	rejected, _ := h.service.Store.GetInstance(h.ctx, "i1")
+	if rejected.Enabled || rejected.SessionID != nil || rejected.Health != store.HealthDegraded {
+		t.Fatalf("i1 应已停用、清空会话并标记 degraded：%+v", rejected)
+	}
+	if healthy, _ := h.service.Store.GetInstance(h.ctx, "i2"); !healthy.Enabled {
+		t.Fatalf("i2 不应受影响：%+v", healthy)
+	}
+	h.owner.validateErr = &tradeowner.TransportError{Operation: "校验会话", Err: errors.New("dial tcp 10.0.0.1:443: connect refused")}
+	err = h.service.ReconcileEnabledInstances(h.ctx)
+	if err == nil || !strings.Contains(err.Error(), "暂时无法校验") || strings.Contains(err.Error(), "10.0.0.1") {
+		t.Fatalf("结果未知时只告警，且不暴露网关地址：%v", err)
+	}
+	if unknown, _ := h.service.Store.GetInstance(h.ctx, "i2"); !unknown.Enabled || unknown.Health != store.HealthDegraded {
+		t.Fatalf("i2 应保持启用并标记 degraded：%+v", unknown)
+	}
+}
+
+// 存储约束错误以中文概述返回，不暴露表名、列名与约束原文。
+func TestStoreErrorsAreNormalized(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("dup", demoDSL)
+	rsp, _ := h.service.CreateStrategy(h.ctx, &strategypb.CreateStrategyReq{Strategy: &strategypb.Strategy{StrategyId: "dup", DslYaml: demoDSL}})
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "记录已存在")
+	if message := rsp.GetRetInfo().GetMsg(); strings.Contains(message, "t_strategy") || strings.Contains(message, "UNIQUE") {
+		t.Fatalf("不应暴露存储细节：%s", message)
+	}
 }

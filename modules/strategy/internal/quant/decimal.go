@@ -11,7 +11,7 @@ const scaleDigits = 18
 
 var decimalPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
-var ErrInvalidDecimal = errors.New("strategy: invalid decimal")
+var ErrInvalidDecimal = errors.New("无效的定点数")
 
 var scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDigits), nil)
 

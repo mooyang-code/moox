@@ -14,7 +14,24 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-const retryDelay = time.Second
+// 重投退避：第 n 次投递失败后等待 baseRetryDelay × 2^(n−1)，最长 maxRetryDelay。
+// 默认 5 次尝试预算下，第 5 次读取发生在首次失败约 30 秒之后，足以跨过依赖的短暂重启。
+const (
+	baseRetryDelay = 2 * time.Second
+	maxRetryDelay  = 30 * time.Second
+)
+
+// retryDelay 按投递次数计算退避时长。
+func retryDelay(deliveryCount uint64) time.Duration {
+	delay := baseRetryDelay
+	for n := uint64(1); n < deliveryCount && delay < maxRetryDelay; n++ {
+		delay *= 2
+	}
+	if delay > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return delay
+}
 
 // ConsumerConfig 是消费者配置。
 type ConsumerConfig struct {
@@ -132,7 +149,7 @@ func HandleDelivery(ctx context.Context, delivery *jetstream.Delivery, handler *
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay, Err: err}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(delivery.DeliveryCount), Err: err}
 	}
 	contentType := delivery.ContentType
 	if contentType == "" {
@@ -142,16 +159,16 @@ func HandleDelivery(ctx context.Context, delivery *jetstream.Delivery, handler *
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
-	return decide(handler.Handle(ctx, message, payload))
+	return decide(handler.Handle(ctx, message, payload), delivery.DeliveryCount)
 }
 
-func decide(err error) jetstream.HandlerResult {
+func decide(err error, deliveryCount uint64) jetstream.HandlerResult {
 	switch {
 	case err == nil:
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	case errors.Is(err, trigger.ErrInvalidEvent):
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	default:
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay, Err: err}
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(deliveryCount), Err: err}
 	}
 }

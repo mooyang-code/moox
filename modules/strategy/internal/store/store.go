@@ -11,12 +11,46 @@ import (
 	"strings"
 	"time"
 
+	sqlitedriver "github.com/glebarez/go-sqlite"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
 // ErrNotFound 表示记录不存在。
 var ErrNotFound = gorm.ErrRecordNotFound
+
+// sqliteConstraint 是 SQLite 约束错误的主错误码。
+const sqliteConstraint = 19
+
+// FriendlyMessage 把错误链中的 SQLite 驱动错误替换为中文概述，避免把表名、列名等内部细节返回给接口调用方；
+// replaced 为 true 时调用方应把原始错误写入日志。
+func FriendlyMessage(err error) (message string, replaced bool) {
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) {
+		return err.Error(), false
+	}
+	friendly := "策略数据库操作失败"
+	switch sqliteErr.Code() {
+	case 2067, 1555: // SQLITE_CONSTRAINT_UNIQUE、SQLITE_CONSTRAINT_PRIMARYKEY
+		friendly = "记录已存在（标识重复）"
+	case 787: // SQLITE_CONSTRAINT_FOREIGNKEY
+		friendly = "引用的记录不存在"
+	}
+	full := err.Error()
+	if raw := sqliteErr.Error(); raw != "" && strings.Contains(full, raw) {
+		return strings.Replace(full, raw, friendly, 1), true
+	}
+	return friendly, true
+}
+
+// IsPermanentWriteError 判断写入错误是否是确定性的：结果校验失败或违反表约束，原样重试不会成功。
+func IsPermanentWriteError(err error) bool {
+	if errors.Is(err, ErrResultInvalid) {
+		return true
+	}
+	var sqliteErr *sqlitedriver.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqliteConstraint
+}
 
 // Store 持有单写连接的 SQLite 数据库。
 type Store struct {
@@ -97,7 +131,7 @@ var schemaColumns = map[string][]string{
 	"t_strategy_instances":    {"c_instance_id", "c_strategy_id", "c_space_id", "c_view_id", "c_logical_account_id", "c_enabled", "c_session_id", "c_resolved_json", "c_health", "c_deleted_at", "c_ctime", "c_mtime"},
 	"t_strategy_sessions":     {"c_session_id", "c_instance_id", "c_dsl_hash", "c_resolved_json", "c_ctime", "c_closed_at"},
 	"t_strategy_results":      {"c_result_id", "c_instance_id", "c_session_id", "c_bar_end_time", "c_valid_until", "c_status", "c_skip_reason", "c_dsl_hash", "c_input_json", "c_targets_json", "c_rule_states_json", "c_summary_json", "c_event_data", "c_publish_status", "c_ctime"},
-	"t_strategy_result_items": {"c_result_id", "c_rule_id", "c_instrument_id", "c_stage", "c_score", "c_rank", "c_weight", "c_reason"},
+	"t_strategy_result_items": {"c_result_id", "c_rule_id", "c_instrument_id", "c_stage", "c_score", "c_rank", "c_weight", "c_reason", "c_ctime"},
 	"t_strategy_replays":      {"c_replay_id", "c_strategy_id", "c_dsl_yaml", "c_space_id", "c_view_id", "c_start_time", "c_end_time", "c_fee_bps", "c_status", "c_progress_time", "c_metrics_json", "c_error", "c_ctime", "c_mtime"},
 	"t_strategy_replay_bars":  {"c_replay_id", "c_bar_end_time", "c_status", "c_targets_json", "c_positions_json", "c_summary_json", "c_return", "c_equity", "c_turnover", "c_fee"},
 }
@@ -116,6 +150,7 @@ var requiredIndexes = []struct {
 	{"t_strategy_results", "idx_t_strategy_results_instance_bar", "c_instance_id\x00c_bar_end_time", false, false},
 	{"t_strategy_results", "idx_t_strategy_results_latest_ok", "c_instance_id\x00c_session_id\x00c_bar_end_time", false, true},
 	{"t_strategy_results", "idx_t_strategy_results_pending", "c_ctime\x00c_result_id", false, true},
+	{"t_strategy_result_items", "idx_t_strategy_result_items_ctime", "c_ctime", false, false},
 	{"t_strategy_replays", "idx_t_strategy_replays_space", "c_space_id\x00c_ctime", false, false},
 }
 

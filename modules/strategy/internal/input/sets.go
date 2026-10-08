@@ -15,8 +15,9 @@ type Membership func(ctx context.Context, tagID string) ([]string, error)
 
 // BuildSets 划分一期的标的集合：
 // U = 事件名单 ∩ 活跃标的（事件没有名单时为全部活跃标的）；
-// E(r) = 规则显式 pool 的范围或 universe 过滤后的 U；G(r) 由年龄探针决定。
-func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, subjects []Subject, eventUniverse []string, probe AgeProbe) (Sets, error) {
+// E(r) = 规则显式 pool 的范围或 universe 过滤后的 U。年龄剔除 G(r) 由 ApplyAge 另行计算，
+// 以便实时装配先读当期行、再用同一修订号执行年龄探针。
+func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, subjects []Subject, eventUniverse []string) (Sets, error) {
 	sets := Sets{Expected: map[string][]string{}, AgedOut: map[string][]string{}, Subjects: map[string]Subject{}}
 	bySubject := make(map[string]Subject, len(subjects))
 	byInstrument := make(map[string]Subject, len(subjects))
@@ -152,26 +153,35 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 		sort.Strings(expected)
 		sets.Expected[rule.ID] = append([]string(nil), expected...)
 	}
-	if strategy.Universe.MinAgeBars > 0 {
-		if probe == nil {
-			return Sets{}, fmt.Errorf("策略设置了 min_age_bars，但没有年龄探针")
-		}
-		aged, err := probe(ctx, sets.Instruments())
-		if err != nil {
-			return Sets{}, err
-		}
-		for ruleID, expected := range sets.Expected {
-			var out []string
-			for _, id := range expected {
-				if _, ok := aged[id]; !ok {
-					out = append(out, id)
-				}
-			}
-			sets.AgedOut[ruleID] = out
-		}
-	}
 	return sets, nil
 }
+
+// ApplyAge 用年龄探针计算各规则的 G(r)：∪E(r) 中探针未返回的标的视为不满足 min_age_bars。
+func (s *Sets) ApplyAge(ctx context.Context, minAgeBars int, probe AgeProbe) error {
+	if minAgeBars <= 0 {
+		return nil
+	}
+	if probe == nil {
+		return fmt.Errorf("策略设置了 min_age_bars，但没有年龄探针")
+	}
+	aged, err := probe(ctx, s.Instruments())
+	if err != nil {
+		return err
+	}
+	for ruleID, expected := range s.Expected {
+		var out []string
+		for _, id := range expected {
+			if _, ok := aged[id]; !ok {
+				out = append(out, id)
+			}
+		}
+		s.AgedOut[ruleID] = out
+	}
+	return nil
+}
+
+// ageProbeColumn 是年龄探针读取的列：只要该列在目标窗口内有行，就认为标的已有足够历史。
+const ageProbeColumn = "close"
 
 // AgeProbe 返回满足年龄要求的标的集合（有历史行即满足）；失败返回基础设施错误。
 type AgeProbe func(ctx context.Context, instruments []string) (map[string]struct{}, error)
@@ -190,6 +200,7 @@ func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.T
 }
 
 // NewAgeProbe 构造每期一次的探针查询：读取年龄窗口内的 close 列，有行即满足。
+// revision 应与当期主查询一致；View 当前覆盖的最早时间晚于目标根时无法判断年龄，返回 history_insufficient。
 func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, subjects map[string]Subject, barStart time.Time, revision uint64) AgeProbe {
 	return func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
 		if resolved.MinAgeBars <= 0 || len(instruments) == 0 {
@@ -203,13 +214,16 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		if err != nil {
 			return nil, err
 		}
+		if target := to.Add(-time.Nanosecond); !view.IndexedFrom.IsZero() && target.Before(view.IndexedFrom) {
+			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 当前最早只覆盖到 %s", resolved.MinAgeBars, target.Format(time.RFC3339), resolved.ViewID, view.IndexedFrom.Format(time.RFC3339))}
+		}
 		selected := make([]Subject, 0, len(instruments))
 		for _, id := range instruments {
 			if subject, ok := subjects[id]; ok {
 				selected = append(selected, subject)
 			}
 		}
-		rows, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: from, End: to, Columns: []string{"close"}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision})
+		rows, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision})
 		if err != nil {
 			return nil, fmt.Errorf("年龄探针查询：%w", err)
 		}

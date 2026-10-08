@@ -92,6 +92,14 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 		resolved.ViewColumns = append(resolved.ViewColumns, column.Name)
 	}
 	sortStrings(resolved.ViewColumns)
+	if strategy.Universe.MinAgeBars > 0 {
+		if _, ok := columns[ageProbeColumn]; !ok {
+			return Resolved{}, nil, fmt.Errorf("universe.min_age_bars 通过 %s 列判断上市时间，但 View %s 没有该列", ageProbeColumn, viewID)
+		}
+		if err := checkAgeCoverage(view, resolved, strategy.Universe.MinAgeBars); err != nil {
+			return Resolved{}, nil, err
+		}
+	}
 	referenced, err := dsl.ReferencedColumns(strategy)
 	if err != nil {
 		return Resolved{}, nil, err
@@ -131,6 +139,23 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	}
 	resolved.UsesPreviousBar = program.UsesPreviousBar
 	return resolved, program, nil
+}
+
+// checkAgeCoverage 校验 View 当前覆盖的历史足以判断 min_age_bars：以最新一根为 T，T − (N−1) 根不能早于覆盖起点。
+// 数据集的保留期可能长于 View 每个序列保留的根数，只按数据集校验会让全部标的被当作新上市剔除。
+func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int) error {
+	if view.IndexedFrom.IsZero() || view.IndexedTo.IsZero() {
+		return nil
+	}
+	target, err := HistoryStart(resolved.Calendar, resolved.Bar, view.IndexedTo, minAgeBars)
+	if err != nil {
+		return err
+	}
+	if target.Before(view.IndexedFrom) {
+		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 %s，但 View %s 当前只覆盖 %s 至 %s；请减小 min_age_bars 或等待 View 积累更多历史",
+			minAgeBars, target.Format(time.RFC3339), resolved.ViewID, view.IndexedFrom.Format(time.RFC3339), view.IndexedTo.Format(time.RFC3339))
+	}
+	return nil
 }
 
 // sourceMarketType 判定源数据集的市场类型：优先读数据集属性 market_type，否则由其标的范围标签的 market_type 决定；
