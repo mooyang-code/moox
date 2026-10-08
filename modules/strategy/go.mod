@@ -3,6 +3,10 @@ module github.com/mooyang-code/moox/modules/strategy
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/sqlite v1.11.0
@@ -133,3 +137,11 @@ replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/m
 replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
+
+replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
+
+replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
+
+replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => ../../packages/gatewayroute/proto/directorypb
+
+replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute

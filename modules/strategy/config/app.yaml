@@ -14,14 +14,17 @@ eventbus:
   reconnect_interval: 1s
   connect_timeout: 3s
   consumer_name: strategy_view_data_ready_v1
+# 访问 Storage 与 FactorMgr 统一经本机主机网关
+gateway_client:
+  mode: local
+  caller: strategy
+  key_file: ../secrets/caller-strategy.key
+  ca_file: ../certs/moox-ca.crt
+  cache_dir: ./data/gatewayclient
 factor:
-  target: ip://127.0.0.1:11003
-  target_node: factor
   app_id: strategy
   timeout: 5s
 storage:
-  target: ip://127.0.0.1:11003
-  target_node: storage-gateway
   app_id: strategy
   # AppKey/ViewAppKey are derived from the deployment's Storage auth secrets.
   app_key: ""

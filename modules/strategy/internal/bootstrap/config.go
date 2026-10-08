@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,14 +25,11 @@ type EventBusConfig struct {
 	ConnectTimeout    time.Duration `yaml:"connect_timeout"`
 }
 
-// RPCConfig describes an authenticated Strategy metadata/data dependency.
-// Targets are optional so an installation can run the control plane before
-// wiring Factor and Storage; V2 publication is rejected until both are set.
+// RPCConfig describes an authenticated Strategy metadata/data dependency. 请求经 gateway_client
+// 发送；没有配置 gateway_client 时只运行控制面，V2 发布会被拒绝。
 type RPCConfig struct {
-	Target     string `yaml:"target"`
-	TargetNode string `yaml:"target_node"`
-	AppID      string `yaml:"app_id"`
-	AppKey     string `yaml:"app_key"`
+	AppID  string `yaml:"app_id"`
+	AppKey string `yaml:"app_key"`
 	// ViewAppKey authenticates DataView requests. Storage deliberately uses a
 	// separate secret for the read/index service from the Primary/Metadata
 	// caller secret, so Strategy must carry both identities explicitly.
@@ -81,9 +79,14 @@ type Config struct {
 	Trade      TradeConfig    `yaml:"trade"`
 	InstanceID string         `yaml:"instance_id"`
 	EventBus   EventBusConfig `yaml:"eventbus"`
-	Factor     RPCConfig      `yaml:"factor"`
-	Storage    RPCConfig      `yaml:"storage"`
+	// GatewayClient 是访问 Storage 与 FactorMgr 的 gatewayclient 配置（strategy 身份）。
+	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+	Factor        RPCConfig            `yaml:"factor"`
+	Storage       RPCConfig            `yaml:"storage"`
 }
+
+// executionConfigured 判断是否配置了执行所需的依赖（Storage 与 FactorMgr 经 gateway_client 访问）。
+func (c Config) executionConfigured() bool { return c.GatewayClient.Mode != "" }
 
 func Load(path string) (Config, error) {
 	b, err := os.ReadFile(path)
@@ -156,12 +159,15 @@ func Load(path string) (Config, error) {
 			c.Storage.ViewAppKey = serviceAuthKey(secret, c.Storage.AppID)
 		}
 	}
-	if strings.TrimSpace(c.Storage.Target) != "" {
+	if c.executionConfigured() {
+		if err := c.GatewayClient.Validate(); err != nil {
+			return Config{}, err
+		}
 		if strings.TrimSpace(c.Storage.AppKey) == "" {
-			return Config{}, fmt.Errorf("storage app_key is required when storage target is configured (set app_key or MOOX_STORAGE_PRIMARY_AUTH_SECRET)")
+			return Config{}, fmt.Errorf("storage app_key is required when gateway_client is configured (set app_key or MOOX_STORAGE_PRIMARY_AUTH_SECRET)")
 		}
 		if strings.TrimSpace(c.Storage.ViewAppKey) == "" {
-			return Config{}, fmt.Errorf("storage view_app_key is required when storage target is configured (set view_app_key or MOOX_STORAGE_VIEW_AUTH_SECRET)")
+			return Config{}, fmt.Errorf("storage view_app_key is required when gateway_client is configured (set view_app_key or MOOX_STORAGE_VIEW_AUTH_SECRET)")
 		}
 	}
 	if c.Factor.Timeout == 0 {

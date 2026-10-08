@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func TestLoadDerivesStorageAppKeysFromRuntimeSecrets(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nstorage:\n  target: ip://storage:11003\n  app_id: strategy\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\ngateway_client:\n  mode: local\n  caller: strategy\n  key_file: caller-strategy.key\n  ca_file: moox-ca.crt\n  cache_dir: ./data/gatewayclient\nstorage:\n  app_id: strategy\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -87,7 +88,7 @@ func TestLoadRejectsConfiguredStorageWithoutAppKey(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
 	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "")
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nstorage:\n  target: ip://storage:11003\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\ngateway_client:\n  mode: local\n  caller: strategy\n  key_file: caller-strategy.key\n  ca_file: moox-ca.crt\n  cache_dir: ./data/gatewayclient\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
@@ -99,7 +100,7 @@ func TestLoadRejectsConfiguredStorageWithoutViewAppKey(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "")
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nstorage:\n  target: ip://storage:11003\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\ngateway_client:\n  mode: local\n  caller: strategy\n  key_file: caller-strategy.key\n  ca_file: moox-ca.crt\n  cache_dir: ./data/gatewayclient\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
@@ -124,7 +125,7 @@ func TestLoadRejectsInvalidLogicalAccountTimeout(t *testing.T) {
 func TestNewRPCServiceUsesLogicalAccountOwnerClient(t *testing.T) {
 	service := newRPCService(nil, Config{
 		Trade: TradeConfig{GatewayURL: "https://trade:11001", TargetNode: "trade"},
-	})
+	}, nil)
 	if service.LogicalAccounts == nil {
 		t.Fatalf("service=%+v", service)
 	}
@@ -202,13 +203,14 @@ func TestLoadTradeGatewayUsesDedicatedOverrides(t *testing.T) {
 	}
 }
 
-func TestStorageGatewayEndpointPrefersLocalStorageNode(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
-	t.Setenv("MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET", "ip://146.56.196.204:11003")
-	t.Setenv("MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID", "storage")
-	target, node := storageGatewayEndpoint(Config{Storage: RPCConfig{Target: "ip://127.0.0.1:11003", TargetNode: "storage-gateway"}})
-	if target != "ip://146.56.196.204:11003" || node != "storage" {
-		t.Fatalf("storage gateway endpoint = %s %s", target, node)
+func TestLoadValidatesConfiguredGatewayClient(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
+	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\ngateway_client:\n  mode: local\n  caller: strategy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "ca_file") {
+		t.Fatalf("不完整的 gateway_client 应当报错: %v", err)
 	}
 }

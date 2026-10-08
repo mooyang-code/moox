@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -27,11 +26,10 @@ import (
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -45,6 +43,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, err
 	}
 	keepResources := false
+	var gateway *gatewayclient.Client
 	var eventRuntime *strategyoutbox.Runtime
 	var readyConsumer *strategyeventconsumer.Consumer
 	var readyClient *jetstream.Client
@@ -71,17 +70,25 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		if cancelReconcile != nil {
 			cancelReconcile()
 		}
+		if gateway != nil {
+			gateway.Close()
+		}
 		_ = db.Close()
 	}()
 	if err := db.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, nil, fmt.Errorf("apply strategy schema: %w", err)
 	}
 	repo := db
+	if cfg.executionConfigured() {
+		if gateway, err = gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient}); err != nil {
+			return nil, nil, fmt.Errorf("创建 strategy 的 gatewayclient: %w", err)
+		}
+	}
 	eventRuntime, err = newEventBusRuntime(db, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	service := newRPCService(repo, cfg)
+	service := newRPCService(repo, cfg, gateway)
 	// Reconcile incomplete modern disable/enable handshakes before subscribing
 	// to Factor-ready events. Historical V1 owner rows are audit data and are
 	// never implicitly released or rebound during startup.
@@ -101,7 +108,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err != nil {
 		return nil, nil, err
 	}
-	readyConsumer, readyClient, readyProcessor, readyErr = newReadyConsumer(ctx, repo, cfg, moduleMetrics)
+	readyConsumer, readyClient, readyProcessor, readyErr = newReadyConsumer(ctx, repo, cfg, gateway, moduleMetrics)
 	if readyErr != nil {
 		return nil, nil, readyErr
 	}
@@ -152,6 +159,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		if scheduler != nil {
 			scheduler.Stop()
 		}
+		if gateway != nil {
+			gateway.Close()
+		}
 		dbErr := db.Close()
 		if eventBusErr != nil {
 			return eventBusErr
@@ -167,7 +177,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 // execution path can consume it. Observation-only instances may still run
 // without these optional worker targets.
 func requireExecutionDependencies(ctx context.Context, repo *store.Store, cfg Config) error {
-	if repo == nil || (strings.TrimSpace(cfg.Factor.Target) != "" && strings.TrimSpace(cfg.Storage.Target) != "") {
+	if repo == nil || cfg.executionConfigured() {
 		return nil
 	}
 	instances, err := repo.ListAllInstances(ctx, boolPtr(true))
@@ -175,7 +185,7 @@ func requireExecutionDependencies(ctx context.Context, repo *store.Store, cfg Co
 		return fmt.Errorf("check enabled Strategy instances: %w", err)
 	}
 	if len(instances) > 0 {
-		return errors.New("enabled strategy instances require configured Factor and Storage targets")
+		return errors.New("enabled strategy instances require gateway_client to reach Factor and Storage")
 	}
 	return nil
 }
@@ -205,16 +215,16 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 	})
 }
 
-func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config, moduleMetrics *report.ModuleMetrics) (*strategyeventconsumer.Consumer, *jetstream.Client, *strategytrigger.Processor, error) {
-	if strings.TrimSpace(cfg.Factor.Target) == "" || strings.TrimSpace(cfg.Storage.Target) == "" {
+func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config, gateway *gatewayclient.Client, moduleMetrics *report.ModuleMetrics) (*strategyeventconsumer.Consumer, *jetstream.Client, *strategytrigger.Processor, error) {
+	if gateway == nil {
 		return nil, nil, nil, nil
 	}
 	client, err := connectEventBus(ctx, cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	reader := newStorageReader(cfg)
-	compilerFactory := newCompilerFactory(cfg)
+	reader := newStorageReader(cfg, gateway)
+	compilerFactory := newCompilerFactory(cfg, gateway)
 	logicalOwner := newLogicalAccountOwnerClient(cfg.Trade)
 	poolRegistry := defaultPoolRegistry()
 	processor := &strategytrigger.Processor{
@@ -398,10 +408,8 @@ func connectEventBus(ctx context.Context, cfg Config) (*jetstream.Client, error)
 	return jetstream.Connect(ctx, jsConfig)
 }
 
-func newStorageReader(cfg Config) *storageio.RPCClient {
-	credentials := gatewayauth.CredentialsFromEnv()
-	target, node := storageGatewayEndpoint(cfg)
-	options := storageRPCOptions(target, node, credentials, cfg.Storage.Timeout)
+func newStorageReader(cfg Config, gateway *gatewayclient.Client) *storageio.RPCClient {
+	options := gateway.ClientOptions(gatewayclient.WithTimeout(cfg.Storage.Timeout))
 	return &storageio.RPCClient{
 		Metadata: storagepb.NewMetadataClientProxy(options...),
 		DataView: storagepb.NewDataViewClientProxy(options...),
@@ -410,23 +418,22 @@ func newStorageReader(cfg Config) *storageio.RPCClient {
 	}
 }
 
-func newRPCService(repo *store.Store, cfg Config) *rpc.Service {
-	compilerFactory := newCompilerFactory(cfg)
+func newRPCService(repo *store.Store, cfg Config, gateway *gatewayclient.Client) *rpc.Service {
+	compilerFactory := newCompilerFactory(cfg, gateway)
 	return &rpc.Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, CompilerFactory: compilerFactory, PoolRegistry: defaultPoolRegistry(),
 		LogicalAccounts: newLogicalAccountOwnerClient(cfg.Trade),
 	}
 }
 
-func newCompilerFactory(cfg Config) func(string) *compiler.Compiler {
-	if strings.TrimSpace(cfg.Factor.Target) == "" || strings.TrimSpace(cfg.Storage.Target) == "" {
+// newCompilerFactory 返回经 gatewayclient 读取 Factor 定义和 Storage 视图的编译器；没有配置 gateway_client 时返回 nil。
+func newCompilerFactory(cfg Config, gateway *gatewayclient.Client) func(string) *compiler.Compiler {
+	if gateway == nil {
 		return nil
 	}
+	factorOptions := gateway.ClientOptions(gatewayclient.WithTimeout(cfg.Factor.Timeout))
+	storageOptions := gateway.ClientOptions(gatewayclient.WithTimeout(cfg.Storage.Timeout))
 	return func(spaceID string) *compiler.Compiler {
-		credentials := gatewayauth.CredentialsFromEnv()
-		factorOptions := rpcOptions(cfg.Factor.Target, cfg.Factor.TargetNode, credentials, cfg.Factor.Timeout)
-		storageTarget, storageNode := storageGatewayEndpoint(cfg)
-		storageOptions := storageRPCOptions(storageTarget, storageNode, credentials, cfg.Storage.Timeout)
 		factorClient := &factorio.RPCClient{Proxy: factorpb.NewFactorMgrClientProxy(factorOptions...)}
 		storageClient := &storageio.RPCClient{
 			SpaceID:  spaceID,
@@ -437,41 +444,6 @@ func newCompilerFactory(cfg Config) func(string) *compiler.Compiler {
 		}
 		return &compiler.Compiler{Factors: factorClient, Storage: storageClient}
 	}
-}
-
-func rpcOptions(target, targetNode string, credentials gatewayauth.Credentials, timeout time.Duration) []client.Option {
-	target = gatewayauth.ServiceGatewayTarget(target)
-	if envNode := gatewayauth.ServiceGatewayNodeID(); envNode != "" {
-		targetNode = envNode
-	}
-	return appendTimeout(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials), timeout)
-}
-
-// storageGatewayEndpoint prefers the Storage node's native gateway. Control
-// injects MOOX_SERVICE_GATEWAY_TARGET / MOOX_GATEWAY_TARGET_NODE for local
-// FactorMgr, and those must not pin Metadata/GetView to a stale control-side
-// storage-primary replica.
-func storageGatewayEndpoint(cfg Config) (string, string) {
-	target := strings.TrimSpace(cfg.Storage.Target)
-	node := strings.TrimSpace(cfg.Storage.TargetNode)
-	if value := strings.TrimSpace(os.Getenv("MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET")); value != "" {
-		target = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID")); value != "" {
-		node = value
-	}
-	return target, node
-}
-
-func storageRPCOptions(target, targetNode string, credentials gatewayauth.Credentials, timeout time.Duration) []client.Option {
-	return appendTimeout(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials), timeout)
-}
-
-func appendTimeout(options []client.Option, timeout time.Duration) []client.Option {
-	if timeout > 0 {
-		return append(options, client.WithTimeout(timeout))
-	}
-	return options
 }
 
 func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumers ...*strategyeventconsumer.Consumer) func(context.Context) healthz.Response {
