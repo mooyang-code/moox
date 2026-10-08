@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -23,7 +24,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/report"
@@ -218,7 +218,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
 	}
-	klineInventory, err := buildKlineFreshnessInventory(cfg)
+	klineInventory, err := buildKlineFreshnessInventory(cfg, runtime)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -276,20 +276,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInventoryCache, error) {
+// buildKlineFreshnessInventory 经 gatewayclient 调用 CollectMgr.GetTaskResultInventory，缓存 K 线任务的结果清单。
+func buildKlineFreshnessInventory(cfg *config.Config, runtime *Runtime) (*monmetrics.TaskResultInventoryCache, error) {
 	if cfg == nil || !cfg.KlineFreshness.Enabled {
 		return nil, nil
 	}
-	credentials, err := gatewayauth.LoadCallerKey(cfg.GatewayClient.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("monitor collector inventory credentials: %w", err)
+	if runtime == nil || runtime.Gateway == nil {
+		return nil, fmt.Errorf("monitor collector inventory requires gatewayclient")
 	}
-	gatewayURL, targetNode := klineFreshnessCollectorRoute(cfg)
-	client, err := monmetrics.NewCollectorInventoryHTTPClient(gatewayURL, targetNode, credentials,
-		os.Getenv("MOOX_SERVICE_GATEWAY_CA_FILE"), 15*time.Second)
-	if err != nil {
-		return nil, err
-	}
+	client := collectorpb.NewCollectMgrClientProxy(runtime.Gateway.ClientOptions(gatewayclient.WithTimeout(15 * time.Second))...)
 	source, err := monmetrics.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryPageSize, cfg.KlineFreshness.InventoryMaxEntries)
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory source: %w", err)
@@ -299,11 +294,6 @@ func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInv
 		return nil, fmt.Errorf("monitor collector inventory cache: %w", err)
 	}
 	return cache, nil
-}
-
-func klineFreshnessCollectorRoute(cfg *config.Config) (string, string) {
-	return cfg.KlineFreshness.CollectorGatewayURL,
-		firstNonEmptyString(cfg.KlineFreshness.CollectorGatewayNodeID, gatewayauth.ServiceGatewayNodeID())
 }
 
 func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache) *monmetrics.KlineFreshnessEvaluator {

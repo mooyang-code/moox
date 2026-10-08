@@ -23,9 +23,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
-	if cfg.KlineFreshness.CollectorGatewayURL != "http://127.0.0.1:11002" {
-		t.Fatalf("collector gateway url default = %q", cfg.KlineFreshness.CollectorGatewayURL)
-	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
 	}
@@ -134,18 +131,6 @@ func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	}
 }
 
-func TestMonitorCollectorGatewayEnvironment(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
-	t.Setenv("MOOX_MONITOR_COLLECTOR_GATEWAY_URL", "https://collector-gateway:11002")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
-	cfg := Default()
-	cfg.applyEnv()
-
-	if cfg.KlineFreshness.CollectorGatewayURL != "https://collector-gateway:11002" || cfg.KlineFreshness.CollectorGatewayNodeID != "collector-node" {
-		t.Fatalf("collector route = %q/%q", cfg.KlineFreshness.CollectorGatewayURL, cfg.KlineFreshness.CollectorGatewayNodeID)
-	}
-}
-
 func TestMonitorDefaultGatewayClientFollowsDeploymentLayout(t *testing.T) {
 	cfg := Default()
 	if err := cfg.GatewayClient.Validate(); err != nil {
@@ -250,11 +235,11 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
 	}
 	freshness, ok := app["kline_freshness"].(map[string]any)
-	if !ok || freshness["collector_gateway_url"] != "http://127.0.0.1:11002" {
-		t.Fatalf("kline freshness Collector gateway url = %v", freshness["collector_gateway_url"])
+	if !ok {
+		t.Fatal("kline_freshness config is missing")
 	}
-	if cfg.KlineFreshness.CollectorGatewayURL != "http://127.0.0.1:11002" {
-		t.Fatalf("loaded collector gateway url = %q", cfg.KlineFreshness.CollectorGatewayURL)
+	if _, legacy := freshness["collector_gateway_url"]; legacy {
+		t.Fatal("Collector 清单经 gatewayclient 访问，不再配置网关地址")
 	}
 	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute {

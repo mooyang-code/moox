@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -71,50 +72,36 @@ func TestNewMetricsStorageWithoutGatewayIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestBuildKlineFreshnessInventoryUsesCollectorGatewayHTTPEntry(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
+func TestBuildKlineFreshnessInventoryUsesGatewayClient(t *testing.T) {
 	cfg := config.Default()
 	cfg.KlineFreshness.Enabled = true
-	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
 	cfg.GatewayClient.KeyFile = filepath.Join(t.TempDir(), "caller-monitor.key")
+	cfg.GatewayClient.CacheDir = t.TempDir()
 	key, err := gatewayauth.MarshalCallerKey(gatewayauth.CallerKey{Caller: "monitor", KeyID: "monitor-1", Secret: "test-gateway-secret"})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfg.GatewayClient.KeyFile, key, 0o600))
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	require.NoError(t, err)
+	defer gateway.Close()
+	runtime := &Runtime{Gateway: gateway}
 
-	cache, err := buildKlineFreshnessInventory(cfg)
+	cache, err := buildKlineFreshnessInventory(cfg, runtime)
 	require.NoError(t, err)
 	require.NotNil(t, cache)
 
-	missingURL := *cfg
-	missingURL.KlineFreshness.CollectorGatewayURL = ""
-	_, err = buildKlineFreshnessInventory(&missingURL)
-	require.ErrorContains(t, err, "gateway URL")
+	_, err = buildKlineFreshnessInventory(cfg, &Runtime{})
+	require.ErrorContains(t, err, "gatewayclient")
 
 	disabled := *cfg
 	disabled.KlineFreshness.Enabled = false
-	cache, err = buildKlineFreshnessInventory(&disabled)
+	cache, err = buildKlineFreshnessInventory(&disabled, runtime)
 	require.NoError(t, err)
 	require.Nil(t, cache)
 
 	invalid := *cfg
 	invalid.KlineFreshness.InventoryPageSize = 101
-	_, err = buildKlineFreshnessInventory(&invalid)
+	_, err = buildKlineFreshnessInventory(&invalid, runtime)
 	require.ErrorContains(t, err, "page size")
-}
-
-func TestKlineFreshnessCollectorRoute(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "gateway-default")
-	cfg := config.Default()
-	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
-	cfg.KlineFreshness.CollectorGatewayNodeID = "collector-node"
-
-	target, nodeID := klineFreshnessCollectorRoute(cfg)
-	require.Equal(t, "http://collector-gateway:11002", target)
-	require.Equal(t, "collector-node", nodeID)
-
-	cfg.KlineFreshness.CollectorGatewayNodeID = ""
-	_, nodeID = klineFreshnessCollectorRoute(cfg)
-	require.Equal(t, "gateway-default", nodeID)
 }
 
 func TestMaxInt(t *testing.T) {

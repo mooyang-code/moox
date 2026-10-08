@@ -113,12 +113,8 @@ type MarketHealthConfig struct {
 }
 
 type KlineFreshnessConfig struct {
-	Enabled  bool     `yaml:"enabled"`
-	SpaceIDs []string `yaml:"space_ids"`
-	// CollectorGatewayURL is the Service Gateway HTTP entry; CollectMgr serves
-	// HTTP only, so the inventory cannot use the native tRPC entry.
-	CollectorGatewayURL      string        `yaml:"collector_gateway_url"`
-	CollectorGatewayNodeID   string        `yaml:"collector_gateway_node_id"`
+	Enabled                  bool          `yaml:"enabled"`
+	SpaceIDs                 []string      `yaml:"space_ids"`
 	EvaluationInterval       time.Duration `yaml:"evaluation_interval"`
 	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
 	InventoryPageSize        int           `yaml:"inventory_page_size"`
@@ -224,7 +220,7 @@ func Default() *Config {
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
 		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		KlineFreshness: KlineFreshnessConfig{
-			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, CollectorGatewayURL: "http://127.0.0.1:11002", EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
+			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
 		},
 		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{AppID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, AppID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
@@ -325,9 +321,6 @@ func (c *Config) applyDefaults() {
 	klineDefaults := Default().KlineFreshness
 	if c.KlineFreshness.EvaluationInterval == 0 {
 		c.KlineFreshness.EvaluationInterval = klineDefaults.EvaluationInterval
-	}
-	if c.KlineFreshness.CollectorGatewayURL == "" {
-		c.KlineFreshness.CollectorGatewayURL = klineDefaults.CollectorGatewayURL
 	}
 	if len(c.KlineFreshness.SpaceIDs) == 0 {
 		c.KlineFreshness.SpaceIDs = append([]string(nil), klineDefaults.SpaceIDs...)
@@ -442,12 +435,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.TargetNode = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_COLLECTOR_GATEWAY_URL")); v != "" {
-		c.KlineFreshness.CollectorGatewayURL = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE")); v != "" {
-		c.KlineFreshness.CollectorGatewayNodeID = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.KeyID = v

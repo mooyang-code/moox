@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -81,7 +80,7 @@ func TestLoadRejectsPartialCollectorRuntimeGatewayConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "collector_runtime.node_id")
 }
 
-func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.T) {
+func TestCollectorServicesListenOnLoopbackTRPC(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
 	require.NoError(t, err)
 	var config struct {
@@ -95,30 +94,21 @@ func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.
 		} `yaml:"server"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &config))
-	listeners := make(map[string]struct {
+	type listener struct {
 		ip       string
 		port     int
 		protocol string
-	})
-	for _, service := range config.Server.Service {
-		if strings.Contains(service.Name, "MarketFetchRuntime") {
-			listeners[service.Protocol] = struct {
-				ip       string
-				port     int
-				protocol string
-			}{service.IP, service.Port, service.Protocol}
-		}
 	}
-	assert.Equal(t, struct {
-		ip       string
-		port     int
-		protocol string
-	}{"127.0.0.1", 11418, "http"}, listeners["http"])
-	assert.Equal(t, struct {
-		ip       string
-		port     int
-		protocol string
-	}{"127.0.0.1", 11422, "trpc"}, listeners["trpc"])
+	listeners := map[string]listener{}
+	for _, service := range config.Server.Service {
+		listeners[service.Name] = listener{service.IP, service.Port, service.Protocol}
+	}
+	// 与组件目录一致：两个服务都只监听本机回环地址，经主机网关以 tRPC 访问。
+	assert.Equal(t, listener{"127.0.0.1", 11402, "trpc"}, listeners["trpc.moox.collector.CollectMgr"])
+	assert.Equal(t, listener{"127.0.0.1", 11422, "trpc"}, listeners["trpc.moox.collector.MarketFetchRuntime"])
+	for name := range listeners {
+		assert.NotContains(t, name, ".http", "HTTP 入口已经删除")
+	}
 }
 
 func TestStockCNTargetDataTimeValidatorUsesConfiguredCalendar(t *testing.T) {

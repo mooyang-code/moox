@@ -201,23 +201,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-const (
-	marketFetchRuntimeHTTPService   = "trpc.moox.collector.MarketFetchRuntime.http"
-	marketFetchRuntimeNativeService = "trpc.moox.collector.MarketFetchRuntime.native"
-)
+const marketFetchRuntimeService = "trpc.moox.collector.MarketFetchRuntime"
 
 func registerMarketFetchRuntime(s *server.Server, implementation collectorpb.MarketFetchRuntimeService) error {
 	if s == nil || implementation == nil {
 		return fmt.Errorf("collector MarketFetchRuntime server is not initialized")
 	}
-	for _, name := range []string{marketFetchRuntimeHTTPService, marketFetchRuntimeNativeService} {
-		service := s.Service(name)
-		if service == nil {
-			return fmt.Errorf("collector MarketFetchRuntime listener %q is not configured", name)
-		}
-		if err := service.Register(&collectorpb.MarketFetchRuntimeServer_ServiceDesc, implementation); err != nil {
-			return fmt.Errorf("register MarketFetchRuntime on %s: %w", name, err)
-		}
+	service := s.Service(marketFetchRuntimeService)
+	if service == nil {
+		return fmt.Errorf("collector MarketFetchRuntime listener %q is not configured", marketFetchRuntimeService)
+	}
+	if err := service.Register(&collectorpb.MarketFetchRuntimeServer_ServiceDesc, implementation); err != nil {
+		return fmt.Errorf("register MarketFetchRuntime: %w", err)
 	}
 	return nil
 }
