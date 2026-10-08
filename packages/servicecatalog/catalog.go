@@ -29,6 +29,9 @@ const AccessCaller = "access"
 // ConsoleCaller 是控制台转发浏览器请求时使用的调用方身份。
 const ConsoleCaller = "console"
 
+// MooxCLICaller 是操作员机器上 moox-cli 的调用方身份，经 SSH 隧道访问各主机网关。
+const MooxCLICaller = "moox-cli"
+
 // Scope 是组件的部署范围。
 type Scope string
 

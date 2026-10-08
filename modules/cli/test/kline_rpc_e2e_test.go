@@ -211,11 +211,17 @@ type gatewayHelperProcess struct {
 
 func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gatewayHelperProcess {
 	t.Helper()
+	return startGatewayHelperProcessWithKeys(t, helper, klineStorageAppID+":"+klineGatewayKeyID+":"+klineGatewaySecret, args...)
+}
+
+// startGatewayHelperProcessWithKeys 启动 e2e-helper；keys 是 caller:key_id:secret，多个用逗号分隔。
+func startGatewayHelperProcessWithKeys(t *testing.T, helper, keys string, args ...string) *gatewayHelperProcess {
+	t.Helper()
 	process := &gatewayHelperProcess{
 		command:  exec.Command(helper, args...),
 		waitDone: make(chan struct{}),
 	}
-	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_KEYS="+klineStorageAppID+":"+klineGatewayKeyID+":"+klineGatewaySecret)
+	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_KEYS="+keys)
 	process.command.Stdout = &process.logs
 	process.command.Stderr = &process.logs
 	require.NoError(t, process.command.Start())
