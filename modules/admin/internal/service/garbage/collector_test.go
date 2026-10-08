@@ -10,20 +10,20 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
 type fakeResolver struct {
-	detail gateway.ServiceDetail
+	detail console.ServiceDetail
 	ok     bool
 }
 
-func (r fakeResolver) ResolveAdminServiceDetail(_ context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool) {
+func (r fakeResolver) ResolveAdminServiceDetail(_ context.Context, adminNodeID, serviceID string) (console.ServiceDetail, bool) {
 	if adminNodeID != "control" || serviceID != "cloudnode" {
-		return gateway.ServiceDetail{}, false
+		return console.ServiceDetail{}, false
 	}
 	return r.detail, r.ok
 }
@@ -64,7 +64,7 @@ func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
 	}
 	server, paths := cloudNodeServer(t, `{"ret_info":{"code":0,"msg":"ok"},"packages":2,"cos_bytes":"250"}`)
 	address := strings.TrimPrefix(server.URL, "http://")
-	collector, err := NewCollector(db, fakeResolver{detail: gateway.ServiceDetail{Address: address, Path: "trpc.moox.cloudnode.CloudNodeMgr"}, ok: true}, "control")
+	collector, err := NewCollector(db, fakeResolver{detail: console.ServiceDetail{Address: address, Path: "trpc.moox.cloudnode.CloudNodeMgr"}, ok: true}, "control")
 	require.NoError(t, err)
 	collector.now = func() time.Time { return now }
 
@@ -81,7 +81,7 @@ func TestCollectorReportsCloudNodeFailureAfterTrimmingHistory(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Exec(`INSERT INTO t_login_history (c_user_id, c_username, c_client_ip, c_login_result, c_ctime) VALUES ('u1', 'admin', '127.0.0.1', 'success', '2026-01-01 00:00:00')`).Error)
 	server, _ := cloudNodeServer(t, `{"ret_info":{"code":999,"msg":"list cloud accounts: boom"}}`)
-	collector, err := NewCollector(db, fakeResolver{detail: gateway.ServiceDetail{Address: strings.TrimPrefix(server.URL, "http://"), Path: "trpc.moox.cloudnode.CloudNodeMgr"}, ok: true}, "control")
+	collector, err := NewCollector(db, fakeResolver{detail: console.ServiceDetail{Address: strings.TrimPrefix(server.URL, "http://"), Path: "trpc.moox.cloudnode.CloudNodeMgr"}, ok: true}, "control")
 	require.NoError(t, err)
 
 	err = collector.Run(context.Background())

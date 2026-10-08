@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"github.com/gorilla/mux"
@@ -44,7 +44,7 @@ rate_limit:
   default_qps: 100
   default_burst: 200
 `
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "gateway.yaml"), []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(content), 0o644))
 
 	origWD, err := os.Getwd()
 	require.NoError(t, err)

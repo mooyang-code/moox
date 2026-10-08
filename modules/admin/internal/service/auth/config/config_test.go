@@ -14,7 +14,7 @@ func TestConfig_LoadConfig_ValidYAML_ShouldParseFields(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config")
 	require.NoError(t, os.MkdirAll(configDir, 0o755))
-	path := filepath.Join(configDir, "gateway.yaml")
+	path := filepath.Join(configDir, "console.yaml")
 	content := `cache:
   data_dir: /tmp/auth-cache
 jwt:
@@ -56,7 +56,7 @@ func TestConfig_LoadConfig_RejectsInvalidSecurityDurations(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.MkdirAll(filepath.Join(dir, "config"), 0o755))
 			content := "jwt:\n  access_expired: 24h\nsecurity:\n  session_ttl: 24h\n  request_clock_skew: 60s\n  nonce_ttl: 2m\n  raw_ticket_ttl: 60s\n  " + tt.field + "\n"
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "gateway.yaml"), []byte(content), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte(content), 0o644))
 			origWD, err := os.Getwd()
 			require.NoError(t, err)
 			require.NoError(t, os.Chdir(dir))
@@ -71,7 +71,7 @@ func TestConfig_LoadConfig_RequiresAccessExpiryToMatchSessionTTL(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "config"), 0o755))
 	content := "jwt:\n  access_expired: 1h\nsecurity:\n  session_ttl: 24h\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "gateway.yaml"), []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte(content), 0o644))
 	origWD, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
@@ -95,7 +95,7 @@ func TestConfig_LoadConfig_InvalidYAML_ShouldReturnError(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config")
 	require.NoError(t, os.MkdirAll(configDir, 0o755))
-	path := filepath.Join(configDir, "gateway.yaml")
+	path := filepath.Join(configDir, "console.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("cache: ["), 0o644))
 
 	origWD, err := os.Getwd()

@@ -36,7 +36,7 @@ gateway:
     - "/api/admin/auth/Login"
   # 网关不在本地 YAML 中维护服务地址。
   # /api/admin/* 的转发目标来自 Admin 节点的 t_service_deployments。
-  # 缺失 active 部署记录时请求会直接失败，避免 gateway.yaml 与系统服务部署表出现双来源。
+  # 缺失 active 部署记录时请求会直接失败，避免 console.yaml 与系统服务部署表出现双来源。
 
 # CORS 跨域配置（生产环境请配置具体前端域名，避免使用 *）
 cors:
@@ -67,7 +67,7 @@ rate_limit:
 #
 # 数据库说明:
 # admin 当前只使用 SQLite，数据库路径由 app.yaml 的 database.path 配置。
-# gateway.yaml 只保留管理网关、认证缓存、JWT、CORS 与限流配置。
+# console.yaml 只保留管理网关、认证缓存、JWT、CORS 与限流配置。
 #
 # 缓存目录:
 # 确保应用有权限在指定目录创建和写入文件

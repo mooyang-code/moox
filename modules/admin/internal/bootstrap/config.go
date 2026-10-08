@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"gopkg.in/yaml.v3"
 
@@ -20,7 +20,7 @@ import (
 type Config struct {
 	App         *config.AppConfig
 	Auth        *authcfg.Config
-	Gateway     *gateway.Config
+	Gateway     *console.Config
 	AdminNodeID string
 }
 
@@ -53,11 +53,11 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	log.Info("认证配置加载成功")
 
 	// 3. 加载网关配置
-	gatewayCfg, err := gateway.LoadConfig()
+	gatewayCfg, err := console.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
-	gateway.SetConfig(gatewayCfg)
+	console.SetConfig(gatewayCfg)
 	if len(strings.TrimSpace(gatewayCfg.JWT.SecretKey)) < 32 {
 		return nil, fmt.Errorf("jwt.secret_key must contain at least 32 characters")
 	}
@@ -136,7 +136,7 @@ func loadEncryptionKey() error {
 	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
 }
 
-func validateGatewayCORS(cfg *gateway.Config) error {
+func validateGatewayCORS(cfg *console.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("gateway config is nil")
 	}

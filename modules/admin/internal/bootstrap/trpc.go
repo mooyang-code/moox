@@ -1,7 +1,7 @@
 package bootstrap
 
 import (
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
@@ -30,7 +30,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 
 	// 2. 初始化网关服务
 	log.Info("正在初始化网关服务...")
-	if err := gateway.InitGatewayServices(s, services.SysDeploy, cfg.AdminNodeID, services.SpaceMgr); err != nil {
+	if err := console.InitGatewayServices(s, services.SysDeploy, cfg.AdminNodeID, services.SpaceMgr); err != nil {
 		return err
 	}
 	if err := adminhealth.Register(s.Service("trpc.moox.admin.Health"), time.Now()); err != nil {
@@ -48,12 +48,12 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	// 3.5 SSH 管理服务（直连端点走 rawhandler）
 	sshSvc := sshrpc.NewService(services.SSHService)
 	adminpb.RegisterSshService(s.Service("trpc.moox.ops.Ssh"), sshSvc)
-	gateway.SetRawSessionOwnerVerifier(services.SSHService.SessionBelongsToUser)
+	console.SetRawSessionOwnerVerifier(services.SSHService.SessionBelongsToUser)
 	// 注册 SSH 裸 HTTP 处理器。每次连接/传输必须先通过已签名的管理 RPC
 	// 获取与操作类型绑定的一次性 ticket；session_id 本身不承担鉴权。
-	gateway.RegisterRawHandler("ssh", "WsConnect", gateway.RawHandler(sshrpc.WebSocketConnectHandler(services.SSHService)))
-	gateway.RegisterRawHandler("ssh", "SftpDownload", gateway.RawHandler(sshrpc.SftpDownloadHandler(services.SSHService)))
-	gateway.RegisterRawHandler("ssh", "SftpUpload", gateway.RawHandler(sshrpc.SftpUploadHandler(services.SSHService)))
+	console.RegisterRawHandler("ssh", "WsConnect", console.RawHandler(sshrpc.WebSocketConnectHandler(services.SSHService)))
+	console.RegisterRawHandler("ssh", "SftpDownload", console.RawHandler(sshrpc.SftpDownloadHandler(services.SSHService)))
+	console.RegisterRawHandler("ssh", "SftpUpload", console.RawHandler(sshrpc.SftpUploadHandler(services.SSHService)))
 
 	// 3.7 秘钥管理服务
 	secretSvc := secretrpc.NewService(services.SecretService)

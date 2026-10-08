@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"context"
@@ -78,7 +78,7 @@ func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider, adm
 
 // setupRoutes 设置路由
 func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
-	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.control"), hr.buildControlRouter()); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.admin.Console"), hr.buildControlRouter()); err != nil {
 		return err
 	}
 	return nil

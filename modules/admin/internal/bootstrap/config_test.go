@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -61,21 +61,21 @@ func TestValidateGatewayCORS_NilConfig_ShouldError(t *testing.T) {
 }
 
 func TestValidateGatewayCORS_ProdEmptyOrigins_ShouldError(t *testing.T) {
-	cfg := &gateway.Config{Gateway: gateway.GatewayConfig{Debug: false}}
+	cfg := &console.Config{Gateway: console.GatewayConfig{Debug: false}}
 	err := validateGatewayCORS(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cors.allowed_origins")
 }
 
 func TestValidateGatewayCORS_DebugEmptyOrigins_ShouldPass(t *testing.T) {
-	cfg := &gateway.Config{Gateway: gateway.GatewayConfig{Debug: true}}
+	cfg := &console.Config{Gateway: console.GatewayConfig{Debug: true}}
 	require.NoError(t, validateGatewayCORS(cfg))
 }
 
 func TestValidateGatewayCORS_WithOrigins_ShouldPass(t *testing.T) {
-	cfg := &gateway.Config{
-		Gateway: gateway.GatewayConfig{Debug: false},
-		CORS:    gateway.CORSConfig{AllowedOrigins: []string{"https://admin.example.com"}},
+	cfg := &console.Config{
+		Gateway: console.GatewayConfig{Debug: false},
+		CORS:    console.CORSConfig{AllowedOrigins: []string{"https://admin.example.com"}},
 	}
 	require.NoError(t, validateGatewayCORS(cfg))
 }
@@ -124,7 +124,7 @@ func setupBootstrapConfigDir(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "app.yaml"), []byte(`database:
   path: ./data/admin.db
 `), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "gateway.yaml"), []byte(`jwt:
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(`jwt:
   secret_key: test-secret-key-32bytes-long-123456
 gateway:
   debug: true
@@ -179,7 +179,7 @@ func TestLoadConfigs_EmptyJWTSecret_ShouldError(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "app.yaml"), []byte(`database:
   path: ./data/admin.db
 `), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "gateway.yaml"), []byte(`jwt:
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(`jwt:
   secret_key: ""
 gateway:
   debug: true
