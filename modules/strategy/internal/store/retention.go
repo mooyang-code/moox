@@ -27,11 +27,40 @@ func (s *Store) DeleteResultItemsBefore(ctx context.Context, cutoff time.Time) (
 	}
 }
 
-// DeleteReplaysBefore 删除创建时间早于 cutoff 且已结束的回放（周期记录级联删除）。
+// DeleteReplaysBefore 删除创建时间早于 cutoff 且已结束的回放：逐个回放先分批删周期记录，再删任务本身，
+// 每条语句的工作量有界，不会在单连接上长时间阻塞事件处理与接口。
 func (s *Store) DeleteReplaysBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	result := s.db.WithContext(ctx).Exec(`
-		DELETE FROM t_strategy_replays
-		WHERE c_ctime < ? AND c_status IN ('done', 'failed', 'cancelled')
-	`, cutoff.UTC())
-	return result.RowsAffected, result.Error
+	var deleted int64
+	for {
+		var ids []string
+		if err := s.db.WithContext(ctx).Raw(`
+			SELECT c_replay_id FROM t_strategy_replays
+			WHERE c_ctime < ? AND c_status IN ('done', 'failed', 'cancelled')
+			ORDER BY c_ctime LIMIT 20
+		`, cutoff.UTC()).Scan(&ids).Error; err != nil {
+			return deleted, err
+		}
+		if len(ids) == 0 {
+			return deleted, nil
+		}
+		for _, id := range ids {
+			for {
+				result := s.db.WithContext(ctx).Exec(`
+					DELETE FROM t_strategy_replay_bars
+					WHERE rowid IN (SELECT rowid FROM t_strategy_replay_bars WHERE c_replay_id = ? LIMIT ?)
+				`, id, retentionBatch)
+				if result.Error != nil {
+					return deleted, result.Error
+				}
+				if result.RowsAffected < retentionBatch {
+					break
+				}
+			}
+			result := s.db.WithContext(ctx).Exec(`DELETE FROM t_strategy_replays WHERE c_replay_id = ?`, id)
+			if result.Error != nil {
+				return deleted, result.Error
+			}
+			deleted += result.RowsAffected
+		}
+	}
 }

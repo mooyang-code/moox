@@ -123,13 +123,13 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	}
 	unlock := s.lockStrategy(current.StrategyID)
 	defer unlock()
+	// 可编辑字段整体替换：策略定义与 View 必填，组合账户留空表示观察实例。
+	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetViewId()) == "" {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 view_id 不能为空"))}, nil
+	}
 	updated := current
-	if strings.TrimSpace(v.GetStrategyId()) != "" {
-		updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
-	}
-	if strings.TrimSpace(v.GetViewId()) != "" {
-		updated.ViewID = strings.TrimSpace(v.GetViewId())
-	}
+	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
+	updated.ViewID = strings.TrimSpace(v.GetViewId())
 	updated.LogicalAccountID = optionalString(v.GetLogicalAccountId())
 	updated.UpdatedAt = s.nowTime()
 	if def, err := s.Store.GetDefinition(ctx, updated.StrategyID); err != nil || def.DeletedAt != nil {
@@ -305,7 +305,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 			resolvedJSON = json.RawMessage(session.ResolvedJSON)
 		} else {
 			if instance.LogicalAccountID != nil {
-				if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, previous); err != nil && !tradeowner.IsOwnerConflict(err) {
+				if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, previous); err != nil && !tradeowner.IsReleaseSettled(err) {
 					return reload(), fmt.Errorf("上一个会话在 Trade 侧的释放尚未确认，暂不能启用：%w", err)
 				}
 			}
@@ -344,6 +344,12 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 	}
 	if instance.LogicalAccountID != nil {
+		// 同一空间的组合账户只能由一个启用实例持有：认领之前先检查，避免认领成功后才撞上唯一约束。
+		if holder, err := s.accountHolder(ctx, instance); err != nil {
+			return reload(), err
+		} else if holder != "" {
+			return reload(), fmt.Errorf("组合账户 %s 已被启用实例 %s 绑定，请先停用该实例", *instance.LogicalAccountID, holder)
+		}
 		if err := s.Owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID); err != nil {
 			if tradeowner.IsPermanentClaimError(err) {
 				_ = s.Store.CloseSession(ctx, sessionID, s.nowTime())
@@ -376,17 +382,14 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 	if releaseNeeded {
 		pending = instance.SessionID
 	}
-	if err := s.Store.SetInstanceEnabled(ctx, instance.InstanceID, false, pending, nil, s.nowTime()); err != nil {
+	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, s.nowTime()); err != nil {
 		return reload(), err
-	}
-	if instance.SessionID != nil {
-		_ = s.Store.CloseSession(ctx, *instance.SessionID, s.nowTime())
 	}
 	if releaseNeeded {
 		if s.Owner == nil {
 			return reload(), errors.New("未接线 Trade，无法释放账户会话；请接线后重试停用")
 		}
-		if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil && !tradeowner.IsOwnerConflict(err) {
+		if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil && !tradeowner.IsReleaseSettled(err) {
 			return reload(), fmt.Errorf("已停用但 Trade 释放未确认，稍后自动重试：%w", err)
 		}
 		if err := s.Store.ClearInstanceSession(ctx, instance.InstanceID, *instance.SessionID, s.nowTime()); err != nil {
@@ -428,7 +431,7 @@ func (s *Service) ReconcileDisabledInstances(ctx context.Context) error {
 					reconcileErr = errors.Join(reconcileErr, fmt.Errorf("实例 %s：未接线 Trade，无法释放会话", current.InstanceID))
 					return
 				}
-				if err := s.Owner.ReleaseSession(ctx, current.SpaceID, *current.LogicalAccountID, current.InstanceID, *current.SessionID); err != nil && !tradeowner.IsOwnerConflict(err) {
+				if err := s.Owner.ReleaseSession(ctx, current.SpaceID, *current.LogicalAccountID, current.InstanceID, *current.SessionID); err != nil && !tradeowner.IsReleaseSettled(err) {
 					reconcileErr = errors.Join(reconcileErr, fmt.Errorf("实例 %s：释放会话失败：%w", current.InstanceID, err))
 					return
 				}
@@ -443,10 +446,10 @@ func (s *Service) ReconcileDisabledInstances(ctx context.Context) error {
 	return reconcileErr
 }
 
-// ReconcileEnabledInstances 在开始消费事件前核对启用实例仍持有 Trade 会话。不一致只影响对应实例，
-// 返回汇总错误供告警，不阻塞进程启动（接口必须可用，才能人工修复）：
-// Trade 明确不再授权该会话（所有者已变或账户不存在）时实例无法继续交易，自动停用；
-// 结果未知（Trade 不可达等）时保持启用并标记 degraded，目标事件由 Trade 按会话围栏校验。
+// ReconcileEnabledInstances 核对每个绑定账户的启用实例仍持有 Trade 会话：启动时执行一次，之后随对账循环周期执行。
+// 不一致只影响对应实例，汇总错误供告警，不阻塞进程（接口必须可用，才能人工修复）：
+// Trade 明确不再授权该会话（所有者已变或账户不存在）时实例无法继续交易，自动停用、标记 degraded 并上报告警；
+// 结果未知（Trade 不可达等）时保持启用并标记 session_unverified，直到再次核实成功；目标事件由 Trade 按会话围栏校验。
 func (s *Service) ReconcileEnabledInstances(ctx context.Context) error {
 	if err := s.ready(); err != nil || s.Owner == nil {
 		return nil
@@ -457,26 +460,63 @@ func (s *Service) ReconcileEnabledInstances(ctx context.Context) error {
 		return err
 	}
 	var reconcileErr error
-	for _, instance := range instances {
-		if instance.LogicalAccountID == nil || instance.SessionID == nil || strings.TrimSpace(*instance.SessionID) == "" {
+	for _, listed := range instances {
+		if listed.LogicalAccountID == nil || listed.SessionID == nil || strings.TrimSpace(*listed.SessionID) == "" {
 			continue
 		}
-		err := s.Owner.ValidateSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID)
-		if err == nil {
-			continue
+		if err := s.reconcileEnabled(ctx, listed); err != nil {
+			reconcileErr = errors.Join(reconcileErr, err)
 		}
-		if tradeowner.IsSessionRejected(err) {
-			if disableErr := s.Store.SetInstanceEnabled(ctx, instance.InstanceID, false, nil, nil, s.nowTime()); disableErr != nil {
-				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("启用实例 %s 的会话已被 Trade 拒绝，自动停用失败：%w", instance.InstanceID, disableErr))
-				continue
-			}
-			_ = s.Store.CloseSession(ctx, *instance.SessionID, s.nowTime())
-			_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthDegraded, s.nowTime())
-			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("启用实例 %s 的会话已被 Trade 拒绝，已自动停用：%w", instance.InstanceID, err))
-			continue
-		}
-		_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthDegraded, s.nowTime())
-		reconcileErr = errors.Join(reconcileErr, fmt.Errorf("启用实例 %s 的 Trade 会话暂时无法校验：%w", instance.InstanceID, err))
 	}
 	return reconcileErr
+}
+
+func (s *Service) reconcileEnabled(ctx context.Context, listed store.Instance) error {
+	unlock := s.lockStrategy(listed.StrategyID)
+	defer unlock()
+	// 拿锁后重读：并发的停用或重新启用已经改变了会话时，以最新状态为准。
+	instance, err := s.Store.GetInstance(ctx, listed.InstanceID)
+	if err != nil {
+		return fmt.Errorf("实例 %s：重读失败：%w", listed.InstanceID, err)
+	}
+	if !instance.Enabled || instance.LogicalAccountID == nil || instance.SessionID == nil || *instance.SessionID != *listed.SessionID {
+		return nil
+	}
+	err = s.Owner.ValidateSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID)
+	switch {
+	case err == nil:
+		if instance.Health == store.HealthSessionUnverified {
+			_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthOK, s.nowTime())
+		}
+		return nil
+	case tradeowner.IsSessionRejected(err):
+		if disableErr := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, nil, s.nowTime()); disableErr != nil {
+			return fmt.Errorf("启用实例 %s 的会话已被 Trade 拒绝，自动停用失败：%w", instance.InstanceID, disableErr)
+		}
+		_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthDegraded, s.nowTime())
+		if s.Alerts != nil {
+			s.Alerts.Alert(instance, "Trade 不再授权该实例的会话，已自动停用")
+		}
+		return fmt.Errorf("启用实例 %s 的会话已被 Trade 拒绝，已自动停用：%w", instance.InstanceID, err)
+	default:
+		if instance.Health != store.HealthSessionUnverified {
+			_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthSessionUnverified, s.nowTime())
+		}
+		return fmt.Errorf("启用实例 %s 的 Trade 会话暂时无法核实：%w", instance.InstanceID, err)
+	}
+}
+
+// accountHolder 返回同一空间里已绑定该组合账户的其他启用实例；没有时返回空串。
+func (s *Service) accountHolder(ctx context.Context, instance store.Instance) (string, error) {
+	enabled := true
+	instances, err := s.Store.ListInstances(ctx, instance.SpaceID, &enabled)
+	if err != nil {
+		return "", err
+	}
+	for _, other := range instances {
+		if other.InstanceID != instance.InstanceID && other.LogicalAccountID != nil && *other.LogicalAccountID == *instance.LogicalAccountID {
+			return other.InstanceID, nil
+		}
+	}
+	return "", nil
 }

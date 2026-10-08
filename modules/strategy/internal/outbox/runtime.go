@@ -97,8 +97,16 @@ func (r *Runtime) run(ctx context.Context) {
 		}
 		relay := &Relay{Store: r.cfg.Store, Publisher: &JetStreamPublisher{Publisher: eventPublisher, InstanceID: r.cfg.InstanceID}}
 		if err := relay.PublishPending(ctx, r.cfg.BatchSize); err != nil {
-			r.dropClient(client)
-			if !waitFor(ctx, r.cfg.ReconnectInterval) {
+			var publishFailure *PublishFailure
+			if errors.As(err, &publishFailure) {
+				r.dropClient(client)
+				if !waitFor(ctx, r.cfg.ReconnectInterval) {
+					return
+				}
+				continue
+			}
+			// 存储错误：连接保持，等下一轮重试。
+			if !waitFor(ctx, r.cfg.RelayInterval) {
 				return
 			}
 			continue

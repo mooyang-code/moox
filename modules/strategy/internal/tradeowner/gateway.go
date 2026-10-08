@@ -41,10 +41,23 @@ func newGateway(cfg Config) *gateway {
 	g := &gateway{config: cfg, credentials: gatewayauth.CredentialsFromEnv()}
 	g.initErr = cfg.Validate()
 	if g.initErr == nil {
-		g.client, g.initErr = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.Timeout, CAFile: cfg.CAFile})
+		var err error
+		g.client, err = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.Timeout, CAFile: cfg.CAFile})
+		if err != nil {
+			g.initErr = &hiddenCause{message: "Trade 网关的 TLS 配置无效（CA 文件无法读取或格式错误）", cause: err}
+		}
 	}
 	return g
 }
+
+// hiddenCause 对调用方只给出概述（例如不暴露 CA 文件路径），原始错误经 Unwrap 留给日志。
+type hiddenCause struct {
+	message string
+	cause   error
+}
+
+func (e *hiddenCause) Error() string { return e.message }
+func (e *hiddenCause) Unwrap() error { return e.cause }
 
 // visibleError 标记不含远端地址、可以原样返回给调用方的网关错误：配置或调用前提缺失、网关返回的 HTTP 状态。
 // 其余错误（连接、TLS 等）可能带有网关地址，由 Client 包装为 TransportError。
@@ -88,7 +101,8 @@ func (g *gateway) post(ctx context.Context, method string, request, response pro
 	path := "/api/service/trade_owner/" + method
 	headers, err := gatewayauth.Sign(g.credentials, gatewayauth.Request{Method: http.MethodPost, Path: path, TargetNode: g.config.TargetNode, Body: body}, time.Now())
 	if err != nil {
-		return err
+		// 签名失败（凭据缺失或无效）是确定的配置问题，不是"不可达"。
+		return configError{&hiddenCause{message: "Trade 网关调用签名失败：Strategy 的网关凭据缺失或无效", cause: err}}
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.config.GatewayURL, "/")+path, bytes.NewReader(body))
 	if err != nil {

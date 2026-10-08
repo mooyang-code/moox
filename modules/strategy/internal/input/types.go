@@ -144,8 +144,10 @@ type Resolved struct {
 	Columns         map[string]ColumnBinding `json:"columns"`
 	Factors         map[string]string        `json:"factors,omitempty"`
 	UsesPreviousBar bool                     `json:"uses_previous_bar"`
-	MinAgeBars      int                      `json:"min_age_bars,omitempty"`
-	ViewColumns     []string                 `json:"view_columns"`
+	// CompletionKind 是触发本实例的完成事件类型：因子结果 View 为 factor_period.computed，K 线 View 为 collector.period.completed。
+	CompletionKind string   `json:"completion_kind,omitempty"`
+	MinAgeBars     int      `json:"min_age_bars,omitempty"`
+	ViewColumns    []string `json:"view_columns"`
 }
 
 // FactorIDs 返回引用的因子 ID（排序）。

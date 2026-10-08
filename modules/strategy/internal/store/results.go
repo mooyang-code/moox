@@ -180,7 +180,8 @@ func readLatest(tx *gorm.DB, instanceID, sessionID string, onlyOK bool) (resultR
 	if onlyOK {
 		query += ` AND c_status = 'ok'`
 	}
-	query += ` ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT 1`
+	// 同一实例、同一会话内 bar_end 唯一（表约束），按 bar_end 倒序取一条即可直接走索引。
+	query += ` ORDER BY c_bar_end_time DESC LIMIT 1`
 	var row resultRow
 	if err := tx.Raw(query, instanceID, sessionID).Scan(&row).Error; err != nil {
 		return resultRow{}, false, err

@@ -21,6 +21,13 @@ type ResultPublisher interface {
 	PublishResult(context.Context, store.Result) error
 }
 
+// PublishFailure 表示向 EventBus 发布失败（连接或 broker 问题）：运行时据此断开重连；
+// 存储错误不是连接问题，不应触发重连。
+type PublishFailure struct{ Err error }
+
+func (e *PublishFailure) Error() string { return "发布策略目标事件失败：" + e.Err.Error() }
+func (e *PublishFailure) Unwrap() error { return e.Err }
+
 // Relay 把待投递的 ok 结果发布到 EventBus；投递前复查有效性，不满足的结果被取消。
 type Relay struct {
 	Store     ResultStore
@@ -68,8 +75,10 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 				if cancelErr := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishCancelled); cancelErr != nil && !errors.Is(cancelErr, store.ErrNotFound) {
 					err = errors.Join(err, cancelErr)
 				}
+				keep(err)
+				continue
 			}
-			keep(err)
+			keep(&PublishFailure{Err: err})
 			continue
 		}
 		if err := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent); err != nil && !errors.Is(err, store.ErrNotFound) {

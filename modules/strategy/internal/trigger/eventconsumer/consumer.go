@@ -33,7 +33,8 @@ func retryDelay(deliveryCount uint64) time.Duration {
 	return delay
 }
 
-// ConsumerConfig 是消费者配置。
+// ConsumerConfig 是消费者配置。BatchSize 默认 1：顺序批次里一条消息 RETRY 会让同批后面的消息一起退避，
+// 事件量很小，逐条拉取既保持同一 View 的周期顺序，又不会让一个 View 的故障拖住其他 View。
 type ConsumerConfig struct {
 	Client        *jetstream.Client
 	ConsumerName  string
@@ -41,18 +42,25 @@ type ConsumerConfig struct {
 	MaxAckPending int
 	FetchMaxWait  time.Duration
 	BatchSize     int
+	Logf          func(format string, args ...any)
 }
 
-// Consumer 持有 durable 消费者与运行循环。
+// Consumer 持有 durable 消费者与监督循环：运行循环因 EventBus 重启等原因退出后，退避重建消费者继续消费。
 type Consumer struct {
-	cfg      ConsumerConfig
-	handler  *trigger.Handler
-	runner   *jetstream.Runner
+	cfg     ConsumerConfig
+	handler *trigger.Handler
+
+	mu       sync.Mutex
 	consumer *jetstream.Consumer
 	cancel   context.CancelFunc
 	ready    bool
-	mu       sync.Mutex
 }
+
+// 重建消费者的退避区间。
+const (
+	minRestartDelay = time.Second
+	maxRestartDelay = 30 * time.Second
+)
 
 // New 构造消费者。
 func New(cfg ConsumerConfig, handler *trigger.Handler) *Consumer {
@@ -69,52 +77,110 @@ func New(cfg ConsumerConfig, handler *trigger.Handler) *Consumer {
 		cfg.FetchMaxWait = time.Second
 	}
 	if cfg.BatchSize <= 0 {
-		cfg.BatchSize = 10
+		cfg.BatchSize = 1
 	}
 	return &Consumer{cfg: cfg, handler: handler}
 }
 
-// Start 创建 durable 消费者并启动运行循环。
+func (c *Consumer) consumerConfig() (jetstream.ConsumerConfig, error) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return jetstream.ConsumerConfig{}, err
+	}
+	filter, err := registry.FamilyPattern(events.ViewDataReady)
+	if err != nil {
+		return jetstream.ConsumerConfig{}, err
+	}
+	return jetstream.ConsumerConfig{
+		Stream: "MOOX_STORAGE", Durable: c.cfg.ConsumerName, FilterSubject: filter, AckWait: c.cfg.AckWait,
+		MaxDeliver: -1, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait,
+		DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
+	}, nil
+}
+
+// Start 创建 durable 消费者并启动监督循环；首次创建失败直接返回错误。
 func (c *Consumer) Start(ctx context.Context) error {
 	if c == nil || c.cfg.Client == nil || c.handler == nil {
 		return errors.New("策略 ViewDataReady 消费者未配置")
 	}
-	registry, err := events.DefaultRegistry()
+	config, err := c.consumerConfig()
 	if err != nil {
 		return err
 	}
-	filter, err := registry.FamilyPattern(events.ViewDataReady)
-	if err != nil {
-		return err
-	}
-	consumer, err := c.cfg.Client.NewConsumer(ctx, jetstream.ConsumerConfig{
-		Stream: "MOOX_STORAGE", Durable: c.cfg.ConsumerName, FilterSubject: filter, AckWait: c.cfg.AckWait,
-		MaxDeliver: -1, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait,
-		DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
-	})
+	consumer, err := c.cfg.Client.NewConsumer(ctx, config)
 	if err != nil {
 		return err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	runner := jetstream.NewRunner(consumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		return HandleDelivery(ctx, delivery, c.handler)
-	}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize})
 	c.mu.Lock()
-	c.consumer = consumer
-	c.runner = runner
 	c.cancel = cancel
-	c.ready = true
 	c.mu.Unlock()
-	go func() {
-		_ = runner.Run(runCtx)
-		c.mu.Lock()
-		c.ready = false
-		c.mu.Unlock()
-	}()
+	go c.supervise(runCtx, config, consumer)
 	return nil
 }
 
-// Close 停止运行循环并关闭消费者。
+// supervise 运行消费循环；循环退出（例如 EventBus 重启时拉取请求收到 Server Shutdown）后记录原因，
+// 按退避重新创建消费者，直到 ctx 结束。
+func (c *Consumer) supervise(ctx context.Context, config jetstream.ConsumerConfig, consumer *jetstream.Consumer) {
+	delay := minRestartDelay
+	for {
+		c.setCurrent(consumer, true)
+		runner := jetstream.NewRunner(consumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+			return HandleDelivery(ctx, delivery, c.handler)
+		}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+			c.logf("ViewDataReady 投递处理失败：%v", err)
+		})})
+		started := time.Now()
+		err := runner.Run(ctx)
+		c.setCurrent(nil, false)
+		_ = consumer.Close()
+		if ctx.Err() != nil {
+			return
+		}
+		c.logf("ViewDataReady 消费循环退出，稍后重建：%v", err)
+		if time.Since(started) > maxRestartDelay {
+			delay = minRestartDelay
+		}
+		for {
+			if !sleepContext(ctx, delay) {
+				return
+			}
+			delay = min(delay*2, maxRestartDelay)
+			next, openErr := c.cfg.Client.NewConsumer(ctx, config)
+			if openErr == nil {
+				consumer = next
+				break
+			}
+			c.logf("重建 ViewDataReady 消费者失败：%v", openErr)
+		}
+	}
+}
+
+func (c *Consumer) setCurrent(consumer *jetstream.Consumer, ready bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.consumer = consumer
+	c.ready = ready
+}
+
+func (c *Consumer) logf(format string, args ...any) {
+	if c.cfg.Logf != nil {
+		c.cfg.Logf(format, args...)
+	}
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// Close 停止监督循环并关闭当前消费者。
 func (c *Consumer) Close() error {
 	if c == nil {
 		return nil
@@ -131,14 +197,14 @@ func (c *Consumer) Close() error {
 	return nil
 }
 
-// Ready 报告消费者是否仍在运行；运行循环退出后不再就绪，便于外部监控重启进程。
+// Ready 报告当前是否有运行中的消费循环；重建期间不就绪。
 func (c *Consumer) Ready() bool {
 	if c == nil {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.consumer != nil && c.cancel != nil && c.ready
+	return c.consumer != nil && c.ready
 }
 
 // HandleDelivery 解码一条投递并交给处理器：解码失败或事件不可处理是契约错误，TERM；

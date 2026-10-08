@@ -366,7 +366,7 @@ func TestS20S25HistoryAfterRedefinitionAndDelete(t *testing.T) {
 	newDSL := strings.Replace(demoDSL, "name: demo", "name: v2", 1)
 	updated, _ := h.service.UpdateStrategy(h.ctx, &strategypb.UpdateStrategyReq{StrategyId: "s1", DslYaml: newDSL})
 	requireOK(t, int32(updated.GetRetInfo().GetCode()), updated.GetRetInfo().GetMsg())
-	rebound, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", ViewId: "view_b"}})
+	rebound, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", ViewId: "view_b"}})
 	requireOK(t, int32(rebound.GetRetInfo().GetCode()), rebound.GetRetInfo().GetMsg())
 	reenabled := h.setEnabled("i1", true)
 	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
@@ -505,11 +505,19 @@ func TestReconcileEnabledInstancesIsolatesInstances(t *testing.T) {
 	}
 	h.owner.validateErr = &tradeowner.TransportError{Operation: "校验会话", Err: errors.New("dial tcp 10.0.0.1:443: connect refused")}
 	err = h.service.ReconcileEnabledInstances(h.ctx)
-	if err == nil || !strings.Contains(err.Error(), "暂时无法校验") || strings.Contains(err.Error(), "10.0.0.1") {
+	if err == nil || !strings.Contains(err.Error(), "暂时无法核实") || strings.Contains(err.Error(), "10.0.0.1") {
 		t.Fatalf("结果未知时只告警，且不暴露网关地址：%v", err)
 	}
-	if unknown, _ := h.service.Store.GetInstance(h.ctx, "i2"); !unknown.Enabled || unknown.Health != store.HealthDegraded {
-		t.Fatalf("i2 应保持启用并标记 degraded：%+v", unknown)
+	if unknown, _ := h.service.Store.GetInstance(h.ctx, "i2"); !unknown.Enabled || unknown.Health != store.HealthSessionUnverified {
+		t.Fatalf("i2 应保持启用并标记 session_unverified：%+v", unknown)
+	}
+	// 再次核实成功后恢复 ok；ok 周期不会提前清除 session_unverified。
+	h.owner.validateErr = nil
+	if err := h.service.ReconcileEnabledInstances(h.ctx); err != nil {
+		t.Fatalf("核实成功不应报错：%v", err)
+	}
+	if recovered, _ := h.service.Store.GetInstance(h.ctx, "i2"); recovered.Health != store.HealthOK {
+		t.Fatalf("核实成功后应恢复 ok：%+v", recovered)
 	}
 }
 
@@ -539,5 +547,41 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	requireOK(t, int32(future.GetRetInfo().GetCode()), future.GetRetInfo().GetMsg())
 	if end := future.GetReplay().GetEndTime(); !strings.HasPrefix(end, "2026-09-03T05:00:00") {
 		t.Fatalf("终点应截到最新一根之后：%s", end)
+	}
+}
+
+// Trade 对释放返回账户不存在（code=5）也是确定结论：停用后会话照常清空，之后可以删除或重新启用。
+func TestDisableTreatsMissingAccountAsReleased(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	h.createInstance("i1", "s1", "view_a", "acct-1", true)
+	h.owner.releaseErr = &tradeowner.ResponseError{Operation: "释放会话", Code: tradepb.ErrorCode(5), Message: "account not found"}
+	rsp := h.setEnabled("i1", false)
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	if rsp.GetInstance().GetEnabled() || rsp.GetInstance().GetSessionId() != "" {
+		t.Fatalf("账户不存在时停用应清空会话：%+v", rsp.GetInstance())
+	}
+}
+
+// 同一空间的组合账户已被另一个启用实例绑定时，启用在联系 Trade 认领之前就被拒绝。
+func TestEnableRejectsAccountHeldByAnotherInstance(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	h.createInstance("i1", "s1", "view_a", "acct-1", true)
+	claims := len(h.owner.claims)
+	second := h.createInstance("i2", "s1", "view_a", "acct-1", true)
+	requireFail(t, int32(second.GetRetInfo().GetCode()), second.GetRetInfo().GetMsg(), "已被启用实例 i1 绑定")
+	if len(h.owner.claims) != claims {
+		t.Fatalf("不应向 Trade 认领：%v", h.owner.claims)
+	}
+}
+
+// 不存在的 ID 返回中文的"记录不存在"，不透出 ORM 的英文原文。
+func TestNotFoundIsReportedInChinese(t *testing.T) {
+	h := newHarness(t)
+	rsp, _ := h.service.GetStrategy(h.ctx, &strategypb.GetStrategyReq{StrategyId: "missing"})
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "记录不存在")
+	if strings.Contains(rsp.GetRetInfo().GetMsg(), "record not found") {
+		t.Fatalf("不应透出英文原文：%s", rsp.GetRetInfo().GetMsg())
 	}
 }

@@ -25,6 +25,13 @@ const sqliteConstraint = 19
 // FriendlyMessage 把错误链中的 SQLite 驱动错误替换为中文概述，避免把表名、列名等内部细节返回给接口调用方；
 // replaced 为 true 时调用方应把原始错误写入日志。
 func FriendlyMessage(err error) (message string, replaced bool) {
+	if errors.Is(err, ErrNotFound) {
+		full := err.Error()
+		if raw := ErrNotFound.Error(); strings.Contains(full, raw) {
+			return strings.Replace(full, raw, "记录不存在", 1), true
+		}
+		return "记录不存在", true
+	}
 	var sqliteErr *sqlitedriver.Error
 	if !errors.As(err, &sqliteErr) {
 		return err.Error(), false
@@ -148,7 +155,7 @@ var requiredIndexes = []struct {
 	{"t_strategy_instances", "idx_t_strategy_instances_view", "c_space_id\x00c_view_id\x00c_enabled", false, false},
 	{"t_strategy_sessions", "idx_t_strategy_sessions_instance", "c_instance_id\x00c_ctime", false, false},
 	{"t_strategy_results", "idx_t_strategy_results_instance_bar", "c_instance_id\x00c_bar_end_time", false, false},
-	{"t_strategy_results", "idx_t_strategy_results_latest_ok", "c_instance_id\x00c_session_id\x00c_bar_end_time", false, true},
+	{"t_strategy_results", "idx_t_strategy_results_latest_ok", "c_instance_id\x00c_session_id\x00c_status\x00c_bar_end_time", false, false},
 	{"t_strategy_results", "idx_t_strategy_results_pending", "c_ctime\x00c_result_id", false, true},
 	{"t_strategy_result_items", "idx_t_strategy_result_items_ctime", "c_ctime", false, false},
 	{"t_strategy_replays", "idx_t_strategy_replays_space", "c_space_id\x00c_ctime", false, false},

@@ -86,7 +86,14 @@ func (e *ResponseError) Error() string {
 	if e == nil {
 		return "Trade 账户请求失败"
 	}
-	return fmt.Sprintf("Trade 账户 %s 失败 (code=%d)：%s", e.Operation, e.Code, e.Message)
+	switch e.Code {
+	case 5:
+		return fmt.Sprintf("Trade 账户%s失败：账户不存在（code=5）", e.Operation)
+	case 14:
+		return fmt.Sprintf("Trade 账户%s失败：账户已由其他实例或会话持有（code=14）", e.Operation)
+	default:
+		return fmt.Sprintf("Trade 账户%s失败：Trade 拒绝了请求（code=%d）", e.Operation, e.Code)
+	}
 }
 
 // StatusCode 返回 Trade 的错误码。
@@ -104,6 +111,16 @@ var ErrSessionNotOwned = errors.New("Trade 账户的会话所有者与本实例�
 // 传输失败、网关配置错误等结果未知的情况不算。
 func IsSessionRejected(err error) bool {
 	if errors.Is(err, ErrSessionNotOwned) {
+		return true
+	}
+	var coded *ResponseError
+	return errors.As(err, &coded) && coded.StatusCode() == 5
+}
+
+// IsReleaseSettled 判断释放失败是否已经是确定的结论：所有权不在本会话（冲突，错误码 14）或账户与空间不存在
+// （错误码 5），都无需再释放。
+func IsReleaseSettled(err error) bool {
+	if IsOwnerConflict(err) {
 		return true
 	}
 	var coded *ResponseError

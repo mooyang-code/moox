@@ -85,8 +85,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
+	observer, err := newInstanceObserver(db, prometheus.DefaultRegisterer, log.Warnf)
+	if err != nil {
+		return nil, nil, err
+	}
+	service.Alerts = observer
+
 	// 先尝试完成崩溃或网络中断留下的启停握手，再开始消费事件。Trade 暂不可达或个别实例不一致只告警：
-	// 停用侧由对账循环继续重试，启用侧不一致的实例已标记 degraded，进程与接口照常启动以便人工修复。
+	// 停用侧由对账循环继续重试；启用侧被 Trade 拒绝的实例自动停用，结果未知的标记 session_unverified，
+	// 进程与接口照常启动以便人工修复。
 	if err := service.ReconcileDisabledInstances(ctx); err != nil {
 		log.Warnf("启动对账：已停用实例的 Trade 释放未完成，稍后自动重试：%v", err)
 	}
@@ -97,10 +104,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		log.Warnf("启动对账：%v", err)
 	}
 	if err := eventRuntime.Start(ctx); err != nil {
-		return nil, nil, err
-	}
-	observer, err := newInstanceObserver(db, prometheus.DefaultRegisterer, log.Warnf)
-	if err != nil {
 		return nil, nil, err
 	}
 	if err := registerMetricsReporter(s, observer); err != nil {
@@ -115,7 +118,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 			return nil, nil, err
 		}
 		closers = append(closers, eventClient.Close)
-		consumer = eventconsumer.New(eventconsumer.ConsumerConfig{Client: eventClient, ConsumerName: cfg.EventBus.ConsumerName}, handler)
+		consumer = eventconsumer.New(eventconsumer.ConsumerConfig{Client: eventClient, ConsumerName: cfg.EventBus.ConsumerName, Logf: log.Warnf}, handler)
 		if err := consumer.Start(ctx); err != nil {
 			return nil, nil, err
 		}
@@ -175,6 +178,9 @@ func reconcileLoop(ctx context.Context, service *rpc.Service) {
 		}
 		if err := service.ReconcileDisabledInstances(ctx); err != nil {
 			log.Warnf("已停用实例的 Trade 释放仍未完成：%v", err)
+		}
+		if err := service.ReconcileEnabledInstances(ctx); err != nil {
+			log.Warnf("启用实例的 Trade 会话复核：%v", err)
 		}
 	}
 }

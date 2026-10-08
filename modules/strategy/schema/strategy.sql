@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_enabled IN (0, 1)),
-    CHECK (c_health IN ('ok', 'degraded')),
+    CHECK (c_health IN ('ok', 'degraded', 'session_unverified')),
     FOREIGN KEY (c_strategy_id) REFERENCES t_strategy_defs (c_strategy_id)
 );
 
@@ -81,8 +81,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_results (
 CREATE INDEX IF NOT EXISTS idx_t_strategy_results_instance_bar ON t_strategy_results (c_instance_id, c_bar_end_time);
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_results_latest_ok
-ON t_strategy_results (c_instance_id, c_session_id, c_bar_end_time)
-WHERE c_status = 'ok';
+ON t_strategy_results (c_instance_id, c_session_id, c_status, c_bar_end_time);
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_results_pending
 ON t_strategy_results (c_ctime, c_result_id)

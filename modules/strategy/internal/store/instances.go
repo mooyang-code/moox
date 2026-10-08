@@ -11,10 +11,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// 实例健康状态。
+// 实例健康状态：degraded 是求值类问题，下一个 ok 周期自动恢复；session_unverified 是 Trade 会话结果未知，
+// 只有重新核实会话成功才恢复，ok 周期不会清除它。
 const (
-	HealthOK       = "ok"
-	HealthDegraded = "degraded"
+	HealthOK                = "ok"
+	HealthDegraded          = "degraded"
+	HealthSessionUnverified = "session_unverified"
 )
 
 // Instance 把定义绑定到一个空间、一个 View 和可选的组合账户。
@@ -268,11 +270,58 @@ func (s *Store) SetInstanceHealth(ctx context.Context, instanceID, health string
 	if err != nil {
 		return err
 	}
-	if health != HealthOK && health != HealthDegraded {
-		return errors.New("健康状态只能是 ok 或 degraded")
+	if health != HealthOK && health != HealthDegraded && health != HealthSessionUnverified {
+		return errors.New("健康状态只能是 ok、degraded 或 session_unverified")
 	}
 	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_instances SET c_health = ?, c_mtime = ? WHERE c_instance_id = ? AND c_health <> ?`, health, now, instanceID, health)
 	return result.Error
+}
+
+// MarkInstanceDegraded 在求值类问题出现时把健康的实例标记为 degraded；不覆盖 session_unverified。
+func (s *Store) MarkInstanceDegraded(ctx context.Context, instanceID string, at time.Time) error {
+	now, err := requireTime(at)
+	if err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_instances SET c_health = 'degraded', c_mtime = ? WHERE c_instance_id = ? AND c_health = 'ok'`, now, instanceID).Error
+}
+
+// RecoverInstanceHealth 在 ok 周期把 degraded 恢复为 ok；session_unverified 只能由重新核实会话恢复。
+func (s *Store) RecoverInstanceHealth(ctx context.Context, instanceID string, at time.Time) error {
+	now, err := requireTime(at)
+	if err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_instances SET c_health = 'ok', c_mtime = ? WHERE c_instance_id = ? AND c_health = 'degraded'`, now, instanceID).Error
+}
+
+// DisableInstance 在一个事务里停用实例并关闭会话：pending 非空时保留它等待 Trade 释放，否则清空。
+// 停用与关闭会话必须同时成功，否则再次启用时可能沿用一个本应关闭的会话。
+func (s *Store) DisableInstance(ctx context.Context, instanceID string, sessionID, pending *string, at time.Time) error {
+	now, err := requireTime(at)
+	if err != nil {
+		return err
+	}
+	return s.transaction(ctx, func(tx *gorm.DB) error {
+		current, err := readInstance(tx, instanceID)
+		if err != nil {
+			return err
+		}
+		if current.DeletedAt.Valid {
+			return ErrNotFound
+		}
+		if pending != nil {
+			if err := tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`, *pending, now, instanceID).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ?`, now, instanceID).Error; err != nil {
+			return err
+		}
+		if sessionID != nil {
+			return tx.Exec(`UPDATE t_strategy_sessions SET c_closed_at = ? WHERE c_session_id = ? AND c_closed_at IS NULL`, now, *sessionID).Error
+		}
+		return nil
+	})
 }
 
 // SoftDeleteInstance 软删除停用且无会话的实例；会话与结果保留。

@@ -19,7 +19,7 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	}
 	strategy, _, err := parseDefinition(req.GetDslYaml())
 	if err != nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}, nil
 	}
 	rsp := &strategypb.ValidateStrategyRsp{RetInfo: success(), Diagnostics: []string{}}
 	if strings.TrimSpace(req.GetViewId()) == "" {
@@ -40,7 +40,7 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	rsp.ResolvedJson = string(resolvedJSON)
 	loaded, err := s.Resolver.LoadLatest(ctx, scoped, resolved, program, s.nowTime())
 	if err != nil {
-		rsp.Diagnostics = append(rsp.Diagnostics, "试算未完成："+err.Error())
+		rsp.Diagnostics = append(rsp.Diagnostics, "试算未完成："+publicMessage(err))
 		return rsp, nil
 	}
 	decision, err := engine.Evaluate(program, loaded.Frame, engine.State{})

@@ -75,8 +75,8 @@ func TestClientMapsBusinessErrors(t *testing.T) {
 	owner := &Client{proxy: stub, timeout: time.Second}
 	err := owner.ValidateSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1")
 	var coded *ResponseError
-	if !errors.As(err, &coded) || coded.StatusCode() != 5 || !strings.Contains(err.Error(), "logical account missing") {
-		t.Fatalf("错误应携带 Trade 错误码：%v", err)
+	if !errors.As(err, &coded) || coded.StatusCode() != 5 || coded.Message != "logical account missing" || !strings.Contains(err.Error(), "账户不存在") || strings.Contains(err.Error(), "logical account missing") {
+		t.Fatalf("错误应携带 Trade 错误码与中文说明，Trade 原始消息只留在字段里：%v", err)
 	}
 	if !IsPermanentClaimError(err) || IsOwnerConflict(err) {
 		t.Fatalf("错误分类不符：permanent=%v conflict=%v", IsPermanentClaimError(err), IsOwnerConflict(err))

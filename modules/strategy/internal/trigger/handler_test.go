@@ -340,17 +340,17 @@ func TestHandleInfraRetryBudgetAndStoreFailure(t *testing.T) {
 	if exhausted.Status != store.StatusSkipped || exhausted.SkipReason != SkipInfraRetryExhausted {
 		t.Fatalf("应记为 infra_retry_exhausted：%+v", exhausted)
 	}
-	// 落库失败：NAK，且不写任何记录。
-	if err := h.repo.ApplySchema(`CREATE TRIGGER block_results BEFORE INSERT ON t_strategy_results BEGIN SELECT RAISE(ABORT, 'disk full'); END;`); err != nil {
+	// 瞬时落库失败（数据库只读，等同磁盘或锁问题）：NAK，且不写任何记录。
+	if err := h.repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
 		t.Fatal(err)
 	}
 	h.frame(2, map[string]map[string]float64{"A": {"m": 1}})
 	h.now = barStart(2).Add(90 * time.Minute)
 	expectRetry(t, h.deliver(2))
-	h.noResultAt(2)
-	if err := h.repo.ApplySchema(`DROP TRIGGER block_results;`); err != nil {
+	if err := h.repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
 		t.Fatal(err)
 	}
+	h.noResultAt(2)
 	expectAck(t, h.deliver(2))
 	if ok := h.resultAt(2); ok.Status != store.StatusOK {
 		t.Fatalf("落库恢复后应产生 ok：%+v", ok)
@@ -521,5 +521,78 @@ END;`); err != nil {
 	}
 	if got := h.observer.results; len(got) != 1 || got[0] != "02:skipped:config_error" {
 		t.Fatalf("观测结果不符：%v", got)
+	}
+}
+
+// 结果与兜底的 skipped 都被约束拒绝时，重投不会成功：记一次模块失败后确认，不无限重投，也不写任何记录。
+func TestHandlePermanentFallbackFailureAcks(t *testing.T) {
+	h := newHarness(t, rankDSL, nil, false)
+	if err := h.repo.ApplySchema(`CREATE TRIGGER trg_test_reject_results
+BEFORE INSERT ON t_strategy_results
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, '测试：拒绝写入结果');
+END;`); err != nil {
+		t.Fatal(err)
+	}
+	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
+	expectAck(t, h.deliver(1))
+	h.noResultAt(1)
+	if got := h.observer.results; len(got) != 1 || got[0] != "02:skipped:config_error" {
+		t.Fatalf("应记一次 config_error 观测：%v", got)
+	}
+}
+
+// 实例只接受启用时确定的完成事件类型；其他类型的 ViewDataReady 不是它的触发信号，忽略且不写记录。
+func TestHandleIgnoresOtherCompletionKinds(t *testing.T) {
+	h := newHarness(t, rankDSL, nil, false)
+	instance, _ := h.repo.GetInstance(context.Background(), "i1")
+	resolved, err := input.ParseResolved(instance.ResolvedJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.CompletionKind = events.FactorPeriodComputed.Name()
+	raw, _ := json.Marshal(resolved)
+	h.handler.programs = nil
+	if err := h.repo.SetInstanceEnabled(context.Background(), "i1", false, nil, nil, bar0); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-2"
+	if err := h.repo.OpenSession(context.Background(), store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(rankDSL)), ResolvedJSON: string(raw), CreatedAt: bar0}, rankDSL); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.SetInstanceEnabled(context.Background(), "i1", true, &session, raw, bar0); err != nil {
+		t.Fatal(err)
+	}
+	h.session = session
+	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
+	message, payload := h.event(1, map[string]string{"f": "h1"})
+	payload.CompletionKind = events.CollectorPeriodCompleted.Name()
+	expectAck(t, h.handler.Handle(context.Background(), message, payload))
+	h.noResultAt(1)
+	payload.CompletionKind = events.FactorPeriodComputed.Name()
+	expectAck(t, h.handler.Handle(context.Background(), message, payload))
+	if result := h.resultAt(1); result.Status != store.StatusOK {
+		t.Fatalf("匹配的完成事件应正常求值：%+v", result)
+	}
+}
+
+// ambiguous_series 同样需要人工处理，实例标记 degraded；ok 周期恢复 degraded，但不清除 session_unverified。
+func TestHandleHealthTransitions(t *testing.T) {
+	h := newHarness(t, rankDSL, nil, false)
+	h.loader.errs = []error{&input.SkipError{Reason: input.SkipAmbiguousSeries, Detail: "两个序列"}}
+	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
+	expectAck(t, h.deliver(1))
+	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {
+		t.Fatalf("ambiguous_series 应标记 degraded：%+v", instance)
+	}
+	if err := h.repo.SetInstanceHealth(context.Background(), "i1", store.HealthSessionUnverified, bar0); err != nil {
+		t.Fatal(err)
+	}
+	h.frame(2, map[string]map[string]float64{"A": {"m": 1}})
+	h.now = barStart(2).Add(90 * time.Minute)
+	expectAck(t, h.deliver(2))
+	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthSessionUnverified {
+		t.Fatalf("ok 周期不能清除 session_unverified：%+v", instance)
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -33,6 +32,11 @@ type Owner interface {
 	ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
 }
 
+// Alerter 接收需要人工处理的实例事件（例如因 Trade 拒绝会话被自动停用），用于模块健康告警。
+type Alerter interface {
+	Alert(instance store.Instance, reason string)
+}
+
 // ReplayWaker 通知回放执行循环有新任务。
 type ReplayWaker interface {
 	Wake()
@@ -44,6 +48,7 @@ type Service struct {
 	Resolver Resolver
 	Owner    Owner
 	Replays  ReplayWaker
+	Alerts   Alerter
 	Now      func() time.Time
 
 	strategyLocks sync.Map
@@ -79,12 +84,11 @@ func failure(err error) *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: publicMessage(err)}
 }
 
-// publicMessage 是返回给接口调用方的错误信息：存储驱动与 Trade 传输的原始错误只写日志。
+// publicMessage 是返回给接口调用方的错误信息：存储驱动、Storage/Factor 与 Trade 传输的原始错误只写日志。
 func publicMessage(err error) string {
-	message, replaced := store.FriendlyMessage(err)
-	var transport *tradeowner.TransportError
-	if replaced || errors.As(err, &transport) {
-		log.Warnf("策略接口返回错误：%s；原始错误：%v", message, rawCause(err))
+	message, _ := store.FriendlyMessage(err)
+	if raw := rawCause(err); raw != nil && raw.Error() != message && !strings.Contains(message, raw.Error()) {
+		log.Warnf("策略接口返回错误：%s；原始错误：%v", message, raw)
 	}
 	return message
 }

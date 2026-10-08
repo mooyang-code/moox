@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 // DefaultCalendar 是没有声明日历的数据集使用的日历。
@@ -140,6 +141,10 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 		return Resolved{}, nil, err
 	}
 	resolved.UsesPreviousBar = program.UsesPreviousBar
+	resolved.CompletionKind = events.CollectorPeriodCompleted.Name()
+	if resolved.SourceDatasetID != "" {
+		resolved.CompletionKind = events.FactorPeriodComputed.Name()
+	}
 	return resolved, program, nil
 }
 

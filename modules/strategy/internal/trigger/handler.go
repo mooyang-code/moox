@@ -129,8 +129,13 @@ func (h *Handler) process(ctx context.Context, instance store.Instance, message 
 	p := &period{instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
 	p.input = store.InputRecord{ViewID: payload.GetViewId(), Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, EventID: message.GetEventId()}
 	if skip != nil {
-		_ = h.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthDegraded, h.now())
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
+	}
+	// 因子结果 View 只由 factor_period.computed 驱动，K 线 View 只由 collector.period.completed 驱动；
+	// 实例绑定哪种 View 在启用时就确定了，其他类型的完成事件不是这个实例的触发信号。
+	if want := rt.resolved.CompletionKind; want != "" && payload.GetCompletionKind() != want {
+		h.logf("实例 %s 只接受 %s 触发，忽略 %s 事件 %s", instance.InstanceID, want, payload.GetCompletionKind(), message.GetEventId())
+		return nil
 	}
 	latest, hasLatest, err := h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID)
 	if err != nil {
@@ -188,9 +193,7 @@ func (h *Handler) process(ctx context.Context, instance store.Instance, message 
 		case err == nil:
 			if created {
 				h.observe(instance, bar, boundary.BarEnd, decision.Status, decision.SkipReason)
-				if decision.Status == engine.StatusOK {
-					_ = h.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthOK, h.now())
-				}
+				h.updateHealth(ctx, instance.InstanceID, decision.Status, decision.SkipReason)
 			}
 			return nil
 		case errors.Is(err, store.ErrResultCASConflict):
@@ -223,7 +226,6 @@ func (h *Handler) process(ctx context.Context, instance store.Instance, message 
 				// 结果本身无法写入（校验失败或违反表约束），重投也不会成功：记一条不带明细的 skipped(config_error) 后 ACK，
 				// 不能让这条消息无限重投并压住同一消费者上的其他事件。
 				h.logf("实例 %s 周期 %s 的结果无法写入：%v", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339), err)
-				_ = h.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthDegraded, h.now())
 				return h.commitSkipped(ctx, p, input.SkipConfigError, "结果无法写入存储（确定性错误，详见策略模块日志）")
 			}
 			return fmt.Errorf("写入结果：%w", err)
@@ -246,13 +248,12 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 		}
 		var skip *input.SkipError
 		if errors.As(err, &skip) {
-			if skip.Reason == input.SkipConfigError || skip.Reason == input.SkipHistoryInsufficient {
-				_ = h.Store.SetInstanceHealth(ctx, p.instance.InstanceID, store.HealthDegraded, h.now())
-			}
 			return nil, input.Loaded{}, h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 		}
 		key := p.eventID + "\x00" + p.instance.InstanceID
 		h.attempts[key]++
+		// 记录里只保存不含服务地址的概述，原始错误写日志。
+		h.logf("实例 %s 周期 %s 读取输入失败（第 %d 次）：%v；原始错误：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), h.attempts[key], err, input.RawCause(err))
 		if h.attempts[key] >= h.budget() {
 			delete(h.attempts, key)
 			return nil, input.Loaded{}, h.commitSkipped(ctx, p, SkipInfraRetryExhausted, err.Error())
@@ -344,13 +345,37 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 		if errors.Is(err, store.ErrResultInstanceNotActive) {
 			return nil
 		}
+		if store.IsPermanentWriteError(err) {
+			// 连兜底的 skipped 也写不进去：重投不会成功，记错误日志并计入模块健康失败后确认，不能无限重投。
+			h.logf("实例 %s 周期 %s 的 skipped(%s) 记录无法写入，放弃本期：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, err)
+			h.observe(p.instance, p.input.Bar, p.boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+			return nil
+		}
 		return fmt.Errorf("写入 skipped(%s) 记录：%w", reason, err)
 	}
 	if created {
 		h.observe(p.instance, p.input.Bar, p.boundary.BarEnd, store.StatusSkipped, reason)
+		h.updateHealth(ctx, p.instance.InstanceID, store.StatusSkipped, reason)
 		h.logf("实例 %s 周期 %s 跳过（%s）：%s", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, detail)
 	}
 	return nil
+}
+
+// degradingReasons 是需要人工处理的跳过原因（重新启用、修复 View 或补数据）：实例标记 degraded，下一个 ok 周期恢复。
+var degradingReasons = map[string]bool{
+	input.SkipConfigError:         true,
+	input.SkipHistoryInsufficient: true,
+	input.SkipAmbiguousSeries:     true,
+}
+
+// updateHealth 按本期结果更新实例健康：ok 恢复 degraded，需要人工处理的跳过原因标记 degraded。
+func (h *Handler) updateHealth(ctx context.Context, instanceID, status, reason string) {
+	switch {
+	case status == engine.StatusOK:
+		_ = h.Store.RecoverInstanceHealth(ctx, instanceID, h.now())
+	case degradingReasons[reason]:
+		_ = h.Store.MarkInstanceDegraded(ctx, instanceID, h.now())
+	}
 }
 
 func (h *Handler) observe(instance store.Instance, bar string, barEnd time.Time, result, reason string) {

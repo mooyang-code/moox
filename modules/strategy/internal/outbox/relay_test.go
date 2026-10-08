@@ -119,3 +119,37 @@ func TestRelaySkipsRowsCancelledAfterListing(t *testing.T) {
 		t.Fatalf("应只投递未取消的行：%+v", publisher.rows)
 	}
 }
+
+// 只有发布失败才标记为 PublishFailure（运行时据此断开重连）；存储错误不是连接问题。
+func TestRelayDistinguishesPublishAndStoreFailures(t *testing.T) {
+	resultStore := &recordingResultStore{rows: []store.Result{{ResultID: "r1", PublishStatus: store.PublishPending}}}
+	relay := &Relay{Store: resultStore, Publisher: &failingPublisher{err: errors.New("nats: connection closed")}}
+	err := relay.PublishPending(context.Background(), 10)
+	var publishFailure *PublishFailure
+	if !errors.As(err, &publishFailure) {
+		t.Fatalf("发布失败应标记为 PublishFailure：%v", err)
+	}
+	broken := &Relay{Store: &brokenResultStore{}, Publisher: &recordingResultPublisher{}}
+	err = broken.PublishPending(context.Background(), 10)
+	if err == nil || errors.As(err, &publishFailure) {
+		t.Fatalf("存储错误不应标记为 PublishFailure：%v", err)
+	}
+}
+
+type failingPublisher struct{ err error }
+
+func (p *failingPublisher) PublishResult(context.Context, store.Result) error { return p.err }
+
+type brokenResultStore struct{}
+
+func (brokenResultStore) ListPendingResults(context.Context, int) ([]store.Result, error) {
+	return nil, errors.New("database is locked")
+}
+
+func (brokenResultStore) PreparePendingResult(context.Context, string, time.Time) (store.Result, bool, error) {
+	return store.Result{}, false, nil
+}
+
+func (brokenResultStore) TransitionPublishStatus(context.Context, string, store.PublishStatus, store.PublishStatus) error {
+	return nil
+}

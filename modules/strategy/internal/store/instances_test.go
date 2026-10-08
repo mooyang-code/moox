@@ -180,3 +180,47 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Fatal("缺少 DSL 文本的会话应被拒绝")
 	}
 }
+
+// 健康状态：degraded 只从 ok 标记、由 ok 周期恢复；session_unverified 不被这两者改变。
+func TestInstanceHealthTransitions(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	seedEnabledInstance(t, repo, "i1", "session-1", nil)
+	health := func() string {
+		instance, err := repo.GetInstance(ctx, "i1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return instance.Health
+	}
+	if err := repo.MarkInstanceDegraded(ctx, "i1", testNow); err != nil || health() != HealthDegraded {
+		t.Fatalf("应标记 degraded：%s err=%v", health(), err)
+	}
+	if err := repo.RecoverInstanceHealth(ctx, "i1", testNow); err != nil || health() != HealthOK {
+		t.Fatalf("应恢复 ok：%s err=%v", health(), err)
+	}
+	if err := repo.SetInstanceHealth(ctx, "i1", HealthSessionUnverified, testNow); err != nil {
+		t.Fatal(err)
+	}
+	_ = repo.MarkInstanceDegraded(ctx, "i1", testNow)
+	_ = repo.RecoverInstanceHealth(ctx, "i1", testNow)
+	if health() != HealthSessionUnverified {
+		t.Fatalf("session_unverified 不应被求值类状态改变：%s", health())
+	}
+}
+
+// DisableInstance 在同一事务里停用实例并关闭会话。
+func TestDisableInstanceClosesSessionAtomically(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	seedEnabledInstance(t, repo, "i1", "session-1", nil)
+	session := "session-1"
+	if err := repo.DisableInstance(ctx, "i1", &session, nil, testNow); err != nil {
+		t.Fatal(err)
+	}
+	instance, _ := repo.GetInstance(ctx, "i1")
+	closed, _ := repo.GetSession(ctx, session)
+	if instance.Enabled || instance.SessionID != nil || closed.ClosedAt == nil {
+		t.Fatalf("应停用、清空并关闭会话：%+v %+v", instance, closed)
+	}
+}

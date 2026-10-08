@@ -145,3 +145,33 @@ func TestRetentionDeletesItemsInBatches(t *testing.T) {
 		t.Fatalf("未过期的明细应保留：%+v err=%v", kept, err)
 	}
 }
+
+// 过期回放逐个分批删除周期记录后再删任务本身。
+func TestRetentionDeletesReplaysInBatches(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	if err := repo.CreateReplay(ctx, newReplay("p1", testNow)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.ClaimNextReplay(ctx, testNow); err != nil {
+		t.Fatal(err)
+	}
+	for bar := 1; bar <= 5; bar++ {
+		if err := repo.AppendReplayBar(ctx, ReplayBar{ReplayID: "p1", BarEndTime: testNow.Add(time.Duration(bar) * time.Hour), Status: "ok", TargetsJSON: []byte(`[]`), PositionsJSON: []byte(`{}`), SummaryJSON: []byte(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.FinishReplay(ctx, "p1", ReplayDone, nil, "", testNow); err != nil {
+		t.Fatal(err)
+	}
+	previous := retentionBatch
+	retentionBatch = 2
+	t.Cleanup(func() { retentionBatch = previous })
+	deleted, err := repo.DeleteReplaysBefore(ctx, testNow.Add(time.Hour))
+	if err != nil || deleted != 1 {
+		t.Fatalf("应删除 1 个回放：deleted=%d err=%v", deleted, err)
+	}
+	if _, total, err := repo.ListReplayBars(ctx, "p1", 0, 10); err != nil || total != 0 {
+		t.Fatalf("周期记录应全部删除：total=%d err=%v", total, err)
+	}
+}

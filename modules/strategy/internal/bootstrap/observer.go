@@ -164,6 +164,12 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 	}
 }
 
+// Alert 记录需要人工处理的实例事件：写告警日志，并把模块健康检查记一次失败。
+func (o *instanceObserver) Alert(instance store.Instance, reason string) {
+	o.log("实例 %s 需要人工处理：%s", instance.InstanceID, reason)
+	_ = o.module.ObserveRun(moduleStage, "error", moduleHealthCheck, o.now().UTC())
+}
+
 func (o *instanceObserver) log(format string, args ...any) {
 	if o.logf != nil {
 		o.logf(format, args...)
