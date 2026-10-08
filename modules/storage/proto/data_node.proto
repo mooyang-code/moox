@@ -285,4 +285,5 @@ service DataNodeMarkerRuntime {
 // narrow, while the View can rebuild after its physical indexes are removed.
 service DataNodeHistoryRuntime {
 	 rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+	 rpc ListHistorySubjects(ListHistorySubjectsReq) returns (ListHistorySubjectsRsp);
 }

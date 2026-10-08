@@ -290,39 +290,19 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	expected := make(map[string]struct{})
 	counts := make(map[string]uint64, len(expected))
 	var selectors []*pb.TimeSeriesSelector
-	if subjects, catalogAvailable, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetDatasetId()); err != nil {
-		return 0, fmt.Errorf("load Primary subject catalog for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), err)
-	} else if catalogAvailable {
-		if len(subjects) == 0 {
-			// An empty catalog is valid for a dataset that has not produced any
-			// rows yet (for example a newly-created system-metrics dataset).
-			// Probe Primary before failing: empty Primary means there is simply
-			// nothing to backfill, while non-empty Primary falls back to the
-			// authoritative scan rather than activating a partial index.
-			probe, probeErr := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
-				Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 1},
-			})
-			if probeErr != nil {
-				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), probeErr)
-			}
-			if err := requireSuccess(probe.GetRetInfo()); err != nil {
-				return 0, fmt.Errorf("probe Primary history for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), err)
-			}
-			if len(probe.GetRows()) == 0 {
-				log.Printf("storage view history backfill has no Primary rows space=%s dataset=%s", view.GetSpaceId(), view.GetDatasetId())
-				return 0, nil
-			}
-			log.Printf("storage view history backfill subject catalog is empty; using authoritative Primary scan space=%s dataset=%s", view.GetSpaceId(), view.GetDatasetId())
-		}
-		if len(subjects) > 0 {
-			// The subject-first Primary history index lets us read each bound
-			// subject without repeating a full time-first dataset scan. The helper
-			// discovers all tags for that subject and writes only the configured
-			// latest periods per series.
-			return s.backfillPrimaryHistoryBySubjectCatalog(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, subjects, periods, limiter)
-		}
+	subjects, known, err := s.backfillSubjects(ctx, limiter, rangeReader, auth, view, frequency)
+	if err != nil {
+		return 0, err
 	}
+	if known {
+		if len(subjects) == 0 {
+			log.Printf("storage view history backfill has no Primary rows space=%s dataset=%s freq=%s", view.GetSpaceId(), view.GetDatasetId(), frequency)
+			return 0, nil
+		}
+		return s.backfillPrimaryHistoryBySubjectCatalog(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, subjects, periods, limiter)
+	}
+	// Neither Primary nor the catalog can name the subjects: fall back to
+	// the authoritative time-first scan.
 	useCatalog := len(selectors) > 0
 	knownSubjects := make(map[string]struct{}, len(selectors))
 	for _, selector := range selectors {
@@ -438,6 +418,37 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	}
 }
 
+// historySubjectLister is implemented by the Primary history reader that can
+// list the subjects with rows at one frequency.
+type historySubjectLister interface {
+	ListHistorySubjects(context.Context, *pb.ListHistorySubjectsReq, ...client.Option) (*pb.ListHistorySubjectsRsp, error)
+}
+
+// backfillSubjects returns the subjects a rebuild reads, and false when they
+// cannot be known. The subjects Primary holds rows for are authoritative and
+// skip catalog entries without data; the Dataset subject catalog is the
+// fallback when Primary cannot list them.
+func (s *Service) backfillSubjects(ctx context.Context, limiter *backfillRequestLimiter, rangeReader TimeSeriesRangeReader, auth *pb.AuthInfo, view *pb.View, frequency string) ([]string, bool, error) {
+	if lister, ok := rangeReader.(historySubjectLister); ok {
+		if err := limiter.wait(ctx); err != nil {
+			return nil, false, err
+		}
+		rsp, err := lister.ListHistorySubjects(ctx, &pb.ListHistorySubjectsReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(), Freq: frequency})
+		if err != nil {
+			return nil, false, fmt.Errorf("list Primary history subjects for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), err)
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, false, fmt.Errorf("list Primary history subjects for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), err)
+		}
+		return rsp.GetSubjectIds(), true, nil
+	}
+	subjects, available, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetDatasetId())
+	if err != nil {
+		return nil, false, fmt.Errorf("load Primary subject catalog for %s/%s: %w", view.GetSpaceId(), view.GetDatasetId(), err)
+	}
+	return subjects, available && len(subjects) > 0, nil
+}
+
 func (s *Service) loadBackfillSubjectCatalog(ctx context.Context, auth *pb.AuthInfo, spaceID, datasetID string) ([]string, bool, error) {
 	metadata := s.metadataClientSnapshot()
 	if metadata == nil {
@@ -463,17 +474,16 @@ func (s *Service) loadBackfillSubjectCatalog(ctx context.Context, auth *pb.AuthI
 	return subjects, true, nil
 }
 
-// capacityMaintenanceCatalogReady prevents an optional capacity rebuild from
-// falling back to a million-row time-first Primary scan. A missing catalog is
-// safe to skip here because the active View remains readable; coverage and
-// manual rebuilds retain the authoritative fallback in the normal backfill
-// path above.
-func (s *Service) capacityMaintenanceCatalogReady(ctx context.Context, auth *pb.AuthInfo, view *pb.View) (bool, string) {
+// capacityMaintenanceSubjectsReady prevents an optional capacity rebuild
+// from falling back to a time-first Primary scan. When neither Primary nor the
+// catalog can name the subjects, the rebuild is skipped; the active View stays
+// readable in the meantime.
+func (s *Service) capacityMaintenanceSubjectsReady(ctx context.Context, rangeReader TimeSeriesRangeReader, auth *pb.AuthInfo, view *pb.View) (bool, string) {
 	if view == nil {
 		return false, "subject_catalog_unavailable"
 	}
-	subjects, available, err := s.loadBackfillSubjectCatalog(ctx, auth, view.GetSpaceId(), view.GetDatasetId())
-	if err != nil || !available {
+	subjects, known, err := s.backfillSubjects(ctx, nil, rangeReader, auth, view, view.GetFreq())
+	if err != nil || !known {
 		return false, "subject_catalog_unavailable"
 	}
 	if len(subjects) == 0 {

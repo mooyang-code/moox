@@ -299,3 +299,30 @@ func recordKeyFromRowKey(key *pb.RowKey) *pb.RecordKey {
 	}
 	return &pb.RecordKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), RecordId: key.GetRecord().GetRecordId(), Version: key.GetRecord().GetVersion()}
 }
+
+// ListHistorySubjects lists the subjects with rows at one frequency in a
+// Dataset for a Storage View rebuild.
+func (s *Service) ListHistorySubjects(ctx context.Context, req *pb.ListHistorySubjectsReq) (*pb.ListHistorySubjectsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetFreq() == "" {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and freq are required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if req.GetAuthInfo().GetAppId() != "storage-view" {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("history subjects are listed for storage-view rebuilds only"))}, nil
+	}
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return nil, err
+	}
+	history, ok := node.(historySubjectLister)
+	if !ok {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode history runtime is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	return history.ListHistorySubjects(ctx, &pb.ListHistorySubjectsReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Freq: req.GetFreq()})
+}

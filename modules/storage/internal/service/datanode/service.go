@@ -178,6 +178,22 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	return rows, nil
 }
 
+// ListHistorySubjects lists the subjects with rows at one frequency in a
+// Dataset. It shares the narrow history runtime with ReadTimeSeriesRows.
+func (s *Service) ListHistorySubjects(ctx context.Context, req *pb.ListHistorySubjectsReq) (*pb.ListHistorySubjectsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetFreq() == "" {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and freq are required"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	subjects, err := s.store.ListHistorySubjects(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetFreq())
+	if err != nil {
+		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Success("success"), SubjectIds: subjects}, nil
+}
+
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

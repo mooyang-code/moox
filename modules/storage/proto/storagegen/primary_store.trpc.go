@@ -40,6 +40,8 @@ type PrimaryStoreService interface {
 
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
+	ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq) (*ListHistorySubjectsRsp, error)
+
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
 
 	ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq) (*ReportCollectorPeriodCompletedRsp, error)
@@ -233,6 +235,24 @@ func PrimaryStoreService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
+func PrimaryStoreService_ListHistorySubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListHistorySubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ListHistorySubjects(ctx, reqbody.(*ListHistorySubjectsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func PrimaryStoreService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadRecordRowsReq{}
 	filters, err := f(req)
@@ -387,6 +407,10 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_ReadTimeSeriesRows_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.PrimaryStore/ListHistorySubjects",
+			Func: PrimaryStoreService_ListHistorySubjects_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadRecordRows",
 			Func: PrimaryStoreService_ReadRecordRows_Handler,
 		},
@@ -455,6 +479,9 @@ func (s *UnimplementedPrimaryStore) RestoreDatasetRows(ctx context.Context, req 
 func (s *UnimplementedPrimaryStore) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc ReadTimeSeriesRows of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq) (*ListHistorySubjectsRsp, error) {
+	return nil, errors.New("rpc ListHistorySubjects of service PrimaryStore is not implemented")
+}
 func (s *UnimplementedPrimaryStore) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
 	return nil, errors.New("rpc ReadRecordRows of service PrimaryStore is not implemented")
 }
@@ -502,6 +529,8 @@ type PrimaryStoreClientProxy interface {
 	RestoreDatasetRows(ctx context.Context, req *PrimaryRestoreDatasetRowsReq, opts ...client.Option) (rsp *PrimaryRestoreDatasetRowsRsp, err error)
 
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
+
+	ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq, opts ...client.Option) (rsp *ListHistorySubjectsRsp, err error)
 
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
 
@@ -719,6 +748,26 @@ func (c *PrimaryStoreClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq, opts ...client.Option) (*ListHistorySubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ListHistorySubjects")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ListHistorySubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListHistorySubjectsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

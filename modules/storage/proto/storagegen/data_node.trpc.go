@@ -453,6 +453,8 @@ func RegisterDataNodeMarkerRuntimeService(s server.Service, svr DataNodeMarkerRu
 // DataNodeHistoryRuntimeService defines service.
 type DataNodeHistoryRuntimeService interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
+
+	ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq) (*ListHistorySubjectsRsp, error)
 }
 
 func DataNodeHistoryRuntimeService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -473,6 +475,24 @@ func DataNodeHistoryRuntimeService_ReadTimeSeriesRows_Handler(svr interface{}, c
 	return rsp, nil
 }
 
+func DataNodeHistoryRuntimeService_ListHistorySubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListHistorySubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeHistoryRuntimeService).ListHistorySubjects(ctx, reqbody.(*ListHistorySubjectsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // DataNodeHistoryRuntimeServer_ServiceDesc descriptor for server.RegisterService.
 var DataNodeHistoryRuntimeServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataNodeHistoryRuntime",
@@ -481,6 +501,10 @@ var DataNodeHistoryRuntimeServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataNodeHistoryRuntime/ReadTimeSeriesRows",
 			Func: DataNodeHistoryRuntimeService_ReadTimeSeriesRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeHistoryRuntime/ListHistorySubjects",
+			Func: DataNodeHistoryRuntimeService_ListHistorySubjects_Handler,
 		},
 	},
 }
@@ -556,6 +580,9 @@ type UnimplementedDataNodeHistoryRuntime struct{}
 
 func (s *UnimplementedDataNodeHistoryRuntime) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc ReadTimeSeriesRows of service DataNodeHistoryRuntime is not implemented")
+}
+func (s *UnimplementedDataNodeHistoryRuntime) ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq) (*ListHistorySubjectsRsp, error) {
+	return nil, errors.New("rpc ListHistorySubjects of service DataNodeHistoryRuntime is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -946,6 +973,8 @@ func (c *DataNodeMarkerRuntimeClientProxyImpl) GetFactorPeriodComputedMarker(ctx
 // DataNodeHistoryRuntimeClientProxy defines service client proxy
 type DataNodeHistoryRuntimeClientProxy interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
+
+	ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq, opts ...client.Option) (rsp *ListHistorySubjectsRsp, err error)
 }
 
 type DataNodeHistoryRuntimeClientProxyImpl struct {
@@ -971,6 +1000,26 @@ func (c *DataNodeHistoryRuntimeClientProxyImpl) ReadTimeSeriesRows(ctx context.C
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeHistoryRuntimeClientProxyImpl) ListHistorySubjects(ctx context.Context, req *ListHistorySubjectsReq, opts ...client.Option) (*ListHistorySubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeHistoryRuntime/ListHistorySubjects")
+	msg.WithCalleeServiceName(DataNodeHistoryRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeHistoryRuntime")
+	msg.WithCalleeMethod("ListHistorySubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListHistorySubjectsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

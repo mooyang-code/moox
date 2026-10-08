@@ -125,6 +125,21 @@ message ReadTimeSeriesRowsReq {
   uint32 latest_per_series = 11;
 }
 
+// ListHistorySubjectsReq lists the subjects that have rows at one frequency
+// in a time-series Dataset, read from the subject-first history index. View
+// rebuilds use it for Datasets without a subject catalog.
+message ListHistorySubjectsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string freq = 4;
+}
+
+message ListHistorySubjectsRsp {
+  common.RetInfo ret_info = 1;
+  repeated string subject_ids = 2;
+}
+
 message ReadTimeSeriesRowsRsp {
   common.RetInfo ret_info = 1;
   repeated TimeSeriesRow rows = 2;

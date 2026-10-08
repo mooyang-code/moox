@@ -328,6 +328,48 @@ func (s *Store) pageHistory(ctx context.Context, req *pb.ReadTimeSeriesRowsReq, 
 	return ordered[startAt:endAt], len(ordered) > endAt, nil
 }
 
+// ListHistorySubjects returns the subjects that have rows at freq in a
+// Dataset. It seeks from one subject to the next in the subject-first index,
+// so the cost depends on the number of subjects, not on the history length.
+func (s *Store) ListHistorySubjects(ctx context.Context, spaceID, datasetID, freq string) ([]string, error) {
+	if spaceID == "" || datasetID == "" || freq == "" {
+		return nil, invalid("space_id, dataset_id and freq are required")
+	}
+	if err := s.ensureHistoryIndex(ctx, spaceID, datasetID); err != nil {
+		return nil, err
+	}
+	datasetPrefix := []byte{seriesHistoryNamespace, timeSeriesKind}
+	datasetPrefix = appendRawPart(datasetPrefix, []byte(spaceID))
+	datasetPrefix = appendRawPart(datasetPrefix, []byte(datasetID))
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: datasetPrefix, UpperBound: nextPrefix(datasetPrefix)})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	var subjects []string
+	for valid := iter.First(); valid; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		key, ok := parseSeriesHistoryKey(iter.Key())
+		if !ok || key.GetTimeSeries() == nil {
+			valid = iter.Next()
+			continue
+		}
+		subject := key.GetTimeSeries().GetSubjectId()
+		subjectPrefix := appendRawPart(append([]byte(nil), datasetPrefix...), []byte(subject))
+		freqPrefix := seriesHistoryPrefix(spaceID, datasetID, historySelector{subject: subject, freq: freq})
+		if iter.SeekGE(freqPrefix) && bytes.HasPrefix(iter.Key(), freqPrefix) {
+			subjects = append(subjects, subject)
+		}
+		valid = iter.SeekGE(nextPrefix(subjectPrefix))
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return subjects, nil
+}
+
 // latestPerSeries returns the latest perSeries keys of every series of one
 // subject and frequency, newest first within a series. It walks the
 // subject-first index backwards and, once a series has perSeries keys, seeks

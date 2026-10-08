@@ -506,3 +506,28 @@ func TestReadTimeSeriesRowsLatestPerSeriesReadsOnlyTheNewestBarsOfEveryTag(t *te
 		t.Fatalf("latest_per_series with a time range error = %v", err)
 	}
 }
+
+func TestListHistorySubjectsReturnsSubjectsWithRowsAtTheFrequency(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var rows []*pb.RowFieldUpsert
+	for _, series := range []struct{ subject, freq string }{{"A", "1m"}, {"A", "5m"}, {"B", "5m"}, {"C", "1m"}} {
+		for minute := 0; minute < 30; minute += 5 {
+			rows = append(rows, &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: series.subject, Freq: series.freq, DataTime: time.Date(2026, 10, 8, 0, minute, 0, 0, time.UTC).Format(time.RFC3339),
+			}}}, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}})
+		}
+	}
+	if err := store.UpsertFields(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	for freq, want := range map[string]string{"1m": "A,C", "5m": "A,B", "1h": ""} {
+		subjects, err := store.ListHistorySubjects(context.Background(), "s", "d", freq)
+		if err != nil || strings.Join(subjects, ",") != want {
+			t.Fatalf("ListHistorySubjects(%s) = %v, %v; want %q", freq, subjects, err, want)
+		}
+	}
+}

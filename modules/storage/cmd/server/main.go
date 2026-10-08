@@ -1082,6 +1082,13 @@ func (a *dataNodeProxyAdapter) ReadTimeSeriesRows(ctx context.Context, req *pb.R
 	return a.historyProxy.ReadTimeSeriesRows(ctx, req)
 }
 
+func (a *dataNodeProxyAdapter) ListHistorySubjects(ctx context.Context, req *pb.ListHistorySubjectsReq) (*pb.ListHistorySubjectsRsp, error) {
+	if a == nil || a.historyProxy == nil {
+		return nil, errors.New("DataNode history runtime is unavailable")
+	}
+	return a.historyProxy.ListHistorySubjects(ctx, req)
+}
+
 type dataViewProxyAdapter struct {
 	proxy pb.DataViewClientProxy
 	auth  *pb.AuthInfo

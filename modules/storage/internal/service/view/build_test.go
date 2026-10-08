@@ -142,23 +142,37 @@ func TestBackfillSubjectMatchesInstrumentMarket(t *testing.T) {
 	}
 }
 
-func TestCapacityMaintenanceRequiresSubjectCatalog(t *testing.T) {
+type historySubjectsReader struct {
+	primaryHistoryRangeReader
+	subjects []string
+	requests []*pb.ListHistorySubjectsReq
+}
+
+func (r *historySubjectsReader) ListHistorySubjects(_ context.Context, req *pb.ListHistorySubjectsReq, _ ...client.Option) (*pb.ListHistorySubjectsRsp, error) {
+	r.requests = append(r.requests, req)
+	return &pb.ListHistorySubjectsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, SubjectIds: r.subjects}, nil
+}
+
+func TestCapacityMaintenanceRequiresKnownSubjects(t *testing.T) {
 	tests := []struct {
 		name     string
 		metadata MetadataClient
+		reader   TimeSeriesRangeReader
 		wantOK   bool
 		wantWhy  string
 	}{
 		{name: "metadata client without subject catalog", metadata: &maintenanceMetadata{}, wantWhy: "subject_catalog_unavailable"},
-		{name: "empty subject catalog", metadata: &backfillSubjectCatalogMetadata{}, wantWhy: "subject_catalog_empty"},
+		{name: "empty subject catalog", metadata: &backfillSubjectCatalogMetadata{}, wantWhy: "subject_catalog_unavailable"},
 		{name: "usable subject catalog", metadata: &backfillSubjectCatalogMetadata{subjects: []*pb.Subject{{SubjectId: "BTC-USDT-SPOT", Attributes: map[string]string{"instrument_type": "spot"}}}}, wantOK: true},
+		{name: "Primary lists the subjects", metadata: &maintenanceMetadata{}, reader: &historySubjectsReader{subjects: []string{"svc-a"}}, wantOK: true},
+		{name: "Primary has no subjects", metadata: &maintenanceMetadata{}, reader: &historySubjectsReader{}, wantWhy: "subject_catalog_empty"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := &Service{metadataClient: tt.metadata}
-			ok, reason := svc.capacityMaintenanceCatalogReady(context.Background(), nil, &pb.View{SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m"})
+			ok, reason := svc.capacityMaintenanceSubjectsReady(context.Background(), tt.reader, nil, &pb.View{SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", Freq: "1m"})
 			if ok != tt.wantOK || reason != tt.wantWhy {
-				t.Fatalf("capacityMaintenanceCatalogReady() = (%v, %q), want (%v, %q)", ok, reason, tt.wantOK, tt.wantWhy)
+				t.Fatalf("capacityMaintenanceSubjectsReady() = (%v, %q), want (%v, %q)", ok, reason, tt.wantOK, tt.wantWhy)
 			}
 		})
 	}
@@ -363,5 +377,61 @@ func TestPeriodCoverageGapsReportsPartiallyBackfilledSeries(t *testing.T) {
 func TestPeriodSeriesIdentitySeparatesSeriesTags(t *testing.T) {
 	if periodSeriesIdentity("BTC-USDT", "1m", "venue:binance") == periodSeriesIdentity("BTC-USDT", "1m", "venue:okx") {
 		t.Fatal("different series tags shared one period budget key")
+	}
+}
+
+type latestPerSeriesReader struct {
+	historySubjectsReader
+	reads []*pb.ReadTimeSeriesRowsReq
+}
+
+func (r *latestPerSeriesReader) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq, _ ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
+	r.reads = append(r.reads, req)
+	var rows []*pb.TimeSeriesRow
+	for _, row := range r.rows {
+		if row.GetKey().GetSubjectId() == req.GetSelectors()[0].GetSubjectId() {
+			rows = append(rows, row)
+		}
+	}
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: successRetInfo(), Rows: rows, PageResult: &pb.PageResult{HasMore: false}}, nil
+}
+
+func TestBackfillWithoutCatalogReadsLatestBarsOfEverySubjectPrimaryLists(t *testing.T) {
+	engine := &primaryHistoryBackfillEngine{}
+	view := &pb.View{SpaceId: "mooxsys", ViewId: "metrics", Engine: "duckdb", DatasetId: "service_metrics", Freq: "30s"}
+	svc := &Service{
+		engines:      map[string]viewindex.Engine{"duckdb": engine},
+		indexEngine:  map[string]string{"metrics-b": "duckdb"},
+		schemas:      map[string]viewindex.ViewIndexSchema{"metrics-b": {SpaceID: "mooxsys", ViewID: "metrics", PrimaryDatasetID: "service_metrics", Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
+		views:        map[viewRef]*viewRuntime{{spaceID: "mooxsys", viewID: "metrics"}: {next: "metrics-b"}},
+		catalogViews: map[viewRef]*pb.View{{spaceID: "mooxsys", viewID: "metrics"}: view},
+		// The Dataset has no subject catalog.
+		metadataClient: &maintenanceMetadata{view: view},
+	}
+	row := func(subject, at string) *pb.TimeSeriesRow {
+		return &pb.TimeSeriesRow{Key: &pb.TimeSeriesKey{SpaceId: "mooxsys", DatasetId: "service_metrics", SubjectId: subject, Freq: "30s", DataTime: at}}
+	}
+	reader := &latestPerSeriesReader{historySubjectsReader: historySubjectsReader{subjects: []string{"svc-a", "svc-b"}}}
+	reader.rows = []*pb.TimeSeriesRow{
+		row("svc-a", "2026-10-08T00:01:00Z"), row("svc-a", "2026-10-08T00:00:30Z"), row("svc-a", "2026-10-08T00:00:00Z"),
+		row("svc-b", "2026-10-08T00:01:00Z"),
+	}
+	written, err := svc.backfillViewWithReader(context.Background(), "mooxsys", "metrics", 100, &primaryHistoryFieldReader{}, reader, 2, defaultMaxHistoryScanRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reader.requests) != 1 || reader.requests[0].GetFreq() != "30s" {
+		t.Fatalf("history subject listing = %v", reader.requests)
+	}
+	if len(reader.reads) != 2 {
+		t.Fatalf("Primary reads = %d, want one per subject", len(reader.reads))
+	}
+	for _, read := range reader.reads {
+		if read.GetLatestPerSeries() != 2 || len(read.GetAfterKey()) != 0 || read.GetTimeRange() != nil {
+			t.Fatalf("read %v must ask for the latest 2 bars without paging", read)
+		}
+	}
+	if written != 3 || engine.writeRows != 3 {
+		t.Fatalf("written=%d rows=%d, want 2 bars of svc-a and the 1 of svc-b", written, engine.writeRows)
 	}
 }

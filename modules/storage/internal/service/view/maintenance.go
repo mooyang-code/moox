@@ -897,7 +897,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		return nil
 	}
 	if capacityMaintenanceOnly {
-		if ready, reason := s.capacityMaintenanceCatalogReady(ctx, auth, view); !ready {
+		if ready, reason := s.capacityMaintenanceSubjectsReady(ctx, opts.PrimaryRange, s.primaryAuthSnapshot(), view); !ready {
 			// Capacity maintenance is optional. Never claim a build and fall back
 			// to the unbounded Primary history walk when the subject universe is
 			// unavailable; the active index remains safe to serve in the meantime.
