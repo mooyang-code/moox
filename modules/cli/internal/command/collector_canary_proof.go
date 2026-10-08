@@ -750,11 +750,15 @@ func (p *collectorSCFCanaryProof) readPrimaryRow(ctx context.Context) (bool, err
 func (p *collectorSCFCanaryProof) readViewRow(ctx context.Context) (bool, bool, error) {
 	tag := p.entry.GetSeriesTag()
 	key := p.timeSeriesKey()
+	columns := collectorCanaryViewColumns(p.entry.GetDatasetId(), p.entry.GetOutputFields())
 	rsp, err := p.access.view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
 		AuthInfo: p.access.viewAuth, SpaceId: p.entry.GetSpaceId(), ViewId: p.entry.GetViewId(),
-		Selectors:   []*storagepb.TimeSeriesSelector{{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: &tag}},
-		TimeRange:   &storagepb.TimeRange{StartTime: p.period.UTC().Format(time.RFC3339Nano), EndTime: p.period.Add(p.interval).UTC().Format(time.RFC3339Nano)},
-		ColumnNames: collectorCanaryReadFields(p.entry.GetOutputFields()), Limit: 1, TotalMode: commonpb.TotalMode_NONE,
+		Selectors: []*storagepb.TimeSeriesSelector{{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: &tag}},
+		// The window covers exactly the target data_time. View completeness
+		// requires the index to reach the query end, and the canary row is
+		// usually the newest one, so a whole-bar window would never be complete.
+		TimeRange:   &storagepb.TimeRange{StartTime: p.period.UTC().Format(time.RFC3339Nano), EndTime: p.period.Add(time.Nanosecond).UTC().Format(time.RFC3339Nano)},
+		ColumnNames: columns, Limit: 1, TotalMode: commonpb.TotalMode_NONE,
 	})
 	if err != nil {
 		return false, false, fmt.Errorf("query exact task-owned View row: %w", err)
@@ -768,7 +772,7 @@ func (p *collectorSCFCanaryProof) readViewRow(ctx context.Context) (bool, bool, 
 	if rsp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_READY {
 		return false, false, nil
 	}
-	rowPresent, err := collectorCanaryExactRows(rsp.GetRows(), key, collectorCanaryReadFields(p.entry.GetOutputFields()))
+	rowPresent, err := collectorCanaryExactRows(rsp.GetRows(), key, columns)
 	if err != nil {
 		return false, false, fmt.Errorf("exact task-owned View row identity: %w", err)
 	}
@@ -819,6 +823,17 @@ func collectorCanaryExactRows(rows []*storagepb.TimeSeriesRow, expected *storage
 		}
 	}
 	return true, nil
+}
+
+// collectorCanaryViewColumns names the task-owned View columns, which the
+// task result qualifies by the source Dataset ("<dataset_id>.<field>").
+func collectorCanaryViewColumns(datasetID string, fields []string) []string {
+	fields = collectorCanaryReadFields(fields)
+	columns := make([]string, 0, len(fields))
+	for _, field := range fields {
+		columns = append(columns, datasetID+"."+field)
+	}
+	return columns
 }
 
 func collectorCanaryReadFields(fields []string) []string {
