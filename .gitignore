@@ -19,6 +19,8 @@
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
+# 覆盖率产物之外，名为 coverage.go 的源码文件要提交。
+!coverage.go
 *.coverprofile
 profile.cov
 
