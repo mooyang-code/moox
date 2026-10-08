@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	archivewriter "github.com/mooyang-code/moox/modules/archive/internal/writer"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	server "github.com/nats-io/nats-server/v2/server"
@@ -299,10 +300,11 @@ func archiveTestConfig(t *testing.T, natsURL string) *config.Config {
 	cfg := config.Default()
 	cfg.Archive.RootDir = filepath.Join(dir, "archive")
 	cfg.Archive.StateDir = filepath.Join(dir, "state")
-	keyFile := filepath.Join(dir, "archive.key")
-	require.NoError(t, os.WriteFile(keyFile, []byte("archive-test-secret\n"), 0o600))
-	cfg.Archive.StorageRPC.KeyID = "archive"
-	cfg.Archive.StorageRPC.HMACKeyFile = keyFile
+	cfg.GatewayClient.KeyFile = filepath.Join(dir, "caller-archive.key")
+	cfg.GatewayClient.CacheDir = filepath.Join(dir, "gatewayclient")
+	key, err := gatewayauth.MarshalCallerKey(gatewayauth.CallerKey{Caller: "archive", KeyID: "archive-1", Secret: "archive-test-secret"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfg.GatewayClient.KeyFile, key, 0o600))
 	cfg.Archive.EventBus.URLs = []string{natsURL}
 	cfg.Archive.EventBus.Consumer = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
 	cfg.Archive.Materialize.ShutdownTimeout = 5 * time.Second

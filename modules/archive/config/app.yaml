@@ -1,3 +1,10 @@
+# 登记归档文件、回填时经本机主机网关访问 Storage
+gateway_client:
+  mode: local
+  caller: archive
+  key_file: ../secrets/caller-archive.key
+  ca_file: ../certs/moox-ca.crt
+  cache_dir: ../data/archive-gatewayclient
 archive:
   root_dir: ../data/archive
   state_dir: ../data/archive-state
@@ -15,11 +22,6 @@ archive:
     workers: 2
     row_group_rows: 65536
     shutdown_timeout: 2m
-  storage_rpc:
-    gateway_target: ip://127.0.0.1:11003
-    gateway_node_id: ""
-    key_id: archive
-    hmac_key_file: ""
   cos:
     enabled: false
     region: ""

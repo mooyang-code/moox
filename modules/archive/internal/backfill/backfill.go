@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
@@ -185,15 +184,4 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 		out = append(out, domain.RowPatch{Partition: domain.PartitionKey{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: key.GetSeriesTag(), Month: domain.MonthOf(t)}, DataTime: t.UTC(), Attributes: attrs, WrittenAt: writtenAt, Columns: columns})
 	}
 	return out, nil
-}
-
-func NormalizeTarget(raw string, defaultPort string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "ip://127.0.0.1:" + defaultPort
-	}
-	if strings.Contains(raw, "://") {
-		return raw
-	}
-	return "ip://" + raw
 }

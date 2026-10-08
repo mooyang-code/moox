@@ -27,12 +27,6 @@ func TestPlanRequiresExplicitConfirmation(t *testing.T) {
 	}
 }
 
-func TestNormalizeTarget(t *testing.T) {
-	assert.Equal(t, "ip://127.0.0.1:20102", NormalizeTarget("", "20102"))
-	assert.Equal(t, "ip://127.0.0.1:20102", NormalizeTarget("127.0.0.1:20102", "20102"))
-	assert.Equal(t, "http://storage:20102", NormalizeTarget("http://storage:20102", "20102"))
-}
-
 func TestRowsToPatches(t *testing.T) {
 	writtenAt := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	rows := []*storagepb.TimeSeriesRow{{

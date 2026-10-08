@@ -22,7 +22,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -113,11 +113,12 @@ func runSyncCOS(ctx context.Context, cli cliConfig, cfg *config.Config, out io.W
 		return err
 	}
 	defer store.Close()
-	credentials, err := gatewayauth.ResolveCredentials(cfg.Archive.StorageRPC.KeyID, cfg.Archive.StorageRPC.HMACKeyFile)
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
 	if err != nil {
-		return err
+		return fmt.Errorf("创建 gatewayclient: %w", err)
 	}
-	metadataRegistry := registry.NewClientWithCredentials(cfg.Archive.StorageRPC.GatewayTarget, cfg.Archive.StorageRPC.TargetNodeID(), credentials)
+	defer gateway.Close()
+	metadataRegistry := registry.NewClientWithOptions(gateway.ClientOptions())
 	if err := (cosstore.Syncer{
 		Client: client, Journal: store,
 		Registry: registry.PartitionRegistry{Client: metadataRegistry, DeviceID: cfg.Archive.DeviceID},
@@ -149,12 +150,12 @@ func runBackfill(ctx context.Context, cli cliConfig, cfg *config.Config, out io.
 		return err
 	}
 	defer store.Close()
-	target := gatewayauth.ServiceGatewayTarget(cfg.Archive.StorageRPC.GatewayTarget)
-	credentials, err := gatewayauth.ResolveCredentials(cfg.Archive.StorageRPC.KeyID, cfg.Archive.StorageRPC.HMACKeyFile)
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
 	if err != nil {
-		return err
+		return fmt.Errorf("创建 gatewayclient: %w", err)
 	}
-	options := gatewayauth.NewTRPCClientOptions(backfill.NormalizeTarget(target, "11003"), cfg.Archive.StorageRPC.TargetNodeID(), credentials)
+	defer gateway.Close()
+	options := gateway.ClientOptions()
 	access := storagepb.NewPrimaryStoreClientProxy(options...)
 	metadata := storagepb.NewMetadataClientProxy(options...)
 	const appID = "archive-backfill"

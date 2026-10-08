@@ -14,7 +14,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -50,8 +49,9 @@ func (c *Client) RegisterPartition(ctx context.Context, key domain.PartitionKey,
 	return c.Register(ctx, BuildArchiveFile("parquet-local", key, manifest, false, domain.COSState{}))
 }
 
-func NewClientWithCredentials(target, targetNode string, credentials gatewayauth.Credentials) *Client {
-	return &Client{proxy: storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...)}
+// NewClientWithOptions 创建经给定 tRPC 客户端选项（gatewayclient）登记归档文件的 Metadata 客户端。
+func NewClientWithOptions(options []client.Option) *Client {
+	return &Client{proxy: storagepb.NewMetadataClientProxy(options...)}
 }
 
 func StableArchiveFileID(key domain.PartitionKey) string {

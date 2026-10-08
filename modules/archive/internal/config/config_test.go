@@ -1,11 +1,13 @@
 package config
 
 import (
-	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadDefaultsAndMarketSources(t *testing.T) {
@@ -39,10 +41,10 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	}
 }
 
-func TestStorageRPCTargetNodeIDPrefersConfigAndFallsBackToEnvironment(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "storage-from-env")
-	assert.Equal(t, "storage-from-env", (StorageRPCConfig{}).TargetNodeID())
-	assert.Equal(t, "storage-from-config", (StorageRPCConfig{GatewayNodeID: " storage-from-config "}).TargetNodeID())
+func TestDefaultGatewayClientFollowsDeploymentLayout(t *testing.T) {
+	cfg := Default()
+	require.NoError(t, cfg.GatewayClient.Validate())
+	assert.Equal(t, "archive", cfg.GatewayClient.Caller)
 }
 
 func TestValidateRejectsOverlappingRootAndState(t *testing.T) {
