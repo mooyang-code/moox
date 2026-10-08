@@ -132,6 +132,37 @@ func TestResolveRejectsMinAgeBeyondRetentionAndMissingHash(t *testing.T) {
 	}
 }
 
+// 市场类型：数据集属性优先，否则由源数据集标签判定；标签不一致或未知时拒绝。
+func TestResolveMarketTypeFromAttributesOrTags(t *testing.T) {
+	client := newFakeClient("swap")
+	resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	if err != nil || resolved.Spot || resolved.MarketType != "swap" {
+		t.Fatalf("binance_swap 标签应判定为合约：%+v err=%v", resolved, err)
+	}
+	source := client.datasets["ds_kline"]
+	source.Attributes = map[string]string{"market_type": "spot"}
+	client.datasets["ds_kline"] = source
+	if resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err != nil || !resolved.Spot {
+		t.Fatalf("数据集属性应优先：%+v err=%v", resolved, err)
+	}
+	source.Attributes = map[string]string{}
+	source.SubjectTags = []string{"binance_spot", "binance_swap"}
+	client.datasets["ds_kline"] = source
+	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "无法确定市场类型") {
+		t.Fatalf("标签不一致应拒绝：%v", err)
+	}
+	source.SubjectTags = nil
+	client.datasets["ds_kline"] = source
+	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "无法确定市场类型") {
+		t.Fatalf("没有标签与属性应拒绝：%v", err)
+	}
+	source.SubjectTags = []string{"mixed_bad"}
+	client.datasets["ds_kline"] = source
+	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "不受支持") {
+		t.Fatalf("未知市场类型应拒绝：%v", err)
+	}
+}
+
 func TestRetentionBars(t *testing.T) {
 	for _, tc := range []struct {
 		retention, bar string

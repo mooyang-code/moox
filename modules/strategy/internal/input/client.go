@@ -99,7 +99,26 @@ func (c *RPCClient) GetDataset(ctx context.Context, spaceID, datasetID string) (
 	for key, value := range dataset.GetAttributes() {
 		attributes[key] = value
 	}
-	return DatasetInfo{DatasetID: dataset.GetDatasetId(), Status: dataset.GetStatus(), Frequency: dataset.GetFreq(), Retention: dataset.GetRetention(), Attributes: attributes}, nil
+	return DatasetInfo{DatasetID: dataset.GetDatasetId(), Status: dataset.GetStatus(), Frequency: dataset.GetFreq(), Retention: dataset.GetRetention(), Attributes: attributes, SubjectTags: append([]string(nil), dataset.GetSubjectTags()...)}, nil
+}
+
+// GetTag 读取标签的市场类型。
+func (c *RPCClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo, error) {
+	if c == nil || c.Metadata == nil {
+		return TagInfo{}, errors.New("Storage Metadata 客户端未配置")
+	}
+	rsp, err := c.Metadata.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: c.Auth, SpaceId: spaceID, TagId: tagID})
+	if err != nil {
+		return TagInfo{}, fmt.Errorf("读取标签 %s：%w", tagID, err)
+	}
+	if err := retError("GetTag", rsp.GetRetInfo()); err != nil {
+		return TagInfo{}, err
+	}
+	tag := rsp.GetTag()
+	if tag == nil {
+		return TagInfo{}, fmt.Errorf("标签 %s 不存在", tagID)
+	}
+	return TagInfo{TagID: tag.GetTagId(), MarketType: strings.ToLower(strings.TrimSpace(tag.GetMarketType()))}, nil
 }
 
 // ListDatasetSubjects 读取数据集的全部标的绑定（含停用的）及标的详情。

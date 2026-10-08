@@ -5,15 +5,15 @@ describe("strategy DSL preview", () => {
   it("parses the v3 templates without diagnostics", () => {
     const ranked = parseDSL(rankedTemplate);
     expect(ranked.diagnostics).toEqual([]);
-    expect(ranked.preview).toMatchObject({ name: "binance_spot_momentum_1h", bar: "1h", leverage: "1" });
+    expect(ranked.preview).toMatchObject({ name: "binance_spot_momentum", bar: "1m", leverage: "1" });
     expect(ranked.preview?.rules).toEqual([
       { id: "long_momentum", name: "多头动量选币", type: "rank" },
-      { id: "btc_trend", name: "BTC 均线趋势跟随", type: "signal" }
+      { id: "btc_trend", name: "BTC 上穿均线", type: "signal" }
     ]);
-    expect(ranked.preview?.universe).toContain("排除标签 stablecoins");
+    expect(ranked.preview?.universe).toContain("排除 BTC-USDT");
     const signal = parseDSL(signalTemplate);
     expect(signal.diagnostics).toEqual([]);
-    expect(signalTemplate).toContain("bars[-1].close");
+    expect(signalTemplate).toContain("bars[-1].bias_20");
   });
 
   it("reports structural problems before saving", () => {

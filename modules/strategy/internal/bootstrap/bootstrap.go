@@ -69,15 +69,20 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	closers = append(closers, eventRuntime.Close)
 
-	var inputClient input.Client
+	// 实时与回放共用 Storage/Factor 适配；回放按 replay.page_size 分页读取较长的区间。
+	var inputClient, replayClient input.Client
 	if cfg.DependenciesConfigured() {
-		inputClient = newInputClient(cfg)
+		live := newInputClient(cfg)
+		inputClient = live
+		ranged := *live
+		ranged.PageSize = uint32(cfg.Replay.PageSize)
+		replayClient = &ranged
 	}
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient}}
 	if cfg.Trade.Configured() {
 		service.Owner = tradeowner.New(cfg.Trade)
 	}
-	runner := &replay.Runner{Store: db, Client: inputClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
+	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
 	// 先完成崩溃或网络中断留下的启停握手，再开始消费事件。

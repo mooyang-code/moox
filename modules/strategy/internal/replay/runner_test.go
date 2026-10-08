@@ -41,7 +41,11 @@ func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, e
 }
 
 func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
-	return input.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "1h", Retention: "forever", Attributes: map[string]string{"market_type": f.marketType}}, nil
+	return input.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "1h", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + f.marketType}}, nil
+}
+
+func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (input.TagInfo, error) {
+	return input.TagInfo{TagID: tagID, MarketType: strings.TrimPrefix(tagID, "binance_")}, nil
 }
 
 func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {

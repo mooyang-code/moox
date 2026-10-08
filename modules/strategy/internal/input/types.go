@@ -48,13 +48,20 @@ type ViewColumn struct {
 	Attributes map[string]string
 }
 
-// DatasetInfo 是数据集元数据。
+// DatasetInfo 是数据集元数据。SubjectTags 是数据集的标的范围（标签 ID）。
 type DatasetInfo struct {
-	DatasetID  string
-	Status     string
-	Frequency  string
-	Retention  string
-	Attributes map[string]string
+	DatasetID   string
+	Status      string
+	Frequency   string
+	Retention   string
+	Attributes  map[string]string
+	SubjectTags []string
+}
+
+// TagInfo 是标签元数据；MarketType 是标签唯一且不可修改的市场类型（spot | swap）。
+type TagInfo struct {
+	TagID      string
+	MarketType string
 }
 
 // Subject 是数据集绑定的一个标的。
@@ -100,6 +107,7 @@ type Client interface {
 	GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error)
 	ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]Subject, error)
 	ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error)
+	GetTag(ctx context.Context, spaceID, tagID string) (TagInfo, error)
 	// QueryRows 读取全部页面并返回服务端修订号；索引或修订号变化返回 ErrStale。
 	QueryRows(ctx context.Context, spaceID string, query Query) ([]Row, uint64, error)
 	GetFactor(ctx context.Context, factorID string) (FactorInfo, error)

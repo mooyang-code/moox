@@ -12,14 +12,15 @@ import (
 
 // fakeClient 是内存中的 Storage/Factor 替身。
 type fakeClient struct {
-	views    map[string]ViewInfo
-	datasets map[string]DatasetInfo
-	subjects map[string][]Subject
-	tags     map[string][]string
-	factors  map[string]FactorInfo
-	rows     func(query Query) ([]Row, uint64, error)
-	queries  []Query
-	errors   map[string]error
+	views      map[string]ViewInfo
+	datasets   map[string]DatasetInfo
+	subjects   map[string][]Subject
+	tags       map[string][]string
+	tagMarkets map[string]string
+	factors    map[string]FactorInfo
+	rows       func(query Query) ([]Row, uint64, error)
+	queries    []Query
+	errors     map[string]error
 }
 
 func (f *fakeClient) GetView(_ context.Context, _, viewID string) (ViewInfo, error) {
@@ -57,6 +58,14 @@ func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]strin
 		return nil, fmt.Errorf("标签 %s 不存在", tagID)
 	}
 	return append([]string(nil), members...), nil
+}
+
+func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (TagInfo, error) {
+	marketType, ok := f.tagMarkets[tagID]
+	if !ok {
+		return TagInfo{}, fmt.Errorf("标签 %s 不存在", tagID)
+	}
+	return TagInfo{TagID: tagID, MarketType: marketType}, nil
 }
 
 func (f *fakeClient) QueryRows(_ context.Context, _ string, query Query) ([]Row, uint64, error) {
@@ -98,11 +107,12 @@ func newFakeClient(marketType string) *fakeClient {
 		},
 		datasets: map[string]DatasetInfo{
 			"ds_factor": {DatasetID: "ds_factor", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline"}},
-			"ds_kline":  {DatasetID: "ds_kline", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"market_type": marketType}},
+			"ds_kline":  {DatasetID: "ds_kline", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + marketType}},
 		},
-		subjects: map[string][]Subject{"ds_factor": {subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true), subject("USDC-USDT", true), subject("OLD-USDT", false)}},
-		tags:     map[string][]string{"stablecoins": {"USDC-USDT"}, "majors": {"BTC-USDT", "ETH-USDT"}},
-		errors:   map[string]error{},
+		subjects:   map[string][]Subject{"ds_factor": {subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true), subject("USDC-USDT", true), subject("OLD-USDT", false)}},
+		tags:       map[string][]string{"stablecoins": {"USDC-USDT"}, "majors": {"BTC-USDT", "ETH-USDT"}},
+		tagMarkets: map[string]string{"binance_spot": "spot", "binance_swap": "swap", "mixed_bad": "option"},
+		errors:     map[string]error{},
 		factors: map[string]FactorInfo{
 			"ma":   {FactorID: "ma", DefinitionHash: "sha256:ma", Outputs: []string{"ma_20"}},
 			"bias": {FactorID: "bias", DefinitionHash: "sha256:bias", Outputs: []string{"bias_q_20"}},

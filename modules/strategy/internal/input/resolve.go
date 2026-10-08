@@ -61,8 +61,12 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 			resolved.Calendar = calendar
 		}
 	}
-	resolved.MarketType = strings.ToLower(strings.TrimSpace(source.Attributes["market_type"]))
-	resolved.Spot = resolved.MarketType != "swap"
+	marketType, err := sourceMarketType(ctx, client, spaceID, source)
+	if err != nil {
+		return Resolved{}, nil, err
+	}
+	resolved.MarketType = marketType
+	resolved.Spot = marketType == "spot"
 	if _, err := FromBarEnd(resolved.Calendar, resolved.Bar, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
 		return Resolved{}, nil, fmt.Errorf("日历 %s 与周期 %s 的组合不受支持：%w", resolved.Calendar, resolved.Bar, err)
 	}
@@ -127,6 +131,35 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	}
 	resolved.UsesPreviousBar = program.UsesPreviousBar
 	return resolved, program, nil
+}
+
+// sourceMarketType 判定源数据集的市场类型：优先读数据集属性 market_type，否则由其标的范围标签的 market_type 决定；
+// 标签缺失、不一致或取值未知都拒绝启用，避免把合约当作现货（或相反）。
+func sourceMarketType(ctx context.Context, client Client, spaceID string, source DatasetInfo) (string, error) {
+	if value := strings.ToLower(strings.TrimSpace(source.Attributes["market_type"])); value != "" {
+		if value != "spot" && value != "swap" {
+			return "", fmt.Errorf("源数据集 %s 的 market_type=%s 不受支持", source.DatasetID, value)
+		}
+		return value, nil
+	}
+	if len(source.SubjectTags) == 0 {
+		return "", fmt.Errorf("源数据集 %s 既没有 market_type 属性也没有标的范围标签，无法确定市场类型", source.DatasetID)
+	}
+	marketType := ""
+	for _, tagID := range source.SubjectTags {
+		tag, err := client.GetTag(ctx, spaceID, tagID)
+		if err != nil {
+			return "", err
+		}
+		if tag.MarketType != "spot" && tag.MarketType != "swap" {
+			return "", fmt.Errorf("标签 %s 的市场类型 %q 不受支持", tagID, tag.MarketType)
+		}
+		if marketType != "" && marketType != tag.MarketType {
+			return "", fmt.Errorf("源数据集 %s 的标签同时包含 %s 与 %s，无法确定市场类型", source.DatasetID, marketType, tag.MarketType)
+		}
+		marketType = tag.MarketType
+	}
+	return marketType, nil
 }
 
 // retentionBars 把数据集保留期（"<n>h" 或 "forever"）换算为根数；forever 或无法解析返回 false。

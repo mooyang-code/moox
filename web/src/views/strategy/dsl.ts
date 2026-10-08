@@ -1,29 +1,28 @@
 import { parseDocument } from "yaml";
 
-/** 截面选股模板：与设计文档示例一致，使用 Binance 现货 1h 因子 View 的真实列。 */
-export const rankedTemplate = `name: binance_spot_momentum_1h
-bar: 1h
+/** 截面选股模板：只用因子库已有的列（Binance 现货因子结果 View）；bias_20 = close / MA20。 */
+export const rankedTemplate = `name: binance_spot_momentum
+bar: 1m
 
 universe:
   min_age_bars: 240
-  exclude_tags: [stablecoins]
   exclude: [BTC-USDT]
 
 rules:
   - id: long_momentum
     name: 多头动量选币
     type: rank
-    filter: "quote_volume_mean_20 > 2000000 && close > 0"
+    filter: "quote_volume_mean_20 > 20000 && close > 0"
     score: "0.6 * rank(bias_q_20) + 0.4 * rank(quote_volume_mean_q_20)"
     select: {top: 5, buffer: 2}
     weight: {total: 0.8, method: equal, cap: 0.3}
 
   - id: btc_trend
-    name: BTC 均线趋势跟随
+    name: BTC 上穿均线
     type: signal
     pool: [BTC-USDT]
-    entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
-    exit: "bars[0].close < bars[0].ma_20"
+    entry: "bars[-1].bias_20 <= 1 && bars[0].bias_20 > 1"
+    exit: "bars[0].bias_20 < 1"
     weight: {total: 0.2}
 
 portfolio:
@@ -33,17 +32,17 @@ portfolio:
   max_missing: 0.2
 `;
 
-/** 固定池择时模板：BTC、ETH 站上 20 日均线时持有。 */
-export const signalTemplate = `name: majors_ma_trend_1h
-bar: 1h
+/** 固定池择时模板：BTC、ETH 站上 20 期均线时持有。 */
+export const signalTemplate = `name: majors_trend
+bar: 1m
 
 rules:
   - id: majors_trend
     name: 主流币均线择时
     type: signal
     pool: [BTC-USDT, ETH-USDT]
-    entry: "bars[-1].close <= bars[-1].ma_20 && bars[0].close > bars[0].ma_20"
-    exit: "bars[0].close < bars[0].ma_20"
+    entry: "bars[-1].bias_20 <= 1 && bars[0].bias_20 > 1"
+    exit: "bars[0].bias_20 < 1"
     weight: {total: 0.6}
 
 portfolio:
