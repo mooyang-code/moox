@@ -24,7 +24,7 @@ import (
 	factorgen "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -242,10 +242,11 @@ type importTarget struct {
 }
 
 func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfig, setID string) (*importTarget, error) {
-	storage, err := newStorageClient(runtime)
+	storage, closeStorage, err := newStorageClient(runtime)
 	if err != nil {
 		return nil, err
 	}
+	defer closeStorage()
 	set, err := db.GetSet(ctx, setID)
 	if err != nil {
 		return nil, fmt.Errorf("get factor set: %w", err)
@@ -363,10 +364,11 @@ func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {
 	}
 	options := []recalc.Option{recalc.WithClock(periodclock.Continuous{})}
 	if len(cli.Subjects) == 0 && set.SubjectMode == domain.SubjectModeAll {
-		storage, clientErr := newStorageClient(config)
+		storage, closeStorage, clientErr := newStorageClient(config)
 		if clientErr != nil {
 			return clientErr
 		}
+		defer closeStorage()
 		options = append(options, recalc.WithSubjectProvider(storage))
 	}
 	svc := recalc.NewService(db, options...)
@@ -415,14 +417,16 @@ func newRequestID() (string, error) {
 	return "cli-" + hex.EncodeToString(value[:]), nil
 }
 
-func newStorageClient(cfg runtimeConfig) (*storageio.Client, error) {
-	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
+// newStorageClient 以 factor-mgr 身份经本机主机网关访问 Storage；用完调用返回的 close。
+func newStorageClient(cfg runtimeConfig) (*storageio.Client, func(), error) {
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("创建 gatewayclient: %w", err)
 	}
 	requestID, err := newRequestID()
 	if err != nil {
-		return nil, err
+		gateway.Close()
+		return nil, nil, err
 	}
-	return storageio.NewClientWithCredentials(cfg.GatewayTarget, cfg.GatewayNodeID, credentials, storageio.AuthInfo(requestID)), nil
+	return storageio.NewClientWithOptions(gateway.ClientOptions(), storageio.AuthInfo(requestID)), gateway.Close, nil
 }

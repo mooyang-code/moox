@@ -1,28 +1,27 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 // runtimeConfig is the part of moox-factor-mgr's app.yaml the CLI needs: the
-// database it edits offline, the Storage Gateway for source columns and the
+// database it edits offline, the gatewayclient for source columns and the
 // Python used to check factor sources.
 type runtimeConfig struct {
 	DatabasePath  string
-	GatewayTarget string
-	GatewayNodeID string
-	KeyID         string
-	HMACKeyFile   string
+	GatewayClient gatewayclient.Config
 	PythonBin     string
 }
 
+// loadRuntimeConfig 读取 factor-mgr 的 app.yaml；相对路径按组件目录（config/ 的上一级）解析，
+// 与 factor-mgr 进程的工作目录一致。
 func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	if strings.TrimSpace(path) == "" {
 		path = "./config/app.yaml"
@@ -35,25 +34,17 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	if filepath.Base(root) == "config" {
 		root = filepath.Dir(root)
 	}
-	config := runtimeConfig{DatabasePath: "./data/factor/factor.db", GatewayTarget: "ip://127.0.0.1:11003", PythonBin: "python3"}
+	config := runtimeConfig{DatabasePath: "./data/factor/factor.db", PythonBin: "python3"}
 	raw, err := os.ReadFile(absolute)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return runtimeConfig{}, fmt.Errorf("read config %s: %w", path, err)
-		}
 		return runtimeConfig{}, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var source struct {
 		Database struct {
 			Path string `yaml:"path"`
 		} `yaml:"database"`
-		Storage struct {
-			GatewayTarget string `yaml:"gateway_target"`
-			GatewayNodeID string `yaml:"gateway_node_id"`
-			KeyID         string `yaml:"key_id"`
-			HMACKeyFile   string `yaml:"hmac_key_file"`
-		} `yaml:"storage"`
-		Python struct {
+		GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+		Python        struct {
 			Bin string `yaml:"bin"`
 		} `yaml:"python"`
 	}
@@ -63,32 +54,17 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	if source.Database.Path != "" {
 		config.DatabasePath = source.Database.Path
 	}
-	if source.Storage.GatewayTarget != "" {
-		config.GatewayTarget = source.Storage.GatewayTarget
+	if config.DatabasePath != "" && !filepath.IsAbs(config.DatabasePath) {
+		config.DatabasePath = filepath.Clean(filepath.Join(root, config.DatabasePath))
 	}
-	config.GatewayNodeID, config.KeyID, config.HMACKeyFile = source.Storage.GatewayNodeID, source.Storage.KeyID, source.Storage.HMACKeyFile
+	if config.GatewayClient, err = source.GatewayClient.ResolvePaths(root); err != nil {
+		return runtimeConfig{}, err
+	}
 	if source.Python.Bin != "" {
 		config.PythonBin = source.Python.Bin
 	}
-	for _, path := range []*string{&config.DatabasePath, &config.HMACKeyFile} {
-		if *path != "" && !filepath.IsAbs(*path) {
-			*path = filepath.Clean(filepath.Join(root, *path))
-		}
-	}
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_DB_PATH")); value != "" {
 		config.DatabasePath = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET")); value != "" {
-		config.GatewayTarget = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID")); value != "" {
-		config.GatewayNodeID = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_KEY_ID")); value != "" {
-		config.KeyID = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE")); value != "" {
-		config.HMACKeyFile = value
 	}
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_BIN")); value != "" {
 		config.PythonBin = value

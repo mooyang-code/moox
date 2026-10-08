@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -91,6 +92,37 @@ func (c Config) Validate() error {
 		return fmt.Errorf("gateway_client.mode %q 无效，可选 local、access、tunnel", c.Mode)
 	}
 	return nil
+}
+
+// ResolvePaths 返回把 key_file、ca_file、cache_dir 解析后的配置：开头的 ~/ 展开为用户主目录，
+// 其余相对路径按 base 解析；base 为空时相对路径保持不变，即按进程工作目录解析。
+func (c Config) ResolvePaths(base string) (Config, error) {
+	for _, path := range []*string{&c.KeyFile, &c.CAFile, &c.CacheDir} {
+		resolved, err := resolvePath(base, *path)
+		if err != nil {
+			return Config{}, err
+		}
+		*path = resolved
+	}
+	return c, nil
+}
+
+func resolvePath(base, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("展开 %s: %w", path, err)
+		}
+		return filepath.Join(home, rest), nil
+	}
+	if base == "" || filepath.IsAbs(path) {
+		return path, nil
+	}
+	return filepath.Join(base, path), nil
 }
 
 // ValidateAccessID 检查外部接入实例 ID 的格式：access@<主机 ID>。

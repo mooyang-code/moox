@@ -8,7 +8,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -45,8 +44,8 @@ func NewClient(primary PrimaryStoreClient, metadata MetadataClient, auth *common
 	return &Client{primary: primary, metadata: metadata, auth: auth}
 }
 
-func NewClientWithCredentials(storageTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
-	options := gatewayauth.NewTRPCClientOptions(storageTarget, targetNode, credentials)
+// NewClientWithOptions 创建经给定 tRPC 客户端选项访问 Storage 的客户端：FactorMgr 传入 gatewayclient 的选项。
+func NewClientWithOptions(options []client.Option, auth *commonpb.AuthInfo) *Client {
 	return NewClient(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), auth)
 }
 

@@ -420,6 +420,53 @@ func TestDirectoryChangeSwitchesTargetAndRetriesReadOnly(t *testing.T) {
 	}
 }
 
+func TestMissingServiceRefreshesDirectoryBeforeSending(t *testing.T) {
+	hosts := newTwoHosts(t)
+	c := hosts.client(t, hosts.tls.ca)
+	// 先让客户端拿到不含 FactorMgr 的目录。
+	if _, err := c.Forward(context.Background(), metadataPath, "ListDatasets", codec.SerializationTypeJSON, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	// FactorMgr 新部署在 control：本地目录还没有它，写方法也应当先刷新目录再发送。
+	added := hosts.directory
+	added.Version = "v2"
+	added.Services = append(append([]servicecatalog.ServiceHosts(nil), added.Services...), servicecatalog.ServiceHosts{Path: "trpc.moox.factor.FactorMgr", HostIDs: []string{"control"}})
+	hosts.local.setDirectory(added)
+	if _, err := c.Forward(context.Background(), "trpc.moox.factor.FactorMgr", "CreateFactor", codec.SerializationTypeJSON, []byte(`{}`)); err != nil {
+		t.Fatalf("目录里没有的服务应当刷新目录后再选路: %v", err)
+	}
+	if call := hosts.local.lastCall(t); call.rpcName != "/trpc.moox.factor.FactorMgr/CreateFactor" {
+		t.Fatalf("应当发往 control: %+v", call)
+	}
+	// 刷新后仍然没有部署时返回明确的错误，请求不会发出。
+	before := hosts.local.callCount() + hosts.remote.callCount()
+	_, err := c.Forward(context.Background(), "trpc.moox.strategy.StrategyMgr", "ListStrategies", codec.SerializationTypeJSON, []byte(`{}`))
+	if errs.Code(err) != gatewayroute.RetServiceNotHere {
+		t.Fatalf("没有部署的服务应当返回 4404，实际 %v", err)
+	}
+	if hosts.local.callCount()+hosts.remote.callCount() != before {
+		t.Fatal("没有部署的服务不应发出请求")
+	}
+}
+
+func TestResolvePaths(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Config{KeyFile: "~/.config/moox/factor-engine.key", CAFile: "../certs/moox-ca.crt", CacheDir: "/var/cache/moox"}.ResolvePaths("/opt/moox/factor-mgr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.KeyFile != filepath.Join(home, ".config/moox/factor-engine.key") || resolved.CAFile != "/opt/moox/certs/moox-ca.crt" || resolved.CacheDir != "/var/cache/moox" {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+	unchanged, err := Config{CAFile: "../certs/moox-ca.crt"}.ResolvePaths("")
+	if err != nil || unchanged.CAFile != "../certs/moox-ca.crt" {
+		t.Fatalf("没有 base 时相对路径保持不变: %+v %v", unchanged, err)
+	}
+}
+
 func TestWriteMethodIsNotRetried(t *testing.T) {
 	hosts := newTwoHosts(t)
 	c := hosts.client(t, hosts.tls.ca)

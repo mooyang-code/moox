@@ -69,7 +69,11 @@ type Client struct {
 
 // New 按配置创建客户端。内部方式和隧道方式会在后台每 15 秒比对一次服务目录版本。
 func New(options Options) (*Client, error) {
-	config := options.Config
+	// 相对路径按进程工作目录解析，只展开 ~/。
+	config, err := options.Config.ResolvePaths("")
+	if err != nil {
+		return nil, err
+	}
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}

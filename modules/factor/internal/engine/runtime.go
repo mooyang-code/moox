@@ -360,8 +360,9 @@ func newStorageClient(cfg StorageConfig) (*storageio.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return storageio.NewClientWithCredentials(cfg.GatewayTarget, cfg.GatewayNodeID, credentials,
-		storageio.NewAuthInfo("factor-engine-"+requestID, secret)), nil
+	// 因子引擎运行在操作员机器上，按配置的网关地址发送并用自己的密钥签名。
+	options := gatewayauth.NewTRPCClientOptions(cfg.GatewayTarget, cfg.GatewayNodeID, credentials)
+	return storageio.NewClientWithOptions(options, storageio.NewAuthInfo("factor-engine-"+requestID, secret)), nil
 }
 
 func randomHex(n int) (string, error) {

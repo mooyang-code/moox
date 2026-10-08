@@ -12,17 +12,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadRuntimeConfigReadsDatabaseStorageAndPython(t *testing.T) {
+func TestLoadRuntimeConfigReadsDatabaseGatewayClientAndPython(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "app.yaml")
-	contents := "database:\n  path: ./state/factor.db\nstorage:\n  gateway_target: ip://10.0.0.1:11003\n  key_id: factor\npython:\n  bin: python311\n"
+	configDir := filepath.Join(root, "config")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	path := filepath.Join(configDir, "app.yaml")
+	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  mode: local\n  caller: factor-mgr\n  key_file: ../secrets/caller-factor-mgr.key\n  ca_file: ../certs/moox-ca.crt\n  cache_dir: ./data/gatewayclient\npython:\n  bin: python311\n"
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(root, "state/factor.db"), cfg.DatabasePath)
-	require.Equal(t, "ip://10.0.0.1:11003", cfg.GatewayTarget)
-	require.Equal(t, "factor", cfg.KeyID)
+	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
+	require.Equal(t, filepath.Join(filepath.Dir(root), "secrets/caller-factor-mgr.key"), cfg.GatewayClient.KeyFile, "相对路径按组件目录解析")
+	require.Equal(t, filepath.Join(root, "data/gatewayclient"), cfg.GatewayClient.CacheDir)
 	require.Equal(t, "python311", cfg.PythonBin)
 }
 
@@ -31,14 +34,10 @@ func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	path := filepath.Join(root, "app.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("python:\n  bin: configured-python\n"), 0o600))
 	t.Setenv("MOOX_FACTOR_PYTHON_BIN", "env-python")
-	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
-	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID", "storage-node-0")
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, "env-python", cfg.PythonBin)
-	require.Equal(t, "ip://127.0.0.1:11003", cfg.GatewayTarget)
-	require.Equal(t, "storage-node-0", cfg.GatewayNodeID)
 }
 
 func TestValidateImportableSetRejectsPendingAndDeleting(t *testing.T) {

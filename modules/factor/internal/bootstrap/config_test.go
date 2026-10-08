@@ -10,24 +10,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadConfigDefaults(t *testing.T) {
+// testGatewayClientYAML 是测试配置共用的 gateway_client 段。
+const testGatewayClientYAML = "gateway_client:\n  mode: local\n  caller: factor-mgr\n  key_file: caller-factor-mgr.key\n  ca_file: moox-ca.crt\n  cache_dir: ./data/gatewayclient\n"
+
+func writeFactorConfig(t *testing.T, content string) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
-	cfg, err := Load(path)
+	require.NoError(t, os.WriteFile(path, []byte(testGatewayClientYAML+content), 0o600))
+	return path
+}
+
+func TestLoadConfigDefaults(t *testing.T) {
+	cfg, err := Load(writeFactorConfig(t, ""))
 	require.NoError(t, err)
 	require.Equal(t, "./data/factor/factor.db", cfg.Database.Path)
-	require.Equal(t, "ip://127.0.0.1:11003", cfg.Storage.GatewayTarget)
-	require.Equal(t, "factor", cfg.Storage.KeyID)
+	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
 	require.Equal(t, "python3", cfg.Python.Bin)
 	require.Equal(t, 45*time.Second, cfg.Engine.LeaseTTL)
 	require.Equal(t, 15*time.Minute, cfg.Engine.JobLeaseTTL)
 }
 
 func TestLoadConfigRejectsShortEngineLease(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("engine:\n  lease_ttl: 2s\n"), 0o600))
-	_, err := Load(path)
+	_, err := Load(writeFactorConfig(t, "engine:\n  lease_ttl: 2s\n"))
 	require.ErrorContains(t, err, "engine.lease_ttl")
+}
+
+func TestLoadConfigRequiresGatewayClient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	_, err := Load(path)
+	require.ErrorContains(t, err, "gateway_client")
 }
 
 func TestLoadRejectsEngineOnlySections(t *testing.T) {
@@ -37,9 +49,7 @@ func TestLoadRejectsEngineOnlySections(t *testing.T) {
 		"python:\n  workers: 8\n",
 		"recalc:\n  chunk_periods: 500\n",
 	} {
-		path := filepath.Join(t.TempDir(), "app.yaml")
-		require.NoError(t, os.WriteFile(path, []byte(section), 0o600))
-		_, err := Load(path)
+		_, err := Load(writeFactorConfig(t, section))
 		require.Error(t, err, section)
 	}
 }

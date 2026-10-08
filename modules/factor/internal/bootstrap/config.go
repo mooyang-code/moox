@@ -9,26 +9,20 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/enginehub"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Database DatabaseConfig `yaml:"database"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Python   PythonConfig   `yaml:"python"`
-	Engine   EngineConfig   `yaml:"engine"`
+	// GatewayClient 是 FactorMgr 访问 Storage 使用的 gatewayclient 配置（factor-mgr 身份）。
+	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+	Database      DatabaseConfig       `yaml:"database"`
+	Python        PythonConfig         `yaml:"python"`
+	Engine        EngineConfig         `yaml:"engine"`
 }
 
 type DatabaseConfig struct {
 	Path string `yaml:"path"`
-}
-
-type StorageConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	GatewayNodeID string `yaml:"gateway_node_id"`
-	KeyID         string `yaml:"key_id"`
-	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 // PythonConfig names the interpreter that test-loads factor sources when a
@@ -65,7 +59,6 @@ func Load(path string) (*Config, error) {
 func Default() *Config {
 	return &Config{
 		Database: DatabaseConfig{Path: "./data/factor/factor.db"},
-		Storage:  StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "factor"},
 		Python:   PythonConfig{Bin: "python3"},
 		Engine:   EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
 	}
@@ -75,12 +68,6 @@ func (c *Config) applyDefaults() {
 	defaults := Default()
 	if c.Database.Path == "" {
 		c.Database.Path = defaults.Database.Path
-	}
-	if c.Storage.GatewayTarget == "" {
-		c.Storage.GatewayTarget = defaults.Storage.GatewayTarget
-	}
-	if c.Storage.KeyID == "" {
-		c.Storage.KeyID = defaults.Storage.KeyID
 	}
 	if c.Python.Bin == "" {
 		c.Python.Bin = defaults.Python.Bin
@@ -97,18 +84,6 @@ func (c *Config) applyEnv() {
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_DB_PATH")); value != "" {
 		c.Database.Path = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET")); value != "" {
-		c.Storage.GatewayTarget = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID")); value != "" {
-		c.Storage.GatewayNodeID = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_KEY_ID")); value != "" {
-		c.Storage.KeyID = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE")); value != "" {
-		c.Storage.HMACKeyFile = value
-	}
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_BIN")); value != "" {
 		c.Python.Bin = value
 	}
@@ -121,13 +96,8 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Database.Path) == "" {
 		return fmt.Errorf("database.path is required")
 	}
-	if !validTRPCTarget(c.Storage.GatewayTarget) {
-		return fmt.Errorf("storage.gateway_target must be a tRPC target")
-	}
-	if strings.TrimSpace(c.Storage.HMACKeyFile) != "" {
-		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
-			return fmt.Errorf("storage hmac credentials: %w", err)
-		}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.Python.Bin) == "" {
 		return fmt.Errorf("python.bin is required")
@@ -139,9 +109,4 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("engine.job_lease_ttl must be at least 1m")
 	}
 	return nil
-}
-
-func validTRPCTarget(value string) bool {
-	value = strings.TrimSpace(strings.ToLower(value))
-	return value != "" && !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://")
 }
