@@ -315,3 +315,68 @@ AFTER UPDATE ON t_secrets
 BEGIN
     UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;
+
+-- ============ 部署主机与部署 ============
+
+-- 部署主机：主机 ID 即主机名，每台主机恰好一个主机网关
+CREATE TABLE IF NOT EXISTS t_hosts (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_address TEXT NOT NULL,
+    c_private_address TEXT NOT NULL DEFAULT '',
+    c_region TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'enabled',
+    c_description TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('enabled', 'disabled')),
+    UNIQUE (c_address)
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_hosts_mtime
+AFTER UPDATE ON t_hosts
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
+END;
+
+-- 部署：哪个组件部署在哪台主机；组件定义见代码中的组件目录
+CREATE TABLE IF NOT EXISTS t_placements (
+    c_host_id TEXT NOT NULL,
+    c_component_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'enabled',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('enabled', 'disabled')),
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id),
+    PRIMARY KEY (c_host_id, c_component_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_placements_component ON t_placements (c_component_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_placements_mtime
+AFTER UPDATE ON t_placements
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_placements SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_host_id = OLD.c_host_id AND c_component_id = OLD.c_component_id;
+END;
+
+-- 主机网关运行状态：由心跳写入
+CREATE TABLE IF NOT EXISTS t_host_gateway_status (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_version TEXT NOT NULL DEFAULT '',
+    c_expected_hash TEXT NOT NULL DEFAULT '',
+    c_applied_hash TEXT NOT NULL DEFAULT '',
+    c_route_count INTEGER NOT NULL DEFAULT 0,
+    c_last_seen_at DATETIME,
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_previous_instance_id TEXT NOT NULL DEFAULT '',
+    c_replaced_at DATETIME,
+    c_conflict_instance_id TEXT NOT NULL DEFAULT '',
+    c_conflict_seen_at DATETIME,
+    c_mismatch_since DATETIME,
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
+);

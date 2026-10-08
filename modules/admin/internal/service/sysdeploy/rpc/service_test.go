@@ -54,47 +54,43 @@ func (f *fakeSysDeployService) GetGatewayNodeRoutes(context.Context, *pb.GetGate
 	return &pb.GetGatewayNodeRoutesRsp{RetInfo: retOK()}, nil
 }
 
-func retOK() *pb.RetInfo {
-	return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}
-}
-
 func TestService_ListServiceDeployments_DelegatesToService(t *testing.T) {
-	svc := NewService(&fakeSysDeployService{})
+	svc := NewService(&fakeSysDeployService{}, nil, nil)
 	rsp, err := svc.ListServiceDeployments(context.Background(), &pb.ListServiceDeploymentsReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestService_GetServiceDeployment_DelegatesToService(t *testing.T) {
-	svc := NewService(&fakeSysDeployService{})
+	svc := NewService(&fakeSysDeployService{}, nil, nil)
 	rsp, err := svc.GetServiceDeployment(context.Background(), &pb.GetServiceDeploymentReq{ServiceName: "moox_trade"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestService_CreateServiceDeployment_DelegatesToService(t *testing.T) {
-	svc := NewService(&fakeSysDeployService{})
+	svc := NewService(&fakeSysDeployService{}, nil, nil)
 	rsp, err := svc.CreateServiceDeployment(context.Background(), &pb.CreateServiceDeploymentReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestService_UpdateServiceDeployment_DelegatesToService(t *testing.T) {
-	svc := NewService(&fakeSysDeployService{})
+	svc := NewService(&fakeSysDeployService{}, nil, nil)
 	rsp, err := svc.UpdateServiceDeployment(context.Background(), &pb.UpdateServiceDeploymentReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestService_DeleteServiceDeployment_DelegatesToService(t *testing.T) {
-	svc := NewService(&fakeSysDeployService{})
+	svc := NewService(&fakeSysDeployService{}, nil, nil)
 	rsp, err := svc.DeleteServiceDeployment(context.Background(), &pb.DeleteServiceDeploymentReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestService_ListActiveServiceDeployments_DelegatesToService(t *testing.T) {
-	svc := NewService(&fakeSysDeployService{})
+	svc := NewService(&fakeSysDeployService{}, nil, nil)
 	rsp, err := svc.ListActiveServiceDeployments(context.Background(), &pb.ListActiveServiceDeploymentsReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
@@ -102,13 +98,13 @@ func TestService_ListActiveServiceDeployments_DelegatesToService(t *testing.T) {
 
 func TestNewService_ShouldWrapUnderlyingService(t *testing.T) {
 	inner := &fakeSysDeployService{}
-	svc := NewService(inner)
+	svc := NewService(inner, nil, nil)
 	require.NotNil(t, svc)
 	assert.Equal(t, inner, svc.svc)
 }
 
 func TestService_GatewayNodeMethodsDelegate(t *testing.T) {
-	svc := NewService(&fakeSysDeployService{})
+	svc := NewService(&fakeSysDeployService{}, nil, nil)
 	ctx := context.Background()
 	list, err := svc.ListGatewayNodes(ctx, &pb.ListGatewayNodesReq{})
 	require.NoError(t, err)
@@ -136,7 +132,7 @@ func TestSysDeployService_GoomMock_DelegatesList(t *testing.T) {
 		return &pb.ListServiceDeploymentsRsp{RetInfo: retOK()}, nil
 	})
 
-	rpcSvc := NewService(svcIface)
+	rpcSvc := NewService(svcIface, nil, nil)
 	rsp, err := rpcSvc.ListServiceDeployments(context.Background(), &pb.ListServiceDeploymentsReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())

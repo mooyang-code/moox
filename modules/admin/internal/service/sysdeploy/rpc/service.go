@@ -4,6 +4,8 @@ package rpc
 import (
 	"context"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/placement"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 )
@@ -11,11 +13,14 @@ import (
 // Service is a thin RPC adapter for service deployment management.
 type Service struct {
 	pb.UnimplementedSysDeploy
-	svc sysdeploy.Service
+	svc        sysdeploy.Service
+	placements *placement.Service
+	control    *gatewaycontrol.Service
 }
 
-func NewService(svc sysdeploy.Service) *Service {
-	return &Service{svc: svc}
+// NewService 创建 SysDeploy 的 RPC 适配层：v1 方法委托 sysdeploy.Service，v2 方法委托部署与网关控制。
+func NewService(svc sysdeploy.Service, placements *placement.Service, control *gatewaycontrol.Service) *Service {
+	return &Service{svc: svc, placements: placements, control: control}
 }
 
 func (s *Service) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {

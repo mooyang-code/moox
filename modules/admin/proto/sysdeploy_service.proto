@@ -3,6 +3,8 @@ syntax = "proto3";
 package trpc.moox.ops;
 
 import "moox_common.proto";
+import "directory.proto";
+import "gatewaycontrol.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
@@ -200,6 +202,206 @@ message GetGatewayNodeRoutesRsp {
   repeated GatewayRoute routes = 6;
 }
 
+// ===== 组件目录、主机与部署 =====
+// 组件定义写在代码里的组件目录（packages/servicecatalog）；这里只记录哪个组件部署在哪台主机、是否启用。
+// 管理台只能查看和启用 / 停用；主机与部署由 CLI 按 moox.toml 经 SyncHostPlacements 同步。
+
+message CatalogPort {
+  string name = 1;
+  int32 port = 2;
+}
+
+message CatalogMethod {
+  string name = 1;
+  bool read_only = 2;
+  // 放行的调用方；host-gateway 表示每台主机的 host-gateway@<主机>。
+  repeated string callers = 3;
+}
+
+message CatalogService {
+  string path = 1;
+  int32 port = 2;
+  string console_name = 3;
+  int64 timeout_ms = 4;
+  int64 max_body_bytes = 5;
+  repeated CatalogMethod methods = 6;
+}
+
+message CatalogComponent {
+  string id = 1;
+  string name = 2;
+  string binary = 3;
+  // host | control | any
+  string scope = 4;
+  // per_host | single | multi
+  string replicas = 5;
+  bool protected = 6;
+  // readyz | https | none
+  string health_kind = 7;
+  int32 health_port = 8;
+  repeated CatalogPort ports = 9;
+  repeated CatalogService services = 10;
+}
+
+message CatalogPrincipalGrant {
+  string service = 1;
+  repeated string methods = 2;
+}
+
+message CatalogPrincipal {
+  string id = 1;
+  string description = 2;
+  repeated CatalogPrincipalGrant allow = 3;
+}
+
+message GetCatalogReq {}
+
+message GetCatalogRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  string checksum = 2;
+  repeated CatalogComponent components = 3;
+  repeated CatalogPrincipal principals = 4;
+}
+
+// HostGatewayStatus 是主机网关的心跳状态；state 为 online、offline、never_reported 或 conflict。
+message HostGatewayStatus {
+  string state = 1;
+  bool synced = 2;
+  string instance_id = 3;
+  string version = 4;
+  string expected_hash = 5;
+  string applied_hash = 6;
+  int32 route_count = 7;
+  string last_seen_at = 8;
+  string last_error = 9;
+  string previous_instance_id = 10;
+  string replaced_at = 11;
+  string conflict_instance_id = 12;
+  string conflict_seen_at = 13;
+  // 已应用哈希与期望哈希不一致的起始时间。
+  string out_of_sync_since = 14;
+}
+
+message DeployHost {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  string region = 4;
+  // enabled | disabled
+  string status = 5;
+  string description = 6;
+  // control 主机受保护，不能停用。
+  bool protected = 7;
+  string created_at = 8;
+  string updated_at = 9;
+  HostGatewayStatus gateway = 10;
+}
+
+message DeployPlacement {
+  string host_id = 1;
+  string component_id = 2;
+  // enabled | disabled
+  string status = 3;
+  bool protected = 4;
+  // 「主机」范围的组件由系统自动维护，不能编辑。
+  bool host_component = 5;
+  string created_at = 6;
+  string updated_at = 7;
+}
+
+message ListDeployHostsReq {}
+
+message ListDeployHostsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated DeployHost hosts = 2;
+}
+
+message ListPlacementsReq {
+  string host_id = 1;
+  string component_id = 2;
+}
+
+message ListPlacementsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated DeployPlacement placements = 2;
+}
+
+message GetHostRoutesReq {
+  string host_id = 1;
+}
+
+message GetHostRoutesRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  string host_id = 2;
+  bool disabled = 3;
+  string expected_hash = 4;
+  string generated_at = 5;
+  repeated trpc.moox.admin.HostRoute routes = 6;
+  // 下发给这台主机网关的校验密钥范围（只有调用方身份，不含密钥）。
+  repeated string callers = 7;
+  HostGatewayStatus gateway = 8;
+}
+
+message GetDirectoryReq {}
+
+message GetDirectoryRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  trpc.moox.hostgateway.DirectorySnapshot directory = 2;
+}
+
+message SetHostStatusReq {
+  string host_id = 1;
+  // enabled | disabled
+  string status = 2;
+}
+
+message SetHostStatusRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  DeployHost host = 2;
+}
+
+message SetPlacementStatusReq {
+  string host_id = 1;
+  string component_id = 2;
+  // enabled | disabled
+  string status = 3;
+}
+
+message SetPlacementStatusRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  DeployPlacement placement = 2;
+}
+
+message DeployHostSpec {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  string region = 4;
+  string description = 5;
+}
+
+// SyncHostPlacementsReq 是 moox.toml 中一台主机的完整组件列表，不含「主机」范围的组件。
+message SyncHostPlacementsReq {
+  DeployHostSpec host = 1;
+  repeated string components = 2;
+}
+
+message SyncHostPlacementsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  bool host_created = 2;
+  repeated string added = 3;
+  repeated string removed = 4;
+  repeated string kept = 5;
+}
+
+message DeleteDeployHostReq {
+  string host_id = 1;
+}
+
+message DeleteDeployHostRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+
 service SysDeploy {
   rpc ListServiceDeployments(ListServiceDeploymentsReq) returns (ListServiceDeploymentsRsp);
   rpc GetServiceDeployment(GetServiceDeploymentReq) returns (GetServiceDeploymentRsp);
@@ -212,4 +414,18 @@ service SysDeploy {
   rpc UpdateGatewayNode(UpdateGatewayNodeReq) returns (UpdateGatewayNodeRsp);
   rpc DeleteGatewayNode(DeleteGatewayNodeReq) returns (DeleteGatewayNodeRsp);
   rpc GetGatewayNodeRoutes(GetGatewayNodeRoutesReq) returns (GetGatewayNodeRoutesRsp);
+
+  // 管理台使用
+  rpc GetCatalog(GetCatalogReq) returns (GetCatalogRsp);
+  rpc ListHosts(ListDeployHostsReq) returns (ListDeployHostsRsp);
+  rpc ListPlacements(ListPlacementsReq) returns (ListPlacementsRsp);
+  rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
+  rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
+  // 受保护的组件和 control 主机拒绝停用
+  rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
+  rpc SetPlacementStatus(SetPlacementStatusReq) returns (SetPlacementStatusRsp);
+  // CLI 使用
+  rpc SyncHostPlacements(SyncHostPlacementsReq) returns (SyncHostPlacementsRsp);
+  // 主机上仍有非主机范围的部署时拒绝
+  rpc DeleteHost(DeleteDeployHostReq) returns (DeleteDeployHostRsp);
 }

@@ -60,8 +60,11 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	adminpb.RegisterSecretMgrService(s.Service("trpc.moox.ops.SecretMgr"), secretSvc)
 
 	// 3.8 服务部署信息
-	sysDeploySvc := sysdeployrpc.NewService(services.SysDeploy)
+	sysDeploySvc := sysdeployrpc.NewService(services.SysDeploy, services.Placements, services.GatewayControl)
 	adminpb.RegisterSysDeployService(s.Service("trpc.moox.ops.SysDeploy"), sysDeploySvc)
+
+	// 3.9 网关控制：只监听本机，主机网关经 control 的主机网关访问
+	adminpb.RegisterGatewayControlService(s.Service("trpc.moox.admin.GatewayControl"), services.GatewayControl)
 
 	// Setup is intentionally registered only on its dedicated loopback listener.
 	adminpb.RegisterSetupService(s.Service("trpc.moox.admin.Setup"), setuprpc.NewService(services.Setup))

@@ -116,14 +116,21 @@ components:
         console_name: sysdeploy
         rpcs: [ListServiceDeployments, GetServiceDeployment, CreateServiceDeployment, UpdateServiceDeployment,
                DeleteServiceDeployment, ListActiveServiceDeployments, ListGatewayNodes, CreateGatewayNode,
-               UpdateGatewayNode, DeleteGatewayNode, GetGatewayNodeRoutes]
+               UpdateGatewayNode, DeleteGatewayNode, GetGatewayNodeRoutes, GetCatalog, ListHosts, ListPlacements,
+               GetHostRoutes, GetDirectory, SetHostStatus, SetPlacementStatus, SyncHostPlacements, DeleteHost]
         read_only: [ListServiceDeployments, GetServiceDeployment, ListActiveServiceDeployments, ListGatewayNodes,
-                    GetGatewayNodeRoutes]
+                    GetGatewayNodeRoutes, GetCatalog, ListHosts, ListPlacements, GetHostRoutes, GetDirectory]
         acl:
+          # 页面不能新增主机和部署：同步与删除主机只给 CLI。
           - all: true
+            except: [SyncHostPlacements, DeleteHost]
             callers: [console, moox-cli]
+          - methods: [SyncHostPlacements, DeleteHost]
+            callers: [moox-cli]
           - methods: [ListServiceDeployments, ListActiveServiceDeployments, ListGatewayNodes]
             callers: [collector, monitor]
+          - methods: [GetCatalog, ListHosts, ListPlacements, GetHostRoutes]
+            callers: [monitor]
       - path: trpc.moox.admin.Setup
         port: 11110
         timeout_ms: 120000

@@ -75,6 +75,12 @@ server:
       network: tcp
       protocol: http
       timeout: 10000
+    - name: trpc.moox.admin.GatewayControl
+      ip: 127.0.0.1
+      port: 11112
+      network: tcp
+      protocol: trpc
+      timeout: 10000
     - name: trpc.moox.admin.metrics.timer
       port: 11305
       network: "*/30 * * * * *"

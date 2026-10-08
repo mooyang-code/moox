@@ -138,7 +138,7 @@ func (c *Catalog) Compile(deployment Deployment) (Compiled, error) {
 			directory.Hosts = append(directory.Hosts, DirectoryHost{ID: host.ID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region})
 		}
 	}
-	version, err := directoryVersion(directory)
+	version, err := DirectoryVersion(directory)
 	if err != nil {
 		return Compiled{}, err
 	}
@@ -209,14 +209,27 @@ func (c *Catalog) expandCallers(callers, gatewayCallers []string) []string {
 	return sortedUnique(out)
 }
 
-func directoryVersion(directory Directory) (string, error) {
-	directory.Version = ""
-	encoded, err := json.Marshal(directory)
+// DirectoryVersion 计算服务目录的版本号：目录内容（不含版本号本身）的 sha256。主机网关据此校验收到的目录。
+func DirectoryVersion(directory Directory) (string, error) {
+	encoded, err := json.Marshal(canonicalDirectory(directory))
 	if err != nil {
 		return "", fmt.Errorf("序列化服务目录: %w", err)
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// canonicalDirectory 把空切片统一成非 nil，保证经过 proto 往返后算出的版本号不变。
+func canonicalDirectory(directory Directory) Directory {
+	out := Directory{Services: []ServiceHosts{}, Components: []ComponentHosts{}, Hosts: []DirectoryHost{}}
+	for _, service := range directory.Services {
+		out.Services = append(out.Services, ServiceHosts{Path: service.Path, HostIDs: append([]string{}, service.HostIDs...)})
+	}
+	for _, component := range directory.Components {
+		out.Components = append(out.Components, ComponentHosts{ComponentID: component.ComponentID, HostIDs: append([]string{}, component.HostIDs...)})
+	}
+	out.Hosts = append(out.Hosts, directory.Hosts...)
+	return out
 }
 
 func sortedMapKeys[V any](values map[string]V) []string {
