@@ -5,19 +5,19 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the root collector control-plane configuration.
 type Config struct {
+	// GatewayClient 是 Collector 调用其他组件（Storage、交易服务等）使用的 gatewayclient 配置。
+	GatewayClient       gatewayclient.Config     `yaml:"gateway_client"`
 	SCFRegionBlacklists map[string][]string      `yaml:"scf_region_blacklists"`
 	Database            DatabaseConfig           `yaml:"database"`
 	CloudNode           CloudNodeConfig          `yaml:"cloudnode"`
@@ -60,12 +60,11 @@ type CloudNodeConfig struct {
 	ServicePath string `yaml:"service_path"`
 }
 
-// StorageConfig describes storage service addresses.
+// StorageConfig 描述 Storage 相关的设置。Collector 自己访问 Storage 走 gateway_client；
+// GatewayTarget、GatewayNodeID 只用来确定写入 SCF 调用载荷的 Storage 网关。
 type StorageConfig struct {
 	GatewayTarget    string `yaml:"gateway_target"`
 	GatewayNodeID    string `yaml:"gateway_node_id"`
-	KeyID            string `yaml:"key_id"`
-	HMACKeyFile      string `yaml:"hmac_key_file"`
 	ResultDataNodeID string `yaml:"result_data_node_id"`
 }
 
@@ -166,12 +165,9 @@ type DNSConfig struct {
 	Nameservers     []string      `yaml:"nameservers"`
 }
 
-// DNSResolverConfig selects the optional Trade-side resolver. The native
-// Gateway target and node are rendered from moox.toml by moox-cli.
+// DNSResolverConfig 选择可选的交易服务侧 DNS 解析，经 gateway_client 调用交易服务。
 type DNSResolverConfig struct {
 	Enabled         bool          `yaml:"enabled"`
-	Target          string        `yaml:"target"`
-	NodeID          string        `yaml:"node_id"`
 	Domains         []string      `yaml:"domains"`
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
@@ -191,6 +187,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyEnv()
+	if err := cfg.GatewayClient.Validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateStorageTargets(); err != nil {
 		return nil, err
 	}
@@ -249,12 +248,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_NODE_ID"); v != "" {
 		c.CollectorRuntime.NodeID = strings.TrimSpace(v)
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID"); v != "" {
-		c.Storage.KeyID = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
-		c.Storage.HMACKeyFile = v
-	}
 	if v := os.Getenv("MOOX_COLLECTOR_RESULT_DATA_NODE_ID"); v != "" {
 		c.Storage.ResultDataNodeID = v
 	}
@@ -280,12 +273,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_ENABLED"); v != "" {
 		c.DNSResolver.Enabled = strings.EqualFold(strings.TrimSpace(v), "1") || strings.EqualFold(strings.TrimSpace(v), "true")
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_TARGET"); v != "" {
-		c.DNSResolver.Target = strings.TrimSpace(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_NODE_ID"); v != "" {
-		c.DNSResolver.NodeID = strings.TrimSpace(v)
-	}
 	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_DOMAINS"); v != "" {
 		c.DNSResolver.Domains = splitCSV(v)
 	}
@@ -310,11 +297,6 @@ func (c *Config) validateStorageTargets() error {
 	if !isStorageTRPCTarget(c.Storage.GatewayTarget) {
 		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
 	}
-	if strings.TrimSpace(c.Storage.HMACKeyFile) != "" {
-		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
-			return fmt.Errorf("storage hmac credentials: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -336,12 +318,6 @@ func (c *Config) validateCollectorRuntime() error {
 func (c *Config) validateDNSResolver() error {
 	if !c.DNSResolver.Enabled {
 		return nil
-	}
-	if !isPublicDNSResolverTarget(c.DNSResolver.Target) {
-		return fmt.Errorf("dns_resolver.target must be an ip://public-ip:port tRPC target, got %q", c.DNSResolver.Target)
-	}
-	if strings.TrimSpace(c.DNSResolver.NodeID) == "" {
-		return fmt.Errorf("dns_resolver.node_id is required when enabled")
 	}
 	if len(c.DNSResolver.Domains) == 0 {
 		return fmt.Errorf("dns_resolver.domains must not be empty when enabled")
@@ -415,32 +391,6 @@ func (c *Config) validatePeriodReadiness() error {
 		return fmt.Errorf("period_readiness.parent_retention must be greater than 0 and at most 365 days")
 	}
 	return nil
-}
-
-func isPublicDNSResolverTarget(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Hostname() == "" || parsed.Port() == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil || port < 1 || port > 65535 {
-		return false
-	}
-	ip := net.ParseIP(parsed.Hostname())
-	return isPublicResolverIP(ip)
-}
-
-func isPublicResolverIP(ip net.IP) bool {
-	ip = ip.To4()
-	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return false
-	}
-	first, second, third := ip[0], ip[1], ip[2]
-	return first != 0 && first < 224 &&
-		!(first == 100 && second >= 64 && second <= 127) &&
-		!(first == 192 && second == 0 && (third == 0 || third == 2)) &&
-		!(first == 198 && (second == 18 || second == 19 || (second == 51 && third == 100))) &&
-		!(first == 203 && second == 0 && third == 113)
 }
 
 func isStorageTRPCTarget(raw string) bool {

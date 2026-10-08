@@ -4,15 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -66,67 +63,37 @@ type storageWriter struct {
 	writeSource string
 }
 
-func NewBatchStorageWithWriteSource(accessTarget, instType, writeSource string) (BatchStorage, error) {
-	binding, err := ResolveStorageBinding(instType)
-	if err != nil {
-		return nil, err
-	}
-	auth, err := storageAuthInfo(binding)
-	if err != nil {
-		return nil, err
-	}
-	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-	primary := storagepb.NewPrimaryStoreClientProxy(options...)
-	return &storageWriter{
-		access: primary, period: primary, metadata: storagepb.NewMetadataClientProxy(options...),
-		authInfo: auth, writeSource: strings.TrimSpace(writeSource),
-	}, nil
+// NewBatchStorage 创建市场写入用的 Storage 适配器。options 决定请求怎样到达 Storage：
+// Collector 传入 gatewayclient 的客户端选项，SCF 传入它自己的网关选项。
+func NewBatchStorage(options []client.Option, instType, writeSource string) (BatchStorage, error) {
+	return newStorageWriter(options, instType, writeSource)
 }
 
-func NewResampleMetadataClient(accessTarget, instType string) (*ResampleMetadataClient, error) {
-	binding, err := ResolveStorageBinding(instType)
+// NewResampleMetadataClient 创建 K 线重采样与任务结果使用的 Metadata、PrimaryStore 客户端。
+func NewResampleMetadataClient(options []client.Option, instType string) (*ResampleMetadataClient, error) {
+	auth, err := ResolveStorageAuthInfo(instType)
 	if err != nil {
 		return nil, err
 	}
-	auth, err := storageAuthInfo(binding)
-	if err != nil {
-		return nil, err
-	}
-	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
 	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(options...), Primary: storagepb.NewPrimaryStoreClientProxy(options...), Auth: auth}, nil
 }
 
-func NewResampleStorage(accessTarget, instType, writeSource string) (ResampleStorage, error) {
-	binding, err := ResolveStorageBinding(instType)
+// NewResampleStorage 创建 K 线重采样读写使用的 Storage 适配器。
+func NewResampleStorage(options []client.Option, instType, writeSource string) (ResampleStorage, error) {
+	return newStorageWriter(options, instType, writeSource)
+}
+
+func newStorageWriter(options []client.Option, instType, writeSource string) (*storageWriter, error) {
+	auth, err := ResolveStorageAuthInfo(instType)
 	if err != nil {
 		return nil, err
 	}
-	auth, err := storageAuthInfo(binding)
-	if err != nil {
-		return nil, err
-	}
-	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
 	primary := storagepb.NewPrimaryStoreClientProxy(options...)
 	return &storageWriter{
 		access: primary, period: primary, metadata: storagepb.NewMetadataClientProxy(options...),
 		authInfo: auth, writeSource: strings.TrimSpace(writeSource),
 	}, nil
 }
-
-func collectorStorageGatewayNodeID() string {
-	if nodeID := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID")); nodeID != "" {
-		return nodeID
-	}
-	return strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
-}
-
-// StorageGatewayNodeID returns the gateway node used by collector control-plane
-// calls. Subject synchronization is a separate binary, but it must use the
-// same routing identity as the regular collector.
-func StorageGatewayNodeID() string { return collectorStorageGatewayNodeID() }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
 	return w.UpsertFieldsWithSource(ctx, rows, "")
@@ -548,28 +515,4 @@ func ResolveStorageAuthInfo(instType string) (*storagepb.AuthInfo, error) {
 		return nil, err
 	}
 	return storageAuthInfo(binding)
-}
-
-func normalizeStorageTarget(raw, defaultPort string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:" + defaultPort
-	}
-	if strings.HasPrefix(raw, "ip://") || strings.Contains(raw, "://") {
-		return raw
-	}
-	parsed, err := url.Parse(raw)
-	if err == nil && parsed.Host != "" {
-		return "ip://" + parsed.Host
-	}
-	if strings.Contains(raw, ":") {
-		return "ip://" + raw
-	}
-	return raw
-}
-
-// NormalizeStorageTarget normalizes a gateway target for standalone collector
-// binaries that share the collector's Storage client configuration.
-func NormalizeStorageTarget(raw, defaultPort string) string {
-	return normalizeStorageTarget(raw, defaultPort)
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -34,13 +33,12 @@ type StorageClient struct {
 	auth   *storagepb.AuthInfo
 }
 
-func NewStorageClient(target string) (*StorageClient, error) {
+// NewStorageClient 创建经给定 tRPC 客户端选项（gatewayclient）访问 Storage Metadata 的客户端。
+func NewStorageClient(options []client.Option) (*StorageClient, error) {
 	auth, err := marketstorage.ResolveStorageAuthInfo(marketstorage.InstTypeSPOT)
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage auth: %w", err)
 	}
-	target = marketstorage.NormalizeStorageTarget(target, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, marketstorage.StorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
 	return &StorageClient{client: storagepb.NewMetadataClientProxy(options...), auth: auth}, nil
 }
 

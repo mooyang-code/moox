@@ -58,8 +58,7 @@ func TestEnsureDatasetPeriodDeadlineCoversThreeRetriesAndFailureReport(t *testin
 	period := now.Truncate(time.Minute)
 	recorder := &recordingPeriodFailureStorage{}
 	scheduler := &Scheduler{
-		StorageTarget: "storage",
-		Storage:       func(string, string, string) (Storage, error) { return recorder, nil },
+		Storage: func(string, string) (Storage, error) { return recorder, nil },
 	}
 	err := scheduler.ensureDatasetPeriod(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "bars-task"}, []domain.CollectionItem{{
 		DatasetID: "bars", MarketType: "spot", SubjectID: "ETH-USDT", SeriesIndex: 0, SeriesHash: "bars-hash", ExpectedCount: 1,
@@ -320,7 +319,7 @@ func (s *oneShotBlockingReportApplyStore) ApplyPeriodFailureReportResults(ctx co
 func TestPeriodFailureReportMetricsQueryStaysInsideRoundBudget(t *testing.T) {
 	countStarted := make(chan struct{})
 	retries := &blockingMetricCountStore{countStarted: countStarted}
-	reporter := NewPeriodFailureReporter(nil, func(string, string, string) (Storage, error) { return nil, nil }, "storage", "crypto")
+	reporter := NewPeriodFailureReporter(nil, func(string, string) (Storage, error) { return nil, nil }, "crypto")
 	reporter.retries = retries
 	reporter.budget = 300 * time.Millisecond
 	reporter.SetMetrics(NewMetrics(prometheus.NewRegistry()))
@@ -416,7 +415,7 @@ func (r *wakeSignalingRetryRepository) ListPendingPeriodFailuresAfter(ctx contex
 }
 
 func newFailureReporter(db *store.Store, storage *periodFailureStorageStub) *PeriodFailureReporter {
-	return NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return storage, nil }, "storage", "crypto")
+	return NewPeriodFailureReporter(db.FetchRetries(), func(string, string) (Storage, error) { return storage, nil }, "crypto")
 }
 
 func insertPermanentFailure(t *testing.T, db *store.Store, retryKey string, period time.Time, targets []domain.WriteTarget) domain.RetryItem {

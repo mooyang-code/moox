@@ -124,11 +124,8 @@ type Scheduler struct {
 	TimerAssignments           func() []NodeAssignment
 	TimerMeasuredSafeGroupSize int
 	Invoker                    MarketFetchInvoker
-	Storage                    func(string, string, string) (Storage, error)
-	StorageTarget              string
-	// InvokeStorageTarget is sent in SCF invoke payloads. Leave empty to reuse
-	// StorageTarget. Collector on a mainland host may talk to Storage over a
-	// private IP while overseas functions still need the public native gateway.
+	Storage                    StorageFactory
+	// InvokeStorageTarget 写入 SCF 调用载荷，是 SCF 函数访问 Storage 的网关地址。
 	InvokeStorageTarget           string
 	BatchSize                     int
 	InvokeConcurrency             int
@@ -797,12 +794,12 @@ func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.Collect
 		return fmt.Errorf("task %s has invalid period frequency %q: %w", task.TaskID, frequency, err)
 	}
 	periodFrequency := strings.TrimSpace(frequency)
-	if s.Storage == nil || strings.TrimSpace(s.StorageTarget) == "" {
+	if s.Storage == nil {
 		// Lightweight scheduler unit tests may not wire Storage. Production
 		// bootstrap always provides it and integration tests cover this boundary.
 		return nil
 	}
-	client, err := s.Storage(s.StorageTarget, items[0].MarketType, "collector")
+	client, err := s.Storage(items[0].MarketType, "collector")
 	if err != nil {
 		return err
 	}
@@ -1018,7 +1015,7 @@ func (s *Scheduler) planTimerPeriodForAssignments(ctx context.Context, spaceID, 
 		return 0, nil
 	}
 	ensureStorage := planner.EnsureStorage
-	if s.Storage != nil && strings.TrimSpace(s.StorageTarget) != "" {
+	if s.Storage != nil {
 		if s.PeriodStorageStates == nil {
 			return 0, fmt.Errorf("Timer period Storage state repository is not configured")
 		}
@@ -2763,10 +2760,7 @@ func (s *Scheduler) eventStorageTarget() string {
 	if s == nil {
 		return ""
 	}
-	if target := strings.TrimSpace(s.InvokeStorageTarget); target != "" {
-		return target
-	}
-	return strings.TrimSpace(s.StorageTarget)
+	return strings.TrimSpace(s.InvokeStorageTarget)
 }
 
 func marketFetchEvent(req Request, storageTarget string) (map[string]any, error) {

@@ -1,5 +1,13 @@
 # MooX Collector control-plane service configuration.
 
+# Collector 调用 Storage、交易服务等组件统一经 gatewayclient（本机主机网关 + 服务目录）。
+gateway_client:
+  mode: local
+  caller: collector
+  key_file: ../secrets/caller-collector.key
+  ca_file: ../certs/moox-ca.crt
+  cache_dir: ./data/gatewayclient
+
 database:
   type: sqlite
   path: ./data/moox_collector.db
@@ -14,11 +22,9 @@ cloudnode:
   service_path: trpc.moox.cloudnode.CloudNodeMgr
 
 storage:
-  # 本地开发默认值；生产部署应通过 t_service_deployments / SysDeploy active 部署信息解析依赖服务。
+  # 只用于确定写入 SCF 调用载荷的 Storage 网关；Collector 自己访问 Storage 走 gateway_client。
   gateway_target: ip://127.0.0.1:11003
   gateway_node_id: ""
-  key_id: collector
-  hmac_key_file: "../secrets/gateway-collector.key"
   result_data_node_id: storage-node-0
 
 period_readiness:
@@ -82,8 +88,6 @@ dns:
 
 dns_resolver:
   enabled: false
-  target: ip://127.0.0.1:11003
-  node_id: ""
   domains: []
   refresh_interval: 5m
   request_timeout: 3s

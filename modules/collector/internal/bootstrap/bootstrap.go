@@ -31,12 +31,13 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -63,6 +64,17 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if spaceID := marketFetchSpaceID(); spaceID == "" {
 		return nil, fmt.Errorf("MOOX_SPACE_ID is required for collector market scheduling")
 	}
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	if err != nil {
+		return nil, fmt.Errorf("创建 collector 的 gatewayclient: %w", err)
+	}
+	keepGateway := false
+	defer func() {
+		if !keepGateway {
+			gateway.Close()
+		}
+	}()
+	gatewayOptions := gateway.ClientOptions()
 	log.InfoContextf(ctx, "collector stockcn runtime config expected_timer_function_count=%d measured_safe_group_size=%d stagger_start_second=%d stagger_window_seconds=%d stagger_max_starts_per_second=%d", cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, cfg.StockCN.StaggerStartSecond, cfg.StockCN.StaggerWindowSeconds, cfg.StockCN.StaggerMaxStartsPerSecond)
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
@@ -116,7 +128,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
 	}
-	resultMetadata, resultMetadataErr := marketstorage.NewResampleMetadataClient(cfg.Storage.GatewayTarget, marketstorage.InstTypeSPOT)
+	resultMetadata, resultMetadataErr := marketstorage.NewResampleMetadataClient(gatewayOptions, marketstorage.InstTypeSPOT)
 	if resultMetadataErr != nil {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
@@ -125,12 +137,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
-		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
-		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
-		RealtimeInventory:              realtimeInventory,
-		DefaultResampleSettleDelay:     cfg.KlineResample.DefaultSettleDelay,
-		ResultManager:                  resultManager,
-		ResultDataNodeID:               cfg.Storage.ResultDataNodeID,
+		StorageOptions:             gatewayOptions,
+		RealtimeInventory:          realtimeInventory,
+		DefaultResampleSettleDelay: cfg.KlineResample.DefaultSettleDelay,
+		ResultManager:              resultManager,
+		ResultDataNodeID:           cfg.Storage.ResultDataNodeID,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	if err := registerMarketFetchRuntime(s, collectsvc.NewMarketFetchRuntime(&marketfetch.TimerBatchClaimer{Batches: dbm.TimerPeriodBatches()})); err != nil {
@@ -145,15 +156,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	localDNS := dnscache.New(dnscache.Config{Domains: dnsDomains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
 	var remoteDNS collectordns.DomainResolver
 	if cfg.DNSResolver.Enabled {
-		// The resolver call is a native Gateway call made as the collector
-		// caller. SysDeploy's service credential is reserved for the control
-		// plane dependency API and must not be reused for Trade RPCs.
-		remoteDNS = collectordns.NewTradeClient(
-			cfg.DNSResolver.Target,
-			cfg.DNSResolver.NodeID,
-			gatewayauth.CredentialsFromEnv(),
-			cfg.DNSResolver.RequestTimeout,
-		)
+		remoteDNS = collectordns.NewTradeClient(gatewayOptions, cfg.DNSResolver.RequestTimeout)
 	}
 	refreshInterval, cacheTTL := cfg.DNS.RefreshInterval, cfg.DNS.RefreshInterval
 	if cfg.DNSResolver.Enabled {
@@ -179,16 +182,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
 	registerDNSRefreshSchedule(s, dnsSnapshot)
-	registerMarketFetchSchedule(ctx, s, cfg, deps, dbm, dnsSnapshot, marketFetchMetrics)
+	registerMarketFetchSchedule(ctx, s, cfg, deps, gatewayOptions, dbm, dnsSnapshot, marketFetchMetrics)
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s, realtimeInventory)
 
 	keepDB = true
+	keepGateway = true
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done
+			gateway.Close()
 			_ = dbm.Close()
 		}()
 	}
@@ -382,9 +387,8 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State,
 		state.SetReady(databaseReady)
 		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, databaseReady)
 		rsp.Details = map[string]any{
-			"database":                   databaseReady,
-			"cloudnode_address":          cfg.CloudNode.Address,
-			"storage_rpc_gateway_target": cfg.Storage.GatewayTarget,
+			"database":          databaseReady,
+			"cloudnode_address": cfg.CloudNode.Address,
 		}
 		if cfg.DNSResolver.Enabled {
 			if len(dns) > 0 && dns[0] != nil {
@@ -445,7 +449,7 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter) {
 	})
 }
 
-func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
+func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, deps Dependencies, gatewayOptions []client.Option, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -463,8 +467,9 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	// enough time to serialize the full fleet instead of treating a healthy
 	// large-fleet response as a coordination failure.
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
-	metadataSource := storagesource.NewDatasetSource(deps.StorageRPCGatewayTarget)
+	metadataSource := storagesource.NewDatasetSource(gatewayOptions)
 	plannerSource := metadataSource
+	storageFactory := marketfetch.NewStorageFactory(gatewayOptions)
 	spaceIDs := marketFetchSpaceIDs()
 	if len(spaceIDs) == 0 {
 		log.Warn("collector market fetch scheduler has no configured spaces")
@@ -476,8 +481,8 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	var resampleMetrics *collectorresample.Metrics
 	if cfg.KlineResample.Enabled {
 		resampleMetrics = collectorresample.NewMetrics(prometheus.DefaultRegisterer)
-		metadataClient, metadataErr := marketstorage.NewResampleMetadataClient(cfg.Storage.GatewayTarget, marketstorage.InstTypeSPOT)
-		localStorage, storageErr := marketstorage.NewResampleStorage(deps.StorageRPCGatewayTarget, marketstorage.InstTypeSPOT, "collector:kline_resample")
+		metadataClient, metadataErr := marketstorage.NewResampleMetadataClient(gatewayOptions, marketstorage.InstTypeSPOT)
+		localStorage, storageErr := marketstorage.NewResampleStorage(gatewayOptions, marketstorage.InstTypeSPOT, "collector:kline_resample")
 		if metadataErr != nil || storageErr != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector kline resample disabled: metadata=%v storage=%v", metadataErr, storageErr)
 		} else {
@@ -538,10 +543,8 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			ResolveSourceID:     marketwiring.DefaultSourceID,
 			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(), PeriodStorageStates: dbm.PeriodStorageStates(),
-			// Local Storage RPC uses the resolved Collector target (private IP
-			// when runtime.env was rewritten). SCF invoke payloads keep the
-			// discovered public native gateway so overseas functions still work.
-			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
+			// Collector 自己经 gatewayclient 访问 Storage；SCF 调用载荷带上它访问 Storage 的网关地址。
+			Invoker: invoker, Storage: storageFactory, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
 			InvokeConcurrency: invokeConcurrency, MaintenanceBatchLimit: maintenanceBatchLimit, MaintenanceRecoveryBatchLimit: recoveryBatchLimit,
 			MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
 			Symbols:                    plannerSource,
@@ -561,7 +564,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			invokeScheduler.TimerPeriodPlanner = timerPlanner
 			invokeScheduler.TimerAssignments = reconciler.TimerAssignments
 		}
-		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), marketfetch.NewMarketStorageForMarket, deps.StorageRPCGatewayTarget, spaceID)
+		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), storageFactory, spaceID)
 		failureReporter.SetMetrics(metrics)
 		invokeScheduler.WakePeriodFailureReporter = failureReporter.Wake
 		if err := marketfetch.StartPeriodFailureReporter(ctx, failureReporter, spaceID, time.Second); err != nil {
@@ -735,7 +738,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		if strings.EqualFold(runtime.spaceID, marketfetch.StockCNSpaceID) {
 			periodMarketType = "equity"
 		}
-		periodStorage, storageErr := marketfetch.NewMarketStorageForMarket(deps.StorageRPCGatewayTarget, periodMarketType, "collector")
+		periodStorage, storageErr := storageFactory(periodMarketType, "collector")
 		if storageErr != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector Storage period reporter and cleanup disabled space=%s: %v", runtime.spaceID, storageErr)
 			continue

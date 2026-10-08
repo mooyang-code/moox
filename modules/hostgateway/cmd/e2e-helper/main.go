@@ -1,4 +1,4 @@
-// Command e2e-helper 在临时的本机端口上启动真实的主机网关转发入口，供跨模块的集成测试使用。
+// Command e2e-helper 在临时的本机端口上启动真实的主机网关本机入口（转发与服务目录），供跨模块的集成测试使用。
 //
 //	e2e-helper -host-id <主机> -route <service path>=<上游地址> [-route ...] -callers a,b [-methods m1,m2]
 //	           -ready-file <文件> -nonce-dir <目录> [-listen-addr 127.0.0.1:0]
@@ -19,11 +19,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/directory"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -88,6 +90,11 @@ func run(hostID string, routeSpecs []string, callerList, methodList, listenAddre
 		server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName(router.ServiceName),
 		server.WithListener(listener), server.WithCurrentSerializationType(codec.SerializationTypeNoop),
 	)
+	// 与主机网关的本机入口一样，同一个端口上同时提供服务目录，测试可以直接用本机方式的 gatewayclient。
+	if err := service.Register(directorypb.NoopServiceDesc(), directorypb.DirectoryService(directory.New(hostID, &current))); err != nil {
+		listener.Close()
+		return err
+	}
 	if err := service.Register(desc, implementation); err != nil {
 		listener.Close()
 		return err

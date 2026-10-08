@@ -26,19 +26,18 @@ import (
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Dependencies contains external service endpoints used by CollectMgr.
 type Dependencies struct {
-	StorageRPCGatewayTarget string
-	// PlannerStorageRPCGatewayTarget is the control-plane's local metadata target.
-	// It overrides the runtime Storage target when both are available.
-	PlannerStorageRPCGatewayTarget string
-	RealtimeInventory              RealtimeInventory
-	DefaultResampleSettleDelay     time.Duration
-	ResultManager                  *taskresult.Manager
-	ResultDataNodeID               string
+	// StorageOptions 是访问 Storage Metadata 的 tRPC 客户端选项（gatewayclient）。
+	StorageOptions             []client.Option
+	RealtimeInventory          RealtimeInventory
+	DefaultResampleSettleDelay time.Duration
+	ResultManager              *taskresult.Manager
+	ResultDataNodeID           string
 }
 
 // RealtimeInventory reconciles the derived expected Dataset registry.
@@ -113,10 +112,6 @@ type datasetSource interface {
 
 // New creates a collector management service.
 func New(persistence *store.Store, deps Dependencies) *Service {
-	plannerMetadataTarget := deps.PlannerStorageRPCGatewayTarget
-	if strings.TrimSpace(plannerMetadataTarget) == "" {
-		plannerMetadataTarget = deps.StorageRPCGatewayTarget
-	}
 	settleDelay := deps.DefaultResampleSettleDelay
 	if settleDelay < 0 {
 		settleDelay = defaultResampleSettleDelay
@@ -125,7 +120,7 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 		persistence:                persistence,
 		taskRepo:                   persistence.Tasks(),
 		instanceRepo:               persistence.TaskInstances(),
-		datasetSrc:                 storagesource.NewDatasetSource(plannerMetadataTarget),
+		datasetSrc:                 storagesource.NewDatasetSource(deps.StorageOptions),
 		inventory:                  deps.RealtimeInventory,
 		defaultResampleSettleDelay: settleDelay,
 		resultManager:              deps.ResultManager,

@@ -18,7 +18,7 @@ func TestStorageClientHostAuthPreservesMasterSecretDerivation(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "")
 	require.NoError(t, os.Unsetenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"))
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "subject-sync-test-secret")
-	storage, err := NewStorageClient("ip://127.0.0.1:11003")
+	storage, err := NewStorageClient(nil)
 	require.NoError(t, err)
 	require.Equal(t, "moox-collector", storage.auth.AppId)
 	require.Equal(t, mooxsecurity.HMACSHA256Hex("subject-sync-test-secret", []byte("moox-collector")), storage.auth.AppKey)
@@ -42,7 +42,7 @@ func TestStorageClientManagedAuthErrorsBeforeProxyCreation(t *testing.T) {
 	}
 	for _, raw := range []string{"", "null", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`} {
 		t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", raw)
-		storage, err := NewStorageClient("ip://127.0.0.1:11003")
+		storage, err := NewStorageClient(nil)
 		require.Error(t, err)
 		require.Nil(t, storage)
 		require.NotContains(t, err.Error(), "subject-sync-test-secret")

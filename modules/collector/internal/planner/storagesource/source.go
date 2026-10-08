@@ -4,27 +4,16 @@ package storagesource
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/log"
-	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const storagePageSize = 500
-
-const (
-	metadataPrimaryTimeout  = 6 * time.Second
-	metadataFallbackTimeout = 8 * time.Second
-)
 
 type metadataClient interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
@@ -212,142 +201,9 @@ func (s *DatasetSource) ListResampleSubjectsForTask(ctx context.Context, spaceID
 	return s.ListSubjects(ctx, spaceID, datasetID, "")
 }
 
-// metadataFailoverClient keeps the authenticated gateway path first and uses
-// the private Metadata listener only for transient read failures.
-type metadataFailoverClient struct {
-	primary   metadataClient
-	secondary metadataClient
-}
-
-func (c *metadataFailoverClient) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq, opts ...client.Option) (*storagepb.GetDatasetRsp, error) {
-	primaryCtx, cancel := context.WithTimeout(ctx, metadataPrimaryTimeout)
-	rsp, err := c.primary.GetDataset(primaryCtx, req, opts...)
-	cancel()
-	if err == nil || c.secondary == nil {
-		return rsp, err
-	}
-	fallbackCtx, fallbackCancel := context.WithTimeout(context.WithoutCancel(ctx), metadataFallbackTimeout)
-	defer fallbackCancel()
-	secondaryRsp, secondaryErr := c.secondary.GetDataset(fallbackCtx, req)
-	if secondaryErr == nil {
-		log.WarnContextf(ctx, "storage metadata gateway failed, used direct Metadata fallback action=get_dataset error=%v", err)
-		return secondaryRsp, nil
-	}
-	return nil, fmt.Errorf("gateway: %w; direct metadata: %v", err, secondaryErr)
-}
-
-func (c *metadataFailoverClient) ResolveSubjects(ctx context.Context, req *storagepb.ResolveSubjectsReq, opts ...client.Option) (*storagepb.ResolveSubjectsRsp, error) {
-	primaryCtx, cancel := context.WithTimeout(ctx, metadataPrimaryTimeout)
-	rsp, err := c.primary.ResolveSubjects(primaryCtx, req, opts...)
-	cancel()
-	if err == nil || c.secondary == nil {
-		return rsp, err
-	}
-	fallbackCtx, fallbackCancel := context.WithTimeout(context.WithoutCancel(ctx), metadataFallbackTimeout)
-	defer fallbackCancel()
-	secondaryRsp, secondaryErr := c.secondary.ResolveSubjects(fallbackCtx, req)
-	if secondaryErr == nil {
-		log.WarnContextf(ctx, "storage metadata gateway failed, used direct Metadata fallback action=resolve_subjects error=%v", err)
-		return secondaryRsp, nil
-	}
-	return nil, fmt.Errorf("gateway: %w; direct metadata: %v", err, secondaryErr)
-}
-
-func (c *metadataFailoverClient) GetTag(ctx context.Context, req *storagepb.GetTagReq, opts ...client.Option) (*storagepb.GetTagRsp, error) {
-	primary, ok := c.primary.(tagMetadataClient)
-	if !ok {
-		return nil, fmt.Errorf("get tag: primary metadata client does not support tags")
-	}
-	primaryCtx, cancel := context.WithTimeout(ctx, metadataPrimaryTimeout)
-	rsp, err := primary.GetTag(primaryCtx, req, opts...)
-	cancel()
-	if err == nil || c.secondary == nil {
-		return rsp, err
-	}
-	secondary, ok := c.secondary.(tagMetadataClient)
-	if !ok {
-		return nil, err
-	}
-	fallbackCtx, fallbackCancel := context.WithTimeout(context.WithoutCancel(ctx), metadataFallbackTimeout)
-	defer fallbackCancel()
-	secondaryRsp, secondaryErr := secondary.GetTag(fallbackCtx, req)
-	if secondaryErr == nil {
-		log.WarnContextf(ctx, "storage metadata gateway failed, used direct Metadata fallback action=get_tag error=%v", err)
-		return secondaryRsp, nil
-	}
-	return nil, fmt.Errorf("gateway: %w; direct metadata: %v", err, secondaryErr)
-}
-
-func (c *metadataFailoverClient) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq, opts ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
-	primary, ok := c.primary.(datasetColumnClient)
-	if !ok {
-		return nil, fmt.Errorf("list dataset columns: primary metadata client does not support columns")
-	}
-	primaryCtx, cancel := context.WithTimeout(ctx, metadataPrimaryTimeout)
-	rsp, err := primary.ListDatasetColumns(primaryCtx, req, opts...)
-	cancel()
-	if err == nil || c.secondary == nil {
-		return rsp, err
-	}
-	secondary, ok := c.secondary.(datasetColumnClient)
-	if !ok {
-		return nil, err
-	}
-	fallbackCtx, fallbackCancel := context.WithTimeout(context.WithoutCancel(ctx), metadataFallbackTimeout)
-	defer fallbackCancel()
-	secondaryRsp, secondaryErr := secondary.ListDatasetColumns(fallbackCtx, req)
-	if secondaryErr == nil {
-		log.WarnContextf(ctx, "storage metadata gateway failed, used direct Metadata fallback action=list_dataset_columns error=%v", err)
-		return secondaryRsp, nil
-	}
-	return nil, fmt.Errorf("gateway: %w; direct metadata: %v", err, secondaryErr)
-}
-
-func NewDatasetSource(metadataTarget string) *DatasetSource {
-	primaryTarget := normalizeTRPCTarget(metadataTarget, "11003")
-	primary := storagepb.NewMetadataClientProxy(append(gatewayauth.NewTRPCClientOptions(primaryTarget, storageGatewayNodeID(), gatewayauth.CredentialsFromEnv()), client.WithTransport(transport.DefaultClientTransport))...)
-	secondaryTarget := directMetadataTarget(primaryTarget)
-	if secondaryTarget == "" {
-		return &DatasetSource{metadata: primary}
-	}
-	secondary := storagepb.NewMetadataClientProxy(client.WithTarget(secondaryTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport))
-	return &DatasetSource{metadata: &metadataFailoverClient{primary: primary, secondary: secondary}}
-}
-
-func directMetadataTarget(raw string) string {
-	if override := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET")); override != "" {
-		return normalizeTRPCTarget(override, "20100")
-	}
-	parsed, err := url.Parse(normalizeTRPCTarget(raw, "11003"))
-	if err != nil || parsed.Scheme != "ip" || parsed.Hostname() == "" || parsed.Port() != "11003" {
-		return ""
-	}
-	return "ip://" + net.JoinHostPort(parsed.Hostname(), "20100")
-}
-
-func storageGatewayNodeID() string {
-	if nodeID := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID")); nodeID != "" {
-		return nodeID
-	}
-	return gatewayauth.ServiceGatewayNodeID()
-}
-
-func normalizeTRPCTarget(raw, defaultPort string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:" + defaultPort
-	}
-	if strings.HasPrefix(raw, "ip://") || strings.Contains(raw, "://") {
-		return raw
-	}
-	parsed, err := url.Parse(raw)
-	if err == nil && parsed.Host != "" {
-		return "ip://" + parsed.Host
-	}
-	if strings.Contains(raw, ":") {
-		return "ip://" + raw
-	}
-	return raw
+// NewDatasetSource 创建经给定 tRPC 客户端选项（gatewayclient）访问 Storage Metadata 的数据集来源。
+func NewDatasetSource(options []client.Option) *DatasetSource {
+	return &DatasetSource{metadata: storagepb.NewMetadataClientProxy(options...)}
 }
 
 func ensureStorageOK(action string, ret *storagepb.RetInfo) error {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -30,7 +31,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("moox-collector-subject source initialization failed: %v", err)
 	}
-	storage, err := subjectsync.NewStorageClient(cfg.Storage.Target)
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	if err != nil {
+		log.Fatalf("moox-collector-subject gatewayclient initialization failed: %v", err)
+	}
+	defer gateway.Close()
+	storage, err := subjectsync.NewStorageClient(gateway.ClientOptions())
 	if err != nil {
 		log.Fatalf("moox-collector-subject storage initialization failed: %v", err)
 	}

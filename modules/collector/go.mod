@@ -3,6 +3,10 @@ module github.com/mooyang-code/moox/modules/collector
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
@@ -166,3 +170,11 @@ replace github.com/mooyang-code/moox/packages/security => ../../packages/securit
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter
+
+replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
+
+replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
+
+replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => ../../packages/gatewayroute/proto/directorypb
+
+replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute

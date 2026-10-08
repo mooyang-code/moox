@@ -40,8 +40,7 @@ type periodFailureReceiptStorage interface {
 // independently of scheduling and CloudNode availability.
 type PeriodFailureReporter struct {
 	retries         periodFailureReportStore
-	storage         func(string, string, string) (Storage, error)
-	storageTarget   string
+	storage         StorageFactory
 	spaceID         string
 	metrics         *Metrics
 	pageSize        int
@@ -55,9 +54,9 @@ type PeriodFailureReporter struct {
 	wake            chan struct{}
 }
 
-func NewPeriodFailureReporter(retries *store.FetchRetryRepository, storage func(string, string, string) (Storage, error), storageTarget, spaceID string) *PeriodFailureReporter {
+func NewPeriodFailureReporter(retries *store.FetchRetryRepository, storage StorageFactory, spaceID string) *PeriodFailureReporter {
 	return &PeriodFailureReporter{
-		retries: retries, storage: storage, storageTarget: strings.TrimSpace(storageTarget), spaceID: strings.TrimSpace(spaceID),
+		retries: retries, storage: storage, spaceID: strings.TrimSpace(spaceID),
 		pageSize: periodFailureReportPageSize, maxRows: periodFailureReportMaxRows,
 		budget: periodFailureReportBudget, rpcTimeout: periodFailureReportRPCTimeout, now: time.Now,
 		seenFrequencies: make(map[string]struct{}), wake: make(chan struct{}, 1),
@@ -85,7 +84,7 @@ func (r *PeriodFailureReporter) Wake() {
 // cursor advances after every attempted row, including failures, so an early
 // unreachable Storage row cannot starve later retry keys.
 func (r *PeriodFailureReporter) RunOnce(ctx context.Context, spaceID string) error {
-	if r == nil || r.retries == nil || r.storage == nil || strings.TrimSpace(r.storageTarget) == "" {
+	if r == nil || r.retries == nil || r.storage == nil {
 		return fmt.Errorf("period failure reporter is not initialized")
 	}
 	if !r.runMu.TryLock() {
@@ -262,7 +261,7 @@ func (r *PeriodFailureReporter) reportRetry(ctx context.Context, spaceID string,
 			break
 		}
 		group := groups[key]
-		storage, err := r.storage(r.storageTarget, group.marketType, "collector")
+		storage, err := r.storage(group.marketType, "collector")
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("create Storage client for period failure dataset=%s period=%s: %w", group.expectation.GetDatasetId(), periodTime.Format(time.RFC3339), err)

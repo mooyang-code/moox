@@ -140,7 +140,7 @@ func TestPeriodFailureReporterMetricsTrackDatasetTasksWithoutDatasetLabels(t *te
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
 	registry := prometheus.NewRegistry()
-	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return nil, nil }, "storage", "crypto")
+	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string) (Storage, error) { return nil, nil }, "crypto")
 	reporter.SetMetrics(NewMetrics(registry))
 	period := time.Now().UTC().Truncate(time.Minute)
 	targetA, retryA := addMetricFailureTask(t, db, "task-a", "dataset-a", "target-a", period)

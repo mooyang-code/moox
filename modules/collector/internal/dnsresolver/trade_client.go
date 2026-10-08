@@ -9,7 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type DomainResolver interface {
@@ -21,14 +21,11 @@ type TradeClient struct {
 	timeout time.Duration
 }
 
-func NewTradeClient(target, nodeID string, credentials gatewayauth.Credentials, timeout time.Duration) *TradeClient {
+// NewTradeClient 创建经给定 tRPC 客户端选项（gatewayclient）调用交易服务 DNS 解析的客户端。
+func NewTradeClient(options []client.Option, timeout time.Duration) *TradeClient {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	credentials.KeyID = strings.TrimSpace(credentials.KeyID)
-	credentials.Caller = strings.TrimSpace(credentials.Caller)
-	credentials.Secret = strings.TrimSpace(credentials.Secret)
-	options := gatewayauth.NewTRPCClientOptions(normalizeTarget(target), strings.TrimSpace(nodeID), credentials)
 	return &TradeClient{
 		client:  tradepb.NewTradeDNSResolverServiceClientProxy(options...),
 		timeout: timeout,
@@ -119,17 +116,6 @@ func isPublicIPv4(ip net.IP) bool {
 		!(first == 192 && second == 0 && (third == 0 || third == 2)) &&
 		!(first == 198 && (second == 18 || second == 19 || (second == 51 && third == 100))) &&
 		!(first == 203 && second == 0 && third == 113)
-}
-
-func normalizeTarget(target string) string {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return "ip://127.0.0.1:11003"
-	}
-	if strings.Contains(target, "://") {
-		return target
-	}
-	return "ip://" + target
 }
 
 func normalizeDomain(raw string) string {

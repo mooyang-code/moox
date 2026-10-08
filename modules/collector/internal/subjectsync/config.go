@@ -6,20 +6,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/robfig/cron"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Storage      StorageConfig  `yaml:"storage"`
-	PollInterval time.Duration  `yaml:"poll_interval"`
-	FetchTimeout time.Duration  `yaml:"fetch_timeout"`
-	HealthAddr   string         `yaml:"health_addr"`
-	Attributes   []AttributeJob `yaml:"attributes"`
-}
-
-type StorageConfig struct {
-	Target string `yaml:"target"`
+	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+	PollInterval  time.Duration        `yaml:"poll_interval"`
+	FetchTimeout  time.Duration        `yaml:"fetch_timeout"`
+	HealthAddr    string               `yaml:"health_addr"`
+	Attributes    []AttributeJob       `yaml:"attributes"`
 }
 
 type AttributeJob struct {
@@ -39,11 +36,8 @@ func LoadConfig(path string) (Config, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if strings.TrimSpace(cfg.Storage.Target) == "" {
-		cfg.Storage.Target = strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"))
-	}
-	if strings.TrimSpace(cfg.Storage.Target) == "" {
-		return Config{}, fmt.Errorf("storage.target is required")
+	if err := cfg.GatewayClient.Validate(); err != nil {
+		return Config{}, err
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = time.Minute

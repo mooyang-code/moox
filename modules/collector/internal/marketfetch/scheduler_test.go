@@ -2892,7 +2892,7 @@ func TestSchedulerEnsurePeriodUsesPersistedSeriesTags(t *testing.T) {
 				items = []domain.CollectionItem{{SubjectID: "600000.XSHG", DatasetID: "bars", Provider: "sina", SourceID: "stockcn", MarketType: "equity", Symbol: "sh600000"}}
 			}
 			storage := &recordingPeriodFailureStorage{}
-			scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+			scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), Storage: func(string, string) (Storage, error) { return storage, nil }}
 			materialized, _, err := scheduler.materializeTaskSeries(ctx, task, items)
 			require.NoError(t, err)
 			snapshot, err := periodSeriesSnapshotFromItems(task, "bars", "1m", period, materialized)
@@ -2956,7 +2956,7 @@ func assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T, freq
 	item := domain.CollectionItem{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", Provider: "binance", SourceID: "binance_http", MarketType: "spot", DataType: "kline", Frequency: frequency, TargetDataTime: period.Format(time.RFC3339Nano)}
 	db := newTestMarketFetchStore(t)
 	storage := &recordingPeriodFailureStorage{}
-	scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+	scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), Storage: func(string, string) (Storage, error) { return storage, nil }}
 	materialized, _, err := scheduler.materializeTaskSeries(ctx, task, []domain.CollectionItem{item})
 	require.NoError(t, err)
 	snapshot, err := periodSeriesSnapshotFromItems(task, "bars", frequency, period, materialized)
@@ -3010,7 +3010,7 @@ func TestPeriodFailureReporterReportsPermanentRetryExactlyOnce(t *testing.T) {
 	}))
 
 	storage := &recordingPeriodFailureStorage{}
-	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return storage, nil }, "storage.local:11003", "crypto")
+	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string) (Storage, error) { return storage, nil }, "crypto")
 	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
 	require.Equal(t, 1, storage.calls)
 	require.Len(t, storage.expectations, 1)
@@ -3054,7 +3054,7 @@ func assertSchedulerRetryFailureKeepsFrequencyIdentity(t *testing.T, frequency s
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "retry-btc-period", SourceBatchID: "sync-period", BatchKind: domain.BatchKindRealtime, InstanceID: item.InstanceID, RetryScope: "fetch", SubjectID: item.SubjectID, Frequency: frequency, TargetDataTime: period, TaskJSON: string(taskRaw), FailureTargetsJSON: string(targetRaw), Attempt: 3, Status: "permanent_failed", LastErrorType: "http_5xx", LastErrorSummary: "provider unavailable"}))
 
 	storage := &recordingPeriodFailureStorage{}
-	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return storage, nil }, "storage.local:11003", "crypto")
+	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string) (Storage, error) { return storage, nil }, "crypto")
 	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
 	require.Len(t, storage.expectations, 1)
 	require.Equal(t, frequency, storage.expectations[0].GetFrequency(), "failure RPC identity must use the Dataset's canonical Storage frequency")

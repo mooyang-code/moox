@@ -16,20 +16,18 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 )
 
-// Dependencies contains the service endpoints used by CollectMgr.
+// Dependencies contains the service endpoints used by CollectMgr. Collector 自己访问 Storage 走
+// gatewayclient；这里只解析写入 SCF 调用载荷的网关地址和控制面依赖。
 type Dependencies struct {
-	AdminGatewayURL         string
-	ServiceGatewayTarget    string
-	ServiceAuth             ServiceAuthConfig
-	StorageRPCGatewayTarget string
+	AdminGatewayURL      string
+	ServiceGatewayTarget string
+	ServiceAuth          ServiceAuthConfig
 	// CollectorRuntimeGatewayTarget is the native tRPC Gateway on the node
 	// hosting MarketFetchRuntime. It must not be inferred from Storage routing.
 	CollectorRuntimeGatewayTarget string
 	CollectorRuntimeGatewayNodeID string
-	// InvokeStorageRPCGatewayTarget is the address sent to SCF invoke
-	// payloads. Overseas functions cannot reach a mainland private IP, so this
-	// stays on the discovered public native gateway when an explicit private
-	// target is used for Collector's own Storage RPC.
+	// InvokeStorageRPCGatewayTarget 是写入 SCF 调用载荷的 Storage 网关地址。海外函数访问不到内地私网地址，
+	// 所以优先使用 SysDeploy 登记的公网地址。
 	InvokeStorageRPCGatewayTarget string
 }
 
@@ -70,7 +68,6 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 		AdminGatewayURL:               defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceGatewayTarget:          defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceAuth:                   cfg.SysDeploy.ServiceAuth,
-		StorageRPCGatewayTarget:       cfg.Storage.GatewayTarget,
 		InvokeStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 		CollectorRuntimeGatewayTarget: cfg.CollectorRuntime.GatewayTarget,
 		CollectorRuntimeGatewayNodeID: cfg.CollectorRuntime.NodeID,
@@ -99,11 +96,10 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	}
 	discovered := strings.TrimSpace(endpointTRPCTarget(active, nativeGateway))
 	configured := strings.TrimSpace(cfg.Storage.GatewayTarget)
-	local, invoke, err := selectStorageRPCTargets(configured, discovered)
+	invoke, err := selectInvokeStorageTarget(configured, discovered)
 	if err != nil {
 		return deps, fmt.Errorf("active %s deployment has no native tRPC target", nativeGateway)
 	}
-	deps.StorageRPCGatewayTarget = local
 	deps.InvokeStorageRPCGatewayTarget = invoke
 	runtimeTarget, runtimeNodeID, runtimeErr := resolveCollectorRuntimeGateway(active, cfg.CollectorRuntime)
 	if runtimeErr != nil {
@@ -168,21 +164,16 @@ func collectorRuntimeNodeID(active map[string]endpoint) (string, error) {
 	return "", nil
 }
 
-func selectStorageRPCTargets(configured, discovered string) (local, invoke string, err error) {
-	configured = strings.TrimSpace(configured)
-	discovered = strings.TrimSpace(discovered)
-	switch {
-	case isUsableConfiguredStorageTarget(configured):
-		local = configured
-	case discovered != "":
-		local = discovered
-	default:
-		return "", "", fmt.Errorf("storage rpc target missing")
+// selectInvokeStorageTarget 选择写入 SCF 调用载荷的 Storage 网关地址：优先使用 SysDeploy 登记的地址，
+// 其次是显式配置的非回环地址。
+func selectInvokeStorageTarget(configured, discovered string) (string, error) {
+	if discovered = strings.TrimSpace(discovered); discovered != "" {
+		return discovered, nil
 	}
-	if discovered != "" {
-		return local, discovered, nil
+	if configured = strings.TrimSpace(configured); isUsableConfiguredStorageTarget(configured) {
+		return configured, nil
 	}
-	return local, local, nil
+	return "", fmt.Errorf("storage rpc target missing")
 }
 
 // preferLocalServiceGatewayTarget avoids sending same-host control-plane

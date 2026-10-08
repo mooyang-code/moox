@@ -7,7 +7,6 @@ import (
 	"time"
 
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -36,7 +35,7 @@ func TestTradeClientBatchesAndNormalizesResponse(t *testing.T) {
 			}, nil
 		}}
 	}
-	client := NewTradeClient("43.132.204.177:11003", "compute-1", gatewayauth.Credentials{KeyID: "collector", Secret: "secret"}, time.Second)
+	client := NewTradeClient(nil, time.Second)
 	result, err := client.ResolveDomains(context.Background(), []string{"fapi.binance.com", "api.binance.com"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, got.GetDomains())
@@ -57,7 +56,7 @@ func TestTradeClientReturnsRequestLevelErrors(t *testing.T) {
 			return nil, errors.New("timeout")
 		}}
 	}
-	client := NewTradeClient("ip://43.132.204.177:11003", "compute-1", gatewayauth.Credentials{}, time.Second)
+	client := NewTradeClient(nil, time.Second)
 	_, err := client.ResolveDomains(context.Background(), []string{"fapi.binance.com"})
 	require.Error(t, err)
 }

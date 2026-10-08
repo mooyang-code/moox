@@ -68,7 +68,7 @@ const (
 
 func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
-		return NewMarketStorageForMarket(target, market, writeSource)
+		return NewMarketStorageForMarket(scfGatewayOptions(target), market, writeSource)
 	}, Publish: publishCompletion}
 }
 
