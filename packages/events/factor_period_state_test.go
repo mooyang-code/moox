@@ -65,7 +65,8 @@ func TestValidateFactorPeriodComputedRequiresFactorStates(t *testing.T) {
 			v.Factors = append(v.Factors, proto.Clone(v.Factors[0]).(*storagepb.FactorPeriodState))
 		}, wantError: true},
 		{name: "missing source hash", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].SourceHash = "" }, wantError: true},
-		{name: "missing definition hash", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].DefinitionHash = "" }, wantError: true},
+		{name: "missing definition hash from an older producer", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].DefinitionHash = "" }},
+		{name: "padded definition hash", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].DefinitionHash = " def-1" }, wantError: true},
 		{name: "complete aggregate with failed subjects", mutate: func(v *storagepb.FactorPeriodComputed) { v.FailedSubjects = []string{"ETH"} }, wantError: true},
 		{name: "complete aggregate with skipped factor", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].Status = "skipped" }, wantError: true},
 		{name: "complete factor with failed subjects", mutate: func(v *storagepb.FactorPeriodComputed) {

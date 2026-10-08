@@ -314,8 +314,10 @@ func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[st
 		if !validRequiredToken(state.GetSourceHash()) {
 			return fmt.Errorf("%s factor %q source_hash is required", label, state.GetFactorId())
 		}
-		if !validRequiredToken(state.GetDefinitionHash()) {
-			return fmt.Errorf("%s factor %q definition_hash is required", label, state.GetFactorId())
+		// definition_hash 允许为空：升级期间旧版 Factor 与 Storage 写入、尚未投递的周期标记不带指纹，
+		// 拒绝它们会让 DataNode 出站队列卡在第一条旧记录上；Strategy 把空指纹判为 factor_missing。
+		if hash := state.GetDefinitionHash(); hash != "" && !validRequiredToken(hash) {
+			return fmt.Errorf("%s factor %q definition_hash is invalid", label, state.GetFactorId())
 		}
 		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s factor %q failed_subjects", label, state.GetFactorId()))
 		if err != nil {

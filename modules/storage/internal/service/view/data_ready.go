@@ -69,7 +69,7 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 	s.pendingReady = s.pendingReady[:0]
 	s.pendingReadyMu.Unlock()
 	remaining := make([]pendingViewReady, 0, len(pending))
-	for _, item := range pending {
+	for index, item := range pending {
 		if spaceID != "" && (item.spaceID != spaceID || (viewID != "" && item.viewID != viewID)) {
 			remaining = append(remaining, item)
 			continue
@@ -83,7 +83,8 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 			if s.metrics != nil {
 				s.metrics.ObserveReadyPublishRetry(item.viewID, "view_data_ready")
 			}
-			remaining = append(remaining, item)
+			// 发布失败时保留这一条以及排在它后面、尚未尝试的全部事件，下次按原顺序重试。
+			remaining = append(remaining, pending[index:]...)
 			s.restorePending(remaining)
 			if persistErr := s.persistPendingReady(); persistErr != nil {
 				return persistErr

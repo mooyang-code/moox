@@ -405,3 +405,49 @@ func TestHandleDatasetSyncPointRecordsBuildingOnlyView(t *testing.T) {
 		t.Fatalf("building-only sync points = %d, want 1", len(metadata.syncPoints))
 	}
 }
+
+// flakyReadyPublisher 让前 failures 次发布失败，之后委托给 inner。
+type flakyReadyPublisher struct {
+	inner    *readyPublisherFake
+	failures int
+}
+
+func (p *flakyReadyPublisher) Publish(ctx context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	if p.failures > 0 {
+		p.failures--
+		return nil, errors.New("eventbus unavailable")
+	}
+	return p.inner.Publish(ctx, event, payload, opts)
+}
+
+// 发布失败时，这一条和排在它后面、尚未尝试的待发布事件都要保留，下次按原顺序重试，不能丢。
+func TestViewDataReadyPublishFailureKeepsLaterPendingEvents(t *testing.T) {
+	metadata := newPeriodMetadataFake()
+	inner := newReadyPublisherFake()
+	publisher := &flakyReadyPublisher{inner: inner}
+	service := newPeriodTestService(metadata, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	for i, id := range []string{"prices-ready-a", "prices-ready-b", "prices-ready-c"} {
+		at := time.Date(2026, 9, 13, 16, i, 0, 0, time.UTC)
+		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
+		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
+		if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+			t.Fatalf("%s 应等待行写入：%v", id, err)
+		}
+	}
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)
+	publisher.failures = 1
+	if err := service.FlushViewDataReady(context.Background(), "quant", "source-view"); err == nil {
+		t.Fatal("发布失败应返回错误")
+	}
+	if len(inner.byID) != 0 {
+		t.Fatalf("第一条失败时不应发布后续事件：%d", len(inner.byID))
+	}
+	if err := service.FlushViewDataReady(context.Background(), "quant", "source-view"); err != nil {
+		t.Fatal(err)
+	}
+	if len(inner.byID) != 3 {
+		t.Fatalf("重试后三条事件都应发布，实际 %d 条", len(inner.byID))
+	}
+}
