@@ -3,7 +3,9 @@ package publishlease
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,6 +129,62 @@ func TestLeaseDAOOperationClaimFencesNewPublisherUntilOperationEnds(t *testing.T
 	second, err := dao.Acquire(ctx, "stockcn", "publisher-b", now.Add(5*time.Second))
 	require.NoError(t, err)
 	require.EqualValues(t, first.FencingToken+1, second.FencingToken)
+}
+
+func TestLeaseDAOBeginsConcurrentOperationsWithoutSnapshotConflicts(t *testing.T) {
+	// CloudNode begins one operation per deploy item in parallel. Production
+	// opens Admin SQLite in WAL mode with a pool, where a read-then-insert
+	// transaction fails with SQLITE_BUSY_SNAPSHOT once another item commits.
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "admin.db")+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(8)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	dao := NewDAO(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	lease, err := dao.Acquire(ctx, "crypto", "publisher-a", now)
+	require.NoError(t, err)
+
+	const operations = 64
+	errs := make(chan error, operations)
+	var wg sync.WaitGroup
+	for i := 0; i < operations; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := dao.BeginOperation(ctx, "crypto", lease.LeaseID, fmt.Sprintf("deploy-item-%d", i), lease.FencingToken, now)
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	var claims int64
+	require.NoError(t, db.Model(&operationRecord{}).Where("c_space_id = ?", "crypto").Count(&claims).Error)
+	require.EqualValues(t, operations, claims)
+}
+
+func TestLeaseDAORejectsOperationForStaleLease(t *testing.T) {
+	dao := newLeaseTestDAO(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	lease, err := dao.Acquire(ctx, "crypto", "publisher-a", now)
+	require.NoError(t, err)
+
+	_, err = dao.BeginOperation(ctx, "crypto", lease.LeaseID, "after-expiry", lease.FencingToken, now.Add(leaseTTL))
+	require.ErrorIs(t, err, ErrLeaseStale)
+	_, err = dao.BeginOperation(ctx, "crypto", lease.LeaseID, "wrong-fence", lease.FencingToken+1, now)
+	require.ErrorIs(t, err, ErrLeaseStale)
+	_, err = dao.BeginOperation(ctx, "crypto", "other-lease", "wrong-lease", lease.FencingToken, now)
+	require.ErrorIs(t, err, ErrLeaseStale)
+	var claims int64
+	require.NoError(t, dao.db.Model(&operationRecord{}).Count(&claims).Error)
+	require.Zero(t, claims)
 }
 
 func TestLeaseDAOOperationClaimExpiresAfterCloudNodeCrash(t *testing.T) {

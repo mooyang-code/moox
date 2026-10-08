@@ -191,18 +191,24 @@ func (d *DAO) BeginOperation(ctx context.Context, spaceID, leaseID, operationID 
 		SpaceID: spaceID, OperationID: operationID, LeaseID: leaseID, FencingToken: token,
 		ExpiresAtUnix: now.Add(operationClaimTTL).UnixMilli(),
 	}
-	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var lease leaseRecord
-		if err := tx.Where("c_space_id = ? AND c_lease_id = ? AND c_fencing_token = ? AND c_expires_at_unix_ms > ?", spaceID, leaseID, token, now.UnixMilli()).First(&lease).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrLeaseStale
-			}
-			return err
-		}
-		return tx.Create(record).Error
-	})
-	if err != nil {
-		return nil, err
+	// CloudNode begins operations for many deploy items in parallel. One
+	// statement takes the write lock before it checks the lease; a deferred
+	// read-then-insert transaction fails with SQLITE_BUSY_SNAPSHOT in WAL mode
+	// once another item commits, and busy_timeout does not retry that.
+	inserted := d.db.WithContext(ctx).Exec(`INSERT INTO t_collector_publish_operations
+		(c_space_id, c_operation_id, c_lease_id, c_fencing_token, c_expires_at_unix_ms)
+		SELECT ?, ?, ?, ?, ?
+		WHERE EXISTS (
+			SELECT 1 FROM t_collector_publish_leases
+			WHERE c_space_id = ? AND c_lease_id = ? AND c_fencing_token = ? AND c_expires_at_unix_ms > ?
+		)`,
+		record.SpaceID, record.OperationID, record.LeaseID, record.FencingToken, record.ExpiresAtUnix,
+		spaceID, leaseID, token, now.UnixMilli())
+	if inserted.Error != nil {
+		return nil, inserted.Error
+	}
+	if inserted.RowsAffected != 1 {
+		return nil, ErrLeaseStale
 	}
 	return record, nil
 }
