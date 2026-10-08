@@ -308,12 +308,12 @@ func TestBackfillSortsUseCompleteTimeSeriesIdentity(t *testing.T) {
 
 func TestProjectBackfillFieldsUsesNextSchemaShape(t *testing.T) {
 	active := viewindex.ViewIndexSchema{Columns: []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "prices.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "old", OriginId: "prices.old", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "old", OriginId: "old", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}}
 	next := viewindex.ViewIndexSchema{Columns: []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "prices.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "old", OriginId: "prices.new", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "old", OriginId: "new", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}}
 	fields := []*pb.FieldValue{
 		{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}},

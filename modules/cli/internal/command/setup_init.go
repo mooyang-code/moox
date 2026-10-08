@@ -478,7 +478,7 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		}
 	}
 	views := make(map[string]struct{}, len(seed.Views))
-	viewDatasets := make(map[string]map[string]struct{}, len(seed.Views))
+	viewDatasets := make(map[string]string, len(seed.Views))
 	for _, item := range seed.Views {
 		if err := requireSpace("view", item.SpaceID); err != nil {
 			return err
@@ -492,7 +492,6 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 			)
 		}
 		viewKey := setupMetadataKey(item.SpaceID, item.ViewID)
-		allowedDatasets := map[string]struct{}{primaryDatasetID: {}}
 		if _, ok := datasets[setupMetadataKey(item.SpaceID, primaryDatasetID)]; !ok {
 			return fmt.Errorf("view %s/%s references undefined dataset %q", item.SpaceID, item.ViewID, primaryDatasetID)
 		}
@@ -502,7 +501,7 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		if err := addSetupMetadataKey(views, viewKey, "view"); err != nil {
 			return err
 		}
-		viewDatasets[viewKey] = allowedDatasets
+		viewDatasets[viewKey] = primaryDatasetID
 	}
 	viewColumns := make(map[string]struct{}, len(seed.ViewColumns))
 	for _, item := range seed.ViewColumns {
@@ -526,26 +525,20 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		if originType != storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
 			continue
 		}
-		originParts := strings.Split(strings.TrimSpace(item.OriginID), ".")
-		if len(originParts) != 2 {
+		// A View indexes exactly one Dataset, so a dataset column is the bare
+		// column name of the View's Dataset.
+		origin := strings.TrimSpace(item.OriginID)
+		if origin == "" || strings.Contains(origin, ".") || origin != strings.TrimSpace(item.ColumnName) {
 			return fmt.Errorf(
-				"view_column %s/%s/%s has invalid dataset_column origin %q",
+				"view_column %s/%s/%s has invalid dataset_column origin %q; use the bare column name",
 				item.SpaceID,
 				item.ViewID,
 				item.ColumnName,
 				item.OriginID,
 			)
 		}
-		if _, ok := viewDatasets[setupMetadataKey(item.SpaceID, item.ViewID)][originParts[0]]; !ok {
-			return fmt.Errorf(
-				"view_column %s/%s/%s references dataset %q not declared by view",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-				originParts[0],
-			)
-		}
-		if _, ok := datasetColumns[setupMetadataColumnKey(item.SpaceID, originParts[0], originParts[1])]; !ok {
+		datasetID := viewDatasets[setupMetadataKey(item.SpaceID, item.ViewID)]
+		if _, ok := datasetColumns[setupMetadataColumnKey(item.SpaceID, datasetID, origin)]; !ok {
 			return fmt.Errorf(
 				"view_column %s/%s/%s references undefined dataset_column %q",
 				item.SpaceID,

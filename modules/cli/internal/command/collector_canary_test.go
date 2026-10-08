@@ -61,7 +61,7 @@ func TestCollectorSCFCanaryRequiresStorageProofAfterTransportSuccess(t *testing.
 func TestCollectorSCFCanarySucceedsOnlyAfterExactStorageProof(t *testing.T) {
 	proof, primary, view := collectorCanaryTestProof()
 	primary.primaryRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
-	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestViewRow(proof)}
+	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 	view.complete = true
 	err := runCollectorSCFCanary(context.Background(), canaryResponseClient(t, map[string]any{"success": true}), collectorPublishOptions{canaryProof: proof}, "canary-node")
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestCollectorSCFCanaryEnsuresPeriodBeforeInvoke(t *testing.T) {
 	primary.ensureStatus = "waiting"
 	primary.status = "complete"
 	primary.primaryRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
-	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestViewRow(proof)}
+	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 	view.complete = true
 
 	var ensureCallsAtInvoke atomic.Int32
@@ -101,7 +101,7 @@ func TestCollectorSCFCanaryDoesNotInvokeWhenEnsureFails(t *testing.T) {
 	primary.ensureRetInfo = &commonpb.RetInfo{Code: storagepb.ErrorCode_CONFLICT, Msg: "period already occupied"}
 	primary.status = "complete"
 	primary.primaryRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
-	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestViewRow(proof)}
+	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 	view.complete = true
 	var invokeCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -388,7 +388,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 			proof, primary, view := collectorCanaryTestProof()
 			proof.reservationID = "scf-release-0123456789abcdef0123456789abcdef"
 			primary.primaryRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
-			view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestViewRow(proof)}
+			view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 			view.complete = true
 
 			const prefix = "release-canary-0123456789abcdef0123456789abcdef"
@@ -867,7 +867,7 @@ func TestCollectorSCFCanaryProofRequiresCompletePeriodAndExactPrimaryAndViewRows
 	proof, primary, view := collectorCanaryTestProof()
 	primary.status = "complete"
 	primary.primaryRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
-	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestViewRow(proof)}
+	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 	view.complete = true
 	require.NoError(t, proof.verify(context.Background()))
 
@@ -1040,36 +1040,30 @@ func collectorCanaryTestRow(proof *collectorSCFCanaryProof) *storagepb.TimeSerie
 	}}}
 }
 
-// collectorCanaryTestViewRow mirrors a task-owned View row, whose columns are
-// qualified by the source Dataset.
-func collectorCanaryTestViewRow(proof *collectorSCFCanaryProof) *storagepb.TimeSeriesRow {
-	row := collectorCanaryTestRow(proof)
-	row.Fields[0].FieldId = proof.entry.GetDatasetId() + ".close"
-	return row
-}
-
-func TestCollectorCanaryQueriesTheExactViewRowWithQualifiedColumns(t *testing.T) {
+func TestCollectorCanaryQueriesTheExactViewRowByFieldName(t *testing.T) {
 	proof, _, view := collectorCanaryTestProof()
 	view.complete = true
-	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestViewRow(proof)}
+	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 	present, complete, err := proof.readViewRow(context.Background())
 	require.NoError(t, err)
 	require.True(t, present)
 	require.True(t, complete)
 	require.NotNil(t, view.lastReq)
-	assert.Equal(t, []string{proof.entry.GetDatasetId() + ".close"}, view.lastReq.GetColumnNames())
+	assert.Equal(t, []string{"close"}, view.lastReq.GetColumnNames(), "View columns are the bare Dataset field names")
 	assert.Equal(t, proof.period.UTC().Format(time.RFC3339Nano), view.lastReq.GetTimeRange().GetStartTime())
 	assert.Equal(t, proof.period.Add(time.Nanosecond).UTC().Format(time.RFC3339Nano), view.lastReq.GetTimeRange().GetEndTime(),
 		"a whole-bar window is never complete when the canary row is the newest one")
 }
 
-func TestCollectorCanaryRejectsAViewRowWithUnqualifiedColumns(t *testing.T) {
+func TestCollectorCanaryRejectsAViewRowWithoutTheRequestedField(t *testing.T) {
 	proof, primary, view := collectorCanaryTestProof()
 	primary.status = "not_found"
 	view.complete = true
-	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
+	row := collectorCanaryTestRow(proof)
+	row.Fields[0].FieldId = proof.entry.GetDatasetId() + ".close"
+	view.viewRows = []*storagepb.TimeSeriesRow{row}
 	_, _, err := proof.readViewRow(context.Background())
-	require.ErrorContains(t, err, "missing requested field \""+proof.entry.GetDatasetId()+".close\"")
+	require.ErrorContains(t, err, `missing requested field "close"`)
 }
 
 func TestCollectorHTTPInventoryReaderUsesTheServiceGatewayRoute(t *testing.T) {

@@ -348,7 +348,7 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 func TestBuildMetadataImportCallsBackfillsInternalViewColumnDisplayName(t *testing.T) {
 	seed := metadataSeed{ViewColumns: []seedViewColumn{{
 		SpaceID: "mooxsys", ViewID: "view_mooxsys_host_resource", ColumnName: "cpu_usage_percent",
-		OriginType: "DATASET_COLUMN", OriginID: "dataset_mooxsys_host_resource.cpu_usage_percent", ValueType: "DOUBLE",
+		OriginType: "DATASET_COLUMN", OriginID: "cpu_usage_percent", ValueType: "DOUBLE",
 	}}}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
@@ -738,9 +738,9 @@ func TestRunMetadataApplyFindsDatasetColumnOnLaterPage(t *testing.T) {
 
 func TestRunMetadataApplyFindsViewColumnOnLaterPage(t *testing.T) {
 	column := &pb.ViewColumn{
-		SpaceId: "crypto", ViewId: "kline_view", ColumnName: "kline.close",
+		SpaceId: "crypto", ViewId: "kline_view", ColumnName: "close",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		OriginId:   "kline.close",
+		OriginId:   "close",
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 	}
 	createCalled := false
@@ -816,8 +816,8 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			FilterJSON:       `{"freq":"1H"}`, Engine: "duckdb", KeepDuration: "8760h",
 		}},
 		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close",
-			OriginType: "DATASET_COLUMN", OriginID: "kline.close", ValueType: "DOUBLE",
+			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
+			OriginType: "DATASET_COLUMN", OriginID: "close", ValueType: "DOUBLE",
 			OnlineTime: "2026-01-01T00:00:00Z", SortOrder: 1,
 			seedCommon: seedCommon{Attributes: map[string]string{"display_name": "收盘价"}},
 		}},
@@ -874,9 +874,9 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 
 func TestRunMetadataApplyRejectsViewColumnConflict(t *testing.T) {
 	expected := &pb.ViewColumn{
-		SpaceId: "crypto", ViewId: "kline", ColumnName: "kline.close",
+		SpaceId: "crypto", ViewId: "kline", ColumnName: "close",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		OriginId:   "kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		OriginId:   "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		Attributes: map[string]string{"display_name": "收盘价"},
 	}
 	actual := proto.Clone(expected).(*pb.ViewColumn)

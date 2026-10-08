@@ -30,7 +30,7 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 		}
 	})
 	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("secret", "test")}
-	columns := []*pb.ViewColumn{{OriginId: "market_prices.close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	columns := []*pb.ViewColumn{{OriginId: "close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-a", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema", Columns: columns,
 	}})

@@ -415,8 +415,8 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 	base.DatasetColumns = base.DatasetColumns[:1]
 	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")}
 	base.ViewColumns = []seedViewColumn{
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
+		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
+		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
 	}
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata view_column")
 }
@@ -431,14 +431,14 @@ func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
 		}},
 		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")},
 		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close",
-			OriginType: "dataset_column", OriginID: "kline.close",
+			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
+			OriginType: "dataset_column", OriginID: "close",
 		}},
 	})
-	require.ErrorContains(t, err, `references undefined dataset_column "kline.close"`)
+	require.ErrorContains(t, err, `references undefined dataset_column "close"`)
 }
 
-func TestSetupInitRejectsViewColumnFromUndeclaredDataset(t *testing.T) {
+func TestSetupInitRejectsDatasetPrefixedViewColumn(t *testing.T) {
 	err := validateSetupMetadataDependencies(metadataSeed{
 		Spaces:      []seedSpace{{SpaceID: "crypto"}},
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
@@ -457,7 +457,7 @@ func TestSetupInitRejectsViewColumnFromUndeclaredDataset(t *testing.T) {
 			OriginType: "dataset_column", OriginID: "perpetual.close",
 		}},
 	})
-	require.ErrorContains(t, err, `references dataset "perpetual" not declared by view`)
+	require.ErrorContains(t, err, `invalid dataset_column origin "perpetual.close"; use the bare column name`)
 }
 
 func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {

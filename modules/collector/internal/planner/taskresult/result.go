@@ -1046,11 +1046,10 @@ func resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*stora
 	columns := make([]*storagepb.ViewColumn, 0, len(ordered))
 	for i, name := range ordered {
 		valueType, _ := resultViewColumnType(name)
-		originID := ids.DatasetID + "." + name
 		columns = append(columns, &storagepb.ViewColumn{
-			SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: originID,
+			SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: name,
 			OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId:   originID, ValueType: valueType, SortOrder: uint32(i + 1),
+			OriginId:   name, ValueType: valueType, SortOrder: uint32(i + 1),
 			Attributes: map[string]string{"display_name": resultColumnDisplayName(name)},
 		})
 	}

@@ -171,7 +171,7 @@ func TestSystemMetricsFromScratchDoesNotJournalPendingSubjects(t *testing.T) {
 	svc.schemas[indexID] = viewindex.ViewIndexSchema{
 		SpaceID: "mooxsys", ViewID: "view_mooxsys_service_metrics", PrimaryDatasetID: "dataset_mooxsys_service_metrics",
 		SchemaHash: "schema", ViewVersion: 1,
-		Columns: []*pb.ViewColumn{{OriginId: "dataset_mooxsys_service_metrics.cpu", ColumnName: "cpu"}},
+		Columns: []*pb.ViewColumn{{OriginId: "cpu", ColumnName: "cpu"}},
 	}
 	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "mooxsys", datasetID: "dataset_mooxsys_service_metrics"}: {indexID: {}}}
 	svc.pendingSubjectsDir = filepath.Join(t.TempDir(), "pending")

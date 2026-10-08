@@ -39,16 +39,28 @@ func TestSingleDatasetView(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	for _, column := range []*pb.DatasetColumn{
+		{SpaceId: "space", DatasetId: "dataset_prices", ColumnName: "close", OriginId: "close"},
+		{SpaceId: "space", DatasetId: "dataset_prices", ColumnName: "volume", OriginId: "volume"},
+		{SpaceId: "space", DatasetId: "dataset_fundamentals", ColumnName: "pe", OriginId: "pe"},
+	} {
+		column.OriginType = pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
+		column.ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+		column.Status = "active"
+		_, err = store.UpsertDatasetColumn(ctx, column)
+		require.NoError(t, err)
+	}
+
 	svc, err := catalog.NewMetadataService(store, nil, catalog.Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	closeCol := &pb.ViewColumn{
-		SpaceId: "space", ViewId: "view_close", ColumnName: "dataset_prices.close", OriginId: "dataset_prices.close",
+		SpaceId: "space", ViewId: "view_close", ColumnName: "close", OriginId: "close",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		Attributes: map[string]string{"display_name": "收盘价"},
 	}
 	volumeCol := &pb.ViewColumn{
-		SpaceId: "space", ViewId: "view_volume", ColumnName: "dataset_prices.volume", OriginId: "dataset_prices.volume",
+		SpaceId: "space", ViewId: "view_volume", ColumnName: "volume", OriginId: "volume",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		Attributes: map[string]string{"display_name": "成交量"},
 	}
@@ -74,7 +86,7 @@ func TestSingleDatasetView(t *testing.T) {
 		require.Len(t, listed.GetViews(), 2)
 	})
 
-	t.Run("multiple source datasets are rejected", func(t *testing.T) {
+	t.Run("a column of another dataset is rejected", func(t *testing.T) {
 		rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 			SpaceId: "space", ViewId: "view_joined", Name: "多源视图",
 			DatasetId:  "dataset_prices",
@@ -82,14 +94,15 @@ func TestSingleDatasetView(t *testing.T) {
 			Columns: []*pb.ViewColumn{
 				closeCol,
 				{
-					SpaceId: "space", ViewId: "view_joined", ColumnName: "dataset_fundamentals.pe",
-					OriginId: "dataset_fundamentals.pe", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+					SpaceId: "space", ViewId: "view_joined", ColumnName: "pe",
+					OriginId: "pe", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 					ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 				},
 			},
 		}})
 		require.NoError(t, err)
-		require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "multi-dataset view must be rejected")
+		require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "a View may only index columns of its own dataset")
+		require.Contains(t, rsp.GetRetInfo().GetMsg(), `view column "pe" is not an active column of dataset dataset_prices`)
 	})
 
 	t.Run("rebuild keeps filter and projection", func(t *testing.T) {
@@ -114,7 +127,7 @@ func TestSingleDatasetView(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_SUCCESS, cols.GetRetInfo().GetCode())
 		require.Len(t, cols.GetColumns(), 1)
-		require.Equal(t, "dataset_prices.close", cols.GetColumns()[0].GetColumnName())
+		require.Equal(t, "close", cols.GetColumns()[0].GetColumnName())
 	})
 
 	t.Run("deleting one view keeps dataset and the other view", func(t *testing.T) {

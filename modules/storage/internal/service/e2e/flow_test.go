@@ -131,8 +131,8 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	view.SetPrimaryAuth(auth)
 	view.SetPrimaryReader(primaryFieldReader{service: primary})
 	columns := []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "prices.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "volume", OriginId: "prices.volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "volume", OriginId: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}
 	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("view prepare: rsp=%v err=%v", rsp, err)

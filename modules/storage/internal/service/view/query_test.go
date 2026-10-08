@@ -126,7 +126,7 @@ func TestLiveIndexWriteUsesDedicatedBudgetAfterDeliveryDeadline(t *testing.T) {
 	key := viewRef{spaceID: "space", viewID: "prices"}
 	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
-		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
 	}
 	svc.indexView = map[string]viewRef{"prices-index": key}
 	svc.byData = map[datasetRef]map[string]struct{}{
@@ -165,7 +165,7 @@ func TestLiveWritePreservesRowInReplacementWhenExistingActiveIsUnwritable(t *tes
 	svc.indexEngine["prices-next"] = "query-test"
 	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
-		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
 	}
 	svc.schemas["prices-next"] = svc.schemas["prices-index"]
 	svc.indexView = map[string]viewRef{"prices-index": key, "prices-next": key}
@@ -259,7 +259,7 @@ func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetr
 	}
 	svc.indexView = map[string]viewRef{"prices-index": key, indexID: key}
 	svc.indexEngine[indexID] = "query-test"
-	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_view", PrimaryDatasetID: "market_prices", Columns: []*pb.ViewColumn{{OriginId: "market_prices.close", ColumnName: "close"}}}
+	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_view", PrimaryDatasetID: "market_prices", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
 	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "space", datasetID: "market_prices"}: {indexID: {}}}
 }
 
@@ -329,7 +329,7 @@ func TestReplacementFailurePersistenceRetriesBeforeAcknowledgingRedelivery(t *te
 	svc.views[key] = &viewRuntime{}
 	svc.indexView = map[string]viewRef{"prices-a": key, "prices-b": key}
 	svc.indexEngine = map[string]string{"prices-a": "query-test", "prices-b": "query-test"}
-	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}}}
+	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
 	svc.schemas["prices-b"] = svc.schemas["prices-a"]
 	svc.byData = map[datasetRef]map[string]struct{}{
 		{spaceID: "space", datasetID: "market"}: {"prices-a": {}, "prices-b": {}},

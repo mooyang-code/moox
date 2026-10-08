@@ -630,7 +630,7 @@ func TestInactiveCapacityBuildFailureLeavesActiveSlotReadable(t *testing.T) {
 		viewID   = "prices"
 		activeID = "prices-a"
 	)
-	columns := []*pb.ViewColumn{{SpaceId: spaceID, ViewId: viewID, OriginId: "prices.close", ColumnName: "close"}}
+	columns := []*pb.ViewColumn{{SpaceId: spaceID, ViewId: viewID, OriginId: "close", ColumnName: "close"}}
 	inactiveID := viewindex.InactiveViewIndexID(spaceID, viewID, activeID)
 	engine := &inactivePrepareFailureEngine{
 		queryEngine: &queryEngine{stats: viewindex.ViewIndexStats{
@@ -1024,7 +1024,7 @@ func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 		DatasetId:           "records",
 		DesiredViewRevision: 1,
 		Columns: []*pb.ViewColumn{{
-			SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title",
+			SpaceId: "space", ViewId: "records", OriginId: "title", ColumnName: "title",
 		}},
 	}}
 	stop, err := svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
@@ -1123,7 +1123,7 @@ func TestAttachPendingViewBuildRejectsPhysicalSchemaMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	column := &pb.ViewColumn{SpaceId: "space", ViewId: "prices", ColumnName: "close", OriginId: "prices.close"}
+	column := &pb.ViewColumn{SpaceId: "space", ViewId: "prices", ColumnName: "close", OriginId: "close"}
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 2, SchemaHash: "wrong"}}
 	view := &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
@@ -1143,7 +1143,7 @@ func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
 	ctx := context.Background()
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
 	const indexID = "records-b"
-	columns := []*pb.ViewColumn{{SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title"}}
+	columns := []*pb.ViewColumn{{SpaceId: "space", ViewId: "records", OriginId: "title", ColumnName: "title"}}
 	prepared, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "records", DatasetId: "records", ViewVersion: 2, Engine: "bleve", ViewSchemaHash: "schema-2", Columns: columns}})
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare: rsp=%v err=%v", prepared, err)
@@ -1195,7 +1195,7 @@ func TestMaintainerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 	}
 	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices", DesiredViewRevision: 1,
-		Columns: []*pb.ViewColumn{{SpaceId: "space", ViewId: "prices", OriginId: "prices.close", ColumnName: "prices.close"}},
+		Columns: []*pb.ViewColumn{{SpaceId: "space", ViewId: "prices", OriginId: "close", ColumnName: "close"}},
 	}}
 	stop, err := svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
 	if err != nil {

@@ -211,10 +211,9 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			continue
 		}
 		viewColumnIndex++
-		originID := targetDatasetID + "." + field.name
 		resp, callErr := c.Metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: c.Auth, Column: &storagepb.ViewColumn{
-			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: originID, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId: originID, ValueType: field.type_, SortOrder: uint32(viewColumnIndex), Attributes: map[string]string{"display_name": field.label},
+			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: field.name, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+			OriginId: field.name, ValueType: field.type_, SortOrder: uint32(viewColumnIndex), Attributes: map[string]string{"display_name": field.label},
 		}})
 		if callErr != nil {
 			return compensate(fmt.Errorf("upsert target View column %s: %w", field.name, callErr))

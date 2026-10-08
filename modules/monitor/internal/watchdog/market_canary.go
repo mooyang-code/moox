@@ -620,11 +620,7 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]mark
 			if field.GetValue() == nil {
 				continue
 			}
-			fieldID := field.GetFieldId()
-			if index := strings.LastIndexByte(fieldID, '.'); index >= 0 {
-				fieldID = fieldID[index+1:]
-			}
-			switch fieldID {
+			switch field.GetFieldId() {
 			case "close":
 				closeValue, haveClose = field.GetValue().GetDoubleValue(), true
 			}
@@ -655,11 +651,7 @@ func decodeStockMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([
 			if field.GetValue() == nil {
 				continue
 			}
-			fieldID := field.GetFieldId()
-			if index := strings.LastIndexByte(fieldID, '.'); index >= 0 {
-				fieldID = fieldID[index+1:]
-			}
-			values[fieldID] = field.GetValue()
+			values[field.GetFieldId()] = field.GetValue()
 		}
 		required := []string{"open", "high", "low", "close", "volume", "amount", "source_provider"}
 		for _, field := range required {

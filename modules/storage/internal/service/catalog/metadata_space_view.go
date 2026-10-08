@@ -257,12 +257,12 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	if spaceID == "" || datasetID == "" {
 		return errors.New("space_id and dataset_id are required")
 	}
-	if err := validateViewReferencesSingleDataset(view); err != nil {
-		return err
-	}
 	dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
 	if err != nil {
 		return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
+	}
+	if err := s.validateViewColumnsInDataset(ctx, spaceID, datasetID, view.GetColumns()); err != nil {
+		return err
 	}
 	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
 		freq, normalizedFilterJSON, err := normalizeTimeSeriesViewFilterJSON(view.GetFilterJson())
@@ -277,6 +277,42 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	view.DatasetId = datasetID
 	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
 	view.Engine = defaultViewEngine(dataset.GetDataKind())
+	return nil
+}
+
+// validateViewColumnsInDataset requires every dataset column of a View to
+// name an active column of the View's Dataset. View column names carry no
+// Dataset prefix, so this is what binds a column to its source.
+func (s *Service) validateViewColumnsInDataset(ctx context.Context, spaceID, datasetID string, columns []*pb.ViewColumn) error {
+	var wanted []string
+	for _, column := range columns {
+		if isDatasetViewColumn(column) {
+			wanted = append(wanted, strings.TrimSpace(column.GetOriginId()))
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	active := make(map[string]struct{})
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := s.metadata.ListDatasetColumns(ctx, spaceID, datasetID, &pb.Page{Page: pageNo, Size: 1000})
+		if err != nil {
+			return fmt.Errorf("list view dataset %s columns: %w", datasetID, err)
+		}
+		for _, item := range items {
+			if item != nil && (item.GetStatus() == "" || item.GetStatus() == "active") {
+				active[item.GetColumnName()] = struct{}{}
+			}
+		}
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			break
+		}
+	}
+	for _, name := range wanted {
+		if _, ok := active[name]; !ok {
+			return fmt.Errorf("view column %q is not an active column of dataset %s", name, datasetID)
+		}
+	}
 	return nil
 }
 
@@ -380,6 +416,13 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewColumnName(column); err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	view, err := s.metadata.GetView(ctx, column.GetSpaceId(), column.GetViewId())
+	if err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.validateViewColumnsInDataset(ctx, column.GetSpaceId(), view.GetDatasetId(), []*pb.ViewColumn{column}); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)

@@ -776,10 +776,9 @@ func addFactorResultViewColumn(ctx context.Context, tx *sql.Tx, item *pb.Dataset
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(c_sort_order) + 1, 0) FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, item.GetSpaceId(), viewID).Scan(&sortOrder); err != nil {
 		return err
 	}
-	columnName := item.GetDatasetId() + "." + item.GetColumnName()
 	changed, err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
-		SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: columnName,
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: columnName,
+		SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: item.GetColumnName(),
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: item.GetColumnName(),
 		ValueType: item.GetValueType(), SortOrder: sortOrder, Attributes: cloneMetadataStringMap(item.GetAttributes()),
 	})
 	if err != nil {

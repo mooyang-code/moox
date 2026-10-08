@@ -162,11 +162,11 @@ func TestUpsertViewMergesPartialColumnsAndReplaceViewColumnsReplaces(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "prices.close"}, {SpaceId: "space", ViewId: "source-view", ColumnName: "prices.old"}}
+	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}, {SpaceId: "space", ViewId: "source-view", ColumnName: "old"}}
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatal(err)
 	}
-	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "prices.close"}}
+	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}}
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestUpsertViewMergesPartialColumnsAndReplaceViewColumnsReplaces(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(columns) != 1 || columns[0].GetColumnName() != "prices.close" {
+	if len(columns) != 1 || columns[0].GetColumnName() != "close" {
 		t.Fatalf("columns after replacement = %v", columns)
 	}
 	view.Columns = []*pb.ViewColumn{}

@@ -60,15 +60,15 @@ describe("rowsToColumnNames", () => {
         [
           {
             fields: [
-              { field_id: "dataset_binance_kline_1m.open" },
-              { field_id: "dataset_binance_kline_1m.bias__bias_20" },
-              { field_id: "dataset_binance_kline_1m.cci__cci" }
+              { field_id: "open" },
+              { field_id: "bias_20" },
+              { field_id: "cci" }
             ]
           }
         ],
-        ["dataset_binance_kline_1m.open", "dataset_binance_kline_1m.close"]
+        ["open", "close"]
       )
-    ).toEqual(["dataset_binance_kline_1m.open", "dataset_binance_kline_1m.close"]);
+    ).toEqual(["open", "close"]);
   });
 
   it("discovers columns from rows only when no projection is declared", () => {
@@ -85,15 +85,15 @@ describe("rowsToColumnNames", () => {
 describe("buildViewFilterFieldOptions", () => {
   it("keeps search fields aligned with the table projection", () => {
     const labels = {
-      "dataset_binance_kline_1m.open": "开盘价",
-      "dataset_binance_kline_1m.close": "收盘价",
+      open: "开盘价",
+      close: "收盘价",
       amount: "成交额"
     };
     const options = buildViewFilterFieldOptions(
       "time_series",
       [
-        { column_name: "dataset_binance_kline_1m.open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-        { column_name: "dataset_binance_kline_1m.close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
+        { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+        { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
       ],
       [
         { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
@@ -108,8 +108,8 @@ describe("buildViewFilterFieldOptions", () => {
       "freq",
       "series_tag",
       "data_time",
-      "dataset_binance_kline_1m.open",
-      "dataset_binance_kline_1m.close"
+      "open",
+      "close"
     ]);
     expect(options.map(item => item.label)).not.toContain("成交额");
   });
@@ -127,30 +127,42 @@ describe("buildViewFilterFieldOptions", () => {
 
 describe("view factor column labels", () => {
   it("uses the factor output name stored in result metadata", () => {
-    const columnName = "bin_e0a2079753cf4faf.bias__bias_5";
     const labels = buildViewColumnLabels(
       [
         {
-          column_name: columnName,
-          origin_id: columnName,
-          attributes: { display_name: "bias_5", factor_output: "bias_5" }
+          column_name: "bias_5",
+          origin_id: "bias_5",
+          attributes: { display_name: "乖离率", factor_output: "bias_5" }
         } as ViewColumn
       ],
       [
         {
-          dataset_id: "bin_e0a2079753cf4faf",
-          column_name: "bias__bias_5",
+          dataset_id: "dataset_factor_btc_1m",
+          column_name: "bias_5",
           origin_type: 2,
-          origin_id: "bias.bias_5",
+          origin_id: "Bias",
           attributes: { display_name: "bias_5", factor_output: "bias_5" }
         } as DatasetColumn
       ],
       [],
-      [],
-      { dataset_id: "bin_e0a2079753cf4faf" }
+      { dataset_id: "dataset_factor_btc_1m" }
     );
 
-    expect(labels[columnName]).toBe("bias_5");
+    expect(labels.bias_5).toBe("bias_5");
+  });
+
+  it("labels a column from the View's own Dataset only", () => {
+    const labels = buildViewColumnLabels(
+      [{ column_name: "close", origin_id: "close" } as ViewColumn],
+      [
+        { dataset_id: "dataset_other", column_name: "close", attributes: { display_name: "其他收盘" } } as DatasetColumn,
+        { dataset_id: "dataset_kline", column_name: "close", attributes: { display_name: "收盘价" } } as DatasetColumn
+      ],
+      [],
+      { dataset_id: "dataset_kline" }
+    );
+
+    expect(labels.close).toBe("收盘价");
   });
 });
 

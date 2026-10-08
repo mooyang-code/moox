@@ -270,7 +270,7 @@ func (r *InventoryReconciler) loadDesired(ctx context.Context) (map[datasetRef]d
 			}
 			primaryID := strings.TrimSpace(view.GetDatasetId())
 			requestID := strings.TrimSpace(view.GetAttributes()[routeReadyRequestIDAttribute])
-			for _, datasetID := range viewConsumerDatasetIDs(view) {
+			for _, datasetID := range viewDatasetIDs(view) {
 				ref := datasetRef{spaceID: strings.TrimSpace(view.GetSpaceId()), datasetID: datasetID}
 				if ref.spaceID == "" || ref.datasetID == "" {
 					continue
@@ -442,29 +442,6 @@ func dynamicDatasetConsumerIdentityForPartition(partitionPrefix, durablePrefix s
 	// historical 32-character durable limit.
 	durableToken := token[:12]
 	return strings.TrimSpace(partitionPrefix) + "_" + token, strings.TrimSpace(durablePrefix) + "_" + durableToken
-}
-
-func viewConsumerDatasetIDs(view *pb.View) []string {
-	if view == nil {
-		return nil
-	}
-	set := make(map[string]struct{})
-	for _, datasetID := range viewDatasetIDs(view) {
-		if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
-			set[datasetID] = struct{}{}
-		}
-	}
-	for _, column := range view.GetColumns() {
-		if column == nil {
-			continue
-		}
-		if datasetID, _, ok := strings.Cut(strings.TrimSpace(column.GetOriginId()), "."); ok {
-			if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
-				set[datasetID] = struct{}{}
-			}
-		}
-	}
-	return sortedStringSet(set)
 }
 
 func sortedStringSet(set map[string]struct{}) []string {

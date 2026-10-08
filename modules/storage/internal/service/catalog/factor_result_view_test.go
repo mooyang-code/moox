@@ -86,9 +86,7 @@ func TestActivateFactorResultDatasetCreatesDefaultView(t *testing.T) {
 
 	columns, _, err := store.ListViewColumns(context.Background(), view.GetSpaceId(), view.GetViewId(), nil)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{
-		dataset.GetDatasetId() + ".close", dataset.GetDatasetId() + ".bias_20",
-	}, viewColumnNames(columns))
+	require.ElementsMatch(t, []string{"close", "bias_20"}, viewColumnNames(columns))
 }
 
 func TestActivateFactorResultDatasetIsIdempotent(t *testing.T) {
@@ -126,7 +124,7 @@ func TestNewFactorResultColumnExtendsDefaultViewDesiredSchema(t *testing.T) {
 	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
 	require.NoError(t, err)
 	require.Equal(t, beforeRevision+1, view.GetDesiredViewRevision())
-	require.Contains(t, viewColumnNames(view.GetColumns()), dataset.GetDatasetId()+".momentum_5")
+	require.Contains(t, viewColumnNames(view.GetColumns()), "momentum_5")
 
 	_, err = store.UpsertDatasetColumn(ctx, column)
 	require.NoError(t, err)

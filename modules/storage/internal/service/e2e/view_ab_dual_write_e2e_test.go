@@ -23,7 +23,7 @@ func TestViewABDualWriteKeepsLiveValueAcrossBackfill(t *testing.T) {
 		t.Fatal(err)
 	}
 	auth := &pb.AuthInfo{AppId: "e2e", AppKey: datanode.ServiceAuthKey(secret, "e2e")}
-	columns := []*pb.ViewColumn{{ColumnName: "close", OriginId: "prices.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	columns := []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	prepare := func(id string, version uint64) {
 		t.Helper()
 		rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: id, Schema: &pb.ViewIndexSchema{

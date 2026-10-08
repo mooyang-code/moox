@@ -149,16 +149,30 @@ func isFactorResultDataset(dataset *pb.Dataset) bool {
 	return dataset != nil && strings.EqualFold(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]), "factor_result")
 }
 
+// isDatasetViewColumn reports whether a View column reads a Dataset column.
+// Metadata stores an unspecified origin type as a dataset column.
+func isDatasetViewColumn(column *pb.ViewColumn) bool {
+	if column == nil {
+		return false
+	}
+	switch column.GetOriginType() {
+	case pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION:
+		return false
+	}
+	return true
+}
+
 func isFactorViewColumn(column *pb.ViewColumn) bool {
-	if column == nil || column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
+	if !isDatasetViewColumn(column) {
 		return false
 	}
 	attrs := column.GetAttributes()
 	factorID := strings.TrimSpace(attrs["origin_factor_id"])
 	output := strings.TrimSpace(attrs["factor_output"])
+	// A factor output column is named after its output, like the Dataset
+	// column it reads.
 	originID := strings.TrimSpace(column.GetOriginId())
-	return factorID != "" && output != "" && strings.EqualFold(originID, strings.TrimSpace(column.GetColumnName())) &&
-		strings.HasSuffix(strings.ToLower(originID), "."+strings.ToLower(factorID)+"__"+strings.ToLower(output))
+	return factorID != "" && output != "" && originID == strings.TrimSpace(column.GetColumnName()) && originID == output
 }
 
 func validateLowerSnakeID(field string, value string, maxLen int) error {
@@ -179,20 +193,17 @@ func validateViewColumnName(column *pb.ViewColumn) error {
 	if err := validateUserColumnName("view column_name", column.GetColumnName()); err != nil {
 		return err
 	}
-	if column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
+	if !isDatasetViewColumn(column) {
 		return nil
 	}
+	// A View indexes exactly one Dataset, so a dataset column is the bare
+	// Dataset column name; View.dataset_id already names the source Dataset.
 	originID := strings.TrimSpace(column.GetOriginId())
-	columnName := strings.TrimSpace(column.GetColumnName())
-	datasetID, sourceName, ok := strings.Cut(originID, ".")
-	if !ok || datasetID == "" || sourceName == "" {
-		return errors.New("dataset view column origin_id must use dataset_id.column_name")
+	if originID == "" || strings.Contains(originID, ".") {
+		return errors.New("dataset view column origin_id must be the bare Dataset column name")
 	}
-	if err := validateDatasetID(datasetID); err != nil {
-		return fmt.Errorf("invalid view column origin dataset: %w", err)
-	}
-	if columnName != originID {
-		return errors.New("dataset view column column_name must equal origin_id and use dataset_id.column_name")
+	if strings.TrimSpace(column.GetColumnName()) != originID {
+		return errors.New("dataset view column column_name must equal origin_id")
 	}
 	return nil
 }
@@ -222,25 +233,4 @@ func viewDatasetID(view *pb.View) string {
 		return ""
 	}
 	return strings.TrimSpace(view.GetDatasetId())
-}
-
-func validateViewReferencesSingleDataset(view *pb.View) error {
-	datasetID := viewDatasetID(view)
-	if datasetID == "" {
-		return errors.New("dataset_id is required")
-	}
-	for _, column := range view.GetColumns() {
-		if column == nil || column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
-			continue
-		}
-		origin := strings.TrimSpace(column.GetOriginId())
-		if origin == "" {
-			continue
-		}
-		originDataset, _, ok := strings.Cut(origin, ".")
-		if ok && originDataset != "" && originDataset != datasetID {
-			return errors.New("view must reference exactly one dataset_id")
-		}
-	}
-	return nil
 }

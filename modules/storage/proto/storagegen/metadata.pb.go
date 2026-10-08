@@ -775,11 +775,11 @@ type ViewColumn struct {
 	SpaceId string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	// view_id 是查询视图 ID。
 	ViewId string `protobuf:"bytes,2,opt,name=view_id,json=viewId,proto3" json:"view_id,omitempty"`
-	// column_name 是视图内稳定技术列名；DatasetColumn 来源必须使用 dataset_id.column_name。
+	// column_name 是视图内稳定技术列名；DatasetColumn 来源直接使用 Dataset 列名，不带数据集前缀。
 	ColumnName string `protobuf:"bytes,3,opt,name=column_name,json=columnName,proto3" json:"column_name,omitempty"`
 	// origin_type 表示列来源，可为 DatasetColumn、表达式或系统列。
 	OriginType ColumnOriginType `protobuf:"varint,4,opt,name=origin_type,json=originType,proto3,enum=trpc.moox.storage.ColumnOriginType" json:"origin_type,omitempty"`
-	// origin_id 是来源 ID；DatasetColumn 必须使用 dataset_id.column_name，并与 column_name 保持一致。
+	// origin_id 是来源 ID；DatasetColumn 为 View 所属 Dataset 的列名，并与 column_name 保持一致。
 	OriginId string `protobuf:"bytes,5,opt,name=origin_id,json=originId,proto3" json:"origin_id,omitempty"`
 	// value_type 是列值的逻辑类型。
 	ValueType FieldValueType `protobuf:"varint,6,opt,name=value_type,json=valueType,proto3,enum=trpc.moox.storage.FieldValueType" json:"value_type,omitempty"`

@@ -405,7 +405,7 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	}
 	complete, incomplete := partitionCompleteWrites(schema, writes)
 	if len(incomplete) > 0 {
-		recovered, err := s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, incomplete)
+		recovered, err := s.recoverMissingRows(ctx, schema, rows, incomplete)
 		if err != nil {
 			return nil, err
 		}
@@ -427,11 +427,8 @@ func validateFactorResultEventColumns(view *pb.View, schema viewindex.ViewIndexS
 	}
 	known := make(map[string]struct{}, len(schema.Columns))
 	for _, column := range schema.Columns {
-		if column == nil || viewColumnDataset(column) != datasetID {
-			continue
-		}
-		if source := viewColumnSource(column, datasetID); source != "" {
-			known[source] = struct{}{}
+		if field := viewColumnField(column); field != "" {
+			known[field] = struct{}{}
 		}
 	}
 	for _, row := range rows {
@@ -582,7 +579,7 @@ func partitionCompleteWrites(schema viewindex.ViewIndexSchema, writes []viewinde
 	return complete, incomplete
 }
 
-func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ string, schema viewindex.ViewIndexSchema, datasetID string, eventRowsInput []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, error) {
+func (s *Service) recoverMissingRows(ctx context.Context, schema viewindex.ViewIndexSchema, eventRowsInput []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, error) {
 	s.mu.RLock()
 	reader := s.primary
 	auth := s.primaryAuth
@@ -593,33 +590,10 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 	if reader == nil || auth == nil {
 		return nil, errors.New("primary reader and auth are required to recover a missing view row")
 	}
-	type sourceField struct{ dataset, source, target string }
-	var sources []sourceField
-	byDataset := make(map[string][]string)
-	seen := make(map[string]map[string]struct{})
-	for _, column := range schema.Columns {
-		if column == nil {
-			continue
-		}
-		sourceDataset := viewColumnDataset(column)
-		origin := column.GetOriginId()
-		if sourceDataset == "" || origin == "" {
-			continue
-		}
-		if owned := strings.TrimSpace(schema.PrimaryDatasetID); owned != "" && sourceDataset != owned {
-			continue
-		}
-		if index := strings.LastIndexByte(origin, '.'); index >= 0 && index+1 < len(origin) {
-			origin = origin[index+1:]
-		}
-		sources = append(sources, sourceField{dataset: sourceDataset, source: origin, target: column.GetColumnName()})
-		if seen[sourceDataset] == nil {
-			seen[sourceDataset] = make(map[string]struct{})
-		}
-		if _, ok := seen[sourceDataset][origin]; !ok {
-			seen[sourceDataset][origin] = struct{}{}
-			byDataset[sourceDataset] = append(byDataset[sourceDataset], origin)
-		}
+	datasetID := strings.TrimSpace(schema.PrimaryDatasetID)
+	fieldIDs := viewColumnFields(schema.Columns)
+	if datasetID == "" || len(fieldIDs) == 0 {
+		return nil, nil
 	}
 	eventRows := make(map[string]*pb.RowFieldUpsert, len(eventRowsInput))
 	for _, event := range eventRowsInput {
@@ -627,78 +601,69 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 			continue
 		}
 		key := proto.Clone(event.GetKey()).(*pb.RowKey)
-		key.DatasetId = schema.PrimaryDatasetID
+		key.DatasetId = datasetID
 		eventRows[viewindex.RowKeyID(key)] = event
 	}
-	type sourceRows struct {
-		values  map[string]*pb.RowFieldValues
-		present map[string]struct{}
+	keys := make([]*pb.RowKey, 0, len(writes))
+	for _, write := range writes {
+		key := proto.Clone(write.Key.Key).(*pb.RowKey)
+		key.DatasetId = datasetID
+		keys = append(keys, key)
 	}
-	rowsByDataset := make(map[string]sourceRows)
-	for sourceDataset, fieldIDs := range byDataset {
-		keys := make([]*pb.RowKey, 0, len(writes))
-		for _, write := range writes {
-			key := proto.Clone(write.Key.Key).(*pb.RowKey)
-			key.DatasetId = sourceDataset
-			keys = append(keys, key)
+	attributeKeys := factorAttributeKeys(schema.Columns)
+	values := make(map[string]*pb.RowFieldValues)
+	present := make(map[string]struct{})
+	chunkSize := primaryPointReadChunkSize(len(fieldIDs)+len(attributeKeys), len(keys))
+	for chunkStart := 0; chunkStart < len(keys); chunkStart += chunkSize {
+		chunkEnd := chunkStart + chunkSize
+		if chunkEnd > len(keys) {
+			chunkEnd = len(keys)
 		}
-		attributeKeys := factorAttributeKeys(schema.Columns, sourceDataset)
-		loaded := sourceRows{values: make(map[string]*pb.RowFieldValues), present: make(map[string]struct{})}
-		chunkSize := primaryPointReadChunkSize(len(fieldIDs)+len(attributeKeys), len(keys))
-		for chunkStart := 0; chunkStart < len(keys); chunkStart += chunkSize {
-			chunkEnd := chunkStart + chunkSize
-			if chunkEnd > len(keys) {
-				chunkEnd = len(keys)
-			}
-			rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys[chunkStart:chunkEnd], FieldIds: fieldIDs, AttributeKeys: attributeKeys})
-			if err != nil {
-				return nil, err
-			}
-			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return nil, err
-			}
-			for _, row := range rsp.GetRows() {
-				if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
-					loaded.values[viewindex.RowKeyID(row.GetKey())] = row
-					loaded.present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
-				}
-			}
-			for _, key := range rsp.GetExistingKeys() {
-				if key != nil {
-					loaded.present[viewindex.RowKeyID(key)] = struct{}{}
-				}
+		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys[chunkStart:chunkEnd], FieldIds: fieldIDs, AttributeKeys: attributeKeys})
+		if err != nil {
+			return nil, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, row := range rsp.GetRows() {
+			if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
+				values[viewindex.RowKeyID(row.GetKey())] = row
+				present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
 			}
 		}
-		rowsByDataset[sourceDataset] = loaded
+		for _, key := range rsp.GetExistingKeys() {
+			if key != nil {
+				present[viewindex.RowKeyID(key)] = struct{}{}
+			}
+		}
 	}
 	result := make([]viewindex.RowWrite, 0, len(writes))
-	for _, write := range writes {
-		primaryKey := proto.Clone(write.Key.Key).(*pb.RowKey)
-		primaryKey.DatasetId = schema.PrimaryDatasetID
-		primaryID := viewindex.RowKeyID(primaryKey)
-		if _, ok := rowsByDataset[schema.PrimaryDatasetID].present[primaryID]; !ok {
+	for index, write := range writes {
+		primaryID := viewindex.RowKeyID(keys[index])
+		if _, ok := present[primaryID]; !ok {
 			continue
 		}
 		complete := viewindex.RowWrite{Key: write.Key}
-		for _, source := range sources {
-			var fields []*pb.FieldValue
-			if row := rowsByDataset[source.dataset].values[viewindex.RowKeyID(withDataset(write.Key.Key, source.dataset))]; row != nil {
-				fields = append(fields, row.GetFields()...)
-				if complete.Attributes == nil && len(row.GetAttributes()) > 0 {
-					complete.Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
-				}
-				mergeRowAttributes(complete.Attributes, row.GetAttributes())
+		var fields []*pb.FieldValue
+		if row := values[primaryID]; row != nil {
+			fields = append(fields, row.GetFields()...)
+			if len(row.GetAttributes()) > 0 {
+				complete.Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
 			}
-			if source.dataset == datasetID {
-				if event := eventRows[primaryID]; event != nil {
-					fields = append(fields, event.GetFields()...)
-					if complete.Attributes == nil && len(event.GetAttributes()) > 0 {
-						complete.Attributes = make(map[string]*pb.TypedValue, len(event.GetAttributes()))
-					}
-					mergeRowAttributes(complete.Attributes, event.GetAttributes())
-				}
+			mergeRowAttributes(complete.Attributes, row.GetAttributes())
+		}
+		// The event carries the newest values, so it is applied after the
+		// Primary row and wins for every field both of them hold.
+		if event := eventRows[primaryID]; event != nil {
+			fields = append(fields, event.GetFields()...)
+			if complete.Attributes == nil && len(event.GetAttributes()) > 0 {
+				complete.Attributes = make(map[string]*pb.TypedValue, len(event.GetAttributes()))
 			}
-			complete.Fields = appendMatchingField(complete.Fields, fields, source.source, source.target)
+			mergeRowAttributes(complete.Attributes, event.GetAttributes())
+		}
+		for _, fieldID := range fieldIDs {
+			complete.Fields = appendMatchingField(complete.Fields, fields, fieldID)
 		}
 		result = append(result, complete)
 	}
@@ -709,7 +674,7 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 // per-factor source-hash keys projected by a managed result View. Primary
 // attribute reads are exact-key reads, so these keys must be enumerated from
 // View column metadata rather than requested with a prefix wildcard.
-func factorAttributeKeys(columns []*pb.ViewColumn, datasetID string) []string {
+func factorAttributeKeys(columns []*pb.ViewColumn) []string {
 	seen := map[string]struct{}{
 		"factor.source_hash":    {},
 		"factor.id":             {},
@@ -717,17 +682,10 @@ func factorAttributeKeys(columns []*pb.ViewColumn, datasetID string) []string {
 		"factor.computed_at":    {},
 	}
 	for _, column := range columns {
-		if column == nil || viewColumnDataset(column) != datasetID {
+		if viewColumnField(column) == "" {
 			continue
 		}
-		factorID := strings.TrimSpace(column.GetAttributes()["origin_factor_id"])
-		if factorID == "" {
-			source := viewColumnSource(column, datasetID)
-			if index := strings.Index(source, "__"); index > 0 {
-				factorID = strings.TrimSpace(source[:index])
-			}
-		}
-		if factorID != "" {
+		if factorID := strings.TrimSpace(column.GetAttributes()["origin_factor_id"]); factorID != "" {
 			seen["factor.source_hash."+factorID] = struct{}{}
 		}
 	}
@@ -739,18 +697,12 @@ func factorAttributeKeys(columns []*pb.ViewColumn, datasetID string) []string {
 	return result
 }
 
-func withDataset(key *pb.RowKey, datasetID string) *pb.RowKey {
-	clone := proto.Clone(key).(*pb.RowKey)
-	clone.DatasetId = datasetID
-	return clone
-}
-
-func appendMatchingField(dst, fields []*pb.FieldValue, source, target string) []*pb.FieldValue {
+func appendMatchingField(dst, fields []*pb.FieldValue, fieldID string) []*pb.FieldValue {
 	for _, field := range fields {
-		if field != nil && field.GetFieldId() == source {
-			value := &pb.FieldValue{FieldId: target, Value: field.GetValue()}
+		if field != nil && field.GetFieldId() == fieldID {
+			value := &pb.FieldValue{FieldId: fieldID, Value: field.GetValue()}
 			for index, existing := range dst {
-				if existing != nil && existing.GetFieldId() == target {
+				if existing != nil && existing.GetFieldId() == fieldID {
 					dst[index] = value
 					value = nil
 					break
@@ -779,18 +731,13 @@ func mergeRowAttributes(dst, src map[string]*pb.TypedValue) {
 }
 
 func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.RowFieldUpsert) []viewindex.RowWrite {
-	if owned := strings.TrimSpace(schema.PrimaryDatasetID); owned != "" && datasetID != owned {
+	owned := strings.TrimSpace(schema.PrimaryDatasetID)
+	if owned == "" || datasetID != owned {
 		return nil
 	}
-	columns := make(map[string]string)
-	for _, column := range schema.Columns {
-		if column == nil || viewColumnDataset(column) != datasetID {
-			continue
-		}
-		source := viewColumnSource(column, datasetID)
-		if source != "" {
-			columns[source] = column.GetColumnName()
-		}
+	columns := make(map[string]struct{}, len(schema.Columns))
+	for _, field := range viewColumnFields(schema.Columns) {
+		columns[field] = struct{}{}
 	}
 	if len(columns) == 0 {
 		return nil
@@ -802,43 +749,48 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 		}
 		fields := make([]*pb.FieldValue, 0, len(row.GetFields()))
 		for _, field := range row.GetFields() {
-			if name := columns[field.GetFieldId()]; name != "" {
-				fields = append(fields, &pb.FieldValue{FieldId: name, Value: field.GetValue()})
+			if _, ok := columns[field.GetFieldId()]; ok {
+				fields = append(fields, &pb.FieldValue{FieldId: field.GetFieldId(), Value: field.GetValue()})
 			}
 		}
 		if len(fields) != 0 || len(row.GetAttributes()) != 0 {
 			key := proto.Clone(row.GetKey()).(*pb.RowKey)
-			if schema.PrimaryDatasetID != "" {
-				key.DatasetId = schema.PrimaryDatasetID
-			}
+			key.DatasetId = owned
 			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields, Attributes: row.GetAttributes()})
 		}
 	}
 	return writes
 }
 
-func viewColumnSource(column *pb.ViewColumn, datasetID string) string {
+// viewColumnField returns the Dataset field a View column materializes. A
+// View indexes exactly one Dataset, so a dataset column is named after the
+// field it reads: column_name and origin_id both hold the bare field name.
+// Metadata stores an unspecified origin type as a dataset column.
+func viewColumnField(column *pb.ViewColumn) string {
 	if column == nil {
 		return ""
 	}
-	origin := column.GetOriginId()
-	prefix := datasetID + "."
-	if strings.HasPrefix(origin, prefix) {
-		return strings.TrimPrefix(origin, prefix)
+	switch column.GetOriginType() {
+	case pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION:
+		return ""
 	}
-	if idx := strings.LastIndexByte(origin, '.'); idx >= 0 && idx+1 < len(origin) {
-		return origin[idx+1:]
-	}
-	return ""
+	return strings.TrimSpace(column.GetOriginId())
 }
 
-func viewColumnDataset(column *pb.ViewColumn) string {
-	if column == nil {
-		return ""
+// viewColumnFields lists each distinct Dataset field of the columns in order.
+func viewColumnFields(columns []*pb.ViewColumn) []string {
+	seen := make(map[string]struct{}, len(columns))
+	fields := make([]string, 0, len(columns))
+	for _, column := range columns {
+		field := viewColumnField(column)
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		fields = append(fields, field)
 	}
-	origin := column.GetOriginId()
-	if idx := strings.LastIndexByte(origin, '.'); idx > 0 {
-		return origin[:idx]
-	}
-	return ""
+	return fields
 }

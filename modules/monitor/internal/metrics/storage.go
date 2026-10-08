@@ -331,11 +331,10 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 	if !end.IsZero() {
 		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
 	}
-	columnPrefix := a.cfg.DatasetID + "."
 	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 		AuthInfo: a.auth, SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID,
 		Selectors: keys, TimeRange: tr, Order: order,
-		ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"},
+		ColumnNames: []string{"value", "labels_json", "message_id"},
 		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
 	}, client.WithFilter(trpcretry.ReadOnly()))
 	if err != nil {
@@ -354,7 +353,7 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 			p.ObservedAt = t
 		}
 		for _, field := range row.GetFields() {
-			switch strings.TrimPrefix(field.GetFieldId(), columnPrefix) {
+			switch field.GetFieldId() {
 			case "value":
 				p.Value = field.GetValue().GetDoubleValue()
 			case "labels_json":

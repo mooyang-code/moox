@@ -38,10 +38,10 @@ func TestHashViewIndexSchemaChangesWithColumnType(t *testing.T) {
 }
 
 func TestIsAppendOnlyViewColumnsRejectsRemovalAndTypeChange(t *testing.T) {
-	active := []*pb.ViewColumn{{ColumnName: "dataset_factor.close", OriginId: "dataset_factor.close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	active := []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	added := []*pb.ViewColumn{
 		active[0],
-		{ColumnName: "dataset_factor.bias", OriginId: "dataset_factor.bias", SortOrder: 1, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "bias", OriginId: "bias", SortOrder: 1, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}
 	if !IsAppendOnlyViewColumns(active, added) {
 		t.Fatal("new trailing column was not recognized as append-only")
@@ -50,7 +50,7 @@ func TestIsAppendOnlyViewColumnsRejectsRemovalAndTypeChange(t *testing.T) {
 		t.Fatal("column removal was recognized as append-only")
 	}
 	changedType := []*pb.ViewColumn{
-		{ColumnName: "dataset_factor.close", OriginId: "dataset_factor.close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+		{ColumnName: "close", OriginId: "close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		added[1],
 	}
 	if IsAppendOnlyViewColumns(active, changedType) {

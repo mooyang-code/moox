@@ -750,7 +750,7 @@ func (p *collectorSCFCanaryProof) readPrimaryRow(ctx context.Context) (bool, err
 func (p *collectorSCFCanaryProof) readViewRow(ctx context.Context) (bool, bool, error) {
 	tag := p.entry.GetSeriesTag()
 	key := p.timeSeriesKey()
-	columns := collectorCanaryViewColumns(p.entry.GetDatasetId(), p.entry.GetOutputFields())
+	columns := collectorCanaryReadFields(p.entry.GetOutputFields())
 	rsp, err := p.access.view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
 		AuthInfo: p.access.viewAuth, SpaceId: p.entry.GetSpaceId(), ViewId: p.entry.GetViewId(),
 		Selectors: []*storagepb.TimeSeriesSelector{{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: &tag}},
@@ -823,17 +823,6 @@ func collectorCanaryExactRows(rows []*storagepb.TimeSeriesRow, expected *storage
 		}
 	}
 	return true, nil
-}
-
-// collectorCanaryViewColumns names the task-owned View columns, which the
-// task result qualifies by the source Dataset ("<dataset_id>.<field>").
-func collectorCanaryViewColumns(datasetID string, fields []string) []string {
-	fields = collectorCanaryReadFields(fields)
-	columns := make([]string, 0, len(fields))
-	for _, field := range fields {
-		columns = append(columns, datasetID+"."+field)
-	}
-	return columns
 }
 
 func collectorCanaryReadFields(fields []string) []string {

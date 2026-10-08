@@ -876,11 +876,8 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 			activeColumns[column.GetColumnName()] = viewColumnShapeOf(column)
 		}
 	}
-	type requestedField struct {
-		source string
-		target string
-	}
-	byDataset := make(map[string][]requestedField)
+	datasetID := strings.TrimSpace(nextSchema.PrimaryDatasetID)
+	var changed []*pb.ViewColumn
 	for _, column := range nextSchema.Columns {
 		if column == nil {
 			continue
@@ -888,91 +885,83 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 		if active, exists := activeColumns[column.GetColumnName()]; exists && active.equal(viewColumnShapeOf(column)) {
 			continue
 		}
-		datasetID := viewColumnDataset(column)
-		owned := strings.TrimSpace(nextSchema.PrimaryDatasetID)
-		if owned != "" && datasetID != owned {
-			continue
-		}
-		source := viewColumnSource(column, datasetID)
-		if datasetID != "" && source != "" {
-			byDataset[datasetID] = append(byDataset[datasetID], requestedField{source: source, target: column.GetColumnName()})
+		changed = append(changed, column)
+	}
+	fieldIDs := viewColumnFields(changed)
+	if datasetID == "" || len(fieldIDs) == 0 {
+		return nil
+	}
+	fields := make(map[string]struct{}, len(fieldIDs))
+	for _, fieldID := range fieldIDs {
+		fields[fieldID] = struct{}{}
+	}
+	s.mu.RLock()
+	auth := s.primaryAuth
+	if auth != nil {
+		auth = proto.Clone(auth).(*pb.AuthInfo)
+	}
+	s.mu.RUnlock()
+	if auth == nil {
+		return errors.New("primary auth is not configured")
+	}
+	// Primary bounds a read request at 100,000 key-field pairs. Keep
+	// enrichment below that limit even for wide Views and large rebuild
+	// pages instead of failing the whole build.
+	chunkSize := len(writes)
+	if chunkSize > 100000/len(fieldIDs) {
+		chunkSize = 100000 / len(fieldIDs)
+		if chunkSize == 0 {
+			chunkSize = 1
 		}
 	}
-	for datasetID, fields := range byDataset {
-		fieldIDs := make([]string, 0, len(fields))
-		targets := make(map[string]string, len(fields))
-		for _, field := range fields {
-			fieldIDs = append(fieldIDs, field.source)
-			targets[field.source] = field.target
+	// The key-field limit is not a latency budget. A 100k-pair request
+	// can still exceed the PrimaryStore RPC deadline on a busy Pebble
+	// host, causing the whole A/B build to self-cancel. Keep individual
+	// point-read chunks small; the outer history page remains 10k keys.
+	if chunkSize > 512 {
+		chunkSize = 512
+	}
+	for chunkStart := 0; chunkStart < len(writes); chunkStart += chunkSize {
+		chunkEnd := chunkStart + chunkSize
+		if chunkEnd > len(writes) {
+			chunkEnd = len(writes)
 		}
-		s.mu.RLock()
-		auth := s.primaryAuth
-		if auth != nil {
-			auth = proto.Clone(auth).(*pb.AuthInfo)
+		keys := make([]*pb.RowKey, 0, chunkEnd-chunkStart)
+		positions := make(map[string]int, chunkEnd-chunkStart)
+		for index := chunkStart; index < chunkEnd; index++ {
+			key := proto.Clone(writes[index].Key.Key).(*pb.RowKey)
+			key.DatasetId = datasetID
+			keys = append(keys, key)
+			positions[viewindex.RowKeyID(key)] = index
 		}
-		s.mu.RUnlock()
-		if auth == nil {
-			return errors.New("primary auth is not configured")
+		if err := limiter.wait(ctx); err != nil {
+			return err
 		}
-		// Primary bounds a read request at 100,000 key-field pairs. Keep
-		// enrichment below that limit even for wide Views and large rebuild
-		// pages instead of failing the whole build.
-		chunkSize := len(writes)
-		if len(fieldIDs) > 0 && chunkSize > 100000/len(fieldIDs) {
-			chunkSize = 100000 / len(fieldIDs)
-			if chunkSize == 0 {
-				chunkSize = 1
-			}
+		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs, AttributeKeys: factorAttributeKeys(nextSchema.Columns)})
+		if err != nil {
+			return err
 		}
-		// The key-field limit is not a latency budget. A 100k-pair request
-		// can still exceed the PrimaryStore RPC deadline on a busy Pebble
-		// host, causing the whole A/B build to self-cancel. Keep individual
-		// point-read chunks small; the outer history page remains 10k keys.
-		if chunkSize > 512 {
-			chunkSize = 512
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return err
 		}
-		for chunkStart := 0; chunkStart < len(writes); chunkStart += chunkSize {
-			chunkEnd := chunkStart + chunkSize
-			if chunkEnd > len(writes) {
-				chunkEnd = len(writes)
+		for _, row := range rsp.GetRows() {
+			position, ok := positions[viewindex.RowKeyID(row.GetKey())]
+			if !ok {
+				continue
 			}
-			keys := make([]*pb.RowKey, 0, chunkEnd-chunkStart)
-			positions := make(map[string]int, chunkEnd-chunkStart)
-			for index := chunkStart; index < chunkEnd; index++ {
-				key := proto.Clone(writes[index].Key.Key).(*pb.RowKey)
-				key.DatasetId = datasetID
-				keys = append(keys, key)
-				positions[viewindex.RowKeyID(key)] = index
-			}
-			if err := limiter.wait(ctx); err != nil {
-				return err
-			}
-			rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs, AttributeKeys: factorAttributeKeys(nextSchema.Columns, datasetID)})
-			if err != nil {
-				return err
-			}
-			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return err
-			}
-			for _, row := range rsp.GetRows() {
-				position, ok := positions[viewindex.RowKeyID(row.GetKey())]
-				if !ok {
-					continue
+			if len(row.GetAttributes()) > 0 {
+				if writes[position].Attributes == nil {
+					writes[position].Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
 				}
-				if len(row.GetAttributes()) > 0 {
-					if writes[position].Attributes == nil {
-						writes[position].Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
-					}
-					for name, value := range row.GetAttributes() {
-						if value != nil {
-							writes[position].Attributes[name] = value
-						}
+				for name, value := range row.GetAttributes() {
+					if value != nil {
+						writes[position].Attributes[name] = value
 					}
 				}
-				for _, field := range row.GetFields() {
-					if target := targets[field.GetFieldId()]; target != "" {
-						writes[position].Fields = append(writes[position].Fields, &pb.FieldValue{FieldId: target, Value: field.GetValue()})
-					}
+			}
+			for _, field := range row.GetFields() {
+				if _, ok := fields[field.GetFieldId()]; ok {
+					writes[position].Fields = append(writes[position].Fields, &pb.FieldValue{FieldId: field.GetFieldId(), Value: field.GetValue()})
 				}
 			}
 		}

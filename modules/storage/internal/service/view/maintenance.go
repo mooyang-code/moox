@@ -1708,7 +1708,7 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 			columns = append(columns, &pb.ViewColumn{
 				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
 				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-				OriginId:   view.GetDatasetId() + "." + column.GetColumnName(),
+				OriginId:   column.GetColumnName(),
 				ValueType:  column.GetValueType(),
 			})
 		}

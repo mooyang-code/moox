@@ -139,9 +139,9 @@ func (s *Service) factorResultViewColumns(ctx context.Context, dataset *pb.Datas
 				continue
 			}
 			columns = append(columns, &pb.ViewColumn{
-				SpaceId: dataset.GetSpaceId(), ViewId: viewID, ColumnName: dataset.GetDatasetId() + "." + item.GetColumnName(),
+				SpaceId: dataset.GetSpaceId(), ViewId: viewID, ColumnName: item.GetColumnName(),
 				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-				OriginId:   dataset.GetDatasetId() + "." + item.GetColumnName(), ValueType: item.GetValueType(),
+				OriginId:   item.GetColumnName(), ValueType: item.GetValueType(),
 				SortOrder: uint32(len(columns)), Attributes: cloneStringMap(item.GetAttributes()),
 			})
 		}

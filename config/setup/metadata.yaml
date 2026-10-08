@@ -2309,690 +2309,690 @@ views:
 view_columns:
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.open
+  column_name: open
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.open
+  origin_id: open
   value_type: double
   sort_order: 10
   attributes:
     display_name: 开盘价
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.high
+  column_name: high
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.high
+  origin_id: high
   value_type: double
   sort_order: 20
   attributes:
     display_name: 最高价
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.low
+  column_name: low
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.low
+  origin_id: low
   value_type: double
   sort_order: 30
   attributes:
     display_name: 最低价
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.close
+  column_name: close
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.close
+  origin_id: close
   value_type: double
   sort_order: 40
   attributes:
     display_name: 收盘价
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.volume
+  column_name: volume
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.volume
+  origin_id: volume
   value_type: double
   sort_order: 50
   attributes:
     display_name: 成交量
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.amount
+  column_name: amount
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.amount
+  origin_id: amount
   value_type: double
   sort_order: 60
   attributes:
     display_name: 成交额
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.instrument_name
+  column_name: instrument_name
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.instrument_name
+  origin_id: instrument_name
   value_type: string
   sort_order: 65
   attributes:
     display_name: 证券名
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.provider_id
+  column_name: provider_id
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.provider_id
+  origin_id: provider_id
   value_type: string
   sort_order: 70
   attributes:
     display_name: 提供方
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.source_id
+  column_name: source_id
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.source_id
+  origin_id: source_id
   value_type: string
   sort_order: 80
   attributes:
     display_name: 来源通道
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
-  column_name: dataset_stockcn_equity_kline.provider_symbol
+  column_name: provider_symbol
   origin_type: dataset_column
-  origin_id: dataset_stockcn_equity_kline.provider_symbol
+  origin_id: provider_symbol
   value_type: string
   sort_order: 90
   attributes:
     display_name: 来源标的
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.open
+  column_name: open
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.open
+  origin_id: open
   value_type: double
   sort_order: 10
   attributes:
     display_name: 开盘价
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.high
+  column_name: high
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.high
+  origin_id: high
   value_type: double
   sort_order: 20
   attributes:
     display_name: 最高价
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.low
+  column_name: low
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.low
+  origin_id: low
   value_type: double
   sort_order: 30
   attributes:
     display_name: 最低价
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.close
+  column_name: close
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.close
+  origin_id: close
   value_type: double
   sort_order: 40
   attributes:
     display_name: 收盘价
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.volume
+  column_name: volume
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.volume
+  origin_id: volume
   value_type: double
   sort_order: 50
   attributes:
     display_name: 成交量
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.amount
+  column_name: amount
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.amount
+  origin_id: amount
   value_type: double
   sort_order: 60
   attributes:
     display_name: 成交额
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.provider_id
+  column_name: provider_id
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.provider_id
+  origin_id: provider_id
   value_type: string
   sort_order: 70
   attributes:
     display_name: 提供方
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.source_id
+  column_name: source_id
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.source_id
+  origin_id: source_id
   value_type: string
   sort_order: 80
   attributes:
     display_name: 来源通道
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
-  column_name: dataset_stockcn_index_kline.provider_symbol
+  column_name: provider_symbol
   origin_type: dataset_column
-  origin_id: dataset_stockcn_index_kline.provider_symbol
+  origin_id: provider_symbol
   value_type: string
   sort_order: 90
   attributes:
     display_name: 来源标的
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.open
+  column_name: open
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.open
+  origin_id: open
   value_type: double
   sort_order: 10
   attributes:
     display_name: 开盘价
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.high
+  column_name: high
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.high
+  origin_id: high
   value_type: double
   sort_order: 20
   attributes:
     display_name: 最高价
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.low
+  column_name: low
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.low
+  origin_id: low
   value_type: double
   sort_order: 30
   attributes:
     display_name: 最低价
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.close
+  column_name: close
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.close
+  origin_id: close
   value_type: double
   sort_order: 40
   attributes:
     display_name: 收盘价
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.volume
+  column_name: volume
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.volume
+  origin_id: volume
   value_type: double
   sort_order: 50
   attributes:
     display_name: 成交量
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.amount
+  column_name: amount
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.amount
+  origin_id: amount
   value_type: double
   sort_order: 60
   attributes:
     display_name: 成交额
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.provider_id
+  column_name: provider_id
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.provider_id
+  origin_id: provider_id
   value_type: string
   sort_order: 70
   attributes:
     display_name: 提供方
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.source_id
+  column_name: source_id
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.source_id
+  origin_id: source_id
   value_type: string
   sort_order: 80
   attributes:
     display_name: 来源通道
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
-  column_name: dataset_stockcn_bond_kline.provider_symbol
+  column_name: provider_symbol
   origin_type: dataset_column
-  origin_id: dataset_stockcn_bond_kline.provider_symbol
+  origin_id: provider_symbol
   value_type: string
   sort_order: 90
   attributes:
     display_name: 来源标的
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
-  column_name: dataset_stockhk_equity_kline.open
+  column_name: open
   origin_type: dataset_column
-  origin_id: dataset_stockhk_equity_kline.open
+  origin_id: open
   value_type: double
   sort_order: 10
   attributes:
     display_name: 开盘价
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
-  column_name: dataset_stockhk_equity_kline.high
+  column_name: high
   origin_type: dataset_column
-  origin_id: dataset_stockhk_equity_kline.high
+  origin_id: high
   value_type: double
   sort_order: 20
   attributes:
     display_name: 最高价
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
-  column_name: dataset_stockhk_equity_kline.low
+  column_name: low
   origin_type: dataset_column
-  origin_id: dataset_stockhk_equity_kline.low
+  origin_id: low
   value_type: double
   sort_order: 30
   attributes:
     display_name: 最低价
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
-  column_name: dataset_stockhk_equity_kline.close
+  column_name: close
   origin_type: dataset_column
-  origin_id: dataset_stockhk_equity_kline.close
+  origin_id: close
   value_type: double
   sort_order: 40
   attributes:
     display_name: 收盘价
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
-  column_name: dataset_stockhk_equity_kline.volume
+  column_name: volume
   origin_type: dataset_column
-  origin_id: dataset_stockhk_equity_kline.volume
+  origin_id: volume
   value_type: double
   sort_order: 50
   attributes:
     display_name: 成交量
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
-  column_name: dataset_stockhk_equity_kline.amount
+  column_name: amount
   origin_type: dataset_column
-  origin_id: dataset_stockhk_equity_kline.amount
+  origin_id: amount
   value_type: double
   sort_order: 60
   attributes:
     display_name: 成交额
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
-  column_name: dataset_stockus_equity_kline.open
+  column_name: open
   origin_type: dataset_column
-  origin_id: dataset_stockus_equity_kline.open
+  origin_id: open
   value_type: double
   sort_order: 10
   attributes:
     display_name: 开盘价
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
-  column_name: dataset_stockus_equity_kline.high
+  column_name: high
   origin_type: dataset_column
-  origin_id: dataset_stockus_equity_kline.high
+  origin_id: high
   value_type: double
   sort_order: 20
   attributes:
     display_name: 最高价
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
-  column_name: dataset_stockus_equity_kline.low
+  column_name: low
   origin_type: dataset_column
-  origin_id: dataset_stockus_equity_kline.low
+  origin_id: low
   value_type: double
   sort_order: 30
   attributes:
     display_name: 最低价
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
-  column_name: dataset_stockus_equity_kline.close
+  column_name: close
   origin_type: dataset_column
-  origin_id: dataset_stockus_equity_kline.close
+  origin_id: close
   value_type: double
   sort_order: 40
   attributes:
     display_name: 收盘价
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
-  column_name: dataset_stockus_equity_kline.volume
+  column_name: volume
   origin_type: dataset_column
-  origin_id: dataset_stockus_equity_kline.volume
+  origin_id: volume
   value_type: double
   sort_order: 50
   attributes:
     display_name: 成交量
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
-  column_name: dataset_stockus_equity_kline.amount
+  column_name: amount
   origin_type: dataset_column
-  origin_id: dataset_stockus_equity_kline.amount
+  origin_id: amount
   value_type: double
   sort_order: 60
   attributes:
     display_name: 成交额
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.agent_id
+  column_name: agent_id
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.agent_id
+  origin_id: agent_id
   value_type: string
   sort_order: 10
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.logical_cores
+  column_name: logical_cores
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.logical_cores
+  origin_id: logical_cores
   value_type: int
   sort_order: 20
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.cpu_usage_percent
+  column_name: cpu_usage_percent
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.cpu_usage_percent
+  origin_id: cpu_usage_percent
   value_type: double
   sort_order: 30
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.cpu_usage_available
+  column_name: cpu_usage_available
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.cpu_usage_available
+  origin_id: cpu_usage_available
   value_type: bool
   sort_order: 40
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.memory_total_bytes
+  column_name: memory_total_bytes
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.memory_total_bytes
+  origin_id: memory_total_bytes
   value_type: int
   sort_order: 50
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.memory_used_bytes
+  column_name: memory_used_bytes
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.memory_used_bytes
+  origin_id: memory_used_bytes
   value_type: int
   sort_order: 60
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.memory_available_bytes
+  column_name: memory_available_bytes
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.memory_available_bytes
+  origin_id: memory_available_bytes
   value_type: int
   sort_order: 70
 - space_id: mooxsys
   view_id: view_mooxsys_host_resource
-  column_name: dataset_mooxsys_host_resource.memory_usage_percent
+  column_name: memory_usage_percent
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_resource.memory_usage_percent
+  origin_id: memory_usage_percent
   value_type: double
   sort_order: 80
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.device
+  column_name: device
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.device
+  origin_id: device
   value_type: string
   sort_order: 10
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.mountpoint
+  column_name: mountpoint
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.mountpoint
+  origin_id: mountpoint
   value_type: string
   sort_order: 20
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.fs_type
+  column_name: fs_type
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.fs_type
+  origin_id: fs_type
   value_type: string
   sort_order: 30
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.total_bytes
+  column_name: total_bytes
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.total_bytes
+  origin_id: total_bytes
   value_type: int
   sort_order: 40
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.used_bytes
+  column_name: used_bytes
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.used_bytes
+  origin_id: used_bytes
   value_type: int
   sort_order: 50
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.available_bytes
+  column_name: available_bytes
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.available_bytes
+  origin_id: available_bytes
   value_type: int
   sort_order: 60
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.usage_percent
+  column_name: usage_percent
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.usage_percent
+  origin_id: usage_percent
   value_type: double
   sort_order: 70
 - space_id: mooxsys
   view_id: view_mooxsys_host_fs
-  column_name: dataset_mooxsys_host_filesystem.read_only
+  column_name: read_only
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_filesystem.read_only
+  origin_id: read_only
   value_type: bool
   sort_order: 80
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.device
+  column_name: device
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.device
+  origin_id: device
   value_type: string
   sort_order: 10
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.read_bytes_total
+  column_name: read_bytes_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.read_bytes_total
+  origin_id: read_bytes_total
   value_type: int
   sort_order: 20
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.write_bytes_total
+  column_name: write_bytes_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.write_bytes_total
+  origin_id: write_bytes_total
   value_type: int
   sort_order: 30
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.read_ops_total
+  column_name: read_ops_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.read_ops_total
+  origin_id: read_ops_total
   value_type: int
   sort_order: 40
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.write_ops_total
+  column_name: write_ops_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.write_ops_total
+  origin_id: write_ops_total
   value_type: int
   sort_order: 50
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.io_time_ms_total
+  column_name: io_time_ms_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.io_time_ms_total
+  origin_id: io_time_ms_total
   value_type: int
   sort_order: 60
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.read_bytes_per_second
+  column_name: read_bytes_per_second
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.read_bytes_per_second
+  origin_id: read_bytes_per_second
   value_type: double
   sort_order: 70
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.write_bytes_per_second
+  column_name: write_bytes_per_second
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.write_bytes_per_second
+  origin_id: write_bytes_per_second
   value_type: double
   sort_order: 80
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.read_iops
+  column_name: read_iops
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.read_iops
+  origin_id: read_iops
   value_type: double
   sort_order: 90
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.write_iops
+  column_name: write_iops
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.write_iops
+  origin_id: write_iops
   value_type: double
   sort_order: 100
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.utilization_percent
+  column_name: utilization_percent
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.utilization_percent
+  origin_id: utilization_percent
   value_type: double
   sort_order: 110
 - space_id: mooxsys
   view_id: view_mooxsys_host_disk
-  column_name: dataset_mooxsys_host_disk.rate_available
+  column_name: rate_available
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_disk.rate_available
+  origin_id: rate_available
   value_type: bool
   sort_order: 120
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.device
+  column_name: device
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.device
+  origin_id: device
   value_type: string
   sort_order: 10
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.operstate
+  column_name: operstate
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.operstate
+  origin_id: operstate
   value_type: string
   sort_order: 20
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.receive_bytes_total
+  column_name: receive_bytes_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.receive_bytes_total
+  origin_id: receive_bytes_total
   value_type: int
   sort_order: 30
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.transmit_bytes_total
+  column_name: transmit_bytes_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.transmit_bytes_total
+  origin_id: transmit_bytes_total
   value_type: int
   sort_order: 40
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.receive_errors_total
+  column_name: receive_errors_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.receive_errors_total
+  origin_id: receive_errors_total
   value_type: int
   sort_order: 50
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.transmit_errors_total
+  column_name: transmit_errors_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.transmit_errors_total
+  origin_id: transmit_errors_total
   value_type: int
   sort_order: 60
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.receive_dropped_total
+  column_name: receive_dropped_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.receive_dropped_total
+  origin_id: receive_dropped_total
   value_type: int
   sort_order: 70
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.transmit_dropped_total
+  column_name: transmit_dropped_total
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.transmit_dropped_total
+  origin_id: transmit_dropped_total
   value_type: int
   sort_order: 80
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.receive_bytes_per_second
+  column_name: receive_bytes_per_second
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.receive_bytes_per_second
+  origin_id: receive_bytes_per_second
   value_type: double
   sort_order: 90
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.transmit_bytes_per_second
+  column_name: transmit_bytes_per_second
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.transmit_bytes_per_second
+  origin_id: transmit_bytes_per_second
   value_type: double
   sort_order: 100
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.receive_errors_per_second
+  column_name: receive_errors_per_second
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.receive_errors_per_second
+  origin_id: receive_errors_per_second
   value_type: double
   sort_order: 110
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.transmit_errors_per_second
+  column_name: transmit_errors_per_second
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.transmit_errors_per_second
+  origin_id: transmit_errors_per_second
   value_type: double
   sort_order: 120
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.rate_available
+  column_name: rate_available
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.rate_available
+  origin_id: rate_available
   value_type: bool
   sort_order: 130
 - space_id: mooxsys
   view_id: view_mooxsys_host_net
-  column_name: dataset_mooxsys_host_network.error_rate_available
+  column_name: error_rate_available
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_host_network.error_rate_available
+  origin_id: error_rate_available
   value_type: bool
   sort_order: 140
 - space_id: mooxsys
   view_id: view_mooxsys_service_metrics
-  column_name: dataset_mooxsys_service_metrics.value
+  column_name: value
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_service_metrics.value
+  origin_id: value
   value_type: double
   sort_order: 10
 - space_id: mooxsys
   view_id: view_mooxsys_service_metrics
-  column_name: dataset_mooxsys_service_metrics.labels_json
+  column_name: labels_json
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_service_metrics.labels_json
+  origin_id: labels_json
   value_type: json
   sort_order: 20
 - space_id: mooxsys
   view_id: view_mooxsys_service_metrics
-  column_name: dataset_mooxsys_service_metrics.producer_node_id
+  column_name: producer_node_id
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_service_metrics.producer_node_id
+  origin_id: producer_node_id
   value_type: string
   sort_order: 30
 - space_id: mooxsys
   view_id: view_mooxsys_service_metrics
-  column_name: dataset_mooxsys_service_metrics.producer_version
+  column_name: producer_version
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_service_metrics.producer_version
+  origin_id: producer_version
   value_type: string
   sort_order: 40
 - space_id: mooxsys
   view_id: view_mooxsys_service_metrics
-  column_name: dataset_mooxsys_service_metrics.message_id
+  column_name: message_id
   origin_type: dataset_column
-  origin_id: dataset_mooxsys_service_metrics.message_id
+  origin_id: message_id
   value_type: string
   sort_order: 50

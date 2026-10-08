@@ -656,19 +656,12 @@ const klineColumnNames = computed(() => {
   const names = preferredColumnNames.value;
   const out: string[] = [];
   for (const basename of KLINE_COLUMN_BASENAMES) {
-    const matched = names.find(name => name === basename || name.endsWith(`.${basename}`));
-    if (matched) out.push(matched);
+    if (names.includes(basename)) out.push(basename);
   }
   return out;
 });
 const columnLabels = computed(() => {
-  const labels = buildViewColumnLabels(
-    viewColumns.value,
-    datasetColumns.value,
-    fields.value,
-    datasets.value,
-    activeView.value
-  );
+  const labels = buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, activeView.value);
   for (const column of datasetColumns.value) {
     if (!column.column_name || labels[column.column_name]) continue;
     labels[column.column_name] = column.attributes?.display_name?.trim() || column.column_name;

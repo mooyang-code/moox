@@ -32,12 +32,12 @@ func TestFactorResultColumnAddDoesNotRebuild(t *testing.T) {
 	const viewID = "view_factor_btc_1m"
 	const indexID = "factor-view-a"
 	closeColumn := &pb.ViewColumn{
-		SpaceId: "space", ViewId: viewID, ColumnName: datasetID + ".close", OriginId: datasetID + ".close",
+		SpaceId: "space", ViewId: viewID, ColumnName: "close", OriginId: "close",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 	}
 	biasColumn := &pb.ViewColumn{
-		SpaceId: "space", ViewId: viewID, ColumnName: datasetID + ".bias_20", OriginId: datasetID + ".bias_20",
+		SpaceId: "space", ViewId: viewID, ColumnName: "bias_20", OriginId: "bias_20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
 	}
@@ -131,12 +131,12 @@ func TestRestoreRecoversFactorResultSchemaExtensionAfterRestart(t *testing.T) {
 	const viewID = "view_factor_btc_1m"
 	const indexID = "factor-view-a"
 	closeColumn := &pb.ViewColumn{
-		SpaceId: "space", ViewId: viewID, ColumnName: datasetID + ".close", OriginId: datasetID + ".close",
+		SpaceId: "space", ViewId: viewID, ColumnName: "close", OriginId: "close",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 	}
 	biasColumn := &pb.ViewColumn{
-		SpaceId: "space", ViewId: viewID, ColumnName: datasetID + ".bias_20", OriginId: datasetID + ".bias_20",
+		SpaceId: "space", ViewId: viewID, ColumnName: "bias_20", OriginId: "bias_20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
 	}
@@ -225,7 +225,7 @@ func TestRestoreRecoversFactorResultSchemaExtensionAfterRestart(t *testing.T) {
 	}
 
 	volumeColumn := &pb.ViewColumn{
-		SpaceId: "space", ViewId: viewID, ColumnName: datasetID + ".volume", OriginId: datasetID + ".volume",
+		SpaceId: "space", ViewId: viewID, ColumnName: "volume", OriginId: "volume",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2,
 	}

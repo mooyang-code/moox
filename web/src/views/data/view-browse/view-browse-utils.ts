@@ -123,34 +123,34 @@ export function viewModeFromPrimaryDataset(
   return isTimeSeriesDataKind(dataset.data_kind) ? "time_series" : "record";
 }
 
+// A View indexes one Dataset and names each dataset column after the Dataset
+// column it reads, so origin_id is the bare column name of view.dataset_id.
 export function buildViewColumnLabels(
   viewColumns: ViewColumn[],
   datasetColumns: DatasetColumn[],
   fields: Field[],
-  datasets: Array<Pick<Dataset, "dataset_id" | "name">> = [],
   view?: Pick<View, "dataset_id"> | null
 ) {
   const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields);
-  const datasetColumnByQualifiedName = new Map<string, DatasetColumn>();
+  const datasetId = view?.dataset_id || "";
+  const datasetColumnByName = new Map<string, DatasetColumn>();
   for (const column of datasetColumns) {
-    if (!column.dataset_id || !column.column_name) continue;
-    datasetColumnByQualifiedName.set(`${column.dataset_id}.${column.column_name}`, column);
+    if (!column.column_name || (datasetId && column.dataset_id && column.dataset_id !== datasetId)) continue;
+    datasetColumnByName.set(column.column_name, column);
   }
-  const showDatasetName = viewDatasetCount(view) > 1;
 
   const labels: Record<string, string> = {};
   for (const column of viewColumns) {
     if (!column.column_name) continue;
-    const fromDataset = datasetColumnByQualifiedName.get(column.origin_id);
+    const fromDataset = datasetColumnByName.get(column.origin_id);
     if (fromDataset) {
-      const label =
+      labels[column.column_name] =
         factorOutputName(column.attributes) ||
         factorOutputName(fromDataset.attributes) ||
         displayName(column.attributes) ||
         datasetColumnLabels[qualifiedDatasetColumnName(fromDataset)] ||
         datasetColumnLabels[fromDataset.column_name] ||
         readableViewColumnLabel(column.column_name);
-      labels[column.column_name] = showDatasetName ? appendDatasetName(label, fromDataset.dataset_id, datasets) : label;
       continue;
     }
     labels[column.column_name] =
@@ -268,16 +268,6 @@ export function exactSeriesTagFromFilters(filters: ViewFilterState[]) {
 
 function readableViewColumnLabel(columnName: string) {
   return systemViewLabels[columnName] || columnName;
-}
-
-function viewDatasetCount(view?: Pick<View, "dataset_id"> | null) {
-  if (!view?.dataset_id) return 0;
-  return 1;
-}
-
-function appendDatasetName(label: string, datasetId: string, datasets: Array<Pick<Dataset, "dataset_id" | "name">>) {
-  const dataset = datasets.find(item => item.dataset_id === datasetId);
-  return `${label}（${dataset?.name || datasetId}）`;
 }
 
 function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field[]) {
@@ -416,10 +406,7 @@ function klineFieldValue(values: Record<string, string>, fieldName: "open" | "hi
     if (exact !== undefined) return exact;
 
     const lowerAlias = alias.toLowerCase();
-    const entry = Object.entries(values).find(([name]) => {
-      const lowerName = name.toLowerCase();
-      return lowerName === lowerAlias || lowerName.endsWith(`.${lowerAlias}`);
-    });
+    const entry = Object.entries(values).find(([name]) => name.toLowerCase() === lowerAlias);
     if (entry) return entry[1];
   }
   return undefined;

@@ -43,7 +43,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	current := viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
 		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
-			ColumnName: "dataset_factor_btc_1m.close", OriginId: "dataset_factor_btc_1m.close",
+			ColumnName: "close", OriginId: "close",
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}},
@@ -57,7 +57,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		ViewRevision: 1, ViewSchemaHash: current.SchemaHash, WriteMode: viewindex.LiveWrite,
 		RowWrites: []viewindex.RowWrite{{
 			Key: viewindex.RowKey{Key: rowKey},
-			Fields: []*pb.FieldValue{{FieldId: "dataset_factor_btc_1m.close", Value: &pb.TypedValue{
+			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{
 				Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.25},
 			}}},
 		}},
@@ -65,7 +65,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v2 := proto.Clone(&pb.ViewColumn{ColumnName: "dataset_factor_btc_1m.bias_20", OriginId: "dataset_factor_btc_1m.bias_20",
+	v2 := proto.Clone(&pb.ViewColumn{ColumnName: "bias_20", OriginId: "bias_20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1}).(*pb.ViewColumn)
 	v2.SpaceId, v2.ViewId = current.SpaceID, current.ViewID
 	version2 := viewindex.ViewIndexSchema{
@@ -88,7 +88,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = manager.Close() }()
-	v3 := proto.Clone(&pb.ViewColumn{ColumnName: "dataset_factor_btc_1m.volume", OriginId: "dataset_factor_btc_1m.volume",
+	v3 := proto.Clone(&pb.ViewColumn{ColumnName: "volume", OriginId: "volume",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2}).(*pb.ViewColumn)
 	v3.SpaceId, v3.ViewId = current.SpaceID, current.ViewID
 	version3 := viewindex.ViewIndexSchema{
@@ -110,7 +110,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	}
 	rows, _, err := manager.Query(ctx, "factor-view-a", viewindex.QuerySpec{
 		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.PrimaryDatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
-		Includes:  []string{"dataset_factor_btc_1m.bias_20", "dataset_factor_btc_1m.volume"},
+		Includes:  []string{"bias_20", "volume"},
 	})
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 2 {
 		t.Fatalf("query extended row = %v err=%v", rows, err)
@@ -132,7 +132,7 @@ func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
 	current := viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
 		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
-			ColumnName: "dataset_factor_btc_1m.close", OriginId: "dataset_factor_btc_1m.close",
+			ColumnName: "close", OriginId: "close",
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}},
@@ -142,8 +142,8 @@ func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	bias := &pb.ViewColumn{
-		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "dataset_factor_btc_1m.bias_20",
-		OriginId: "dataset_factor_btc_1m.bias_20", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "bias_20",
+		OriginId: "bias_20", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
 	}
 	intermediate := viewindex.ViewIndexSchema{
@@ -162,8 +162,8 @@ func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	volume := &pb.ViewColumn{
-		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "dataset_factor_btc_1m.volume",
-		OriginId: "dataset_factor_btc_1m.volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "volume",
+		OriginId: "volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2,
 	}
 	target := viewindex.ViewIndexSchema{

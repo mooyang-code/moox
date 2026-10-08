@@ -14,7 +14,7 @@ import (
 )
 
 func TestFullSeriesWindowRejectsUnrepresentableSchema(t *testing.T) {
-	valid := &pb.ViewColumn{ColumnName: "bars.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}
+	valid := &pb.ViewColumn{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}
 	for _, columns := range [][]*pb.ViewColumn{
 		{{ColumnName: "bad-name", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 		{{ColumnName: "unknown", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED}},

@@ -186,8 +186,8 @@ func TestEnsureOutputFieldsReplacesExplicitViewProjection(t *testing.T) {
 		SpaceId: "crypto", ViewId: ids.ViewID, Name: "任务结果", DatasetId: ids.DatasetID, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection", "moox.columns_explicit": "true"},
 		Columns: []*storagepb.ViewColumn{
-			{ColumnName: ids.DatasetID + ".close", OriginId: ids.DatasetID + ".close"},
-			{ColumnName: ids.DatasetID + ".provider_id", OriginId: ids.DatasetID + ".provider_id"},
+			{ColumnName: "close", OriginId: "close"},
+			{ColumnName: "provider_id", OriginId: "provider_id"},
 		},
 	}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
@@ -195,8 +195,8 @@ func TestEnsureOutputFieldsReplacesExplicitViewProjection(t *testing.T) {
 
 	got := fake.views[ids.ViewID].GetColumns()
 	require.Len(t, got, 2)
-	require.Equal(t, ids.DatasetID+".close", got[0].GetColumnName())
-	require.Equal(t, ids.DatasetID+".open", got[1].GetColumnName())
+	require.Equal(t, "close", got[0].GetColumnName())
+	require.Equal(t, "open", got[1].GetColumnName())
 	for _, column := range got {
 		require.NotContains(t, column.GetColumnName(), "provider_id")
 	}

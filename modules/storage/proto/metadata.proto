@@ -118,11 +118,11 @@ message ViewColumn {
   string space_id = 1;
   // view_id 是查询视图 ID。
   string view_id = 2;
-  // column_name 是视图内稳定技术列名；DatasetColumn 来源必须使用 dataset_id.column_name。
+  // column_name 是视图内稳定技术列名；DatasetColumn 来源直接使用 Dataset 列名，不带数据集前缀。
   string column_name = 3;
   // origin_type 表示列来源，可为 DatasetColumn、表达式或系统列。
   ColumnOriginType origin_type = 4;
-  // origin_id 是来源 ID；DatasetColumn 必须使用 dataset_id.column_name，并与 column_name 保持一致。
+  // origin_id 是来源 ID；DatasetColumn 为 View 所属 Dataset 的列名，并与 column_name 保持一致。
   string origin_id = 5;
   // value_type 是列值的逻辑类型。
   FieldValueType value_type = 6;

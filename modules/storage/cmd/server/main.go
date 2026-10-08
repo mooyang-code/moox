@@ -643,28 +643,16 @@ func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb
 			if view == nil {
 				continue
 			}
-			ids := []string{}
-			if view.GetDatasetId() != "" {
-				ids = []string{view.GetDatasetId()}
+			datasetID := strings.TrimSpace(view.GetDatasetId())
+			if datasetID == "" {
+				continue
 			}
-			for _, column := range view.GetColumns() {
-				origin := strings.TrimSpace(column.GetOriginId())
-				if datasetID, _, ok := strings.Cut(origin, "."); ok && datasetID != "" {
-					ids = append(ids, datasetID)
-				}
+			key := view.GetSpaceId() + "\x00" + datasetID
+			if _, ok := seen[key]; ok {
+				continue
 			}
-			for _, datasetID := range ids {
-				datasetID = strings.TrimSpace(datasetID)
-				if datasetID == "" {
-					continue
-				}
-				key := view.GetSpaceId() + "\x00" + datasetID
-				if _, ok := seen[key]; ok {
-					continue
-				}
-				seen[key] = struct{}{}
-				managed = append(managed, storageconfig.StorageViewConsumerDataset{SpaceID: view.GetSpaceId(), DatasetID: datasetID})
-			}
+			seen[key] = struct{}{}
+			managed = append(managed, storageconfig.StorageViewConsumerDataset{SpaceID: view.GetSpaceId(), DatasetID: datasetID})
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
 			break
