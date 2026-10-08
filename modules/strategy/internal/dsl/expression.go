@@ -36,6 +36,8 @@ const (
 	identifierInstrument = "instrument_id"
 
 	maxExpressionNodes = 256
+	// maxExpressionLength 限制单条表达式的字符数，同时限制了括号嵌套深度，避免递归解析耗尽栈。
+	maxExpressionLength = 1024
 )
 
 // Normalizer 是一次截面预计算：先对样本内每行求 Inner，再把 rank 或 zscore 的结果写入 Variable。
@@ -118,6 +120,9 @@ func analyze(source string, stage Stage) (*Expression, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return nil, errors.New("表达式为空")
+	}
+	if len(source) > maxExpressionLength {
+		return nil, fmt.Errorf("表达式超过 %d 个字符", maxExpressionLength)
 	}
 	tree, err := parser.Parse(source)
 	if err != nil {

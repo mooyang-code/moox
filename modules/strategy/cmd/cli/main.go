@@ -42,9 +42,6 @@ func runCLI(args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := dsl.Validate(&strategy); err != nil {
-		return err
-	}
 	columns, err := dsl.ReferencedColumns(strategy)
 	if err != nil {
 		return err

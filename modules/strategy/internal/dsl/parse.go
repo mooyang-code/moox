@@ -12,9 +12,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxDSLBytes 是 DSL 文本的大小上限。
+const maxDSLBytes = 64 << 10
+
 // Parse 解析并校验一份 DSL。解析经由 yaml.Node 完成：拒绝重复键、未知字段和多文档，
 // 让配置错误在保存时就暴露，而不是等到求值。
 func Parse(raw []byte) (Strategy, error) {
+	if len(raw) > maxDSLBytes {
+		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限", maxDSLBytes>>10)
+	}
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	var document yaml.Node
 	if err := decoder.Decode(&document); err != nil {
@@ -149,7 +155,7 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 	if err != nil {
 		return Strategy{}, err
 	}
-	var strategy Strategy
+	strategy := Strategy{Portfolio: defaultPortfolio()}
 	rulesSeen := false
 	for _, f := range fields {
 		switch f.key {
@@ -394,12 +400,17 @@ func decodeHolding(node *yaml.Node, path string) (Holding, error) {
 	return holding, nil
 }
 
+// defaultPortfolio 是省略 portfolio 字段时的取值；显式写出的 0 不会被默认值覆盖。
+func defaultPortfolio() Portfolio {
+	return Portfolio{Leverage: quant.One(), MaxMissing: quant.Must(DefaultMaxMissing)}
+}
+
 func decodePortfolio(node *yaml.Node) (Portfolio, error) {
 	fields, err := mappingFields(node, "portfolio")
 	if err != nil {
 		return Portfolio{}, err
 	}
-	var portfolio Portfolio
+	portfolio := defaultPortfolio()
 	for _, f := range fields {
 		path := "portfolio." + f.key
 		switch f.key {

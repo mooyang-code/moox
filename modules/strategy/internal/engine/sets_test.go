@@ -140,3 +140,82 @@ portfolio:
 		t.Fatalf("B 应记为上一根缺数：%+v", item)
 	}
 }
+
+// 守门边界：预期集合为空或全部年龄剔除按 universe_too_small 跳过；基础集合为空按 no_data 跳过；
+// 显式 max_missing: 0 时一个缺数即跳过。跳过时状态沿用前序。
+func TestGuardEdgeCases(t *testing.T) {
+	program := compile(t, `name: edge
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 1}
+`, "m")
+	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A": "1"}}
+
+	emptyPool := frameOf(program, map[string]Row{"A": values("m", 1)})
+	emptyPool.Expected["r"] = nil
+	decision := evaluate(t, program, emptyPool, previous)
+	assertSkipped(t, decision, SkipUniverseTooSmall)
+	if decision.State.Targets["A"] != "1" {
+		t.Fatalf("跳过时状态应沿用前序：%+v", decision.State)
+	}
+
+	allAged := frameOf(program, map[string]Row{"A": values("m", 1), "B": values("m", 2)})
+	allAged.AgedOut = map[string][]string{"r": {"A", "B"}}
+	assertSkipped(t, evaluate(t, program, allAged, previous), SkipUniverseTooSmall)
+
+	noData := frameOf(program, map[string]Row{})
+	decision = evaluate(t, program, noData, previous)
+	assertSkipped(t, decision, SkipNoData)
+	if decision.State.Rules["r"].Held[0] != "A" {
+		t.Fatalf("no_data 时规则状态应沿用前序：%+v", decision.State)
+	}
+
+	strict := compile(t, `name: strict
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 1}
+portfolio:
+  max_missing: 0
+`, "m")
+	oneMissing := frameOf(strict, map[string]Row{"A": values("m", 1), "B": values("m", 2)})
+	oneMissing.Expected["r"] = []string{"A", "B", "C"}
+	assertSkipped(t, evaluate(t, strict, oneMissing, State{}), SkipTooManyMissing)
+}
+
+// 上期持有、本期已不在预期集合中的标的给出 dropped(not_expected) 明细。
+func TestHeldInstrumentLeavingExpectedSetIsExplained(t *testing.T) {
+	signal := compile(t, `name: gone
+rules:
+  - id: s
+    type: signal
+    pool: [BTC-USDT, ETH-USDT]
+    entry: "m > 0"
+    exit: "m < 0"
+    weight: {total: 0.5}
+`, "m")
+	frame := frameOf(signal, map[string]Row{"ETH-USDT": values("m", 1)})
+	previous := State{Rules: map[string]RuleState{"s": {Held: []string{"BTC-USDT"}}}, Targets: map[string]string{"BTC-USDT": "0.5"}}
+	decision := evaluate(t, signal, frame, previous)
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"ETH-USDT": "0.5"})
+	if item := findItem(t, decision, "s", "BTC-USDT"); item.Stage != StageDropped || item.Reason != "not_expected" {
+		t.Fatalf("离开预期集合的 BTC 应记 not_expected：%+v", item)
+	}
+
+	ranked := compile(t, bufferStrategy, "m")
+	frame = frameOf(ranked, map[string]Row{"A": values("m", 3), "B": values("m", 2), "C": values("m", 1)})
+	decision = evaluate(t, ranked, frame, State{Rules: map[string]RuleState{"r": {Held: []string{"A", "Z"}}}})
+	assertOK(t, decision)
+	if item := findItem(t, decision, "r", "Z"); item.Stage != StageDropped || item.Reason != "not_expected" {
+		t.Fatalf("离开预期集合的 Z 应记 not_expected：%+v", item)
+	}
+	if countItems(decision, "r", StageWeighted) != 2 {
+		t.Fatalf("A、B 应入选：%+v", decision.Items)
+	}
+}

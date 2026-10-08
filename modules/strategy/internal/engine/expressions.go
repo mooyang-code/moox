@@ -46,46 +46,71 @@ type numericResult struct {
 	failed map[string]string
 }
 
-// evaluateNumeric 在样本 ids 上执行数值表达式。截面函数先对样本做预计算，内层表达式递归求值；
-// 任一环节失败的标的被记为失败并从后续计算中剔除。
+// evaluateNumeric 在样本 ids 上执行数值表达式。截面函数的样本是"全部内层表达式与外层表达式都有效"的标的：
+// 任一环节失败的标的被剔除后，在剩余样本上整体重算，直到不再有新的失败。这样结果与截面函数的书写顺序无关，
+// 名次与标准化也不会包含最终被淘汰的标的。
 func evaluateNumeric(expression *dsl.Expression, ids []string, rows map[string]Row) numericResult {
-	result := numericResult{values: make(map[string]float64, len(ids)), failed: make(map[string]string)}
+	result := numericResult{failed: make(map[string]string)}
+	live := append([]string(nil), ids...)
+	for {
+		values, failed := evaluateOnSample(expression, live, rows)
+		if len(failed) == 0 {
+			result.values = values
+			return result
+		}
+		for id, reason := range failed {
+			result.failed[id] = reason
+		}
+		live = without(live, failed)
+	}
+}
+
+// evaluateOnSample 在固定样本上求值一次：内层有失败时先返回失败，不再计算外层。
+func evaluateOnSample(expression *dsl.Expression, ids []string, rows map[string]Row) (map[string]float64, map[string]string) {
+	failed := make(map[string]string)
+	inners := make([]numericResult, len(expression.Normalizers))
+	for i, normalizer := range expression.Normalizers {
+		inners[i] = evaluateNumeric(normalizer.Inner, ids, rows)
+		for id, reason := range inners[i].failed {
+			if _, seen := failed[id]; !seen {
+				failed[id] = reason
+			}
+		}
+	}
+	if len(failed) > 0 {
+		return nil, failed
+	}
 	vars := make(map[string]map[string]float64, len(ids))
 	for _, id := range ids {
 		vars[id] = make(map[string]float64, len(expression.Normalizers))
 	}
-	live := append([]string(nil), ids...)
-	for _, normalizer := range expression.Normalizers {
-		inner := evaluateNumeric(normalizer.Inner, live, rows)
-		for id, reason := range inner.failed {
-			result.failed[id] = reason
-		}
-		live = without(live, inner.failed)
+	for i, normalizer := range expression.Normalizers {
 		var normalized map[string]float64
 		switch normalizer.Kind {
 		case "rank":
-			normalized = percentileRank(live, inner.values)
+			normalized = percentileRank(ids, inners[i].values)
 		default:
-			normalized = zScore(live, inner.values)
+			normalized = zScore(ids, inners[i].values)
 		}
 		for id, value := range normalized {
 			vars[id][normalizer.Variable] = value
 		}
 	}
-	for _, id := range live {
+	values := make(map[string]float64, len(ids))
+	for _, id := range ids {
 		value, err := expression.Run(rowEnv(id, rows[id], 0, vars[id]))
 		if err != nil {
-			result.failed[id] = "score_error:" + err.Error()
+			failed[id] = "score_error:" + err.Error()
 			continue
 		}
 		number, ok := toFloat(value)
 		if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
-			result.failed[id] = "score_invalid"
+			failed[id] = "score_invalid"
 			continue
 		}
-		result.values[id] = number
+		values[id] = number
 	}
-	return result
+	return values, failed
 }
 
 func without(ids []string, failed map[string]string) []string {
@@ -153,15 +178,18 @@ func percentileRank(ids []string, values map[string]float64) map[string]float64 
 	return result
 }
 
-// zScore 是截面标准化：总体标准差为 0 时记 0。
+// zScore 是截面标准化：样本值全部相同、或标准差相对量级小到只剩浮点误差时，全部记 0。
 func zScore(ids []string, values map[string]float64) map[string]float64 {
 	result := make(map[string]float64, len(ids))
 	if len(ids) == 0 {
 		return result
 	}
-	mean := 0.0
+	mean, low, high := 0.0, math.Inf(1), math.Inf(-1)
 	for _, id := range ids {
-		mean += values[id]
+		value := values[id]
+		mean += value
+		low = math.Min(low, value)
+		high = math.Max(high, value)
 	}
 	mean /= float64(len(ids))
 	variance := 0.0
@@ -171,8 +199,10 @@ func zScore(ids []string, values map[string]float64) map[string]float64 {
 	}
 	variance /= float64(len(ids))
 	deviation := math.Sqrt(variance)
+	scale := math.Max(math.Abs(low), math.Abs(high))
+	flat := low == high || deviation <= zeroVarianceTolerance*scale
 	for _, id := range ids {
-		if deviation == 0 {
+		if flat {
 			result[id] = 0
 			continue
 		}
@@ -180,3 +210,6 @@ func zScore(ids []string, values map[string]float64) map[string]float64 {
 	}
 	return result
 }
+
+// zeroVarianceTolerance 是零方差的相对容差：标准差不超过样本量级的 1e-12 视为浮点误差。
+const zeroVarianceTolerance = 1e-12

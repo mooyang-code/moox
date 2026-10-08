@@ -47,10 +47,12 @@ func DecodeTargets(raw json.RawMessage) ([]TargetJSON, error) {
 	return items, nil
 }
 
-// SummaryJSON 是 summary_json 的结构：引擎摘要加装配说明。
-type SummaryJSON struct {
-	engine.Summary
-	Notes []string `json:"notes,omitempty"`
+// EncodeSummary 编码 summary_json：装配说明在前、引擎说明在后，合并到同一个 notes 列表。
+func EncodeSummary(summary engine.Summary, notes []string) (json.RawMessage, error) {
+	if len(notes) > 0 {
+		summary.Notes = append(append([]string(nil), notes...), summary.Notes...)
+	}
+	return json.Marshal(summary)
 }
 
 // ResultItems 把引擎解释转为存储行。

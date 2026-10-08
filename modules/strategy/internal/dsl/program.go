@@ -15,6 +15,24 @@ type CompiledRule struct {
 	Exit        *Expression
 }
 
+// stageSource 是规则一个阶段的表达式文本。
+type stageSource struct {
+	stage  Stage
+	source string
+}
+
+// stageSources 按固定顺序返回规则各阶段的表达式文本（可能为空）。
+func (r Rule) stageSources() []stageSource {
+	return []stageSource{
+		{StageFilter, r.Filter},
+		{StageScore, r.Score},
+		{StageSelectWhere, r.Select.Where},
+		{StageFilterAfter, r.FilterAfter},
+		{StageEntry, r.Entry},
+		{StageExit, r.Exit},
+	}
+}
+
 // Expressions 按固定顺序返回非空的阶段表达式。
 func (r *CompiledRule) Expressions() []*Expression {
 	out := make([]*Expression, 0, 6)
@@ -112,13 +130,13 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 func ReferencedColumns(strategy Strategy) ([]string, error) {
 	set := make(map[string]struct{})
 	for _, rule := range strategy.Rules {
-		for stage, source := range map[Stage]string{StageFilter: rule.Filter, StageScore: rule.Score, StageSelectWhere: rule.Select.Where, StageFilterAfter: rule.FilterAfter, StageEntry: rule.Entry, StageExit: rule.Exit} {
-			if source == "" {
+		for _, item := range rule.stageSources() {
+			if item.source == "" {
 				continue
 			}
-			expression, err := Analyze(source, stage)
+			expression, err := Analyze(item.source, item.stage)
 			if err != nil {
-				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, stage, err)
+				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, item.stage, err)
 			}
 			for _, column := range expression.AllColumns() {
 				set[column] = struct{}{}

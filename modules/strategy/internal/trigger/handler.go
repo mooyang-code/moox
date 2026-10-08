@@ -282,7 +282,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 	if err != nil {
 		return store.Result{}, nil, err
 	}
-	summary, err := json.Marshal(SummaryJSON{Summary: decision.Summary, Notes: loaded.Sets.Notes})
+	summary, err := EncodeSummary(decision.Summary, loaded.Sets.Notes)
 	if err != nil {
 		return store.Result{}, nil, err
 	}

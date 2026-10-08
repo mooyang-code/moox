@@ -89,6 +89,29 @@ rules:
 	}
 }
 
+// 只写 include 时它就是白名单，不能退化为全部 U。
+func TestBuildSetsIncludeAloneIsWhitelist(t *testing.T) {
+	client := newFakeClient("spot")
+	strategy := parseStrategy(t, `name: include_only
+universe:
+  include: [SOL-USDT, ETH-USDT]
+  exclude: [ETH-USDT]
+rules:
+  - id: r
+    type: rank
+    score: "close"
+    select: {top: 1}
+    weight: {total: 0.5}
+`)
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sets.Expected["r"], []string{"SOL-USDT"}) {
+		t.Fatalf("include 单独使用应只保留白名单再减黑名单：%v", sets.Expected["r"])
+	}
+}
+
 // S12：探针查询失败返回基础设施错误，不把标的记为年龄不足；成功时按有无行划分 G(r)。
 func TestBuildSetsAgeProbe(t *testing.T) {
 	client := newFakeClient("spot")

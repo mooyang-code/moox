@@ -65,7 +65,21 @@ func evaluate(t *testing.T, program *dsl.Program, frame Frame, previous State) D
 	if err != nil {
 		t.Fatalf("求值失败：%v", err)
 	}
+	assertUniqueItems(t, decision)
 	return decision
+}
+
+// assertUniqueItems 校验每个 (规则, 标的) 只有一条解释明细，与 t_strategy_result_items 的主键一致。
+func assertUniqueItems(t *testing.T, decision Decision) {
+	t.Helper()
+	seen := make(map[string]struct{}, len(decision.Items))
+	for _, item := range decision.Items {
+		key := item.RuleID + "/" + item.InstrumentID
+		if _, ok := seen[key]; ok {
+			t.Fatalf("解释明细重复：%s（全部 %+v）", key, decision.Items)
+		}
+		seen[key] = struct{}{}
+	}
 }
 
 func weightsOf(decision Decision) map[string]string {
@@ -231,17 +245,15 @@ func TestExampleStrategyEvaluatesDeterministically(t *testing.T) {
 	frame := exampleFrame(program)
 	first := evaluate(t, program, frame, State{})
 	assertOK(t, first)
-	// 5 个动量标的各 0.16，BTC 入场 0.2。
+	// 分数随序号递增：ALT003～ALT007 入选，各 0.16；BTC 入场 0.2。
 	want := map[string]string{"BTC-USDT": "0.2"}
-	for _, item := range first.Targets {
-		if item.InstrumentID != "BTC-USDT" {
-			want[item.InstrumentID] = "0.16"
-		}
-	}
-	if len(want) != 6 {
-		t.Fatalf("期望 6 个目标，实际 %v", weightsOf(first))
+	for _, id := range numberedIDs("ALT", 8)[3:] {
+		want[id] = "0.16"
 	}
 	assertWeights(t, first, want)
+	if item := findItem(t, first, "long_momentum", "ALT002-USDT"); item.Stage != StageScored || item.Reason != "not_selected" || item.Rank != 6 {
+		t.Fatalf("ALT002 应排第 6 名未入选：%+v", item)
+	}
 	assertDecimal(t, "gross", first.Summary.Gross, "1")
 	assertDecimal(t, "cash", first.Summary.Cash, "0")
 	if first.Summary.Rules["long_momentum"].Filtered != 1 {
@@ -266,5 +278,38 @@ func TestExampleStrategyEvaluatesDeterministically(t *testing.T) {
 func TestEvaluateRejectsNilProgram(t *testing.T) {
 	if _, err := Evaluate(nil, Frame{}, State{}); err == nil {
 		t.Fatal("空程序应返回错误")
+	}
+}
+
+// 组合约束失败（现货出现负权重）按 config_error 跳过，解释明细仍按规则声明顺序与标的 id 排序。
+func TestConfigErrorSkipKeepsItemsSorted(t *testing.T) {
+	program := compile(t, `name: bad
+rules:
+  - id: b
+    type: rank
+    score: "m"
+    select: {bottom: 2}
+    weight: {total: 0.5}
+    side: short
+  - id: a
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 0.5}
+`, "m")
+	frame := frameOf(program, map[string]Row{"C": values("m", 3), "A": values("m", 1), "B": values("m", 2)})
+	frame.Spot = true
+	first := evaluate(t, program, frame, State{})
+	assertSkipped(t, first, SkipConfigError)
+	var order []string
+	for _, item := range first.Items {
+		order = append(order, item.RuleID+"/"+item.InstrumentID)
+	}
+	if fmt.Sprint(order) != "[b/A b/B b/C a/A a/B a/C]" {
+		t.Fatalf("解释明细顺序不符：%v", order)
+	}
+	second := evaluate(t, program, frame, State{})
+	if fingerprint(t, first) != fingerprint(t, second) {
+		t.Fatal("config_error 的两次求值结果不同")
 	}
 }

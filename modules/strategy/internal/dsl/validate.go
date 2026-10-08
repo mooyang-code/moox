@@ -13,7 +13,7 @@ import (
 var ruleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // Validate 校验结构、字段取值和表达式语法；不需要知道 View 的列，列的存在性在 Compile 时检查。
-// 校验会就地规范化默认值（side、method、leverage、max_missing）。
+// 校验会就地规范化 side 与 method 的默认值；portfolio 的默认值在解析时填入，显式写出的 0 按原值校验。
 func Validate(s *Strategy) error {
 	if s == nil {
 		return errors.New("策略 DSL 为空")
@@ -61,10 +61,7 @@ func Validate(s *Strategy) error {
 }
 
 func validatePortfolio(p *Portfolio) error {
-	if p.Leverage.IsZero() {
-		p.Leverage = quant.One()
-	}
-	if p.Leverage.IsNegative() {
+	if p.Leverage.IsZero() || p.Leverage.IsNegative() {
 		return errors.New("portfolio.leverage 必须大于 0")
 	}
 	if p.HasMaxWeight {
@@ -77,9 +74,6 @@ func validatePortfolio(p *Portfolio) error {
 	}
 	if p.MinUniverse < 0 {
 		return errors.New("portfolio.min_universe 不能为负数")
-	}
-	if p.MaxMissing.IsZero() {
-		p.MaxMissing = quant.Must(DefaultMaxMissing)
 	}
 	if p.MaxMissing.IsNegative() || p.MaxMissing.Cmp(quant.One()) > 0 {
 		return errors.New("portfolio.max_missing 必须在 0 到 1 之间")
@@ -158,12 +152,10 @@ func validateRankRule(prefix string, rule *Rule) error {
 	if sel.Top < 0 || sel.Bottom < 0 || sel.Buffer < 0 {
 		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能为负数", prefix)
 	}
-	count := sel.Top
+	// 能同时持有的标的数上限：普通规则是选中数量，holding 规则是各批次之和。
+	slots := sel.Top
 	if sel.Bottom > 0 {
-		count = sel.Bottom
-	}
-	if rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(count))).Cmp(rule.Weight.Total) < 0 {
-		return fmt.Errorf("%s 的 weight.cap 乘以选中数量小于 weight.total，预算永远分不完", prefix)
+		slots = sel.Bottom
 	}
 	if rule.Holding != nil {
 		if sel.Buffer > 0 {
@@ -172,16 +164,12 @@ func validateRankRule(prefix string, rule *Rule) error {
 		if err := validateHolding(prefix, rule.Holding); err != nil {
 			return err
 		}
+		slots *= len(rule.Holding.Offsets)
 	}
-	for stage, source := range map[Stage]string{StageFilter: rule.Filter, StageScore: rule.Score, StageSelectWhere: sel.Where, StageFilterAfter: rule.FilterAfter} {
-		if source == "" {
-			continue
-		}
-		if _, err := Analyze(source, stage); err != nil {
-			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, stage, err)
-		}
+	if rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
+		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)
 	}
-	return nil
+	return analyzeStages(prefix, rule.stageSources())
 }
 
 func validateSignalRule(prefix string, rule *Rule) error {
@@ -200,9 +188,17 @@ func validateSignalRule(prefix string, rule *Rule) error {
 	if rule.Weight.HasCap {
 		return fmt.Errorf("%s 是 signal 规则，不支持 weight.cap", prefix)
 	}
-	for stage, source := range map[Stage]string{StageEntry: rule.Entry, StageExit: rule.Exit} {
-		if _, err := Analyze(source, stage); err != nil {
-			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, stage, err)
+	return analyzeStages(prefix, rule.stageSources())
+}
+
+// analyzeStages 按固定阶段顺序做语法检查，保证同一份 DSL 总是报告同一个错误。
+func analyzeStages(prefix string, sources []stageSource) error {
+	for _, item := range sources {
+		if item.source == "" {
+			continue
+		}
+		if _, err := Analyze(item.source, item.stage); err != nil {
+			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, item.stage, err)
 		}
 	}
 	return nil

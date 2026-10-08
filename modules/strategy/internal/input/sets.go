@@ -94,21 +94,25 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 			return defaultExpected, nil
 		}
 		defaultComputed = true
-		var tagged map[string]struct{}
-		if len(strategy.Universe.Tags) > 0 {
-			var err error
-			if tagged, err = membersOf(strategy.Universe.Tags); err != nil {
+		// 白名单 = tags 成员 ∪ include；两者都为空时不设白名单（全部 U）。
+		var whitelist map[string]struct{}
+		if len(strategy.Universe.Tags) > 0 || len(strategy.Universe.Include) > 0 {
+			tagged, err := membersOf(strategy.Universe.Tags)
+			if err != nil {
 				return nil, err
+			}
+			whitelist = tagged
+			for id := range listed(strategy.Universe.Include) {
+				whitelist[id] = struct{}{}
 			}
 		}
 		excludedTags, err := membersOf(strategy.Universe.ExcludeTags)
 		if err != nil {
 			return nil, err
 		}
-		include := listed(strategy.Universe.Include)
 		exclude := listed(strategy.Universe.Exclude)
 		for _, subject := range universe {
-			if tagged != nil && !inSet(subject, tagged) && !inSet(subject, include) {
+			if whitelist != nil && !inSet(subject, whitelist) {
 				continue
 			}
 			if inSet(subject, excludedTags) || inSet(subject, exclude) {

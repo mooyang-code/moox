@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -159,6 +160,19 @@ rules:
 	for _, id := range []string{"A", "B", "C"} {
 		if item := findItem(t, flat, "r", id); item.Score != "0" {
 			t.Fatalf("零方差 zscore 应为 0：%+v", item)
+		}
+	}
+
+	// 0.1 × 3 的均值有浮点误差，也必须判为零方差；只差一个 ulp 的样本同样记 0。
+	for name, rows := range map[string]map[string]Row{
+		"相同的 0.1": {"A": values("x", 0.1), "B": values("x", 0.1), "C": values("x", 0.1)},
+		"差一个 ulp": {"A": values("x", 0.1), "B": values("x", 0.1), "C": values("x", 0.30000000000000004/3)},
+	} {
+		decision := evaluate(t, zProgram, frameOf(zProgram, rows), State{})
+		for _, id := range []string{"A", "B", "C"} {
+			if item := findItem(t, decision, "r", id); item.Score != "0" {
+				t.Fatalf("%s：零方差 zscore 应为 0：%+v", name, item)
+			}
 		}
 	}
 
@@ -335,5 +349,123 @@ portfolio:
 	}
 	if decision.Summary.Rules["r"].Available != 2 {
 		t.Fatalf("跳过时也应给出集合摘要：%+v", decision.Summary.Rules["r"])
+	}
+}
+
+// 截面函数的样本与书写顺序无关：任一内层表达式无效的标的不参与任何一个截面函数。
+func TestNormalizerSampleIndependentOfOrder(t *testing.T) {
+	strategy := `name: order
+rules:
+  - id: r
+    type: rank
+    score: "SCORE"
+    select: {top: 3}
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`
+	rows := map[string]Row{
+		"A": values("a", 1, "b", 3, "d", 0),
+		"B": values("a", 1, "b", 1, "d", 1),
+		"C": values("a", 2, "b", 2, "d", 1),
+	}
+	var fingerprints []string
+	for _, score := range []string{"rank(a / d) + rank(b)", "rank(b) + rank(a / d)"} {
+		program := compile(t, strings.Replace(strategy, "SCORE", score, 1), "a", "b", "d")
+		decision := evaluate(t, program, frameOf(program, rows), State{})
+		assertOK(t, decision)
+		if item := findItem(t, decision, "r", "A"); item.Stage != StageDropped || item.Reason != "score_invalid" {
+			t.Fatalf("%s：A 的分数应无效：%+v", score, item)
+		}
+		for id, want := range map[string]string{"B": "0", "C": "2"} {
+			if item := findItem(t, decision, "r", id); item.Score != want {
+				t.Fatalf("%s：%s 的分数应为 %s：%+v", score, id, want, item)
+			}
+		}
+		fingerprints = append(fingerprints, fingerprint(t, decision))
+	}
+	if fingerprints[0] != fingerprints[1] {
+		t.Fatalf("交换截面函数顺序后结果不同：%s 与 %s", fingerprints[0], fingerprints[1])
+	}
+}
+
+// 延续批次中的标的本期被 filter 淘汰时仍按批次持有，明细只有一条 weighted，原因 holding:filter；
+// 非建仓 bar 上未持有的标的记 not_rebalanced。
+func TestHoldingContinuingBatchSurvivesFilterWithSingleItem(t *testing.T) {
+	program := compile(t, `name: hold_filter
+rules:
+  - id: h
+    type: rank
+    filter: "m > 0"
+    score: "m"
+    select: {top: 1}
+    weight: {total: 0.8}
+    holding: {bars: 2, offsets: [0]}
+portfolio:
+  max_missing: 1
+`, "m")
+	bar0 := frameOf(program, map[string]Row{"A": values("m", 2), "B": values("m", 1)})
+	bar0.BarIndex = 0
+	first := evaluate(t, program, bar0, State{})
+	assertOK(t, first)
+	assertWeights(t, first, map[string]string{"A": "0.8"})
+	if item := findItem(t, first, "h", "A"); item.Stage != StageWeighted || item.Reason != "" {
+		t.Fatalf("建仓 bar 上 A 是本期选中：%+v", item)
+	}
+
+	bar1 := frameOf(program, map[string]Row{"A": values("m", -1), "B": values("m", 1)})
+	bar1.BarIndex = 1
+	second := evaluate(t, program, bar1, first.State)
+	assertOK(t, second)
+	assertWeights(t, second, map[string]string{"A": "0.8"})
+	if item := findItem(t, second, "h", "A"); item.Stage != StageWeighted || item.Reason != "holding:filter" || item.Weight != "0.8" {
+		t.Fatalf("A 应由延续批次持有并注明本期被 filter 淘汰：%+v", item)
+	}
+	if item := findItem(t, second, "h", "B"); item.Stage != StageScored || item.Reason != "not_rebalanced" {
+		t.Fatalf("非建仓 bar 上 B 应为 not_rebalanced：%+v", item)
+	}
+	if summary := second.Summary.Rules["h"]; summary.Filtered != 1 || summary.Selected != 0 || summary.Weighted != 1 {
+		t.Fatalf("摘要不符：%+v", summary)
+	}
+}
+
+// holding 建仓时 filter_after 剔除的份额留现金，不分给同批次的其他标的；延续期间份额不变。
+func TestHoldingFilterAfterLeavesShareAsCash(t *testing.T) {
+	program := compile(t, `name: hold_after
+rules:
+  - id: h
+    type: rank
+    score: "m"
+    select: {top: 2}
+    filter_after: "ok > 0"
+    weight: {total: 0.8}
+    holding: {bars: 2, offsets: [0]}
+portfolio:
+  max_missing: 1
+`, "m", "ok")
+	rows := map[string]Row{"A": values("m", 3, "ok", 0), "B": values("m", 2, "ok", 1), "C": values("m", 1, "ok", 1)}
+	bar0 := frameOf(program, rows)
+	bar0.BarIndex = 0
+	first := evaluate(t, program, bar0, State{})
+	assertOK(t, first)
+	assertWeights(t, first, map[string]string{"B": "0.4"})
+	assertDecimal(t, "cash", first.Summary.Cash, "0.6")
+	if item := findItem(t, first, "h", "A"); item.Stage != StageDropped || item.Reason != "filter_after" || item.Rank != 1 {
+		t.Fatalf("A 应被 filter_after 剔除：%+v", item)
+	}
+	if item := findItem(t, first, "h", "C"); item.Stage != StageScored || item.Reason != "not_selected" {
+		t.Fatalf("C 应为未入选：%+v", item)
+	}
+	if batches := first.State.Rules["h"].Batches; len(batches) != 1 || len(batches[0].BaseWeights) != 1 || batches[0].BaseWeights["B"] != "0.5" {
+		t.Fatalf("批次应只含 B 且基准份额为 0.5：%+v", batches)
+	}
+
+	bar1 := frameOf(program, rows)
+	bar1.BarIndex = 1
+	second := evaluate(t, program, bar1, first.State)
+	assertOK(t, second)
+	assertWeights(t, second, map[string]string{"B": "0.4"})
+	if item := findItem(t, second, "h", "B"); item.Stage != StageWeighted || item.Reason != "holding" {
+		t.Fatalf("B 应由延续批次持有：%+v", item)
 	}
 }

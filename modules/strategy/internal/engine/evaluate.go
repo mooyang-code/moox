@@ -14,6 +14,12 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 	if program == nil {
 		return Decision{}, errors.New("策略程序为空")
 	}
+	decision := evaluateFrame(program, frame, previous)
+	sortItems(program, decision.Items)
+	return decision, nil
+}
+
+func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 	decision := Decision{
 		Status:  StatusOK,
 		State:   State{Rules: make(map[string]RuleState, len(program.Rules)), Targets: map[string]string{}},
@@ -22,6 +28,9 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
 	skipReason, skipNote := "", ""
+	if len(frame.Universe) == 0 {
+		skipReason, skipNote = SkipNoData, "本期基础集合为空：没有任何标的的数据"
+	}
 	for i := range program.Rules {
 		rule := &program.Rules[i]
 		sets := partitionRule(rule, frame)
@@ -43,7 +52,7 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 		}
 	}
 	if skipReason != "" {
-		return skipped(decision, previous, skipReason, skipNote), nil
+		return skipped(decision, previous, skipReason, skipNote)
 	}
 	// 第二遍：逐规则求值。
 	contributions := make(map[string]quant.Decimal)
@@ -60,7 +69,7 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
 		}
 		if err != nil {
-			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err)), nil
+			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err))
 		}
 		allocated := quant.Zero()
 		for id, weight := range result.weights {
@@ -73,12 +82,12 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 		decision.Summary.Rules[rule.Rule.ID] = summary
 		decision.State.Rules[rule.Rule.ID] = result.state
 		decision.Items = append(decision.Items, result.items...)
+		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}
 	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, previous); err != nil {
-		return skipped(decision, previous, SkipConfigError, err.Error()), nil
+		return skipped(decision, previous, SkipConfigError, err.Error())
 	}
-	sortItems(program, decision.Items)
-	return decision, nil
+	return decision
 }
 
 // skipped 把决策改为跳过：无目标、状态沿用前序，并追加说明。
@@ -93,13 +102,14 @@ func skipped(decision Decision, previous State, reason, note string) Decision {
 	return decision
 }
 
-// guard 是 rank 规则的守门：进入 filter 的可用标的太少，或缺数占（预期 − 年龄剔除）的比例过高，都整期跳过。
+// guard 是 rank 规则的守门：没有可评估的候选（预期集合为空或全部年龄剔除）、进入 filter 的可用标的太少，
+// 或缺数占（预期 − 年龄剔除）的比例过高，都整期跳过。空候选不能当作"选不出标的"去清仓。
 func guard(portfolio dsl.Portfolio, sets ruleSets) string {
-	if len(sets.available) < portfolio.MinUniverse {
+	denominator := len(sets.expected) - len(sets.agedOut)
+	if denominator <= 0 || len(sets.available) < portfolio.MinUniverse {
 		return SkipUniverseTooSmall
 	}
-	denominator := len(sets.expected) - len(sets.agedOut)
-	if denominator > 0 && len(sets.missing) > 0 {
+	if len(sets.missing) > 0 {
 		ratio := quant.Must(fmt.Sprint(len(sets.missing))).Div(quant.Must(fmt.Sprint(denominator)))
 		if ratio.Cmp(portfolio.MaxMissing) > 0 {
 			return SkipTooManyMissing

@@ -32,7 +32,8 @@ type Frame struct {
 	FailedColumns map[string]map[string]struct{}
 }
 
-// HoldingBatch 是 holding 规则在某个偏移建立的一个批次；BaseWeights 之和为 1。
+// HoldingBatch 是 holding 规则在某个偏移建立的一个批次；BaseWeights 之和不超过 1，
+// filter_after 剔除与缺数移除的份额留作现金。
 type HoldingBatch struct {
 	Offset         int               `json:"offset"`
 	EstablishedBar int64             `json:"established_bar"`
@@ -57,6 +58,7 @@ const (
 	StatusOK      = "ok"
 	StatusSkipped = "skipped"
 
+	SkipNoData           = "no_data"
 	SkipUniverseTooSmall = "universe_too_small"
 	SkipTooManyMissing   = "too_many_missing"
 	SkipConfigError      = "config_error"

@@ -108,9 +108,6 @@ func parseDefinition(raw string) (dsl.Strategy, string, error) {
 	if err != nil {
 		return dsl.Strategy{}, "", err
 	}
-	if err := dsl.Validate(&strategy); err != nil {
-		return dsl.Strategy{}, "", err
-	}
 	return strategy, dsl.Hash([]byte(raw)), nil
 }
 

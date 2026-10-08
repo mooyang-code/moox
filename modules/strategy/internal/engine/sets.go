@@ -76,3 +76,19 @@ func (s ruleSets) items(ruleID string) []Item {
 	}
 	return items
 }
+
+// notExpected 为上期持有、本期已不在预期集合中的标的生成 dropped 明细（例如退市或移出标签）。
+// 在预期集合中但缺数或年龄不足的标的已有各自的明细。
+func (s ruleSets) notExpected(ruleID string, held []string) []Item {
+	expected := make(map[string]struct{}, len(s.expected))
+	for _, id := range s.expected {
+		expected[id] = struct{}{}
+	}
+	var items []Item
+	for _, id := range held {
+		if _, ok := expected[id]; !ok {
+			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageDropped, Reason: reasonNotExpected})
+		}
+	}
+	return items
+}
