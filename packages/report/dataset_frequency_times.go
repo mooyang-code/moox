@@ -2,72 +2,46 @@ package report
 
 import (
 	"fmt"
-	"strconv"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/frequency"
 )
 
 // RecentDatasetTimes returns canonical Storage row times from newest to oldest.
-func RecentDatasetTimes(frequency string, now time.Time, limit int) ([]time.Time, error) {
-	canonical, _, err := parseDatasetFrequency(frequency)
+func RecentDatasetTimes(raw string, now time.Time, limit int) ([]time.Time, error) {
+	parsed, err := frequency.Parse(raw)
 	if err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
 		return nil, fmt.Errorf("recent dataset time limit must be positive")
 	}
-	step, err := strconv.Atoi(canonical[:len(canonical)-1])
-	if err != nil || step <= 0 {
-		return nil, fmt.Errorf("frequency must be a positive duration")
-	}
-	suffix := canonical[len(canonical)-1]
-	at := datasetTimeFloor(now.UTC(), step, suffix)
+	at := datasetTimeFloor(now.UTC(), parsed)
 	result := make([]time.Time, 0, limit)
 	for range limit {
 		result = append(result, at)
-		switch suffix {
-		case 'm':
-			at = at.Add(-time.Duration(step) * time.Minute)
-		case 'H':
-			at = at.Add(-time.Duration(step) * time.Hour)
-		case 'D':
-			at = at.AddDate(0, 0, -step)
-		case 'W':
-			at = at.AddDate(0, 0, -7*step)
-		case 'M':
-			at = at.AddDate(0, -step, 0)
-		case 'Y':
-			at = at.AddDate(-step, 0, 0)
+		switch parsed {
+		case frequency.Week1:
+			at = at.AddDate(0, 0, -7)
+		case frequency.Month1:
+			at = at.AddDate(0, -1, 0)
+		default:
+			at = at.Add(-parsed.Duration())
 		}
 	}
 	return result, nil
 }
 
-func datasetTimeFloor(now time.Time, step int, suffix byte) time.Time {
-	switch suffix {
-	case 'm':
-		seconds := int64(step) * int64(time.Minute/time.Second)
-		return time.Unix(now.Unix()/seconds*seconds, 0).UTC()
-	case 'H':
-		seconds := int64(step) * int64(time.Hour/time.Second)
-		return time.Unix(now.Unix()/seconds*seconds, 0).UTC()
-	case 'D':
-		day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-		days := int(day.Sub(time.Unix(0, 0).UTC()) / (24 * time.Hour))
-		return day.AddDate(0, 0, -(days % step))
-	case 'W':
-		day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-		monday := day.AddDate(0, 0, -int((day.Weekday()+6)%7))
-		anchor := time.Date(1970, time.January, 5, 0, 0, 0, 0, time.UTC)
-		weeks := int(monday.Sub(anchor) / (7 * 24 * time.Hour))
-		return monday.AddDate(0, 0, -7*(weeks%step))
-	case 'M':
-		months := now.Year()*12 + int(now.Month()) - 1
-		months -= months % step
-		return time.Date(months/12, time.Month(months%12+1), 1, 0, 0, 0, 0, time.UTC)
-	case 'Y':
-		year := (now.Year()-1)/step*step + 1
-		return time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
+// datasetTimeFloor returns the start of the bar containing now. Weeks start
+// on Monday and months on the first day; other bars align to the Unix epoch.
+func datasetTimeFloor(now time.Time, parsed frequency.Frequency) time.Time {
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	switch parsed {
+	case frequency.Week1:
+		return day.AddDate(0, 0, -int((day.Weekday()+6)%7))
+	case frequency.Month1:
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	default:
-		return time.Time{}
+		return now.Truncate(parsed.Duration())
 	}
 }

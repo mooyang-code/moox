@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/factor
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
@@ -139,6 +140,8 @@ require (
 )
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb

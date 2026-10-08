@@ -18,6 +18,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/glebarez/sqlite"
 	"github.com/spf13/cobra"
 	"gorm.io/gorm"
@@ -1584,15 +1586,14 @@ func supportedInventoryFrequency(value string) bool {
 }
 
 func normalizedInventoryMarketFrequency(value string) (string, bool) {
-	raw := strings.TrimSpace(value)
-	if raw == "1M" {
-		return "1M", true
+	parsed, err := frequencypkg.Parse(value)
+	if err != nil {
+		return "", false
 	}
-	switch strings.ToLower(raw) {
-	case "1m", "5m", "15m", "30m", "1h", "1d", "1w":
-		return strings.ToLower(raw), true
-	case "60m":
-		return "1h", true
+	switch parsed {
+	case frequencypkg.Minute1, frequencypkg.Minute5, frequencypkg.Minute15, frequencypkg.Minute30,
+		frequencypkg.Hour1, frequencypkg.Day1, frequencypkg.Week1, frequencypkg.Month1:
+		return string(parsed), true
 	default:
 		return "", false
 	}
@@ -1609,28 +1610,11 @@ func supportedPeriodInventoryFrequency(value, workType string) bool {
 	}
 }
 
+// supportedResampleStorageFrequency reports whether value is a canonical
+// frequency a resample task can produce.
 func supportedResampleStorageFrequency(value string) bool {
-	raw := strings.TrimSpace(value)
-	if raw == "" {
-		return false
-	}
-	unit := raw[len(raw)-1]
-	countText := raw[:len(raw)-1]
-	count, err := strconv.ParseInt(countText, 10, 64)
-	if err != nil || count <= 0 || strconv.FormatInt(count, 10) != countText {
-		return false
-	}
-	switch unit {
-	case 'm':
-		minutes := count
-		return minutes <= 30*24*60 && minutes%60 != 0
-	case 'H':
-		return count <= 30*24 && count%24 != 0
-	case 'D':
-		return count <= 30
-	default:
-		return false
-	}
+	parsed, err := frequencypkg.Parse(value)
+	return err == nil && string(parsed) == value && parsed.Duration() > time.Minute && parsed.Duration() <= 24*time.Hour
 }
 
 func safeInventoryState(value string, allowed ...string) bool {

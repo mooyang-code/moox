@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/trade
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/glebarez/sqlite v1.11.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/matoous/go-nanoid/v2 v2.1.0
@@ -127,6 +128,8 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metric
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 

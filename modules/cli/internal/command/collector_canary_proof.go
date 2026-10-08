@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -19,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
-	metricsreport "github.com/mooyang-code/moox/packages/report"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -201,10 +202,11 @@ func prepareCollectorSCFCanaryProofWithClock(ctx context.Context, fetcher *setup
 	if err != nil {
 		return nil, err
 	}
-	interval, err := metricsreport.ParseDatasetFrequency(entry.GetFrequency())
-	if err != nil || interval <= 0 {
+	parsedFrequency, err := frequencypkg.Parse(entry.GetFrequency())
+	if err != nil {
 		return nil, fmt.Errorf("canary task frequency %q is invalid", entry.GetFrequency())
 	}
+	interval := parsedFrequency.NominalDuration()
 	periods, err := collectorSCFCanaryPeriods(entry, now, collectorCanaryCandidatePeriods)
 	if err != nil {
 		return nil, err
@@ -524,10 +526,11 @@ func collectorSCFCanaryPeriods(entry *collectorpb.TaskResultInventoryEntry, now 
 	if entry == nil || limit < 1 {
 		return nil, errors.New("canary period identity and positive candidate bound are required")
 	}
-	interval, err := metricsreport.ParseDatasetFrequency(entry.GetFrequency())
-	if err != nil || interval <= 0 {
+	parsedFrequency, err := frequencypkg.Parse(entry.GetFrequency())
+	if err != nil {
 		return nil, fmt.Errorf("canary frequency %q is invalid", entry.GetFrequency())
 	}
+	interval := parsedFrequency.NominalDuration()
 	if strings.EqualFold(entry.GetMarketId(), "stockcn") || strings.EqualFold(entry.GetCalendarId(), "cn_stock") {
 		return collectorStockCNCanaryPeriods(entry, now, limit, interval)
 	}

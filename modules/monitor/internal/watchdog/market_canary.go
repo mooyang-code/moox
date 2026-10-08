@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -165,16 +167,12 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	if strings.EqualFold(strings.TrimSpace(config.MarketID), "stockcn") || strings.EqualFold(strings.TrimSpace(config.SpaceID), "stockcn") {
 		return c.runStockCN(ctx, result, now, config)
 	}
-	storageFrequency, err := canonicalStorageFrequency(config.Frequency)
+	parsedFrequency, err := frequencypkg.Parse(config.Frequency)
 	if err != nil {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
-	interval, err := report.ParseDatasetFrequency(storageFrequency)
-	if err != nil {
-		result.ErrorMessage = "invalid_config"
-		return result
-	}
+	storageFrequency, interval := string(parsedFrequency), parsedFrequency.NominalDuration()
 	candidateCount, err := marketCanaryCandidateCount(config.Freshness, interval)
 	if err != nil {
 		result.ErrorMessage = "invalid_config"
@@ -474,7 +472,7 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve market canary subject: %w", err)
 	}
-	frequency, err := canonicalStorageFrequency(config.Frequency)
+	frequency, err := frequencypkg.Normalize(config.Frequency)
 	if err != nil {
 		return fmt.Errorf("invalid market canary frequency: %w", err)
 	}
@@ -548,31 +546,6 @@ func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) 
 		return 0, fmt.Errorf("market canary freshness requires more than %d exact keys", maxCandidates)
 	}
 	return count, nil
-}
-
-func canonicalStorageFrequency(frequency string) (string, error) {
-	frequency = strings.TrimSpace(frequency)
-	if len(frequency) < 2 {
-		return "", fmt.Errorf("frequency %q is invalid", frequency)
-	}
-	count, err := strconv.ParseUint(frequency[:len(frequency)-1], 10, 64)
-	if err != nil || count == 0 {
-		return "", fmt.Errorf("frequency %q is invalid", frequency)
-	}
-	switch frequency[len(frequency)-1] {
-	case 'h', 'H':
-		return frequency[:len(frequency)-1] + "H", nil
-	case 'd', 'D':
-		return frequency[:len(frequency)-1] + "D", nil
-	case 'w', 'W':
-		return frequency[:len(frequency)-1] + "W", nil
-	case 'y', 'Y':
-		return frequency[:len(frequency)-1] + "Y", nil
-	case 'm', 'M':
-		return frequency, nil
-	default:
-		return "", fmt.Errorf("frequency %q has an unsupported unit", frequency)
-	}
 }
 
 func storageRejectionError(retInfo *storagepb.RetInfo) string {

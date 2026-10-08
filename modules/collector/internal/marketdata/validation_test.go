@@ -50,7 +50,7 @@ func TestParseFrequencyDistinguishesMinuteAndCalendarMonth(t *testing.T) {
 	minute, err := ParseFrequency("1m")
 	require.NoError(t, err)
 	require.Equal(t, FrequencyMinute, minute)
-	month, err := ParseFrequency("1M")
+	month, err := ParseFrequency("1mo")
 	require.NoError(t, err)
 	require.Equal(t, FrequencyMonth, month)
 	start := time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)

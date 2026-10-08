@@ -196,7 +196,7 @@ func TestValidateCollectionTaskDatasetsAcceptsStockSharedDataSource(t *testing.T
 
 func TestValidateCollectionTaskAcceptsCollectorLocalResampleWithoutCloudRoute(t *testing.T) {
 	task := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "resample-1", TaskName: "resample", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_4h","target_frequency":"4H","alignment":"epoch_utc"}`,
+		SpaceID: "crypto", TaskID: "resample-1", TaskName: "resample", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_4h","target_frequency":"4h","alignment":"epoch_utc"}`,
 	}
 	require.NoError(t, validateCollectionTask(task))
 }
@@ -901,7 +901,7 @@ func TestPreserveCollectionTaskCoverageStartOnOrdinaryUpdate(t *testing.T) {
 func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 	base := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", TaskName: "original", DataType: "kline_resample", Enabled: true,
-		CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc","settle_delay_ms":10000}`,
+		CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc","settle_delay_ms":10000}`,
 		ResultDatasetID: "target", ResultViewID: "view_target",
 	}
 
@@ -916,7 +916,7 @@ func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 		"space_id":  func(task *domain.CollectionTask) { task.SpaceID = "other" },
 		"data_type": func(task *domain.CollectionTask) { task.DataType = "kline" },
 		"collect_params": func(task *domain.CollectionTask) {
-			task.CollectParams = strings.Replace(task.CollectParams, `"4H"`, `"1H"`, 1)
+			task.CollectParams = strings.Replace(task.CollectParams, `"4h"`, `"1h"`, 1)
 		},
 		"result_dataset": func(task *domain.CollectionTask) { task.ResultDatasetID = "other" },
 		"result_view":    func(task *domain.CollectionTask) { task.ResultViewID = "other" },
@@ -952,7 +952,7 @@ func TestValidateTaskResultIdentityUpdateRejectsViewChanges(t *testing.T) {
 
 func TestValidateResampleSourceDoesNotFoldMonthIntoMinute(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1M"}, Attributes: map[string]string{"market_type": "spot"}},
+		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1mo"}, Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	rule := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`,
@@ -962,10 +962,10 @@ func TestValidateResampleSourceDoesNotFoldMonthIntoMinute(t *testing.T) {
 
 func TestValidateCollectionTaskDatasetsAcceptsExchangeSourceForMooxResample(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1H"}, Attributes: map[string]string{"market_type": "spot"}},
+		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1h"}, Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	rule := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc"}`,
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc"}`,
 	}
 	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), rule))
 }
@@ -1007,12 +1007,12 @@ func TestCollectionTaskDefinitionHashCanonicalizesKlineDefinition(t *testing.T) 
 	}
 	right := domain.CollectionTask{
 		SpaceID: "crypto", DataType: "kline", TagIDs: []string{"tag-a", "tag-b"},
-		CollectParams: `{"provider":"okx","market_type":"swap","market_id":"other","instrument_type":"swap","source_id":"swap_http","series_tag":"venue:okx","target_dataset_id":"dataset-b","frequency":"1H","output_fields":["close","volume"]}`,
+		CollectParams: `{"provider":"okx","market_type":"swap","market_id":"other","instrument_type":"swap","source_id":"swap_http","series_tag":"venue:okx","target_dataset_id":"dataset-b","frequency":"1h","output_fields":["close","volume"]}`,
 	}
 	require.Equal(t, collectionTaskDefinitionHash(left), collectionTaskDefinitionHash(right))
 
 	changed := right
-	changed.CollectParams = `{"frequency":"1H","output_fields":["close"]}`
+	changed.CollectParams = `{"frequency":"1h","output_fields":["close"]}`
 	require.NotEqual(t, collectionTaskDefinitionHash(left), collectionTaskDefinitionHash(changed))
 }
 

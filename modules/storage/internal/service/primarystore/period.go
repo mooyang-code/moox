@@ -5,10 +5,11 @@ import (
 	"errors"
 	"strings"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/report"
 )
 
 type periodDataNodeClient interface {
@@ -237,7 +238,7 @@ func validateCollectorPeriodDataset(ctx context.Context, auth *pb.AuthInfo, expe
 		return errors.New("period Dataset must be time_series")
 	}
 	frequency := expectation.GetFrequency()
-	if _, err := report.ParseDatasetFrequency(frequency); err != nil {
+	if !frequencypkg.IsCanonical(frequency) {
 		return errors.New("period frequency is invalid")
 	}
 	for _, declared := range dataset.GetFreqs() {

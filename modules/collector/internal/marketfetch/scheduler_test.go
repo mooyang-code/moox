@@ -175,7 +175,7 @@ func TestTargetDataTimeUsesCalendarBoundariesForWeekAndMonth(t *testing.T) {
 	}{
 		{frequency: "1m", want: time.Date(2026, time.July, 29, 15, 46, 0, 0, time.UTC)},
 		{frequency: "1w", want: time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC)},
-		{frequency: "1M", want: time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)},
+		{frequency: "1mo", want: time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.frequency, func(t *testing.T) {
@@ -210,7 +210,7 @@ func TestPeriodPriorityMetadataUsesAuthoritativeStorageDeadline(t *testing.T) {
 }
 
 func TestNormalizeStorageFrequencyKeepsWeekAndMonthSemantics(t *testing.T) {
-	for input, want := range map[string]string{"1w": "1W", "1M": "1M"} {
+	for input, want := range map[string]string{"1w": "1w", "1mo": "1mo"} {
 		got, err := normalizeStorageFrequency(input)
 		assert.NoError(t, err)
 		assert.Equal(t, want, got)
@@ -2420,7 +2420,7 @@ func TestSchedulerSkipsUnchangedHourlyTargetInNextMinuteRun(t *testing.T) {
 	ctx := context.Background()
 	for _, task := range []domain.CollectionTask{
 		{SpaceID: "crypto", TaskID: "bars-1m", TaskName: "Minute bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"bars-1m","frequency":"1m"}`},
-		{SpaceID: "crypto", TaskID: "bars-1h", TaskName: "Hourly bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"bars-1h","frequency":"1H"}`},
+		{SpaceID: "crypto", TaskID: "bars-1h", TaskName: "Hourly bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"bars-1h","frequency":"1h"}`},
 	} {
 		require.NoError(t, db.Tasks().Create(ctx, task))
 	}
@@ -2592,7 +2592,7 @@ func TestSchedulerReusesPeriodSeriesSnapshotAfterTagMembershipChangesAndRestart(
 	require.NoError(t, newScheduler(now).Tick(ctx, "crypto"))
 	firstPeriod, err := targetDataTime(now, "1h")
 	require.NoError(t, err)
-	firstSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: firstPeriod})
+	firstSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: firstPeriod})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, uint32(2), firstSnapshot.ExpectedCount)
@@ -2614,7 +2614,7 @@ func TestSchedulerReusesPeriodSeriesSnapshotAfterTagMembershipChangesAndRestart(
 	nextPeriod, err := targetDataTime(nextNow, "1h")
 	require.NoError(t, err)
 	require.NotEqual(t, firstPeriod, nextPeriod)
-	nextSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: nextPeriod})
+	nextSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: nextPeriod})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, uint32(1), nextSnapshot.ExpectedCount)
@@ -2921,15 +2921,15 @@ func TestSchedulerEnsurePeriodUsesPersistedSeriesTags(t *testing.T) {
 }
 
 func TestMonthlyPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T) {
-	assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t, "1M", "1M", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), func(start time.Time) time.Time {
+	assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t, "1mo", "1mo", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), func(start time.Time) time.Time {
 		return start.AddDate(0, 1, 0)
 	})
 }
 
 func TestHourlyPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T) {
-	for _, providerFrequency := range []string{"1H", "1h"} {
+	for _, providerFrequency := range []string{"1h", "1H"} {
 		t.Run(providerFrequency, func(t *testing.T) {
-			assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t, "1H", providerFrequency, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), func(start time.Time) time.Time {
+			assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t, "1h", providerFrequency, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), func(start time.Time) time.Time {
 				return start.Add(time.Hour)
 			})
 		})
@@ -3021,7 +3021,7 @@ func TestPeriodFailureReporterReportsPermanentRetryExactlyOnce(t *testing.T) {
 }
 
 func TestSchedulerRetryFailureKeepsFrequencyIdentity(t *testing.T) {
-	for _, frequency := range []string{"1M", "1H"} {
+	for _, frequency := range []string{"1mo", "1h"} {
 		t.Run(frequency, func(t *testing.T) {
 			assertSchedulerRetryFailureKeepsFrequencyIdentity(t, frequency)
 		})

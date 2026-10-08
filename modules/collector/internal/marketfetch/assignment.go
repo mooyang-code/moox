@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	"github.com/mooyang-code/moox/packages/frequency"
 )
 
 // TaskGroup is one independent timer workload. A function must never mix
@@ -1002,27 +1003,29 @@ func AssignmentHash(parts ...string) string {
 	return hex.EncodeToString(hash[:])[:16]
 }
 
-func CronForFrequency(frequency string) (string, error) {
-	raw := strings.TrimSpace(frequency)
-	if raw == "1M" {
-		return "0 0 0 1 * * *", nil
+func CronForFrequency(raw string) (string, error) {
+	parsed, err := frequency.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("unsupported timer frequency %q", raw)
 	}
-	switch strings.ToLower(raw) {
-	case "1m":
+	switch parsed {
+	case frequency.Minute1:
 		return "0 * * * * * *", nil
-	case "5m":
+	case frequency.Minute5:
 		return "0 */5 * * * * *", nil
-	case "15m":
+	case frequency.Minute15:
 		return "0 */15 * * * * *", nil
-	case "30m":
+	case frequency.Minute30:
 		return "0 */30 * * * * *", nil
-	case "1h":
+	case frequency.Hour1:
 		return "0 0 * * * * *", nil
-	case "4h":
+	case frequency.Hour4:
 		return "0 0 */4 * * * *", nil
-	case "1d":
+	case frequency.Day1:
 		return "0 0 0 * * * *", nil
+	case frequency.Month1:
+		return "0 0 0 1 * * *", nil
 	default:
-		return "", fmt.Errorf("unsupported timer frequency %q", frequency)
+		return "", fmt.Errorf("unsupported timer frequency %q", raw)
 	}
 }

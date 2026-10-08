@@ -153,10 +153,10 @@ func TestBuildMetadataImportCallsCanonicalizesKeepDurations(t *testing.T) {
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance",
 			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "4320h",
-			Freqs: []string{"1H"},
+			Freqs: []string{"1h"},
 		}},
 		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline", FilterJSON: `{"freq":"1H"}`, KeepDuration: "4320h",
+			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline", FilterJSON: `{"freq":"1h"}`, KeepDuration: "4320h",
 		}},
 	})
 	require.NoError(t, err)
@@ -181,11 +181,11 @@ func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
 			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h",
-			Freqs: []string{"1H"},
+			Freqs: []string{"1h"},
 		}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-			GrainKeys: []string{"wrong"}, FilterJSON: `{ "freq": "1H" }`, Engine: "pebble",
+			GrainKeys: []string{"wrong"}, FilterJSON: `{ "freq": "1h" }`, Engine: "pebble",
 			KeepDuration: "1h",
 		}},
 	})
@@ -193,7 +193,7 @@ func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 	view := calls[1].Request.(*pb.CreateViewReq).GetView()
 	require.Equal(t, "kline", view.GetDatasetId())
 	require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, view.GetGrainKeys())
-	require.Equal(t, `{"freq":"1H"}`, view.GetFilterJson())
+	require.Equal(t, `{"freq":"1h"}`, view.GetFilterJson())
 	require.Equal(t, "duckdb", view.GetEngine())
 	require.Equal(t, "1h0m0s", view.GetKeepDuration())
 }
@@ -392,7 +392,7 @@ func TestMetadataContractsEqualAcceptsActivatedLockedDataset(t *testing.T) {
 		SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance",
 		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 		DataNodeId: "storage-node-0", KeepDuration: "8760h",
-		Freqs: []string{"1H"}, Status: "disabled",
+		Freqs: []string{"1h"}, Status: "disabled",
 	}
 	actual := proto.Clone(expected).(*pb.Dataset)
 	actual.Status = "active"
@@ -790,7 +790,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "行情",
 			Description: "小时行情", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0",
-			KeepDuration: "8760h", Freqs: []string{"1H"},
+			KeepDuration: "8760h", Freqs: []string{"1h"},
 		}},
 		FieldGroups: []seedFieldGroup{{
 			SpaceID: "crypto", GroupID: "quote", Name: "行情", Description: "行情字段", SortOrder: 1,
@@ -813,7 +813,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
 			PrimaryDatasetID: "kline",
 			GrainKeys:        []string{"subject_id", "freq", "data_time", "series_tag"},
-			FilterJSON:       `{"freq":"1H"}`, Engine: "duckdb", KeepDuration: "8760h",
+			FilterJSON:       `{"freq":"1h"}`, Engine: "duckdb", KeepDuration: "8760h",
 		}},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",

@@ -76,12 +76,12 @@ func TestMarketDataAdapterNormalizesBinanceIntervalWithoutChangingStoredFrequenc
 	adapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSpot, KlineCollector: collector, Now: func() time.Time { return now }})
 	rows, err := adapter.FetchKlines(context.Background(), marketdata.KlineRequest{
 		MarketID: "crypto", ExchangeID: "binance", InstrumentType: marketdata.InstrumentSpot,
-		SubjectID: "BTC-USDT-SPOT", ProviderSymbol: "BTCUSDT", Frequency: "1H", Limit: 1, RequestID: "req-binance-hour",
+		SubjectID: "BTC-USDT-SPOT", ProviderSymbol: "BTCUSDT", Frequency: "1h", Limit: 1, RequestID: "req-binance-hour",
 	})
 
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "1H", rows[0].Frequency)
+	assert.Equal(t, "1h", rows[0].Frequency)
 }
 
 func TestMarketDataAdapterSupportsSwapHourlyRequestThroughRouter(t *testing.T) {
@@ -100,7 +100,7 @@ func TestMarketDataAdapterSupportsSwapHourlyRequestThroughRouter(t *testing.T) {
 	require.NoError(t, err)
 	rows, err := router.NewSession().FetchKlines(context.Background(), marketdata.KlineRequest{
 		MarketID: "crypto", ExchangeID: "binance", InstrumentType: marketdata.InstrumentSwap,
-		SubjectID: "1000BONK-USDT-SWAP", ProviderSymbol: "1000BONKUSDT", SourceID: "swap_http", Frequency: "1H", Limit: 1, RequestID: "req-binance-swap-hour",
+		SubjectID: "1000BONK-USDT-SWAP", ProviderSymbol: "1000BONKUSDT", SourceID: "swap_http", Frequency: "1h", Limit: 1, RequestID: "req-binance-swap-hour",
 	}, []string{"binance"})
 
 	require.NoError(t, err)

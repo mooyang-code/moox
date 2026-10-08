@@ -8,12 +8,13 @@ import (
 	"strings"
 	"time"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
-	"github.com/mooyang-code/moox/packages/report"
 )
 
 type ViewRow struct {
@@ -141,10 +142,11 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 			}
 		}
 	}
-	duration, err := report.ParseDatasetFrequency(compiled.SourceView.Frequency)
-	if err != nil || duration <= 0 {
+	sourceFrequency, err := frequencypkg.Parse(compiled.SourceView.Frequency)
+	if err != nil {
 		return input.EvaluationInput{}, fmt.Errorf("invalid source frequency %q", compiled.SourceView.Frequency)
 	}
+	duration := sourceFrequency.NominalDuration()
 	minHistory := compiled.InstrumentPool.MinHistoryPeriods
 	if minHistory <= 0 {
 		minHistory = 1

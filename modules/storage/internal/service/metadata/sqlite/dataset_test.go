@@ -56,7 +56,7 @@ func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
 	registerActiveNode(t, ctx, store, "node-a")
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, KeepDuration: "0",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, KeepDuration: "0",
 		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
 	}); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
 	if _, err := store.CreateView(ctx, &pb.View{
 		SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result",
 		DatasetId: "dataset_factor_result", Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-		FilterJson: `{"freq":"1H"}`, Attributes: map[string]string{
+		FilterJson: `{"freq":"1h"}`, Attributes: map[string]string{
 			"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage", "primary_dataset_role": "factor_result",
 		},
 	}); err != nil {
@@ -115,7 +115,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 	registerActiveNode(t, ctx, store, "node-a")
 	dataset := &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, KeepDuration: "0",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, KeepDuration: "0",
 		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
 	}
 	if _, err := store.CreateDataset(ctx, dataset); err != nil {
@@ -126,7 +126,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 		{
 			SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result", DatasetId: dataset.GetDatasetId(),
 			Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-			FilterJson: `{"freq":"1H"}`, Attributes: managedAttrs,
+			FilterJson: `{"freq":"1h"}`, Attributes: managedAttrs,
 		},
 		{SpaceId: "space", ViewId: "view_factor_extra", Name: "Extra view", DatasetId: dataset.GetDatasetId(), Engine: "duckdb"},
 	} {

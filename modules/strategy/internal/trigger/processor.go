@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
@@ -19,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/selection"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -382,8 +383,9 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 		var evaluated input.EvaluationInput
 		expectedIndexesMap := expectedIndexes(compiled, event)
 		if withoutInput {
-			duration, durationErr := report.ParseDatasetFrequency(compiled.Data.Bar)
-			if durationErr != nil || duration <= 0 {
+			barFrequency, durationErr := frequencypkg.Parse(compiled.Data.Bar)
+			duration := barFrequency.NominalDuration()
+			if durationErr != nil {
 				if retryErr == nil {
 					retryErr = fmt.Errorf("holding period frequency %q: %w", compiled.Data.Bar, durationErr)
 				}
@@ -1007,8 +1009,8 @@ func effectivePeriodTimes(event PeriodReady) (barEnd, storagePeriod time.Time) {
 		return barEnd, storagePeriod
 	}
 	if !event.BarEndTime.IsZero() {
-		if duration, err := report.ParseDatasetFrequency(event.Frequency); err == nil && duration > 0 {
-			return barEnd, barEnd.Add(-duration)
+		if parsed, err := frequencypkg.Parse(event.Frequency); err == nil {
+			return barEnd, barEnd.Add(-parsed.NominalDuration())
 		}
 	}
 	return barEnd, barEnd
@@ -1234,8 +1236,8 @@ func frequencyMatches(eventFrequency, expected string) bool {
 	if strings.TrimSpace(eventFrequency) == "" || strings.TrimSpace(expected) == "" {
 		return true
 	}
-	eventValue, eventErr := report.NormalizeDatasetFrequency(eventFrequency)
-	expectedValue, expectedErr := report.NormalizeDatasetFrequency(expected)
+	eventValue, eventErr := frequencypkg.Normalize(eventFrequency)
+	expectedValue, expectedErr := frequencypkg.Normalize(expected)
 	return eventErr == nil && expectedErr == nil && eventValue == expectedValue
 }
 

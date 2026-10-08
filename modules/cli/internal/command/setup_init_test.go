@@ -327,7 +327,7 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freqs: []string{"1h"},
 		}},
 	}
 	tests := []struct {
@@ -402,7 +402,7 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freqs: []string{"1h"},
 		}},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
@@ -413,7 +413,7 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata dataset_column")
 
 	base.DatasetColumns = base.DatasetColumns[:1]
-	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")}
+	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1h")}
 	base.ViewColumns = []seedViewColumn{
 		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
 		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
@@ -427,9 +427,9 @@ func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freqs: []string{"1h"},
 		}},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1h")},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
 			OriginType: "dataset_column", OriginID: "close",
@@ -443,15 +443,15 @@ func TestSetupInitRejectsDatasetPrefixedViewColumn(t *testing.T) {
 		Spaces:      []seedSpace{{SpaceID: "crypto"}},
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{
-			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
-			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
+			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1h"}},
+			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1h"}},
 		},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
 			{SpaceID: "crypto", DatasetID: "spot", ColumnName: "close", OriginType: "field", OriginID: "close"},
 			{SpaceID: "crypto", DatasetID: "perpetual", ColumnName: "close", OriginType: "field", OriginID: "close"},
 		},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot", "1H")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot", "1h")},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "spot_view", ColumnName: "perpetual.close",
 			OriginType: "dataset_column", OriginID: "perpetual.close",
@@ -466,13 +466,13 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freqs: []string{"1h"},
 		}},
 	}
 	canonical := seedView{
 		SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
 		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
-		FilterJSON: `{"freq":"1H"}`,
+		FilterJSON: `{"freq":"1h"}`,
 		Engine:     "duckdb",
 	}
 	tests := []struct {
@@ -511,7 +511,7 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 			name: "filter json",
 			view: func() seedView {
 				item := canonical
-				item.FilterJSON = `{ "freq": "1H" }`
+				item.FilterJSON = `{ "freq": "1h" }`
 				return item
 			}(),
 			want: "filter_json must be canonical",
@@ -528,8 +528,8 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 	seed.Views = []seedView{canonical}
 	require.NoError(t, validateSetupMetadataDependencies(seed))
 
-	seed.Datasets[0].Freqs = []string{" 1H "}
-	require.NoError(t, validateSetupMetadataDependencies(seed))
+	seed.Datasets[0].Freqs = []string{"1H"}
+	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `freq "1H" is not canonical`)
 }
 
 func testCanonicalTimeSeriesView(spaceID, viewID, datasetID, freq string) seedView {

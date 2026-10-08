@@ -33,19 +33,3 @@ func NewKline(exchange, symbol, interval string) *Kline {
 		Interval:      interval,
 	}
 }
-
-const (
-	Interval1m  = "1m"  // 1分钟
-	Interval3m  = "3m"  // 3分钟
-	Interval5m  = "5m"  // 5分钟
-	Interval15m = "15m" // 15分钟
-	Interval30m = "30m" // 30分钟
-	Interval1h  = "1h"  // 1小时
-	Interval2h  = "2h"  // 2小时
-	Interval4h  = "4h"  // 4小时
-	Interval6h  = "6h"  // 6小时
-	Interval12h = "12h" // 12小时
-	Interval1d  = "1d"  // 1天
-	Interval1w  = "1w"  // 1周
-	Interval1M  = "1M"  // 1月
-)

@@ -8,8 +8,9 @@ import (
 	"sort"
 	"strings"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
-	"github.com/mooyang-code/moox/packages/report"
 )
 
 // InstanceBindings is the concrete source/factor selection stored on one
@@ -120,7 +121,7 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 		compiled.SourceView.ID = binding.SourceViewID
 	}
 	if binding.Frequency != "" {
-		frequency, frequencyErr := report.NormalizeDatasetFrequency(binding.Frequency)
+		frequency, frequencyErr := frequencypkg.Normalize(binding.Frequency)
 		if frequencyErr != nil {
 			return CompiledStrategy{}, fmt.Errorf("strategy instance binding frequency: %w", frequencyErr)
 		}
@@ -136,7 +137,7 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 	for i := range compiled.Factors {
 		frequency := dsl.Data.Bar
 		if strings.TrimSpace(compiled.Factors[i].Frequency) != "" {
-			normalized, frequencyErr := report.NormalizeDatasetFrequency(compiled.Factors[i].Frequency)
+			normalized, frequencyErr := frequencypkg.Normalize(compiled.Factors[i].Frequency)
 			if frequencyErr != nil {
 				return CompiledStrategy{}, fmt.Errorf("strategy factor %s frequency: %w", compiled.Factors[i].FactorID, frequencyErr)
 			}

@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/report"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -443,14 +443,13 @@ func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, f
 			return fmt.Errorf("target Dataset immutable lineage attribute %s does not match task", key)
 		}
 	}
-	wantedFrequency, err := report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
+	wantedFrequency, err := frequencypkg.Normalize(frequency)
 	if err != nil {
 		return fmt.Errorf("target Dataset frequency %q is invalid: %w", frequency, err)
 	}
 	found := false
 	for _, freq := range dataset.GetFreqs() {
-		actualFrequency, normalizeErr := report.NormalizeDatasetFrequency(strings.TrimSpace(freq))
-		if normalizeErr == nil && actualFrequency == wantedFrequency {
+		if freq == wantedFrequency {
 			found = true
 			break
 		}

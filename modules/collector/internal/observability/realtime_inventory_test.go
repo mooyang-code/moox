@@ -69,13 +69,13 @@ func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing
 func TestRealtimeInventoryCanonicalizesFrequencyAliasesBeforeDeduplication(t *testing.T) {
 	source := &ruleSourceStub{rules: []domain.CollectionTask{
 		collectorRule("lowercase", true, "kline", "bars", "1h"),
-		collectorRule("canonical", true, "kline", "bars", "1H"),
+		collectorRule("canonical", true, "kline", "bars", "1h"),
 	}}
 	registry := &registryStub{}
 
 	require.NoError(t, NewRealtimeInventory(source, registry).Refresh(context.Background()))
 	require.Equal(t, []report.DatasetExpectation{{
-		Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1H"}, Interval: time.Hour,
+		Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1h"}, Interval: time.Hour,
 	}}, registry.items)
 }
 

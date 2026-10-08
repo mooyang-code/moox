@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
@@ -424,6 +426,13 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		if err := addSetupMetadataKey(datasets, setupMetadataKey(item.SpaceID, item.DatasetID), "dataset"); err != nil {
 			return err
 		}
+		if kind, kindErr := parseDataKind(item.DataKind); kindErr == nil && kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
+			for _, freq := range item.Freqs {
+				if !frequencypkg.IsCanonical(freq) {
+					return fmt.Errorf("dataset %s/%s freq %q is not canonical; use one of %s", item.SpaceID, item.DatasetID, freq, strings.Join(frequencypkg.Strings(), ", "))
+				}
+			}
+		}
 		datasetDefinitions[setupMetadataKey(item.SpaceID, item.DatasetID)] = item
 	}
 	groups := make(map[string]struct{}, len(seed.FieldGroups))
@@ -660,7 +669,7 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 
 func setupDatasetSupportsFreq(freqs []string, freq string) bool {
 	for _, item := range freqs {
-		if strings.TrimSpace(item) == freq {
+		if item == freq {
 			return true
 		}
 	}

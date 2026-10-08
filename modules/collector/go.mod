@@ -13,6 +13,7 @@ require (
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
@@ -73,6 +74,8 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metric
 replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 

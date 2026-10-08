@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -118,17 +119,13 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 			if task.PrepareState != domain.PrepareStateReady {
 				continue
 			}
-			frequency, err := report.NormalizeDatasetFrequency(params.TargetFrequency)
+			parsed, err := frequencypkg.Parse(params.TargetFrequency)
 			if err != nil {
 				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("normalize resample task %q frequency %q: %w", task.TaskID, params.TargetFrequency, err)
+				return fmt.Errorf("parse resample task %q frequency %q: %w", task.TaskID, params.TargetFrequency, err)
 			}
-			interval, err := report.ParseDatasetFrequency(frequency)
-			if err != nil {
-				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("parse resample task %q frequency %q: %w", task.TaskID, frequency, err)
-			}
-			key := report.DatasetKey{SpaceID: task.SpaceID, DatasetID: params.TargetDatasetID, Freq: frequency}
+			interval := parsed.NominalDuration()
+			key := report.DatasetKey{SpaceID: task.SpaceID, DatasetID: params.TargetDatasetID, Freq: string(parsed)}
 			if previous, ok := expected[key]; !ok || interval < previous {
 				expected[key] = interval
 			}
@@ -143,14 +140,10 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 			return fmt.Errorf("parse collector task %q schedule: %w", task.TaskID, err)
 		}
 		for _, freq := range params.Collector.Intervals {
-			if _, err := report.ParseDatasetFrequency(freq); err != nil {
-				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("parse collector task %q frequency %q: %w", task.TaskID, freq, err)
-			}
-			canonicalFreq, err := report.NormalizeDatasetFrequency(freq)
+			canonicalFreq, err := frequencypkg.Normalize(freq)
 			if err != nil {
 				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("normalize collector task %q frequency %q: %w", task.TaskID, freq, err)
+				return fmt.Errorf("parse collector task %q frequency %q: %w", task.TaskID, freq, err)
 			}
 			key := report.DatasetKey{SpaceID: task.SpaceID, DatasetID: params.Target.DatasetID, Freq: canonicalFreq}
 			if previous, ok := expected[key]; !ok || interval < previous {

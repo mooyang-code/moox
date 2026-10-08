@@ -238,7 +238,7 @@ datasets:
   data_node_id: storage-node-0
   keep_duration: 8760h
   freqs:
-  - 1H
+  - 1h
   - 1d
   status: disabled
   attributes:
@@ -301,7 +301,7 @@ datasets:
   - 1m
   - 1d
   - 1w
-  - 1M
+  - 1mo
   status: disabled
   attributes:
     market_id: stockhk
@@ -320,7 +320,7 @@ datasets:
   - 1m
   - 1d
   - 1w
-  - 1M
+  - 1mo
   status: disabled
   attributes:
     market_id: stockus

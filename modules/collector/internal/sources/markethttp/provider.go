@@ -84,7 +84,7 @@ func New(cfg Config) *Provider {
 		cfg.Location = time.UTC
 	}
 	if len(cfg.Frequencies) == 0 {
-		cfg.Frequencies = []string{"1m", "5m", "15m", "30m", "60m", "1d", "1w", "1M"}
+		cfg.Frequencies = []string{"1m", "5m", "15m", "30m", "1h", "1d", "1w", "1mo"}
 	}
 	if cfg.MaxBarsPerRequest <= 0 {
 		cfg.MaxBarsPerRequest = 1200
@@ -162,7 +162,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrUnsupportedFrequency, err)
 	}
-	if !containsFrequency(p.frequencies, string(frequency)) {
+	if !containsFrequency(p.frequencies, frequency) {
 		return nil, fmt.Errorf("%w: %s does not support %s", marketdata.ErrUnsupportedFrequency, p.sourceID, frequency)
 	}
 	symbol, err := p.symbolFunc(req.SubjectID)
@@ -281,10 +281,9 @@ func parseNumber(value string) (float64, error) {
 	return strconv.ParseFloat(strings.TrimSpace(strings.ReplaceAll(value, ",", "")), 64)
 }
 
-func containsFrequency(values []string, want string) bool {
+func containsFrequency(values []string, want marketdata.Frequency) bool {
 	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == want || (value != string(marketdata.FrequencyMinute) && value != string(marketdata.FrequencyMonth) && strings.EqualFold(value, want)) {
+		if strings.TrimSpace(value) == string(want) {
 			return true
 		}
 	}

@@ -541,12 +541,12 @@ func TestDataNodeResolverPeriodRPCContract(t *testing.T) {
 
 	auth := &pb.AuthInfo{AppId: "collector", AppKey: "signed-key"}
 	expectation := &pb.DatasetPeriodExpectation{
-		SpaceId: "space", DatasetId: "dataset", Frequency: "1H", PeriodTime: 123,
+		SpaceId: "space", DatasetId: "dataset", Frequency: "1h", PeriodTime: 123,
 		SeriesHash: "expected-hash", ExpectedCount: 1,
 		SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "venue:binance"}},
 	}
 	row := &pb.RowFieldUpsert{
-		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1H", DataTime: "2026-09-30T00:00:00Z", SeriesTag: "venue:binance"}}},
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-09-30T00:00:00Z", SeriesTag: "venue:binance"}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 101.25}}}},
 	}
 	ensureReq := &pb.EnsureDatasetPeriodReq{AuthInfo: auth, Expectation: expectation}

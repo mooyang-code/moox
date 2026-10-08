@@ -187,7 +187,7 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 		{name: "go duration", interval: "90m"},
 		{name: "day duration", interval: "2d"},
 		{name: "week duration", interval: "1w"},
-		{name: "month duration", interval: "1M"},
+		{name: "month duration", interval: "1mo"},
 		{name: "shorter than one minute", interval: "30s", wantErr: "whole minutes"},
 		{name: "fractional minute", interval: "90s", wantErr: "whole minutes"},
 		{name: "zero days", interval: "0d", wantErr: "positive"},
@@ -235,10 +235,10 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 	assert.Equal(t, "spot", params.MarketType)
 	assert.Equal(t, "dataset", params.Source.Kind)
 	assert.Equal(t, "dataset_binance_kline_1m", params.Source.DatasetID)
-	assert.Equal(t, "1H", params.SourceFrequency)
+	assert.Equal(t, "1h", params.SourceFrequency)
 	assert.Equal(t, "venue:binance", params.SourceSeriesTag)
 	assert.Equal(t, "dataset_spot_kline_derived_4h", params.Target.DatasetID)
-	assert.Equal(t, "4H", params.TargetFrequency)
+	assert.Equal(t, "4h", params.TargetFrequency)
 	assert.Equal(t, "epoch_utc", params.Alignment)
 	assert.Equal(t, time.Second*10, params.SettleDelay())
 }
@@ -251,7 +251,7 @@ func TestParseCollectParamsRejectsResampleRepairOverride(t *testing.T) {
 		"source_frequency":"1m",
 		"source_series_tag":"venue:binance",
 		"target_dataset_id":"dataset_spot_kline_derived_4h",
-		"target_frequency":"4H",
+		"target_frequency":"4h",
 		"alignment":"epoch_utc",
 		"repair_lookback_buckets":3
 	}`, "", "", "kline_resample")
@@ -267,13 +267,13 @@ func TestKlineResampleParamsRejectInvalidPairAndIdentity(t *testing.T) {
 		{name: "same dataset", overrides: `"source_dataset_id":"same","target_dataset_id":"same"`, want: "must differ"},
 		{name: "missing series", overrides: `"source_series_tag":""`, want: "source_series_tag"},
 		{name: "wrong alignment", overrides: `"alignment":"session"`, want: "epoch_utc"},
-		{name: "target not multiple", overrides: `"source_frequency":"1H","target_frequency":"90m"`, want: "multiple"},
-		{name: "target not larger", overrides: `"source_frequency":"1H","target_frequency":"1H"`, want: "greater"},
+		{name: "calendar target", overrides: `"source_frequency":"1h","target_frequency":"1w"`, want: "cannot be resampled"},
+		{name: "target not larger", overrides: `"source_frequency":"1h","target_frequency":"1h"`, want: "greater"},
 		{name: "negative settle", overrides: `"settle_delay_ms":-1`, want: "non-negative"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw := `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc",` + tt.overrides + `}`
+			raw := `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc",` + tt.overrides + `}`
 			params, err := ParseCollectParams(raw, "", "", "kline_resample")
 			require.NoError(t, err)
 			require.ErrorContains(t, params.Validate(), tt.want)
@@ -286,13 +286,13 @@ func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
 	require.NoError(t, err)
 	raw, err := params.CanonicalJSON()
 	require.NoError(t, err)
-	assert.Contains(t, raw, `"source_frequency":"1H"`)
-	assert.Contains(t, raw, `"target_frequency":"4H"`)
+	assert.Contains(t, raw, `"source_frequency":"1h"`)
+	assert.Contains(t, raw, `"target_frequency":"4h"`)
 	assert.NotContains(t, raw, "repair")
 }
 
 func TestKlineResampleSettleDelayPreservesExplicitZero(t *testing.T) {
-	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":0}`, "", "", "kline_resample")
+	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":0}`, "", "", "kline_resample")
 	require.NoError(t, err)
 	require.NoError(t, params.Validate())
 	assert.NotNil(t, params.SettleDelayMS)
@@ -305,11 +305,11 @@ func TestKlineResampleSettleDelayPreservesExplicitZero(t *testing.T) {
 }
 
 func TestKlineResampleRejectsDurationAndSettleDelayOverflow(t *testing.T) {
-	tooLargeFrequency, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"9007199254740993m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc"}`, "", "", "kline_resample")
+	tooLargeFrequency, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"9007199254740993m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`, "", "", "kline_resample")
 	require.NoError(t, err)
-	require.ErrorContains(t, tooLargeFrequency.Validate(), "frequency must not exceed 30 days")
+	require.ErrorContains(t, tooLargeFrequency.Validate(), "unsupported frequency")
 
-	tooLargeDelay, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_2m","target_frequency":"2m","alignment":"epoch_utc","settle_delay_ms":288230376151711744}`, "", "", "kline_resample")
+	tooLargeDelay, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":288230376151711744}`, "", "", "kline_resample")
 	require.NoError(t, err)
 	require.ErrorContains(t, tooLargeDelay.Validate(), "settle_delay_ms must not exceed")
 	assert.Equal(t, MaxResampleSettleDelay, tooLargeDelay.SettleDelayOr(0))

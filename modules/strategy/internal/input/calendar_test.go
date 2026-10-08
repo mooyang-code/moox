@@ -7,7 +7,7 @@ import (
 
 func TestClosedBarCryptoUsesMostRecentClosedBoundary(t *testing.T) {
 	trigger := time.Date(2026, 8, 29, 11, 7, 30, 0, time.UTC)
-	got, err := ClosedBar("crypto_24x7", "1H", trigger, nil)
+	got, err := ClosedBar("crypto_24x7", "1h", trigger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

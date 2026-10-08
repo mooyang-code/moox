@@ -12,7 +12,7 @@ import (
 func TestManagedEnvironmentMembershipIsNotTimerClaimPayload(t *testing.T) {
 	assignment := marketfetch.NodeAssignment{
 		Provider: "binance", MarketID: "crypto", InstrumentType: "swap", MarketType: "swap", SourceID: "swap_http",
-		DatasetID: "bars", Frequency: "1H", Enabled: true,
+		DatasetID: "bars", Frequency: "1h", Enabled: true,
 		GroupID: 0, GroupCount: 1, NodeID: "node-1", FunctionName: "function-1", Region: "ap-guangzhou",
 		Subjects:        []string{"BTC-USDT", "CUSTOM-USDT"},
 		ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT", "CUSTOM-USDT": "EXPLICIT"},

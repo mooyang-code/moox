@@ -9,7 +9,7 @@ import (
 
 func TestCryptoCompositionRootSupportsMinuteAndHourMarkets(t *testing.T) {
 	for _, product := range []marketdata.InstrumentType{marketdata.InstrumentSpot, marketdata.InstrumentSwap} {
-		for _, frequency := range []string{"1m", "1H"} {
+		for _, frequency := range []string{"1m", "1h"} {
 			t.Run(string(product)+"/"+frequency, func(t *testing.T) {
 				pipeline, err := NewCryptoKlinePipeline(timerHandlerStorage{}, product)
 				require.NoError(t, err)

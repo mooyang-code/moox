@@ -22,24 +22,24 @@ tasks:
     frequency: 1m
 - space_id: crypto
   task_id: dasftksvjhj2jom4vhe0
-  task_name: Binance 现货 K 线 1H
+  task_name: Binance 现货 K 线 1h
   data_type: kline
   tag_ids: [binance_spot]
   enabled: true
   creator: moox-setup
   collect_params:
     output_fields: [open, high, low, close, volume, quote_volume, trade_num]
-    frequency: 1H
+    frequency: 1h
 - space_id: crypto
   task_id: dasftksvjhj2jom4vheg
-  task_name: Binance 合约 K 线 1H
+  task_name: Binance 合约 K 线 1h
   data_type: kline
   tag_ids: [binance_swap]
   enabled: true
   creator: moox-setup
   collect_params:
     output_fields: [open, high, low, close, volume, quote_volume, trade_num]
-    frequency: 1H
+    frequency: 1h
 - space_id: stockcn
   task_id: dasftksvjhj2jom4vhf0
   task_name: A 股 K 线 1m

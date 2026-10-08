@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/frequency"
 )
 
 const day = 24 * time.Hour
@@ -15,7 +17,7 @@ const monthScheduleInterval = 31 * day
 // their actual month-boundary execution semantics.
 func ParseScheduleInterval(raw string) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "1M" {
+	if parsed, err := frequency.Parse(raw); err == nil && parsed == frequency.Month1 {
 		return monthScheduleInterval, nil
 	}
 	raw = strings.ToLower(raw)

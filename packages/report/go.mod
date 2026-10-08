@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/packages/report
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
@@ -61,3 +62,5 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../jetstream
 replace github.com/mooyang-code/moox/packages/events => ../events
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../metricspb
+
+replace github.com/mooyang-code/moox/packages/frequency => ../frequency

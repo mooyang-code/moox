@@ -155,9 +155,9 @@ func TestCollectorPeriodInventoryDoesNotRequireCollectorSnapshotForResampleReadi
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	db := openCollectorPeriodInventoryFixture(t, dbPath)
 	for index, period := range []struct{ datasetID, frequency, at string }{
-		{datasetID: "derived-1h", frequency: "1H", at: "2026-10-01 01:00:00"},
-		{datasetID: "derived-4h", frequency: "4H", at: "2026-10-01 02:00:00"},
-		{datasetID: "derived-7m", frequency: "7m", at: "2026-10-01 03:00:00"},
+		{datasetID: "derived-1h", frequency: "1h", at: "2026-10-01 01:00:00"},
+		{datasetID: "derived-4h", frequency: "4h", at: "2026-10-01 02:00:00"},
+		{datasetID: "derived-15m", frequency: "15m", at: "2026-10-01 03:00:00"},
 	} {
 		require.NoError(t, db.Exec(`INSERT INTO t_period_readiness
 			(c_space_id,c_dataset_id,c_frequency,c_work_type,c_period_time,c_deadline_at,c_status,c_report_state)
@@ -186,7 +186,7 @@ func TestCollectorPeriodInventoryDoesNotRequireCollectorSnapshotForResampleReadi
 			seen[period.DatasetID] = true
 		}
 	}
-	require.Equal(t, map[string]bool{"derived-1h": true, "derived-4h": true, "derived-7m": true}, seen)
+	require.Equal(t, map[string]bool{"derived-1h": true, "derived-4h": true, "derived-15m": true}, seen)
 	require.True(t, report.Complete)
 }
 

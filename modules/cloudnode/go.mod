@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/cloudnode
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
@@ -130,3 +131,5 @@ replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency

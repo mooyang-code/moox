@@ -9,6 +9,7 @@ replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/pr
 replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
 
 require (
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
@@ -106,6 +107,8 @@ replace github.com/mooyang-code/moox/modules/monitor/proto/monitorgen => ../moni
 replace github.com/mooyang-code/moox/packages/doctor => ../../packages/doctor
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 

@@ -145,7 +145,7 @@ func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *test
 	require.Equal(t, testSkillGatewaySecret, got.Gateway.Secret)
 	require.Equal(t, security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill")), got.Storage.AppKey)
 	require.Equal(t, "venue:binance|market:spot|source:spot_http", got.DataTypes["crypto"].Exchanges["binance"].SeriesTag)
-	require.Equal(t, map[string]string{"1m": "dataset_dasftksvjhj2jom4vhd0"}, got.DataTypes["crypto"].Exchanges["binance"].KlineDatasets)
+	require.Equal(t, map[string]string{"1m": "dataset_dasftksvjhj2jom4vhd0", "1h": "dataset_dasftksvjhj2jom4vhe0"}, got.DataTypes["crypto"].Exchanges["binance"].KlineDatasets)
 	require.Equal(t, map[string]string{"1m": "dataset_dasftksvjhj2jom4vhf0"}, got.DataTypes["stockcn"].Exchanges["stockcn"].KlineDatasets)
 	require.Equal(t, "default", got.DataTypes["stockcn"].Exchanges["stockcn"].SeriesTag)
 

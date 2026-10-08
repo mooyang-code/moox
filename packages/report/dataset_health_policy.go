@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/frequency"
 	"gopkg.in/yaml.v3"
 )
 
@@ -87,11 +88,11 @@ func (c DatasetHealthPolicy) Validate() error {
 			strings.TrimSpace(override.Freq) == "" {
 			return fmt.Errorf("realtime_timeseries override %d requires space_id, dataset_id, and freq", index)
 		}
-		freq, interval, err := parseDatasetFrequency(strings.TrimSpace(override.Freq))
-		if err != nil || interval <= 0 {
-			return fmt.Errorf("realtime_timeseries override %d has invalid positive freq %q", index, override.Freq)
+		freq, err := frequency.Parse(override.Freq)
+		if err != nil {
+			return fmt.Errorf("realtime_timeseries override %d has invalid freq %q", index, override.Freq)
 		}
-		key := strings.Join([]string{override.SpaceID, override.DatasetID, freq}, "\x00")
+		key := strings.Join([]string{override.SpaceID, override.DatasetID, string(freq)}, "\x00")
 		if seen[key] {
 			return fmt.Errorf(
 				"duplicate realtime_timeseries override for %s/%s/%s",

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -844,17 +846,17 @@ func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeT
 }
 
 func sameDatasetFrequency(left, right string) bool {
-	left, leftErr := report.NormalizeDatasetFrequency(strings.TrimSpace(left))
-	right, rightErr := report.NormalizeDatasetFrequency(strings.TrimSpace(right))
+	left, leftErr := frequencypkg.Normalize(left)
+	right, rightErr := frequencypkg.Normalize(right)
 	return leftErr == nil && rightErr == nil && left == right
 }
 
 func parseOverviewFrequency(raw string) time.Duration {
-	parsed, err := report.ParseDatasetFrequency(strings.TrimSpace(raw))
+	parsed, err := frequencypkg.Parse(raw)
 	if err != nil {
 		return 0
 	}
-	return parsed
+	return parsed.NominalDuration()
 }
 
 func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {

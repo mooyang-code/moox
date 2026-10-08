@@ -1,5 +1,6 @@
 import type { FactorDef, FactorSet, FactorSetInfo } from "@/api/factor/types";
 import type { View, ViewColumn } from "@/api/storage/types";
+import { normalizeFrequency } from "@/utils/frequency";
 
 export interface BindingSelection {
   factor: FactorDef;
@@ -27,14 +28,6 @@ export function validateAliasConflicts(selections: BindingSelection[]): string |
   return null;
 }
 
-/** Keep the UI comparison aligned with the backend's accepted frequency form. */
-export function normalizeFrequency(value: string): string {
-  const normalized = value.trim();
-  const match = normalized.match(/^(\d+)([mhd])$/i);
-  if (!match) return normalized;
-  const unit = match[2] === "m" ? "m" : match[2].toUpperCase();
-  return `${match[1]}${unit}`;
-}
 
 export function findOutputColumn(columns: ViewColumn[], factorId: string, output: string): ViewColumn | null {
   return columns.find(column => column.attributes?.origin_factor_id === factorId && column.attributes?.factor_output === output) ?? null;

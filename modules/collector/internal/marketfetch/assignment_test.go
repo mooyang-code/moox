@@ -205,10 +205,10 @@ func TestSelectCryptoGroupsForCapacityKeepsMinuteBars(t *testing.T) {
 		externals[subject] = fmt.Sprintf("S%02dUSDT", i)
 	}
 	groups := []TaskGroup{
-		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1h", Subjects: subjects, ExternalSymbols: externals},
 		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
 		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
-		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1h", Subjects: subjects, ExternalSymbols: externals},
 	}
 	nodes := make([]scfinvoker.Node, 0, 4)
 	for i := 0; i < 4; i++ {
@@ -222,7 +222,7 @@ func TestSelectCryptoGroupsForCapacityKeepsMinuteBars(t *testing.T) {
 		require.Equal(t, "1m", group.Frequency)
 	}
 	for _, group := range deferred {
-		require.Equal(t, "1H", group.Frequency)
+		require.Equal(t, "1h", group.Frequency)
 	}
 }
 
@@ -235,10 +235,10 @@ func TestSelectCryptoGroupsForCapacityKeepsBinanceCryptoInOverseasRegion(t *test
 		externals[subject] = fmt.Sprintf("S%02dUSDT", i)
 	}
 	groups := []TaskGroup{
-		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1h", Subjects: subjects, ExternalSymbols: externals},
 		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
 		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
-		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1h", Subjects: subjects, ExternalSymbols: externals},
 	}
 	nodes := []scfinvoker.Node{
 		{NodeID: "hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
@@ -256,7 +256,7 @@ func TestSelectCryptoGroupsForCapacityKeepsBinanceCryptoInOverseasRegion(t *test
 	}
 	require.ElementsMatch(t, []string{"swap/1m", "spot/1m"}, selectedKeys)
 	for _, group := range deferred {
-		require.Equal(t, "1H", group.Frequency)
+		require.Equal(t, "1h", group.Frequency)
 	}
 }
 
@@ -362,7 +362,7 @@ func TestCronForFrequency(t *testing.T) {
 	cron, err := CronForFrequency("1m")
 	require.NoError(t, err)
 	require.Equal(t, "0 * * * * * *", cron)
-	cron, err = CronForFrequency("1M")
+	cron, err = CronForFrequency("1mo")
 	require.NoError(t, err)
 	require.Equal(t, "0 0 0 1 * * *", cron)
 	_, err = CronForFrequency("2m")

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mooyang-code/moox/packages/report"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 )
 
 // ErrDependencyMismatch marks a permanent change to metadata frozen in an
@@ -134,7 +134,7 @@ func normalizeOptionalFrequency(value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", nil
 	}
-	return report.NormalizeDatasetFrequency(value)
+	return frequencypkg.Normalize(value)
 }
 
 func sameStringSet(left, right []string) bool {

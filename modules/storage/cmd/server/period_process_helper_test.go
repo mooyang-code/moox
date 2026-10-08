@@ -101,7 +101,7 @@ func TestPeriodNativeProcessHelper(t *testing.T) {
 	})
 	ready := periodProcessReady{
 		NodeID: "period-e2e-node", SpaceID: "period-e2e-space", DatasetID: "period-e2e-dataset",
-		Frequency: "1H", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline",
+		Frequency: "1h", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline",
 		AppID: "moox-collector", DataDir: root,
 		ClockFile: filepath.Join(root, "clock"), PrimarySecret: periodHelperSecret(t), NodeSecret: periodHelperSecret(t),
 	}

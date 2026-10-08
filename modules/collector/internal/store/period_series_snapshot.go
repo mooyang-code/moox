@@ -512,10 +512,11 @@ func loadPeriodSeriesSnapshotEntries(tx *gorm.DB, spaceID, datasetID, frequency 
 func normalizePeriodSeriesSnapshotKey(key domain.PeriodKey) (domain.PeriodKey, error) {
 	key.SpaceID = strings.TrimSpace(key.SpaceID)
 	key.DatasetID = strings.TrimSpace(key.DatasetID)
-	key.Frequency = strings.TrimSpace(key.Frequency)
-	if _, err := marketdata.ParseFrequency(key.Frequency); err != nil {
+	frequency, err := marketdata.ParseFrequency(key.Frequency)
+	if err != nil {
 		return domain.PeriodKey{}, fmt.Errorf("invalid period frequency %q: %w", key.Frequency, err)
 	}
+	key.Frequency = string(frequency)
 	if key.SpaceID == "" || key.DatasetID == "" || key.Frequency == "" || key.PeriodTime.IsZero() {
 		return domain.PeriodKey{}, fmt.Errorf("space_id, dataset_id, frequency and period_time are required")
 	}
@@ -534,10 +535,11 @@ func normalizeAndValidatePeriodSeriesSnapshotEntries(input []domain.PeriodSeries
 		row.ID = 0
 		row.SpaceID = strings.TrimSpace(row.SpaceID)
 		row.DatasetID = strings.TrimSpace(row.DatasetID)
-		row.Frequency = strings.TrimSpace(row.Frequency)
-		if _, err := marketdata.ParseFrequency(row.Frequency); err != nil {
+		frequency, err := marketdata.ParseFrequency(row.Frequency)
+		if err != nil {
 			return nil, fmt.Errorf("invalid period series frequency %q: %w", row.Frequency, err)
 		}
+		row.Frequency = string(frequency)
 		row.PeriodTime = row.PeriodTime.UTC()
 		row.SeriesKey = strings.TrimSpace(row.SeriesKey)
 		row.SubjectID = strings.ToUpper(strings.TrimSpace(row.SubjectID))

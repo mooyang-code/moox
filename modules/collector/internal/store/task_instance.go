@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/packages/report"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -317,7 +317,7 @@ func (r *TaskInstanceRepository) ReplaceMarketFetchAssignments(ctx context.Conte
 			}
 			matching := func(db *gorm.DB) *gorm.DB {
 				query := db.Model(&domain.TaskInstance{}).
-					Where("t_collector_task_instances.c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(assignment.Provider), strings.TrimSpace(assignment.MarketType), "kline", frequencyVariants(assignment.Frequency), subjects, false).
+					Where("t_collector_task_instances.c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_frequency = ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(assignment.Provider), strings.TrimSpace(assignment.MarketType), "kline", storedFrequency(assignment.Frequency), subjects, false).
 					Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)`, strings.TrimSpace(assignment.DatasetID)).
 					Where("c_function_name <> ?", functionName)
 				return currentScheduledRunScope(query, spaceID)
@@ -375,9 +375,8 @@ func (r *TaskInstanceRepository) AssignMarketFetchFunction(ctx context.Context, 
 	if len(subjects) == 0 {
 		return nil
 	}
-	frequencyValues := frequencyVariants(frequency)
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
-		Where("t_collector_task_instances.c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(provider), strings.TrimSpace(marketType), "kline", frequencyValues, subjects, false).
+		Where("t_collector_task_instances.c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_frequency = ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(provider), strings.TrimSpace(marketType), "kline", storedFrequency(frequency), subjects, false).
 		Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)`, strings.TrimSpace(datasetID)).
 		Where("c_function_name <> ?", functionName)
 	query = currentScheduledRunScope(query, spaceID)
@@ -403,9 +402,8 @@ func (r *TaskInstanceRepository) MarkStorageWrites(ctx context.Context, observat
 				continue
 			}
 			seen[key] = struct{}{}
-			frequencyValues := frequencyVariants(observation.Frequency)
 			query := tx.Model(&domain.TaskInstance{}).
-				Where("t_collector_task_instances.c_space_id = ? AND c_subject_id = ? AND c_frequency IN ? AND c_series_tag = ? AND c_function_name = ? AND c_is_deleted = ?", observation.SpaceID, observation.SubjectID, frequencyValues, strings.TrimSpace(observation.SeriesTag), observation.FunctionName, false).
+				Where("t_collector_task_instances.c_space_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_series_tag = ? AND c_function_name = ? AND c_is_deleted = ?", observation.SpaceID, observation.SubjectID, storedFrequency(observation.Frequency), strings.TrimSpace(observation.SeriesTag), observation.FunctionName, false).
 				Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)`, observation.DatasetID).
 				Where("c_last_exec_time IS NULL OR c_last_exec_time < ?", observation.At.UTC())
 			query = currentScheduledRunScope(query, observation.SpaceID)
@@ -420,38 +418,14 @@ func (r *TaskInstanceRepository) MarkStorageWrites(ctx context.Context, observat
 	return updated, err
 }
 
-func frequencyVariants(value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	values := []string{value}
-	seen := map[string]struct{}{value: {}}
-	add := func(candidate string) {
-		if candidate == "" {
-			return
-		}
-		if _, exists := seen[candidate]; exists {
-			return
-		}
-		seen[candidate] = struct{}{}
-		values = append(values, candidate)
-	}
-	canonical, err := report.NormalizeDatasetFrequency(value)
+// storedFrequency returns the canonical frequency task instances store, or
+// value itself when it is not a frequency.
+func storedFrequency(value string) string {
+	canonical, err := frequencypkg.Normalize(value)
 	if err != nil {
-		return values
+		return strings.TrimSpace(value)
 	}
-	add(canonical)
-	// Older task rows may retain lowercase hour/day spellings while Storage
-	// events use its canonical uppercase identity. Minutes and months are
-	// intentionally not case-folded because M and m have different meanings.
-	if len(canonical) > 1 {
-		switch canonical[len(canonical)-1] {
-		case 'H', 'D', 'W', 'Y':
-			add(strings.ToLower(canonical))
-		}
-	}
-	return values
+	return canonical
 }
 
 func sameOptionalTime(left, right *time.Time) bool {

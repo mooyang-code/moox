@@ -246,9 +246,9 @@ func metricMessageStoreFromDatabaseForTest(t *testing.T, mgr *store.Store) *Metr
 // Collector names hourly results 1H; their View output must be observed.
 func TestKlineFreshnessEvaluatorObservesCollectorHourlyFrequency(t *testing.T) {
 	now := time.Date(2026, 10, 7, 7, 20, 0, 0, time.UTC)
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1H", MarketID: "crypto", StaleAfter: 2 * time.Hour}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1h", MarketID: "crypto", StaleAfter: 2 * time.Hour}
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
-		ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Freq: "1H",
+		ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Freq: "1h",
 		Latest: now.Add(-80 * time.Minute), Subjects: 1, ObservedAt: now,
 	}})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
@@ -258,22 +258,22 @@ func TestKlineFreshnessEvaluatorObservesCollectorHourlyFrequency(t *testing.T) {
 	require.True(t, reports[0].Success, "reason=%s", reports[0].Reason)
 }
 
-func TestKlineFrequencyUnitsAreCaseInsensitiveExceptMonth(t *testing.T) {
-	require.True(t, isValidKlineFrequency("1H"))
+func TestKlineFrequencyAcceptsOnlyCanonicalIdentities(t *testing.T) {
 	require.True(t, isValidKlineFrequency("1h"))
-	require.True(t, isValidKlineFrequency("1M"))
-	require.Equal(t, klineFrequencyUnit("H"), klineFrequencyUnit("h"))
-	require.NotEqual(t, klineFrequencyUnit("M"), klineFrequencyUnit("m"), "M is month, m is minute")
+	require.True(t, isValidKlineFrequency("1mo"))
+	require.False(t, isValidKlineFrequency("1H"), "Storage identities are canonical")
+	require.Equal(t, time.Hour, klineFrequencyDuration("1H"), "rules may use aliases")
+	require.Equal(t, "1h", canonicalRuleFrequency("1H"))
 }
 
 // An hourly bar is stamped with its period start and the next bar closes two
 // periods later; data is fresh until that next bar is stale_after overdue.
 func TestKlineFreshnessMeasuresStalenessFromBarClose(t *testing.T) {
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1H", MarketID: "crypto", StaleAfter: 5 * time.Minute}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1h", MarketID: "crypto", StaleAfter: 5 * time.Minute}
 	barStart := time.Date(2026, 10, 7, 6, 0, 0, 0, time.UTC)
 	evaluate := func(now time.Time) KlineFreshnessReport {
 		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
-			ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Freq: "1H",
+			ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Freq: "1h",
 			Latest: barStart, Subjects: 1, ObservedAt: now,
 		}})
 		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FactorDef, FactorSet, FactorSetInfo } from "@/api/factor/types";
 import type { View, ViewColumn } from "@/api/storage/types";
-import { buildInputBindings, enabledFactors, canCombineSelections, findOutputColumn, normalizeFrequency, validFactorSets, validateAliasConflicts } from "./bindings";
+import { buildInputBindings, enabledFactors, canCombineSelections, findOutputColumn, validFactorSets, validateAliasConflicts } from "./bindings";
 
 const source = { space_id: "s", view_id: "price", name: "价格", dataset_id: "prices", status: "active" } as View;
 const factor = { factor_id: "ma", name: "MA", input_columns: ["close"], outputs: ["ma20"], params_json: "{}", lookback_periods: 20 } as FactorDef;
@@ -28,7 +28,7 @@ describe("strategy factor-set bindings", () => {
   it("only offers enabled sets matching source dataset and frequency", () => {
     const other = { ...info, factor_set: { ...set, set_id: "other", source_dataset_id: "elsewhere" } };
     const disabled = { ...info, factor_set: { ...set, set_id: "disabled", status: "disabled" as const } };
-    expect(validFactorSets([info, other, disabled], source, "1H")).toEqual([info]);
+    expect(validFactorSets([info, other, disabled], source, "1h")).toEqual([info]);
   });
 
   it("rejects selections that do not share one result dataset or collide with the source", () => {
@@ -49,7 +49,7 @@ describe("strategy factor-set bindings", () => {
       input_columns: ["close"],
       params_json: "{}",
       lookback_periods: 20,
-      frequency: "1H",
+      frequency: "1h",
       result_dataset_id: "result",
       result_view_id: "view_result",
       output: "ma20",
@@ -76,8 +76,6 @@ describe("strategy factor-set bindings", () => {
   });
 
   it("compares backend frequency spellings and rejects output alias collisions", () => {
-    expect(normalizeFrequency("1h")).toBe("1H");
-    expect(normalizeFrequency("15m")).toBe("15m");
     expect(validateAliasConflicts([{ factor, factorSet: set, output: "close", column_name: "value", result_view_id: "view_result" }])).toContain("内置");
     expect(validateAliasConflicts([
       { factor, factorSet: set, output: "ma20", column_name: "value", result_view_id: "view_result" },

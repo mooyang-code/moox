@@ -11,21 +11,21 @@ describe("Kline series tag isolation", () => {
       {
         key: "BTC-USDT",
         version: "2026-07-29T00:00:00Z",
-        freq: "1H",
+        freq: "1h",
         seriesTag: "venue:binance",
         values: { open: "100", high: "110", low: "90", close: "105" }
       },
       {
         key: "BTC-USDT",
         version: "2026-07-29T00:00:00Z",
-        freq: "1H",
+        freq: "1h",
         seriesTag: "venue:okx",
         values: { open: "200", high: "210", low: "190", close: "205" }
       },
       {
         key: "sh600000",
         version: "2026-07-29T00:00:00Z",
-        freq: "1D",
+        freq: "1d",
         seriesTag: "",
         values: { open: "10", high: "11", low: "9", close: "10.5" }
       }

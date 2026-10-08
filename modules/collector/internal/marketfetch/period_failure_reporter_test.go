@@ -29,8 +29,8 @@ func TestPeriodFailureReportUsesStorageCanonicalFrequency(t *testing.T) {
 	var receivedFrequency string
 	storage := &periodFailureStorageStub{call: func(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, indexes []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
 		receivedFrequency = expectation.GetFrequency()
-		if receivedFrequency != "1H" {
-			return nil, fmt.Errorf("period frequency %q does not match Dataset declaration %q", receivedFrequency, "1H")
+		if receivedFrequency != "1h" {
+			return nil, fmt.Errorf("period frequency %q does not match Dataset declaration %q", receivedFrequency, "1h")
 		}
 		return recordedFailureResults(indexes, storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED), nil
 	}}
@@ -38,7 +38,7 @@ func TestPeriodFailureReportUsesStorageCanonicalFrequency(t *testing.T) {
 	reporter := newFailureReporter(db, storage)
 	reporter.budget = time.Second
 	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
-	require.Equal(t, "1H", receivedFrequency)
+	require.Equal(t, "1h", receivedFrequency)
 }
 
 func (*periodFailureStorageStub) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {

@@ -272,7 +272,7 @@ func TestPeriodCommitRejectsPhysicalIdentityAliases(t *testing.T) {
 		{name: "dataset_whitespace", mutate: func(k *pb.RowKey) { k.DatasetId = " bars " }},
 		{name: "subject_whitespace", mutate: func(k *pb.RowKey) { k.GetTimeSeries().SubjectId = " ETH-USDT " }},
 		{name: "tag_whitespace", mutate: func(k *pb.RowKey) { k.GetTimeSeries().SeriesTag = " binance " }},
-		{name: "month_is_not_minute", mutate: func(k *pb.RowKey) { k.GetTimeSeries().Freq = "1M" }},
+		{name: "month_is_not_minute", mutate: func(k *pb.RowKey) { k.GetTimeSeries().Freq = "1mo" }},
 		{name: "frequency_whitespace", mutate: func(k *pb.RowKey) { k.GetTimeSeries().Freq = " 1m " }},
 		{name: "hour_case_alias", frequency: "1h", mutate: func(k *pb.RowKey) { k.GetTimeSeries().Freq = "1H" }},
 		{name: "fractional_target_second", mutate: func(k *pb.RowKey) {
@@ -365,7 +365,7 @@ func TestPeriodMonthFrequencyDoesNotAliasMinute(t *testing.T) {
 	period := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	store := newPeriodReceiptStore(t, newPeriodReceiptClock(period.Add(time.Minute)))
 	month := periodExpectationForTest(period, 1, "BTC-USDT")
-	month.Frequency = "1M"
+	month.Frequency = "1mo"
 	month.DeadlineAt = period.Add(time.Hour).Unix()
 	minute := month
 	minute.Frequency = "1m"
@@ -376,7 +376,7 @@ func TestPeriodMonthFrequencyDoesNotAliasMinute(t *testing.T) {
 	require.NoError(t, err)
 
 	monthRow := periodRowForTest(period, "BTC-USDT")
-	monthRow.Key.GetTimeSeries().Freq = "1M"
+	monthRow.Key.GetTimeSeries().Freq = "1mo"
 	monthResult, err := store.CommitTimeSeriesBatch(ctx, month, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: monthRow}}, "month-row", "collector")
 	require.NoError(t, err)
 	require.Equal(t, "complete", monthResult.Status)
@@ -388,37 +388,6 @@ func TestPeriodMonthFrequencyDoesNotAliasMinute(t *testing.T) {
 	require.Equal(t, "complete", minuteResult.Status)
 	require.Equal(t, []uint32{0}, minuteResult.AcceptedSeriesIndexes)
 	require.Equal(t, 2, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()), "minute and month are distinct period identities at the same timestamp")
-}
-
-func TestPeriodHistoricalHourFrequencyDoesNotAliasLowercaseHour(t *testing.T) {
-	ctx := context.Background()
-	period := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	store := newPeriodReceiptStore(t, newPeriodReceiptClock(period.Add(time.Minute)))
-	historical := periodExpectationForTest(period, 1, "BTC-USDT")
-	historical.Frequency = "1H"
-	historical.DeadlineAt = period.Add(time.Hour).Unix()
-	canonical := historical
-	canonical.Frequency = "1h"
-
-	_, err := store.EnsureDatasetPeriod(ctx, historical)
-	require.NoError(t, err)
-	_, err = store.EnsureDatasetPeriod(ctx, canonical)
-	require.NoError(t, err)
-
-	historicalRow := periodRowForTest(period, "BTC-USDT")
-	historicalRow.Key.GetTimeSeries().Freq = "1H"
-	historicalResult, err := store.CommitTimeSeriesBatch(ctx, historical, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: historicalRow}}, "historical-hour-row", "collector")
-	require.NoError(t, err)
-	require.Equal(t, "complete", historicalResult.Status)
-	require.Equal(t, []uint32{0}, historicalResult.AcceptedSeriesIndexes)
-
-	canonicalRow := periodRowForTest(period, "BTC-USDT")
-	canonicalRow.Key.GetTimeSeries().Freq = "1h"
-	canonicalResult, err := store.CommitTimeSeriesBatch(ctx, canonical, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: canonicalRow}}, "canonical-hour-row", "collector")
-	require.NoError(t, err)
-	require.Equal(t, "complete", canonicalResult.Status)
-	require.Equal(t, []uint32{0}, canonicalResult.AcceptedSeriesIndexes)
-	require.Equal(t, 2, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()), "the catalog's 1H spelling and 1h are distinct Storage period keys")
 }
 
 func TestPeriodEnsureRejectsInvalidSeriesTagsWithoutSideEffects(t *testing.T) {

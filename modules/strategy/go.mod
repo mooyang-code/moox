@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/strategy
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
@@ -122,6 +123,8 @@ replace github.com/mooyang-code/moox/modules/strategy/proto/strategygen => ./pro
 replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/proto/tradegen
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 

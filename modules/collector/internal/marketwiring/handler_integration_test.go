@@ -61,13 +61,13 @@ func (f composedTimerRuntimeClientFunc) ClaimTimerBatch(ctx context.Context, req
 
 func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 	for _, product := range []string{"spot", "swap"} {
-		for _, frequency := range []string{"1m", "1H"} {
+		for _, frequency := range []string{"1m", "1h"} {
 			for _, mode := range []string{"invoke", "timer"} {
 				t.Run(product+"/"+frequency+"/"+mode, func(t *testing.T) {
 					now := time.Now().UTC().Truncate(time.Hour)
 					start := now.Add(-time.Hour)
 					barDuration := time.Minute
-					if frequency == "1H" {
+					if frequency == "1h" {
 						barDuration = time.Hour
 					}
 					expectedPath := "/api/v3/klines"

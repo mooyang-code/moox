@@ -122,7 +122,7 @@ func TestDatasetMetricsAcceptsCanonicalStorageFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1H"}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1h"}
 	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Hour}}); err != nil {
 		t.Fatalf("canonical Storage frequency rejected: %v", err)
 	}
@@ -142,9 +142,6 @@ func TestDatasetMetricsAcceptsSecondFrequency(t *testing.T) {
 	if err := metrics.ObserveFact(DatasetObservation{Key: key, Result: "success", FinishedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("second frequency observation rejected: %v", err)
 	}
-	if got, err := ParseDatasetFrequency("30s"); err != nil || got != 30*time.Second {
-		t.Fatalf("ParseDatasetFrequency(30s) = %v, %v", got, err)
-	}
 }
 
 func TestDatasetMetricsUsesCanonicalFrequencyIdentity(t *testing.T) {
@@ -152,15 +149,15 @@ func TestDatasetMetricsUsesCanonicalFrequencyIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lowercase := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1h"}
-	canonical := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1H"}
-	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: lowercase, Interval: time.Hour}}); err != nil {
+	canonical := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1h"}
+	alias := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", Freq: "1H"}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: canonical, Interval: time.Hour}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := metrics.ObserveRun(DatasetObservation{
-		Key: canonical, Result: "success", Rows: 1, FinishedAt: time.Now().UTC(),
+		Key: alias, Result: "success", Rows: 1, FinishedAt: time.Now().UTC(),
 	}); err != nil {
-		t.Fatalf("canonical observation did not match lowercase inventory: %v", err)
+		t.Fatalf("an alias observation did not match the canonical inventory: %v", err)
 	}
 }
 

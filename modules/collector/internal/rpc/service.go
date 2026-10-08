@@ -22,7 +22,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/report"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
@@ -1516,13 +1516,12 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(params.MarketType)) {
 		return fmt.Errorf("source Dataset %s market_type=%s does not match collect_params market_type=%s", params.SourceDatasetID, actualMarket, params.MarketType)
 	}
-	wantedFrequency, normalizeErr := report.NormalizeDatasetFrequency(strings.TrimSpace(params.SourceFrequency))
+	wantedFrequency, normalizeErr := frequencypkg.Normalize(params.SourceFrequency)
 	if normalizeErr != nil {
 		return fmt.Errorf("source Dataset %s frequency %q is invalid: %w", params.SourceDatasetID, params.SourceFrequency, normalizeErr)
 	}
 	for _, frequency := range info.Freqs {
-		actualFrequency, frequencyErr := report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
-		if frequencyErr == nil && actualFrequency == wantedFrequency {
+		if frequency == wantedFrequency {
 			// Dataset metadata adapters that expose column discovery return a
 			// non-nil ColumnTypes map. Validate both presence and logical type so
 			// an empty or malformed schema cannot enter ready and spin forever.

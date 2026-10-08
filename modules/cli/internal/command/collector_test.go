@@ -560,8 +560,8 @@ func TestDefaultCryptoCollectorTasksSelectOnlyKlineFields(t *testing.T) {
 	wantTasks := map[string]bool{
 		"Binance 现货 K 线 1m": false,
 		"Binance 合约 K 线 1m": false,
-		"Binance 现货 K 线 1H": false,
-		"Binance 合约 K 线 1H": false,
+		"Binance 现货 K 线 1h": false,
+		"Binance 合约 K 线 1h": false,
 	}
 	for _, task := range bundle.Tasks {
 		if task.SpaceID != "crypto" || task.DataType != "kline" {

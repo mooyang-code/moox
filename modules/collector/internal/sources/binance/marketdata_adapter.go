@@ -167,11 +167,10 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	if err := validateInstrumentType(productType, req.InstrumentType); err != nil {
 		return nil, err
 	}
-	// Binance interval tokens are case-sensitive. The catalog keeps the
-	// historical 1H spelling for the hourly Spot dataset, while Binance
-	// expects 1h on the wire. Keep the catalog frequency on the persisted row
-	// and normalize only the provider request.
-	providerInterval := normalizeBinanceInterval(req.Frequency)
+	providerInterval, err := binanceInterval(req.Frequency)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", marketdata.ErrInvalidRequest, err)
+	}
 
 	params := &sources.CollectParams{
 		InstType:  instType,
@@ -207,13 +206,17 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	return rows, nil
 }
 
-func normalizeBinanceInterval(frequency string) string {
-	raw := strings.TrimSpace(frequency)
+// binanceInterval maps a canonical frequency to the case-sensitive Binance
+// interval token; they differ only for a month ("1M" on the wire).
+func binanceInterval(raw string) (string, error) {
 	parsed, err := marketdata.ParseFrequency(raw)
 	if err != nil {
-		return raw
+		return "", err
 	}
-	return string(parsed)
+	if parsed == marketdata.FrequencyMonth {
+		return "1M", nil
+	}
+	return string(parsed), nil
 }
 
 func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
@@ -388,7 +391,7 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 		ProviderID:        "binance",
 		SourceID:          sourceID,
 		ProviderSymbol:    req.ProviderSymbol,
-		Frequency:         req.Frequency,
+		Frequency:         string(frequency),
 		BarStart:          barStart,
 		BarEnd:            frequency.BarEnd(barStart),
 		Open:              openValue,

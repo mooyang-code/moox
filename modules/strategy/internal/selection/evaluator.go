@@ -10,13 +10,14 @@ import (
 	"strings"
 	"time"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
-	"github.com/mooyang-code/moox/packages/report"
 )
 
 // Definition is the evaluator-facing form of the validated strategy DSL.
@@ -1370,8 +1371,8 @@ func adaptInput(raw any) ([]row, time.Time, int64, time.Duration, func(int) time
 		}
 		duration := time.Minute
 		if typed.DataFrequency != "" {
-			if parsed, parseErr := report.ParseDatasetFrequency(typed.DataFrequency); parseErr == nil && parsed > 0 {
-				duration = parsed
+			if parsed, parseErr := frequencypkg.Parse(typed.DataFrequency); parseErr == nil {
+				duration = parsed.NominalDuration()
 			}
 		}
 		index := int64(-1)

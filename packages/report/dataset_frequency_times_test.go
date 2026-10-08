@@ -13,21 +13,21 @@ func TestRecentDatasetTimesUsesStorageCalendarBoundaries(t *testing.T) {
 		frequency string
 		want      []time.Time
 	}{
-		{"1H", []time.Time{
+		{"1h", []time.Time{
 			time.Date(2026, time.July, 29, 15, 0, 0, 0, time.UTC),
 			time.Date(2026, time.July, 29, 14, 0, 0, 0, time.UTC),
 		}},
-		{"1W", []time.Time{
+		{"1w", []time.Time{
 			time.Date(2026, time.July, 27, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
 		}},
-		{"1M", []time.Time{
+		{"1mo", []time.Time{
 			time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC),
 		}},
-		{"1Y", []time.Time{
-			time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
-			time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC),
+		{"4h", []time.Time{
+			time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC),
+			time.Date(2026, time.July, 29, 8, 0, 0, 0, time.UTC),
 		}},
 	}
 	for _, tt := range tests {

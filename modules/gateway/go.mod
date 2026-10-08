@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/gateway
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
@@ -99,6 +100,8 @@ replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requ
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 

@@ -19,7 +19,7 @@ func TestParseScheduleIntervalAcceptsWholeMinuteDurations(t *testing.T) {
 		{raw: "1d", want: 24 * time.Hour},
 		{raw: "2d", want: 48 * time.Hour},
 		{raw: "1w", want: 7 * 24 * time.Hour},
-		{raw: "1M", want: 31 * 24 * time.Hour},
+		{raw: "1mo", want: 31 * 24 * time.Hour},
 	}
 
 	for _, tt := range tests {

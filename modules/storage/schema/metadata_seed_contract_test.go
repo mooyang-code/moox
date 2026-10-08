@@ -97,10 +97,10 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 	}
 	owners := map[string][]string{
 		"stockcn/dataset_stockcn_equity_kline": {"1m"},
-		"stockcn/dataset_stockcn_index_kline":  {"1H", "1d"},
+		"stockcn/dataset_stockcn_index_kline":  {"1h", "1d"},
 		"stockcn/dataset_stockcn_bond_kline":   {"1m", "1d"},
-		"stockhk/dataset_stockhk_equity_kline": {"1m", "1d", "1w", "1M"},
-		"stockus/dataset_stockus_equity_kline": {"1m", "1d", "1w", "1M"},
+		"stockhk/dataset_stockhk_equity_kline": {"1m", "1d", "1w", "1mo"},
+		"stockus/dataset_stockus_equity_kline": {"1m", "1d", "1w", "1mo"},
 	}
 	for key, freqs := range owners {
 		t.Run(key, func(t *testing.T) {

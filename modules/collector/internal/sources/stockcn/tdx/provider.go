@@ -84,7 +84,7 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
-		Frequencies:       []string{"1m", "5m", "15m", "30m", "60m", "1d", "1w"},
+		Frequencies:       []string{"1m", "5m", "15m", "30m", "1h", "1d", "1w"},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
 		MaxBarsPerRequest: p.maxBarsPerRequest,
@@ -149,28 +149,30 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	return rows, nil
 }
 
-func categoryForFrequency(frequency string) (tdxwire.KlineCategory, error) {
-	raw := strings.TrimSpace(frequency)
-	if raw == "1M" {
-		return tdxwire.CategoryMonth, nil
+func categoryForFrequency(raw string) (tdxwire.KlineCategory, error) {
+	parsed, err := marketdata.ParseFrequency(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w: tdx frequency %q", marketdata.ErrUnsupportedFrequency, raw)
 	}
-	switch strings.ToLower(raw) {
-	case "1m":
+	switch parsed {
+	case marketdata.FrequencyMinute:
 		return tdxwire.Category1Min, nil
-	case "5m":
+	case marketdata.Frequency5Min:
 		return tdxwire.Category5Min, nil
-	case "15m":
+	case marketdata.Frequency15Min:
 		return tdxwire.Category15Min, nil
-	case "30m":
+	case marketdata.Frequency30Min:
 		return tdxwire.Category30Min, nil
-	case "60m", "1h":
+	case marketdata.FrequencyHour:
 		return tdxwire.Category60Min, nil
-	case "1d":
+	case marketdata.FrequencyDay:
 		return tdxwire.CategoryDay, nil
-	case "1w":
+	case marketdata.FrequencyWeek:
 		return tdxwire.CategoryWeek, nil
+	case marketdata.FrequencyMonth:
+		return tdxwire.CategoryMonth, nil
 	default:
-		return 0, fmt.Errorf("%w: tdx frequency %q", marketdata.ErrUnsupportedFrequency, frequency)
+		return 0, fmt.Errorf("%w: tdx frequency %q", marketdata.ErrUnsupportedFrequency, raw)
 	}
 }
 

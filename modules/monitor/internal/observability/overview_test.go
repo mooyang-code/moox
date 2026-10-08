@@ -70,7 +70,7 @@ func TestDatasetTolerancesMatchFrequencyAliasesInOverrides(t *testing.T) {
 	}}
 
 	_, _, watermarkLag := datasetTolerances(
-		datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: "1H"},
+		datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: "1h"},
 		60,
 		policy,
 	)
@@ -83,7 +83,7 @@ func TestDatasetTolerancesMatchFrequencyAliasesInOverrides(t *testing.T) {
 func TestDatasetStatusMarksCanonicalFrequencyWatermarkStale(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	got := datasetStatus(now, datasetKey{
-		producer: "collector", spaceID: "crypto", datasetID: "market_kline", freq: "1H",
+		producer: "collector", spaceID: "crypto", datasetID: "market_kline", freq: "1h",
 	}, datasetValues{
 		interval: 3600, inventory: float64(now.Unix()), lastRun: float64(now.Unix()),
 		lastSuccess: float64(now.Unix()), output: float64(now.Add(-4 * time.Hour).Unix()),

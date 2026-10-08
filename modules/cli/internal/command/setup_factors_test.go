@@ -129,7 +129,7 @@ func TestLoadSetupFactorsMatchesFrequencyExactly(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte("def compute(df, params):\n    return df\n"), 0o600))
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "factors",
-		Sets: []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1M"}},
+		Sets: []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1mo"}},
 		Definitions: []setupconfig.FactorSetupDefinition{{
 			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias"},
 		}},

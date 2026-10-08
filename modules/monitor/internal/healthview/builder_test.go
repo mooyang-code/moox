@@ -133,7 +133,7 @@ func TestCollectorDatasetUsesStorageAsAuthoritativeHealthFact(t *testing.T) {
 
 func TestCollectorDatasetCoverageNormalizesFrequency(t *testing.T) {
 	items := []observability.DatasetFrequencyStatus{
-		{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1H"},
+		{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1h"},
 	}
 	if !collectorCoveredByStorage(
 		observability.DatasetFrequencyStatus{Producer: "collector", SpaceID: "crypto", DatasetID: "bars", Freq: "1h"},

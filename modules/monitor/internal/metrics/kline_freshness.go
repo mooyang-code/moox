@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
@@ -525,41 +526,21 @@ func klineUnixTime(value float64) (time.Time, error) {
 func viewRuleMatches(rule KlineFreshnessRule, identity viewSummaryIdentity) bool {
 	return strings.TrimSpace(rule.ViewID) == identity.ViewID && strings.TrimSpace(rule.SpaceID) == identity.SpaceID &&
 		(strings.TrimSpace(rule.DatasetID) == "" || strings.TrimSpace(rule.DatasetID) == identity.DatasetID) &&
-		strings.TrimSpace(rule.Frequency) == identity.Frequency
+		canonicalRuleFrequency(rule.Frequency) == identity.Frequency
 }
 
-// klineFrequencyUnit normalizes a frequency unit the way Collector does: units
-// are case-insensitive (Collector names hourly bars 1H) except M, which means
-// month as opposed to m for minute.
-func klineFrequencyUnit(unit string) string {
-	if unit == "M" {
-		return unit
+// canonicalRuleFrequency lets freshness rules use frequency aliases, while
+// Storage identities are always canonical.
+func canonicalRuleFrequency(raw string) string {
+	canonical, err := frequencypkg.Normalize(raw)
+	if err != nil {
+		return strings.TrimSpace(raw)
 	}
-	return strings.ToLower(unit)
+	return canonical
 }
 
 func isValidKlineFrequency(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	index := 0
-	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
-		index++
-	}
-	if index == 0 || index == len(value) {
-		return false
-	}
-	amount, err := strconv.Atoi(value[:index])
-	if err != nil || amount <= 0 {
-		return false
-	}
-	switch klineFrequencyUnit(value[index:]) {
-	case "s", "m", "h", "d", "w", "M":
-		return true
-	default:
-		return false
-	}
+	return frequencypkg.IsCanonical(value)
 }
 
 func sortedLimitedSubjects(subjects map[string]struct{}, limit int) []string {
@@ -648,35 +629,11 @@ func sessionSkipReason(rule KlineFreshnessRule, now time.Time, location *time.Lo
 	return "skipped_market_closed"
 }
 
+// klineFrequencyDuration returns the fixed bar length, or 0 for a month.
 func klineFrequencyDuration(value string) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	parsed, err := frequencypkg.Parse(value)
+	if err != nil {
 		return 0
 	}
-	index := 0
-	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
-		index++
-	}
-	if index == 0 || index == len(value) {
-		return 0
-	}
-	amount, err := strconv.Atoi(value[:index])
-	if err != nil || amount <= 0 {
-		return 0
-	}
-	unit := time.Duration(amount)
-	switch klineFrequencyUnit(value[index:]) {
-	case "s":
-		return unit * time.Second
-	case "m":
-		return unit * time.Minute
-	case "h":
-		return unit * time.Hour
-	case "d":
-		return unit * 24 * time.Hour
-	case "w":
-		return unit * 7 * 24 * time.Hour
-	default:
-		return 0
-	}
+	return parsed.Duration()
 }

@@ -26,7 +26,7 @@ func TestTaskInstanceStatusValuesAreCompact(t *testing.T) {
 }
 
 func TestResampleStableTaskIDIncludesSourceSeriesTag(t *testing.T) {
-	spec := TaskSpec{Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H"}
+	spec := TaskSpec{Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4h"}
 	left := StableResampleTaskID("crypto", "rule-1", spec, "venue:binance")
 	right := StableResampleTaskID("crypto", "rule-1", spec, "venue:okx")
 	assert.NotEqual(t, left, right)

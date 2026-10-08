@@ -10,7 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/packages/report"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -318,13 +318,8 @@ func retryHasReportableFailureSnapshot(item *domain.RetryItem) bool {
 	if frequency == "" || frequency != item.Frequency || item.TargetDataTime.IsZero() {
 		return false
 	}
-	if _, err := marketdata.ParseFrequency(frequency); err != nil {
-		return false
-	}
-	if _, err := report.NormalizeDatasetFrequency(frequency); err != nil {
-		return false
-	}
-	return true
+	_, err := marketdata.ParseFrequency(frequency)
+	return err == nil
 }
 
 func (r *FetchRetryRepository) ListPendingPeriodFailuresAfter(ctx context.Context, spaceID, afterRetryKey string, limit int) ([]domain.RetryItem, error) {
@@ -378,7 +373,7 @@ func (r *FetchRetryRepository) ApplyPeriodFailureReportResults(ctx context.Conte
 		if err != nil {
 			return fmt.Errorf("retry item has invalid failure frequency %q: %w", item.Frequency, err)
 		}
-		storageFrequency, err := report.NormalizeDatasetFrequency(item.Frequency)
+		storageFrequency, err := frequencypkg.Normalize(item.Frequency)
 		if err != nil {
 			return fmt.Errorf("retry item has invalid Storage failure frequency %q: %w", item.Frequency, err)
 		}

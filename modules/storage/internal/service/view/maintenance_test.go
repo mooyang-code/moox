@@ -251,7 +251,7 @@ func TestRebuildLookbackPeriodsSelectsFrequencyAndDefault(t *testing.T) {
 	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1m"}`}, configured); got != 4320 {
 		t.Fatalf("1m periods = %d, want 4320", got)
 	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1H"}`}, configured); got != 2880 {
+	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1h"}`}, configured); got != 2880 {
 		t.Fatalf("1H periods = %d, want 2880", got)
 	}
 	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1d"}`}, configured); got != 360 {

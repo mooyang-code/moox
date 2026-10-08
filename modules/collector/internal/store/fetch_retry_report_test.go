@@ -84,17 +84,17 @@ func TestApplyPeriodFailureReportResultsFindsCanonicalHourlyDeadline(t *testing.
 	targetsJSON, err := json.Marshal([]domain.WriteTarget{target})
 	require.NoError(t, err)
 	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
-		SpaceID: "crypto", RetryKey: "hourly-retry", SubjectID: "BTC-USDT", Frequency: "1H", TargetDataTime: period,
+		SpaceID: "crypto", RetryKey: "hourly-retry", SubjectID: "BTC-USDT", Frequency: "1h", TargetDataTime: period,
 		FailureTargetsJSON: string(targetsJSON), Status: "permanent_failed",
 	}))
 	deadline := period.Add(time.Minute)
 	require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
-		Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: period},
+		Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: period},
 		SeriesHash: "hourly-hash", ExpectedCount: 1, DeadlineAt: deadline, Status: domain.PeriodStatusWaiting, ConfirmedAt: period.Add(time.Second),
 	}))
 
 	result := domain.PeriodFailureTargetResult{
-		WriteTargetID: target.ID, SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: period,
+		WriteTargetID: target.ID, SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: period,
 		SeriesHash: target.SeriesHash, ExpectedCount: target.ExpectedCount, SeriesIndex: target.SeriesIndex,
 		Disposition: "missed_deadline", ObservedAt: time.Now().UTC(),
 	}

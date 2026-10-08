@@ -29,6 +29,7 @@ use (
 	./packages/commonpb
 	./packages/doctor
 	./packages/events
+	./packages/frequency
 	./packages/gatewayauth
 	./packages/gatewayproxy
 	./packages/healthz

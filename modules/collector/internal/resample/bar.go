@@ -177,7 +177,7 @@ func validateTaskSpec(spec TaskSpec) error {
 	if err := ValidateResamplePair(spec.SourceFrequency, spec.TargetFrequency); err != nil {
 		return err
 	}
-	if err := ValidateTargetDatasetID(spec.TargetDatasetID, spec.TargetFrequency.Slug); err != nil {
+	if err := ValidateTargetDatasetID(spec.TargetDatasetID, spec.TargetFrequency.Storage); err != nil {
 		return err
 	}
 	return nil

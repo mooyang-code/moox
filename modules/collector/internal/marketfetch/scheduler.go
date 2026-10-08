@@ -22,6 +22,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -2738,7 +2739,7 @@ func targetDataTime(now time.Time, frequency string) (time.Time, error) {
 }
 
 func normalizeStorageFrequency(frequency string) (string, error) {
-	return report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
+	return frequencypkg.Normalize(frequency)
 }
 
 func stableID(parts ...string) string {

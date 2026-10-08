@@ -5,17 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/robfig/cron"
 	"gopkg.in/yaml.v3"
 )
-
-var frequencyPattern = regexp.MustCompile(`^([1-9][0-9]*)([mhdwMHDW])$`)
 
 // DSL is the user-authored strategy definition.  The shape is deliberately
 // small: the rule name is the only dynamic part of the document.
@@ -251,7 +250,7 @@ func Validate(dsl *DSL) error {
 	case "crypto_24x7":
 		// Continuous markets support the configured minute/hour/day bar.
 	case "cn_stock":
-		if dsl.Data.Bar != "1D" {
+		if dsl.Data.Bar != string(frequencypkg.Day1) {
 			return fmt.Errorf("strategy DSL data.calendar cn_stock only supports 1d bars")
 		}
 	default:
@@ -272,22 +271,17 @@ func Validate(dsl *DSL) error {
 	return validateWeightBudget(dsl.Rules)
 }
 
+// normalizeFrequency returns the canonical bar for a strategy DSL. The first
+// implementation's calendar contract covers minute, hour and day bars only.
 func normalizeFrequency(value string) (string, error) {
-	matches := frequencyPattern.FindStringSubmatch(strings.TrimSpace(value))
-	if len(matches) != 3 {
-		return "", fmt.Errorf("frequency %q is invalid", value)
+	parsed, err := frequencypkg.Parse(value)
+	if err != nil {
+		return "", err
 	}
-	unit := matches[2]
-	// In the report package lowercase m means minutes while uppercase M means
-	// months. Preserve that distinction and reject month/week units for the
-	// first implementation, whose calendar contract is minute/hour/day only.
-	if unit == "M" || unit == "w" || unit == "W" {
+	if parsed == frequencypkg.Week1 || parsed == frequencypkg.Month1 || parsed == frequencypkg.Second30 {
 		return "", fmt.Errorf("frequency %q is unsupported; use minute/hour/day", value)
 	}
-	if unit != "m" {
-		unit = strings.ToUpper(unit)
-	}
-	return matches[1] + unit, nil
+	return string(parsed), nil
 }
 
 func supportedEventName(name string) bool {

@@ -53,53 +53,27 @@ func TestPeriodSeriesSnapshotSeparatesMonthAndMinuteFrequency(t *testing.T) {
 	s := newCollectorStore(t)
 	period := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	month := testPeriodSnapshot(period, "BTC-USDT")
-	month.Key.Frequency = "1M"
-	month.Entries[0].Frequency = "1M"
+	month.Key.Frequency = "1mo"
+	month.Entries[0].Frequency = "1mo"
 	minute := testPeriodSnapshot(period, "BTC-USDT")
 
 	storedMonth, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, month)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.Equal(t, "1M", storedMonth.Key.Frequency)
+	require.Equal(t, "1mo", storedMonth.Key.Frequency)
 	storedMinute, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, minute)
 	require.NoError(t, err)
 	require.True(t, created, "a minute snapshot at the same timestamp must not collide with a month snapshot")
 	require.Equal(t, "1m", storedMinute.Key.Frequency)
 
-	loadedMonth, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1M", PeriodTime: period})
+	loadedMonth, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1mo", PeriodTime: period})
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "1M", loadedMonth.Entries[0].Frequency)
+	require.Equal(t, "1mo", loadedMonth.Entries[0].Frequency)
 	loadedMinute, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "1m", loadedMinute.Entries[0].Frequency)
-}
-
-func TestPeriodSeriesSnapshotPreservesHourlyFrequencyIdentity(t *testing.T) {
-	ctx := context.Background()
-	s := newCollectorStore(t)
-	period := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	historical := testPeriodSnapshot(period, "BTC-USDT")
-	historical.Key.Frequency = "1H"
-	historical.Entries[0].Frequency = "1H"
-	canonical := testPeriodSnapshot(period, "BTC-USDT")
-	canonical.Key.Frequency = "1h"
-	canonical.Entries[0].Frequency = "1h"
-
-	storedHistorical, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, historical)
-	require.NoError(t, err)
-	require.True(t, created)
-	require.Equal(t, "1H", storedHistorical.Key.Frequency)
-	storedCanonical, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, canonical)
-	require.NoError(t, err)
-	require.True(t, created, "the canonical 1h key must not alias the catalog's historical 1H spelling")
-	require.Equal(t, "1h", storedCanonical.Key.Frequency)
-
-	loaded, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, historical.Key)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "1H", loaded.Entries[0].Frequency)
 }
 
 func TestCreatePeriodSeriesSnapshotIfAbsentIsIdempotentForConcurrentSameSnapshot(t *testing.T) {
@@ -258,7 +232,7 @@ func TestPeriodSeriesSnapshotContractValidatesEnvelopeAndDistinguishesAbsent(t *
 	require.NoError(t, err)
 	require.True(t, created)
 	wantKey := testPeriodSnapshot(period, "BTC-USDT", "ETH-USDT").Key
-	wantKey.Frequency = "1M"
+	wantKey.Frequency = "1mo"
 	require.Equal(t, wantKey, snapshot.Key)
 	require.Equal(t, uint32(len(snapshot.Entries)), snapshot.ExpectedCount)
 	require.Equal(t, snapshot.Entries[0].SeriesHash, snapshot.SeriesHash)
@@ -313,9 +287,9 @@ func TestPeriodSeriesSnapshotCleanupRetentionUsesSnapshotAndConfirmationAge(t *t
 		frequency string
 		period    time.Time
 	}{
-		{frequency: "1D", period: now.Add(-2 * 24 * time.Hour)},
-		{frequency: "1W", period: now.Add(-8 * 24 * time.Hour)},
-		{frequency: "1M", period: now.Add(-32 * 24 * time.Hour)},
+		{frequency: "1d", period: now.Add(-2 * 24 * time.Hour)},
+		{frequency: "1w", period: now.Add(-8 * 24 * time.Hour)},
+		{frequency: "1mo", period: now.Add(-32 * 24 * time.Hour)},
 	}
 	for _, fixture := range fixtures {
 		snapshot := testPeriodSnapshot(fixture.period, "BTC-USDT")

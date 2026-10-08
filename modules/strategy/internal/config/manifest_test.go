@@ -33,7 +33,7 @@ func TestDSLContract(t *testing.T) {
 	dsl, err := Parse(validDSLYAML())
 	require.NoError(t, err)
 	require.Equal(t, "strategy_demo", dsl.Name)
-	require.Equal(t, "1H", dsl.Data.Bar)
+	require.Equal(t, "1h", dsl.Data.Bar)
 	require.Equal(t, "UTC", dsl.Triggers.Schedule.Timezone)
 	require.Len(t, dsl.Rules, 2)
 	require.Equal(t, "spot_symbols", dsl.Rules["momentum"].Pool.UDF.Name)
@@ -85,7 +85,7 @@ func TestDSLPreservesMinuteFrequencyUnit(t *testing.T) {
 }
 
 func TestDSLRejectsUnsupportedMonthAndWeekBars(t *testing.T) {
-	for _, bar := range []string{"1M", "1w", "1W"} {
+	for _, bar := range []string{"1mo", "1w", "1w"} {
 		raw := []byte("name: unsupported\ntriggers: {event: {name: ready}}\ndata: {bar: " + bar + ", calendar: crypto_24x7}\nrules: {r: {pool: [BTC], weight: 1}}\n")
 		if _, err := Parse(raw); err == nil {
 			t.Fatalf("bar %s should be rejected by the v1 calendar contract", bar)
