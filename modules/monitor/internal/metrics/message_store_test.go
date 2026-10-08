@@ -197,7 +197,7 @@ func TestMetricMessageStoreCommitsLargeReportInBatches(t *testing.T) {
 	require.True(t, plain.ObservedAt.Equal(at.Add(time.Second)))
 }
 
-func TestMetricMessageStorePrunesRetiredSeriesWithLatest(t *testing.T) {
+func TestMetricMessageStorePrunesRetiredSeriesAndReporters(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
@@ -215,9 +215,20 @@ func TestMetricMessageStorePrunesRetiredSeriesWithLatest(t *testing.T) {
 		}})
 		require.NoError(t, err)
 	}
+	retiredReport := &metricspb.MetricReport{ServiceName: "renamed-service", InstanceId: "renamed-service@a", BootId: "b"}
+	_, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "renamed"}, retiredReport, nil)
+	require.NoError(t, err)
+	require.NoError(t, r.db.Model(&MetricService{}).Where("c_service_name = ?", retiredReport.ServiceName).
+		Update("c_last_seen_at", now.Add(-RetiredSeriesAfter-time.Minute)).Error)
+	require.NoError(t, r.db.Model(&MetricService{}).Where("c_service_name = ?", report.ServiceName).
+		Update("c_last_seen_at", now.Add(-time.Minute)).Error)
 	pruned, err := r.PruneRetiredSeries(context.Background(), now)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, pruned)
+	var services []MetricService
+	require.NoError(t, r.db.Order("c_service_name").Find(&services).Error)
+	require.Len(t, services, 1)
+	require.Equal(t, report.ServiceName, services[0].ServiceName)
 	_, err = r.GetLatest(context.Background(), "retired")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	_, err = r.GetLatest(context.Background(), "live")

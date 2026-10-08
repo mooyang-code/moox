@@ -194,13 +194,16 @@ func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (in
 	return store.DeleteBefore(ctx, r.db, "t_monitor_metric_ingest_messages", "c_expires_at", now)
 }
 
-// RetiredSeriesAfter is how long a series may go unreported before it is
-// dropped with its latest value: the View, subject or reporter behind it is
-// gone. A series that is reported again is simply recreated.
+// RetiredSeriesAfter is how long a series or reporter may go unreported before
+// it is dropped: the View, subject or service behind it is gone. A series or
+// reporter that is reported again is simply recreated.
 const RetiredSeriesAfter = 24 * time.Hour
 
 // PruneRetiredSeries removes the series not reported since RetiredSeriesAfter
-// before now, together with their latest values.
+// before now, together with their latest values, and the reporter instances
+// that went silent in the same window. Dropping a reporter lets its freshness
+// check resolve as no longer expected, so a renamed or removed service does not
+// keep alerting; SysDeploy probes still cover a registered service that is down.
 func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("message store is not initialized")
@@ -213,8 +216,11 @@ func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Ti
 			return err
 		}
 		result := tx.Where("c_last_seen_at < ?", cutoff).Delete(&MetricSeries{})
+		if result.Error != nil {
+			return result.Error
+		}
 		pruned = result.RowsAffected
-		return result.Error
+		return tx.Where("c_last_seen_at < ?", cutoff).Delete(&MetricService{}).Error
 	})
 	return pruned, err
 }
