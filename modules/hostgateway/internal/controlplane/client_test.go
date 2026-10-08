@@ -2,147 +2,120 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
+	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func TestPullSignsRequestAndValidatesSnapshot(t *testing.T) {
-	const nodeID = "gateway-test"
-	const secret = "control-secret"
-	snapshot, _ := gatewayroute.NormalizeAndHash(nodeID, []gatewayroute.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/gateway-control/routes" || r.URL.Query().Get("node_id") != nodeID || r.URL.Query().Get("current_hash") != "old" {
-			t.Errorf("request URL = %s", r.URL.String())
-		}
-		if _, err := gatewayauth.Verify(gatewayauth.Credentials{KeyID: DefaultControlKeyID, Secret: secret}, gatewayauth.Request{Method: http.MethodGet, Path: r.URL.EscapedPath(), TargetNode: nodeID}, r.Header, time.Now()); err != nil {
-			t.Errorf("Verify() = %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(snapshot)
-	}))
-	defer server.Close()
-	client := newTestClient(t, server.URL, secret)
-	got, err := client.Pull(context.Background(), "old")
-	if err != nil {
-		t.Fatalf("Pull() = %v", err)
-	}
-	if got.RouteHash != snapshot.RouteHash {
-		t.Fatalf("hash = %q", got.RouteHash)
-	}
+type fakeGatewayControl struct {
+	adminpb.UnimplementedGatewayControl
+	mu      sync.Mutex
+	callers []string
+	reports []*adminpb.ReportStatusReq
+	hash    string
 }
 
-func TestPullFailureReturnsNoSnapshot(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "down", http.StatusBadGateway) }))
-	defer server.Close()
-	client := newTestClient(t, server.URL, "control-secret")
-	got, err := client.Pull(context.Background(), "old")
-	if err == nil || got.RouteHash != "" || len(got.Routes) != 0 {
-		t.Fatalf("Pull() = %+v, %v", got, err)
+func (f *fakeGatewayControl) PullSnapshot(ctx context.Context, req *adminpb.PullSnapshotReq) (*adminpb.PullSnapshotRsp, error) {
+	f.mu.Lock()
+	f.callers = append(f.callers, string(trpc.GetMetaData(ctx, gatewayroute.MetadataVerifiedCaller)))
+	f.mu.Unlock()
+	if req.GetCurrentHash() == f.hash {
+		return &adminpb.PullSnapshotRsp{RetInfo: &adminpb.RetInfo{}}, nil
 	}
+	return &adminpb.PullSnapshotRsp{RetInfo: &adminpb.RetInfo{}, Changed: true, Snapshot: &adminpb.HostSnapshot{HostId: req.GetHostId(), Hash: f.hash}}, nil
 }
 
-func TestNewRejectsNonLoopbackPlaintextControlPlane(t *testing.T) {
-	key := filepath.Join(t.TempDir(), "control.key")
-	if err := os.WriteFile(key, []byte("secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := New(Options{NodeID: "gateway-test", BaseURL: "http://admin.example", HMACKeyFile: key}); err == nil {
-		t.Fatal("New() accepted non-loopback plaintext Admin URL")
-	}
+func (f *fakeGatewayControl) ReportStatus(_ context.Context, req *adminpb.ReportStatusReq) (*adminpb.ReportStatusRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reports = append(f.reports, req)
+	return &adminpb.ReportStatusRsp{RetInfo: &adminpb.RetInfo{}}, nil
 }
 
-func TestPullRejectsRedirectWithoutLeakingAuthentication(t *testing.T) {
-	targetCalled := false
-	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		targetCalled = true
-		if r.Header.Get("X-Moox-Signature") != "" {
-			t.Error("redirect leaked authentication header")
-		}
-	}))
-	defer target.Close()
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Redirect(w, &http.Request{}, target.URL, http.StatusFound)
-	}))
-	defer origin.Close()
-	client := newTestClient(t, origin.URL, "control-secret")
-	if _, err := client.Pull(context.Background(), ""); err == nil {
-		t.Fatal("Pull() followed redirect")
-	}
-	if targetCalled {
-		t.Fatal("redirect target was contacted")
-	}
-}
-
-func TestPullRejectsWrongNodeAndInvalidRouteHash(t *testing.T) {
-	for name, mutate := range map[string]func(*gatewayroute.Snapshot){
-		"wrong node":   func(snapshot *gatewayroute.Snapshot) { snapshot.NodeID = "other-node" },
-		"invalid hash": func(snapshot *gatewayroute.Snapshot) { snapshot.RouteHash = "invalid" },
-	} {
-		t.Run(name, func(t *testing.T) {
-			snapshot, _ := gatewayroute.NormalizeAndHash("gateway-test", nil)
-			mutate(&snapshot)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(snapshot) }))
-			defer server.Close()
-			client := newTestClient(t, server.URL, "control-secret")
-			got, err := client.Pull(context.Background(), "old")
-			if err == nil || got.RouteHash != "" || !errors.Is(err, ErrInvalidSnapshot) {
-				t.Fatalf("Pull() = %+v, %v", got, err)
-			}
-		})
-	}
-}
-
-func TestReportSignsExactJSONBody(t *testing.T) {
-	const secret = "control-secret"
-	seen := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			NodeID           string `json:"node_id"`
-			AppliedRouteHash string `json:"applied_route_hash"`
-			RouteCount       int32  `json:"route_count"`
-			LastError        string `json:"last_error"`
-		}
-		var raw json.RawMessage
-		_ = json.NewDecoder(r.Body).Decode(&raw)
-		if _, err := gatewayauth.Verify(gatewayauth.Credentials{KeyID: DefaultControlKeyID, Secret: secret}, gatewayauth.Request{Method: http.MethodPost, Path: r.URL.EscapedPath(), TargetNode: "gateway-test", Body: raw}, r.Header, time.Now()); err != nil {
-			t.Errorf("Verify() = %v", err)
-		}
-		if err := json.Unmarshal(raw, &body); err != nil {
-			t.Error(err)
-		}
-		if body.NodeID != "gateway-test" || body.AppliedRouteHash != "hash" || body.RouteCount != 2 || body.LastError != "oops" {
-			t.Errorf("body = %+v", body)
-		}
-		seen = true
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-	client := newTestClient(t, server.URL, secret)
-	if err := client.Report(context.Background(), "hash", 2, "oops"); err != nil {
-		t.Fatalf("Report() = %v", err)
-	}
-	if !seen {
-		t.Fatal("request not seen")
-	}
-}
-
-func newTestClient(t *testing.T, baseURL, secret string) *Client {
+func startFakeControl(t *testing.T) (*fakeGatewayControl, string) {
 	t.Helper()
-	key := filepath.Join(t.TempDir(), "control.key")
-	if err := os.WriteFile(key, []byte(secret+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	client, err := New(Options{NodeID: "gateway-test", BaseURL: baseURL, HMACKeyFile: key})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client
+	address := listener.Addr().String()
+	_ = listener.Close()
+	fake := &fakeGatewayControl{hash: "h1"}
+	svc := server.New(server.WithAddress(address), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.admin.GatewayControl"))
+	adminpb.RegisterGatewayControlService(svc, fake)
+	go func() { _ = svc.Serve() }()
+	t.Cleanup(func() { _ = svc.Close(nil) })
+	time.Sleep(150 * time.Millisecond)
+	return fake, address
+}
+
+func controlConfig(target string) config.Config {
+	var cfg config.Config
+	cfg.Host.ID = "control"
+	cfg.Control.Target = target
+	cfg.Control.Caller = "host-gateway@control"
+	return cfg
+}
+
+func TestDirectClientWritesItsOwnCaller(t *testing.T) {
+	fake, address := startFakeControl(t)
+	client, err := New(Options{Config: controlConfig(address), InstanceID: "inst-1", Version: "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, changed, err := client.Pull(context.Background(), "")
+	if err != nil || !changed || snapshot.GetHash() != "h1" {
+		t.Fatalf("Pull = %v %v %v", snapshot, changed, err)
+	}
+	if _, changed, err := client.Pull(context.Background(), "h1"); err != nil || changed {
+		t.Fatalf("同一哈希应当没有变化: %v %v", changed, err)
+	}
+	notAfter := time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := client.Report(context.Background(), Status{AppliedHash: "h1", RouteCount: 3, LastError: "x", CertificateNotAfter: notAfter}); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.callers) != 2 || fake.callers[0] != "host-gateway@control" {
+		t.Fatalf("直连时应当写入本机主机网关身份: %v", fake.callers)
+	}
+	report := fake.reports[0]
+	if report.GetInstanceId() != "inst-1" || report.GetVersion() != "v1" || report.GetRouteCount() != 3 || report.GetCertificateNotAfter() != "2031-01-01T00:00:00Z" {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestRemoteClientRequiresMatchingKey(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "caller-host-gateway.key")
+	raw, err := gatewayauth.MarshalCallerKey(gatewayauth.CallerKey{Caller: "host-gateway@compute-1", KeyID: "host-gateway@compute-1-1", Secret: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cfg config.Config
+	cfg.Host.ID = "storage"
+	cfg.Control.Target = "106.53.107.122:11003"
+	cfg.Control.Caller = "host-gateway@storage"
+	cfg.Control.KeyFile = keyFile
+	cfg.TLS.CAFile = filepath.Join(dir, "ca.crt")
+	if _, err := New(Options{Config: cfg, InstanceID: "i"}); err == nil || !strings.Contains(err.Error(), "host-gateway@compute-1") {
+		t.Fatalf("密钥属于其他主机时应当报错: %v", err)
+	}
+	if _, err := New(Options{Config: controlConfig("127.0.0.1:11112")}); err == nil {
+		t.Fatal("缺少实例 ID 应当报错")
+	}
 }

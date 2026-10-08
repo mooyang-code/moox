@@ -1,68 +1,67 @@
-// Package bootstrap wires the standalone gateway and owns its route lifecycle.
+// Package bootstrap 组装主机网关：快照同步、跨主机入口（TLS）、本机入口与服务目录、健康端口。
 package bootstrap
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/controlplane"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/directory"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
+	"github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb"
 	"github.com/mooyang-code/moox/packages/healthz"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	trpcserver "trpc.group/trpc-go/trpc-go/server"
 )
 
-type routeStore interface {
-	Load() (gatewayroute.Snapshot, error)
-	Save(gatewayroute.Snapshot) error
+type snapshotStore interface {
+	Load() (*adminpb.HostSnapshot, error)
+	Save(*adminpb.HostSnapshot) error
 }
 
 type controlClient interface {
-	Pull(context.Context, string) (gatewayroute.Snapshot, error)
-	Report(context.Context, string, int32, string) error
+	Pull(context.Context, string) (*adminpb.HostSnapshot, bool, error)
+	Report(context.Context, controlplane.Status) error
 }
 
+// Options 是快照同步的依赖。
 type Options struct {
-	NodeID              string
-	Routes              routeStore
+	HostID              string
+	Store               snapshotStore
 	Control             controlClient
 	Health              *health.State
+	CertificateNotAfter time.Time
 	Now                 func() time.Time
 	Warn                func(string)
 	SyncWarningAfter    time.Duration
 	SyncWarningInterval time.Duration
 }
 
-const (
-	serviceReadTimeout = 15 * time.Second
-	// CloudNode synchronous SCF canaries may use the full 900s function
-	// timeout. Keep the public gateway envelope longer than the route timeout.
-	serviceWriteTimeout = 960 * time.Second
-	serviceIdleTimeout  = 60 * time.Second
-	healthReadTimeout   = 5 * time.Second
-	healthWriteTimeout  = 10 * time.Second
-	healthIdleTimeout   = 30 * time.Second
-)
-
+// Runtime 维护当前快照：启动时先加载缓存，之后每 15 秒拉取一次。
 type Runtime struct {
-	nodeID        string
-	routes        routeStore
+	hostID        string
+	store         snapshotStore
 	control       controlClient
 	health        *health.State
-	table         gatewayroute.Table
+	current       snapshot.Current
+	certNotAfter  time.Time
 	mu            sync.Mutex
 	now           func() time.Time
 	warn          func(string)
@@ -73,6 +72,7 @@ type Runtime struct {
 	lastWarning   time.Time
 }
 
+// New 创建快照同步。
 func New(options Options) *Runtime {
 	now := options.Now
 	if now == nil {
@@ -94,287 +94,317 @@ func New(options Options) *Runtime {
 		options.Health.SetClock(now)
 	}
 	return &Runtime{
-		nodeID: options.NodeID, routes: options.Routes, control: options.Control, health: options.Health,
-		now: now, warn: warn, warnAfter: warnAfter, warnEvery: warnEvery,
+		hostID: options.HostID, store: options.Store, control: options.Control, health: options.Health,
+		certNotAfter: options.CertificateNotAfter, now: now, warn: warn, warnAfter: warnAfter, warnEvery: warnEvery,
 	}
 }
 
-func (runtime *Runtime) Table() *gatewayroute.Table { return &runtime.table }
+// Current 返回当前快照的持有者，转发入口和 Directory 服务从这里读取。
+func (r *Runtime) Current() *snapshot.Current { return &r.current }
 
-func (runtime *Runtime) Initialize(ctx context.Context) error {
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-
+// Initialize 先加载缓存，再拉取一次；拉取失败且没有可用缓存时返回错误。
+func (r *Runtime) Initialize(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	hasCache := false
-	if cached, err := runtime.routes.Load(); err == nil {
-		if err := runtime.apply(cached, false); err == nil {
+	if cached, err := r.store.Load(); err == nil {
+		if applied, err := snapshot.Validate(r.hostID, cached); err == nil {
+			r.apply(applied)
 			hasCache = true
+		} else {
+			r.health.RouteValidationFailed()
+			r.warn(fmt.Sprintf("主机网关快照缓存无效，忽略: %v", err))
 		}
 	}
-	hash, _ := runtime.health.Current()
-	snapshot, err := runtime.control.Pull(ctx, hash)
-	if err != nil {
-		runtime.health.RouteSyncFailed()
-		runtime.noteSyncFailure()
-		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
-			runtime.health.RouteValidationFailed()
-		}
+	if err := r.sync(ctx); err != nil {
 		if hasCache {
-			_ = runtime.report(ctx, err.Error())
 			return nil
 		}
-		return fmt.Errorf("initial route pull failed without a valid cache: %w", err)
+		return fmt.Errorf("首次拉取快照失败且没有可用缓存: %w", err)
 	}
-	if err := runtime.apply(snapshot, true); err != nil {
-		runtime.health.RouteSyncFailed()
-		runtime.noteSyncFailure()
-		if hasCache {
-			_ = runtime.report(ctx, err.Error())
-			return nil
-		}
-		return fmt.Errorf("apply initial route snapshot: %w", err)
-	}
-	runtime.resetSyncFailure()
-	// Keep the process alive when the route pull succeeded but the heartbeat
-	// could not be acknowledged. Readiness remains degraded until a later
-	// refresh reports successfully.
-	_ = runtime.report(ctx, "")
 	return nil
 }
 
-func (runtime *Runtime) Refresh(ctx context.Context) error {
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	hash, _ := runtime.health.Current()
-	snapshot, err := runtime.control.Pull(ctx, hash)
-	if err == nil {
-		err = runtime.apply(snapshot, true)
-	}
+// Refresh 拉取一次快照并上报心跳，由路由刷新定时器每 15 秒调用。
+func (r *Runtime) Refresh(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sync(ctx)
+}
+
+func (r *Runtime) sync(ctx context.Context) error {
+	err := r.pull(ctx)
+	lastError := ""
 	if err != nil {
-		runtime.health.RouteSyncFailed()
-		runtime.noteSyncFailure()
-		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
-			runtime.health.RouteValidationFailed()
-		}
-		_ = runtime.report(ctx, err.Error())
-		return err
-	}
-	runtime.resetSyncFailure()
-	if err := runtime.report(ctx, ""); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (runtime *Runtime) noteSyncFailure() {
-	now := runtime.now()
-	if !runtime.failureActive {
-		runtime.failureSince = now
-		runtime.failureActive = true
-		return
-	}
-	if now.Sub(runtime.failureSince) < runtime.warnAfter {
-		return
-	}
-	if !runtime.lastWarning.IsZero() && now.Sub(runtime.lastWarning) < runtime.warnEvery {
-		return
-	}
-	runtime.lastWarning = now
-	runtime.warn(fmt.Sprintf(
-		"gateway route sync stale: node_id=%s continuous_failure=%s; retaining cached routes while readiness is degraded",
-		runtime.nodeID, now.Sub(runtime.failureSince).Truncate(time.Second),
-	))
-}
-
-func (runtime *Runtime) resetSyncFailure() {
-	runtime.failureSince = time.Time{}
-	runtime.failureActive = false
-	runtime.lastWarning = time.Time{}
-}
-
-func (runtime *Runtime) apply(snapshot gatewayroute.Snapshot, persist bool) error {
-	if snapshot.NodeID != runtime.nodeID {
-		runtime.health.RouteValidationFailed()
-		return fmt.Errorf("route snapshot targets %q, want %q", snapshot.NodeID, runtime.nodeID)
-	}
-	var validated gatewayroute.Table
-	if err := validated.Replace(snapshot); err != nil {
-		runtime.health.RouteValidationFailed()
-		return err
-	}
-	if persist {
-		currentHash, _ := runtime.health.Current()
-		if snapshot.RouteHash == currentHash {
-			runtime.health.RouteSyncSucceeded(runtime.now())
-			return nil
-		}
-		if err := runtime.routes.Save(snapshot); err != nil {
-			return fmt.Errorf("save route snapshot: %w", err)
-		}
-	}
-	if err := runtime.table.Replace(snapshot); err != nil {
-		return err
-	}
-	runtime.health.ApplyRoutes(snapshot.RouteHash, len(snapshot.Routes), snapshot.Disabled)
-	if persist {
-		runtime.health.RouteSyncSucceeded(runtime.now())
-	}
-	return nil
-}
-
-func (runtime *Runtime) report(ctx context.Context, lastError string) error {
-	hash, count := runtime.health.Current()
-	if err := runtime.control.Report(ctx, hash, int32(count), lastError); err != nil {
-		runtime.health.RouteReportFailed()
-		runtime.warn(fmt.Sprintf("gateway heartbeat report failed: node_id=%s", runtime.nodeID))
-		return err
-	}
-	runtime.health.RouteReportSucceeded(runtime.now())
-	return nil
-}
-
-func Run(ctx context.Context, cfg config.Config) error {
-	control, err := controlplane.New(controlplane.Options{NodeID: cfg.Node.ID, BaseURL: cfg.ControlPlane.BaseURL, HMACKeyFile: cfg.ControlPlane.HMACKeyFile, CAFile: cfg.ControlPlane.CAFile})
-	if err != nil {
-		return err
-	}
-	var credentialRegistry *gatewayauth.CredentialRegistry
-	var credentialsSecret string
-	if cfg.Auth.CredentialsFile != "" {
-		credentialRegistry, err = gatewayauth.LoadCredentialRegistry(cfg.Auth.CredentialsFile)
-		if err != nil {
-			return err
-		}
+		lastError = err.Error()
+		r.health.RouteSyncFailed()
+		r.noteSyncFailure()
 	} else {
-		credentialsSecret, err = config.ReadSecret(cfg.Auth.HMACKeyFile)
-		if err != nil {
-			return fmt.Errorf("read service authentication key: %w", err)
+		r.resetSyncFailure()
+		r.health.RouteSyncSucceeded(r.now())
+	}
+	if reportErr := r.report(ctx, lastError); reportErr != nil && err == nil {
+		return reportErr
+	}
+	return err
+}
+
+func (r *Runtime) pull(ctx context.Context) error {
+	next, changed, err := r.control.Pull(ctx, r.current.Hash())
+	if err != nil {
+		return err
+	}
+	if !changed {
+		if r.current.Load() == nil {
+			return errors.New("网关控制报告快照没有变化，但本机还没有任何快照")
 		}
+		return nil
+	}
+	applied, err := snapshot.Validate(r.hostID, next)
+	if err != nil {
+		r.health.RouteValidationFailed()
+		return err
+	}
+	if err := r.store.Save(applied.Proto); err != nil {
+		return fmt.Errorf("保存快照缓存: %w", err)
+	}
+	r.apply(applied)
+	return nil
+}
+
+func (r *Runtime) apply(applied *snapshot.Applied) {
+	r.current.Store(applied, r.now())
+	r.health.ApplyRoutes(applied.Hash, applied.Routes, applied.Disabled)
+}
+
+func (r *Runtime) report(ctx context.Context, lastError string) error {
+	hash, count := r.health.Current()
+	err := r.control.Report(ctx, controlplane.Status{
+		AppliedHash: hash, RouteCount: int32(count), LastError: lastError, CertificateNotAfter: r.certNotAfter,
+	})
+	if err != nil {
+		r.health.RouteReportFailed()
+		r.warn(fmt.Sprintf("主机网关心跳上报失败: host_id=%s: %v", r.hostID, err))
+		return err
+	}
+	r.health.RouteReportSucceeded(r.now())
+	return nil
+}
+
+func (r *Runtime) noteSyncFailure() {
+	now := r.now()
+	if !r.failureActive {
+		r.failureSince = now
+		r.failureActive = true
+		return
+	}
+	if now.Sub(r.failureSince) < r.warnAfter {
+		return
+	}
+	if !r.lastWarning.IsZero() && now.Sub(r.lastWarning) < r.warnEvery {
+		return
+	}
+	r.lastWarning = now
+	r.warn(fmt.Sprintf("主机网关快照同步持续失败: host_id=%s 已持续 %s；继续使用缓存的快照，就绪状态降级",
+		r.hostID, now.Sub(r.failureSince).Truncate(time.Second)))
+}
+
+func (r *Runtime) resetSyncFailure() {
+	r.failureSince = time.Time{}
+	r.failureActive = false
+	r.lastWarning = time.Time{}
+}
+
+// Gateway 是组装好的主机网关：快照同步已完成首次拉取，三个监听都已绑定端口。
+type Gateway struct {
+	Runtime        *Runtime
+	State          *health.State
+	remote         trpcserver.Service
+	local          trpcserver.Service
+	remoteListener *trackedListener
+	localListener  *trackedListener
+	healthServer   *http.Server
+	healthListener net.Listener
+	nonces         *store.Nonces
+	closeOnce      sync.Once
+}
+
+// NewGateway 读取证书与密钥、首次同步快照，并绑定跨主机入口、本机入口和健康端口。
+func NewGateway(ctx context.Context, cfg config.Config, version string) (*Gateway, error) {
+	serverTLS, err := tlsconfig.LoadServer(cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.CAFile, cfg.Host.ID, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	instanceID, err := newInstanceID()
+	if err != nil {
+		return nil, err
+	}
+	control, err := controlplane.New(controlplane.Options{Config: cfg, InstanceID: instanceID, Version: version})
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(cfg.Store.Path, 0o700); err != nil {
+		return nil, fmt.Errorf("创建主机网关数据目录: %w", err)
 	}
 	nonces, err := store.OpenNonces(filepath.Join(cfg.Store.Path, "nonces"))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer nonces.Close()
-	state := health.NewState()
-	routeStore := store.NewRoutes(cfg.Store.Path)
-	runtime := New(Options{NodeID: cfg.Node.ID, Routes: routeStore, Control: control, Health: state})
-	if err := runtime.Initialize(ctx); err != nil {
-		return err
+	gateway := &Gateway{State: health.NewState(), nonces: nonces}
+	fail := func(err error) (*Gateway, error) {
+		gateway.Close()
+		return nil, err
 	}
-	timerServer := trpc.NewServer()
-	if err := registerRouteRefreshTimer(timerServer, runtime); err != nil {
-		return err
+	snapshots := store.NewSnapshots(cfg.Store.Path)
+	gateway.Runtime = New(Options{HostID: cfg.Host.ID, Store: snapshots, Control: control, Health: gateway.State, CertificateNotAfter: serverTLS.NotAfter})
+	if err := gateway.Runtime.Initialize(ctx); err != nil {
+		return fail(err)
 	}
-	if err := registerMetricsReporter(timerServer); err != nil {
-		return err
-	}
-	state.SetStorageCheck(func() error {
-		if err := routeStore.Check(); err != nil {
+	gateway.State.SetStorageCheck(func() error {
+		if err := snapshots.Check(); err != nil {
 			return err
 		}
 		return nonces.Check()
 	})
+	nativeDesc, nativeImpl := router.ServiceDesc(router.Options{HostID: cfg.Host.ID, Snapshot: gateway.Runtime.Current(), Nonces: nonces, Metrics: gateway.State})
+	remoteListener, err := tlsconfig.Listen(cfg.Server.RemoteAddr, serverTLS.Config)
+	if err != nil {
+		return fail(fmt.Errorf("监听跨主机入口 %s: %w", cfg.Server.RemoteAddr, err))
+	}
+	gateway.remoteListener = track(remoteListener)
+	gateway.remote = newGatewayService(cfg.Server.RemoteAddr, gateway.remoteListener)
+	if err := gateway.remote.Register(nativeDesc, nativeImpl); err != nil {
+		return fail(fmt.Errorf("注册跨主机入口: %w", err))
+	}
+	localListener, err := net.Listen("tcp", cfg.Server.LocalAddr)
+	if err != nil {
+		return fail(fmt.Errorf("监听本机入口 %s: %w", cfg.Server.LocalAddr, err))
+	}
+	gateway.localListener = track(localListener)
+	gateway.local = newGatewayService(cfg.Server.LocalAddr, gateway.localListener)
+	if err := gateway.local.Register(directorypb.NoopServiceDesc(), directorypb.DirectoryService(directory.New(cfg.Host.ID, gateway.Runtime.Current()))); err != nil {
+		return fail(fmt.Errorf("注册服务目录: %w", err))
+	}
+	if err := gateway.local.Register(nativeDesc, nativeImpl); err != nil {
+		return fail(fmt.Errorf("注册本机入口: %w", err))
+	}
+	gateway.healthListener, err = net.Listen("tcp", cfg.Server.HealthAddr)
+	if err != nil {
+		return fail(fmt.Errorf("监听健康端口 %s: %w", cfg.Server.HealthAddr, err))
+	}
+	healthHandler, err := healthz.WrapFromEnv(gateway.State.Handler())
+	if err != nil {
+		return fail(fmt.Errorf("配置健康端口鉴权: %w", err))
+	}
+	gateway.healthServer = &http.Server{
+		Handler: healthHandler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second,
+		WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second,
+	}
+	return gateway, nil
+}
 
-	serviceCredentials := gatewayauth.Credentials{KeyID: "moox-gateway-service", Caller: cfg.Auth.Caller, Secret: credentialsSecret}
-	serviceHandler := router.New(router.Options{
-		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
-		MaxBodyBytes: cfg.Proxy.MaxBodyBytes, Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled, Metrics: state,
-	})
-	nativeDesc, nativeImpl := router.NativeServiceDesc(router.NativeOptions{
-		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
-		Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled,
-	})
-	nativeService := trpcserver.New(
-		trpcserver.WithAddress(cfg.Server.NativeAddr), trpcserver.WithNetwork("tcp"), trpcserver.WithProtocol("trpc"),
-		trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop), trpcserver.WithServiceName("trpc.moox.hostgateway.ServiceGateway"),
-	)
-	if err := nativeService.Register(nativeDesc, nativeImpl); err != nil {
-		return fmt.Errorf("register native gateway service: %w", err)
-	}
-	serviceListener, err := net.Listen("tcp", cfg.Server.ServiceAddr)
-	if err != nil {
-		return fmt.Errorf("listen service endpoint: %w", err)
-	}
-	defer serviceListener.Close()
-	healthListener, err := net.Listen("tcp", cfg.Server.HealthAddr)
-	if err != nil {
-		return fmt.Errorf("listen health endpoint: %w", err)
-	}
-	defer healthListener.Close()
-	healthHandler, err := authenticatedHealthHandler(state.Handler())
-	if err != nil {
-		return fmt.Errorf("configure health authentication: %w", err)
-	}
-
-	serviceServer := newServiceHTTPServer(serviceHandler)
-	healthServer := newHealthHTTPServer(healthHandler)
-	serverResults := make(chan serverResult, 4)
-	go serveHTTP("gateway service", serviceServer, serviceListener, serverResults)
-	go serveHTTP("gateway health", healthServer, healthListener, serverResults)
-	go func() { serverResults <- serverResult{name: "gateway native service", err: nativeService.Serve()} }()
+// Serve 服务三个监听，直到 ctx 结束或任一监听退出。
+func (g *Gateway) Serve(ctx context.Context) error {
+	results := make(chan serverResult, 3)
+	go func() { results <- serverResult{name: "跨主机入口", err: g.remote.Serve()} }()
+	go func() { results <- serverResult{name: "本机入口", err: g.local.Serve()} }()
 	go func() {
-		serverResults <- serverResult{name: "gateway timer", err: timerServer.Serve()}
+		err := g.healthServer.Serve(g.healthListener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		results <- serverResult{name: "健康端口", err: err}
 	}()
-
 	var firstErr error
 	completed := 0
 	select {
 	case <-ctx.Done():
-	case result := <-serverResults:
+	case result := <-results:
 		completed = 1
 		if result.err != nil && !errors.Is(result.err, context.Canceled) {
-			firstErr = fmt.Errorf("%s server: %w", result.name, result.err)
+			firstErr = fmt.Errorf("%s退出: %w", result.name, result.err)
 		} else {
-			firstErr = fmt.Errorf("%s server stopped unexpectedly", result.name)
+			firstErr = fmt.Errorf("%s意外退出", result.name)
 		}
 	}
-
 	shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 	defer cancel()
-	shutdownErr := errors.Join(serviceServer.Shutdown(shutdownCtx), healthServer.Shutdown(shutdownCtx))
-	_ = nativeService.Close(make(chan struct{}, 1))
-	_ = timerServer.Close(nil)
-	for completed < 4 {
-		<-serverResults
+	shutdownErr := g.healthServer.Shutdown(shutdownCtx)
+	// tRPC 服务关闭时等待进行中的请求，之后断开剩余的连接。
+	_ = g.remote.Close(make(chan struct{}, 1))
+	_ = g.local.Close(make(chan struct{}, 1))
+	g.remoteListener.shutdown()
+	g.localListener.shutdown()
+	for completed < 3 {
+		<-results
 		completed++
 	}
 	return errors.Join(firstErr, shutdownErr)
 }
 
-func authenticatedHealthHandler(next http.Handler) (http.Handler, error) {
-	return healthz.WrapFromEnv(next)
+// Close 关闭监听和连接并释放 nonce 存储，可以重复调用。Serve 返回后调用；NewGateway 失败时自动调用。
+func (g *Gateway) Close() {
+	g.closeOnce.Do(func() {
+		for _, listener := range []*trackedListener{g.remoteListener, g.localListener} {
+			if listener != nil {
+				listener.shutdown()
+			}
+		}
+		if g.healthListener != nil {
+			_ = g.healthListener.Close()
+		}
+		if g.nonces != nil {
+			_ = g.nonces.Close()
+		}
+	})
 }
 
-func newServiceHTTPServer(handler http.Handler) *http.Server {
-	return &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       serviceReadTimeout,
-		WriteTimeout:      serviceWriteTimeout,
-		IdleTimeout:       serviceIdleTimeout,
+// Run 启动主机网关和它的定时器，直到 ctx 结束或任一监听退出。
+func Run(ctx context.Context, cfg config.Config, version string) error {
+	gateway, err := NewGateway(ctx, cfg, version)
+	if err != nil {
+		return err
 	}
+	defer gateway.Close()
+	timerServer := trpc.NewServer()
+	if err := registerRouteRefreshTimer(timerServer, gateway.Runtime); err != nil {
+		return err
+	}
+	if err := registerMetricsReporter(timerServer); err != nil {
+		return err
+	}
+	timerDone := make(chan error, 1)
+	go func() { timerDone <- timerServer.Serve() }()
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		if err := <-timerDone; err != nil {
+			log.Printf("主机网关定时器退出: %v", err)
+		}
+		cancel()
+	}()
+	err = gateway.Serve(serveCtx)
+	_ = timerServer.Close(nil)
+	return err
 }
 
-func newHealthHTTPServer(handler http.Handler) *http.Server {
-	return &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       healthReadTimeout,
-		WriteTimeout:      healthWriteTimeout,
-		IdleTimeout:       healthIdleTimeout,
+func newGatewayService(address string, listener net.Listener) trpcserver.Service {
+	return trpcserver.New(
+		trpcserver.WithAddress(address), trpcserver.WithListener(listener), trpcserver.WithNetwork("tcp"),
+		trpcserver.WithProtocol("trpc"), trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop),
+		trpcserver.WithServiceName(router.ServiceName),
+	)
+}
+
+func newInstanceID() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("生成主机网关实例 ID: %w", err)
 	}
+	return hex.EncodeToString(raw), nil
 }
 
 type serverResult struct {
 	name string
 	err  error
-}
-
-func serveHTTP(name string, server *http.Server, listener net.Listener, results chan<- serverResult) {
-	err := server.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
-		err = nil
-	}
-	results <- serverResult{name: name, err: err}
 }

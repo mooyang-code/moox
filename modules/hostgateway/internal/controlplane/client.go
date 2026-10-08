@@ -1,163 +1,121 @@
-// Package controlplane synchronizes node-local routes with Admin.
+// Package controlplane 是主机网关访问网关控制（trpc.moox.admin.GatewayControl）的客户端：
+//   - control 主机直连 127.0.0.1:11112，自己写入调用方身份；
+//   - 其他主机经 control 的 11003（TLS，校验 MooX 私有 CA）访问，由 control 的主机网关校验签名后转发。
 package controlplane
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-const DefaultControlKeyID = "moox-gateway-control"
-const maxSnapshotBytes = 16 << 20
+const requestTimeout = 10 * time.Second
 
-var ErrInvalidSnapshot = errors.New("invalid gateway route snapshot")
-
-type Options struct {
-	NodeID, BaseURL, HMACKeyFile, CAFile, KeyID string
-	Now                                         func() time.Time
+// Status 是一次心跳上报的内容。
+type Status struct {
+	AppliedHash         string
+	RouteCount          int32
+	LastError           string
+	CertificateNotAfter time.Time
 }
 
+// Client 拉取快照并上报心跳。
 type Client struct {
-	nodeID, baseURL string
-	credentials     gatewayauth.Credentials
-	httpClient      *http.Client
-	now             func() time.Time
+	hostID     string
+	instanceID string
+	version    string
+	proxy      adminpb.GatewayControlClientProxy
 }
 
+// Options 是客户端参数。
+type Options struct {
+	Config     config.Config
+	InstanceID string
+	Version    string
+	// extra 供测试注入额外的 tRPC 选项。
+	extra []client.Option
+}
+
+// New 按配置创建客户端。
 func New(options Options) (*Client, error) {
-	if strings.TrimSpace(options.NodeID) == "" {
-		return nil, errors.New("control-plane node ID is required")
+	cfg := options.Config
+	if strings.TrimSpace(options.InstanceID) == "" {
+		return nil, errors.New("主机网关实例 ID 不能为空")
 	}
-	baseURL := strings.TrimRight(options.BaseURL, "/")
-	if err := config.ValidateBaseURL(baseURL); err != nil {
-		return nil, errors.New("control-plane base URL is invalid")
+	clientOptions := []client.Option{
+		client.WithTarget("ip://" + cfg.Control.Target), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
+		client.WithTimeout(requestTimeout),
 	}
-	secret, err := config.ReadSecret(options.HMACKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read control-plane key: %w", err)
-	}
-	keyID := strings.TrimSpace(options.KeyID)
-	if keyID == "" {
-		keyID = DefaultControlKeyID
-	}
-	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: 10 * time.Second, CAFile: options.CAFile})
-	if err != nil {
-		return nil, err
-	}
-	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	now := options.Now
-	if now == nil {
-		now = time.Now
-	}
-	return &Client{nodeID: options.NodeID, baseURL: baseURL, credentials: gatewayauth.Credentials{KeyID: keyID, Secret: secret}, httpClient: httpClient, now: now}, nil
-}
-
-func (client *Client) Pull(ctx context.Context, currentHash string) (gatewayroute.Snapshot, error) {
-	endpoint, err := url.Parse(client.baseURL + "/api/gateway-control/routes")
-	if err != nil {
-		return gatewayroute.Snapshot{}, err
-	}
-	query := endpoint.Query()
-	query.Set("node_id", client.nodeID)
-	if currentHash != "" {
-		query.Set("current_hash", currentHash)
-	}
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return gatewayroute.Snapshot{}, err
-	}
-	if err := client.sign(request, nil); err != nil {
-		return gatewayroute.Snapshot{}, err
-	}
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return gatewayroute.Snapshot{}, fmt.Errorf("pull gateway routes: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		return gatewayroute.Snapshot{}, fmt.Errorf("pull gateway routes: unexpected HTTP status %d", response.StatusCode)
-	}
-	encoded, err := io.ReadAll(io.LimitReader(response.Body, maxSnapshotBytes+1))
-	if err != nil {
-		return gatewayroute.Snapshot{}, fmt.Errorf("read gateway routes: %w", err)
-	}
-	if len(encoded) > maxSnapshotBytes {
-		return gatewayroute.Snapshot{}, errors.New("gateway route snapshot is too large")
-	}
-	var snapshot gatewayroute.Snapshot
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&snapshot); err != nil {
-		return gatewayroute.Snapshot{}, fmt.Errorf("decode gateway routes: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return gatewayroute.Snapshot{}, errors.New("gateway route snapshot contains trailing JSON")
-	}
-	if snapshot.NodeID != client.nodeID {
-		return gatewayroute.Snapshot{}, fmt.Errorf("%w: targets %q, want %q", ErrInvalidSnapshot, snapshot.NodeID, client.nodeID)
-	}
-	var table gatewayroute.Table
-	if err := table.Replace(snapshot); err != nil {
-		return gatewayroute.Snapshot{}, fmt.Errorf("%w: %v", ErrInvalidSnapshot, err)
-	}
-	return snapshot, nil
-}
-
-func (client *Client) Report(ctx context.Context, appliedHash string, routeCount int32, lastError string) error {
-	body, err := json.Marshal(struct {
-		NodeID           string `json:"node_id"`
-		AppliedRouteHash string `json:"applied_route_hash"`
-		RouteCount       int32  `json:"route_count"`
-		LastError        string `json:"last_error"`
-	}{client.nodeID, appliedHash, routeCount, lastError})
-	if err != nil {
-		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/api/gateway-control/status", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	if err := client.sign(request, body); err != nil {
-		return err
-	}
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return fmt.Errorf("report gateway status: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusNoContent {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		return fmt.Errorf("report gateway status: unexpected HTTP status %d", response.StatusCode)
-	}
-	return nil
-}
-
-func (client *Client) sign(request *http.Request, body []byte) error {
-	headers, err := gatewayauth.Sign(client.credentials, gatewayauth.Request{Method: request.Method, Path: request.URL.EscapedPath(), TargetNode: client.nodeID, Body: body}, client.now())
-	if err != nil {
-		return err
-	}
-	for name, values := range headers {
-		for _, value := range values {
-			request.Header.Add(name, value)
+	if cfg.Direct() {
+		// 直连本机网关控制：没有网关在中间，自己写入可信的调用方身份。
+		clientOptions = append(clientOptions, client.WithMetaData(gatewayroute.MetadataVerifiedCaller, []byte(cfg.Control.Caller)))
+	} else {
+		credentials, err := gatewayauth.LoadCallerKey(cfg.Control.KeyFile)
+		if err != nil {
+			return nil, err
 		}
+		if credentials.Caller != cfg.Control.Caller {
+			return nil, fmt.Errorf("control.key_file 属于 %s，不是 %s", credentials.Caller, cfg.Control.Caller)
+		}
+		clientOptions = append(clientOptions,
+			client.WithCurrentSerializationType(codec.SerializationTypeNoop),
+			client.WithFilter(gatewayauth.NewTRPCClientFilter(credentials, servicecatalog.ControlHostID, nil)),
+			client.WithTLS("", "", cfg.TLS.CAFile, servicecatalog.ControlHostID),
+			// control 的主机网关重启后，旧的 TLS 连接要能被识别出来，不再复用。
+			client.WithPool(gatewayclient.NewConnectionPool()),
+		)
+	}
+	clientOptions = append(clientOptions, options.extra...)
+	return &Client{
+		hostID: cfg.Host.ID, instanceID: options.InstanceID, version: options.Version,
+		proxy: adminpb.NewGatewayControlClientProxy(clientOptions...),
+	}, nil
+}
+
+// Pull 拉取快照；changed=false 表示与 currentHash 相同。
+func (c *Client) Pull(ctx context.Context, currentHash string) (*adminpb.HostSnapshot, bool, error) {
+	rsp, err := c.proxy.PullSnapshot(ctx, &adminpb.PullSnapshotReq{HostId: c.hostID, CurrentHash: currentHash})
+	if err != nil {
+		return nil, false, fmt.Errorf("拉取快照: %w", err)
+	}
+	if code := rsp.GetRetInfo().GetCode(); code != adminpb.ErrorCode_SUCCESS {
+		return nil, false, fmt.Errorf("拉取快照: %s", rsp.GetRetInfo().GetMsg())
+	}
+	if !rsp.GetChanged() {
+		return nil, false, nil
+	}
+	if rsp.GetSnapshot() == nil {
+		return nil, false, errors.New("网关控制报告快照有变化，却没有返回快照")
+	}
+	return rsp.GetSnapshot(), true, nil
+}
+
+// Report 上报心跳。
+func (c *Client) Report(ctx context.Context, status Status) error {
+	req := &adminpb.ReportStatusReq{
+		HostId: c.hostID, InstanceId: c.instanceID, Version: c.version, AppliedHash: status.AppliedHash,
+		RouteCount: status.RouteCount, LastError: status.LastError,
+	}
+	if !status.CertificateNotAfter.IsZero() {
+		req.CertificateNotAfter = status.CertificateNotAfter.UTC().Format(time.RFC3339)
+	}
+	rsp, err := c.proxy.ReportStatus(ctx, req)
+	if err != nil {
+		return fmt.Errorf("上报心跳: %w", err)
+	}
+	if code := rsp.GetRetInfo().GetCode(); code != adminpb.ErrorCode_SUCCESS {
+		return fmt.Errorf("上报心跳: %s", rsp.GetRetInfo().GetMsg())
 	}
 	return nil
 }

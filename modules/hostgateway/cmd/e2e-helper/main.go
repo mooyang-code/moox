@@ -1,14 +1,17 @@
-// Command e2e-helper starts the production Gateway service handler on an
-// ephemeral loopback port for cross-module integration tests.
+// Command e2e-helper 在临时的本机端口上启动真实的主机网关转发入口，供跨模块的集成测试使用。
+//
+//	e2e-helper -host-id <主机> -route <service path>=<上游地址> [-route ...] -callers a,b [-methods m1,m2]
+//	           -ready-file <文件> -nonce-dir <目录> [-listen-addr 127.0.0.1:0]
+//
+// 调用方密钥从环境变量 MOOX_GATEWAY_E2E_KEYS 读取，格式为 caller:key_id:secret，多个用逗号分隔。
+// 没有给出 -methods 时，路由放行组件目录允许这些调用方调用的全部方法。
 package main
 
 import (
-	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,154 +19,74 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
-
-	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
-	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
-	"gopkg.in/yaml.v3"
 )
 
+type routeFlags []string
+
+func (r *routeFlags) String() string { return strings.Join(*r, ",") }
+
+func (r *routeFlags) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
 func main() {
-	mode := flag.String("mode", "monitor-http", "helper mode: monitor-http, kline-native or collector-period-native")
-	deploymentYAML := flag.String("deployment-yaml", "", "absolute production deployment YAML path")
-	routeScope := flag.String("route-scope", "", "collector-period-native scope: storage-period, storage-metadata or collector-runtime")
-	nodeID := flag.String("node-id", "", "target Gateway node ID")
-	upstreamURL := flag.String("upstream-url", "", "loopback Monitor upstream URL")
-	upstreamAddress := flag.String("upstream-addr", "", "loopback native tRPC upstream address")
-	metadataUpstreamAddress := flag.String("metadata-upstream-addr", "", "optional loopback Metadata upstream for storage-period scope")
-	listenAddress := flag.String("listen-addr", "127.0.0.1:0", "native gateway listen address")
-	readyFile := flag.String("ready-file", "", "file receiving the service URL")
-	nonceDirectory := flag.String("nonce-dir", "", "persistent nonce directory")
-	keyID := flag.String("key-id", "", "service HMAC key ID")
+	var routes routeFlags
+	hostID := flag.String("host-id", "", "主机 ID")
+	flag.Var(&routes, "route", "<service path>=<上游 host:port>，可重复")
+	callers := flag.String("callers", "", "路由放行的调用方，逗号分隔")
+	methods := flag.String("methods", "", "路由放行的方法，逗号分隔；默认取组件目录允许这些调用方调用的方法")
+	listenAddress := flag.String("listen-addr", "127.0.0.1:0", "监听地址")
+	readyFile := flag.String("ready-file", "", "就绪后写入 ip://<地址> 的文件")
+	nonceDirectory := flag.String("nonce-dir", "", "nonce 存储目录")
 	flag.Parse()
-	if *mode == "collector-period-native" {
-		err := runCollectorPeriodNative(*deploymentYAML, *routeScope, *upstreamAddress, *metadataUpstreamAddress, *nodeID, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	if err := run(*mode, *nodeID, *upstreamURL, *upstreamAddress, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET")); err != nil {
+	if err := run(*hostID, routes, *callers, *methods, *listenAddress, *readyFile, *nonceDirectory, os.Getenv("MOOX_GATEWAY_E2E_KEYS")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(mode, nodeID, upstreamURL, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	if mode == "kline-native" {
-		return runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret)
-	}
-	if mode != "monitor-http" {
-		return fmt.Errorf("unsupported mode %q", mode)
-	}
-	return runMonitorHTTP(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secret)
-}
-
-func runMonitorHTTP(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secret string) error {
-	parsed, err := url.Parse(upstreamURL)
-	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.Path != "" {
-		return fmt.Errorf("upstream-url must be a loopback HTTP origin")
-	}
-	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, []gatewayroute.Route{{
-		ServiceID: "monitor", Address: parsed.Host, ServicePath: "trpc.moox.monitor.MonitorMgr",
-		AllowedMethods: []string{"GetPeerSnapshot"},
-		AllowedCallers: []string{"monitor"},
-	}})
+func run(hostID string, routeSpecs []string, callerList, methodList, listenAddress, readyFile, nonceDirectory, keyList string) error {
+	routes, services, err := buildRoutes(routeSpecs, splitList(callerList), splitList(methodList))
 	if err != nil {
 		return err
 	}
-	var table gatewayroute.Table
-	if err := table.Replace(snapshot); err != nil {
+	keys, err := parseKeys(keyList)
+	if err != nil {
 		return err
 	}
+	built, err := testsnapshot.Build(hostID, false, routes, keys, testsnapshot.Directory(hostID, services...))
+	if err != nil {
+		return err
+	}
+	applied, err := snapshot.Validate(hostID, built)
+	if err != nil {
+		return err
+	}
+	var current snapshot.Current
+	current.Store(applied, time.Now())
 	nonces, err := store.OpenNonces(nonceDirectory)
 	if err != nil {
 		return err
 	}
 	defer nonces.Close()
-	handler := router.New(router.Options{
-		NodeID: nodeID, Credentials: gatewayauth.Credentials{KeyID: keyID, Secret: secret},
-		MaxBodyBytes: 4 << 20, Table: &table, Nonces: nonces, Disabled: func() bool { return false },
-	})
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	if err := os.MkdirAll(filepath.Dir(readyFile), 0o700); err != nil {
-		return err
-	}
-	if err := os.WriteFile(readyFile, []byte("http://"+listener.Addr().String()), 0o600); err != nil {
-		return err
-	}
-	defer os.Remove(readyFile)
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
-	ctx, stop := signal.NotifyContext(trpc.BackgroundContext(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	done := make(chan error, 1)
-	go func() { done <- server.Serve(listener) }()
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 3*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
-	case err := <-done:
-		if err == http.ErrServerClosed {
-			return nil
-		}
-		return err
-	}
-}
-
-func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(upstreamAddress))
-	if err != nil || (host != "127.0.0.1" && host != "::1") {
-		return fmt.Errorf("upstream-addr must be a loopback host:port")
-	}
-	return runNativeRoutes(nodeID, []gatewayroute.Route{{
-		ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
-		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-skill"},
-	}}, "moox-skill", listenAddress, readyFile, nonceDirectory, keyID, secret)
-}
-
-func runNativeRoutes(nodeID string, routes []gatewayroute.Route, caller, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	credentials := gatewayauth.Credentials{KeyID: keyID, Caller: caller, Secret: secret}
-	if _, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: http.MethodPost, Path: "/", TargetNode: nodeID}, time.Now()); err != nil {
-		return fmt.Errorf("native gateway identity: %w", err)
-	}
-	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, routes)
-	if err != nil {
-		return err
-	}
-	var table gatewayroute.Table
-	if err := table.Replace(snapshot); err != nil {
-		return err
-	}
-	nonces, err := store.OpenNonces(nonceDirectory)
-	if err != nil {
-		return err
-	}
-	defer nonces.Close()
-	desc, implementation := router.NativeServiceDesc(router.NativeOptions{
-		NodeID:      nodeID,
-		Credentials: credentials,
-		Table:       &table, Nonces: nonces, Disabled: func() bool { return false },
-	})
+	desc, implementation := router.ServiceDesc(router.Options{HostID: hostID, Snapshot: &current, Nonces: nonces})
 	listener, err := net.Listen("tcp", strings.TrimSpace(listenAddress))
 	if err != nil {
 		return err
 	}
 	service := server.New(
-		server.WithNetwork("tcp"),
-		server.WithProtocol("trpc"),
-		server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"),
-		server.WithListener(listener),
-		server.WithCurrentSerializationType(codec.SerializationTypeNoop),
+		server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName(router.ServiceName),
+		server.WithListener(listener), server.WithCurrentSerializationType(codec.SerializationTypeNoop),
 	)
 	if err := service.Register(desc, implementation); err != nil {
 		listener.Close()
@@ -180,159 +103,88 @@ func runNativeRoutes(nodeID string, routes []gatewayroute.Route, caller, listenA
 	go func() { done <- service.Serve() }()
 	select {
 	case <-ctx.Done():
-		service.Close(nil)
+		_ = service.Close(nil)
 		select {
 		case err := <-done:
 			return err
 		case <-time.After(3 * time.Second):
-			return fmt.Errorf("native gateway did not stop")
+			return errors.New("主机网关没有停止")
 		}
 	case err := <-done:
 		return err
 	}
 }
 
-type deploymentRoutePolicy struct {
-	TimeoutMS      int64    `yaml:"timeout_ms"`
-	MaxBodyBytes   int64    `yaml:"max_body_bytes"`
-	GatewayMethods []string `yaml:"gateway_methods"`
-	GatewayCallers []string `yaml:"gateway_callers"`
-}
-
-func runCollectorPeriodNative(path, scope, upstreamAddress, metadataUpstreamAddress, nodeID, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	routes, err := loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress)
-	if err != nil {
-		return err
+func buildRoutes(specs, callers, methods []string) ([]gatewayroute.Route, []string, error) {
+	if len(specs) == 0 {
+		return nil, nil, errors.New("至少需要一个 -route")
 	}
-	return runNativeRoutes(nodeID, routes, "collector", listenAddress, readyFile, nonceDirectory, keyID, secret)
-}
-
-func loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress string) ([]gatewayroute.Route, error) {
-	routes, err := loadCollectorPeriodRoutes(path, scope, upstreamAddress)
-	if err != nil {
-		return nil, err
+	if len(callers) == 0 {
+		return nil, nil, errors.New("-callers 不能为空")
 	}
-	if strings.TrimSpace(metadataUpstreamAddress) == "" {
-		return routes, nil
-	}
-	if scope != "storage-period" {
-		return nil, fmt.Errorf("metadata-upstream-addr requires storage-period route-scope")
-	}
-	metadataRoutes, err := loadCollectorPeriodRoutes(path, "storage-metadata", metadataUpstreamAddress)
-	if err != nil {
-		return nil, err
-	}
-	return append(routes, metadataRoutes...), nil
-}
-
-func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewayroute.Route, error) {
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("deployment-yaml must be an absolute path")
-	}
-	host, port, err := net.SplitHostPort(upstreamAddress)
-	if err != nil || (host != "127.0.0.1" && host != "::1") || port == "" {
-		return nil, fmt.Errorf("upstream-addr must be a loopback host:port")
-	}
-	serviceID, servicePath := "storage-primary", "trpc.moox.storage.PrimaryStore"
-	required := []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}
-	switch scope {
-	case "storage-period":
-	case "storage-metadata":
-		servicePath = "trpc.moox.storage.Metadata"
-		required = []string{"ApplyTagSnapshot", "GetTag", "ListSubjects", "ResolveSubjects"}
-	case "collector-runtime":
-		serviceID, servicePath = "collector-market-runtime", "trpc.moox.collector.MarketFetchRuntime"
-		required = []string{"ClaimTimerBatch"}
-	default:
-		return nil, fmt.Errorf("unsupported route-scope %q", scope)
-	}
-	var seed struct {
-		Services []struct {
-			Name             string `yaml:"name"`
-			Status           string `yaml:"status"`
-			Host             string `yaml:"host"`
-			Port             int    `yaml:"port"`
-			GatewayPath      string `yaml:"gateway_path"`
-			GatewayServiceID string `yaml:"gateway_service_id"`
-			GatewayEnabled   bool   `yaml:"gateway_enabled"`
-			ExtraConfig      struct {
-				deploymentRoutePolicy `yaml:",inline"`
-				GatewayRoutes         []struct {
-					deploymentRoutePolicy `yaml:",inline"`
-					ServicePath           string `yaml:"service_path"`
-					Port                  int    `yaml:"port"`
-				} `yaml:"gateway_routes"`
-			} `yaml:"extra_config"`
-		} `yaml:"services"`
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := yaml.Unmarshal(raw, &seed); err != nil {
-		return nil, fmt.Errorf("decode deployment-yaml: %w", err)
-	}
-	counts := make(map[string]int)
-	var selected []gatewayroute.Route
-	for _, service := range seed.Services {
-		id := service.GatewayServiceID
-		if id == "" && service.Name == serviceID {
-			return nil, fmt.Errorf("required service %s needs explicit gateway_service_id", service.Name)
+	catalog := servicecatalog.Default()
+	var routes []gatewayroute.Route
+	var services []string
+	for _, spec := range specs {
+		path, address, ok := strings.Cut(strings.TrimSpace(spec), "=")
+		if !ok {
+			return nil, nil, fmt.Errorf("-route %q 必须是 <service path>=<host:port>", spec)
 		}
-		if id != serviceID {
-			continue
+		host, _, err := net.SplitHostPort(address)
+		if err != nil || (host != "127.0.0.1" && host != "::1") {
+			return nil, nil, fmt.Errorf("-route %q 的上游必须是本机回环地址 host:port", spec)
 		}
-		if !service.GatewayEnabled {
-			return nil, fmt.Errorf("required service %s is not gateway enabled", id)
+		service, component, known := catalog.Service(path)
+		if !known {
+			return nil, nil, fmt.Errorf("服务 %s 不在组件目录中", path)
 		}
-		if service.Status != "active" {
-			return nil, fmt.Errorf("required service %s must have active status", id)
-		}
-		appendRoute := func(path string, port int, policy deploymentRoutePolicy) error {
-			route := gatewayroute.Route{ServiceID: id, Address: net.JoinHostPort(service.Host, fmt.Sprint(port)), ServicePath: path,
-				TimeoutMS: policy.TimeoutMS, MaxBodyBytes: policy.MaxBodyBytes,
-				AllowedMethods: policy.GatewayMethods, AllowedCallers: policy.GatewayCallers}
-			chosen := false
-			for _, method := range required {
-				if route.AllowsMethod(method) {
-					counts[method]++
-					chosen = true
+		routeMethods := methods
+		if len(routeMethods) == 0 {
+			// 与网关控制编译路由的规则一致：只放行组件目录允许这些调用方调用的方法。
+			for _, rpc := range service.RPCs {
+				for _, caller := range callers {
+					if catalog.Allowed(caller, path, rpc) {
+						routeMethods = append(routeMethods, rpc)
+						break
+					}
 				}
 			}
-			if !chosen {
-				return nil
+			if len(routeMethods) == 0 {
+				return nil, nil, fmt.Errorf("组件目录不允许 %s 调用 %s 的任何方法，请用 -methods 指定", strings.Join(callers, ","), path)
 			}
-			if path != servicePath || !route.AllowsCaller("collector") {
-				return fmt.Errorf("required route %s must use %s and allow collector", id, servicePath)
-			}
-			if _, err := gatewayroute.NormalizeAndHash("validate-production-route", []gatewayroute.Route{route}); err != nil {
-				return fmt.Errorf("invalid production route: %w", err)
-			}
-			route.Address = upstreamAddress
-			selected = append(selected, route)
-			return nil
 		}
-		if err := appendRoute(service.GatewayPath, service.Port, service.ExtraConfig.deploymentRoutePolicy); err != nil {
-			return nil, err
+		routes = append(routes, gatewayroute.Route{
+			ServiceID: component.ID, Address: address, ServicePath: path, TimeoutMS: service.TimeoutMS,
+			MaxBodyBytes: service.MaxBodyBytes, AllowedMethods: routeMethods, AllowedCallers: callers,
+		})
+		services = append(services, path)
+	}
+	return routes, services, nil
+}
+
+func parseKeys(raw string) ([]gatewayroute.VerificationKey, error) {
+	var keys []gatewayroute.VerificationKey
+	for _, item := range splitList(raw) {
+		parts := strings.SplitN(item, ":", 3)
+		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return nil, fmt.Errorf("MOOX_GATEWAY_E2E_KEYS 中的 %q 必须是 caller:key_id:secret", item)
 		}
-		for _, route := range service.ExtraConfig.GatewayRoutes {
-			if route.ServicePath == "" || route.Port < 1 {
-				return nil, fmt.Errorf("gateway_routes entries require service_path and positive port")
-			}
-			if err := appendRoute(route.ServicePath, route.Port, route.deploymentRoutePolicy); err != nil {
-				return nil, err
-			}
+		keys = append(keys, gatewayroute.VerificationKey{Caller: parts[0], KeyID: parts[1], Secret: parts[2]})
+	}
+	if len(keys) == 0 {
+		return nil, errors.New("MOOX_GATEWAY_E2E_KEYS 不能为空")
+	}
+	return keys, nil
+}
+
+func splitList(raw string) []string {
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
 		}
 	}
-	for _, method := range required {
-		if counts[method] != 1 {
-			return nil, fmt.Errorf("required method %s must have exactly one route (got %d)", method, counts[method])
-		}
-	}
-	if _, err := gatewayroute.NormalizeAndHash("validate-selected-routes", selected); err != nil {
-		return nil, err
-	}
-	return selected, nil
+	return out
 }
 
 func writeReadyFile(path, value string) error {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,107 +10,91 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayroute"
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"google.golang.org/protobuf/proto"
 )
 
-func TestRoutesSaveLoadAndRejectInvalidSnapshotWithoutReplacingFile(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
+func secureDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "host-gateway")
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	routes := NewRoutes(dir)
-	valid, err := gatewayroute.NormalizeAndHash("node-a", []gatewayroute.Route{{ServiceID: "monitor", Address: "127.0.0.1:11410", ServicePath: "trpc.moox.monitor.MonitorMgr", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
+	return dir
+}
+
+func TestSnapshotsSaveAndLoad(t *testing.T) {
+	dir := secureDir(t)
+	snapshots := NewSnapshots(dir)
+	if _, err := snapshots.Load(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("没有缓存时应当返回 ErrNotExist，实际 %v", err)
+	}
+	want := &adminpb.HostSnapshot{HostId: "storage", Hash: "h", Routes: []*adminpb.HostRoute{{ServicePath: "trpc.moox.storage.DataView", Methods: []string{"QueryTimeSeriesRows"}}},
+		Keys: []*adminpb.VerificationKey{{KeyId: "strategy-1", Caller: "strategy", Secret: "s"}}}
+	if err := snapshots.Save(want); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(snapshots.Path())
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("快照缓存应当是 0600: %v %v", info, err)
+	}
+	got, err := snapshots.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routes.Save(valid); err != nil {
-		t.Fatalf("Save() = %v", err)
+	if !proto.Equal(want, got) {
+		t.Fatalf("got %v", got)
 	}
-	got, err := routes.Load()
-	if err != nil {
-		t.Fatalf("Load() = %v", err)
-	}
-	if got.RouteHash != valid.RouteHash {
-		t.Fatalf("hash = %q", got.RouteHash)
-	}
-	before, _ := os.ReadFile(filepath.Join(dir, "routes.json"))
-	valid.RouteHash = "broken"
-	if err := routes.Save(valid); err == nil {
-		t.Fatal("Save() accepted bad hash")
-	}
-	after, _ := os.ReadFile(filepath.Join(dir, "routes.json"))
-	if string(after) != string(before) {
-		t.Fatal("invalid save changed route file")
-	}
-	matches, _ := filepath.Glob(filepath.Join(dir, ".routes-*.tmp"))
-	if len(matches) != 0 {
-		t.Fatalf("temporary files left behind: %v", matches)
-	}
-}
-
-func TestRoutesLoadRejectsUnknownAndTrailingJSON(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := snapshots.Check(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "routes.json")
-	for name, contents := range map[string]string{
-		"unknown field":  `{"node_id":"node-a","unknown":true}`,
-		"trailing value": "{}\n{}",
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := NewRoutes(dir).Load(); err == nil {
-				t.Fatal("Load() accepted invalid JSON")
-			}
-		})
+	if matches, _ := filepath.Glob(filepath.Join(dir, ".snapshot-*.tmp")); len(matches) != 0 {
+		t.Fatalf("留下了临时文件: %v", matches)
 	}
 }
 
-func TestRoutesRejectsInsecureOrSymlinkedCache(t *testing.T) {
-	t.Run("insecure directory", func(t *testing.T) {
-		dir := filepath.Join(t.TempDir(), "routes")
-		if err := os.Mkdir(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		snapshot, _ := gatewayroute.NormalizeAndHash("node-a", nil)
-		if err := NewRoutes(dir).Save(snapshot); err == nil {
-			t.Fatal("Save() accepted insecure directory")
-		}
-	})
-	t.Run("symlinked directory", func(t *testing.T) {
-		root := t.TempDir()
-		realDir := filepath.Join(root, "real")
-		if err := os.Mkdir(realDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		link := filepath.Join(root, "link")
-		if err := os.Symlink(realDir, link); err != nil {
-			t.Fatal(err)
-		}
-		snapshot, _ := gatewayroute.NormalizeAndHash("node-a", nil)
-		if err := NewRoutes(link).Save(snapshot); err == nil {
-			t.Fatal("Save() accepted symlinked directory")
-		}
-	})
-	t.Run("symlinked cache file", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.Chmod(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		target := filepath.Join(dir, "target.json")
-		if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, filepath.Join(dir, "routes.json")); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := NewRoutes(dir).Load(); err == nil {
-			t.Fatal("Load() accepted symlinked cache file")
-		}
-	})
+func TestSnapshotsRejectInsecureCache(t *testing.T) {
+	dir := secureDir(t)
+	snapshots := NewSnapshots(dir)
+	if err := snapshots.Save(&adminpb.HostSnapshot{HostId: "storage"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(snapshots.Path(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshots.Load(); err == nil {
+		t.Fatal("组可读的缓存应当被拒绝")
+	}
+	_ = os.Chmod(snapshots.Path(), 0o600)
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.Check(); err == nil {
+		t.Fatal("组可读的目录应当被拒绝")
+	}
+	_ = os.Chmod(dir, 0o700)
+	if err := os.Remove(snapshots.Path()); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "elsewhere.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, snapshots.Path()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshots.Load(); err == nil {
+		t.Fatal("符号链接应当被拒绝")
+	}
+	if err := os.Remove(snapshots.Path()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(snapshots.Path(), []byte(`{"hostId":"storage","unknown":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshots.Load(); err == nil {
+		t.Fatal("未知字段应当被拒绝")
+	}
 }
 
 func TestNonceConsumePersistsAndRejectsConcurrentDuplicates(t *testing.T) {
@@ -149,32 +134,7 @@ func TestNonceConsumePersistsAndRejectsConcurrentDuplicates(t *testing.T) {
 	if ok, err := nonces.Consume(context.Background(), "service", "abc", time.Minute); err != nil || ok {
 		t.Fatalf("persistent consume = %v, %v", ok, err)
 	}
-}
-
-func TestPersistentStoreHealthChecks(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, _ := gatewayroute.NormalizeAndHash("node-a", nil)
-	routes := NewRoutes(dir)
-	if err := routes.Save(snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if err := routes.Check(); err != nil {
-		t.Fatalf("routes Check() = %v", err)
-	}
-	nonces, err := OpenNonces(filepath.Join(dir, "nonces"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := nonces.Check(); err != nil {
 		t.Fatalf("nonces Check() = %v", err)
-	}
-	if err := nonces.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := nonces.Check(); err == nil {
-		t.Fatal("closed nonce store remained healthy")
 	}
 }

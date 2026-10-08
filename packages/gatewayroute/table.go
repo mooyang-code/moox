@@ -56,6 +56,20 @@ func (table *Table) ResolveMethod(serviceID, method string) (Route, bool) {
 	return Route{}, false
 }
 
+// HasService 判断快照中是否有这个 tRPC 服务的路由，用来区分「服务不在本机」与「方法未开放」。
+func (table *Table) HasService(servicePath string) bool {
+	snapshot := table.current.Load()
+	if snapshot == nil {
+		return false
+	}
+	for _, route := range snapshot.Routes {
+		if route.ServicePath == servicePath {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveRPC resolves a native tRPC request by callee service path and method.
 func (table *Table) ResolveRPC(rpcName string) (Route, string, bool) {
 	return table.resolveRPC(rpcName, "", false)

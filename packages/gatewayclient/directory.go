@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/pool/connpool"
 )
 
 // DefaultRefreshInterval 是比对服务目录版本的间隔，与主机网关拉取快照的间隔一致。
@@ -44,6 +45,7 @@ func (f SourceFunc) Fetch(ctx context.Context, currentVersion string) (View, boo
 type rpcSource struct {
 	address func(context.Context) (string, error)
 	timeout time.Duration
+	pool    connpool.Pool
 }
 
 func (s rpcSource) Fetch(ctx context.Context, currentVersion string) (View, bool, error) {
@@ -51,10 +53,11 @@ func (s rpcSource) Fetch(ctx context.Context, currentVersion string) (View, bool
 	if err != nil {
 		return View{}, false, err
 	}
-	proxy := directorypb.NewDirectoryClientProxy(
-		client.WithTarget("ip://"+address), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
-		client.WithTimeout(s.timeout),
-	)
+	options := []client.Option{client.WithTarget("ip://" + address), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(s.timeout)}
+	if s.pool != nil {
+		options = append(options, client.WithPool(s.pool))
+	}
+	proxy := directorypb.NewDirectoryClientProxy(options...)
 	rsp, err := proxy.GetDirectory(ctx, &directorypb.GetDirectoryReq{CurrentVersion: currentVersion})
 	if err != nil {
 		return View{}, false, fmt.Errorf("从 %s 查询服务目录失败: %w", address, err)

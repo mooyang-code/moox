@@ -1,4 +1,4 @@
-// Package config loads and validates the standalone gateway configuration.
+// Package config 读取并校验主机网关的配置（执行计划 2.5）。
 package config
 
 import (
@@ -6,242 +6,133 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	ServiceAddress             = "127.0.0.1:11002"
-	NativeServiceAddress       = "127.0.0.1:11003"
-	PublicNativeServiceAddress = "0.0.0.0:11003"
-	HealthAddress              = "127.0.0.1:11012"
-	PublicHealthAddress        = "0.0.0.0:11012"
-	// Dedicated Trade nodes use a separate local listener set when a Storage
-	// Gateway already owns the legacy 11002/11003/11012 ports.
-	DedicatedTradeServiceAddress       = "127.0.0.1:11004"
-	DedicatedTradeNativeAddress        = "127.0.0.1:11005"
-	DedicatedTradeHealthAddress        = "127.0.0.1:11014"
-	DefaultMaxBodyBytes          int64 = 4 << 20
+	// RemoteAddress 是跨主机入口（TLS），LocalAddress 是本机入口与服务目录，HealthAddress 是健康与指标。
+	RemoteAddress = "0.0.0.0:11003"
+	LocalAddress  = "127.0.0.1:11002"
+	HealthAddress = "0.0.0.0:11012"
+	// ControlLocalTarget 是 control 主机上网关控制的本机地址。
+	ControlLocalTarget = "127.0.0.1:11112"
 )
 
+// Config 是主机网关的配置。
 type Config struct {
-	Node struct {
+	Host struct {
 		ID string `yaml:"id"`
-	} `yaml:"node"`
+	} `yaml:"host"`
 	Server struct {
-		ServiceAddr string `yaml:"service_addr"`
-		NativeAddr  string `yaml:"native_addr"`
-		HealthAddr  string `yaml:"health_addr"`
+		RemoteAddr string `yaml:"remote_addr"`
+		LocalAddr  string `yaml:"local_addr"`
+		HealthAddr string `yaml:"health_addr"`
 	} `yaml:"server"`
-	ControlPlane struct {
-		BaseURL     string `yaml:"base_url"`
-		HMACKeyFile string `yaml:"hmac_key_file"`
-		CAFile      string `yaml:"ca_file"`
-	} `yaml:"control_plane"`
-	Auth struct {
-		HMACKeyFile     string `yaml:"hmac_key_file"`
-		Caller          string `yaml:"caller"`
-		CredentialsFile string `yaml:"credentials_file"`
-	} `yaml:"auth"`
+	TLS struct {
+		CertFile string `yaml:"cert_file"`
+		KeyFile  string `yaml:"key_file"`
+		CAFile   string `yaml:"ca_file"`
+	} `yaml:"tls"`
+	Control struct {
+		// Target 是网关控制的地址：control 主机上为 127.0.0.1:11112，其他主机为 <control>:11003。
+		Target  string `yaml:"target"`
+		Caller  string `yaml:"caller"`
+		KeyFile string `yaml:"key_file"`
+	} `yaml:"control"`
 	Store struct {
 		Path string `yaml:"path"`
 	} `yaml:"store"`
-	Proxy struct {
-		MaxBodyBytes int64 `yaml:"max_body_bytes"`
-	} `yaml:"proxy"`
 }
 
-type fileConfig struct {
-	Node struct {
-		ID string `yaml:"id"`
-	} `yaml:"node"`
-	Server struct {
-		ServiceAddr string `yaml:"service_addr"`
-		NativeAddr  string `yaml:"native_addr"`
-		HealthAddr  string `yaml:"health_addr"`
-	} `yaml:"server"`
-	ControlPlane struct {
-		BaseURL     string `yaml:"base_url"`
-		HMACKeyFile string `yaml:"hmac_key_file"`
-		CAFile      string `yaml:"ca_file"`
-	} `yaml:"control_plane"`
-	Auth struct {
-		HMACKeyFile     string `yaml:"hmac_key_file"`
-		Caller          string `yaml:"caller"`
-		CredentialsFile string `yaml:"credentials_file"`
-	} `yaml:"auth"`
-	Store struct {
-		Path string `yaml:"path"`
-	} `yaml:"store"`
-	Proxy struct {
-		MaxBodyBytes int64 `yaml:"max_body_bytes"`
-	} `yaml:"proxy"`
-}
+// Direct 判断是否直连本机的网关控制：只有 control 主机如此。
+func (c Config) Direct() bool { return c.Host.ID == servicecatalog.ControlHostID }
 
+// Load 读取配置文件；相对路径按配置文件所在目录解析。
 func Load(path string) (Config, error) {
 	encoded, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("read gateway config: %w", err)
+		return Config{}, fmt.Errorf("读取主机网关配置: %w", err)
 	}
-	var raw fileConfig
 	decoder := yaml.NewDecoder(strings.NewReader(string(encoded)))
 	decoder.KnownFields(true)
-	if err := decoder.Decode(&raw); err != nil {
-		return Config{}, fmt.Errorf("decode gateway config: %w", err)
+	var cfg Config
+	if err := decoder.Decode(&cfg); err != nil {
+		return Config{}, fmt.Errorf("解析主机网关配置: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return Config{}, errors.New("decode gateway config: multiple YAML documents are not allowed")
-		}
-		return Config{}, fmt.Errorf("decode gateway config trailing content: %w", err)
+		return Config{}, errors.New("主机网关配置只能包含一个 YAML 文档")
 	}
-	var cfg Config
-	cfg.Node.ID = strings.TrimSpace(raw.Node.ID)
-	cfg.Server.ServiceAddr = strings.TrimSpace(raw.Server.ServiceAddr)
-	cfg.Server.NativeAddr = strings.TrimSpace(raw.Server.NativeAddr)
-	if cfg.Server.NativeAddr == "" {
-		cfg.Server.NativeAddr = NativeServiceAddress
-	}
-	cfg.Server.HealthAddr = strings.TrimSpace(raw.Server.HealthAddr)
-	cfg.ControlPlane.BaseURL = strings.TrimRight(strings.TrimSpace(raw.ControlPlane.BaseURL), "/")
-	cfg.ControlPlane.HMACKeyFile = resolvePath(path, raw.ControlPlane.HMACKeyFile)
-	cfg.ControlPlane.CAFile = resolvePath(path, raw.ControlPlane.CAFile)
-	cfg.Auth.HMACKeyFile = resolvePath(path, raw.Auth.HMACKeyFile)
-	cfg.Auth.Caller = strings.TrimSpace(raw.Auth.Caller)
-	cfg.Auth.CredentialsFile = resolvePath(path, raw.Auth.CredentialsFile)
-	cfg.Store.Path = resolvePath(path, raw.Store.Path)
-	cfg.Proxy.MaxBodyBytes = raw.Proxy.MaxBodyBytes
-	if cfg.Proxy.MaxBodyBytes == 0 {
-		cfg.Proxy.MaxBodyBytes = DefaultMaxBodyBytes
-	}
+	cfg.Host.ID = strings.TrimSpace(cfg.Host.ID)
+	cfg.Server.RemoteAddr = defaultString(cfg.Server.RemoteAddr, RemoteAddress)
+	cfg.Server.LocalAddr = defaultString(cfg.Server.LocalAddr, LocalAddress)
+	cfg.Server.HealthAddr = defaultString(cfg.Server.HealthAddr, HealthAddress)
+	cfg.TLS.CertFile = resolvePath(path, cfg.TLS.CertFile)
+	cfg.TLS.KeyFile = resolvePath(path, cfg.TLS.KeyFile)
+	cfg.TLS.CAFile = resolvePath(path, cfg.TLS.CAFile)
+	cfg.Control.Target = strings.TrimSpace(cfg.Control.Target)
+	cfg.Control.Caller = strings.TrimSpace(cfg.Control.Caller)
+	cfg.Control.KeyFile = resolvePath(path, cfg.Control.KeyFile)
+	cfg.Store.Path = resolvePath(path, cfg.Store.Path)
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
+// Validate 校验配置。
 func Validate(cfg Config) error {
-	if cfg.Node.ID == "" {
-		return errors.New("node.id is required")
+	if cfg.Host.ID == "" {
+		return errors.New("host.id 不能为空")
 	}
-	if cfg.Server.ServiceAddr == DedicatedTradeServiceAddress {
-		if cfg.Server.NativeAddr != DedicatedTradeNativeAddress {
-			return fmt.Errorf("dedicated Trade server.native_addr must be %s", DedicatedTradeNativeAddress)
-		}
-		if cfg.Server.HealthAddr != DedicatedTradeHealthAddress {
-			return fmt.Errorf("dedicated Trade server.health_addr must be %s", DedicatedTradeHealthAddress)
-		}
-	} else {
-		if cfg.Server.ServiceAddr != ServiceAddress {
-			return fmt.Errorf("server.service_addr must be %s", ServiceAddress)
-		}
-		if cfg.Server.NativeAddr != NativeServiceAddress && cfg.Server.NativeAddr != PublicNativeServiceAddress {
-			return fmt.Errorf("server.native_addr must be %s or %s", NativeServiceAddress, PublicNativeServiceAddress)
-		}
-		if cfg.Server.HealthAddr != HealthAddress && cfg.Server.HealthAddr != PublicHealthAddress {
-			return fmt.Errorf("server.health_addr must be %s or %s", HealthAddress, PublicHealthAddress)
+	if want := servicecatalog.HostGatewayIdentity(cfg.Host.ID); cfg.Control.Caller != want {
+		return fmt.Errorf("control.caller 必须是 %s", want)
+	}
+	for name, address := range map[string]string{"server.remote_addr": cfg.Server.RemoteAddr, "server.local_addr": cfg.Server.LocalAddr, "server.health_addr": cfg.Server.HealthAddr, "control.target": cfg.Control.Target} {
+		if _, _, err := net.SplitHostPort(address); err != nil {
+			return fmt.Errorf("%s %q 不是 host:port: %w", name, address, err)
 		}
 	}
-	if cfg.ControlPlane.BaseURL == "" {
-		return errors.New("control_plane.base_url is required")
+	if host, _, _ := net.SplitHostPort(cfg.Server.LocalAddr); !isLoopback(host) {
+		return errors.New("server.local_addr 只能监听本机回环地址")
 	}
-	if err := ValidateBaseURL(cfg.ControlPlane.BaseURL); err != nil {
-		return fmt.Errorf("control_plane.base_url: %w", err)
-	}
-	if err := ValidateKeyFile(cfg.ControlPlane.HMACKeyFile); err != nil {
-		return fmt.Errorf("control_plane.hmac_key_file: %w", err)
-	}
-	if cfg.Auth.CredentialsFile != "" {
-		if info, err := os.Lstat(cfg.Auth.CredentialsFile); err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-			return errors.New("auth.credentials_file must be a regular 0600 file")
+	if cfg.Direct() {
+		// 直连时自己写入可信的调用方身份，只能发往本机回环地址上的网关控制。
+		if host, _, _ := net.SplitHostPort(cfg.Control.Target); !isLoopback(host) {
+			return fmt.Errorf("control 主机只能直连本机的网关控制（%s）", ControlLocalTarget)
 		}
-	} else if err := ValidateKeyFile(cfg.Auth.HMACKeyFile); err != nil {
-		return fmt.Errorf("auth.hmac_key_file: %w", err)
-	} else if cfg.Auth.Caller == "" {
-		return errors.New("auth.caller is required when auth.credentials_file is not configured")
+		if cfg.Control.KeyFile != "" {
+			return errors.New("control 主机直连本机的网关控制，不使用 control.key_file")
+		}
+	} else if cfg.Control.KeyFile == "" {
+		return errors.New("control.key_file 不能为空：其他主机经 control 的 11003 访问网关控制时要签名")
 	}
-	if cfg.ControlPlane.CAFile != "" {
-		if info, err := os.Stat(cfg.ControlPlane.CAFile); err != nil || !info.Mode().IsRegular() {
-			return errors.New("control_plane.ca_file must be a readable regular file")
+	for name, file := range map[string]string{"tls.cert_file": cfg.TLS.CertFile, "tls.key_file": cfg.TLS.KeyFile, "tls.ca_file": cfg.TLS.CAFile} {
+		if file == "" {
+			return fmt.Errorf("%s 不能为空", name)
 		}
 	}
 	if cfg.Store.Path == "" {
-		return errors.New("store.path is required")
-	}
-	if cfg.Proxy.MaxBodyBytes <= 0 {
-		return errors.New("proxy.max_body_bytes must be positive")
+		return errors.New("store.path 不能为空")
 	}
 	return nil
 }
 
-func ValidateBaseURL(value string) error {
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return errors.New("must be an HTTP(S) origin")
-	}
-	if strings.EqualFold(parsed.Scheme, "https") {
-		return nil
-	}
-	if !strings.EqualFold(parsed.Scheme, "http") {
-		return errors.New("must use HTTPS or loopback HTTP")
-	}
-	host := parsed.Hostname()
-	if strings.EqualFold(host, "localhost") {
-		return nil
-	}
+func isLoopback(host string) bool {
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return errors.New("plaintext HTTP is allowed only for loopback hosts")
-	}
-	return nil
+	return ip != nil && ip.IsLoopback()
 }
 
-func ValidateKeyFile(path string) error {
-	_, err := readSecretFile(path)
-	return err
-}
-
-func ReadSecret(path string) (string, error) {
-	return readSecretFile(path)
-}
-
-func readSecretFile(path string) (string, error) {
-	if strings.TrimSpace(path) == "" {
-		return "", errors.New("path is required")
+func defaultString(value, fallback string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
 	}
-	file, err := openSecretFile(path)
-	if err != nil {
-		return "", fmt.Errorf("open key file: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("must be a regular file")
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("permissions must not include group or world bits (got %04o)", info.Mode().Perm())
-	}
-	const maxSecretBytes = 64 << 10
-	value, err := io.ReadAll(io.LimitReader(file, maxSecretBytes+1))
-	if err != nil {
-		return "", err
-	}
-	if len(value) > maxSecretBytes {
-		return "", errors.New("file is too large")
-	}
-	secret := strings.TrimSpace(string(value))
-	if secret == "" {
-		return "", errors.New("file is empty")
-	}
-	return secret, nil
+	return fallback
 }
 
 func resolvePath(configPath, value string) string {

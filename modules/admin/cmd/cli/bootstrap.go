@@ -30,7 +30,8 @@ import (
 //  2. 生成 MooX 私有 CA；
 //  3. 按部署表写入全部主机和部署（与 SyncHostPlacements 同一套校验）；
 //  4. 生成全部调用方密钥并存入 Admin 密钥表；
-//  5. 为 control 签发主机网关证书，并导出 control 主机网关需要的 CA、证书和密钥。
+//  5. 为 control 签发主机网关证书，并导出 control 主机网关需要的 CA 与证书。control 的主机网关直连
+//     本机的网关控制，不需要调用方密钥。
 
 // BootstrapSpec 是 moox-cli 按 moox.toml 渲染的部署表。
 type BootstrapSpec struct {
@@ -172,18 +173,11 @@ func bootstrap(ctx context.Context, dbPath, pkiDir, outDir string, spec Bootstra
 	if err := exportCA(pkiDir, filepath.Join(outDir, "certs", "moox-ca.crt")); err != nil {
 		return bootstrapResult{}, err
 	}
-	gatewayKey, err := keyService.SigningKey(ctx, keys.CategoryCaller, servicecatalog.HostGatewayIdentity(control.ID))
-	if err != nil {
-		return bootstrapResult{}, err
-	}
-	if err := writeKeyFile(filepath.Join(outDir, "secrets", "caller-host-gateway.key"), gatewayKey); err != nil {
-		return bootstrapResult{}, err
-	}
 	return result, nil
 }
 
 // bootstrapIdentities 返回初始化时生成密钥的全部内部调用方身份：每个组件、console、moox-cli，
-// 以及每台主机的 host-gateway@<主机>。
+// 以及 control 之外每台主机的 host-gateway@<主机>。
 func bootstrapIdentities(spec BootstrapSpec) []string {
 	catalog := servicecatalog.Default()
 	identities := map[string]bool{}
@@ -197,7 +191,9 @@ func bootstrapIdentities(spec BootstrapSpec) []string {
 		identities[caller.ID] = true
 	}
 	for _, host := range spec.Hosts {
-		identities[servicecatalog.HostGatewayIdentity(host.ID)] = true
+		if host.ID != servicecatalog.ControlHostID {
+			identities[servicecatalog.HostGatewayIdentity(host.ID)] = true
+		}
 	}
 	out := make([]string, 0, len(identities))
 	for identity := range identities {

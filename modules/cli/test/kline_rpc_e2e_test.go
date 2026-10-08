@@ -16,8 +16,10 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -75,33 +77,27 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 		AuthInfo: &pb.AuthInfo{AppId: klineStorageAppID, AppKey: klineStorageAppKey},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "caller is not allowed")
-	require.Equal(t, int32(0), storage.writeCalls.Load(), "write RPC must be rejected before reaching Storage")
+	require.Equal(t, gatewayroute.RetForbidden, int(errs.Code(err)), "写方法不经主机网关开放: %v", err)
+	require.Equal(t, int32(0), storage.writeCalls.Load(), "写请求必须在到达 Storage 之前被拒绝")
 }
 
 func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 	helper := buildGatewayE2EHelper(t)
 	readyFile := filepath.Join(t.TempDir(), "never.ready")
-	process := startGatewayHelperProcess(t, helper,
-		"--mode", "kline-native",
-		"--node-id", klineGatewayNode,
-		"--upstream-addr", "not-an-address",
-		"--ready-file", readyFile,
-		"--nonce-dir", filepath.Join(t.TempDir(), "nonces"),
-		"--key-id", klineGatewayKeyID,
-	)
+	process := startGatewayHelperProcess(t, helper, klineHelperArgs("not-an-address", readyFile, filepath.Join(t.TempDir(), "nonces"))...)
 
 	select {
 	case <-process.waitDone:
 	case <-time.After(10 * time.Second):
-		t.Fatal("invalid helper did not exit")
+		t.Fatal("参数无效的 e2e-helper 没有退出")
 	}
 	firstErr := process.waitError()
 	require.Error(t, firstErr)
-	require.Contains(t, process.logs.String(), "upstream-addr must be a loopback host:port")
+	const invalidUpstream = "的上游必须是本机回环地址 host:port"
+	require.Contains(t, process.logs.String(), invalidUpstream)
 	_, readyErr := process.waitForReady(readyFile, 2*time.Second)
 	require.ErrorContains(t, readyErr, firstErr.Error())
-	require.ErrorContains(t, readyErr, "upstream-addr must be a loopback host:port")
+	require.ErrorContains(t, readyErr, invalidUpstream)
 
 	cleanupDone := make(chan struct{})
 	go func() {
@@ -172,14 +168,7 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	tempDir := t.TempDir()
 	helper := buildGatewayE2EHelper(t)
 	readyFile := filepath.Join(tempDir, "gateway.ready")
-	process := startGatewayHelperProcess(t, helper,
-		"--mode", "kline-native",
-		"--node-id", klineGatewayNode,
-		"--upstream-addr", upstreamAddress,
-		"--ready-file", readyFile,
-		"--nonce-dir", filepath.Join(tempDir, "nonces"),
-		"--key-id", klineGatewayKeyID,
-	)
+	process := startGatewayHelperProcess(t, helper, klineHelperArgs(upstreamAddress, readyFile, filepath.Join(tempDir, "nonces"))...)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
 			t.Errorf("gateway helper required kill: %s", process.logs.String())
@@ -188,6 +177,18 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	target, err := process.waitForReady(readyFile, 30*time.Second)
 	require.NoError(t, err)
 	return target
+}
+
+// klineHelperArgs 让主机网关只向 moox-skill 开放 PrimaryStore 的 ReadTimeSeriesRows。
+func klineHelperArgs(upstreamAddress, readyFile, nonceDir string) []string {
+	return []string{
+		"-host-id", klineGatewayNode,
+		"-route", "trpc.moox.storage.PrimaryStore=" + upstreamAddress,
+		"-callers", klineStorageAppID,
+		"-methods", "ReadTimeSeriesRows",
+		"-ready-file", readyFile,
+		"-nonce-dir", nonceDir,
+	}
 }
 
 func buildGatewayE2EHelper(t *testing.T) string {
@@ -214,7 +215,7 @@ func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gat
 		command:  exec.Command(helper, args...),
 		waitDone: make(chan struct{}),
 	}
-	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+klineGatewaySecret)
+	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_KEYS="+klineStorageAppID+":"+klineGatewayKeyID+":"+klineGatewaySecret)
 	process.command.Stdout = &process.logs
 	process.command.Stderr = &process.logs
 	require.NoError(t, process.command.Start())

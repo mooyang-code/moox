@@ -59,14 +59,13 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 	require.NotEmpty(t, first["keys_created"])
 	caBefore, err := os.ReadFile(filepath.Join(paths.pki, pki.CACertFile))
 	require.NoError(t, err)
-	gatewayKey, err := gatewayauth.LoadCallerKey(filepath.Join(paths.out, "secrets", "caller-host-gateway.key"))
-	require.NoError(t, err)
-	require.Equal(t, "host-gateway@control", gatewayKey.Caller)
 	for _, file := range []string{"certs/host-gateway/server.crt", "certs/host-gateway/server.key", "certs/moox-ca.crt"} {
 		info, err := os.Stat(filepath.Join(paths.out, file))
 		require.NoError(t, err, file)
 		require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), file)
 	}
+	_, err = os.Stat(filepath.Join(paths.out, "secrets", "caller-host-gateway.key"))
+	require.True(t, os.IsNotExist(err), "control 的主机网关直连网关控制，不导出调用方密钥")
 
 	second := runCLI(t, args...)
 	require.Equal(t, false, second["ca_created"], "重复执行不重建 CA")
@@ -74,9 +73,6 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 	caAfter, err := os.ReadFile(filepath.Join(paths.pki, pki.CACertFile))
 	require.NoError(t, err)
 	require.Equal(t, caBefore, caAfter)
-	again, err := gatewayauth.LoadCallerKey(filepath.Join(paths.out, "secrets", "caller-host-gateway.key"))
-	require.NoError(t, err)
-	require.Equal(t, gatewayKey.Secret, again.Secret)
 
 	keys := runCLI(t, "keys", "list", "--db-path", paths.db, "--encryption-key-file", paths.key)
 	items := keys["keys"].([]any)
@@ -84,9 +80,10 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 	for _, item := range items {
 		callers[item.(map[string]any)["caller"].(string)] = true
 	}
-	for _, caller := range []string{"console", "admin", "moox-cli", "collector", "access", "host-gateway@control", "host-gateway@storage"} {
+	for _, caller := range []string{"console", "admin", "moox-cli", "collector", "access", "host-gateway@storage"} {
 		require.True(t, callers[caller], caller)
 	}
+	require.False(t, callers["host-gateway@control"], "control 的主机网关不需要调用方密钥")
 }
 
 func TestOfflineRecoveryRestoresDisabledComponent(t *testing.T) {

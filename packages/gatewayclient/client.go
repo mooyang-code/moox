@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go/pool/connpool"
 )
 
 const directoryFetchTimeout = 3 * time.Second
@@ -48,7 +49,7 @@ type Options struct {
 	Now             func() time.Time
 }
 
-// Client 是并发安全的网关客户端。
+// Client 是并发安全的网关客户端，应在进程内长期复用。
 type Client struct {
 	mode          Mode
 	credentials   gatewayauth.Credentials
@@ -61,6 +62,9 @@ type Client struct {
 	remoteAddress func(local, target servicecatalog.DirectoryHost) string
 	catalog       *servicecatalog.Catalog
 	now           func() time.Time
+	// pool 是客户端自己的连接池：tRPC 默认连接池只按网络、地址和协议区分连接，
+	// 不同的 TLS 设置（或明文与 TLS）会共用同一条连接；它也检测不出失效的 TLS 连接。
+	pool connpool.Pool
 }
 
 // New 按配置创建客户端。内部方式和隧道方式会在后台每 15 秒比对一次服务目录版本。
@@ -89,7 +93,7 @@ func New(options Options) (*Client, error) {
 		mode: config.Mode, credentials: credentials, caFile: strings.TrimSpace(config.CAFile),
 		localAddress: strings.TrimSpace(config.LocalAddress), accessAddress: strings.TrimSpace(config.AccessAddress),
 		accessID: strings.TrimSpace(config.AccessID), tunnel: options.Tunnel, remoteAddress: options.RemoteAddress,
-		catalog: options.Catalog, now: options.Now,
+		catalog: options.Catalog, now: options.Now, pool: NewConnectionPool(),
 	}
 	if c.localAddress == "" {
 		c.localAddress = DefaultLocalAddress
@@ -108,7 +112,7 @@ func New(options Options) (*Client, error) {
 	case ModeLocal:
 		if source == nil {
 			address := c.localAddress
-			source = rpcSource{address: func(context.Context) (string, error) { return address, nil }, timeout: directoryFetchTimeout}
+			source = rpcSource{address: func(context.Context) (string, error) { return address, nil }, timeout: directoryFetchTimeout, pool: c.pool}
 		}
 		c.directory = newDirectoryState(source, config.CacheDir, options.RefreshInterval, false)
 	case ModeTunnel:
@@ -119,7 +123,7 @@ func New(options Options) (*Client, error) {
 			tunnel := options.Tunnel
 			source = rpcSource{address: func(ctx context.Context) (string, error) {
 				return tunnel.Address(ctx, servicecatalog.ControlHostID)
-			}, timeout: directoryFetchTimeout}
+			}, timeout: directoryFetchTimeout, pool: c.pool}
 		}
 		c.directory = newDirectoryState(source, config.CacheDir, options.RefreshInterval, true)
 	}
@@ -265,9 +269,17 @@ func (c *Client) do(ctx context.Context, servicePath, method string, body []byte
 		attempts = 2
 	}
 	failed := map[string]bool{}
+	refreshed := false
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		chosen, err := c.pick(ctx, servicePath, options.host, failed)
+		if err != nil && !refreshed && c.directory != nil && errs.Code(err) == gatewayroute.RetServiceNotHere {
+			// 本地目录里没有可用的部署，目录可能已过期：刷新后再选一次。请求还没有发出，任何方法都可以重选。
+			refreshed = true
+			if c.directory.refresh(ctx) == nil {
+				chosen, err = c.pick(ctx, servicePath, options.host, failed)
+			}
+		}
 		if err != nil {
 			if lastErr != nil {
 				return nil, lastErr
@@ -284,16 +296,18 @@ func (c *Client) do(ctx context.Context, servicePath, method string, body []byte
 		}
 		failed[chosen.hostID] = true
 		if c.directory != nil {
+			refreshed = true
 			_ = c.directory.refresh(ctx)
 		}
 	}
 	return nil, lastErr
 }
 
-// needsDirectoryRefresh 判断错误是否说明目录过期：服务不在目标主机、目标主机已停用或连不上。
+// needsDirectoryRefresh 判断错误是否说明目录可能过期：服务不在目标主机、目标主机已停用、连不上，
+// 或连接在收到响应前断开（例如目标主机网关正在重启）。只读方法遇到这些错误时刷新目录后重试一次。
 func needsDirectoryRefresh(err error) bool {
 	switch errs.Code(err) {
-	case gatewayroute.RetServiceNotHere, gatewayroute.RetHostDisabled, errs.RetClientConnectFail, errs.RetClientNetErr:
+	case gatewayroute.RetServiceNotHere, gatewayroute.RetHostDisabled, errs.RetClientConnectFail, errs.RetClientNetErr, errs.RetClientReadFrameErr:
 		return true
 	default:
 		return false
@@ -381,6 +395,7 @@ func (c *Client) send(ctx context.Context, chosen target, servicePath, method st
 		client.WithServiceName(servicePath), client.WithCalleeMethod(method),
 		client.WithSerializationType(options.serialization),
 		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
+		client.WithPool(c.pool),
 	}
 	if chosen.tls {
 		if c.caFile == "" {

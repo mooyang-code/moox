@@ -321,21 +321,16 @@ func waitPeriodE2EFinalizerCycles(t *testing.T, ctx context.Context) {
 
 func startPeriodStorageGateway(t *testing.T, ctx context.Context, root, binary string, ready periodE2EStorageReady, secret string) string {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../../../.."))
-	yamlPath := filepath.Join(repoRoot, "config/setup/service-deployments.yaml")
 	readyFile := filepath.Join(root, "storage-gateway-ready")
 	nonceDir := filepath.Join(root, "gateway-nonces")
 	primary := stripPeriodE2EURL(t, ready.PrimaryTarget)
 	metadata := stripPeriodE2EURL(t, ready.MetadataTarget)
 	args := []string{
-		"-mode=collector-period-native", "-deployment-yaml=" + yamlPath, "-route-scope=storage-period",
-		"-node-id=" + periodE2EGatewayNodeID, "-upstream-addr=" + primary,
-		"-metadata-upstream-addr=" + metadata, "-listen-addr=127.0.0.1:0",
-		"-ready-file=" + readyFile, "-nonce-dir=" + nonceDir, "-key-id=" + periodE2EGatewayKeyID,
+		"-host-id=" + periodE2EGatewayNodeID,
+		"-route=trpc.moox.storage.PrimaryStore=" + primary, "-route=trpc.moox.storage.Metadata=" + metadata,
+		"-callers=collector", "-listen-addr=127.0.0.1:0", "-ready-file=" + readyFile, "-nonce-dir=" + nonceDir,
 	}
-	process := startPeriodE2EProcess(t, binary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_SERVICE_SECRET": secret})
+	process := startPeriodE2EProcess(t, binary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_KEYS": periodE2EGatewayKeys(secret)})
 	var target string
 	waitPeriodE2EReady(t, ctx, process, readyFile, func(raw []byte) error { target = strings.TrimSpace(string(raw)); return nil })
 	parsed, err := url.Parse(target)
@@ -418,6 +413,11 @@ func periodE2EProcessFailure(process *periodE2EProcess) string {
 		return fmt.Sprintf("%v\n%s", process.waitErr, process.output.String())
 	}
 	return ""
+}
+
+// periodE2EGatewayKeys 是 e2e-helper 的校验密钥：只有 collector 一个调用方。
+func periodE2EGatewayKeys(secret string) string {
+	return "collector:" + periodE2EGatewayKeyID + ":" + secret
 }
 
 func periodE2EEnvironment(base []string, overrides map[string]string) []string {
@@ -1863,17 +1863,15 @@ func startPeriodCollectorRuntimeE2E(t *testing.T, ctx context.Context, root, gat
 		}
 	})
 
-	_, source, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../../../.."))
 	readyFile := filepath.Join(root, "collector-runtime-gateway-ready")
 	args := []string{
-		"-mode=collector-period-native", "-deployment-yaml=" + filepath.Join(repoRoot, "config/setup/service-deployments.yaml"),
-		"-route-scope=collector-runtime", "-node-id=" + periodE2EGatewayNodeID + "-runtime",
-		"-upstream-addr=" + listener.Addr().String(), "-listen-addr=127.0.0.1:0", "-ready-file=" + readyFile,
-		"-nonce-dir=" + filepath.Join(root, "runtime-gateway-nonces"), "-key-id=" + periodE2EGatewayKeyID,
+		"-host-id=" + periodE2EGatewayNodeID + "-runtime",
+		// 生产中 SCF 经外部接入领取批次；这里直接以 collector 身份调用，所以显式放行 ClaimTimerBatch。
+		"-route=trpc.moox.collector.MarketFetchRuntime=" + listener.Addr().String(),
+		"-callers=collector", "-methods=ClaimTimerBatch", "-listen-addr=127.0.0.1:0", "-ready-file=" + readyFile,
+		"-nonce-dir=" + filepath.Join(root, "runtime-gateway-nonces"),
 	}
-	process := startPeriodE2EProcess(t, gatewayBinary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_SERVICE_SECRET": secret})
+	process := startPeriodE2EProcess(t, gatewayBinary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_KEYS": periodE2EGatewayKeys(secret)})
 	var target string
 	waitPeriodE2EReady(t, ctx, process, readyFile, func(raw []byte) error { target = strings.TrimSpace(string(raw)); return nil })
 	parsed, err := url.Parse(target)
