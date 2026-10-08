@@ -186,8 +186,8 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return fmt.Errorf("metrics dataset kind is %s, want TIME_SERIES", dataset.GetDataKind())
 	}
-	if !contains(dataset.GetFreqs(), a.cfg.Frequency) {
-		return fmt.Errorf("metrics dataset does not support frequency %q", a.cfg.Frequency)
+	if dataset.GetFreq() != a.cfg.Frequency {
+		return fmt.Errorf("metrics dataset freq is %q, not %q", dataset.GetFreq(), a.cfg.Frequency)
 	}
 	columnsRsp, err := a.metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, Page: &commonpb.Page{Page: 1, Size: 500}})
 	if err != nil {
@@ -211,14 +211,6 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	return nil
 }
 func isActive(status string) bool { return strings.EqualFold(strings.TrimSpace(status), "active") }
-func contains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
-}
 func sortedKeys(m map[string]columnContract) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

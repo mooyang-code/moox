@@ -45,9 +45,9 @@ func TestCompletionEventBusConfigPrefersPackagedCAFile(t *testing.T) {
 }
 
 func TestRetryCollectionItemUsesExactInstanceIDBeforeSubjectFallback(t *testing.T) {
-	request := Request{DatasetID: "dataset_stockcn_equity_kline", Items: []domain.CollectionItem{
-		{InstanceID: "snapshot-shard-0", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
-		{InstanceID: "snapshot-shard-1", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 1, SnapshotShardCount: 2},
+	request := Request{DatasetID: "dataset_stockcn_equity_kline_1m", Items: []domain.CollectionItem{
+		{InstanceID: "snapshot-shard-0", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
+		{InstanceID: "snapshot-shard-1", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 1, SnapshotShardCount: 2},
 	}}
 	result := &marketfetchpb.MarketFetchItemResult{InstanceId: "snapshot-shard-1", SubjectId: "stockcn", Outcome: string(domain.ItemOutcomeProviderError)}
 

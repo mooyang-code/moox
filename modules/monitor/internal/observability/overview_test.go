@@ -246,7 +246,7 @@ func TestBuilderAlertsOnStockCNConfiguredGroupIdentityMismatch(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		route := "stockcn_equity_kline_1m_multi_provider_v1"
-		labels := `{"space_id":"stockcn","dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`
+		labels := `{"space_id":"stockcn","dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m"}`
 		seedOverviewMetricForInstance(t, db, "identity-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
 		seedOverviewMetricForInstance(t, db, "identity-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
 		seedOverviewMetricForInstance(t, db, "identity-success", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"stockcn"}`, float64(now.Unix()), now)
@@ -267,7 +267,7 @@ func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	lastSuccess := now.Add(-2 * time.Minute)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		labels := `{"space_id":"stockcn","dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`
+		labels := `{"space_id":"stockcn","dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m"}`
 		seedOverviewMetricForInstance(t, db, "timer-required-stock", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
 		seedOverviewMetricForInstance(t, db, "timer-active-stock", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
 		seedOverviewMetricForInstance(t, db, "timer-success-stock", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"stockcn"}`, float64(lastSuccess.Unix()), now)

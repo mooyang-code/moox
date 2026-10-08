@@ -214,7 +214,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		// without inventing a fake market subject.
 		groups = []TaskGroup{{
 			Provider: "stockcn_multi", MarketType: "equity", MarketID: StockCNSpaceID,
-			InstrumentType: "equity", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m",
+			InstrumentType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
 		}}
 	}
 	if !stockCN && len(groups) == 0 {

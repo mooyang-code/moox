@@ -55,6 +55,30 @@ func TestDefaultViewInventory(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestDefaultSeedImportsIntoEmptyStoreWithDatasetFrequencies(t *testing.T) {
+	ctx := context.Background()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "config", "setup", "metadata.yaml"))
+	require.NoError(t, err)
+	var seed seedFile
+	require.NoError(t, yaml.UnmarshalStrict(raw, &seed))
+	store := openSeedTestStore(t)
+	_, err = store.RegisterDataNode(ctx, "storage-node-0", "ip://127.0.0.1:20107", "local node")
+	require.NoError(t, err)
+
+	result, err := importEntities(ctx, store, seed)
+	require.NoError(t, err)
+	require.Equal(t, len(seed.Datasets), result.Datasets)
+	require.Equal(t, len(seed.Views), result.Views)
+	for _, item := range seed.Views {
+		view, err := store.GetView(ctx, item.SpaceID, item.ViewID)
+		require.NoError(t, err)
+		dataset, err := store.GetDataset(ctx, item.SpaceID, item.PrimaryDatasetID)
+		require.NoError(t, err)
+		require.NotEmpty(t, view.GetFreq(), "%s/%s", item.SpaceID, item.ViewID)
+		require.Equal(t, dataset.GetFreq(), view.GetFreq(), "%s/%s takes its Dataset freq", item.SpaceID, item.ViewID)
+	}
+}
+
 func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 	ctx := context.Background()
 	store := openSeedTestStore(t)
@@ -63,7 +87,7 @@ func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "space", DataSourceID: "source", Name: "Source", Kind: "internal", Status: "active"}},
 		Datasets: []seedDataset{{
 			SpaceID: "space", DatasetID: "dataset", DataSourceID: "source", Name: "Dataset",
-			DataKind: "time_series", DataNodeID: "storage-node-0", KeepDuration: "1h", Status: "active",
+			DataKind: "time_series", Freq: "1m", DataNodeID: "storage-node-0", KeepDuration: "1h", Status: "active",
 		}},
 	}
 

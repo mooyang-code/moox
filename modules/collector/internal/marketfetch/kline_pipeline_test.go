@@ -40,8 +40,8 @@ func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
 		dataset    string
 	}{
 		{marketdata.InstrumentEquity, "600000.XSHG", StockCNDatasetID},
-		{marketdata.InstrumentIndex, "000001.XSHG", "dataset_stockcn_index_kline"},
-		{marketdata.InstrumentConvertibleBond, "113001.XSHG", "dataset_stockcn_bond_kline"},
+		{marketdata.InstrumentIndex, "000001.XSHG", "dataset_stockcn_index_kline_1d"},
+		{marketdata.InstrumentConvertibleBond, "113001.XSHG", "dataset_stockcn_bond_kline_1m"},
 	} {
 		t.Run(string(test.instrument), func(t *testing.T) {
 			item := domain.CollectionItem{SubjectID: test.subject, Symbol: "sh" + test.subject[:6], DatasetID: test.dataset, Provider: "sina", SourceID: "stockcn_http", MarketType: string(test.instrument), TargetDataTime: period.Format(time.RFC3339Nano), SeriesHash: "one-logical-series", ExpectedCount: 1, PeriodReservationID: "release-canary-123"}

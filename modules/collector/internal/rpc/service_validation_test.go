@@ -164,10 +164,10 @@ func (f *taskResultMetadataFake) ActivateDataset(context.Context, *storagepb.Act
 func TestValidateCollectionTaskDatasetsRejectsMarketAndFrequencyMismatch(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
 		"symbols": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
-		"bars":    {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}},
+		"bars":    {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	task := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"5m"}`}
-	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), task), `does not enable frequency "5m"`)
+	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), task), `freq is "1m", not "5m"`)
 
 	task.CollectParams = `{"provider":"binance","market_type":"swap","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`
 	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), task), "market_type=spot does not match task market_type=swap")
@@ -175,7 +175,7 @@ func TestValidateCollectionTaskDatasetsRejectsMarketAndFrequencyMismatch(t *test
 
 func TestValidateCollectionTaskDatasetsRejectsTargetMarketMismatch(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"bars": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}},
+		"bars": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	task := domain.CollectionTask{
 		SpaceID: "crypto", DataType: "kline", CollectParams: `{"provider":"binance","market_type":"swap","subject_tags":["binance_swap"],"target_dataset_id":"bars","frequency":"1m"}`,
@@ -185,11 +185,11 @@ func TestValidateCollectionTaskDatasetsRejectsTargetMarketMismatch(t *testing.T)
 
 func TestValidateCollectionTaskDatasetsAcceptsStockSharedDataSource(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"symbols":                      {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
-		"dataset_stockcn_equity_kline": {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "equity"}},
+		"symbols":                         {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
+		"dataset_stockcn_equity_kline_1m": {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", Attributes: map[string]string{"market_type": "equity"}},
 	}}
 	task := domain.CollectionTask{
-		SpaceID: "stockcn", TaskID: "stock-bars", DataType: "kline", CollectParams: `{"provider":"stockcn_multi","market_type":"equity","subject_tags":["binance_spot"],"target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+		SpaceID: "stockcn", TaskID: "stock-bars", DataType: "kline", CollectParams: `{"provider":"stockcn_multi","market_type":"equity","subject_tags":["binance_spot"],"target_dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m"}`,
 	}
 	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), task))
 }
@@ -204,7 +204,7 @@ func TestValidateCollectionTaskAcceptsCollectorLocalResampleWithoutCloudRoute(t 
 func TestValidateCollectionTaskAcceptsBoundedStockHistoryMode(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "stock-bars", TaskName: "stock bars", DataType: "kline", TagIDs: []string{"cn_a_share"},
-		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
 	}
 	require.NoError(t, validateCollectionTask(task))
 }
@@ -587,7 +587,7 @@ type acceptingKlineDatasetSource struct{}
 
 func (acceptingKlineDatasetSource) GetDataset(_ context.Context, _ string, _ string) (storagesource.DatasetInfo, error) {
 	return storagesource.DatasetInfo{
-		DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"},
+		DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m",
 		SubjectTags: []string{"binance_spot"},
 		Attributes:  map[string]string{"market_type": "spot"},
 	}, nil
@@ -736,7 +736,7 @@ func TestUpdateTaskRejectsChangingSubjectTags(t *testing.T) {
 		taskRepo:      db.Tasks(),
 		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
 		datasetSrc: validationDatasetSource{
-			ids.DatasetID: {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, SubjectTags: []string{"old_tag"}, Attributes: map[string]string{"market_type": "spot"}},
+			ids.DatasetID: {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", SubjectTags: []string{"old_tag"}, Attributes: map[string]string{"market_type": "spot"}},
 		},
 	}
 
@@ -834,7 +834,7 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 		taskRepo: db.Tasks(),
 		datasetSrc: validationDatasetSource{
 			"dataset-original": {
-				DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, SubjectTags: []string{"binance_spot"},
+				DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", SubjectTags: []string{"binance_spot"},
 				Attributes: map[string]string{"market_type": "spot"},
 			},
 		},
@@ -952,17 +952,17 @@ func TestValidateTaskResultIdentityUpdateRejectsViewChanges(t *testing.T) {
 
 func TestValidateResampleSourceDoesNotFoldMonthIntoMinute(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1mo"}, Attributes: map[string]string{"market_type": "spot"}},
+		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1mo", Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	rule := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`,
 	}
-	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), rule), `does not enable frequency "1m"`)
+	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), rule), `freq is "1mo", not "1m"`)
 }
 
 func TestValidateCollectionTaskDatasetsAcceptsExchangeSourceForMooxResample(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1h"}, Attributes: map[string]string{"market_type": "spot"}},
+		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1h", Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	rule := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc"}`,

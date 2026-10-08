@@ -28,6 +28,7 @@
           <section v-if="!props.hideTechnicalIdentity" class="view-status-line">
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
+            <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
@@ -1287,7 +1288,7 @@ function resetFilterRows() {
 }
 
 function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
-  const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline";
+  const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline_1m";
   return {
     fieldName: option?.value || "",
     operator: option?.value === "series_tag" ? "eq" : "contains",

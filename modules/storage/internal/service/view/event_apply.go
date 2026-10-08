@@ -504,7 +504,7 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 	if spaceID == "" || viewID == "" {
 		return
 	}
-	frequency := viewFrequencyValue(view)
+	frequency := view.GetFreq()
 	var watermark time.Time
 	type datasetKey struct {
 		subjectID, frequency, seriesTag string

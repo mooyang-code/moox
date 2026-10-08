@@ -3,8 +3,10 @@ package schema
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
 )
@@ -14,7 +16,7 @@ type metadataSeedGrainContract struct {
 		SpaceID    string            `yaml:"space_id"`
 		DatasetID  string            `yaml:"dataset_id"`
 		DataKind   string            `yaml:"data_kind"`
-		Freqs      []string          `yaml:"freqs"`
+		Freq       string            `yaml:"freq"`
 		Attributes map[string]string `yaml:"attributes"`
 	} `yaml:"datasets"`
 	DatasetColumns []struct {
@@ -68,6 +70,18 @@ func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
 	}
 }
 
+func TestDefaultSetupSeedTimeSeriesDatasetsDeclareCanonicalFreq(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml"))
+	require.NoError(t, err)
+	var seed metadataSeedGrainContract
+	require.NoError(t, yaml.Unmarshal(raw, &seed))
+	for _, dataset := range seed.Datasets {
+		if dataset.DataKind == "time_series" {
+			require.True(t, frequencypkg.IsCanonical(dataset.Freq), "%s/%s freq %q", dataset.SpaceID, dataset.DatasetID, dataset.Freq)
+		}
+	}
+}
+
 func TestDefaultSetupSeedDeclaresArchiveDevice(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
 	raw, err := os.ReadFile(path)
@@ -95,20 +109,20 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		require.NotContains(t, indexes, key, "duplicate Dataset identity")
 		indexes[key] = i
 	}
-	owners := map[string][]string{
-		"stockcn/dataset_stockcn_equity_kline": {"1m"},
-		"stockcn/dataset_stockcn_index_kline":  {"1h", "1d"},
-		"stockcn/dataset_stockcn_bond_kline":   {"1m", "1d"},
-		"stockhk/dataset_stockhk_equity_kline": {"1m", "1d", "1w", "1mo"},
-		"stockus/dataset_stockus_equity_kline": {"1m", "1d", "1w", "1mo"},
+	owners := []string{
+		"stockcn/dataset_stockcn_equity_kline_1m",
+		"stockcn/dataset_stockcn_index_kline_1d",
+		"stockcn/dataset_stockcn_bond_kline_1m",
+		"stockhk/dataset_stockhk_equity_kline_1d",
+		"stockus/dataset_stockus_equity_kline_1d",
 	}
-	for key, freqs := range owners {
+	for _, key := range owners {
 		t.Run(key, func(t *testing.T) {
 			index, found := indexes[key]
 			require.True(t, found, "raw market Dataset is missing")
 			dataset := seed.Datasets[index]
 			require.Equal(t, "time_series", dataset.DataKind)
-			require.Equal(t, freqs, dataset.Freqs)
+			require.True(t, strings.HasSuffix(dataset.DatasetID, "_"+dataset.Freq), "market Dataset ID must end with its freq %q", dataset.Freq)
 			require.Equal(t, "collector", dataset.Attributes["owner_module"])
 			require.Equal(t, "raw_collection", dataset.Attributes["dataset_role"])
 		})

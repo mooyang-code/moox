@@ -674,7 +674,7 @@ func testSkillDataAccessConfig() dataAccessConfig {
 			"stockcn": {
 				DefaultExchange: "stockcn",
 				Exchanges: map[string]exchangeConfig{
-					"stockcn": {SpaceID: "stockcn", SeriesTag: "default", KlineDatasets: map[string]string{"1m": "dataset_stockcn_equity_kline"}},
+					"stockcn": {SpaceID: "stockcn", SeriesTag: "default", KlineDatasets: map[string]string{"1m": "dataset_stockcn_equity_kline_1m"}},
 				},
 			},
 		},

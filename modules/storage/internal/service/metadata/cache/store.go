@@ -72,7 +72,7 @@ type entry struct {
 	ParentGroupID  string   `json:"parent_group_id,omitempty"`
 	DatasetIDs     []string `json:"dataset_ids,omitempty"`
 	DataKind       int32    `json:"data_kind,omitempty"`
-	Freqs          []string `json:"freqs,omitempty"`
+	Freq           string   `json:"freq,omitempty"`
 	KeepDuration   string   `json:"keep_duration,omitempty"`
 	DataNodeID     string   `json:"data_node_id,omitempty"`
 	BindingLocked  bool     `json:"binding_locked,omitempty"`
@@ -103,7 +103,6 @@ func (s *Store) Snapshot() *MetadataSnapshot {
 		items[i] = item
 		items[i].Payload = append([]byte(nil), item.Payload...)
 		items[i].DatasetIDs = append([]string(nil), item.DatasetIDs...)
-		items[i].Freqs = append([]string(nil), item.Freqs...)
 	}
 	return &MetadataSnapshot{items: items}
 }
@@ -374,7 +373,7 @@ func (s *Store) ListDatasets(ctx context.Context, query metadata.DatasetQuery) (
 			return false
 		}
 		return (query.DataKind == pb.DataKind_DATA_KIND_UNSPECIFIED || item.DataKind == int32(query.DataKind)) &&
-			(query.Freq == "" || containsString(item.Freqs, query.Freq))
+			(query.Freq == "" || item.Freq == query.Freq)
 	}), func() *pb.Dataset { return &pb.Dataset{} })
 	if err != nil {
 		return nil, nil, err
@@ -717,7 +716,7 @@ func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error)
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freqs: item.GetFreqs(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freq: item.GetFreq(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

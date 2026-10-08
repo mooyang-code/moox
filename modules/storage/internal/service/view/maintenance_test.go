@@ -177,7 +177,7 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 }
 
 func TestPeriodBoundedViewCanRebuildForFileCapacity(t *testing.T) {
-	view := &pb.View{ActiveIndexId: "idx", FilterJson: `{"freq":"1m"}`, KeepDuration: "0"}
+	view := &pb.View{ActiveIndexId: "idx", Freq: "1m", KeepDuration: "0"}
 	opts := MaintenanceOptions{MaxViewFileBytes: 512, RebuildLookbackPeriods: map[string]uint64{"default": 5000}}
 	stats := viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}
 	if !needsCapacityMaintenanceRebuild(view, stats, opts) {
@@ -203,7 +203,7 @@ func TestPeriodCapacityPolicyIgnoresGlobalCoverageSpan(t *testing.T) {
 	view := &pb.View{
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 		KeepDuration: "24h",
-		FilterJson:   `{"freq":"1m"}`,
+		Freq:         "1m",
 	}
 	wide := viewindex.ViewIndexStats{
 		Exists: true, IndexedFrom: "2026-01-01T00:00:00Z", IndexedTo: "2026-01-10T00:00:00Z",
@@ -248,25 +248,25 @@ func TestRebuildLookbackUsesViewRetentionPerFrequency(t *testing.T) {
 
 func TestRebuildLookbackPeriodsSelectsFrequencyAndDefault(t *testing.T) {
 	configured := map[string]uint64{"1m": 4320, "1h": 2880, "1d": 360, "default": 2000}
-	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1m"}`}, configured); got != 4320 {
+	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1m"}, configured); got != 4320 {
 		t.Fatalf("1m periods = %d, want 4320", got)
 	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1h"}`}, configured); got != 2880 {
+	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1h"}, configured); got != 2880 {
 		t.Fatalf("1H periods = %d, want 2880", got)
 	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1d"}`}, configured); got != 360 {
+	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1d"}, configured); got != 360 {
 		t.Fatalf("1d periods = %d, want 360", got)
 	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"30s"}`}, configured); got != 2000 {
+	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "30s"}, configured); got != 2000 {
 		t.Fatalf("default periods = %d, want 2000", got)
 	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"foo":"bar"}`}, configured); got != 0 {
+	if got := rebuildLookbackPeriodsForView(&pb.View{}, configured); got != 0 {
 		t.Fatalf("missing frequency periods = %d, want 0", got)
 	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1m"}`}, nil); got != defaultRebuildLookbackPeriods {
+	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1m"}, nil); got != defaultRebuildLookbackPeriods {
 		t.Fatalf("missing configured periods = %d, want default %d", got, defaultRebuildLookbackPeriods)
 	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{Engine: "duckdb", FilterJson: `{"foo":"bar"}`}, nil); got != 0 {
+	if got := rebuildLookbackPeriodsForView(&pb.View{Engine: "bleve"}, nil); got != 0 {
 		t.Fatalf("frequency-less View periods = %d, want 0", got)
 	}
 }
@@ -662,7 +662,7 @@ func TestInactiveCapacityBuildFailureLeavesActiveSlotReadable(t *testing.T) {
 		SpaceId: spaceID, ViewId: viewID, DatasetId: "prices", Engine: "duckdb",
 		ActiveIndexId: activeID, ActiveViewRevision: 1, DesiredViewRevision: 1,
 		ActiveViewSchemaHash: "schema-v1", ActiveColumns: columns, Columns: columns,
-		FilterJson: `{"freq":"1m"}`, KeepDuration: "8760h", Status: "active",
+		Freq: "1m", KeepDuration: "8760h", Status: "active",
 	}}
 	svc.consumerState = func(context.Context) (jetstream.ConsumerState, error) { return jetstream.ConsumerState{}, nil }
 	err := svc.maintainView(ctx, MaintenanceOptions{

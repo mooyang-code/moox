@@ -89,7 +89,7 @@ async function mockGateway(route: Route) {
             dataset_id: "dataset_binance_kline_1m",
             name: "现货K线",
             status: "active",
-            freqs: ["1m"],
+            freq: "1m",
             attributes: { owner_module: "collector", dataset_role: "raw_collection" }
           },
           {
@@ -97,7 +97,7 @@ async function mockGateway(route: Route) {
             dataset_id: factorSet.result_dataset_id,
             name: "现货K线因子结果",
             status: "active",
-            freqs: ["1m"],
+            freq: "1m",
             attributes: { owner_module: "factor", dataset_role: "factor_result" }
           }
         ],
@@ -191,7 +191,7 @@ async function mockGateway(route: Route) {
           dataset_id: body.dataset_id,
           name: "现货K线",
           status: "active",
-          freqs: ["1m"],
+          freq: "1m",
           attributes: {}
         }
       })

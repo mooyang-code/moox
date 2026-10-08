@@ -28,11 +28,11 @@ func TestHandlerRoutesTimerToClaimedMarketFetch(t *testing.T) {
 	var observed marketfetch.Request
 	period := "2026-09-01T07:59:00Z"
 	claimed, err := json.Marshal(marketfetch.Request{
-		BatchID: "claimed-batch", BatchKind: domain.BatchKindRealtime, SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline",
+		BatchID: "claimed-batch", BatchKind: domain.BatchKindRealtime, SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m",
 		Frequency: "1m", Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", FunctionName: "function-1",
 		GroupID: 0, GroupCount: 1, BindingHash: "binding-hash", RequirePeriodCommit: true,
-		Items:   []domain.CollectionItem{{InstanceID: "instance-1", SubjectID: "600000.XSHG", Symbol: "600000", Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m", TargetDataTime: period, SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true}},
-		Targets: []domain.WriteTarget{{ID: "target-1", SpaceID: "stockcn", InstanceID: "instance-1", TaskID: "task-1", DatasetID: "dataset_stockcn_equity_kline", SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, Frequency: "1m", TargetDataTime: period}},
+		Items:   []domain.CollectionItem{{InstanceID: "instance-1", SubjectID: "600000.XSHG", Symbol: "600000", Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1m", TargetDataTime: period, SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true}},
+		Targets: []domain.WriteTarget{{ID: "target-1", SpaceID: "stockcn", InstanceID: "instance-1", TaskID: "task-1", DatasetID: "dataset_stockcn_equity_kline_1m", SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, Frequency: "1m", TargetDataTime: period}},
 	})
 	require.NoError(t, err)
 	handler := &Handler{

@@ -236,15 +236,13 @@ func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 	require.Equal(t, []string{"new_tag"}, fake.datasets[ids.DatasetID].GetSubjectTags())
 }
 
-func TestEnsureDeclaresAllCollectionFrequencies(t *testing.T) {
+func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	ids, err := manager.Ensure(context.Background(), "crypto", "task-multi-frequency", "kline", "spot", Config{
-		DataNodeID: "node-1", Frequency: "1m", Frequencies: []string{"1m", "5m", "1m"},
-	})
+	ids, err := manager.Ensure(context.Background(), "crypto", "task-5m", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "5m"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"1m", "5m"}, fake.datasets[ids.DatasetID].GetFreqs())
-	require.Equal(t, `{"freq":"1m"}`, fake.views[ids.ViewID].GetFilterJson())
+	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFreq())
+	require.Empty(t, fake.views[ids.ViewID].GetFreq(), "Storage fills the View freq from its Dataset")
 }
 
 func TestNormalizeKeepDurationAcceptsDaysAndWeeks(t *testing.T) {

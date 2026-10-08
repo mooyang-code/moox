@@ -38,7 +38,7 @@ func TestBuildMetadataImportCallsFromSeed(t *testing.T) {
 		}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "spot_kline", DataSourceID: "binance",
-			Name: "Spot Kline", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"},
+			Name: "Spot Kline", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freq: "1m",
 		}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
@@ -182,7 +182,7 @@ func TestRunStorageImportDryRunPath(t *testing.T) {
 	content := "meta\nignore\nopen_time,close\n2026-01-02T03:04:05Z,1.25\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	meta := fakeStorageImportMeta{
-		dataset: &pb.Dataset{DatasetId: "kline", Freqs: []string{"1m"}, Status: "active"},
+		dataset: &pb.Dataset{DatasetId: "kline", Freq: "1m", Status: "active"},
 		subject: &pb.Subject{SubjectId: "BTC", Status: "active"},
 		columns: []*pb.DatasetColumn{
 			{ColumnName: "open_time", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_TIME, Required: true, Status: "active"},

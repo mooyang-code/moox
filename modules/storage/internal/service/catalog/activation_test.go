@@ -61,7 +61,7 @@ func newActivationReader(status, target string) *activationMetadataReader {
 	return &activationMetadataReader{
 		dataset: &pb.Dataset{
 			SpaceId: "space-a", DatasetId: "dataset_a", DataSourceId: "source-a",
-			Name: "数据集", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+			Name: "数据集", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 			DataNodeId: "node-a", KeepDuration: "24h", Status: status, Revision: 7,
 		},
 		node: &pb.DataNode{NodeId: "node-a", ServiceTarget: target, Status: "active"},

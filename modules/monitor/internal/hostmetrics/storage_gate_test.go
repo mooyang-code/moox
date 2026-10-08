@@ -147,7 +147,7 @@ func validGateFake(cfg monconfig.HostStorageConfig) *gateMetadataFake {
 	}
 	return &gateMetadataFake{
 		space:   &storagepb.Space{SpaceId: cfg.SpaceID, Status: "active"},
-		dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}},
+		dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m"},
 		node:    &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"},
 		columns: append(append(append(cols[cfg.ResourceDatasetID], cols[cfg.FilesystemDatasetID]...), cols[cfg.DiskDatasetID]...), cols[cfg.NetworkDatasetID]...),
 	}
@@ -212,7 +212,7 @@ func TestStorageGatePropagatesMetadataFailures(t *testing.T) {
 	})
 	t.Run("bad_freq", func(t *testing.T) {
 		fake := validGateFake(cfg)
-		fake.dataset = &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"5m"}}
+		fake.dataset = &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m"}
 		gate := NewStorageGate(fake, cfg)
 		require.Error(t, gate.Validate(ctx))
 	})
@@ -242,12 +242,10 @@ func TestStorageGatePropagatesMetadataFailures(t *testing.T) {
 	})
 }
 
-func TestCheckRetAndContainsFreq(t *testing.T) {
+func TestCheckRet(t *testing.T) {
 	assert.Error(t, checkRet(nil))
 	assert.Error(t, checkRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "boom"}))
 	assert.NoError(t, checkRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}))
-	assert.True(t, containsFreq([]string{"1m", "5m"}, "1m"))
-	assert.False(t, containsFreq([]string{"5m"}, "1m"))
 }
 
 func TestHasHostColumnsIgnoresInactive(t *testing.T) {

@@ -208,7 +208,7 @@ func normalizeStockCNSeriesTags(input []*pb.RowFieldUpsert) []*pb.RowFieldUpsert
 		copyRow := proto.Clone(row).(*pb.RowFieldUpsert)
 		key := copyRow.GetKey()
 		series := key.GetTimeSeries()
-		if key.GetSpaceId() == "stockcn" && key.GetDatasetId() == "dataset_stockcn_equity_kline" && series != nil && strings.TrimSpace(series.GetSeriesTag()) == "" {
+		if key.GetSpaceId() == "stockcn" && key.GetDatasetId() == "dataset_stockcn_equity_kline_1m" && series != nil && strings.TrimSpace(series.GetSeriesTag()) == "" {
 			series.SeriesTag = stockCNDefaultSeriesTag
 		}
 		rows = append(rows, copyRow)

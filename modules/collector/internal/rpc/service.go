@@ -409,7 +409,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
 		var err error
-		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, "", taskresult.Config{ViewID: resultIDs.ViewID, DataNodeID: dataNodeID, KeepDuration: keepDuration, Name: task.TaskName, Description: description, Frequency: firstTaskFrequency(params), Frequencies: append([]string(nil), params.Collector.Intervals...), SubjectTags: subjectTags, OutputFields: params.OutputFields})
+		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, "", taskresult.Config{ViewID: resultIDs.ViewID, DataNodeID: dataNodeID, KeepDuration: keepDuration, Name: task.TaskName, Description: description, Frequency: firstTaskFrequency(params), SubjectTags: subjectTags, OutputFields: params.OutputFields})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
 				return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -1482,7 +1482,7 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, task domai
 			"target",
 			true,
 			params.Collector.Market,
-			params.Collector.Intervals,
+			params.Frequency,
 		)
 	case "kline_resample":
 		return s.validateResampleSourceDataset(ctx, task, params)
@@ -1520,38 +1520,36 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 	if normalizeErr != nil {
 		return fmt.Errorf("source Dataset %s frequency %q is invalid: %w", params.SourceDatasetID, params.SourceFrequency, normalizeErr)
 	}
-	for _, frequency := range info.Freqs {
-		if frequency == wantedFrequency {
-			// Dataset metadata adapters that expose column discovery return a
-			// non-nil ColumnTypes map. Validate both presence and logical type so
-			// an empty or malformed schema cannot enter ready and spin forever.
-			if info.ColumnTypes != nil {
-				expected := map[string]storagepb.FieldValueType{
-					"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-					"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-					"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-					"trade_num": storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
-				}
-				missing := make([]string, 0)
-				for column, expectedType := range expected {
-					actualType, ok := info.ColumnTypes[column]
-					if !ok {
-						missing = append(missing, column)
-						continue
-					}
-					if actualType != expectedType {
-						return fmt.Errorf("source Dataset %s column %s has value_type=%s, want %s", params.SourceDatasetID, column, actualType.String(), expectedType.String())
-					}
-				}
-				if len(missing) != 0 {
-					sort.Strings(missing)
-					return fmt.Errorf("source Dataset %s missing active K-line columns: %s", params.SourceDatasetID, strings.Join(missing, ","))
-				}
+	if info.Freq != wantedFrequency {
+		return fmt.Errorf("source Dataset %s freq is %q, not %q", params.SourceDatasetID, info.Freq, params.SourceFrequency)
+	}
+	// Dataset metadata adapters that expose column discovery return a
+	// non-nil ColumnTypes map. Validate both presence and logical type so
+	// an empty or malformed schema cannot enter ready and spin forever.
+	if info.ColumnTypes != nil {
+		expected := map[string]storagepb.FieldValueType{
+			"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"trade_num": storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
+		}
+		missing := make([]string, 0)
+		for column, expectedType := range expected {
+			actualType, ok := info.ColumnTypes[column]
+			if !ok {
+				missing = append(missing, column)
+				continue
 			}
-			return nil
+			if actualType != expectedType {
+				return fmt.Errorf("source Dataset %s column %s has value_type=%s, want %s", params.SourceDatasetID, column, actualType.String(), expectedType.String())
+			}
+		}
+		if len(missing) != 0 {
+			sort.Strings(missing)
+			return fmt.Errorf("source Dataset %s missing active K-line columns: %s", params.SourceDatasetID, strings.Join(missing, ","))
 		}
 	}
-	return fmt.Errorf("source Dataset %s does not enable frequency %q", params.SourceDatasetID, params.SourceFrequency)
+	return nil
 }
 
 func (s *Service) validateDataset(
@@ -1563,7 +1561,7 @@ func (s *Service) validateDataset(
 	role string,
 	allowSharedMarket bool,
 	marketType string,
-	requiredFreqs []string,
+	requiredFreq string,
 ) error {
 	info, err := s.datasetSrc.GetDataset(ctx, spaceID, datasetID)
 	if err != nil {
@@ -1602,16 +1600,8 @@ func (s *Service) validateDataset(
 			return fmt.Errorf("%s Dataset %s market_type=%s does not match task market_type=%s", role, datasetID, actual, marketType)
 		}
 	}
-	if len(requiredFreqs) > 0 {
-		available := make(map[string]struct{}, len(info.Freqs))
-		for _, value := range info.Freqs {
-			available[strings.ToLower(strings.TrimSpace(value))] = struct{}{}
-		}
-		for _, value := range requiredFreqs {
-			if _, ok := available[strings.ToLower(strings.TrimSpace(value))]; !ok {
-				return fmt.Errorf("%s Dataset %s does not enable frequency %q", role, datasetID, value)
-			}
-		}
+	if requiredFreq != "" && info.Freq != requiredFreq {
+		return fmt.Errorf("%s Dataset %s freq is %q, not %q", role, datasetID, info.Freq, requiredFreq)
 	}
 	return nil
 }

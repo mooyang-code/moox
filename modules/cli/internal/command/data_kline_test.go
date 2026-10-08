@@ -82,12 +82,12 @@ func TestDataKlineBuildsStockCNCatalogBackedRPCRequest(t *testing.T) {
 	require.Len(t, reader.request.GetSelectors(), 1)
 	selector := reader.request.GetSelectors()[0]
 	assert.Equal(t, "stockcn", selector.GetSpaceId())
-	assert.Equal(t, "dataset_stockcn_equity_kline", selector.GetDatasetId())
+	assert.Equal(t, "dataset_stockcn_equity_kline_1m", selector.GetDatasetId())
 	assert.Equal(t, "600519.SH", selector.GetSubjectId())
 	assert.Equal(t, "1m", selector.GetFreq())
 	assert.Equal(t, "default", selector.GetSeriesTag())
 	assert.Equal(t, "stockcn", reader.request.GetSpaceId())
-	assert.Equal(t, "dataset_stockcn_equity_kline", reader.request.GetDatasetId())
+	assert.Equal(t, "dataset_stockcn_equity_kline_1m", reader.request.GetDatasetId())
 }
 
 func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {

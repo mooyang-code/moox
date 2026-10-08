@@ -1,4 +1,5 @@
 import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
+import { normalizeFrequency } from "@/utils/frequency";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
 export type CollectionTaskMarket = "spot" | "swap";
@@ -9,7 +10,7 @@ export interface CollectionSourceOption {
   data_source_id: string;
   data_kind: string | number;
   attributes?: Record<string, string>;
-  freqs?: string[];
+  freq?: string;
   keep_duration?: string;
 }
 
@@ -236,12 +237,7 @@ export function collectionSourceMatches(
   if (!expectedKinds.includes(source.data_kind)) return false;
   if (market && source.attributes?.market_type?.toLowerCase() !== market.toLowerCase()) return false;
   if (normalizedType === "kline_resample" && source.attributes?.dataset_role === "kline_resample_result") return false;
-  if (frequency) {
-    const requested = normalizeStorageFrequency(frequency);
-    if (!requested) return false;
-    const supported = (source.freqs || []).map(normalizeStorageFrequency).filter((value): value is string => Boolean(value));
-    if (!supported.includes(requested)) return false;
-  }
+  if (frequency && normalizeFrequency(source.freq || "") !== normalizeFrequency(frequency)) return false;
   return true;
 }
 
@@ -252,34 +248,6 @@ function normalizeDataType(value: string): CollectionTaskDataType {
 
 function normalizeMarket(value: string): CollectionTaskMarket {
   return value === "swap" ? "swap" : "spot";
-}
-
-function normalizeStorageFrequency(value: string): string | undefined {
-  const match = value.trim().match(/^(\d+)([smhdwHDWMyY])$/);
-  if (!match || Number(match[1]) <= 0) return undefined;
-  const count = match[1];
-  switch (match[2]) {
-    case "s":
-      return `${count}s`;
-    case "m":
-      return `${count}m`;
-    case "h":
-    case "H":
-      return `${count}H`;
-    case "d":
-    case "D":
-      return `${count}D`;
-    case "w":
-    case "W":
-      return `${count}W`;
-    case "M":
-      return `${count}M`;
-    case "y":
-    case "Y":
-      return `${count}Y`;
-    default:
-      return undefined;
-  }
 }
 
 function normalizeResult(value: unknown): CollectorTask["result"] | undefined {

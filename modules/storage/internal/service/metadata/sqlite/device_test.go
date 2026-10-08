@@ -44,7 +44,7 @@ func TestDeviceCRUDUsesSchemaV6WithoutNodeBinding(t *testing.T) {
 	registerActiveNode(t, ctx, store, "node-a")
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	}); err != nil {
 		t.Fatal(err)
 	}

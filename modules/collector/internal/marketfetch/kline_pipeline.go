@@ -20,7 +20,7 @@ import (
 
 const (
 	StockCNSpaceID   = "stockcn"
-	StockCNDatasetID = "dataset_stockcn_equity_kline"
+	StockCNDatasetID = "dataset_stockcn_equity_kline_1m"
 	StockCNRouteID   = "stockcn_equity_kline_1m_v4"
 	// Each provider gets three attempts before the next provider in the route.
 	klineProviderAttemptBudget = 3

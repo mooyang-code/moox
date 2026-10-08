@@ -42,7 +42,7 @@ func TestCreateSetCanonicalizesUppercaseFrequency(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	source := meta.datasets[resultKey("crypto", "dataset_prices")]
-	source.Freqs = []string{"1H"}
+	source.Freq = "1h"
 	meta.datasets[resultKey("crypto", "dataset_prices")] = source
 	set := newSet()
 	set.Freq = "1H"
@@ -492,14 +492,15 @@ func TestSameDefinitionEnablesIndependentlyInTwoSets(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
+	hourlySource := meta.datasets[resultKey("crypto", "dataset_prices")]
+	hourlySource.DatasetID, hourlySource.Name, hourlySource.Freq = "dataset_prices_1h", "Hourly prices", "1h"
+	meta.datasets[resultKey("crypto", hourlySource.DatasetID)] = hourlySource
+	meta.sourceColumnsByDataset[hourlySource.DatasetID] = meta.sourceColumnsByDataset["dataset_prices"]
 	hourly := newSet()
-	hourly.Freq = "1h"
-	source := meta.datasets[resultKey("crypto", "dataset_prices")]
-	source.Freqs = []string{"1m", "1h"}
-	meta.datasets[resultKey("crypto", "dataset_prices")] = source
+	hourly.SourceDatasetID, hourly.Freq = hourlySource.DatasetID, "1h"
 	_, err := svc.CreateSet(context.Background(), hourly)
 	require.NoError(t, err)
-	hourlyID := domain.SetID("dataset_prices", "1h")
+	hourlyID := domain.SetID(hourlySource.DatasetID, "1h")
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
 	_, err = svc.AddFactorToSet(context.Background(), hourlyID, "momentum")
 	require.NoError(t, err)
@@ -658,7 +659,7 @@ func TestReconcileContinuesAfterOneSetFailure(t *testing.T) {
 	secondSource := meta.datasets[resultKey("crypto", "dataset_zzz")]
 	secondSource = storageio.DatasetInfo{
 		SpaceID: "crypto", DatasetID: "dataset_zzz", DataSourceID: "other", DataNodeID: "storage-node-0",
-		Name: "Other", DataKind: storageio.DataKindTimeSeries, Freqs: []string{"1m"}, KeepDuration: "720h",
+		Name: "Other", DataKind: storageio.DataKindTimeSeries, Freq: "1m", KeepDuration: "720h",
 		Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
 	}
 	meta.datasets[resultKey("crypto", "dataset_zzz")] = secondSource
@@ -813,7 +814,7 @@ type metadataFake struct {
 func newMetadataFake() *metadataFake {
 	source := storageio.DatasetInfo{
 		SpaceID: "crypto", DatasetID: "dataset_prices", DataSourceID: "binance", DataNodeID: "storage-node-0",
-		Name: "Prices", Description: "Price bars", DataKind: storageio.DataKindTimeSeries, Freqs: []string{"1m"},
+		Name: "Prices", Description: "Price bars", DataKind: storageio.DataKindTimeSeries, Freq: "1m",
 		KeepDuration: "720h", Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
 	}
 	cols := []storageio.ColumnInfo{sourceColumn("close"), {
@@ -866,7 +867,7 @@ func (f *metadataFake) CreateResultDataset(_ context.Context, spec storageio.Res
 		}
 		f.datasets[key] = storageio.DatasetInfo{
 			SpaceID: spec.SpaceID, DatasetID: spec.DatasetID, DataSourceID: spec.DataSourceID, DataNodeID: spec.DataNodeID,
-			Name: spec.Name, Description: spec.Description, DataKind: spec.DataKind, Freqs: []string{spec.Frequency},
+			Name: spec.Name, Description: spec.Description, DataKind: spec.DataKind, Freq: spec.Frequency,
 			KeepDuration: spec.KeepDuration, Status: storageio.DatasetStatusDisabled, Attributes: attrs,
 		}
 		f.columns[key] = append([]storageio.ColumnInfo(nil), spec.Columns...)

@@ -173,7 +173,7 @@ describe("collection task params", () => {
       data_source_id: "crypto",
       data_kind: "DATA_KIND_TIME_SERIES",
       attributes: { market_type: "spot" },
-      freqs: ["1h"]
+      freq: "1h"
     };
 
     expect(collectionSourceMatches(source, "binance", "kline", "spot", "1h")).toBe(true);

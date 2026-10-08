@@ -270,25 +270,15 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	if partitions[1].ID != "system_metrics" || partitions[1].Durable != "storage_view_metrics" || partitions[1].FetchBatch != 16 || partitions[1].MaxWorkers != 4 || partitions[1].MaxAckPending != 64 {
 		t.Fatalf("metrics partition = %+v", partitions[1])
 	}
-	miscDatasets := partitions[2].Datasets()
-	wantStockRoutes := map[string]bool{
-		"dataset_stockcn_financial_statement_metric": false,
-		"dataset_stockcn_financial_summary":          false,
-		"dataset_stockcn_bond_kline":                 false,
-		"dataset_stockcn_index_kline":                false,
-		"dataset_stockcn_equity_kline":               false,
-	}
-	for _, dataset := range miscDatasets {
-		if dataset.SpaceID == "stockcn" {
-			if _, ok := wantStockRoutes[dataset.DatasetID]; !ok {
-				t.Fatalf("unexpected stockcn default route %q", dataset.DatasetID)
-			}
-			wantStockRoutes[dataset.DatasetID] = true
+	wildcards := map[string]bool{}
+	for _, dataset := range partitions[2].Datasets() {
+		if dataset.DatasetID == "*" {
+			wildcards[dataset.SpaceID] = true
 		}
 	}
-	for datasetID, found := range wantStockRoutes {
-		if !found {
-			t.Fatalf("stockcn default route %q is missing: %+v", datasetID, miscDatasets)
+	for _, spaceID := range []string{"crypto", "stockcn", "stockhk", "stockus"} {
+		if !wildcards[spaceID] {
+			t.Fatalf("misc partition must route every %s Dataset: %+v", spaceID, partitions[2].Datasets())
 		}
 	}
 }

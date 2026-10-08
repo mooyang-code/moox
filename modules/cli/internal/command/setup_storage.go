@@ -599,7 +599,7 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 
 func verifyStockCNKlineColumns(ctx context.Context, metadata storageMetadataAPI, auth *storagepb.AuthInfo) error {
 	response, err := metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
-		AuthInfo: auth, SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline",
+		AuthInfo: auth, SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m",
 		Page: &commonpb.Page{Page: 1, Size: 100},
 	})
 	if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {

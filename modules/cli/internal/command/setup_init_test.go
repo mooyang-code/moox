@@ -327,7 +327,7 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1h"},
+			DataKind: "time_series", Freq: "1h",
 		}},
 	}
 	tests := []struct {
@@ -361,7 +361,7 @@ func TestSetupInitAllowsRawDatasetFieldColumnOrigin(t *testing.T) {
 		Datasets: []seedDataset{
 			{
 				SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-				DataSourceID: "binance", DataKind: "time_series", Freqs: []string{"1m"},
+				DataSourceID: "binance", DataKind: "time_series", Freq: "1m",
 			},
 		},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "open"}},
@@ -386,7 +386,7 @@ func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testin
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", DataSourceID: "binance",
-			DataKind: "time_series", Freqs: []string{"1m"},
+			DataKind: "time_series", Freq: "1m",
 		}},
 		DatasetColumns: []seedDatasetColumn{{
 			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", ColumnName: "bias_20",
@@ -402,7 +402,7 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1h"},
+			DataKind: "time_series", Freq: "1h",
 		}},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
@@ -413,7 +413,7 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata dataset_column")
 
 	base.DatasetColumns = base.DatasetColumns[:1]
-	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1h")}
+	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline")}
 	base.ViewColumns = []seedViewColumn{
 		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
 		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
@@ -427,9 +427,9 @@ func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1h"},
+			DataKind: "time_series", Freq: "1h",
 		}},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1h")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline")},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
 			OriginType: "dataset_column", OriginID: "close",
@@ -443,15 +443,15 @@ func TestSetupInitRejectsDatasetPrefixedViewColumn(t *testing.T) {
 		Spaces:      []seedSpace{{SpaceID: "crypto"}},
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{
-			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1h"}},
-			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1h"}},
+			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freq: "1h"},
+			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freq: "1h"},
 		},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
 			{SpaceID: "crypto", DatasetID: "spot", ColumnName: "close", OriginType: "field", OriginID: "close"},
 			{SpaceID: "crypto", DatasetID: "perpetual", ColumnName: "close", OriginType: "field", OriginID: "close"},
 		},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot", "1h")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot")},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "spot_view", ColumnName: "perpetual.close",
 			OriginType: "dataset_column", OriginID: "perpetual.close",
@@ -466,14 +466,13 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1h"},
+			DataKind: "time_series", Freq: "1h",
 		}},
 	}
 	canonical := seedView{
 		SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
-		FilterJSON: `{"freq":"1h"}`,
-		Engine:     "duckdb",
+		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+		Engine:    "duckdb",
 	}
 	tests := []struct {
 		name string
@@ -507,15 +506,6 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 			}(),
 			want: `engine must be "duckdb"`,
 		},
-		{
-			name: "filter json",
-			view: func() seedView {
-				item := canonical
-				item.FilterJSON = `{ "freq": "1h" }`
-				return item
-			}(),
-			want: "filter_json must be canonical",
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -528,16 +518,15 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 	seed.Views = []seedView{canonical}
 	require.NoError(t, validateSetupMetadataDependencies(seed))
 
-	seed.Datasets[0].Freqs = []string{"1H"}
+	seed.Datasets[0].Freq = "1H"
 	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `freq "1H" is not canonical`)
 }
 
-func testCanonicalTimeSeriesView(spaceID, viewID, datasetID, freq string) seedView {
+func testCanonicalTimeSeriesView(spaceID, viewID, datasetID string) seedView {
 	return seedView{
 		SpaceID: spaceID, ViewID: viewID, PrimaryDatasetID: datasetID,
-		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
-		FilterJSON: `{"freq":"` + freq + `"}`,
-		Engine:     "duckdb",
+		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+		Engine:    "duckdb",
 	}
 }
 

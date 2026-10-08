@@ -30,12 +30,12 @@ func TestSingleDatasetView(t *testing.T) {
 	require.NoError(t, err)
 	prices, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_prices", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, KeepDuration: "0",
+		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "0",
 	})
 	require.NoError(t, err)
 	_, err = store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_fundamentals", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "基本面", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, KeepDuration: "0",
+		Name: "基本面", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "0",
 	})
 	require.NoError(t, err)
 
@@ -68,14 +68,14 @@ func TestSingleDatasetView(t *testing.T) {
 	t.Run("two projections on one dataset succeed", func(t *testing.T) {
 		closeRsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 			SpaceId: "space", ViewId: "view_close", Name: "收盘视图", DatasetId: prices.GetDatasetId(),
-			FilterJson: `{"freq":"1m"}`, Columns: []*pb.ViewColumn{closeCol},
+			Freq: "1m", Columns: []*pb.ViewColumn{closeCol},
 		}})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_SUCCESS, closeRsp.GetRetInfo().GetCode(), closeRsp.GetRetInfo().GetMsg())
 
 		volumeRsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 			SpaceId: "space", ViewId: "view_volume", Name: "成交视图", DatasetId: prices.GetDatasetId(),
-			FilterJson: `{"freq":"1m"}`, Columns: []*pb.ViewColumn{volumeCol},
+			Freq: "1m", Columns: []*pb.ViewColumn{volumeCol},
 		}})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_SUCCESS, volumeRsp.GetRetInfo().GetCode(), volumeRsp.GetRetInfo().GetMsg())
@@ -89,8 +89,8 @@ func TestSingleDatasetView(t *testing.T) {
 	t.Run("a column of another dataset is rejected", func(t *testing.T) {
 		rsp, err := svc.CreateView(ctx, &pb.CreateViewReq{View: &pb.View{
 			SpaceId: "space", ViewId: "view_joined", Name: "多源视图",
-			DatasetId:  "dataset_prices",
-			FilterJson: `{"freq":"1m"}`,
+			DatasetId: "dataset_prices",
+			Freq:      "1m",
 			Columns: []*pb.ViewColumn{
 				closeCol,
 				{
@@ -105,12 +105,11 @@ func TestSingleDatasetView(t *testing.T) {
 		require.Contains(t, rsp.GetRetInfo().GetMsg(), `view column "pe" is not an active column of dataset dataset_prices`)
 	})
 
-	t.Run("rebuild keeps filter and projection", func(t *testing.T) {
+	t.Run("rebuild keeps freq and projection", func(t *testing.T) {
 		got, err := svc.GetView(ctx, &pb.GetViewReq{SpaceId: "space", ViewId: "view_close"})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_SUCCESS, got.GetRetInfo().GetCode())
-		filter := got.GetView().GetFilterJson()
-		require.Contains(t, filter, `"1m"`)
+		require.Equal(t, "1m", got.GetView().GetFreq())
 
 		rebuild, err := svc.RequestViewRebuild(ctx, &pb.RequestViewRebuildReq{
 			AuthInfo: &pb.AuthInfo{AppId: "admin-gateway", AppKey: datanode.ServiceAuthKey("secret", "admin-gateway")},
@@ -121,7 +120,7 @@ func TestSingleDatasetView(t *testing.T) {
 
 		after, err := svc.GetView(ctx, &pb.GetViewReq{SpaceId: "space", ViewId: "view_close"})
 		require.NoError(t, err)
-		require.Equal(t, filter, after.GetView().GetFilterJson())
+		require.Equal(t, "1m", after.GetView().GetFreq())
 		require.Equal(t, prices.GetDatasetId(), after.GetView().GetDatasetId())
 		cols, err := svc.ListViewColumns(ctx, &pb.ListViewColumnsReq{SpaceId: "space", ViewId: "view_close"})
 		require.NoError(t, err)
@@ -133,7 +132,7 @@ func TestSingleDatasetView(t *testing.T) {
 	t.Run("deleting one view keeps dataset and the other view", func(t *testing.T) {
 		deleted, err := svc.UpdateView(ctx, &pb.UpdateViewReq{View: &pb.View{
 			SpaceId: "space", ViewId: "view_volume", Name: "成交视图", DatasetId: prices.GetDatasetId(),
-			FilterJson: `{"freq":"1m"}`, Status: "deleted",
+			Freq: "1m", Status: "deleted",
 		}})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_SUCCESS, deleted.GetRetInfo().GetCode(), deleted.GetRetInfo().GetMsg())

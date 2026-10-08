@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -427,10 +426,8 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 			return err
 		}
 		if kind, kindErr := parseDataKind(item.DataKind); kindErr == nil && kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-			for _, freq := range item.Freqs {
-				if !frequencypkg.IsCanonical(freq) {
-					return fmt.Errorf("dataset %s/%s freq %q is not canonical; use one of %s", item.SpaceID, item.DatasetID, freq, strings.Join(frequencypkg.Strings(), ", "))
-				}
+			if !frequencypkg.IsCanonical(item.Freq) {
+				return fmt.Errorf("dataset %s/%s freq %q is not canonical; use one of %s", item.SpaceID, item.DatasetID, item.Freq, strings.Join(frequencypkg.Strings(), ", "))
 			}
 		}
 		datasetDefinitions[setupMetadataKey(item.SpaceID, item.DatasetID)] = item
@@ -613,9 +610,6 @@ func validateCanonicalSetupView(view seedView, datasets map[string]seedDataset) 
 			normalized.Engine,
 		)
 	}
-	if view.FilterJSON != normalized.FilterJSON {
-		return fmt.Errorf("view %s/%s filter_json must be canonical", view.SpaceID, view.ViewID)
-	}
 	return nil
 }
 
@@ -643,64 +637,10 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 		grainKeys = []string{"subject_id", "freq", "data_time", "series_tag"}
 		engine = "duckdb"
 	}
-	filterJSON := view.FilterJSON
-	if dataKind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		freq, normalizedFilter, err := canonicalSetupTimeSeriesFilter(view.FilterJSON)
-		if err != nil {
-			return seedView{}, fmt.Errorf("view %s/%s: %w", view.SpaceID, view.ViewID, err)
-		}
-		if !setupDatasetSupportsFreq(primary.Freqs, freq) {
-			return seedView{}, fmt.Errorf(
-				"view %s/%s dataset %s does not support freq %q",
-				view.SpaceID,
-				view.ViewID,
-				primaryDatasetID,
-				freq,
-			)
-		}
-		filterJSON = normalizedFilter
-	}
 	view.PrimaryDatasetID = primaryDatasetID
 	view.GrainKeys = grainKeys
 	view.Engine = engine
-	view.FilterJSON = filterJSON
 	return view, nil
-}
-
-func setupDatasetSupportsFreq(freqs []string, freq string) bool {
-	for _, item := range freqs {
-		if item == freq {
-			return true
-		}
-	}
-	return false
-}
-
-func canonicalSetupTimeSeriesFilter(raw string) (string, string, error) {
-	fields := make(map[string]json.RawMessage)
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &fields); err != nil {
-		return "", "", fmt.Errorf("invalid time series filter_json: %w", err)
-	}
-	var freq string
-	if encoded, ok := fields["freq"]; ok {
-		if err := json.Unmarshal(encoded, &freq); err != nil {
-			return "", "", fmt.Errorf("filter_json.freq must be a string")
-		}
-	}
-	freq = strings.TrimSpace(freq)
-	if freq == "" {
-		return "", "", fmt.Errorf("filter_json.freq is required")
-	}
-	encodedFreq, err := json.Marshal(freq)
-	if err != nil {
-		return "", "", err
-	}
-	fields["freq"] = encodedFreq
-	normalized, err := json.Marshal(fields)
-	if err != nil {
-		return "", "", err
-	}
-	return freq, string(normalized), nil
 }
 
 type remoteSetupInitStorage struct {

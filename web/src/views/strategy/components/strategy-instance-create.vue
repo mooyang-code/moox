@@ -112,7 +112,6 @@ import type { LogicalAccount } from "@/api/trade/types";
 import { parseDSL, requiredFactorFields } from "@/views/strategy/dsl";
 import { buildInputBindings, canCombineSelections, enabledFactors, findOutputColumn, validFactorSets, validateAliasConflicts, type BindingSelection } from "@/views/strategy/bindings";
 import { normalizeFrequency } from "@/utils/frequency";
-import { freqFromViewFilterJSON } from "@/views/data/views/view-form-utils";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import type { Strategy } from "@/api/strategy-types";
 
@@ -209,14 +208,11 @@ async function loadSourceColumns() {
   try {
     const dataset = await getDataset({ space_id: spaceId, dataset_id: source.dataset_id });
     if (requestId !== sourceRequest || props.spaceId !== spaceId) return;
-    const supported = dataset.dataset?.freqs || [];
-    const viewFrequency = freqFromViewFilterJSON(source.filter_json);
+    const viewFrequency = source.freq || "";
     if (!isTimeSeriesDataKind(dataset.dataset?.data_kind)) sourceFrequencyError.value = "策略源 View 必须基于时序数据集";
-    else if (!supported.length || !viewFrequency) sourceFrequencyError.value = "策略源 View 必须声明可用周期和实际 View 周期";
-    else if (!supported.some(value => normalizeFrequency(value) === normalizeFrequency(form.frequency))) {
-      sourceFrequencyError.value = `源 View 主数据集不支持 ${form.frequency}，可用周期：${supported.join("、")}`;
-    } else if (normalizeFrequency(viewFrequency) !== normalizeFrequency(form.frequency)) {
-      sourceFrequencyError.value = `源 View 实际周期为 ${viewFrequency}，与 DSL data.bar ${form.frequency} 不一致`;
+    else if (!viewFrequency) sourceFrequencyError.value = "策略源 View 缺少周期";
+    else if (normalizeFrequency(viewFrequency) !== normalizeFrequency(form.frequency)) {
+      sourceFrequencyError.value = `源 View 周期为 ${viewFrequency}，与 DSL data.bar ${form.frequency} 不一致`;
     }
   } catch (err) {
     if (requestId === sourceRequest && props.spaceId === spaceId) {

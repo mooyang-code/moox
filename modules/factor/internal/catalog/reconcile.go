@@ -93,7 +93,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 	if result.SpaceID != set.SpaceID || result.DatasetID != set.ResultDatasetID ||
 		result.DataSourceID != source.DataSourceID || result.DataNodeID != source.DataNodeID ||
 		result.KeepDuration != source.KeepDuration || result.DataKind != storageio.DataKindTimeSeries ||
-		!equalStrings(result.Freqs, []string{set.Freq}) ||
+		result.Freq != set.Freq ||
 		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
 		result.Attributes["source_dataset_id"] != set.SourceDatasetID || result.Attributes["write_owner"] != "factor" {
 		return fmt.Errorf("result dataset %q does not match the factor result contract", set.ResultDatasetID)
@@ -183,15 +183,8 @@ func (s *Service) sourceDataset(ctx context.Context, set domain.FactorSet) (stor
 	if source.DataKind != storageio.DataKindTimeSeries {
 		return storageio.DatasetInfo{}, nil, errors.New("factor sets require a time_series source dataset")
 	}
-	frequencyDeclared := false
-	for _, frequency := range source.Freqs {
-		if strings.EqualFold(strings.TrimSpace(frequency), set.Freq) {
-			frequencyDeclared = true
-			break
-		}
-	}
-	if !frequencyDeclared {
-		return storageio.DatasetInfo{}, nil, fmt.Errorf("source dataset does not declare frequency %q", set.Freq)
+	if source.Freq != set.Freq {
+		return storageio.DatasetInfo{}, nil, fmt.Errorf("source dataset freq is %q, not %q", source.Freq, set.Freq)
 	}
 	if source.SpaceID != set.SpaceID || source.DatasetID != set.SourceDatasetID || source.DataNodeID == "" || source.DataSourceID == "" {
 		return storageio.DatasetInfo{}, nil, errors.New("source dataset identity or DataNode is invalid")

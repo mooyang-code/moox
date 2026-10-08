@@ -189,7 +189,8 @@ export interface Dataset {
   name: string;
   description?: string;
   data_kind: DataKind;
-  freqs?: string[];
+  /** 时序 Dataset 的唯一频率；记录型 Dataset 可为空。 */
+  freq?: string;
   status: string;
   data_node_id?: string;
   keep_duration: string;
@@ -253,7 +254,8 @@ export interface View {
   description?: string;
   dataset_id: string;
   grain_keys?: string[];
-  filter_json?: string;
+  /** 所属 Dataset 的频率，由 Storage 填写。 */
+  freq?: string;
   engine?: string;
   retention_window?: string;
   active_index_id?: string;

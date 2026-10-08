@@ -251,7 +251,7 @@ func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *tes
 func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetrics, indexID, nextID string) {
 	key := viewRef{spaceID: "space", viewID: "prices_view"}
 	svc.metrics = metrics
-	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_view", FilterJson: `{"freq":"1m"}`}}
+	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_view", Freq: "1m"}}
 	svc.views[key] = &viewRuntime{active: "prices-index", next: nextID, status: "active"}
 	if indexID == nextID {
 		svc.views[key].active = ""

@@ -153,10 +153,10 @@ func TestBuildMetadataImportCallsCanonicalizesKeepDurations(t *testing.T) {
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance",
 			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "4320h",
-			Freqs: []string{"1h"},
+			Freq: "1h",
 		}},
 		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline", FilterJSON: `{"freq":"1h"}`, KeepDuration: "4320h",
+			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline", KeepDuration: "4320h",
 		}},
 	})
 	require.NoError(t, err)
@@ -181,11 +181,11 @@ func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
 			DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h",
-			Freqs: []string{"1h"},
+			Freq: "1h",
 		}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-			GrainKeys: []string{"wrong"}, FilterJSON: `{ "freq": "1h" }`, Engine: "pebble",
+			GrainKeys: []string{"wrong"}, Engine: "pebble",
 			KeepDuration: "1h",
 		}},
 	})
@@ -193,7 +193,6 @@ func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
 	view := calls[1].Request.(*pb.CreateViewReq).GetView()
 	require.Equal(t, "kline", view.GetDatasetId())
 	require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, view.GetGrainKeys())
-	require.Equal(t, `{"freq":"1h"}`, view.GetFilterJson())
 	require.Equal(t, "duckdb", view.GetEngine())
 	require.Equal(t, "1h0m0s", view.GetKeepDuration())
 }
@@ -267,12 +266,12 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 		DataSources:    []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
 		Subjects:       []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
 		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Source: "binance", MarketType: "spot"}},
-		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"}, SubjectTags: []string{"binance_spot"}}},
+		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freq: "1m", SubjectTags: []string{"binance_spot"}}},
 		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-			FilterJSON: `{"freq":"1m"}`, Engine: "duckdb",
+			Engine: "duckdb",
 		}},
 		ViewColumns: []seedViewColumn{{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}},
 		Devices:     []seedDevice{{DeviceID: "dev-1", Name: "Device"}},
@@ -363,8 +362,8 @@ func TestMetadataContractsEqualAllResources(t *testing.T) {
 		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Kind: "exchange", Status: "active"},
 	))
 	assert.True(t, metadataContractsEqual("datasets",
-		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, Status: "active"},
-		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, Status: "active"},
+		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
+		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
 	))
 	assert.True(t, metadataContractsEqual("fields",
 		&pb.Field{SpaceId: "crypto", FieldId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
@@ -392,7 +391,7 @@ func TestMetadataContractsEqualAcceptsActivatedLockedDataset(t *testing.T) {
 		SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance",
 		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 		DataNodeId: "storage-node-0", KeepDuration: "8760h",
-		Freqs: []string{"1h"}, Status: "disabled",
+		Freq: "1h", Status: "disabled",
 	}
 	actual := proto.Clone(expected).(*pb.Dataset)
 	actual.Status = "active"
@@ -790,7 +789,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "行情",
 			Description: "小时行情", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0",
-			KeepDuration: "8760h", Freqs: []string{"1h"},
+			KeepDuration: "8760h", Freq: "1h",
 		}},
 		FieldGroups: []seedFieldGroup{{
 			SpaceID: "crypto", GroupID: "quote", Name: "行情", Description: "行情字段", SortOrder: 1,
@@ -813,7 +812,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
 			PrimaryDatasetID: "kline",
 			GrainKeys:        []string{"subject_id", "freq", "data_time", "series_tag"},
-			FilterJSON:       `{"freq":"1h"}`, Engine: "duckdb", KeepDuration: "8760h",
+			Engine:           "duckdb", KeepDuration: "8760h",
 		}},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",

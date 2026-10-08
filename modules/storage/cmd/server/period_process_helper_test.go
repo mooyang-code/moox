@@ -101,7 +101,7 @@ func TestPeriodNativeProcessHelper(t *testing.T) {
 	})
 	ready := periodProcessReady{
 		NodeID: "period-e2e-node", SpaceID: "period-e2e-space", DatasetID: "period-e2e-dataset",
-		Frequency: "1h", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline",
+		Frequency: "1h", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline_1m",
 		AppID: "moox-collector", DataDir: root,
 		ClockFile: filepath.Join(root, "clock"), PrimarySecret: periodHelperSecret(t), NodeSecret: periodHelperSecret(t),
 	}
@@ -405,7 +405,7 @@ func periodHelperSeed(t *testing.T, ctx context.Context, meta *metasqlite.Store,
 	}
 	dataset, err := meta.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, DataNodeId: ready.NodeID, Name: "Period E2E raw data",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m", ready.Frequency},
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: ready.Frequency,
 		Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": "period-e2e-task"},
 	})
 	if err != nil {
@@ -445,7 +445,7 @@ func periodHelperSeedStockCN(t *testing.T, ctx context.Context, meta *metasqlite
 	}
 	dataset, err := meta.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: ready.StockSpaceID, DatasetId: ready.StockDatasetID, DataNodeId: ready.NodeID,
-		Name: "StockCN Period E2E Kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"},
+		Name: "StockCN Period E2E Kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": "stockcn-period-e2e-task"},
 	})
 	if err != nil {

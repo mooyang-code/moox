@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -59,17 +58,16 @@ func validateFactorResultDatasetContract(dataset *pb.Dataset) error {
 	if dataset == nil || strings.TrimSpace(dataset.GetAttributes()["dataset_role"]) != "factor_result" {
 		return nil
 	}
-	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES || len(dataset.GetFreqs()) != 1 || strings.TrimSpace(dataset.GetFreqs()[0]) == "" {
-		return errors.New("factor_result Dataset must be a time series with exactly one non-empty frequency")
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES || dataset.GetFreq() == "" {
+		return errors.New("factor_result Dataset must be a time series with a frequency")
 	}
 	return nil
 }
 
 func (s *Service) factorResultDefaultView(ctx context.Context, dataset *pb.Dataset, viewID string, columns []*pb.ViewColumn) (*pb.View, error) {
-	frequency := strings.TrimSpace(dataset.GetFreqs()[0])
 	view := &pb.View{
 		SpaceId: dataset.GetSpaceId(), ViewId: viewID, Name: dataset.GetName(), DatasetId: dataset.GetDatasetId(),
-		GrainKeys: defaultViewGrainKeys(dataset.GetDataKind()), FilterJson: fmt.Sprintf(`{"freq":%q}`, frequency),
+		GrainKeys: defaultViewGrainKeys(dataset.GetDataKind()), Freq: dataset.GetFreq(),
 		Engine: defaultViewEngine(dataset.GetDataKind()), KeepDuration: dataset.GetKeepDuration(), Status: "active", Columns: columns,
 		Attributes: map[string]string{
 			"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage",
@@ -91,7 +89,7 @@ func validateFactorResultDefaultView(existing, expected *pb.View) error {
 		existing.GetEngine() != expected.GetEngine() || existing.GetStatus() != "active" ||
 		existing.GetKeepDuration() != expected.GetKeepDuration() ||
 		!slicesEqual(existing.GetGrainKeys(), expected.GetGrainKeys()) ||
-		!factorResultFrequencyMatches(existing.GetFilterJson(), expected.GetFilterJson()) ||
+		existing.GetFreq() != expected.GetFreq() ||
 		!proto.Equal(&pb.View{Columns: existing.GetColumns()}, &pb.View{Columns: expected.GetColumns()}) {
 		return fmt.Errorf("default factor result View %s/%s conflicts with the managed contract", expected.GetSpaceId(), expected.GetViewId())
 	}
@@ -101,18 +99,6 @@ func validateFactorResultDefaultView(existing, expected *pb.View) error {
 		}
 	}
 	return nil
-}
-
-func factorResultFrequencyMatches(actualFilter, expectedFilter string) bool {
-	var actual, expected map[string]json.RawMessage
-	if json.Unmarshal([]byte(actualFilter), &actual) != nil || json.Unmarshal([]byte(expectedFilter), &expected) != nil || len(actual) != 1 || len(expected) != 1 {
-		return false
-	}
-	var actualFrequency, expectedFrequency string
-	if json.Unmarshal(actual["freq"], &actualFrequency) != nil || json.Unmarshal(expected["freq"], &expectedFrequency) != nil {
-		return false
-	}
-	return strings.TrimSpace(actualFrequency) == strings.TrimSpace(expectedFrequency)
 }
 
 func slicesEqual(left, right []string) bool {

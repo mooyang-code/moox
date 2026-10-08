@@ -21,7 +21,7 @@ type resampleE2ESource struct{}
 func (resampleE2ESource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
 	return storagesource.DatasetInfo{
 		DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Status: "active", Freqs: []string{"1m"},
+		Status: "active", Freq: "1m",
 		Attributes: map[string]string{"market_type": "spot"}, KeepDuration: "4320h",
 	}, nil
 }

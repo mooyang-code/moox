@@ -65,7 +65,7 @@ func metricsStorageConfig() monconfig.MetricsStorageConfig {
 	return monconfig.MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 1}
 }
 func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "30s"}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType
@@ -139,7 +139,7 @@ func TestStorageAdapterListsAndCachesActiveDatasetSubjects(t *testing.T) {
 	assert.Equal(t, 1, f.subjectCalls)
 }
 func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{Status: "active"}, dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}}
+	f := &fakeMetadata{space: &storagepb.Space{Status: "active"}, dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "30s"}}
 	adapter := NewStorageAdapter(&fakeAccess{}, f, metricsStorageConfig())
 	if err := adapter.ValidateSchema(context.Background()); err == nil {
 		t.Fatal("expected missing binding error")
@@ -147,7 +147,7 @@ func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
 }
 
 func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "30s"}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType
@@ -170,7 +170,6 @@ func TestNormalizeTarget(t *testing.T) {
 func TestStorageHelpers(t *testing.T) {
 	assert.True(t, isActive(" active "))
 	assert.False(t, isActive("deleted"))
-	assert.True(t, contains([]string{"30s", "1m"}, "30s"))
 	assert.Equal(t, []string{"a", "b"}, sortedKeys(map[string]columnContract{"b": {}, "a": {}}))
 	require.NoError(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}))
 	require.Error(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "fail"}))

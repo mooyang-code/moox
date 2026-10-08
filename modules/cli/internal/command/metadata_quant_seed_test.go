@@ -59,14 +59,14 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	var stockKline seedDataset
 	foundStockKline := false
 	for _, item := range seed.Datasets {
-		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline" {
+		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline_1m" {
 			stockKline = item
 			foundStockKline = true
 			break
 		}
 	}
 	require.True(t, foundStockKline)
-	require.Equal(t, []string{"1m"}, stockKline.Freqs)
+	require.Equal(t, "1m", stockKline.Freq)
 	require.Empty(t, viewIDs)
 	for _, item := range seed.Datasets {
 		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
@@ -92,7 +92,7 @@ func TestDefaultMetadataDefinesStrictStockCNKlineColumns(t *testing.T) {
 
 	var columns []string
 	for _, item := range seed.DatasetColumns {
-		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline" {
+		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline_1m" {
 			columns = append(columns, item.ColumnName)
 		}
 	}

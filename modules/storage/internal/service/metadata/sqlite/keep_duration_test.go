@@ -115,7 +115,7 @@ func createKeepDurationDataset(t *testing.T, ctx context.Context, store *Store, 
 	t.Helper()
 	item, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: datasetID, DataSourceId: "source", DataNodeId: "node",
-		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, KeepDuration: keepDuration,
+		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: keepDuration,
 	})
 	if err != nil {
 		t.Fatal(err)

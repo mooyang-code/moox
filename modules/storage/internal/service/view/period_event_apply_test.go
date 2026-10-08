@@ -314,11 +314,10 @@ func TestHandleFactorPeriodComputedEmptyFactorsPublishesDegradedReady(t *testing
 	}
 }
 
-func TestHandleFactorPeriodComputedFilteredViewPreservesFactorUniverse(t *testing.T) {
+func TestHandleFactorPeriodComputedViewPreservesFactorUniverse(t *testing.T) {
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(nil, publisher, &pb.View{
-		SpaceId: "quant", ViewId: "filtered-result", DatasetId: "factor-results", ActiveIndexId: "filtered-result-a",
-		FilterJson: `{"subject_id":"BTC-USDT"}`,
+		SpaceId: "quant", ViewId: "factor-result", DatasetId: "factor-results", ActiveIndexId: "factor-result-a", Freq: "1m",
 	})
 	at := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	payload := &storageeventpb.FactorPeriodComputed{
@@ -326,7 +325,7 @@ func TestHandleFactorPeriodComputedFilteredViewPreservesFactorUniverse(t *testin
 		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"},
 		Factors: []*storageeventpb.FactorPeriodState{{FactorId: "factor", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash"}},
 	}
-	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-filtered", at), payload); err != nil {
+	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-result", at), payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 1 {
@@ -339,39 +338,18 @@ func TestHandleFactorPeriodComputedFilteredViewPreservesFactorUniverse(t *testin
 		t.Fatal(err)
 	}
 	if _, err := registry.Encode(attempt.event, ready, attempt.opts); err != nil {
-		t.Fatalf("filtered factor ready violates event contract: %v", err)
+		t.Fatalf("factor ready violates event contract: %v", err)
 	}
-	if ready.GetVisibleScope() != "view:filtered-result" || !reflect.DeepEqual(ready.GetUniverseSubjectIds(), payload.GetUniverseSubjectIds()) {
-		t.Fatalf("filtered factor ready scope/universe=%v", ready)
-	}
-}
-
-func TestHandleCollectorPeriodCompletedFilteredViewOmitsObjectUniverse(t *testing.T) {
-	metadata := newPeriodMetadataFake()
-	publisher := newReadyPublisherFake()
-	service := newPeriodTestService(metadata, publisher, &pb.View{
-		SpaceId: "quant", ViewId: "spot-view", DatasetId: "prices", ActiveIndexId: "spot-a", FilterJson: `{"market":"spot"}`,
-	})
-	service.NoteAppliedPosition("quant", "spot-view", "spot-a", "node-a", "store-a", 1)
-	at := time.Date(2026, 9, 13, 16, 2, 0, 0, time.UTC)
-	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT", "ETH-USDT"}, nil, at, at.Unix())
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("spot-ready", at), payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(publisher.attempts) != 1 {
-		t.Fatalf("filtered ready attempts=%d", len(publisher.attempts))
-	}
-	ready := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
-	if len(ready.GetUniverseSubjectIds()) != 0 {
-		t.Fatalf("object-filtered View must not copy the full completion universe: %v", ready.GetUniverseSubjectIds())
+	if ready.GetVisibleScope() != "view:factor-result" || !reflect.DeepEqual(ready.GetUniverseSubjectIds(), payload.GetUniverseSubjectIds()) {
+		t.Fatalf("factor ready scope/universe=%v", ready)
 	}
 }
 
-func TestHandleCollectorPeriodCompletedFreqFilterKeepsObjectUniverse(t *testing.T) {
+func TestHandleCollectorPeriodCompletedKeepsObjectUniverse(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
-		SpaceId: "quant", ViewId: "kline-view", DatasetId: "prices", ActiveIndexId: "kline-a", FilterJson: `{"freq":"1m"}`,
+		SpaceId: "quant", ViewId: "kline-view", DatasetId: "prices", ActiveIndexId: "kline-a", Freq: "1m",
 	})
 	service.NoteAppliedPosition("quant", "kline-view", "kline-a", "node-a", "store-a", 1)
 	at := time.Date(2026, 9, 13, 16, 2, 0, 0, time.UTC)
@@ -381,7 +359,7 @@ func TestHandleCollectorPeriodCompletedFreqFilterKeepsObjectUniverse(t *testing.
 	}
 	ready := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
 	if got := ready.GetUniverseSubjectIds(); len(got) != 2 || got[0] != "BTC-USDT" || got[1] != "ETH-USDT" {
-		t.Fatalf("freq-only filter should keep the completion universe: %v", got)
+		t.Fatalf("a View must keep the completion universe: %v", got)
 	}
 }
 

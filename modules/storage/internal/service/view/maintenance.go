@@ -746,8 +746,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	if lookbackPeriods > 0 {
 		opts.RebuildLookback = 0
 	} else {
-		// A View's retention remains the fallback for legacy definitions that do
-		// not expose a frequency in filter_json.
+		// A View without a frequency (a record View) is bounded by its retention.
 		opts.RebuildLookback = rebuildLookbackForView(view, opts.RebuildLookback)
 	}
 	var stats viewindex.ViewIndexStats
@@ -1053,7 +1052,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		}
 	}
 	// PrepareViewIndex may need the full catalog contract while it attaches a
-	// first index. Keep metadata fields (notably filter_json/frequency)
+	// first index. Keep metadata fields (notably the frequency)
 	// available to Primary history backfill instead of reconstructing a reduced
 	// View from the physical schema alone.
 	s.mu.Lock()
@@ -1209,7 +1208,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 }
 
 func canRebuildInvalidViewFromPrimary(view *pb.View, opts MaintenanceOptions, lookbackPeriods uint64) bool {
-	if view == nil || opts.Primary == nil || opts.PrimaryRange == nil || viewFrequencyValue(view) == "" {
+	if view == nil || opts.Primary == nil || opts.PrimaryRange == nil || view.GetFreq() == "" {
 		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve") {
@@ -1240,21 +1239,8 @@ func rebuildLookbackForView(view *pb.View, fallback time.Duration) time.Duration
 	return lookback
 }
 
-func viewFrequencyValue(view *pb.View) string {
-	if view == nil || strings.TrimSpace(view.GetFilterJson()) == "" {
-		return ""
-	}
-	var filter struct {
-		Frequency string `json:"freq"`
-	}
-	if err := json.Unmarshal([]byte(view.GetFilterJson()), &filter); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(filter.Frequency)
-}
-
 func rebuildLookbackPeriodsForView(view *pb.View, configured map[string]uint64) uint64 {
-	frequency := strings.ToLower(viewFrequencyValue(view))
+	frequency := view.GetFreq()
 	if frequency == "" {
 		// A period budget is meaningful only for a frequency-bound time-series
 		// View. Record/metrics Views without a freq filter continue to use their
@@ -1598,7 +1584,7 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 	if s == nil || s.metrics == nil || view == nil || strings.TrimSpace(indexID) == "" {
 		return
 	}
-	if strings.TrimSpace(viewFrequencyValue(view)) == "" || strings.TrimSpace(view.GetDatasetId()) == "" {
+	if view.GetFreq() == "" || strings.TrimSpace(view.GetDatasetId()) == "" {
 		return
 	}
 	engine, err := s.engineFor(indexID)

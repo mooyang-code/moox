@@ -73,7 +73,6 @@ func viewIndexShapeChanged(existing *pb.View, next *pb.View) bool {
 	}
 	return existing.GetDatasetId() != next.GetDatasetId() ||
 		!slices.Equal(existing.GetGrainKeys(), next.GetGrainKeys()) ||
-		existing.GetFilterJson() != next.GetFilterJson() ||
 		existing.GetEngine() != next.GetEngine() ||
 		existingColumnsExplicit != nextColumnsExplicit
 }

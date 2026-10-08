@@ -315,8 +315,8 @@ func TestBuildAssignmentsRejectsMissingExternalSymbolMapping(t *testing.T) {
 
 func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
 	groups := []TaskGroup{
-		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
-		{Provider: "tdx", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "tdx", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
 	}
 	nodes := []scfinvoker.Node{
 		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
@@ -331,8 +331,8 @@ func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
 
 func TestBuildAssignmentsKeepsSeriesTagsSeparate(t *testing.T) {
 	groups := []TaskGroup{
-		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "raw", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
-		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "adjusted", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "raw", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "adjusted", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
 	}
 	nodes := []scfinvoker.Node{
 		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},

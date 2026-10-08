@@ -111,6 +111,9 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 	); err != nil {
 		return nil, err
 	}
+	if err := deriveViewFreq(ctx, tx, next); err != nil {
+		return nil, err
+	}
 	var existing *pb.View
 	if !createOnly {
 		existing, err = getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
@@ -133,8 +136,8 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		return nil, err
 	}
 	insertSQL := `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_filter_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if !createOnly {
 		insertSQL += `
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
@@ -142,7 +145,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			c_description = excluded.c_description,
 			c_dataset_id = excluded.c_dataset_id,
 			c_grain_keys_json = excluded.c_grain_keys_json,
-			c_filter_json = excluded.c_filter_json,
 			c_engine = excluded.c_engine,
 			c_keep_duration = excluded.c_keep_duration,
 			c_active_index_id = excluded.c_active_index_id,
@@ -156,7 +158,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json`
 	}
-	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
+	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
 		var sqliteErr *sqlite.Error
 		if createOnly && errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555) {
@@ -233,6 +235,22 @@ func (s *Store) defaultViewEngine(ctx context.Context, spaceID string, datasetID
 		return "bleve"
 	}
 	return "duckdb"
+}
+
+// deriveViewFreq copies the Dataset frequency onto the View. A View has no
+// frequency of its own; a caller-supplied value must match the Dataset's.
+func deriveViewFreq(ctx context.Context, tx *sql.Tx, view *pb.View) error {
+	var freq string
+	err := tx.QueryRowContext(ctx, `SELECT c_freq FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`,
+		view.GetSpaceId(), view.GetDatasetId()).Scan(&freq)
+	if err != nil {
+		return err
+	}
+	if candidate := strings.TrimSpace(view.GetFreq()); candidate != "" && candidate != freq {
+		return fmt.Errorf("view freq %q differs from dataset %s freq %q; a View takes its Dataset's freq", candidate, view.GetDatasetId(), freq)
+	}
+	view.Freq = freq
+	return nil
 }
 
 func (s *Store) viewDataKind(ctx context.Context, spaceID, datasetID string) pb.DataKind {

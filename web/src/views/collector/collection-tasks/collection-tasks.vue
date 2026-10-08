@@ -932,7 +932,7 @@ async function loadSources() {
           data_source_id: source.data_source_id,
           data_kind: source.data_kind,
           attributes: source.attributes,
-          freqs: source.freqs,
+          freq: source.freq,
           keep_duration: source.keep_duration
         });
       }

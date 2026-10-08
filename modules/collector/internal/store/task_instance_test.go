@@ -333,10 +333,10 @@ func TestReplaceMarketFetchAssignmentsUsesRouteProviderAndChecksCoverage(t *test
 		SpaceID: "stockcn", InstanceID: "task-1", Provider: "stockcn_multi", MarketType: "equity",
 		DataType: "kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`,
 	}}))
-	attachTestWriteTarget(t, s, ctx, "stockcn", "task-1", "rule-1", "dataset_stockcn_equity_kline")
+	attachTestWriteTarget(t, s, ctx, "stockcn", "task-1", "rule-1", "dataset_stockcn_equity_kline_1m")
 
 	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stockcn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
-		Provider: "stockcn_multi", SourceID: "stockcn_http", MarketType: "equity", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m",
+		Provider: "stockcn_multi", SourceID: "stockcn_http", MarketType: "equity", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1m",
 		FunctionName: "stock-fetch-000", Subjects: []string{"600000.XSHG", "000001.XSHE"},
 	}})
 	require.ErrorContains(t, err, "covered 1 of 2 subjects")
@@ -354,11 +354,11 @@ func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T)
 		{SpaceID: "stockcn", InstanceID: "task-2", Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
 	}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
-	attachTestWriteTarget(t, s, ctx, "stockcn", "task-1", "rule-1", "dataset_stockcn_equity_kline")
-	attachTestWriteTarget(t, s, ctx, "stockcn", "task-2", "rule-2", "dataset_stockcn_equity_kline")
+	attachTestWriteTarget(t, s, ctx, "stockcn", "task-1", "rule-1", "dataset_stockcn_equity_kline_1m")
+	attachTestWriteTarget(t, s, ctx, "stockcn", "task-2", "rule-2", "dataset_stockcn_equity_kline_1m")
 
 	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stockcn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
-		Provider: "stockcn_multi", SourceID: "stockcn_minute_http", MarketType: "equity", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m",
+		Provider: "stockcn_multi", SourceID: "stockcn_minute_http", MarketType: "equity", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1m",
 		FunctionName: "stock-fetch-000", Subjects: []string{"600000.XSHG"},
 	}})
 	require.NoError(t, err)

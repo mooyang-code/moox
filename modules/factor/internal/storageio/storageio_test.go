@@ -113,7 +113,7 @@ func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
 func TestWriteRowsEncodesNullFields(t *testing.T) {
 	primary := &primaryFake{}
 	metadata := &metadataFake{dataset: &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: "factor_result", Freqs: []string{"1m"}, Status: "active",
+		SpaceId: "crypto", DatasetId: "factor_result", Freq: "1m", Status: "active",
 	}}
 	store := NewClient(primary, metadata, nil)
 	err := store.WriteRows(context.Background(), "crypto", "factor_result", "commit-1", []ResultRow{{
@@ -229,7 +229,7 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	require.Equal(t, spec.DataSourceID, dataset.GetDataSourceId())
 	require.Equal(t, spec.DataNodeID, dataset.GetDataNodeId())
 	require.Equal(t, spec.KeepDuration, dataset.GetKeepDuration())
-	require.Equal(t, []string{spec.Frequency}, dataset.GetFreqs())
+	require.Equal(t, spec.Frequency, dataset.GetFreq())
 	require.Equal(t, []string{"tag-b", "tag-a"}, dataset.GetSubjectTags())
 	require.Equal(t, DatasetRoleFactorResult, dataset.GetAttributes()["dataset_role"])
 	require.Equal(t, spec.SourceDatasetID, dataset.GetAttributes()["source_dataset_id"])

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -264,16 +263,10 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	if err := s.validateViewColumnsInDataset(ctx, spaceID, datasetID, view.GetColumns()); err != nil {
 		return err
 	}
-	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
-		freq, normalizedFilterJSON, err := normalizeTimeSeriesViewFilterJSON(view.GetFilterJson())
-		if err != nil {
-			return err
-		}
-		if !datasetSupportsFreq(dataset, freq) {
-			return fmt.Errorf("view dataset %s does not support freq %q", dataset.GetDatasetId(), freq)
-		}
-		view.FilterJson = normalizedFilterJSON
+	if freq := strings.TrimSpace(view.GetFreq()); freq != "" && freq != dataset.GetFreq() {
+		return fmt.Errorf("view freq %q differs from dataset %s freq %q; a View takes its Dataset's freq", freq, dataset.GetDatasetId(), dataset.GetFreq())
 	}
+	view.Freq = dataset.GetFreq()
 	view.DatasetId = datasetID
 	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
 	view.Engine = defaultViewEngine(dataset.GetDataKind())
@@ -314,37 +307,6 @@ func (s *Service) validateViewColumnsInDataset(ctx context.Context, spaceID, dat
 		}
 	}
 	return nil
-}
-
-func normalizeTimeSeriesViewFilterJSON(raw string) (string, string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", "", errors.New("time series view filter_json.freq is required")
-	}
-	fields := make(map[string]json.RawMessage)
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-		return "", "", fmt.Errorf("invalid time series view filter_json: %w", err)
-	}
-	var freq string
-	if rawFreq, ok := fields["freq"]; ok {
-		if err := json.Unmarshal(rawFreq, &freq); err != nil {
-			return "", "", errors.New("time series view filter_json.freq must be a string")
-		}
-	}
-	freq = strings.TrimSpace(freq)
-	if freq == "" {
-		return "", "", errors.New("time series view filter_json.freq is required")
-	}
-	encodedFreq, err := json.Marshal(freq)
-	if err != nil {
-		return "", "", err
-	}
-	fields["freq"] = encodedFreq
-	normalized, err := json.Marshal(fields)
-	if err != nil {
-		return "", "", err
-	}
-	return freq, string(normalized), nil
 }
 
 func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {

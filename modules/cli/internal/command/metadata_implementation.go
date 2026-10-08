@@ -632,7 +632,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetName() == y.GetName() &&
 			x.GetDescription() == y.GetDescription() &&
 			x.GetDataKind() == y.GetDataKind() &&
-			slices.Equal(x.GetFreqs(), y.GetFreqs()) &&
+			x.GetFreq() == y.GetFreq() &&
 			statusMatches &&
 			x.GetDataNodeId() == y.GetDataNodeId() &&
 			x.GetKeepDuration() == y.GetKeepDuration() &&
@@ -695,7 +695,6 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetDescription() == y.GetDescription() &&
 			x.GetDatasetId() == y.GetDatasetId() &&
 			slices.Equal(x.GetGrainKeys(), y.GetGrainKeys()) &&
-			x.GetFilterJson() == y.GetFilterJson() &&
 			x.GetEngine() == y.GetEngine() &&
 			x.GetKeepDuration() == y.GetKeepDuration() &&
 			x.GetStatus() == y.GetStatus() &&
@@ -825,7 +824,7 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	if dataKind == pb.DataKind_DATA_KIND_RECORD && keepDuration != "0" {
 		return nil, fmt.Errorf("dataset %q: record keep_duration must be 0", s.DatasetID)
 	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: keepDuration, Freqs: s.Freqs, SubjectTags: s.SubjectTags, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: keepDuration, Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func canonicalMetadataKeepDuration(value string) (string, error) {
@@ -869,7 +868,7 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 }
 
 func (s seedView) toPB() *pb.View {
-	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, KeepDuration: s.KeepDuration, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, Engine: s.Engine, KeepDuration: s.KeepDuration, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {

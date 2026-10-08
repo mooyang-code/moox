@@ -24,7 +24,7 @@ type runnerSource struct {
 }
 
 func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
+	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
 }
 func (s runnerSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
 	return s.subjects, nil

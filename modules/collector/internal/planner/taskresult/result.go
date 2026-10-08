@@ -2,7 +2,6 @@ package taskresult
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -46,14 +45,10 @@ func ResultIDsForTask(spaceID, taskID, taskType, frequency string) IDs {
 }
 
 func resultIDsForConfig(spaceID, taskID, taskType string, cfg Config) IDs {
-	frequency := strings.TrimSpace(cfg.Frequency)
-	if frequency == "" && len(cfg.Frequencies) > 0 {
-		frequency = strings.TrimSpace(cfg.Frequencies[0])
-	}
 	if strings.TrimSpace(taskType) == "" {
 		return resultIDs(spaceID, taskID)
 	}
-	return ResultIDsForTask(spaceID, taskID, taskType, frequency)
+	return ResultIDsForTask(spaceID, taskID, taskType, strings.TrimSpace(cfg.Frequency))
 }
 
 func resultSlug(taskID string) string {
@@ -211,7 +206,6 @@ type Config struct {
 	Name         string
 	Description  string
 	Frequency    string
-	Frequencies  []string
 	SubjectTags  []string
 	OutputFields []string
 }
@@ -538,7 +532,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID, DataNodeId: cfg.DataNodeID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency, cfg.Frequencies), Attributes: attrs, SubjectTags: subjectTags,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freq: datasetFrequency(kind, cfg.Frequency), Attributes: attrs, SubjectTags: subjectTags,
 		}})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
@@ -1095,16 +1089,7 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		if kind == storagepb.DataKind_DATA_KIND_RECORD {
 			engine, grain = "bleve", []string{"subject_id", "version"}
 		}
-		filterJSON := ""
-		resultFrequencies := normalizeFrequencies(cfg.Frequencies, cfg.Frequency)
-		if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES && len(resultFrequencies) > 0 {
-			encoded, _ := json.Marshal(map[string]string{"freq": strings.TrimSpace(cfg.Frequency)})
-			if strings.TrimSpace(cfg.Frequency) == "" {
-				encoded, _ = json.Marshal(map[string]string{"freq": resultFrequencies[0]})
-			}
-			filterJSON = string(encoded)
-		}
-		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, FilterJson: filterJSON, KeepDuration: keep, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
+		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, KeepDuration: keep, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result view", createErr, retInfoView(created))
 		}
@@ -1328,28 +1313,13 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	return nil
 }
 
-func nonEmptyFrequency(kind storagepb.DataKind, frequency string, frequencies ...[]string) []string {
+// datasetFrequency returns the Dataset freq: a time-series result has the
+// task's one frequency, a record result has none.
+func datasetFrequency(kind storagepb.DataKind, frequency string) string {
 	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		if len(frequencies) > 0 {
-			return normalizeFrequencies(frequencies[0], frequency)
-		}
-		return normalizeFrequencies(nil, frequency)
+		return strings.TrimSpace(frequency)
 	}
-	return nil
-}
-
-func normalizeFrequencies(frequencies []string, fallback string) []string {
-	values := make([]string, 0, len(frequencies)+1)
-	for _, frequency := range frequencies {
-		frequency = strings.TrimSpace(frequency)
-		if frequency != "" && !containsString(values, frequency) {
-			values = append(values, frequency)
-		}
-	}
-	if len(values) == 0 && strings.TrimSpace(fallback) != "" {
-		values = append(values, strings.TrimSpace(fallback))
-	}
-	return values
+	return ""
 }
 
 func containsString(values []string, target string) bool {

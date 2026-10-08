@@ -33,7 +33,7 @@ func (f *fakeMetadataClient) ResolveSubjects(_ context.Context, _ *storagepb.Res
 
 func TestDatasetSourceGetDatasetReturnsTagsAndValidationContract(t *testing.T) {
 	src := &DatasetSource{metadata: &fakeMetadataClient{dataset: &storagepb.Dataset{
-		DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"},
+		DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m",
 		SubjectTags: []string{"binance_spot"}, Attributes: map[string]string{"market_type": "spot"},
 	}}}
 	info, err := src.GetDataset(context.Background(), "crypto", "kline")

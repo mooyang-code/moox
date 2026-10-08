@@ -252,7 +252,6 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 					Name:         task.TaskName,
 					Description:  task.Description,
 					Frequency:    taskResultFrequency(*params),
-					Frequencies:  append([]string(nil), params.Collector.Intervals...),
 					SubjectTags:  append([]string(nil), task.TagIDs...),
 					OutputFields: params.OutputFields,
 				})

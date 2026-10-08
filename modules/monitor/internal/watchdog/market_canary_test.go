@@ -368,7 +368,7 @@ func TestMarketCanaryStockCNReportsNoEligibleKlineFeed(t *testing.T) {
 func stockCanaryConfig(t *testing.T, calendarPath string) MarketCanaryConfig {
 	t.Helper()
 	return MarketCanaryConfig{
-		SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", SeriesTag: stringPtr("default"),
+		SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m", SubjectID: "600000.XSHG", Frequency: "1m", SeriesTag: stringPtr("default"),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.2, MarketID: "stockcn", CalendarPath: calendarPath,
 		SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99,
 		EligibleKlineProviders: []string{"sina", "tencent", "tdx", "eastmoney"},

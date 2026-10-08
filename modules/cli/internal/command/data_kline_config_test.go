@@ -36,7 +36,7 @@ data_types:
         space_id: stockcn
         series_tag: default
         kline_datasets:
-          1m: dataset_stockcn_equity_kline
+          1m: dataset_stockcn_equity_kline_1m
 `
 
 func writeDataAccessConfig(t *testing.T, content string, mode os.FileMode) string {
@@ -70,7 +70,7 @@ func TestDataAccessConfigLoadsStrictCatalog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "stockcn", selection.Exchange)
 	assert.Equal(t, "stockcn", selection.SpaceID)
-	assert.Equal(t, "dataset_stockcn_equity_kline", selection.DatasetID)
+	assert.Equal(t, "dataset_stockcn_equity_kline_1m", selection.DatasetID)
 	assert.Equal(t, "default", selection.SeriesTag)
 }
 

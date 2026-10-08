@@ -116,7 +116,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	metadata := &capacityMaintenanceMetadata{maintenanceMetadata: maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", DatasetId: "prices",
 		Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
-		ActiveViewSchemaHash: schemaHash, ActiveColumns: columns, Columns: columns, FilterJson: `{"freq":"1m"}`, KeepDuration: "365d", Status: "active",
+		ActiveViewSchemaHash: schemaHash, ActiveColumns: columns, Columns: columns, Freq: "1m", KeepDuration: "365d", Status: "active",
 	}}}
 	primaryRows := make([]*pb.TimeSeriesRow, 0, 6002)
 	for index := 0; index < 4; index++ {

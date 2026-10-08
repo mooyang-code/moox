@@ -29,7 +29,7 @@ type cleanupDatasetReader struct{}
 func (cleanupDatasetReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	return []*pb.Dataset{{
 		SpaceId: "space", DatasetId: "prices", DataNodeId: "node-a",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, KeepDuration: "48h", Status: "active",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "48h", Status: "active",
 	}}, &pb.PageResult{Page: 1, Size: 1000}, nil
 }
 
@@ -311,7 +311,7 @@ func TestStorageViewConfigFilesBindFactorResultsDynamically(t *testing.T) {
 					t.Fatalf("factor delivery budget = %+v, want serialized 1/1/1", partition)
 				}
 			}
-			if stockRoutes["stock_kline"] || !stockRoutes["dataset_stockcn_equity_kline"] {
+			if len(stockRoutes) != 1 || !stockRoutes["*"] {
 				t.Fatalf("stockcn routes = %+v", stockRoutes)
 			}
 		})
@@ -322,11 +322,11 @@ func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
 	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []viewservice.DatasetRoute{
 			{SpaceID: "crypto", DatasetID: "*"},
-			{SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline"},
+			{SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m"},
 		}},
 	}}
 	stripWildcardConsumerRoutes(&opts)
-	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stockcn" || got[0].DatasetID != "dataset_stockcn_equity_kline" {
+	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stockcn" || got[0].DatasetID != "dataset_stockcn_equity_kline_1m" {
 		t.Fatalf("static routes = %+v, want only exact route", got)
 	}
 }
@@ -615,7 +615,7 @@ func TestPrimaryPeriodWrongDataNodeTargetFailsClosed(t *testing.T) {
 	snapshot := resolverSnapshot{
 		dataset: &pb.Dataset{
 			SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active",
-			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"},
+			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 			Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
 		},
 		node: &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://" + addressB},

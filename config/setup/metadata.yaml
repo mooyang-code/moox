@@ -216,14 +216,13 @@ tags:
 
 datasets:
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   data_source_id: stockcn
   name: A股分钟行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 8760h
-  freqs:
-  - 1m
+  freq: 1m
   status: disabled
   attributes:
     market_type: equity
@@ -231,31 +230,27 @@ datasets:
     owner_module: collector
     dataset_role: raw_collection
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   data_source_id: market_data
   name: 指数行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 8760h
-  freqs:
-  - 1h
-  - 1d
+  freq: 1d
   status: disabled
   attributes:
     market_type: index
-    source_directories: 主要指数历史日线数据|指数1小时K线数据
+    source_directories: 主要指数历史日线数据
     owner_module: collector
     dataset_role: raw_collection
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   data_source_id: market_data
   name: 可转债行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 8760h
-  freqs:
-  - 1m
-  - 1d
+  freq: 1m
   status: disabled
   attributes:
     market_id: stockcn
@@ -270,8 +265,7 @@ datasets:
   data_kind: record
   data_node_id: storage-node-0
   keep_duration: '0'
-  freqs:
-  - quarter
+  freq: quarter
   status: disabled
   attributes:
     source_directories: 邢不行财务数据
@@ -283,25 +277,20 @@ datasets:
   data_kind: record
   data_node_id: storage-node-0
   keep_duration: '0'
-  freqs:
-  - quarter
+  freq: quarter
   status: disabled
   attributes:
     source_directories: 财务预处理数据
     storage_model: wide_common_metrics
 
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   data_source_id: market_data
   name: 港股行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 8760h
-  freqs:
-  - 1m
-  - 1d
-  - 1w
-  - 1mo
+  freq: 1d
   status: disabled
   attributes:
     market_id: stockhk
@@ -310,17 +299,13 @@ datasets:
     owner_module: collector
     dataset_role: raw_collection
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   data_source_id: market_data
   name: 美股行情
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 8760h
-  freqs:
-  - 1m
-  - 1d
-  - 1w
-  - 1mo
+  freq: 1d
   status: disabled
   attributes:
     market_id: stockus
@@ -338,8 +323,7 @@ datasets:
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 4320h
-  freqs:
-  - 1m
+  freq: 1m
   status: disabled
 - space_id: mooxsys
   dataset_id: dataset_mooxsys_host_filesystem
@@ -349,8 +333,7 @@ datasets:
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 4320h
-  freqs:
-  - 1m
+  freq: 1m
   status: disabled
 - space_id: mooxsys
   dataset_id: dataset_mooxsys_host_disk
@@ -360,8 +343,7 @@ datasets:
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 4320h
-  freqs:
-  - 1m
+  freq: 1m
   status: disabled
 - space_id: mooxsys
   dataset_id: dataset_mooxsys_host_network
@@ -371,8 +353,7 @@ datasets:
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 4320h
-  freqs:
-  - 1m
+  freq: 1m
   status: disabled
 - space_id: mooxsys
   dataset_id: dataset_mooxsys_service_metrics
@@ -382,8 +363,7 @@ datasets:
   data_kind: time_series
   data_node_id: storage-node-0
   keep_duration: 24h
-  freqs:
-  - 30s
+  freq: 30s
   status: disabled
 
 field_groups:
@@ -1278,28 +1258,28 @@ fields:
 dataset_columns:
 
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: open
   origin_type: field
   origin_id: open
   value_type: double
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: high
   origin_type: field
   origin_id: high
   value_type: double
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: low
   origin_type: field
   origin_id: low
   value_type: double
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: close
   origin_type: field
   origin_id: close
@@ -1307,35 +1287,35 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: volume
   origin_type: field
   origin_id: volume
   value_type: double
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: amount
   origin_type: field
   origin_id: amount
   value_type: double
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: provider_id
   origin_type: field
   origin_id: provider_id
   value_type: string
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: source_id
   origin_type: field
   origin_id: source_id
   value_type: string
   status: active
 - space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   column_name: provider_symbol
   origin_type: field
   origin_id: provider_symbol
@@ -1343,28 +1323,28 @@ dataset_columns:
   status: active
 
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: open
   origin_type: field
   origin_id: open
   value_type: double
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: high
   origin_type: field
   origin_id: high
   value_type: double
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: low
   origin_type: field
   origin_id: low
   value_type: double
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: close
   origin_type: field
   origin_id: close
@@ -1372,35 +1352,35 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: volume
   origin_type: field
   origin_id: volume
   value_type: double
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: amount
   origin_type: field
   origin_id: amount
   value_type: double
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: provider_id
   origin_type: field
   origin_id: provider_id
   value_type: string
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: source_id
   origin_type: field
   origin_id: source_id
   value_type: string
   status: active
 - space_id: stockus
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   column_name: provider_symbol
   origin_type: field
   origin_id: provider_symbol
@@ -1408,28 +1388,28 @@ dataset_columns:
   status: active
 
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: open
   origin_type: field
   origin_id: open
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: high
   origin_type: field
   origin_id: high
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: low
   origin_type: field
   origin_id: low
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: close
   origin_type: field
   origin_id: close
@@ -1437,28 +1417,28 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: volume
   origin_type: field
   origin_id: volume
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: amount
   origin_type: field
   origin_id: amount
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: instrument_name
   origin_type: field
   origin_id: instrument_name
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: trade_date
   origin_type: field
   origin_id: trade_date
@@ -1466,7 +1446,7 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: close_time
   origin_type: field
   origin_id: close_time
@@ -1474,28 +1454,28 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: volume_unit
   origin_type: field
   origin_id: volume_unit
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: amount_unit
   origin_type: field
   origin_id: amount_unit
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: amount_quality
   origin_type: field
   origin_id: amount_quality
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: provider_symbol
   origin_type: field
   origin_id: provider_symbol
@@ -1503,7 +1483,7 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: provider_timestamp
   origin_type: field
   origin_id: provider_timestamp
@@ -1511,7 +1491,7 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: fetched_at
   origin_type: field
   origin_id: fetched_at
@@ -1519,7 +1499,7 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: request_id
   origin_type: field
   origin_id: request_id
@@ -1527,7 +1507,7 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: route_id
   origin_type: field
   origin_id: route_id
@@ -1535,7 +1515,7 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: route_rank
   origin_type: field
   origin_id: route_rank
@@ -1543,7 +1523,7 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: source_provider
   origin_type: field
   origin_id: source_provider
@@ -1551,28 +1531,28 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: quality_status
   origin_type: field
   origin_id: quality_status
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: provider_id
   origin_type: field
   origin_id: provider_id
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   column_name: source_id
   origin_type: field
   origin_id: source_id
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: index_code
   origin_type: field
   origin_id: index_code
@@ -1580,28 +1560,28 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: open
   origin_type: field
   origin_id: open
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: high
   origin_type: field
   origin_id: high
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: low
   origin_type: field
   origin_id: low
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: close
   origin_type: field
   origin_id: close
@@ -1609,70 +1589,70 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: volume
   origin_type: field
   origin_id: volume
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: amount
   origin_type: field
   origin_id: amount
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: raw_payload
   origin_type: field
   origin_id: raw_payload
   value_type: json
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: provider_id
   origin_type: field
   origin_id: provider_id
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: source_id
   origin_type: field
   origin_id: source_id
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   column_name: provider_symbol
   origin_type: field
   origin_id: provider_symbol
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: open
   origin_type: field
   origin_id: open
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: high
   origin_type: field
   origin_id: high
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: low
   origin_type: field
   origin_id: low
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: close
   origin_type: field
   origin_id: close
@@ -1680,35 +1660,35 @@ dataset_columns:
   required: true
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: volume
   origin_type: field
   origin_id: volume
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: amount
   origin_type: field
   origin_id: amount
   value_type: double
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: provider_id
   origin_type: field
   origin_id: provider_id
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: source_id
   origin_type: field
   origin_id: source_id
   value_type: string
   status: active
 - space_id: stockcn
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   column_name: provider_symbol
   origin_type: field
   origin_id: provider_symbol
@@ -2179,65 +2159,60 @@ views:
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
   name: A股分钟行情
-  dataset_id: dataset_stockcn_equity_kline
+  dataset_id: dataset_stockcn_equity_kline_1m
   grain_keys:
   - subject_id
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1m"}'
   engine: duckdb
   keep_duration: 24h
   status: active
 - space_id: stockcn
   view_id: view_stockcn_index_kline_1d
   name: 指数行情
-  dataset_id: dataset_stockcn_index_kline
+  dataset_id: dataset_stockcn_index_kline_1d
   grain_keys:
   - subject_id
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1d"}'
   engine: duckdb
   keep_duration: 8760h
   status: active
 - space_id: stockcn
   view_id: view_stockcn_bond_kline_1m
   name: 可转债行情
-  dataset_id: dataset_stockcn_bond_kline
+  dataset_id: dataset_stockcn_bond_kline_1m
   grain_keys:
   - subject_id
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1m"}'
   engine: duckdb
   keep_duration: 24h
   status: active
 - space_id: stockhk
   view_id: view_stockhk_equity_kline_1d
   name: 港股行情视图
-  dataset_id: dataset_stockhk_equity_kline
+  dataset_id: dataset_stockhk_equity_kline_1d
   grain_keys:
   - subject_id
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1d"}'
   engine: duckdb
   keep_duration: 8760h
   status: active
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
   name: 美股行情视图
-  dataset_id: dataset_stockus_equity_kline
+  dataset_id: dataset_stockus_equity_kline_1d
   grain_keys:
   - subject_id
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1d"}'
   engine: duckdb
   keep_duration: 8760h
   status: active
@@ -2250,7 +2225,6 @@ views:
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1m"}'
   engine: duckdb
   keep_duration: 4320h
   status: active
@@ -2263,7 +2237,6 @@ views:
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1m"}'
   engine: duckdb
   keep_duration: 4320h
   status: active
@@ -2276,7 +2249,6 @@ views:
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1m"}'
   engine: duckdb
   keep_duration: 4320h
   status: active
@@ -2289,7 +2261,6 @@ views:
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"1m"}'
   engine: duckdb
   keep_duration: 4320h
   status: active
@@ -2302,7 +2273,6 @@ views:
   - freq
   - data_time
   - series_tag
-  filter_json: '{"freq":"30s"}'
   engine: duckdb
   keep_duration: 24h
   status: active

@@ -118,9 +118,9 @@ func TestValidateStorageImportFile(t *testing.T) {
 }
 
 func TestValidateStorageImportFreq(t *testing.T) {
-	dataset := &pb.Dataset{DatasetId: "d1", Freqs: []string{"1m", "1h"}}
+	dataset := &pb.Dataset{DatasetId: "d1", Freq: "1m"}
 	require.NoError(t, validateStorageImportFreq(storageImportOptions{Freq: "1m"}, dataset))
-	require.Error(t, validateStorageImportFreq(storageImportOptions{Freq: "1d"}, dataset))
+	require.Error(t, validateStorageImportFreq(storageImportOptions{Freq: "1h"}, dataset))
 	require.NoError(t, validateStorageImportFreq(storageImportOptions{}, dataset))
 }
 
@@ -229,7 +229,7 @@ func TestRunStorageImportWritePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	meta := fakeStorageImportMetaFull{
 		fakeStorageImportMeta: fakeStorageImportMeta{
-			dataset: &pb.Dataset{DatasetId: "kline", Freqs: []string{"1m"}, Status: "active"},
+			dataset: &pb.Dataset{DatasetId: "kline", Freq: "1m", Status: "active"},
 			subject: &pb.Subject{SubjectId: "BTC", Status: "active"},
 			columns: []*pb.DatasetColumn{
 				{ColumnName: "open_time", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_TIME, Required: true, Status: "active"},
@@ -262,7 +262,7 @@ type fakeStorageImportMetaFull struct {
 func newStorageImportMetaFull() *fakeStorageImportMetaFull {
 	return &fakeStorageImportMetaFull{
 		fakeStorageImportMeta: fakeStorageImportMeta{
-			dataset: &pb.Dataset{DatasetId: "kline", Freqs: []string{"1m"}, Status: "active"},
+			dataset: &pb.Dataset{DatasetId: "kline", Freq: "1m", Status: "active"},
 			subject: &pb.Subject{SubjectId: "BTC", Status: "active"},
 			columns: []*pb.DatasetColumn{
 				{ColumnName: "data_time", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_TIME, Required: true, Status: "active"},
@@ -312,11 +312,6 @@ type trackingStorageWriter struct{ writes int }
 func (w *trackingStorageWriter) UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error {
 	w.writes++
 	return nil
-}
-
-func TestStringSliceContains(t *testing.T) {
-	assert.True(t, stringSliceContains([]string{"a", "b"}, "b"))
-	assert.False(t, stringSliceContains([]string{"a"}, "c"))
 }
 
 func TestStorageImportColumnMap(t *testing.T) {

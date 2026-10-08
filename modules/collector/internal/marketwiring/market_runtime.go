@@ -51,15 +51,15 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	if err != nil {
 		return nil, err
 	}
-	datasetID := marketDatasetID(marketID, instrumentType)
+	// Each collection task writes its own single-frequency Dataset, so a
+	// shared market pipeline takes the Dataset from the request.
 	pipeline := &marketfetch.KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: []string{providerID},
 		RouteID: marketID + "_" + string(instrumentType) + "_kline",
 		SpaceID: marketID, MarketID: marketID, InstrumentType: instrumentType,
-		DatasetID: datasetID, SourceID: sourceID,
+		SourceID: sourceID,
 	}
 	if marketID == "crypto" {
-		pipeline.DatasetID = ""
 		pipeline.InstrumentType = marketdata.InstrumentSpot
 		if instrumentType == marketdata.InstrumentSwap {
 			pipeline.InstrumentType = marketdata.InstrumentSwap
@@ -146,19 +146,4 @@ func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType
 		}
 	}
 	return nil, fmt.Errorf("unsupported market %q", marketID)
-}
-
-func marketDatasetID(marketID string, instrumentType marketdata.InstrumentType) string {
-	switch {
-	case marketID == "stockhk" && instrumentType == marketdata.InstrumentEquity:
-		return "dataset_stockhk_equity_kline"
-	case marketID == "stockus" && instrumentType == marketdata.InstrumentEquity:
-		return "dataset_stockus_equity_kline"
-	case marketID == marketfetch.StockCNSpaceID && instrumentType == marketdata.InstrumentIndex:
-		return "dataset_stockcn_index_kline"
-	case marketID == marketfetch.StockCNSpaceID && instrumentType == marketdata.InstrumentConvertibleBond:
-		return "dataset_stockcn_bond_kline"
-	default:
-		return marketID + "_" + string(instrumentType) + "_kline"
-	}
 }

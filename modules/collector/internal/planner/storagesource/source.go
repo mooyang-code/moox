@@ -44,7 +44,7 @@ type DatasetInfo struct {
 	DataNodeID   string
 	DataKind     storagepb.DataKind
 	Status       string
-	Freqs        []string
+	Freq         string
 	SubjectTags  []string
 	Columns      []string
 	ColumnTypes  map[string]storagepb.FieldValueType
@@ -105,7 +105,7 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 		DataNodeID:   strings.TrimSpace(dataset.GetDataNodeId()),
 		DataKind:     dataset.GetDataKind(),
 		Status:       strings.ToLower(strings.TrimSpace(dataset.GetStatus())),
-		Freqs:        append([]string(nil), dataset.GetFreqs()...),
+		Freq:         dataset.GetFreq(),
 		SubjectTags:  append([]string(nil), dataset.GetSubjectTags()...),
 		Attributes:   cloneAttributes(dataset.GetAttributes()),
 		KeepDuration: strings.TrimSpace(dataset.GetKeepDuration()),

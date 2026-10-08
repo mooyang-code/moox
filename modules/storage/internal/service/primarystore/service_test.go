@@ -358,7 +358,7 @@ func TestPrimaryNormalizesMissingStockCNSeriesTag(t *testing.T) {
 	}}
 	svc, err := New(Options{Node: node})
 	require.NoError(t, err)
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "600000.XSHG", Freq: "1m", DataTime: "2026-08-28T06:59:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "600000.XSHG", Freq: "1m", DataTime: "2026-08-28T06:59:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
 	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row}})
 	require.NoError(t, err)
 	require.NotNil(t, captured)
@@ -601,7 +601,7 @@ func TestStockReadForwardsExactDefaultSeriesToView(t *testing.T) {
 	svc, err := New(Options{
 		Node: &recordingNode{},
 		View: func(_ context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
-			if spaceID != "stockcn" || datasetID != "dataset_stockcn_equity_kline" {
+			if spaceID != "stockcn" || datasetID != "dataset_stockcn_equity_kline_1m" {
 				t.Fatalf("resolved scope=%s/%s", spaceID, datasetID)
 			}
 			return view, "view_stockcn_equity_kline_1m", nil
@@ -613,9 +613,9 @@ func TestStockReadForwardsExactDefaultSeriesToView(t *testing.T) {
 	defaultTag := "default"
 	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "moox-skill"},
-		SpaceId:  "stockcn", DatasetId: "dataset_stockcn_equity_kline", Order: pb.SortOrder_SORT_ORDER_DESC,
+		SpaceId:  "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m", Order: pb.SortOrder_SORT_ORDER_DESC,
 		Selectors: []*pb.TimeSeriesSelector{{
-			SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline", SubjectId: "600000.SH", Freq: "1m", SeriesTag: &defaultTag,
+			SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m", SubjectId: "600000.SH", Freq: "1m", SeriesTag: &defaultTag,
 		}},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -856,7 +856,7 @@ func collectorPeriodMetadataSnapshot(spaceID, datasetID, frequency string) metad
 	return periodAuthorizationSnapshot{datasets: map[routeKey]*pb.Dataset{
 		{spaceID: spaceID, datasetID: datasetID}: {
 			SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
-			Freqs: []string{frequency}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
+			Freq: frequency, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
 		},
 	}}
 }
@@ -922,7 +922,7 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 	t.Helper()
 	validDataset := func() *pb.Dataset {
 		return &pb.Dataset{
-			SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"},
+			SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h",
 			Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
 		}
 	}
@@ -940,12 +940,12 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 		{name: "SCF canary read-only caller", appID: "scf-market-canary", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
 		{name: "Factor caller", appID: "moox-factor", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
 		{name: "other module caller", appID: "admin", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "Factor-owned Dataset", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "missing Dataset owner", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, Attributes: map[string]string{"dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "wrong Dataset role", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "snapshot Dataset identity mismatch", appID: "collector", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "record Dataset kind", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Freqs: []string{"1h"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "invalid declared frequency", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"forever"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "Factor-owned Dataset", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "missing Dataset owner", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "wrong Dataset role", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "snapshot Dataset identity mismatch", appID: "collector", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "record Dataset kind", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Freq: "1h", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "invalid declared frequency", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "forever", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_NO_PERMISSION},
 		{name: "frequency alias is not canonical", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
 		{name: "unknown Dataset", appID: "collector", dataset: validDataset(), includeDataset: false, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
 		{name: "missing metadata snapshot", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: false, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},

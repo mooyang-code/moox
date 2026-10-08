@@ -68,11 +68,11 @@ func (r *primaryHistoryRangeReader) ReadTimeSeriesRows(_ context.Context, req *p
 func TestPeriodBackfillUsesPrimaryInsteadOfCopyingActiveAndReportsRowsWritten(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{
-		SpaceId:    "space",
-		ViewId:     "prices",
-		Engine:     "duckdb",
-		DatasetId:  "market",
-		FilterJson: `{"freq":"1m"}`,
+		SpaceId:   "space",
+		ViewId:    "prices",
+		Engine:    "duckdb",
+		DatasetId: "market",
+		Freq:      "1m",
 	}
 	metadata := &maintenanceMetadata{view: view}
 	svc := &Service{
@@ -166,7 +166,7 @@ func TestCapacityMaintenanceRequiresSubjectCatalog(t *testing.T) {
 
 func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", FilterJson: `{"freq":"1m"}`}
+	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
 	svc := &Service{
 		engines:      map[string]viewindex.Engine{"duckdb": engine},
 		indexEngine:  map[string]string{"prices-b": "duckdb"},
@@ -183,7 +183,7 @@ func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market",
-		FilterJson: `{"freq":"1m"}`,
+		Freq: "1m",
 	}
 	svc := &Service{
 		engines:      map[string]viewindex.Engine{"duckdb": engine},
@@ -211,7 +211,7 @@ func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 		ViewId:     "factor-result-view",
 		Engine:     "duckdb",
 		DatasetId:  "factor-results",
-		FilterJson: `{"freq":"1m"}`,
+		Freq:       "1m",
 		Attributes: map[string]string{"dataset_role": "factor_result"},
 	}
 	runtime := &viewRuntime{next: "factor-result-view-b"}
@@ -241,7 +241,7 @@ func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
 		ViewId:     "factor-result-view",
 		Engine:     "duckdb",
 		DatasetId:  "factor-results",
-		FilterJson: `{"freq":"1m"}`,
+		Freq:       "1m",
 		Attributes: map[string]string{"dataset_role": "factor_result"},
 	}
 	runtime := &viewRuntime{active: "factor-result-view-a", next: "factor-result-view-b"}

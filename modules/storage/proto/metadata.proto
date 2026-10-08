@@ -76,8 +76,8 @@ message View {
   string dataset_id = 5;
   // grain_keys 表示视图行粒度键，例如 subject_id、data_time 或 freq。
   repeated string grain_keys = 7;
-  // filter_json 是构建视图物化结果时使用的固定过滤条件。
-  string filter_json = 8;
+  // freq 是所属 Dataset 的频率，由 Storage 按 Dataset 填写，调用方不能指定；记录型 View 为空。
+  string freq = 8;
   // engine 是视图查询执行引擎标识，由控制面配置。
   string engine = 9;
   // keep_duration 是 TimeSeries View 保留 RowKey 的时间窗口；0 表示永久保存。
@@ -258,8 +258,9 @@ message Dataset {
   string description = 5;
   // data_kind 是数据集的结构形态。
   DataKind data_kind = 6;
-  // freqs 是该数据集支持的数据频率列表。
-  repeated string freqs = 7;
+  // freq 是时序 Dataset 的唯一频率，必须是规范值（见 packages/frequency），创建后不可修改；
+  // 记录型 Dataset 可以为空或使用描述性取值。
+  string freq = 7;
   // status 表示启用、停用、构建中、归档或删除等状态。
   string status = 8;
   // created_at 是创建时间，使用项目统一时间字符串格式。

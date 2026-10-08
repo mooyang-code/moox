@@ -40,7 +40,7 @@ type DatasetInfo struct {
 	Name         string
 	Description  string
 	DataKind     string
-	Freqs        []string
+	Freq         string
 	KeepDuration string
 	Status       string
 	SubjectTags  []string
@@ -424,7 +424,7 @@ func datasetFromResultSpec(spec ResultDatasetSpec) *storagepb.Dataset {
 	return &storagepb.Dataset{
 		SpaceId: spec.SpaceID, DatasetId: spec.DatasetID, DataSourceId: spec.DataSourceID,
 		Name: spec.Name, Description: spec.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Freqs: []string{spec.Frequency}, Status: DatasetStatusDisabled, Attributes: attributes,
+		Freq: spec.Frequency, Status: DatasetStatusDisabled, Attributes: attributes,
 		DataNodeId: spec.DataNodeID, KeepDuration: spec.KeepDuration,
 		SubjectTags: append([]string(nil), spec.SubjectTags...),
 	}
@@ -440,7 +440,7 @@ func validateExistingResultDataset(expected, actual *storagepb.Dataset) error {
 		actual.GetName() != expected.GetName() || actual.GetDescription() != expected.GetDescription() ||
 		actual.GetAttributes()["dataset_role"] != DatasetRoleFactorResult ||
 		actual.GetAttributes()["source_dataset_id"] != expected.GetAttributes()["source_dataset_id"] ||
-		len(actual.GetFreqs()) != 1 || actual.GetFreqs()[0] != expected.GetFreqs()[0] ||
+		actual.GetFreq() != expected.GetFreq() ||
 		!equalStrings(actual.GetSubjectTags(), expected.GetSubjectTags()) ||
 		!containsAttributes(actual.GetAttributes(), expected.GetAttributes()) {
 		return fmt.Errorf("result dataset %s conflicts with the requested factor result contract", expected.GetDatasetId())
@@ -453,7 +453,7 @@ func datasetInfoFromProto(item *storagepb.Dataset) DatasetInfo {
 		SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(),
 		DataNodeID: item.GetDataNodeId(), Name: item.GetName(), Description: item.GetDescription(),
 		DataKind: dataKindFromProto(item.GetDataKind()),
-		Freqs:    append([]string(nil), item.GetFreqs()...), KeepDuration: item.GetKeepDuration(),
+		Freq:     item.GetFreq(), KeepDuration: item.GetKeepDuration(),
 		Status: item.GetStatus(), SubjectTags: append([]string(nil), item.GetSubjectTags()...),
 		Attributes: cloneStringMap(item.GetAttributes()), Revision: item.GetRevision(),
 	}

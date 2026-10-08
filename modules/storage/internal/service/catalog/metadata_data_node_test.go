@@ -114,7 +114,7 @@ func TestListDataNodesAggregatesDatasetsWithOneUnpaginatedQuery(t *testing.T) {
 			{NodeId: "node-b", Name: "B", Status: "disabled"},
 		},
 		datasets: []*pb.Dataset{
-			{SpaceId: "space-a", DatasetId: "dataset-a", DataNodeId: "node-a", Name: "A Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, KeepDuration: "24h", Status: "active"},
+			{SpaceId: "space-a", DatasetId: "dataset-a", DataNodeId: "node-a", Name: "A Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "24h", Status: "active"},
 			{SpaceId: "space-b", DatasetId: "dataset-b", DataNodeId: "node-a", Name: "B Dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "disabled"},
 		},
 	}
@@ -240,7 +240,7 @@ func TestCreateDatasetRequiresDataNodeID(t *testing.T) {
 
 	rsp, err := svc.CreateDataset(context.Background(), &pb.CreateDatasetReq{Dataset: &pb.Dataset{
 		SpaceId: "space-a", DatasetId: "dataset_a", DataSourceId: "source-a", Name: "测试集",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, KeepDuration: "24h",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "24h",
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
@@ -250,14 +250,14 @@ func TestCreateDatasetRequiresDataNodeID(t *testing.T) {
 func TestUpdateActiveDatasetCannotChangeDataNode(t *testing.T) {
 	store := &datasetOwnershipMetadataStore{dataset: &pb.Dataset{
 		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-a", Name: "测试集",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Revision: 2,
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Revision: 2,
 	}}
 	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	rsp, err := svc.UpdateDataset(context.Background(), &pb.UpdateDatasetReq{Dataset: &pb.Dataset{
 		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-b", Name: "测试集",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Revision: 2,
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Revision: 2,
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
@@ -267,7 +267,7 @@ func TestUpdateActiveDatasetCannotChangeDataNode(t *testing.T) {
 func TestRebindDatasetRequiresDisabledState(t *testing.T) {
 	store := &datasetOwnershipMetadataStore{dataset: &pb.Dataset{
 		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-a", Name: "测试集",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Revision: 2,
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Revision: 2,
 	}}
 	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
 	require.NoError(t, err)

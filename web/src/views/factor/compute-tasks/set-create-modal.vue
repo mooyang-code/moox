@@ -9,22 +9,14 @@
   >
     <a-form layout="vertical">
       <a-form-item label="源数据集" required>
-        <a-select
-          v-model="form.source_dataset_id"
-          allow-search
-          :loading="datasetsLoading"
-          placeholder="选择已激活的时序数据集"
-          @change="sourceChanged"
-        >
+        <a-select v-model="form.source_dataset_id" allow-search :loading="datasetsLoading" placeholder="选择已激活的时序数据集">
           <a-option v-for="dataset in sourceDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
             {{ dataset.name || dataset.dataset_id }}（{{ dataset.dataset_id }}）
           </a-option>
         </a-select>
       </a-form-item>
-      <a-form-item label="频率" required>
-        <a-select v-model="form.freq" :disabled="!availableFreqs.length" placeholder="选择源数据集支持的频率">
-          <a-option v-for="freq in availableFreqs" :key="freq" :value="freq">{{ freq }}</a-option>
-        </a-select>
+      <a-form-item label="频率">
+        <a-input :model-value="sourceFreq" disabled placeholder="由源数据集决定" />
       </a-form-item>
       <SubjectScopeFields v-model:mode="form.subject_mode" v-model:subjects="subjects" />
     </a-form>
@@ -52,9 +44,10 @@ const sourceDatasets = ref<Dataset[]>([]);
 const datasetsLoading = ref(false);
 const submitting = ref(false);
 const subjects = ref<string[]>([]);
-const form = reactive({ source_dataset_id: "", freq: "", subject_mode: "all" as SubjectMode });
+const form = reactive({ source_dataset_id: "", subject_mode: "all" as SubjectMode });
 
-const availableFreqs = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.freqs || []);
+// A Dataset has exactly one frequency, so the factor set takes the source's.
+const sourceFreq = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.freq || "");
 
 async function loadSourceDatasets(spaceId: string) {
   const items: Dataset[] = [];
@@ -67,14 +60,13 @@ async function loadSourceDatasets(spaceId: string) {
     item =>
       item.status === "active" &&
       isTimeSeriesDataKind(item.data_kind) &&
-      (item.freqs || []).length > 0 &&
+      Boolean(item.freq) &&
       item.attributes?.dataset_role !== "factor_result"
   );
 }
 
 async function prepare() {
   form.source_dataset_id = "";
-  form.freq = "";
   form.subject_mode = "all";
   subjects.value = [];
   const spaceId = spaceStore.selectedSpaceId;
@@ -90,14 +82,10 @@ async function prepare() {
   }
 }
 
-function sourceChanged() {
-  form.freq = availableFreqs.value.includes(form.freq) ? form.freq : availableFreqs.value[0] || "";
-}
-
 async function submit() {
   const spaceId = spaceStore.selectedSpaceId;
-  if (!spaceId || !form.source_dataset_id || !form.freq) {
-    Message.warning("请选择源数据集和频率");
+  if (!spaceId || !form.source_dataset_id || !sourceFreq.value) {
+    Message.warning("请选择源数据集");
     return false;
   }
   if (form.subject_mode === "include" && !subjects.value.length) {
@@ -109,7 +97,7 @@ async function submit() {
     const created = await createFactorSet({
       space_id: spaceId,
       source_dataset_id: form.source_dataset_id,
-      freq: form.freq,
+      freq: sourceFreq.value,
       subject_mode: form.subject_mode,
       subjects: form.subject_mode === "include" ? [...subjects.value] : []
     });

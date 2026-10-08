@@ -21,7 +21,7 @@ func TestDatasetCreateDefaultsAndRequiresActiveDataNode(t *testing.T) {
 	}
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, KeepDuration: "4320h",
+		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "4320h",
 		Status: "active", BindingLocked: true, Revision: 99,
 	})
 	if err != nil {
@@ -56,7 +56,7 @@ func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
 	registerActiveNode(t, ctx, store, "node-a")
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, KeepDuration: "0",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", KeepDuration: "0",
 		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
 	}); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
 	if _, err := store.CreateView(ctx, &pb.View{
 		SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result",
 		DatasetId: "dataset_factor_result", Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-		FilterJson: `{"freq":"1h"}`, Attributes: map[string]string{
+		Freq: "1h", Attributes: map[string]string{
 			"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage", "primary_dataset_role": "factor_result",
 		},
 	}); err != nil {
@@ -88,7 +88,7 @@ func TestDeleteDatasetRejectsReferencedOrdinaryDatasetWithoutDeletingView(t *tes
 	registerActiveNode(t, ctx, store, "node-a")
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset-ordinary", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Ordinary", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		Name: "Ordinary", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 	registerActiveNode(t, ctx, store, "node-a")
 	dataset := &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, KeepDuration: "0",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", KeepDuration: "0",
 		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
 	}
 	if _, err := store.CreateDataset(ctx, dataset); err != nil {
@@ -126,7 +126,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 		{
 			SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result", DatasetId: dataset.GetDatasetId(),
 			Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-			FilterJson: `{"freq":"1h"}`, Attributes: managedAttrs,
+			Freq: "1h", Attributes: managedAttrs,
 		},
 		{SpaceId: "space", ViewId: "view_factor_extra", Name: "Extra view", DatasetId: dataset.GetDatasetId(), Engine: "duckdb"},
 	} {
@@ -152,7 +152,7 @@ func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
 
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_collector_result", DataNodeId: "node-a",
-		Name: "Collector Result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		Name: "Collector Result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-1"},
 	})
 	if err != nil {
@@ -171,7 +171,7 @@ func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
 
 	_, err = store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_missing_source", DataNodeId: "node-a",
-		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	if err == nil || !strings.Contains(err.Error(), "data_source_id is required") {
 		t.Fatalf("ordinary dataset without source err = %v", err)
@@ -187,7 +187,7 @@ func TestDatasetUpdateRevisionAndStatusInvariants(t *testing.T) {
 
 	updated, err := store.UpdateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", Name: "Dataset v2", Description: "updated",
-		DataSourceId: "source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		DataSourceId: "source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		KeepDuration: "24h", Status: "disabled", Revision: created.GetRevision(),
 	})
 	if err != nil {
@@ -266,7 +266,7 @@ func TestDatasetRebindRejectsLockedDatasetAndPreservesFullRow(t *testing.T) {
 	}
 	locked, err := store.UpdateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", Name: active.GetName(),
-		Description: "locked row", Freqs: []string{"1m", "1h"}, KeepDuration: "48h",
+		Description: "locked row", KeepDuration: "48h",
 		Attributes: map[string]string{"owner": "storage"}, Status: "disabled", Revision: active.GetRevision(),
 	})
 	if err != nil {
@@ -433,7 +433,7 @@ func createTestDataset(t *testing.T, ctx context.Context, store *Store, datasetI
 	t.Helper()
 	item, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: datasetID, DataSourceId: "source", DataNodeId: nodeID,
-		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, KeepDuration: "24h",
+		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", KeepDuration: "24h",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -473,5 +473,66 @@ func seedDatasetParents(t *testing.T, ctx context.Context, store *Store) {
 		if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: id, Name: id, Kind: "internal"}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestTimeSeriesDatasetRequiresOneCanonicalImmutableFreq(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	for _, freq := range []string{"", "1H", "60m", "quarter"} {
+		_, err := store.CreateDataset(ctx, &pb.Dataset{
+			SpaceId: "space", DatasetId: "dataset_bad", DataSourceId: "source", DataNodeId: "node-a",
+			Name: "Bad", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: freq,
+		})
+		if err == nil || !strings.Contains(err.Error(), "time_series dataset freq must be one of") {
+			t.Fatalf("freq %q error = %v, want canonical freq rejection", freq, err)
+		}
+	}
+	record, err := store.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset_record", DataSourceId: "source", DataNodeId: "node-a",
+		Name: "Record", DataKind: pb.DataKind_DATA_KIND_RECORD, Freq: "quarter",
+	})
+	if err != nil || record.GetFreq() != "quarter" {
+		t.Fatalf("record dataset = %v, %v; a record Dataset keeps a descriptive freq", record, err)
+	}
+
+	created := createTestDataset(t, ctx, store, "dataset", "node-a")
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Freq: "5m"}); err == nil || !strings.Contains(err.Error(), "freq is immutable") {
+		t.Fatalf("freq change error = %v, want immutable", err)
+	}
+	updated, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Description: "renamed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.GetFreq() != created.GetFreq() {
+		t.Fatalf("update without freq changed it to %q", updated.GetFreq())
+	}
+	listed, _, err := store.ListDatasets(ctx, DatasetQuery{SpaceID: "space", Freq: "1m"})
+	if err != nil || len(listed) != 1 || listed[0].GetDatasetId() != "dataset" {
+		t.Fatalf("list by freq = %v, %v", listed, err)
+	}
+}
+
+func TestViewTakesItsDatasetFreq(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	createTestDataset(t, ctx, store, "dataset", "node-a")
+	view, err := store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", KeepDuration: "24h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.GetFreq() != "1m" {
+		t.Fatalf("view freq = %q, want the Dataset freq 1m", view.GetFreq())
+	}
+	stored, err := store.GetView(ctx, "space", "view")
+	if err != nil || stored.GetFreq() != "1m" {
+		t.Fatalf("stored view freq = %q, %v", stored.GetFreq(), err)
+	}
+	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", KeepDuration: "24h", Freq: "1h"}); err == nil || !strings.Contains(err.Error(), "a View takes its Dataset's freq") {
+		t.Fatalf("mismatched view freq error = %v", err)
 	}
 }

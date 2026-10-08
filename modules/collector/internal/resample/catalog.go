@@ -110,7 +110,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freqs: []string{targetFreq.Storage}, Status: "draft", Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...), KeepDuration: keepDuration,
+			Freq: targetFreq.Storage, Status: "draft", Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...), KeepDuration: keepDuration,
 		}})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
@@ -175,7 +175,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, CreateOnly: true, View: &storagepb.View{
 			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
-			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage), KeepDuration: keepDuration, Status: "active",
+			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", KeepDuration: keepDuration, Status: "active",
 			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "route_ready_request_id": "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
@@ -399,7 +399,7 @@ func validateTargetView(view *storagepb.View, task domain.CollectionTask, params
 	if view.GetDatasetId() != params.TargetDatasetID {
 		return errors.New("target View immutable Dataset contract does not match task")
 	}
-	if view.GetFilterJson() != fmt.Sprintf(`{"freq":%q}`, frequency) || view.GetEngine() != "duckdb" {
+	if view.GetFreq() != frequency || view.GetEngine() != "duckdb" {
 		return errors.New("target View immutable frequency contract does not match task")
 	}
 	wantGrain := []string{"subject_id", "freq", "data_time", "series_tag"}
@@ -447,15 +447,8 @@ func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, f
 	if err != nil {
 		return fmt.Errorf("target Dataset frequency %q is invalid: %w", frequency, err)
 	}
-	found := false
-	for _, freq := range dataset.GetFreqs() {
-		if freq == wantedFrequency {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("target Dataset does not enable frequency %s", frequency)
+	if dataset.GetFreq() != wantedFrequency {
+		return fmt.Errorf("target Dataset freq is %q, not %s", dataset.GetFreq(), frequency)
 	}
 	return nil
 }

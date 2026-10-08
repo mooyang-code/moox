@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -56,10 +56,6 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
-	freqs, err := marshalJSON(item.GetFreqs())
-	if err != nil {
-		return nil, err
-	}
 	subjectTags, err := marshalJSON(item.GetSubjectTags())
 	if err != nil {
 		return nil, err
@@ -67,11 +63,11 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO t_datasets (
 			c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name,
-			c_description, c_data_kind, c_freqs_json, c_keep_duration,
+			c_description, c_data_kind, c_freq, c_keep_duration,
 			c_binding_locked, c_revision, c_status, c_attrs_json, c_subject_tags_json, c_ctime, c_mtime
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
+	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), item.GetFreq(), item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +115,9 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != existing.GetDataKind() {
 		return nil, errors.New("dataset data_kind is immutable")
 	}
+	if freq := strings.TrimSpace(item.GetFreq()); freq != "" && freq != existing.GetFreq() {
+		return nil, errors.New("dataset freq is immutable")
+	}
 	status := existing.GetStatus()
 	if candidate := strings.TrimSpace(item.GetStatus()); candidate != "" {
 		if err := validateDatasetStatus(candidate); err != nil {
@@ -143,6 +142,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	item.DataSourceId = dataSourceID
 	item.DataNodeId = existing.GetDataNodeId()
 	item.DataKind = existing.GetDataKind()
+	item.Freq = existing.GetFreq()
 	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
 	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
 		return nil, err
@@ -157,20 +157,16 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
-	freqs, err := marshalJSON(item.GetFreqs())
-	if err != nil {
-		return nil, err
-	}
 	subjectTags, err := marshalJSON(item.GetSubjectTags())
 	if err != nil {
 		return nil, err
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE t_datasets SET
-			c_data_source_id = ?, c_name = ?, c_description = ?, c_freqs_json = ?, c_keep_duration = ?,
+			c_data_source_id = ?, c_name = ?, c_description = ?, c_keep_duration = ?,
 			c_status = ?, c_attrs_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
 		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
-	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetDescription(), freqs, item.GetKeepDuration(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
+	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetDescription(), item.GetKeepDuration(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +260,7 @@ func deleteManagedFactorResultDefaultView(ctx context.Context, tx *sql.Tx, datas
 }
 
 func isManagedFactorResultDefaultView(dataset *pb.Dataset, view *pb.View) bool {
-	if dataset == nil || view == nil || dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES || len(dataset.GetFreqs()) != 1 || strings.TrimSpace(dataset.GetFreqs()[0]) == "" {
+	if dataset == nil || view == nil || dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES || dataset.GetFreq() == "" {
 		return false
 	}
 	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
@@ -278,11 +274,7 @@ func isManagedFactorResultDefaultView(dataset *pb.Dataset, view *pb.View) bool {
 		viewAttrs["managed_by"] != "storage" || viewAttrs["primary_dataset_role"] != "factor_result" {
 		return false
 	}
-	var filter map[string]string
-	if json.Unmarshal([]byte(view.GetFilterJson()), &filter) != nil || len(filter) != 1 {
-		return false
-	}
-	return strings.TrimSpace(filter["freq"]) == strings.TrimSpace(dataset.GetFreqs()[0])
+	return view.GetFreq() == dataset.GetFreq()
 }
 
 func equalStrings(left, right []string) bool {
@@ -336,7 +328,7 @@ func (s *Store) ListDatasets(ctx context.Context, query coremetadata.DatasetQuer
 		args = append(args, kind)
 	}
 	if freq := strings.TrimSpace(query.Freq); freq != "" {
-		where = append(where, "EXISTS (SELECT 1 FROM json_each(c_freqs_json) WHERE value = ?)")
+		where = append(where, "c_freq = ?")
 		args = append(args, freq)
 	}
 	whereSQL := strings.Join(where, " AND ")
@@ -479,6 +471,10 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, string, error) {
 	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return nil, "", errors.New("data_kind must be record or time_series")
+	}
+	item.Freq = strings.TrimSpace(item.GetFreq())
+	if item.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && !frequencypkg.IsCanonical(item.GetFreq()) {
+		return nil, "", fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.Strings(), ", "), item.GetFreq())
 	}
 	keepDuration, err := normalizeKeepDuration(item.GetKeepDuration(), item.GetDataKind())
 	return item, keepDuration, err

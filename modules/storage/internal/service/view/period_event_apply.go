@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -379,35 +378,8 @@ func viewDataReadyPayload(view *pb.View, completion periodCompletionInput, state
 		DatasetId:      completion.datasetID, Status: status, VisibleScope: viewVisibleScope(view, firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId())),
 		Frequency: completion.frequency, PeriodTime: completion.periodTime, FailedScopeRef: degradedScopeRef(status, failed),
 		CommittedPositions: cloneCommittedPositions(completion.committedPositions), ReadyAt: readyAt,
-		UniverseSubjectIds: viewUniverseSubjectIDs(view, completion.universeSubjectIDs),
+		UniverseSubjectIds: uniqueSortedStrings(completion.universeSubjectIDs),
 	}, true
-}
-
-func viewUniverseSubjectIDs(view *pb.View, universe []string) []string {
-	if viewFilterRestrictsSubjects(view.GetFilterJson()) {
-		return nil
-	}
-	return uniqueSortedStrings(universe)
-}
-
-func viewFilterRestrictsSubjects(filterJSON string) bool {
-	raw := strings.TrimSpace(filterJSON)
-	if raw == "" {
-		return false
-	}
-	var filter map[string]any
-	if json.Unmarshal([]byte(raw), &filter) != nil {
-		return true
-	}
-	for key := range filter {
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "freq", "frequency":
-			continue
-		default:
-			return true
-		}
-	}
-	return false
 }
 
 func viewConfigID(view *pb.View) string {

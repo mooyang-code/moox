@@ -457,13 +457,10 @@ func validateStorageImportFile(path string) error {
 }
 
 func validateStorageImportFreq(opts storageImportOptions, dataset *pb.Dataset) error {
-	if opts.Freq == "" || len(dataset.GetFreqs()) == 0 {
+	if opts.Freq == "" || dataset.GetFreq() == "" || dataset.GetFreq() == opts.Freq {
 		return nil
 	}
-	if !stringSliceContains(dataset.GetFreqs(), opts.Freq) {
-		return fmt.Errorf("dataset %s does not support freq %s", opts.DatasetID, opts.Freq)
-	}
-	return nil
+	return fmt.Errorf("dataset %s freq is %s, not %s", opts.DatasetID, dataset.GetFreq(), opts.Freq)
 }
 
 func storageImportColumnMap(columns []*pb.DatasetColumn) (map[string]*pb.DatasetColumn, error) {
@@ -755,15 +752,6 @@ func storageImportValueTypeName(valueType pb.FieldValueType) string {
 	name := valueType.String()
 	name = strings.TrimPrefix(name, "FIELD_VALUE_TYPE_")
 	return strings.ToLower(name)
-}
-
-func stringSliceContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func writeStorageImportSummary(summary storageImportSummary) error {

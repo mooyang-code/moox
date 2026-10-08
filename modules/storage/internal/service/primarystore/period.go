@@ -241,10 +241,8 @@ func validateCollectorPeriodDataset(ctx context.Context, auth *pb.AuthInfo, expe
 	if !frequencypkg.IsCanonical(frequency) {
 		return errors.New("period frequency is invalid")
 	}
-	for _, declared := range dataset.GetFreqs() {
-		if declared == frequency {
-			return nil
-		}
+	if dataset.GetFreq() != frequency {
+		return errors.New("period frequency does not match the Dataset declaration")
 	}
-	return errors.New("period frequency does not match the Dataset declaration")
+	return nil
 }

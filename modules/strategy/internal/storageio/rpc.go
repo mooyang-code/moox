@@ -2,7 +2,6 @@ package storageio
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -96,7 +95,7 @@ func (c *RPCClient) beginViewSnapshot(ctx context.Context, spaceID string, viewI
 		if expectedID != "" && expectedID != indexID {
 			return nil, fmt.Errorf("%w: storage view %s active index changed: expected=%s actual=%s", input.ErrStaleViewSnapshot, viewID, expectedID, indexID)
 		}
-		frequency := viewFrequency(view)
+		frequency := view.GetFreq()
 		if frequency == "" {
 			return nil, fmt.Errorf("storage view %s has no frequency", viewID)
 		}
@@ -298,7 +297,7 @@ func (c *RPCClient) GetView(ctx context.Context, id string) (compiler.ViewDescri
 	if view == nil {
 		return compiler.ViewDescriptor{}, fmt.Errorf("storage view %s is empty", id)
 	}
-	return compiler.ViewDescriptor{ID: view.GetViewId(), DatasetID: view.GetDatasetId(), Status: view.GetStatus(), Frequency: viewFrequency(view)}, nil
+	return compiler.ViewDescriptor{ID: view.GetViewId(), DatasetID: view.GetDatasetId(), Status: view.GetStatus(), Frequency: view.GetFreq()}, nil
 }
 
 func (c *RPCClient) ListViewColumns(ctx context.Context, id string) ([]compiler.ViewColumn, error) {
@@ -445,7 +444,7 @@ func (c *RPCClient) readRows(ctx context.Context, spaceID, viewID string, start,
 	if expectedIndexID == "" {
 		return nil, fmt.Errorf("%w: storage view %s has no active index", input.ErrNotReady, viewID)
 	}
-	frequency := viewFrequency(view)
+	frequency := view.GetFreq()
 	if frequency == "" {
 		return nil, fmt.Errorf("storage view %s has no frequency", viewID)
 	}
@@ -638,19 +637,6 @@ func typedValueString(value *storagepb.TypedValue) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported typed value %T", value.GetValue())
 	}
-}
-
-func viewFrequency(view *storagepb.View) string {
-	if view == nil {
-		return ""
-	}
-	var filter struct {
-		Freq string `json:"freq"`
-	}
-	if json.Unmarshal([]byte(view.GetFilterJson()), &filter) == nil {
-		return filter.Freq
-	}
-	return view.GetAttributes()["frequency"]
 }
 
 func retError(info *commonpb.RetInfo) error {

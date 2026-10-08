@@ -89,8 +89,7 @@ func Default() *Config {
 			StateDir: "../data/archive-state",
 			DeviceID: "parquet-local",
 			Sources: map[string]SourceConfig{
-				"stockcn": {Datasets: []string{"dataset_stockcn_equity_kline", "dataset_stockcn_index_kline", "dataset_stockcn_bond_kline"}},
-				"stockus": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
+				"stockcn": {Datasets: []string{"dataset_stockcn_equity_kline_1m", "dataset_stockcn_index_kline_1d", "dataset_stockcn_bond_kline_1m"}},
 			},
 			EventBus: EventBusConfig{
 				URLs:     []string{"nats://127.0.0.1:4222"},

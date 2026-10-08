@@ -265,7 +265,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 		return 0, errors.New("primary dataset is required for View history backfill")
 	}
 	if lookbackPeriods > 0 {
-		frequency := viewFrequencyValue(view)
+		frequency := view.GetFreq()
 		if frequency != "" {
 			return s.backfillPrimaryHistoryByPeriods(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, lookbackPeriods, maxHistoryScanRows, limiter)
 		}

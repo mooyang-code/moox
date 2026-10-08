@@ -22,15 +22,6 @@ var reservedTimeSeriesSystemColumns = map[string]struct{}{
 	"series_tag": {},
 }
 
-func datasetSupportsFreq(dataset *pb.Dataset, freq string) bool {
-	for _, item := range dataset.GetFreqs() {
-		if strings.TrimSpace(item) == freq {
-			return true
-		}
-	}
-	return false
-}
-
 func defaultViewGrainKeys(kind pb.DataKind) []string {
 	if kind == pb.DataKind_DATA_KIND_TIME_SERIES {
 		return []string{"subject_id", "freq", "data_time", "series_tag"}

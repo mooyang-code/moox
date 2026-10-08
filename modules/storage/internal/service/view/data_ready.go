@@ -233,7 +233,7 @@ func (s *Service) readyPublisherLocked() ReadyEventPublisher {
 }
 
 func viewVisibleScope(view *pb.View, fallback string) string {
-	if view != nil && strings.TrimSpace(view.GetFilterJson()) != "" {
+	if view.GetFreq() != "" {
 		return "view:" + view.GetViewId()
 	}
 	return firstNonEmpty(fallback, "view:"+view.GetViewId())
