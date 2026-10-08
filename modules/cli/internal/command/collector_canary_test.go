@@ -835,7 +835,7 @@ func TestCollectorSCFCanaryEventBindsInventoryTaskPeriodAndView(t *testing.T) {
 	data, ok := event["data"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, true, data["require_period_commit"])
-	require.Equal(t, proof.entry.GetTaskId(), data["task_id"])
+	require.NotContains(t, data, "task_id", "the market_fetch request rejects unknown fields; task ownership travels in targets")
 	require.Equal(t, proof.entry.GetDatasetId(), data["dataset_id"])
 	require.Equal(t, proof.entry.GetFrequency(), data["frequency"])
 

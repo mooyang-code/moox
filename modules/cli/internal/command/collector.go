@@ -2889,7 +2889,7 @@ func collectorSCFCanaryEventForProof(opts collectorPublishOptions, nodeID, batch
 			"batch_kind": "backfill", "space_id": spaceID, "market_id": marketID,
 			"instrument_type": marketType, "dataset_id": entry.GetDatasetId(), "frequency": entry.GetFrequency(),
 			"provider": entry.GetProvider(), "source_id": entry.GetSourceId(), "market_type": marketType,
-			"region": opts.Region, "node_id": nodeID, "task_id": entry.GetTaskId(), "require_period_commit": true,
+			"region": opts.Region, "node_id": nodeID, "require_period_commit": true,
 			"items": []map[string]any{item}, "targets": []map[string]any{target},
 		},
 	}
