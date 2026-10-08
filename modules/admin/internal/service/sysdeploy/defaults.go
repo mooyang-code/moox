@@ -22,7 +22,7 @@ const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
 const storageTimeSeriesGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\",\"strategy\",\"moox-skill\"]"
 const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"strategy\"]"
-const strategyGatewayMethods = "[\"CreateStrategy\",\"UpdateStrategy\",\"GetStrategy\",\"ListStrategies\",\"ListStrategyResults\",\"GetStrategyResult\",\"ListStrategyTargets\",\"CreateStrategyInstance\",\"GetStrategyInstance\",\"ListStrategyInstances\",\"SetStrategyInstanceEnabled\"]"
+const strategyGatewayMethods = "[\"CreateStrategy\",\"UpdateStrategy\",\"GetStrategy\",\"ListStrategies\",\"DeleteStrategy\",\"ValidateStrategy\",\"CreateStrategyInstance\",\"UpdateStrategyInstance\",\"GetStrategyInstance\",\"ListStrategyInstances\",\"SetStrategyInstanceEnabled\",\"DeleteStrategyInstance\",\"ListStrategyResults\",\"GetStrategyResult\",\"ListStrategyTargets\",\"StartReplay\",\"GetReplay\",\"ListReplays\",\"ListReplayBars\",\"CancelReplay\"]"
 const strategyGatewayCallers = "[\"admin-gateway\",\"moox-cli\"]"
 
 func DefaultDeployments(nodeID string) []Deployment {

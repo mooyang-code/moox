@@ -27,3 +27,12 @@ storage:
   app_key: ""
   view_app_key: ""
   timeout: 5s
+evaluation:
+  attempt_budget: 5
+retention:
+  result_items_days: 90
+  replays_days: 90
+replay:
+  chunk_bars: 50
+  page_size: 2000
+  missing_price_liquidate_bars: 3

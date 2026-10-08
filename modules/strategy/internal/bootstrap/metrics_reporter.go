@@ -1,30 +1,37 @@
 package bootstrap
 
 import (
-	"fmt"
+	"context"
+	"errors"
 
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
+	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
+const metricsTimerService = "trpc.moox.strategy.metrics.timer"
+
+// registerMetricsReporter 每个定时周期先刷新实例的期望数据集清单，再把指标快照发给 Monitor。
+func registerMetricsReporter(s *server.Server, observer *instanceObserver) error {
 	if s == nil {
-		return nil, fmt.Errorf("strategy metrics reporter requires a tRPC server")
+		return errors.New("策略指标上报需要 tRPC 服务")
 	}
-	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "strategy", report.HealthCheckIDsForModule("strategy"))
-	if err != nil {
-		return nil, err
-	}
-	h, err := report.NewHandler(report.DefaultConfig("strategy", "moox_strategy"))
-	if err != nil {
-		return nil, err
-	}
-	service := s.Service("trpc.moox.strategy.metrics.timer")
+	service := s.Service(metricsTimerService)
 	if service == nil {
-		return nil, fmt.Errorf("strategy metrics timer service is not configured")
+		return errors.New("策略指标定时服务 " + metricsTimerService + " 未配置")
 	}
-	timer.RegisterHandlerService(service, h.Handle)
-	return moduleMetrics, nil
+	handler, err := report.NewHandler(report.DefaultConfig("strategy", "moox_strategy"))
+	if err != nil {
+		return err
+	}
+	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+		if observer != nil {
+			if err := observer.refresh(ctx); err != nil {
+				log.WarnContextf(ctx, "策略实例的期望数据集未刷新：%v", err)
+			}
+		}
+		return handler.Handle(ctx)
+	})
+	return nil
 }

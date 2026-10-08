@@ -10,13 +10,13 @@ import (
 )
 
 type recordingResultStore struct {
-	rows  []store.StrategyResult
+	rows  []store.Result
 	limit int
 }
 
-func (s *recordingResultStore) ListPendingResults(_ context.Context, limit int) ([]store.StrategyResult, error) {
+func (s *recordingResultStore) ListPendingResults(_ context.Context, limit int) ([]store.Result, error) {
 	s.limit = limit
-	rows := make([]store.StrategyResult, 0, limit)
+	rows := make([]store.Result, 0, limit)
 	for _, row := range s.rows {
 		if row.PublishStatus != store.PublishPending {
 			continue
@@ -29,13 +29,13 @@ func (s *recordingResultStore) ListPendingResults(_ context.Context, limit int) 
 	return rows, nil
 }
 
-func (s *recordingResultStore) PreparePendingResult(_ context.Context, resultID string, _ time.Time) (store.StrategyResult, bool, error) {
+func (s *recordingResultStore) PreparePendingResult(_ context.Context, resultID string, _ time.Time) (store.Result, bool, error) {
 	for _, row := range s.rows {
 		if row.ResultID == resultID {
 			return row, true, nil
 		}
 	}
-	return store.StrategyResult{}, false, nil
+	return store.Result{}, false, nil
 }
 
 func (s *recordingResultStore) TransitionPublishStatus(_ context.Context, resultID string, from, to store.PublishStatus) error {
@@ -49,11 +49,11 @@ func (s *recordingResultStore) TransitionPublishStatus(_ context.Context, result
 }
 
 type recordingResultPublisher struct {
-	rows   []store.StrategyResult
+	rows   []store.Result
 	failID string
 }
 
-func (p *recordingResultPublisher) PublishResult(_ context.Context, row store.StrategyResult) error {
+func (p *recordingResultPublisher) PublishResult(_ context.Context, row store.Result) error {
 	if row.ResultID == p.failID {
 		return &PermanentPublishError{Err: errors.New("unknown event type")}
 	}
@@ -62,7 +62,7 @@ func (p *recordingResultPublisher) PublishResult(_ context.Context, row store.St
 }
 
 func TestRelayHonorsResultBatchLimit(t *testing.T) {
-	resultStore := &recordingResultStore{rows: []store.StrategyResult{
+	resultStore := &recordingResultStore{rows: []store.Result{
 		{ResultID: "r1", PublishStatus: store.PublishPending},
 		{ResultID: "r2", PublishStatus: store.PublishPending},
 		{ResultID: "r3", PublishStatus: store.PublishPending},
@@ -78,7 +78,7 @@ func TestRelayHonorsResultBatchLimit(t *testing.T) {
 }
 
 func TestRelayQuarantinesPermanentResultAndAdvancesPrefix(t *testing.T) {
-	resultStore := &recordingResultStore{rows: []store.StrategyResult{
+	resultStore := &recordingResultStore{rows: []store.Result{
 		{ResultID: "bad", PublishStatus: store.PublishPending},
 		{ResultID: "good", PublishStatus: store.PublishPending},
 	}}

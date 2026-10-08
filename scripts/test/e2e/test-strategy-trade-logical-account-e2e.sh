@@ -72,7 +72,7 @@ export MOOX_STRATEGY_TRADE_RPC_E2E_TARGET="ip://127.0.0.1:${CONSOLE_PORT}"
   cd "$ROOT/modules/strategy"
   CGO_ENABLED=1 go test -v -tags=e2e_external -count=1 \
     -run '^TestExternalStrategyClaimsLogicalAccountFromTrade$' \
-    ./internal/bootstrap
+    ./internal/tradeowner
 )
 
 echo "strategy -> TradeConsole logical-account RPC E2E passed"

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -51,7 +50,7 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 		}},
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)
-	require.NoError(t, publisher.Publish(context.Background(), domain.OutboxMessage{MessageID: "request-1", EventData: data}))
+	require.NoError(t, publisher.Publish(context.Background(), "request-1", data))
 	registry, err = events.DefaultRegistry()
 	require.NoError(t, err)
 	_, payload, err := events.DecodeRaw(registry, client.body, client.subject, client.id, events.ContentType)
@@ -77,7 +76,5 @@ func TestJetStreamPublisherAcceptsEmptyFullTargetWithoutExpiry(t *testing.T) {
 	publisher := &JetStreamPublisher{
 		Publisher: &captureEventPublisher{},
 	}
-	require.NoError(t, publisher.Publish(context.Background(), domain.OutboxMessage{
-		MessageID: "target-empty", EventData: data,
-	}))
+	require.NoError(t, publisher.Publish(context.Background(), "target-empty", data))
 }

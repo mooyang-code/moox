@@ -26,7 +26,7 @@ export MOOX_GATEWAY_SERVICE_SECRET_KEY="isolated-local-gateway-owner-e2e-secret"
 
 (cd "$ROOT/modules/trade" && go test -tags=e2e_external -c -o "$WORK/trade.test" ./test)
 (cd "$ROOT/modules/gateway" && go test -tags=e2e_external -c -o "$WORK/gateway.test" ./internal/router)
-(cd "$ROOT/modules/strategy" && go test -tags=e2e_external -c -o "$WORK/strategy.test" ./internal/bootstrap)
+(cd "$ROOT/modules/strategy" && go test -tags=e2e_external -c -o "$WORK/strategy.test" ./internal/tradeowner)
 
 wait_ready() {
   local file=$1 pid=$2 log=$3

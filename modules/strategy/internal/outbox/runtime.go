@@ -5,20 +5,14 @@ import (
 	"errors"
 	"sync"
 	"time"
-
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 )
-
-type RuntimeStore interface {
-	PendingOutboxStats(context.Context) (domain.OutboxStats, error)
-}
 
 type Connector func(context.Context) (JetStreamClient, error)
 
 type RuntimeConfig struct {
 	Connector         Connector
 	Probe             func(context.Context, JetStreamClient) error
-	Store             any
+	Store             ResultStore
 	InstanceID        string
 	RelayInterval     time.Duration
 	ReconnectInterval time.Duration
@@ -38,10 +32,10 @@ type Runtime struct {
 
 func NewRuntime(cfg RuntimeConfig) (*Runtime, error) {
 	if cfg.Connector == nil || cfg.Probe == nil || cfg.Store == nil {
-		return nil, errors.New("strategy EventBus runtime connector, probe, and store are required")
+		return nil, errors.New("策略 EventBus 运行时需要连接器、探针与存储")
 	}
 	if cfg.RelayInterval <= 0 || cfg.ReconnectInterval <= 0 || cfg.BatchSize <= 0 {
-		return nil, errors.New("strategy EventBus runtime intervals and batch size must be positive")
+		return nil, errors.New("策略 EventBus 运行时的间隔与批量必须大于 0")
 	}
 	return &Runtime{cfg: cfg, done: make(chan struct{})}, nil
 }
@@ -50,7 +44,7 @@ func (r *Runtime) Start(parent context.Context) error {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
-		return errors.New("strategy EventBus runtime is closed")
+		return errors.New("策略 EventBus 运行时已关闭")
 	}
 	if r.started {
 		r.mu.Unlock()

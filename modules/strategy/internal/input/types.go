@@ -1,117 +1,183 @@
+// Package input 负责从一个 View 装配引擎输入：启用时解析绑定，每期划分标的集合并读取一帧数据。
 package input
 
 import (
+	"context"
 	"errors"
-	"sort"
-	"strings"
+	"fmt"
 	"time"
-
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
-// ErrNotReady indicates that the immutable period snapshot is not complete
-// yet. Trigger consumers should retry the readiness event rather than marking
-// it processed, so a later factor-period event can make the same period
-// evaluable.
-var ErrNotReady = errors.New("evaluation input is not ready")
+// ErrStale 表示读取过程中 View 的活动索引或修订号发生变化，已读页面作废，需要整体重读。
+var ErrStale = errors.New("View 输入快照已过期")
 
-// ErrLegacyProvenance identifies an old readiness marker that predates the
-// immutable View index provenance contract. It is terminal for that broker
-// delivery: retrying cannot manufacture the missing generation identifiers.
-var ErrLegacyProvenance = errors.New("evaluation input has legacy provenance")
-
-// ErrStaleViewSnapshot means the readiness event's View generation has been
-// superseded before the input could be read. Such a delivery is terminal for
-// this generation; a newer ready event (or an explicit recalc) owns the
-// replacement input and the broker message must not be retried forever.
-var ErrStaleViewSnapshot = errors.New("evaluation input View snapshot is stale")
-
-// ErrStrictIncomplete means the dependency Views are readable, but the
-// selected pool is missing a current source row or required factor column.
-// This is a terminal skip for the current ready message; a later ready event
-// may re-evaluate the same period without keeping the broker delivery alive
-// forever.
-var ErrStrictIncomplete = errors.New("evaluation input is strictly incomplete")
-
-// ErrPoolInvalid means an explicitly configured pool could not be resolved
-// against the current subject directory. It is terminal for this evaluation
-// attempt: publishing an empty FULL target would otherwise be interpreted by
-// Trade as an instruction to flatten the account.
-var ErrPoolInvalid = errors.New("strategy pool is invalid")
-
-// StrictIncompleteError carries the resolved pool that was checked before a
-// strict readiness failure. Trigger handling uses it to scope terminal
-// subject failures even when the pool was selected dynamically (without an
-// explicit include list).
-type StrictIncompleteError struct {
-	Pool    PoolResult
-	Missing []string
+// SkipError 表示本期不能求值但不是基础设施问题：记录为 skipped 并 ACK。
+type SkipError struct {
+	Reason string
+	Detail string
 }
 
-func (e *StrictIncompleteError) Error() string {
-	if e == nil || len(e.Missing) == 0 {
-		return ErrStrictIncomplete.Error()
+func (e *SkipError) Error() string {
+	if e == nil {
+		return "本期跳过"
 	}
-	return ErrStrictIncomplete.Error() + ": missing current rows or factor columns: " + strings.Join(e.Missing, ",")
+	return fmt.Sprintf("本期跳过（%s）：%s", e.Reason, e.Detail)
 }
 
-func (e *StrictIncompleteError) Unwrap() error { return ErrStrictIncomplete }
+// 跳过原因。
+const (
+	SkipConfigError     = "config_error"
+	SkipAmbiguousSeries = "ambiguous_series"
+)
 
-// PoolItem is one instrument admitted by the compiled instrument-pool rule.
-// Identity and metadata are kept separate from factor values so the evaluator
-// never needs to know how the values were collected.
-type PoolItem struct {
-	InstrumentID string
+// ViewInfo 是 View 的元数据。
+type ViewInfo struct {
+	ViewID        string
+	DatasetID     string
+	Frequency     string
+	Status        string
+	ActiveIndexID string
+	// IndexedFrom 是当前索引覆盖的最早业务时间（bar_start），零值表示未知。
+	IndexedFrom time.Time
+	Columns     []ViewColumn
+}
+
+// ViewColumn 是 View 的一列及其属性（因子列带 origin_factor_id 与 factor_output）。
+type ViewColumn struct {
+	Name       string
+	Attributes map[string]string
+}
+
+// DatasetInfo 是数据集元数据。
+type DatasetInfo struct {
+	DatasetID  string
+	Status     string
+	Frequency  string
+	Retention  string
+	Attributes map[string]string
+}
+
+// Subject 是数据集绑定的一个标的。
+type Subject struct {
 	SubjectID    string
-	Exchange     string
-	Market       string
-	QuoteAsset   string
+	InstrumentID string
 	SeriesTag    string
+	Active       bool
+	Attributes   map[string]string
 }
 
-// InstrumentInput combines an admitted instrument with the factor values for
-// a single completed period.
-type InstrumentInput struct {
-	PoolItem
-	Values         map[string]quant.Decimal
-	PreviousValues map[string]quant.Decimal
-	// ScopedFields marks aliases that are intentionally unavailable for this
-	// instrument because the corresponding subject-scoped binding does not
-	// cover it.  Other missing fields remain strict evaluation errors.
-	ScopedFields      map[string]bool
-	ScopedFieldsReady bool
+// FactorInfo 是因子定义中策略关心的部分。
+type FactorInfo struct {
+	FactorID       string
+	DefinitionHash string
+	Outputs        []string
 }
 
-// EvaluationInput is immutable input for one strategy period. The producer is
-// responsible for omitting instruments with missing required factor values.
-type EvaluationInput struct {
-	SpaceID       string
-	StrategyID    string
-	PeriodEnd     string
-	SourceViewID  string
-	DataFrequency string
-	// View provenance is populated by Storage-backed loaders when available.
-	// It makes the immutable generation used for a scheduled evaluation
-	// auditable; event-driven evaluations additionally carry the producer's
-	// expected generations.
-	SourceIndexID       string
-	SourceIndexRevision uint64
-	ResultIndexID       string
-	ResultIndexRevision uint64
-	Items               []InstrumentInput
-	Ineligible          map[string]string
-	// BarIndex and BarEndAt let holding rules advance by valid market bars
-	// instead of assuming every calendar has a 24-hour cadence.
-	BarIndex    int64
-	BarDuration time.Duration
-	BarEndAt    func(int) time.Time
+// Row 是 View 的一行：数值列已转为 float64，无法解析的列不出现。
+type Row struct {
+	SubjectID string
+	SeriesTag string
+	DataTime  time.Time
+	Values    map[string]float64
 }
 
-// Ordered returns a deterministic copy sorted by instrument identity.
-func (in EvaluationInput) Ordered() []InstrumentInput {
-	items := append([]InstrumentInput(nil), in.Items...)
-	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].InstrumentID < items[j].InstrumentID
-	})
-	return items
+// Query 是一次固定索引的分页读取。
+type Query struct {
+	ViewID           string
+	DatasetID        string
+	Frequency        string
+	Subjects         []Subject
+	Start            time.Time
+	End              time.Time
+	Columns          []string
+	ExpectedIndexID  string
+	ExpectedRevision uint64
+}
+
+// Client 是 Storage 与 Factor 的窄适配。
+type Client interface {
+	GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error)
+	GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error)
+	ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]Subject, error)
+	ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error)
+	// QueryRows 读取全部页面并返回服务端修订号；索引或修订号变化返回 ErrStale。
+	QueryRows(ctx context.Context, spaceID string, query Query) ([]Row, uint64, error)
+	GetFactor(ctx context.Context, factorID string) (FactorInfo, error)
+}
+
+// ColumnBinding 是一个被引用列的来源。
+type ColumnBinding struct {
+	Source         string `json:"source"`
+	FactorID       string `json:"factor_id,omitempty"`
+	FactorOutput   string `json:"factor_output,omitempty"`
+	DefinitionHash string `json:"definition_hash,omitempty"`
+}
+
+// 列来源。
+const (
+	SourceDataset = "dataset"
+	SourceFactor  = "factor"
+)
+
+// Resolved 是启用时固化的绑定解析，保存在实例与会话的 resolved_json 中。
+type Resolved struct {
+	ViewID          string                   `json:"view_id"`
+	DatasetID       string                   `json:"dataset_id"`
+	SourceDatasetID string                   `json:"source_dataset_id,omitempty"`
+	Bar             string                   `json:"bar"`
+	Calendar        string                   `json:"calendar"`
+	MarketType      string                   `json:"market_type,omitempty"`
+	Spot            bool                     `json:"spot"`
+	Columns         map[string]ColumnBinding `json:"columns"`
+	Factors         map[string]string        `json:"factors,omitempty"`
+	UsesPreviousBar bool                     `json:"uses_previous_bar"`
+	MinAgeBars      int                      `json:"min_age_bars,omitempty"`
+	RetentionBars   int                      `json:"retention_bars,omitempty"`
+	ViewColumns     []string                 `json:"view_columns"`
+}
+
+// FactorIDs 返回引用的因子 ID（排序）。
+func (r Resolved) FactorIDs() []string {
+	return sortedKeys(r.Factors)
+}
+
+// ColumnsOfFactor 返回由某个因子产出的被引用列。
+func (r Resolved) ColumnsOfFactor(factorID string) []string {
+	columns := make([]string, 0)
+	for name, binding := range r.Columns {
+		if binding.FactorID == factorID {
+			columns = append(columns, name)
+		}
+	}
+	sortStrings(columns)
+	return columns
+}
+
+// Sets 是一期的标的集合划分：基础集合 U、各规则的预期集合与年龄剔除集合。
+type Sets struct {
+	Universe []string
+	Expected map[string][]string
+	AgedOut  map[string][]string
+	Subjects map[string]Subject
+	// Notes 记录装配过程中的说明（例如事件未携带名单）。
+	Notes []string
+}
+
+// Instruments 返回 ∪E(r) 中未被年龄剔除的标的（排序）。
+func (s Sets) Instruments() []string {
+	aged := make(map[string]struct{})
+	for _, ids := range s.AgedOut {
+		for _, id := range ids {
+			aged[id] = struct{}{}
+		}
+	}
+	set := make(map[string]struct{})
+	for _, ids := range s.Expected {
+		for _, id := range ids {
+			if _, out := aged[id]; !out {
+				set[id] = struct{}{}
+			}
+		}
+	}
+	return sortedKeys(set)
 }

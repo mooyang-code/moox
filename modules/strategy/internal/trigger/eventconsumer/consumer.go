@@ -1,3 +1,5 @@
+// Package eventconsumer 是 ViewDataReady 的 JetStream 传输适配：持有 durable 消费者，解码投递，
+// 并把领域处理结果映射为 ACK / RETRY / TERM。投递次数不设上限，终态只由处理器落库后决定。
 package eventconsumer
 
 import (
@@ -12,40 +14,36 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-const ViewDataReadyConsumerName = "strategy_view_data_ready_v1"
+const retryDelay = time.Second
 
-type Config struct {
+// ConsumerConfig 是消费者配置。
+type ConsumerConfig struct {
 	Client        *jetstream.Client
 	ConsumerName  string
 	AckWait       time.Duration
-	MaxDeliver    int
 	MaxAckPending int
 	FetchMaxWait  time.Duration
 	BatchSize     int
 }
 
+// Consumer 持有 durable 消费者与运行循环。
 type Consumer struct {
-	cfg       Config
-	processor *trigger.Processor
-	runners   []*jetstream.Runner
-	consumers []*jetstream.Consumer
-	cancel    context.CancelFunc
-	ready     bool
-	mu        sync.Mutex
+	cfg      ConsumerConfig
+	handler  *trigger.Handler
+	runner   *jetstream.Runner
+	consumer *jetstream.Consumer
+	cancel   context.CancelFunc
+	ready    bool
+	mu       sync.Mutex
 }
 
-func New(cfg Config, processor *trigger.Processor) *Consumer {
+// New 构造消费者。
+func New(cfg ConsumerConfig, handler *trigger.Handler) *Consumer {
 	if cfg.ConsumerName == "" {
-		cfg.ConsumerName = ViewDataReadyConsumerName
+		cfg.ConsumerName = trigger.ViewDataReadyConsumerName
 	}
 	if cfg.AckWait <= 0 {
 		cfg.AckWait = 30 * time.Second
-	}
-	if cfg.MaxDeliver == 0 {
-		// Bound poison periods so a permanently incomplete View cannot consume
-		// the entire durable consumer's pending window. A later ready event or
-		// an explicit recalc can retry the same bar after the terminal ACK.
-		cfg.MaxDeliver = 10
 	}
 	if cfg.MaxAckPending <= 0 {
 		cfg.MaxAckPending = 100
@@ -56,12 +54,13 @@ func New(cfg Config, processor *trigger.Processor) *Consumer {
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 10
 	}
-	return &Consumer{cfg: cfg, processor: processor}
+	return &Consumer{cfg: cfg, handler: handler}
 }
 
+// Start 创建 durable 消费者并启动运行循环。
 func (c *Consumer) Start(ctx context.Context) error {
-	if c == nil || c.cfg.Client == nil || c.processor == nil {
-		return errors.New("strategy View-ready consumer is not configured")
+	if c == nil || c.cfg.Client == nil || c.handler == nil {
+		return errors.New("策略 ViewDataReady 消费者未配置")
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
@@ -71,17 +70,21 @@ func (c *Consumer) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	readyConsumer, err := c.cfg.Client.NewConsumer(ctx, jetstream.ConsumerConfig{Stream: "MOOX_STORAGE", Durable: c.cfg.ConsumerName, FilterSubject: filter, AckWait: c.cfg.AckWait, MaxDeliver: c.cfg.MaxDeliver, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true})
+	consumer, err := c.cfg.Client.NewConsumer(ctx, jetstream.ConsumerConfig{
+		Stream: "MOOX_STORAGE", Durable: c.cfg.ConsumerName, FilterSubject: filter, AckWait: c.cfg.AckWait,
+		MaxDeliver: -1, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait,
+		DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
+	})
 	if err != nil {
 		return err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	runner := jetstream.NewRunner(readyConsumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		return HandleViewPeriodReady(ctx, delivery, c.processor)
+	runner := jetstream.NewRunner(consumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+		return HandleDelivery(ctx, delivery, c.handler)
 	}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize})
 	c.mu.Lock()
-	c.consumers = []*jetstream.Consumer{readyConsumer}
-	c.runners = []*jetstream.Runner{runner}
+	c.consumer = consumer
+	c.runner = runner
 	c.cancel = cancel
 	c.ready = true
 	c.mu.Unlock()
@@ -94,30 +97,61 @@ func (c *Consumer) Start(ctx context.Context) error {
 	return nil
 }
 
+// Close 停止运行循环并关闭消费者。
 func (c *Consumer) Close() error {
+	if c == nil {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cancel != nil {
 		c.cancel()
 	}
 	c.ready = false
-	var closeErr error
-	for _, consumer := range c.consumers {
-		if consumer != nil {
-			closeErr = errors.Join(closeErr, consumer.Close())
-		}
+	if c.consumer != nil {
+		return c.consumer.Close()
 	}
-	return closeErr
+	return nil
 }
 
-// Ready reports whether the durable consumer exists and its runner is still
-// alive. A stopped runner makes Strategy unready so an external supervisor can
-// restart it instead of silently dropping readiness events.
+// Ready 报告消费者是否仍在运行；运行循环退出后不再就绪，便于外部监控重启进程。
 func (c *Consumer) Ready() bool {
 	if c == nil {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.consumers) == 1 && c.cancel != nil && c.ready
+	return c.consumer != nil && c.cancel != nil && c.ready
+}
+
+// HandleDelivery 解码一条投递并交给处理器：解码失败或事件不可处理是契约错误，TERM；
+// 处理器返回错误表示仍有实例的终态没有落库，RETRY；否则 ACK。
+func HandleDelivery(ctx context.Context, delivery *jetstream.Delivery, handler *trigger.Handler) jetstream.HandlerResult {
+	if delivery == nil || handler == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay, Err: err}
+	}
+	contentType := delivery.ContentType
+	if contentType == "" {
+		contentType = events.ContentType
+	}
+	message, payload, err := events.DecodeViewDataReadyWithContentType(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, contentType)
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
+	return decide(handler.Handle(ctx, message, payload))
+}
+
+func decide(err error) jetstream.HandlerResult {
+	switch {
+	case err == nil:
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	case errors.Is(err, trigger.ErrInvalidEvent):
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	default:
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay, Err: err}
+	}
 }

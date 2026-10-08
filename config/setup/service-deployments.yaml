@@ -311,7 +311,7 @@ services:
       health_url: http://127.0.0.1:11431/readyz
       health_kind: readiness
       monitor_enabled: true
-      gateway_methods: [CreateStrategy, UpdateStrategy, GetStrategy, ListStrategies, ListStrategyResults, GetStrategyResult, ListStrategyTargets, CreateStrategyInstance, GetStrategyInstance, ListStrategyInstances, SetStrategyInstanceEnabled]
+      gateway_methods: [CreateStrategy, UpdateStrategy, GetStrategy, ListStrategies, DeleteStrategy, ValidateStrategy, CreateStrategyInstance, UpdateStrategyInstance, GetStrategyInstance, ListStrategyInstances, SetStrategyInstanceEnabled, DeleteStrategyInstance, ListStrategyResults, GetStrategyResult, ListStrategyTargets, StartReplay, GetReplay, ListReplays, ListReplayBars, CancelReplay]
       gateway_callers: [admin-gateway, moox-cli]
   - name: moox_archive
     kind: archive

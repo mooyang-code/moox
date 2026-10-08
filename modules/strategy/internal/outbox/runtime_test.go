@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	strategystore "github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -19,23 +18,23 @@ import (
 
 type runtimeTestStore struct {
 	mu        sync.Mutex
-	row       strategystore.StrategyResult
+	row       strategystore.Result
 	published bool
 }
 
-func (s *runtimeTestStore) ListPendingResults(_ context.Context, limit int) ([]strategystore.StrategyResult, error) {
+func (s *runtimeTestStore) ListPendingResults(_ context.Context, limit int) ([]strategystore.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.published || s.row.ResultID == "" || limit <= 0 || s.row.PublishStatus != strategystore.PublishPending {
 		return nil, nil
 	}
-	return []strategystore.StrategyResult{s.row}, nil
+	return []strategystore.Result{s.row}, nil
 }
-func (s *runtimeTestStore) PreparePendingResult(_ context.Context, resultID string, _ time.Time) (strategystore.StrategyResult, bool, error) {
+func (s *runtimeTestStore) PreparePendingResult(_ context.Context, resultID string, _ time.Time) (strategystore.Result, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.row.ResultID != resultID || s.row.PublishStatus != strategystore.PublishPending {
-		return strategystore.StrategyResult{}, false, nil
+		return strategystore.Result{}, false, nil
 	}
 	return s.row, true, nil
 }
@@ -48,13 +47,13 @@ func (s *runtimeTestStore) TransitionPublishStatus(_ context.Context, resultID s
 	}
 	return nil
 }
-func (s *runtimeTestStore) PendingOutboxStats(context.Context) (domain.OutboxStats, error) {
+func (s *runtimeTestStore) PendingOutboxStats(context.Context) (strategystore.OutboxStats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.published || s.row.ResultID == "" {
-		return domain.OutboxStats{}, nil
+		return strategystore.OutboxStats{}, nil
 	}
-	return domain.OutboxStats{PendingCount: 1, OldestPending: s.row.CreatedAt}, nil
+	return strategystore.OutboxStats{PendingCount: 1, OldestPending: s.row.CreatedAt}, nil
 }
 func (s *runtimeTestStore) isPublished() bool {
 	s.mu.Lock()
@@ -109,7 +108,7 @@ func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &runtimeTestStore{row: strategystore.StrategyResult{ResultID: "run-1", EventData: data, PublishStatus: strategystore.PublishPending, CreatedAt: time.Now().Add(-time.Minute)}}
+	store := &runtimeTestStore{row: strategystore.Result{ResultID: "run-1", EventData: data, PublishStatus: strategystore.PublishPending, CreatedAt: time.Now().Add(-time.Minute)}}
 	client := newRuntimeTestClient()
 	var attempts atomic.Int32
 	runtime, err := NewRuntime(RuntimeConfig{

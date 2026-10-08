@@ -9,80 +9,67 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 )
 
+// ResultStore 是投递需要的存储能力。
 type ResultStore interface {
-	ListPendingResults(context.Context, int) ([]store.StrategyResult, error)
-	PreparePendingResult(context.Context, string, time.Time) (store.StrategyResult, bool, error)
+	ListPendingResults(context.Context, int) ([]store.Result, error)
+	PreparePendingResult(context.Context, string, time.Time) (store.Result, bool, error)
 	TransitionPublishStatus(context.Context, string, store.PublishStatus, store.PublishStatus) error
 }
 
+// ResultPublisher 发布一条待投递结果的事件。
 type ResultPublisher interface {
-	PublishResult(context.Context, store.StrategyResult) error
+	PublishResult(context.Context, store.Result) error
 }
 
+// Relay 把待投递的 ok 结果发布到 EventBus；投递前复查有效性，不满足的结果被取消。
 type Relay struct {
-	Store     any
-	Publisher any
+	Store     ResultStore
+	Publisher ResultPublisher
 	mu        sync.Mutex
 }
 
+// PublishPending 扫描一批待投递结果。永久失败的事件被隔离（cancelled），不阻塞后续结果。
 func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 	if r == nil || r.Store == nil || r.Publisher == nil {
-		return errors.New("strategy outbox relay dependencies are required")
+		return errors.New("策略投递缺少存储或发布器")
 	}
 	if limit <= 0 {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if resultStore, ok := r.Store.(ResultStore); ok {
-		publisher, pubOK := r.Publisher.(ResultPublisher)
-		if !pubOK {
-			ok = false
-		}
-		if ok {
-			rows, err := resultStore.ListPendingResults(ctx, limit)
-			if err != nil {
-				return err
-			}
-			// Scan the complete pending set. A fixed prefix cap lets a run of
-			// transiently failing rows starve every later result indefinitely.
-			var firstErr error
-			for _, row := range rows {
-				prepared, valid, prepErr := resultStore.PreparePendingResult(ctx, row.ResultID, time.Now().UTC())
-				if prepErr != nil {
-					if firstErr == nil {
-						firstErr = prepErr
-					}
-					continue
-				}
-				if !valid {
-					continue
-				}
-				if pubErr := publisher.PublishResult(ctx, prepared); pubErr != nil {
-					var permanent *PermanentPublishError
-					if errors.As(pubErr, &permanent) {
-						if cancelErr := resultStore.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishCancelled); cancelErr != nil {
-							pubErr = errors.Join(pubErr, cancelErr)
-						} else {
-							// Quarantined rows no longer occupy the fixed relay prefix;
-							// subsequent valid targets can make progress next round.
-							if firstErr == nil {
-								firstErr = pubErr
-							}
-							continue
-						}
-					}
-					if firstErr == nil {
-						firstErr = pubErr
-					}
-					continue
-				}
-				if statusErr := resultStore.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent); statusErr != nil && firstErr == nil {
-					firstErr = statusErr
-				}
-			}
-			return firstErr
+	rows, err := r.Store.ListPendingResults(ctx, limit)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	keep := func(err error) {
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
-	return errors.New("strategy result outbox store or publisher is unavailable")
+	for _, row := range rows {
+		prepared, valid, err := r.Store.PreparePendingResult(ctx, row.ResultID, time.Now().UTC())
+		if err != nil {
+			keep(err)
+			continue
+		}
+		if !valid {
+			continue
+		}
+		if err := r.Publisher.PublishResult(ctx, prepared); err != nil {
+			var permanent *PermanentPublishError
+			if errors.As(err, &permanent) {
+				if cancelErr := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishCancelled); cancelErr != nil {
+					err = errors.Join(err, cancelErr)
+				}
+			}
+			keep(err)
+			continue
+		}
+		if err := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent); err != nil {
+			keep(err)
+		}
+	}
+	return firstErr
 }

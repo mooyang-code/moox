@@ -5,8 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	strategyStore "github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -15,7 +14,7 @@ import (
 
 func ValidateJetStreamPublisher(_ context.Context, client JetStreamClient, _ string) error {
 	if client == nil || !client.Ready() {
-		return errors.New("strategy eventbus publisher is not ready")
+		return errors.New("策略 EventBus 发布器未就绪")
 	}
 	return nil
 }
@@ -33,7 +32,7 @@ type managedClient struct {
 
 func NewManagedClient(client *jetstream.Client) (JetStreamClient, error) {
 	if client == nil {
-		return nil, errors.New("strategy EventBus client is nil")
+		return nil, errors.New("策略 EventBus 客户端为空")
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
@@ -66,7 +65,7 @@ type PermanentPublishError struct{ Err error }
 
 func (e *PermanentPublishError) Error() string {
 	if e == nil || e.Err == nil {
-		return "permanent strategy event publish error"
+		return "策略事件永久发布失败"
 	}
 	return e.Err.Error()
 }
@@ -78,24 +77,25 @@ func (e *PermanentPublishError) Unwrap() error {
 	return e.Err
 }
 
-func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessage) error {
+// Publish 校验并发布一条已编码的事件；无法被当前协议接受的事件返回 *PermanentPublishError。
+func (p *JetStreamPublisher) Publish(ctx context.Context, messageID string, eventData []byte) error {
 	if p == nil || p.Publisher == nil {
-		return errors.New("strategy JetStream publisher is unavailable")
+		return errors.New("策略 JetStream 发布器不可用")
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
 	rawMessage := new(eventpb.EventMessage)
-	if err := proto.Unmarshal(row.EventData, rawMessage); err != nil {
+	if err := proto.Unmarshal(eventData, rawMessage); err != nil {
 		return &PermanentPublishError{Err: err}
 	}
-	message, err := registry.UnmarshalMessage(row.EventData)
+	message, err := registry.UnmarshalMessage(eventData)
 	if err != nil {
 		return &PermanentPublishError{Err: err}
 	}
-	if message.GetEventId() != row.MessageID {
-		return &PermanentPublishError{Err: errors.New("strategy outbox event_id does not match message_id")}
+	if message.GetEventId() != messageID {
+		return &PermanentPublishError{Err: errors.New("待投递事件的 event_id 与结果 ID 不一致")}
 	}
 	_, err = p.Publisher.PublishMessage(ctx, message)
 	if err != nil {
@@ -110,6 +110,7 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessa
 	return err
 }
 
-func (p *JetStreamPublisher) PublishResult(ctx context.Context, row strategyStore.StrategyResult) error {
-	return p.Publish(ctx, domain.OutboxMessage{MessageID: row.ResultID, EventData: row.EventData, CreatedAt: row.CreatedAt})
+// PublishResult 发布一条待投递结果携带的事件。
+func (p *JetStreamPublisher) PublishResult(ctx context.Context, row store.Result) error {
+	return p.Publish(ctx, row.ResultID, row.EventData)
 }
