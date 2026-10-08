@@ -632,7 +632,7 @@ async function loadSpaceScoped() {
       if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
     }),
     callControl<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page?: { total?: number } }>(
-      "collectmgr",
+      "collector",
       "GetTaskList",
       { space_id: spaceId, page: { page: 1, size: 1 } }
     ).then(rsp => {
@@ -641,7 +641,7 @@ async function loadSpaceScoped() {
     callControl<
       { filter: { space_id: string; page: { page: number; size: number } } },
       { instances?: unknown[]; page?: { total?: number; total_state?: number | string; has_more?: boolean } }
-    >("collectmgr", "GetTaskInstanceList", { filter: { space_id: spaceId, page: { page: 1, size: 1 } } }).then(rsp => {
+    >("collector", "GetTaskInstanceList", { filter: { space_id: spaceId, page: { page: 1, size: 1 } } }).then(rsp => {
       if (!isCurrent()) return;
       const totalState = rsp.page?.total_state;
       const skipped = totalState === 2 || totalState === "SKIPPED" || totalState === "TOTAL_STATE_SKIPPED";

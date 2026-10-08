@@ -10,75 +10,24 @@ import (
 	"strings"
 )
 
-// storageBFFMethods is the browser-facing Storage contract. The target
-// service IDs are existing HTTP deployments; the BFF does not create a new
-// Storage backend or expose the internal service names to the browser.
-var storageBFFMethods = map[string]string{
-	"CreateDataSource":    "storage-primary",
-	"UpdateDataSource":    "storage-primary",
-	"ListDataSources":     "storage-primary",
-	"UpsertSubject":       "storage-primary",
-	"ListSubjects":        "storage-primary",
-	"UpsertTag":           "storage-primary",
-	"ListTags":            "storage-primary",
-	"DeleteTag":           "storage-primary",
-	"ListTagMembers":      "storage-primary",
-	"AddTagMembers":       "storage-primary",
-	"RemoveTagMembers":    "storage-primary",
-	"SetTagMemberStatus":  "storage-primary",
-	"GetDataset":          "storage-primary",
-	"ListDatasets":        "storage-primary",
-	"CreateField":         "storage-primary",
-	"CreateFieldGroup":    "storage-primary",
-	"UpdateFieldGroup":    "storage-primary",
-	"ListFieldGroups":     "storage-primary",
-	"UpdateField":         "storage-primary",
-	"ListFields":          "storage-primary",
-	"BatchUpdateFields":   "storage-primary",
-	"DeleteFieldGroup":    "storage-primary",
-	"ListDatasetColumns":  "storage-primary",
-	"CreateView":          "storage-primary",
-	"RequestViewRebuild":  "storage-primary",
-	"GetView":             "storage-primary",
-	"ListViews":           "storage-primary",
-	"ListViewColumns":     "storage-primary",
-	"ListViewRebuildLogs": "storage-primary",
-	"ListDataNodes":       "storage-primary",
-	"UpdateDataNode":      "storage-primary",
-	"DeleteDataNode":      "storage-primary",
-	"ListArchiveFiles":    "storage-primary",
-	"UpsertFields":        "storage-primary",
-	"QueryTimeSeriesRows": "storage-view",
-	"SearchRecordRows":    "storage-view",
-}
+// storageConsoleAppID 是控制台在 Storage 应用层鉴权（auth_info）中的身份。
+const storageConsoleAppID = "console"
 
-func storageBFFServiceID(method string) (string, bool) {
-	serviceID, ok := storageBFFMethods[method]
-	return serviceID, ok
-}
-
-func storageBFFServicePath(serviceID, method string) string {
-	if serviceID == "storage-view" {
-		return "trpc.moox.storage.DataView"
-	}
-	if method == "UpsertFields" {
-		return "trpc.moox.storage.PrimaryStore"
-	}
-	return "trpc.moox.storage.Metadata"
-}
-
-func storageBFFBody(serviceID string, body []byte) ([]byte, error) {
-	var secret string
-	switch serviceID {
-	case "storage-primary":
-		secret = strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
-	case "storage-view":
-		secret = strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET"))
+// storageBFFBody 为浏览器的 Storage 请求注入 auth_info：Storage 在主机网关之外还按应用身份做一层鉴权，
+// 例如手动重建视图只接受控制台和 CLI。密钥按目标服务所属的 Storage 角色选择。
+func storageBFFBody(servicePath string, body []byte) ([]byte, error) {
+	var env string
+	switch servicePath {
+	case "trpc.moox.storage.Metadata", "trpc.moox.storage.PrimaryStore":
+		env = "MOOX_STORAGE_PRIMARY_AUTH_SECRET"
+	case "trpc.moox.storage.DataView":
+		env = "MOOX_STORAGE_VIEW_AUTH_SECRET"
 	default:
-		return nil, errors.New("unsupported Storage BFF service")
+		return nil, errors.New("不支持的 Storage 服务")
 	}
+	secret := strings.TrimSpace(os.Getenv(env))
 	if secret == "" {
-		return nil, errors.New("Storage BFF internal auth is not configured")
+		return nil, errors.New("控制台没有配置 Storage 应用鉴权密钥")
 	}
 	payload := make(map[string]json.RawMessage)
 	if len(body) != 0 {
@@ -86,15 +35,14 @@ func storageBFFBody(serviceID string, body []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	const appID = "admin-gateway"
 	authPayload := make(map[string]json.RawMessage)
 	if raw := payload["auth_info"]; len(raw) != 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &authPayload); err != nil {
 			return nil, err
 		}
 	}
-	authPayload["app_id"], _ = json.Marshal(appID)
-	authPayload["app_key"], _ = json.Marshal(storageServiceAuthKey(secret, appID))
+	authPayload["app_id"], _ = json.Marshal(storageConsoleAppID)
+	authPayload["app_key"], _ = json.Marshal(storageServiceAuthKey(secret, storageConsoleAppID))
 	payload["auth_info"], _ = json.Marshal(authPayload)
 	return json.Marshal(payload)
 }

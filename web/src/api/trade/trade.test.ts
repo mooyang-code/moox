@@ -12,7 +12,7 @@ describe("Trade public API", () => {
   beforeEach(() => callTrade.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
 
   it("registers the unified Trade console service", () => {
-    expect(trade.tradeServiceMap).toEqual({ console: "trade_console" });
+    expect(trade.tradeServiceMap).toEqual({ console: "trade" });
   });
 
   it("constructs 组合账户生命周期请求", async () => {

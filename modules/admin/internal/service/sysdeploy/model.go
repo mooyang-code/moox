@@ -40,3 +40,10 @@ type GatewayNode struct {
 }
 
 func (GatewayNode) TableName() string { return "t_gateway_nodes" }
+
+// ServiceDetail 是一条部署记录解析出的本机服务地址，只供 Admin 的垃圾回收任务使用。
+type ServiceDetail struct {
+	Address string
+	Path    string
+	Timeout time.Duration
+}

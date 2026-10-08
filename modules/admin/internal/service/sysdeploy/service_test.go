@@ -519,21 +519,6 @@ func TestServiceImpl_ResolveAdminServiceDetailCarriesForwardTimeout(t *testing.T
 	assert.Equal(t, 330*time.Second, detail.Timeout)
 }
 
-func TestServiceImpl_ResolveAdminServiceDetailCarriesTradeGatewayPlacement(t *testing.T) {
-	db := setupSysDeployTestDB(t)
-	svc := NewService(&database.Manager{}, testAdminNodeID)
-	svc.dao = NewDAO(db)
-	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
-		NodeID: testAdminNodeID, ServiceName: "trade_console", Host: "43.132.204.177", Port: 11200,
-		GatewayPath: "trpc.moox.trade.TradeConsoleService", Status: "active",
-		ExtraConfig: `{"gateway_url":"https://43.132.204.177","gateway_node":"trade-node"}`,
-	}))
-	detail, ok := svc.ResolveAdminServiceDetail(context.Background(), testAdminNodeID, "trade_console")
-	require.True(t, ok)
-	assert.Equal(t, "https://43.132.204.177", detail.GatewayURL)
-	assert.Equal(t, "trade-node", detail.GatewayNode)
-}
-
 func TestServiceImpl_ListActiveServiceDeployments_ActiveRows_ShouldReturnEndpoints(t *testing.T) {
 	db := setupSysDeployTestDB(t)
 	svc := NewService(&database.Manager{}, testAdminNodeID)

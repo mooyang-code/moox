@@ -37,14 +37,6 @@ func (s *fakeRequestAuthStore) ConsumeSessionNonce(_ context.Context, sid, nonce
 	return true, nil
 }
 
-func (s *fakeRequestAuthStore) ConsumeGatewayControlNonce(_ context.Context, keyID, nonce string, _ time.Duration) (bool, error) {
-	key := "gateway_control:" + keyID + ":" + nonce
-	if s.nonces[key] {
-		return false, nil
-	}
-	s.nonces[key] = true
-	return true, nil
-}
 func (s *fakeRequestAuthStore) ConsumeRawSessionTicket(_ context.Context, id string) (*authmodel.RawSessionTicket, error) {
 	v, ok := s.tickets[id]
 	if !ok {

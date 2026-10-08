@@ -135,32 +135,19 @@ func TestConsumeSessionNonceRejectsReplay(t *testing.T) {
 	assert.False(t, consumed)
 }
 
-func TestConsumeGatewayControlNonceRejectsReplay(t *testing.T) {
-	_, cache := setupUserTestDB(t)
-	d := NewUserDAO(nil, cache)
-	ctx := context.Background()
-
-	consumed, err := d.ConsumeGatewayControlNonce(ctx, "shared-key", "nonce-1", 2*time.Minute)
-	require.NoError(t, err)
-	require.True(t, consumed)
-	consumed, err = d.ConsumeGatewayControlNonce(ctx, "shared-key", "nonce-1", 2*time.Minute)
-	require.NoError(t, err)
-	assert.False(t, consumed)
-}
-
-func TestConsumeGatewayControlNonceSurvivesCacheRestart(t *testing.T) {
+func TestConsumeSessionNonceSurvivesCacheRestart(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	cache := openTestCacheDB(t, dir)
 	d := NewUserDAO(nil, cache)
-	consumed, err := d.ConsumeGatewayControlNonce(ctx, "control-key", "nonce-1", 2*time.Minute)
+	consumed, err := d.ConsumeSessionNonce(ctx, "session-1", "nonce-1", 2*time.Minute)
 	require.NoError(t, err)
 	require.True(t, consumed)
 	require.NoError(t, cache.Close())
 
 	reopened := openTestCacheDB(t, dir)
 	d = NewUserDAO(nil, reopened)
-	consumed, err = d.ConsumeGatewayControlNonce(ctx, "control-key", "nonce-1", 2*time.Minute)
+	consumed, err = d.ConsumeSessionNonce(ctx, "session-1", "nonce-1", 2*time.Minute)
 	require.NoError(t, err)
 	assert.False(t, consumed)
 }

@@ -1,14 +1,13 @@
 package console
 
 import (
-	"github.com/gorilla/mux"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetConfig_GetConfig_RoundTrip_ShouldWork(t *testing.T) {
@@ -67,33 +66,4 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 
 	_, err = LoadConfig()
 	require.Error(t, err)
-}
-
-func TestAdminRouterKeepsAdminAndGatewayControlButRejectsMachineService(t *testing.T) {
-	hr := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{}, "admin-node-test")
-	router := hr.buildControlRouter()
-	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health"} {
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
-		if rr.Code != http.StatusNotFound {
-			t.Fatalf("admin router exposed %s: %d", path, rr.Code)
-		}
-	}
-
-	for _, path := range []string{
-		"/api/admin/auth/GetLoginSalt",
-		"/api/gateway-control/routes",
-	} {
-		request := httptest.NewRequest(http.MethodGet, path, nil)
-		match := &mux.RouteMatch{}
-		if !router.Match(request, match) {
-			t.Fatalf("admin router did not register %s", path)
-		}
-	}
-
-	machineRR := httptest.NewRecorder()
-	router.ServeHTTP(machineRR, httptest.NewRequest(http.MethodPost, "/api/service/monitor/GetPeerSnapshot", nil))
-	if machineRR.Code != http.StatusNotFound {
-		t.Fatalf("admin router machine service status=%d, want 404", machineRR.Code)
-	}
 }

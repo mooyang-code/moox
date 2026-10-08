@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/console"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -28,7 +28,7 @@ const (
 
 // ServiceResolver finds a module deployment on the Admin node.
 type ServiceResolver interface {
-	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (console.ServiceDetail, bool)
+	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (sysdeploy.ServiceDetail, bool)
 }
 
 // Collector removes system garbage once per timer invocation.

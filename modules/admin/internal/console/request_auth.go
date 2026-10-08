@@ -23,7 +23,6 @@ import (
 type requestAuthStore interface {
 	GetSigningSession(context.Context, string) (*authmodel.RequestSigningSession, error)
 	ConsumeSessionNonce(context.Context, string, string, time.Duration) (bool, error)
-	ConsumeGatewayControlNonce(context.Context, string, string, time.Duration) (bool, error)
 	ConsumeRawSessionTicket(context.Context, string) (*authmodel.RawSessionTicket, error)
 }
 
@@ -155,11 +154,6 @@ func writeAdminAuthFailure(w http.ResponseWriter) {
 
 var rawRouteOperations = map[string]string{
 	"ssh/WsConnect": "ssh_ws", "ssh/SftpDownload": "sftp_download", "ssh/SftpUpload": "sftp_upload",
-}
-
-func isRawTicketPath(path string) bool {
-	_, ok := rawRouteOperations[strings.TrimPrefix(path, "/api/admin/")]
-	return ok
 }
 
 func validateRawRouteTicket(r *http.Request, serviceID, method string) (*accessClaims, error) {

@@ -29,7 +29,7 @@ func TestRegisterAndLookupRawHandler_ShouldRoundTrip(t *testing.T) {
 }
 
 func TestRawAndServe_Miss_ShouldReturnFalse(t *testing.T) {
-	assert.False(t, rawAndServe(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), "missing", "method", nil))
+	assert.False(t, rawAndServe(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), "missing", "method"))
 }
 
 func TestRawAndServe_Hit_ShouldInvokeHandler(t *testing.T) {
@@ -44,9 +44,7 @@ func TestRawAndServe_Hit_ShouldInvokeHandler(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	ok := rawAndServe(context.Background(), rr, req, "raw", "Echo", map[string]string{
-		"space_id": "space-1", "trace_id": "trace-1",
-	})
+	ok := rawAndServe(context.Background(), rr, req, "raw", "Echo")
 	assert.True(t, ok)
 	assert.Equal(t, "echo", rr.Body.String())
 }

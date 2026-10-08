@@ -5,15 +5,11 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
-
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// RawHandler 是经统一网关分派的裸 HTTP 处理器（用于 multipart/流式等不适合 PB RPC 的场景）。
-// 它运行在 thttp http_no_protocol mux 之上，鉴权/trace/CORS 由网关前置统一完成，
-// handler 自行从 r 读取请求（含 multipart）、自行向 w 写响应。
-// ctx 已注入 space_id（X-Space-Id）和 trace_id，handler 可直接使用。
+// RawHandler 是控制台进程内的原始 HTTP 处理器，用于 SSH 终端（WebSocket）和 SFTP 上传下载这类
+// 不适合 RPC 的场景。鉴权、trace、CORS 由控制台前置完成，处理器自己读写请求和响应。
 type RawHandler http.HandlerFunc
 
 var (
@@ -21,24 +17,22 @@ var (
 	rawHandlersMutex sync.RWMutex
 )
 
-// RegisterRawHandler 注册某 service 的某 method 为裸 HTTP 处理器。
-// 与 RegisterDispatcher 互斥：同一 (serviceID, method) 若已注册裸处理器，
-// dispatchAndServe 不会再被触达（handleGatewayRequest 优先分派裸处理器）。
-func RegisterRawHandler(serviceID, method string, h RawHandler) {
+// RegisterRawHandler 把 /api/admin/<console_name>/<method> 登记为原始处理器。
+func RegisterRawHandler(consoleName, method string, h RawHandler) {
 	rawHandlersMutex.Lock()
 	defer rawHandlersMutex.Unlock()
-	if _, ok := rawHandlers[serviceID]; !ok {
-		rawHandlers[serviceID] = make(map[string]RawHandler)
+	if _, ok := rawHandlers[consoleName]; !ok {
+		rawHandlers[consoleName] = make(map[string]RawHandler)
 	}
-	rawHandlers[serviceID][method] = h
-	log.Infof("[gateway] 已注册 raw handler: service=%s method=%s", serviceID, method)
+	rawHandlers[consoleName][method] = h
+	log.Infof("[console] 已登记原始处理器: %s/%s", consoleName, method)
 }
 
-// LookupRawHandler 查找 (serviceID, method) 的裸处理器。
-func LookupRawHandler(serviceID, method string) (RawHandler, bool) {
+// LookupRawHandler 查找原始处理器。
+func LookupRawHandler(consoleName, method string) (RawHandler, bool) {
 	rawHandlersMutex.RLock()
 	defer rawHandlersMutex.RUnlock()
-	if methods, ok := rawHandlers[serviceID]; ok {
+	if methods, ok := rawHandlers[consoleName]; ok {
 		if h, ok := methods[method]; ok {
 			return h, true
 		}
@@ -46,17 +40,12 @@ func LookupRawHandler(serviceID, method string) (RawHandler, bool) {
 	return nil, false
 }
 
-// rawAndServe 分派裸 HTTP 处理器。
-// 返回 true 表示已处理（命中裸处理器），false 表示未命中、调用方应继续走 forwardHTTP 纯转发。
-// 注意：调用方应在读取请求体之前调用本函数，避免 multipart body 被网关读干。
-// 鉴权（JWT/HMAC）由调用方在调用本函数之前完成；space_id/trace_id 在此注入 ctx。
-func rawAndServe(ctx context.Context, w http.ResponseWriter, r *http.Request, serviceID, method string, headers map[string]string) bool {
-	h, ok := LookupRawHandler(serviceID, method)
+// rawAndServe 分派原始处理器；返回 false 表示没有命中。调用方必须在读取请求体之前调用，并已完成鉴权。
+func rawAndServe(ctx context.Context, w http.ResponseWriter, r *http.Request, consoleName, method string) bool {
+	h, ok := LookupRawHandler(consoleName, method)
 	if !ok {
 		return false
 	}
-	// 注入 space_id（硬隔离维度）与 trace_id，供裸 handler 使用
-	ctx = spacecontext.InjectFromHeaders(ctx, headers)
 	h(w, r.WithContext(ctx))
 	return true
 }

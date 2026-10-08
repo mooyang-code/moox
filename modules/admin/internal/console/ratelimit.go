@@ -4,12 +4,9 @@ import (
 	"context"
 	"sync"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
 	"golang.org/x/time/rate"
-	"trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/filter"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -24,11 +21,6 @@ type RateLimitManager struct {
 	config         *RateLimitConfig
 	globalLimiter  *rate.Limiter            // 全局限流器
 	methodLimiters map[string]*rate.Limiter // 接口级别限流器
-}
-
-func init() {
-	// 注册流量控制 trpc 中间件
-	filter.Register("ratelimit", RateLimit(), nil)
 }
 
 // getRateLimitManager 获取流量控制管理器实例（单例模式）
@@ -55,10 +47,10 @@ func getDefaultRateLimitConfig() *RateLimitConfig {
 
 // loadRateLimitConfig 加载流量控制配置
 func loadRateLimitConfig() *RateLimitConfig {
-	// 从gateway配置获取
+	// 从控制台配置获取
 	cfg := GetConfig()
 	if cfg == nil {
-		log.Warn("网关配置未初始化，使用默认配置")
+		log.Warn("控制台配置未初始化，使用默认限流配置")
 		return getDefaultRateLimitConfig()
 	}
 
@@ -120,30 +112,9 @@ func (m *RateLimitManager) checkRateLimit(ctx context.Context, method string) bo
 	return true
 }
 
-// RateLimit 流量控制中间件
-func RateLimit() filter.ServerFilter {
-	return func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
-		ctxMsg := trpc.Message(ctx)
-		rpcName := ctxMsg.ServerRPCName()
-		if !IsAdminAPIPath(rpcName) {
-			return next(ctx, req)
-		}
-
-		// 获取TraceID（用于日志追踪）
-		traceIDBytes := trpc.GetMetaData(ctx, model.CtxTraceID)
-		traceID := string(traceIDBytes)
-
-		// 检查流量限制
-		manager := getRateLimitManager()
-		if !manager.checkRateLimit(ctx, rpcName) {
-			log.WarnContextf(ctx, "接口 [%s] 流量被限制，TraceID: %s", rpcName, traceID)
-			return createRateLimitResponse(), nil
-		}
-
-		log.DebugContextf(ctx, "接口 [%s] 流量检查通过，TraceID: %s", rpcName, traceID)
-		// 继续执行下一个处理器
-		return next(ctx, req)
-	}
+// allowRequest 按接口路径做限流，超过限制时返回 false。
+func allowRequest(ctx context.Context, path string) bool {
+	return getRateLimitManager().checkRateLimit(ctx, path)
 }
 
 // createRateLimitResponse 创建流量限制响应

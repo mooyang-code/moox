@@ -45,21 +45,6 @@ type GatewayConfig struct {
 	NoAuthMethods []string `yaml:"no_auth_methods"` // 不需要鉴权的接口列表
 }
 
-// ServiceDetail 服务详细配置
-type ServiceDetail struct {
-	Address string
-	Path    string
-	// GatewayURL/GatewayNode identify an authenticated remote Node Gateway for
-	// browser BFF calls (currently the dedicated TradeConsole surface). When
-	// empty, callers use the direct in-process tRPC endpoint above.
-	GatewayURL  string
-	GatewayNode string
-	// Timeout is the maximum duration the Admin BFF may wait for this
-	// deployment. Provider-backed read operations can legitimately outlive
-	// the short default used by ordinary control-plane calls.
-	Timeout time.Duration
-}
-
 // RateLimitConfig 限流配置
 type RateLimitConfig struct {
 	// 全局默认限流配置
