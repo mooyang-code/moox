@@ -78,7 +78,7 @@ func (s *Service) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.Get
 		}
 		factors = append(factors, &pb.FactorPeriodState{
 			FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: append([]string(nil), state.GetFailedSubjects()...),
-			SourceHash: state.GetSourceHash(),
+			SourceHash: state.GetSourceHash(), DefinitionHash: state.GetDefinitionHash(),
 		})
 	}
 	return &pb.GetFactorPeriodComputedMarkerRsp{

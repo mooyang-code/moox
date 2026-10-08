@@ -258,7 +258,7 @@ func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeri
 	return &storagepb.FactorPeriodComputed{
 		DatasetId: "dataset_result", SourceDatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
 		UniverseSubjectIds: []string{"BTC-USDT"},
-		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
+		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"}},
 		ComputedAt:         now, TriggerEventId: "collector-completed-1",
 	}
 }

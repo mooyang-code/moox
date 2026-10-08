@@ -314,6 +314,9 @@ func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[st
 		if !validRequiredToken(state.GetSourceHash()) {
 			return fmt.Errorf("%s factor %q source_hash is required", label, state.GetFactorId())
 		}
+		if !validRequiredToken(state.GetDefinitionHash()) {
+			return fmt.Errorf("%s factor %q definition_hash is required", label, state.GetFactorId())
+		}
 		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s factor %q failed_subjects", label, state.GetFactorId()))
 		if err != nil {
 			return err

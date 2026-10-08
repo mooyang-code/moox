@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
@@ -20,7 +21,7 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 	for _, factor := range plan.Factors {
 		state, ok := computation.FactorStates[factor.FactorID]
 		if !ok {
-			state = storageio.FactorState{FactorID: factor.FactorID, Status: "degraded", SourceHash: factor.SourceHash}
+			state = storageio.FactorState{FactorID: factor.FactorID, Status: "degraded", SourceHash: factor.SourceHash, DefinitionHash: domain.DefinitionHash(factor)}
 		}
 		state.FailedSubjects = uniqueSorted(state.FailedSubjects)
 		outcome.Factors = append(outcome.Factors, state)
@@ -87,6 +88,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	for _, factor := range plan.Factors {
 		computation.FactorStates[factor.FactorID] = storageio.FactorState{
 			FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SourceHash,
+			DefinitionHash: domain.DefinitionHash(factor),
 		}
 	}
 	rowsWritten := 0

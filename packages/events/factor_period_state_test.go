@@ -13,7 +13,7 @@ func factorPeriodStatePayload() *storagepb.FactorPeriodComputed {
 	return &storagepb.FactorPeriodComputed{
 		DatasetId: "result", SourceDatasetId: "source", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "complete", UniverseSubjectIds: []string{"BTC", "ETH"},
-		Factors:        []*storagepb.FactorPeriodState{{FactorId: "momentum", Status: "complete", SourceHash: "hash-1"}},
+		Factors:        []*storagepb.FactorPeriodState{{FactorId: "momentum", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"}},
 		TriggerEventId: "collector-event", ComputedAt: timestamppb.Now(),
 	}
 }
@@ -65,6 +65,7 @@ func TestValidateFactorPeriodComputedRequiresFactorStates(t *testing.T) {
 			v.Factors = append(v.Factors, proto.Clone(v.Factors[0]).(*storagepb.FactorPeriodState))
 		}, wantError: true},
 		{name: "missing source hash", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].SourceHash = "" }, wantError: true},
+		{name: "missing definition hash", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].DefinitionHash = "" }, wantError: true},
 		{name: "complete aggregate with failed subjects", mutate: func(v *storagepb.FactorPeriodComputed) { v.FailedSubjects = []string{"ETH"} }, wantError: true},
 		{name: "complete aggregate with skipped factor", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].Status = "skipped" }, wantError: true},
 		{name: "complete factor with failed subjects", mutate: func(v *storagepb.FactorPeriodComputed) {
@@ -103,8 +104,8 @@ func TestDecodeViewDataReadyFactorStates(t *testing.T) {
 	payload := validViewDataReady(timestamppb.Now())
 	payload.CompletionKind = FactorPeriodComputed.Name()
 	payload.Factors = []*storagepb.FactorPeriodState{
-		{FactorId: "momentum", Status: "complete", SourceHash: "hash-1"},
-		{FactorId: "rank", Status: "skipped", SourceHash: "hash-2"},
+		{FactorId: "momentum", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"},
+		{FactorId: "rank", Status: "skipped", SourceHash: "hash-2", DefinitionHash: "def-2"},
 	}
 	payload.Status = "degraded"
 	payload.FailedScopeRef = "failed:rank"
@@ -160,7 +161,7 @@ func TestValidateViewDataReadyFactorFailureUniverse(t *testing.T) {
 			payload.FailedScopeRef = "failed:momentum"
 			payload.UniverseSubjectIds = []string{"BTC", "ETH"}
 			payload.Factors = []*storagepb.FactorPeriodState{{
-				FactorId: "momentum", Status: "degraded", SourceHash: "hash-1", FailedSubjects: []string{subject},
+				FactorId: "momentum", Status: "degraded", SourceHash: "hash-1", DefinitionHash: "def-1", FailedSubjects: []string{subject},
 			}}
 			_, err := registry.Encode(ViewDataReady, payload, validationOptions("ready-event", "space", "view-1"))
 			if subject == "unknown" {
