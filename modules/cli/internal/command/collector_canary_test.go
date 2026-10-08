@@ -848,6 +848,9 @@ func TestCollectorSCFCanaryEventBindsInventoryTaskPeriodAndView(t *testing.T) {
 	require.Equal(t, proof.entry.GetSeriesHash(), items[0]["series_hash"])
 	require.Equal(t, proof.reservationID, items[0]["period_reservation_id"])
 	require.Equal(t, proof.period.Format(time.RFC3339Nano), items[0]["target_data_time"])
+	require.Equal(t, proof.period.Format(time.RFC3339Nano), items[0]["start_time"], "backfill items must carry start_time")
+	require.Equal(t, proof.period.Add(proof.interval).Format(time.RFC3339Nano), items[0]["end_time"])
+	require.Equal(t, 1, items[0]["bar_limit"])
 	require.Equal(t, true, items[0]["require_period_commit"])
 
 	targets, ok := data["targets"].([]map[string]any)

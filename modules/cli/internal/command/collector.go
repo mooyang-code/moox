@@ -2868,7 +2868,8 @@ func collectorSCFCanaryEventForProof(opts collectorPublishOptions, nodeID, batch
 		"provider": entry.GetProvider(), "source_id": entry.GetSourceId(), "market_id": marketID,
 		"instrument_type": marketType, "market_type": marketType, "data_type": "kline",
 		"dataset_id": entry.GetDatasetId(), "frequency": entry.GetFrequency(), "bar_limit": 1,
-		"target_data_time": period, "source_event_id": batchID, "output_fields": outputFields,
+		"target_data_time": period, "start_time": period, "end_time": proof.period.Add(proof.interval).UTC().Format(time.RFC3339Nano),
+		"source_event_id": batchID, "output_fields": outputFields,
 		"series_index": entry.GetSeriesIndex(), "series_hash": entry.GetSeriesHash(), "expected_count": entry.GetExpectedCount(),
 		"require_period_commit": true, "period_reservation_id": proof.reservationID,
 	}
