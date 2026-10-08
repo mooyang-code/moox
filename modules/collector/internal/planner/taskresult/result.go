@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -1273,12 +1274,16 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 }
 
 // datasetFrequency returns the Dataset freq: a time-series result has the
-// task's one frequency, a record result has none.
+// task's one frequency in canonical form ("1H" becomes "1h"), a record result
+// has none. An unknown frequency is passed through for Storage to reject.
 func datasetFrequency(kind storagepb.DataKind, frequency string) string {
-	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		return strings.TrimSpace(frequency)
+	if kind != storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		return ""
 	}
-	return ""
+	if canonical, err := frequencypkg.Normalize(frequency); err == nil {
+		return canonical
+	}
+	return strings.TrimSpace(frequency)
 }
 
 func containsString(values []string, target string) bool {

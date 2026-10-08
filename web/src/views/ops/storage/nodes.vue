@@ -174,7 +174,9 @@
               <a-table-column title="名称" :width="150">
                 <template #cell="{ record }">{{ record.name || record.dataset_id }}</template>
               </a-table-column>
-              <a-table-column title="数据类型" :width="150" data-index="data_kind" />
+              <a-table-column title="数据类型" :width="150">
+                <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
+              </a-table-column>
               <a-table-column title="保留期" :width="150">
                 <template #cell="{ record }">
                   {{ formatRetention(record.retention) }}
@@ -219,8 +221,10 @@ import type { DataNodeListItem, DatasetSummary } from "@/api/storage/types";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
 import {
   applyPageResult,
+  dataKindOptions,
   defaultPagination,
   formatTime,
+  optionLabel,
   statusColor,
   statusLabel,
   statusOptions

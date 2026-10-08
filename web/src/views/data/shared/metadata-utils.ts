@@ -87,6 +87,11 @@ export const statusOptions: SelectOption[] = [
   { label: "禁用", value: "disabled" }
 ];
 
+export const dataKindOptions: SelectOption<DataKind>[] = [
+  { label: "记录", value: "DATA_KIND_RECORD", aliases: [1, "record"] },
+  { label: "时序", value: "DATA_KIND_TIME_SERIES", aliases: [2, "time_series"] }
+];
+
 export const fieldValueTypeOptions: SelectOption<FieldValueType>[] = [
   { label: "字符串", value: "FIELD_VALUE_TYPE_STRING", aliases: [1] },
   { label: "整数", value: "FIELD_VALUE_TYPE_INT", aliases: [2] },

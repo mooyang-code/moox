@@ -94,8 +94,6 @@ storage:
     # so a large repair does not burst against Storage.
     backfill_page_size: 2000
     backfill_request_interval: 100ms
-    # Time-series Views use the completed-bar targets below. Keep this global
-    # duration only as a compatibility fallback for legacy Views without freq.
     rebuild_max_pending: 32
     rebuild_idle_checks: 3
   health:

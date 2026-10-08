@@ -243,6 +243,10 @@ func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFreq())
 	require.Empty(t, fake.views[ids.ViewID].GetFreq(), "Storage fills the View freq from its Dataset")
+
+	ids, err = manager.Ensure(context.Background(), "crypto", "task-1h", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "1H"})
+	require.NoError(t, err)
+	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFreq(), "a frequency alias is declared in canonical form")
 }
 
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
