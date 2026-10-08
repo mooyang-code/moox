@@ -1,16 +1,14 @@
-module github.com/mooyang-code/moox/modules/admin/proto/admingen
+module github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb
 
 go 1.25.0
 
 require (
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	google.golang.org/protobuf v1.36.11
-	trpc.group/trpc-go/trpc-filter/masking v1.0.0
 	trpc.group/trpc-go/trpc-go v1.0.4
 )
 
-replace github.com/mooyang-code/moox/packages/commonpb => ../../../../packages/commonpb
+replace github.com/mooyang-code/moox/packages/commonpb => ../../../commonpb
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
@@ -52,5 +50,3 @@ require (
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
-
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => ../../../../packages/gatewayroute/proto/directorypb

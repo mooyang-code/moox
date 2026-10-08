@@ -32,6 +32,7 @@ use (
 	./packages/frequency
 	./packages/gatewayauth
 	./packages/gatewayroute
+	./packages/gatewayroute/proto/directorypb
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream

@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/monitor
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
@@ -165,3 +166,5 @@ replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requ
 replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
 
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+
+replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => ../../packages/gatewayroute/proto/directorypb

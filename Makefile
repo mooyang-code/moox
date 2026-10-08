@@ -166,6 +166,7 @@ proto:
 	$(MAKE) -C packages/storagepb generate
 	$(MAKE) -C packages/events all
 	$(MAKE) -C packages/marketfetchpb all
+	$(MAKE) -C packages/gatewayroute/proto all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all

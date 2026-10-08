@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package trpc.moox.hostgateway;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb;directorypb";
+
+// Directory 是主机网关在本机入口（127.0.0.1:11002）上提供的服务目录查询，不经签名鉴权。
+// 内部组件的 gatewayclient 据此决定一个 tRPC 服务该发往哪台主机。
+service Directory {
+  rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
+}
+
+message GetDirectoryReq {
+  // 调用方已持有的目录版本；与当前版本相同时只返回 changed=false。
+  string current_version = 1;
+}
+
+message GetDirectoryRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  bool changed = 2;
+  // 本机主机 ID：调用方据此判断哪些服务在本机。
+  string host_id = 3;
+  DirectorySnapshot directory = 4;
+}
+
+// DirectorySnapshot 由「组件目录 × 已启用的部署」计算得出，随网关控制的快照下发到每台主机网关。
+message DirectorySnapshot {
+  string version = 1;
+  repeated ServiceHosts services = 2;
+  repeated HostInfo hosts = 3;
+  repeated ComponentHosts components = 4;
+}
+
+// ServiceHosts 是一个 tRPC 服务当前所在的主机，按主机 ID 排序。
+message ServiceHosts {
+  string path = 1;
+  repeated string host_ids = 2;
+}
+
+message HostInfo {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  string region = 4;
+}
+
+// ComponentHosts 是一个组件当前启用的部署所在的主机，按主机 ID 排序。
+message ComponentHosts {
+  string component_id = 1;
+  repeated string host_ids = 2;
+}

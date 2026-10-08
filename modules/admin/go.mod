@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/admin
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/glebarez/sqlite v1.11.0
@@ -151,3 +152,5 @@ replace github.com/mooyang-code/moox/packages/frequency => ../../packages/freque
 replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
+
+replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => ../../packages/gatewayroute/proto/directorypb

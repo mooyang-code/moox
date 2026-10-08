@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package trpc.moox.admin;
+
+import "moox_common.proto";
+import "directory.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
+
+// GatewayControl 向主机网关下发快照并接收心跳，监听 127.0.0.1:11112。
+// control 的主机网关直连本机端口，其他主机经 control 的 11003 访问；
+// 只允许 host-gateway@<请求中的主机> 调用。
+service GatewayControl {
+  rpc PullSnapshot(PullSnapshotReq) returns (PullSnapshotRsp);
+  rpc ReportStatus(ReportStatusReq) returns (ReportStatusRsp);
+}
+
+message PullSnapshotReq {
+  string host_id = 1;
+  // 主机网关当前已应用的快照哈希；与期望哈希相同时只返回 changed=false。
+  string current_hash = 2;
+}
+
+message PullSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  bool changed = 2;
+  HostSnapshot snapshot = 3;
+}
+
+// HostSnapshot 是一台主机网关需要的全部状态：本机路由、全局服务目录和调用方校验密钥。
+message HostSnapshot {
+  string host_id = 1;
+  string hash = 2;
+  string generated_at = 3;
+  // 主机被停用时为 true，此时不带任何路由。
+  bool disabled = 4;
+  repeated HostRoute routes = 5;
+  trpc.moox.hostgateway.DirectorySnapshot directory = 6;
+  repeated VerificationKey keys = 7;
+}
+
+// HostRoute 是一个 tRPC 服务中调用方集合相同的一组方法，上游固定为本机地址。
+message HostRoute {
+  string component_id = 1;
+  string service_path = 2;
+  string address = 3;
+  int64 timeout_ms = 4;
+  int64 max_body_bytes = 5;
+  repeated string methods = 6;
+  repeated string callers = 7;
+}
+
+// VerificationKey 是主机网关校验调用方签名用的密钥，只经 TLS 下发给通过身份校验的主机网关。
+message VerificationKey {
+  string key_id = 1;
+  string caller = 2;
+  string secret = 3;
+}
+
+message ReportStatusReq {
+  string host_id = 1;
+  // 主机网关进程启动时随机生成，用来区分实例替换与冲突。
+  string instance_id = 2;
+  string version = 3;
+  string applied_hash = 4;
+  int32 route_count = 5;
+  string last_error = 6;
+}
+
+message ReportStatusRsp {
+  common.RetInfo ret_info = 1;
+}
