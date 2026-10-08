@@ -53,7 +53,7 @@ func duckDBContext(ctx context.Context) (context.Context, error) {
 	return context.WithoutCancel(ctx), nil
 }
 
-var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
+var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
 
 const (
@@ -1041,24 +1041,10 @@ func resolveIncludedColumns(columns map[string]pb.FieldValueType, includes []str
 	}
 	selected := make(map[string]struct{}, len(includes))
 	for _, include := range includes {
-		if _, ok := columns[include]; ok && !isSystemColumn(include) {
-			selected[include] = struct{}{}
-			continue
-		}
-		matches := make([]string, 0, 1)
-		for name := range columns {
-			if !isSystemColumn(name) && strings.HasSuffix(name, "."+include) {
-				matches = append(matches, name)
-			}
-		}
-		if len(matches) == 0 {
+		if _, ok := columns[include]; !ok || isSystemColumn(include) {
 			return nil, fmt.Errorf("View column %q is not projected", include)
 		}
-		if len(matches) > 1 {
-			sort.Strings(matches)
-			return nil, fmt.Errorf("View column %q is ambiguous: %s", include, strings.Join(matches, ", "))
-		}
-		selected[matches[0]] = struct{}{}
+		selected[include] = struct{}{}
 	}
 	result := make([]string, 0, len(selected))
 	for name := range selected {

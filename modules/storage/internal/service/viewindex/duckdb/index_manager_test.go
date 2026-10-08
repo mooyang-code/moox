@@ -651,23 +651,20 @@ func TestDuckDBAfterCursorIncludesSeriesTag(t *testing.T) {
 	}
 }
 
-func TestResolveIncludedColumnsMapsUniqueLogicalSuffix(t *testing.T) {
+func TestResolveIncludedColumnsRequiresExactProjectedNames(t *testing.T) {
 	columns := map[string]pb.FieldValueType{
-		"prices.close":  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		"prices.volume": pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":     pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume":    pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"data_time": pb.FieldValueType_FIELD_VALUE_TYPE_TIME,
 	}
 	got, err := resolveIncludedColumns(columns, []string{"close"})
-	if err != nil {
-		t.Fatalf("resolve unique suffix: %v", err)
+	if err != nil || !reflect.DeepEqual(got, []string{"close"}) {
+		t.Fatalf("resolve exact name = %v err=%v, want [close]", got, err)
 	}
-	if !reflect.DeepEqual(got, []string{"prices.close"}) {
-		t.Fatalf("resolve unique suffix = %v, want [prices.close]", got)
-	}
-
-	columns["adjusted.close"] = pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-	_, err = resolveIncludedColumns(columns, []string{"close"})
-	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Fatalf("resolve ambiguous suffix error = %v", err)
+	for _, include := range []string{"prices.close", "data_time", "open"} {
+		if _, err := resolveIncludedColumns(columns, []string{include}); err == nil || !strings.Contains(err.Error(), "is not projected") {
+			t.Fatalf("include %q error = %v, want not projected", include, err)
+		}
 	}
 }
 
@@ -993,77 +990,6 @@ func TestMergeCoverageBoundsIsMonotonicAndCanonical(t *testing.T) {
 	)
 	if from != "2026-08-12T00:00:00.100000000Z" || to != "2026-08-12T00:00:00.900000000Z" {
 		t.Fatalf("bounds were not normalized: %s..%s", from, to)
-	}
-}
-
-func TestDuckDBQualifiedViewColumn(t *testing.T) {
-	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Close()
-	const column = "prices.close"
-	schema := viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices",
-		ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{ColumnName: column, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
-	}
-	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
-		t.Fatal(err)
-	}
-	key := &pb.RowKey{
-		SpaceId: "s", DatasetId: "prices",
-		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-07-20T00:00:00Z",
-		}},
-	}
-	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
-		RowWrites: []viewindex.RowWrite{{
-			Key: viewindex.RowKey{Key: key},
-			Fields: []*pb.FieldValue{{
-				FieldId: column,
-				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 123.5}},
-			}},
-		}},
-		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rows, total, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
-		Groups: []viewindex.FilterGroup{{Conds: []viewindex.Filter{{
-			Column: column,
-			Op:     pb.FilterOp_FILTER_OP_GTE,
-			Values: []*pb.TypedValue{{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}},
-		}}}},
-		Sorts:    []*pb.SortSpec{{FieldName: column, Desc: true}},
-		Includes: []string{column},
-		Limit:    1, TotalMode: pb.TotalMode_FORCE_EXACT,
-	})
-	if err != nil || total != 1 || len(rows) != 1 {
-		t.Fatalf("qualified query: rows=%v total=%d err=%v", rows, total, err)
-	}
-	fields := rows[0].GetFields()
-	if len(fields) != 1 || fields[0].GetFieldId() != column || fields[0].GetValue().GetDoubleValue() != 123.5 {
-		t.Fatalf("qualified field not retained: %v", fields)
-	}
-	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
-		RowWrites: []viewindex.RowWrite{{
-			Key: viewindex.RowKey{Key: key},
-			Fields: []*pb.FieldValue{{FieldId: column, Value: &pb.TypedValue{
-				Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL},
-			}}},
-		}},
-		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rows, _, err = manager.Query(context.Background(), "idx", viewindex.QuerySpec{
-		Includes: []string{column}, Limit: 1, TotalMode: pb.TotalMode_NONE,
-	})
-	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 ||
-		rows[0].GetFields()[0].GetFieldId() != column ||
-		rows[0].GetFields()[0].GetValue().GetNullValue() != pb.NullValue_NULL_VALUE_NULL {
-		t.Fatalf("qualified NULL field not retained: rows=%v err=%v", rows, err)
 	}
 }
 
