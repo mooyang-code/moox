@@ -1018,3 +1018,28 @@ func collectorCanaryTestRow(proof *collectorSCFCanaryProof) *storagepb.TimeSerie
 		FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100}},
 	}}}
 }
+
+func TestCollectorHTTPInventoryReaderUsesTheServiceGatewayRoute(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"snapshot_id":"snap-1","entries":[{"task_id":"canary","enabled":false,"expected_count":1}],"page":{"page":1,"size":100,"total":1}}`))
+	}))
+	defer server.Close()
+
+	reader := collectorHTTPInventoryReader{control: adminclient.New(server.URL)}
+	rsp, err := reader.GetTaskResultInventory(context.Background(), &collectorpb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 100},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/api/admin/collectmgr/GetTaskResultInventory", gotPath)
+	assert.Equal(t, "crypto", gotBody["space_id"])
+	assert.Equal(t, "snap-1", rsp.GetSnapshotId())
+	require.Len(t, rsp.GetEntries(), 1)
+	assert.Equal(t, "canary", rsp.GetEntries()[0].GetTaskId())
+	assert.EqualValues(t, 1, rsp.GetEntries()[0].GetExpectedCount())
+	assert.EqualValues(t, 1, rsp.GetPage().GetTotal())
+}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	metricsreport "github.com/mooyang-code/moox/packages/report"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
@@ -114,14 +117,38 @@ func sameCollectorCanaryBinding(left, right *collectorpb.TaskResultInventoryEntr
 		left.GetExpectedCount() == right.GetExpectedCount() && slices.Equal(left.GetOutputFields(), right.GetOutputFields())
 }
 
-func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, storageTarget, storageNode string, trust collectorSCFTrustMaterial) (collectorCanaryAccess, error) {
+// collectorHTTPInventoryReader reads the task-result inventory through the
+// service gateway's HTTP route, the same path Monitor uses. CollectMgr only
+// serves HTTP, so the native tRPC gateway cannot reach it.
+type collectorHTTPInventoryReader struct {
+	control *adminclient.Client
+}
+
+func (r collectorHTTPInventoryReader) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq, _ ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error) {
+	if r.control == nil {
+		return nil, errors.New("Collector inventory control client is not configured")
+	}
+	body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var raw json.RawMessage
+	if err := r.control.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskResultInventory", json.RawMessage(body), &raw); err != nil {
+		return nil, err
+	}
+	rsp := &collectorpb.GetTaskResultInventoryRsp{}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, rsp); err != nil {
+		return nil, fmt.Errorf("decode Collector inventory: %w", err)
+	}
+	return rsp, nil
+}
+
+func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, inventory collectorCanaryInventoryReader, storageTarget, storageNode string, trust collectorSCFTrustMaterial) (collectorCanaryAccess, error) {
 	if fetcher == nil {
 		return collectorCanaryAccess{}, errors.New("SCF canary requires manifest task ownership")
 	}
-	collectorTarget := strings.TrimSpace(fetcher.CollectorRPCGatewayTarget)
-	collectorNode := strings.TrimSpace(fetcher.CollectorGatewayTargetNode)
-	if collectorTarget == "" || collectorNode == "" || strings.TrimSpace(trust.CollectorServiceKey) == "" {
-		return collectorCanaryAccess{}, errors.New("Collector inventory gateway credentials are unavailable")
+	if inventory == nil {
+		return collectorCanaryAccess{}, errors.New("Collector inventory reader is required")
 	}
 	if strings.TrimSpace(storageTarget) == "" || strings.TrimSpace(storageNode) == "" {
 		return collectorCanaryAccess{}, errors.New("Storage proof gateway target and node are required")
@@ -130,9 +157,6 @@ func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, storageTarge
 		return collectorCanaryAccess{}, errors.New("Storage Primary and View proof credentials are required")
 	}
 
-	collectorOptions := gatewayauth.NewTRPCClientOptions(collectorTarget, collectorNode, gatewayauth.Credentials{
-		KeyID: "collector", Caller: "collector", Secret: trust.CollectorServiceKey,
-	})
 	storageOptions := gatewayauth.NewTRPCClientOptions(storageTarget, storageNode, gatewayauth.Credentials{
 		KeyID: "collector", Caller: "collector", Secret: trust.CollectorServiceKey,
 	})
@@ -140,7 +164,7 @@ func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, storageTarge
 	primaryReadAppID := "scf-market-canary"
 	viewReadAppID := "scf-market-canary"
 	return collectorCanaryAccess{
-		inventory: collectorpb.NewCollectMgrClientProxy(append(collectorOptions, client.WithTimeout(5*time.Second))...),
+		inventory: inventory,
 		primary:   storagepb.NewPrimaryStoreClientProxy(storageOptions...),
 		view:      storagepb.NewDataViewClientProxy(storageOptions...),
 		periodAuth: &commonpb.AuthInfo{

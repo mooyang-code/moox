@@ -903,7 +903,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		canaryFetcher := *fetcherConfig
 		canaryFetcher.CollectorRPCGatewayTarget = firstNonEmpty(opts.CollectorRPCGatewayTarget, fetcherConfig.CollectorRPCGatewayTarget, os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
 		canaryFetcher.CollectorGatewayTargetNode = firstNonEmpty(opts.CollectorGatewayTargetNode, fetcherConfig.CollectorGatewayTargetNode, os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
-		canaryAccess, accessErr := newCollectorCanaryAccess(&canaryFetcher, storageTarget, storageNode, collectorCanaryTrust)
+		canaryAccess, accessErr := newCollectorCanaryAccess(&canaryFetcher, collectorHTTPInventoryReader{control: client}, storageTarget, storageNode, collectorCanaryTrust)
 		if accessErr != nil {
 			return collectorPublishSummary{}, accessErr
 		}
@@ -1528,7 +1528,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	canaryFetcher.CollectorRPCGatewayTarget = firstNonEmpty(fetcherConfig.CollectorRPCGatewayTarget, os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
 	canaryFetcher.CollectorGatewayTargetNode = firstNonEmpty(fetcherConfig.CollectorGatewayTargetNode, os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
 	canaryAccess, accessErr := newCollectorCanaryAccess(
-		&canaryFetcher, collectorStorageRPCGatewayTarget(canaryOpts),
+		&canaryFetcher, collectorHTTPInventoryReader{control: client}, collectorStorageRPCGatewayTarget(canaryOpts),
 		firstNonEmpty(fetcherConfig.StorageAccessTargetNode(canaryRegion.Region), os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE")),
 		trustMaterial,
 	)
