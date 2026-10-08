@@ -70,7 +70,7 @@ require_text modules/storage/proto/metadata.proto 'rpc RegisterDataNode' 'deploy
 require_text modules/storage/proto/metadata.proto 'rpc CheckDatasetActivation' 'read-only activation check RPC'
 require_text modules/storage/proto/metadata.proto 'rpc ActivateDataset' 'explicit activation RPC'
 require_text modules/storage/proto/data_node.proto 'service DataNodeRuntime {' 'DataNode runtime service'
-require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '12')" 'Schema v12'
+require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '13')" 'Schema v13'
 require_text config/setup/metadata.yaml 'data_source_id: crypto' 'shared crypto logical DataSource binding'
 require_text config/setup/metadata.yaml 'dataset_id: dataset_stockcn_equity_kline_1m' 'seeded stockcn equity Dataset'
 require_text config/setup/metadata.yaml 'series_tag' 'tagged time-series grain'
