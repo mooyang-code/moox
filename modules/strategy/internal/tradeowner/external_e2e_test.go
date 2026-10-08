@@ -31,8 +31,13 @@ func reachable(ctx context.Context, owner *Client, space, account string) error 
 	if errors.As(err, &coded) {
 		return err
 	}
-	if strings.Contains(err.Error(), "所有者与本实例不符") {
+	if errors.Is(err, ErrSessionNotOwned) {
 		return nil
+	}
+	// 传输错误对调用方只给概述，断言具体的 TLS 失败要看原始原因。
+	var transport *TransportError
+	if errors.As(err, &transport) {
+		return transport.Err
 	}
 	return err
 }

@@ -46,10 +46,26 @@ func newGateway(cfg Config) *gateway {
 	return g
 }
 
-// configError 是网关配置或调用前提缺失：与传输失败不同，它不含远端地址，原样返回给调用方。
+// visibleError 标记不含远端地址、可以原样返回给调用方的网关错误：配置或调用前提缺失、网关返回的 HTTP 状态。
+// 其余错误（连接、TLS 等）可能带有网关地址，由 Client 包装为 TransportError。
+type visibleError interface{ visibleToCaller() }
+
+// configError 是网关配置或调用前提缺失。
 type configError struct{ error }
 
-func (e configError) Unwrap() error { return e.error }
+func (e configError) Unwrap() error  { return e.error }
+func (configError) visibleToCaller() {}
+
+// statusError 是网关返回的非 200 状态：请求已到达网关，多为鉴权或路由配置问题，不是"不可达"。
+type statusError struct {
+	method string
+	status int
+}
+
+func (e statusError) Error() string {
+	return fmt.Sprintf("Trade 网关 %s 返回 HTTP %d", e.method, e.status)
+}
+func (statusError) visibleToCaller() {}
 
 func (g *gateway) post(ctx context.Context, method string, request, response proto.Message) error {
 	if g.initErr != nil {
@@ -87,7 +103,7 @@ func (g *gateway) post(ctx context.Context, method string, request, response pro
 	}
 	defer httpRsp.Body.Close()
 	if httpRsp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Trade 网关 %s 返回 HTTP %d", method, httpRsp.StatusCode)
+		return statusError{method: method, status: httpRsp.StatusCode}
 	}
 	const maxResponseBytes = 1 << 20
 	data, err := io.ReadAll(io.LimitReader(httpRsp.Body, maxResponseBytes+1))

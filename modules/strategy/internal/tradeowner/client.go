@@ -254,9 +254,9 @@ func (e *TransportError) Error() string {
 func (e *TransportError) Unwrap() error { return e.Err }
 
 func (c *Client) transportError(ctx context.Context, operation string, err error) error {
-	var cfgErr configError
-	if errors.As(err, &cfgErr) {
-		return fmt.Errorf("Trade 账户%s失败：%w", operation, cfgErr.error)
+	var visible visibleError
+	if errors.As(err, &visible) {
+		return fmt.Errorf("Trade 账户%s失败：%w", operation, err)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return &TransportError{Operation: operation, Timeout: true, Err: errors.Join(ctxErr, err)}
