@@ -29,6 +29,7 @@
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
+            <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
@@ -423,6 +424,7 @@ import type {
   ViewRebuildLog
 } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
+import { formatRetention, retentionSourceLabel } from "@/utils/retention";
 import {
   adaptiveColumnWidth,
   recordRowsToTableRows,
@@ -640,6 +642,11 @@ const currentDatasetName = computed(() => {
   return dataset.name || dataset.dataset_id;
 });
 const currentDatasetId = computed(() => activeView.value?.dataset_id || "-");
+const currentDatasetRetention = computed(() => {
+  const dataset = primaryDataset.value;
+  if (!dataset?.retention) return "";
+  return `${formatRetention(dataset.retention)}（${retentionSourceLabel(dataset.retention_source)}）`;
+});
 
 const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.dataset_id));
 const modeText = computed(() => {
