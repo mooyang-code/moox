@@ -7,6 +7,7 @@ import (
 
 	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/garbage"
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -14,6 +15,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+// adminCaller 是 Admin 内部任务（例如每日垃圾回收）调用其他组件时的调用方身份，即 Admin 的组件 ID。
+const adminCaller = "admin"
 
 // Initialize 初始化应用
 // 这是应用启动的统一入口，完成所有初始化工作
@@ -49,7 +53,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.Placements)); err != nil {
 		return nil, err
 	}
-	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.SysDeploy, cfg.AdminNodeID)
+	// Admin 内部任务以 admin 身份调用其他组件；没有配置 admin_key_file 时只清理 Admin 自己的历史。
+	adminGateway, err := newGatewayClient(cfg.App.GatewayClient, adminCaller, cfg.App.GatewayClient.AdminKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("创建 admin 身份的 gatewayclient: %w", err)
+	}
+	var cloudNode garbage.CloudNodeGarbage
+	if adminGateway != nil {
+		cloudNode = cloudnodepb.NewCloudNodeMgrClientProxy(adminGateway.ClientOptions()...)
+	} else {
+		log.Warn("没有配置 gateway_client.admin_key_file：每日垃圾回收不会清理 CloudNode")
+	}
+	collector, err := garbage.NewCollector(services.DBManager.GetDB(), cloudNode)
 	if err != nil {
 		return nil, err
 	}

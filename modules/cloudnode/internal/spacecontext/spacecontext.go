@@ -1,4 +1,5 @@
-// Package spacecontext provides space_id injection from gateway headers.
+// Package spacecontext 取得 CloudNode 请求所属的 space：调用方（控制台、Collector）把它写在 tRPC 元数据
+// x-space-id 中，进程内调用（测试、后台任务）可以直接放进 context。
 package spacecontext
 
 import (
@@ -6,33 +7,13 @@ import (
 	"fmt"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-go/filter"
-	thttp "trpc.group/trpc-go/trpc-go/http"
-)
-
-const (
-	// SpaceIDHeader is the HTTP header used by admin gateway forwarding.
-	SpaceIDHeader = "X-Space-Id"
-	// SpaceFilterName is the trpc server filter registration name.
-	SpaceFilterName = "spacectx"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type ctxKey struct{}
 
-func init() {
-	filter.Register(SpaceFilterName, spaceServerFilter, nil)
-}
-
-func spaceServerFilter(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
-	if r := thttp.Request(ctx); r != nil {
-		if sid := r.Header.Get(SpaceIDHeader); sid != "" {
-			ctx = WithSpaceID(ctx, sid)
-		}
-	}
-	return next(ctx, req)
-}
-
-// WithSpaceID stores space_id in context.
+// WithSpaceID 把 space_id 放进 context，优先于 tRPC 元数据。
 func WithSpaceID(ctx context.Context, spaceID string) context.Context {
 	if spaceID == "" {
 		return ctx
@@ -40,24 +21,20 @@ func WithSpaceID(ctx context.Context, spaceID string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, spaceID)
 }
 
-// FromContext reads space_id from context.
+// FromContext 读取 space_id：先看 context，再看 tRPC 元数据。
 func FromContext(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(ctxKey{}).(string)
-	if ok {
+	if v, ok := ctx.Value(ctxKey{}).(string); ok {
 		spaceID := strings.TrimSpace(v)
 		return spaceID, spaceID != ""
 	}
-	if r := thttp.Request(ctx); r != nil {
-		spaceID := strings.TrimSpace(r.Header.Get(SpaceIDHeader))
-		return spaceID, spaceID != ""
-	}
-	return "", false
+	spaceID := strings.TrimSpace(string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID)))
+	return spaceID, spaceID != ""
 }
 
-// MustFromContext reads space_id or returns an error.
+// MustFromContext 读取 space_id，缺失时返回错误。
 func MustFromContext(ctx context.Context) (string, error) {
 	spaceID, ok := FromContext(ctx)
-	if !ok || spaceID == "" {
+	if !ok {
 		return "", fmt.Errorf("space_id is required but not set in context")
 	}
 	return spaceID, nil

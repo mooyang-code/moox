@@ -20,6 +20,7 @@ import (
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -35,7 +36,7 @@ const ServiceName = "trpc.moox.admin.Console"
 
 // 转发给其他组件的元数据键：主机网关只丢弃 x-moox- 开头的键，这些键原样到达目标服务。
 const (
-	MetadataSpaceID  = "x-space-id"
+	MetadataSpaceID  = gatewayroute.MetadataSpaceID
 	MetadataUserID   = "x-user-id"
 	MetadataUserRole = "x-user-role"
 	MetadataTraceID  = "x-trace-id"

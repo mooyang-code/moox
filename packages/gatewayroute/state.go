@@ -12,6 +12,10 @@ import (
 // 全部 x-moox- 元数据，因此本机服务看到的这个值只可能来自网关自己。
 const MetadataVerifiedCaller = "x-moox-verified-caller"
 
+// MetadataSpaceID 是调用方写入的 space 元数据：控制台转发浏览器请求、组件按 space 调用时写入，
+// 服务从 tRPC 元数据中读取。主机网关原样透传。
+const MetadataSpaceID = "x-space-id"
+
 // VerificationKey 是快照中的一把调用方校验密钥。
 type VerificationKey struct {
 	KeyID  string `json:"key_id"`

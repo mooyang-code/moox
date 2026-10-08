@@ -2,30 +2,28 @@ package garbage
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/modules/admin/schema"
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
-type fakeResolver struct {
-	detail sysdeploy.ServiceDetail
-	ok     bool
+type fakeCloudNode struct {
+	calls int
+	rsp   *cloudnodepb.CollectGarbageRsp
+	err   error
 }
 
-func (r fakeResolver) ResolveAdminServiceDetail(_ context.Context, adminNodeID, serviceID string) (sysdeploy.ServiceDetail, bool) {
-	if adminNodeID != "control" || serviceID != "cloudnode" {
-		return sysdeploy.ServiceDetail{}, false
-	}
-	return r.detail, r.ok
+func (f *fakeCloudNode) CollectGarbage(context.Context, *cloudnodepb.CollectGarbageReq, ...client.Option) (*cloudnodepb.CollectGarbageRsp, error) {
+	f.calls++
+	return f.rsp, f.err
 }
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -35,17 +33,6 @@ func newTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	require.NoError(t, db.Exec(`INSERT INTO t_users (c_user_id, c_username, c_password_hash) VALUES ('u1', 'admin', 'x')`).Error)
 	return db
-}
-
-func cloudNodeServer(t *testing.T, body string) (*httptest.Server, *[]string) {
-	t.Helper()
-	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(server.Close)
-	return server, &paths
 }
 
 func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
@@ -62,14 +49,13 @@ func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
 		require.NoError(t, db.Exec(`INSERT INTO t_ssh_session (c_session_id, c_host_id, c_host_address, c_connect_time, c_close_time) VALUES (?, 1, 'h', ?, ?)`,
 			string(rune('a'+i)), row.connect, row.close).Error)
 	}
-	server, paths := cloudNodeServer(t, `{"ret_info":{"code":0,"msg":"ok"},"packages":2,"cos_bytes":"250"}`)
-	address := strings.TrimPrefix(server.URL, "http://")
-	collector, err := NewCollector(db, fakeResolver{detail: sysdeploy.ServiceDetail{Address: address, Path: "trpc.moox.cloudnode.CloudNodeMgr"}, ok: true}, "control")
+	cloudNode := &fakeCloudNode{rsp: &cloudnodepb.CollectGarbageRsp{RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS}, Packages: 2, CosBytes: 250}}
+	collector, err := NewCollector(db, cloudNode)
 	require.NoError(t, err)
 	collector.now = func() time.Time { return now }
 
 	require.NoError(t, collector.Run(context.Background()))
-	require.Equal(t, []string{"/trpc.moox.cloudnode.CloudNodeMgr/CollectGarbage"}, *paths)
+	require.Equal(t, 1, cloudNode.calls)
 	var logins, sessions int64
 	require.NoError(t, db.Table("t_login_history").Count(&logins).Error)
 	require.NoError(t, db.Table("t_ssh_session").Count(&sessions).Error)
@@ -80,8 +66,7 @@ func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
 func TestCollectorReportsCloudNodeFailureAfterTrimmingHistory(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Exec(`INSERT INTO t_login_history (c_user_id, c_username, c_client_ip, c_login_result, c_ctime) VALUES ('u1', 'admin', '127.0.0.1', 'success', '2026-01-01 00:00:00')`).Error)
-	server, _ := cloudNodeServer(t, `{"ret_info":{"code":999,"msg":"list cloud accounts: boom"}}`)
-	collector, err := NewCollector(db, fakeResolver{detail: sysdeploy.ServiceDetail{Address: strings.TrimPrefix(server.URL, "http://"), Path: "trpc.moox.cloudnode.CloudNodeMgr"}, ok: true}, "control")
+	collector, err := NewCollector(db, &fakeCloudNode{rsp: &cloudnodepb.CollectGarbageRsp{RetInfo: &cloudnodepb.RetInfo{Code: 999, Msg: "list cloud accounts: boom"}}})
 	require.NoError(t, err)
 
 	err = collector.Run(context.Background())
@@ -91,8 +76,14 @@ func TestCollectorReportsCloudNodeFailureAfterTrimmingHistory(t *testing.T) {
 	require.Zero(t, logins)
 }
 
-func TestCollectorRequiresACloudNodeDeployment(t *testing.T) {
-	collector, err := NewCollector(newTestDB(t), fakeResolver{}, "control")
+func TestCollectorReportsMissingGatewayClient(t *testing.T) {
+	collector, err := NewCollector(newTestDB(t), nil)
 	require.NoError(t, err)
-	require.ErrorContains(t, collector.Run(context.Background()), "cloudnode has no active deployment on the admin node")
+	require.ErrorContains(t, collector.Run(context.Background()), "gateway_client 没有配置")
+}
+
+func TestCollectorReportsCloudNodeTransportError(t *testing.T) {
+	collector, err := NewCollector(newTestDB(t), &fakeCloudNode{err: errors.New("服务 trpc.moox.cloudnode.CloudNodeMgr 没有已启用的部署")})
+	require.NoError(t, err)
+	require.ErrorContains(t, collector.Run(context.Background()), "没有已启用的部署")
 }

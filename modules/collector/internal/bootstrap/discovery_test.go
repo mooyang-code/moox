@@ -63,17 +63,9 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deps.ServiceGatewayTarget != "https://gw.example.com:11001" {
-		t.Fatalf("ServiceGatewayTarget = %q, want service_gateway deployment target", deps.ServiceGatewayTarget)
-	}
 	if deps.InvokeStorageRPCGatewayTarget != "gw.example.com:11003" {
 		t.Fatalf("InvokeStorageRPCGatewayTarget = %q, want native service gateway target", deps.InvokeStorageRPCGatewayTarget)
 	}
-}
-
-func TestPreferLocalServiceGatewayTargetForSameHostControlPlane(t *testing.T) {
-	assert.Equal(t, "http://127.0.0.1:11002", preferLocalServiceGatewayTarget("https://106.53.107.122:11001", "http://127.0.0.1:11002"))
-	assert.Equal(t, "https://gw.example.com:11001", preferLocalServiceGatewayTarget("https://gw.example.com:11001", "https://control.example.com:11002"))
 }
 
 func TestResolveUsesPublicGatewayEndpoints(t *testing.T) {
@@ -94,7 +86,6 @@ func TestResolveUsesPublicGatewayEndpoints(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, "https://106.53.107.122:11001", endpointGatewayTarget(items, "service_gateway"))
 	assert.Equal(t, "106.53.107.122:11003", endpointTRPCTarget(items, "service_gateway_native"))
 }
 

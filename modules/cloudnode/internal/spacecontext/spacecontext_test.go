@@ -2,66 +2,44 @@ package spacecontext
 
 import (
 	"context"
-	"net/http"
 	"testing"
 
-	thttp "trpc.group/trpc-go/trpc-go/http"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
+
+func withMetadataSpace(spaceID string) context.Context {
+	ctx, msg := codec.WithNewMessage(context.Background())
+	msg.WithServerMetaData(codec.MetaData{gatewayroute.MetadataSpaceID: []byte(spaceID)})
+	return ctx
+}
 
 func TestFromContextReadsExplicitSpaceID(t *testing.T) {
 	got, ok := FromContext(WithSpaceID(context.Background(), "crypto"))
-	if !ok {
-		t.Fatal("FromContext ok = false, want true")
-	}
-	if got != "crypto" {
-		t.Fatalf("FromContext = %q, want crypto", got)
+	if !ok || got != "crypto" {
+		t.Fatalf("FromContext = %q %v, want crypto", got, ok)
 	}
 }
 
-func TestFromContextReadsHTTPHeaderWhenFilterDidNotInject(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(SpaceIDHeader, "crypto")
-	ctx := thttp.WithHeader(context.Background(), &thttp.Header{Request: req})
-
-	got, ok := FromContext(ctx)
-	if !ok {
-		t.Fatal("FromContext ok = false, want true")
-	}
-	if got != "crypto" {
-		t.Fatalf("FromContext = %q, want crypto", got)
+func TestFromContextReadsTRPCMetadata(t *testing.T) {
+	got, ok := FromContext(withMetadataSpace("crypto"))
+	if !ok || got != "crypto" {
+		t.Fatalf("FromContext = %q %v, want crypto", got, ok)
 	}
 }
 
-func TestFromContextPrefersExplicitSpaceIDOverHTTPHeader(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(SpaceIDHeader, "wrong")
-	ctx := thttp.WithHeader(WithSpaceID(context.Background(), "crypto"), &thttp.Header{Request: req})
-
-	got, ok := FromContext(ctx)
-	if !ok {
-		t.Fatal("FromContext ok = false, want true")
-	}
-	if got != "crypto" {
-		t.Fatalf("FromContext = %q, want explicit crypto", got)
+func TestFromContextPrefersExplicitSpaceIDOverMetadata(t *testing.T) {
+	got, ok := FromContext(WithSpaceID(withMetadataSpace("wrong"), "crypto"))
+	if !ok || got != "crypto" {
+		t.Fatalf("FromContext = %q %v, want explicit crypto", got, ok)
 	}
 }
 
-func TestFromContextRejectsBlankHTTPHeader(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(SpaceIDHeader, "   ")
-	ctx := thttp.WithHeader(context.Background(), &thttp.Header{Request: req})
-
-	got, ok := FromContext(ctx)
-	if ok {
+func TestFromContextRejectsBlankMetadata(t *testing.T) {
+	if got, ok := FromContext(withMetadataSpace("   ")); ok {
 		t.Fatalf("FromContext ok = true, want false with value %q", got)
+	}
+	if _, err := MustFromContext(context.Background()); err == nil {
+		t.Fatal("缺少 space 时应当报错")
 	}
 }

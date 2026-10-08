@@ -5,47 +5,39 @@
 package garbage
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const (
-	// historyRetention bounds the login and SSH session audit history.
-	historyRetention = 90 * 24 * time.Hour
-	// maxResponseBytes bounds a module's garbage summary.
-	maxResponseBytes = 1 << 20
-)
+// historyRetention bounds the login and SSH session audit history.
+const historyRetention = 90 * 24 * time.Hour
 
-// ServiceResolver finds a module deployment on the Admin node.
-type ServiceResolver interface {
-	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (sysdeploy.ServiceDetail, bool)
+// CloudNodeGarbage 是 CloudNode 的垃圾回收接口；Admin 以 admin 身份经 gatewayclient 调用。
+type CloudNodeGarbage interface {
+	CollectGarbage(context.Context, *cloudnodepb.CollectGarbageReq, ...client.Option) (*cloudnodepb.CollectGarbageRsp, error)
 }
 
 // Collector removes system garbage once per timer invocation.
 type Collector struct {
-	db          *gorm.DB
-	resolver    ServiceResolver
-	adminNodeID string
-	client      *http.Client
-	now         func() time.Time
+	db        *gorm.DB
+	cloudNode CloudNodeGarbage
+	now       func() time.Time
 }
 
-// NewCollector returns a Collector over the Admin database and deployments.
-func NewCollector(db *gorm.DB, resolver ServiceResolver, adminNodeID string) (*Collector, error) {
-	if db == nil || resolver == nil || adminNodeID == "" {
-		return nil, errors.New("garbage collector requires database, service resolver and admin node id")
+// NewCollector returns a Collector over the Admin database. cloudNode 为空时（没有配置 admin 身份的
+// gateway_client）只清理 Admin 自己的历史，并在每次运行时报告 CloudNode 未清理。
+func NewCollector(db *gorm.DB, cloudNode CloudNodeGarbage) (*Collector, error) {
+	if db == nil {
+		return nil, errors.New("garbage collector requires the admin database")
 	}
-	return &Collector{db: db, resolver: resolver, adminNodeID: adminNodeID, client: &http.Client{}, now: time.Now}, nil
+	return &Collector{db: db, cloudNode: cloudNode, now: time.Now}, nil
 }
 
 // Run trims Admin history and collects CloudNode garbage. One failing part
@@ -70,43 +62,18 @@ func (c *Collector) trimHistory(ctx context.Context) error {
 	return nil
 }
 
-type retInfo struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-}
-
 func (c *Collector) collectCloudNode(ctx context.Context) error {
-	detail, ok := c.resolver.ResolveAdminServiceDetail(ctx, c.adminNodeID, "cloudnode")
-	if !ok {
-		return errors.New("collect CloudNode garbage: cloudnode has no active deployment on the admin node")
+	if c.cloudNode == nil {
+		return errors.New("collect CloudNode garbage: admin 身份的 gateway_client 没有配置")
 	}
-	url := fmt.Sprintf("http://%s/%s/CollectGarbage", detail.Address, detail.Path)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(`{}`)))
+	rsp, err := c.cloudNode.CollectGarbage(ctx, &cloudnodepb.CollectGarbageReq{})
 	if err != nil {
 		return fmt.Errorf("collect CloudNode garbage: %w", err)
 	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.client.Do(request)
-	if err != nil {
-		return fmt.Errorf("collect CloudNode garbage: %w", err)
+	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
+		return fmt.Errorf("collect CloudNode garbage: %s", rsp.GetRetInfo().GetMsg())
 	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-	if err != nil {
-		return fmt.Errorf("collect CloudNode garbage: read response: %w", err)
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("collect CloudNode garbage: HTTP %d", response.StatusCode)
-	}
-	var summary struct {
-		RetInfo retInfo `json:"ret_info"`
-	}
-	if err := json.Unmarshal(body, &summary); err != nil {
-		return fmt.Errorf("collect CloudNode garbage: decode response: %w", err)
-	}
-	if summary.RetInfo.Code != 0 {
-		return fmt.Errorf("collect CloudNode garbage: %s", summary.RetInfo.Msg)
-	}
-	log.InfoContextf(ctx, "[Garbage] cloudnode %s", body)
+	log.InfoContextf(ctx, "[Garbage] cloudnode packages=%d cos_objects=%d cos_bytes=%d deleted_nodes=%d",
+		rsp.GetPackages(), rsp.GetCosObjects(), rsp.GetCosBytes(), rsp.GetDeletedNodes())
 	return nil
 }

@@ -16,12 +16,8 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 )
 
-// Dependencies contains the service endpoints used by CollectMgr. Collector 自己访问 Storage 走
-// gatewayclient；这里只解析写入 SCF 调用载荷的网关地址和控制面依赖。
+// Dependencies 是写入 SCF 调用载荷的网关地址。Collector 自己调用其他组件都走 gatewayclient。
 type Dependencies struct {
-	AdminGatewayURL      string
-	ServiceGatewayTarget string
-	ServiceAuth          ServiceAuthConfig
 	// CollectorRuntimeGatewayTarget is the native tRPC Gateway on the node
 	// hosting MarketFetchRuntime. It must not be inferred from Storage routing.
 	CollectorRuntimeGatewayTarget string
@@ -65,9 +61,6 @@ type activeDeploymentsRsp struct {
 // Collector's own Storage RPC.
 func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	deps := Dependencies{
-		AdminGatewayURL:               defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceGatewayTarget:          defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceAuth:                   cfg.SysDeploy.ServiceAuth,
 		InvokeStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 		CollectorRuntimeGatewayTarget: cfg.CollectorRuntime.GatewayTarget,
 		CollectorRuntimeGatewayNodeID: cfg.CollectorRuntime.NodeID,
@@ -78,12 +71,6 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	active, err := fetchActiveDeployments(ctx, cfg)
 	if err != nil {
 		return deps, err
-	}
-	if v := endpointAddress(active, "moox_cloudnode", "cloudnode"); v != "" {
-		_ = v // cloudnode RPC address is resolved for runtime deployments; control plane uses admin gateway.
-	}
-	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
-		deps.ServiceGatewayTarget = preferLocalServiceGatewayTarget(v, cfg.SysDeploy.AdminGatewayURL)
 	}
 	// Storage clients use the native tRPC listener selected for the Storage
 	// deployment. The active-deployment response contains endpoints from every
@@ -176,25 +163,6 @@ func selectInvokeStorageTarget(configured, discovered string) (string, error) {
 	return "", fmt.Errorf("storage rpc target missing")
 }
 
-// preferLocalServiceGatewayTarget avoids sending same-host control-plane
-// calls through the public HTTPS edge. The public address is not hairpin-safe
-// on the control machine, so a healthy local Gateway can otherwise appear as
-// a timeout to Collector (and stall timer reconciliation and EventBus work).
-// Keep remote deployments on the discovered public endpoint.
-func preferLocalServiceGatewayTarget(discovered, adminGatewayURL string) string {
-	discovered = strings.TrimRight(strings.TrimSpace(discovered), "/")
-	admin := normalizeBaseURL(adminGatewayURL)
-	parsed, err := url.Parse(admin)
-	if err != nil || parsed.Hostname() == "" || parsed.Port() != "11002" {
-		return discovered
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
-		return discovered
-	}
-	return admin
-}
-
 func isUsableConfiguredStorageTarget(raw string) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "ip" || parsed.Hostname() == "" || parsed.Port() == "" {
@@ -212,14 +180,6 @@ func isUsableConfiguredStorageTarget(raw string) bool {
 		return false
 	}
 	return true
-}
-
-func defaultAdminGatewayURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw != "" {
-		return normalizeBaseURL(raw)
-	}
-	return "http://127.0.0.1:11002"
 }
 
 func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoint, error) {
@@ -265,46 +225,6 @@ func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoi
 		return nil, fmt.Errorf("sysdeploy: %s", out.RetInfo.Msg)
 	}
 	return out.DeploymentMap, nil
-}
-
-func endpointAddress(items map[string]endpoint, names ...string) string {
-	for _, name := range names {
-		item, ok := findEndpoint(items, name)
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(item.RPCAddress) != "" {
-			return item.RPCAddress
-		}
-		if strings.TrimSpace(item.BaseURL) != "" {
-			return item.BaseURL
-		}
-		if strings.TrimSpace(item.Host) != "" && item.Port > 0 {
-			return fmt.Sprintf("%s:%d", item.Host, item.Port)
-		}
-	}
-	return ""
-}
-
-func endpointGatewayTarget(items map[string]endpoint, names ...string) string {
-	for _, name := range names {
-		item, ok := findEndpoint(items, name)
-		if !ok {
-			continue
-		}
-		if value := strings.TrimSpace(item.BaseURL); value != "" {
-			return strings.TrimRight(value, "/")
-		}
-		if strings.TrimSpace(item.Host) == "" || item.Port <= 0 {
-			continue
-		}
-		protocol := strings.TrimSpace(item.Protocol)
-		if protocol == "" {
-			protocol = "http"
-		}
-		return fmt.Sprintf("%s://%s:%d", protocol, item.Host, item.Port)
-	}
-	return ""
 }
 
 func endpointTRPCTarget(items map[string]endpoint, names ...string) string {

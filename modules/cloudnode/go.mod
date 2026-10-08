@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/cloudnode
 go 1.25.0
 
 require (
+	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/glebarez/sqlite v1.11.0
@@ -136,3 +137,5 @@ replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
 replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => ../../packages/gatewayroute/proto/directorypb
+
+replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute

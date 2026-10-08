@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -37,7 +36,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -182,7 +180,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
 	registerDNSRefreshSchedule(s, dnsSnapshot)
-	registerMarketFetchSchedule(ctx, s, cfg, deps, gatewayOptions, dbm, dnsSnapshot, marketFetchMetrics)
+	registerMarketFetchSchedule(ctx, s, cfg, deps, gateway, dbm, dnsSnapshot, marketFetchMetrics)
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err
 	}
@@ -444,7 +442,7 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter) {
 	})
 }
 
-func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, deps Dependencies, gatewayOptions []client.Option, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
+func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, deps Dependencies, gateway *gatewayclient.Client, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -452,16 +450,12 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	if service == nil {
 		log.Warn("collector market fetch timer service is not configured, scheduler registration skipped")
 	}
-	auth := runtimeAuth(deps.ServiceAuth)
-	// CloudNode control calls are service-gateway requests.  The admin gateway
-	// is only used to discover active deployments; using it here makes every
-	// scheduled invocation hit the browser/admin auth surface instead of the
-	// authenticated service route.
+	gatewayOptions := gateway.ClientOptions()
 	// A stockcn reconciliation reads the complete 170-node Timer fleet from
 	// CloudNode. Keep the request bounded, but allow the control-plane query
 	// enough time to serialize the full fleet instead of treating a healthy
 	// large-fleet response as a coordination failure.
-	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
+	invoker := scfinvoker.New(gateway.ClientOptions(gatewayclient.WithTimeout(60 * time.Second)))
 	metadataSource := storagesource.NewDatasetSource(gatewayOptions)
 	plannerSource := metadataSource
 	storageFactory := marketfetch.NewStorageFactory(gatewayOptions)
@@ -955,10 +949,6 @@ func parseMarketFetchSpaceIDs(raw string) []string {
 		spaceIDs = append(spaceIDs, spaceID)
 	}
 	return spaceIDs
-}
-
-func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {
-	return runtimeapp.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, Caller: cfg.Caller, TargetNode: cfg.TargetNode, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64, ExpireSec: cfg.ExpireSeconds}
 }
 
 func stockCNTargetDataTimeValidator(calendar *stockmarket.Calendar, settleDelay time.Duration, now func() time.Time) func(string, time.Time) bool {

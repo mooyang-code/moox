@@ -2,15 +2,13 @@ package test
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
@@ -21,10 +19,12 @@ import (
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 // TestDefaultRuleInitAndSchedulerE2E proves the complete recovery boundary:
@@ -45,36 +45,12 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5, summary.TasksCreated)
 
-	var invocationCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		var response proto.Message
-		switch r.URL.Path {
-		case "/api/service/cloudnode/GetNodeList":
-			response = &cloudnodepb.GetNodeListRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Items:   []*cloudnodepb.CloudNode{{NodeId: "node-symbols", FunctionName: "node-symbols", Region: "ap-guangzhou", PackageId: "pkg", BizType: "market_fetcher", TriggerType: "invoke", Metadata: &structpb.Struct{Fields: map[string]*structpb.Value{"deployment_ready": structpb.NewBoolValue(true)}}}},
-				Page:    &commonpb.PageResult{Page: 1, Size: 100, Total: 1, HasMore: false},
-			}
-		case "/api/service/cloudnode/InvokeFunction":
-			invocationCount.Add(1)
-			response = &cloudnodepb.InvokeFunctionRsp{RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"}, Scf: &cloudnodepb.ScfInvokeResult{Code: 0, RequestId: "request-1"}}
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		message, marshalErr := protojson.Marshal(response)
-		if marshalErr != nil {
-			http.Error(w, marshalErr.Error(), http.StatusInternalServerError)
-			return
-		}
-		_, _ = w.Write(message)
-	}))
-	defer server.Close()
+	cloudNode := &defaultRuleCloudNode{}
+	address := startDefaultRuleCloudNode(t, cloudNode)
 
 	scheduler := &marketfetch.Scheduler{
 		Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
-		Invoker:           scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
+		Invoker:           scfinvoker.New([]client.Option{client.WithTarget("ip://" + address), client.WithNetwork("tcp"), client.WithProtocol("trpc")}),
 		ResolveSymbol:     marketwiring.ResolveSymbol,
 		ResolveSourceID:   marketwiring.DefaultSourceID,
 		Symbols:           defaultRuleDatasetSource{},
@@ -82,7 +58,8 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 		InvokeConcurrency: 1, Now: func() time.Time { return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC) },
 	}
 	require.NoError(t, scheduler.Tick(ctx, "crypto"))
-	require.Eventually(t, func() bool { return invocationCount.Load() > 0 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return cloudNode.invocations.Load() > 0 }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, "crypto", cloudNode.space.Load(), "CloudNode 从 tRPC 元数据取得 space")
 
 	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", Page: 1, PageSize: 200})
 	require.NoError(t, err)
@@ -126,4 +103,36 @@ func (defaultRuleDatasetSource) ResolveSubjects(_ context.Context, _ string, tag
 		}
 	}
 	return []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}}, nil
+}
+
+// defaultRuleCloudNode 是假的 CloudNodeMgr：列出一个已部署的采集节点，并记录函数调用。
+type defaultRuleCloudNode struct {
+	cloudnodepb.UnimplementedCloudNodeMgr
+	invocations atomic.Int32
+	space       atomic.Value
+}
+
+func (f *defaultRuleCloudNode) GetNodeList(ctx context.Context, _ *cloudnodepb.GetNodeListReq) (*cloudnodepb.GetNodeListRsp, error) {
+	f.space.Store(string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID)))
+	return &cloudnodepb.GetNodeListRsp{
+		RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+		Items:   []*cloudnodepb.CloudNode{{NodeId: "node-symbols", FunctionName: "node-symbols", Region: "ap-guangzhou", PackageId: "pkg", BizType: "market_fetcher", TriggerType: "invoke", Metadata: &structpb.Struct{Fields: map[string]*structpb.Value{"deployment_ready": structpb.NewBoolValue(true)}}}},
+		Page:    &commonpb.PageResult{Page: 1, Size: 100, Total: 1, HasMore: false},
+	}, nil
+}
+
+func (f *defaultRuleCloudNode) InvokeFunction(context.Context, *cloudnodepb.InvokeFunctionReq) (*cloudnodepb.InvokeFunctionRsp, error) {
+	f.invocations.Add(1)
+	return &cloudnodepb.InvokeFunctionRsp{RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"}, Scf: &cloudnodepb.ScfInvokeResult{Code: 0, RequestId: "request-1"}}, nil
+}
+
+func startDefaultRuleCloudNode(t *testing.T, impl cloudnodepb.CloudNodeMgrService) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	service := server.New(server.WithListener(listener), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.cloudnode.CloudNodeMgr"))
+	cloudnodepb.RegisterCloudNodeMgrService(service, impl)
+	go func() { _ = service.Serve() }()
+	t.Cleanup(func() { _ = service.Close(nil) })
+	return listener.Addr().String()
 }
