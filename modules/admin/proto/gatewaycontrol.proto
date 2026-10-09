@@ -23,7 +23,8 @@ message GatewayVerificationKey {
   string caller = 1;
   string key_id = 2;
   bytes secret = 3;
-  // Zero means active. Retiring keys remain valid until this deadline.
+  // Zero means valid until explicitly retired, including rotation overlap.
+  // A positive value limits verification to this Unix deadline.
   int64 expires_at_unix = 4;
 }
 

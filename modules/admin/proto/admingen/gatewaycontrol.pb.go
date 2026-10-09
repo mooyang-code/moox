@@ -135,7 +135,8 @@ type GatewayVerificationKey struct {
 	Caller string `protobuf:"bytes,1,opt,name=caller,proto3" json:"caller,omitempty"`
 	KeyId  string `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
 	Secret []byte `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"`
-	// Zero means active. Retiring keys remain valid until this deadline.
+	// Zero means valid until explicitly retired, including rotation overlap.
+	// A positive value limits verification to this Unix deadline.
 	ExpiresAtUnix int64 `protobuf:"varint,4,opt,name=expires_at_unix,json=expiresAtUnix,proto3" json:"expires_at_unix,omitempty"`
 }
 

@@ -2,6 +2,12 @@ package model
 
 import "time"
 
+// Gateway keyrings belong to the control plane, not the generic SecretMgr API.
+const (
+	GatewayKeyringType     = "gateway_keyring"
+	GatewayKeyringIDPrefix = "moox:gateway-keyring:"
+)
+
 // Secret 秘钥管理表
 type Secret struct {
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`

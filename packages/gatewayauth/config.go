@@ -22,9 +22,10 @@ type credentialRegistryFile struct {
 	} `json:"credentials"`
 }
 
+// NewCredentialRegistry indexes by KeyID. A caller may have both its current
+// and retiring key during a controlled rotation; KeyIDs are globally unique.
 func NewCredentialRegistry(credentials []Credentials) (*CredentialRegistry, error) {
 	entries := make(map[string]Credentials, len(credentials))
-	callers := make(map[string]string, len(credentials))
 	for _, credential := range credentials {
 		if _, _, err := validateCredentials(credential); err != nil {
 			return nil, err
@@ -32,14 +33,10 @@ func NewCredentialRegistry(credentials []Credentials) (*CredentialRegistry, erro
 		if !validIdentifier(credential.Caller) {
 			return nil, fmt.Errorf("credential caller %q is invalid", credential.Caller)
 		}
-		if previous, exists := callers[credential.Caller]; exists {
-			return nil, fmt.Errorf("duplicate gateway caller %q for key IDs %q and %q", credential.Caller, previous, credential.KeyID)
-		}
 		if _, exists := entries[credential.KeyID]; exists {
 			return nil, fmt.Errorf("duplicate gateway key_id %q", credential.KeyID)
 		}
 		entries[credential.KeyID] = credential
-		callers[credential.Caller] = credential.KeyID
 	}
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("gateway credential registry is empty")
