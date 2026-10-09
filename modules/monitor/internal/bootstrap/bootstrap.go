@@ -54,14 +54,13 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
-	if cfg.Metrics.Enabled || cfg.Metrics.HostStorage.Enabled || cfg.MarketCanary.Enabled || cfg.KlineFreshness.Enabled {
-		runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "monitor gateway directory refresh: %v", err) })
-		if err != nil {
-			_ = runtime.Close()
-			return nil, err
-		}
-		runtime.StorageGateway = storagegateway.New(runtime.Gateway)
+	runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "monitor gateway directory refresh: %v", err) })
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
 	}
+	runtime.StorageGateway = storagegateway.New(runtime.Gateway)
+
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
 		_ = runtime.Close()
@@ -205,7 +204,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, policyErr
 	}
 	doctorContext := &monitordoctor.Builder{
-		Deployments: monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Deployments: monitorsysdeploy.NewClientSource(runtime.Gateway), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}

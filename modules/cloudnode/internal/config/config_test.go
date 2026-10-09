@@ -98,3 +98,23 @@ func writeCloudnodeConfig(t *testing.T, content string) string {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
 }
+
+func TestGatewayIdentityAndStrictConfiguration(t *testing.T) {
+	for _, body := range []string{
+		"gateway_client:\n  caller: admin\n",
+		"gateway_client:\n  caller: cloudnode\n  caller: admin\n",
+		"gateway_client:\n  unknown: true\n",
+		"{}\n---\n{}\n",
+		"service_auth:\n  caller: old\n",
+	} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(body), 0600))
+			_, err := Load(path)
+			require.Error(t, err)
+		})
+	}
+	cfg := Default()
+	_, err := cfg.OpenGateway(nil)
+	require.Error(t, err)
+}

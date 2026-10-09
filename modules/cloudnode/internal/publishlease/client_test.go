@@ -2,100 +2,84 @@ package publishlease
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"testing"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
-func TestClientOperationClaimLifecycle(t *testing.T) {
-	var methods []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		methods = append(methods, r.URL.Path)
-		var payload map[string]any
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-		require.Equal(t, "crypto", payload["spaceId"])
-		require.Equal(t, "operation-1", payload["operationId"])
-		require.Equal(t, "7", payload["fencingToken"])
-		w.Header().Set("Content-Type", "application/json")
-		active := r.URL.Path != endOperationPath
-		_, _ = fmt.Fprintf(w, "{\"ret_info\":{\"code\":0,\"msg\":\"ok\"},\"active\":%t}", active)
-	}))
-	defer server.Close()
+type gatewayFunc func(context.Context, string, string, any, any) error
 
-	client := &Client{
-		baseURL: server.URL, targetNode: "cloudnode-a",
-		credentials: gatewayauth.Credentials{KeyID: "key", Caller: "cloudnode", Secret: "secret"},
-		httpClient:  server.Client(),
-	}
-	ctx := context.Background()
-	require.NoError(t, client.BeginOperation(ctx, "crypto", "lease-1", 7, "operation-1"))
-	require.NoError(t, client.RenewOperation(ctx, "crypto", "operation-1", 7))
-	require.NoError(t, client.EndOperation(ctx, "crypto", "operation-1", 7))
-	require.Equal(t, []string{beginOperationPath, renewOperationPath, endOperationPath}, methods)
+func (f gatewayFunc) Invoke(ctx context.Context, service, method string, request, response any) error {
+	return f(ctx, service, method, request, response)
 }
 
-func TestClientRecoveryLeaseLifecycle(t *testing.T) {
+func TestClientNativeLeaseAndOperationLifecycle(t *testing.T) {
 	var methods []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		methods = append(methods, r.URL.Path)
-		var payload map[string]any
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-		require.Equal(t, "crypto", payload["spaceId"])
-		switch r.URL.Path {
-		case acquireLeasePath:
-			require.Equal(t, "cloudnode-recovery/job-1/item-1", payload["holderId"])
-			require.Equal(t, "7", payload["expectedFencingToken"])
-			_, _ = fmt.Fprint(w, `{"retInfo":{"code":0,"msg":"ok"},"spaceId":"crypto","leaseId":"lease-new","fencingToken":"8","expiresAt":"2026-10-03T12:02:00Z"}`)
-		case renewLeasePath:
-			require.Equal(t, "lease-new", payload["leaseId"])
-			require.Equal(t, "8", payload["fencingToken"])
-			_, _ = fmt.Fprint(w, `{"retInfo":{"code":0,"msg":"ok"},"spaceId":"crypto","leaseId":"lease-new","fencingToken":"8","expiresAt":"2026-10-03T12:04:00Z"}`)
-		case releaseLeasePath:
-			require.Equal(t, "lease-new", payload["leaseId"])
-			_, _ = fmt.Fprint(w, `{"retInfo":{"code":0,"msg":"ok"},"released":true}`)
+	client := New(gatewayFunc(func(ctx context.Context, service, method string, request, response any) error {
+		require.Equal(t, "trpc.moox.admin.CollectorPublishLease", service)
+		require.Equal(t, "crypto", gatewayclient.CallMetadataFromContext(ctx).SpaceID)
+		methods = append(methods, method)
+		switch method {
+		case "ValidateCollectorPublishLease":
+			require.EqualValues(t, 7, request.(*adminpb.ValidateCollectorPublishLeaseReq).GetFencingToken())
+			proto.Merge(response.(proto.Message), &adminpb.ValidateCollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, Valid: true, CurrentFencingToken: 7})
+		case "BeginCollectorPublishOperation":
+			require.Equal(t, "operation-1", request.(*adminpb.BeginCollectorPublishOperationReq).GetOperationId())
+			proto.Merge(response.(proto.Message), &adminpb.CollectorPublishOperationRsp{RetInfo: &adminpb.RetInfo{}, Active: true})
+		case "RenewCollectorPublishOperation", "EndCollectorPublishOperation":
+			require.Equal(t, "operation-1", request.(*adminpb.CollectorPublishOperationReq).GetOperationId())
+			proto.Merge(response.(proto.Message), &adminpb.CollectorPublishOperationRsp{RetInfo: &adminpb.RetInfo{}, Active: method != "EndCollectorPublishOperation"})
+		case "AcquireCollectorPublishLease":
+			require.Equal(t, "cloudnode-recovery/job-1/item-1", request.(*adminpb.AcquireCollectorPublishLeaseReq).GetHolderId())
+			require.EqualValues(t, 7, request.(*adminpb.AcquireCollectorPublishLeaseReq).GetExpectedFencingToken())
+			proto.Merge(response.(proto.Message), &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: "crypto", LeaseId: "lease-new", FencingToken: 8})
+		case "RenewCollectorPublishLease":
+			require.EqualValues(t, 8, request.(*adminpb.RenewCollectorPublishLeaseReq).GetFencingToken())
+			proto.Merge(response.(proto.Message), &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: "crypto", LeaseId: "lease-new", FencingToken: 8})
+		case "ReleaseCollectorPublishLease":
+			require.EqualValues(t, 8, request.(*adminpb.ReleaseCollectorPublishLeaseReq).GetFencingToken())
+			proto.Merge(response.(proto.Message), &adminpb.ReleaseCollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, Released: true})
 		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
+			t.Fatalf("unexpected method %s", method)
 		}
+		return nil
 	}))
-	defer server.Close()
-	client := &Client{
-		baseURL: server.URL, targetNode: "cloudnode-a",
-		credentials: gatewayauth.Credentials{KeyID: "key", Caller: "cloudnode", Secret: "secret"},
-		httpClient:  server.Client(),
-	}
-
-	lease, err := client.AcquireLease(context.Background(), "crypto", "cloudnode-recovery/job-1/item-1", 7)
+	require.NoError(t, client.Validate(t.Context(), "crypto", "lease-1", 7))
+	require.NoError(t, client.BeginOperation(t.Context(), "crypto", "lease-1", 7, "operation-1"))
+	require.NoError(t, client.RenewOperation(t.Context(), "crypto", "operation-1", 7))
+	require.NoError(t, client.EndOperation(t.Context(), "crypto", "operation-1", 7))
+	lease, err := client.AcquireLease(t.Context(), "crypto", "cloudnode-recovery/job-1/item-1", 7)
 	require.NoError(t, err)
 	require.Equal(t, &Lease{SpaceID: "crypto", LeaseID: "lease-new", FencingToken: 8}, lease)
-	require.NoError(t, client.RenewLease(context.Background(), lease))
-	require.NoError(t, client.ReleaseLease(context.Background(), lease))
-	require.Equal(t, []string{acquireLeasePath, renewLeasePath, releaseLeasePath}, methods)
+	require.NoError(t, client.RenewLease(t.Context(), lease))
+	require.NoError(t, client.ReleaseLease(t.Context(), lease))
+	require.Len(t, methods, 7)
 }
 
 func TestClientClassifiesStaleAndHeldLeaseResponses(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == acquireLeasePath {
-			_, _ = fmt.Fprintf(w, `{"retInfo":{"code":%d,"msg":"collector publish lease is held"}}`, adminpb.ErrorCode_CONFLICT)
-			return
+	client := New(gatewayFunc(func(_ context.Context, _, method string, _, response any) error {
+		if method == "AcquireCollectorPublishLease" {
+			response.(*adminpb.CollectorPublishLeaseRsp).RetInfo = &adminpb.RetInfo{Code: adminpb.ErrorCode_CONFLICT, Msg: ErrLeaseHeld.Error()}
+		} else {
+			response.(*adminpb.CollectorPublishOperationRsp).RetInfo = &adminpb.RetInfo{Code: adminpb.ErrorCode_CONFLICT, Msg: ErrLeaseStale.Error()}
 		}
-		_, _ = fmt.Fprintf(w, `{"retInfo":{"code":%d,"msg":"collector publish lease is expired or fenced"},"active":false}`, adminpb.ErrorCode_CONFLICT)
+		return nil
 	}))
-	defer server.Close()
-	client := &Client{
-		baseURL: server.URL, targetNode: "cloudnode-a",
-		credentials: gatewayauth.Credentials{KeyID: "key", Caller: "cloudnode", Secret: "secret"},
-		httpClient:  server.Client(),
-	}
-
-	_, err := client.AcquireLease(context.Background(), "crypto", "holder", 7)
+	_, err := client.AcquireLease(t.Context(), "crypto", "holder", 7)
 	require.ErrorIs(t, err, ErrLeaseHeld)
-	err = client.BeginOperation(context.Background(), "crypto", "old-lease", 7, "operation-1")
-	require.ErrorIs(t, err, ErrLeaseStale)
+	require.ErrorIs(t, client.BeginOperation(t.Context(), "crypto", "old-lease", 7, "operation-1"), ErrLeaseStale)
 	require.ErrorIs(t, leaseResponseError(&adminpb.RetInfo{Code: adminpb.ErrorCode_CONFLICT, Msg: ErrLeaseSuperseded.Error()}), ErrLeaseSuperseded)
+}
+
+func TestClientDoesNotResendMutationOnLostResponse(t *testing.T) {
+	calls := 0
+	lost := errors.New("response lost")
+	client := New(gatewayFunc(func(context.Context, string, string, any, any) error { calls++; return lost }))
+	require.ErrorIs(t, client.BeginOperation(t.Context(), "crypto", "lease-1", 7, "operation-1"), lost)
+	require.Equal(t, 1, calls)
+	require.Error(t, New(nil).EndOperation(t.Context(), "crypto", "operation-1", 7))
 }

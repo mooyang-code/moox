@@ -1,42 +1,34 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
 const (
-	setupRemoteAddress     = "127.0.0.1:11110"
-	sysDeployRemoteAddress = "127.0.0.1:11109"
-	maxResponseBytes       = 1 << 20
-	TradeGatewayHTTPSPort  = 11001
+	maxResponseBytes      = 1 << 20
+	TradeGatewayHTTPSPort = 11001
 )
 
 var storageDeploymentNames = []string{
 	"storage-primary", "storage-view",
 }
 
-type Forwarder interface {
-	ForwardLocal(context.Context, string) (net.Listener, error)
-}
-
+// Client borrows the command-owned signed gateway connection.
 type Client struct {
-	forwarder Forwarder
-	timeout   time.Duration
+	gateway gatewayclient.Invoker
 }
 
 type Space struct {
@@ -85,13 +77,13 @@ type TradeDeploymentSnapshot struct {
 
 func (c *Client) SnapshotTradeDeployments(ctx context.Context, nodeID string) (TradeDeploymentSnapshot, error) {
 	nodeID = strings.TrimSpace(nodeID)
-	if c == nil || c.forwarder == nil || nodeID == "" {
+	if c == nil || c.gateway == nil || nodeID == "" {
 		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_invalid")
 	}
 	snapshot := TradeDeploymentSnapshot{Rows: make(map[string]*pb.ServiceDeployment, 3)}
 	for _, name := range []string{"moox_trade", "trade_owner", "trade_console"} {
 		response := &pb.GetServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: name}, response); err != nil {
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: name}, response); err != nil {
 			return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
 		}
 		if response.GetRetInfo().GetCode() == pb.ErrorCode_NOT_FOUND {
@@ -103,7 +95,7 @@ func (c *Client) SnapshotTradeDeployments(ctx context.Context, nodeID string) (T
 		snapshot.Rows[name] = proto.Clone(response.GetDeployment()).(*pb.ServiceDeployment)
 	}
 	control := &pb.GetServiceDeploymentRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: "trade_console"}, control); err != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: "trade_console"}, control); err != nil {
 		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
 	}
 	if control.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && control.GetDeployment() != nil {
@@ -112,7 +104,7 @@ func (c *Client) SnapshotTradeDeployments(ctx context.Context, nodeID string) (T
 		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
 	}
 	nodes := &pb.ListGatewayNodesRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err != nil || checkRetInfo(nodes.GetRetInfo()) != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err != nil || checkRetInfo(nodes.GetRetInfo()) != nil {
 		return TradeDeploymentSnapshot{}, fmt.Errorf("trade_snapshot_failed")
 	}
 	for _, node := range nodes.GetNodes() {
@@ -126,7 +118,7 @@ func (c *Client) SnapshotTradeDeployments(ctx context.Context, nodeID string) (T
 
 func (c *Client) RestoreTradeDeployments(ctx context.Context, nodeID string, snapshot TradeDeploymentSnapshot) error {
 	nodeID = strings.TrimSpace(nodeID)
-	if c == nil || c.forwarder == nil || nodeID == "" {
+	if c == nil || c.gateway == nil || nodeID == "" {
 		return fmt.Errorf("trade_snapshot_invalid")
 	}
 	var restoreErr error
@@ -152,14 +144,14 @@ func (c *Client) RestoreTradeDeployments(ctx context.Context, nodeID string, sna
 	if snapshot.GatewayNode != nil {
 		node := proto.Clone(snapshot.GatewayNode).(*pb.GatewayNode)
 		response := &pb.UpdateGatewayNodeRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: node}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: node}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
 			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore gateway node: gateway_node_update_failed"))
 		}
 	} else {
 		// The setup API has no delete operation. Disable a node created by the
 		// failed attempt so it cannot receive a stale or partial route snapshot.
 		nodes := &pb.ListGatewayNodesRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err != nil {
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err != nil {
 			restoreErr = errors.Join(restoreErr, fmt.Errorf("find new gateway node: %w", err))
 		} else if err := checkRetInfo(nodes.GetRetInfo()); err != nil {
 			restoreErr = errors.Join(restoreErr, fmt.Errorf("find new gateway node: %w", err))
@@ -171,7 +163,7 @@ func (c *Client) RestoreTradeDeployments(ctx context.Context, nodeID string, sna
 				copy := proto.Clone(node).(*pb.GatewayNode)
 				copy.Status = "disabled"
 				response := &pb.UpdateGatewayNodeRsp{}
-				if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: copy}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+				if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: copy}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
 					restoreErr = errors.Join(restoreErr, fmt.Errorf("disable new gateway node: gateway_node_update_failed"))
 				}
 				break
@@ -190,14 +182,14 @@ func (c *Client) ApplyTradeConsolePlacementForNode(ctx context.Context, host, no
 
 func (c *Client) applyTradeConsolePlacement(ctx context.Context, host, nodeID string) error {
 	host = strings.TrimSpace(host)
-	if c == nil || c.forwarder == nil || host == "" {
+	if c == nil || c.gateway == nil || host == "" {
 		return fmt.Errorf("trade_placement_invalid")
 	}
 	if !validTradePlacementHost(host) {
 		return fmt.Errorf("trade_placement_invalid")
 	}
 	getResponse := &pb.GetServiceDeploymentRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 		&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: "trade_console"}, getResponse); err != nil {
 		return fmt.Errorf("trade_placement_failed")
 	}
@@ -268,11 +260,11 @@ func tradeConsoleGatewayExtra(raw, host, nodeID string) string {
 // not enough: the Gateway may still hold a stale/disabled route snapshot.
 func (c *Client) VerifyTradeOwnerRoute(ctx context.Context, nodeID string) error {
 	nodeID = strings.TrimSpace(nodeID)
-	if c == nil || c.forwarder == nil || nodeID == "" {
+	if c == nil || c.gateway == nil || nodeID == "" {
 		return fmt.Errorf("trade_route_invalid")
 	}
 	response := &pb.GetGatewayNodeRoutesRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetGatewayNodeRoutes", &pb.GetGatewayNodeRoutesReq{NodeId: nodeID}, response); err != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetGatewayNodeRoutes", &pb.GetGatewayNodeRoutesReq{NodeId: nodeID}, response); err != nil {
 		return fmt.Errorf("trade_route_probe_failed")
 	}
 	if err := checkRetInfo(response.GetRetInfo()); err != nil || response.GetDisabled() || response.GetRouteHash() == "" {
@@ -288,7 +280,7 @@ func (c *Client) VerifyTradeOwnerRoute(ctx context.Context, nodeID string) error
 	}
 	for {
 		nodes := &pb.ListGatewayNodesRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err == nil && checkRetInfo(nodes.GetRetInfo()) == nil {
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, nodes); err == nil && checkRetInfo(nodes.GetRetInfo()) == nil {
 			var observed *pb.GatewayNode
 			for _, candidate := range nodes.GetNodes() {
 				if candidate != nil && candidate.GetNodeId() == nodeID {
@@ -368,8 +360,8 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-func New(forwarder Forwarder) *Client {
-	return &Client{forwarder: forwarder, timeout: 30 * time.Second}
+func New(gateway gatewayclient.Invoker) *Client {
+	return &Client{gateway: gateway}
 }
 
 func (c *Client) Apply(ctx context.Context, snapshot *setupconfig.Snapshot) (ApplyResult, error) {
@@ -381,7 +373,7 @@ func (c *Client) ApplyWithSpaces(
 	snapshot *setupconfig.Snapshot,
 	spaces []Space,
 ) (ApplyResult, error) {
-	if snapshot == nil || c.forwarder == nil {
+	if snapshot == nil || c.gateway == nil {
 		return ApplyResult{}, fmt.Errorf("setup_client_invalid")
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
@@ -415,7 +407,7 @@ func (c *Client) StatusWithSpaces(
 	snapshot *setupconfig.Snapshot,
 	spaces []Space,
 ) (StatusResult, error) {
-	if snapshot == nil || c.forwarder == nil {
+	if snapshot == nil || c.gateway == nil {
 		return StatusResult{}, fmt.Errorf("setup_client_invalid")
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
@@ -446,7 +438,7 @@ func (c *Client) ApplyStoragePlacement(ctx context.Context, nodeID, host string)
 	// The HTTP gateway remains on control for CloudNode and other control-plane
 	// RPCs. Only the native Storage ingress moves to the Storage host.
 	getResponse := &pb.GetServiceDeploymentRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 		&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: "service_gateway_native"}, getResponse); err != nil || checkRetInfo(getResponse.GetRetInfo()) != nil || getResponse.GetDeployment() == nil {
 		return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 	}
@@ -465,12 +457,12 @@ func (c *Client) ApplyStoragePlacement(ctx context.Context, nodeID, host string)
 // resolve PrimaryStore/Metadata requests even though the processes are ready.
 func (c *Client) ActivateStoragePlacement(ctx context.Context, nodeID string) (StoragePlacementResult, error) {
 	nodeID = strings.TrimSpace(nodeID)
-	if c == nil || c.forwarder == nil || nodeID == "" {
+	if c == nil || c.gateway == nil || nodeID == "" {
 		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
 	}
 	for _, serviceName := range storageDeploymentNames {
 		getResponse := &pb.GetServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 			&pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: serviceName}, getResponse); err != nil {
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
@@ -495,19 +487,19 @@ func (c *Client) ActivateStoragePlacement(ctx context.Context, nodeID string) (S
 // without a placed row are left alone.
 func (c *Client) RefreshStoragePlacement(ctx context.Context, nodeID string) (StoragePlacementResult, error) {
 	nodeID = strings.TrimSpace(nodeID)
-	if c == nil || c.forwarder == nil || nodeID == "" || nodeID == "control" {
+	if c == nil || c.gateway == nil || nodeID == "" || nodeID == "control" {
 		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
 	}
 	refreshed := 0
 	for _, serviceName := range storageDeploymentNames {
 		control := &pb.GetServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 			&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: serviceName}, control); err != nil ||
 			checkRetInfo(control.GetRetInfo()) != nil || control.GetDeployment() == nil {
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
 		placed := &pb.GetServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 			&pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: serviceName}, placed); err != nil {
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
@@ -536,7 +528,7 @@ func (c *Client) RefreshStoragePlacement(ctx context.Context, nodeID string) (St
 // the current native endpoint until Storage readiness has succeeded.
 func (c *Client) PrepareStoragePlacement(ctx context.Context, nodeID, host string) (StoragePlacementResult, error) {
 	nodeID, host = strings.TrimSpace(nodeID), strings.TrimSpace(host)
-	if c == nil || c.forwarder == nil || nodeID == "" || host == "" {
+	if c == nil || c.gateway == nil || nodeID == "" || host == "" {
 		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
 	}
 	if err := c.ensureGatewayNode(ctx, nodeID, host); err != nil {
@@ -544,7 +536,7 @@ func (c *Client) PrepareStoragePlacement(ctx context.Context, nodeID, host strin
 	}
 	for _, serviceName := range storageDeploymentNames {
 		getResponse := &pb.GetServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 			&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: serviceName}, getResponse); err != nil {
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
@@ -581,14 +573,14 @@ func (c *Client) writeGatewayNode(ctx context.Context, nodeID, host string, port
 		createStatus = "enabled"
 	}
 	response := &pb.ListGatewayNodesRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
 		return fmt.Errorf("gateway_node_lookup_failed")
 	}
 	desiredAddress := "https://" + net.JoinHostPort(host, strconv.Itoa(port))
 	node := &pb.GatewayNode{NodeId: nodeID, Name: nodeID, PublicAddress: desiredAddress, Status: createStatus}
 	if len(response.GetNodes()) == 0 {
 		created := &pb.CreateGatewayNodeRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateGatewayNode", &pb.CreateGatewayNodeReq{Node: node}, created); err != nil || checkRetInfo(created.GetRetInfo()) != nil {
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "CreateGatewayNode", &pb.CreateGatewayNodeReq{Node: node}, created); err != nil || checkRetInfo(created.GetRetInfo()) != nil {
 			return fmt.Errorf("gateway_node_create_failed")
 		}
 		return nil
@@ -606,7 +598,7 @@ func (c *Client) writeGatewayNode(ctx context.Context, nodeID, host string, port
 		node.PublicAddress = desiredAddress
 	}
 	updated := &pb.UpdateGatewayNodeRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: node}, updated); err != nil || checkRetInfo(updated.GetRetInfo()) != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: node}, updated); err != nil || checkRetInfo(updated.GetRetInfo()) != nil {
 		return fmt.Errorf("gateway_node_update_failed")
 	}
 	return nil
@@ -614,16 +606,16 @@ func (c *Client) writeGatewayNode(ctx context.Context, nodeID, host string, port
 
 func (c *Client) upsertDeployment(ctx context.Context, deployment *pb.ServiceDeployment) error {
 	getResponse := &pb.GetServiceDeploymentRsp{}
-	err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: deployment.GetNodeId(), ServiceName: deployment.GetServiceName()}, getResponse)
+	err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: deployment.GetNodeId(), ServiceName: deployment.GetServiceName()}, getResponse)
 	if err == nil && checkRetInfo(getResponse.GetRetInfo()) == nil {
 		response := &pb.UpdateServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment", &pb.UpdateServiceDeploymentReq{NodeId: deployment.GetNodeId(), ServiceName: deployment.GetServiceName(), Deployment: deployment}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+		if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment", &pb.UpdateServiceDeploymentReq{NodeId: deployment.GetNodeId(), ServiceName: deployment.GetServiceName(), Deployment: deployment}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
 			return fmt.Errorf("deployment_update_failed")
 		}
 		return nil
 	}
 	response := &pb.CreateServiceDeploymentRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateServiceDeployment", &pb.CreateServiceDeploymentReq{Deployment: deployment}, response); err != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "CreateServiceDeployment", &pb.CreateServiceDeploymentReq{Deployment: deployment}, response); err != nil {
 		return fmt.Errorf("deployment_create_failed")
 	}
 	if err := checkRetInfo(response.GetRetInfo()); err != nil {
@@ -636,47 +628,18 @@ func (c *Client) upsertDeployment(ctx context.Context, deployment *pb.ServiceDep
 }
 
 func (c *Client) forwardedPost(ctx context.Context, method string, request, response proto.Message) error {
-	return c.forwardedPostTo(ctx, setupRemoteAddress, "trpc.moox.admin.Setup", method, request, response)
+	return c.invoke(ctx, "trpc.moox.admin.Setup", method, request, response)
 }
 
-func (c *Client) forwardedPostTo(ctx context.Context, remoteAddress, service, method string, request, response proto.Message) error {
-	forwardContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	listener, err := c.forwarder.ForwardLocal(forwardContext, remoteAddress)
-	if err != nil {
+func (c *Client) invoke(ctx context.Context, service, method string, request, response proto.Message) error {
+	if c == nil || c.gateway == nil {
+		return fmt.Errorf("setup requires the operator's SSH gateway client")
+	}
+	if err := c.gateway.Invoke(ctx, service, method, request, response); err != nil {
+		if errs.Code(err) == errs.RetClientDecodeFail {
+			return fmt.Errorf("setup_response_invalid")
+		}
 		return fmt.Errorf("setup_not_reachable")
-	}
-	defer listener.Close()
-	endpoint := "http://" + listener.Addr().String() + "/" + service + "/" + method
-	return postProto(ctx, endpoint, request, response, c.timeout)
-}
-
-func postProto(ctx context.Context, endpoint string, request, response proto.Message, timeout time.Duration) error {
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(request)
-	if err != nil {
-		return fmt.Errorf("setup_request_invalid")
-	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
-	if err != nil {
-		return fmt.Errorf("setup_request_invalid")
-	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpClient := &http.Client{Timeout: timeout}
-	httpResponse, err := httpClient.Do(httpRequest)
-	if err != nil {
-		return fmt.Errorf("setup_not_reachable")
-	}
-	defer httpResponse.Body.Close()
-	if httpResponse.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(httpResponse.Body, maxResponseBytes))
-		return fmt.Errorf("setup_remote_failed")
-	}
-	body, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxResponseBytes+1))
-	if err != nil || len(body) > maxResponseBytes {
-		return fmt.Errorf("setup_response_invalid")
-	}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(body, response); err != nil {
-		return fmt.Errorf("setup_response_invalid")
 	}
 	return nil
 }

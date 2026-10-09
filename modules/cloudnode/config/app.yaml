@@ -1,5 +1,10 @@
 # MooX CloudNode service configuration.
 
+gateway_client:
+  caller: cloudnode
+  key_id: ""
+  key_file: ../../secrets/caller-cloudnode.key
+
 database:
   type: sqlite
   path: ./data/moox_cloudnode.db

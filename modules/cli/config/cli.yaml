@@ -6,7 +6,6 @@ moox:
 
 doctor:
   monitor_target: "ip://127.0.0.1:11410"
-  sysdeploy_target: "ip://127.0.0.1:11109"
   node_id: ""
   release_root: "."
   seed_path: "config/setup/service-deployments.yaml"

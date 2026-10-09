@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -80,20 +79,24 @@ func (c *Client) AcquireCollectorPublishLease(ctx context.Context, spaceID, hold
 	if spaceID == "" || holderID == "" {
 		return nil, fmt.Errorf("space_id and holder_id are required")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/publishlease/AcquireCollectorPublishLease", map[string]any{
+	raw, err := c.gatewayJSON(ctx, "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease", map[string]any{
 		"space_id": spaceID, "holder_id": holderID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AcquireCollectorPublishLease: %w", err)
 	}
-	return decodeCollectorPublishLease(raw, "AcquireCollectorPublishLease")
+	lease, err := decodeCollectorPublishLease(raw, "AcquireCollectorPublishLease")
+	if err == nil && lease.SpaceID != spaceID {
+		return nil, fmt.Errorf("AcquireCollectorPublishLease returned a different space")
+	}
+	return lease, err
 }
 
 func (c *Client) RenewCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease) (*CollectorPublishLease, error) {
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return nil, fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/publishlease/RenewCollectorPublishLease", map[string]any{
+	raw, err := c.gatewayJSON(ctx, "trpc.moox.admin.CollectorPublishLease", "RenewCollectorPublishLease", map[string]any{
 		"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10),
 	})
 	if err != nil {
@@ -103,6 +106,9 @@ func (c *Client) RenewCollectorPublishLease(ctx context.Context, lease *Collecto
 	if err != nil {
 		return nil, err
 	}
+	if renewed.SpaceID != lease.SpaceID || renewed.LeaseID != lease.LeaseID || renewed.FencingToken != lease.FencingToken {
+		return nil, fmt.Errorf("RenewCollectorPublishLease returned a different lease identity")
+	}
 	renewed.HolderID = lease.HolderID
 	return renewed, nil
 }
@@ -111,21 +117,21 @@ func (c *Client) ReleaseCollectorPublishLease(ctx context.Context, lease *Collec
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/publishlease/ReleaseCollectorPublishLease", map[string]any{
+	raw, err := c.gatewayJSON(ctx, "trpc.moox.admin.CollectorPublishLease", "ReleaseCollectorPublishLease", map[string]any{
 		"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10),
 	})
 	if err != nil {
 		return fmt.Errorf("ReleaseCollectorPublishLease: %w", err)
 	}
 	var response struct {
-		RetInfo  retInfo `json:"ret_info"`
-		Released bool    `json:"released"`
+		RetInfo  *retInfo `json:"ret_info"`
+		Released bool     `json:"released"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return fmt.Errorf("decode ReleaseCollectorPublishLease: %w", err)
 	}
-	if !isRetInfoSuccess(response.RetInfo.Code) {
-		return fmt.Errorf("ReleaseCollectorPublishLease rejected: %s", response.RetInfo.Msg)
+	if response.RetInfo == nil || !isRetInfoSuccess(response.RetInfo.Code) {
+		return fmt.Errorf("ReleaseCollectorPublishLease rejected: %s", safeLeaseMessage(response.RetInfo))
 	}
 	if !response.Released {
 		return fmt.Errorf("ReleaseCollectorPublishLease: lease is no longer current")
@@ -136,7 +142,7 @@ func (c *Client) ReleaseCollectorPublishLease(ctx context.Context, lease *Collec
 
 func decodeCollectorPublishLease(raw []byte, method string) (*CollectorPublishLease, error) {
 	var response struct {
-		RetInfo      retInfo         `json:"ret_info"`
+		RetInfo      *retInfo        `json:"ret_info"`
 		SpaceID      string          `json:"space_id"`
 		LeaseID      string          `json:"lease_id"`
 		FencingToken json.RawMessage `json:"fencing_token"`
@@ -145,8 +151,8 @@ func decodeCollectorPublishLease(raw []byte, method string) (*CollectorPublishLe
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", method, err)
 	}
-	if !isRetInfoSuccess(response.RetInfo.Code) {
-		return nil, fmt.Errorf("%s rejected: %s", method, response.RetInfo.Msg)
+	if response.RetInfo == nil || !isRetInfoSuccess(response.RetInfo.Code) {
+		return nil, fmt.Errorf("%s rejected: %s", method, safeLeaseMessage(response.RetInfo))
 	}
 	tokenText := strings.Trim(string(response.FencingToken), `"`)
 	token, err := strconv.ParseInt(tokenText, 10, 64)
@@ -158,4 +164,11 @@ func decodeCollectorPublishLease(raw []byte, method string) (*CollectorPublishLe
 		return nil, fmt.Errorf("%s returned an incomplete lease", method)
 	}
 	return &CollectorPublishLease{SpaceID: response.SpaceID, LeaseID: response.LeaseID, FencingToken: token, ExpiresAt: expiresAt}, nil
+}
+
+func safeLeaseMessage(info *retInfo) string {
+	if info == nil {
+		return "missing ret_info"
+	}
+	return info.Msg
 }

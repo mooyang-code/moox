@@ -12,7 +12,7 @@ func TestDefaultConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	cfg := DefaultConfig()
 	assert.False(t, cfg.Runtime.LiveTradingEnabled)
 	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
-	assert.Equal(t, "https://106.53.107.122:11001", cfg.Admin.BaseURL)
+	assert.Equal(t, "trade", cfg.GatewayClient.Caller)
 	assert.True(t, cfg.EventBus.Enabled)
 	assert.False(t, cfg.DNSResolver.Enabled)
 	assert.Equal(t, 4, cfg.DNSResolver.MaxIPsPerDomain)
@@ -48,10 +48,11 @@ eventbus:
 	assert.Equal(t, filepath.Join(dir, "data", "trade.db"), cfg.Database.Path)
 }
 
-func TestLoad_MissingFile_ShouldUseDefaults(t *testing.T) {
-	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
-	require.NoError(t, err)
-	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
+func TestLoadRequiresExistingConfiguration(t *testing.T) {
+	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
+	_, err = DefaultConfig().OpenGateway(nil)
+	require.Error(t, err)
 }
 
 func TestValidate_EventBusEnabledWithoutURLs_ShouldFail(t *testing.T) {
@@ -82,10 +83,7 @@ func TestApplyEnv_OverridesBusinessFields(t *testing.T) {
 
 	assert.Equal(t, dbPath, cfg.Database.Path)
 	assert.True(t, cfg.Runtime.LiveTradingEnabled)
-	assert.Equal(t, "http://127.0.0.1:18080", cfg.Admin.BaseURL)
-	assert.Equal(t, "env-ak", cfg.Admin.ServiceAuth.AccessKey)
-	assert.Equal(t, "env-sk", cfg.Admin.ServiceAuth.SecretKey)
-	assert.Equal(t, "gateway-gz-122", cfg.Admin.ServiceAuth.TargetNode)
+	assert.Equal(t, "trade", cfg.GatewayClient.Caller)
 }
 
 func TestLoad_InvalidYAML_ShouldReturnParseError(t *testing.T) {
@@ -110,7 +108,9 @@ func TestLoad_UnknownLegacyField_ShouldFail(t *testing.T) {
 
 func TestLoadRejectsInvalidLiveTradingEnvironment(t *testing.T) {
 	t.Setenv("MOOX_TRADE_LIVE_TRADING_ENABLED", "sometimes")
-	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	_, err := Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MOOX_TRADE_LIVE_TRADING_ENABLED")
 }
@@ -134,4 +134,24 @@ func TestValidate_EventBusEnabledWithoutConsumer_ShouldFail(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "eventbus target consumer is required")
+}
+
+func TestGatewayIdentityAndStrictConfiguration(t *testing.T) {
+	for _, body := range []string{
+		"gateway_client:\n  caller: admin\n",
+		"gateway_client:\n  caller: trade\n  caller: admin\n",
+		"gateway_client:\n  unknown: true\n",
+		"{}\n---\n{}\n",
+		"service_auth:\n  caller: old\n",
+	} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(body), 0600))
+			_, err := Load(path)
+			require.Error(t, err)
+		})
+	}
+	cfg := DefaultConfig()
+	_, err := cfg.OpenGateway(nil)
+	require.Error(t, err)
 }

@@ -54,6 +54,8 @@ func main() {
 	switch *mode {
 	case "kline-native":
 		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+	case "admin-native":
+		err = runAdminNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "cloudnode-native":
 		err = runCloudNodeNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "collector-period-native":
@@ -409,4 +411,29 @@ func writeReadyFile(path, value string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(value), 0o600)
+}
+
+func runAdminNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	var routes []gatewayroute.Route
+	for _, component := range catalog.Components {
+		if component.ID != "admin" {
+			continue
+		}
+		for _, spec := range component.Services {
+			var methods []string
+			for _, method := range spec.Methods {
+				if catalog.Allowed("moox-cli", spec.Path, method) {
+					methods = append(methods, method)
+				}
+			}
+			if len(methods) > 0 {
+				routes = append(routes, gatewayroute.Route{ServiceID: "admin", Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{"moox-cli"}})
+			}
+		}
+	}
+	return runNativeRoutes(nodeID, routes, "moox-cli", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }

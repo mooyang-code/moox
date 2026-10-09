@@ -15,6 +15,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	core "github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
@@ -29,7 +30,7 @@ func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
-	newClient         func(string, string) *doctorcli.Client
+	newClient         func(string, gatewayclient.Invoker) *doctorcli.Client
 	newMetadataClient func(string, string) doctorcli.StorageActivationClient
 }
 
@@ -62,7 +63,7 @@ func newDoctorViewConsumerRepairCommand() *cobra.Command {
 }
 
 func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
-	var nodeID, format, output string
+	var nodeID, format, output, file string
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
@@ -81,7 +82,12 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			if nodeID == "" {
 				nodeID = doctorCfg.NodeID
 			}
-			client := deps.newClient(doctorCfg.MonitorTarget, doctorCfg.SysDeployTarget)
+			gateway, err := openCommandGateway(cmd.Context(), file, nil)
+			if err != nil {
+				return err
+			}
+			defer gateway.Close()
+			client := deps.newClient(doctorCfg.MonitorTarget, gateway)
 			metadataClientFactory := deps.newMetadataClient
 			if metadataClientFactory == nil {
 				metadataClientFactory = newSignedStorageMetadataClient
@@ -127,6 +133,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&file, "file", "./moox.toml", "deployment manifest for the operator SSH gateway")
 	cmd.Flags().StringVar(&nodeID, "node", "", "target node ID")
 	cmd.Flags().StringSliceVar(&checks, "check", nil, "specific bounded check ID")
 	cmd.Flags().StringVar(&format, "format", "json", "report format: json, text, or markdown")

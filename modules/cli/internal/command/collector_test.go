@@ -1525,8 +1525,7 @@ func TestCollectorCLSCredentialsPreferDedicatedRuntimeIdentity(t *testing.T) {
 
 func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
 	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/service/secret/GetSecretValue", r.URL.Path)
-		require.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
+		require.Equal(t, "/api/admin/secret/GetSecretValue", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_id":"secret-shanghai","category":"cloud","provider":"tencent","status":"active","key_id":"shanghai-id","secret_value":"shanghai-key"}}`))
 	}))
 	defer server.Close()
@@ -2082,20 +2081,6 @@ func TestResolveCollectorRootMissing(t *testing.T) {
 	_, err := resolveCollectorRoot("/nonexistent/path")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "collector root not found")
-}
-
-func TestValidateCollectorPublishAuth(t *testing.T) {
-	t.Setenv("MOOX_ACCESS_TOKEN", "")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "")
-
-	require.ErrorContains(t, validateCollectorPublishAuth(collectorPublishOptions{}), "control authentication")
-	require.NoError(t, validateCollectorPublishAuth(collectorPublishOptions{AccessToken: "token"}))
-	require.Error(t, validateCollectorPublishAuth(collectorPublishOptions{ServiceAccessKey: "key"}))
-	require.NoError(t, validateCollectorPublishAuth(collectorPublishOptions{
-		ServiceAccessKey: "key",
-		ServiceSecretKey: "secret",
-	}))
 }
 
 func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, bizType string, expected int) ([]adminclient.CloudNode, error) {

@@ -305,13 +305,41 @@ components:
           - SetPlacementStatus
           - SyncHostPlacements
           - DeleteHost
+          - GetServiceDeployment
+          - GetGatewayNodeRoutes
+          - ListGatewayNodes
+          - ListServiceDeployments
+          - CreateServiceDeployment
+          - UpdateServiceDeployment
+          - CreateGatewayNode
+          - UpdateGatewayNode
         read_only_methods:
           - GetCatalog
           - ListHosts
           - ListPlacements
           - GetHostRoutes
           - GetDirectory
+          - GetServiceDeployment
+          - GetGatewayNodeRoutes
+          - ListGatewayNodes
+          - ListServiceDeployments
         acl:
+          - methods:
+              - GetServiceDeployment
+              - GetGatewayNodeRoutes
+              - ListGatewayNodes
+              - ListServiceDeployments
+              - CreateServiceDeployment
+              - UpdateServiceDeployment
+              - CreateGatewayNode
+              - UpdateGatewayNode
+            callers:
+              - moox-cli
+          - methods:
+              - ListGatewayNodes
+              - ListServiceDeployments
+            callers:
+              - monitor
           - methods:
               - GetCatalog
               - ListHosts

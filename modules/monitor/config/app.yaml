@@ -28,12 +28,6 @@ scheduler:
 
 sysdeploy:
   enabled: true
-  target: "ip://127.0.0.1:11109"
-  service_auth:
-    key_id: ""
-    secret_key: ""
-    target_node: ""
-    ca_file: ""
 
 alert:
   send_timeout_seconds: 10

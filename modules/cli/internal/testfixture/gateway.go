@@ -25,11 +25,15 @@ func (f HandlerGateway) Forward(ctx context.Context, service, method string, ser
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collectmgr", "trpc.moox.cloudnode.CloudNodeMgr": "cloudnode"}[service]
+	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collectmgr", "trpc.moox.cloudnode.CloudNodeMgr": "cloudnode", "trpc.moox.ops.SecretMgr": "secret", "trpc.moox.admin.CollectorPublishLease": "publishlease", "trpc.moox.admin.Setup": "setup", "trpc.moox.ops.SysDeploy": "sysdeploy"}[service]
 	if alias == "" || strings.ContainsAny(method, "/?#") || serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("unexpected gateway fixture call")
 	}
-	request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/admin/"+alias+"/"+method, bytes.NewReader(body))
+	path := "/api/admin/" + alias + "/" + method
+	if alias == "setup" || alias == "sysdeploy" {
+		path = "/" + service + "/" + method
+	}
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Space-Id", gatewayclient.CallMetadataFromContext(ctx).SpaceID)
 	response := httptest.NewRecorder()
@@ -55,6 +59,9 @@ func (f HandlerGateway) Invoke(ctx context.Context, service, method string, req,
 	if err != nil {
 		return err
 	}
-	return protojson.Unmarshal(raw, rsp.(proto.Message))
+	if err := protojson.Unmarshal(raw, rsp.(proto.Message)); err != nil {
+		return errs.NewFrameError(errs.RetClientDecodeFail, "decode gateway response")
+	}
+	return nil
 }
 func (f HandlerGateway) Close() error { return nil }

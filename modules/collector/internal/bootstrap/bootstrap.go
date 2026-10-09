@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -93,10 +92,6 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector gateway: %w", err)
 	}
-	deps, err := Resolve(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("resolve collector dependencies from sysdeploy: %w", err)
-	}
 
 	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "collector")
 	if err != nil {
@@ -152,9 +147,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	localDNS := dnscache.New(dnscache.Config{Domains: dnsDomains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
 	var remoteDNS collectordns.DomainResolver
 	if cfg.DNSResolver.Enabled {
-		// The resolver call is a native Gateway call made as the collector
-		// caller. SysDeploy's service credential is reserved for the control
-		// plane dependency API and must not be reused for Trade RPCs.
+		// Trade DNS retains its existing external credentials until E4.
 		remoteDNS = collectordns.NewTradeClient(
 			cfg.DNSResolver.Target,
 			cfg.DNSResolver.NodeID,
@@ -186,7 +179,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
 	registerDNSRefreshSchedule(s, dnsSnapshot, process)
-	registerMarketFetchSchedule(ctx, s, cfg, deps, dbm, dnsSnapshot, marketFetchMetrics, process)
+	registerMarketFetchSchedule(ctx, s, cfg, dbm, dnsSnapshot, marketFetchMetrics, process)
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err
 	}
@@ -378,9 +371,8 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State,
 		state.SetReady(databaseReady)
 		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, databaseReady)
 		rsp.Details = map[string]any{
-			"database":          databaseReady,
-			"cloudnode_address": cfg.CloudNode.Address,
-			"gateway_caller":    cfg.GatewayClient.Caller,
+			"database":       databaseReady,
+			"gateway_caller": cfg.GatewayClient.Caller,
 		}
 		if cfg.DNSResolver.Enabled {
 			if len(dns) > 0 && dns[0] != nil {
@@ -441,7 +433,7 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter, process 
 	})
 }
 
-func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics, process *Runtime) {
+func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics, process *Runtime) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -449,9 +441,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	if service == nil {
 		log.Warn("collector market fetch timer service is not configured, scheduler registration skipped")
 	}
-	auth := runtimeAuth(deps.ServiceAuth)
-	// CloudNode calls borrow the process gateway; publish leases migrate in D2c.
-	invoker := scfinvoker.New(scfinvoker.Config{Gateway: process.gateway, ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
+	invoker := scfinvoker.New(scfinvoker.Config{Gateway: process.gateway})
 	metadataSource := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
 	plannerSource := metadataSource
 	newStorage := func(_ string, marketType, writeSource string) (marketfetch.Storage, error) {
@@ -515,8 +505,8 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			SCFRegionBlacklists:           cfg.SCFRegionBlacklists,
 			ResolveSourceID:               marketwiring.DefaultSourceID,
 			ResolveSymbol:                 marketwiring.ResolveSymbol,
-			CollectorRuntimeGatewayTarget: deps.CollectorRuntimeGatewayTarget,
-			CollectorRuntimeGatewayNodeID: deps.CollectorRuntimeGatewayNodeID,
+			CollectorRuntimeGatewayTarget: cfg.CollectorRuntime.GatewayTarget,
+			CollectorRuntimeGatewayNodeID: cfg.CollectorRuntime.NodeID,
 			Tasks:                         dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: marketfetch.DefaultMaxSubjects(spaceID),
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
@@ -535,7 +525,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(), PeriodStorageStates: dbm.PeriodStorageStates(),
 			// Internal Storage uses the process gateway client. The external
 			// SCF payload keeps its discovered public target until E2.
-			Lifetime: ctx, Invoker: invoker, Storage: newStorage, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
+			Lifetime: ctx, Invoker: invoker, Storage: newStorage, InvokeStorageTarget: cfg.Storage.GatewayTarget,
 			InvokeConcurrency: invokeConcurrency, MaintenanceBatchLimit: maintenanceBatchLimit, MaintenanceRecoveryBatchLimit: recoveryBatchLimit,
 			MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
 			Symbols:                    plannerSource,
@@ -952,10 +942,6 @@ func parseMarketFetchSpaceIDs(raw string) []string {
 		spaceIDs = append(spaceIDs, spaceID)
 	}
 	return spaceIDs
-}
-
-func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {
-	return runtimeapp.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, Caller: cfg.Caller, TargetNode: cfg.TargetNode, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64, ExpireSec: cfg.ExpireSeconds}
 }
 
 func stockCNTargetDataTimeValidator(calendar *stockmarket.Calendar, settleDelay time.Duration, now func() time.Time) func(string, time.Time) bool {

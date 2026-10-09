@@ -26,7 +26,6 @@ type Config struct {
 
 type DoctorConfig struct {
 	MonitorTarget           string `yaml:"monitor_target"`
-	SysDeployTarget         string `yaml:"sysdeploy_target"`
 	NodeID                  string `yaml:"node_id"`
 	ReleaseRoot             string `yaml:"release_root"`
 	SeedPath                string `yaml:"seed_path"`
@@ -35,8 +34,8 @@ type DoctorConfig struct {
 
 func (c *Config) EffectiveDoctor() DoctorConfig {
 	value := DoctorConfig{
-		MonitorTarget: "ip://127.0.0.1:11410", SysDeployTarget: "ip://127.0.0.1:11109",
-		ReleaseRoot: ".", SeedPath: "config/setup/service-deployments.yaml",
+		MonitorTarget: "ip://127.0.0.1:11410",
+		ReleaseRoot:   ".", SeedPath: "config/setup/service-deployments.yaml",
 		DatasetHealthPolicyPath: "config/setup/dataset-health-policy.yaml",
 	}
 	if c != nil {
@@ -52,9 +51,6 @@ func (c *Config) EffectiveDoctor() DoctorConfig {
 func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 	if source.MonitorTarget != "" {
 		target.MonitorTarget = source.MonitorTarget
-	}
-	if source.SysDeployTarget != "" {
-		target.SysDeployTarget = source.SysDeployTarget
 	}
 	if source.NodeID != "" {
 		target.NodeID = source.NodeID
@@ -72,8 +68,8 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 
 func overrideDoctorFromEnv(value *DoctorConfig) {
 	for name, target := range map[string]*string{
-		"MOOX_DOCTOR_MONITOR_TARGET": &value.MonitorTarget, "MOOX_DOCTOR_SYSDEPLOY_TARGET": &value.SysDeployTarget,
-		"MOOX_NODE_ID": &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
+		"MOOX_DOCTOR_MONITOR_TARGET": &value.MonitorTarget,
+		"MOOX_NODE_ID":               &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
 		"MOOX_SERVICE_DEPLOYMENTS_SEED": &value.SeedPath,
 		"MOOX_DATASET_HEALTH_POLICY":    &value.DatasetHealthPolicyPath,
 	} {

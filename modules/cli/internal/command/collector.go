@@ -703,11 +703,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if fetcherConfig != nil && strings.TrimSpace(opts.ZipPath) != "" {
 		return collectorPublishSummary{}, fmt.Errorf("--zip is not allowed with --file manifest deployments; rebuild the package from control-plane trust material")
 	}
-	if fetcherConfig == nil {
-		if err := validateCollectorPublishAuth(opts); err != nil {
-			return collectorPublishSummary{}, err
-		}
-	} else {
+	if fetcherConfig != nil {
 		limits := setupconfig.TencentSCFLimits{}
 		if manifest != nil {
 			limits = manifest.Manifest.SCFFetcher.TencentLimits
@@ -738,8 +734,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return collectorPublishSummary{}, err
 	}
-	serviceGatewayCAFile := ""
-	manifestServiceAuth := false
 	var collectorCanaryTrust collectorSCFTrustMaterial
 	if fetcherConfig != nil {
 		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
@@ -747,33 +741,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, trustErr
 		}
 		collectorCanaryTrust = trustMaterial
-		if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-			opts.ServiceAccessKey = "moox-cli"
-			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
-			manifestServiceAuth = true
-		}
-		if err := validateCollectorPublishAuth(opts); err != nil {
-			return collectorPublishSummary{}, err
-		}
-		if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-			file, writeErr := os.CreateTemp("", "moox-collector-service-ca-")
-			if writeErr != nil {
-				return collectorPublishSummary{}, fmt.Errorf("create control service CA file: %w", writeErr)
-			}
-			serviceGatewayCAFile = file.Name()
-			if writeErr = file.Chmod(0o600); writeErr == nil {
-				_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-			}
-			closeErr := file.Close()
-			if writeErr == nil {
-				writeErr = closeErr
-			}
-			if writeErr != nil {
-				_ = os.Remove(serviceGatewayCAFile)
-				return collectorPublishSummary{}, fmt.Errorf("write control service CA file: %w", writeErr)
-			}
-			defer os.Remove(serviceGatewayCAFile)
-		}
 		// The credential file on the control host is intentionally an internal
 		// publisher credential and commonly contains a loopback NATS URL. SCF
 		// must never receive that URL: replace only the endpoint with the
@@ -838,20 +805,12 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if leaseSpaceID == "" {
 		return collectorPublishSummary{}, fmt.Errorf("collector publish requires a target space for the control-plane lease")
 	}
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, leaseSpaceID)
 	controlGateway, gatewayErr := openCommandGateway(ctx, opts.File, manifest)
 	if gatewayErr != nil {
 		return collectorPublishSummary{}, gatewayErr
 	}
 	defer controlGateway.Close()
-	client.Gateway = controlGateway
-	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
-		client.ServiceAuth.CAFile = serviceGatewayCAFile
-	}
-	if manifestServiceAuth && client.ServiceAuth != nil {
-		client.ServiceAuth.Caller = "moox-cli"
-		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
-	}
+	client := &adminclient.Client{Gateway: controlGateway, SpaceID: leaseSpaceID}
 	publishBaseCtx := ctx
 	var leaseGuard *collectorPublishLeaseGuard
 	defer func() {
@@ -1478,43 +1437,9 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return summary, err
 	}
-	serviceGatewayCAFile := ""
-	manifestServiceAuth := false
 	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
 	if trustErr != nil {
 		return summary, trustErr
-	}
-	if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-		opts.ServiceAccessKey = "moox-cli"
-		opts.ServiceSecretKey = trustMaterial.CLIServiceKey
-		manifestServiceAuth = true
-		if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-			file, writeErr := os.CreateTemp("", "moox-collector-activate-service-ca-")
-			if writeErr != nil {
-				return summary, fmt.Errorf("create control service CA: %w", writeErr)
-			}
-			serviceGatewayCAFile = file.Name()
-			if writeErr = file.Chmod(0o600); writeErr == nil {
-				_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-			}
-			closeErr := file.Close()
-			if writeErr == nil {
-				writeErr = closeErr
-			}
-			if writeErr != nil {
-				_ = os.Remove(serviceGatewayCAFile)
-				return summary, fmt.Errorf("write control service CA: %w", writeErr)
-			}
-			defer os.Remove(serviceGatewayCAFile)
-		}
-	}
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, fetcherConfig.SpaceID)
-	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
-		client.ServiceAuth.CAFile = serviceGatewayCAFile
-	}
-	if manifestServiceAuth && client.ServiceAuth != nil {
-		client.ServiceAuth.Caller = "moox-cli"
-		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
 	}
 	canaryRegion, selectErr := selectCollectorSCFCanaryRegion(fetcherConfig, activateLimits, "", "")
 	if selectErr != nil {
@@ -1530,7 +1455,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		return summary, gatewayErr
 	}
 	defer proofGateway.Close()
-	client.Gateway = proofGateway
+	client := &adminclient.Client{Gateway: proofGateway, SpaceID: fetcherConfig.SpaceID}
 	canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorGatewayInventoryReader{gateway: proofGateway}, proofGateway, trustMaterial)
 	if accessErr != nil {
 		return summary, accessErr
@@ -2130,22 +2055,6 @@ func readCollectorZipEntry(zipPath, name string) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(reader, 4*1024*1024))
 	}
 	return nil, fmt.Errorf("SCF package requires %s", name)
-}
-
-func validateCollectorPublishAuth(opts collectorPublishOptions) error {
-	accessToken := defaultFlag(opts.AccessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
-	accessKey := defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
-	secretKey := defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
-	if strings.TrimSpace(accessToken) != "" {
-		return nil
-	}
-	if strings.TrimSpace(accessKey) == "" || strings.TrimSpace(secretKey) == "" {
-		return fmt.Errorf(
-			"control authentication is required; set MOOX_ACCESS_TOKEN or both " +
-				"MOOX_GATEWAY_SERVICE_KEY_ID and MOOX_GATEWAY_SERVICE_SECRET_KEY",
-		)
-	}
-	return nil
 }
 
 func inspectCollectorFleet(
@@ -2996,58 +2905,12 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		return nil, fmt.Errorf("market_fetcher deletion requires --wait so the publish lease covers the asynchronous CloudNode batch")
 	}
 
-	serviceGatewayCAFile := ""
-	manifestServiceAuth := false
-	var manifest *setupconfig.Snapshot
-	if strings.TrimSpace(opts.File) != "" {
-		_, loadedManifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, spaceID)
-		if err != nil {
-			return nil, err
-		}
-		manifest = loadedManifest
-		if manifest != nil && strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-			trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
-			if trustErr != nil {
-				return nil, trustErr
-			}
-			opts.ServiceAccessKey = "moox-cli"
-			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
-			manifestServiceAuth = true
-			if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-				file, writeErr := os.CreateTemp("", "moox-collector-delete-service-ca-")
-				if writeErr != nil {
-					return nil, fmt.Errorf("create control service CA: %w", writeErr)
-				}
-				serviceGatewayCAFile = file.Name()
-				if writeErr = file.Chmod(0o600); writeErr == nil {
-					_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-				}
-				closeErr := file.Close()
-				if writeErr == nil {
-					writeErr = closeErr
-				}
-				if writeErr != nil {
-					_ = os.Remove(serviceGatewayCAFile)
-					return nil, fmt.Errorf("write control service CA: %w", writeErr)
-				}
-				defer os.Remove(serviceGatewayCAFile)
-			}
-		}
-	}
-	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
-	gateway, err := openCommandGateway(ctx, opts.File, manifest)
+	gateway, err := openCommandGateway(ctx, opts.File, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer gateway.Close()
-	client.Gateway = gateway
-	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
-		client.ServiceAuth.CAFile = serviceGatewayCAFile
-	}
-	if manifestServiceAuth && client.ServiceAuth != nil && manifest != nil {
-		client.ServiceAuth.Caller = "moox-cli"
-		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
-	}
+	client := &adminclient.Client{Gateway: gateway, SpaceID: spaceID}
 	namespace := strings.TrimSpace(opts.Namespace)
 	region := strings.TrimSpace(opts.Region)
 	if opts.DryRun {
@@ -4514,29 +4377,6 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 	summary.Operation = "deploy_nodes"
 	summary.TotalCount = deployResp.TotalCount
 	return summary, nil
-}
-
-func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string, spaceID string) *adminclient.Client {
-	client := adminclient.New(controlURL)
-	// A full stock Instrument snapshot can take longer than the ordinary
-	// control-plane request budget while the SCF invokes public providers.
-	// Keep the client bounded, but do not cancel a healthy invocation at 45s.
-	client.HTTPClient = &http.Client{Timeout: 2 * time.Minute}
-	client.AccessToken = defaultFlag(accessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
-	client.SpaceID = defaultFlag(spaceID, os.Getenv("MOOX_SPACE_ID"))
-	accessKey := defaultFlag(serviceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
-	secretKey := defaultFlag(serviceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
-	if accessKey != "" && secretKey != "" {
-		client.ServiceAuth = &adminclient.ServiceAuthConfig{
-			AccessKey:  accessKey,
-			SecretKey:  secretKey,
-			Caller:     defaultFlag(os.Getenv("MOOX_GATEWAY_CALLER"), "moox-cli"),
-			TargetNode: defaultFlag(os.Getenv("MOOX_GATEWAY_TARGET_NODE"), os.Getenv("MOOX_GATEWAY_NODE_ID")),
-			CAFile:     os.Getenv("MOOX_GATEWAY_CA_FILE"),
-			ExpireSecs: 60,
-		}
-	}
-	return client
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {

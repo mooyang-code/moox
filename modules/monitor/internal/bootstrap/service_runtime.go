@@ -65,7 +65,7 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
+	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(runtime.Gateway))
 	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
 		count, err := syncer.Sync(syncCtx)
 		if err != nil {

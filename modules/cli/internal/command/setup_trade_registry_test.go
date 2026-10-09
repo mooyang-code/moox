@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -24,7 +24,10 @@ func TestSyncTradeRegistryRequiresOwnerRouteBeforeSuccess(t *testing.T) {
 		for _, remote := range []bool{false, true} {
 			t.Run(strings.Join([]string{map[bool]string{true: "failure", false: "success"}[fail], map[bool]string{true: "remote", false: "local"}[remote]}, "/"), func(t *testing.T) {
 				ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), failOwner: fail}
-				result, err := syncSetupServiceRegistry(context.Background(), ssh, ssh,
+				previousOpen := openCommandGateway
+				openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
+				t.Cleanup(func() { openCommandGateway = previousOpen })
+				result, err := syncSetupServiceRegistry(context.Background(), nil, ssh, ssh,
 					setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", remote,
 					setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 				ssh.mu.Lock()
@@ -55,7 +58,10 @@ func TestSyncTradeRegistryCleansUpAfterRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), cancelOwner: cancel}
-	result, err := syncSetupServiceRegistry(ctx, ssh, ssh,
+	previousOpen := openCommandGateway
+	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
+	t.Cleanup(func() { openCommandGateway = previousOpen })
+	result, err := syncSetupServiceRegistry(ctx, nil, ssh, ssh,
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", true,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.Error(t, err)
@@ -71,7 +77,10 @@ func TestSyncTradeRegistryCleansUpAfterRequestCancellation(t *testing.T) {
 
 func TestSyncTradeRegistryReportsCleanupFailure(t *testing.T) {
 	ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), failOwner: true, stopError: errors.New("stop unavailable")}
-	_, err := syncSetupServiceRegistry(context.Background(), ssh, ssh,
+	previousOpen := openCommandGateway
+	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
+	t.Cleanup(func() { openCommandGateway = previousOpen })
+	_, err := syncSetupServiceRegistry(context.Background(), nil, ssh, ssh,
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", false,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.ErrorContains(t, err, "trade_owner_registry_failed")
@@ -80,7 +89,10 @@ func TestSyncTradeRegistryReportsCleanupFailure(t *testing.T) {
 
 func TestSyncTradeRegistryReportsDisableFailure(t *testing.T) {
 	ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), failOwner: true, failDisable: true}
-	result, err := syncSetupServiceRegistry(context.Background(), ssh, ssh,
+	previousOpen := openCommandGateway
+	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
+	t.Cleanup(func() { openCommandGateway = previousOpen })
+	result, err := syncSetupServiceRegistry(context.Background(), nil, ssh, ssh,
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", false,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.False(t, result.RegistrySynced)
@@ -116,15 +128,15 @@ func (s *tradeRegistrySSH) Run(ctx context.Context, argv []string, _ io.Reader) 
 	return setupssh.Result{}, nil
 }
 
-func (s *tradeRegistrySSH) ForwardLocal(ctx context.Context, _ string) (net.Listener, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (s *tradeRegistrySSH) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return (testfixture.HandlerGateway{Handler: s.handler()}).Invoke(ctx, service, method, req, rsp)
+}
+func (s *tradeRegistrySSH) Forward(ctx context.Context, service, method string, serialization int, body []byte) ([]byte, error) {
+	return (testfixture.HandlerGateway{Handler: s.handler()}).Forward(ctx, service, method, serialization, body)
+}
+func (s *tradeRegistrySSH) Close() error { return nil }
+func (s *tradeRegistrySSH) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		raw, _ := io.ReadAll(r.Body)
@@ -224,8 +236,5 @@ func (s *tradeRegistrySSH) ForwardLocal(ctx context.Context, _ string) (net.List
 			s.cancelOwner()
 		}
 		_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"}}`))
-	})}
-	s.t.Cleanup(func() { _ = server.Close() })
-	go func() { _ = server.Serve(listener) }()
-	return listener, nil
+	})
 }

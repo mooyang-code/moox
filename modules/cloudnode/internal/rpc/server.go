@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
@@ -25,6 +26,7 @@ type Service struct {
 	moduleMetrics         *report.ModuleMetrics
 	publishLeaseValidator CollectorPublishLeaseValidator
 	packageObjectsFactory func(store.CloudAccount, cloudcredential.TencentCredential) packageObjectStore
+	nodeBatchWorkers      sync.WaitGroup
 }
 
 type scfProvisioner interface {

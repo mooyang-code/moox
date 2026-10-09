@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
@@ -35,6 +36,7 @@ import (
 )
 
 type collectorGatewayWire struct {
+	adminpb.UnimplementedCollectorPublishLease
 	cloudnodepb.UnimplementedCloudNodeMgr
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedPrimaryStore
@@ -51,9 +53,10 @@ func (w *collectorGatewayWire) GetDirectory(_ context.Context, req *directorypb.
 		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
 	}
 	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version, Services: map[string]*directorypb.ServiceHosts{
-		"trpc.moox.storage.Metadata":       {HostIds: []string{"control"}},
-		"trpc.moox.storage.PrimaryStore":   {HostIds: []string{"control"}},
-		"trpc.moox.cloudnode.CloudNodeMgr": {HostIds: []string{"control"}},
+		"trpc.moox.storage.Metadata":            {HostIds: []string{"control"}},
+		"trpc.moox.storage.PrimaryStore":        {HostIds: []string{"control"}},
+		"trpc.moox.cloudnode.CloudNodeMgr":      {HostIds: []string{"control"}},
+		"trpc.moox.admin.CollectorPublishLease": {HostIds: []string{"control"}},
 	}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
 }
 
@@ -70,7 +73,7 @@ func (w *collectorGatewayWire) verify(ctx context.Context, service, method strin
 	if err != nil {
 		return err
 	}
-	if service == "trpc.moox.cloudnode.CloudNodeMgr" {
+	if service == "trpc.moox.cloudnode.CloudNodeMgr" || service == "trpc.moox.admin.CollectorPublishLease" {
 		if headers.Get("X-Space-Id") != "crypto" {
 			return errors.New("CloudNode space metadata changed")
 		}
@@ -342,7 +345,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	encoded, err := hostgatewayconfig.Encode(host)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(hostPath, encoded, 0600))
-	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.cloudnode.CloudNodeMgr": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
+	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.cloudnode.CloudNodeMgr": {"control"}, "trpc.moox.admin.CollectorPublishLease": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	wire := &collectorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}, calls: map[string]int{}}
@@ -350,6 +353,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
 	cloudnodepb.RegisterCloudNodeMgrService(svc, wire)
+	adminpb.RegisterCollectorPublishLeaseService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
@@ -499,6 +503,17 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	require.Len(t, wire.calls, 32)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
+	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")
+	require.NoError(t, err)
+	require.EqualValues(t, 17, lease.FencingToken)
+	lease, err = invoker.RenewCollectorPublishLease(t.Context(), lease)
+	require.NoError(t, err)
+	require.NoError(t, invoker.ReleaseCollectorPublishLease(t.Context(), lease))
+	wire.mu.Lock()
+	for _, method := range []string{"AcquireCollectorPublishLease", "RenewCollectorPublishLease", "ReleaseCollectorPublishLease"} {
+		require.Equal(t, 1, wire.calls[method])
+	}
+	wire.mu.Unlock()
 	nodes, err := invoker.ListMarketFetchers(t.Context(), "crypto")
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
@@ -548,4 +563,25 @@ func (w *collectorGatewayWire) SubmitUpdateNodeRuntimeConfigs(ctx context.Contex
 		return nil, err
 	}
 	return nil, errs.NewFrameError(errs.RetServerSystemErr, "lost response after accepting write")
+}
+
+func (w *collectorGatewayWire) AcquireCollectorPublishLease(ctx context.Context, req *adminpb.AcquireCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease", req); err != nil {
+		return nil, err
+	}
+	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: "lease-1", FencingToken: 17, ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
+}
+
+func (w *collectorGatewayWire) RenewCollectorPublishLease(ctx context.Context, req *adminpb.RenewCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.admin.CollectorPublishLease", "RenewCollectorPublishLease", req); err != nil {
+		return nil, err
+	}
+	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: req.GetLeaseId(), FencingToken: req.GetFencingToken(), ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
+}
+
+func (w *collectorGatewayWire) ReleaseCollectorPublishLease(ctx context.Context, req *adminpb.ReleaseCollectorPublishLeaseReq) (*adminpb.ReleaseCollectorPublishLeaseRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.admin.CollectorPublishLease", "ReleaseCollectorPublishLease", req); err != nil {
+		return nil, err
+	}
+	return &adminpb.ReleaseCollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, Released: true}, nil
 }

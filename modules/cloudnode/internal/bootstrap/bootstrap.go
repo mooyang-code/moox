@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
@@ -17,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/cloudnode/schema"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -32,6 +34,10 @@ type Runtime struct {
 	Store           *store.Store
 	DebugServer     *http.Server
 	NodeBatchCancel context.CancelFunc
+	NodeBatchWait   func()
+	Gateway         *gatewayclient.Client
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 func (r *Runtime) Close(ctx context.Context) error {
@@ -41,21 +47,28 @@ func (r *Runtime) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	if r.NodeBatchCancel != nil {
-		r.NodeBatchCancel()
-	}
-	var firstErr error
-	if r.DebugServer != nil {
-		if err := r.DebugServer.Shutdown(ctx); err != nil && firstErr == nil {
-			firstErr = err
+	r.closeOnce.Do(func() {
+		if r.NodeBatchCancel != nil {
+			r.NodeBatchCancel()
 		}
-	}
-	if r.Store != nil {
-		if err := r.Store.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if r.NodeBatchWait != nil {
+			r.NodeBatchWait()
 		}
-	}
-	return firstErr
+		if r.DebugServer != nil {
+			r.closeErr = r.DebugServer.Shutdown(ctx)
+		}
+		if r.Gateway != nil {
+			if err := r.Gateway.Close(); err != nil && r.closeErr == nil {
+				r.closeErr = err
+			}
+		}
+		if r.Store != nil {
+			if err := r.Store.Close(); err != nil && r.closeErr == nil {
+				r.closeErr = err
+			}
+		}
+	})
+	return r.closeErr
 }
 
 // Initialize loads config, initializes persistence, and registers tRPC services.
@@ -91,6 +104,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 cloudnode schema 失败: %v", err)
 		return nil, err
 	}
+	runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "cloudnode directory refresh failed: %v", err) })
+	if err != nil {
+		return nil, fmt.Errorf("initialize cloudnode gateway: %w", err)
+	}
 	moduleMetrics, err := registerMetricsReporter(s)
 	if err != nil {
 		return nil, err
@@ -98,9 +115,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	opts := []cloudnoderpc.Option{
 		cloudnoderpc.WithModuleMetrics(moduleMetrics),
-		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.NewFromEnv()),
+		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.New(runtime.Gateway)),
 	}
-	credentialResolver, err := cloudcredential.NewFromEnv()
+	credentialResolver, err := cloudcredential.New(runtime.Gateway)
 	if err != nil {
 		return nil, err
 	}
@@ -111,12 +128,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := startNodeBatchRunner(nodeBatchCtx, svc, cfg); err != nil {
 		return nil, err
 	}
+	runtime.NodeBatchWait = svc.WaitNodeBatchRunner
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
 	if err := registerHealth(s, cfg, dbm); err != nil {
 		return nil, err
 	}
 
 	keepResources = true
+	s.RegisterOnShutdown(func() {
+		closeCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 20*time.Second)
+		defer cancel()
+		_ = runtime.Close(closeCtx)
+	})
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done

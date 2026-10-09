@@ -65,9 +65,16 @@ func (s *Service) StartNodeBatchRunner(ctx context.Context, batchSize int, pollI
 	if repairedClaims > 0 {
 		log.InfoContextf(ctx, "[CloudNode] repaired successful node batch mutation claims count=%d", repairedClaims)
 	}
-	go s.runNodeBatchLoop(ctx, batchSize, pollInterval)
+	s.nodeBatchWorkers.Add(1)
+	go func() {
+		defer s.nodeBatchWorkers.Done()
+		s.runNodeBatchLoop(ctx, batchSize, pollInterval)
+	}()
 	return nil
 }
+
+// WaitNodeBatchRunner waits after cancellation before closing shared resources.
+func (s *Service) WaitNodeBatchRunner() { s.nodeBatchWorkers.Wait() }
 
 func (s *Service) runNodeBatchLoop(ctx context.Context, batchSize int, pollInterval time.Duration) {
 	for {

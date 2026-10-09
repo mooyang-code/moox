@@ -278,7 +278,10 @@ func (c *Client) Invoke(ctx context.Context, service, method string, req, rsp in
 	if err != nil {
 		return err
 	}
-	return codec.Unmarshal(c.config.Serialization, response, rsp)
+	if err := codec.Unmarshal(c.config.Serialization, response, rsp); err != nil {
+		return errs.NewFrameError(errs.RetClientDecodeFail, "decode gateway response")
+	}
+	return nil
 }
 
 func (c *Client) Forward(ctx context.Context, service, method string, serialization int, body []byte) ([]byte, error) {

@@ -19,6 +19,7 @@ import (
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -125,15 +126,8 @@ func (staticSSHChecker) Check(context.Context, setupconfig.Host) error { return 
 
 type setupForwarder struct{ handler http.Handler }
 
-func (f *setupForwarder) ForwardLocal(ctx context.Context, _ string) (net.Listener, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	server := &http.Server{Handler: f.handler}
-	go func() { _ = server.Serve(listener) }()
-	go func() { <-ctx.Done(); _ = server.Close() }()
-	return listener, nil
+func (f *setupForwarder) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return (testfixture.HandlerGateway{Handler: f.handler}).Invoke(ctx, service, method, req, rsp)
 }
 
 func setupAdminHandler() http.Handler {

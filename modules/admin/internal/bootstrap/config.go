@@ -145,8 +145,8 @@ func validateSetupListener(path string) error {
 		if address == nil || !address.IsLoopback() {
 			return fmt.Errorf("setup listener must bind to loopback")
 		}
-		if service.Port != 11110 || service.Network != "tcp" || service.Protocol != "http" {
-			return fmt.Errorf("setup listener must use tcp http on port 11110")
+		if service.Port != 11110 || service.Network != "tcp" || service.Protocol != "trpc" {
+			return fmt.Errorf("setup listener must use tcp trpc on port 11110")
 		}
 		return nil
 	}

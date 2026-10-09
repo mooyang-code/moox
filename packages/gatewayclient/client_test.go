@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -233,6 +234,23 @@ func TestBusinessErrorsDoNotRetryOrRefresh(t *testing.T) {
 	}
 	_, err := c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypePB, nil)
 	require.EqualValues(t, 12345, errs.Code(err))
+	require.Equal(t, 1, calls)
+	require.Equal(t, fetches, source.calls)
+}
+
+func TestInvokeSanitizesMalformedResponseAndDoesNotRetryDecode(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "a")}
+	config := tunnelConfig(source)
+	config.Serialization = codec.SerializationTypeJSON
+	c := newTestClient(t, config)
+	calls, fetches := 0, source.calls
+	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+		calls++
+		return []byte("recognizable-secret-response"), nil
+	}
+	err := c.Invoke(t.Context(), secretService, "GetSecret", &emptypb.Empty{}, &emptypb.Empty{})
+	require.EqualValues(t, errs.RetClientDecodeFail, errs.Code(err))
+	require.NotContains(t, err.Error(), "recognizable-secret-response")
 	require.Equal(t, 1, calls)
 	require.Equal(t, fetches, source.calls)
 }

@@ -7,18 +7,19 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type Client struct {
-	monitor   monitorpb.MonitorMgrClientProxy
-	sysdeploy adminpb.SysDeployClientProxy
+	monitor monitorpb.MonitorMgrClientProxy
+	gateway gatewayclient.Invoker
 }
 
-func New(monitorTarget, sysdeployTarget string) *Client {
+func New(monitorTarget string, gateway gatewayclient.Invoker) *Client {
 	return &Client{
-		monitor:   monitorpb.NewMonitorMgrClientProxy(client.WithTarget(monitorTarget), client.WithProtocol("http"), client.WithNetwork("tcp")),
-		sysdeploy: adminpb.NewSysDeployClientProxy(client.WithTarget(sysdeployTarget), client.WithProtocol("http"), client.WithNetwork("tcp")),
+		monitor: monitorpb.NewMonitorMgrClientProxy(client.WithTarget(monitorTarget), client.WithProtocol("http"), client.WithNetwork("tcp")),
+		gateway: gateway,
 	}
 }
 
@@ -40,18 +41,19 @@ func (c *Client) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctorC
 }
 
 func (c *Client) ListDeployments(ctx context.Context, nodeID string) ([]*adminpb.ServiceDeployment, error) {
-	if c == nil || c.sysdeploy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("SysDeploy client is unavailable")
 	}
 	const pageSize = 100
 	const maxRows = 500
 	rows := make([]*adminpb.ServiceDeployment, 0, pageSize)
 	for page := uint32(1); page <= maxRows/pageSize; page++ {
-		rsp, err := c.sysdeploy.ListServiceDeployments(ctx, &adminpb.ListServiceDeploymentsReq{NodeId: nodeID, Page: &commonpb.Page{Page: page, Size: pageSize}})
+		rsp := &adminpb.ListServiceDeploymentsRsp{}
+		err := c.gateway.Invoke(ctx, "trpc.moox.ops.SysDeploy", "ListServiceDeployments", &adminpb.ListServiceDeploymentsReq{NodeId: nodeID, Page: &commonpb.Page{Page: page, Size: pageSize}}, rsp)
 		if err != nil {
 			return nil, err
 		}
-		if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 			return nil, fmt.Errorf("SysDeploy list failed: %s", rsp.GetRetInfo().GetMsg())
 		}
 		if len(rows)+len(rsp.GetDeployments()) > maxRows {

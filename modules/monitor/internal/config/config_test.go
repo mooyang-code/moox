@@ -29,7 +29,7 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Scheduler.MaxConcurrency != 16 {
 		t.Fatalf("max concurrency = %d", cfg.Scheduler.MaxConcurrency)
 	}
-	if !cfg.SysDeploy.Enabled || cfg.SysDeploy.Target != "ip://127.0.0.1:11109" {
+	if !cfg.SysDeploy.Enabled {
 		t.Fatalf("sysdeploy = %+v", cfg.SysDeploy)
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
@@ -119,19 +119,6 @@ func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
 	}
 }
 
-func TestMonitorGatewayAuthEnvironment(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-hk-177")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "monitor-key")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "monitor-secret")
-	t.Setenv("MOOX_GATEWAY_CA_FILE", "/tmp/peers.pem")
-	cfg := Default()
-	cfg.applyEnv()
-	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
-		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
-	}
-
-}
-
 func TestMonitorStorageUsesConfiguredIdentityInsteadOfLegacyEnvironment(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
@@ -149,9 +136,7 @@ func TestMonitorStorageUsesConfiguredIdentityInsteadOfLegacyEnvironment(t *testi
 	if cfg.GatewayClient.Caller != "monitor" || cfg.GatewayClient.KeyID != "admin-assigned-monitor-key" || cfg.GatewayClient.KeyFile != "../../secrets/caller-monitor.key" {
 		t.Fatalf("gateway identity was overridden: %+v", cfg.GatewayClient)
 	}
-	if cfg.SysDeploy.ServiceAuth.TargetNode != "control" {
-		t.Fatal("legacy SysDeploy override must remain until D2c")
-	}
+
 }
 
 func TestMonitorRejectsOldAndInvalidGatewayConfiguration(t *testing.T) {

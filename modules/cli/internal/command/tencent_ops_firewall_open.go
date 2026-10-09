@@ -81,17 +81,13 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 	if strings.TrimSpace(opts.Ports) == "" {
 		return fmt.Errorf("--ports is required")
 	}
-	if opts.ServiceAccessKey == "" || opts.ServiceSecretKey == "" {
-		return fmt.Errorf("--service-access-key and --service-secret-key are required")
-	}
 
-	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, "")
 	gateway, gatewayErr := openCommandGateway(cmd.Context(), opts.File, nil)
 	if gatewayErr != nil {
 		return gatewayErr
 	}
 	defer gateway.Close()
-	client.Gateway = gateway
+	client := &adminclient.Client{Gateway: gateway}
 	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 	defer cancel()
 

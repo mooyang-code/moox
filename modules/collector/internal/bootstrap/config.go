@@ -24,14 +24,12 @@ type Config struct {
 	sourcePath          string                   `yaml:"-"`
 	SCFRegionBlacklists map[string][]string      `yaml:"scf_region_blacklists"`
 	Database            DatabaseConfig           `yaml:"database"`
-	CloudNode           CloudNodeConfig          `yaml:"cloudnode"`
 	Storage             StorageConfig            `yaml:"storage"`
 	CollectorRuntime    CollectorRuntimeConfig   `yaml:"collector_runtime"`
 	CollectorRetention  CollectorRetentionConfig `yaml:"collector_retention"`
 	StockCN             StockCNConfig            `yaml:"stockcn"`
 	PeriodReadiness     PeriodReadinessConfig    `yaml:"period_readiness"`
 	KlineResample       KlineResampleConfig      `yaml:"kline_resample"`
-	SysDeploy           SysDeployConfig          `yaml:"sysdeploy"`
 	Health              HealthConfig             `yaml:"health"`
 	DNS                 DNSConfig                `yaml:"dns"`
 	DNSResolver         DNSResolverConfig        `yaml:"dns_resolver"`
@@ -58,17 +56,10 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
 }
 
-// CloudNodeConfig describes cloudnode RPC routing.
-type CloudNodeConfig struct {
-	Address     string `yaml:"address"`
-	ServicePath string `yaml:"service_path"`
-}
-
 // StorageConfig keeps the SCF external target until E2 and the result node ID.
 // Internal Storage calls use GatewayClient and never use these addresses.
 type StorageConfig struct {
 	GatewayTarget    string `yaml:"gateway_target"`
-	GatewayNodeID    string `yaml:"gateway_node_id"`
 	ResultDataNodeID string `yaml:"result_data_node_id"`
 }
 
@@ -136,23 +127,6 @@ type KlineResampleConfig struct {
 	StaleRunningAfter           time.Duration `yaml:"stale_running_after"`
 	DefaultSettleDelay          time.Duration `yaml:"default_settle_delay"`
 	RepairLookbackBuckets       int           `yaml:"repair_lookback_buckets"`
-}
-
-// SysDeployConfig describes optional dependency discovery through admin SysDeploy.
-type SysDeployConfig struct {
-	AdminGatewayURL string            `yaml:"admin_gateway_url"`
-	ServiceAuth     ServiceAuthConfig `yaml:"service_auth"`
-}
-
-// ServiceAuthConfig describes backend HMAC auth for /api/service calls.
-type ServiceAuthConfig struct {
-	AccessKey     string `yaml:"access_key"`
-	SecretKey     string `yaml:"secret_key"`
-	Caller        string `yaml:"caller"`
-	TargetNode    string `yaml:"target_node"`
-	CAFile        string `yaml:"ca_file"`
-	CAPEMBase64   string `yaml:"ca_pem_base64"`
-	ExpireSeconds int64  `yaml:"expire_seconds"`
 }
 
 // HealthConfig controls the lightweight HTTP health endpoint.
@@ -233,32 +207,8 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_ADMIN_GATEWAY_URL"); v != "" {
-		c.SysDeploy.AdminGatewayURL = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.TargetNode = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.AccessKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CALLER"); v != "" {
-		c.SysDeploy.ServiceAuth.Caller = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
-		c.SysDeploy.ServiceAuth.CAFile = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_PEM_B64"); v != "" {
-		c.SysDeploy.ServiceAuth.CAPEMBase64 = v
-	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
 		c.Storage.GatewayTarget = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID"); v != "" {
-		c.Storage.GatewayNodeID = v
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET"); v != "" {
 		c.CollectorRuntime.GatewayTarget = strings.TrimSpace(v)
@@ -487,10 +437,6 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		CloudNode: CloudNodeConfig{
-			Address:     "127.0.0.1:11401",
-			ServicePath: "trpc.moox.cloudnode.CloudNodeMgr",
-		},
 		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", ResultDataNodeID: "storage-node-0"},
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
@@ -507,9 +453,6 @@ func Default() *Config {
 			WorkerPollInterval: 5 * time.Second, WorkerMaxSourceKeysPerClaim: 20000,
 			StaleRunningAfter: 2 * time.Minute, DefaultSettleDelay: 10 * time.Second,
 			RepairLookbackBuckets: 3,
-		},
-		SysDeploy: SysDeployConfig{
-			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},
 		},
 		Health: HealthConfig{
 			Addr: ":11412",

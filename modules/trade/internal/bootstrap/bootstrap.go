@@ -71,16 +71,16 @@ func initialize(
 		}
 	}()
 
-	secrets := secretclient.New(secretclient.Config{
-		GatewayBaseURL: cfg.Admin.BaseURL,
-		ServiceAuth: secretclient.ServiceAuthConfig{
-			AccessKey:  cfg.Admin.ServiceAuth.AccessKey,
-			SecretKey:  cfg.Admin.ServiceAuth.SecretKey,
-			TargetNode: cfg.Admin.ServiceAuth.TargetNode,
-			CAFile:     cfg.Admin.ServiceAuth.CAFile,
-			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
-		},
-	})
+	gateway, err := cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "trade gateway directory refresh failed: %v", err) })
+	if err != nil {
+		return nil, fmt.Errorf("initialize trade gateway: %w", err)
+	}
+	defer func() {
+		if cleanupStore {
+			_ = gateway.Close()
+		}
+	}()
+	secrets := secretclient.New(gateway)
 	registry := execution.NewRegistry()
 	registerBuiltins(registry)
 	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
@@ -432,6 +432,7 @@ func initialize(
 			eventBus.Close()
 		}
 		workers.Wait()
+		_ = gateway.Close()
 		_ = tradeStore.Close()
 	})
 	cleanupStore = false

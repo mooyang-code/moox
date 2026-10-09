@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -21,19 +21,9 @@ type fakeForwarder struct {
 	remote  string
 }
 
-func (f *fakeForwarder) ForwardLocal(ctx context.Context, remote string) (net.Listener, error) {
-	f.remote = remote
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	server := &http.Server{Handler: f.handler}
-	go func() { _ = server.Serve(listener) }()
-	go func() {
-		<-ctx.Done()
-		_ = server.Close()
-	}()
-	return listener, nil
+func (f *fakeForwarder) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	f.remote = service
+	return (testfixture.HandlerGateway{Handler: f.handler}).Invoke(ctx, service, method, req, rsp)
 }
 
 func clientSnapshot(t *testing.T) *setupconfig.Snapshot {
@@ -76,7 +66,7 @@ host = "192.0.2.11"
 	return snapshot, path
 }
 
-func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
+func TestApplyUsesCommandGateway(t *testing.T) {
 	var capturedPath string
 	var capturedRequest pb.ApplySetupReq
 	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -93,7 +83,7 @@ func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Action)
 	assert.Equal(t, 2, result.Hosts)
-	assert.Equal(t, "127.0.0.1:11110", forwarder.remote)
+	assert.Equal(t, "trpc.moox.admin.Setup", forwarder.remote)
 	assert.Equal(t, "/trpc.moox.admin.Setup/ApplySetup", capturedPath)
 	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetTencentCloud().GetSecretKey())
 	assert.Empty(t, capturedRequest.GetSpaces())
@@ -221,7 +211,7 @@ func TestApplyStoragePlacementCreatesRemoteLoopbackRoutesAndPublishesGatewayEndp
 	result, err := New(forwarder).ApplyStoragePlacement(context.Background(), "compute-1", "203.0.113.9")
 	require.NoError(t, err)
 	require.Equal(t, len(storageDeploymentNames), result.Deployments)
-	require.Equal(t, "127.0.0.1:11109", forwarder.remote)
+	require.Equal(t, "trpc.moox.ops.SysDeploy", forwarder.remote)
 	require.Equal(t, "compute-1", gatewayNode.GetNodeId())
 	require.Equal(t, "https://203.0.113.9:11001", gatewayNode.GetPublicAddress())
 	for _, name := range storageDeploymentNames {

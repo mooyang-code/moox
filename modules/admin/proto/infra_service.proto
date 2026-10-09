@@ -7,7 +7,7 @@ import "moox_common.proto";
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
 // Infra 域合并认证（Auth）与 DNS 代理（Dns）。
-// 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/auth/{method}）调度。
+// 由主机网关转发原生 tRPC；控制台通过生成的 handler 在 Admin 进程内调用。
 //
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。

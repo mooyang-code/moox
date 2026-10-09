@@ -30,7 +30,6 @@ import (
 const (
 	storageMetadataRemoteAddress = "127.0.0.1:20200"
 	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
-	adminSpaceRemoteAddress      = "127.0.0.1:11107"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
 	storageLocalProvenanceFile   = "release/storage-artifacts/build-provenance.json"
 	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
@@ -129,21 +128,24 @@ type storageAdminSpaceAPI interface {
 	ListSpaces(context.Context, *adminpb.ListSpacesReq) (*adminpb.ListSpacesRsp, error)
 }
 
-type storageAdminSpaceProxy struct {
-	proxy   adminpb.SpaceMgrClientProxy
-	options []client.Option
-}
+type storageAdminSpaceProxy struct{ gateway commandGateway }
 
 func (c *storageAdminSpaceProxy) CreateSpace(ctx context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
-	return c.proxy.CreateSpace(ctx, req, c.options...)
+	rsp := &adminpb.CreateSpaceRsp{}
+	err := c.gateway.Invoke(ctx, "trpc.moox.admin.SpaceMgr", "CreateSpace", req, rsp)
+	return rsp, err
 }
 
 func (c *storageAdminSpaceProxy) DeleteSpace(ctx context.Context, req *adminpb.DeleteSpaceReq) (*adminpb.DeleteSpaceRsp, error) {
-	return c.proxy.DeleteSpace(ctx, req, c.options...)
+	rsp := &adminpb.DeleteSpaceRsp{}
+	err := c.gateway.Invoke(ctx, "trpc.moox.admin.SpaceMgr", "DeleteSpace", req, rsp)
+	return rsp, err
 }
 
 func (c *storageAdminSpaceProxy) ListSpaces(ctx context.Context, req *adminpb.ListSpacesReq) (*adminpb.ListSpacesRsp, error) {
-	return c.proxy.ListSpaces(ctx, req, c.options...)
+	rsp := &adminpb.ListSpacesRsp{}
+	err := c.gateway.Invoke(ctx, "trpc.moox.admin.SpaceMgr", "ListSpaces", req, rsp)
+	return rsp, err
 }
 
 type storagePrimaryAPI interface {
@@ -1441,13 +1443,12 @@ root="$1"
 curl -kfsS https://127.0.0.1:9527/ >/dev/null`, "moox-browser-e2e", controlRoot}, nil); err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}
-	adminListener, err := controlTransport.ForwardLocal(ctx, adminSpaceRemoteAddress)
+	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}
-	defer adminListener.Close()
-	adminOptions := []client.Option{client.WithTarget("ip://" + adminListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("http")}
-	adminSpaces := &storageAdminSpaceProxy{proxy: adminpb.NewSpaceMgrClientProxy(adminOptions...), options: adminOptions}
+	defer gateway.Close()
+	adminSpaces := &storageAdminSpaceProxy{gateway: gateway}
 	fixture, cleanup, err := createStorageBrowserFixture(ctx, storageSession, adminSpaces)
 	if err != nil {
 		return storageBrowserResult{}, err

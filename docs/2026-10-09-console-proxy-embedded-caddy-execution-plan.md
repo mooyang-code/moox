@@ -89,6 +89,8 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 
 主计划 D2b 的 CloudNodeMgr 与全部调用方同批迁移已完成：11401 改为原生 tRPC，生产处理器从元数据读取空间标识；Collector 四个方法复用进程客户端，Admin 垃圾回收使用独立 `admin` 身份，CLI 全部 CloudNode 操作经同一 SSH 网关客户端。保留 COS HTTPS 上传、发布围栏、写入单发与未知结果处理；取消后的清理可复用隧道，退出统一关闭。函数调用采用目录中的 960 秒预算，删除固定 5 秒覆盖及远端执行 CLI 的出口探针回退。相关模块全包 race、vet、真实 SSH/原生 RPC、生产处理器空间隔离、垃圾回收 ACL 与长调用验证通过；五个静态程序及 14 个 Linux 测试包均在本机关闭 CGO 构建，14 包在 Linux 全量运行通过。协议生成、边界、851 模块图、文档、格式及 15 份 schema 检查通过。Admin 租约与密钥调用、其他 D2～J、最终独立审查及正式发布仍待完成。
 
+主计划 D2c 的 Admin RPC 与全部调用方已迁移：七个内部服务使用 loopback 原生 tRPC，端口不变；Collector、CloudNode、Trade、Monitor 与 CLI 的密钥、租约、Setup、部署诊断及测试空间管理共用各自网关客户端。删除旧 HTTP 发现、相关目标配置与重复签名身份读取，保留发布 fencing 和写入单发；CloudNode 退出等待批处理循环结束。真实 SSH/原生 RPC、权限与 nonce、严格配置和关闭回归通过；相关模块全包 race/vet、七个本机交叉编译的静态程序及 25 个 Linux 测试包运行通过。Collector 性能配额用例在停止并行构建后按原预算单独通过。CloudNode/Trade 独立模块构建、协议生成、851 模块图、格式、边界、架构文档及 15 份 schema 检查通过。SysDeploy v1 的实际方法 ACL 保留至 F/G4 删除最后一个调用方；D2d～J、代理后续阶段、独立审查与正式切换仍未完成。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。

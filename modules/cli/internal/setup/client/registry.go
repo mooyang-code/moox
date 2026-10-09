@@ -74,12 +74,12 @@ func (c *Client) registerServiceDeployment(ctx context.Context, nodeID, serviceN
 	nodeID = strings.TrimSpace(nodeID)
 	serviceName = strings.TrimSpace(serviceName)
 	host = strings.TrimSpace(host)
-	if c == nil || c.forwarder == nil || nodeID == "" || serviceName == "" {
+	if c == nil || c.gateway == nil || nodeID == "" || serviceName == "" {
 		return fmt.Errorf("service_registry_invalid")
 	}
 	canonical, spec := lookupServiceDeployment(serviceName)
 	get := &pb.GetServiceDeploymentRsp{}
-	err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+	err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 		&pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: canonical}, get)
 	if err != nil {
 		return fmt.Errorf("service_registry_lookup_failed: %w", err)
@@ -139,12 +139,12 @@ func tradeConsoleGatewayExtraConfig() string {
 func (c *Client) disableServiceDeployment(ctx context.Context, nodeID, serviceName string) error {
 	nodeID = strings.TrimSpace(nodeID)
 	serviceName = strings.TrimSpace(serviceName)
-	if c == nil || c.forwarder == nil || nodeID == "" || serviceName == "" {
+	if c == nil || c.gateway == nil || nodeID == "" || serviceName == "" {
 		return fmt.Errorf("service_registry_invalid")
 	}
 	canonical, _ := lookupServiceDeployment(serviceName)
 	get := &pb.GetServiceDeploymentRsp{}
-	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
 		&pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: canonical}, get); err != nil {
 		return fmt.Errorf("service_registry_lookup_failed: %w", err)
 	}

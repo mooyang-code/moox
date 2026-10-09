@@ -17,11 +17,13 @@ import (
 	"testing"
 	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
+	"github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
@@ -60,6 +62,7 @@ func (w *monitorGatewayWire) GetDirectory(_ context.Context, req *directorypb.Ge
 	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
 		Services: map[string]*directorypb.ServiceHosts{
 			"trpc.moox.collector.CollectMgr": {HostIds: []string{"control"}},
+			"trpc.moox.ops.SysDeploy":        {HostIds: []string{"control"}},
 			"trpc.moox.storage.Metadata":     {HostIds: []string{"control"}},
 			"trpc.moox.storage.PrimaryStore": {HostIds: []string{"control"}},
 		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
@@ -157,13 +160,14 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(hostPath, encoded, 0o600))
 	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.collector.CollectMgr": {"control"},
+		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.collector.CollectMgr": {"control"}, "trpc.moox.ops.SysDeploy": {"control"},
 	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	wire := &monitorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	collectorpb.RegisterCollectMgrService(svc, wire)
+	adminpb.RegisterSysDeployService(svc, &monitorSysDeployWire{wire: wire})
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)
@@ -188,12 +192,21 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "generation-1"})
 	require.NoError(t, err)
 	require.Equal(t, "generation-1", inventoryResponse.GetSnapshotId())
+	source := sysdeploy.NewClientSource(runtime.Gateway)
+	deployments, err := source.DesiredDeployments(t.Context())
+	require.NoError(t, err)
+	require.Len(t, deployments, 1)
+	hosts, err := source.NodeHosts(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "control.example.test", hosts["control"])
+	var forbidden adminpb.UpdateServiceDeploymentRsp
+	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment", &adminpb.UpdateServiceDeploymentReq{}, &forbidden))
 	wire.mu.Lock()
 	reads, writes, nonces, refreshes := wire.reads, wire.writes, len(wire.nonces), wire.refreshes
 	wire.mu.Unlock()
 	require.Equal(t, 2, reads)
 	require.Equal(t, 1, writes)
-	require.Equal(t, 4, nonces)
+	require.Equal(t, 6, nonces)
 	require.GreaterOrEqual(t, refreshes, 2)
 	_, err = runtime.StorageGateway.GetSpace(t.Context(), &storagepb.GetSpaceReq{SpaceId: "mooxsys"}, client.WithTarget("ip://192.0.2.99:20200"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
@@ -206,4 +219,22 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.Error(t, err)
 	_, err = storagegateway.New(nil).GetSpace(t.Context(), &storagepb.GetSpaceReq{})
 	require.ErrorContains(t, err, "unavailable")
+}
+
+type monitorSysDeployWire struct {
+	adminpb.UnimplementedSysDeploy
+	wire *monitorGatewayWire
+}
+
+func (w monitorSysDeployWire) ListServiceDeployments(ctx context.Context, req *adminpb.ListServiceDeploymentsReq) (*adminpb.ListServiceDeploymentsRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListServiceDeployments", req); err != nil {
+		return nil, err
+	}
+	return &adminpb.ListServiceDeploymentsRsp{RetInfo: &adminpb.RetInfo{}, Deployments: []*adminpb.ServiceDeployment{{NodeId: "control", ServiceName: "admin"}}}, nil
+}
+func (w monitorSysDeployWire) ListGatewayNodes(ctx context.Context, req *adminpb.ListGatewayNodesReq) (*adminpb.ListGatewayNodesRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", req); err != nil {
+		return nil, err
+	}
+	return &adminpb.ListGatewayNodesRsp{RetInfo: &adminpb.RetInfo{}, Nodes: []*adminpb.GatewayNode{{NodeId: "control", PublicAddress: "https://control.example.test:11001"}}}, nil
 }

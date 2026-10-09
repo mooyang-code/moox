@@ -17,3 +17,5 @@ go test -count=1 ./modules/monitor/...
 `config/app.yaml`、`config/trpc_go.yaml`；schema 在 `schema/monitor.sql`。schema 变化时需要同时发布服务和 `moox-monitor-cli`。
 
 Collector 任务结果清单与 Storage 调用共用进程持有的网关客户端，按 Directory 选择 CollectMgr。`kline_freshness` 不再接受旧 `collector_gateway_url` / `collector_gateway_node_id`，也不从环境变量覆盖清单路由；只启用 K 线新鲜度检查时同样初始化并关闭网关客户端。
+
+SysDeploy 的部署与网关节点查询也复用上述进程客户端；按需 Doctor 调用始终有可用的网关客户端。删除 SysDeploy 直连目标和独立签名配置。当前仍调用 v1 的两个只读方法，目录仅放行 `monitor` 的这两项权限，拓扑 v2 迁移随主计划 F 完成。

@@ -51,7 +51,7 @@ storage:
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
 	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
-	assert.Equal(t, "collector", cfg.SysDeploy.ServiceAuth.Caller)
+	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
 }
 
 func TestCollectorRuntimeGatewayConfigIsExplicitPair(t *testing.T) {

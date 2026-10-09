@@ -161,16 +161,6 @@ func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
 	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
 }
 
-func TestNewControlClientSetsServiceAuth(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "sk")
-	client := newControlClient("http://control", "", "", "", "crypto")
-	require.NotNil(t, client.ServiceAuth)
-	assert.Equal(t, "ak", client.ServiceAuth.AccessKey)
-	assert.Equal(t, "gateway-gz-122", client.ServiceAuth.TargetNode)
-}
-
 func TestDeployCollectorFunctionValidatesRequiredFields(t *testing.T) {
 	_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{})
 	require.Error(t, err)

@@ -59,16 +59,7 @@ type SchedulerConfig struct {
 }
 
 type SysDeployConfig struct {
-	Enabled     bool              `yaml:"enabled"`
-	Target      string            `yaml:"target"`
-	ServiceAuth ServiceAuthConfig `yaml:"service_auth"`
-}
-
-type ServiceAuthConfig struct {
-	KeyID      string `yaml:"key_id"`
-	SecretKey  string `yaml:"secret_key"`
-	TargetNode string `yaml:"target_node"`
-	CAFile     string `yaml:"ca_file"`
+	Enabled bool `yaml:"enabled"`
 }
 
 type AlertConfig struct {
@@ -209,11 +200,7 @@ func Default() *Config {
 			ResultRetentionDays: 14,
 			MaxConcurrency:      16,
 		},
-		SysDeploy: SysDeployConfig{
-			Enabled:     true,
-			Target:      "ip://127.0.0.1:11109",
-			ServiceAuth: ServiceAuthConfig{},
-		},
+		SysDeploy: SysDeployConfig{Enabled: true},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
@@ -264,9 +251,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Scheduler.MaxConcurrency == 0 {
 		c.Scheduler.MaxConcurrency = defaults.Scheduler.MaxConcurrency
-	}
-	if c.SysDeploy.Target == "" {
-		c.SysDeploy.Target = defaults.SysDeploy.Target
 	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
@@ -415,9 +399,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v
 	}
-	if v := os.Getenv("MOOX_MONITOR_SYSDEPLOY_TARGET"); v != "" {
-		c.SysDeploy.Target = v
-	}
 	if v := firstEnv("MOOX_OBSERVABILITY_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
 		c.Observability.EventBusURLs = strings.Split(v, ",")
 	}
@@ -430,18 +411,7 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
 		c.Metrics.DatasetHealthPolicyPath = v
 	}
-	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.TargetNode = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.KeyID = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
-		c.SysDeploy.ServiceAuth.CAFile = v
-	}
+
 }
 
 func (c *Config) Validate() error {
@@ -595,7 +565,7 @@ func firstEnv(names ...string) string {
 	return ""
 }
 
-// OpenGateway owns one process-scoped client shared by all Storage consumers.
+// OpenGateway owns the client shared by Storage, Collector and Admin consumers.
 func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
 	if c == nil || c.sourcePath == "" {
 		return nil, fmt.Errorf("monitor gateway client requires a loaded module configuration")

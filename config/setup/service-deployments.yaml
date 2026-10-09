@@ -364,7 +364,7 @@ services:
   - name: admin_auth
     kind: admin_rpc
     deployment_mode: endpoint
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11100
     gateway_path: trpc.moox.infra.Auth
@@ -376,7 +376,7 @@ services:
   - name: ssh
     kind: admin_rpc
     deployment_mode: endpoint
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11106
     gateway_path: trpc.moox.ops.Ssh
@@ -388,7 +388,7 @@ services:
   - name: space
     kind: admin_rpc
     deployment_mode: endpoint
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11107
     gateway_path: trpc.moox.admin.SpaceMgr
@@ -400,7 +400,7 @@ services:
   - name: secret
     kind: admin_rpc
     deployment_mode: endpoint
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11108
     gateway_path: trpc.moox.ops.SecretMgr
@@ -417,7 +417,7 @@ services:
   - name: publishlease
     kind: admin_rpc
     deployment_mode: endpoint
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11111
     gateway_path: trpc.moox.admin.CollectorPublishLease
@@ -437,7 +437,7 @@ services:
   - name: sysdeploy
     kind: admin_rpc
     deployment_mode: endpoint
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11109
     gateway_path: trpc.moox.ops.SysDeploy

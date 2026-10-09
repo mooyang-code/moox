@@ -1,19 +1,14 @@
 package scfinvoker
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
@@ -22,10 +17,7 @@ import (
 )
 
 type Config struct {
-	Gateway              gatewayclient.Invoker
-	ServiceGatewayTarget string
-	Auth                 runtimeapp.AuthConfig
-	Timeout              time.Duration
+	Gateway gatewayclient.Invoker
 }
 
 const listMarketFetchersPageSize = 500
@@ -35,12 +27,9 @@ var (
 	ErrCollectorPublishLeaseStale     = errors.New("collector publish lease is expired or fenced")
 )
 
+// Client borrows the process gateway for CloudNode and Admin publish leases.
 type Client struct {
-	gateway   gatewayclient.Invoker
-	target    string
-	auth      runtimeapp.AuthConfig
-	http      *http.Client
-	httpError error
+	gateway gatewayclient.Invoker
 }
 
 type Node struct {
@@ -75,9 +64,7 @@ type CollectorPublishLease struct {
 }
 
 func New(cfg Config) *Client {
-	target := strings.TrimRight(strings.TrimSpace(cfg.ServiceGatewayTarget), "/")
-	httpClient, err := runtimeapp.NewGatewayHTTPClient(cfg.Timeout, cfg.Auth)
-	return &Client{gateway: cfg.Gateway, target: target, auth: cfg.Auth, http: httpClient, httpError: err}
+	return &Client{gateway: cfg.Gateway}
 }
 
 func (c *Client) ListMarketFetchers(ctx context.Context, spaceID string) ([]Node, error) {
@@ -99,7 +86,7 @@ func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType st
 	for page := uint32(1); ; page++ {
 		request := &cloudnodepb.GetNodeListReq{BizType: "market_fetcher", TriggerType: triggerType, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize}}
 		var rsp cloudnodepb.GetNodeListRsp
-		if err := c.callCloudNode(ctx, spaceID, "GetNodeList", request, &rsp, false); err != nil {
+		if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeList", request, &rsp, false); err != nil {
 			return nil, err
 		}
 		if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -151,7 +138,7 @@ func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patch
 	}
 	request := &cloudnodepb.BatchUpdateNodeRuntimeConfigsReq{Nodes: patches}
 	var rsp cloudnodepb.SubmitNodeBatchRsp
-	if err := c.callCloudNode(ctx, spaceID, "SubmitUpdateNodeRuntimeConfigs", request, &rsp, true); err != nil {
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "SubmitUpdateNodeRuntimeConfigs", request, &rsp, true); err != nil {
 		return "", err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -174,7 +161,7 @@ func (c *Client) GetRuntimeConfigBatchStatus(ctx context.Context, spaceID, jobID
 	}
 	request := &cloudnodepb.GetNodeBatchChangeReq{JobId: jobID}
 	var rsp cloudnodepb.GetNodeBatchChangeRsp
-	if err := c.callCloudNode(ctx, spaceID, "GetNodeBatchChange", request, &rsp, false); err != nil {
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeBatchChange", request, &rsp, false); err != nil {
 		return nil, err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -191,123 +178,63 @@ func (c *Client) AcquireCollectorPublishLease(ctx context.Context, spaceID, hold
 	if spaceID == "" || holderID == "" {
 		return nil, fmt.Errorf("space_id and holder_id are required")
 	}
-	var response struct {
-		RetInfo struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		} `json:"ret_info"`
-		SpaceID      string          `json:"space_id"`
-		LeaseID      string          `json:"lease_id"`
-		FencingToken json.RawMessage `json:"fencing_token"`
-		ExpiresAt    string          `json:"expires_at"`
-	}
-	body, err := json.Marshal(map[string]string{"space_id": spaceID, "holder_id": holderID})
-	if err != nil {
+	var response adminpb.CollectorPublishLeaseRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease",
+		&adminpb.AcquireCollectorPublishLeaseReq{SpaceId: spaceID, HolderId: holderID}, &response, false); err != nil {
 		return nil, err
 	}
-	if err := c.postService(ctx, spaceID, "AcquireCollectorPublishLease", body, &response); err != nil {
-		return nil, err
-	}
-	if response.RetInfo.Code != 0 {
-		return nil, fmt.Errorf("acquire collector publish lease: %s", response.RetInfo.Msg)
-	}
-	token, err := parsePublishFencingToken(response.FencingToken)
-	if err != nil {
-		return nil, err
-	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, response.ExpiresAt)
-	if err != nil {
-		return nil, fmt.Errorf("decode collector publish lease expiry: %w", err)
-	}
-	if response.LeaseID == "" || token < 1 {
-		return nil, fmt.Errorf("collector publish lease response is incomplete")
-	}
-	return &CollectorPublishLease{SpaceID: response.SpaceID, LeaseID: response.LeaseID, HolderID: holderID, FencingToken: token, ExpiresAt: expiresAt}, nil
+	return collectorLeaseFromResponse(spaceID, holderID, &response)
 }
 
 func (c *Client) RenewCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease) (*CollectorPublishLease, error) {
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return nil, fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	return c.updateCollectorPublishLease(ctx, lease, "RenewCollectorPublishLease")
+	var response adminpb.CollectorPublishLeaseRsp
+	if err := c.invoke(ctx, lease.SpaceID, "trpc.moox.admin.CollectorPublishLease", "RenewCollectorPublishLease",
+		&adminpb.RenewCollectorPublishLeaseReq{SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken}, &response, false); err != nil {
+		return nil, err
+	}
+	if response.GetRetInfo().GetCode() == adminpb.ErrorCode_CONFLICT {
+		return nil, fmt.Errorf("%w: %s", ErrCollectorPublishLeaseStale, response.GetRetInfo().GetMsg())
+	}
+	renewed, err := collectorLeaseFromResponse(lease.SpaceID, lease.HolderID, &response)
+	if err != nil {
+		return nil, err
+	}
+	if renewed.LeaseID != lease.LeaseID || renewed.FencingToken != lease.FencingToken {
+		return nil, fmt.Errorf("RenewCollectorPublishLease returned a different lease identity")
+	}
+	return renewed, nil
 }
 
 func (c *Client) ReleaseCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease) error {
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	var response struct {
-		RetInfo struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		} `json:"ret_info"`
-		Released bool `json:"released"`
-	}
-	body, err := json.Marshal(map[string]string{"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10)})
-	if err != nil {
+	var response adminpb.ReleaseCollectorPublishLeaseRsp
+	if err := c.invoke(ctx, lease.SpaceID, "trpc.moox.admin.CollectorPublishLease", "ReleaseCollectorPublishLease",
+		&adminpb.ReleaseCollectorPublishLeaseReq{SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken}, &response, false); err != nil {
 		return err
 	}
-	if err := c.postService(ctx, lease.SpaceID, "ReleaseCollectorPublishLease", body, &response); err != nil {
-		return err
-	}
-	if response.RetInfo.Code != 0 || !response.Released {
-		return fmt.Errorf("release collector publish lease rejected: %s", response.RetInfo.Msg)
+	if response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || !response.GetReleased() {
+		return fmt.Errorf("release collector publish lease rejected: %s", response.GetRetInfo().GetMsg())
 	}
 	return nil
 }
 
-func (c *Client) updateCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease, method string) (*CollectorPublishLease, error) {
-	var response struct {
-		RetInfo struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		} `json:"ret_info"`
-		SpaceID      string          `json:"space_id"`
-		LeaseID      string          `json:"lease_id"`
-		FencingToken json.RawMessage `json:"fencing_token"`
-		ExpiresAt    string          `json:"expires_at"`
+func collectorLeaseFromResponse(spaceID, holderID string, response *adminpb.CollectorPublishLeaseRsp) (*CollectorPublishLease, error) {
+	if response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+		return nil, fmt.Errorf("collector publish lease rejected: %s", response.GetRetInfo().GetMsg())
 	}
-	body, err := json.Marshal(map[string]string{"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10)})
-	if err != nil {
-		return nil, err
+	if response.GetSpaceId() != spaceID || strings.TrimSpace(response.GetLeaseId()) == "" || response.GetFencingToken() < 1 {
+		return nil, fmt.Errorf("collector publish lease response identity is incomplete or inconsistent")
 	}
-	if err := c.postService(ctx, lease.SpaceID, method, body, &response); err != nil {
-		return nil, err
-	}
-	if response.RetInfo.Code != 0 {
-		if method == "RenewCollectorPublishLease" && response.RetInfo.Code == int(commonpb.ErrorCode_CONFLICT) {
-			return nil, fmt.Errorf("%w: %s", ErrCollectorPublishLeaseStale, response.RetInfo.Msg)
-		}
-		return nil, fmt.Errorf("%s: %s", method, response.RetInfo.Msg)
-	}
-	token, err := parsePublishFencingToken(response.FencingToken)
-	if err != nil {
-		return nil, err
-	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, response.ExpiresAt)
+	expiresAt, err := time.Parse(time.RFC3339Nano, response.GetExpiresAt())
 	if err != nil {
 		return nil, fmt.Errorf("decode collector publish lease expiry: %w", err)
 	}
-	if response.LeaseID != lease.LeaseID || token != lease.FencingToken {
-		return nil, fmt.Errorf("%s returned a different lease identity", method)
-	}
-	return &CollectorPublishLease{SpaceID: lease.SpaceID, LeaseID: lease.LeaseID, HolderID: lease.HolderID, FencingToken: token, ExpiresAt: expiresAt}, nil
-}
-
-func parsePublishFencingToken(raw json.RawMessage) (int64, error) {
-	value := strings.TrimSpace(string(raw))
-	if len(value) > 1 && value[0] == '"' {
-		var decoded string
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return 0, err
-		}
-		value = decoded
-	}
-	token, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || token < 1 {
-		return 0, fmt.Errorf("collector publish lease fencing_token is invalid")
-	}
-	return token, nil
+	return &CollectorPublishLease{SpaceID: spaceID, LeaseID: response.GetLeaseId(), HolderID: holderID, FencingToken: response.GetFencingToken(), ExpiresAt: expiresAt}, nil
 }
 
 func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (InvocationResult, error) {
@@ -320,7 +247,7 @@ func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[s
 	}
 	request := &cloudnodepb.InvokeFunctionReq{NodeId: nodeID, EventData: value, ScfInvokeType: invokeType}
 	var rsp cloudnodepb.InvokeFunctionRsp
-	if err := c.callCloudNode(ctx, spaceID, "InvokeFunction", request, &rsp, false); err != nil {
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "InvokeFunction", request, &rsp, false); err != nil {
 		return InvocationResult{}, err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -340,59 +267,20 @@ func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[s
 	return InvocationResult{RequestID: result.GetRequestId(), Code: result.GetCode(), Message: result.GetMessage(), Result: resultMap, DurationMS: result.GetDuration(), BillDuration: result.GetBillDuration()}, nil
 }
 
-func (c *Client) callCloudNode(ctx context.Context, spaceID, method string, request, response proto.Message, unknownAfterSend bool) error {
+func (c *Client) invoke(ctx context.Context, spaceID, service, method string, request, response proto.Message, unknownAfterSend bool) error {
 	if c == nil || c.gateway == nil {
-		return errors.New("CloudNode requires the process gateway client")
+		return errors.New("SCF control requires the process gateway client")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	metadata := gatewayclient.CallMetadataFromContext(ctx)
 	metadata.SpaceID = spaceID
-	err := c.gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), "trpc.moox.cloudnode.CloudNodeMgr", method, request, response)
+	err := c.gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), service, method, request, response)
 	if err != nil && unknownAfterSend {
 		return fmt.Errorf("%w: CloudNode %s: %w", ErrRuntimeConfigSubmissionUnknown, method, err)
 	}
 	return err
-}
-
-func (c *Client) postService(ctx context.Context, spaceID, method string, body []byte, out any) error {
-	return c.postPath(ctx, spaceID, "/api/service/publishlease/"+method, "publishlease "+method, body, out)
-}
-
-func (c *Client) postPath(ctx context.Context, spaceID, path, label string, body []byte, out any) error {
-	if c == nil {
-		return errors.New("SCF invoker is nil")
-	}
-	if c.httpError != nil {
-		return c.httpError
-	}
-	if c.target == "" {
-		return errors.New("service gateway target is required")
-	}
-	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, c.target+path, body, map[string]string{"X-Space-Id": spaceID}, c.auth)
-	if err != nil {
-		return err
-	}
-	response, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s status=%d body=%s", label, response.StatusCode, string(responseBody))
-	}
-	if len(bytes.TrimSpace(responseBody)) == 0 || out == nil {
-		return nil
-	}
-	if err := json.Unmarshal(responseBody, out); err != nil {
-		return fmt.Errorf("decode %s response: %w", label, err)
-	}
-	return nil
 }
 
 func (c *Client) LogNode(node Node) {

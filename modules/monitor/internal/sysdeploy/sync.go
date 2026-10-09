@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -36,12 +37,37 @@ type ClientSource struct {
 	client deploymentClient
 }
 
-func NewClientSource(target string) *ClientSource {
-	return &ClientSource{client: adminpb.NewSysDeployClientProxy(
-		client.WithTarget(target),
-		client.WithProtocol("http"),
-		client.WithNetwork("tcp"),
-	)}
+// NewClientSource borrows the process client until the v2 topology migration in F.
+func NewClientSource(gateway gatewayclient.Invoker) *ClientSource {
+	return &ClientSource{client: gatewayDeploymentClient{gateway: gateway}}
+}
+
+type gatewayDeploymentClient struct{ gateway gatewayclient.Invoker }
+
+func (c gatewayDeploymentClient) ListServiceDeployments(ctx context.Context, req *adminpb.ListServiceDeploymentsReq, options ...client.Option) (*adminpb.ListServiceDeploymentsRsp, error) {
+	var response adminpb.ListServiceDeploymentsRsp
+	if err := c.invoke(ctx, "ListServiceDeployments", req, &response, len(options)); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c gatewayDeploymentClient) ListGatewayNodes(ctx context.Context, req *adminpb.ListGatewayNodesReq, options ...client.Option) (*adminpb.ListGatewayNodesRsp, error) {
+	var response adminpb.ListGatewayNodesRsp
+	if err := c.invoke(ctx, "ListGatewayNodes", req, &response, len(options)); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c gatewayDeploymentClient) invoke(ctx context.Context, method string, request, response any, options int) error {
+	if c.gateway == nil {
+		return fmt.Errorf("SysDeploy requires the process gateway client")
+	}
+	if options != 0 {
+		return fmt.Errorf("SysDeploy SDK options cannot override gateway routing")
+	}
+	return c.gateway.Invoke(ctx, "trpc.moox.ops.SysDeploy", method, request, response)
 }
 
 func (s *ClientSource) DesiredDeployments(ctx context.Context) ([]*adminpb.ServiceDeployment, error) {
@@ -53,7 +79,7 @@ func (s *ClientSource) DesiredDeployments(ctx context.Context) ([]*adminpb.Servi
 		if err != nil {
 			return nil, err
 		}
-		if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 			return nil, fmt.Errorf("%w: %s", errAdminUnavailable, rsp.GetRetInfo().GetMsg())
 		}
 		if len(deployments)+len(rsp.GetDeployments()) > maxDeployments {
@@ -77,7 +103,7 @@ func (s *ClientSource) NodeHosts(ctx context.Context) (map[string]string, error)
 		if err != nil {
 			return nil, err
 		}
-		if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 			return nil, fmt.Errorf("%w: %s", errAdminUnavailable, rsp.GetRetInfo().GetMsg())
 		}
 		for _, node := range rsp.GetNodes() {

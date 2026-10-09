@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"strings"
 	"time"
 
@@ -73,17 +74,12 @@ func runCLSPrepare(cmd *cobra.Command, opts clsPrepareOptions) error {
 		return fmt.Errorf("--control-url and --credentials-output are required")
 	}
 
-	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, "")
-	if client.ServiceAuth == nil {
-		return fmt.Errorf("service authentication is required for CLS account reveal")
-	}
-
 	gateway, gatewayErr := openCommandGateway(cmd.Context(), opts.File, nil)
 	if gatewayErr != nil {
 		return gatewayErr
 	}
 	defer gateway.Close()
-	client.Gateway = gateway
+	client := &adminclient.Client{Gateway: gateway}
 	factory := func(secretID, secretKey string) (tencent.CLSAPI, error) {
 		return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
 			SecretID:  secretID,
