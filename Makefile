@@ -164,6 +164,7 @@ package-skill:
 
 proto:
 	$(MAKE) -C packages/commonpb all
+	$(MAKE) -C packages/gatewayroute/proto all
 	$(MAKE) -C packages/metricspb all
 	$(MAKE) -C packages/hostmetricpb all
 	$(MAKE) -C packages/tradeeventpb all

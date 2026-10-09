@@ -207,7 +207,7 @@ func TestConsoleResolvesStorageByNameAndMethod(t *testing.T) {
 func TestCatalogMethodsMatchExistingProtos(t *testing.T) {
 	// Stage A declares the next protocol before stages A6/B2/E3 implement it.
 	// All other methods must match the current service definitions exactly.
-	planned := map[string]bool{"trpc.moox.ops.SysDeploy": true, GatewayControlPath: true, "trpc.moox.egress.Proxy": true}
+	planned := map[string]bool{"trpc.moox.ops.SysDeploy": true, "trpc.moox.egress.Proxy": true}
 	files, err := filepath.Glob("../../modules/*/proto/*.proto")
 	if err != nil {
 		t.Fatal(err)

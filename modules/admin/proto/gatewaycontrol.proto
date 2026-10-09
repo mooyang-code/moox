@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package trpc.moox.admin;
+
+import "moox_common.proto";
+import "directory.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
+
+// One route represents exactly one method and its permitted callers.
+message HostGatewayRoute {
+  string component_id = 1;
+  string service_path = 2;
+  string method = 3;
+  string address = 4;
+  int64 timeout_ms = 5;
+  int64 max_body_bytes = 6;
+  repeated string callers = 7;
+  bool read_only = 8;
+}
+
+message GatewayVerificationKey {
+  string caller = 1;
+  string key_id = 2;
+  bytes secret = 3;
+  // Zero means active. Retiring keys remain valid until this deadline.
+  int64 expires_at_unix = 4;
+}
+
+message HostGatewaySnapshot {
+  uint32 schema_version = 1;
+  string host_id = 2;
+  string hash = 3;
+  bool disabled = 4;
+  repeated HostGatewayRoute routes = 5;
+  trpc.moox.hostgateway.ServiceDirectory directory = 6;
+  repeated GatewayVerificationKey verification_keys = 7;
+}
+
+message PullSnapshotReq {
+  string host_id = 1;
+  string current_hash = 2;
+}
+
+message PullSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  bool changed = 2;
+  HostGatewaySnapshot snapshot = 3;
+}
+
+message ReportStatusReq {
+  string host_id = 1;
+  string instance_id = 2;
+  string version = 3;
+  string applied_hash = 4;
+  string error = 5;
+  int32 route_count = 6;
+}
+
+message ReportStatusRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// Only host-gateway@<host_id> may call these methods. The service validates
+// both the signed caller and the request host; key material never enters logs.
+service GatewayControl {
+  rpc PullSnapshot(PullSnapshotReq) returns (PullSnapshotRsp);
+  rpc ReportStatus(ReportStatusReq) returns (ReportStatusRsp);
+}
