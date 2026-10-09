@@ -66,15 +66,6 @@ build_storage() {
 	          -o "${BIN_DIR}/$(binary_name moox-storage-${role})" ./cmd/server
 	      fi
 	    done
-	    if ((${#tags[@]})); then
-	      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build "${tags[@]}" \
-	        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-	        -o "${BIN_DIR}/$(binary_name moox-storage-access)" ./cmd/access
-	    else
-	      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build \
-        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/$(binary_name moox-storage-access)" ./cmd/access
-	    fi
 	  )
 }
 
@@ -149,6 +140,7 @@ case "${TARGET_MODULE}" in
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
     build_storage_cli
+    build_go modules/access ./cmd/server moox-access 0
     build_archive
     ;;
   cli)
@@ -222,6 +214,9 @@ case "${TARGET_MODULE}" in
     ;;
   storage-cli)
     build_storage_cli
+    ;;
+  access)
+    build_go modules/access ./cmd/server moox-access 0
     ;;
   archive)
     build_archive

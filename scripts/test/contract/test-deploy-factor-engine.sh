@@ -10,7 +10,7 @@ DIR="$(cd "${DIR}" && pwd -P)"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${DIR}/bin/moox-factor-engine"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${DIR}/venv/bin/python"
 chmod +x "${DIR}/bin/moox-factor-engine" "${DIR}/venv/bin/python"
-for secret in gateway-factor-engine.key storage-access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
+for secret in gateway-factor-engine.key access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
   printf 'secret-%s\n' "${secret}" >"${DIR}/secrets/${secret}"
   chmod 0600 "${DIR}/secrets/${secret}"
 done
@@ -18,7 +18,7 @@ done
 install_args=(
   --dir "${DIR}" --skip-build --no-start --engine-id factor-engine@contract
   --manager-url https://control.example:11001 --manager-node-id control
-  --storage-target ip://storage.example:11004 --storage-node-id storage-access-storage
+  --storage-target ip://storage.example:11004 --storage-node-id access-storage
   --eventbus-url tls://control.example:4222
 )
 export MOOX_LAUNCH_AGENTS_DIR="${TMP_ROOT}/LaunchAgents" MOOX_SYSTEMD_USER_DIR="${TMP_ROOT}/systemd"

@@ -155,11 +155,11 @@ openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=gateway-peer-test \
   -keyout "${TMP}/private-two.key" -out "${TMP}/root-two.crt" -days 1 >/dev/null 2>&1
 cat "${TMP}/root-one.crt" "${TMP}/root-two.crt" >"${TMP}/peers.pem"
 
-# Gateway-only fixtures do not own the independent Storage Access component.
+# Gateway-only fixtures do not own the independent Access component.
 deploy_fixture() {
   local bundle="$1" suffix="$2" control_url="${3:-https://admin.example.com:9527/}"
   "${DEPLOY}" --target localhost --dir "${TMP}/deploy-${suffix}" --stage "${TMP}/stage-${suffix}" \
-    --skip-build --no-start --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+    --skip-build --no-start --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
     --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
     --node-id gateway-test --gateway-control-url "${control_url}" \
     --gateway-ca-bundle "${bundle}" --gateway-control-key-file "${TMP}/control.key" \
@@ -172,7 +172,7 @@ deploy_overlay_fixture() {
   MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   MOOX_TRADE_GATEWAY_URL= MOOX_TRADE_GATEWAY_NODE_ID= \
     "${DEPLOY}" --target localhost --dir "${directory}" --stage "${TMP}/stage-${suffix}" \
-    --skip-build --no-start --component-overlay --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+    --skip-build --no-start --component-overlay --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
     --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
     --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
     --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -366,7 +366,7 @@ mkdir "${LOCAL_REGISTRY_FAILURE}/secrets/gateway-credentials.json"
 if MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
   MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   "${DEPLOY}" --target localhost --dir "${LOCAL_REGISTRY_FAILURE}" --stage "${TMP}/stage-registry-failure" \
-  --skip-build --no-start --component-overlay --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+  --skip-build --no-start --component-overlay --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
   --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -385,7 +385,7 @@ ln -s "${TMP}/local-cls-env-sentinel" "${LOCAL_CLS_UNSAFE}/secrets/gateway-moox-
 if MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
   MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   "${DEPLOY}" --target localhost --dir "${LOCAL_CLS_UNSAFE}" --stage "${TMP}/stage-cls-unsafe" \
-  --skip-build --no-start --enable-cls --component-overlay --no-gateway --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+  --skip-build --no-start --enable-cls --component-overlay --no-gateway --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
   --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -402,7 +402,7 @@ chmod 0666 "${LOCAL_CLS_WRITABLE}/secrets/gateway-moox-cli.env"
 if cls_output=$(MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
   MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   "${DEPLOY}" --target localhost --dir "${LOCAL_CLS_WRITABLE}" --stage "${TMP}/stage-cls-writable" \
-  --skip-build --no-start --enable-cls --component-overlay --no-gateway --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+  --skip-build --no-start --enable-cls --component-overlay --no-gateway --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
   --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -420,7 +420,7 @@ printf 'preserve-no-gateway-skill\n' >"${NO_GATEWAY_DEPLOY}/secrets/gateway-moox
 MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
 MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   "${DEPLOY}" --target localhost --dir "${NO_GATEWAY_DEPLOY}" --stage "${TMP}/stage-no-gateway-overlay" \
-  --skip-build --no-start --component-overlay --no-gateway --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+  --skip-build --no-start --component-overlay --no-gateway --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --local-ca skip --target-ca skip \
   --node-id gateway-test --gateway-control-url 'https://admin.example.com:9527/' --monitor-instance-id monitor-local \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -454,7 +454,7 @@ MOOX_EVENTBUS_ENABLE_TLS=1 \
 MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
 MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
   "${DEPLOY}" --target localhost --dir "${TMP}/deploy-monitor" --stage "${TMP}/stage-monitor" \
-  --skip-build --no-start --no-admin --no-storage --no-storage-access --no-hostagent --no-archive \
+  --skip-build --no-start --no-admin --no-storage --no-access --no-hostagent --no-archive \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --local-ca skip --target-ca skip \
   --node-id gateway-monitor --gateway-control-url 'http://[::1]:11000' \
   --monitor-instance-id monitor-local \
@@ -519,7 +519,7 @@ grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" 
 MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
 MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
 "${DEPLOY}" --target localhost --dir "${TMP}/deploy-peer-only" --stage "${TMP}/stage-peer-only" \
-  --skip-build --no-start --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+  --skip-build --no-start --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --local-ca skip --target-ca skip \
   --node-id gateway-peer-only --gateway-control-url 'http://[::1]:11000' \
   --monitor-instance-id monitor-peer-only \
@@ -543,7 +543,7 @@ printf 'MOOX_CADDY_PORTS=443\n' >"${PEER_ONLY_DEPLOY}/config/caddy/edge.env"
 	if ! output=$(MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
 	  MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
 	  "${DEPLOY}" --target localhost --dir "${PEER_ONLY_DEPLOY}" --stage "${TMP}/stage-existing-caddy-overlay" \
-  --skip-build --no-start --component-overlay --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade \
+  --skip-build --no-start --component-overlay --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade \
   --local-ca skip --target-ca skip --node-id gateway-peer-only \
   --gateway-control-url 'http://[::1]:11000' --monitor-instance-id monitor-peer-only \
   --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -559,7 +559,7 @@ expect_monitor_arg_rejected() {
   if output=$(MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
     MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
     "${DEPLOY}" --target localhost --dir "${TMP}/reject-${label}" --stage "${TMP}/reject-stage-${label}" \
-    --skip-build --no-start --no-admin --no-storage --no-storage-access --no-hostagent --no-archive --no-eventbus \
+    --skip-build --no-start --no-admin --no-storage --no-access --no-hostagent --no-archive --no-eventbus \
     --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --local-ca skip --target-ca skip \
     --node-id gateway-monitor --gateway-control-url 'http://127.0.0.1:11000' \
     --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -665,7 +665,7 @@ awk '/bash -s" <<'"'"'EOF'"'"'$/ { capture=1; next } capture && /^EOF$/ { exit }
   "${DEPLOY}" >"${REMOTE_OVERLAY_SCRIPT}"
 cp "${REMOTE_OVERLAY_ARCHIVE}" "${TMP}/remote-full-registry-failure.tar.gz"
 if DEPLOY_DIR="${REMOTE_FULL_REGISTRY_FAILURE_ROOT}" ARCHIVE="${TMP}/remote-full-registry-failure.tar.gz" NODE_ID=gateway-remote-full \
-  NO_START=1 COMPONENT_OVERLAY=0 WITH_STORAGE=0 WITH_STORAGE_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  NO_START=1 COMPONENT_OVERLAY=0 WITH_STORAGE=0 WITH_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR_MGR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
   WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=1 RESET_DATA=0 \
   MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
@@ -682,7 +682,7 @@ grep -Fxq 'remote-full-registry-sentinel' "${REMOTE_FULL_REGISTRY_FAILURE_ROOT}/
 
 cp "${REMOTE_OVERLAY_ARCHIVE}" "${TMP}/remote-full-secret-failure.tar.gz"
 if DEPLOY_DIR="${REMOTE_FULL_SECRET_FAILURE_ROOT}" ARCHIVE="${TMP}/remote-full-secret-failure.tar.gz" NODE_ID=gateway-remote-full \
-  NO_START=1 COMPONENT_OVERLAY=0 WITH_STORAGE=0 WITH_STORAGE_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  NO_START=1 COMPONENT_OVERLAY=0 WITH_STORAGE=0 WITH_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR_MGR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
   WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=1 RESET_DATA=0 \
   MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
@@ -698,7 +698,7 @@ grep -Fxq 'remote-full-secret-sentinel' "${TMP}/remote-full-secret-sentinel" || 
   fail 'remote full deployment followed an unsafe Gateway secret target'
 
 if DEPLOY_DIR="${REMOTE_FAILURE_ROOT}" ARCHIVE="${REMOTE_FAILURE_ARCHIVE}" NODE_ID=gateway-remote-overlay \
-  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR_MGR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
   WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=1 RESET_DATA=0 \
   MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
@@ -722,7 +722,7 @@ fi
 [[ -d "${REMOTE_FAILURE_ROOT}/secrets/gateway-credentials.json" ]] || \
   fail 'failed remote component overlay changed the unsafe Gateway registry target'
 DEPLOY_DIR="${REMOTE_OVERLAY_ROOT}" ARCHIVE="${REMOTE_OVERLAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
-  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR_MGR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
   WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=1 RESET_DATA=0 \
   MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
@@ -770,7 +770,7 @@ source "${REMOTE_OVERLAY_ROOT}/secrets/gateway-moox-cli.env"
   fail 'remote component overlay followed, chmodded, or sourced an unsafe Gateway CLI env symlink'
 
 if DEPLOY_DIR="${REMOTE_NO_GATEWAY_UNSAFE_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
-  NO_START=0 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  NO_START=0 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR_MGR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
   WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=0 RESET_DATA=0 \
   MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
@@ -786,7 +786,7 @@ fi
   fail 'remote --no-gateway overlay chmodded or sourced an unsafe Gateway env symlink'
 
 DEPLOY_DIR="${REMOTE_NO_GATEWAY_ROOT}" ARCHIVE="${REMOTE_NO_GATEWAY_ARCHIVE}" NODE_ID=gateway-remote-overlay \
-  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_STORAGE_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
+  NO_START=1 COMPONENT_OVERLAY=1 WITH_STORAGE=0 WITH_ACCESS=0 WITH_STORAGE_NODE=0 WITH_ARCHIVE=0 WITH_EVENTBUS=0 \
   WITH_CLOUDNODE=0 WITH_COLLECTOR=0 WITH_FACTOR_MGR=0 WITH_STRATEGY=0 WITH_TRADE=0 WITH_MONITOR=1 \
   WITH_HOSTAGENT=0 WITH_WEB_HOST=0 WITH_ADMIN=0 WITH_GATEWAY=0 RESET_DATA=0 \
   MOOX_METRICS_STORAGE_METADATA_URL='' MOOX_EVENTBUS_NATS_URL='' MOOX_EVENTBUS_HOST='' MOOX_EVENTBUS_PORT='' \
@@ -863,7 +863,7 @@ chmod +x "${TMP}/fake-bin/ssh" "${TMP}/fake-bin/scp"
 for attempt in 1 2; do
   if PATH="${TMP}/fake-bin:${PATH}" FAKE_REMOTE_DIR="${TMP}/fake-remote" \
     "${DEPLOY}" --target fake@example --dir /tmp/moox-test --stage "${TMP}/remote-stage-${attempt}" \
-      --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-storage-access --no-hostagent --no-archive \
+      --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-access --no-hostagent --no-archive \
       --no-eventbus --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
       --node-id gateway-remote --gateway-control-url https://admin.example.com:9527 \
       --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
@@ -873,7 +873,7 @@ for attempt in 1 2; do
 done
 PATH="${TMP}/fake-bin:${PATH}" FAKE_REMOTE_DIR="${TMP}/fake-remote" FAKE_REMOTE_SUCCESS=1 \
   "${DEPLOY}" --target fake@example --dir /tmp/moox-test --stage "${TMP}/remote-stage-success" \
-    --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-storage-access --no-hostagent --no-archive \
+    --goos linux --goarch amd64 --skip-build --no-start --no-admin --no-storage --no-access --no-hostagent --no-archive \
     --no-eventbus --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor --local-ca skip --target-ca skip \
     --node-id gateway-remote --gateway-control-url https://admin.example.com:9527 \
     --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \

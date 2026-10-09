@@ -76,8 +76,8 @@ mkdir -p \
   "${RELEASE_ROOT}/modules/storage-view/bin" \
   "${RELEASE_ROOT}/modules/storage-view/config" \
   "${RELEASE_ROOT}/modules/storage-view/schema" \
-  "${RELEASE_ROOT}/modules/storage-access/bin" \
-  "${RELEASE_ROOT}/modules/storage-access/config" \
+  "${RELEASE_ROOT}/modules/access/bin" \
+  "${RELEASE_ROOT}/modules/access/config" \
   "${RELEASE_ROOT}/modules/archive/bin" \
   "${RELEASE_ROOT}/modules/archive/config" \
   "${RELEASE_ROOT}/examples" \
@@ -124,8 +124,8 @@ storage_binary_name() {
 
 cp "${ROOT}/bin/$(storage_binary_name moox-storage-primary)" "${RELEASE_ROOT}/modules/storage-primary/bin/$(storage_binary_name moox-storage-primary)"
 cp "${ROOT}/bin/$(storage_binary_name moox-storage-view)" "${RELEASE_ROOT}/modules/storage-view/bin/$(storage_binary_name moox-storage-view)"
-cp "${ROOT}/bin/$(storage_binary_name moox-storage-access)" "${RELEASE_ROOT}/modules/storage-access/bin/$(storage_binary_name moox-storage-access)"
 cp "${ROOT}/bin/$(storage_binary_name moox-storage-cli)" "${RELEASE_ROOT}/modules/storage-primary/bin/$(storage_binary_name moox-storage-primary-cli)"
+copy_binary moox-access "${RELEASE_ROOT}/modules/access/bin"
 copy_binary moox-archive "${RELEASE_ROOT}/modules/archive/bin"
 copy_binary moox-archive-cli "${RELEASE_ROOT}/modules/archive/bin"
 if [[ -d "${RELEASE_ROOT}/modules/hostagent" ]]; then
@@ -161,7 +161,7 @@ cp "${ROOT}/modules/storage/config/trpc_go.primary.yaml" "${RELEASE_ROOT}/module
 printf '\n' >> "${RELEASE_ROOT}/modules/storage-primary/config/trpc_go.yaml"
 cat "${ROOT}/modules/storage/config/storage.primary.yaml" >> "${RELEASE_ROOT}/modules/storage-primary/config/trpc_go.yaml"
 cp "${ROOT}/modules/storage/config/storage_view/trpc_go.yaml" "${RELEASE_ROOT}/modules/storage-view/config/trpc_go.yaml"
-cp "${ROOT}/modules/storage/config/access/trpc_go.yaml" "${RELEASE_ROOT}/modules/storage-access/config/trpc_go.yaml"
+cp "${ROOT}/modules/access/config/trpc_go.yaml" "${RELEASE_ROOT}/modules/access/config/trpc_go.yaml"
 cp -R "${ROOT}/modules/monitor/config/." "${RELEASE_ROOT}/modules/monitor/config/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/modules/storage-primary/schema/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/modules/storage-view/schema/"

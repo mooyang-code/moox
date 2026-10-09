@@ -47,7 +47,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --node-id strategy \
   --gateway-control-url http://127.0.0.1:11000 \
-  --no-admin --no-storage --no-storage-access --no-archive --no-eventbus --no-cloudnode \
+  --no-admin --no-storage --no-access --no-archive --no-eventbus --no-cloudnode \
   --no-collector --no-factor-mgr --no-trade --no-monitor --no-hostagent >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked"
@@ -63,12 +63,14 @@ do
 done
 
 grep -q '^database: ../data/strategy/strategy.sqlite$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
-# The browser/admin route targets StrategyMgr's HTTP listener, not the native
-# tRPC listener used by machine clients.
-grep -A6 'name: trpc.moox.strategy.StrategyMgr$' "${TMP_ROOT}/unpacked/strategy/config/trpc_go.yaml" | grep -q 'port: 11433'
-grep -q '^  gateway_url: "https://trade.example.test:11001"$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml" || { echo 'missing rendered remote Trade Gateway URL' >&2; exit 1; }
-grep -q '^  target_node: "trade-node"$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
-grep -q '^  ca_file: ""$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
+# StrategyMgr 只有一个 tRPC 监听，控制台和机器调用方都经主机网关访问。
+grep -A6 'name: trpc.moox.strategy.StrategyMgr$' "${TMP_ROOT}/unpacked/strategy/config/trpc_go.yaml" | grep -q 'port: 11430'
+# Strategy 经 gateway_client 调用 Trade，trade 段只剩超时。
+grep -A1 '^trade:$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml" | grep -q '^  timeout: 3s$'
+if grep -Eq '^  (gateway_url|target_node):' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"; then
+  echo 'Strategy must not carry Trade gateway settings' >&2
+  exit 1
+fi
 grep -q 'MOOX_TRADE_GATEWAY_CA_FILE=' "${TMP_ROOT}/unpacked/start.sh"
 [[ -f "${TMP_ROOT}/unpacked/config/trade-gateway.json" ]] || { echo 'missing persisted Trade Gateway route placement' >&2; exit 1; }
 # Exercise the generated restart helper without starting services or requiring
@@ -141,7 +143,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --dir "${TMP_ROOT}/control-deploy" --stage "${TMP_ROOT}/control-stage" \
   --goos linux --goarch amd64 --skip-build --node-id control \
   --gateway-control-url http://127.0.0.1:11000 \
-  --no-strategy --no-web-host --no-storage --no-storage-access --no-archive --no-eventbus --no-cloudnode \
+  --no-strategy --no-web-host --no-storage --no-access --no-archive --no-eventbus --no-cloudnode \
   --no-collector --no-factor-mgr --no-trade --no-monitor --no-hostagent >/dev/null
 cmp "${TMP_ROOT}/unpacked/config/trade-gateway.json" "${TMP_ROOT}/control-stage/config/trade-gateway.json"
 [[ ! -e "${TMP_ROOT}/control-stage/strategy/config/app.yaml" ]]

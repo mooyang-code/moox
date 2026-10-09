@@ -2,7 +2,7 @@
 # Installs moox-factor-engine on the machine that runs it (macOS with launchd,
 # Linux with a systemd user unit). The engine only dials out: to
 # moox-factor-mgr through the control host's gateway HTTPS entry, to EventBus
-# and to storage-access on the Storage host.
+# and to access on the Storage host.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -36,15 +36,15 @@ Options:
   --manager-url <url>       Control host service HTTPS entry, e.g. https://106.53.107.122:11001.
   --manager-node-id <id>    Gateway node id of the control host.
   --manager-ca <path>       Caddy root certificate of the control host (copied to secrets/).
-  --storage-target <target> storage-access tRPC target, e.g. ip://146.56.196.204:11004.
-  --storage-node-id <id>    storage-access inbound target node id.
+  --storage-target <target> access tRPC target, e.g. ip://146.56.196.204:11004.
+  --storage-node-id <id>    access inbound target node id.
   --eventbus-url <url>      EventBus URL, e.g. tls://106.53.107.122:4222.
   --skip-build              Reuse <dir>/bin/moox-factor-engine.
   --no-start                Install files only; do not (re)start the service.
 
 Credentials expected in the secrets directory (regular files, mode 0600):
   gateway-factor-engine.key          factor-engine gateway service key (control host secrets/)
-  storage-access-factor-engine.key   factor-engine storage-access key (Storage host secrets/)
+  access-factor-engine.key   factor-engine access key (Storage host secrets/)
   storage-primary-auth.secret        MOOX_STORAGE_PRIMARY_AUTH_SECRET of the Storage deployment
   factor-eventbus.yaml               factor EventBus role credential (its ca_file next to it)
 EOF
@@ -104,7 +104,7 @@ require_secret() {
 mkdir -p "${DEPLOY_DIR}/bin" "${DEPLOY_DIR}/config" "${DEPLOY_DIR}/pyworker" "${DEPLOY_DIR}/data/engine" "${DEPLOY_DIR}/logs"
 mkdir -p "${SECRETS_DIR}"
 chmod 0700 "${SECRETS_DIR}"
-for secret in gateway-factor-engine.key storage-access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
+for secret in gateway-factor-engine.key access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
   require_secret "${secret}"
 done
 if [[ -n "${MANAGER_CA}" ]]; then
@@ -173,7 +173,7 @@ storage:
   gateway_target: "${STORAGE_TARGET}"
   gateway_node_id: "${STORAGE_NODE_ID}"
   key_id: factor-engine
-  hmac_key_file: ${SECRETS_DIR}/storage-access-factor-engine.key
+  hmac_key_file: ${SECRETS_DIR}/access-factor-engine.key
   auth_secret_file: ${SECRETS_DIR}/storage-primary-auth.secret
 
 eventbus:

@@ -18,14 +18,14 @@ import (
 )
 
 const (
-	AccessServiceName = "trpc.moox.storage.Access"
+	AccessServiceName = "trpc.moox.access.Access"
 	PrimaryStoreName  = "trpc.moox.storage.PrimaryStore"
 	MetadataName      = "trpc.moox.storage.Metadata"
 	DataViewName      = "trpc.moox.storage.DataView"
 
 	defaultMaxBodyBytes = 32 << 20
 	defaultTimeout      = 30 * time.Second
-	defaultNonceNS      = "storage-access"
+	defaultNonceNS      = "access"
 )
 
 // NonceStore persists inbound gateway nonces so a process restart does not

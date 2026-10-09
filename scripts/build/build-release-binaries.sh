@@ -122,7 +122,8 @@ binary_names=(
   moox-strategy moox-strategy-cli
   moox-trade moox-trade-cli
   moox-monitor moox-monitor-cli
-  moox-storage-primary moox-storage-node moox-storage-view moox-storage-access moox-storage-cli
+  moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli
+  moox-access
   moox-archive moox-archive-cli
 )
 if [[ "${TARGET_GOOS}" == "linux" ]]; then

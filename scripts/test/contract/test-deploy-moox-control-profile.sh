@@ -25,8 +25,8 @@ mkdir -p "${FIXTURE_ROOT}/scripts/deploy" "${FIXTURE_ROOT}/scripts/runtime" \
   "${FIXTURE_ROOT}/config/setup" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 selected_workload="$(sed -n '/^HAS_SELECTED_WORKLOAD=0$/,/^fi$/p' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh")"
-if ! grep -Fq '"${WITH_STORAGE_ACCESS}" == "1"' <<<"${selected_workload}"; then
-  echo "storage-access-only component overlays must be accepted as selected workloads" >&2
+if ! grep -Fq '"${WITH_ACCESS}" == "1"' <<<"${selected_workload}"; then
+  echo "access-only component overlays must be accepted as selected workloads" >&2
   exit 1
 fi
 verify_shell="$(sed -n "/local verify_script=/,/^fi'$/p" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh")"
@@ -263,7 +263,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --profile control --package-only --archive "${WEB_HOST_OVERLAY_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-web-host" --stage "${TMP_ROOT}/stage-web-host" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
-  --no-admin --with-web-host --no-storage --no-storage-access --no-archive --no-eventbus \
+  --no-admin --with-web-host --no-storage --no-access --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor \
   --no-hostagent --no-gateway --node-id control --gateway-control-url http://127.0.0.1:11000 \
   --monitor-instance-id monitor-control --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
@@ -277,7 +277,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --profile control --package-only --archive "${WEB_HOST_OVERLAY_REVERSED_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-web-host-reversed" --stage "${TMP_ROOT}/stage-web-host-reversed" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
-  --with-web-host --no-admin --no-storage --no-storage-access --no-archive --no-eventbus \
+  --with-web-host --no-admin --no-storage --no-access --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor \
   --no-hostagent --no-gateway --node-id control --gateway-control-url http://127.0.0.1:11000 \
   --monitor-instance-id monitor-control --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
@@ -306,7 +306,7 @@ cp "${WEB_HOST_OVERLAY_DEPLOY}/bin/moox-admin" "${TMP_ROOT}/admin-before-web-hos
   --profile control --target localhost --dir "${WEB_HOST_OVERLAY_DEPLOY}" \
   --stage "${TMP_ROOT}/stage-installed-web-host" --goos linux --goarch amd64 \
   --skip-build --reuse-web-assets --no-start --component-overlay \
-  --no-admin --with-web-host --no-gateway --no-storage --no-storage-access \
+  --no-admin --with-web-host --no-gateway --no-storage --no-access \
   --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor-mgr \
   --no-strategy --no-trade --no-monitor --no-hostagent --local-ca skip --target-ca skip \
   --node-id control --gateway-control-url http://127.0.0.1:11000 \
@@ -331,7 +331,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --package-only --archive "${DEFAULT_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-default" --stage "${TMP_ROOT}/stage-default" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
-  --no-storage --no-storage-access --no-archive --no-factor-mgr --no-strategy --no-trade --no-monitor \
+  --no-storage --no-access --no-archive --no-factor-mgr --no-strategy --no-trade --no-monitor \
   --node-id control --gateway-control-url http://127.0.0.1:11000 >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked-default"

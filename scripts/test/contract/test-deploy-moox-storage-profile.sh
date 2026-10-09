@@ -21,6 +21,7 @@ ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/script
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/config/setup" "${FIXTURE_ROOT}/config/setup"
 ln -s "${ROOT}/modules/storage" "${FIXTURE_ROOT}/modules/storage"
+ln -s "${ROOT}/modules/access" "${FIXTURE_ROOT}/modules/access"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
 ln -s "${ROOT}/modules/hostgateway" "${FIXTURE_ROOT}/modules/hostgateway"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
@@ -28,7 +29,7 @@ ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/scripts/runtime/reset-storage-view-indexes.sh" "${FIXTURE_ROOT}/scripts/runtime/reset-storage-view-indexes.sh"
 
-for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-storage-access moox-host-gateway moox-host-gateway-cli moox-admin moox-admin-cli moox-cli; do
+for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-access moox-host-gateway moox-host-gateway-cli moox-admin moox-admin-cli moox-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
@@ -47,7 +48,7 @@ EOF
 done
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" \
-MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:20201 \
+MOOX_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:20201 \
 "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
   --profile storage --package-only --archive "${ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
@@ -177,7 +178,7 @@ grep -q 'start_storage_view' <<<"${bootstrap_body}"
 grep -q 'defer Dataset activation' <<<"${doctor_body}"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" \
-MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003 \
+MOOX_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003 \
 "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
   --profile storage --no-gateway --package-only --archive "${SHARED_GATEWAY_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-shared-gateway" --stage "${TMP_ROOT}/stage-shared-gateway" \

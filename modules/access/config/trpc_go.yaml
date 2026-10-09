@@ -1,6 +1,6 @@
 global:
   namespace: Production
-  env_name: storage-access
+  env_name: access
 
 server:
   filter: []
@@ -11,13 +11,13 @@ server:
     read_timeout: 3000
     write_timeout: 60000
   service:
-    - name: trpc.moox.storage.Access
+    - name: trpc.moox.access.Access
       ip: 0.0.0.0
       port: 11004
       network: tcp
       protocol: trpc
       timeout: 30000
-    - name: trpc.moox.storage.Health
+    - name: trpc.moox.access.Health
       ip: 127.0.0.1
       port: 11014
       network: tcp
