@@ -27,3 +27,9 @@ go test -count=1 ./modules/admin/...
 离线恢复使用 `host set-status` 或 `placement set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
 
 bootstrap 已生成新主机网关格式；运行端接入和实际首次部署流程仍由执行计划 C/G/J 验收。
+
+## 证书巡检
+
+Admin 启动时及每天检查 MooX CA 和数据库中全部主机的公有证书清单（包括停用主机），检查有效期、CA 签名、服务端用途及主机 ID/公网/私网 SAN。证书在 90 天内到期时发出 warning；缺失、损坏、过期或不匹配时发出 critical，同轮发现按级别汇总。EventBus CA 仍独立检查。
+
+`MOOX_ADMIN_PKI_DIR` 指向 bootstrap 的持久 `--pki-dir`；未设置时使用 Admin 主密钥文件同目录下的 `pki/`，未提供主密钥文件路径时默认为 `../secrets/pki`。巡检只读取 `ca.crt` 与 `hosts/<host-id>.crt`，不读取私钥或签名密钥，不创建或修复文件。首次初始化时其他主机可能尚未签发证书，这类发现会告警并保留定时巡检，允许控制面启动，以便后续部署和换发证书。

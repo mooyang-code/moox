@@ -46,7 +46,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment()); err != nil {
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB())); err != nil {
 		return nil, err
 	}
 	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.SysDeploy, cfg.AdminNodeID)
@@ -134,9 +134,19 @@ func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch 
 	if service == nil {
 		return fmt.Errorf("certificate watch timer service %q is not configured", certificateWatchTimerService)
 	}
-	if err := watch.Validate(ctx); err != nil {
+	job, err := timerjob.New("admin_certificate_watch", certificateWatchTimeout, watch.Validate)
+	if err != nil {
 		return err
 	}
-	timer.RegisterHandlerService(service, watch.Validate)
+	// Other registered hosts may not have completed their first deployment yet.
+	// Report findings while allowing the control plane to start so deployment
+	// and certificate renewal can proceed.
+	if err := job.Handle(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.WarnContextf(ctx, "initial certificate watch reported a problem: %v", err)
+	}
+	timer.RegisterHandlerService(service, job.Handle)
 	return nil
 }
