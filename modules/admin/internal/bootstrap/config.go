@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
@@ -21,7 +21,7 @@ import (
 type Config struct {
 	App         *config.AppConfig
 	Auth        *authcfg.Config
-	Gateway     *gateway.Config
+	Console     *console.Config
 	AdminNodeID string
 }
 
@@ -56,25 +56,25 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	}
 	log.Info("认证配置加载成功")
 
-	// 3. 加载网关配置
-	gatewayCfg, err := gateway.LoadConfig()
+	// 3. 加载控制台配置
+	consoleCfg, err := console.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
-	gateway.SetConfig(gatewayCfg)
-	if len(strings.TrimSpace(gatewayCfg.JWT.SecretKey)) < 32 {
+	console.SetConfig(consoleCfg)
+	if len(strings.TrimSpace(consoleCfg.JWT.SecretKey)) < 32 {
 		return nil, fmt.Errorf("jwt.secret_key must contain at least 32 characters")
 	}
-	if err := validateGatewayCORS(gatewayCfg); err != nil {
+	if err := validateConsoleCORS(consoleCfg); err != nil {
 		return nil, err
 	}
-	log.Info("网关配置加载成功")
+	log.Info("控制台配置加载成功")
 
 	// 5. 创建配置对象
 	cfg := &Config{
 		App:         appCfg,
 		Auth:        authCfg,
-		Gateway:     gatewayCfg,
+		Console:     consoleCfg,
 		AdminNodeID: adminNodeID,
 	}
 	return cfg, nil
@@ -178,24 +178,24 @@ func loadEncryptionKey() error {
 	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
 }
 
-func validateGatewayCORS(cfg *gateway.Config) error {
+func validateConsoleCORS(cfg *console.Config) error {
 	if cfg == nil {
-		return fmt.Errorf("gateway config is nil")
+		return fmt.Errorf("console config is nil")
 	}
 	if len(cfg.CORS.AllowedOrigins) == 0 {
-		if cfg.Gateway.Debug {
+		if cfg.Console.Debug {
 			log.Warn("cors.allowed_origins 未配置，非 debug 环境将无法设置 CORS 响应头")
 			return nil
 		}
-		return fmt.Errorf("cors.allowed_origins must not be empty when gateway.debug is false")
+		return fmt.Errorf("cors.allowed_origins must not be empty when console.debug is false")
 	}
-	if !cfg.Gateway.Debug && gatewayContainsWildcardOrigin(cfg.CORS.AllowedOrigins) {
+	if !cfg.Console.Debug && consoleContainsWildcardOrigin(cfg.CORS.AllowedOrigins) {
 		log.Warn("生产环境 cors.allowed_origins 包含 '*'，建议改为具体前端域名")
 	}
 	return nil
 }
 
-func gatewayContainsWildcardOrigin(origins []string) bool {
+func consoleContainsWildcardOrigin(origins []string) bool {
 	for _, origin := range origins {
 		if strings.TrimSpace(origin) == "*" {
 			return true

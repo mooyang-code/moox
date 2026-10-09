@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -48,37 +48,37 @@ func TestValidateSetupListenerRequiresDedicatedService(t *testing.T) {
 }
 
 func TestGatewayContainsWildcardOrigin_HasWildcard_ShouldReturnTrue(t *testing.T) {
-	assert.True(t, gatewayContainsWildcardOrigin([]string{"https://a.com", "*"}))
+	assert.True(t, consoleContainsWildcardOrigin([]string{"https://a.com", "*"}))
 }
 
 func TestGatewayContainsWildcardOrigin_NoWildcard_ShouldReturnFalse(t *testing.T) {
-	assert.False(t, gatewayContainsWildcardOrigin([]string{"https://a.com", "https://b.com"}))
+	assert.False(t, consoleContainsWildcardOrigin([]string{"https://a.com", "https://b.com"}))
 }
 
 func TestValidateGatewayCORS_NilConfig_ShouldError(t *testing.T) {
-	err := validateGatewayCORS(nil)
+	err := validateConsoleCORS(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil")
 }
 
 func TestValidateGatewayCORS_ProdEmptyOrigins_ShouldError(t *testing.T) {
-	cfg := &gateway.Config{Gateway: gateway.GatewayConfig{Debug: false}}
-	err := validateGatewayCORS(cfg)
+	cfg := &console.Config{Console: console.ConsoleConfig{Debug: false}}
+	err := validateConsoleCORS(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cors.allowed_origins")
 }
 
 func TestValidateGatewayCORS_DebugEmptyOrigins_ShouldPass(t *testing.T) {
-	cfg := &gateway.Config{Gateway: gateway.GatewayConfig{Debug: true}}
-	require.NoError(t, validateGatewayCORS(cfg))
+	cfg := &console.Config{Console: console.ConsoleConfig{Debug: true}}
+	require.NoError(t, validateConsoleCORS(cfg))
 }
 
 func TestValidateGatewayCORS_WithOrigins_ShouldPass(t *testing.T) {
-	cfg := &gateway.Config{
-		Gateway: gateway.GatewayConfig{Debug: false},
-		CORS:    gateway.CORSConfig{AllowedOrigins: []string{"https://admin.example.com"}},
+	cfg := &console.Config{
+		Console: console.ConsoleConfig{Debug: false},
+		CORS:    console.CORSConfig{AllowedOrigins: []string{"https://admin.example.com"}},
 	}
-	require.NoError(t, validateGatewayCORS(cfg))
+	require.NoError(t, validateConsoleCORS(cfg))
 }
 
 func TestLoadEncryptionKey_FromEnv_ShouldPass(t *testing.T) {
@@ -125,9 +125,9 @@ func setupBootstrapConfigDir(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "app.yaml"), []byte(`database:
   path: ./data/admin.db
 `), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "gateway.yaml"), []byte(`jwt:
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(`jwt:
   secret_key: test-secret-key-32bytes-long-123456
-gateway:
+console:
   debug: true
 cors:
   allowed_origins:
@@ -163,9 +163,9 @@ func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	require.NotNil(t, cfg)
 	assert.NotNil(t, cfg.App)
 	assert.NotNil(t, cfg.Auth)
-	assert.NotNil(t, cfg.Gateway)
+	assert.NotNil(t, cfg.Console)
 	assert.Equal(t, "admin-node-test", cfg.AdminNodeID)
-	assert.Equal(t, "test-secret-key-32bytes-long-123456", cfg.Gateway.JWT.SecretKey)
+	assert.Equal(t, "test-secret-key-32bytes-long-123456", cfg.Console.JWT.SecretKey)
 }
 
 func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
@@ -180,9 +180,9 @@ func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
 
 func TestLoadConfigs_EmptyJWTSecret_ShouldError(t *testing.T) {
 	dir := setupBootstrapConfigDir(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "gateway.yaml"), []byte(`jwt:
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte(`jwt:
   secret_key: ""
-gateway:
+console:
   debug: true
 cors:
   allowed_origins:

@@ -14,4 +14,4 @@ go test -count=1 ./modules/admin/...
 
 ## 配置
 
-`config/trpc_go.yaml`（服务与端口）、`config/app.yaml`、`config/gateway.yaml`（管理网关）；schema 在 `schema/admin.sql`。
+`config/trpc_go.yaml`（服务与端口）、`config/app.yaml`、`config/console.yaml`（控制台）；schema 在 `schema/admin.sql`。

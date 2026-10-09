@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 )
 
 func TestShouldSkipAuth_ConfiguredMethod_ShouldReturnTrue(t *testing.T) {
-	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/login"}}})
+	SetConfig(&Config{Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/auth/login"}}})
 	assert.True(t, ShouldSkipAuth("/api/admin/auth/login"))
 	assert.False(t, ShouldSkipAuth("/api/admin/auth/get_user_info"))
 }

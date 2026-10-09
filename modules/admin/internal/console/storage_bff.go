@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"crypto/hmac"

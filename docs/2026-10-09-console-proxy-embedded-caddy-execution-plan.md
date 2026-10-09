@@ -49,6 +49,8 @@ B3 变更后，55 个模块统一 Go 测试与 vet、格式、模块/包边界�
 
 B5 已交付 MooX 私有 CA 与主机网关证书的离线命令。已有 CA 和连续性摘要被保留，损坏或丢失时拒绝更换信任根；主机证书包含主机 ID、公网/私网地址，使用新的私密暂存目录输出后交给部署安装。此 CA 专供主机网关 TLS，与本子计划要求保留指纹的 Caddy 代理 CA 分开。Admin 全量、PKI/CLI race、实际 TLS 正反用例及 Linux amd64 运行验证通过；五个平台的 Admin CLI 均在本机关闭 CGO 编译通过。部署分发、主机网关、证书巡检和正式环境切换仍待后续阶段完成。
 
+B7 已单独完成 Admin Console 的包、服务和配置改名；`trpc.moox.admin.Console` 继续监听 loopback `11000`，配置为 `admin/config/console.yaml`。Admin 全量、受影响包 race/vet、Linux amd64 Console 全包及 control 打包契约通过。打包契约已单独改为本地 Caddy 测试制品，生产旧 manager/archive 链路仍须 P6 清理。B8 的转发行为与前端服务名、B6/C2 的初始化配置集成，以及后续正式验收仍待交付。
+
 B4 变更后，55 个 Go 模块的统一测试与 vet 再次全部通过；协议生成一致性、格式门禁、模块/包边界、模块图及文档架构检查通过。编译策略继续遵循上述 CGO 边界，Linux 纯 Go 测试程序在本机交叉编译后，只在编译机执行验证。正式切换尚未执行。
 
 control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
@@ -199,7 +201,7 @@ SCF / factor-engine / moox-skill -- signed tRPC :11004 --> access -- TLS tRPC :1
 - `modules/gateway/internal/controlplane/client.go`：Pull/Report。
 - `modules/trade/internal/secretclient/client.go`：Trade Secret。
 - `modules/strategy/internal/bootstrap/logical_account_gateway.go`：Strategy TradeOwner。
-- `modules/admin/internal/gateway/forward.go`：Admin TradeConsole。
+- `modules/admin/internal/console/forward.go`：Admin TradeConsole（B7 已完成包改名）。
 - `modules/collector/internal/scfinvoker/client.go`：Collector 服务调用。
 - `scripts/deploy/deploy-moox.sh`：`MOOX_SCF_SERVICE_GATEWAY_TARGET` 生成。
 - `modules/admin/internal/service/sysdeploy/defaults.go`：服务入口发布。

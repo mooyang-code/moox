@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
@@ -23,7 +23,7 @@ import (
 type Service interface {
 	pb.SysDeployService
 	SeedDefaults(ctx context.Context) error
-	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool)
+	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (console.ServiceDetail, bool)
 	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayroute.Snapshot, error)
 	ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error
 }
@@ -218,29 +218,29 @@ func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.
 
 // ResolveAdminServiceDetail resolves browser control-plane forwarding only from
 // active deployments assigned to the Admin process's configured node.
-func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool) {
+func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (console.ServiceDetail, bool) {
 	adminNodeID = strings.TrimSpace(adminNodeID)
 	if adminNodeID == "" || adminNodeID != s.adminNodeID {
-		return gateway.ServiceDetail{}, false
+		return console.ServiceDetail{}, false
 	}
 	row, err := s.dao.Get(ctx, adminNodeID, gatewayDeploymentName(serviceID))
 	if err != nil || row == nil || row.Status != "active" {
-		return gateway.ServiceDetail{}, false
+		return console.ServiceDetail{}, false
 	}
 	address := deploymentRPCAddress(row)
 	path := strings.TrimSpace(row.GatewayPath)
 	if address == "" || path == "" || strings.HasPrefix(path, "/") {
-		return gateway.ServiceDetail{}, false
+		return console.ServiceDetail{}, false
 	}
 	extra, err := parseRouteExtraConfig(row.ExtraConfig)
 	if err != nil {
-		return gateway.ServiceDetail{}, false
+		return console.ServiceDetail{}, false
 	}
 	timeout := 30 * time.Second
 	if extra.TimeoutMS != nil && *extra.TimeoutMS > 0 {
 		timeout = time.Duration(*extra.TimeoutMS) * time.Millisecond
 	}
-	detail := gateway.ServiceDetail{Address: address, Path: path, Timeout: timeout}
+	detail := console.ServiceDetail{Address: address, Path: path, Timeout: timeout}
 	if gatewayDeploymentName(serviceID) == "trade_console" && extra.GatewayURL != "" && extra.GatewayNode != "" {
 		detail.GatewayURL = strings.TrimRight(strings.TrimSpace(extra.GatewayURL), "/")
 		detail.GatewayNode = strings.TrimSpace(extra.GatewayNode)

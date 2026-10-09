@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"bytes"
@@ -64,13 +64,13 @@ func signedGatewayControlRequest(t *testing.T, method, target, body string, at t
 	return req
 }
 
-func setupGatewayControlRouter(t *testing.T, provider GatewayProvider) (*HTTPRouter, *fakeRequestAuthStore) {
+func setupGatewayControlRouter(t *testing.T, provider ConsoleProvider) (*HTTPRouter, *fakeRequestAuthStore) {
 	t.Helper()
 	t.Setenv("MOOX_GATEWAY_CONTROL_SECRET_KEY", testGatewayControlSecret)
 	store := &fakeRequestAuthStore{nonces: map[string]bool{}}
 	SetRequestAuthStore(store)
 	t.Cleanup(func() { SetRequestAuthStore(nil) })
-	return NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test"), store
+	return NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test"), store
 }
 
 func TestGatewayControlRoutesReturnsOnlySignedTargetSnapshot(t *testing.T) {

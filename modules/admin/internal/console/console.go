@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"context"
@@ -20,29 +20,29 @@ import (
 )
 
 // ============================================================================
-// 网关管理器
+// 控制台处理器
 // ============================================================================
 
 var (
-	gatewayHandleInstance *GatewayHandle
-	gatewayHandleOnce     sync.Once
+	consoleHandleInstance *ConsoleHandle
+	consoleHandleOnce     sync.Once
 )
 
-// GatewayHandle 网关处理器（保留单例以承载 HTTPRequestHandler）。
-type GatewayHandle struct {
+// ConsoleHandle 控制台处理器（保留单例以承载 HTTPRequestHandler）。
+type ConsoleHandle struct {
 	requestHandler *HTTPRequestHandler
 }
 
-// GetGatewayHandleInstance 返回网关处理器的全局单例实例
-func GetGatewayHandleInstance() *GatewayHandle {
-	gatewayHandleOnce.Do(func() {
-		gatewayHandleInstance = NewGatewayHandle()
+// GetConsoleHandleInstance 返回控制台处理器的全局单例实例
+func GetConsoleHandleInstance() *ConsoleHandle {
+	consoleHandleOnce.Do(func() {
+		consoleHandleInstance = NewConsoleHandle()
 	})
-	return gatewayHandleInstance
+	return consoleHandleInstance
 }
 
-var NewGatewayHandle = func() *GatewayHandle {
-	return &GatewayHandle{
+var NewConsoleHandle = func() *ConsoleHandle {
+	return &ConsoleHandle{
 		requestHandler: NewHTTPRequestHandler(),
 	}
 }
@@ -53,32 +53,32 @@ var NewGatewayHandle = func() *GatewayHandle {
 
 // HTTPRouter HTTP路由管理器
 type HTTPRouter struct {
-	gateway              *GatewayHandle
-	controlProvider      GatewayProvider
+	console              *ConsoleHandle
+	controlProvider      ConsoleProvider
 	adminServiceProvider AdminServiceDetailProvider
 	tradeAuthorizer      TradeSpaceAuthorizer
 	adminNodeID          string
 }
 
 // NewHTTPRouter 创建HTTP路由管理器
-func NewHTTPRouter(gateway *GatewayHandle, provider GatewayProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) *HTTPRouter {
+func NewHTTPRouter(console *ConsoleHandle, provider ConsoleProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) *HTTPRouter {
 	var authorizer TradeSpaceAuthorizer
 	if len(authorizers) > 0 {
 		authorizer = authorizers[0]
 	}
-	return &HTTPRouter{gateway: gateway, controlProvider: provider, adminServiceProvider: provider, tradeAuthorizer: authorizer, adminNodeID: adminNodeID}
+	return &HTTPRouter{console: console, controlProvider: provider, adminServiceProvider: provider, tradeAuthorizer: authorizer, adminNodeID: adminNodeID}
 }
 
-// RegisterGatewayHTTPHandlers 注册网关HTTP接口
-func RegisterGatewayHTTPHandlers(s *server.Server, provider GatewayProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) error {
-	gateway := GetGatewayHandleInstance()
-	router := NewHTTPRouter(gateway, provider, adminNodeID, authorizers...)
+// RegisterConsoleHTTPHandlers 注册控制台 HTTP 接口
+func RegisterConsoleHTTPHandlers(s *server.Server, provider ConsoleProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) error {
+	console := GetConsoleHandleInstance()
+	router := NewHTTPRouter(console, provider, adminNodeID, authorizers...)
 	return router.setupRoutes(s)
 }
 
 // setupRoutes 设置路由
 func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
-	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.gateway.control"), hr.buildControlRouter()); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.admin.Console"), hr.buildControlRouter()); err != nil {
 		return err
 	}
 	return nil
@@ -108,9 +108,9 @@ func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	return router
 }
 
-// handleControlRequest 处理管理台网关请求(中间件authorize通过之后，执行流才到本函数)
+// handleControlRequest 处理控制台请求(中间件authorize通过之后，执行流才到本函数)
 func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {
-	hr.handleGatewayRequest(w, r)
+	hr.handleConsoleRequest(w, r)
 }
 
 func (hr *HTTPRouter) handleStorageBFFRequest(w http.ResponseWriter, r *http.Request) {
@@ -119,9 +119,9 @@ func (hr *HTTPRouter) handleStorageBFFRequest(w http.ResponseWriter, r *http.Req
 	hr.handleControlRequest(w, r)
 }
 
-func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Request) {
+func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	handler := hr.gateway.requestHandler
+	handler := hr.console.requestHandler
 
 	// 解析请求参数
 	serviceID, method, err := handler.parseRequestParams(r)

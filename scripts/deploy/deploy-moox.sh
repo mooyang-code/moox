@@ -1235,7 +1235,7 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/admin\.db#path: ../data/admin.db#g' \
       "${STAGE_DIR}/admin/config/app.yaml"
     perl -0pi -e 's#data_dir:\s*"\./data/badger"#data_dir: "../data/badger"#g' \
-      "${STAGE_DIR}/admin/config/gateway.yaml"
+      "${STAGE_DIR}/admin/config/console.yaml"
     perl -0pi -e 's#log_path:\s*\./log#log_path: ../logs/admin#g' \
       "${STAGE_DIR}/admin/config/trpc_go.yaml"
   fi

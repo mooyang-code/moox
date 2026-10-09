@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ type GatewayControlProvider interface {
 	ReportGatewayStatus(context.Context, gatewayroute.GatewayStatusReport) error
 }
 
-type GatewayProvider interface {
+type ConsoleProvider interface {
 	GatewayControlProvider
 	AdminServiceDetailProvider
 }

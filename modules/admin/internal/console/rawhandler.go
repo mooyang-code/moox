@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"context"
@@ -23,7 +23,7 @@ var (
 
 // RegisterRawHandler 注册某 service 的某 method 为裸 HTTP 处理器。
 // 与 RegisterDispatcher 互斥：同一 (serviceID, method) 若已注册裸处理器，
-// dispatchAndServe 不会再被触达（handleGatewayRequest 优先分派裸处理器）。
+// dispatchAndServe 不会再被触达（handleConsoleRequest 优先分派裸处理器）。
 func RegisterRawHandler(serviceID, method string, h RawHandler) {
 	rawHandlersMutex.Lock()
 	defer rawHandlersMutex.Unlock()

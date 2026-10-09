@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"github.com/gorilla/mux"
@@ -35,7 +35,7 @@ func TestLoadConfig_ValidYAML_ShouldParse(t *testing.T) {
 	require.NoError(t, os.MkdirAll(configDir, 0o755))
 	content := `jwt:
   secret_key: test-secret
-gateway:
+console:
   debug: true
 cors:
   allowed_origins:
@@ -44,7 +44,7 @@ rate_limit:
   default_qps: 100
   default_burst: 200
 `
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "gateway.yaml"), []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(content), 0o644))
 
 	origWD, err := os.Getwd()
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ rate_limit:
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "test-secret", cfg.JWT.SecretKey)
-	assert.True(t, cfg.Gateway.Debug)
+	assert.True(t, cfg.Console.Debug)
 	assert.Equal(t, 100, cfg.RateLimit.DefaultQPS)
 }
 
@@ -70,7 +70,7 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 }
 
 func TestAdminRouterKeepsAdminAndGatewayControlButRejectsMachineService(t *testing.T) {
-	hr := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{}, "admin-node-test")
+	hr := NewHTTPRouter(NewConsoleHandle(), &fakeGatewayControlProvider{}, "admin-node-test")
 	router := hr.buildControlRouter()
 	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health"} {
 		rr := httptest.NewRecorder()

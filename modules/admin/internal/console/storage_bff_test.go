@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"bytes"
@@ -114,7 +114,7 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 func TestAdminRouterStorageBFFRequiresNativeGatewayConfiguration(t *testing.T) {
 	SetConfig(&Config{
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/ListDataSources"}},
+		Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/storage/ListDataSources"}},
 	})
 	t.Setenv("MOOX_NODE_GATEWAY_URL", "")
 	t.Setenv("MOOX_NODE_GATEWAY_NATIVE_URL", "")
@@ -122,7 +122,7 @@ func TestAdminRouterStorageBFFRequiresNativeGatewayConfiguration(t *testing.T) {
 	t.Setenv("MOOX_NODE_GATEWAY_NODE_ID", "")
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	provider := &fakeGatewayControlProvider{}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test").buildControlRouter()
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/storage/ListDataSources", bytes.NewBufferString(`{"space_id":"space-1"}`))
 
@@ -136,7 +136,7 @@ func TestAdminRouterStorageBFFRequiresNativeGatewayConfiguration(t *testing.T) {
 func TestAdminRouterStorageBFFDoesNotUseHTTPServiceDetail(t *testing.T) {
 	SetConfig(&Config{
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/ListDataSources"}},
+		Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/storage/ListDataSources"}},
 	})
 	t.Setenv("MOOX_NODE_GATEWAY_URL", "http://127.0.0.1:1")
 	t.Setenv("MOOX_NODE_GATEWAY_NATIVE_URL", "ip://127.0.0.1:1")
@@ -144,7 +144,7 @@ func TestAdminRouterStorageBFFDoesNotUseHTTPServiceDetail(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "moox-gateway-service")
 	t.Setenv("MOOX_NODE_GATEWAY_NODE_ID", "node-a")
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
-	router := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{}, "admin-node-test").buildControlRouter()
+	router := NewHTTPRouter(NewConsoleHandle(), &fakeGatewayControlProvider{}, "admin-node-test").buildControlRouter()
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/admin/storage/ListDataSources", bytes.NewBufferString(`{"space_id":"space-1"}`)))
 	assert.Equal(t, http.StatusOK, recorder.Code)
@@ -154,10 +154,10 @@ func TestAdminRouterStorageBFFDoesNotUseHTTPServiceDetail(t *testing.T) {
 func TestAdminRouterStorageBFFRejectsInternalMethodBeforeResolvingService(t *testing.T) {
 	SetConfig(&Config{
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/ClaimViewIndexBuild"}},
+		Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/storage/ClaimViewIndexBuild"}},
 	})
 	provider := &fakeGatewayControlProvider{}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test").buildControlRouter()
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/admin/storage/ClaimViewIndexBuild", nil))
 
@@ -168,7 +168,7 @@ func TestAdminRouterStorageBFFRejectsInternalMethodBeforeResolvingService(t *tes
 func TestAdminRouterRejectsDirectStorageServiceIDsAndAliases(t *testing.T) {
 	SetConfig(&Config{
 		CORS: CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{
+		Console: ConsoleConfig{NoAuthMethods: []string{
 			"/api/admin/storage-primary/DeleteDataset",
 			"/api/admin/storage-view/ClaimViewIndexBuild",
 			"/api/admin/storage_alias/DeleteDataset",
@@ -181,7 +181,7 @@ func TestAdminRouterRejectsDirectStorageServiceIDsAndAliases(t *testing.T) {
 			Path:    "trpc.moox.storage.Metadata",
 		},
 	}}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test").buildControlRouter()
 
 	for _, path := range []string{
 		"/api/admin/storage-primary/DeleteDataset",

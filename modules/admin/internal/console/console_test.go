@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"bytes"
@@ -134,7 +134,7 @@ func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T)
 
 func TestHTTPRouterAuthorizeSpaceRequestRequiresAuthenticatedSpace(t *testing.T) {
 	a := &fakeTradeSpaceAuthorizer{}
-	hr := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test", a)
+	hr := NewHTTPRouter(NewConsoleHandle(), nil, "admin-node-test", a)
 	ctx, msg := codec.WithNewMessage(context.WithValue(context.Background(), authmodel.CtxUserID, "user-1"))
 	msg.WithServerMetaData(map[string][]byte{authmodel.CtxUserRole: []byte("1")})
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/trade_console/ListOrders", nil)
@@ -147,7 +147,7 @@ func TestHTTPRouterAuthorizeSpaceRequestRequiresAuthenticatedSpace(t *testing.T)
 }
 
 func TestHTTPRouterAuthorizeSpaceRequestFailsClosedWithoutAuthorizer(t *testing.T) {
-	hr := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
+	hr := NewHTTPRouter(NewConsoleHandle(), nil, "admin-node-test")
 	ctx := context.WithValue(context.Background(), authmodel.CtxUserID, "user-1")
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/trade_console/ListOrders", nil)
 	req.Header.Set("X-Space-Id", "crypto")
@@ -156,7 +156,7 @@ func TestHTTPRouterAuthorizeSpaceRequestFailsClosedWithoutAuthorizer(t *testing.
 
 func TestHTTPRouterAuthorizeCloudNodeRequestEnforcesSpaceMembership(t *testing.T) {
 	authorizer := &fakeTradeSpaceAuthorizer{}
-	hr := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test", authorizer)
+	hr := NewHTTPRouter(NewConsoleHandle(), nil, "admin-node-test", authorizer)
 	ctx := context.WithValue(context.Background(), authmodel.CtxUserID, "user-1")
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudnode/GetNodeList", nil)
 	req.Header.Set("X-Space-Id", "crypto")
@@ -165,7 +165,7 @@ func TestHTTPRouterAuthorizeCloudNodeRequestEnforcesSpaceMembership(t *testing.T
 	assert.Equal(t, "crypto", authorizer.spaceID)
 	assert.Equal(t, "GetNodeList", authorizer.method)
 
-	hrWithoutAuthorizer := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
+	hrWithoutAuthorizer := NewHTTPRouter(NewConsoleHandle(), nil, "admin-node-test")
 	assert.Error(t, hrWithoutAuthorizer.authorizeSpaceRequest(ctx, req, "GetNodeList"), "CloudNode browser access must fail closed without a Space ACL")
 }
 
@@ -197,7 +197,7 @@ func TestTradeConsoleDoesNotExposeStrategyOwnershipFencingToBrowser(t *testing.T
 }
 
 func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing.T) {
-	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/demo/Ping"}}})
+	SetConfig(&Config{Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/demo/Ping"}}})
 	called := false
 	RegisterRawHandler("demo", "Ping", func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -210,7 +210,7 @@ func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing
 		rawHandlersMutex.Unlock()
 	})
 
-	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
+	router := NewHTTPRouter(NewConsoleHandle(), nil, "admin-node-test")
 	muxRouter := router.buildControlRouter()
 	rr := httptest.NewRecorder()
 	muxRouter.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/demo/Ping", nil))
@@ -224,9 +224,9 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
+		Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
-	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
+	router := NewHTTPRouter(NewConsoleHandle(), nil, "admin-node-test")
 	muxRouter := router.buildControlRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
@@ -237,9 +237,9 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 }
 
 func TestAdminRouterDeniesMachineOnlyGetSecretValueAliases(t *testing.T) {
-	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/secret/GetSecretValue", "/api/admin/SecretMgr/getsecretvalue"}}})
+	SetConfig(&Config{Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/secret/GetSecretValue", "/api/admin/SecretMgr/getsecretvalue"}}})
 	provider := &fakeGatewayControlProvider{}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test").buildControlRouter()
 	for _, path := range []string{"/api/admin/secret/GetSecretValue", "/api/admin/SecretMgr/getsecretvalue", "/api/admin/trpc.moox.ops.SecretMgr/GETSECRETVALUE"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
@@ -249,7 +249,7 @@ func TestAdminRouterDeniesMachineOnlyGetSecretValueAliases(t *testing.T) {
 }
 
 func TestAdminRouterDeniesGetSecretValueThroughDeploymentAlias(t *testing.T) {
-	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{
+	SetConfig(&Config{Console: ConsoleConfig{NoAuthMethods: []string{
 		"/api/admin/secret_alias/GetSecretValue",
 		"/api/admin/secret_alias/ListSecrets",
 	}}})
@@ -266,7 +266,7 @@ func TestAdminRouterDeniesGetSecretValueThroughDeploymentAlias(t *testing.T) {
 			Path:    "TRPC.MOOX.OPS.SECRET_MGR",
 		},
 	}}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test").buildControlRouter()
 
 	denied := httptest.NewRecorder()
 	router.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/admin/secret_alias/GetSecretValue", bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
@@ -284,12 +284,12 @@ func TestAdminRouterDeniesCollectorPublishControlMethodsByServiceAlias(t *testin
 	methods := []string{"ValidateCollectorPublishLease", "BeginCollectorPublishOperation", "RenewCollectorPublishOperation", "EndCollectorPublishOperation"}
 	aliases := []string{"publishlease", "publish_lease", "Publish-Lease", "CollectorPublishLease", "collector_publish_lease", "trpc.moox.admin.CollectorPublishLease"}
 	provider := &fakeGatewayControlProvider{}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test").buildControlRouter()
 	for _, alias := range aliases {
 		for _, method := range methods {
 			t.Run(alias+"/"+method, func(t *testing.T) {
 				path := "/api/admin/" + alias + "/" + method
-				SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{path}}})
+				SetConfig(&Config{Console: ConsoleConfig{NoAuthMethods: []string{path}}})
 				recorder := httptest.NewRecorder()
 				router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
 				assert.Equal(t, http.StatusNotFound, recorder.Code)
@@ -313,10 +313,10 @@ func TestAdminRouterCollectorPublishControlGateThroughDeploymentAlias(t *testing
 			provider := &fakeGatewayControlProvider{details: map[string]ServiceDetail{
 				"admin-node-test:publish_alias": {Address: upstream.Listener.Addr().String(), Path: servicePath},
 			}}
-			router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+			router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-test").buildControlRouter()
 			for _, method := range append(append([]string{}, methods...), leaseMethods...) {
 				path := "/api/admin/publish_alias/" + method
-				SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{path}}})
+				SetConfig(&Config{Console: ConsoleConfig{NoAuthMethods: []string{path}}})
 				before := upstreamCalls
 				recorder := httptest.NewRecorder()
 				router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
@@ -355,10 +355,10 @@ func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
+		Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
 	provider := &fakeGatewayControlProvider{}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-b")
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-b")
 	t.Setenv("MOOX_ADMIN_NODE_ID", "changed-after-startup")
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
@@ -371,7 +371,7 @@ func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
 func TestHandleGatewayRequest_GetLoginSaltWorksWithConfiguredNode(t *testing.T) {
 	SetConfig(&Config{
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetLoginSalt"}},
+		Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/auth/GetLoginSalt"}},
 	})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/trpc.moox.infra.Auth/GetLoginSalt", r.URL.Path)
@@ -382,7 +382,7 @@ func TestHandleGatewayRequest_GetLoginSaltWorksWithConfiguredNode(t *testing.T) 
 	provider := &fakeGatewayControlProvider{details: map[string]ServiceDetail{
 		"admin-node-b:auth": {Address: upstream.Listener.Addr().String(), Path: "trpc.moox.infra.Auth"},
 	}}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-b")
+	router := NewHTTPRouter(NewConsoleHandle(), provider, "admin-node-b")
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetLoginSalt", bytes.NewBufferString(`{"username":"admin"}`))
 
@@ -393,9 +393,9 @@ func TestHandleGatewayRequest_GetLoginSaltWorksWithConfiguredNode(t *testing.T) 
 	assert.Equal(t, "admin-node-b", provider.lastNode)
 }
 
-func TestGetGatewayHandleInstance_ShouldReturnSingleton(t *testing.T) {
-	a := GetGatewayHandleInstance()
-	b := GetGatewayHandleInstance()
+func TestGetConsoleHandleInstance_ShouldReturnSingleton(t *testing.T) {
+	a := GetConsoleHandleInstance()
+	b := GetConsoleHandleInstance()
 	assert.Same(t, a, b)
 }
 
@@ -403,9 +403,9 @@ func TestHandleGatewayRequest_UserIDFromContext_ShouldInjectHeader(t *testing.T)
 	SetConfig(&Config{
 		JWT:     JWTConfig{SecretKey: "secret"},
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
+		Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
-	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
+	router := NewHTTPRouter(NewConsoleHandle(), nil, "admin-node-test")
 	muxRouter := router.buildControlRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))

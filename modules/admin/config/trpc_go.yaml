@@ -19,7 +19,7 @@ server:
     read_timeout: 3000
     write_timeout: 960000
   service:
-    - name: trpc.moox.gateway.control
+    - name: trpc.moox.admin.Console
       ip: 127.0.0.1
       port: 11000
       network: tcp

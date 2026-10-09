@@ -1,4 +1,4 @@
-package gateway
+package console
 
 import (
 	"context"
@@ -93,7 +93,7 @@ func ShouldSkipAuth(rpcName string) bool {
 		return false
 	}
 
-	for _, method := range cfg.Gateway.NoAuthMethods {
+	for _, method := range cfg.Console.NoAuthMethods {
 		if method == rpcName {
 			return true
 		}
