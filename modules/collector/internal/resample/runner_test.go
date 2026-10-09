@@ -112,7 +112,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), time.Now().UTC(), 10)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
-	require.Equal(t, cursor, reports[0].Readiness.PeriodTime)
+	require.Equal(t, cursor, reports[0].Readiness.PeriodTime.UTC())
 }
 
 func TestResampleBackfillSyncIgnoresSubjectAddedAfterRequestStart(t *testing.T) {

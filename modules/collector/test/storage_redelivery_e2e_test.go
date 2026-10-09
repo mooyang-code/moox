@@ -9,13 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	_ "modernc.org/sqlite"
 )
 
 type storedKlineRow struct {
@@ -46,7 +47,7 @@ func (f redeliveryActionReporterFunc) ReportAction(
 
 func newSQLiteRowUpserter(t *testing.T) *sqliteRowUpserter {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "storage-redelivery.db")), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: filepath.Join(t.TempDir(), "storage-redelivery.db") + "?_time_format=sqlite"}, &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

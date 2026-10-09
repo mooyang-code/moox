@@ -7,14 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 func TestTimerBatchClaimerReturnsPersistedPeriodIdentity(t *testing.T) {
@@ -705,7 +706,7 @@ func newTimerClaimerStoreWithPath(t *testing.T) (*store.Store, string) {
 
 func setTimerBatchRequestJSON(t *testing.T, dbPath, batchID string, requestJSON []byte) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: dbPath + "?_time_format=sqlite"}, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -717,7 +718,7 @@ func setTimerBatchRequestJSON(t *testing.T, dbPath, batchID string, requestJSON 
 
 func setTimerManifestClaim(t *testing.T, dbPath, batchID, requestID string, claimedAt time.Time) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: dbPath + "?_time_format=sqlite"}, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -730,7 +731,7 @@ func setTimerManifestClaim(t *testing.T, dbPath, batchID, requestID string, clai
 
 func setTimerTaskInstanceField(t *testing.T, dbPath, instanceID, column string, value any) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: dbPath + "?_time_format=sqlite"}, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)

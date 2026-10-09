@@ -434,28 +434,36 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_fetch_retry ON t_collector_fetch_retry_items (c_space_id, c_retry_key);
 
-CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due ON t_collector_fetch_retry_items (c_status, c_next_retry_at);
+-- Retire redundant indexes on existing stores as well as fresh databases.
+DROP INDEX IF EXISTS idx_collector_fetch_retry_due;
+DROP INDEX IF EXISTS idx_collector_fetch_retry_terminal_cleanup;
+DROP INDEX IF EXISTS idx_collector_fetch_retry_period_failure;
+DROP INDEX IF EXISTS idx_collector_fetch_retry_target;
+DROP INDEX IF EXISTS idx_collector_fetch_retry_pending_scope;
+DROP INDEX IF EXISTS idx_collector_fetch_retry_due_scope;
+DROP INDEX IF EXISTS idx_collector_fetch_retry_period_due;
 
-CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_target
-ON t_collector_fetch_retry_items (c_space_id, c_write_target_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_retry_write_target
+ON t_collector_fetch_retry_items (c_space_id, c_write_target_id);
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_instance_active
 ON t_collector_fetch_retry_items (c_space_id, c_instance_id, c_status, c_period_failure_report_state);
 
-CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_pending_scope
-ON t_collector_fetch_retry_items (c_space_id, c_status, c_frequency, c_write_target_id, c_instance_id);
+CREATE INDEX IF NOT EXISTS idx_collector_retry_pending_scope
+ON t_collector_fetch_retry_items (c_space_id, c_frequency, c_write_target_id, c_instance_id)
+WHERE c_status = 'pending';
 
-CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due_scope
-ON t_collector_fetch_retry_items (c_space_id, c_status, c_next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_collector_retry_due
+ON t_collector_fetch_retry_items (c_space_id, c_next_retry_at)
+WHERE c_status = 'pending';
 
-CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_period_due
-ON t_collector_fetch_retry_items (c_space_id, c_status, c_period_deadline_at, c_next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_collector_retry_period_due
+ON t_collector_fetch_retry_items (c_space_id, c_period_deadline_at, c_next_retry_at)
+WHERE c_status = 'pending';
 
-CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_period_failure
-ON t_collector_fetch_retry_items (c_space_id, c_status, c_period_failure_report_state, c_retry_key);
-
-CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_terminal_cleanup
-ON t_collector_fetch_retry_items (c_mtime, c_status, c_period_failure_report_state, c_id);
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_failure_reports
+ON t_collector_fetch_retry_items (c_space_id, c_period_failure_report_state, c_retry_key)
+WHERE c_status = 'permanent_failed';
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_cleanup_succeeded
 ON t_collector_fetch_retry_items (c_mtime, c_id)

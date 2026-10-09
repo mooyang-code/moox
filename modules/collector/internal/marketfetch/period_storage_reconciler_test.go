@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
@@ -16,11 +15,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 func TestPeriodStorageReconcilerCountsRetainCommittedManifestAfterSnapshotRollback(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/counts.db"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: t.TempDir() + "/counts.db?_time_format=sqlite"}, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -119,7 +120,7 @@ func TestPeriodStorageReconcilerRefreshesRecentWaitingState(t *testing.T) {
 }
 
 func TestPeriodStorageReconcilerReportsBoundedProbeMetrics(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/probe-metrics.db"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: t.TempDir() + "/probe-metrics.db?_time_format=sqlite"}, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -331,7 +332,7 @@ func TestPeriodStorageReconcilerUsesBoundedConcurrentProbes(t *testing.T) {
 }
 
 func TestPeriodStorageReconcilerAccountsSnapshotRowsAndTimerManifestsSeparately(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/cleanup-budget.db"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: t.TempDir() + "/cleanup-budget.db?_time_format=sqlite"}, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -422,7 +423,7 @@ func TestPeriodStorageReconcilerBudgetExceedsSustainedArrivalRate(t *testing.T) 
 	const initialBacklog, arrivalsPerMinute, waitingCount, minutes = 900, 300, 3, 8
 	for _, cleanupLimit := range []int{100, periodStorageCleanupRowLimit} {
 		t.Run(fmt.Sprintf("cleanup_limit_%d", cleanupLimit), func(t *testing.T) {
-			db, err := gorm.Open(sqlite.Open(t.TempDir()+"/backlog.db"), &gorm.Config{})
+			db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: t.TempDir() + "/backlog.db?_time_format=sqlite"}, &gorm.Config{})
 			require.NoError(t, err)
 			sqlDB, err := db.DB()
 			require.NoError(t, err)

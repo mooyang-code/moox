@@ -364,6 +364,6 @@ func TestListDueRecentPageUsesScopedIndex(t *testing.T) {
 	for _, row := range plan {
 		details = append(details, row.Detail)
 	}
-	require.Contains(t, fmt.Sprint(details), "idx_collector_fetch_retry_period_due")
+	require.Contains(t, fmt.Sprint(details), "idx_collector_retry_period_due")
 	require.NotContains(t, fmt.Sprint(details), "TEMP B-TREE", "recent retry ordering should be covered by the composite index")
 }

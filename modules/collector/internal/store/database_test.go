@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -76,7 +77,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 			}
 		}
 	}
-	for _, index := range []string{"idx_collector_instances_run", "idx_collector_instances_space_page", "idx_collector_instances_list_page", "idx_collector_instances_space_status_page", "idx_collector_instances_storage_write", "idx_collector_instances_terminal_cleanup_space", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_task_period_series_space_retention", "idx_collector_period_storage_terminal_cleanup", "idx_collector_period_storage_waiting_cursor", "idx_collector_runs_terminal_cleanup", "idx_collector_runs_terminal_cleanup_space", "idx_collector_write_targets_retention_space", "idx_collector_fetch_batch_instance_ref", "idx_collector_fetch_batch_target_ref", "idx_collector_fetch_batch_period_due", "idx_collector_fetch_batch_terminal_items_cleanup", "idx_collector_fetch_batch_terminal_items_cleanup_space", "idx_collector_fetch_batch_terminal_parent_cleanup", "idx_collector_fetch_batch_terminal_parent_cleanup_space", "idx_collector_fetch_retry_instance_active", "idx_collector_fetch_retry_period_due", "idx_collector_fetch_retry_period_failure", "idx_collector_fetch_retry_cleanup_succeeded_space", "idx_collector_fetch_retry_cleanup_permanent_space", "idx_collector_timer_period_batches_claim_request", "idx_collector_timer_period_batches_candidate", "idx_period_readiness_items_write_target"} {
+	for _, index := range []string{"idx_collector_instances_run", "idx_collector_instances_space_page", "idx_collector_instances_list_page", "idx_collector_instances_space_status_page", "idx_collector_instances_storage_write", "idx_collector_instances_terminal_cleanup_space", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_task_period_series_space_retention", "idx_collector_period_storage_terminal_cleanup", "idx_collector_period_storage_waiting_cursor", "idx_collector_runs_terminal_cleanup", "idx_collector_runs_terminal_cleanup_space", "idx_collector_write_targets_retention_space", "idx_collector_fetch_batch_instance_ref", "idx_collector_fetch_batch_target_ref", "idx_collector_fetch_batch_period_due", "idx_collector_fetch_batch_terminal_items_cleanup", "idx_collector_fetch_batch_terminal_items_cleanup_space", "idx_collector_fetch_batch_terminal_parent_cleanup", "idx_collector_fetch_batch_terminal_parent_cleanup_space", "idx_collector_fetch_retry_instance_active", "idx_collector_retry_period_due", "idx_collector_fetch_retry_failure_reports", "idx_collector_fetch_retry_cleanup_succeeded_space", "idx_collector_fetch_retry_cleanup_permanent_space", "idx_collector_timer_period_batches_claim_request", "idx_collector_timer_period_batches_candidate", "idx_period_readiness_items_write_target"} {
 		var count int64
 		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&count).Error; err != nil {
 			t.Fatalf("query index %s: %v", index, err)
@@ -240,4 +241,49 @@ func TestWaitTaskDrainUsesSharedWriteTargetIdentity(t *testing.T) {
 	_, err = mgr.FetchBatches().Complete(ctx, &domain.BatchInvocation{SpaceID: "crypto", BatchID: "batch-shared", Status: domain.BatchStatusSucceeded})
 	require.NoError(t, err)
 	require.NoError(t, mgr.WaitTaskDrain(ctx, "crypto", "task-b", 20*time.Millisecond))
+}
+
+func TestSchemaRetiresRedundantRetryIndexesWithoutRemovingWork(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "retained-work", Status: "pending", TargetDataTime: time.Now().UTC()}))
+	require.NoError(t, s.db.Exec(`
+CREATE INDEX idx_collector_fetch_retry_due ON t_collector_fetch_retry_items (c_status, c_next_retry_at);
+CREATE INDEX idx_collector_fetch_retry_terminal_cleanup ON t_collector_fetch_retry_items (c_mtime, c_status, c_period_failure_report_state, c_id);
+CREATE INDEX idx_collector_fetch_retry_period_failure ON t_collector_fetch_retry_items (c_space_id, c_status, c_period_failure_report_state, c_retry_key);
+`).Error)
+	for range 2 {
+		require.NoError(t, s.ApplySchema(schema.AllSQL()))
+	}
+	stored, err := s.FetchRetries().Get(ctx, "crypto", "retained-work")
+	require.NoError(t, err)
+	require.Equal(t, "pending", stored.Status)
+	var obsolete int64
+	require.NoError(t, s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name IN (?, ?, ?)`, "idx_collector_fetch_retry_due", "idx_collector_fetch_retry_terminal_cleanup", "idx_collector_fetch_retry_period_failure").Scan(&obsolete).Error)
+	require.Zero(t, obsolete)
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	require.NoError(t, s.db.Raw(`EXPLAIN QUERY PLAN SELECT c_retry_key FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_status = ? AND c_period_failure_report_state = ? AND c_retry_key > ? ORDER BY c_retry_key LIMIT ?`, "crypto", "permanent_failed", "pending", "", 100).Scan(&plan).Error)
+	require.Contains(t, fmt.Sprint(plan), "idx_collector_fetch_retry_failure_reports")
+	require.NotContains(t, fmt.Sprint(plan), "TEMP B-TREE")
+}
+
+func TestSQLiteTimestampsSupportDateFunctionsAndDeadlineQueries(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	deadline := time.Date(2026, time.October, 9, 13, 14, 15, 123456789, time.UTC)
+	created, err := s.FetchBatches().CreatePlanned(ctx, &domain.BatchInvocation{SpaceID: "crypto", BatchID: "sqlite-time", ScheduleID: "sqlite-time", Status: domain.BatchStatusPlanned, DeadlineAt: &deadline})
+	require.NoError(t, err)
+	require.True(t, created)
+	var stored struct {
+		Text   string   `gorm:"column:encoded"`
+		Julian *float64 `gorm:"column:julian"`
+	}
+	require.NoError(t, s.db.Raw(`SELECT CAST(c_deadline_at AS TEXT) AS encoded, julianday(c_deadline_at) AS julian FROM t_collector_fetch_batches WHERE c_batch_id = ?`, "sqlite-time").Scan(&stored).Error)
+	require.Equal(t, deadline.Format("2006-01-02 15:04:05.999999999-07:00"), stored.Text)
+	require.NotNil(t, stored.Julian, "SQLite must parse the persisted timestamp")
+	due, err := s.FetchBatches().ListDue(ctx, "crypto", deadline, 10)
+	require.NoError(t, err)
+	require.Len(t, due, 1, "an exact persisted deadline must compare equal to a bound time")
 }

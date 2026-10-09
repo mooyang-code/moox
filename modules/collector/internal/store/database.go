@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -138,7 +139,7 @@ func Open(opts *Options) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	db, err := gorm.Open(sqlite.Open(buildSQLiteDSN(dbPath)), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: buildSQLiteDSN(dbPath)}, &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -256,6 +257,9 @@ func (s *Store) Close() error {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		// Keep timestamps readable by SQLite date functions and consistent in
+		// equality/range queries; the driver's default includes a zone name.
+		"_time_format=sqlite",
 		"_pragma=journal_mode(WAL)",
 		// Collector persists assignment and readiness state that drives the
 		// market timers.  Synchronous=OFF can leave b-tree pages torn after a

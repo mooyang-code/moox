@@ -245,7 +245,7 @@ func TestDeleteReportedItemsOutsideWindowKeepsNewestPeriods(t *testing.T) {
 	require.Len(t, items, 1)
 	var kept domain.PeriodReadiness
 	require.NoError(t, s.db.First(&kept, "c_id = ?", items[0].ReadinessID).Error)
-	require.Equal(t, base.Add(2*time.Minute), kept.PeriodTime)
+	require.Equal(t, base.Add(2*time.Minute), kept.PeriodTime.UTC())
 }
 
 func TestCleanupReportedRetentionInSpaceBoundsPhysicalRows(t *testing.T) {
@@ -326,7 +326,7 @@ func TestLatestCompletedPeriodUsesExactScopeAndCompletionOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, domain.PeriodStatusDegraded, got.Status)
-	require.Equal(t, base.Add(time.Minute), got.PeriodTime)
+	require.Equal(t, base.Add(time.Minute), got.PeriodTime.UTC())
 
 	var plan []struct{ Detail string }
 	require.NoError(t, s.db.Raw(`EXPLAIN QUERY PLAN SELECT c_id FROM t_period_readiness WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_status = ? ORDER BY c_period_time DESC, c_id DESC LIMIT 1`, "crypto", "bars", "1m", domain.PeriodStatusComplete).Scan(&plan).Error)

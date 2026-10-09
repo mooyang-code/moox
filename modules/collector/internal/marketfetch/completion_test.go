@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
@@ -18,7 +17,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 func TestStartCompletionConsumerWithDoneWaitsForCancellation(t *testing.T) {
@@ -110,7 +111,7 @@ func TestHandleCompletionDoesNotWakeWhenPermanentFailurePersistenceFails(t *test
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
-	triggerDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	triggerDB, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: dbPath + "?_time_format=sqlite"}, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := triggerDB.DB()
 	require.NoError(t, err)
@@ -243,9 +244,9 @@ func TestHandleCompletionExhaustsWriteTargetRetriesAfterThreeRetries(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, 1, retry.Attempt, "the initial write failure schedules retry 1")
 	require.NotNil(t, retry.PeriodTime)
-	require.Equal(t, periodTime, *retry.PeriodTime)
+	require.Equal(t, periodTime, retry.PeriodTime.UTC())
 	require.NotNil(t, retry.PeriodDeadlineAt)
-	require.Equal(t, periodDeadline, *retry.PeriodDeadlineAt)
+	require.Equal(t, periodDeadline, retry.PeriodDeadlineAt.UTC())
 	for retryNumber := 1; retryNumber <= 3; retryNumber++ {
 		require.NoError(t, db.FetchRetries().MarkStatus(ctx, "crypto", retryKey, "dispatched"))
 		batch = completionTestBatch(fmt.Sprintf("write-target-retry-%d", retryNumber))
