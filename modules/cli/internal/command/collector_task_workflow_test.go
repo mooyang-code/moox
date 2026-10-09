@@ -68,9 +68,7 @@ func TestCollectorTaskWorkflowHelpUsesTaskTerminology(t *testing.T) {
 }
 
 func collectorTestClient(server *httptest.Server) *adminclient.Client {
-	c := adminclient.New(server.URL)
-	c.Gateway = testfixture.HandlerGateway{Handler: server.Config.Handler}
-	return c
+	return &adminclient.Client{Gateway: testfixture.HandlerGateway{Handler: server.Config.Handler}}
 }
 
 func newControlFixtureServer(t *testing.T, handler http.Handler) *httptest.Server {

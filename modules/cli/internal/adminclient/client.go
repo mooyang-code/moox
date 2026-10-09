@@ -1,38 +1,16 @@
 package adminclient
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
-// Client borrows the command gateway; unmigrated Admin calls still use HTTP.
+// Client borrows the command-owned SSH gateway.
 type Client struct {
-	Gateway     GatewayForwarder
-	BaseURL     string
-	AccessToken string
-	SpaceID     string
-	// ServiceAuth 后台服务签名鉴权配置。设置后请求走 /api/service/{service}/{method}
-	// 路由并使用 HMAC Auth 头，不再依赖用户登录态 X-Access-Token。
-	ServiceAuth    *ServiceAuthConfig
-	HTTPClient     *http.Client
+	Gateway        GatewayForwarder
+	SpaceID        string
 	publishLeaseMu sync.RWMutex
 	publishLease   *CollectorPublishLease
-}
-
-// New creates a Control API client. baseURL should point at the Control service root.
-func New(baseURL string) *Client {
-	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-	}
 }
 
 type retInfo struct {
@@ -41,7 +19,7 @@ type retInfo struct {
 }
 
 func isRetInfoSuccess(code int) bool {
-	return code == 0 || code == 200
+	return code == 0
 }
 
 func isRetInfoNotFound(info retInfo) bool {
@@ -50,117 +28,4 @@ func isRetInfoNotFound(info retInfo) bool {
 	}
 	message := strings.ToLower(strings.TrimSpace(info.Msg))
 	return strings.Contains(message, "not found") || strings.Contains(message, "record not found")
-}
-func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([]byte, error) {
-	if strings.HasPrefix(path, "/api/admin/collectmgr/") || strings.HasPrefix(path, "/api/service/collectmgr/") {
-		return nil, fmt.Errorf("Collector HTTP routes have been removed; use the SSH gateway client")
-	}
-	if strings.HasPrefix(path, "/api/admin/cloudnode/") || strings.HasPrefix(path, "/api/service/cloudnode/") {
-		return nil, fmt.Errorf("CloudNode HTTP routes have been removed; use the SSH gateway client")
-	}
-	if c.BaseURL == "" {
-		return nil, fmt.Errorf("control url is required")
-	}
-	var rawBody []byte
-	if body == nil {
-		rawBody = nil
-	} else {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		rawBody = data
-	}
-	// 若配置了后台服务签名鉴权，则改走 /api/service/{service}/{method} 路由，
-	// 并对原始请求体做 HMAC 签名放进 Auth 头，不再依赖用户登录态。
-	finalPath := path
-	if c.ServiceAuth != nil {
-		finalPath = rewriteToServiceRoute(path)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+finalPath, bytes.NewReader(rawBody))
-	if err != nil {
-		return nil, err
-	}
-	var authHeader http.Header
-	if c.ServiceAuth != nil {
-		authHeader, err = c.ServiceAuth.BuildAuthHeader(req.Method, req.URL.EscapedPath(), rawBody, time.Now())
-		if err != nil {
-			return nil, err
-		}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if authHeader != nil {
-		for name, values := range authHeader {
-			req.Header[name] = append([]string(nil), values...)
-		}
-	}
-	if c.AccessToken != "" {
-		req.Header.Set("X-Access-Token", c.AccessToken)
-	}
-	if c.SpaceID != "" {
-		req.Header.Set("X-Space-Id", c.SpaceID)
-	}
-	client := c.HTTPClient
-	if c.ServiceAuth != nil {
-		timeout := 30 * time.Second
-		if c.HTTPClient != nil && c.HTTPClient.Timeout > 0 {
-			timeout = c.HTTPClient.Timeout
-		}
-		client, err = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: c.ServiceAuth.CAFile})
-		if err != nil {
-			return nil, err
-		}
-	} else if client == nil {
-		client = http.DefaultClient
-	}
-	httpResp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer httpResp.Body.Close()
-	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return nil, fmt.Errorf("control returned HTTP %s", httpResp.Status)
-	}
-	raw, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if trpcRet := httpResp.Header.Get("trpc-ret"); trpcRet != "" && trpcRet != "0" {
-		msg := httpResp.Header.Get("trpc-func-ret")
-		if msg == "" {
-			msg = string(raw)
-		}
-		return nil, fmt.Errorf("control returned trpc-ret=%s: %s", trpcRet, msg)
-	}
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("control returned empty response body")
-	}
-	return raw, nil
-}
-
-// CallJSON invokes one of the service gateway methods and decodes its JSON
-// response.  Setup workflows use this small escape hatch for services whose
-// generated client is owned by another module (for example FactorMgr).
-func (c *Client) CallJSON(ctx context.Context, method, path string, body, response any) error {
-	raw, err := c.postJSON(ctx, method, path, body)
-	if err != nil {
-		return err
-	}
-	if response == nil || len(raw) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(raw, response); err != nil {
-		return fmt.Errorf("decode service response: %w", err)
-	}
-	return nil
-}
-
-// rewriteToServiceRoute 将 /api/admin/{service}/{method} 改写为 /api/service/{service}/{method}。
-// 仅识别 /api/admin/ 前缀；非该前缀的路径原样返回。
-func rewriteToServiceRoute(path string) string {
-	const controlPrefix = "/api/admin/"
-	if strings.HasPrefix(path, controlPrefix) {
-		return "/api/service/" + strings.TrimPrefix(path, controlPrefix)
-	}
-	return path
 }

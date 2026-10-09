@@ -247,7 +247,5 @@ func TestCloudNodeCommandsUseSSHNativeGatewayAndKeepUploadAndFences(t *testing.T
 	status, err := client.GetNodeBatchChange(ctx, "job-1")
 	require.NoError(t, err)
 	require.Equal(t, "job-1", status.Job.JobID)
-	err = client.CallJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", struct{}{}, &runtime)
-	require.ErrorContains(t, err, "HTTP routes have been removed")
 	require.NotContains(t, fmt.Sprint(runtime), klineGatewaySecret)
 }

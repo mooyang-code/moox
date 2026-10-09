@@ -181,7 +181,7 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 }
 
 func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
-	_, err := New("http://127.0.0.1").CreateTask(context.Background(), "stockcn", "任务一", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+	_, err := (&Client{}).CreateTask(context.Background(), "stockcn", "任务一", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
 		"target_dataset_id": "dataset-user-selected",
 		"frequency":         "1m",
 	}, nil)
@@ -239,7 +239,5 @@ func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 }
 
 func collectorTestClient(server *httptest.Server) *Client {
-	c := New(server.URL)
-	c.Gateway = testfixture.HandlerGateway{Handler: server.Config.Handler}
-	return c
+	return &Client{Gateway: testfixture.HandlerGateway{Handler: server.Config.Handler}}
 }

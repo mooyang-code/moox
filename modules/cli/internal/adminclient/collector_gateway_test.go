@@ -135,8 +135,6 @@ func TestCollectorTaskWorkflowUsesNativeGatewayJSONAndInventoryPB(t *testing.T) 
 			t.Fatalf("missing native call %s", method)
 		}
 	}
-	_, err = New("http://127.0.0.1:1").ListEnabledTasks(ctx, "stockcn")
+	_, err = (&Client{}).ListEnabledTasks(ctx, "stockcn")
 	require.ErrorContains(t, err, "SSH gateway")
-	err = c.CallJSON(ctx, "POST", "/api/admin/collectmgr/GetTaskList", map[string]any{}, &tasks)
-	require.ErrorContains(t, err, "HTTP routes have been removed")
 }

@@ -80,12 +80,3 @@ func NewTRPCClientOptions(target, targetNode string, credentials Credentials) []
 func CredentialsFromEnv() Credentials {
 	return Credentials{KeyID: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")), Caller: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CALLER")), Secret: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))}
 }
-
-func ServiceGatewayTarget(raw string) string {
-	if target := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_TARGET")); target != "" {
-		return target
-	}
-	return raw
-}
-
-func ServiceGatewayNodeID() string { return strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")) }

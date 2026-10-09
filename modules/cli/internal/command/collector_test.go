@@ -1417,7 +1417,7 @@ func TestWaitCollectorBatchChecksEveryJobAfterTerminalFailure(t *testing.T) {
 func TestWaitCollectorBatchCanceledReturnsUnknownOutcome(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := waitCollectorBatch(ctx, adminclient.New("http://127.0.0.1:1"), "job-pending")
+	err := waitCollectorBatch(ctx, &adminclient.Client{}, "job-pending")
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
 }
 
@@ -1530,7 +1530,6 @@ func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
 	}))
 	defer server.Close()
 	client := collectorTestClient(server)
-	client.ServiceAuth = &adminclient.ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", Caller: "moox-cli", TargetNode: "gateway", ExpireSecs: 60}
 	previous := newCollectorCLSAPI
 	defer func() { newCollectorCLSAPI = previous }()
 	var gotID, gotKey, gotRegion string

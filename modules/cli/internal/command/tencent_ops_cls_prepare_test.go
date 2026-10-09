@@ -35,7 +35,6 @@ func TestRunCLSPrepareUsesOperatorGatewayAndExplicitAccount(t *testing.T) {
 	clsPrepareRunner = prepareRunnerFunc(func(_ context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
 		client := source.(*adminclient.Client)
 		require.NotNil(t, client.Gateway)
-		require.Nil(t, client.ServiceAuth)
 		require.NotNil(t, factory)
 		require.Equal(t, "chosen", opts.CloudAccountID)
 		require.Equal(t, credentialPath, opts.CredentialsOutput)

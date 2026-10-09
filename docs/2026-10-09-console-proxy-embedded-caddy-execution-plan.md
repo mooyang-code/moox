@@ -98,6 +98,8 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 
 主计划 D2f 已完成：FactorMgr、StrategyMgr 与 Storage 删除旧 HTTP 监听，使用规范原生服务名与实际端口登记；Strategy 的原生空间隔离有真实 PB/JSON 回归。CLI Factor/Storage 初始化、诊断、Metadata 导入、CSV 导入、数据导出和任务清理复用命令级 SSH 客户端，保留独立 Storage 角色认证、空间及同步围栏，写入单发并返回未知结果。相关全模块 race/vet、CLI/Strategy 独立构建与质量门禁通过；七个静态程序和 16 个测试包在本机关闭 CGO 编译，16 包在 Linux 全量运行通过。Storage Server 在 Linux 编译机的 CGO race/vet 通过，实际构建入口产出四个 CGO 程序；编译继续遵循 CGO 边界。FactorEngine 外部调用、旧部署脚本、D3～J、代理后续阶段、独立审查与正式环境切换继续保留。
 
+D3 首批清理删除已无生产调用方的 CLI Admin HTTP 客户端、旧认证配置及两个无引用的目标辅助接口；CLI 全包 race、gatewayauth race、相关 vet、独立构建与质量门禁通过；CLI 静态程序和三个测试包均在本机编译，三包在 Linux 全量运行通过。剩余旧公共接口随 SCF/因子引擎及 DNS 的最后调用方迁移删除；命令参数、部署脚本与正式环境验收继续按后续阶段推进。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。
