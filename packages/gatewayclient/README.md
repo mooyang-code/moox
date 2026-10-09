@@ -2,6 +2,10 @@
 
 `Invoke` 将对象按配置的 PB 或 JSON 编码后签名；`Forward` 对传入的 PB/JSON 字节签名并原样发送。调用权限、请求与响应大小、默认超时以及只读方法均取自 `servicecatalog`。
 
+内部组件可用 `FileConfig` 读取 `gateway_client: { caller, key_id, key_file }`，再通过 `OpenInternal` 创建客户端。KeyID 是 Admin 生成的公开标识，与 caller 独立；部署时按 bootstrap 导出的凭据清单填写，不能用 caller 推导。签名文件为单个密钥值，必须是 0600 的普通文件，拒绝符号链接、超长或不足 32 字节的内容。
+
+内部组件配置固定放在 `<部署目录>/<模块>/config/app.yaml`。客户端从同级组件 `hostgateway/config/app.yaml` 读取主机 ID、loopback 地址和私有 CA，避免各模块重复配置目标主机、网关地址与 CA；`key_file` 相对模块配置文件解析。目录缓存写入调用方提供的数据目录下的 `gatewayclient/directory.json`。读取公开配置时允许 KeyID 留空，便于离线检查；实际连接 Storage 等服务时必须有完整身份。客户端由进程或命令持有并在退出时关闭。
+
 调用方完成身份认证及空间授权后，可用 `WithCallMetadata` 传入可信的用户 ID、角色、空间 ID 和 trace ID，客户端将其作为固定的四个 tRPC 元数据字段发送。此接口不能修改网关签名身份，也不加工请求 JSON。Admin 控制台使用数据库中的 `console` 身份，目录来源直接读取 Admin 拓扑表，避免首次启动依赖尚未启动的本机网关。
 
 `Config.Mode` 支持三种方式：

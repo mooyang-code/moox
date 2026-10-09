@@ -37,6 +37,11 @@ type TunnelResolver interface {
 	Resolve(ctx context.Context, hostID string) (string, error)
 }
 
+// Invoker is the object-call interface used by service clients.
+type Invoker interface {
+	Invoke(context.Context, string, string, any, any) error
+}
+
 type Config struct {
 	Mode             string
 	Credentials      gatewayauth.Credentials

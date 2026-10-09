@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
@@ -69,11 +68,12 @@ func (a *App) Run(ctx context.Context) error {
 	w := writer.New(store, a.Config.Archive.RootDir, a.Config.Archive.Materialize.RowGroupRows)
 	w.SetPartitionLocker(partitionLocks)
 	w.SetWorkers(a.Config.Archive.Materialize.Workers)
-	storageCredentials, err := gatewayauth.ResolveCredentials(a.Config.Archive.StorageRPC.KeyID, a.Config.Archive.StorageRPC.HMACKeyFile)
+	gateway, err := a.Config.OpenGateway(func(err error) { log.Errorf("archive gateway directory refresh: %v", err) })
 	if err != nil {
 		return err
 	}
-	metadataRegistry := registry.NewClientWithCredentials(a.Config.Archive.StorageRPC.GatewayTarget, a.Config.Archive.StorageRPC.TargetNodeID(), storageCredentials)
+	defer gateway.Close()
+	metadataRegistry := registry.NewClient(gateway)
 	w.SetRegistry(registry.PartitionRegistry{Client: metadataRegistry, DeviceID: a.Config.Archive.DeviceID})
 	if err := w.Recover(ctx); err != nil {
 		return err

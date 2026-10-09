@@ -3,6 +3,8 @@ package backfill
 import (
 	"context"
 	"errors"
+	"fmt"
+	"google.golang.org/protobuf/proto"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestPlanRequiresExplicitConfirmation(t *testing.T) {
@@ -25,12 +26,6 @@ func TestPlanRequiresExplicitConfirmation(t *testing.T) {
 	if len(plan.Partitions()) != 2 {
 		t.Fatalf("partitions = %v", plan.Partitions())
 	}
-}
-
-func TestNormalizeTarget(t *testing.T) {
-	assert.Equal(t, "ip://127.0.0.1:20102", NormalizeTarget("", "20102"))
-	assert.Equal(t, "ip://127.0.0.1:20102", NormalizeTarget("127.0.0.1:20102", "20102"))
-	assert.Equal(t, "http://storage:20102", NormalizeTarget("http://storage:20102", "20102"))
 }
 
 func TestRowsToPatches(t *testing.T) {
@@ -93,7 +88,7 @@ func TestNewRunIDDoesNotCollide(t *testing.T) {
 }
 
 func TestBackfillerRunRequiresConfirm(t *testing.T) {
-	b := New(nil, nil, nil, nil, nil)
+	b := New(nil, nil, nil, nil)
 	_, err := b.Run(nil, Plan{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "confirm")
@@ -103,15 +98,18 @@ type captureAccess struct {
 	request *storagepb.ReadTimeSeriesRowsReq
 }
 
-func (c *captureAccess) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	c.request = request
-	return nil, errors.New("stop after request capture")
+func (c *captureAccess) Invoke(_ context.Context, service, method string, request, _ any) error {
+	if service != "trpc.moox.storage.PrimaryStore" || method != "ReadTimeSeriesRows" {
+		return fmt.Errorf("unexpected RPC %s/%s", service, method)
+	}
+	c.request = request.(*storagepb.ReadTimeSeriesRowsReq)
+	return errors.New("stop after request capture")
 }
 
 func TestBackfillerCarriesPrimaryAuth(t *testing.T) {
 	access := &captureAccess{}
 	auth := &commonpb.AuthInfo{AppId: "archive-backfill", AppKey: "derived-key"}
-	b := New(access, nil, auth, nil, nil)
+	b := New(access, auth, nil, nil)
 	tag := ""
 	_, err := b.Run(t.Context(), Plan{
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC-USDT", Freq: "1m",
@@ -128,7 +126,7 @@ func TestBackfillerCarriesPrimaryAuth(t *testing.T) {
 
 func TestBackfillerAbsentSeriesTagUsesWildcardSelector(t *testing.T) {
 	access := &captureAccess{}
-	b := New(access, nil, nil, nil, nil)
+	b := New(access, nil, nil, nil)
 	_, err := b.Run(t.Context(), Plan{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Start: "2026-01-01T00:00:00Z", End: "2026-01-02T00:00:00Z", Confirm: true})
 	require.ErrorContains(t, err, "request capture")
 	require.Nil(t, access.request.GetSelectors()[0].SeriesTag)
@@ -163,7 +161,7 @@ func TestBackfillerRejectsIncompleteViewBeforeJournalAppend(t *testing.T) {
 		Start: "2026-01-01T00:00:00Z", End: "2026-02-01T00:00:00Z", Confirm: true,
 	}
 
-	total, err := New(access, nil, nil, store, w).Run(t.Context(), plan)
+	total, err := New(access, nil, store, w).Run(t.Context(), plan)
 
 	require.ErrorContains(t, err, "source view is incomplete")
 	require.Zero(t, total)
@@ -184,16 +182,18 @@ type staticAccess struct {
 	response *storagepb.ReadTimeSeriesRowsRsp
 }
 
-func (s staticAccess) ReadTimeSeriesRows(_ context.Context, _ *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	if s.response != nil {
-		return s.response, nil
+func (s staticAccess) Invoke(_ context.Context, service, method string, _, output any) error {
+	if service != "trpc.moox.storage.PrimaryStore" || method != "ReadTimeSeriesRows" {
+		return fmt.Errorf("unexpected RPC %s/%s", service, method)
 	}
-	return &storagepb.ReadTimeSeriesRowsRsp{
-		RetInfo:    &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-		Rows:       []*storagepb.TimeSeriesRow{s.row},
-		PageResult: &commonpb.PageResult{},
-		Complete:   true,
-	}, nil
+	response := s.response
+	if response == nil {
+		response = &storagepb.ReadTimeSeriesRowsRsp{
+			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Rows: []*storagepb.TimeSeriesRow{s.row}, PageResult: &commonpb.PageResult{}, Complete: true,
+		}
+	}
+	proto.Merge(output.(*storagepb.ReadTimeSeriesRowsRsp), response)
+	return nil
 }
 
 func TestBackfillerSameRangeCanRunAgainAsNewGeneration(t *testing.T) {
@@ -215,7 +215,7 @@ func TestBackfillerSameRangeCanRunAgainAsNewGeneration(t *testing.T) {
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1h",
 		Start: "2026-01-01T00:00:00Z", End: "2026-02-01T00:00:00Z", Confirm: true,
 	}
-	b := New(staticAccess{row: row}, nil, nil, store, w)
+	b := New(staticAccess{row: row}, nil, store, w)
 	first, err := b.Run(t.Context(), plan)
 	require.NoError(t, err)
 	second, err := b.Run(t.Context(), plan)

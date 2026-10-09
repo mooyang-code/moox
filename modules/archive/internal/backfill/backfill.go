@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
@@ -13,17 +12,9 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/trpcretry"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
-type AccessClient interface {
-	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
-}
-type MetadataClient interface {
-	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
-	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
-}
 type Plan struct {
 	SpaceID   string
 	DatasetID string
@@ -51,15 +42,14 @@ func (p Plan) Partitions() []string {
 }
 
 type Backfiller struct {
-	access   AccessClient
-	metadata MetadataClient
-	auth     *commonpb.AuthInfo
-	journal  *journal.Store
-	writer   *writer.Writer
+	gateway gatewayclient.Invoker
+	auth    *commonpb.AuthInfo
+	journal *journal.Store
+	writer  *writer.Writer
 }
 
-func New(access AccessClient, metadata MetadataClient, auth *commonpb.AuthInfo, store *journal.Store, w *writer.Writer) *Backfiller {
-	return &Backfiller{access: access, metadata: metadata, auth: auth, journal: store, writer: w}
+func New(gateway gatewayclient.Invoker, auth *commonpb.AuthInfo, store *journal.Store, w *writer.Writer) *Backfiller {
+	return &Backfiller{gateway: gateway, auth: auth, journal: store, writer: w}
 }
 func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 	if !plan.Confirm {
@@ -81,7 +71,8 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 	page := uint32(1)
 	total := 0
 	for {
-		rsp, err := b.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+		rsp := &storagepb.ReadTimeSeriesRowsRsp{}
+		err := b.gateway.Invoke(ctx, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo: b.auth, SpaceId: plan.SpaceID, DatasetId: plan.DatasetID,
 			Selectors: []*storagepb.TimeSeriesSelector{selector},
 			TimeRange: &storagepb.TimeRange{
@@ -90,7 +81,7 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 			},
 			Order: storagepb.SortOrder_SORT_ORDER_ASC,
 			Page:  &commonpb.Page{Page: page, Size: 500},
-		}, client.WithFilter(trpcretry.ReadOnly()))
+		}, rsp)
 		if err != nil {
 			return total, err
 		}
@@ -185,15 +176,4 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 		out = append(out, domain.RowPatch{Partition: domain.PartitionKey{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: key.GetSeriesTag(), Month: domain.MonthOf(t)}, DataTime: t.UTC(), Attributes: attrs, WrittenAt: writtenAt, Columns: columns})
 	}
 	return out, nil
-}
-
-func NormalizeTarget(raw string, defaultPort string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "ip://127.0.0.1:" + defaultPort
-	}
-	if strings.Contains(raw, "://") {
-		return raw
-	}
-	return "ip://" + raw
 }

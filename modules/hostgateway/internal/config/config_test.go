@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testcert"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func TestSharedConfigurationAndPrivateIdentity(t *testing.T) {
 	}
 	for _, invalid := range []string{"short", strings.Repeat("x", 4097), strings.Repeat("x", 32) + "\n" + strings.Repeat("y", 32)} {
 		require.NoError(t, os.WriteFile(cfg.Control.KeyFile, []byte(invalid), 0o600))
-		_, err := ReadSecret(cfg.Control.KeyFile)
+		_, err := gatewayauth.ReadSigningSecret(cfg.Control.KeyFile)
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), invalid)
 	}

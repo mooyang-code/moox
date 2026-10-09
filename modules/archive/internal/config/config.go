@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,8 +18,10 @@ var consumerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var sourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 type Config struct {
-	Archive ArchiveConfig `yaml:"archive"`
-	Health  HealthConfig  `yaml:"health"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	SourcePath    string                   `yaml:"-"`
+	Archive       ArchiveConfig            `yaml:"archive"`
+	Health        HealthConfig             `yaml:"health"`
 }
 
 type ArchiveConfig struct {
@@ -29,7 +31,6 @@ type ArchiveConfig struct {
 	Sources     map[string]SourceConfig `yaml:"sources"`
 	EventBus    EventBusConfig          `yaml:"eventbus"`
 	Materialize MaterializeConfig       `yaml:"materialize"`
-	StorageRPC  StorageRPCConfig        `yaml:"storage_rpc"`
 	COS         COSConfig               `yaml:"cos"`
 }
 
@@ -55,20 +56,6 @@ type MaterializeConfig struct {
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
 }
 
-type StorageRPCConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	GatewayNodeID string `yaml:"gateway_node_id"`
-	KeyID         string `yaml:"key_id"`
-	HMACKeyFile   string `yaml:"hmac_key_file"`
-}
-
-func (c StorageRPCConfig) TargetNodeID() string {
-	if nodeID := strings.TrimSpace(c.GatewayNodeID); nodeID != "" {
-		return nodeID
-	}
-	return gatewayauth.ServiceGatewayNodeID()
-}
-
 type COSConfig struct {
 	Enabled            bool   `yaml:"enabled"`
 	Region             string `yaml:"region"`
@@ -84,6 +71,7 @@ type HealthConfig struct {
 
 func Default() *Config {
 	return &Config{
+		GatewayClient: gatewayclient.FileConfig{Caller: "archive", KeyFile: "../../secrets/caller-archive.key"},
 		Archive: ArchiveConfig{
 			RootDir:  "../data/archive",
 			StateDir: "../data/archive-state",
@@ -97,7 +85,6 @@ func Default() *Config {
 				DedupeRetention: 168 * time.Hour,
 			},
 			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
-			StorageRPC:  StorageRPCConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "archive"},
 			COS:         COSConfig{Prefix: "moox/archive", Workers: 2},
 		},
 		Health: HealthConfig{Addr: "127.0.0.1:11416"},
@@ -114,6 +101,10 @@ func Load(path string) (*Config, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse archive config %s: %w", path, err)
+	}
+	cfg.SourcePath, err = filepath.Abs(path)
+	if err != nil {
+		return nil, err
 	}
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
@@ -172,12 +163,7 @@ func (c *Config) applyDefaults() {
 	if c.Health.Addr == "" {
 		c.Health.Addr = d.Health.Addr
 	}
-	if c.Archive.StorageRPC.GatewayTarget == "" {
-		c.Archive.StorageRPC.GatewayTarget = d.Archive.StorageRPC.GatewayTarget
-	}
-	if c.Archive.StorageRPC.KeyID == "" {
-		c.Archive.StorageRPC.KeyID = d.Archive.StorageRPC.KeyID
-	}
+
 }
 
 func (c *Config) SourceSpaceIDs() []string {
@@ -248,15 +234,22 @@ func (c *Config) Validate() error {
 	if c.Archive.COS.Enabled && (strings.TrimSpace(c.Archive.COS.Region) == "" || strings.TrimSpace(c.Archive.COS.Bucket) == "") {
 		return fmt.Errorf("archive cos region and bucket are required")
 	}
-	if strings.TrimSpace(c.Archive.StorageRPC.HMACKeyFile) != "" {
-		if _, err := gatewayauth.CredentialsFromKeyFile(c.Archive.StorageRPC.KeyID, c.Archive.StorageRPC.HMACKeyFile); err != nil {
-			return fmt.Errorf("archive storage hmac credentials: %w", err)
-		}
+	if c.GatewayClient.Caller != "archive" {
+		return fmt.Errorf("archive gateway_client.caller must be archive")
 	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func pathContains(parent, child string) bool {
 	rel, err := filepath.Rel(parent, child)
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// OpenGateway creates an owned client only for operations that need Storage.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	return c.GatewayClient.OpenInternal(c.SourcePath, c.Archive.StateDir, onRefreshError)
 }

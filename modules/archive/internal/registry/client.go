@@ -14,17 +14,13 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
-type MetadataClient interface {
-	RegisterArchiveFile(context.Context, *storagepb.RegisterArchiveFileReq, ...client.Option) (*storagepb.RegisterArchiveFileRsp, error)
-}
 type Client struct {
-	proxy storagepb.MetadataClientProxy
-	mu    sync.Mutex
-	last  map[string]uint64
+	gateway gatewayclient.Invoker
+	mu      sync.Mutex
+	last    map[string]uint64
 }
 
 type PartitionRegistry struct {
@@ -50,8 +46,8 @@ func (c *Client) RegisterPartition(ctx context.Context, key domain.PartitionKey,
 	return c.Register(ctx, BuildArchiveFile("parquet-local", key, manifest, false, domain.COSState{}))
 }
 
-func NewClientWithCredentials(target, targetNode string, credentials gatewayauth.Credentials) *Client {
-	return &Client{proxy: storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...)}
+func NewClient(gateway gatewayclient.Invoker) *Client {
+	return &Client{gateway: gateway}
 }
 
 func StableArchiveFileID(key domain.PartitionKey) string {
@@ -73,7 +69,7 @@ func BuildArchiveFile(deviceID string, key domain.PartitionKey, manifest domain.
 }
 
 func (c *Client) Register(ctx context.Context, file *storagepb.ArchiveFile) error {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return fmt.Errorf("metadata client is nil")
 	}
 	generation, err := strconv.ParseUint(file.GetAttributes()["generation"], 10, 64)
@@ -88,11 +84,12 @@ func (c *Client) Register(ctx context.Context, file *storagepb.ArchiveFile) erro
 	if generation < c.last[file.GetArchiveFileId()] {
 		return fmt.Errorf("refusing to roll archive registry generation backward")
 	}
-	rsp, err := c.proxy.RegisterArchiveFile(ctx, &storagepb.RegisterArchiveFileReq{ArchiveFile: file})
+	rsp := &storagepb.RegisterArchiveFileRsp{}
+	err = c.gateway.Invoke(ctx, "trpc.moox.storage.Metadata", "RegisterArchiveFile", &storagepb.RegisterArchiveFileReq{ArchiveFile: file}, rsp)
 	if err != nil {
 		return err
 	}
-	if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+	if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 		return fmt.Errorf("metadata register archive file failed")
 	}
 	c.last[file.GetArchiveFileId()] = generation

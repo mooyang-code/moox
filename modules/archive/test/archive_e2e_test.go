@@ -24,8 +24,10 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	sharedpb "github.com/mooyang-code/moox/packages/storagepb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -140,7 +142,7 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 
 func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 	if os.Getenv("MOOX_SERIES_TAG_E2E") != "1" {
-		t.Skip("requires scripts/test/e2e/test-series-tag-e2e.sh")
+		t.Skip("requires an isolated Storage/Archive deployment and operator gateway identity")
 	}
 	archiveRoot := requiredArchiveEnv(t, "MOOX_ARCHIVE_E2E_ROOT")
 	pidRaw, err := os.ReadFile(requiredArchiveEnv(t, "MOOX_ARCHIVE_E2E_PID_FILE"))
@@ -156,15 +158,17 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 		t.Fatalf("deployed Archive process %d is not running: %v", pid, err)
 	}
 
-	credentials := gatewayauth.CredentialsFromEnv()
-	if credentials.KeyID == "" || credentials.Caller == "" || credentials.Secret == "" {
-		t.Fatal("gateway credentials are required")
-	}
-	target := requiredArchiveEnv(t, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
-	nodeID := requiredArchiveEnv(t, "MOOX_STORAGE_RPC_GATEWAY_NODE_ID")
-	options := gatewayauth.NewTRPCClientOptions(target, nodeID, credentials)
-	primary := storagepb.NewPrimaryStoreClientProxy(options...)
-	metadata := storagepb.NewMetadataClientProxy(options...)
+	host, err := hostgatewayconfig.Load(requiredArchiveEnv(t, "MOOX_ARCHIVE_E2E_HOST_CONFIG"))
+	require.NoError(t, err)
+	secret, err := gatewayauth.ReadSigningSecret(requiredArchiveEnv(t, "MOOX_ARCHIVE_E2E_OPERATOR_KEY_FILE"))
+	require.NoError(t, err)
+	gateway, err := gatewayclient.New(gatewayclient.Config{
+		Mode:        gatewayclient.Internal,
+		Credentials: gatewayauth.Credentials{Caller: "moox-cli", KeyID: requiredArchiveEnv(t, "MOOX_ARCHIVE_E2E_OPERATOR_KEY_ID"), Secret: secret},
+		LocalHostID: host.Host.ID, LocalAddress: host.Server.LocalAddr, CAFile: host.TLS.CAFile,
+	})
+	require.NoError(t, err)
+	defer gateway.Close()
 	metadataSetup := storagepb.NewMetadataClientProxy(
 		client.WithTarget("ip://127.0.0.1:20100"),
 		client.WithNetwork("tcp"),
@@ -237,7 +241,7 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 			rows = append(rows, archiveStorageRow(spaceID, datasetID, subjectID, freq, tag, at, base))
 		}
 	}
-	writeRsp, err := primary.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{
+	writeRsp, err := invokeArchiveStorage[storagepb.PrimaryUpsertFieldsRsp](t.Context(), gateway, "trpc.moox.storage.PrimaryStore", "UpsertFields", &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: fmt.Sprintf("archive-real-e2e-%d", time.Now().UnixNano()), Rows: rows,
 	})
 	requireArchiveRPCOK(t, "PrimaryStore.UpsertFields", writeRsp.GetRetInfo(), err)
@@ -247,7 +251,7 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 		keys = append(keys, row.GetKey())
 	}
 	require.Eventually(t, func() bool {
-		readRsp, readErr := primary.ReadFields(t.Context(), &storagepb.PrimaryReadFieldsReq{
+		readRsp, readErr := invokeArchiveStorage[storagepb.PrimaryReadFieldsRsp](t.Context(), gateway, "trpc.moox.storage.PrimaryStore", "ReadFields", &storagepb.PrimaryReadFieldsReq{
 			AuthInfo: auth, Keys: keys, FieldIds: []string{"open", "high", "low", "close", "volume"},
 		})
 		if readErr != nil || readRsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
@@ -291,7 +295,7 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 
 	var filesByPartition map[string]*storagepb.ArchiveFile
 	require.Eventually(t, func() bool {
-		listRsp, listErr := metadata.ListArchiveFiles(t.Context(), &storagepb.ListArchiveFilesReq{
+		listRsp, listErr := invokeArchiveStorage[storagepb.ListArchiveFilesRsp](t.Context(), gateway, "trpc.moox.storage.Metadata", "ListArchiveFiles", &storagepb.ListArchiveFilesReq{
 			AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID,
 			Page: &commonpb.Page{Page: 1, Size: 100},
 		})
@@ -488,4 +492,10 @@ func parseFloat(t *testing.T, value string) float64 {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func invokeArchiveStorage[T any](ctx context.Context, gateway gatewayclient.Invoker, service, method string, request any) (*T, error) {
+	response := new(T)
+	err := gateway.Invoke(ctx, service, method, request, response)
+	return response, err
 }

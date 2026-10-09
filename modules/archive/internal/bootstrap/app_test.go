@@ -21,7 +21,6 @@ import (
 
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -237,12 +236,7 @@ func TestAppRunConsumesStorageEventAndBecomesReadyE2E(t *testing.T) {
 				cancel()
 				select {
 				case err := <-errCh:
-					// This ingress E2E intentionally has no Storage metadata RPC
-					// fixture. The delivery is already journaled and ACKed above;
-					// only the separate shutdown materialization step may fail.
-					if err != nil && !strings.Contains(err.Error(), "gateway target node is invalid") {
-						t.Fatalf("app.Run shutdown: %v", err)
-					}
+					require.NoError(t, err)
 				case <-time.After(10 * time.Second):
 					t.Fatal("app.Run did not stop after cancel")
 				}
@@ -297,16 +291,15 @@ func archiveTestConfig(t *testing.T, natsURL string) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
+	cfg.Archive.Sources = map[string]config.SourceConfig{"crypto": {Datasets: []string{"dataset_spot_kline_1h"}}}
 	cfg.Archive.RootDir = filepath.Join(dir, "archive")
 	cfg.Archive.StateDir = filepath.Join(dir, "state")
-	keyFile := filepath.Join(dir, "archive.key")
-	require.NoError(t, os.WriteFile(keyFile, []byte("archive-test-secret\n"), 0o600))
-	cfg.Archive.StorageRPC.KeyID = "archive"
-	cfg.Archive.StorageRPC.HMACKeyFile = keyFile
+
 	cfg.Archive.EventBus.URLs = []string{natsURL}
 	cfg.Archive.EventBus.Consumer = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
 	cfg.Archive.Materialize.ShutdownTimeout = 5 * time.Second
 	cfg.Archive.COS.Enabled = false
+	installArchiveGatewayFixture(t, cfg, dir)
 	require.NoError(t, cfg.Validate())
 	return cfg
 }

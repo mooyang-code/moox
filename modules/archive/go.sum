@@ -173,7 +173,6 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
 github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
-github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
@@ -276,7 +275,5 @@ trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0 h1:KOWoPoowE/pNDgFQKidfgU7t+av
 trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0/go.mod h1:rGmXHWtX8+Spt7fNxlPwG00DCWVlgBDsIX8yv7oFOFo=
 trpc.group/trpc-go/trpc-metrics-runtime v1.0.0 h1:KHrlvzlzaGP4F2hcUQrtaeq3hM9cHyz2q1wXQmUnlII=
 trpc.group/trpc-go/trpc-metrics-runtime v1.0.0/go.mod h1:IjJWQfdTnQfLDK50bgK+ZMMqZqlN3C7OVZIeQ8YLrG4=
-trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f h1:oqMaDIDGJ9gF2WQoan8q5nIF1bT89jRAouS6eYxpKds=
-trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f/go.mod h1:OcD5wGpljRUlkATiy0dHHJDwlZT+KkXb22RxCc7HACY=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 h1:xSqncQDYiUeNQSCz8RMdF7pVJWZImJ/RK+FgtSMFjss=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1/go.mod h1:BasNP/F0p0Y/fcbQMMw4TJzhYKv+dVPlnxiQaWZUpWs=

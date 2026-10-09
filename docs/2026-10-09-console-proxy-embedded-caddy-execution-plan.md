@@ -61,6 +61,10 @@ B4 变更后，55 个 Go 模块的统一测试与 vet 再次全部通过；协�
 
 B8 的 Admin/共享客户端/目录/主机网关全量 race、相关 vet、原始字节及可信元数据的实际 tRPC 回归、Linux Console/bootstrap 全包运行验证通过。Linux 程序由本机关闭 CGO 交叉编译。前端 90 个文件、448 个 Vitest 用例与生产构建在本机通过；测试使用本机已有 Node 24.19，避开默认 Node 22.11 对现有 jsdom ESM 依赖的加载失败，未修改依赖。格式、模块/包边界、模块图、架构文档、全部 15 份 schema 与 diff 检查通过。B 阶段现已完成；D～J、代理后续阶段、Collector 配额问题、最终独立审查及正式发布仍待完成。旧部署脚本尚未迁移，正式环境继续保留当前运行版本。
 
+主计划 D1 的 Archive 调用迁移已完成：常驻进程、COS 同步和历史回填使用 gatewayclient，删除旧目标配置、环境回退、未使用的 Metadata 回填客户端和重复重试。公共 FileConfig 显式配置 caller、Admin 分配的 KeyID 与密钥文件，从同级 hostgateway 配置读取主机身份、loopback 地址及私有 CA；密钥读取复用严格的普通文件、0600、禁止符号链接和长度限制。隔离 Storage outbox 验收用例也切换到 moox-cli 网关身份，完整部署联调留待最终门禁。
+
+Archive/共享客户端/签名包/主机网关全量 race 与 vet、边界、848 模块图、架构文档、Go 格式及 15 份 schema 检查通过。Archive 原启动用例只检查 ACK，现修正空间订阅配置并要求实际 Journal、ACK、Parquet 物化及 tRPC Metadata 注册，关闭阶段不得豁免错误；实际目录查询和缓存回退也有验证。Archive 服务与 CLI 的 Linux amd64 静态程序及测试包均在本机关闭 CGO 构建；bootstrap、CLI 与共享客户端测试包在 Linux 全包运行通过。D1 其他模块、D2～J、Collector 配额问题、最终独立审查与正式切换仍未完成，G 阶段须渲染新的身份与配置。
+
 control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
 
 ```text

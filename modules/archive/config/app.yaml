@@ -1,3 +1,7 @@
+gateway_client:
+  caller: archive
+  key_id: "" # Admin 分配，部署时填入；本地离线命令无需密钥。
+  key_file: ../../secrets/caller-archive.key
 archive:
   root_dir: ../data/archive
   state_dir: ../data/archive-state
@@ -15,11 +19,6 @@ archive:
     workers: 2
     row_group_rows: 65536
     shutdown_timeout: 2m
-  storage_rpc:
-    gateway_target: ip://127.0.0.1:11003
-    gateway_node_id: ""
-    key_id: archive
-    hmac_key_file: ""
   cos:
     enabled: false
     region: ""

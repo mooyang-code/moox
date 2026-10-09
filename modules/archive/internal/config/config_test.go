@@ -39,10 +39,25 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	}
 }
 
-func TestStorageRPCTargetNodeIDPrefersConfigAndFallsBackToEnvironment(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "storage-from-env")
-	assert.Equal(t, "storage-from-env", (StorageRPCConfig{}).TargetNodeID())
-	assert.Equal(t, "storage-from-config", (StorageRPCConfig{GatewayNodeID: " storage-from-config "}).TargetNodeID())
+func TestLoadRejectsRemovedStorageGatewayFields(t *testing.T) {
+	for _, key := range []string{"gateway_target", "gateway_node_id", "hmac_key_file"} {
+		path := filepath.Join(t.TempDir(), "app.yaml")
+		if err := os.WriteFile(path, []byte("archive:\n  storage_rpc:\n    "+key+": legacy\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(path)
+		if err == nil {
+			t.Fatalf("accepted removed field %s", key)
+		}
+	}
+}
+
+func TestGatewayIdentityIsArchiveAndPathsAreExplicit(t *testing.T) {
+	cfg := Default()
+	assert.Equal(t, "archive", cfg.GatewayClient.Caller)
+	assert.Equal(t, "../../secrets/caller-archive.key", cfg.GatewayClient.KeyFile)
+	cfg.GatewayClient.Caller = "console"
+	assert.ErrorContains(t, cfg.Validate(), "must be archive")
 }
 
 func TestValidateRejectsOverlappingRootAndState(t *testing.T) {
