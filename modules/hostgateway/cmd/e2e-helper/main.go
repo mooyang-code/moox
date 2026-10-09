@@ -1,176 +1,227 @@
-// Command e2e-helper starts the production Gateway service handler on an
-// ephemeral loopback port for cross-module integration tests.
+// Command e2e-helper runs native cross-module test fixtures through the host
+// gateway router. Its synthetic boundary adapts test callers pending stage D;
+// production uses neither this boundary nor fixture upstream address overrides.
 package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/codec"
-	"trpc.group/trpc-go/trpc-go/server"
-
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
+	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 func main() {
-	mode := flag.String("mode", "monitor-http", "helper mode: monitor-http, kline-native or collector-period-native")
-	deploymentYAML := flag.String("deployment-yaml", "", "absolute production deployment YAML path")
-	routeScope := flag.String("route-scope", "", "collector-period-native scope: storage-period, storage-metadata or collector-runtime")
-	nodeID := flag.String("node-id", "", "target Gateway node ID")
-	upstreamURL := flag.String("upstream-url", "", "loopback Monitor upstream URL")
-	upstreamAddress := flag.String("upstream-addr", "", "loopback native tRPC upstream address")
-	metadataUpstreamAddress := flag.String("metadata-upstream-addr", "", "optional loopback Metadata upstream for storage-period scope")
-	listenAddress := flag.String("listen-addr", "127.0.0.1:0", "native gateway listen address")
-	readyFile := flag.String("ready-file", "", "file receiving the service URL")
-	nonceDirectory := flag.String("nonce-dir", "", "persistent nonce directory")
-	keyID := flag.String("key-id", "", "service HMAC key ID")
+	mode := flag.String("mode", "kline-native", "kline-native or collector-period-native")
+	deploymentYAML := flag.String("deployment-yaml", "", "test deployment YAML")
+	routeScope := flag.String("route-scope", "", "test route scope")
+	nodeID := flag.String("node-id", "", "test host ID")
+	upstream := flag.String("upstream-addr", "", "loopback fixture upstream")
+	metadata := flag.String("metadata-upstream-addr", "", "optional metadata fixture upstream")
+	address := flag.String("listen-addr", "127.0.0.1:0", "fixture listener")
+	ready := flag.String("ready-file", "", "fixture readiness file")
+	nonces := flag.String("nonce-dir", "", "fixture nonce directory")
+	keyID := flag.String("key-id", "", "test caller key ID")
 	flag.Parse()
-	if *mode == "collector-period-native" {
-		err := runCollectorPeriodNative(*deploymentYAML, *routeScope, *upstreamAddress, *metadataUpstreamAddress, *nodeID, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
+	var err error
+	switch *mode {
+	case "kline-native":
+		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+	case "collector-period-native":
+		err = runCollectorPeriodNative(*deploymentYAML, *routeScope, *upstream, *metadata, *nodeID, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+	default:
+		err = errors.New("unsupported native fixture mode")
 	}
-	if err := run(*mode, *nodeID, *upstreamURL, *upstreamAddress, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET")); err != nil {
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(mode, nodeID, upstreamURL, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	if mode == "kline-native" {
-		return runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret)
-	}
-	if mode != "monitor-http" {
-		return fmt.Errorf("unsupported mode %q", mode)
-	}
-	return runMonitorHTTP(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secret)
+func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	return runNativeRoutes(nodeID, []gatewayroute.Route{{ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
+		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-skill"}}}, "moox-skill", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
-func runMonitorHTTP(nodeID, upstreamURL, readyFile, nonceDirectory, keyID, secret string) error {
-	parsed, err := url.Parse(upstreamURL)
-	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.Path != "" {
-		return fmt.Errorf("upstream-url must be a loopback HTTP origin")
+type fixtureForwarder struct {
+	upstream  *router.Upstream
+	addresses map[string]string
+}
+
+func (f fixtureForwarder) Forward(ctx context.Context, route servicecatalog.Route, serialization int, body []byte, metadata codec.MetaData) ([]byte, error) {
+	route.Address = f.addresses[route.ServicePath]
+	return f.upstream.Forward(ctx, route, serialization, body, metadata)
+}
+
+func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	incoming := gatewayauth.Credentials{Caller: caller, KeyID: keyID, Secret: secret}
+	if !servicecatalog.ValidHostID(hostID) {
+		return errors.New("native gateway identity: canonical host ID required")
 	}
-	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, []gatewayroute.Route{{
-		ServiceID: "monitor", Address: parsed.Host, ServicePath: "trpc.moox.monitor.MonitorMgr",
-		AllowedMethods: []string{"GetPeerSnapshot"},
-		AllowedCallers: []string{"monitor"},
-	}})
+	if _, err := gatewayauth.Sign(incoming, gatewayauth.Request{Method: "POST", Path: "/", TargetNode: hostID}, time.Now()); err != nil {
+		return fmt.Errorf("native gateway identity: %w", err)
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
 	}
-	var table gatewayroute.Table
-	if err := table.Replace(snapshot); err != nil {
+	internalCaller := caller
+	externalPrincipal := ""
+	if caller == "moox-skill" {
+		internalCaller = "access"
+		externalPrincipal = caller
+	}
+	// The legacy period harness uses collector credentials for its simulated
+	// SCF worker. ClaimTimerBatch belongs to scf-collector's external policy;
+	// this test boundary models Access without widening the production ACL.
+	if caller == "collector" && len(routes) == 1 && routes[0].ServicePath == "trpc.moox.collector.MarketFetchRuntime" {
+		internalCaller, externalPrincipal = "access", "scf-collector"
+	}
+	digest := sha256.Sum256([]byte("synthetic fixture/" + secret))
+	internal := gatewayauth.Credentials{Caller: internalCaller, KeyID: keyID, Secret: hex.EncodeToString(digest[:])}
+	dir := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{hostID: {Address: "127.0.0.1"}}, Services: map[string][]string{}}
+	raw := &pb.HostGatewaySnapshot{SchemaVersion: 1, HostId: hostID}
+	addresses := map[string]string{}
+	for _, selected := range routes {
+		host, _, err := net.SplitHostPort(selected.Address)
+		if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+			return errors.New("fixture upstream must be literal loopback")
+		}
+		service, ok := catalog.Service(selected.ServicePath)
+		if !ok {
+			return errors.New("fixture service absent from catalog")
+		}
+		componentID := ""
+		for _, c := range catalog.Components {
+			for _, candidate := range c.Services {
+				if candidate.Path == service.Path {
+					componentID = c.ID
+				}
+			}
+		}
+		dir.Services[service.Path] = []string{hostID}
+		addresses[service.Path] = selected.Address
+		timeout, limit := service.TimeoutMS, service.MaxBodyBytes
+		if timeout == 0 {
+			timeout = servicecatalog.DefaultTimeoutMS
+		}
+		if limit == 0 {
+			limit = servicecatalog.DefaultMaxBodyBytes
+		}
+		for _, method := range selected.AllowedMethods {
+			if !catalog.Allowed(internalCaller, service.Path, method) {
+				if externalPrincipal != "" {
+					continue
+				}
+				return errors.New("fixture caller/method absent from catalog")
+			}
+			raw.Routes = append(raw.Routes, &pb.HostGatewayRoute{ComponentId: componentID, ServicePath: service.Path, Method: method,
+				Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMs: timeout, MaxBodyBytes: limit, ReadOnly: catalog.ReadOnly(service.Path, method), Callers: []string{internalCaller}})
+		}
+	}
+	dir.Version, err = dir.VersionHash()
+	if err != nil {
 		return err
 	}
+	raw.Directory = &directorypb.ServiceDirectory{Version: dir.Version, Hosts: map[string]*directorypb.DirectoryHost{hostID: {Address: "127.0.0.1"}}, Services: map[string]*directorypb.ServiceHosts{}}
+	for path, hosts := range dir.Services {
+		raw.Directory.Services[path] = &directorypb.ServiceHosts{HostIds: hosts}
+	}
+	raw.VerificationKeys = []*pb.GatewayVerificationKey{{Caller: internalCaller, KeyId: keyID, Secret: []byte(internal.Secret)}}
+	raw.Hash, err = pb.SnapshotHash(raw)
+	if err != nil {
+		return err
+	}
+	view, err := snapshot.Build(hostID, raw)
+	if err != nil {
+		return err
+	}
+	state := &snapshot.State{}
+	state.Apply(view)
 	nonces, err := store.OpenNonces(nonceDirectory)
 	if err != nil {
 		return err
 	}
 	defer nonces.Close()
-	handler := router.New(router.Options{
-		NodeID: nodeID, Credentials: gatewayauth.Credentials{KeyID: keyID, Secret: secret},
-		MaxBodyBytes: 4 << 20, Table: &table, Nonces: nonces, Disabled: func() bool { return false },
-	})
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	upstream := router.NewUpstream()
+	defer upstream.Close()
+	proxy, err := router.NewService(router.ServiceOptions{State: state, Nonces: nonces, Forwarder: fixtureForwarder{upstream: upstream, addresses: addresses}})
+	if err != nil {
+		return err
+	}
+	defer proxy.Close()
+	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	if err := os.MkdirAll(filepath.Dir(readyFile), 0o700); err != nil {
-		return err
-	}
-	if err := os.WriteFile(readyFile, []byte("http://"+listener.Addr().String()), 0o600); err != nil {
-		return err
-	}
-	defer os.Remove(readyFile)
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
-	ctx, stop := signal.NotifyContext(trpc.BackgroundContext(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	done := make(chan error, 1)
-	go func() { done <- server.Serve(listener) }()
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 3*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
-	case err := <-done:
-		if err == http.ErrServerClosed {
-			return nil
+	boundary := func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
+		message := codec.Message(ctx)
+		path := message.ServerRPCName()
+		servicePath, method, ok := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+		if !ok {
+			return nil, errors.New("invalid fixture RPC")
 		}
-		return err
+		headers := http.Header{}
+		for k, v := range message.ServerMetaData() {
+			headers.Add(k, string(v))
+		}
+		body := req.(*codec.Body).Data
+		if _, err := gatewayauth.Verify(incoming, gatewayauth.Request{Method: "POST", Path: path, TargetNode: hostID, Callee: servicePath, Func: method, Body: body}, headers, time.Now()); err != nil {
+			return nil, err
+		}
+		if externalPrincipal != "" && !catalog.PrincipalAllowed(externalPrincipal, servicePath, method) {
+			return nil, errors.New("caller is not allowed for service/method")
+		}
+		signed, err := gatewayauth.Sign(internal, gatewayauth.Request{Method: "POST", Path: path, TargetNode: hostID, Callee: servicePath, Func: method, Body: body}, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		metadata := codec.MetaData{}
+		for k, v := range message.ServerMetaData() {
+			if !strings.HasPrefix(strings.ToLower(k), "x-moox-") {
+				metadata[k] = slices.Clone(v)
+			}
+		}
+		for k, v := range signed {
+			metadata[k] = []byte(v[0])
+		}
+		message.WithServerMetaData(metadata)
+		return next(ctx, req)
 	}
-}
-
-func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(upstreamAddress))
-	if err != nil || (host != "127.0.0.1" && host != "::1") {
-		return fmt.Errorf("upstream-addr must be a loopback host:port")
-	}
-	return runNativeRoutes(nodeID, []gatewayroute.Route{{
-		ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
-		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-skill"},
-	}}, "moox-skill", listenAddress, readyFile, nonceDirectory, keyID, secret)
-}
-
-func runNativeRoutes(nodeID string, routes []gatewayroute.Route, caller, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	credentials := gatewayauth.Credentials{KeyID: keyID, Caller: caller, Secret: secret}
-	if _, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: http.MethodPost, Path: "/", TargetNode: nodeID}, time.Now()); err != nil {
-		return fmt.Errorf("native gateway identity: %w", err)
-	}
-	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, routes)
-	if err != nil {
-		return err
-	}
-	var table gatewayroute.Table
-	if err := table.Replace(snapshot); err != nil {
-		return err
-	}
-	nonces, err := store.OpenNonces(nonceDirectory)
-	if err != nil {
-		return err
-	}
-	defer nonces.Close()
-	desc, implementation := router.NativeServiceDesc(router.NativeOptions{
-		NodeID:      nodeID,
-		Credentials: credentials,
-		Table:       &table, Nonces: nonces, Disabled: func() bool { return false },
-	})
-	listener, err := net.Listen("tcp", strings.TrimSpace(listenAddress))
-	if err != nil {
-		return err
-	}
-	service := server.New(
-		server.WithNetwork("tcp"),
-		server.WithProtocol("trpc"),
-		server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"),
-		server.WithListener(listener),
-		server.WithCurrentSerializationType(codec.SerializationTypeNoop),
-	)
-	if err := service.Register(desc, implementation); err != nil {
-		listener.Close()
+	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()),
+		server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.Fixture"),
+		server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithFilter(boundary))
+	if err := proxy.Register(service); err != nil {
 		return err
 	}
 	if err := writeReadyFile(readyFile, "ip://"+listener.Addr().String()); err != nil {
-		listener.Close()
 		return err
 	}
 	defer os.Remove(readyFile)
@@ -180,13 +231,8 @@ func runNativeRoutes(nodeID string, routes []gatewayroute.Route, caller, listenA
 	go func() { done <- service.Serve() }()
 	select {
 	case <-ctx.Done():
-		service.Close(nil)
-		select {
-		case err := <-done:
-			return err
-		case <-time.After(3 * time.Second):
-			return fmt.Errorf("native gateway did not stop")
-		}
+		_ = service.Close(nil)
+		return <-done
 	case err := <-done:
 		return err
 	}

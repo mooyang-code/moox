@@ -1,21 +1,18 @@
-node:
-  id: gateway-gz-122
-
+host:
+  id: storage
 server:
-  service_addr: 127.0.0.1:11002
-  native_addr: 127.0.0.1:11003
-  health_addr: 127.0.0.1:11012
-
-control_plane:
-  base_url: https://admin.example.com
-  hmac_key_file: ./secrets/gateway-control.key
-
-auth:
-  hmac_key_file: ./secrets/gateway-service.key
-  caller: service
-
+  remote_addr: 0.0.0.0:11003
+  local_addr: 127.0.0.1:11002
+  health_addr: 0.0.0.0:11012
+tls:
+  cert_file: ../../certs/host-gateway/server.crt
+  key_file: ../../certs/host-gateway/server.key
+  ca_file: ../../certs/moox-ca.crt
+control:
+  host_id: control
+  target: 192.0.2.1:11003
+  caller: host-gateway@storage
+  key_id: replace-with-issued-key-id
+  key_file: ../../secrets/caller-host-gateway.key
 store:
-  path: ./data/gateway
-
-proxy:
-  max_body_bytes: 33554432
+  path: ../../data/host-gateway

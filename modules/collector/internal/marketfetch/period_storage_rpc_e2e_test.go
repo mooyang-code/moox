@@ -46,6 +46,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const (
@@ -70,6 +71,7 @@ type periodE2EStorageReady struct {
 	SpaceID        string `json:"space_id"`
 	DatasetID      string `json:"dataset_id"`
 	Frequency      string `json:"frequency"`
+	RetryDatasetID string `json:"retry_dataset_id"`
 	StockSpaceID   string `json:"stock_space_id"`
 	StockDatasetID string `json:"stock_dataset_id"`
 	ClockFile      string `json:"clock_file"`
@@ -208,7 +210,10 @@ func TestPeriodStorageRPCE2E(t *testing.T) {
 	t.Log("SCENARIO PASS snapshot-freeze")
 
 	runStockCNPeriodTimerE2E(t, ctx, root, gatewayBinary, ready, secret, gatewayTarget)
-	runPeriodRetryExhaustionRPCE2E(t, ctx, root, gatewayTarget, metadata, ready, initialItems, clock)
+	retryReady := ready
+	require.NotEmpty(t, ready.RetryDatasetID)
+	retryReady.DatasetID, retryReady.Frequency = ready.RetryDatasetID, "1h"
+	runPeriodRetryExhaustionRPCE2E(t, ctx, root, gatewayTarget, metadata, retryReady, initialItems, clock)
 
 	thirdPeriod := period.Add(2 * time.Minute)
 	thirdExpectation := periodE2EExpectation(ready, thirdPeriod, deadline, []string{"BTC-USDT", "ETH-USDT"})
@@ -321,9 +326,7 @@ func waitPeriodE2EFinalizerCycles(t *testing.T, ctx context.Context) {
 
 func startPeriodStorageGateway(t *testing.T, ctx context.Context, root, binary string, ready periodE2EStorageReady, secret string) string {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../../../.."))
+	repoRoot := periodE2ERepositoryRoot(t)
 	yamlPath := filepath.Join(repoRoot, "config/setup/service-deployments.yaml")
 	readyFile := filepath.Join(root, "storage-gateway-ready")
 	nonceDir := filepath.Join(root, "gateway-nonces")
@@ -1037,9 +1040,13 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	// only from the period timestamp. Advance the cleanup clock beyond that
 	// retention window so the just-confirmed complete period is eligible.
 	cleanupNow := time.Now().UTC().Add(30*24*time.Hour + time.Hour)
-	deleted, err := reconciler.Reconcile(ctx, cleanupNow)
+	counts, err := reconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err, "NOT_FOUND must defer its snapshot rather than manufacture a period")
-	require.Equal(t, int64(1), deleted, "only complete, expired and quiescent period may be deleted")
+	require.EqualValues(t, 1, counts.SnapshotRows, "only the complete period's series entry may be deleted")
+	require.EqualValues(t, 1, counts.StateRows, "the complete period's confirmed state must be deleted with its entry")
+	_, completeRetained, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(complete).Key)
+	require.NoError(t, err)
+	require.False(t, completeRetained)
 	for _, expectation := range []*storagegen.DatasetPeriodExpectation{waiting, missing} {
 		_, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(expectation).Key)
 		require.NoError(t, err)
@@ -1050,9 +1057,9 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	unreachable, err := marketstorage.NewBatchStorageWithWriteSource(unusedPeriodE2ETarget(t), marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	networkReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), unreachable, ready.SpaceID)
-	deleted, err = networkReconciler.Reconcile(ctx, cleanupNow)
+	counts, err = networkReconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err)
-	require.Zero(t, deleted, "network errors must not authorize cleanup")
+	require.Zero(t, counts.Total(), "network errors must not authorize cleanup")
 	t.Log("SCENARIO PASS cleanup-waiting-not-found-network-retention")
 	require.NoError(t, replacePeriodE2EClock(ready.ClockFile, deadline))
 	var terminal domain.PeriodStorageState
@@ -1100,9 +1107,9 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	}
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &unresolved))
 	blockedReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), storage, ready.SpaceID)
-	deleted, err = blockedReconciler.Reconcile(ctx, clock)
+	counts, err = blockedReconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err, "the missing independent period still defers reconciliation")
-	require.Zero(t, deleted, "a terminal Storage period cannot release its snapshot while a failure receipt is unresolved")
+	require.Zero(t, counts.Total(), "a terminal Storage period cannot release its snapshot while a failure receipt is unresolved")
 	_, retained, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(waiting).Key)
 	require.NoError(t, err)
 	require.True(t, retained)
@@ -1117,9 +1124,10 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	// Fresh scan starts before the old cursor, including the newly degraded
 	// period, while the still-missing period continues to defer cleanup.
 	finalReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), storage, ready.SpaceID)
-	deleted, err = finalReconciler.Reconcile(ctx, clock)
+	counts, err = finalReconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err)
-	require.Equal(t, int64(1), deleted)
+	require.EqualValues(t, 1, counts.SnapshotRows)
+	require.EqualValues(t, 1, counts.StateRows)
 	_, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(waiting).Key)
 	require.NoError(t, err)
 	require.False(t, found)
@@ -1613,10 +1621,16 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 	manifest, err := db.TimerPeriodBatches().GetByPeriod(ctx, plan.Snapshot.Key, 0)
 	require.NoError(t, err)
 	runtimeTarget := startPeriodCollectorRuntimeE2E(t, ctx, root, gatewayBinary, secret, db)
-	configurePeriodE2EEventBus(t)
+	bus := configurePeriodE2EEventBus(t)
 	completionCtx, cancel := context.WithCancel(ctx)
 	done, err := marketfetch.StartCompletionConsumerWithDone(completionCtx, ready.StockSpaceID, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil)
 	require.NoError(t, err)
+	// Startup is asynchronous. Observe the real durable before changing the
+	// publisher URL, so the consumer cannot capture the unavailable endpoint.
+	require.Eventually(t, func() bool {
+		_, err := bus.JetStream().ConsumerInfo(events.MarketFetchBatchCompleted.Stream(), "collector-market-fetch-completion-v1-"+ready.StockSpaceID, nats.Context(ctx))
+		return err == nil
+	}, 5*time.Second, 20*time.Millisecond)
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -1829,17 +1843,33 @@ func claimPeriodE2EStockBatchConcurrently(t *testing.T, ctx context.Context, tar
 
 func periodE2EStockCalendarPath(t *testing.T) string {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../../../.."))
+	repoRoot := periodE2ERepositoryRoot(t)
 	return filepath.Join(repoRoot, "modules", "collector", "config", "markets", "stockcn", "calendar.yaml")
+}
+
+// Runtime fixtures live beside the executing checkout. Compiler source paths
+// point to the build machine when this pure Go test is cross-compiled.
+func periodE2ERepositoryRoot(t *testing.T) string {
+	t.Helper()
+	directory, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if info, err := os.Stat(filepath.Join(directory, "go.work")); err == nil && info.Mode().IsRegular() {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("period E2E requires a checkout containing go.work")
+		}
+		directory = parent
+	}
 }
 
 func startPeriodCollectorRuntimeE2E(t *testing.T, ctx context.Context, root, gatewayBinary, secret string, db *store.Store) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	service := server.New(server.WithServiceName("trpc.moox.collector.MarketFetchRuntime"), server.WithProtocol("trpc"), server.WithNetwork("tcp"), server.WithListener(listener), server.WithServerAsync(false))
+	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithServiceName("trpc.moox.collector.MarketFetchRuntime"), server.WithProtocol("trpc"), server.WithNetwork("tcp"), server.WithListener(listener), server.WithServerAsync(false))
 	collectorpb.RegisterMarketFetchRuntimeService(service, collectorrpc.NewMarketFetchRuntime(&marketfetch.TimerBatchClaimer{Batches: db.TimerPeriodBatches()}))
 	done := make(chan error, 1)
 	go func() { done <- service.Serve() }()
@@ -1863,9 +1893,7 @@ func startPeriodCollectorRuntimeE2E(t *testing.T, ctx context.Context, root, gat
 		}
 	})
 
-	_, source, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../../../.."))
+	repoRoot := periodE2ERepositoryRoot(t)
 	readyFile := filepath.Join(root, "collector-runtime-gateway-ready")
 	args := []string{
 		"-mode=collector-period-native", "-deployment-yaml=" + filepath.Join(repoRoot, "config/setup/service-deployments.yaml"),
@@ -1882,7 +1910,7 @@ func startPeriodCollectorRuntimeE2E(t *testing.T, ctx context.Context, root, gat
 	return target
 }
 
-func configurePeriodE2EEventBus(t *testing.T) {
+func configurePeriodE2EEventBus(t *testing.T) *testkit.Server {
 	t.Helper()
 	server := testkit.Start(t)
 	registry, err := events.DefaultRegistry()
@@ -1903,6 +1931,7 @@ func configurePeriodE2EEventBus(t *testing.T) {
 	} {
 		t.Setenv(name, "")
 	}
+	return server
 }
 
 type periodE2EStockFetcher struct {

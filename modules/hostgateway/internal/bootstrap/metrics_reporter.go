@@ -12,7 +12,7 @@ func registerMetricsReporter(s *server.Server) error {
 	if s == nil {
 		return fmt.Errorf("gateway metrics reporter requires a tRPC server")
 	}
-	h, err := report.NewHandler(report.DefaultConfig("host-gateway", "moox_host_gateway"))
+	h, err := report.NewHandler(report.DefaultConfig("host_gateway", "moox_host_gateway"))
 	if err != nil {
 		return err
 	}

@@ -5,271 +5,144 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/hostgateway/internal/controlplane"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
+	"github.com/stretchr/testify/require"
 )
 
-func TestInitializeLoadsCacheBeforeInitialPull(t *testing.T) {
-	cached := testSnapshot(t, "node-a", "cached")
-	pulled := testSnapshot(t, "node-a", "fresh")
-	events := []string{}
-	routes := &fakeRoutes{load: cached, events: &events}
-	control := &fakeControl{pull: pulled, events: &events}
-	runtime := New(Options{NodeID: "node-a", Routes: routes, Control: control, Health: health.NewState()})
-	if err := runtime.Initialize(context.Background()); err != nil {
-		t.Fatalf("Initialize() = %v", err)
-	}
-	if strings.Join(events, ",") != "load,pull:"+cached.RouteHash+",save,report:"+pulled.RouteHash {
-		t.Fatalf("events = %v", events)
-	}
-	if route, ok := runtime.Table().Resolve("fresh"); !ok || route.ServiceID != "fresh" {
-		t.Fatalf("fresh route = %+v, %v", route, ok)
-	}
-}
-
-func TestAuthenticatedHealthHandlerRejectsUnsignedDiagnostics(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	handler, err := authenticatedHealthHandler(health.NewState().Handler())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
-		if recorder.Code != http.StatusUnauthorized {
-			t.Fatalf("%s status = %d, want %d", path, recorder.Code, http.StatusUnauthorized)
-		}
-	}
-}
-
-func TestInitializeRequiresCacheOrSuccessfulPull(t *testing.T) {
-	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{loadErr: errors.New("no cache")}, Control: &fakeControl{pullErr: errors.New("admin down")}, Health: health.NewState()})
-	if err := runtime.Initialize(context.Background()); err == nil {
-		t.Fatal("Initialize() succeeded without cache or pull")
-	}
-}
-
-func TestRefreshFailureKeepsReadinessAndIncrementsMetric(t *testing.T) {
-	cached := testSnapshot(t, "node-a", "cached")
-	state := health.NewState()
-	control := &fakeControl{pull: cached}
-	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{load: cached}, Control: control, Health: state})
-	if err := runtime.Initialize(context.Background()); err != nil {
-		t.Fatalf("Initialize() = %v", err)
-	}
-	control.pullErr = errors.New("admin down")
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("Refresh() succeeded")
-	}
-	if !state.Ready() {
-		t.Fatal("failed refresh cleared readiness")
-	}
-	recorder := httptest.NewRecorder()
-	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(recorder.Body.String(), "host_gateway_route_sync_errors_total 1") {
-		t.Fatalf("metrics = %q", recorder.Body.String())
-	}
-	if _, ok := runtime.Table().Resolve("cached"); !ok {
-		t.Fatal("failed refresh discarded cached route")
-	}
-}
-
-func TestRefreshUnchangedHashSkipsSaveAndTableReplacement(t *testing.T) {
-	snapshot := testSnapshot(t, "node-a", "monitor")
-	events := []string{}
-	routes := &fakeRoutes{load: snapshot, events: &events}
-	control := &fakeControl{pull: snapshot, events: &events}
-	runtime := New(Options{NodeID: "node-a", Routes: routes, Control: control, Health: health.NewState()})
-	if err := runtime.Initialize(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(events, ","); got != "load,pull:"+snapshot.RouteHash+",report:"+snapshot.RouteHash {
-		t.Fatalf("unchanged initialization events = %s", got)
-	}
-	events = events[:0]
-	if err := runtime.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(events, ","); got != "pull:"+snapshot.RouteHash+",report:"+snapshot.RouteHash {
-		t.Fatalf("unchanged refresh events = %s", got)
-	}
-}
-
-func TestRefreshCountsControlPlaneRouteValidationFailures(t *testing.T) {
-	snapshot := testSnapshot(t, "node-a", "monitor")
-	state := health.NewState()
-	control := &fakeControl{pull: snapshot}
-	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{load: snapshot}, Control: control, Health: state})
-	if err := runtime.Initialize(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	control.pullErr = controlplane.ErrInvalidSnapshot
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("Refresh() succeeded")
-	}
-	recorder := httptest.NewRecorder()
-	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(recorder.Body.String(), "host_gateway_route_validation_failures_total 1") {
-		t.Fatalf("metrics = %q", recorder.Body.String())
-	}
-}
-
-func TestHTTPServersHaveBoundedConnectionTimeouts(t *testing.T) {
-	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
-	for name, server := range map[string]*http.Server{
-		"service": newServiceHTTPServer(handler),
-		"health":  newHealthHTTPServer(handler),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.WriteTimeout <= 0 || server.IdleTimeout <= 0 {
-				t.Fatalf("timeouts are not bounded: %+v", server)
-			}
-			if name == "service" && server.WriteTimeout <= 120*time.Second {
-				t.Fatalf("service write timeout %v cuts off the maximum proxy timeout", server.WriteTimeout)
-			}
-		})
-	}
-}
-
-func TestContinuousSyncFailureWarnsAfterThresholdAndResetsOnRecovery(t *testing.T) {
-	snapshot := testSnapshot(t, "node-a", "monitor")
-	state := health.NewState()
-	control := &fakeControl{pull: snapshot}
-	now := time.Unix(1_700_000_000, 0)
-	warnings := []string{}
-	runtime := New(Options{
-		NodeID: "node-a", Routes: &fakeRoutes{load: snapshot}, Control: control, Health: state,
-		Now: func() time.Time { return now }, Warn: func(message string) { warnings = append(warnings, message) },
-		SyncWarningAfter: 10 * time.Minute, SyncWarningInterval: 10 * time.Minute,
-	})
-	if err := runtime.Initialize(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	control.pullErr = errors.New("admin unavailable")
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("first failure succeeded")
-	}
-	now = now.Add(9 * time.Minute)
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("nine-minute failure succeeded")
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("warnings before threshold = %v", warnings)
-	}
-	now = now.Add(time.Minute)
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("ten-minute failure succeeded")
-	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "node_id=node-a") {
-		t.Fatalf("warnings at threshold = %v", warnings)
-	}
-	if state.Ready() {
-		t.Fatal("stale control-plane sync remained ready")
-	}
-	if _, ok := runtime.Table().Resolve("monitor"); !ok {
-		t.Fatal("warning discarded cached route")
-	}
-	now = now.Add(time.Minute)
-	_ = runtime.Refresh(context.Background())
-	if len(warnings) != 1 {
-		t.Fatalf("warning spam = %v", warnings)
-	}
-
-	control.pullErr = nil
-	if err := runtime.Refresh(context.Background()); err != nil {
-		t.Fatalf("recovery = %v", err)
-	}
-	control.pullErr = errors.New("admin unavailable again")
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("second outage succeeded")
-	}
-	now = now.Add(10 * time.Minute)
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("second threshold failure succeeded")
-	}
-	if len(warnings) != 2 {
-		t.Fatalf("recovery did not reset warning streak: %v", warnings)
-	}
-	if strings.Contains(strings.Join(warnings, " "), "admin unavailable") {
-		t.Fatalf("warning leaked error details: %v", warnings)
-	}
-}
-
-func TestRefreshReportFailureDegradesReadinessWithoutDiscardingRoutes(t *testing.T) {
-	snapshot := testSnapshot(t, "node-a", "monitor")
-	state := health.NewState()
-	control := &fakeControl{pull: snapshot}
-	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{load: snapshot}, Control: control, Health: state})
-	if err := runtime.Initialize(context.Background()); err != nil {
-		t.Fatalf("Initialize() = %v", err)
-	}
-	control.reportErr = errors.New("admin heartbeat unavailable")
-	if err := runtime.Refresh(context.Background()); err == nil {
-		t.Fatal("Refresh() succeeded")
-	}
-	if !state.Ready() {
-		t.Fatal("transient report failure degraded gateway before stale window")
-	}
-	if _, ok := runtime.Table().Resolve("monitor"); !ok {
-		t.Fatal("report failure discarded cached route")
-	}
-	recorder := httptest.NewRecorder()
-	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(recorder.Body.String(), "host_gateway_route_report_errors_total 1") {
-		t.Fatalf("metrics = %q", recorder.Body.String())
-	}
-}
-
-func testSnapshot(t *testing.T, nodeID, serviceID string) gatewayroute.Snapshot {
-	t.Helper()
-	snapshot, err := gatewayroute.NormalizeAndHash(nodeID, []gatewayroute.Route{{ServiceID: serviceID, Address: "127.0.0.1:1234", ServicePath: "trpc.moox.test.Service", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return snapshot
-}
-
-type fakeRoutes struct {
-	load             gatewayroute.Snapshot
+type fakeSnapshots struct {
+	cached           *snapshot.View
 	loadErr, saveErr error
-	events           *[]string
+	saves            int
 }
 
-func (routes *fakeRoutes) Load() (gatewayroute.Snapshot, error) {
-	if routes.events != nil {
-		*routes.events = append(*routes.events, "load")
+func (s *fakeSnapshots) Load() (*snapshot.View, error) { return s.cached, s.loadErr }
+func (s *fakeSnapshots) Save(view *snapshot.View) error {
+	s.saves++
+	if s.saveErr == nil {
+		s.cached = view
 	}
-	return routes.load, routes.loadErr
-}
-func (routes *fakeRoutes) Save(gatewayroute.Snapshot) error {
-	if routes.events != nil {
-		*routes.events = append(*routes.events, "save")
-	}
-	return routes.saveErr
+	return s.saveErr
 }
 
 type fakeControl struct {
-	pull               gatewayroute.Snapshot
+	pulled             *snapshot.View
 	pullErr, reportErr error
-	events             *[]string
+	current, reported  string
+	calls              int
 }
 
-func (control *fakeControl) Pull(_ context.Context, hash string) (gatewayroute.Snapshot, error) {
-	if control.events != nil {
-		*control.events = append(*control.events, "pull:"+hash)
-	}
-	return control.pull, control.pullErr
+func (c *fakeControl) Pull(_ context.Context, hash string) (*snapshot.View, error) {
+	c.calls++
+	c.current = hash
+	return c.pulled, c.pullErr
 }
-func (control *fakeControl) Report(_ context.Context, hash string, _ int32, _ string) error {
-	if control.events != nil {
-		*control.events = append(*control.events, "report:"+hash)
+func (c *fakeControl) Report(_ context.Context, hash string, _ int32, _ string) error {
+	c.reported = hash
+	return c.reportErr
+}
+
+func fixtureView(t *testing.T, components ...string) *snapshot.View {
+	t.Helper()
+	view, err := snapshot.Build("storage", testsnapshot.New(t, "storage", components...))
+	require.NoError(t, err)
+	return view
+}
+
+func TestCachedStartupAndFreshSnapshotReadiness(t *testing.T) {
+	cache := &fakeSnapshots{cached: fixtureView(t, "storage-primary")}
+	control := &fakeControl{pullErr: errors.New("offline")}
+	h := health.NewState()
+	r := New(Options{HostID: "storage", Snapshots: cache, Control: control, Health: h})
+	require.NoError(t, r.Initialize(context.Background()))
+	require.Equal(t, cache.cached.Hash(), control.current)
+	require.Equal(t, cache.cached.Hash(), r.State().Load().Hash())
+	require.False(t, h.Ready())
+	control.pullErr = nil
+	require.NoError(t, r.Refresh(context.Background()))
+	require.True(t, h.Ready())
+	require.Zero(t, cache.saves, "unchanged snapshots do not rewrite the cache")
+	control.pullErr = snapshot.ErrInvalid
+	require.Error(t, r.Refresh(context.Background()))
+	require.Equal(t, cache.cached.Hash(), r.State().Load().Hash())
+}
+
+func TestPersistenceFailureAppliesRevocationAndRetriesUnchangedView(t *testing.T) {
+	cache := &fakeSnapshots{cached: fixtureView(t, "storage-primary")}
+	control := &fakeControl{}
+	r := New(Options{HostID: "storage", Snapshots: cache, Control: control})
+	require.NoError(t, r.Initialize(context.Background()))
+	replacement := fixtureView(t)
+	control.pulled = replacement
+	cache.saveErr = errors.New("disk full")
+	require.Error(t, r.Refresh(context.Background()))
+	_, found := r.State().Load().Resolve("trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows")
+	require.False(t, found, "a cache failure must not preserve withdrawn permissions")
+	require.Equal(t, replacement.Hash(), control.reported)
+	require.NotEqual(t, replacement.Hash(), cache.cached.Hash())
+	control.pulled, cache.saveErr = nil, nil
+	require.NoError(t, r.Refresh(context.Background()))
+	require.Equal(t, replacement.Hash(), cache.cached.Hash())
+	require.Equal(t, 2, cache.saves)
+}
+
+func TestStartupWithoutSnapshotFailsAndCancellationIsRespected(t *testing.T) {
+	for _, pullErr := range []error{nil, errors.New("offline"), snapshot.ErrInvalid} {
+		control := &fakeControl{pullErr: pullErr}
+		r := New(Options{HostID: "storage", Snapshots: &fakeSnapshots{loadErr: errors.New("missing")}, Control: control})
+		require.Error(t, r.Initialize(context.Background()))
 	}
-	return control.reportErr
+	control := &fakeControl{}
+	r := New(Options{HostID: "storage", Snapshots: &fakeSnapshots{cached: fixtureView(t)}, Control: control})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, r.Initialize(ctx), context.Canceled)
+	require.Zero(t, control.calls)
+}
+
+func TestHeartbeatFailureAndContinuousSyncWarning(t *testing.T) {
+	now := time.Now()
+	control := &fakeControl{pulled: fixtureView(t), reportErr: errors.New("heartbeat failed")}
+	warnings := []string{}
+	h := health.NewState()
+	r := New(Options{HostID: "storage", Snapshots: &fakeSnapshots{}, Control: control, Health: h, Now: func() time.Time { return now }, Warn: func(s string) { warnings = append(warnings, s) }})
+	require.NoError(t, r.Initialize(context.Background()))
+	require.False(t, h.Ready())
+	control.pulled, control.reportErr = nil, nil
+	require.NoError(t, r.Refresh(context.Background()))
+	require.True(t, h.Ready())
+	control.pullErr = errors.New("offline")
+	require.Error(t, r.Refresh(context.Background()))
+	now = now.Add(91 * time.Second)
+	require.False(t, h.Ready())
+	now = now.Add(9 * time.Minute)
+	require.Error(t, r.Refresh(context.Background()))
+	require.Len(t, warnings, 2)
+	require.Error(t, r.Refresh(context.Background()))
+	require.Len(t, warnings, 2)
+	control.pullErr = nil
+	require.NoError(t, r.Refresh(context.Background()))
+	control.pullErr = errors.New("offline")
+	require.Error(t, r.Refresh(context.Background()))
+	require.Len(t, warnings, 2)
+}
+
+func TestHealthAuthenticationAndServerTimeouts(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "fixture")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "synthetic-health-secret")
+	handler, err := authenticatedHealthHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	require.NoError(t, err)
+	rsp := httptest.NewRecorder()
+	handler.ServeHTTP(rsp, httptest.NewRequest("GET", "/healthz", nil))
+	require.Equal(t, http.StatusUnauthorized, rsp.Code)
+	s := newHealthHTTPServer(handler)
+	require.Positive(t, s.ReadHeaderTimeout)
+	require.Positive(t, s.ReadTimeout)
+	require.Positive(t, s.WriteTimeout)
+	require.Positive(t, s.IdleTimeout)
 }

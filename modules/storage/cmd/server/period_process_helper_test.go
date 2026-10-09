@@ -44,6 +44,7 @@ type periodProcessReady struct {
 	SpaceID        string `json:"space_id"`
 	DatasetID      string `json:"dataset_id"`
 	Frequency      string `json:"frequency"`
+	RetryDatasetID string `json:"retry_dataset_id"`
 	StockSpaceID   string `json:"stock_space_id"`
 	StockDatasetID string `json:"stock_dataset_id"`
 	OutboxTarget   string `json:"outbox_target"`
@@ -101,7 +102,7 @@ func TestPeriodNativeProcessHelper(t *testing.T) {
 	})
 	ready := periodProcessReady{
 		NodeID: "period-e2e-node", SpaceID: "period-e2e-space", DatasetID: "period-e2e-dataset",
-		Frequency: "1h", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline_1m",
+		Frequency: "1m", RetryDatasetID: "period-e2e-retry-dataset", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline_1m",
 		AppID: "moox-collector", DataDir: root,
 		ClockFile: filepath.Join(root, "clock"), PrimarySecret: periodHelperSecret(t), NodeSecret: periodHelperSecret(t),
 	}
@@ -403,25 +404,32 @@ func periodHelperSeed(t *testing.T, ctx context.Context, meta *metasqlite.Store,
 	if _, err := meta.RegisterDataNode(ctx, ready.NodeID, ready.DataNodeTarget, "Period E2E node"); err != nil {
 		t.Fatal(err)
 	}
-	dataset, err := meta.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, DataNodeId: ready.NodeID, Name: "Period E2E raw data",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: ready.Frequency,
-		Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": "period-e2e-task"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"open", "high", "low", "close", "volume", "amount"} {
-		if _, err := meta.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
-			SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, ColumnName: name,
-			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, OriginId: name,
-			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
-		}); err != nil {
+	// Minute-level snapshot cases and hourly retry cases must not share a
+	// Dataset: production enforces one declared frequency per Dataset.
+	for _, fixture := range []struct{ id, frequency, task string }{
+		{ready.DatasetID, ready.Frequency, "period-e2e-task"},
+		{ready.RetryDatasetID, "1h", "period-e2e-retry-task"},
+	} {
+		dataset, err := meta.CreateDataset(ctx, &pb.Dataset{
+			SpaceId: ready.SpaceID, DatasetId: fixture.id, DataNodeId: ready.NodeID, Name: "Period E2E raw data " + fixture.frequency,
+			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: fixture.frequency,
+			Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": fixture.task},
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	if _, err := meta.CommitDatasetActivation(ctx, ready.SpaceID, ready.DatasetID, dataset.GetRevision()); err != nil {
-		t.Fatal(err)
+		for _, name := range []string{"open", "high", "low", "close", "volume", "amount"} {
+			if _, err := meta.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
+				SpaceId: ready.SpaceID, DatasetId: fixture.id, ColumnName: name,
+				OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, OriginId: name,
+				ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := meta.CommitDatasetActivation(ctx, ready.SpaceID, fixture.id, dataset.GetRevision()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	periodHelperSeedStockCN(t, ctx, meta, ready)
 }

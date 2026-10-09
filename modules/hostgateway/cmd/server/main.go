@@ -12,6 +12,9 @@ import (
 	_ "trpc.group/trpc-go/trpc-log-cls"
 )
 
+var Version = "dev"
+var BuildTime, GitCommit string
+
 func main() {
 	configPath := flag.String("config", "config/app.yaml", "gateway application configuration file")
 	frameworkConfigPath := flag.String("conf", "config/trpc_go.yaml", "tRPC framework configuration file")
@@ -23,7 +26,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(trpc.BackgroundContext(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := bootstrap.Run(ctx, cfg); err != nil {
+	if err := bootstrap.Run(ctx, cfg, Version); err != nil {
 		log.Fatalf("run gateway: %v", err)
 	}
 }

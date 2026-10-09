@@ -1,4 +1,4 @@
-// Package bootstrap wires the standalone gateway and owns its route lifecycle.
+// Package bootstrap owns the host gateway's listeners and complete snapshots.
 package bootstrap
 
 import (
@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -14,329 +13,259 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/controlplane"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/directory"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/listener"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/healthz"
 	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/codec"
-	trpcserver "trpc.group/trpc-go/trpc-go/server"
 )
 
-type routeStore interface {
-	Load() (gatewayroute.Snapshot, error)
-	Save(gatewayroute.Snapshot) error
+type snapshotStore interface {
+	Load() (*snapshot.View, error)
+	Save(*snapshot.View) error
 }
-
 type controlClient interface {
-	Pull(context.Context, string) (gatewayroute.Snapshot, error)
+	Pull(context.Context, string) (*snapshot.View, error)
 	Report(context.Context, string, int32, string) error
 }
 
 type Options struct {
-	NodeID              string
-	Routes              routeStore
-	Control             controlClient
-	Health              *health.State
-	Now                 func() time.Time
-	Warn                func(string)
-	SyncWarningAfter    time.Duration
-	SyncWarningInterval time.Duration
+	HostID                                string
+	Snapshots                             snapshotStore
+	Control                               controlClient
+	Health                                *health.State
+	Now                                   func() time.Time
+	Warn                                  func(string)
+	SyncWarningAfter, SyncWarningInterval time.Duration
 }
 
-const (
-	serviceReadTimeout = 15 * time.Second
-	// CloudNode synchronous SCF canaries may use the full 900s function
-	// timeout. Keep the public gateway envelope longer than the route timeout.
-	serviceWriteTimeout = 960 * time.Second
-	serviceIdleTimeout  = 60 * time.Second
-	healthReadTimeout   = 5 * time.Second
-	healthWriteTimeout  = 10 * time.Second
-	healthIdleTimeout   = 30 * time.Second
-)
-
 type Runtime struct {
-	nodeID        string
-	routes        routeStore
-	control       controlClient
-	health        *health.State
-	table         gatewayroute.Table
-	mu            sync.Mutex
-	now           func() time.Time
-	warn          func(string)
-	warnAfter     time.Duration
-	warnEvery     time.Duration
-	failureSince  time.Time
-	failureActive bool
-	lastWarning   time.Time
+	hostID                    string
+	snapshots                 snapshotStore
+	control                   controlClient
+	health                    *health.State
+	state                     snapshot.State
+	mu                        sync.Mutex
+	dirty                     bool
+	now                       func() time.Time
+	warn                      func(string)
+	warnAfter, warnEvery      time.Duration
+	failureSince, lastWarning time.Time
 }
 
 func New(options Options) *Runtime {
-	now := options.Now
-	if now == nil {
-		now = time.Now
+	if options.Now == nil {
+		options.Now = time.Now
 	}
-	warn := options.Warn
-	if warn == nil {
-		warn = func(message string) { log.Print(message) }
+	if options.Warn == nil {
+		options.Warn = func(s string) { log.Print(s) }
 	}
-	warnAfter := options.SyncWarningAfter
-	if warnAfter <= 0 {
-		warnAfter = 10 * time.Minute
+	if options.Health == nil {
+		options.Health = health.NewState()
 	}
-	warnEvery := options.SyncWarningInterval
-	if warnEvery <= 0 {
-		warnEvery = 10 * time.Minute
+	if options.SyncWarningAfter <= 0 {
+		options.SyncWarningAfter = 10 * time.Minute
 	}
-	if options.Health != nil {
-		options.Health.SetClock(now)
+	if options.SyncWarningInterval <= 0 {
+		options.SyncWarningInterval = 10 * time.Minute
 	}
-	return &Runtime{
-		nodeID: options.NodeID, routes: options.Routes, control: options.Control, health: options.Health,
-		now: now, warn: warn, warnAfter: warnAfter, warnEvery: warnEvery,
-	}
+	options.Health.SetClock(options.Now)
+	return &Runtime{hostID: options.HostID, snapshots: options.Snapshots, control: options.Control, health: options.Health,
+		now: options.Now, warn: options.Warn, warnAfter: options.SyncWarningAfter, warnEvery: options.SyncWarningInterval}
 }
 
-func (runtime *Runtime) Table() *gatewayroute.Table { return &runtime.table }
+func (r *Runtime) State() *snapshot.State { return &r.state }
 
-func (runtime *Runtime) Initialize(ctx context.Context) error {
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
+func (r *Runtime) Initialize(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cached, err := r.snapshots.Load(); err == nil && cached != nil && cached.HostID() == r.hostID {
+		r.apply(cached)
+	}
+	err := r.refresh(ctx)
+	if err != nil && (r.state.Load() == nil || ctx.Err() != nil) {
+		return fmt.Errorf("initial host snapshot unavailable: %w", err)
+	}
+	return nil
+}
 
-	hasCache := false
-	if cached, err := runtime.routes.Load(); err == nil {
-		if err := runtime.apply(cached, false); err == nil {
-			hasCache = true
+func (r *Runtime) Refresh(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.refresh(ctx)
+}
+
+func (r *Runtime) apply(view *snapshot.View) {
+	r.state.Apply(view)
+	r.health.ApplyRoutes(view.Hash(), view.Count(), view.Disabled())
+}
+
+func (r *Runtime) refresh(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	hash, _ := r.health.Current()
+	view, err := r.control.Pull(ctx, hash)
+	if err == nil && view != nil {
+		if view.HostID() != r.hostID {
+			err = snapshot.ErrInvalid
+		} else {
+			// Apply revocation immediately, even if persistence fails. A dirty
+			// view is retried on unchanged responses; no restart is required.
+			r.apply(view)
+			r.dirty = true
 		}
 	}
-	hash, _ := runtime.health.Current()
-	snapshot, err := runtime.control.Pull(ctx, hash)
+	if err == nil && r.state.Load() == nil {
+		err = snapshot.ErrInvalid
+	}
+	if err == nil && r.dirty {
+		err = r.snapshots.Save(r.state.Load())
+		if err == nil {
+			r.dirty = false
+		}
+	}
+	lastError := ""
 	if err != nil {
-		runtime.health.RouteSyncFailed()
-		runtime.noteSyncFailure()
-		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
-			runtime.health.RouteValidationFailed()
+		r.health.RouteSyncFailed()
+		if errors.Is(err, snapshot.ErrInvalid) {
+			r.health.RouteValidationFailed()
 		}
-		if hasCache {
-			_ = runtime.report(ctx, err.Error())
-			return nil
-		}
-		return fmt.Errorf("initial route pull failed without a valid cache: %w", err)
-	}
-	if err := runtime.apply(snapshot, true); err != nil {
-		runtime.health.RouteSyncFailed()
-		runtime.noteSyncFailure()
-		if hasCache {
-			_ = runtime.report(ctx, err.Error())
-			return nil
-		}
-		return fmt.Errorf("apply initial route snapshot: %w", err)
-	}
-	runtime.resetSyncFailure()
-	// Keep the process alive when the route pull succeeded but the heartbeat
-	// could not be acknowledged. Readiness remains degraded until a later
-	// refresh reports successfully.
-	_ = runtime.report(ctx, "")
-	return nil
-}
-
-func (runtime *Runtime) Refresh(ctx context.Context) error {
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	hash, _ := runtime.health.Current()
-	snapshot, err := runtime.control.Pull(ctx, hash)
-	if err == nil {
-		err = runtime.apply(snapshot, true)
-	}
-	if err != nil {
-		runtime.health.RouteSyncFailed()
-		runtime.noteSyncFailure()
-		if errors.Is(err, controlplane.ErrInvalidSnapshot) {
-			runtime.health.RouteValidationFailed()
-		}
-		_ = runtime.report(ctx, err.Error())
-		return err
-	}
-	runtime.resetSyncFailure()
-	if err := runtime.report(ctx, ""); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (runtime *Runtime) noteSyncFailure() {
-	now := runtime.now()
-	if !runtime.failureActive {
-		runtime.failureSince = now
-		runtime.failureActive = true
-		return
-	}
-	if now.Sub(runtime.failureSince) < runtime.warnAfter {
-		return
-	}
-	if !runtime.lastWarning.IsZero() && now.Sub(runtime.lastWarning) < runtime.warnEvery {
-		return
-	}
-	runtime.lastWarning = now
-	runtime.warn(fmt.Sprintf(
-		"gateway route sync stale: node_id=%s continuous_failure=%s; retaining cached routes while readiness is degraded",
-		runtime.nodeID, now.Sub(runtime.failureSince).Truncate(time.Second),
-	))
-}
-
-func (runtime *Runtime) resetSyncFailure() {
-	runtime.failureSince = time.Time{}
-	runtime.failureActive = false
-	runtime.lastWarning = time.Time{}
-}
-
-func (runtime *Runtime) apply(snapshot gatewayroute.Snapshot, persist bool) error {
-	if snapshot.NodeID != runtime.nodeID {
-		runtime.health.RouteValidationFailed()
-		return fmt.Errorf("route snapshot targets %q, want %q", snapshot.NodeID, runtime.nodeID)
-	}
-	var validated gatewayroute.Table
-	if err := validated.Replace(snapshot); err != nil {
-		runtime.health.RouteValidationFailed()
-		return err
-	}
-	if persist {
-		currentHash, _ := runtime.health.Current()
-		if snapshot.RouteHash == currentHash {
-			runtime.health.RouteSyncSucceeded(runtime.now())
-			return nil
-		}
-		if err := runtime.routes.Save(snapshot); err != nil {
-			return fmt.Errorf("save route snapshot: %w", err)
-		}
-	}
-	if err := runtime.table.Replace(snapshot); err != nil {
-		return err
-	}
-	runtime.health.ApplyRoutes(snapshot.RouteHash, len(snapshot.Routes), snapshot.Disabled)
-	if persist {
-		runtime.health.RouteSyncSucceeded(runtime.now())
-	}
-	return nil
-}
-
-func (runtime *Runtime) report(ctx context.Context, lastError string) error {
-	hash, count := runtime.health.Current()
-	if err := runtime.control.Report(ctx, hash, int32(count), lastError); err != nil {
-		runtime.health.RouteReportFailed()
-		runtime.warn(fmt.Sprintf("gateway heartbeat report failed: node_id=%s", runtime.nodeID))
-		return err
-	}
-	runtime.health.RouteReportSucceeded(runtime.now())
-	return nil
-}
-
-func Run(ctx context.Context, cfg config.Config) error {
-	control, err := controlplane.New(controlplane.Options{NodeID: cfg.Node.ID, BaseURL: cfg.ControlPlane.BaseURL, HMACKeyFile: cfg.ControlPlane.HMACKeyFile, CAFile: cfg.ControlPlane.CAFile})
-	if err != nil {
-		return err
-	}
-	var credentialRegistry *gatewayauth.CredentialRegistry
-	var credentialsSecret string
-	if cfg.Auth.CredentialsFile != "" {
-		credentialRegistry, err = gatewayauth.LoadCredentialRegistry(cfg.Auth.CredentialsFile)
-		if err != nil {
-			return err
-		}
+		r.noteSyncFailure()
+		// Reports and logs deliberately exclude upstream response/error bodies.
+		lastError = "host snapshot synchronization or persistence failed"
 	} else {
-		credentialsSecret, err = config.ReadSecret(cfg.Auth.HMACKeyFile)
-		if err != nil {
-			return fmt.Errorf("read service authentication key: %w", err)
-		}
+		r.failureSince, r.lastWarning = time.Time{}, time.Time{}
+		r.health.RouteSyncSucceeded(r.now())
+	}
+	hash, count := r.health.Current()
+	reportErr := r.control.Report(ctx, hash, int32(count), lastError)
+	if reportErr != nil {
+		r.health.RouteReportFailed()
+		r.warn("host gateway heartbeat failed: host_id=" + r.hostID)
+	} else {
+		r.health.RouteReportSucceeded(r.now())
+	}
+	return errors.Join(err, reportErr)
+}
+
+func (r *Runtime) noteSyncFailure() {
+	now := r.now()
+	if r.failureSince.IsZero() {
+		r.failureSince = now
+		return
+	}
+	if now.Sub(r.failureSince) < r.warnAfter || !r.lastWarning.IsZero() && now.Sub(r.lastWarning) < r.warnEvery {
+		return
+	}
+	r.lastWarning = now
+	r.warn("host gateway snapshot sync stale: host_id=" + r.hostID + "; keeping last validated snapshot")
+}
+
+func Run(ctx context.Context, cfg config.Config, version string) error {
+	material, credentials, err := config.LoadIdentity(cfg)
+	if err != nil {
+		return err
+	}
+	health := health.NewState()
+	healthHandler, err := authenticatedHealthHandler(health.Handler())
+	if err != nil {
+		return err
+	}
+	// tRPC repairs process-wide codec/client configuration. Finish setup before
+	// creating any control connection or accepting requests.
+	timers := trpc.NewServer()
+	var closeTimersOnce sync.Once
+	closeTimers := func() { closeTimersOnce.Do(func() { _ = timers.Close(nil) }) }
+	defer closeTimers()
+	control, err := controlplane.NewRPC(cfg, material, credentials, version)
+	if err != nil {
+		return err
+	}
+	defer control.Close()
+	cache := store.NewSnapshots(cfg.Store.Path, cfg.Host.ID)
+	if err := cache.Prepare(); err != nil {
+		return err
 	}
 	nonces, err := store.OpenNonces(filepath.Join(cfg.Store.Path, "nonces"))
 	if err != nil {
 		return err
 	}
 	defer nonces.Close()
-	state := health.NewState()
-	routeStore := store.NewRoutes(cfg.Store.Path)
-	runtime := New(Options{NodeID: cfg.Node.ID, Routes: routeStore, Control: control, Health: state})
-	if err := runtime.Initialize(ctx); err != nil {
+	runtime := New(Options{HostID: cfg.Host.ID, Snapshots: cache, Control: control, Health: health})
+	initialCtx, cancelInitial := context.WithTimeout(ctx, 15*time.Second)
+	err = runtime.Initialize(initialCtx)
+	cancelInitial()
+	if err != nil {
 		return err
 	}
-	timerServer := trpc.NewServer()
-	if err := registerRouteRefreshTimer(timerServer, runtime); err != nil {
+	health.SetStorageCheck(func() error { return errors.Join(cache.Check(), nonces.Check()) })
+	proxy, err := router.NewService(router.ServiceOptions{State: runtime.State(), Nonces: nonces, Metrics: health})
+	if err != nil {
 		return err
 	}
-	if err := registerMetricsReporter(timerServer); err != nil {
+	defer proxy.Close()
+	if err := registerRouteRefreshTimer(timers, runtime); err != nil {
 		return err
 	}
-	state.SetStorageCheck(func() error {
-		if err := routeStore.Check(); err != nil {
-			return err
-		}
-		return nonces.Check()
-	})
-
-	serviceCredentials := gatewayauth.Credentials{KeyID: "moox-gateway-service", Caller: cfg.Auth.Caller, Secret: credentialsSecret}
-	serviceHandler := router.New(router.Options{
-		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
-		MaxBodyBytes: cfg.Proxy.MaxBodyBytes, Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled, Metrics: state,
-	})
-	nativeDesc, nativeImpl := router.NativeServiceDesc(router.NativeOptions{
-		NodeID: cfg.Node.ID, Credentials: serviceCredentials, CredentialRegistry: credentialRegistry,
-		Table: runtime.Table(), Nonces: nonces, Disabled: state.Disabled,
-	})
-	nativeService := trpcserver.New(
-		trpcserver.WithAddress(cfg.Server.NativeAddr), trpcserver.WithNetwork("tcp"), trpcserver.WithProtocol("trpc"),
-		trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop), trpcserver.WithServiceName("trpc.moox.hostgateway.ServiceGateway"),
-	)
-	if err := nativeService.Register(nativeDesc, nativeImpl); err != nil {
-		return fmt.Errorf("register native gateway service: %w", err)
+	if err := registerMetricsReporter(timers); err != nil {
+		return err
 	}
-	serviceListener, err := net.Listen("tcp", cfg.Server.ServiceAddr)
+	opened, err := listener.Open(ctx, cfg, material)
 	if err != nil {
-		return fmt.Errorf("listen service endpoint: %w", err)
+		return err
 	}
-	defer serviceListener.Close()
-	healthListener, err := net.Listen("tcp", cfg.Server.HealthAddr)
-	if err != nil {
-		return fmt.Errorf("listen health endpoint: %w", err)
+	defer opened.Close()
+	remote := listener.TRPC(opened.Remote, "trpc.moox.hostgateway.Remote")
+	local := listener.TRPC(opened.Local, "trpc.moox.hostgateway.Local")
+	if err := proxy.Register(remote); err != nil {
+		return err
 	}
-	defer healthListener.Close()
-	healthHandler, err := authenticatedHealthHandler(state.Handler())
-	if err != nil {
-		return fmt.Errorf("configure health authentication: %w", err)
+	if err := proxy.Register(local); err != nil {
+		return err
 	}
-
-	serviceServer := newServiceHTTPServer(serviceHandler)
+	if err := directory.Register(local, runtime.State()); err != nil {
+		return err
+	}
 	healthServer := newHealthHTTPServer(healthHandler)
-	serverResults := make(chan serverResult, 4)
-	go serveHTTP("gateway service", serviceServer, serviceListener, serverResults)
-	go serveHTTP("gateway health", healthServer, healthListener, serverResults)
-	go func() { serverResults <- serverResult{name: "gateway native service", err: nativeService.Serve()} }()
+	results := make(chan serverResult, 4)
+	go func() { results <- serverResult{"remote tRPC", remote.Serve()} }()
+	go func() { results <- serverResult{"local tRPC", local.Serve()} }()
 	go func() {
-		serverResults <- serverResult{name: "gateway timer", err: timerServer.Serve()}
+		err := healthServer.Serve(opened.Health)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		results <- serverResult{"health", err}
 	}()
-
+	go func() { results <- serverResult{"timers", timers.Serve()} }()
 	var firstErr error
 	completed := 0
 	select {
 	case <-ctx.Done():
-	case result := <-serverResults:
+	case result := <-results:
 		completed = 1
-		if result.err != nil && !errors.Is(result.err, context.Canceled) {
-			firstErr = fmt.Errorf("%s server: %w", result.name, result.err)
-		} else {
-			firstErr = fmt.Errorf("%s server stopped unexpectedly", result.name)
+		if ctx.Err() == nil {
+			firstErr = fmt.Errorf("%s stopped unexpectedly: %v", result.name, result.err)
 		}
 	}
-
-	shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	shutdownErr := errors.Join(serviceServer.Shutdown(shutdownCtx), healthServer.Shutdown(shutdownCtx))
-	_ = nativeService.Close(make(chan struct{}, 1))
-	_ = timerServer.Close(nil)
+	shutdownErr := healthServer.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		_ = healthServer.Close()
+	}
+	_ = remote.Close(nil)
+	_ = local.Close(nil)
+	closeTimers()
 	for completed < 4 {
-		<-serverResults
+		<-results
 		completed++
 	}
 	return errors.Join(firstErr, shutdownErr)
@@ -345,36 +274,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 func authenticatedHealthHandler(next http.Handler) (http.Handler, error) {
 	return healthz.WrapFromEnv(next)
 }
-
-func newServiceHTTPServer(handler http.Handler) *http.Server {
-	return &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       serviceReadTimeout,
-		WriteTimeout:      serviceWriteTimeout,
-		IdleTimeout:       serviceIdleTimeout,
-	}
-}
-
 func newHealthHTTPServer(handler http.Handler) *http.Server {
-	return &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       healthReadTimeout,
-		WriteTimeout:      healthWriteTimeout,
-		IdleTimeout:       healthIdleTimeout,
-	}
+	return &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 }
 
 type serverResult struct {
 	name string
 	err  error
-}
-
-func serveHTTP(name string, server *http.Server, listener net.Listener, results chan<- serverResult) {
-	err := server.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
-		err = nil
-	}
-	results <- serverResult{name: name, err: err}
 }

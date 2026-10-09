@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -53,7 +54,11 @@ func checkConfig(arguments []string, output io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("check-config accepts no positional arguments")
 	}
-	if _, err := config.Load(*path); err != nil {
+	cfg, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	if _, _, err := config.LoadIdentity(cfg); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintln(output, "configuration valid")
@@ -74,27 +79,39 @@ func printRoutes(arguments []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := store.NewRoutes(cfg.Store.Path).Load()
+	view, err := store.NewSnapshots(cfg.Store.Path, cfg.Host.ID).Load()
 	if err != nil {
 		return err
 	}
-	if snapshot.NodeID != cfg.Node.ID {
-		return fmt.Errorf("cached routes target %q, want %q", snapshot.NodeID, cfg.Node.ID)
-	}
 	encoder := json.NewEncoder(output)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(snapshot)
+	return encoder.Encode(map[string]any{"host_id": view.HostID(), "hash": view.Hash(), "disabled": view.Disabled(), "routes": view.Proto().Routes, "directory": view.Directory()})
 }
 
 func checkHealth(arguments []string, output io.Writer) error {
 	flags := flag.NewFlagSet("health", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	endpoint := flags.String("url", "http://127.0.0.1:11012/readyz", "readiness URL")
+	endpoint := flags.String("url", "", "readiness URL, defaults to configured health listener")
+	configPath := flags.String("config", "config/app.yaml", "host gateway configuration")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("health accepts no positional arguments")
+	}
+	if *endpoint == "" {
+		cfg, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		host, port, _ := net.SplitHostPort(cfg.Server.HealthAddr)
+		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+			host = "127.0.0.1"
+			if ip.To4() == nil {
+				host = "::1"
+			}
+		}
+		*endpoint = "http://" + net.JoinHostPort(host, port) + "/readyz"
 	}
 	parsed, err := url.Parse(*endpoint)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {

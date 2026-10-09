@@ -98,10 +98,10 @@ func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 	}
 	firstErr := process.waitError()
 	require.Error(t, firstErr)
-	require.Contains(t, process.logs.String(), "upstream-addr must be a loopback host:port")
+	require.Contains(t, process.logs.String(), "fixture upstream must be literal loopback")
 	_, readyErr := process.waitForReady(readyFile, 2*time.Second)
 	require.ErrorContains(t, readyErr, firstErr.Error())
-	require.ErrorContains(t, readyErr, "upstream-addr must be a loopback host:port")
+	require.ErrorContains(t, readyErr, "fixture upstream must be literal loopback")
 
 	cleanupDone := make(chan struct{})
 	go func() {
@@ -194,7 +194,7 @@ func buildGatewayE2EHelper(t *testing.T) string {
 	t.Helper()
 	helper := filepath.Join(t.TempDir(), "gateway-e2e-helper")
 	build := exec.Command("go", "build", "-o", helper, "./cmd/e2e-helper")
-	build.Dir = filepath.Join("..", "..", "gateway")
+	build.Dir = filepath.Join("..", "..", "hostgateway")
 	output, err := build.CombinedOutput()
 	require.NoError(t, err, "build gateway helper: %s", output)
 	return helper
