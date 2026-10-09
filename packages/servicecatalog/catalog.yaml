@@ -328,6 +328,13 @@ components:
               - DeleteHost
             callers:
               - moox-cli
+          - methods:
+              - GetCatalog
+              - ListHosts
+              - ListPlacements
+              - GetHostRoutes
+            callers:
+              - monitor
       - path: trpc.moox.admin.Setup
         port: 11110
         console_name: setup

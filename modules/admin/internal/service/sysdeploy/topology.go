@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+var ErrInvalidTopology = errors.New("invalid host topology")
 
 // TopologyDAO is shared by the live API and offline bootstrap/recovery commands.
 // It never creates schema or seeds deployments during Admin startup.
@@ -69,7 +72,18 @@ func (d *TopologyDAO) Compile(ctx context.Context, hostID string) (servicecatalo
 	if err != nil {
 		return servicecatalog.CompiledHost{}, err
 	}
+	if !slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == hostID }) {
+		return servicecatalog.CompiledHost{}, gorm.ErrRecordNotFound
+	}
 	return d.catalog.Compile(d.topology(hosts, placements), hostID)
+}
+
+func (d *TopologyDAO) GetGatewayStatus(ctx context.Context, hostID string) (*HostGatewayStatus, error) {
+	status := &HostGatewayStatus{}
+	if err := d.db.WithContext(ctx).Where("c_host_id = ?", hostID).First(status).Error; err != nil {
+		return nil, err
+	}
+	return status, nil
 }
 
 func (d *TopologyDAO) mutate(ctx context.Context, fn func(*gorm.DB) error) error {
@@ -92,7 +106,7 @@ func (d *TopologyDAO) SyncHostPlacements(ctx context.Context, spec HostSpec) err
 // A live synchronization uses SyncHostPlacements for exactly one host.
 func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 	if len(specs) == 0 || len(specs) > 1024 {
-		return fmt.Errorf("host synchronization requires 1..1024 hosts")
+		return fmt.Errorf("%w: host synchronization requires 1..1024 hosts", ErrInvalidTopology)
 	}
 	return d.mutate(ctx, func(tx *gorm.DB) error {
 		hosts, placements, err := d.records(tx)
@@ -102,7 +116,7 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 		seen := map[string]bool{}
 		for _, spec := range specs {
 			if seen[spec.HostID] {
-				return fmt.Errorf("duplicate host in synchronization")
+				return fmt.Errorf("%w: duplicate host in synchronization", ErrInvalidTopology)
 			}
 			seen[spec.HostID] = true
 			hosts, placements, err = d.propose(hosts, placements, spec)
@@ -111,7 +125,7 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 			}
 		}
 		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		for _, host := range hosts {
 			if !seen[host.HostID] {
@@ -143,13 +157,13 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 
 func (d *TopologyDAO) propose(hosts []HostRecord, placements []PlacementRecord, spec HostSpec) ([]HostRecord, []PlacementRecord, error) {
 	if len(spec.Description) > 4096 || len(spec.Components) > len(d.catalog.Components) {
-		return nil, nil, fmt.Errorf("host description or component list exceeds limit")
+		return nil, nil, fmt.Errorf("%w: host description or component list exceeds limit", ErrInvalidTopology)
 	}
 	wanted := map[string]bool{}
 	for _, id := range spec.Components {
 		component, ok := d.catalog.Component(id)
 		if !ok || wanted[id] || component.Scope == servicecatalog.ScopeHost {
-			return nil, nil, fmt.Errorf("unknown, duplicate or automatic component %q", id)
+			return nil, nil, fmt.Errorf("%w: unknown, duplicate or automatic component %q", ErrInvalidTopology, id)
 		}
 		wanted[id] = true
 	}
@@ -177,7 +191,7 @@ func (d *TopologyDAO) propose(hosts []HostRecord, placements []PlacementRecord, 
 			continue
 		}
 		if component, ok := d.catalog.Component(placement.ComponentID); ok && component.Protected {
-			return nil, nil, fmt.Errorf("protected component %q cannot be removed", component.ID)
+			return nil, nil, fmt.Errorf("%w: protected component %q cannot be removed", ErrInvalidTopology, component.ID)
 		}
 	}
 	for id := range wanted {
@@ -198,7 +212,7 @@ func (d *TopologyDAO) SetHostStatus(ctx context.Context, hostID, status string) 
 		}
 		hosts[i].Status = status
 		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		return tx.Model(&HostRecord{}).Where("c_host_id = ?", hostID).Updates(map[string]interface{}{"c_status": status, "c_mtime": time.Now().UTC()}).Error
 	})
@@ -207,7 +221,7 @@ func (d *TopologyDAO) SetHostStatus(ctx context.Context, hostID, status string) 
 func (d *TopologyDAO) SetPlacementStatus(ctx context.Context, hostID, componentID, status string) error {
 	component, ok := d.catalog.Component(componentID)
 	if !ok || component.Scope == servicecatalog.ScopeHost {
-		return fmt.Errorf("unknown or automatic component")
+		return fmt.Errorf("%w: unknown or automatic component", ErrInvalidTopology)
 	}
 	return d.mutate(ctx, func(tx *gorm.DB) error {
 		hosts, placements, err := d.records(tx)
@@ -220,7 +234,7 @@ func (d *TopologyDAO) SetPlacementStatus(ctx context.Context, hostID, componentI
 		}
 		placements[i].Status = status
 		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		return tx.Model(&PlacementRecord{}).Where("c_host_id = ? AND c_component_id = ?", hostID, componentID).Updates(map[string]interface{}{"c_status": status, "c_mtime": time.Now().UTC()}).Error
 	})
@@ -228,7 +242,7 @@ func (d *TopologyDAO) SetPlacementStatus(ctx context.Context, hostID, componentI
 
 func (d *TopologyDAO) DeleteHost(ctx context.Context, hostID string) error {
 	if hostID == d.controlHostID {
-		return fmt.Errorf("control host cannot be deleted")
+		return fmt.Errorf("%w: control host cannot be deleted", ErrInvalidTopology)
 	}
 	return d.mutate(ctx, func(tx *gorm.DB) error {
 		hosts, placements, err := d.records(tx)
@@ -242,13 +256,13 @@ func (d *TopologyDAO) DeleteHost(ctx context.Context, hostID string) error {
 		for _, placement := range placements {
 			component, ok := d.catalog.Component(placement.ComponentID)
 			if placement.HostID == hostID && (!ok || component.Scope != servicecatalog.ScopeHost) {
-				return fmt.Errorf("host still has component placements")
+				return fmt.Errorf("%w: host still has component placements", ErrInvalidTopology)
 			}
 		}
 		hosts = slices.Delete(hosts, i, i+1)
 		placements = slices.DeleteFunc(placements, func(p PlacementRecord) bool { return p.HostID == hostID })
 		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		if err := tx.Where("c_host_id = ?", hostID).Delete(&HostGatewayStatus{}).Error; err != nil {
 			return err

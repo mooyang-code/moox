@@ -3,6 +3,8 @@ syntax = "proto3";
 package trpc.moox.ops;
 
 import "moox_common.proto";
+import "directory.proto";
+import "gatewaycontrol.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
@@ -200,7 +202,135 @@ message GetGatewayNodeRoutesRsp {
   repeated GatewayRoute routes = 6;
 }
 
+message DeploymentHost {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  string region = 4;
+  string status = 5;
+  string description = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message ComponentPlacement {
+  string host_id = 1;
+  string component_id = 2;
+  string status = 3;
+  string created_at = 4;
+  string updated_at = 5;
+}
+
+message HostGatewayRuntimeStatus {
+  string instance_id = 1;
+  string version = 2;
+  string expected_hash = 3;
+  string applied_hash = 4;
+  int64 route_count = 5;
+  string last_seen_at = 6;
+  string last_error = 7;
+  string previous_instance_id = 8;
+  string replaced_at = 9;
+  string conflict_instance_id = 10;
+  string conflict_seen_at = 11;
+}
+
+message GetCatalogReq {}
+message GetCatalogRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  // Exact embedded shared catalog bytes, including Doctor metadata.
+  string catalog_yaml = 2;
+  string sha256 = 3;
+}
+
+// ListHostsReq/Rsp already belong to Ssh in this protobuf package.
+message ListDeploymentHostsReq {
+  string host_id = 1;
+  string status = 2;
+  trpc.moox.common.Page page = 3;
+}
+message ListDeploymentHostsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated DeploymentHost hosts = 2;
+  trpc.moox.common.PageResult page_result = 3;
+}
+
+message ListPlacementsReq {
+  string host_id = 1;
+  string component_id = 2;
+  string status = 3;
+  trpc.moox.common.Page page = 4;
+}
+message ListPlacementsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated ComponentPlacement placements = 2;
+  trpc.moox.common.PageResult page_result = 3;
+}
+
+message GetHostRoutesReq {
+  string host_id = 1;
+}
+message GetHostRoutesRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  string host_id = 2;
+  // Definition hash excludes keys; the final snapshot hash is in gateway_status.
+  string definition_hash = 3;
+  repeated trpc.moox.admin.HostGatewayRoute routes = 4;
+  HostGatewayRuntimeStatus gateway_status = 5;
+}
+
+message GetDirectoryReq {}
+message GetDirectoryRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  trpc.moox.hostgateway.ServiceDirectory directory = 2;
+}
+
+message SetHostStatusReq {
+  string host_id = 1;
+  string status = 2;
+}
+message SetHostStatusRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+message SetPlacementStatusReq {
+  string host_id = 1;
+  string component_id = 2;
+  string status = 3;
+}
+message SetPlacementStatusRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+
+message SyncHostPlacementsReq {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  string region = 4;
+  string description = 5;
+  // Complete business component list. Host-scope components are automatic.
+  repeated string component_ids = 6;
+}
+message SyncHostPlacementsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+
+message DeleteDeploymentHostReq {
+  string host_id = 1;
+}
+message DeleteDeploymentHostRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+
 service SysDeploy {
+  rpc GetCatalog(GetCatalogReq) returns (GetCatalogRsp);
+  rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
+  rpc ListPlacements(ListPlacementsReq) returns (ListPlacementsRsp);
+  rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
+  rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
+  rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
+  rpc SetPlacementStatus(SetPlacementStatusReq) returns (SetPlacementStatusRsp);
+  rpc SyncHostPlacements(SyncHostPlacementsReq) returns (SyncHostPlacementsRsp);
+  rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
   rpc ListServiceDeployments(ListServiceDeploymentsReq) returns (ListServiceDeploymentsRsp);
   rpc GetServiceDeployment(GetServiceDeploymentReq) returns (GetServiceDeploymentRsp);
   rpc CreateServiceDeployment(CreateServiceDeploymentReq) returns (CreateServiceDeploymentRsp);

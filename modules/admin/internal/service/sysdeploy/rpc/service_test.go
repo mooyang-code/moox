@@ -8,7 +8,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	mocker "github.com/tencent/goom"
 )
 
 type fakeSysDeployService struct {
@@ -125,19 +124,4 @@ func TestService_GatewayNodeMethodsDelegate(t *testing.T) {
 	routes, err := svc.GetGatewayNodeRoutes(ctx, &pb.GetGatewayNodeRoutesReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, routes.GetRetInfo().GetCode())
-}
-
-func TestSysDeployService_GoomMock_DelegatesList(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
-	svcIface := (sysdeploy.Service)(nil)
-	mock.Interface(&svcIface).Method("ListServiceDeployments").Apply(func(_ *mocker.IContext, _ context.Context, _ *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {
-		return &pb.ListServiceDeploymentsRsp{RetInfo: retOK()}, nil
-	})
-
-	rpcSvc := NewService(svcIface)
-	rsp, err := rpcSvc.ListServiceDeployments(context.Background(), &pb.ListServiceDeploymentsReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
