@@ -953,6 +953,7 @@ func (s *Service) switchViewLocked(ctx context.Context, runtime *viewRuntime) (s
 			return "", 0, fmt.Errorf("mark old view index retiring: %w", err)
 		}
 	}
+	s.inheritAppliedFence(oldID, runtime.next)
 	runtime.active = runtime.next
 	runtime.activeDatasetIDs = append([]string(nil), runtime.nextDatasetIDs...)
 	runtime.activePrimaryDatasetID = runtime.nextPrimaryDatasetID

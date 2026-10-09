@@ -54,6 +54,7 @@ func TestAppliedFencePersistsSafelyUnderConcurrentWriters(t *testing.T) {
 			}
 		}
 	}()
+	// 记录位置的分区消费者与落盘（后台循环、停止消费）并发进行。
 	var wg sync.WaitGroup
 	for writer := 0; writer < 32; writer++ {
 		wg.Add(1)
@@ -61,10 +62,18 @@ func TestAppliedFencePersistsSafelyUnderConcurrentWriters(t *testing.T) {
 			defer wg.Done()
 			for seq := uint64(1); seq <= 20; seq++ {
 				service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", fmt.Sprintf("store-%d", writer), seq)
+				if seq%5 == 0 {
+					if err := service.flushAppliedFence(); err != nil {
+						t.Error(err)
+					}
+				}
 			}
 		}(writer)
 	}
 	wg.Wait()
+	if err := service.flushAppliedFence(); err != nil {
+		t.Fatal(err)
+	}
 	close(stop)
 	if err := <-readErr; err != nil {
 		t.Fatal(err)

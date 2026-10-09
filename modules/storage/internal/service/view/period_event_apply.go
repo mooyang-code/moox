@@ -48,7 +48,7 @@ type periodCompletionInput struct {
 
 func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.CollectorPeriodCompleted) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("collector period event is empty"))
+		return eventconsumer.Permanent(errors.New("Collector 周期完成事件为空"))
 	}
 	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
 		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
@@ -61,7 +61,7 @@ func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *e
 func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.EventMessage, completion periodCompletionInput) error {
 	metadata, publisher := s.periodDependencies()
 	if metadata == nil || publisher == nil {
-		return errors.New("storage View period dependencies are unavailable")
+		return errors.New("View 处理周期事件所需的依赖尚未就绪")
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), completion.datasetID)
 	if len(views) == 0 {
@@ -70,7 +70,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -137,11 +137,11 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 
 func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.FactorPeriodComputed) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("factor period event is empty"))
+		return eventconsumer.Permanent(errors.New("Factor 周期计算事件为空"))
 	}
 	_, publisher := s.periodDependencies()
 	if publisher == nil {
-		return errors.New("storage View ready publisher is unavailable")
+		return errors.New("View 就绪事件发布器尚未就绪")
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
 	if len(views) == 0 {
@@ -150,7 +150,7 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -187,11 +187,11 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 
 func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.DatasetSyncPoint) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("dataset sync-point event is empty"))
+		return eventconsumer.Permanent(errors.New("数据集同步点事件为空"))
 	}
 	metadata, _ := s.periodDependencies()
 	if metadata == nil {
-		return errors.New("storage View period metadata is unavailable")
+		return errors.New("View 处理周期事件所需的元数据客户端尚未就绪")
 	}
 	views := s.syncPointViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
 	if len(views) == 0 {
@@ -200,7 +200,7 @@ func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.E
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -210,7 +210,7 @@ func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.E
 			return readyErr
 		}
 		if !ready {
-			return fmt.Errorf("View %s/%s has no ready active or building index", view.GetSpaceId(), view.GetViewId())
+			return fmt.Errorf("View %s/%s 没有可用的活动索引或正在构建的索引", view.GetSpaceId(), view.GetViewId())
 		}
 		rsp, err := metadata.RecordViewSyncPoint(ctx, &pb.RecordViewSyncPointReq{AuthInfo: s.internalAuth(), SyncPoint: &pb.ViewSyncPoint{
 			SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), DatasetId: payload.GetDatasetId(), RequestId: payload.GetRequestId(),
@@ -440,10 +440,10 @@ func cloneFactorStates(values []*storageeventpb.FactorPeriodState) []*storageeve
 
 func requireStorageSuccess(operation string, info *pb.RetInfo) error {
 	if info == nil {
-		return fmt.Errorf("%s returned empty ret_info", operation)
+		return fmt.Errorf("%s 返回的 ret_info 为空", operation)
 	}
 	if info.GetCode() != pb.ErrorCode_SUCCESS {
-		return fmt.Errorf("%s failed: %s", operation, info.GetMsg())
+		return fmt.Errorf("%s 失败：%s", operation, info.GetMsg())
 	}
 	return nil
 }

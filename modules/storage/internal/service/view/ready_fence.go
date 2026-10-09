@@ -51,7 +51,7 @@ type persistedApplied struct {
 
 func (s *Service) OpenReadyFence(dir string) error {
 	if s == nil {
-		return errors.New("view service is nil")
+		return errors.New("View 服务未初始化")
 	}
 	s.readyFenceDir = strings.TrimSpace(dir)
 	if s.appliedFence == nil {
@@ -67,59 +67,64 @@ func (s *Service) loadReadyFence() error {
 	if err := os.MkdirAll(s.readyFenceDir, 0o755); err != nil {
 		return err
 	}
+	// 崩溃时写到一半的临时文件不会再被改名，启动时清掉，免得逐渐累积。
+	if leftovers, err := filepath.Glob(filepath.Join(s.readyFenceDir, "*.tmp-*")); err == nil {
+		for _, leftover := range leftovers {
+			_ = os.Remove(leftover)
+		}
+	}
 	if err := s.loadAppliedFence(); err != nil {
 		return err
 	}
 	return s.loadPendingReady()
 }
 
-// persistAppliedFence 落盘写入围栏。多个分区消费者并行写行，落盘必须串行：快照在持有 appliedPersistMu 时取，
-// 后写入的文件总是更新的快照。已退役索引（View 当前活动索引之外）的键不再参与判断，顺带清掉。
-func (s *Service) persistAppliedFence() error {
+// appliedPersistInterval 是写入围栏两次落盘之间的最短间隔。
+var appliedPersistInterval = time.Second
+
+// flushAppliedFence 把标脏的写入围栏落盘，不 fsync（围栏丢了只会让就绪事件晚放行）。后台循环与停止消费可能同时调用，
+// 落盘串行：快照在持有 appliedPersistMu 时取，后写入的文件总是更新的快照。A/B 槽位名在重建时复用，每个 View 至多
+// 两个索引的键，不需要清理。
+func (s *Service) flushAppliedFence() error {
 	if s == nil || strings.TrimSpace(s.readyFenceDir) == "" {
 		return nil
 	}
 	s.appliedPersistMu.Lock()
 	defer s.appliedPersistMu.Unlock()
-	active := s.activeIndexesByView()
 	s.appliedFenceMu.Lock()
+	if !s.appliedDirty {
+		s.appliedFenceMu.Unlock()
+		return nil
+	}
 	items := make([]persistedApplied, 0, len(s.appliedFence))
 	for key, seq := range s.appliedFence {
-		if index, known := active[viewRef{spaceID: key.spaceID, viewID: key.viewID}]; known && index != "" && index != key.indexID {
-			delete(s.appliedFence, key)
-			continue
-		}
 		items = append(items, persistedApplied{
 			SpaceID: key.spaceID, ViewID: key.viewID, IndexID: key.indexID,
 			NodeID: key.nodeID, StoreID: key.storeID, Sequence: seq,
 		})
 	}
+	s.appliedDirty = false
 	s.appliedFenceMu.Unlock()
 	raw, err := json.Marshal(items)
+	if err == nil {
+		err = replaceFile(filepath.Join(s.readyFenceDir, "applied.json"), raw, false)
+	}
 	if err != nil {
+		s.appliedFenceMu.Lock()
+		s.appliedDirty = true
+		s.appliedFenceMu.Unlock()
 		return err
 	}
-	return atomicWriteFile(filepath.Join(s.readyFenceDir, "applied.json"), raw)
+	return nil
 }
 
-// activeIndexesByView 返回已登记 View 的当前活动索引。
-func (s *Service) activeIndexesByView() map[viewRef]string {
-	s.mu.RLock()
-	runtimes := make(map[viewRef]*viewRuntime, len(s.views))
-	for ref, runtime := range s.views {
-		runtimes[ref] = runtime
+// persistAppliedFenceLogged 落盘写入围栏并记录失败与恢复（按类别去重）。
+func (s *Service) persistAppliedFenceLogged() {
+	if err := s.flushAppliedFence(); err != nil {
+		s.readyIssue(readyIssueFence, "View 写入围栏落盘失败：%v", err)
+		return
 	}
-	s.mu.RUnlock()
-	active := make(map[viewRef]string, len(runtimes))
-	for ref, runtime := range runtimes {
-		if runtime == nil {
-			continue
-		}
-		runtime.mu.Lock()
-		active[ref] = runtime.active
-		runtime.mu.Unlock()
-	}
-	return active
+	s.readyResolved(readyIssueFence, "View 写入围栏落盘已恢复")
 }
 
 // setAsideCorrupt 把无法解析的落盘文件改名保留（便于排查）并记日志，让进程按空状态继续启动。
@@ -187,7 +192,7 @@ func (s *Service) persistPendingReadyLocked() error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(filepath.Join(s.readyFenceDir, "pending.json"), raw)
+	return replaceFile(filepath.Join(s.readyFenceDir, "pending.json"), raw, true)
 }
 
 func (s *Service) loadPendingReady() error {
@@ -256,9 +261,9 @@ func (s *Service) appliedSequence(spaceID, viewID, indexID, nodeID, storeID stri
 	return seq
 }
 
-// atomicWriteFile 先写同目录下的唯一临时文件并 fsync，再改名替换：并发的写者不会互相截断，读者与崩溃后的启动
-// 只会看到完整的旧文件或新文件。
-func atomicWriteFile(path string, raw []byte) error {
+// replaceFile 先写同目录下的唯一临时文件，再改名替换：并发的写者不会互相截断，读者只会看到完整的旧文件或新文件。
+// durable 为 true 时改名前后都 fsync，断电后也不会丢掉已确认的内容（就绪队列）；写入围栏丢了只会晚放行，不付这个代价。
+func replaceFile(path string, raw []byte, durable bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -276,8 +281,10 @@ func atomicWriteFile(path string, raw []byte) error {
 	if _, err := tmp.Write(raw); err != nil {
 		return cleanup(err)
 	}
-	if err := tmp.Sync(); err != nil {
-		return cleanup(err)
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			return cleanup(err)
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(name)
@@ -290,6 +297,9 @@ func atomicWriteFile(path string, raw []byte) error {
 	if err := os.Rename(name, path); err != nil {
 		_ = os.Remove(name)
 		return err
+	}
+	if !durable {
+		return nil
 	}
 	if handle, err := os.Open(dir); err == nil {
 		_ = handle.Sync()

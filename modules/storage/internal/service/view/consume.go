@@ -45,7 +45,7 @@ func (s *dynamicConsumerBoundState) get() bool {
 
 func (l liveDeliveryLease) Acquire(ctx context.Context) error {
 	if ctx == nil {
-		return errors.New("storage view delivery context is required")
+		return errors.New("View 投递缺少上下文")
 	}
 	return ctx.Err()
 }
@@ -55,7 +55,7 @@ func (l liveDeliveryLease) Release() {
 
 func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Client, configured ...EventConsumerOptions) (func(), error) {
 	if s == nil {
-		return nil, errors.New("storage view service is nil")
+		return nil, errors.New("View 服务未初始化")
 	}
 	opts := EventConsumerOptions{}
 	if len(configured) > 0 {
@@ -176,7 +176,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		for partitionID, reader := range readers {
 			state, err := reader(stateCtx)
 			if err != nil {
-				return jetstream.ConsumerState{}, fmt.Errorf("consumer partition %q: %w", partitionID, err)
+				return jetstream.ConsumerState{}, fmt.Errorf("读取消费分区 %q 的状态失败：%w", partitionID, err)
 			}
 			if opts.Metrics != nil {
 				opts.Metrics.ObserveConsumerPartitionBacklog(partitionID, state.NumPending, uint64(state.NumAckPending))
@@ -250,18 +250,23 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if opts.Metrics != nil && reader != nil {
 		opts.Metrics.SetConsumerBound(reader())
 	}
-	// 就绪事件主要随投递刷新；发布失败或进入退避后，没有新投递的 View 也要有人重试积压的事件。
+	// 就绪事件主要随投递刷新；发布失败或进入退避后，没有新投递的 View 也要有人重试积压的事件。写入围栏也在这里合并落盘。
 	retryCtx, stopRetry := context.WithCancel(ctx)
 	retryDone := make(chan struct{})
 	go func() {
 		defer close(retryDone)
-		ticker := time.NewTicker(readyRetryBackoff)
-		defer ticker.Stop()
+		retry := time.NewTicker(readyRetryBackoff)
+		defer retry.Stop()
+		persist := time.NewTicker(appliedPersistInterval)
+		defer persist.Stop()
 		for {
 			select {
 			case <-retryCtx.Done():
 				return
-			case <-ticker.C:
+			case <-persist.C:
+				s.persistAppliedFenceLogged()
+				continue
+			case <-retry.C:
 			}
 			if !s.hasPendingReady() {
 				continue
@@ -275,6 +280,8 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		stopRetry()
 		<-retryDone
 		stopAll()
+		// 消费已停止，围栏不会再变：落盘最后一次，正常重启不丢任何更新。
+		s.persistAppliedFenceLogged()
 		if opts.Metrics != nil {
 			opts.Metrics.SetConsumerBound(false)
 		}
@@ -304,13 +311,13 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 
 func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstream.Client, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
 	if s == nil {
-		return nil, errors.New("storage view service is nil")
+		return nil, errors.New("View 服务未初始化")
 	}
 	if client == nil {
-		return nil, errors.New("storage view dynamic consumer EventBus client is required")
+		return nil, errors.New("View 动态消费者缺少 EventBus 客户端")
 	}
 	if spec.ref.spaceID == "" || spec.ref.datasetID == "" || spec.partitionID == "" || spec.durable == "" {
-		return nil, errors.New("storage view dynamic consumer identity is incomplete")
+		return nil, errors.New("View 动态消费者的身份不完整（空间、数据集、分区或 durable 为空）")
 	}
 	partitionClient, err := client.Fork(ctx, "storage-view-"+spec.partitionID)
 	if err != nil {
@@ -362,15 +369,15 @@ func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstr
 
 func (s *Service) registerDynamicConsumerPartition(ref datasetRef, binding *dynamicDatasetConsumerBinding) error {
 	if binding == nil || binding.partitionID == "" || binding.consumerState == nil || binding.consumerIsBound == nil {
-		return errors.New("storage view dynamic consumer binding is incomplete")
+		return errors.New("View 动态消费者的绑定不完整")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if current := s.consumerPartitionByDataset[ref]; current != "" && current != binding.partitionID {
-		return fmt.Errorf("Dataset %s/%s is already assigned to consumer partition %q", ref.spaceID, ref.datasetID, current)
+		return fmt.Errorf("数据集 %s/%s 已分配给消费分区 %q", ref.spaceID, ref.datasetID, current)
 	}
 	if _, exists := s.consumerStates[binding.partitionID]; exists {
-		return fmt.Errorf("storage view consumer partition %q is already registered", binding.partitionID)
+		return fmt.Errorf("View 消费分区 %q 已经登记过", binding.partitionID)
 	}
 	if s.consumerStates == nil {
 		s.consumerStates = make(map[string]func(context.Context) (jetstream.ConsumerState, error))

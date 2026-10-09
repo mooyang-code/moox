@@ -91,7 +91,7 @@ type InventoryReconciler struct {
 // reconciler ready to run alongside the static exact-route consumers.
 func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*InventoryReconciler, error) {
 	if s == nil {
-		return nil, errors.New("storage view service is nil")
+		return nil, errors.New("View 服务未初始化")
 	}
 	if opts.Metadata == nil {
 		return nil, errors.New("storage view inventory metadata client is required")
@@ -100,7 +100,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 		return nil, errors.New("storage view route-ready Primary client is required")
 	}
 	if opts.EventClient == nil {
-		return nil, errors.New("storage view inventory EventBus client is required")
+		return nil, errors.New("View 清单对账缺少 EventBus 客户端")
 	}
 	factor, misc, exact, dynamicExact, allowedSpaces, err := dynamicConsumerTemplate(opts.Consumer)
 	if err != nil {

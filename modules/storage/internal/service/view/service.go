@@ -79,10 +79,12 @@ type Service struct {
 	// readyBackoffUntil 之前不再尝试发布就绪事件（上一次发布因连接问题失败）；readyReconnecting 保证同一时刻只有一个重连。
 	readyBackoffUntil time.Time
 	readyReconnecting atomic.Bool
-	// readyLastIssue 是就绪队列最近一条异常日志，用于去重；appliedPersistMu 串行化写入围栏的落盘。
+	// readyIssues 是就绪队列每类异常最近的一条日志，用于去重；appliedPersistMu 串行化写入围栏的落盘；
+	// appliedDirty 表示写入围栏有尚未落盘的更新（受 appliedFenceMu 保护）。
 	readyLogMu       sync.Mutex
-	readyLastIssue   string
+	readyIssues      map[string]string
 	appliedPersistMu sync.Mutex
+	appliedDirty     bool
 	// seriesBars 是时序 View 每个序列保留的根数，随查询响应告知调用方。
 	seriesBars uint64
 }
@@ -130,7 +132,6 @@ type viewRuntime struct {
 	buildFailed                    bool
 	buildContext                   context.Context
 	lastCapacityMaintenanceBuildAt time.Time
-	applied                        map[appliedKey]uint64
 	// readState is a lock-free copy of what queries need. A delivery holds mu
 	// for its whole index write (seconds for a large factor batch), so queries
 	// that took mu to read the active index waited behind every write.

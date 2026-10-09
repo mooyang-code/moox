@@ -17,12 +17,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type appliedKey struct {
-	indexID string
-	nodeID  string
-	storeID string
-}
-
 type pendingViewReady struct {
 	spaceID  string
 	viewID   string
@@ -31,36 +25,45 @@ type pendingViewReady struct {
 	opts     events.PublishOptions
 }
 
+// NoteAppliedPosition 记录某个索引已写入到的来源位置。只改内存并标脏：后台循环每 appliedPersistInterval 合并落盘一次，
+// 停止消费时再落盘一次。崩溃时丢失最近的更新只会让对应的就绪事件等到同一来源的下一次行写入才放行，不必为每条行事件
+// 同步落盘（那会让所有分区排队等 fsync）。
 func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID string, sequence uint64) {
 	if s == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || strings.TrimSpace(indexID) == "" || strings.TrimSpace(nodeID) == "" || strings.TrimSpace(storeID) == "" || sequence == 0 {
 		return
 	}
 	key := appliedFenceKey{spaceID: spaceID, viewID: viewID, indexID: indexID, nodeID: nodeID, storeID: storeID}
 	s.appliedFenceMu.Lock()
+	defer s.appliedFenceMu.Unlock()
 	if s.appliedFence == nil {
 		s.appliedFence = make(map[appliedFenceKey]uint64)
 	}
 	if sequence > s.appliedFence[key] {
 		s.appliedFence[key] = sequence
+		s.appliedDirty = true
 	}
-	s.appliedFenceMu.Unlock()
-	if err := s.persistAppliedFence(); err != nil {
-		s.readyIssue("View 写入围栏落盘失败：%v", err)
-	}
-	s.mu.RLock()
-	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
-	s.mu.RUnlock()
-	if runtime == nil {
+}
+
+// inheritAppliedFence 在活动索引从 from 切换到 to 时，把 from 的写入围栏并入 to（逐个来源取较大值）。to 的回填包含
+// from 在 to 开始双写之前已写入的全部行，此后的行两边都写，所以 from 已写入到的位置 to 也都有了；不并入的话，行在
+// 切换前写入、周期完成事件在切换后才到的就绪事件，要等同一来源的下一次行写入才放行（日线要等一个交易日）。索引 ID
+// 内含空间与 View，按索引 ID 匹配即可。A/B 槽位名在重建时复用：to 上一代留下的旧键不会大于 from 继承来的值，不影响结果。
+func (s *Service) inheritAppliedFence(from, to string) {
+	if from == "" || to == "" || from == to {
 		return
 	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.applied == nil {
-		runtime.applied = make(map[appliedKey]uint64)
-	}
-	applied := appliedKey{indexID: indexID, nodeID: nodeID, storeID: storeID}
-	if current := runtime.applied[applied]; sequence > current {
-		runtime.applied[applied] = sequence
+	s.appliedFenceMu.Lock()
+	defer s.appliedFenceMu.Unlock()
+	for key, seq := range s.appliedFence {
+		if key.indexID != from {
+			continue
+		}
+		target := key
+		target.indexID = to
+		if seq > s.appliedFence[target] {
+			s.appliedFence[target] = seq
+			s.appliedDirty = true
+		}
 	}
 }
 
@@ -104,7 +107,7 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 	s.pendingReadyMu.Lock()
 	pending := append([]pendingViewReady(nil), s.pendingReady...)
 	s.pendingReadyMu.Unlock()
-	removed := false
+	removed, published := false, false
 	defer func() {
 		if removed {
 			if err := s.persistPendingReady(); err != nil {
@@ -157,32 +160,45 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 			return err
 		}
 		s.removePending(item.opts.EventID)
-		removed = true
+		removed, published = true, true
 	}
-	s.readyRecovered()
+	// 只有本次真正发布成功过、或队列已经空了，才算发布恢复：按空间过滤后一条都没发的刷新证明不了 EventBus 已恢复。
+	if published || !s.hasPendingReady() {
+		s.readyResolved(readyIssuePublish, "View 就绪事件发布已恢复")
+	}
 	return nil
 }
 
-// readyIssue 记录就绪队列的一条异常；与上一条相同则不重复记录，避免持续故障时每 5 秒一行。
-func (s *Service) readyIssue(format string, args ...any) {
+// 就绪队列异常的类别：各自去重、各自恢复，交替出现的两类异常不会互相顶掉去重记录。
+const (
+	readyIssuePublish   = "publish"
+	readyIssueReconnect = "reconnect"
+	readyIssueFence     = "fence"
+)
+
+// readyIssue 记录就绪队列的一条异常；与同类的上一条相同则不重复记录，避免持续故障时每 5 秒一行。
+func (s *Service) readyIssue(kind, format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 	s.readyLogMu.Lock()
-	repeated := message == s.readyLastIssue
-	s.readyLastIssue = message
+	if s.readyIssues == nil {
+		s.readyIssues = make(map[string]string)
+	}
+	repeated := s.readyIssues[kind] == message
+	s.readyIssues[kind] = message
 	s.readyLogMu.Unlock()
 	if !repeated {
 		log.Print(message)
 	}
 }
 
-// readyRecovered 在一次刷新正常完成后记录恢复。
-func (s *Service) readyRecovered() {
+// readyResolved 在一类异常确实恢复后记录一次恢复；这类异常没有发生过时不记。
+func (s *Service) readyResolved(kind, message string) {
 	s.readyLogMu.Lock()
-	had := s.readyLastIssue != ""
-	s.readyLastIssue = ""
+	_, had := s.readyIssues[kind]
+	delete(s.readyIssues, kind)
 	s.readyLogMu.Unlock()
 	if had {
-		log.Print("View 就绪事件发布已恢复")
+		log.Print(message)
 	}
 }
 
@@ -207,7 +223,7 @@ func (s *Service) startReadyBackoff(cause error) {
 	if s.metrics != nil {
 		s.metrics.SetReadyPublishBackoff(true)
 	}
-	s.readyIssue("View 就绪事件发布失败，进入 %s 退避：%v", readyRetryBackoff, cause)
+	s.readyIssue(readyIssuePublish, "View 就绪事件发布失败，进入 %s 退避：%v", readyRetryBackoff, cause)
 	if reconnect == nil || !s.readyReconnecting.CompareAndSwap(false, true) {
 		return
 	}
@@ -216,8 +232,10 @@ func (s *Service) startReadyBackoff(cause error) {
 		ctx, cancel := context.WithTimeout(context.Background(), readyPublishTimeout)
 		defer cancel()
 		if err := reconnect(ctx); err != nil {
-			s.readyIssue("View 就绪事件发布器重连 EventBus 失败：%v", err)
+			s.readyIssue(readyIssueReconnect, "View 就绪事件发布器重连 EventBus 失败：%v", err)
+			return
 		}
+		s.readyResolved(readyIssueReconnect, "View 就绪事件发布器已重新连接 EventBus")
 	}()
 }
 
