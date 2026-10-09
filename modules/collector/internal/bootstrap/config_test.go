@@ -335,3 +335,31 @@ func TestCollectorGatewayIdentityUsesStrictConfiguration(t *testing.T) {
 	_, err = Default().OpenGateway(nil)
 	require.Error(t, err, "an in-memory default must not manufacture a deployment identity")
 }
+
+func TestLoadSubjectSyncFromCollectorConfig(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, "subject_sync: {fetch_timeout: 3m, attributes: [{space_id: crypto, sources: [' BINANCE '], cron: '10 8 * * *', timezone: Asia/Shanghai}]}"))
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Minute, cfg.SubjectSync.FetchTimeout)
+	require.Equal(t, []string{"binance"}, cfg.SubjectSync.Attributes[0].Sources)
+	defaults, err := Load(writeCollectorConfig(t, "{}"))
+	require.NoError(t, err)
+	require.Len(t, defaults.SubjectSync.Attributes, 2)
+	for _, job := range defaults.SubjectSync.Attributes {
+		require.Equal(t, "10 8 * * *", job.Cron)
+		require.Equal(t, "Asia/Shanghai", job.Timezone)
+	}
+	for _, raw := range []string{
+		"subject_sync: {fetch_timeout: 0s}", "subject_sync: {fetch_timeout: 11m}",
+		"subject_sync: {poll_interval: 1m}", "subject_sync: {health_addr: ':11413'}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: bad}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: '0 0 31 2 *'}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: '@every 2m'}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], timezone: Invalid/Zone}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [' ']}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance, BINANCE]}]}",
+		"subject_sync: {attributes: [{space_id: '', sources: [binance]}]}",
+	} {
+		_, err = Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
+	}
+}

@@ -2,6 +2,8 @@ package subjectsync
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,41 +24,46 @@ type AttributeRunner struct {
 	FetchTimeout time.Duration
 	Now          func() time.Time
 	Metrics      *Metrics
-	next         []time.Time
 }
 
-func (r *AttributeRunner) RunOnce(ctx context.Context) {
+func (r *AttributeRunner) RunOnce(ctx context.Context) error {
 	now := time.Now().UTC()
 	if r.Now != nil {
 		now = r.Now().UTC()
 	}
-	if len(r.next) != len(r.Jobs) {
-		r.next = make([]time.Time, len(r.Jobs))
-	}
-	for i, job := range r.Jobs {
+	var failures error
+	for _, job := range r.Jobs {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
 		schedule, err := cron.ParseStandard(job.Cron)
 		if err != nil {
 			log.ErrorContextf(ctx, "attribute job %s cron: %v", job.SpaceID, err)
+			failures = errors.Join(failures, err)
 			continue
 		}
 		loc, err := time.LoadLocation(job.Timezone)
 		if err != nil {
 			log.ErrorContextf(ctx, "attribute job %s timezone: %v", job.SpaceID, err)
+			failures = errors.Join(failures, err)
 			continue
 		}
-		if r.next[i].IsZero() {
-			r.next[i] = schedule.Next(now.In(loc))
+		// Adjacent windows (trigger - 1m, trigger] do not overlap. Scheduling
+		// depends on the job timezone, independently of process uptime.
+		next := schedule.Next(now.Add(-time.Minute).In(loc))
+		if next.IsZero() {
+			failures = errors.Join(failures, fmt.Errorf("attribute job %s has no scheduled occurrence", job.SpaceID))
 			continue
 		}
-		if now.Before(r.next[i]) {
+		if next.After(now) {
 			continue
 		}
-		r.runJob(ctx, job)
-		r.next[i] = schedule.Next(now.In(loc))
+		failures = errors.Join(failures, r.runJob(ctx, job))
 	}
+	return failures
 }
 
-func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
+func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 	instrumentType := job.InstrumentType
 	if instrumentType == "" {
 		if job.SpaceID == "crypto" {
@@ -77,7 +84,7 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
 		if r.Metrics != nil {
 			r.Metrics.observeAttributeFailure(job.SpaceID)
 		}
-		return
+		return err
 	}
 	items := make([]*pb.SubjectAttributes, 0, len(instruments))
 	for _, instrument := range instruments {
@@ -88,7 +95,9 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
 		if r.Metrics != nil {
 			r.Metrics.observeAttributeFailure(job.SpaceID)
 		}
+		return fmt.Errorf("update subject attributes %s: %w", job.SpaceID, err)
 	}
+	return nil
 }
 
 func attributes(spaceID string, item marketdata.Instrument) map[string]string {

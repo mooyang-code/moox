@@ -27,6 +27,9 @@ type Runtime struct {
 
 func newRuntime(ctx context.Context, s *server.Server) *Runtime {
 	ctx, cancel := context.WithCancel(ctx)
+	if s != nil {
+		s.RegisterOnShutdown(cancel)
+	}
 	return &Runtime{Server: s, ctx: ctx, cancel: cancel}
 }
 
@@ -50,6 +53,33 @@ func (r *Runtime) join(done <-chan struct{}, err error) error {
 		go func() { defer r.workers.Done(); <-done }()
 	}
 	return nil
+}
+
+// run tracks a synchronous timer callback and links it to process shutdown.
+func (r *Runtime) run(ctx context.Context, work func(context.Context) error) error {
+	r.mu.Lock()
+	if r.closing || r.ctx.Err() != nil {
+		r.mu.Unlock()
+		return context.Canceled
+	}
+	r.workers.Add(1)
+	r.mu.Unlock()
+	defer r.workers.Done()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(r.ctx, cancel)
+	defer stop()
+	if r.ctx.Err() != nil {
+		cancel()
+	}
+	if err := runCtx.Err(); err != nil {
+		return err
+	}
+	err := work(runCtx)
+	if err == nil {
+		err = runCtx.Err()
+	}
+	return err
 }
 
 func (r *Runtime) Close() error {

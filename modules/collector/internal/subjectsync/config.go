@@ -1,21 +1,15 @@
 package subjectsync
 
 import (
-	"bytes"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/robfig/cron"
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	PollInterval time.Duration  `yaml:"poll_interval"`
 	FetchTimeout time.Duration  `yaml:"fetch_timeout"`
-	HealthAddr   string         `yaml:"health_addr"`
 	Attributes   []AttributeJob `yaml:"attributes"`
 }
 
@@ -27,33 +21,24 @@ type AttributeJob struct {
 	Timezone       string   `yaml:"timezone"`
 }
 
-func LoadConfig(path string) (Config, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, err
+func DefaultConfig() Config {
+	return Config{FetchTimeout: 2 * time.Minute, Attributes: []AttributeJob{
+		{SpaceID: "stockcn", Sources: []string{"eastmoney"}, InstrumentType: "equity", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"},
+		{SpaceID: "crypto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"},
+	}}
+}
+
+// Validate normalizes the subject_sync section of the Collector configuration.
+func (c *Config) Validate() error {
+	if c.FetchTimeout <= 0 || c.FetchTimeout > 10*time.Minute {
+		return fmt.Errorf("fetch_timeout must be positive and at most 10m")
 	}
-	var cfg Config
-	decoder := yaml.NewDecoder(bytes.NewReader(raw))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&cfg); err != nil {
-		return Config{}, fmt.Errorf("parse %s: %w", path, err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return Config{}, fmt.Errorf("subject config must contain exactly one YAML document")
-	}
-	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = time.Minute
-	}
-	if cfg.FetchTimeout <= 0 {
-		cfg.FetchTimeout = 2 * time.Minute
-	}
-	if cfg.HealthAddr == "" {
-		cfg.HealthAddr = "127.0.0.1:11413"
-	}
-	for i := range cfg.Attributes {
-		job := &cfg.Attributes[i]
+	for i := range c.Attributes {
+		job := &c.Attributes[i]
 		job.SpaceID = strings.TrimSpace(job.SpaceID)
+		job.Cron = strings.TrimSpace(job.Cron)
+		job.Timezone = strings.TrimSpace(job.Timezone)
+		job.InstrumentType = strings.ToLower(strings.TrimSpace(job.InstrumentType))
 		if job.Timezone == "" {
 			job.Timezone = "UTC"
 		}
@@ -61,14 +46,30 @@ func LoadConfig(path string) (Config, error) {
 			job.Cron = "0 0 * * *"
 		}
 		if job.SpaceID == "" || len(job.Sources) == 0 {
-			return Config{}, fmt.Errorf("attributes[%d]: space_id and sources are required", i)
+			return fmt.Errorf("attributes[%d]: space_id and sources are required", i)
 		}
-		if _, err := cron.ParseStandard(job.Cron); err != nil {
-			return Config{}, fmt.Errorf("attributes[%d].cron: %w", i, err)
+		seen := map[string]bool{}
+		for j, source := range job.Sources {
+			source = strings.ToLower(strings.TrimSpace(source))
+			if source == "" || seen[source] {
+				return fmt.Errorf("attributes[%d].sources: empty or duplicate source", i)
+			}
+			seen[source], job.Sources[j] = true, source
 		}
-		if _, err := time.LoadLocation(job.Timezone); err != nil {
-			return Config{}, fmt.Errorf("attributes[%d].timezone: %w", i, err)
+		if strings.HasPrefix(job.Cron, "@every") {
+			return fmt.Errorf("attributes[%d].cron must define a calendar schedule", i)
+		}
+		schedule, err := cron.ParseStandard(job.Cron)
+		if err != nil {
+			return fmt.Errorf("attributes[%d].cron: %w", i, err)
+		}
+		loc, err := time.LoadLocation(job.Timezone)
+		if err != nil {
+			return fmt.Errorf("attributes[%d].timezone: %w", i, err)
+		}
+		if schedule.Next(time.Now().In(loc)).IsZero() {
+			return fmt.Errorf("attributes[%d].cron has no scheduled occurrence", i)
 		}
 	}
-	return cfg, nil
+	return nil
 }

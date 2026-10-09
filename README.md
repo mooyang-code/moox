@@ -15,7 +15,7 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 | [EventBus](docs/模块/事件总线.md) | `moox-eventbus` | 内嵌 NATS JetStream，模块间的异步事件 |
 | [Storage](docs/模块/存储.md) | `moox-storage-{primary,node,view}` | 元数据、字段级事实存储、可重建 View |
 | [Access](modules/access/README.md) | `moox-access` | 外部签名 tRPC 接入、逐方法权限与防重放，经主机网关调用服务 |
-| [Collector](docs/模块/采集.md) | `moox-collector`、`moox-collector-subject`、SCF 函数 | 采集任务、周期批次、云函数调度与对账、标的同步 |
+| [Collector](docs/模块/采集.md) | `moox-collector`、SCF 函数 | 采集任务、周期批次、云函数调度与对账、标的同步 |
 | [CloudNode](docs/模块/云节点.md) | `moox-cloudnode` | 云账户、SCF 节点、代码包与发布 |
 | [Factor](docs/模块/因子.md) | `moox-factor-mgr`、`moox-factor-engine` | 因子定义与计算任务、Python 因子增量计算与补算 |
 | [Strategy](docs/模块/策略.md) | `moox-strategy` | 声明式策略 DSL，按周期产出目标权重 |

@@ -121,6 +121,7 @@ require (
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats-server/v2 v2.11.17 // indirect; test-only embedded broker
 	github.com/nats-io/nats.go v1.51.0
@@ -182,3 +183,5 @@ replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
 
 replace github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen => ../egressproxy/proto/egressgen
+
+replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob

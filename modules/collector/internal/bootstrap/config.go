@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security/domainpolicy"
@@ -33,6 +34,7 @@ type Config struct {
 	Health              HealthConfig                     `yaml:"health"`
 	DNS                 DNSConfig                        `yaml:"dns"`
 	EgressProxy         EgressProxyConfig                `yaml:"egress_proxy"`
+	SubjectSync         subjectsync.Config               `yaml:"subject_sync"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -183,6 +185,9 @@ func Load(path string) (*Config, error) {
 	cfg.applyEnv()
 	if err := cfg.validateEgressProxy(); err != nil {
 		return nil, err
+	}
+	if err := cfg.SubjectSync.Validate(); err != nil {
+		return nil, fmt.Errorf("subject_sync: %w", err)
 	}
 	if err := cfg.validateSCFAccess(); err != nil {
 		return nil, err
@@ -337,8 +342,9 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		Storage:   StorageConfig{ResultDataNodeID: "storage-node-0"},
-		SCFAccess: gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
+		Storage:     StorageConfig{ResultDataNodeID: "storage-node-0"},
+		SubjectSync: subjectsync.DefaultConfig(),
+		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,

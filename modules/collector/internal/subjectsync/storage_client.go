@@ -27,7 +27,7 @@ type metadataClient interface {
 	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq, ...client.Option) (*storagepb.UpdateDataSourceRsp, error)
 }
 
-// StorageClient is the narrow Storage Metadata client used by the standalone
+// StorageClient is the narrow Storage Metadata client used by Collector's
 // subject synchronizer. Keeping the RPC surface small makes the two schedulers
 // independently testable and prevents accidental writes outside metadata.
 type StorageClient struct {

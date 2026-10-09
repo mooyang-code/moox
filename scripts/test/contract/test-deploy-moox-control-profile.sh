@@ -92,7 +92,7 @@ ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 for binary in \
   moox-admin moox-cli moox-host-gateway moox-host-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-subject \
+  moox-collector moox-collector-cli \
   moox-factor-mgr moox-factor-mgr-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli moox-host-agent; do
@@ -132,7 +132,7 @@ tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in \
   moox-admin moox-admin-cli moox-cli moox-host-gateway moox-host-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-subject \
+  moox-collector moox-collector-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli moox-host-agent; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }
@@ -163,6 +163,16 @@ grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/se
 [[ ! -e "${TMP_ROOT}/unpacked/storage" ]]
 [[ -d "${TMP_ROOT}/unpacked/cloudnode" ]]
 [[ -d "${TMP_ROOT}/unpacked/collector" ]]
+[[ ! -e "${TMP_ROOT}/unpacked/bin/moox-collector-subject" ]]
+[[ ! -e "${TMP_ROOT}/unpacked/collector/config/subject.yaml" ]]
+grep -Fq 'subject_sync:' "${TMP_ROOT}/unpacked/collector/config/app.yaml"
+grep -Fq 'trpc.moox.collector.subject_tags.timer' "${TMP_ROOT}/unpacked/collector/config/trpc_go.yaml"
+grep -Fq 'trpc.moox.collector.subject_attributes.timer' "${TMP_ROOT}/unpacked/collector/config/trpc_go.yaml"
+if grep -Eq 'collector-subject|start_collector_subject|11413/(readyz|healthz)' \
+  "${TMP_ROOT}/unpacked/start.sh" "${TMP_ROOT}/unpacked/stop.sh" "${TMP_ROOT}/unpacked/healthcheck.sh"; then
+  echo 'retired subject process remains in lifecycle scripts' >&2
+  exit 1
+fi
 [[ -d "${TMP_ROOT}/unpacked/strategy" ]]
 [[ -d "${TMP_ROOT}/unpacked/trade" ]]
 grep -Fq 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-1}}"' "${TMP_ROOT}/unpacked/start.sh"
@@ -190,7 +200,7 @@ grep -Fq 'stop_service "trade"' "${TMP_ROOT}/unpacked/stop.sh"
 grep -q '^node_batch:' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q '  batch_size: 3' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q '  poll_interval: 500ms' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
-grep -q 'native_addr: 0.0.0.0:11003' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
+grep -q 'remote_addr: 0.0.0.0:11003' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
 grep -q 'health_addr: 0.0.0.0:11012' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
 sed -n '/name: trpc.moox.monitor.Health/,/name:/p' "${TMP_ROOT}/unpacked/monitor/config/trpc_go.yaml" |
   grep -q 'ip: 0.0.0.0'

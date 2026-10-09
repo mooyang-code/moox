@@ -70,6 +70,20 @@ egress_proxy:
     request_timeout: 3s
     cache_ttl: 5m
 
+subject_sync:
+  fetch_timeout: 2m
+  attributes:
+    - space_id: stockcn
+      sources: [eastmoney]
+      instrument_type: equity
+      cron: "10 8 * * *"
+      timezone: Asia/Shanghai
+    - space_id: crypto
+      sources: [binance]
+      instrument_type: spot
+      cron: "10 8 * * *"
+      timezone: Asia/Shanghai
+
 # 外部 SCF 身份由 Admin 分配；按地域的地址由发布器根据 VPC 路由生成。
 scf_access:
   access_address: access.example.test:11004

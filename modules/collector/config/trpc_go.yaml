@@ -52,6 +52,16 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.collector.subject_tags.timer
+      port: 11416
+      network: "30 * * * * *"
+      protocol: timer
+      timeout: 600000
+    - name: trpc.moox.collector.subject_attributes.timer
+      port: 11417
+      network: "45 * * * * *"
+      protocol: timer
+      timeout: 600000
 plugins:
   metrics:
     prometheus:

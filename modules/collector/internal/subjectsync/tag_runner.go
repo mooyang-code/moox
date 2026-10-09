@@ -2,6 +2,7 @@ package subjectsync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -66,17 +67,24 @@ func tagDue(tag *pb.Tag, now time.Time) (bool, error) {
 	return !schedule.Next(lastRun.In(loc)).After(now), nil
 }
 
-func (r *TagRunner) RunOnce(ctx context.Context) {
+func (r *TagRunner) RunOnce(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tags, err := r.Store.ListTags(ctx)
 	if err != nil {
 		log.ErrorContextf(ctx, "list tags: %v", err)
-		return
+		return err
 	}
 	now := time.Now().UTC()
 	if r.Now != nil {
 		now = r.Now().UTC()
 	}
+	var failures error
 	for _, tag := range tags {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
 		if r.Metrics != nil {
 			r.Metrics.observeTagInventory(tag)
 		}
@@ -86,15 +94,17 @@ func (r *TagRunner) RunOnce(ctx context.Context) {
 		due, err := tagDue(tag, now)
 		if err != nil {
 			log.ErrorContextf(ctx, "tag %s/%s schedule: %v", tag.GetSpaceId(), tag.GetTagId(), err)
+			failures = errors.Join(failures, err)
 			continue
 		}
 		if due {
-			r.runTag(ctx, tag, now)
+			failures = errors.Join(failures, r.runTag(ctx, tag, now))
 		}
 	}
+	return failures
 }
 
-func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) {
+func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) error {
 	timeout := r.FetchTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -117,12 +127,14 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) {
 		}
 		if reportErr := r.Store.ReportTagRunFailure(ctx, tag.GetSpaceId(), tag.GetTagId(), runAt, err.Error()); reportErr != nil {
 			log.ErrorContextf(ctx, "report tag %s/%s failure: %v", tag.GetSpaceId(), tag.GetTagId(), reportErr)
+			err = errors.Join(err, reportErr)
 		}
-		return
+		return err
 	}
 	if r.Metrics != nil {
 		r.Metrics.observeTagSuccess(tag, runAt)
 	}
+	return nil
 }
 
 func snapshotItem(tag *pb.Tag, item marketdata.Instrument) *pb.TagSnapshotItem {
