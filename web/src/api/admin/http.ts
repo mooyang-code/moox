@@ -19,6 +19,14 @@ const adminClient = axios.create({
   headers: { "Content-Type": "application/json" }
 });
 const reportedErrors = new WeakSet<object>();
+// serverClockOffset 是服务端时钟减浏览器时钟（毫秒），取自最近一次响应的 Date 头；还没有读到时为 null。
+let serverClockOffset: number | null = null;
+
+/** 按最近一次响应的 Date 头换算的服务端当前时间（毫秒）；还没有读到 Date 头时返回 null。浏览器时钟可能与服务端不一致，
+ *  比较服务端给出的时间戳时用它。 */
+export function serverNow(): number | null {
+  return serverClockOffset === null ? null : Date.now() + serverClockOffset;
+}
 
 export class ControlRequestError<T = unknown> extends Error {
   constructor(
@@ -70,6 +78,8 @@ installSpaceAwareSignedClient(adminClient);
 
 adminClient.interceptors.response.use(
   rsp => {
+    const date = Date.parse(String(rsp.headers?.date ?? ""));
+    if (Number.isFinite(date)) serverClockOffset = date - Date.now();
     // 框架错误：HTTP 200 但 trpc-ret != 0，body 为空，错误信息在 header。
     const trpcRet = rsp.headers?.["trpc-ret"] ?? rsp.headers?.["Trpc-Ret"];
     if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== "0") {

@@ -9,6 +9,10 @@ const api = vi.hoisted(() => ({
   startReplay: vi.fn(),
   cancelReplay: vi.fn(),
   listViews: vi.fn(),
+  loadAllStrategies: vi.fn(),
+  reportControlError: vi.fn(),
+  // serverNow 是请求层按 Date 头换算的服务端时间；null 表示还没有读到。
+  serverNow: null as number | null,
   chartSpecs: [] as any[],
   space: null as null | { selectedSpaceId: string }
 }));
@@ -20,11 +24,13 @@ vi.mock("@/api/strategy", () => ({
   cancelReplay: api.cancelReplay
 }));
 vi.mock("@/api/storage/metadata", () => ({ listViews: api.listViews }));
+vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("vue-router", () => ({ useRoute: () => ({ query: {} }) }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({
-  useStrategyStore: () => reactive({ strategies: [{ strategy_id: "s1", name: "动量" }], loadAllStrategies: vi.fn() })
+  useStrategyStore: () =>
+    reactive({ strategies: [{ strategy_id: "s1", name: "动量" }], loadAllStrategies: api.loadAllStrategies })
 }));
 vi.mock("@visactor/vchart", () => ({
   default: class {
@@ -37,6 +43,7 @@ vi.mock("@visactor/vchart", () => ({
   }
 }));
 
+import { Message } from "@arco-design/web-vue";
 import ReplayPage from "./index.vue";
 
 function replay(id: string, status: string, metrics = "{}", extra: Record<string, unknown> = {}) {
@@ -108,11 +115,11 @@ const stubs = {
   "a-list-item": { template: '<div class="list-item"><slot /></div>' },
   "a-popconfirm": { emits: ["ok"], template: '<div class="confirm" @click="$emit(\'ok\')"><slot /></div>' },
   "a-button": { template: "<button><slot /></button>" },
-  // 表格只渲染展开行，用来检查每期明细。
+  // 表格只渲染展开行，用来检查每期明细；data-loading 反映加载遮罩。
   "a-table": {
-    props: ["data"],
+    props: ["data", "loading"],
     template:
-      '<div class="table"><div v-for="row in data || []" :key="row.bar_end_time || row.id" class="expanded"><slot name="expand-row" :record="row" /></div></div>'
+      '<div class="table" :data-loading="loading ? \'true\' : \'false\'"><div v-for="row in data || []" :key="row.bar_end_time || row.id" class="expanded"><slot name="expand-row" :record="row" /></div></div>'
   },
   "a-spin": { props: ["tip"], template: '<div class="spin">{{ tip }}</div>' },
   "a-alert": { template: '<div class="alert"><slot /></div>' }
@@ -165,8 +172,20 @@ describe("strategy replay page", () => {
     vi.useFakeTimers();
     api.chartSpecs.length = 0;
     api.space = reactive({ selectedSpaceId: "crypto" });
-    for (const fn of [api.getReplay, api.listReplays, api.listReplayBars, api.startReplay, api.cancelReplay, api.listViews])
+    for (const fn of [
+      api.getReplay,
+      api.listReplays,
+      api.listReplayBars,
+      api.startReplay,
+      api.cancelReplay,
+      api.listViews,
+      api.loadAllStrategies,
+      api.reportControlError
+    ])
       fn.mockReset();
+    vi.mocked(Message.error).mockClear();
+    api.serverNow = null;
+    api.loadAllStrategies.mockResolvedValue(undefined);
     api.listViews.mockResolvedValue({ views: [], page_result: { has_more: false } });
     api.listReplayBars.mockResolvedValue(bars);
   });
@@ -559,5 +578,223 @@ describe("strategy replay page", () => {
     await flushPromises();
     expect(listText(wrapper)).toContain("view_stock");
     expect(api.getReplay.mock.calls.at(-1)?.[0]).toBe("s1");
+  });
+
+  it("waits after its own cancel even when the browser clock is far ahead", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    api.cancelReplay.mockResolvedValue({});
+    const wrapper = mountPage();
+    await flushPromises();
+    // 浏览器比服务端快 10 分钟：取消时间在浏览器看来是 10 分钟前，但这是本页刚取消的。
+    const cancelledAt = new Date(Date.now() - 600_000).toISOString();
+    api.getReplay.mockResolvedValue(replay("r1", "cancelled", "{}", { updated_at: cancelledAt }));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled")], page: { total: 1 } });
+    await wrapper.find(".confirm").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("正在等待写入");
+  });
+
+  it("waits when polling observes the transition to cancelled regardless of clocks", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    api.getReplay.mockResolvedValue(
+      replay("r1", "cancelled", "{}", { updated_at: new Date(Date.now() - 600_000).toISOString() })
+    );
+    await pollOnce();
+    expect(wrapper.text()).toContain("正在等待写入");
+  });
+
+  it("judges a directly opened cancelled replay by server time", async () => {
+    const cancelledAt = Date.now() - 600_000;
+    const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });
+    api.listReplays.mockResolvedValue({ items: [cancelled], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(cancelled);
+    // 服务端看来 30 秒前刚取消（浏览器时钟快 10 分钟）：等待。
+    api.serverNow = cancelledAt + 30_000;
+    let wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain("正在等待写入");
+    wrapper.unmount();
+    // 服务端看来 10 分钟前取消：不等待。
+    api.serverNow = cancelledAt + 600_000;
+    wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("正在等待写入");
+    wrapper.unmount();
+    // 读不到服务端时间：不等待。
+    api.serverNow = null;
+    wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("正在等待写入");
+  });
+
+  it("keeps the user's selection made while a started replay is being listed", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
+    api.startReplay.mockResolvedValue({ replay: replay("r9", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.strategy_id = "s1";
+    vm.form.view_id = "view_a";
+    await nextTick();
+    const list = deferred<unknown>();
+    api.listReplays.mockImplementationOnce(() => list.promise);
+    await wrapper
+      .findAll("button")
+      .find(button => button.text() === "开始回放")!
+      .trigger("click");
+    await flushPromises();
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    list.resolve({ items: [replay("r9", "pending"), replay("r1", "done"), replay("r2", "done")], page: { total: 3 } });
+    await flushPromises();
+    expect(vm.selectedId).toBe("r2");
+  });
+
+  it("keeps the table page when reloading after a cancel", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    api.cancelReplay.mockResolvedValue({});
+    const wrapper = mountPage();
+    await flushPromises();
+    (wrapper.vm as any).changeTablePage(3);
+    await flushPromises();
+    api.getReplay.mockResolvedValue(justCancelled("r1"));
+    api.listReplayBars.mockClear();
+    await wrapper.find(".confirm").trigger("click");
+    await flushPromises();
+    const tableCalls = api.listReplayBars.mock.calls.filter(call => !call[1]?.brief);
+    expect(tableCalls.at(-1)?.[1]).toMatchObject({ page: 3 });
+    expect((wrapper.vm as any).tablePage).toBe(3);
+  });
+
+  it("reports a failed cancel once and not after a space switch", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const failure = new Error("网络错误");
+    api.cancelReplay.mockRejectedValueOnce(failure);
+    await wrapper.find(".confirm").trigger("click");
+    await flushPromises();
+    expect(api.reportControlError).toHaveBeenCalledTimes(1);
+    expect(api.reportControlError).toHaveBeenCalledWith(failure);
+    expect(Message.error).not.toHaveBeenCalled();
+    const pending = deferred<unknown>();
+    api.cancelReplay.mockImplementationOnce(() => pending.promise);
+    await wrapper.find(".confirm").trigger("click");
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.space!.selectedSpaceId = "stock";
+    await nextTick();
+    pending.reject(new Error("旧空间的取消失败"));
+    await flushPromises();
+    expect(api.reportControlError).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops in-flight requests after unmount", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    const pending = deferred<unknown>();
+    api.getReplay.mockImplementation(() => pending.promise);
+    const wrapper = mountPage();
+    await flushPromises();
+    wrapper.unmount();
+    api.listReplayBars.mockClear();
+    pending.resolve(replay("r1", "done"));
+    await flushPromises();
+    expect(api.listReplayBars).not.toHaveBeenCalled();
+    expect(api.chartSpecs.length).toBe(0);
+  });
+
+  it("clears the detail error when a new selection starts", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.getReplay.mockRejectedValueOnce(new Error("读取失败"));
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain("回放详情加载失败：读取失败");
+    const slow = deferred<unknown>();
+    api.getReplay.mockImplementationOnce(() => slow.promise);
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("回放详情加载失败");
+    slow.resolve(replay("r2", "done"));
+    await flushPromises();
+  });
+
+  it("keeps the definition list error across space switches", async () => {
+    api.loadAllStrategies.mockRejectedValueOnce(new Error("定义服务不可用"));
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain("策略定义加载失败：定义服务不可用");
+    api.space!.selectedSpaceId = "stock";
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.text()).toContain("策略定义加载失败：定义服务不可用");
+  });
+
+  it("does not show the table mask while polling", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.find(".table").attributes("data-loading")).toBe("false");
+    const slow = deferred<unknown>();
+    api.listReplayBars.mockImplementation((_id: string, params: any) => (params?.brief ? Promise.resolve(bars) : slow.promise));
+    await pollOnce();
+    expect(api.listReplayBars.mock.calls.some(call => !call[1]?.brief)).toBe(true);
+    expect(wrapper.find(".table").attributes("data-loading")).toBe("false");
+    slow.resolve(bars);
+    await flushPromises();
+  });
+
+  it("ends the list loading state before the automatic selection finishes", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    const slow = deferred<unknown>();
+    api.getReplay.mockImplementation(() => slow.promise);
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain("正在加载回放详情");
+    expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).not.toBe("true");
+    slow.resolve(replay("r1", "done"));
+    await flushPromises();
+  });
+
+  it("stops waiting for partial metrics when the space changes", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    api.cancelReplay.mockResolvedValue({});
+    const wrapper = mountPage();
+    await flushPromises();
+    api.getReplay.mockResolvedValue(justCancelled("r1"));
+    await wrapper.find(".confirm").trigger("click");
+    await flushPromises();
+    expect((wrapper.vm as any).awaitingMetrics).not.toBeNull();
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.space!.selectedSpaceId = "stock";
+    await nextTick();
+    await flushPromises();
+    expect((wrapper.vm as any).awaitingMetrics).toBeNull();
+  });
+
+  it("keeps the table mask until the latest manual table load finishes", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    api.listReplayBars.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    (wrapper.vm as any).changeTablePage(2);
+    (wrapper.vm as any).changeTablePage(3);
+    await nextTick();
+    first.resolve(bars);
+    await flushPromises();
+    expect(wrapper.find(".table").attributes("data-loading")).toBe("true");
+    second.resolve(bars);
+    await flushPromises();
+    expect(wrapper.find(".table").attributes("data-loading")).toBe("false");
   });
 });

@@ -64,6 +64,7 @@
                 <a-input v-model="form.start" aria-label="开始时间（UTC）" placeholder="开始，例如 2026-09-01 00:00" />
                 <a-input v-model="form.end" aria-label="结束时间（UTC）" placeholder="结束，例如 2026-10-01 00:00" />
               </div>
+              <div class="muted range-hint">A 股日线 View 按上海日期回放：起止各取所在的上海日期，含起始日期、不含结束日期。</div>
               <a-space class="presets" :size="4">
                 <a-button size="mini" @click="applyPreset(1)">近 1 天</a-button>
                 <a-button size="mini" @click="applyPreset(7)">近 7 天</a-button>
@@ -83,7 +84,7 @@
                   type="button"
                   class="replay-row"
                   :aria-current="item.replay_id === selectedId ? 'true' : undefined"
-                  @click="select(item.replay_id)"
+                  @click="pick(item.replay_id)"
                 >
                   <span class="replay-line">
                     <a-tag size="small" :color="replayStatusColor(item.status)">{{ replayStatusLabel(item.status) }}</a-tag>
@@ -313,6 +314,7 @@ import { useRoute } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
 import type { InstrumentTarget, Replay, ReplayBar, Strategy } from "@/api/strategy-types";
+import { reportControlError, serverNow } from "@/api/admin/http";
 import { listViews } from "@/api/storage/metadata";
 import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -405,6 +407,8 @@ let tableLoadingRequest = 0;
 let listSeq = 0;
 let listApplied = 0;
 let listLoadingSeq = 0;
+// userPicks 是用户在列表里手动选择的次数：发起回放等待列表期间用户另选过，就不再切到新回放。
+let userPicks = 0;
 
 const metrics = computed(() => parseMetrics(selected.value?.metrics_json));
 const partialMetrics = computed(() => selected.value?.status === "cancelled" || selected.value?.status === "failed");
@@ -559,22 +563,38 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
 }
 
 /**
- * 按观察到的状态决定是否等待部分指标：已取消、已经有周期、还没有指标、并且是刚取消的（2 分钟内）回放，
- * 执行器读完当前分段才写入指标，继续轮询等它。无论是本页、别的标签页还是 CLI 取消的都一样。
+ * 是否等待部分指标：已取消、已经有周期、还没有指标的回放，执行器读完当前分段才写入指标，继续轮询等它（最多 2 分钟，
+ * 按浏览器时钟计时）。observedCancel 表示亲眼看到它被取消（本页取消成功，或轮询看到从排队、运行中变为已取消），
+ * 直接等待；直接打开一个已取消的回放时才判断它是不是刚取消的，并且用服务端时间比较（浏览器时钟可能不准），
+ * 读不到服务端时间就不等待。
  */
-function maybeAwaitMetrics(replay: Replay) {
+function maybeAwaitMetrics(replay: Replay, observedCancel: boolean) {
   if (replay.status !== "cancelled" || parseMetrics(replay.metrics_json) || !series.value.length) return;
   if (awaitingMetrics.value?.replayId === replay.replay_id) return;
-  const updated = Date.parse(replay.updated_at);
-  if (!Number.isFinite(updated) || Date.now() - updated > 120_000) return;
+  if (!observedCancel) {
+    const now = serverNow();
+    const updated = Date.parse(replay.updated_at);
+    if (now === null || !Number.isFinite(updated) || now - updated > 120_000) return;
+  }
   clock.value = Date.now();
   awaitingMetrics.value = { replayId: replay.replay_id, until: clock.value + 120_000 };
 }
 
-async function select(replayId: string) {
+/** 用户在列表里选择一个回放。 */
+function pick(replayId: string) {
+  userPicks += 1;
+  void select(replayId);
+}
+
+/**
+ * 选择并加载一个回放。observedCancel 见 maybeAwaitMetrics；keepTablePage 为 true 且重读的是同一个回放时，表格停在
+ * 当前页（取消后的整体重读）。
+ */
+async function select(replayId: string, options: { observedCancel?: boolean; keepTablePage?: boolean } = {}) {
   const requestId = ++selectRequest;
   const gen = generation;
   const isCurrent = () => requestId === selectRequest && gen === generation;
+  const page = options.keepTablePage && selectedId.value === replayId ? tablePage.value : 1;
   // 立即清掉上一个回放的详情与错误：加载期间不能显示旧回放，取消等操作也不能作用在旧回放上。
   selectedId.value = replayId;
   selected.value = null;
@@ -582,7 +602,7 @@ async function select(replayId: string) {
   series.value = [];
   tableRows.value = [];
   tableTotal.value = 0;
-  tablePage.value = 1;
+  tablePage.value = page;
   errors.table = "";
   chart?.release();
   chart = null;
@@ -596,7 +616,7 @@ async function select(replayId: string) {
     series.value = all;
     errors.detail = "";
     pollFailures.value = 0;
-    maybeAwaitMetrics(replay);
+    maybeAwaitMetrics(replay, Boolean(options.observedCancel));
     detailLoading.value = false;
     await Promise.all([renderChart(true), loadTablePage(replayId, isCurrent)]);
   } catch (err) {
@@ -638,7 +658,7 @@ async function refreshSelected() {
     series.value = all;
     await renderChart(false);
   }
-  maybeAwaitMetrics(replay);
+  maybeAwaitMetrics(replay, current.status === "pending" || current.status === "running");
   const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
   if (tablePage.value >= lastPage - 1 || replay.status !== current.status) await loadTablePage(replayId, isCurrent, true);
 }
@@ -708,6 +728,7 @@ async function start() {
     return;
   }
   const gen = generation;
+  const picks = userPicks;
   starting.value = true;
   try {
     const started = await startReplay({
@@ -723,7 +744,8 @@ async function start() {
     );
     replayPage.value = 1;
     await loadReplays();
-    if (gen !== generation) return;
+    // 等待期间用户在列表里另选了回放：尊重用户的选择，不再切到新回放。
+    if (gen !== generation || userPicks !== picks) return;
     await select(started.replay.replay_id);
   } catch (err) {
     if (gen === generation) errors.start = `回放发起失败：${err instanceof Error ? err.message : "未知错误"}`;
@@ -742,10 +764,12 @@ async function cancel() {
     await cancelReplay(replayId);
     if (gen !== generation) return;
     await loadReplays();
-    // 取消后整体重读：补上取消前写入的最后几根；重读后按观察到的状态决定是否等待部分指标。
-    if (gen === generation && selectedId.value === replayId) await select(replayId);
+    // 取消后整体重读：补上取消前写入的最后几根，表格停在当前页；本页取消成功即进入等待部分指标。
+    if (gen === generation && selectedId.value === replayId)
+      await select(replayId, { observedCancel: true, keepTablePage: true });
   } catch (err) {
-    Message.error(err instanceof Error ? err.message : "取消失败");
+    // 请求层已提示过的错误不再重复；切换空间后，旧空间的取消失败不再提示。
+    if (gen === generation) reportControlError(err);
   } finally {
     cancelling.value = false;
   }
@@ -817,7 +841,12 @@ watch(
 );
 onBeforeUnmount(() => {
   if (poll) clearInterval(poll);
+  // 作废进行中的请求：返回后不再翻页读取、不再渲染图表。
+  generation += 1;
+  selectRequest += 1;
+  tableRequest += 1;
   chart?.release();
+  chart = null;
 });
 </script>
 
@@ -854,6 +883,10 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 6px;
   width: 100%;
+}
+.range-hint {
+  margin-top: 6px;
+  font-size: 12px;
 }
 .presets {
   margin-top: 6px;
