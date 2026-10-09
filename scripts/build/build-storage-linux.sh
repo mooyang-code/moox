@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${CONFIG:-${ROOT}/moox.toml}"
+CONFIG_ROOT="${MOOX_CONFIG_ROOT:-${ROOT}}"
 REMOTE_ROOT="${REMOTE_ROOT:-moox-build}"
 MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"
 BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
@@ -28,7 +29,7 @@ command -v rsync >/dev/null 2>&1 || die "rsync is required"
 command -v scp >/dev/null 2>&1 || die "scp is required"
 command -v ssh >/dev/null 2>&1 || die "ssh is required"
 
-hosts_json="$(${MOOX_CLI} setup hosts --file "${CONFIG}")" || die "unable to load build host through moox-cli"
+hosts_json="$(cd "${CONFIG_ROOT}" && "${MOOX_CLI}" setup hosts --file "${CONFIG}")" || die "unable to load build host through moox-cli"
 build_host_name="${MOOX_STORAGE_BUILD_HOST:-}"
 build_host_role="${MOOX_STORAGE_BUILD_HOST_ROLE:-}"
 if [[ -n "${build_host_name}" ]]; then
@@ -62,7 +63,7 @@ target_goarch_q="$(shell_quote "${target_goarch}")"
 linux_cgo_target="${MOOX_LINUX_CGO_TARGET:-storage}"
 case "${linux_cgo_target}" in
   storage)
-	    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-access moox-storage-cli)
+    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
     ;;
   storage-primary)
     linux_cgo_binaries=(moox-storage-primary)
@@ -74,7 +75,9 @@ case "${linux_cgo_target}" in
     die "unsupported linux CGO build target: ${linux_cgo_target}"
     ;;
 esac
-linux_cgo_target_q="$(shell_quote "${linux_cgo_target}")"
+remote_build_target="${linux_cgo_target}"
+[[ "${linux_cgo_target}" != storage ]] || remote_build_target=storage-cgo
+remote_build_target_q="$(shell_quote "${remote_build_target}")"
 
 rsync_ssh="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o UserKnownHostsFile=${known_hosts_q}"
 ssh_args=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
@@ -82,6 +85,13 @@ ssh_args=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15
 # SFTP-backed scp intermittently stalls on this build host; compression keeps
 # the transfer small without changing the produced artifacts.
 scp_args=(scp -O -C -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
+# Prefer the operator's working key/agent even when a manifest contains a
+# password. Only pass the password to sshpass if key authentication fails.
+key_probe=("${ssh_args[@]}")
+[[ "${port}" == 22 ]] || key_probe+=(-p "${port}")
+if [[ -n "${build_password}" ]] && "${key_probe[@]}" "${remote}" true >/dev/null 2>&1; then
+  build_password=''
+fi
 if [[ -n "${build_password}" ]]; then
   command -v sshpass >/dev/null 2>&1 || die "sshpass is required for password-authenticated storage build hosts"
   rsync_ssh="sshpass -e ssh -o BatchMode=no -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o UserKnownHostsFile=${known_hosts_q}"
@@ -152,7 +162,7 @@ run_rsync -az --delete \
 
 echo "==> build ${linux_cgo_target} on ${name} (${version})"
 run_ssh "${remote}" \
-	  "cd ${remote_root_q} && mkdir -p bin .gotmp && rm -f bin/moox-storage-primary bin/moox-storage-node bin/moox-storage-view bin/moox-storage-access bin/moox-storage-cli && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOTMPDIR="\$PWD/.gotmp" GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh ${linux_cgo_target_q}"
+  "set -eu; cd ${remote_root_q}; required=\$(tr -d '[:space:]' < .go-version); if [ -x \"\$HOME/.local/go\$required/bin/go\" ]; then export PATH=\"\$HOME/.local/go\$required/bin:\$PATH\"; fi; export GOTOOLCHAIN=local; bash ./scripts/ci/check-go-version.sh; command -v gcc >/dev/null; command -v g++ >/dev/null; mkdir -p bin .gotmp; GOTMPDIR=\"\$PWD/.gotmp\" GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh ${remote_build_target_q}"
 
 mkdir -p "${BIN_DIR}"
 echo "==> download Linux ${linux_cgo_target} binaries from ${name}"
@@ -202,6 +212,12 @@ for binary in "${linux_cgo_binaries[@]}"; do
   [[ "${local_sha256_value}" == "${remote_sha256}" ]] || die "checksum mismatch for ${binary}"
   mv "${local_tmp}" "${BIN_DIR}/${binary}"
 done
+
+if [[ "${linux_cgo_target}" == storage ]]; then
+  echo '==> build non-CGO Storage access locally'
+  BIN_DIR="${BIN_DIR}" VERSION="${version}" GIT_COMMIT="${git_commit}" TARGET_GOOS=linux TARGET_GOARCH="${target_goarch}" \
+    bash "${ROOT}/scripts/build/build.sh" storage-access
+fi
 
 for binary in "${linux_cgo_binaries[@]}"; do
   [[ -s "${BIN_DIR}/${binary}" ]] || die "remote build did not return ${binary}"

@@ -43,6 +43,9 @@ func (t Target) DialAddress() string {
 type Options struct {
 	KnownHostsPath string
 	Timeout        time.Duration
+	IdentityFiles  []string
+	AgentSocket    string
+	DisableAgent   bool
 }
 
 type Result struct {
@@ -84,9 +87,14 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 		}
 		return nil
 	}
+	methods, closeAgent := authentication(ctx, password, opts)
+	defer closeAgent()
+	if len(methods) == 0 {
+		return nil, ErrAuthFailed
+	}
 	config := &xssh.ClientConfig{
 		User:            target.Username,
-		Auth:            []xssh.AuthMethod{xssh.Password(password)},
+		Auth:            methods,
 		HostKeyCallback: wrappedCallback,
 		Timeout:         timeout(opts),
 	}

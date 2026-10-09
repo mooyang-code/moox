@@ -2,11 +2,40 @@
 
 日期：2026-10-09
 
-状态：第二版，待实施；已按 `feature/mooyang` 当前代码与网关重构主计划复审。文档修订不代表代码、构建、发布或部署已经完成。
+状态：第二版，实施中；已按 `feature/mooyang` 当前代码与网关重构主计划复审。当前只有独立 worktree 中的代理原型与部分验证完成，网络迁移、完整交付及正式环境验收仍未完成。
 
 源码基线：`feature/mooyang@8133cc41`。初版文档来自 `c52c2af4`，初版源码基线为 `d64c4075`。执行前重新确认相关文件，保留并适配其他任务的改动。
 
-本文是[网关与服务部署重构执行计划](计划/网关与服务部署重构执行计划.md)（下文简称「主计划」）的 console-proxy 子计划。网络、服务发现、MooX 私有 CA 与调用方迁移遵循[网关重构设计](计划/网关与服务部署重构设计.md)。这些目标已写入主计划，但当前代码尚无 `modules/consoleproxy`、`modules/hostgateway`、`modules/access` 或 `packages/servicecatalog`，不能把设计决策当作已交付能力。
+本文是[网关与服务部署重构执行计划](计划/网关与服务部署重构执行计划.md)（下文简称「主计划」）的 console-proxy 子计划。网络、服务发现、MooX 私有 CA 与调用方迁移遵循[网关重构设计](计划/网关与服务部署重构设计.md)。复审基线尚无 `modules/consoleproxy`、`modules/hostgateway`、`modules/access` 或 `packages/servicecatalog`；实施进度另见第 0 节，不能把设计决策当作已交付能力。
+
+## 0. 实施记录（2026-10-09）
+
+实施分支为从 `feature/mooyang@503f5a37` 新建的 `feature/console-proxy-embedded-caddy`，使用独立 worktree。文档复审和修订已在 `503f5a37` 提交；第 3 节保留复审时的源码事实。本节记录后续实施证据，不用原型测试替代 P0～P7 退出条件。
+
+已确认没有其他任务交付网关重构依赖，本任务须一并完成主计划要求的对应共享包、入口、调用方和部署改造，再执行整批正式切换。
+
+| 阶段 | 当前进度 | 尚未满足的门禁 |
+| --- | --- | --- |
+| P0 | 已通过 CLI 只读检查 control、storage、compute-1 的监听与进程，核对 control 旧 CA；compute-1 确认仍有 storage 与 trade-move 两套网关进程；CLI 已支持本机 SSH agent/默认私钥，compile_host 认证成功，并单独完成 Go 1.26.9 预置及 GCC/G++ 检查；配置凭据未输出 | compute-1 配置目录与实际运行目录不一致，需核对切换归档范围及旧监听归属；完整迁移表待补齐 |
+| P1 | 已新增模块、版本/配置命令和构建 target；固定 Caddy `v2.11.4`，工作区与 CI/CNB 配置使用 Go `1.26.9`，构建入口拒绝未预置的工具链；远程编译机已完成预置 | 完整依赖图仍有旧 `go_reuseport` 模块下载未解析；自建 runner 未完成预置；全工作区回归尚未通过 |
+| P2 | 真实 internal HTTPS、路由、CA 连续性、流式/WS 完整排空、启动端口冲突清理已测；public-only 配置不创建 internal CA | public 本地 ACME 签发/续期及完整模式切换、HTTP/3、真实 SSH/SFTP 和实际启停脚本仍需验证 |
+| P3 | 内部鉴权诊断已实现；匿名、错误 HMAC、重放被拒绝；上游失败与 readiness 分离，排空时 not-ready 且保持 live | `servicecatalog`、Doctor、Monitor 和新部署登记尚未接入 |
+| P4～P7 | 尚未完成 | 三类最终包、双部署路径、网关主计划依赖、旧源码清理、最终全链路验证及独立 Agent 审查均保留 |
+| 正式切换 | 未执行 | 必须先通过 P7，再执行主计划第 13 节并验证真实业务及 SCF |
+
+已通过的本地检查：新模块 `go test -race -count=1 ./...` 与 `go vet ./...`；CLI 的 SSH、部署、命令包全量测试与新预检测试；`packages/storagepolicy` 测试；模块/包/Factor 边界、文档架构和远程 Storage 构建契约。Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 五平台代理原型已通过实际构建入口编译并核对文件架构，Linux 实际运行和三类最终包仍未验收。CLI 基线缺少 `Policy.Coverage()`，已补齐并通过现有覆盖校验测试，未修改现场存储策略。
+
+构建策略按用户确认执行：只有需要 CGO 的 Linux 目标交给编译机；其余目标在本机编译或交叉编译。远程 Storage 构建已拆出 `storage-cgo`，无 CGO 的 Storage Access 留在本机。`setup build-linux --source-dir <worktree>` 从指定 worktree 同步源码，配置仍由原仓库的 CLI 读取；认证优先使用现有 SSH key/agent。`--prepare-only` 独立预置 `.go-version` 指定的 Go 并检查 C/C++ 编译器；实际构建使用 `GOTOOLCHAIN=local`，不会临时下载工具链。
+
+`make test-go` 在 Admin 的 `TestSysDeployService_GoomMock_DelegatesList` 因 macOS ARM64 的 goom 运行时内存权限错误失败。原分支 Go `1.25.0` 下也已复现同一错误，不能将其算作通过或直接跳过。另逐模块运行了当前工作区 52 个模块；Factor 首次因系统 Python 缺少 pandas 失败，使用已安装的 Python `3.12.14`、pandas `2.2.3`、numpy `2.3.5` 后测试通过。其余模块测试通过；Admin 问题、完整依赖解析和 Linux 全量回归仍是未通过门禁。
+
+control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
+
+```text
+50:DC:4A:53:B7:A5:26:19:E2:24:3F:F8:53:73:3F:16:6D:EC:36:D6:FF:ED:A6:E5:65:F8:7C:70:A6:62:40:01
+```
+
+现场仍有旧 Caddy 及 `11001`、2019 监听；本任务未切换、停止或安装运行服务。上述结果只是迁移前核验，不能作为新组件正式环境验收证据。
 
 ## 1. 目标与已确定的决策
 
@@ -350,26 +379,26 @@ P1～P6 的原型、安装、切换和回滚测试使用本地临时目录、端
 
 ### P1：工作区、工具链与最小模块
 
-- [ ] 新增 `modules/consoleproxy` 的 go.mod、go.sum、main、配置加载和版本输出。
-- [ ] 初始固定 Caddy `v2.11.4`，加入标准模块和 tzdata。
+- [x] 新增 `modules/consoleproxy` 的 go.mod、go.sum、main、配置加载和版本输出。
+- [x] 初始固定 Caddy `v2.11.4`，加入标准模块和 tzdata。
 - [ ] 加入 go.work，统一解析依赖图，审查 zap、Prometheus、x/net、x/crypto 等实际升级。
 - [ ] Caddy 该 tag 自身最低 Go 为 1.25.1；选定满足完整依赖图的具体工具链版本并统一到 CI、CNB、开发与发布构建。
 - [ ] 不只写“Go 1.25”，也不依赖 `GOTOOLCHAIN=auto` 在发布时临时下载未预置工具链。
 - [ ] 更新 `scripts/ci/check-runner.sh`，对自建 runner 实际 Go 版本做失败即退出的校验；同步 runner 工具链预置和远程编译机，不只修改 PR CI/CNB。
 - [ ] 新模块纳入现有 workspace test/vet/格式与边界检查，保留其他组件的 CGO 设置。
-- [ ] 新模块加入 `go.work` 的同一提交更新 `docs/总体设计.md` 模块表，避免文档门禁漏项。
+- [x] 新模块加入 `go.work` 的同一提交更新 `docs/总体设计.md` 模块表，避免文档门禁漏项。
 
 退出条件：版本输出和配置测试通过；依赖升级有完整清单；新模块没有被全量测试静默跳过。
 
 ### P2：进程内引擎与前端路由
 
-- [ ] 实现受约束配置渲染/适配，关闭 Caddy admin、autosave、动态配置拉取及 PKI 自动信任安装；断言最终配置。
+- [x] 实现受约束配置渲染/适配，关闭 Caddy admin、autosave、动态配置拉取及 PKI 自动信任安装；断言最终配置。public 不加载 PKI，internal 显式 `install_trust=false`。
 - [ ] 实现同进程 Load/Run、main 等待、启动失败清理和退出排空。
 - [ ] 先通过第 6.3 节排空原型门禁，再实现准入/完整活动请求跟踪，禁止用 Stop 返回或 sleep 充当完成信号。
 - [ ] 实现 internal/public TLS，显式指定持久存储，不改变现有证书身份。
 - [ ] 实现 Load/Run 前已有 CA/密钥/指纹检查、首装建立基线、OpenSSL 指纹格式及 public 模式发布副本清理；持久基线跨模式保留。
 - [ ] 实现前端允许路由和非前端拒绝路由；保留 headers、压缩、WS/流式请求行为。
-- [ ] 实现无生产副作用的 validate 命令，测试独立引擎版本输出。
+- [x] 实现无生产副作用的 validate 命令，测试独立引擎版本输出。
 - [ ] 冻结排空、引擎停止及清理预算，验证 WS/流式完整存续期与到期取消；不破坏 ResponseWriter 的协议能力。
 - [ ] 使用测试证书/本地 ACME 测试服务验证，不让普通单元测试访问生产 CA 或修改本机信任库。
 
@@ -377,8 +406,8 @@ P1～P6 的原型、安装、切换和回滚测试使用本地临时目录、端
 
 ### P3：组件诊断与注册
 
-- [ ] 接入 healthz 共享状态与鉴权，建立独立内部诊断监听。
-- [ ] 分开 liveness、readiness 和上游依赖故障；TLS 未就绪不得报 ready。
+- [x] 接入 healthz 共享状态与鉴权，建立独立内部诊断监听。
+- [x] 分开 liveness、readiness 和上游依赖故障；TLS 未就绪不得报 ready。
 - [ ] 接入主计划 A/B 的 `servicecatalog` 条目，登记 `console-proxy`、`moox-console-proxy`、control/单副本/受保护和 `readyz:19528`；同步 Doctor/PID/二进制身份。
 - [ ] 保持 Admin、web-host、console-proxy 三种进程身份分离，不创建重复的虚假入口组件。
 - [ ] 随主计划 F1 接入 control 本机鉴权探针；不把 loopback 改写为公网地址。HTTPS 页面单独做端到端检查，显式配置 CA、SNI/Host。
@@ -388,7 +417,7 @@ P1～P6 的原型、安装、切换和回滚测试使用本地临时目录、端
 
 ### P4：构建与安装包重组，对应 G2
 
-- [ ] `build.sh` 新增 `console-proxy` target 并加入 `all`；只对本组件使用 CGO_ENABLED=0。
+- [x] `build.sh` 新增 `console-proxy` target 并加入 `all`；只对本组件使用 CGO_ENABLED=0。
 - [ ] 完整 release 创建组件目录，装入新二进制、配置和生命周期脚本。
 - [ ] binary-only release 的显式 binary_names 和 SHA256 manifest 加入新二进制。
 - [ ] binary-only publish/restart 识别新服务；确认所选新制品有对应摘要并经过校验。
@@ -526,7 +555,7 @@ Go 版本门禁同时覆盖 PR CI、CNB、自建 runner 和远程编译机；自
 
 ### 10.3 计划新增的验证入口
 
-以下为待实现接口，当前目录/target 尚不存在：
+模块和 target 已新增；当前 target 聚合模块测试与 vet，双部署路径和安装契约仍需随 P5 补齐：
 
 ```bash
 cd modules/consoleproxy

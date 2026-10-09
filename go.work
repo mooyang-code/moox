@@ -1,4 +1,4 @@
-go 1.25.0
+go 1.26.9
 
 use (
 	./modules/admin
@@ -9,6 +9,7 @@ use (
 	./modules/cloudnode/proto/cloudnodegen
 	./modules/collector
 	./modules/collector/proto/collectorgen
+	./modules/consoleproxy
 	./modules/eventbus
 	./modules/eventbus/proto/eventbusgen
 	./modules/factor

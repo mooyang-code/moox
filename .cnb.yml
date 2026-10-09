@@ -16,7 +16,7 @@ $:
             - validate
   tag_push:
     - docker:
-        image: golang:1.24-bookworm
+        image: golang:1.26.9-bookworm
       stages:
         - name: Install build tools
           script: |
@@ -24,7 +24,9 @@ $:
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends make nodejs npm python3 ca-certificates
             npm install --global pnpm@10.28.2
         - name: Verify release contract
-          script: bash scripts/test/contract/test-release-contract.sh
+          script: |
+            bash scripts/ci/check-go-version.sh
+            bash scripts/test/contract/test-release-contract.sh
         - name: Build release matrix
           script: |
             VERSION="$CNB_BRANCH" \

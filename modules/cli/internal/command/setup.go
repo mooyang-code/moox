@@ -89,6 +89,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupRebootHostCommand(deps),
 		newSetupRestartHostCommand(deps),
 		newSetupHostDiagnosticsCommand(deps),
+		newSetupConsoleProxyPreflightCommand(deps),
 		newSetupPurgeEventBusCommand(deps),
 		newSetupInspectSCFCommand(deps),
 		newSetupAttachSCFVPCCommand(deps),

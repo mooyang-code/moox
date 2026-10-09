@@ -32,7 +32,7 @@ type sshFixture struct {
 	connections sync.WaitGroup
 }
 
-func startSSHFixture(t *testing.T) *sshFixture {
+func startSSHFixture(t *testing.T, allowedKeys ...xssh.PublicKey) *sshFixture {
 	t.Helper()
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -52,6 +52,16 @@ func startSSHFixture(t *testing.T) *sshFixture {
 		done:      make(chan struct{}),
 	}
 	serverConfig := &xssh.ServerConfig{
+		PublicKeyCallback: func(metadata xssh.ConnMetadata, key xssh.PublicKey) (*xssh.Permissions, error) {
+			if metadata.User() == f.target.Username {
+				for _, allowed := range allowedKeys {
+					if string(allowed.Marshal()) == string(key.Marshal()) {
+						return nil, nil
+					}
+				}
+			}
+			return nil, fmt.Errorf("denied")
+		},
 		PasswordCallback: func(metadata xssh.ConnMetadata, password []byte) (*xssh.Permissions, error) {
 			if metadata.User() != f.target.Username || string(password) != f.password {
 				return nil, fmt.Errorf("denied")

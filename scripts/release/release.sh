@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bash "${ROOT}/scripts/ci/check-go-version.sh"
+export GOTOOLCHAIN=local
 VERSION="${VERSION:-dev}"
 OS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 ARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"

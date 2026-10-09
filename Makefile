@@ -91,6 +91,10 @@ test: test-go test-web
 test-go:
 	./scripts/test/contract/test-go-workspace.sh
 
+.PHONY: test-console-proxy
+test-console-proxy:
+	cd modules/consoleproxy && go test -count=1 ./... && go vet ./...
+
 test-web:
 	CI=true pnpm --dir web install --frozen-lockfile
 	pnpm --dir web test

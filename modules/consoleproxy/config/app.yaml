@@ -1,0 +1,23 @@
+# Paths are relative to this configuration file; health credentials come from
+# the existing MOOX_HEALTH_AUTH_* environment, never this distributable file.
+public:
+  host: localhost
+  bind: 0.0.0.0
+  port: 9527
+  http3: true
+tls:
+  mode: internal
+  storage_root: ../data/caddy/caddy
+  ca_baseline: ../data/caddy/internal-ca.sha256
+  ca_publish_dir: ../certs/caddy
+  initialize_ca: false
+upstreams:
+  admin: 127.0.0.1:11000
+  web: 127.0.0.1:9528
+health:
+  listen: 127.0.0.1:19528
+lifecycle:
+  drain_timeout: 30s
+  engine_stop_timeout: 10s
+  cleanup_margin: 5s
+  startup_timeout: 3m

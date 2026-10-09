@@ -2,10 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bash "${ROOT}/scripts/ci/check-go-version.sh"
+export GOTOOLCHAIN=local
 VERSION="${VERSION:-dev}"
 BUILD_TIME="$(date +"%Y-%m-%d_%H:%M:%S")"
 GIT_COMMIT="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-BIN_DIR="${ROOT}/bin"
+BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
 TARGET_MODULE="${1:-all}"
@@ -66,6 +68,7 @@ build_storage() {
 	          -o "${BIN_DIR}/$(binary_name moox-storage-${role})" ./cmd/server
 	      fi
 	    done
+	    if [[ "${TARGET_MODULE}" == "storage-cgo" ]]; then return; fi
 	    if ((${#tags[@]})); then
 	      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build "${tags[@]}" \
 	        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
@@ -131,6 +134,7 @@ case "${TARGET_MODULE}" in
     build_go modules/gateway ./cmd/server moox-gateway 0
     build_go modules/gateway ./cmd/cli moox-gateway-cli 0
     build_go modules/eventbus ./cmd/server moox-eventbus 0
+    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
     build_web_host
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
     build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
@@ -167,6 +171,9 @@ case "${TARGET_MODULE}" in
     ;;
   eventbus)
     build_go modules/eventbus ./cmd/server moox-eventbus 0
+    ;;
+  console-proxy)
+    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
     ;;
   cloudnode)
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
@@ -213,6 +220,13 @@ case "${TARGET_MODULE}" in
   storage)
     build_storage
     build_storage_cli
+    ;;
+  storage-cgo)
+    build_storage
+    build_storage_cli
+    ;;
+  storage-access)
+    build_go modules/storage ./cmd/access moox-storage-access 0
     ;;
   storage-primary)
     build_go modules/storage ./cmd/server moox-storage-primary 1

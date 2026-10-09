@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -162,6 +163,61 @@ func Default() Policy {
 func (p Policy) Validate() error {
 	_, err := p.normalized()
 	return err
+}
+
+// Coverage checks whether retention can supply view.bars. Defaults and 7×24
+// markets have a deterministic rate; session markets are calendar estimates
+// and produce warnings rather than rejecting an otherwise valid policy.
+func (p Policy) Coverage() (errs, warnings []string) {
+	normalized, err := p.normalized()
+	if err != nil {
+		return []string{err.Error()}, nil
+	}
+	check := func(path, raw, freq, space string) {
+		period, _ := ParsePeriod(raw)
+		if period.Forever {
+			return
+		}
+		f, _ := frequencypkg.Parse(freq)
+		barLength := f.Duration()
+		if barLength == 0 {
+			barLength = 31 * 24 * time.Hour
+		}
+		bars := float64(period.Duration) / float64(barLength)
+		minutes := map[string]float64{"stockcn": 240, "stockhk": 330, "stockus": 390}[space]
+		if minutes > 0 {
+			if barLength < 24*time.Hour {
+				bars *= minutes / (24 * 60) * 5 / 7
+			} else if barLength == 24*time.Hour {
+				bars *= 5.0 / 7
+			}
+		}
+		if bars >= float64(normalized.View.Bars) {
+			return
+		}
+		message := fmt.Sprintf("%s = %s provides approximately %.0f bars, fewer than view.bars = %d", path, raw, bars, normalized.View.Bars)
+		if minutes > 0 {
+			warnings = append(warnings, message)
+		} else {
+			errs = append(errs, message)
+		}
+	}
+	for _, freq := range frequencypkg.Strings() {
+		check("retention.defaults."+freq, normalized.Retention.Defaults[freq], freq, "")
+	}
+	spaces := make([]string, 0, len(normalized.Retention.Spaces))
+	for space := range normalized.Retention.Spaces {
+		spaces = append(spaces, space)
+	}
+	sort.Strings(spaces)
+	for _, space := range spaces {
+		for _, freq := range frequencypkg.Strings() {
+			if raw, ok := normalized.Retention.Spaces[space][freq]; ok {
+				check("retention.spaces."+space+"."+freq, raw, freq, space)
+			}
+		}
+	}
+	return errs, warnings
 }
 
 // normalized validates the policy and renders every period canonically.

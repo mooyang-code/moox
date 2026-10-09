@@ -73,6 +73,7 @@ export default defineConfig({
           { text: '管理后台', link: '/模块/管理后台' },
           { text: '节点网关', link: '/模块/节点网关' },
           { text: '事件总线', link: '/模块/事件总线' },
+          { text: '控制台代理', link: '/模块/控制台代理' },
         ],
       },
       {

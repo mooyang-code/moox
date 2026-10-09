@@ -5,6 +5,8 @@ set -euo pipefail
 # directory. The existing release.sh remains the full config/schema archive;
 # this script is intentionally smaller for binary-only upgrades.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bash "${ROOT}/scripts/ci/check-go-version.sh"
+export GOTOOLCHAIN=local
 VERSION="${VERSION:-$(git -C "${ROOT}" describe --tags --always --dirty 2>/dev/null || echo dev)}"
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
