@@ -24,6 +24,7 @@ type Listeners struct {
 	Remote net.Listener
 	Local  net.Listener
 	Health net.Listener
+	cancel context.CancelFunc
 }
 
 func Open(ctx context.Context, cfg hostgatewayconfig.Config, material *tlsconfig.Material) (_ *Listeners, resultErr error) {
@@ -33,7 +34,8 @@ func Open(ctx context.Context, cfg hostgatewayconfig.Config, material *tlsconfig
 	if material == nil || material.HostID() != cfg.Host.ID {
 		return nil, errors.New("listeners require validated TLS material for this host")
 	}
-	listeners := &Listeners{}
+	ctx, cancel := context.WithCancel(ctx)
+	listeners := &Listeners{cancel: cancel}
 	defer func() {
 		if resultErr != nil {
 			_ = listeners.Close()
@@ -54,11 +56,14 @@ func Open(ctx context.Context, cfg hostgatewayconfig.Config, material *tlsconfig
 		}
 		*endpoint.destination = opened
 	}
-	listeners.Remote = &tlsListener{Listener: listeners.Remote, config: material.Server()}
+	listeners.Remote = &tlsListener{Listener: listeners.Remote, config: material.Server(), ctx: ctx}
 	return listeners, nil
 }
 
 func (l *Listeners) Close() error {
+	if l.cancel != nil {
+		l.cancel()
+	}
 	var result error
 	for _, opened := range []net.Listener{l.Remote, l.Local, l.Health} {
 		if opened != nil {
@@ -84,6 +89,7 @@ func TRPC(opened net.Listener, serviceName string) server.Service {
 type tlsListener struct {
 	net.Listener
 	config *tls.Config
+	ctx    context.Context
 }
 
 func (l *tlsListener) Accept() (net.Conn, error) {
@@ -91,20 +97,21 @@ func (l *tlsListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &handshakeConn{Conn: tls.Server(conn, l.config)}, nil
+	return &handshakeConn{Conn: tls.Server(conn, l.config), ctx: l.ctx}, nil
 }
 
 // The SDK sets its own idle read deadline. HandshakeContext adds a separate
 // bound for a stalled TLS handshake without serializing the listener's Accept.
 type handshakeConn struct {
 	*tls.Conn
+	ctx  context.Context
 	once sync.Once
 	err  error
 }
 
 func (c *handshakeConn) handshake() error {
 	c.once.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+		ctx, cancel := context.WithTimeout(c.ctx, handshakeTimeout)
 		defer cancel()
 		c.err = c.HandshakeContext(ctx)
 		if c.err != nil {

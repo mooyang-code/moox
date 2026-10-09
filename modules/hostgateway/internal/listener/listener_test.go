@@ -223,3 +223,38 @@ func TestTLSMinimumVersionAndStalledHandshakeBound(t *testing.T) {
 	_, err = os.Stat(cfg.Store.Path)
 	require.ErrorIs(t, err, os.ErrNotExist, "opening sockets must not initialize caches or credentials")
 }
+
+func TestClosingListenersCancelsPendingTLSHandshake(t *testing.T) {
+	cfg, material := fixture(t)
+	opened, err := Open(context.Background(), cfg, material)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = opened.Close() })
+	accepted := make(chan struct{})
+	readResult := make(chan error, 1)
+	go func() {
+		conn, err := opened.Remote.Accept()
+		if err != nil {
+			readResult <- err
+			return
+		}
+		defer conn.Close()
+		close(accepted)
+		_, err = conn.Read(make([]byte, 1))
+		readResult <- err
+	}()
+	conn, err := net.Dial("tcp", cfg.Server.RemoteAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("TLS connection was not accepted")
+	}
+	require.NoError(t, opened.Close())
+	select {
+	case err := <-readResult:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("listener shutdown did not cancel the TLS handshake")
+	}
+}
