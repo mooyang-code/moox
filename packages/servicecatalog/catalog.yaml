@@ -1234,6 +1234,10 @@ components:
               - collector
               - factor-mgr
               - archive
+          - methods:
+              - ActivateDataset
+            callers:
+              - factor-mgr
       - path: trpc.moox.storage.PrimaryStore
         port: 20102
         console_name: storage
@@ -1322,6 +1326,8 @@ components:
           - methods:
               - WriteFactorRows
               - ReportFactorPeriodComputed
+              - DeleteDatasetRows
+              - RestoreDatasetRows
             callers:
               - factor-mgr
     doctor:

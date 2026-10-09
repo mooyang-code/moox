@@ -24,9 +24,9 @@ import (
 	factorgen "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type catalogEntry struct {
@@ -242,10 +242,11 @@ type importTarget struct {
 }
 
 func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfig, setID string) (*importTarget, error) {
-	storage, err := newStorageClient(runtime)
+	storage, closeStorage, err := newStorageClient(runtime)
 	if err != nil {
 		return nil, err
 	}
+	defer closeStorage()
 	set, err := db.GetSet(ctx, setID)
 	if err != nil {
 		return nil, fmt.Errorf("get factor set: %w", err)
@@ -363,10 +364,11 @@ func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {
 	}
 	options := []recalc.Option{recalc.WithClock(periodclock.Continuous{})}
 	if len(cli.Subjects) == 0 && set.SubjectMode == domain.SubjectModeAll {
-		storage, clientErr := newStorageClient(config)
+		storage, closeStorage, clientErr := newStorageClient(config)
 		if clientErr != nil {
 			return clientErr
 		}
+		defer closeStorage()
 		options = append(options, recalc.WithSubjectProvider(storage))
 	}
 	svc := recalc.NewService(db, options...)
@@ -387,7 +389,7 @@ func runStatus(ctx context.Context, cli cliConfig, out io.Writer) error {
 		return errors.New("FactorMgr target is required: pass --target or set MOOX_FACTOR_RPC_TARGET")
 	}
 	api := factorgen.NewFactorMgrClientProxy(
-		client.WithTarget(cli.RPCTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
+		client.WithTarget(cli.RPCTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport),
 	)
 	rsp, err := api.GetStatus(ctx, &factorgen.GetStatusReq{})
 	if err != nil {
@@ -415,14 +417,17 @@ func newRequestID() (string, error) {
 	return "cli-" + hex.EncodeToString(value[:]), nil
 }
 
-func newStorageClient(cfg runtimeConfig) (*storageio.Client, error) {
-	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
-	if err != nil {
-		return nil, err
-	}
+func newStorageClient(cfg runtimeConfig) (*storageio.Client, func() error, error) {
 	requestID, err := newRequestID()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return storageio.NewClientWithCredentials(cfg.GatewayTarget, cfg.GatewayNodeID, credentials, storageio.AuthInfo(requestID)), nil
+	if cfg.GatewayClient.Caller != "factor-mgr" {
+		return nil, nil, errors.New("gateway_client.caller must be factor-mgr")
+	}
+	gateway, err := cfg.GatewayClient.OpenInternal(cfg.ConfigPath, filepath.Dir(cfg.DatabasePath), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return storageio.NewGatewayClient(gateway, storageio.AuthInfo(requestID)), gateway.Close, nil
 }

@@ -19,7 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -37,6 +37,7 @@ const (
 // moox-factor-mgr: the SQLite catalog, result-dataset reconciliation and the
 // engine hub. Factor computation runs in moox-factor-engine.
 type Runtime struct {
+	gateway     *gatewayclient.Client
 	store       *store.Store
 	stopCatalog func() error
 	cancel      context.CancelFunc
@@ -76,12 +77,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.store = db
 
-	credentials, err := gatewayauth.ResolveCredentials(cfg.Storage.KeyID, cfg.Storage.HMACKeyFile)
+	runtime.gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(appCtx, "factor-mgr gateway directory refresh: %v", err) })
 	if err != nil {
-		return nil, fmt.Errorf("load factor Storage gateway credentials: %w", err)
+		return nil, fmt.Errorf("open factor Storage gateway client: %w", err)
 	}
-	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials,
-		storageio.AuthInfo(fmt.Sprintf("factor-mgr-%d", time.Now().UnixNano())))
+	storage := storageio.NewGatewayClient(runtime.gateway, storageio.AuthInfo(fmt.Sprintf("factor-mgr-%d", time.Now().UnixNano())))
 
 	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL))
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
@@ -134,6 +134,9 @@ func (r *Runtime) Close() error {
 		}
 		if r.stopCatalog != nil {
 			r.err = errors.Join(r.err, r.stopCatalog())
+		}
+		if r.gateway != nil {
+			r.err = errors.Join(r.err, r.gateway.Close())
 		}
 		if r.store != nil {
 			r.err = errors.Join(r.err, r.store.Close())

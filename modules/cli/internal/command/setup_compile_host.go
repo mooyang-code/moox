@@ -38,7 +38,7 @@ func newSetupBuildLinuxCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&module, "module", "storage", "storage、storage-primary 或 factor-mgr")
+	cmd.Flags().StringVar(&module, "module", "storage", "storage 或 storage-primary")
 	cmd.Flags().StringVar(&sourceDir, "source-dir", "", "构建源码目录（默认当前仓库，可指定独立 worktree）")
 	cmd.Flags().BoolVar(&prepareOnly, "prepare-only", false, "仅预置固定 Go 工具链并检查 C/C++ 编译器，不构建或部署服务")
 	return cmd
@@ -82,7 +82,7 @@ func prepareCompileHost(cmd *cobra.Command, snapshot *setupconfig.Snapshot, sour
 func runSetupBuildLinux(ctx context.Context, snapshot *setupconfig.Snapshot, file, module, sourceDir string) error {
 	module = strings.TrimSpace(module)
 	switch module {
-	case "storage", "storage-primary", "factor-mgr":
+	case "storage", "storage-primary":
 	default:
 		return fmt.Errorf("unsupported linux CGO module %q", module)
 	}

@@ -1105,15 +1105,8 @@ build_core_binaries() {
       "${ROOT}/scripts/build/build.sh" collector
   fi
   if [[ "${WITH_FACTOR_MGR}" -eq 1 ]]; then
-    if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
-      [[ "${TARGET_GOOS}" == linux ]] || fail "cross-platform Factor build supports only Linux targets"
-      [[ "${TARGET_GOARCH}" == amd64 ]] || fail "cross-platform Factor build supports only linux/amd64"
-      log "cross build detected; build CGO-enabled Factor on compile host"
-      MOOX_CLI="${host_cli}" MOOX_LINUX_CGO_TARGET=factor-mgr "${ROOT}/scripts/build/build-storage-linux.sh"
-    else
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build/build.sh" factor-mgr
-    fi
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build/build.sh" factor-mgr
   fi
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \

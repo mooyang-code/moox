@@ -15,14 +15,15 @@ import (
 func TestLoadRuntimeConfigReadsDatabaseStorageAndPython(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "app.yaml")
-	contents := "database:\n  path: ./state/factor.db\nstorage:\n  gateway_target: ip://10.0.0.1:11003\n  key_id: factor\npython:\n  bin: python311\n"
+	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  caller: factor-mgr\n  key_id: admin-assigned-factor-key\n  key_file: ../../secrets/caller-factor-mgr.key\npython:\n  bin: python311\n"
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(root, "state/factor.db"), cfg.DatabasePath)
-	require.Equal(t, "ip://10.0.0.1:11003", cfg.GatewayTarget)
-	require.Equal(t, "factor", cfg.KeyID)
+	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
+	require.Equal(t, "admin-assigned-factor-key", cfg.GatewayClient.KeyID)
+	require.Equal(t, path, cfg.ConfigPath)
 	require.Equal(t, "python311", cfg.PythonBin)
 }
 
@@ -37,8 +38,8 @@ func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, "env-python", cfg.PythonBin)
-	require.Equal(t, "ip://127.0.0.1:11003", cfg.GatewayTarget)
-	require.Equal(t, "storage-node-0", cfg.GatewayNodeID)
+	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
+	require.Empty(t, cfg.GatewayClient.KeyID)
 }
 
 func TestValidateImportableSetRejectsPendingAndDeleting(t *testing.T) {

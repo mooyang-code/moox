@@ -28,3 +28,8 @@ func TestLinuxBuildSourceSelectsWorktreeWithoutCopyingManifest(t *testing.T) {
 	_, err = linuxBuildSource(configRoot, "")
 	require.ErrorContains(t, err, "missing go.work")
 }
+
+func TestRunSetupBuildLinuxRejectsPureGoFactorBeforeLoadingCompileHost(t *testing.T) {
+	err := runSetupBuildLinux(t.Context(), nil, "./moox.toml", "factor-mgr", "")
+	require.EqualError(t, err, `unsupported linux CGO module "factor-mgr"`)
+}

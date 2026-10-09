@@ -4,31 +4,27 @@ package bootstrap
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/enginehub"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Database DatabaseConfig `yaml:"database"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Python   PythonConfig   `yaml:"python"`
-	Engine   EngineConfig   `yaml:"engine"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath    string                   `yaml:"-"`
+	Database      DatabaseConfig           `yaml:"database"`
+	Python        PythonConfig             `yaml:"python"`
+	Engine        EngineConfig             `yaml:"engine"`
 }
 
 type DatabaseConfig struct {
 	Path string `yaml:"path"`
-}
-
-type StorageConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	GatewayNodeID string `yaml:"gateway_node_id"`
-	KeyID         string `yaml:"key_id"`
-	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 // PythonConfig names the interpreter that test-loads factor sources when a
@@ -48,11 +44,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read factor config %s: %w", path, err)
 	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve factor config: %w", err)
+	}
 	cfg := Default()
+	cfg.sourcePath = absolute
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse factor config %s: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("factor config must contain exactly one YAML document")
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
@@ -64,10 +69,10 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
-		Database: DatabaseConfig{Path: "./data/factor/factor.db"},
-		Storage:  StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "factor"},
-		Python:   PythonConfig{Bin: "python3"},
-		Engine:   EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
+		Database:      DatabaseConfig{Path: "./data/factor/factor.db"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "factor-mgr", KeyFile: "../../secrets/caller-factor-mgr.key"},
+		Python:        PythonConfig{Bin: "python3"},
+		Engine:        EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
 	}
 }
 
@@ -75,12 +80,6 @@ func (c *Config) applyDefaults() {
 	defaults := Default()
 	if c.Database.Path == "" {
 		c.Database.Path = defaults.Database.Path
-	}
-	if c.Storage.GatewayTarget == "" {
-		c.Storage.GatewayTarget = defaults.Storage.GatewayTarget
-	}
-	if c.Storage.KeyID == "" {
-		c.Storage.KeyID = defaults.Storage.KeyID
 	}
 	if c.Python.Bin == "" {
 		c.Python.Bin = defaults.Python.Bin
@@ -97,18 +96,6 @@ func (c *Config) applyEnv() {
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_DB_PATH")); value != "" {
 		c.Database.Path = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET")); value != "" {
-		c.Storage.GatewayTarget = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID")); value != "" {
-		c.Storage.GatewayNodeID = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_KEY_ID")); value != "" {
-		c.Storage.KeyID = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE")); value != "" {
-		c.Storage.HMACKeyFile = value
-	}
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_BIN")); value != "" {
 		c.Python.Bin = value
 	}
@@ -121,13 +108,11 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Database.Path) == "" {
 		return fmt.Errorf("database.path is required")
 	}
-	if !validTRPCTarget(c.Storage.GatewayTarget) {
-		return fmt.Errorf("storage.gateway_target must be a tRPC target")
+	if c.GatewayClient.Caller != "factor-mgr" {
+		return fmt.Errorf("gateway_client.caller must be factor-mgr")
 	}
-	if strings.TrimSpace(c.Storage.HMACKeyFile) != "" {
-		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
-			return fmt.Errorf("storage hmac credentials: %w", err)
-		}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.Python.Bin) == "" {
 		return fmt.Errorf("python.bin is required")
@@ -141,7 +126,13 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func validTRPCTarget(value string) bool {
-	value = strings.TrimSpace(strings.ToLower(value))
-	return value != "" && !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://")
+// OpenGateway loads the Manager's process-scoped signing identity and directory.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("factor gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "factor-mgr" {
+		return nil, fmt.Errorf("gateway_client.caller must be factor-mgr")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

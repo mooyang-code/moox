@@ -292,3 +292,30 @@ func TestReadOnlyMethodsDoNotIncludeWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
+	c := mustCatalog(t)
+	for service, methods := range map[string][]string{
+		"PrimaryStore": {"ReadTimeSeriesRows", "WriteFactorRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed", "DeleteDatasetRows", "RestoreDatasetRows"},
+		"Metadata":     {"GetDataset", "ListDatasetColumns", "CreateDataset", "UpsertDatasetColumn", "ActivateDataset", "DeleteDataset", "UpdateDataset", "ListDatasetSubjects"},
+	} {
+		for _, method := range methods {
+			if !c.Allowed("factor-mgr", "trpc.moox.storage."+service, method) {
+				t.Errorf("Factor internal method is denied: %s/%s", service, method)
+			}
+			if c.Allowed("factor-engine", "trpc.moox.storage."+service, method) {
+				t.Errorf("external engine may not authenticate directly to host gateways: %s/%s", service, method)
+			}
+		}
+	}
+	for service, methods := range map[string][]string{
+		"PrimaryStore": {"CommitTimeSeriesBatch", "EnsureDatasetPeriod"},
+		"Metadata":     {"RebindDatasetDataNode", "DeleteDataNode"},
+	} {
+		for _, method := range methods {
+			if c.Allowed("factor-mgr", "trpc.moox.storage."+service, method) {
+				t.Errorf("unrelated Factor write permission: %s/%s", service, method)
+			}
+		}
+	}
+}

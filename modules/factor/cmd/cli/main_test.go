@@ -116,7 +116,7 @@ func TestImportCatalogCreatesDefinitionsOnly(t *testing.T) {
 	]`), 0o600))
 	dbPath := filepath.Join(root, "factor.db")
 	configPath := filepath.Join(root, "app.yaml")
-	require.NoError(t, os.WriteFile(configPath, []byte("database:\n  path: "+dbPath+"\npython:\n  bin: python3\n  factors_dir: "+factorsDir+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte("database:\n  path: "+dbPath+"\npython:\n  bin: python3\n"), 0o600))
 
 	var output bytes.Buffer
 	require.NoError(t, runImportCatalog(t.Context(), cliConfig{ConfigPath: configPath, CatalogDir: factorsDir}, &output))

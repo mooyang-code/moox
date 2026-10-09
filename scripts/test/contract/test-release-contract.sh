@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 bash "${ROOT}/scripts/test/contract/test-build-factor.sh"
-bash "${ROOT}/scripts/test/contract/test-build-factor-linux-contract.sh"
 
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
 grep -q 'moox_gateway' "${ROOT}/config/setup/service-deployments.yaml"

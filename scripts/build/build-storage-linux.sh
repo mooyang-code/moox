@@ -14,6 +14,19 @@ die() {
   exit 1
 }
 
+linux_cgo_target="${MOOX_LINUX_CGO_TARGET:-storage}"
+case "${linux_cgo_target}" in
+  storage)
+    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
+    ;;
+  storage-primary)
+    linux_cgo_binaries=(moox-storage-primary)
+    ;;
+  *)
+    die "unsupported linux CGO build target: ${linux_cgo_target}"
+    ;;
+esac
+
 build_password="${MOOX_SSH_PASSWORD:-}"
 unset MOOX_SSH_PASSWORD
 
@@ -60,21 +73,6 @@ case "${target_goarch}" in
   *) die "unsupported storage build architecture: ${target_goarch}" ;;
 esac
 target_goarch_q="$(shell_quote "${target_goarch}")"
-linux_cgo_target="${MOOX_LINUX_CGO_TARGET:-storage}"
-case "${linux_cgo_target}" in
-  storage)
-    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
-    ;;
-  storage-primary)
-    linux_cgo_binaries=(moox-storage-primary)
-    ;;
-  factor-mgr)
-    linux_cgo_binaries=(moox-factor-mgr moox-factor-mgr-cli)
-    ;;
-  *)
-    die "unsupported linux CGO build target: ${linux_cgo_target}"
-    ;;
-esac
 remote_build_target="${linux_cgo_target}"
 [[ "${linux_cgo_target}" != storage ]] || remote_build_target=storage-cgo
 remote_build_target_q="$(shell_quote "${remote_build_target}")"

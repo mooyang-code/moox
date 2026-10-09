@@ -61,7 +61,7 @@ type Options struct {
 	StorageEventBusCredential        []byte
 	StorageEventBusCA                []byte
 	StorageMetricsEventBusCredential []byte
-	// StorageBuildPassword is used by the cross-platform Storage/Factor CGO
+	// StorageBuildPassword is used by the cross-platform Storage CGO
 	// build helper when the configured compile host accepts password SSH auth.
 	StorageBuildPassword   string
 	StorageBuildHost       string
