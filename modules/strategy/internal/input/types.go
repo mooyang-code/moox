@@ -11,10 +11,39 @@ import (
 // ErrStale 表示读取过程中 View 的活动索引或修订号发生变化，已读页面作废，需要整体重读。
 var ErrStale = errors.New("View 输入快照已过期")
 
-// SkipError 表示本期不能求值但不是基础设施问题：记录为 skipped 并 ACK。
+// staleError 是读取期间活动索引或修订号变化的错误：Error 只给中文说明，Storage 的原文经 Unwrap 留给日志；
+// errors.Is(err, ErrStale) 成立。
+type staleError struct {
+	message string
+	raw     error
+}
+
+func (e *staleError) Error() string        { return e.message }
+func (e *staleError) Is(target error) bool { return target == ErrStale }
+func (e *staleError) Unwrap() error        { return e.raw }
+
+// describedError 是换成中文说明的错误：Error 只给说明，原错误（可能是英文）经 Unwrap 留给日志与 errors.Is 判断。
+type describedError struct {
+	message string
+	cause   error
+}
+
+func (e *describedError) Error() string { return e.message }
+func (e *describedError) Unwrap() error { return e.cause }
+
+// SkipError 表示本期不能求值但不是基础设施问题：记录为 skipped 并 ACK。Cause 是服务端的原文（可能是英文），
+// 只经 Unwrap 留给日志，不进入说明。
 type SkipError struct {
 	Reason string
 	Detail string
+	Cause  error
+}
+
+func (e *SkipError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 // Error 只返回说明：同一个错误也会出现在启用与回放的报错里，那里没有“本期”的语境。
@@ -162,9 +191,9 @@ type Resolved struct {
 	Spot            bool                     `json:"spot"`
 	Columns         map[string]ColumnBinding `json:"columns"`
 	Factors         map[string]string        `json:"factors,omitempty"`
-	UsesPreviousBar bool                     `json:"uses_previous_bar"`
-	// PreviousFactors 是经 bars[-1] 读取的因子列所属的因子（排序）：只有它们需要上一根的版本证据。
-	PreviousFactors []string `json:"previous_factors,omitempty"`
+	// PreviousFactors 是经 bars[-1] 读取的因子列所属的因子（排序）：只有它们需要上一根的版本证据。由编译结果派生
+	// （Resolve 与 Compile 填入），不进快照。
+	PreviousFactors []string `json:"-"`
 	// CompletionKind 是触发本实例的完成事件类型：因子结果 View 为 factor_period.computed，K 线 View 为 collector.period.completed。
 	CompletionKind string   `json:"completion_kind,omitempty"`
 	MinAgeBars     int      `json:"min_age_bars,omitempty"`

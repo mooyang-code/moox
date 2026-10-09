@@ -43,14 +43,14 @@ func TestStockCalendarTail(t *testing.T) {
 // A 股日线的覆盖边界落在非交易日（节假日误写的行）：最晚一根取不晚于它的交易日，最早一根取不早于它的交易日。
 func TestCoverageBoundsSnapToTradingDays(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
-	// 10-03 到 10-05 整段是假期：规整后最早一根（10-08）晚于最晚一根（09-30），覆盖范围视为未知。
-	if from, to, ok := CoverageBounds(ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 3), IndexedTo: stockDay(t, 2026, 10, 5)}, resolved); ok {
-		t.Fatalf("整段落在假期内的覆盖范围应视为未知：%s ~ %s", from, to)
+	// 10-03 到 10-05 整段是假期：规整后最早一根（10-08）晚于最晚一根（09-30），报出行都不在交易日上。
+	if bounds, err := CoverageBounds(ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 3), IndexedTo: stockDay(t, 2026, 10, 5)}, resolved); err == nil || !strings.Contains(err.Error(), "都不在 A 股交易日上") {
+		t.Fatalf("整段落在假期内的覆盖范围应报出原因：%+v err=%v", bounds, err)
 	}
 	view := ViewInfo{IndexedFrom: stockDay(t, 2026, 9, 27), IndexedTo: stockDay(t, 2026, 10, 5), SeriesBars: 5000}
-	from, to, ok := CoverageBounds(view, resolved)
-	if !ok || !from.Equal(stockDay(t, 2026, 9, 28)) || !to.Equal(stockDay(t, 2026, 9, 30)) {
-		t.Fatalf("覆盖边界应规整到交易日：%s ~ %s ok=%v", from, to, ok)
+	bounds, err := CoverageBounds(view, resolved)
+	if err != nil || !bounds.From.Equal(stockDay(t, 2026, 9, 28)) || !bounds.To.Equal(stockDay(t, 2026, 9, 30)) || bounds.ToClosed {
+		t.Fatalf("覆盖边界应规整到交易日：%+v err=%v", bounds, err)
 	}
 	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 28), stockDay(t, 2026, 10, 9)); err != nil {
 		t.Fatalf("覆盖边界落在节假日时回放仍应可以提交：%v", err)
@@ -89,8 +89,8 @@ func TestPreviousFactorsOnlyForFactorColumns(t *testing.T) {
 rules:
   - {id: r, type: signal, pool: [BTC-USDT], entry: "bars[-1].close < bars[0].close && ma_20 > 0", exit: "close < 1", weight: 1}
 `)
-	resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", klineOnly)
-	if err != nil || !resolved.UsesPreviousBar || len(resolved.PreviousFactors) != 0 || len(resolved.ReadinessBinding().PreviousFactors) != 0 {
+	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", klineOnly)
+	if err != nil || !program.UsesPreviousBar || len(resolved.PreviousFactors) != 0 || len(resolved.ReadinessBinding().PreviousFactors) != 0 {
 		t.Fatalf("只经 bars[-1] 读 K 线列时不应要求上一根的因子证据：%+v err=%v", resolved, err)
 	}
 	withFactor, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))

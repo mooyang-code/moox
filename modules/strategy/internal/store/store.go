@@ -103,6 +103,8 @@ type Store struct {
 	db *gorm.DB
 	// onCancel 在待投递结果被取消、事务提交之后调用，用于按原因计数。
 	onCancel func(reason string, count int64)
+	// onSentAfterCancel 在已取消的结果确认已经发出、改记 sent 之后调用：取消计数只增不减，这类结果另行计数。
+	onSentAfterCancel func()
 }
 
 // 待投递结果被取消的原因。
@@ -113,8 +115,14 @@ const (
 	CancelRejected   = "rejected"   // 事件无法通过契约校验（永久发布错误）
 )
 
+// CancelReasons 是全部取消原因。
+var CancelReasons = []string{CancelSuperseded, CancelExpired, CancelInactive, CancelRejected}
+
 // SetCancelObserver 设置待投递结果被取消时的回调（事务提交之后调用）；传 nil 关闭。
 func (s *Store) SetCancelObserver(fn func(reason string, count int64)) { s.onCancel = fn }
+
+// SetSentAfterCancelObserver 设置已取消的结果确认已经发出、改记 sent 时的回调；传 nil 关闭。
+func (s *Store) SetSentAfterCancelObserver(fn func()) { s.onSentAfterCancel = fn }
 
 func (s *Store) cancelled(reason string, count int64) {
 	if count > 0 && s.onCancel != nil {

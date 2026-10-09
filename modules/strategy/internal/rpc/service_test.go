@@ -40,6 +40,8 @@ type fakeResolver struct {
 	coverageErr error
 	// onResolve 在每次解析开始时调用，用来模拟解析期间的并发修改。
 	onResolve func()
+	// calendar 非空时解析结果使用该日历的日线（例如 cn_stock）。
+	calendar string
 }
 
 func (f *fakeResolver) CheckAgeCoverage(context.Context, string, input.Resolved) error {
@@ -67,7 +69,11 @@ func (f *fakeResolver) Resolve(_ context.Context, _, viewID string, strategy dsl
 	if !spot {
 		marketType = "swap"
 	}
-	return input.Resolved{ViewID: viewID, DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: spot, MarketType: marketType, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}, program, nil
+	resolved := input.Resolved{ViewID: viewID, DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: spot, MarketType: marketType, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
+	if f.calendar != "" {
+		resolved.Calendar, resolved.Bar = f.calendar, "1d"
+	}
+	return resolved, program, nil
 }
 
 func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.Program, time.Time) (input.Loaded, error) {

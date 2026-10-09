@@ -27,7 +27,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 	if binding := resolved.Columns["close"]; binding.Source != SourceDataset || binding.FactorID != "" {
 		t.Fatalf("close 的绑定不符：%+v", binding)
 	}
-	if !resolved.UsesPreviousBar || !program.UsesPreviousBar {
+	if !program.UsesPreviousBar {
 		t.Fatal("示例使用了 bars[-1]，应标记 UsesPreviousBar")
 	}
 	if got := resolved.ColumnsOfFactor("qv"); len(got) != 2 || got[0] != "quote_volume_mean_20" {
@@ -41,8 +41,15 @@ func TestResolveExampleStrategy(t *testing.T) {
 	if err != nil || parsed.ViewID != "view_factor_1h" || len(parsed.ViewColumns) != 11 {
 		t.Fatalf("resolved_json 往返失败：%+v err=%v", parsed, err)
 	}
-	if _, err := Compile(parsed, exampleDSL); err != nil {
+	if len(parsed.PreviousFactors) != 0 {
+		t.Fatalf("经 bars[-1] 读取的因子是派生字段，不应进入快照：%v", parsed.PreviousFactors)
+	}
+	recompiled, _, err := Compile(parsed, exampleDSL)
+	if err != nil {
 		t.Fatalf("按固化列重新编译失败：%v", err)
+	}
+	if len(recompiled.PreviousFactors) != 1 || recompiled.PreviousFactors[0] != "ma" {
+		t.Fatalf("重新编译应按程序重算经 bars[-1] 读取的因子：%v", recompiled.PreviousFactors)
 	}
 	binding := resolved.ReadinessBinding()
 	if len(binding.PreviousFactors) != 1 || binding.PreviousFactors[0] != "ma" || binding.Factors["ma"] != "sha256:ma" {

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
 func parseTime(raw, field string) (time.Time, error) {
@@ -76,6 +77,10 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	}
 	if !resolved.Spot {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", req.GetViewId(), resolved.MarketType))}, nil
+	}
+	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间。
+	if start, end, err = input.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
 	generation := ""
@@ -168,19 +173,34 @@ func (s *Service) replaySource(ctx context.Context, scoped string, req *strategy
 func (s *Service) scopedReplay(ctx context.Context, replayID string) (store.Replay, error) {
 	scoped, err := requireSpaceID(ctx)
 	if err != nil {
-		return store.Replay{}, err
+		return store.Replay{}, &badRequestError{err}
 	}
 	if strings.TrimSpace(replayID) == "" {
-		return store.Replay{}, errors.New("replay_id 不能为空")
+		return store.Replay{}, &badRequestError{errors.New("replay_id 不能为空")}
 	}
 	replay, err := s.Store.GetReplay(ctx, replayID)
 	if err != nil {
 		return store.Replay{}, err
 	}
 	if replay.SpaceID != scoped {
-		return store.Replay{}, errors.New("回放不在当前空间")
+		return store.Replay{}, &badRequestError{errors.New("回放不在当前空间")}
 	}
 	return replay, nil
+}
+
+// badRequestError 标记请求本身的问题（缺少空间或 ID、回放不在当前空间）。
+type badRequestError struct{ error }
+
+func (e *badRequestError) Unwrap() error { return e.error }
+
+// replayLookupError 把读取回放的错误映射为返回码：请求本身的问题 → 参数无效；回放不存在 → NOT_FOUND；
+// 其余（存储错误）→ 内部错误，而不是笼统地当作参数无效。
+func replayLookupError(err error) *commonpb.RetInfo {
+	var bad *badRequestError
+	if errors.As(err, &bad) {
+		return invalid(err)
+	}
+	return failure(err)
 }
 
 func (s *Service) GetReplay(ctx context.Context, req *strategypb.GetReplayReq) (*strategypb.GetReplayRsp, error) {
@@ -189,10 +209,7 @@ func (s *Service) GetReplay(ctx context.Context, req *strategypb.GetReplayReq) (
 	}
 	replay, err := s.scopedReplay(ctx, req.GetReplayId())
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return &strategypb.GetReplayRsp{RetInfo: failure(err)}, nil
-		}
-		return &strategypb.GetReplayRsp{RetInfo: invalid(err)}, nil
+		return &strategypb.GetReplayRsp{RetInfo: replayLookupError(err)}, nil
 	}
 	return &strategypb.GetReplayRsp{RetInfo: success(), Replay: replayProto(replay)}, nil
 }
@@ -224,7 +241,7 @@ func (s *Service) ListReplayBars(ctx context.Context, req *strategypb.ListReplay
 	}
 	replay, err := s.scopedReplay(ctx, req.GetReplayId())
 	if err != nil {
-		return &strategypb.ListReplayBarsRsp{RetInfo: invalid(err)}, nil
+		return &strategypb.ListReplayBarsRsp{RetInfo: replayLookupError(err)}, nil
 	}
 	// 完整记录含目标与持仓 JSON，每页最多 100 根，避免报文超过网关的大小上限；brief 只有曲线与摘要字段，每页最多 5000 根。
 	page, size := pageValues(req.GetPage())
@@ -253,7 +270,7 @@ func (s *Service) CancelReplay(ctx context.Context, req *strategypb.CancelReplay
 	}
 	replay, err := s.scopedReplay(ctx, req.GetReplayId())
 	if err != nil {
-		return &strategypb.CancelReplayRsp{RetInfo: invalid(err)}, nil
+		return &strategypb.CancelReplayRsp{RetInfo: replayLookupError(err)}, nil
 	}
 	if err := s.Store.CancelReplay(ctx, replay.ReplayID, s.nowTime()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

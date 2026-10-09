@@ -520,6 +520,9 @@ func (s *Store) TransitionPublishStatus(ctx context.Context, resultID string, fr
 	if to == PublishCancelled {
 		s.cancelled(CancelRejected, 1)
 	}
+	if from == PublishCancelled && s.onSentAfterCancel != nil {
+		s.onSentAfterCancel()
+	}
 	return nil
 }
 

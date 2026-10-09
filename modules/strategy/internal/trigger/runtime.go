@@ -38,7 +38,7 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 	if err != nil {
 		return &runtime{sessionID: sessionID, dslHash: session.DSLHash}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 	}
-	program, err := input.Compile(resolved, version.DSLYaml)
+	resolved, program, err := input.Compile(resolved, version.DSLYaml)
 	if err != nil {
 		return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: resolved}, &input.SkipError{Reason: input.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
 	}

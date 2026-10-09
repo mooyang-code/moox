@@ -33,7 +33,7 @@ func TestValidateRejectsSemanticErrors(t *testing.T) {
 		"method 非法":                  {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: {total: 1, method: score}}\n", want: "method"},
 		"rank 用在 filter":             {rules: "  - {id: a, type: rank, filter: \"rank(close) > 0.5\", score: close, select: {top: 1}, weight: 1}\n", want: "只能在 score"},
 		"score 用在 filter":            {rules: "  - {id: a, type: rank, filter: \"score > 0\", score: close, select: {top: 1}, weight: 1}\n", want: "score 只能"},
-		"bar 非法":                     {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", portfolio: "bar: 7x\n", want: "规范频率"},
+		"bar 非法":                     {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", portfolio: "bar: 7x\n", want: "可选：1m、5m、15m、30m、1h、4h、1d"},
 		"max_weight 超杠杆":             {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", portfolio: "portfolio: {max_weight: 1.5}\n", want: "max_weight"},
 		"max_missing 越界":             {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", portfolio: "portfolio: {max_missing: 2}\n", want: "max_missing"},
 		"杠杆超过上限":                     {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", portfolio: "portfolio: {leverage: 11}\n", want: "不能超过 10"},

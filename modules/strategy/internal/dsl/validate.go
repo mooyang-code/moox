@@ -12,6 +12,22 @@ import (
 
 var ruleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+// supportedBar 报告 DSL 是否支持这个周期：只支持定长的分钟、小时与日线（30 秒、周线、月线不支持）。
+func supportedBar(bar frequencypkg.Frequency) bool {
+	return bar != frequencypkg.Second30 && bar != frequencypkg.Week1 && bar != frequencypkg.Month1
+}
+
+// supportedBars 返回 DSL 支持的周期，从短到长。
+func supportedBars() []string {
+	bars := make([]string, 0)
+	for _, bar := range frequencypkg.All() {
+		if supportedBar(bar) {
+			bars = append(bars, string(bar))
+		}
+	}
+	return bars
+}
+
 // 取值上限：超出这些量级的写法没有实际意义，却会让时间换算溢出、权重变成天文数字。
 const (
 	// MaxCount 是 min_age_bars、min_universe、select.top / bottom / buffer 与 holding.bars 的上限。
@@ -35,11 +51,8 @@ func Validate(s *Strategy) error {
 	}
 	if s.Bar != "" {
 		bar, err := frequencypkg.Parse(s.Bar)
-		if err != nil {
-			return fmt.Errorf("bar %q 不是规范频率：%w", s.Bar, err)
-		}
-		if bar == frequencypkg.Week1 || bar == frequencypkg.Month1 || bar == frequencypkg.Second30 {
-			return fmt.Errorf("bar %q 不受支持，只支持分钟、小时和日线", s.Bar)
+		if err != nil || !supportedBar(bar) {
+			return fmt.Errorf("bar %q 不受支持，可选：%s", s.Bar, strings.Join(supportedBars(), "、"))
 		}
 		s.Bar = string(bar)
 	}

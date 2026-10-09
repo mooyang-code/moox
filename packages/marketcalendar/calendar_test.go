@@ -61,7 +61,10 @@ func TestLoadEmbeddedChinaCalendarAndManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	manifest := calendar.Manifest()
+	manifest, err := parseCalendarManifest(embeddedManifest)
+	if err != nil {
+		t.Fatalf("parseCalendarManifest() error = %v", err)
+	}
 	if calendar.ID() != "cn_stock" || manifest.CalendarID != "cn_stock" {
 		t.Fatalf("calendar identity = %q/%q", calendar.ID(), manifest.CalendarID)
 	}
@@ -80,7 +83,7 @@ func TestLoadEmbeddedChinaCalendarAndManifest(t *testing.T) {
 	if calendar.LastDate().String() != "2026-12-31" {
 		t.Fatalf("LastDate() = %s, want 2026-12-31", calendar.LastDate())
 	}
-	if manifest.ValidFrom != calendar.FirstDate() || manifest.ValidThrough != calendar.LastDate() {
+	if manifest.ValidFrom != calendar.FirstDate().String() || manifest.ValidThrough != calendar.LastDate().String() {
 		t.Fatalf("manifest coverage = %s..%s, calendar = %s..%s", manifest.ValidFrom, manifest.ValidThrough, calendar.FirstDate(), calendar.LastDate())
 	}
 }
@@ -88,13 +91,13 @@ func TestLoadEmbeddedChinaCalendarAndManifest(t *testing.T) {
 func TestEmbeddedDataHashMatchesManifest(t *testing.T) {
 	t.Parallel()
 
-	calendar, err := Load("cn_stock")
+	manifest, err := parseCalendarManifest(embeddedManifest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(embeddedTradingDays)
 	want := "sha256:" + hex.EncodeToString(sum[:])
-	if got := calendar.Manifest().SHA256; got != want {
+	if got := manifest.SHA256; got != want {
 		t.Fatalf("manifest SHA256 = %q, want %q", got, want)
 	}
 }
@@ -145,21 +148,6 @@ func TestStatusDistinguishesTradingNonTradingAndOutOfCoverage(t *testing.T) {
 	}
 }
 
-func TestReadinessFailsClosedAndWarnsBeforeCoverageExpires(t *testing.T) {
-	t.Parallel()
-
-	calendar := mustLoad(t)
-	if err := calendar.Readiness(mustDate(t, "2026-01-01"), 30*24*time.Hour); err != nil {
-		t.Fatalf("Readiness() before warning window = %v", err)
-	}
-	if err := calendar.Readiness(mustDate(t, "2026-12-01"), 30*24*time.Hour); !errors.Is(err, ErrCalendarExpiring) {
-		t.Fatalf("Readiness() expiring error = %v, want ErrCalendarExpiring", err)
-	}
-	if err := calendar.Readiness(mustDate(t, "2027-01-01"), 0); !errors.Is(err, ErrCalendarExpired) {
-		t.Fatalf("Readiness() expired error = %v, want ErrCalendarExpired", err)
-	}
-}
-
 func TestPreviousAndNextTradingDayAreStrictAndBounded(t *testing.T) {
 	t.Parallel()
 
@@ -195,62 +183,6 @@ func TestPreviousAndNextTradingDayAreStrictAndBounded(t *testing.T) {
 	}
 	if _, err := calendar.NextTradingDay(mustDate(t, "2027-01-01")); !errors.Is(err, ErrOutOfCoverage) {
 		t.Fatalf("NextTradingDay(after last) error = %v, want ErrOutOfCoverage", err)
-	}
-}
-
-func TestTradingDaysIsInclusiveAndReturnsIndependentSlice(t *testing.T) {
-	t.Parallel()
-
-	calendar := mustLoad(t)
-	start := mustDate(t, "1992-04-30")
-	end := mustDate(t, "1992-05-05")
-	dates, err := calendar.TradingDays(start, end)
-	if err != nil {
-		t.Fatalf("TradingDays() error = %v", err)
-	}
-	want := []string{"1992-04-30", "1992-05-04", "1992-05-05"}
-	if len(dates) != len(want) {
-		t.Fatalf("TradingDays() len = %d, want %d", len(dates), len(want))
-	}
-	for i, value := range want {
-		if dates[i].String() != value {
-			t.Fatalf("TradingDays()[%d] = %s, want %s", i, dates[i], value)
-		}
-	}
-
-	dates[0] = mustDate(t, "2000-01-03")
-	again, err := calendar.TradingDays(start, end)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again[0].String() != "1992-04-30" {
-		t.Fatalf("calendar data changed after result mutation: %s", again[0])
-	}
-}
-
-func TestTradingDaysRejectsInvalidRangesAndOutOfCoverage(t *testing.T) {
-	t.Parallel()
-
-	calendar := mustLoad(t)
-	tests := []struct {
-		name      string
-		start     string
-		end       string
-		wantError error
-	}{
-		{name: "reversed", start: "2024-01-02", end: "2024-01-01", wantError: ErrInvalidRange},
-		{name: "start before coverage", start: "1990-12-18", end: "1990-12-19", wantError: ErrOutOfCoverage},
-		{name: "end after coverage", start: "2026-12-31", end: "2027-01-01", wantError: ErrOutOfCoverage},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := calendar.TradingDays(mustDate(t, tt.start), mustDate(t, tt.end))
-			if !errors.Is(err, tt.wantError) {
-				t.Fatalf("TradingDays() error = %v, want %v", err, tt.wantError)
-			}
-		})
 	}
 }
 
@@ -343,8 +275,8 @@ func mustDate(t *testing.T, value string) CivilDate {
 	return date
 }
 
-// TradingDayIndex 返回交易日在日历中的序号（首个交易日为 0），与 TradingDays 的计数一致；非交易日报错。
-func TestTradingDayIndexMatchesTradingDays(t *testing.T) {
+// TradingDayIndex 返回交易日在日历中的序号（首个交易日为 0），等于从它逐个回退到首个交易日的步数；非交易日报错。
+func TestTradingDayIndexCountsTradingDays(t *testing.T) {
 	t.Parallel()
 
 	calendar, err := Load("cn_stock")
@@ -355,13 +287,15 @@ func TestTradingDayIndexMatchesTradingDays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	days, err := calendar.TradingDays(calendar.FirstDate(), day)
-	if err != nil {
-		t.Fatal(err)
+	steps := 0
+	for current := day; current != calendar.FirstDate(); steps++ {
+		if current, err = calendar.PrevTradingDay(current); err != nil {
+			t.Fatal(err)
+		}
 	}
 	index, err := calendar.TradingDayIndex(day)
-	if err != nil || index != len(days)-1 {
-		t.Fatalf("交易日序号 = %d，期望 %d（err=%v）", index, len(days)-1, err)
+	if err != nil || index != steps {
+		t.Fatalf("交易日序号 = %d，期望 %d（err=%v）", index, steps, err)
 	}
 	if first, err := calendar.TradingDayIndex(calendar.FirstDate()); err != nil || first != 0 {
 		t.Fatalf("首个交易日的序号应为 0：%d err=%v", first, err)

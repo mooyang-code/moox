@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
 const (
@@ -190,7 +191,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	// 代次变了（排队期间重建过索引，新一代只保留最近的根数）才按新索引的精确统计复查起点并截断终点。
 	end := job.EndTime
 	if view.Generation != job.ViewGeneration {
-		if view, end, err = r.recheckWindow(ctx, job, resolved, program, view, job.StartTime, "在排队期间"); err != nil {
+		if view, end, err = r.recheckWindow(ctx, job, resolved, program, view, job.StartTime, end, false); err != nil {
 			return Metrics{}, err
 		}
 	}
@@ -206,9 +207,12 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		return Metrics{}, err
 	}
 	columns := uniqueStrings(append(append([]string{"close"}, program.Columns...), program.PreviousColumns...))
-	loader := &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: columns}
+	reader := &segmentReader{
+		runner: r, job: job, resolved: resolved, program: program, end: end,
+		rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: columns},
+		history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}},
+	}
 	members := cachedMembership(r.Client, job.SpaceID)
-	history := &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}}
 	ledger := NewLedger(r.initialEquity(), job.FeeBps, r.liquidateAfter())
 	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, freq.NominalDuration()), minAnnualizedBars(resolved.Calendar, freq.NominalDuration()))
 	acc.metrics.Factors = resolved.Factors
@@ -217,11 +221,16 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	previousEquity := r.initialEquity()
 	chunk := r.chunkBars()
 	for start := 0; start < len(bars); start += chunk {
-		end := min(start+chunk, len(bars))
-		segment := bars[start:end]
-		rows, presence, err := r.loadSegment(ctx, job, resolved, program, segment, loader, history)
+		segment := bars[start:min(start+chunk, len(bars))]
+		rows, presence, err := reader.load(ctx, segment)
 		if err != nil {
 			return acc.finish(), err
+		}
+		// 换代后新索引可能截短了终点：丢掉终点之后的 bar（复查保证本段至少还剩第一根）。
+		if cut := sort.Search(len(bars), func(i int) bool { return !bars[i].StorageStart.Before(reader.end) }); cut < len(bars) {
+			bars = bars[:cut]
+			segment = bars[start:min(start+chunk, len(bars))]
+			acc.note(fmt.Sprintf("回放过程中 View 重建了索引，终点按新索引截到 %s（不含）", reader.end.Format(time.RFC3339)))
 		}
 		for _, bar := range segment {
 			if status, err := r.Store.ReplayStatus(ctx, job.ReplayID); err != nil {
@@ -269,55 +278,98 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			return acc.finish(), err
 		}
 	}
+	if reader.switches > 0 {
+		acc.note(fmt.Sprintf("回放过程中 View 重建了 %d 次索引，每次都按新索引复查了剩余区间后继续", reader.switches))
+	}
 	return acc.finish(), nil
 }
 
-// maxIndexSwitches 是一次回放内允许跟随的索引换代次数。
+// maxIndexSwitches 是一次回放内允许跟随的索引换代次数（整个回放累计，不按段计）。
 const maxIndexSwitches = 3
 
-// recheckWindow 在活动索引换了一代后，按新索引的精确统计复查 [start, job.EndTime) 的起点并截断终点；when 说明换代
-// 发生在排队期间还是回放过程中。新索引的统计未知时无法确认区间仍然有效，拒绝继续。
-func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, view input.ViewInfo, start time.Time, when string) (input.ViewInfo, time.Time, error) {
-	view, err := input.WithCoverage(ctx, r.Client, job.SpaceID, view, true)
-	if err != nil {
-		return input.ViewInfo{}, time.Time{}, err
+// maxRecheckRereads 是复查时读取覆盖统计遇到活动索引再次变化、按最新 View 重读的次数上限。
+const maxRecheckRereads = 3
+
+// recheckWindow 在活动索引换了一代后，按新索引的精确统计复查 [start, end) 的起点并截断终点；midRun 说明换代发生在
+// 回放过程中（start 是剩余区间的起点）还是排队期间（start 是回放起点）。新索引的统计未知时无法确认区间仍然有效，拒绝继续。
+func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, view input.ViewInfo, start, end time.Time, midRun bool) (input.ViewInfo, time.Time, error) {
+	when := "在排队期间"
+	if midRun {
+		when = "在回放过程中"
+	}
+	for attempt := 0; ; attempt++ {
+		covered, err := input.WithCoverage(ctx, r.Client, job.SpaceID, view, true)
+		if err == nil {
+			view = covered
+			break
+		}
+		// 读取覆盖统计时活动索引又换了槽位：按最新的 View 重新复查。
+		if !errors.Is(err, input.ErrStale) || attempt >= maxRecheckRereads {
+			return input.ViewInfo{}, time.Time{}, err
+		}
+		if view, err = r.Client.GetView(ctx, job.SpaceID, job.ViewID); err != nil {
+			return input.ViewInfo{}, time.Time{}, err
+		}
 	}
 	if input.CoverageStart(view, resolved).IsZero() {
 		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引，新索引的覆盖范围暂时未知，无法确认回放区间仍然有效；请稍后重新发起回放", job.ViewID, when)
 	}
-	end, err := input.ReplayWindow(resolved, program, view, start, job.EndTime)
+	newEnd, err := input.ReplayWindow(resolved, program, view, start, end)
+	var early *input.EarlyStartError
+	if midRun && errors.As(err, &early) {
+		// 回放过程中复查的是剩余区间，起点是本段的第一根，不是回放起点。
+		requirement := ""
+		if early.History > 0 {
+			requirement = fmt.Sprintf("，%s 要求它之前还有 %d 根历史", early.Source, early.History)
+		}
+		err = fmt.Errorf("剩余区间从 %s 起，但新索引的活跃序列从 %s 起才有数据%s（新索引的可用起点为 %s）", early.First.Format(time.RFC3339), early.Coverage.Format(time.RFC3339), requirement, early.Earliest.Format(time.RFC3339))
+	}
 	if err != nil {
 		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引：%w；请重新发起回放", job.ViewID, when, err)
 	}
-	r.logf("回放 %s：View %s %s重建了索引（%s → %s），按新索引复查区间通过", job.ReplayID, job.ViewID, when, job.ViewGeneration, view.Generation)
-	return view, end, nil
+	r.logf("回放 %s：View %s %s重建了索引（→ %s），按新索引复查区间通过", job.ReplayID, job.ViewID, when, view.Generation)
+	return view, newEnd, nil
 }
 
-// loadSegment 读取一段的行与年龄判定所需的历史。读取期间活动索引换了一代：按新索引复查从本段起的剩余区间，通过才让
-// 两个读取器一起切换过去重读本段，否则失败，不静默改读一代可能已经丢掉较早 bar 的新索引。
-func (r *Runner) loadSegment(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, segment []input.PeriodBoundaries, loader, history *input.RangeLoader) (input.RangeRows, *presence, error) {
+// segmentReader 按段读取回放的行与年龄判定所需的历史，跟随活动索引换代：读取期间活动索引换了一代时，按新索引复查从本段
+// 起的剩余区间，通过才让两个读取器一起切换过去重读本段，并按新索引截短终点；否则失败，不静默改读一代可能已经丢掉较早
+// bar 的新索引。一次回放内最多跟随 maxIndexSwitches 次。
+type segmentReader struct {
+	runner   *Runner
+	job      store.Replay
+	resolved input.Resolved
+	program  *dsl.Program
+	rows     *input.RangeLoader
+	history  *input.RangeLoader
+	switches int
+	// end 是当前有效的终点（不含）：换代后可能被新索引截短。
+	end time.Time
+}
+
+func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundaries) (input.RangeRows, *presence, error) {
 	readFrom := segment[0].StorageStart
-	if program.UsesPreviousBar {
+	if s.program.UsesPreviousBar && !segment[0].PreviousStart.IsZero() {
 		readFrom = segment[0].PreviousStart
 	}
-	for switches := 0; ; switches++ {
-		rows, err := loader.Load(ctx, readFrom, segment[len(segment)-1].StorageStart.Add(time.Nanosecond))
+	for {
+		rows, err := s.rows.Load(ctx, readFrom, segment[len(segment)-1].StorageStart.Add(time.Nanosecond))
 		var ages *presence
 		if err == nil {
-			ages, err = agePresence(ctx, history, resolved, segment)
+			ages, err = agePresence(ctx, s.history, s.resolved, segment)
 		}
 		var changed *input.IndexChangedError
 		if !errors.As(err, &changed) {
 			return rows, ages, err
 		}
-		if switches >= maxIndexSwitches {
-			return input.RangeRows{}, nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", job.ViewID)
+		if s.switches >= maxIndexSwitches {
+			return input.RangeRows{}, nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", s.job.ViewID)
 		}
-		view, _, err := r.recheckWindow(ctx, job, resolved, program, changed.View, segment[0].StorageStart, "在回放过程中")
+		s.switches++
+		view, end, err := s.runner.recheckWindow(ctx, s.job, s.resolved, s.program, changed.View, segment[0].StorageStart, s.end, true)
 		if err != nil {
 			return input.RangeRows{}, nil, err
 		}
-		loader.View, history.View = view, view
+		s.rows.View, s.history.View, s.end = view, view, end
 	}
 }
 
@@ -443,6 +495,10 @@ func agePresence(ctx context.Context, history *input.RangeLoader, resolved input
 		return result, nil
 	}
 	from, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, resolved.MinAgeBars+2)
+	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
+		// A 股内嵌日历起点附近没有目标根之前的两根容忍窗口，从目标根读起。
+		from, err = input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, resolved.MinAgeBars)
+	}
 	if err != nil {
 		return nil, err
 	}

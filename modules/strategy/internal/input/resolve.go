@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
 // DefaultCalendar 是没有声明日历的数据集使用的日历。
@@ -150,16 +151,7 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	if err != nil {
 		return Resolved{}, nil, err
 	}
-	resolved.UsesPreviousBar = program.UsesPreviousBar
-	previousFactors := make([]string, 0)
-	for _, column := range program.PreviousColumns {
-		if binding := resolved.Columns[column]; binding.Source == SourceFactor && binding.FactorID != "" {
-			previousFactors = append(previousFactors, binding.FactorID)
-		}
-	}
-	if len(previousFactors) > 0 {
-		resolved.PreviousFactors = uniqueSorted(previousFactors)
-	}
+	resolved.PreviousFactors = previousFactors(resolved.Columns, program)
 	resolved.CompletionKind = events.CollectorPeriodCompleted.Name()
 	if strings.TrimSpace(dataset.Attributes["dataset_role"]) == datasetRoleFactorResult {
 		resolved.CompletionKind = events.FactorPeriodComputed.Name()
@@ -238,12 +230,19 @@ func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int) error {
 	if view.SeriesBars > 0 && minAgeBars > view.SeriesBars {
 		return fmt.Errorf("universe.min_age_bars=%d 超过 View %s 每个序列保留的 %d 根，永远无法满足", minAgeBars, resolved.ViewID, view.SeriesBars)
 	}
-	start := CoverageStart(view, resolved)
-	_, latest, ok := CoverageBounds(view, resolved)
-	if start.IsZero() || !ok {
+	bounds, err := CoverageBounds(view, resolved)
+	if errors.Is(err, ErrCoverageUnknown) {
 		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认 universe.min_age_bars=%d 所需的历史，请等数据写入后再启用", resolved.ViewID, minAgeBars)
 	}
+	if err != nil {
+		return coverageUnusable(resolved.ViewID, err, fmt.Sprintf("无法确认 universe.min_age_bars=%d 所需的历史", minAgeBars))
+	}
+	start, latest := coverageStart(bounds, view, resolved, time.Time{}), bounds.To
 	target, err := HistoryStart(resolved.Calendar, resolved.Bar, latest, minAgeBars)
+	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
+		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 A 股内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars",
+			minAgeBars, resolved.ViewID, start.Format(time.RFC3339), latest.Format(time.RFC3339))
+	}
 	if err != nil {
 		return err
 	}
@@ -306,20 +305,40 @@ func retentionBars(retention, calendar, bar string) (int, bool) {
 	return int((time.Duration(hours) * time.Hour) / duration), true
 }
 
-// Compile 用固化的解析结果重新编译 DSL（重启或恢复会话时使用）。
-func Compile(resolved Resolved, dslYaml string) (*dsl.Program, error) {
+// previousFactors 返回经 bars[-1] 读取的因子列所属的因子（排序）；没有时返回 nil。
+func previousFactors(columns map[string]ColumnBinding, program *dsl.Program) []string {
+	ids := make([]string, 0)
+	for _, column := range program.PreviousColumns {
+		if binding := columns[column]; binding.Source == SourceFactor && binding.FactorID != "" {
+			ids = append(ids, binding.FactorID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return uniqueSorted(ids)
+}
+
+// Compile 用固化的解析结果重新编译 DSL（重启或恢复会话时使用），并按编译结果重算派生字段（经 bars[-1] 读取的因子）：
+// 它们不进快照，不会因快照缺字段而静默跳过上一根的版本核对。
+func Compile(resolved Resolved, dslYaml string) (Resolved, *dsl.Program, error) {
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	if err != nil {
-		return nil, err
+		return Resolved{}, nil, err
 	}
-	return dsl.Compile(strategy, resolved.ViewColumns)
+	program, err := dsl.Compile(strategy, resolved.ViewColumns)
+	if err != nil {
+		return Resolved{}, nil, err
+	}
+	resolved.PreviousFactors = previousFactors(resolved.Columns, program)
+	return resolved, program, nil
 }
 
 // ParseResolved 解析保存的 resolved_json。
 func ParseResolved(raw []byte) (Resolved, error) {
 	var resolved Resolved
 	if err := json.Unmarshal(raw, &resolved); err != nil {
-		return Resolved{}, fmt.Errorf("解析 resolved_json：%w", err)
+		return Resolved{}, &describedError{message: "会话快照的 resolved_json 无法解析", cause: err}
 	}
 	if resolved.ViewID == "" || resolved.Bar == "" || resolved.Calendar == "" {
 		return Resolved{}, errors.New("resolved_json 缺少 view_id、bar 或 calendar")

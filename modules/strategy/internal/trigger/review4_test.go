@@ -39,7 +39,7 @@ func (h *harness) rebindStock() {
 
 // A 股日历无法换算的周期（不在交易日上、超出内嵌日历的范围）只能 ACK：写日志并计入模块健康失败，不悄悄丢掉。
 func TestHandleLogsUnmappablePeriods(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.rebindStock()
 	var logs []string
 	h.handler.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }

@@ -20,7 +20,6 @@ var (
 	ErrUnknownCalendar      = errors.New("unknown trading calendar")
 	ErrInvalidCivilDate     = errors.New("invalid civil date")
 	ErrOutOfCoverage        = errors.New("date is outside calendar coverage")
-	ErrInvalidRange         = errors.New("invalid calendar date range")
 	ErrNoPreviousTradingDay = errors.New("no previous trading day in calendar coverage")
 	ErrNoNextTradingDay     = errors.New("no next trading day in calendar coverage")
 	ErrInvalidCalendarData  = errors.New("invalid trading calendar data")
@@ -75,15 +74,6 @@ func ParseCivilDate(value string) (CivilDate, error) {
 		return CivilDate{}, fmt.Errorf("%w: %q", ErrInvalidCivilDate, value)
 	}
 	return date, nil
-}
-
-// MustParseCivilDate parses value and panics if it is not a valid civil date.
-func MustParseCivilDate(value string) CivilDate {
-	date, err := ParseCivilDate(value)
-	if err != nil {
-		panic(err)
-	}
-	return date
 }
 
 // Validate reports whether d is a non-zero, valid civil date.
@@ -187,17 +177,6 @@ func (s CoverageStatus) String() string {
 	}
 }
 
-// Manifest describes the immutable data embedded in a TradingCalendar.
-type Manifest struct {
-	CalendarID   string    `json:"calendar_id"`
-	Source       string    `json:"source"`
-	Version      int       `json:"version"`
-	DataVersion  string    `json:"data_version,omitempty"`
-	ValidFrom    CivilDate `json:"valid_from"`
-	ValidThrough CivilDate `json:"valid_through"`
-	SHA256       string    `json:"sha256"`
-}
-
 type calendarManifest struct {
 	CalendarID   string `json:"calendar_id"`
 	Source       string `json:"source"`
@@ -215,7 +194,6 @@ type calendarFile struct {
 
 type calendarData struct {
 	id            string
-	manifest      Manifest
 	tradingDays   []CivilDate
 	tradingDaySet map[CivilDate]struct{}
 }
@@ -246,14 +224,6 @@ func (c TradingCalendar) ID() string {
 	return c.data.id
 }
 
-// Manifest returns a value copy of the calendar manifest.
-func (c TradingCalendar) Manifest() Manifest {
-	if c.data == nil {
-		return Manifest{}
-	}
-	return c.data.manifest
-}
-
 func (c TradingCalendar) FirstDate() CivilDate {
 	if c.data == nil || len(c.data.tradingDays) == 0 {
 		return CivilDate{}
@@ -277,34 +247,6 @@ func (c TradingCalendar) Status(date CivilDate) (CoverageStatus, error) {
 		return TradingDay, nil
 	}
 	return NonTradingDay, nil
-}
-
-// Readiness checks whether the embedded data is safe to use for the supplied
-// civil date. It fails closed after valid_through and reports an expiring
-// calendar inside warningWindow so the annual update job can run before the
-// first uncovered trading day.
-func (c TradingCalendar) Readiness(asOf CivilDate, warningWindow time.Duration) error {
-	if c.data == nil {
-		return fmt.Errorf("%w: calendar is not loaded", ErrCalendarExpired)
-	}
-	if err := asOf.Validate(); err != nil {
-		return err
-	}
-	if asOf.Before(c.FirstDate()) {
-		return fmt.Errorf("%w: %s is before %s", ErrOutOfCoverage, asOf, c.FirstDate())
-	}
-	if asOf.After(c.LastDate()) {
-		return fmt.Errorf("%w: %s is after %s", ErrCalendarExpired, asOf, c.LastDate())
-	}
-	if warningWindow <= 0 {
-		return nil
-	}
-	warningDays := int((warningWindow + 24*time.Hour - 1) / (24 * time.Hour))
-	threshold, ok := shiftCivilDate(c.LastDate(), -warningDays)
-	if ok && !asOf.Before(threshold) {
-		return fmt.Errorf("%w: valid_through=%s", ErrCalendarExpiring, c.LastDate())
-	}
-	return nil
 }
 
 // PrevTradingDay returns the closest trading day strictly before date.
@@ -353,24 +295,6 @@ func (c TradingCalendar) TradingDayIndex(date CivilDate) (int, error) {
 	return index, nil
 }
 
-// TradingDays returns all trading days in the inclusive [start, end] range.
-func (c TradingCalendar) TradingDays(start, end CivilDate) ([]CivilDate, error) {
-	if err := c.checkCovered(start); err != nil {
-		return nil, err
-	}
-	if err := c.checkCovered(end); err != nil {
-		return nil, err
-	}
-	if start.After(end) {
-		return nil, fmt.Errorf("%w: %s is after %s", ErrInvalidRange, start, end)
-	}
-	first := lowerBound(c.data.tradingDays, start)
-	last := upperBound(c.data.tradingDays, end)
-	result := make([]CivilDate, last-first)
-	copy(result, c.data.tradingDays[first:last])
-	return result, nil
-}
-
 func (c TradingCalendar) checkCovered(date CivilDate) error {
 	if c.data == nil {
 		return fmt.Errorf("%w: calendar is not loaded", ErrOutOfCoverage)
@@ -404,19 +328,8 @@ func loadCalendar(dataRaw, manifestRaw []byte) (TradingCalendar, error) {
 	if manifest.SHA256 != wantHash {
 		return TradingCalendar{}, fmt.Errorf("%w: got %q, want %q", ErrCalendarChecksum, manifest.SHA256, wantHash)
 	}
-	validFrom, _ := ParseCivilDate(manifest.ValidFrom)
-	validThrough, _ := ParseCivilDate(manifest.ValidThrough)
 	return TradingCalendar{data: &calendarData{
-		id: manifest.CalendarID,
-		manifest: Manifest{
-			CalendarID:   manifest.CalendarID,
-			Source:       manifest.Source,
-			Version:      manifest.Version,
-			DataVersion:  manifest.DataVersion,
-			ValidFrom:    validFrom,
-			ValidThrough: validThrough,
-			SHA256:       manifest.SHA256,
-		},
+		id:            manifest.CalendarID,
 		tradingDays:   append([]CivilDate(nil), data.dates...),
 		tradingDaySet: data.set,
 	}}, nil
@@ -552,19 +465,6 @@ func lowerBound(dates []CivilDate, target CivilDate) int {
 			left = middle + 1
 		} else {
 			right = middle
-		}
-	}
-	return left
-}
-
-func upperBound(dates []CivilDate, target CivilDate) int {
-	left, right := 0, len(dates)
-	for left < right {
-		middle := left + (right-left)/2
-		if dates[middle].After(target) {
-			right = middle
-		} else {
-			left = middle + 1
 		}
 	}
 	return left

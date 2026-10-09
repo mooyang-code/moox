@@ -125,7 +125,7 @@ type harness struct {
 	session  string
 }
 
-func newHarness(t *testing.T, dslYaml string, account *string, usesPrevious bool) *harness {
+func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	if err != nil {
@@ -143,11 +143,7 @@ func newHarness(t *testing.T, dslYaml string, account *string, usesPrevious bool
 	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", LogicalAccountID: account, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, UsesPreviousBar: usesPrevious, ViewColumns: []string{"close", "m"}}
-	if usesPrevious {
-		// previousBarDSL 经 bars[-1] 读取因子列 m。
-		resolved.PreviousFactors = []string{"f"}
-	}
+	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
 	raw, _ := json.Marshal(resolved)
 	session := "session-1"
 	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
@@ -242,7 +238,7 @@ func targetsOf(t *testing.T, result store.Result) map[string]string {
 // S9 + S14：ok → skipped → 重启后的 ok：规则状态只从最近 ok 决策恢复，buffer 保留上期持有；skipped 不取消 pending。
 func TestHandleRestoresStateFromLatestOkAcrossSkipAndRestart(t *testing.T) {
 	account := "acct-1"
-	h := newHarness(t, rankDSL, &account, false)
+	h := newHarness(t, rankDSL, &account)
 	h.frame(2, map[string]map[string]float64{"A": {"m": 3}, "B": {"m": 2}, "C": {"m": 1}})
 	expectAck(t, h.deliver(2))
 	first := h.resultAt(2)
@@ -290,7 +286,7 @@ func TestHandleRestoresStateFromLatestOkAcrossSkipAndRestart(t *testing.T) {
 
 // S10：重复投递只 ACK 不重写；乱序投递记 skipped(out_of_order)，不发布。
 func TestHandleDuplicateAndOutOfOrderDeliveries(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.frame(2, map[string]map[string]float64{"A": {"m": 1}})
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	expectAck(t, h.deliver(2))
@@ -310,7 +306,7 @@ func TestHandleDuplicateAndOutOfOrderDeliveries(t *testing.T) {
 
 // S16：首次收到已过期周期：skipped(expired)，允许过去的 valid_until，不读输入、不更新状态。
 func TestHandleExpiredPeriodOnFirstDelivery(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.now = barStart(1).Add(time.Hour).Add(2 * time.Hour)
 	expectAck(t, h.deliver(1))
 	expired := h.resultAt(1)
@@ -328,7 +324,7 @@ func TestHandleExpiredPeriodOnFirstDelivery(t *testing.T) {
 // S17：求值完成后、提交前跨过有效期：转为 skipped(expired)，不发布。
 func TestHandleExpiryDuringEvaluation(t *testing.T) {
 	account := "acct-1"
-	h := newHarness(t, rankDSL, &account, false)
+	h := newHarness(t, rankDSL, &account)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	h.loader.onLoad = func() { h.now = barStart(1).Add(4 * time.Hour) }
 	h.now = barStart(1).Add(90 * time.Minute)
@@ -341,7 +337,7 @@ func TestHandleExpiryDuringEvaluation(t *testing.T) {
 
 // S15：读输入的基础设施错误先重试，超过预算后记 skipped(infra_retry_exhausted) 并 ACK；落库失败 NAK 而不 ACK。
 func TestHandleInfraRetryBudgetAndStoreFailure(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	h.loader.errs = []error{errors.New("storage down"), errors.New("storage down")}
 	expectRetry(t, h.deliver(1))
@@ -370,7 +366,7 @@ func TestHandleInfraRetryBudgetAndStoreFailure(t *testing.T) {
 
 // S11（处理器部分）：索引变化整体重读后成功。
 func TestHandleRereadsOnStaleSnapshot(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	h.loader.errs = []error{input.ErrStale, nil}
 	expectAck(t, h.deliver(1))
@@ -384,7 +380,7 @@ func TestHandleRereadsOnStaleSnapshot(t *testing.T) {
 
 // 绑定的因子定义变了：每期 skipped(factor_changed)，只有重新启用才能恢复，实例标记 degraded。
 func TestHandleFactorChangedDegradesInstance(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	message, payload := h.event(1, map[string]string{"f": "h2"})
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
@@ -398,7 +394,7 @@ func TestHandleFactorChangedDegradesInstance(t *testing.T) {
 
 // 配置错误：skipped(config_error)、实例标记 degraded；恢复后 ok 并回到健康。
 func TestHandleConfigErrorDegradesInstance(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	h.loader.errs = []error{&input.SkipError{Reason: input.SkipConfigError, Detail: "列已删除"}}
 	expectAck(t, h.deliver(1))
@@ -426,7 +422,7 @@ func TestHandleConfigErrorDegradesInstance(t *testing.T) {
 // 绑定账户的 ok 结果携带合法的目标权重事件。
 func TestHandleBuildsValidTargetEvent(t *testing.T) {
 	account := "acct-1"
-	h := newHarness(t, rankDSL, &account, false)
+	h := newHarness(t, rankDSL, &account)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 2}, "B": {"m": 1}})
 	expectAck(t, h.deliver(1))
 	result := h.resultAt(1)
@@ -457,7 +453,7 @@ func TestHandleBuildsValidTargetEvent(t *testing.T) {
 
 // S18 / S19（处理器部分）：用了 bars[-1] 的实例首期 previous_version_unknown 并记录指纹，次期正常；漏掉一根后再次 unknown。
 func TestHandlePreviousBarVersionEvidence(t *testing.T) {
-	h := newHarness(t, previousBarDSL, nil, true)
+	h := newHarness(t, previousBarDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 2, "prev_m": 1}})
 	h.frame(2, map[string]map[string]float64{"A": {"m": 3, "prev_m": 2}})
 	h.frame(4, map[string]map[string]float64{"A": {"m": 5, "prev_m": 4}})
@@ -492,7 +488,7 @@ func TestHandlePreviousBarVersionEvidence(t *testing.T) {
 
 // 提交冲突：读输入期间出现了更新的记录 → 重读后重新求值一次。
 func TestHandleCASConflictReevaluates(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	expectAck(t, h.deliver(1))
 	h.frame(3, map[string]map[string]float64{"A": {"m": 1}})
@@ -515,7 +511,7 @@ func TestHandleCASConflictReevaluates(t *testing.T) {
 }
 
 func TestHandleAcksEventsWithoutInstances(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	message, payload := h.event(1, map[string]string{"f": "h1"})
 	payload.ViewId = "other_view"
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
@@ -529,7 +525,7 @@ func TestHandleAcksEventsWithoutInstances(t *testing.T) {
 
 // 结果违反表约束等确定性写入错误不再无限重投：记一条不带明细的 skipped(config_error) 并 ACK，实例标记 degraded。
 func TestHandlePermanentWriteErrorRecordsConfigError(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	if err := h.repo.ApplySchema(`CREATE TRIGGER trg_test_reject_items
 BEFORE INSERT ON t_strategy_result_items
 FOR EACH ROW
@@ -554,7 +550,7 @@ END;`); err != nil {
 
 // 结果与兜底的 skipped 都被约束拒绝时，重投不会成功：记一次模块失败后确认，不无限重投，也不写任何记录。
 func TestHandlePermanentFallbackFailureAcks(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	if err := h.repo.ApplySchema(`CREATE TRIGGER trg_test_reject_results
 BEFORE INSERT ON t_strategy_results
 FOR EACH ROW
@@ -573,7 +569,7 @@ END;`); err != nil {
 
 // 实例只接受启用时确定的完成事件类型；其他类型的 ViewDataReady 不是它的触发信号，忽略且不写记录。
 func TestHandleIgnoresOtherCompletionKinds(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	instance, _ := h.repo.GetInstance(context.Background(), "i1")
 	resolved, err := input.ParseResolved(instance.ResolvedJSON)
 	if err != nil {
@@ -610,7 +606,7 @@ func TestHandleIgnoresOtherCompletionKinds(t *testing.T) {
 
 // ambiguous_series 同样需要人工处理，实例标记 degraded；ok 周期恢复 degraded，但不清除 session_unverified。
 func TestHandleHealthTransitions(t *testing.T) {
-	h := newHarness(t, rankDSL, nil, false)
+	h := newHarness(t, rankDSL, nil)
 	h.loader.errs = []error{&input.SkipError{Reason: input.SkipAmbiguousSeries, Detail: "两个序列"}}
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	expectAck(t, h.deliver(1))

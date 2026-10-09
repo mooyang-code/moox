@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
+	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
 
@@ -310,6 +313,13 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 	if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
 		previous := *instance.SessionID
 		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash && sessionView(session) == instance.ViewID {
+			resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
+			if err != nil {
+				return reload(), err
+			}
+			if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
+				return reload(), err
+			}
 			sessionID = session.SessionID
 			resolvedJSON = json.RawMessage(session.ResolvedJSON)
 		} else {
@@ -334,6 +344,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 		resolved, _, err := s.Resolver.Resolve(ctx, instance.SpaceID, instance.ViewID, strategy)
 		if err != nil {
+			return reload(), err
+		}
+		if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
 			return reload(), err
 		}
 		if err := s.Resolver.CheckAgeCoverage(ctx, instance.SpaceID, resolved); err != nil {
@@ -375,6 +388,17 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		return reload(), err
 	}
 	return reload(), nil
+}
+
+// checkLiveCalendar 拒绝在 A 股内嵌日历过了可用截止日后启用实例：此后每一期都推算不出有效期，结果都会被丢弃。
+func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
+	if !strings.EqualFold(resolved.Calendar, "cn_stock") {
+		return nil
+	}
+	if err := input.StockCalendarReadiness(now, 0, trigger.ValidBars); err != nil {
+		return fmt.Errorf("不能启用实例：%w", err)
+	}
+	return nil
 }
 
 // sessionView 返回会话固化的解析结果里的 View（与存储层启用时的核对口径一致）；解析失败时返回空串。

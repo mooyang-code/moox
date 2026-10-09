@@ -40,6 +40,9 @@ type fakeClient struct {
 	// 之后按旧索引发出的读取返回 ErrStale。
 	switchAtQuery int
 	switchedFrom  time.Time
+	// switchedTo 非零时换代后的最新一根改为它（新一代可能截短终点）；coverageStale 是读取覆盖统计依次返回 ErrStale 的次数。
+	switchedTo    time.Time
+	coverageStale int
 }
 
 func price(id string, hour int) float64 {
@@ -55,6 +58,10 @@ func price(id string, hour int) float64 {
 
 func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool) (input.Coverage, error) {
 	f.coverageCalls++
+	if f.coverageStale > 0 {
+		f.coverageStale--
+		return input.Coverage{}, input.ErrStale
+	}
 	if f.unknownCoverage {
 		return input.Coverage{}, nil
 	}
@@ -108,6 +115,9 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 	}
 	if f.switchAtQuery > 0 && f.queries >= f.switchAtQuery && f.activeIndex != "idx2" {
 		f.activeIndex, f.build, f.indexedFrom = "idx2", "b2", f.switchedFrom
+		if !f.switchedTo.IsZero() {
+			f.indexedTo = f.switchedTo
+		}
 	}
 	if query.ExpectedIndexID != "" && query.ExpectedIndexID != f.currentIndex() {
 		return nil, 0, input.ErrStale

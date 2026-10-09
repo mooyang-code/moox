@@ -56,7 +56,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 	if code := rsp.GetRetInfo().GetCode(); code == commonpb.ErrorCode_VIEW_NOT_FOUND || code == commonpb.ErrorCode_NOT_FOUND {
 		return ViewInfo{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 已不存在，请重新绑定实例", viewID)}
 	}
-	if err := retError("GetView", rsp.GetRetInfo()); err != nil {
+	if err := retError("读取 View "+viewID, rsp.GetRetInfo()); err != nil {
 		return ViewInfo{}, err
 	}
 	view := rsp.GetView()
@@ -70,7 +70,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 		if err != nil {
 			return ViewInfo{}, transport("读取 View "+viewID+" 的列", err)
 		}
-		if err := retError("ListViewColumns", columns.GetRetInfo()); err != nil {
+		if err := retError("读取 View "+viewID+" 的列", columns.GetRetInfo()); err != nil {
 			return ViewInfo{}, err
 		}
 		for _, column := range columns.GetColumns() {
@@ -120,7 +120,7 @@ func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewI
 		if err != nil {
 			return Coverage{}, transport("读取 View "+view.ViewID+" 的覆盖范围", err)
 		}
-		if err := viewRetError(rsp.GetRetInfo()); err != nil {
+		if err := viewRetError("读取 View "+view.ViewID+" 的覆盖范围", view.ViewID, nil, rsp.GetRetInfo()); err != nil {
 			return Coverage{}, err
 		}
 		coverage.SeriesBars = int(min(rsp.GetServedSeriesBars(), uint64(math.MaxInt32)))
@@ -143,7 +143,7 @@ func (c *RPCClient) GetDataset(ctx context.Context, spaceID, datasetID string) (
 	if err != nil {
 		return DatasetInfo{}, transport("读取数据集 "+datasetID, err)
 	}
-	if err := retError("GetDataset", rsp.GetRetInfo()); err != nil {
+	if err := retError("读取数据集 "+datasetID, rsp.GetRetInfo()); err != nil {
 		return DatasetInfo{}, err
 	}
 	dataset := rsp.GetDataset()
@@ -169,7 +169,7 @@ func (c *RPCClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo,
 	if rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_NOT_FOUND {
 		return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
 	}
-	if err := retError("GetTag", rsp.GetRetInfo()); err != nil {
+	if err := retError("读取标签 "+tagID, rsp.GetRetInfo()); err != nil {
 		return TagInfo{}, err
 	}
 	tag := rsp.GetTag()
@@ -191,7 +191,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 		if err != nil {
 			return nil, transport("读取数据集 "+datasetID+" 的标的绑定", err)
 		}
-		if err := retError("ListDatasetSubjects", rsp.GetRetInfo()); err != nil {
+		if err := retError("读取数据集 "+datasetID+" 的标的绑定", rsp.GetRetInfo()); err != nil {
 			return nil, err
 		}
 		for _, binding := range rsp.GetDatasetSubjects() {
@@ -220,7 +220,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 			if err != nil {
 				return nil, transport("读取标的详情", err)
 			}
-			if err := retError("ListSubjects", rsp.GetRetInfo()); err != nil {
+			if err := retError("读取标的详情", rsp.GetRetInfo()); err != nil {
 				return nil, err
 			}
 			for _, subject := range rsp.GetSubjects() {
@@ -268,7 +268,7 @@ func (c *RPCClient) ListTagMembers(ctx context.Context, spaceID, tagID string) (
 		if err != nil {
 			return nil, transport("读取标签 "+tagID+" 的成员", err)
 		}
-		if err := retError("ListTagMembers", rsp.GetRetInfo()); err != nil {
+		if err := retError("读取标签 "+tagID+" 的成员", rsp.GetRetInfo()); err != nil {
 			return nil, err
 		}
 		for _, member := range rsp.GetMembers() {
@@ -326,17 +326,17 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 		if err != nil {
 			return nil, 0, transport("读取 View "+query.ViewID+" 的行", err)
 		}
-		if err := viewRetError(rsp.GetRetInfo()); err != nil {
+		if err := viewRetError("读取 View "+query.ViewID+" 的行", query.ViewID, query.Columns, rsp.GetRetInfo()); err != nil {
 			return nil, 0, err
 		}
 		if served := rsp.GetServedActiveIndexRevision(); served != 0 {
 			if revision != 0 && revision != served {
-				return nil, 0, fmt.Errorf("%w：View %s 的索引修订号从 %d 变为 %d", ErrStale, query.ViewID, revision, served)
+				return nil, 0, &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入（索引修订号从 %d 变为 %d）", query.ViewID, revision, served)}
 			}
 			revision = served
 		}
 		if servedIndex := strings.TrimSpace(rsp.GetServedActiveIndexId()); servedIndex != "" && servedIndex != query.ExpectedIndexID {
-			return nil, 0, fmt.Errorf("%w：View %s 的活动索引从 %s 变为 %s", ErrStale, query.ViewID, query.ExpectedIndexID, servedIndex)
+			return nil, 0, &staleError{message: fmt.Sprintf("View %s 的活动索引在读取期间从 %s 变为 %s", query.ViewID, query.ExpectedIndexID, servedIndex)}
 		}
 		for _, row := range rsp.GetRows() {
 			converted, err := convertRow(row)
@@ -358,7 +358,7 @@ func convertRow(row *storagepb.TimeSeriesRow) (Row, error) {
 	}
 	at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
 	if err != nil {
-		return Row{}, fmt.Errorf("解析 data_time：%w", err)
+		return Row{}, fmt.Errorf("Storage 返回的 data_time %q 不是 RFC3339 时间", row.GetKey().GetDataTime())
 	}
 	values := make(map[string]float64, len(row.GetFields()))
 	for _, field := range row.GetFields() {
@@ -402,7 +402,7 @@ func (c *RPCClient) GetFactor(ctx context.Context, factorID string) (FactorInfo,
 	if err != nil {
 		return FactorInfo{}, transport("读取因子 "+factorID, err)
 	}
-	if err := retError("GetFactor", rsp.GetRetInfo()); err != nil {
+	if err := retError("读取因子 "+factorID, rsp.GetRetInfo()); err != nil {
 		return FactorInfo{}, err
 	}
 	factor := rsp.GetFactor()
@@ -412,11 +412,59 @@ func (c *RPCClient) GetFactor(ctx context.Context, factorID string) (FactorInfo,
 	return FactorInfo{FactorID: factor.GetFactorId(), DefinitionHash: strings.TrimSpace(factor.GetDefinitionHash()), Outputs: append([]string(nil), factor.GetOutputs()...)}, nil
 }
 
-func retError(method string, info *commonpb.RetInfo) error {
+// ServiceError 是 Storage 或 Factor 返回的业务错误。Error 只给中文概述（操作与错误码的含义）；服务端的原文可能是
+// 英文、也可能带内部细节，经 Unwrap 留给日志，不写入结果记录，也不返回给接口调用方。
+type ServiceError struct {
+	Operation string
+	Code      commonpb.ErrorCode
+	Raw       error
+}
+
+func (e *ServiceError) Error() string {
+	return fmt.Sprintf("%s失败：%s（%s）", e.Operation, retCodeText(e.Code), e.Code.String())
+}
+
+func (e *ServiceError) Unwrap() error { return e.Raw }
+
+func retError(operation string, info *commonpb.RetInfo) error {
 	if info == nil || info.GetCode() == commonpb.ErrorCode_SUCCESS {
 		return nil
 	}
-	return fmt.Errorf("%s 失败（%s）：%s", method, info.GetCode().String(), info.GetMsg())
+	return &ServiceError{Operation: operation, Code: info.GetCode(), Raw: errors.New(info.GetMsg())}
+}
+
+// retCodeText 是错误码的中文含义。
+func retCodeText(code commonpb.ErrorCode) string {
+	switch code {
+	case commonpb.ErrorCode_INVALID_PARAM:
+		return "请求参数无效"
+	case commonpb.ErrorCode_NO_AUTH, commonpb.ErrorCode_NO_PERMISSION:
+		return "没有访问权限"
+	case commonpb.ErrorCode_NOT_FOUND:
+		return "记录不存在"
+	case commonpb.ErrorCode_DATASET_NOT_FOUND:
+		return "数据集不存在"
+	case commonpb.ErrorCode_SUBJECT_NOT_FOUND:
+		return "标的不存在"
+	case commonpb.ErrorCode_FIELD_NOT_FOUND, commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND:
+		return "列不存在"
+	case commonpb.ErrorCode_FACTOR_NOT_FOUND:
+		return "因子不存在"
+	case commonpb.ErrorCode_VIEW_NOT_FOUND:
+		return "View 不存在"
+	case commonpb.ErrorCode_VIEW_NOT_READY:
+		return "View 尚未就绪"
+	case commonpb.ErrorCode_QUERY_SHAPE_UNSUPPORTED, commonpb.ErrorCode_ENGINE_CAPABILITY_UNSUPPORTED:
+		return "查询方式不受支持"
+	case commonpb.ErrorCode_CONFLICT:
+		return "状态冲突"
+	case commonpb.ErrorCode_SUBJECT_NOT_IN_DATASET:
+		return "标的不在数据集中"
+	case commonpb.ErrorCode_INNER_ERR:
+		return "服务内部错误"
+	default:
+		return "服务返回错误"
+	}
 }
 
 // ErrTagNotFound 表示标签不存在（ID 区分大小写）。
@@ -450,18 +498,31 @@ func RawCause(err error) error {
 	}
 }
 
-// viewRetError 把 Storage 的"索引已变化"错误映射为 ErrStale，其余原样返回。
-func viewRetError(info *commonpb.RetInfo) error {
+// viewRetError 把 DataView 的错误映射为输入层错误：读取期间索引变化 → ErrStale；列不存在 → config_error 跳过；
+// 其余 → *ServiceError。服务端原文只经 Unwrap 留给日志。
+func viewRetError(operation, viewID string, columns []string, info *commonpb.RetInfo) error {
 	if info == nil || info.GetCode() == commonpb.ErrorCode_SUCCESS {
 		return nil
 	}
+	raw := errors.New(info.GetMsg())
 	message := strings.ToLower(info.GetMsg())
 	if info.GetCode() == commonpb.ErrorCode_VIEW_NOT_READY && (strings.Contains(message, "revision changed") || strings.Contains(message, "index changed") || strings.Contains(message, "updated during query")) {
-		return fmt.Errorf("%w：%s", ErrStale, info.GetMsg())
+		return &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入或换了活动索引", viewID), raw: raw}
 	}
 	if info.GetCode() == commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND || info.GetCode() == commonpb.ErrorCode_FIELD_NOT_FOUND {
 		// 列不存在是确定性的配置问题，重试不会恢复。
-		return &SkipError{Reason: SkipConfigError, Detail: "View 的列已不存在：" + info.GetMsg()}
+		// 原文是英文，只取其中提到的请求列名；一个都认不出时列出全部请求的列。
+		missing := make([]string, 0, len(columns))
+		for _, column := range columns {
+			if column != "" && strings.Contains(info.GetMsg(), column) {
+				missing = append(missing, column)
+			}
+		}
+		detail := fmt.Sprintf("View %s 缺少列 %s", viewID, strings.Join(missing, "、"))
+		if len(missing) == 0 {
+			detail = fmt.Sprintf("View %s 缺少请求的列（请求的列：%s）", viewID, strings.Join(columns, "、"))
+		}
+		return &SkipError{Reason: SkipConfigError, Detail: detail, Cause: raw}
 	}
-	return fmt.Errorf("QueryTimeSeriesRows 返回 %s：%s", info.GetCode().String(), info.GetMsg())
+	return &ServiceError{Operation: operation, Code: info.GetCode(), Raw: raw}
 }

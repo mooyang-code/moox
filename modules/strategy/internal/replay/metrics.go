@@ -87,6 +87,16 @@ func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outc
 	}
 }
 
+// note 追加一条局限说明（相同的说明只记一次）。
+func (a *accumulator) note(text string) {
+	for _, existing := range a.metrics.Limitations {
+		if existing == text {
+			return
+		}
+	}
+	a.metrics.Limitations = append(a.metrics.Limitations, text)
+}
+
 func (a *accumulator) finish() Metrics {
 	m := a.metrics
 	if m.InitialEquity > 0 {

@@ -27,14 +27,14 @@ func Parse(raw []byte) (Strategy, error) {
 		if errors.Is(err, io.EOF) {
 			return Strategy{}, errors.New("策略 DSL 为空")
 		}
-		return Strategy{}, fmt.Errorf("解析策略 DSL 失败：%w", err)
+		return Strategy{}, yamlSyntaxError(err)
 	}
 	var extra yaml.Node
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return Strategy{}, errors.New("策略 DSL 只能包含一个 YAML 文档")
 		}
-		return Strategy{}, fmt.Errorf("解析策略 DSL 失败：%w", err)
+		return Strategy{}, yamlSyntaxError(err)
 	}
 	if document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
 		return Strategy{}, errors.New("策略 DSL 必须是一个 YAML 对象")

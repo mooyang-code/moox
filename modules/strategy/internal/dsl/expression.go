@@ -144,7 +144,7 @@ func analyze(source string, stage Stage) (*Expression, error) {
 		if strings.Contains(err.Error(), "exceeds maximum allowed nodes") {
 			return nil, fmt.Errorf("表达式过于复杂：超过 %d 个语法节点", maxExpressionNodes)
 		}
-		return nil, fmt.Errorf("语法错误：%w", err)
+		return nil, exprError("语法错误", err, true)
 	}
 	expression := &Expression{Source: source, Stage: stage, Numeric: stage == StageScore || stage == stageInner}
 	w := &walker{stage: stage, expression: expression, columns: map[string]struct{}{}, previous: map[string]struct{}{}}
@@ -201,7 +201,7 @@ func compileAnalyzed(expression *Expression, columns map[string]struct{}) error 
 	}
 	program, err := expr.Compile(expression.Rewritten, options...)
 	if err != nil {
-		return fmt.Errorf("编译失败：%w", err)
+		return exprError("编译失败", err, false)
 	}
 	expression.Program = program
 	return nil

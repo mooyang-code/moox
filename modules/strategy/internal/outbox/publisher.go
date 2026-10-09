@@ -3,13 +3,13 @@ package outbox
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -65,9 +65,8 @@ type EventPublisher interface {
 	PublishMessage(context.Context, *eventpb.EventMessage) (*jetstream.PublishAck, error)
 }
 
-// PermanentPublishError identifies an event that can never be accepted by the
-// current protocol (for example corrupt bytes or an unknown event type). The
-// relay quarantines such rows instead of retrying the same prefix forever.
+// PermanentPublishError 表示当前协议永远不会接受的事件（例如字节损坏、事件类型未知、超过最大消息长度）：
+// 投递循环隔离这一行，而不是一直重试、挡住其后的结果。
 type PermanentPublishError struct{ Err error }
 
 func (e *PermanentPublishError) Error() string {
@@ -111,14 +110,10 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, messageID string, even
 	publishCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	_, err = p.Publisher.PublishMessage(publishCtx, message)
-	if err != nil {
-		// NATS rejects an over-sized payload locally/server-side and retrying it
-		// cannot succeed without changing the event. Keep ordinary transport
-		// errors retryable, but quarantine this deterministic protocol failure.
-		text := strings.ToLower(err.Error())
-		if strings.Contains(text, "maximum payload") || strings.Contains(text, "message size") {
-			return &PermanentPublishError{Err: err}
-		}
+	// 消息过不了发布前校验（例如超过 EventBus 的最大消息长度，本地预检或服务端拒绝）时原样重试永远不会成功，
+	// 还会挡住其后所有实例的目标：按永久错误隔离；其余传输错误照常重试。
+	if errors.Is(err, jetstream.ErrInvalidMessage) || errors.Is(err, nats.ErrMaxPayload) {
+		return &PermanentPublishError{Err: err}
 	}
 	return err
 }

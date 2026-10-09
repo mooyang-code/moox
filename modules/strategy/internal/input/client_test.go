@@ -103,10 +103,15 @@ func TestQueryRowsConcatenatesPagesAndConvertsValues(t *testing.T) {
 func TestQueryRowsMapsMissingColumnToConfigError(t *testing.T) {
 	stub := &dataViewStub{pages: []*storagepb.QueryTimeSeriesRowsRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND, Msg: "column ma_20 not found"}}}}
 	client := &RPCClient{DataView: stub}
-	_, _, err := client.QueryRows(context.Background(), "space", baseQuery())
+	query := baseQuery()
+	query.Columns = []string{"close", "ma_20"}
+	_, _, err := client.QueryRows(context.Background(), "space", query)
 	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "ma_20") {
-		t.Fatalf("列不存在应记为 config_error：%v", err)
+	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || skip.Detail != "View view 缺少列 ma_20" {
+		t.Fatalf("列不存在应记为 config_error，说明里只有中文与列名：%v", err)
+	}
+	if raw := RawCause(err); raw == nil || raw.Error() != "column ma_20 not found" {
+		t.Fatalf("Storage 的原文应留给日志：%v", raw)
 	}
 }
 

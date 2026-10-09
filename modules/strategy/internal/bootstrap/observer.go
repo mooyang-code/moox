@@ -35,20 +35,20 @@ var failureReasons = map[string]bool{
 
 var metricLabelPattern = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
-// instanceObserver 把每个启用实例登记为 Monitor 的期望数据集（间隔 = bar 时长），每期上报一次运行；
+// instanceObserver 把每个启用实例登记为 Monitor 的期望数据集（间隔见 runIntervalLocked），每期上报一次运行；
 // 同时累计 moox_strategy_period_total{instance_id,result,reason}。
 type instanceObserver struct {
 	store    *store.Store
 	datasets *report.DatasetMetrics
 	module   *report.ModuleMetrics
 	periods  *prometheus.CounterVec
-	// cancelled 按原因累计被取消、没有送到 Trade 的目标（moox_strategy_target_cancelled_total）。
-	cancelled *prometheus.CounterVec
-	now       func() time.Time
-	logf      func(format string, args ...any)
+	now      func() time.Time
+	logf     func(format string, args ...any)
 
 	mu       sync.Mutex
 	expected map[string]report.DatasetExpectation
+	// lastBarEnd 是每个实例最近处理的一根的 bar_end，是 A 股实例期望间隔的基准。
+	lastBarEnd map[string]time.Time
 }
 
 func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, logf func(string, ...any)) (*instanceObserver, error) {
@@ -64,14 +64,23 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 	if err := registerer.Register(periods); err != nil {
 		return nil, fmt.Errorf("注册策略周期指标失败：%w", err)
 	}
-	cancelled := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_strategy_target_cancelled_total", Help: "被取消、没有送到 Trade 的策略目标数，按原因分类（superseded、expired、inactive、rejected）。"}, []string{"reason"})
+	cancelled := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_strategy_target_cancelled_total", Help: "被取消的策略目标数，按原因分类（superseded、expired、inactive、rejected）；其中发布期间被取消、随后确认已发出的另计于 moox_strategy_target_sent_after_cancel_total。"}, []string{"reason"})
 	if err := registerer.Register(cancelled); err != nil {
 		return nil, fmt.Errorf("注册策略目标取消指标失败：%w", err)
+	}
+	sentAfterCancel := prometheus.NewCounter(prometheus.CounterOpts{Name: "moox_strategy_target_sent_after_cancel_total", Help: "发布期间被取消、随后确认已发出并改记 sent 的策略目标数（取消计数不回退）。"})
+	if err := registerer.Register(sentAfterCancel); err != nil {
+		return nil, fmt.Errorf("注册策略目标取消后发出指标失败：%w", err)
+	}
+	// 预先登记各原因，没有发生过的原因也有值为 0 的序列。
+	for _, reason := range store.CancelReasons {
+		cancelled.WithLabelValues(reason)
 	}
 	repo.SetCancelObserver(func(reason string, count int64) {
 		cancelled.WithLabelValues(reason).Add(float64(count))
 	})
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, cancelled: cancelled, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}}, nil
+	repo.SetSentAfterCancelObserver(sentAfterCancel.Inc)
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。
@@ -100,6 +109,8 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		o.datasets.ObserveInventoryRefreshError()
 		return fmt.Errorf("读取启用实例：%w", err)
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	next := make(map[string]report.DatasetExpectation, len(instances))
 	for _, instance := range instances {
 		resolved, err := input.ParseResolved(instance.ResolvedJSON)
@@ -107,16 +118,45 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 			continue
 		}
 		if expectation, ok := datasetKey(instance, resolved.Bar); ok {
+			expectation.Interval = o.runIntervalLocked(instance.InstanceID, resolved.Calendar, resolved.Bar, expectation.Interval)
 			next[instance.InstanceID] = expectation
 		}
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
 	if err := o.datasets.ReplaceExpected(expectations(next)); err != nil {
 		return err
 	}
 	o.expected = next
+	for id := range o.lastBarEnd {
+		if _, ok := next[id]; !ok {
+			delete(o.lastBarEnd, id)
+		}
+	}
 	return nil
+}
+
+// runIntervalLocked 返回实例的期望运行间隔（Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行就报
+// run stale）。crypto 是 bar 时长。A 股相邻交易日之间隔着周末与长假：取“最近处理的一根到其后第二根”的间隔的一半，
+// 即最近处理的一根之后第二个交易日收盘时下一根还没处理才告警（与 crypto 的口径一致），不因休市误报；还没处理过时以
+// 最近闭合一根的上一根为基准（偏宽）。调用方持有 o.mu。
+func (o *instanceObserver) runIntervalLocked(instanceID, calendar, bar string, nominal time.Duration) time.Duration {
+	if !strings.EqualFold(strings.TrimSpace(calendar), "cn_stock") {
+		return nominal
+	}
+	reference, ok := o.lastBarEnd[instanceID]
+	if !ok {
+		period, err := input.ClosedPeriod(calendar, bar, o.now())
+		if err != nil {
+			return nominal
+		}
+		if reference, err = input.AdvanceBarEnd(calendar, bar, period.BarEnd, -1); err != nil {
+			return nominal
+		}
+	}
+	after, err := input.AdvanceBarEnd(calendar, bar, reference, 2)
+	if err != nil {
+		return nominal
+	}
+	return max(after.Sub(reference)/2, nominal)
 }
 
 func expectations(values map[string]report.DatasetExpectation) []report.DatasetExpectation {
@@ -137,10 +177,16 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 	o.periods.WithLabelValues(instance.InstanceID, result, reason).Inc()
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if barEnd.After(o.lastBarEnd[instance.InstanceID]) {
+		o.lastBarEnd[instance.InstanceID] = barEnd
+	}
 	expectation, ok := o.expected[instance.InstanceID]
 	if !ok {
 		if expectation, ok = datasetKey(instance, bar); !ok {
 			return
+		}
+		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil {
+			expectation.Interval = o.runIntervalLocked(instance.InstanceID, resolved.Calendar, bar, expectation.Interval)
 		}
 		next := make(map[string]report.DatasetExpectation, len(o.expected)+1)
 		for id, value := range o.expected {

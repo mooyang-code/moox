@@ -115,7 +115,8 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		return Loaded{}, err
 	}
 	previous := map[string]Row{}
-	if program.UsesPreviousBar {
+	// A 股内嵌日历的第一个交易日没有上一根（PreviousStart 为零值），bars[-1] 的值都缺失。
+	if program.UsesPreviousBar && !boundary.PreviousStart.IsZero() {
 		query.Start = boundary.PreviousStart
 		query.End = boundary.PreviousStart.Add(time.Nanosecond)
 		query.ExpectedRevision = revision
