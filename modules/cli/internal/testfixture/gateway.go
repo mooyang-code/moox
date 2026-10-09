@@ -25,12 +25,12 @@ func (f HandlerGateway) Forward(ctx context.Context, service, method string, ser
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collectmgr", "trpc.moox.cloudnode.CloudNodeMgr": "cloudnode", "trpc.moox.ops.SecretMgr": "secret", "trpc.moox.admin.CollectorPublishLease": "publishlease", "trpc.moox.admin.Setup": "setup", "trpc.moox.ops.SysDeploy": "sysdeploy"}[service]
+	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collectmgr", "trpc.moox.cloudnode.CloudNodeMgr": "cloudnode", "trpc.moox.ops.SecretMgr": "secret", "trpc.moox.admin.CollectorPublishLease": "publishlease", "trpc.moox.admin.Setup": "setup", "trpc.moox.ops.SysDeploy": "sysdeploy", "trpc.moox.trade.TradeConsoleService": "trade"}[service]
 	if alias == "" || strings.ContainsAny(method, "/?#") || serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("unexpected gateway fixture call")
 	}
 	path := "/api/admin/" + alias + "/" + method
-	if alias == "setup" || alias == "sysdeploy" {
+	if alias == "setup" || alias == "sysdeploy" || alias == "trade" {
 		path = "/" + service + "/" + method
 	}
 	request := httptest.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))

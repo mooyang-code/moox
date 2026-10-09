@@ -29,7 +29,7 @@ func TestRegisterTradeCreatesNodeLocalOwnerRouteIdempotently(t *testing.T) {
 	require.Equal(t, "trade-node", owner.GetNodeId())
 	require.Equal(t, "127.0.0.1", owner.GetHost())
 	require.Equal(t, int32(11200), owner.GetPort())
-	require.Equal(t, "http", owner.GetProtocol())
+	require.Equal(t, "trpc", owner.GetProtocol())
 	require.Equal(t, "trpc.moox.trade.TradeConsoleService", owner.GetGatewayPath())
 	require.Equal(t, "trade_owner", owner.GetGatewayServiceId())
 	require.True(t, owner.GetGatewayEnabled())
@@ -38,7 +38,7 @@ func TestRegisterTradeCreatesNodeLocalOwnerRouteIdempotently(t *testing.T) {
 	console := rows["trade-node/trade_console"]
 	require.NotNil(t, console)
 	require.Equal(t, "trade_console", console.GetGatewayServiceId())
-	require.Equal(t, "trpc.moox.trade.TradeConsoleAdminService", console.GetGatewayPath())
+	require.Equal(t, "trpc.moox.trade.TradeConsoleService", console.GetGatewayPath())
 	require.True(t, console.GetGatewayEnabled())
 	require.Equal(t, "127.0.0.1", console.GetHost())
 	require.JSONEq(t, `{"gateway_methods":["CreateTradingAccount","UpdateTradingAccount","GetTradingAccount","ListTradingAccounts","SetLeverage","SyncTradingAccount","CreateLogicalAccount","GetLogicalAccount","ListLogicalAccounts","UpdateLogicalAccount","AddLogicalAccountMember","RemoveLogicalAccountMember","PauseLogicalAccount","ResumeLogicalAccount","FlattenLogicalAccount","PlaceManualOrder","SubmitOrder","CancelOrder","GetOperatorAction","GetLogicalAccountTarget","GetOrder","ListOrders","ListFills","ListPositions","CreatePaperSimulation","ClosePaperSimulation","GetExecutionCapabilities","QueryEquityCurve","ListHoldings"],"gateway_callers":["admin-gateway"],"monitor_enabled":false,"managed_by":"moox-cli"}`, console.GetExtraConfig())

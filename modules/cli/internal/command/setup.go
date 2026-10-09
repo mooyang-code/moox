@@ -25,7 +25,10 @@ import (
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 const defaultSetupFile = "./moox.toml"
@@ -2034,7 +2037,7 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 			return setupdeploy.ServiceResult{}, fmt.Errorf("trade_gateway_ca_sync_failed: %w", err)
 		}
 	}
-	result, err = syncSetupServiceRegistry(ctx, snapshot, transport, control, host, service, tradeConsoleBindAddress != "", result, snapshot.Manifest.Paths.Resolved().ControlRoot)
+	result, err = syncSetupServiceRegistry(ctx, snapshot, transport, host, service, tradeConsoleBindAddress != "", result)
 	if err != nil {
 		if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2129,30 +2132,7 @@ func restoreTradeGatewayRuntime(ctx context.Context, control setupssh.Client, co
 	return nil
 }
 
-func probeTradeGatewayFromControl(ctx context.Context, control setupssh.Client, host, nodeID, controlRoot string) error {
-	host, nodeID, controlRoot = strings.TrimSpace(host), strings.TrimSpace(nodeID), strings.TrimSpace(controlRoot)
-	if control == nil || host == "" || nodeID == "" || controlRoot == "" {
-		return fmt.Errorf("trade_gateway_probe_failed")
-	}
-	endpoint := "https://" + net.JoinHostPort(host, strconv.Itoa(setupclient.TradeGatewayHTTPSPort)) + "/api/service/trade_console/GetExecutionCapabilities"
-	script := "set -eu\n" +
-		"root=\"$1\"; endpoint=\"$2\"; target=\"$3\"\n" +
-		"set -a; source \"$root/secrets/gateway-service.env\"; set +a\n" +
-		"[ -r \"$root/certs/caddy/trade-gateway-root.crt\" ] || exit 1\n" +
-		"[ \"${MOOX_GATEWAY_CALLER:-}\" = \"admin-gateway\" ] || exit 1\n" +
-		"body='{}'; path='/api/service/trade_console/GetExecutionCapabilities'; timestamp=$(date +%s); nonce=$(openssl rand -hex 32)\n" +
-		"body_hash=$(printf '%s' \"$body\" | openssl dgst -sha256 | awk '{print $NF}')\n" +
-		"canonical=$(printf 'moox-gateway-auth-v1\\n%s\\nPOST\\n%s\\n\\n\\n%s\\n%s\\n%s\\n%s' \"$MOOX_GATEWAY_CALLER\" \"$path\" \"$body_hash\" \"$timestamp\" \"$nonce\" \"$target\")\n" +
-		"signature=$(printf '%s' \"$canonical\" | openssl dgst -sha256 -hmac \"$MOOX_GATEWAY_SERVICE_SECRET_KEY\" | awk '{print $NF}')\n" +
-		"status=$(curl --silent --show-error --fail --max-time 8 --cacert \"$root/certs/caddy/trade-gateway-root.crt\" -X POST -H 'Content-Type: application/json' -H \"X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID\" -H \"X-Moox-Caller: $MOOX_GATEWAY_CALLER\" -H \"X-Moox-Timestamp: $timestamp\" -H \"X-Moox-Nonce: $nonce\" -H \"X-Moox-Target-Node: $target\" -H \"X-Moox-Signature: $signature\" --data \"$body\" --output /dev/null --write-out '%{http_code}' \"$endpoint\")\n" +
-		"[ \"$status\" = 200 ]\n"
-	if _, err := control.Run(ctx, []string{"bash", "-lc", script, "moox-probe-trade-gateway-from-control", controlRoot, endpoint, nodeID}, nil); err != nil {
-		return fmt.Errorf("trade_gateway_probe_failed")
-	}
-	return nil
-}
-
-func syncSetupServiceRegistry(ctx context.Context, snapshot *setupconfig.Snapshot, transport, control setupssh.Client, host setupconfig.Host, service string, remoteTrade bool, result setupdeploy.ServiceResult, controlRoots ...string) (setupdeploy.ServiceResult, error) {
+func syncSetupServiceRegistry(ctx context.Context, snapshot *setupconfig.Snapshot, transport setupssh.Client, host setupconfig.Host, service string, remoteTrade bool, result setupdeploy.ServiceResult) (setupdeploy.ServiceResult, error) {
 	isTrade := strings.EqualFold(strings.TrimSpace(service), "trade") || strings.EqualFold(strings.TrimSpace(service), "moox_trade")
 	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
@@ -2194,7 +2174,7 @@ func syncSetupServiceRegistry(ctx context.Context, snapshot *setupconfig.Snapsho
 		return failRegistration(err, "registry")
 	}
 	if remoteTrade {
-		if err := probeTradeConsole(ctx, transport, "127.0.0.1"); err != nil {
+		if err := probeTradeConsole(ctx, gateway); err != nil {
 			return failRegistration(err, "probe")
 		}
 		if err := controlClient.ApplyTradeConsolePlacementForNode(ctx, host.Address, host.Name); err != nil {
@@ -2205,33 +2185,38 @@ func syncSetupServiceRegistry(ctx context.Context, snapshot *setupconfig.Snapsho
 		if err := controlClient.VerifyTradeOwnerRoute(ctx, host.Name); err != nil {
 			return failRegistration(err, "gateway-route")
 		}
-		if len(controlRoots) > 0 {
-			if err := probeTradeGatewayFromControl(ctx, control, host.Address, host.Name, controlRoots[0]); err != nil {
-				return failRegistration(err, "gateway-https")
-			}
-		}
 	}
 	result.RegistrySynced = true
 	return result, nil
 }
 
-// probeTradeConsole checks the actual control-to-Trade network path before
-// publishing the browser route. Trade returns HTTP 200 with a business error
-// when no space header is supplied, which is sufficient for this liveness
-// probe and avoids requiring operator credentials.
-func probeTradeConsole(ctx context.Context, transport setupssh.Client, host string) error {
-	host = strings.TrimSpace(host)
-	if transport == nil || host == "" {
+// probeTradeConsole exercises the signed native gateway and the Trade handler.
+// Without a space/account, the handler must return NO_PERMISSION. No business
+// data or operator credentials are needed for this transport check.
+func probeTradeConsole(ctx context.Context, gateway commandGateway) error {
+	if gateway == nil {
 		return fmt.Errorf("trade_console_probe_invalid")
 	}
-	_, err := transport.Run(ctx, []string{"bash", "-lc", `set -eu
-host="$1"
-curl --fail --silent --show-error --max-time 5 \
-  -X POST -H 'Content-Type: application/json' --data '{}' \
-  "http://${host}:11200/trpc.moox.trade.TradeConsoleService/ListTradingAccounts" >/dev/null
-`, "moox-probe-trade-console", host}, nil)
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	raw, err := gateway.Forward(ctx, "trpc.moox.trade.TradeConsoleService", "GetExecutionCapabilities", codec.SerializationTypeJSON, []byte(`{}`))
 	if err != nil {
-		return fmt.Errorf("trade_console_probe_failed")
+		return fmt.Errorf("trade_console_probe_failed: %w", err)
+	}
+	var envelope struct {
+		RetInfo      json.RawMessage `json:"ret_info"`
+		RetInfoCamel json.RawMessage `json:"retInfo"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("trade_console_probe_failed: invalid response")
+	}
+	status := envelope.RetInfo
+	if len(status) == 0 {
+		status = envelope.RetInfoCamel
+	}
+	var retInfo commonpb.RetInfo
+	if err := protojson.Unmarshal(status, &retInfo); err != nil || retInfo.GetCode() != commonpb.ErrorCode_NO_PERMISSION {
+		return fmt.Errorf("trade_console_probe_failed: unexpected status")
 	}
 	return nil
 }

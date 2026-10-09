@@ -4,9 +4,6 @@ gateway_client:
   key_id: ""
   key_file: ../../secrets/caller-strategy.key
 trade:
-  gateway_url: ""
-  target_node: ""
-  ca_file: ""
   timeout: 3s
 instance_id: strategy-1
 eventbus:

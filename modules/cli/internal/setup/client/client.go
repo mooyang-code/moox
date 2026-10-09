@@ -205,7 +205,7 @@ func (c *Client) applyTradeConsolePlacement(ctx context.Context, host, nodeID st
 	deployment.NodeId = "control"
 	deployment.ServiceName = "trade_console"
 	deployment.ServiceKind = "trade"
-	deployment.Protocol = "http"
+	deployment.Protocol = "trpc"
 	deployment.Host = host
 	deployment.Port = 11200
 	deployment.GatewayPath = "trpc.moox.trade.TradeConsoleService"
@@ -326,7 +326,7 @@ func (c *Client) VerifyTradeOwnerRoute(ctx context.Context, nodeID string) error
 			}
 			ownerFound = true
 		case "trade_console":
-			if route.GetServicePath() != "trpc.moox.trade.TradeConsoleAdminService" {
+			if route.GetServicePath() != "trpc.moox.trade.TradeConsoleService" {
 				return fmt.Errorf("trade_route_probe_failed")
 			}
 			if len(route.GetAllowedCallers()) != 1 || route.GetAllowedCallers()[0] != "admin-gateway" {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Three isolated processes, ephemeral loopback listeners and test-local TLS CA.
+# Three isolated processes, catalog loopback ports and test-local TLS CA.
 # TLS verification stays enabled; no deployment or NATS is involved.
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/moox-gateway-owner-e2e.XXXXXX")
@@ -20,13 +20,19 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 export MOOX_GATEWAY_OWNER_E2E_COORD="$WORK"
-export MOOX_GATEWAY_SERVICE_KEY_ID="gateway-owner-e2e"
-export MOOX_GATEWAY_CALLER="strategy"
-export MOOX_GATEWAY_SERVICE_SECRET_KEY="isolated-local-gateway-owner-e2e-secret"
 
-(cd "$ROOT/modules/trade" && go test -tags=e2e_external -c -o "$WORK/trade.test" ./test)
-(cd "$ROOT/modules/hostgateway" && go test -tags=e2e_external -c -o "$WORK/gateway.test" ./internal/router)
-(cd "$ROOT/modules/strategy" && go test -tags=e2e_external -c -o "$WORK/strategy.test" ./internal/bootstrap)
+build_test_binary() {
+  local module="$1" package="$2" output="$3" prebuilt="$4"
+  if [[ -n "$prebuilt" ]]; then
+    [[ "$prebuilt" == /* && -x "$prebuilt" ]] || { printf 'Invalid prebuilt E2E binary\n' >&2; return 1; }
+    cp -- "$prebuilt" "$output"
+  else
+    (cd "$ROOT/$module" && go test -tags=e2e_external -c -o "$output" "$package")
+  fi
+}
+build_test_binary modules/trade ./test "$WORK/trade.test" "${MOOX_TRADE_OWNER_E2E_BINARY:-}"
+build_test_binary modules/hostgateway ./internal/router "$WORK/gateway.test" "${MOOX_GATEWAY_OWNER_E2E_BINARY:-}"
+build_test_binary modules/strategy ./internal/bootstrap "$WORK/strategy.test" "${MOOX_STRATEGY_OWNER_E2E_BINARY:-}"
 
 wait_ready() {
   local file=$1 pid=$2 log=$3
@@ -65,4 +71,4 @@ wait "$trade_pid" || status=1
 pids=()
 cat "$WORK/trade.log" "$WORK/gateway.log"
 [[ "$status" == 0 ]] || exit "$status"
-printf 'PASS: local production Strategy client -> trusted TLS Gateway handler/Forward -> Trade HTTP RPC + Paper Store ownership. No order execution or deployment claimed.\n'
+printf 'PASS: local production Strategy client -> Directory -> private TLS native Gateway -> Trade tRPC + Paper Store ownership. No order execution or deployment claimed.\n'

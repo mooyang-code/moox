@@ -362,7 +362,7 @@ func setSeedTradeConsoleEndpoint(seed *serviceDeploymentSeed, rawHost string, po
 		found = true
 		seed.Services[i].Host = host
 		seed.Services[i].Port = int32(port)
-		seed.Services[i].Protocol = "http"
+		seed.Services[i].Protocol = "trpc"
 		seed.Services[i].Status = "active"
 	}
 	if !found {
@@ -393,8 +393,8 @@ func validTradeConsoleHost(host string) bool {
 
 // enableScopedTradeConsoleRoute turns the otherwise control-only browser row
 // into an authenticated route when a deployment seed is intentionally scoped
-// to a remote Trade node. The dedicated node uses a distinct native service
-// path so the strategy ownership route can stay on the canonical path.
+// to a remote Trade node. Both callers use the canonical native service;
+// method ACLs keep Strategy ownership separate from console operations.
 func enableScopedTradeConsoleRoute(seed *serviceDeploymentSeed) error {
 	if seed == nil || seed.Node.ID == "control" {
 		return nil
@@ -408,8 +408,8 @@ func enableScopedTradeConsoleRoute(seed *serviceDeploymentSeed) error {
 		}
 		seed.Services[i].GatewayEnabled = true
 		seed.Services[i].GatewayService = "trade_console"
-		seed.Services[i].GatewayPath = "trpc.moox.trade.TradeConsoleAdminService"
-		seed.Services[i].Protocol = "http"
+		seed.Services[i].GatewayPath = "trpc.moox.trade.TradeConsoleService"
+		seed.Services[i].Protocol = "trpc"
 		seed.Services[i].Host = "127.0.0.1"
 		seed.Services[i].Port = 11200
 		seed.Services[i].Status = "active"

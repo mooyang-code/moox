@@ -51,8 +51,8 @@ func DefaultDeployments(nodeID string) []Deployment {
 		deployment("secret", "admin_rpc", "trpc", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),
 		deployment("sysdeploy", "admin_rpc", "trpc", "127.0.0.1", 11109, "trpc.moox.ops.SysDeploy", "internal", "系统服务部署信息 RPC 服务"),
 		withExtra(deployment("publishlease", "admin_rpc", "trpc", "127.0.0.1", 11111, "trpc.moox.admin.CollectorPublishLease", "internal", "Collector SCF 发布租约与 fencing 校验"), `{"gateway_methods":["AcquireCollectorPublishLease","RenewCollectorPublishLease","ReleaseCollectorPublishLease"],"gateway_callers":["moox-cli","collector","cloudnode"],"gateway_routes":[{"service_path":"trpc.moox.admin.CollectorPublishLease","port":11111,"gateway_methods":["ValidateCollectorPublishLease","BeginCollectorPublishOperation","RenewCollectorPublishOperation","EndCollectorPublishOperation"],"gateway_callers":["cloudnode"]}]}`),
-		deployment("trade_console", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.TradeConsoleService", "internal", "统一交易控制台与执行服务"),
-		withExtra(deployment("trade_owner", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.TradeConsoleService", "internal", "Strategy 专用交易账户授权路由，不开放下单及资金管理"), `{"gateway_methods":["GetLogicalAccount","ClaimLogicalAccountOwner","ReleaseLogicalAccountOwner","RebindLogicalAccountOwner"],"gateway_callers":["strategy"]}`),
+		deployment("trade_console", "trade", "trpc", "127.0.0.1", 11200, "trpc.moox.trade.TradeConsoleService", "internal", "统一交易控制台与执行服务"),
+		withExtra(deployment("trade_owner", "trade", "trpc", "127.0.0.1", 11200, "trpc.moox.trade.TradeConsoleService", "internal", "Strategy 专用交易账户授权路由，不开放下单及资金管理"), `{"gateway_methods":["GetLogicalAccount","ClaimLogicalAccountOwner","ReleaseLogicalAccountOwner","RebindLogicalAccountOwner"],"gateway_callers":["strategy"]}`),
 		withExtra(deployment("trade_dns_resolver", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.TradeDNSResolverService", "internal", "交易节点 DNS 解析与连通性探测服务"), `{"gateway_methods":["ResolveDomains"],"gateway_callers":["collector"]}`),
 	}
 	canonical := map[string]string{

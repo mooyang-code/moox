@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
-	"trpc.group/trpc-go/trpc-go/client"
-	thttp "trpc.group/trpc-go/trpc-go/http"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
 const defaultLogicalAccountTimeout = 3 * time.Second
@@ -46,13 +44,13 @@ func (e *logicalAccountResponseError) Code() int32 {
 	return int32(e.code)
 }
 
-func newLogicalAccountOwnerClient(cfg TradeConfig) *logicalAccountOwnerClient {
+func newLogicalAccountOwnerClient(cfg TradeConfig, gateway gatewayclient.Invoker) *logicalAccountOwnerClient {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultLogicalAccountTimeout
 	}
 	return &logicalAccountOwnerClient{
-		client:  newLogicalAccountGateway(cfg),
+		client:  newLogicalAccountGateway(gateway),
 		timeout: timeout,
 	}
 }
@@ -65,7 +63,7 @@ func (c *logicalAccountOwnerClient) Validate(
 	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, "", false); err != nil {
 		return err
 	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return err
 	}
@@ -73,7 +71,6 @@ func (c *logicalAccountOwnerClient) Validate(
 	response, err := c.client.GetLogicalAccount(
 		callCtx,
 		&tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID},
-		opts...,
 	)
 	if err != nil {
 		return c.transportError(callCtx, "validate", err)
@@ -99,12 +96,12 @@ func (c *logicalAccountOwnerClient) Generation(
 	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, expectedOwner, expectedOwner != ""); err != nil {
 		return 0, err
 	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return 0, err
 	}
 	defer cancel()
-	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
+	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID})
 	if err != nil {
 		return 0, c.transportError(callCtx, "generation", err)
 	}
@@ -135,12 +132,12 @@ func (c *logicalAccountOwnerClient) SessionGeneration(
 	if strings.TrimSpace(sessionID) == "" {
 		return 0, errors.New("Trade LogicalAccount session_id is required")
 	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return 0, err
 	}
 	defer cancel()
-	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
+	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID})
 	if err != nil {
 		return 0, c.transportError(callCtx, "session generation", err)
 	}
@@ -181,7 +178,7 @@ func (c *logicalAccountOwnerClient) ClaimWithGeneration(
 	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, runnerID, true); err != nil {
 		return 0, err
 	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return 0, err
 	}
@@ -192,7 +189,6 @@ func (c *logicalAccountOwnerClient) ClaimWithGeneration(
 			LogicalAccountId: logicalAccountID,
 			RunnerId:         runnerID,
 		},
-		opts...,
 	)
 	if err != nil {
 		return 0, c.transportError(callCtx, "claim", err)
@@ -220,7 +216,7 @@ func (c *logicalAccountOwnerClient) Release(
 	if err := validateLogicalAccountIdentity(spaceID, logicalAccountID, runnerID, true); err != nil {
 		return err
 	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return err
 	}
@@ -231,7 +227,6 @@ func (c *logicalAccountOwnerClient) Release(
 			LogicalAccountId: logicalAccountID,
 			RunnerId:         runnerID,
 		},
-		opts...,
 	)
 	if err != nil {
 		return c.transportError(callCtx, "release", err)
@@ -263,12 +258,12 @@ func (c *logicalAccountOwnerClient) ClaimSession(ctx context.Context, spaceID, l
 	if err != nil {
 		return err
 	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-	response, err := c.client.ClaimLogicalAccountOwner(callCtx, &tradepb.ClaimLogicalAccountOwnerReq{LogicalAccountId: logicalAccountID, InstanceId: instanceID, SessionId: sessionID, ExpectedAuthFence: expectedFence}, opts...)
+	response, err := c.client.ClaimLogicalAccountOwner(callCtx, &tradepb.ClaimLogicalAccountOwnerReq{LogicalAccountId: logicalAccountID, InstanceId: instanceID, SessionId: sessionID, ExpectedAuthFence: expectedFence})
 	if err != nil {
 		return c.transportError(callCtx, "claim session", err)
 	}
@@ -289,12 +284,12 @@ func (c *logicalAccountOwnerClient) ReleaseSession(ctx context.Context, spaceID,
 	if err != nil {
 		return err
 	}
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-	response, err := c.client.ReleaseLogicalAccountOwner(callCtx, &tradepb.ReleaseLogicalAccountOwnerReq{LogicalAccountId: logicalAccountID, InstanceId: instanceID, SessionId: sessionID, ExpectedAuthFence: expectedFence}, opts...)
+	response, err := c.client.ReleaseLogicalAccountOwner(callCtx, &tradepb.ReleaseLogicalAccountOwnerReq{LogicalAccountId: logicalAccountID, InstanceId: instanceID, SessionId: sessionID, ExpectedAuthFence: expectedFence})
 	if err != nil {
 		return c.transportError(callCtx, "release session", err)
 	}
@@ -302,12 +297,12 @@ func (c *logicalAccountOwnerClient) ReleaseSession(ctx context.Context, spaceID,
 }
 
 func (c *logicalAccountOwnerClient) readAuthFence(ctx context.Context, spaceID, logicalAccountID string) (string, error) {
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	callCtx, cancel, err := c.call(ctx, spaceID)
 	if err != nil {
 		return "", err
 	}
 	defer cancel()
-	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
+	response, err := c.client.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID})
 	if err != nil {
 		return "", c.transportError(callCtx, "read auth fence", err)
 	}
@@ -320,9 +315,9 @@ func (c *logicalAccountOwnerClient) readAuthFence(ctx context.Context, spaceID, 
 func (c *logicalAccountOwnerClient) call(
 	ctx context.Context,
 	spaceID string,
-) (context.Context, context.CancelFunc, []client.Option, error) {
+) (context.Context, context.CancelFunc, error) {
 	if c == nil || c.client == nil {
-		return nil, nil, nil, errors.New("Trade LogicalAccount client is unavailable")
+		return nil, nil, errors.New("Trade LogicalAccount client is unavailable")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -331,13 +326,10 @@ func (c *logicalAccountOwnerClient) call(
 	if timeout <= 0 {
 		timeout = defaultLogicalAccountTimeout
 	}
-	callCtx, cancel := context.WithTimeout(context.WithValue(ctx, logicalAccountSpaceKey{}, spaceID), timeout)
-	reqHead := &thttp.ClientReqHeader{Header: make(http.Header)}
-	reqHead.Header.Set("X-Space-Id", spaceID)
-	return callCtx, cancel, []client.Option{
-		client.WithReqHead(reqHead),
-		client.WithTimeout(timeout),
-	}, nil
+	metadata := gatewayclient.CallMetadataFromContext(ctx)
+	metadata.SpaceID = spaceID
+	callCtx, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(ctx, metadata), timeout)
+	return callCtx, cancel, nil
 }
 
 func (c *logicalAccountOwnerClient) transportError(

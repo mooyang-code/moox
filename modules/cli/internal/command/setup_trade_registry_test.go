@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 func TestSyncTradeRegistryRequiresOwnerRouteBeforeSuccess(t *testing.T) {
@@ -27,7 +28,7 @@ func TestSyncTradeRegistryRequiresOwnerRouteBeforeSuccess(t *testing.T) {
 				previousOpen := openCommandGateway
 				openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
 				t.Cleanup(func() { openCommandGateway = previousOpen })
-				result, err := syncSetupServiceRegistry(context.Background(), nil, ssh, ssh,
+				result, err := syncSetupServiceRegistry(context.Background(), nil, ssh,
 					setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", remote,
 					setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 				ssh.mu.Lock()
@@ -61,7 +62,7 @@ func TestSyncTradeRegistryCleansUpAfterRequestCancellation(t *testing.T) {
 	previousOpen := openCommandGateway
 	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
 	t.Cleanup(func() { openCommandGateway = previousOpen })
-	result, err := syncSetupServiceRegistry(ctx, nil, ssh, ssh,
+	result, err := syncSetupServiceRegistry(ctx, nil, ssh,
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", true,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.Error(t, err)
@@ -80,7 +81,7 @@ func TestSyncTradeRegistryReportsCleanupFailure(t *testing.T) {
 	previousOpen := openCommandGateway
 	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
 	t.Cleanup(func() { openCommandGateway = previousOpen })
-	_, err := syncSetupServiceRegistry(context.Background(), nil, ssh, ssh,
+	_, err := syncSetupServiceRegistry(context.Background(), nil, ssh,
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", false,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.ErrorContains(t, err, "trade_owner_registry_failed")
@@ -92,7 +93,7 @@ func TestSyncTradeRegistryReportsDisableFailure(t *testing.T) {
 	previousOpen := openCommandGateway
 	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return ssh, nil }
 	t.Cleanup(func() { openCommandGateway = previousOpen })
-	result, err := syncSetupServiceRegistry(context.Background(), nil, ssh, ssh,
+	result, err := syncSetupServiceRegistry(context.Background(), nil, ssh,
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", false,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.False(t, result.RegistrySynced)
@@ -139,6 +140,10 @@ func (s *tradeRegistrySSH) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if r.URL.Path == "/trpc.moox.trade.TradeConsoleService/GetExecutionCapabilities" {
+			_, _ = w.Write([]byte(`{"ret_info":{"code":"NO_PERMISSION"}}`))
+			return
+		}
 		raw, _ := io.ReadAll(r.Body)
 		if strings.HasSuffix(r.URL.Path, "/GetServiceDeployment") {
 			var req pb.GetServiceDeploymentReq
@@ -202,7 +207,7 @@ func (s *tradeRegistrySSH) handler() http.Handler {
 				RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, NodeId: req.GetNodeId(), RouteHash: "route-hash",
 				Routes: []*pb.GatewayRoute{
 					{ServiceId: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, AllowedCallers: []string{"strategy"}},
-					{ServiceId: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleAdminService", AllowedMethods: []string{"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts", "SetLeverage", "SyncTradingAccount", "CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts", "UpdateLogicalAccount", "AddLogicalAccountMember", "RemoveLogicalAccountMember", "PauseLogicalAccount", "ResumeLogicalAccount", "FlattenLogicalAccount", "PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction", "GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills", "ListPositions", "CreatePaperSimulation", "ClosePaperSimulation", "GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings"}, AllowedCallers: []string{"admin-gateway"}},
+					{ServiceId: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts", "SetLeverage", "SyncTradingAccount", "CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts", "UpdateLogicalAccount", "AddLogicalAccountMember", "RemoveLogicalAccountMember", "PauseLogicalAccount", "ResumeLogicalAccount", "FlattenLogicalAccount", "PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction", "GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills", "ListPositions", "CreatePaperSimulation", "ClosePaperSimulation", "GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings"}, AllowedCallers: []string{"admin-gateway"}},
 				},
 			})
 			_, _ = w.Write(encoded)
@@ -237,4 +242,43 @@ func (s *tradeRegistrySSH) handler() http.Handler {
 		}
 		_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"}}`))
 	})
+}
+
+type tradeProbeGateway struct {
+	commandGateway
+	raw []byte
+	err error
+}
+
+func (g tradeProbeGateway) Forward(_ context.Context, service, method string, serialization int, body []byte) ([]byte, error) {
+	if service != "trpc.moox.trade.TradeConsoleService" || method != "GetExecutionCapabilities" || serialization != codec.SerializationTypeJSON || string(body) != "{}" {
+		return nil, errors.New("unexpected probe request")
+	}
+	return g.raw, g.err
+}
+
+func TestTradeNativeProbeRequiresHandlerStatus(t *testing.T) {
+	for _, test := range []struct {
+		name, raw string
+		err       error
+		ok        bool
+	}{
+		{"canonical", `{"ret_info":{"code":"NO_PERMISSION"}}`, nil, true},
+		{"proto JSON", `{"retInfo":{"code":"NO_PERMISSION"}}`, nil, true},
+		{"missing status", `{}`, nil, false},
+		{"unexpected success", `{"ret_info":{"code":"SUCCESS"}}`, nil, false},
+		{"unavailable", `{"ret_info":{"code":"INNER_ERR"}}`, nil, false},
+		{"invalid JSON", `invalid`, nil, false},
+		{"transport", ``, errors.New("native connection failed"), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := probeTradeConsole(t.Context(), tradeProbeGateway{raw: []byte(test.raw), err: test.err})
+			if test.ok {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+	require.Error(t, probeTradeConsole(t.Context(), nil))
 }

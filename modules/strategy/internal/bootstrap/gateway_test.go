@@ -23,6 +23,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/factorio"
 	"github.com/mooyang-code/moox/modules/strategy/internal/storageio"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
@@ -39,16 +40,18 @@ import (
 
 type strategyGatewayWire struct {
 	factorpb.UnimplementedFactorMgr
+	tradepb.UnimplementedTradeConsoleService
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedDataView
 	directorypb.UnimplementedDirectory
-	credentials gatewayauth.Credentials
-	directory   servicecatalog.Directory
-	catalog     servicecatalog.Catalog
-	mu          sync.Mutex
-	nonces      map[string]bool
-	calls       map[string]int
-	refreshes   int
+	credentials  gatewayauth.Credentials
+	directory    servicecatalog.Directory
+	catalog      servicecatalog.Catalog
+	mu           sync.Mutex
+	nonces       map[string]bool
+	calls        map[string]int
+	refreshes    int
+	logicalOwner *tradepb.LogicalAccount
 }
 
 func (w *strategyGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
@@ -60,9 +63,10 @@ func (w *strategyGatewayWire) GetDirectory(_ context.Context, req *directorypb.G
 	}
 	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
 		Services: map[string]*directorypb.ServiceHosts{
-			"trpc.moox.factor.FactorMgr": {HostIds: []string{"control"}},
-			"trpc.moox.storage.Metadata": {HostIds: []string{"control"}},
-			"trpc.moox.storage.DataView": {HostIds: []string{"control"}},
+			"trpc.moox.trade.TradeConsoleService": {HostIds: []string{"control"}},
+			"trpc.moox.factor.FactorMgr":          {HostIds: []string{"control"}},
+			"trpc.moox.storage.Metadata":          {HostIds: []string{"control"}},
+			"trpc.moox.storage.DataView":          {HostIds: []string{"control"}},
 		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
 }
 
@@ -202,7 +206,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(hostPath, encoded, 0o600))
 	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.factor.FactorMgr": {"control"}, "trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.DataView": {"control"},
+		"trpc.moox.trade.TradeConsoleService": {"control"}, "trpc.moox.factor.FactorMgr": {"control"}, "trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.DataView": {"control"},
 	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
@@ -211,6 +215,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	wire := &strategyGatewayWire{credentials: credentials, directory: directory, catalog: catalog, nonces: map[string]bool{}, calls: map[string]int{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	factorpb.RegisterFactorMgrService(svc, wire)
+	tradepb.RegisterTradeConsoleServiceService(svc, wire)
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterDataViewService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)

@@ -1,18 +1,12 @@
 package bootstrap
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"io"
-	"net/http"
+	"errors"
 	"strings"
-	"time"
 
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -23,92 +17,42 @@ type logicalAccountProxy interface {
 	RebindLogicalAccountOwner(context.Context, *tradepb.RebindLogicalAccountOwnerReq, ...client.Option) (*tradepb.RebindLogicalAccountOwnerRsp, error)
 }
 
-type logicalAccountSpaceKey struct{}
+// The process owns this client; the account adapter only borrows it.
+type logicalAccountGateway struct{ gateway gatewayclient.Invoker }
 
-type logicalAccountGateway struct {
-	config      TradeConfig
-	credentials gatewayauth.Credentials
-	client      *http.Client
-	initErr     error
+func newLogicalAccountGateway(gateway gatewayclient.Invoker) *logicalAccountGateway {
+	return &logicalAccountGateway{gateway: gateway}
 }
 
-func newLogicalAccountGateway(cfg TradeConfig) *logicalAccountGateway {
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = defaultLogicalAccountTimeout
+func (g *logicalAccountGateway) invoke(ctx context.Context, method string, request, response any, options []client.Option) error {
+	if g == nil || g.gateway == nil {
+		return errors.New("Trade gateway client is required")
 	}
-	g := &logicalAccountGateway{config: cfg, credentials: gatewayauth.CredentialsFromEnv()}
-	g.initErr = cfg.validate()
-	if g.initErr == nil {
-		g.client, g.initErr = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.Timeout, CAFile: cfg.CAFile})
+	if len(options) != 0 {
+		return errors.New("Trade gateway calls use context and catalog settings instead of tRPC client options")
 	}
-	return g
+	if strings.TrimSpace(gatewayclient.CallMetadataFromContext(ctx).SpaceID) == "" {
+		return errors.New("Trade gateway space is required")
+	}
+	return g.gateway.Invoke(ctx, "trpc.moox.trade.TradeConsoleService", method, request, response)
 }
 
-func (g *logicalAccountGateway) post(ctx context.Context, method string, request, response proto.Message) error {
-	if g.initErr != nil {
-		return g.initErr
-	}
-	if g.config.GatewayURL == "" {
-		return fmt.Errorf("Trade gateway_url is not configured")
-	}
-	if g.credentials.Caller != "strategy" {
-		return fmt.Errorf("Trade gateway caller must be strategy")
-	}
-	spaceID, _ := ctx.Value(logicalAccountSpaceKey{}).(string)
-	if spaceID == "" {
-		return fmt.Errorf("Trade gateway space is required")
-	}
-	body, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(request)
-	if err != nil {
-		return err
-	}
-	path := "/api/service/trade_owner/" + method
-	headers, err := gatewayauth.Sign(g.credentials, gatewayauth.Request{Method: http.MethodPost, Path: path, TargetNode: g.config.TargetNode, Body: body}, time.Now())
-	if err != nil {
-		return err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.config.GatewayURL, "/")+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	httpReq.Header = headers
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Space-Id", spaceID)
-	httpRsp, err := g.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer httpRsp.Body.Close()
-	if httpRsp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Trade gateway %s HTTP %d", method, httpRsp.StatusCode)
-	}
-	const maxResponseBytes = 1 << 20
-	data, err := io.ReadAll(io.LimitReader(httpRsp.Body, maxResponseBytes+1))
-	if err != nil {
-		return err
-	}
-	if len(data) > maxResponseBytes {
-		return fmt.Errorf("Trade gateway response exceeds limit")
-	}
-	return protojson.Unmarshal(data, response)
-}
-
-func (g *logicalAccountGateway) GetLogicalAccount(ctx context.Context, req *tradepb.GetLogicalAccountReq, _ ...client.Option) (*tradepb.GetLogicalAccountRsp, error) {
+func (g *logicalAccountGateway) GetLogicalAccount(ctx context.Context, req *tradepb.GetLogicalAccountReq, options ...client.Option) (*tradepb.GetLogicalAccountRsp, error) {
 	rsp := new(tradepb.GetLogicalAccountRsp)
-	return rsp, g.post(ctx, "GetLogicalAccount", req, rsp)
+	return rsp, g.invoke(ctx, "GetLogicalAccount", req, rsp, options)
 }
 
-func (g *logicalAccountGateway) ClaimLogicalAccountOwner(ctx context.Context, req *tradepb.ClaimLogicalAccountOwnerReq, _ ...client.Option) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
+func (g *logicalAccountGateway) ClaimLogicalAccountOwner(ctx context.Context, req *tradepb.ClaimLogicalAccountOwnerReq, options ...client.Option) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
 	rsp := new(tradepb.ClaimLogicalAccountOwnerRsp)
-	return rsp, g.post(ctx, "ClaimLogicalAccountOwner", req, rsp)
+	return rsp, g.invoke(ctx, "ClaimLogicalAccountOwner", req, rsp, options)
 }
 
-func (g *logicalAccountGateway) ReleaseLogicalAccountOwner(ctx context.Context, req *tradepb.ReleaseLogicalAccountOwnerReq, _ ...client.Option) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
+func (g *logicalAccountGateway) ReleaseLogicalAccountOwner(ctx context.Context, req *tradepb.ReleaseLogicalAccountOwnerReq, options ...client.Option) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
 	rsp := new(tradepb.ReleaseLogicalAccountOwnerRsp)
-	return rsp, g.post(ctx, "ReleaseLogicalAccountOwner", req, rsp)
+	return rsp, g.invoke(ctx, "ReleaseLogicalAccountOwner", req, rsp, options)
 }
 
-func (g *logicalAccountGateway) RebindLogicalAccountOwner(ctx context.Context, req *tradepb.RebindLogicalAccountOwnerReq, _ ...client.Option) (*tradepb.RebindLogicalAccountOwnerRsp, error) {
+func (g *logicalAccountGateway) RebindLogicalAccountOwner(ctx context.Context, req *tradepb.RebindLogicalAccountOwnerReq, options ...client.Option) (*tradepb.RebindLogicalAccountOwnerRsp, error) {
 	rsp := new(tradepb.RebindLogicalAccountOwnerRsp)
-	return rsp, g.post(ctx, "RebindLogicalAccountOwner", req, rsp)
+	return rsp, g.invoke(ctx, "RebindLogicalAccountOwner", req, rsp, options)
 }

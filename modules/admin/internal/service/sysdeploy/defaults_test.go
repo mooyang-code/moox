@@ -387,7 +387,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	} {
 		row, ok := byName[name]
 		if !ok || row.Port != expected.port || row.GatewayPath != expected.path ||
-			row.Protocol != "http" || row.Host != "127.0.0.1" || row.Scope != "internal" {
+			row.Protocol != "trpc" || row.Host != "127.0.0.1" || row.Scope != "internal" {
 			t.Fatalf("%s deployment = %+v", name, row)
 		}
 		if healthURL(row.ExtraConfig) != "" {

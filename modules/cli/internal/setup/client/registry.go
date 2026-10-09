@@ -45,7 +45,7 @@ func (c *Client) RegisterServiceDeployment(ctx context.Context, nodeID, serviceN
 	// node. Never reuse the control node's browser trade_console placement.
 	owner := &pb.ServiceDeployment{
 		NodeId: strings.TrimSpace(nodeID), ServiceName: "trade_owner", ServiceKind: "trade",
-		Protocol: "http", Host: "127.0.0.1", Port: 11200, Scope: "internal", Status: "active",
+		Protocol: "trpc", Host: "127.0.0.1", Port: 11200, Scope: "internal", Status: "active",
 		GatewayPath: "trpc.moox.trade.TradeConsoleService", GatewayServiceId: "trade_owner", GatewayEnabled: true,
 		Description: "Strategy-only logical account ownership route",
 		ExtraConfig: `{"gateway_methods":["GetLogicalAccount","ClaimLogicalAccountOwner","ReleaseLogicalAccountOwner","RebindLogicalAccountOwner"],"gateway_callers":["strategy"],"monitor_enabled":false,"managed_by":"moox-cli"}`,
@@ -55,12 +55,9 @@ func (c *Client) RegisterServiceDeployment(ctx context.Context, nodeID, serviceN
 	}
 	console := &pb.ServiceDeployment{
 		NodeId: strings.TrimSpace(nodeID), ServiceName: "trade_console", ServiceKind: "trade",
-		Protocol: "http", Host: "127.0.0.1", Port: 11200, Scope: "internal", Status: "active",
-		// Dedicated Trade nodes expose the browser/operator methods through a
-		// distinct native service path. This keeps the strategy ownership route
-		// on the canonical path and makes route snapshots unambiguous even when
-		// an older Gateway is rolled back.
-		GatewayPath: "trpc.moox.trade.TradeConsoleAdminService", GatewayServiceId: "trade_console", GatewayEnabled: true,
+		Protocol: "trpc", Host: "127.0.0.1", Port: 11200, Scope: "internal", Status: "active",
+		// Method ACLs distinguish console operations from Strategy ownership.
+		GatewayPath: "trpc.moox.trade.TradeConsoleService", GatewayServiceId: "trade_console", GatewayEnabled: true,
 		Description: "Authenticated Admin TradeConsole route; ownership fencing remains strategy-only",
 		ExtraConfig: tradeConsoleGatewayExtraConfig(),
 	}

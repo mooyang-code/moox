@@ -157,7 +157,7 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 	require.Equal(t, "trpc.moox.trade.TradeConsoleService", owner.ServicePath)
 	require.Equal(t, []string{"strategy"}, owner.AllowedCallers)
 	require.ElementsMatch(t, []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, owner.AllowedMethods)
-	require.Equal(t, "trpc.moox.trade.TradeConsoleAdminService", console.ServicePath)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleService", console.ServicePath)
 	require.Equal(t, []string{"admin-gateway"}, console.AllowedCallers)
 	require.Equal(t, "127.0.0.1", byName["trade_owner"].Host)
 	require.Equal(t, int32(11200), byName["trade_owner"].Port)
@@ -182,11 +182,11 @@ func TestScopedTradeConsoleImportCompilesAuthenticatedAdminRoute(t *testing.T) {
 	require.NoError(t, db.Where("c_node_id = ? AND c_service_name = ?", "trade-node", "trade_console").First(&row).Error)
 	require.True(t, row.GatewayEnabled)
 	require.Equal(t, "trade_console", row.GatewayServiceID)
-	require.Equal(t, "trpc.moox.trade.TradeConsoleAdminService", row.GatewayPath)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleService", row.GatewayPath)
 	extra, err := sysdeploy.NewDAO(db).CompileGatewaySnapshot(context.Background(), "trade-node")
 	require.NoError(t, err)
 	require.Len(t, extra.Routes, 1)
-	require.Equal(t, "trpc.moox.trade.TradeConsoleAdminService", extra.Routes[0].ServicePath)
+	require.Equal(t, "trpc.moox.trade.TradeConsoleService", extra.Routes[0].ServicePath)
 }
 
 func TestTradeGatewayPlacementPersistsAcrossSeedImport(t *testing.T) {

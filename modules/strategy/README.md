@@ -15,3 +15,5 @@ go test -count=1 ./modules/strategy/...
 ## 配置
 
 `config/app.yaml`（Trade 接线、EventBus）、`config/trpc_go.yaml`；schema 在 `schema/`。
+
+Trade 的逻辑账户读取与授权复用进程级网关客户端，使用原生 PB 和空间元数据；只保留 `trade.timeout` 业务预算，删除专用目标、CA 和环境覆盖。Storage、Factor、Trade 共用部署签名身份与客户端生命周期。
