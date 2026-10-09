@@ -73,7 +73,7 @@ func TestRouteRefreshTimerConfig(t *testing.T) {
 		"name: " + routeRefreshTimerService,
 		"ip: 127.0.0.1",
 		"port: 11013",
-		"network: \"*/15 * * * * *\"",
+		"network: \"*/5 * * * * *\"",
 		"protocol: timer",
 		"timeout: 10000",
 	} {

@@ -37,11 +37,14 @@ func (u *Upstream) Forward(parent context.Context, route servicecatalog.Route, s
 		client.WithTransport(u.transport), client.WithPool(u.pool), client.WithMultiplexed(false),
 		client.WithTimeout(time.Duration(route.TimeoutMS) * time.Millisecond), client.WithDialTimeout(time.Duration(route.TimeoutMS) * time.Millisecond),
 	}
-	if route.ReadOnly {
+	// GatewayControl verifies the original host identity and raw bytes again.
+	// Its nonce belongs to the caller: only that caller can sign a fresh retry.
+	control := route.ServicePath == servicecatalog.GatewayControlPath
+	if route.ReadOnly && !control {
 		options = append(options, client.WithFilter(trpcretry.ReadOnly()))
 	}
 	for key, value := range metadata {
-		if strings.HasPrefix(strings.ToLower(key), "x-moox-") {
+		if strings.HasPrefix(strings.ToLower(key), "x-moox-") && (!control || !controlSignatureHeader(key)) {
 			continue
 		}
 		options = append(options, client.WithMetaData(key, append([]byte(nil), value...)))
@@ -51,6 +54,15 @@ func (u *Upstream) Forward(parent context.Context, route servicecatalog.Route, s
 		return nil, err
 	}
 	return rsp.Data, nil
+}
+
+func controlSignatureHeader(key string) bool {
+	switch strings.ToLower(key) {
+	case "x-moox-key-id", "x-moox-caller", "x-moox-timestamp", "x-moox-nonce", "x-moox-target-node", "x-moox-signature":
+		return true
+	default:
+		return false
+	}
 }
 
 func failureKind(err error) string {

@@ -49,6 +49,10 @@ test-storage-view-series-capacity:
 test-collector-period-universe-e2e:
 	bash scripts/test/e2e/test-collector-period-universe-e2e.sh
 
+.PHONY: test-host-gateway-control-e2e
+test-host-gateway-control-e2e:
+	bash scripts/test/gates/test-host-gateway-control-e2e.sh
+
 test-kline-resample:
 	bash scripts/test/e2e/test-kline-resample.sh
 

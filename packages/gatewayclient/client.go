@@ -82,7 +82,9 @@ func New(config Config) (*Client, error) {
 		config.DirectoryTimeout = 5 * time.Second
 	}
 	if config.RefreshInterval == 0 {
-		config.RefreshInterval = 15 * time.Second
+		// Directory publication follows the host snapshot pull. Leave room for
+		// both polling stages within the 15-second deployment visibility budget.
+		config.RefreshInterval = 5 * time.Second
 	}
 	if config.Timeout < 0 || config.DirectoryTimeout <= 0 || config.RefreshInterval <= 0 || config.Serialization != codec.SerializationTypePB && config.Serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("gateway client requires positive timeouts and PB or JSON serialization")

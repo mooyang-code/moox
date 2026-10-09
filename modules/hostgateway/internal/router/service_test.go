@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testrpc"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -24,6 +25,40 @@ import (
 )
 
 const primary = "trpc.moox.storage.PrimaryStore"
+
+func TestControlUpstreamPreservesSignatureWithoutReusingNonceForRetry(t *testing.T) {
+	opened, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	credential := testsnapshot.Credential("host-gateway@storage")
+	body := []byte{0x0a, 7, 's', 't', 'o', 'r', 'a', 'g', 'e'}
+	var calls atomic.Int32
+	testrpc.Serve(t, opened, servicecatalog.GatewayControlPath, func(ctx context.Context, raw []byte) ([]byte, error) {
+		calls.Add(1)
+		headers := http.Header{}
+		for key, value := range codec.Message(ctx).ServerMetaData() {
+			if strings.EqualFold(key, "x-moox-extra") {
+				return nil, errors.New("unsigned gateway metadata leaked")
+			}
+			headers.Add(key, string(value))
+		}
+		_, err := gatewayauth.Verify(credential, gatewayauth.Request{Method: "POST", Path: "/" + servicecatalog.GatewayControlPath + "/PullSnapshot", TargetNode: "control", Callee: servicecatalog.GatewayControlPath, Func: "PullSnapshot", Body: raw}, headers, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		return nil, errs.NewFrameError(errs.RetClientNetErr, "verified control request")
+	})
+	headers, err := testrpc.Signed(credential, "control", servicecatalog.GatewayControlPath, "PullSnapshot", body)
+	require.NoError(t, err)
+	metadata := codec.MetaData{"x-moox-extra": []byte("unsigned")}
+	for key := range headers {
+		metadata[key] = []byte(headers.Get(key))
+	}
+	u := NewUpstream()
+	defer u.Close()
+	_, err = u.Forward(context.Background(), servicecatalog.Route{Address: opened.Addr().String(), ServicePath: servicecatalog.GatewayControlPath, Method: "PullSnapshot", ReadOnly: true, TimeoutMS: 1000}, codec.SerializationTypePB, body, metadata)
+	require.ErrorContains(t, err, "verified control request")
+	require.EqualValues(t, 1, calls.Load(), "the origin must sign every control retry with a new nonce")
+}
 
 type forwardFunc func(context.Context, servicecatalog.Route, int, []byte, codec.MetaData) ([]byte, error)
 

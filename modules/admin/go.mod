@@ -34,6 +34,8 @@ require (
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 )
 
+require github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
+
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
@@ -43,7 +45,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.1 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
@@ -104,6 +105,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
@@ -155,6 +157,8 @@ replace github.com/mooyang-code/moox/packages/frequency => ../../packages/freque
 replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
+
+replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
 
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
 
