@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"gorm.io/gorm"
 )
@@ -71,7 +72,7 @@ func runKeysCommand(args []string, stdout, stderr io.Writer) error {
 	if *keyFile == "" {
 		return errors.New("--encryption-key-file is required")
 	}
-	master, err := readPrivateFile(*keyFile, 8192)
+	master, err := privatefiles.Read(*keyFile, 8192)
 	if err != nil {
 		return fmt.Errorf("read Admin encryption key: %w", err)
 	}
@@ -131,13 +132,13 @@ func runKeysCommand(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		root, err := privateOutputRoot(*outputDir)
+		root, err := privatefiles.OpenRoot(*outputDir)
 		if err != nil {
 			return err
 		}
 		defer root.Close()
 		name := "caller-" + key.Caller + ".key"
-		if err := writePrivateFile(root, name, []byte(key.Credentials().Secret+"\n")); err != nil {
+		if err := privatefiles.Write(root, name, []byte(key.Credentials().Secret+"\n")); err != nil {
 			return err
 		}
 		return writeJSON(stdout, map[string]string{"caller": key.Caller, "key_id": key.KeyID, "key_file": filepath.Join(*outputDir, name)})
@@ -152,7 +153,7 @@ func exportAccessKeys(ctx context.Context, store *keys.Store, dir string, stdout
 	if err != nil {
 		return err
 	}
-	root, err := privateOutputRoot(dir)
+	root, err := privatefiles.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
@@ -168,7 +169,7 @@ func exportAccessKeys(ctx context.Context, store *keys.Store, dir string, stdout
 	}{Version: 1}
 	for _, item := range items {
 		name := "caller-" + item.Caller + "-" + item.KeyID + ".key"
-		if err := writePrivateFile(root, name, item.Secret); err != nil {
+		if err := privatefiles.Write(root, name, item.Secret); err != nil {
 			return err
 		}
 		file.Keys = append(file.Keys, credential{KeyID: item.KeyID, Caller: item.Caller, SecretFile: name})
@@ -179,7 +180,7 @@ func exportAccessKeys(ctx context.Context, store *keys.Store, dir string, stdout
 	}
 	// Publish the registry last. Versioned key files keep the old registry valid
 	// if any write fails. Removed keys are absent from the next active registry.
-	if err := writePrivateFile(root, "access-verification.json", append(raw, '\n')); err != nil {
+	if err := privatefiles.Write(root, "access-verification.json", append(raw, '\n')); err != nil {
 		return err
 	}
 	return writeJSON(stdout, map[string]any{"status": "ok", "registry_file": filepath.Join(dir, "access-verification.json"), "key_count": len(items)})

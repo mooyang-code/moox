@@ -1,4 +1,6 @@
-package main
+// Package privatefiles confines private credential reads and atomic writes to
+// regular 0600 files and owned 0700 directories.
+package privatefiles
 
 import (
 	"errors"
@@ -10,13 +12,19 @@ import (
 	"github.com/mooyang-code/moox/packages/security"
 )
 
-func readPrivateFile(path string, limit int64) ([]byte, error) {
+func Read(path string, limit int64) ([]byte, error) {
 	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
-	name := filepath.Base(path)
+	return ReadAt(root, filepath.Base(path), limit)
+}
+
+func ReadAt(root *os.Root, name string, limit int64) ([]byte, error) {
+	if filepath.Base(name) != name || name == "." || limit <= 0 {
+		return nil, errors.New("invalid credential filename or size limit")
+	}
 	info, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
@@ -46,7 +54,7 @@ func readPrivateFile(path string, limit int64) ([]byte, error) {
 	return raw, nil
 }
 
-func privateOutputRoot(dir string) (*os.Root, error) {
+func OpenRoot(dir string) (*os.Root, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -69,7 +77,30 @@ func privateOutputRoot(dir string) (*os.Root, error) {
 	return root, nil
 }
 
-func writePrivateFile(root *os.Root, name string, data []byte) error {
+func OpenSubRoot(parent *os.Root, name string) (*os.Root, error) {
+	if filepath.Base(name) != name || name == "." {
+		return nil, errors.New("credential directory must be a single path component")
+	}
+	if err := parent.Mkdir(name, 0o700); err != nil && !os.IsExist(err) {
+		return nil, err
+	}
+	info, err := parent.Lstat(name)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return nil, errors.New("credential subdirectory must be a regular 0700 directory")
+	}
+	root, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		root.Close()
+		return nil, errors.New("credential subdirectory changed while opening")
+	}
+	return root, nil
+}
+
+func Write(root *os.Root, name string, data []byte) error {
 	if filepath.Base(name) != name || name == "." {
 		return errors.New("secret filename must be a single path component")
 	}

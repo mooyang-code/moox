@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -182,9 +183,9 @@ func TestPrivateCallerFilesRejectSymlinksLoosePermissionsAndOversize(t *testing.
 	require.NoError(t, os.Chmod(f.master, 0o600))
 	link := filepath.Join(f.dir, "master-link")
 	require.NoError(t, os.Symlink(f.master, link))
-	_, err = readPrivateFile(link, 8192)
+	_, err = privatefiles.Read(link, 8192)
 	require.Error(t, err)
-	_, err = readPrivateFile(f.master, 2)
+	_, err = privatefiles.Read(f.master, 2)
 	require.Error(t, err)
 	_, err = f.run(t, "ensure", "--caller", "console")
 	require.NoError(t, err)

@@ -210,7 +210,8 @@ func validateDoctor(component Component, ids map[string]bool) error {
 	return nil
 }
 
-func validAddress(address string) bool {
+// ValidHostAddress accepts a bare IP or DNS host, without a scheme or port.
+func ValidHostAddress(address string) bool {
 	if address == "" || len(address) > 253 {
 		return false
 	}
