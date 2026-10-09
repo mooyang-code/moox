@@ -28,7 +28,6 @@ import (
 const (
 	factorHealthService    = "trpc.moox.factor.Health"
 	factorMgrService       = "trpc.moox.factor.FactorMgr"
-	factorMgrTRPCService   = "trpc.moox.factor.FactorMgr.trpc"
 	factorEngineService    = "trpc.moox.factor.FactorEngine"
 	catalogReconcilePeriod = 5 * time.Minute
 )
@@ -53,13 +52,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{factorHealthService, factorEngineService} {
+	for _, name := range []string{factorHealthService, factorEngineService, factorMgrService} {
 		if s.Service(name) == nil {
 			return nil, fmt.Errorf("factor service %q is required", name)
 		}
-	}
-	if s.Service(factorMgrService) == nil && s.Service(factorMgrTRPCService) == nil {
-		return nil, errors.New("FactorMgr tRPC or HTTP service is required")
 	}
 
 	runtime := &Runtime{health: factorhealth.New("factor", "factor", "", "")}
@@ -103,11 +99,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	runtime.stopCatalog = stopCatalog
 
 	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub))
-	for _, name := range []string{factorMgrService, factorMgrTRPCService} {
-		if service := s.Service(name); service != nil {
-			factorpb.RegisterFactorMgrService(service, factorService)
-		}
-	}
+	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub))
 
 	runtime.health.SnapshotFunc = runtime.healthSnapshot(db)

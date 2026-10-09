@@ -14,6 +14,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 )
@@ -350,16 +351,16 @@ func normalizeFieldGroups(seed metadataSeed) (metadataSeed, error) {
 	return seed, nil
 }
 
-func runMetadataImport(ctx context.Context, metadataURL string, calls []metadataImportCall, ifNotExists bool) (metadataImportSummary, error) {
+func runMetadataImport(ctx context.Context, gateway gatewayclient.Invoker, calls []metadataImportCall, ifNotExists bool) (metadataImportSummary, error) {
 	summary := metadataImportSummary{
-		Status:      "ok",
-		MetadataURL: metadataURL,
-		Planned:     len(calls),
-		Resources:   countMetadataCalls(calls),
+		Status:    "ok",
+		Service:   metadataServiceName,
+		Planned:   len(calls),
+		Resources: countMetadataCalls(calls),
 	}
 	for _, call := range calls {
 		if ifNotExists && call.Exists != nil {
-			exists, err := metadataResourceExists(ctx, metadataURL, call.Exists)
+			exists, err := metadataResourceExists(ctx, gateway, call.Exists)
 			if err != nil {
 				return summary, err
 			}
@@ -368,7 +369,7 @@ func runMetadataImport(ctx context.Context, metadataURL string, calls []metadata
 				continue
 			}
 		}
-		if err := postStorage(ctx, metadataURL, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
+		if err := postStorage(ctx, gateway, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
 			return summary, err
 		}
 		summary.Applied++
@@ -376,8 +377,8 @@ func runMetadataImport(ctx context.Context, metadataURL string, calls []metadata
 	return summary, nil
 }
 
-func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataImportCall) (metadataImportSummary, error) {
-	summary := metadataImportSummary{Status: "ok", MetadataURL: metadataURL, Planned: len(calls), Resources: countMetadataCalls(calls)}
+func runMetadataApply(ctx context.Context, gateway gatewayclient.Invoker, calls []metadataImportCall) (metadataImportSummary, error) {
+	summary := metadataImportSummary{Status: "ok", Service: metadataServiceName, Planned: len(calls), Resources: countMetadataCalls(calls)}
 	for _, call := range calls {
 		probe := call.Exists
 		switch call.Resource {
@@ -397,12 +398,12 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 		if probe == nil {
 			return summary, fmt.Errorf("apply does not support resource %s without read probe", call.Resource)
 		}
-		found, actual, err := findMetadataApplyResource(ctx, metadataURL, call.Resource, probe, call.Request)
+		found, actual, err := findMetadataApplyResource(ctx, gateway, call.Resource, probe, call.Request)
 		if err != nil {
 			return summary, err
 		}
 		if !found {
-			if err := postStorage(ctx, metadataURL, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
+			if err := postStorage(ctx, gateway, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
 				return summary, err
 			}
 			summary.Applied++
@@ -424,7 +425,7 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 
 func findMetadataApplyResource(
 	ctx context.Context,
-	metadataURL string,
+	gateway gatewayclient.Invoker,
 	resource string,
 	probe *metadataExistsProbe,
 	expectedRequest proto.Message,
@@ -441,7 +442,7 @@ func findMetadataApplyResource(
 				},
 				Response: &pb.ListDatasetColumnsRsp{},
 			}
-			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, metadataURL, resource, current, expectedRequest)
+			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, gateway, resource, current, expectedRequest)
 			if err != nil || found || !hasMore {
 				return found, actual, err
 			}
@@ -457,13 +458,13 @@ func findMetadataApplyResource(
 				},
 				Response: &pb.ListViewColumnsRsp{},
 			}
-			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, metadataURL, resource, current, expectedRequest)
+			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, gateway, resource, current, expectedRequest)
 			if err != nil || found || !hasMore {
 				return found, actual, err
 			}
 		}
 	default:
-		found, actual, _, err := inspectMetadataApplyPage(ctx, metadataURL, resource, probe, expectedRequest)
+		found, actual, _, err := inspectMetadataApplyPage(ctx, gateway, resource, probe, expectedRequest)
 		return found, actual, err
 	}
 	return false, nil, fmt.Errorf("metadata %s probe exceeds %d pages", resource, metadataApplyMaxPages)
@@ -471,12 +472,12 @@ func findMetadataApplyResource(
 
 func inspectMetadataApplyPage(
 	ctx context.Context,
-	metadataURL string,
+	gateway gatewayclient.Invoker,
 	resource string,
 	probe *metadataExistsProbe,
 	expectedRequest proto.Message,
 ) (bool, proto.Message, bool, error) {
-	if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
+	if err := postStorageRaw(ctx, gateway, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
 		return false, nil, false, err
 	}
 	ret, ok := responseRetInfo(probe.Response)
@@ -717,8 +718,8 @@ func metadataViewAttributesEqual(expected, actual map[string]string) bool {
 	return maps.Equal(expected, actualContract)
 }
 
-func metadataResourceExists(ctx context.Context, metadataURL string, probe *metadataExistsProbe) (bool, error) {
-	if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
+func metadataResourceExists(ctx context.Context, gateway gatewayclient.Invoker, probe *metadataExistsProbe) (bool, error) {
+	if err := postStorageRaw(ctx, gateway, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
 		return false, err
 	}
 	retInfo, ok := responseRetInfo(probe.Response)
@@ -746,20 +747,6 @@ func writeMetadataImportSummary(summary metadataImportSummary) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(summary)
-}
-
-func defaultMetadataImportURL(flagValue string) string {
-	value := strings.TrimSpace(flagValue)
-	if value == "" {
-		value = strings.TrimSpace(os.Getenv("MOOX_METADATA_URL"))
-	}
-	if value == "" {
-		value = "http://127.0.0.1:20200"
-	}
-	if !strings.Contains(value, "://") {
-		value = "http://" + value
-	}
-	return value
 }
 
 func metadataNotFound(retInfo *pb.RetInfo) bool {
@@ -965,12 +952,12 @@ func init() {
 	metadataCmd.AddCommand(metadataSpacesCmd)
 
 	metadataImportCmd.Flags().StringVarP(&metadataImportFile, "file", "f", "", "metadata seed YAML 文件路径")
-	metadataImportCmd.Flags().StringVar(&metadataImportURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:20200")
+	metadataImportCmd.Flags().StringVar(&metadataImportManifest, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	metadataImportCmd.Flags().BoolVar(&metadataImportDryRun, "dry-run", false, "只解析并输出导入计划，不发送 RPC")
 	metadataImportCmd.Flags().BoolVar(&metadataImportIfNotExists, "if-not-exists", false, "资源已存在时跳过 create 类调用")
 	metadataImportCmd.Flags().StringSliceVar(&metadataImportSpaces, "spaces", nil, "仅导入指定 Space ID 或中文名，逗号分隔")
 	metadataSpacesCmd.Flags().StringVarP(&metadataSpacesFile, "file", "f", "", "metadata seed YAML 文件路径")
 	metadataApplyCmd.Flags().StringVarP(&metadataApplyFile, "file", "f", "", "metadata seed YAML 文件路径")
-	metadataApplyCmd.Flags().StringVar(&metadataApplyURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址")
+	metadataApplyCmd.Flags().StringVar(&metadataApplyManifest, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	metadataApplyCmd.Flags().BoolVar(&metadataApplyDryRun, "dry-run", false, "只解析并输出应用计划，不发送 RPC")
 }

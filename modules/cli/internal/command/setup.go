@@ -1600,23 +1600,16 @@ func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snaps
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
-	host, err := findSetupHost(snapshot.Manifest, hostName)
+	_, err = findSetupHost(snapshot.Manifest, hostName)
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
-	transport, err := dialSetupHost(ctx, host)
+	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
-	defer transport.Close()
-	forwardContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	listener, err := transport.ForwardLocal(forwardContext, "127.0.0.1:20200")
-	if err != nil {
-		return metadataImportSummary{}, fmt.Errorf("storage_not_reachable")
-	}
-	defer listener.Close()
-	return runMetadataImport(ctx, "http://"+listener.Addr().String(), calls, true)
+	defer gateway.Close()
+	return runMetadataImport(ctx, gateway, calls, true)
 }
 
 func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (setupvalidate.Result, error) {

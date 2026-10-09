@@ -1,16 +1,12 @@
 package command
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -20,49 +16,30 @@ type retInfoResponse interface {
 	GetRetInfo() *pb.RetInfo
 }
 
-func exportRowsRemote(ctx context.Context, storageURL string, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+func exportRowsRemote(ctx context.Context, gateway gatewayclient.Invoker, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	rsp := &pb.ReadTimeSeriesRowsRsp{}
-	if err := postStorage(ctx, storageURL, accessServiceName, "ReadTimeSeriesRows", req, rsp); err != nil {
+	if err := postStorage(ctx, gateway, accessServiceName, "ReadTimeSeriesRows", req, rsp); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func postStorage(ctx context.Context, storageURL string, service string, method string, req proto.Message, rsp proto.Message) error {
-	if err := postStorageRaw(ctx, storageURL, service, method, req, rsp); err != nil {
+func postStorage(ctx context.Context, gateway gatewayclient.Invoker, service string, method string, req proto.Message, rsp proto.Message) error {
+	if err := postStorageRaw(ctx, gateway, service, method, req, rsp); err != nil {
 		return err
 	}
 	return checkStorageRetInfo(service, method, rsp)
 }
 
-func postStorageRaw(ctx context.Context, storageURL string, service string, method string, req proto.Message, rsp proto.Message) error {
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
-	if err != nil {
-		return err
+func postStorageRaw(ctx context.Context, gateway gatewayclient.Invoker, service string, method string, req proto.Message, rsp proto.Message) error {
+	if gateway == nil || req == nil || rsp == nil {
+		return fmt.Errorf("Storage call requires the operator SSH gateway and request/response")
 	}
-	url := strings.TrimRight(storageURL, "/") + "/" + service + "/" + method
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	metadata := gatewayclient.CallMetadataFromContext(ctx)
 	if spaceID := protoMessageSpaceID(req.ProtoReflect()); spaceID != "" {
-		httpReq.Header.Set("X-Space-Id", spaceID)
+		metadata.SpaceID = spaceID
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	httpRsp, err := client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer httpRsp.Body.Close()
-	body, _ := io.ReadAll(httpRsp.Body)
-	if httpRsp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s/%s HTTP %d: %s", service, method, httpRsp.StatusCode, string(body))
-	}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(body, rsp); err != nil {
-		return err
-	}
-	return nil
+	return gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), service, method, req, rsp)
 }
 
 func protoMessageSpaceID(message protoreflect.Message) string {

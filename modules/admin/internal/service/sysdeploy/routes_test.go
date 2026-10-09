@@ -63,7 +63,7 @@ func TestCompileGatewaySnapshot_DefaultsInvalidExtraAndDisabledNode(t *testing.T
 
 func TestFactorGatewayRouteUsesNativeTRPCListener(t *testing.T) {
 	row := Deployment{
-		Host: "127.0.0.1", Port: 11404,
+		Host: "127.0.0.1", Port: 11403,
 		GatewayPath: "trpc.moox.factor.FactorMgr", GatewayServiceID: "factormgr",
 	}
 	routes, err := deploymentGatewayRoutes(row, routeExtraConfig{
@@ -77,7 +77,7 @@ func TestFactorGatewayRouteUsesNativeTRPCListener(t *testing.T) {
 
 func TestStrategyGatewayRouteUsesNativeTRPCListener(t *testing.T) {
 	row := Deployment{
-		Host: "127.0.0.1", Port: 11433,
+		Host: "127.0.0.1", Port: 11430,
 		GatewayPath: "trpc.moox.strategy.StrategyMgr", GatewayServiceID: "strategymgr",
 	}
 	routes, err := deploymentGatewayRoutes(row, routeExtraConfig{

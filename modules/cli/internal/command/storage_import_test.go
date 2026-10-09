@@ -34,14 +34,14 @@ func TestStorageImporterForFormat(t *testing.T) {
 
 func TestValidateStorageImportOptions(t *testing.T) {
 	err := validateStorageImportOptions(storageImportOptions{
-		File: "a.csv", MetadataURL: "http://meta", SpaceID: "s", DatasetID: "d",
-		SubjectID: "sub", TimeColumn: "t", AccessURL: "http://access", Freq: "1m",
+		File: "a.csv", SpaceID: "s", DatasetID: "d",
+		SubjectID: "sub", TimeColumn: "t", Freq: "1m",
 	})
 	require.NoError(t, err)
 	err = validateStorageImportOptions(storageImportOptions{File: "a.csv"})
 	require.Error(t, err)
 	err = validateStorageImportOptions(storageImportOptions{
-		File: "a.csv", MetadataURL: "http://meta", SpaceID: "s", DatasetID: "d",
+		File: "a.csv", SpaceID: "s", DatasetID: "d",
 		SubjectID: "sub", TimeColumn: "t", DryRun: true, Freq: "1m",
 	})
 	require.NoError(t, err)
@@ -129,13 +129,6 @@ func TestNormalizedStorageImportBatchSize(t *testing.T) {
 	assert.Equal(t, 200, normalizedStorageImportBatchSize(200))
 }
 
-func TestRetryableStorageImportWriteError(t *testing.T) {
-	assert.True(t, retryableStorageImportWriteError(assertErr("subject not bound")))
-	assert.True(t, retryableStorageImportWriteError(assertErr("路由未注册")))
-	assert.False(t, retryableStorageImportWriteError(assertErr("permission denied")))
-	assert.False(t, retryableStorageImportWriteError(nil))
-}
-
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
@@ -202,27 +195,6 @@ func TestWriteStorageImportSummary(t *testing.T) {
 	assert.Contains(t, string(raw), `"written_rows": 3`)
 }
 
-func TestWriteStorageImportRowsImmediateSuccess(t *testing.T) {
-	writer := fakeStorageWriter{}
-	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.PrimaryUpsertFieldsReq{}, false))
-}
-
-type retryOnceWriter struct{ calls int }
-
-func (w *retryOnceWriter) UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error {
-	w.calls++
-	if w.calls == 1 {
-		return assertErr("subject not bound")
-	}
-	return nil
-}
-
-func TestWriteStorageImportRowsRetriesRetryableError(t *testing.T) {
-	writer := &retryOnceWriter{}
-	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.PrimaryUpsertFieldsReq{}, true))
-	assert.Equal(t, 2, writer.calls)
-}
-
 func TestRunStorageImportWritePath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.csv")
 	content := "meta\nignore\nopen_time,close\n2026-01-02T03:04:05Z,1.25\n"
@@ -240,7 +212,7 @@ func TestRunStorageImportWritePath(t *testing.T) {
 	}
 	writer := &trackingStorageWriter{}
 	summary, err := runStorageImport(context.Background(), storageImportOptions{
-		Format: "csv", File: path, MetadataURL: "http://meta", AccessURL: "http://access",
+		Format: "csv", File: path,
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", TimeColumn: "open_time",
 		BatchSize: 100,
 	}, &meta, writer)
@@ -275,7 +247,7 @@ func newStorageImportMetaFull() *fakeStorageImportMetaFull {
 
 func validStorageImportOptions(path string, seriesTag string, dryRun bool) storageImportOptions {
 	return storageImportOptions{
-		Format: "csv", File: path, MetadataURL: "http://meta", AccessURL: "http://access",
+		Format: "csv", File: path,
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m",
 		TimeColumn: "data_time", SeriesTag: seriesTag, BatchSize: 100, DryRun: dryRun,
 	}

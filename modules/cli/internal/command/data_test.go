@@ -3,10 +3,9 @@ package command
 import (
 	"bytes"
 	"context"
-	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,17 +78,17 @@ func TestWriteRowsExport(t *testing.T) {
 }
 
 func TestPostStorageRawAndRetInfo(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/Access/ReadTimeSeriesRows", r.URL.Path)
+	server := &testfixture.HandlerGateway{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/"+accessServiceName+"/ReadTimeSeriesRows", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		body, _ := protojson.Marshal(&pb.ReadTimeSeriesRowsRsp{
 			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
 		})
 		w.Write(body)
-	}))
+	})}
 	defer server.Close()
 	rsp := &pb.ReadTimeSeriesRowsRsp{}
-	err := postStorage(context.Background(), server.URL, "Access", "ReadTimeSeriesRows", &pb.ReadTimeSeriesRowsReq{}, rsp)
+	err := postStorage(context.Background(), server, accessServiceName, "ReadTimeSeriesRows", &pb.ReadTimeSeriesRowsReq{}, rsp)
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
@@ -110,34 +109,34 @@ func TestResponseRetInfo(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestExportRowsRemotePropagatesHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestExportRowsRemotePropagatesGatewayError(t *testing.T) {
+	server := &testfixture.HandlerGateway{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("fail"))
-	}))
+	})}
 	defer server.Close()
-	_, err := exportRowsRemote(context.Background(), server.URL, &pb.ReadTimeSeriesRowsReq{})
+	_, err := exportRowsRemote(context.Background(), server, &pb.ReadTimeSeriesRowsReq{})
 	require.Error(t, err)
 }
 
-func TestPostStorageRawNetworkError(t *testing.T) {
-	err := postStorageRaw(context.Background(), "http://127.0.0.1:1", "Access", "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
+func TestPostStorageRawRequiresGateway(t *testing.T) {
+	err := postStorageRaw(context.Background(), nil, accessServiceName, "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
 	require.Error(t, err)
 }
 
 func TestCheckStorageRetInfoMissingRetInfo(t *testing.T) {
-	err := checkStorageRetInfo("Access", "Read", &pb.ReadTimeSeriesRowsRsp{RetInfo: nil})
+	err := checkStorageRetInfo(accessServiceName, "Read", &pb.ReadTimeSeriesRowsRsp{RetInfo: nil})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing ret_info")
 }
 
 func TestPostStorageWrapsRetInfoError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := &testfixture.HandlerGateway{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := protojson.Marshal(&pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "bad"}})
 		w.Write(body)
-	}))
+	})}
 	defer server.Close()
-	err := postStorage(context.Background(), server.URL, "Access", "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
+	err := postStorage(context.Background(), server, accessServiceName, "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, err) || err != nil)
+	assert.Contains(t, err.Error(), "bad")
 }

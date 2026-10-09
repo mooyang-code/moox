@@ -15,3 +15,5 @@ go test -count=1 ./modules/storage/...
 ## 配置
 
 `config/storage*.yaml` 与 `config/trpc_go*.yaml` 按角色区分，`config/access/`、`config/storage_view/` 为对应角色配置；元数据 schema 在 `schema/metadata.sql`。需要 DuckDB 的 Linux 制品在编译机上构建（`moox-cli setup build-linux`）。
+
+Metadata 20100、PrimaryStore 20101/20102 与 DataView 20103 仅提供 loopback 原生 tRPC；20200/20201/20202 已删除。CLI 运维经操作员 SSH 网关访问，独立健康 HTTP 保留。

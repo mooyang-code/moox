@@ -20,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type doctorExitError struct{ code int }
@@ -31,7 +30,7 @@ func (e doctorExitError) ExitCode() int { return e.code }
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
 	newClient         func(gatewayclient.Invoker) *doctorcli.Client
-	newMetadataClient func(string, string) doctorcli.StorageActivationClient
+	newMetadataClient func(gatewayclient.Invoker, string) doctorcli.StorageActivationClient
 }
 
 func init() {
@@ -95,7 +94,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			if metadataClientFactory == nil {
 				metadataClientFactory = newSignedStorageMetadataClient
 			}
-			storageActivation := metadataClientFactory(defaultMetadataImportURL(""), os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
+			storageActivation := metadataClientFactory(gateway, os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
 			auth, err := loadDoctorHealthAuth(doctorCfg.ReleaseRoot)
 			if err != nil {
 				return err
@@ -145,19 +144,19 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 }
 
 type signedStorageMetadataClient struct {
-	proxy pb.MetadataClientProxy
-	auth  *commonpb.AuthInfo
+	gateway gatewayclient.Invoker
+	auth    *commonpb.AuthInfo
 }
 
-func newSignedStorageMetadataClient(target, secret string) doctorcli.StorageActivationClient {
+func newSignedStorageMetadataClient(gateway gatewayclient.Invoker, secret string) doctorcli.StorageActivationClient {
 	return &signedStorageMetadataClient{
-		proxy: pb.NewMetadataClientProxy(client.WithTarget(target), client.WithProtocol("http"), client.WithNetwork("tcp")),
-		auth:  &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		gateway: gateway,
+		auth:    &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
 	}
 }
 
 func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, errors.New("storage metadata client is unavailable")
 	}
 	request := &pb.ListDatasetsReq{}
@@ -165,11 +164,13 @@ func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.
 		request = proto.Clone(req).(*pb.ListDatasetsReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.ListDatasets(ctx, request)
+	rsp := &pb.ListDatasetsRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDatasets", request, rsp)
+	return rsp, err
 }
 
 func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, errors.New("storage metadata client is unavailable")
 	}
 	request := &pb.CheckDatasetActivationReq{}
@@ -177,7 +178,9 @@ func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context
 		request = proto.Clone(req).(*pb.CheckDatasetActivationReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.CheckDatasetActivation(ctx, request)
+	rsp := &pb.CheckDatasetActivationRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CheckDatasetActivation", request, rsp)
+	return rsp, err
 }
 
 func validateDoctorFlags(format, output string, checks []string) error {

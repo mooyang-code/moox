@@ -181,10 +181,10 @@ func lookupServiceDeployment(name string) (string, serviceDeploymentCatalogEntry
 		"moox_collector":  {canonical: "moox_collector", kind: "collector", protocol: "trpc", scope: "internal", port: 11402, healthPort: 11412, description: "MooX Collector"},
 		"cloudnode":       {canonical: "moox_cloudnode", kind: "cloudnode", protocol: "trpc", scope: "internal", port: 11401, healthPort: 11411, description: "MooX CloudNode"},
 		"moox_cloudnode":  {canonical: "moox_cloudnode", kind: "cloudnode", protocol: "trpc", scope: "internal", port: 11401, healthPort: 11411, description: "MooX CloudNode"},
-		"factor":          {canonical: "moox_factor_mgr", kind: "factor", protocol: "http", scope: "internal", port: 11404, healthPort: 11414, description: "MooX Factor Manager"},
-		"moox_factor_mgr": {canonical: "moox_factor_mgr", kind: "factor", protocol: "http", scope: "internal", port: 11404, healthPort: 11414, description: "MooX Factor Manager"},
-		"strategy":        {canonical: "moox_strategy", kind: "strategy", protocol: "http", scope: "internal", port: 11433, healthPort: 11431, description: "MooX Strategy"},
-		"moox_strategy":   {canonical: "moox_strategy", kind: "strategy", protocol: "http", scope: "internal", port: 11433, healthPort: 11431, description: "MooX Strategy"},
+		"factor":          {canonical: "moox_factor_mgr", kind: "factor", protocol: "trpc", scope: "internal", port: 11403, healthPort: 11414, description: "MooX Factor Manager"},
+		"moox_factor_mgr": {canonical: "moox_factor_mgr", kind: "factor", protocol: "trpc", scope: "internal", port: 11403, healthPort: 11414, description: "MooX Factor Manager"},
+		"strategy":        {canonical: "moox_strategy", kind: "strategy", protocol: "trpc", scope: "internal", port: 11430, healthPort: 11431, description: "MooX Strategy"},
+		"moox_strategy":   {canonical: "moox_strategy", kind: "strategy", protocol: "trpc", scope: "internal", port: 11430, healthPort: 11431, description: "MooX Strategy"},
 		"archive":         {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
 		"moox_archive":    {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
 		"hostagent":       {canonical: "moox_hostagent", kind: "hostagent", protocol: "trpc", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
@@ -194,10 +194,10 @@ func lookupServiceDeployment(name string) (string, serviceDeploymentCatalogEntry
 		// path rather than advertising an unreachable public /readyz URL.
 		"trade":           {canonical: "moox_trade", kind: "trade", protocol: "http", scope: "internal", port: 11210, healthPort: 0, description: "MooX Trade"},
 		"moox_trade":      {canonical: "moox_trade", kind: "trade", protocol: "http", scope: "internal", port: 11210, healthPort: 0, description: "MooX Trade"},
-		"storage-primary": {canonical: "storage-primary", kind: "storage", protocol: "http", scope: "public", port: 20200, healthPort: 20210, description: "MooX Storage Primary"},
-		"storage_primary": {canonical: "storage-primary", kind: "storage", protocol: "http", scope: "public", port: 20200, healthPort: 20210, description: "MooX Storage Primary"},
-		"storage-view":    {canonical: "storage-view", kind: "storage", protocol: "http", scope: "public", port: 20202, healthPort: 20211, description: "MooX Storage View"},
-		"storage_view":    {canonical: "storage-view", kind: "storage", protocol: "http", scope: "public", port: 20202, healthPort: 20211, description: "MooX Storage View"},
+		"storage-primary": {canonical: "storage-primary", kind: "storage", protocol: "trpc", scope: "internal", port: 20100, healthPort: 20210, description: "MooX Storage Primary"},
+		"storage_primary": {canonical: "storage-primary", kind: "storage", protocol: "trpc", scope: "internal", port: 20100, healthPort: 20210, description: "MooX Storage Primary"},
+		"storage-view":    {canonical: "storage-view", kind: "storage", protocol: "trpc", scope: "internal", port: 20103, healthPort: 20211, description: "MooX Storage View"},
+		"storage_view":    {canonical: "storage-view", kind: "storage", protocol: "trpc", scope: "internal", port: 20103, healthPort: 20211, description: "MooX Storage View"},
 	}
 	if spec, ok := known[name]; ok {
 		return spec.canonical, spec

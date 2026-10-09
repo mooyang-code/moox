@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,7 +80,7 @@ func TestCollectorTaskPurgeApplyRequiresConfirmation(t *testing.T) {
 	server := newCollectorTaskPurgeControlServer(t, orderPath)
 	defer server.Close()
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath: dbPath, ControlURL: server.URL, Apply: true,
+		DBPath: dbPath, Apply: true,
 		StopCommand: fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
 	})
 	require.Error(t, err)
@@ -99,7 +101,6 @@ func TestCollectorTaskPurgeApplyBacksUpBeforeInitializing(t *testing.T) {
 	require.NoError(t, os.WriteFile(initScript, []byte("#!/bin/sh\n[ \"$1\" = init ] && [ \"$2\" = --db-path ] && [ -n \"$3\" ] || exit 2\nexit 0\n"), 0o700))
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
 		DBPath:           dbPath,
-		MetadataTarget:   "test-storage",
 		Apply:            true,
 		Confirm:          true,
 		StopCommand:      "true",
@@ -136,13 +137,11 @@ func TestCollectorTaskPurgeApplyStopsBeforeDeletingTaskAndRuntime(t *testing.T) 
 	stopCommand := fmt.Sprintf("printf 'stop\\n' >> %q", orderPath)
 
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath:         dbPath,
-		SpaceID:        "crypto",
-		MetadataTarget: "test-storage",
-		ControlURL:     server.URL,
-		Apply:          true,
-		Confirm:        true,
-		StopCommand:    stopCommand,
+		DBPath:      dbPath,
+		SpaceID:     "crypto",
+		Apply:       true,
+		Confirm:     true,
+		StopCommand: stopCommand,
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"stop"}, readCollectorPurgeOrder(t, orderPath))
@@ -184,8 +183,6 @@ func TestCollectorTaskPurgeApplyUsesSpaceForEachTask(t *testing.T) {
 
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
 		DBPath:           dbPath,
-		ControlURL:       server.URL,
-		MetadataTarget:   "test-storage",
 		Apply:            true,
 		Confirm:          true,
 		StopCommand:      fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
@@ -209,13 +206,11 @@ func TestCollectorTaskPurgeStopFailureDoesNotDelete(t *testing.T) {
 	server := newCollectorTaskPurgeControlServer(t, orderPath)
 	defer server.Close()
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath:         dbPath,
-		SpaceID:        "crypto",
-		ControlURL:     server.URL,
-		MetadataTarget: "test-storage",
-		Apply:          true,
-		Confirm:        true,
-		StopCommand:    "printf 'stop\\n' >> " + shellQuoteCollectorPurge(orderPath) + "; exit 7",
+		DBPath:      dbPath,
+		SpaceID:     "crypto",
+		Apply:       true,
+		Confirm:     true,
+		StopCommand: "printf 'stop\\n' >> " + shellQuoteCollectorPurge(orderPath) + "; exit 7",
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "stop Collector")
@@ -248,18 +243,17 @@ func TestCollectorTaskPurgeMetadataDeleteFailureKeepsLocalRetryState(t *testing.
 		},
 		failViewID: "view-fail",
 	}
-	newCollectorStorageMetadataClient = func(string, string, string, string) collectorStorageMetadataClient {
-		return fake
+	newCollectorStorageMetadataClient = func(context.Context, string, *setupconfig.Snapshot, string) (collectorStorageMetadataClient, io.Closer, error) {
+		return fake, nil, nil
 	}
 
 	orderPath := filepath.Join(t.TempDir(), "order.log")
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath:         dbPath,
-		SpaceID:        "crypto",
-		MetadataTarget: "test-storage",
-		Apply:          true,
-		Confirm:        true,
-		StopCommand:    fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
+		DBPath:      dbPath,
+		SpaceID:     "crypto",
+		Apply:       true,
+		Confirm:     true,
+		StopCommand: fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "view-fail")
@@ -298,15 +292,12 @@ func TestCollectorTaskPurgeStorageInventoryCountsOnlyCollectorOwnedObjects(t *te
 		},
 		pageSize: 1,
 	}
-	newCollectorStorageMetadataClient = func(string, string, string, string) collectorStorageMetadataClient {
-		return fake
+	newCollectorStorageMetadataClient = func(context.Context, string, *setupconfig.Snapshot, string) (collectorStorageMetadataClient, io.Closer, error) {
+		return fake, nil, nil
 	}
 
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath:                dbPath,
-		MetadataTarget:        "ip://storage:11003",
-		MetadataServiceKey:    "storage-metadata",
-		MetadataServiceSecret: "secret",
+		DBPath: dbPath,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "available", summary.StorageInventoryStatus)
@@ -409,8 +400,8 @@ func storageOKForCollectorPurge() *storagepb.RetInfo {
 func useEmptyCollectorStorageInventory(t *testing.T) {
 	t.Helper()
 	original := newCollectorStorageMetadataClient
-	newCollectorStorageMetadataClient = func(string, string, string, string) collectorStorageMetadataClient {
-		return &fakeCollectorStorageMetadataClient{}
+	newCollectorStorageMetadataClient = func(context.Context, string, *setupconfig.Snapshot, string) (collectorStorageMetadataClient, io.Closer, error) {
+		return &fakeCollectorStorageMetadataClient{}, nil, nil
 	}
 	t.Cleanup(func() {
 		newCollectorStorageMetadataClient = original

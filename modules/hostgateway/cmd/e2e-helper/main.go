@@ -54,6 +54,8 @@ func main() {
 	switch *mode {
 	case "kline-native":
 		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+	case "storage-native":
+		err = runComponentsNative([]string{"storage-primary", "storage-view"}, *nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "doctor-native":
 		err = runComponentsNative([]string{"admin", "monitor"}, *nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "admin-native":

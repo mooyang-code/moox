@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"errors"
 	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	"testing"
@@ -40,12 +41,12 @@ func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {
 }
 
 func TestStorageMetadataClientUsesReadOnlySignedIdentity(t *testing.T) {
-	client := newSignedStorageMetadataClient("http://127.0.0.1:20200", "storage-secret")
+	client := newSignedStorageMetadataClient(storageGatewayCall(func(context.Context, string, string, any, any) error { return nil }), "storage-secret")
 	signed, ok := client.(*signedStorageMetadataClient)
 	require.True(t, ok)
 	require.Equal(t, "storage-metadata", signed.auth.GetAppId())
 	require.Len(t, signed.auth.GetAppKey(), 64)
-	require.NotNil(t, signed.proxy)
+	require.NotNil(t, signed.gateway)
 }
 
 func TestDoctorRejectsInvalidLocalConfigBeforeOpeningGateway(t *testing.T) {

@@ -183,12 +183,12 @@ func runPrimaryRole() error {
 	go runCleanupLoop(cleanupCtx, datasetCleanup{reader: cached, resolver: resolver, auth: cleanupAuth, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
 	go runViewPeriodCleanupLoop(cleanupCtx, meta, time.Hour, storageViewPeriodRetention())
 	s := trpc.NewServer()
-	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc", "trpc.moox.storage.PrimaryStore.http"} {
+	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterPrimaryStoreService(listener, svc)
 		}
 	}
-	for _, name := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.Metadata.trpc", "trpc.moox.storage.Metadata.http"} {
+	for _, name := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.Metadata.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterMetadataService(listener, metadataSvc)
 		}
@@ -434,7 +434,7 @@ func runViewRole() error {
 		return errors.New("ViewIndex listener is not configured")
 	}
 	pb.RegisterViewIndexService(indexListener, svc)
-	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc", "trpc.moox.storage.DataView.http"} {
+	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterDataViewService(listener, svc)
 		}

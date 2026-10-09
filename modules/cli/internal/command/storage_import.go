@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,10 +30,6 @@ const (
 )
 
 var storageImportFlags storageImportOptions
-var (
-	storageImportRetryWindow = 20 * time.Second
-	storageImportRetryDelay  = time.Second
-)
 
 var storageImportCmd = &cobra.Command{
 	Use:   "import",
@@ -41,13 +38,13 @@ var storageImportCmd = &cobra.Command{
 
 示例:
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
-    --access-url http://127.0.0.1:20201 --metadata-url http://127.0.0.1:20200 \
+    --manifest ./moox.toml \
     --space crypto --dataset dataset_spot_kline_1h --subject ARB-USDT --freq 1h \
     --series-tag venue:binance \
     --time-column candle_begin_time
 
   moox-cli storage import --file ~/Downloads/ARB-USDT.csv --dry-run \
-    --metadata-url http://127.0.0.1:20200 --space crypto --dataset dataset_spot_kline_1h \
+    --manifest ./moox.toml --space crypto --dataset dataset_spot_kline_1h \
     --subject ARB-USDT --freq 1h --time-column candle_begin_time
 
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
@@ -55,9 +52,20 @@ var storageImportCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := storageImportFlags
 		opts.Format = defaultFlag(opts.Format, defaultStorageImportFormat)
-		opts.MetadataURL = defaultMetadataImportURL(opts.MetadataURL)
-		meta := httpStorageImportMetadataClient{URL: opts.MetadataURL}
-		writer := httpStorageDataWriter{URL: opts.AccessURL, SpaceID: opts.SpaceID}
+		gateway, err := openCommandGateway(cmd.Context(), opts.Manifest, nil)
+		if err != nil {
+			return err
+		}
+		defer gateway.Close()
+		meta := gatewayStorageImportMetadataClient{Gateway: gateway}
+		var auth *pb.AuthInfo
+		if !opts.DryRun {
+			auth, err = storagePrimaryRoleAuth(opts.AuthFile, "moox-cli-data-import")
+			if err != nil {
+				return err
+			}
+		}
+		writer := gatewayStorageDataWriter{Gateway: gateway, SpaceID: opts.SpaceID, Auth: auth}
 		summary, err := runStorageImport(cmd.Context(), opts, meta, writer)
 		if err != nil {
 			return err
@@ -70,8 +78,8 @@ var storageImportCmd = &cobra.Command{
 type storageImportOptions struct {
 	Format       string
 	File         string
-	AccessURL    string
-	MetadataURL  string
+	Manifest     string
+	AuthFile     string
 	SpaceID      string
 	ViewID       string
 	DatasetID    string
@@ -108,8 +116,7 @@ type storageImportSummary struct {
 	Status            string `json:"status"`
 	File              string `json:"file"`
 	Format            string `json:"format"`
-	AccessURL         string `json:"access_url,omitempty"`
-	MetadataURL       string `json:"metadata_url"`
+	Service           string `json:"service"`
 	SpaceID           string `json:"space"`
 	ViewID            string `json:"view,omitempty"`
 	DatasetID         string `json:"dataset"`
@@ -155,14 +162,15 @@ type storageFileImporter interface {
 // csvStorageFileImporter 实现 CSV 文件到 Storage 行的导入。
 type csvStorageFileImporter struct{}
 
-// httpStorageImportMetadataClient 通过 tRPC 读取远端元数据。
-type httpStorageImportMetadataClient struct {
-	URL string
+// gatewayStorageImportMetadataClient 通过 tRPC 读取远端元数据。
+type gatewayStorageImportMetadataClient struct {
+	Gateway gatewayclient.Invoker
 }
 
-// httpStorageDataWriter 通过 tRPC 将数据写入 Access 服务。
-type httpStorageDataWriter struct {
-	URL     string
+// gatewayStorageDataWriter 通过 tRPC 将数据写入 Access 服务。
+type gatewayStorageDataWriter struct {
+	Gateway gatewayclient.Invoker
+	Auth    *pb.AuthInfo
 	SpaceID string
 }
 
@@ -236,8 +244,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		Status:        "imported",
 		File:          opts.File,
 		Format:        format,
-		AccessURL:     opts.AccessURL,
-		MetadataURL:   opts.MetadataURL,
+		Service:       accessServiceName,
 		SpaceID:       opts.SpaceID,
 		ViewID:        opts.ViewID,
 		DatasetID:     opts.DatasetID,
@@ -261,7 +268,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		if end > len(result.Rows) {
 			end = len(result.Rows)
 		}
-		if err := writeStorageImportRows(ctx, writer, &pb.PrimaryUpsertFieldsReq{Rows: storageImportUpserts(result.Rows[start:end])}, true); err != nil {
+		if err := writer.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{Rows: storageImportUpserts(result.Rows[start:end])}); err != nil {
 			return storageImportSummary{}, err
 		}
 		summary.Batches++
@@ -314,51 +321,6 @@ func stableStorageImportRequestID(opts storageImportOptions, result storageImpor
 	return "import-" + hex.EncodeToString(h.Sum(nil)[:16])
 }
 
-func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.PrimaryUpsertFieldsReq, allowMetadataRetry bool) error {
-	err := writer.UpsertFields(ctx, req)
-	if err == nil || !allowMetadataRetry || !retryableStorageImportWriteError(err) {
-		return err
-	}
-	deadline := time.Now().Add(storageImportRetryWindow)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(storageImportRetryDelay):
-		}
-		err = writer.UpsertFields(ctx, req)
-		if err == nil {
-			return nil
-		}
-		if !retryableStorageImportWriteError(err) {
-			return err
-		}
-	}
-	return err
-}
-
-func retryableStorageImportWriteError(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := strings.ToLower(err.Error())
-	for _, pattern := range []string{
-		"not bound",
-		"not registered",
-		"route not found",
-		"subject",
-		"dataset",
-		"路由",
-		"绑定",
-		"未注册",
-	} {
-		if strings.Contains(text, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
 func inferStorageImportFormat(format string, path string) (string, error) {
 	value := strings.ToLower(strings.TrimSpace(format))
 	if value == "" || value == "auto" {
@@ -389,15 +351,11 @@ func storageImporterForFormat(format string) (storageFileImporter, error) {
 
 func validateStorageImportOptions(opts storageImportOptions) error {
 	required := map[string]string{
-		"file":         opts.File,
-		"metadata-url": opts.MetadataURL,
-		"space":        opts.SpaceID,
-		"dataset":      opts.DatasetID,
-		"subject":      opts.SubjectID,
-		"time-column":  opts.TimeColumn,
-	}
-	if !opts.DryRun {
-		required["access-url"] = opts.AccessURL
+		"file":        opts.File,
+		"space":       opts.SpaceID,
+		"dataset":     opts.DatasetID,
+		"subject":     opts.SubjectID,
+		"time-column": opts.TimeColumn,
 	}
 	if opts.Freq == "" {
 		required["freq"] = opts.Freq
@@ -760,33 +718,33 @@ func writeStorageImportSummary(summary storageImportSummary) error {
 	return encoder.Encode(summary)
 }
 
-func (c httpStorageImportMetadataClient) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
+func (c gatewayStorageImportMetadataClient) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
 	rsp := &pb.GetDatasetRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "GetDataset", &pb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID}, rsp); err != nil {
+	if err := postStorage(ctx, c.Gateway, metadataServiceName, "GetDataset", &pb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID}, rsp); err != nil {
 		return nil, err
 	}
 	return rsp.GetDataset(), nil
 }
 
-func (c httpStorageImportMetadataClient) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
+func (c gatewayStorageImportMetadataClient) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
 	rsp := &pb.GetViewRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "GetView", &pb.GetViewReq{SpaceId: spaceID, ViewId: viewID}, rsp); err != nil {
+	if err := postStorage(ctx, c.Gateway, metadataServiceName, "GetView", &pb.GetViewReq{SpaceId: spaceID, ViewId: viewID}, rsp); err != nil {
 		return nil, err
 	}
 	return rsp.GetView(), nil
 }
 
-func (c httpStorageImportMetadataClient) GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error) {
+func (c gatewayStorageImportMetadataClient) GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error) {
 	rsp := &pb.GetSubjectRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "GetSubject", &pb.GetSubjectReq{SpaceId: spaceID, SubjectId: subjectID}, rsp); err != nil {
+	if err := postStorage(ctx, c.Gateway, metadataServiceName, "GetSubject", &pb.GetSubjectReq{SpaceId: spaceID, SubjectId: subjectID}, rsp); err != nil {
 		return nil, err
 	}
 	return rsp.GetSubject(), nil
 }
 
-func (c httpStorageImportMetadataClient) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DatasetColumn, error) {
+func (c gatewayStorageImportMetadataClient) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DatasetColumn, error) {
 	rsp := &pb.ListDatasetColumnsRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "ListDatasetColumns", &pb.ListDatasetColumnsReq{
+	if err := postStorage(ctx, c.Gateway, metadataServiceName, "ListDatasetColumns", &pb.ListDatasetColumnsReq{
 		SpaceId:   spaceID,
 		DatasetId: datasetID,
 		Page:      &pb.Page{Page: 1, Size: 10000},
@@ -796,9 +754,9 @@ func (c httpStorageImportMetadataClient) ListDatasetColumns(ctx context.Context,
 	return rsp.GetColumns(), nil
 }
 
-func (c httpStorageImportMetadataClient) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string) ([]*pb.DatasetSubject, error) {
+func (c gatewayStorageImportMetadataClient) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string) ([]*pb.DatasetSubject, error) {
 	rsp := &pb.ListDatasetSubjectsRsp{}
-	if err := postStorage(ctx, c.URL, metadataServiceName, "ListDatasetSubjects", &pb.ListDatasetSubjectsReq{
+	if err := postStorage(ctx, c.Gateway, metadataServiceName, "ListDatasetSubjects", &pb.ListDatasetSubjectsReq{
 		SpaceId:   spaceID,
 		DatasetId: datasetID,
 		SubjectId: subjectID,
@@ -809,17 +767,35 @@ func (c httpStorageImportMetadataClient) ListDatasetSubjects(ctx context.Context
 	return rsp.GetDatasetSubjects(), nil
 }
 
-func (w httpStorageDataWriter) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) error {
-	return postStorage(ctx, w.URL, accessServiceName, "UpsertFields", req, &pb.PrimaryUpsertFieldsRsp{})
+func (w gatewayStorageDataWriter) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) error {
+	if req == nil || w.Auth == nil || w.SpaceID == "" {
+		return fmt.Errorf("Storage import requires a request, role authentication and space")
+	}
+	for _, row := range req.GetRows() {
+		if row.GetKey().GetSpaceId() != w.SpaceID {
+			return fmt.Errorf("Storage import row does not match the selected space")
+		}
+	}
+	metadata := gatewayclient.CallMetadataFromContext(ctx)
+	metadata.SpaceID = w.SpaceID
+	ctx = gatewayclient.WithCallMetadata(ctx, metadata)
+	request := proto.Clone(req).(*pb.PrimaryUpsertFieldsReq)
+	request.AuthInfo = w.Auth
+	return postStorage(ctx, w.Gateway, accessServiceName, "UpsertFields", request, &pb.PrimaryUpsertFieldsRsp{})
 }
 
-func (w httpStorageDataWriter) AppendDatasetSyncPoint(ctx context.Context, marker *pb.DatasetSyncPointMarker) error {
-	return postStorage(ctx, w.URL, accessServiceName, "AppendDatasetSyncPoint", &pb.AppendDatasetSyncPointReq{SpaceId: w.SpaceID, SyncPoint: marker}, &pb.AppendDatasetSyncPointRsp{})
+func (w gatewayStorageDataWriter) AppendDatasetSyncPoint(ctx context.Context, marker *pb.DatasetSyncPointMarker) error {
+	return postStorage(ctx, w.Gateway, accessServiceName, "AppendDatasetSyncPoint", &pb.AppendDatasetSyncPointReq{AuthInfo: w.Auth, SpaceId: w.SpaceID, SyncPoint: marker}, &pb.AppendDatasetSyncPointRsp{})
 }
 
-func (w httpStorageDataWriter) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {
+func (w gatewayStorageDataWriter) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {
+	if req == nil || w.Auth == nil {
+		return nil, fmt.Errorf("Storage view sync requires a request and role authentication")
+	}
 	rsp := &pb.WaitViewSyncPointRsp{}
-	if err := postStorage(ctx, w.URL, accessServiceName, "WaitViewSyncPoint", req, rsp); err != nil {
+	request := proto.Clone(req).(*pb.WaitViewSyncPointReq)
+	request.AuthInfo = w.Auth
+	if err := postStorage(ctx, w.Gateway, accessServiceName, "WaitViewSyncPoint", request, rsp); err != nil {
 		return nil, err
 	}
 	return rsp, nil
@@ -850,8 +826,8 @@ func init() {
 	storageCmd.AddCommand(storageImportCmd)
 	storageImportCmd.Flags().StringVar(&storageImportFlags.Format, "format", defaultStorageImportFormat, "导入文件格式：auto/csv")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.File, "file", "", "本地数据文件路径")
-	storageImportCmd.Flags().StringVar(&storageImportFlags.AccessURL, "access-url", "", "moox-storage AccessService HTTP 地址，例如 http://127.0.0.1:20201")
-	storageImportCmd.Flags().StringVar(&storageImportFlags.MetadataURL, "metadata-url", "", "moox-storage MetadataService HTTP 地址，例如 http://127.0.0.1:20200")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.Manifest, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.SpaceID, "space", "", "Space ID")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.ViewID, "view", "", "可选 View ID；传入时校验 dataset 属于该 view")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.DatasetID, "dataset", "", "Dataset ID")

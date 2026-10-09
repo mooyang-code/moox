@@ -10,11 +10,10 @@ import (
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 var (
-	dataStorageURL      string
+	dataManifest        string
 	dataSpaceID         string
 	dataDatasetID       string
 	dataSubjectID       string
@@ -45,28 +44,26 @@ var dataRowsExportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if dataStorageURL != "" {
-			auth, err := dataPrimaryAuth(dataStorageAuthFile)
-			if err != nil {
-				return err
-			}
-			selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
-			rsp, err := exportRowsRemote(trpc.BackgroundContext(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth,
-				SpaceId:  defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
-				Selectors: []*pb.TimeSeriesSelector{selector},
-				TimeRange: &pb.TimeRange{
-					StartTime: dataStartTime,
-					EndTime:   dataEndTime,
-				},
-				Page: &pb.Page{Page: 1, Size: dataPageSize},
-			})
-			if err != nil {
-				return err
-			}
-			return writeRowsExport(rsp, dataOutputFile, dataStorageURL, datasetID, dataSubjectID)
+		auth, err := dataPrimaryAuth(dataStorageAuthFile)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("必须指定 --storage-url，通过 moox-storage Access Service 读取")
+		gateway, err := openCommandGateway(cmd.Context(), dataManifest, nil)
+		if err != nil {
+			return err
+		}
+		defer gateway.Close()
+		selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
+		rsp, err := exportRowsRemote(cmd.Context(), gateway, &pb.ReadTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
+			Selectors: []*pb.TimeSeriesSelector{selector},
+			TimeRange: &pb.TimeRange{StartTime: dataStartTime, EndTime: dataEndTime},
+			Page:      &pb.Page{Page: 1, Size: dataPageSize},
+		})
+		if err != nil {
+			return err
+		}
+		return writeRowsExport(rsp, dataOutputFile, accessServiceName, datasetID, dataSubjectID)
 	},
 }
 
@@ -86,7 +83,7 @@ func init() {
 	dataCmd.AddCommand(dataRowsCmd)
 	dataRowsCmd.AddCommand(dataRowsExportCmd)
 
-	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:20201")
+	dataRowsExportCmd.Flags().StringVar(&dataManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	dataRowsExportCmd.Flags().StringVar(&dataStorageAuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")
@@ -100,7 +97,10 @@ func init() {
 }
 
 func dataPrimaryAuth(path string) (*pb.AuthInfo, error) {
-	const appID = "moox-cli-data-export"
+	return storagePrimaryRoleAuth(path, "moox-cli-data-export")
+}
+
+func storagePrimaryRoleAuth(path, appID string) (*pb.AuthInfo, error) {
 	secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
 	if secret == "" {
 		raw, err := os.ReadFile(filepath.Clean(path))

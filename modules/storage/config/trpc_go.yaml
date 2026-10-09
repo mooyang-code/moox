@@ -64,34 +64,12 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 60000
-    - name: trpc.moox.storage.PrimaryStore.http
-      ip: 127.0.0.1
-      port: 20201
-      network: tcp
-      protocol: http
-    - name: trpc.moox.storage.Metadata.http
-      ip: 127.0.0.1
-      port: 20200
-      network: tcp
-      protocol: http
-    - name: trpc.moox.storage.DataView.http
-      ip: 127.0.0.1
-      port: 20202
-      network: tcp
-      protocol: http
-      timeout: 30000
 
 client:
   filter:
     - validation
     - opentelemetry
   service:
-    - name: trpc.moox.storage.PrimaryStore
-      target: ip://127.0.0.1:20101
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 3000
     - name: trpc.moox.storage.PrimaryStore
       target: ip://127.0.0.1:20102
       network: tcp

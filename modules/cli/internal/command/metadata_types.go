@@ -15,13 +15,13 @@ const (
 
 var (
 	metadataImportFile        string
-	metadataImportURL         string
+	metadataImportManifest    string
 	metadataImportDryRun      bool
 	metadataImportIfNotExists bool
 	metadataImportSpaces      []string
 	metadataSpacesFile        string
 	metadataApplyFile         string
-	metadataApplyURL          string
+	metadataApplyManifest     string
 	metadataApplyDryRun       bool
 )
 
@@ -36,7 +36,7 @@ var metadataImportCmd = &cobra.Command{
 	Long: `通过 moox-storage MetadataService 导入存储元数据 seed。
 
 示例:
-  moox-cli metadata import --file ../../config/setup/metadata.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
+  moox-cli metadata import --file ../../config/setup/metadata.yaml --manifest ./moox.toml --if-not-exists
   moox-cli metadata import --file ../../config/setup/metadata.yaml --spaces crypto --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataImportFile) == "" {
@@ -54,17 +54,21 @@ var metadataImportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		url := defaultMetadataImportURL(metadataImportURL)
 		if metadataImportDryRun {
 			return writeMetadataImportSummary(metadataImportSummary{
-				Status:      "dry_run",
-				DryRun:      true,
-				MetadataURL: url,
-				Planned:     len(calls),
-				Resources:   countMetadataCalls(calls),
+				Status:    "dry_run",
+				DryRun:    true,
+				Service:   metadataServiceName,
+				Planned:   len(calls),
+				Resources: countMetadataCalls(calls),
 			})
 		}
-		summary, err := runMetadataImport(cmd.Context(), url, calls, metadataImportIfNotExists)
+		gateway, err := openCommandGateway(cmd.Context(), metadataImportManifest, nil)
+		if err != nil {
+			return err
+		}
+		defer gateway.Close()
+		summary, err := runMetadataImport(cmd.Context(), gateway, calls, metadataImportIfNotExists)
 		if err != nil {
 			return err
 		}
@@ -105,11 +109,15 @@ var metadataApplyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		url := defaultMetadataImportURL(metadataApplyURL)
 		if metadataApplyDryRun {
-			return writeMetadataImportSummary(metadataImportSummary{Status: "dry_run", DryRun: true, MetadataURL: url, Planned: len(calls), Resources: countMetadataCalls(calls)})
+			return writeMetadataImportSummary(metadataImportSummary{Status: "dry_run", DryRun: true, Service: metadataServiceName, Planned: len(calls), Resources: countMetadataCalls(calls)})
 		}
-		summary, err := runMetadataApply(cmd.Context(), url, calls)
+		gateway, err := openCommandGateway(cmd.Context(), metadataApplyManifest, nil)
+		if err != nil {
+			return err
+		}
+		defer gateway.Close()
+		summary, err := runMetadataApply(cmd.Context(), gateway, calls)
 		if err != nil {
 			return err
 		}
@@ -279,12 +287,12 @@ type metadataExistsProbe struct {
 }
 
 type metadataImportSummary struct {
-	Status      string         `json:"status"`
-	DryRun      bool           `json:"dry_run,omitempty"`
-	MetadataURL string         `json:"metadata_url,omitempty"`
-	Planned     int            `json:"planned"`
-	Applied     int            `json:"applied"`
-	Skipped     int            `json:"skipped"`
-	Unchanged   int            `json:"unchanged,omitempty"`
-	Resources   map[string]int `json:"resources"`
+	Status    string         `json:"status"`
+	DryRun    bool           `json:"dry_run,omitempty"`
+	Service   string         `json:"service"`
+	Planned   int            `json:"planned"`
+	Applied   int            `json:"applied"`
+	Skipped   int            `json:"skipped"`
+	Unchanged int            `json:"unchanged,omitempty"`
+	Resources map[string]int `json:"resources"`
 }

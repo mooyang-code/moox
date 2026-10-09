@@ -16,11 +16,11 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
+	"github.com/mooyang-code/moox/modules/strategy/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"gorm.io/gorm"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type LogicalAccountOwner interface {
@@ -802,12 +802,8 @@ func decodeCompiled(strategy domain.Strategy) (compiler.CompiledStrategy, error)
 }
 
 func requestSpaceID(ctx context.Context) string {
-	for _, key := range []string{"space_id", "X-Space-Id", "x-space-id"} {
-		if value := string(trpc.GetMetaData(ctx, key)); value != "" {
-			return value
-		}
-	}
-	return ""
+	spaceID, _ := spacecontext.FromContext(ctx)
+	return spaceID
 }
 
 func requireSpaceID(ctx context.Context) (string, error) {

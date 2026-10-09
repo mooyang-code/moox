@@ -28,27 +28,24 @@ import (
 )
 
 const (
-	storageMetadataRemoteAddress = "127.0.0.1:20200"
-	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
-	storageBrowserRemoteAddress  = "127.0.0.1:9527"
-	storageLocalProvenanceFile   = "release/storage-artifacts/build-provenance.json"
-	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
-	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
-	storageDeploymentNodeID      = "storage-node-0"
-	storageBrowserFixtureOwner   = "storage-browser-e2e"
-	storageBrowserFixtureMaxAge  = time.Hour
+	storageBrowserRemoteAddress = "127.0.0.1:9527"
+	storageLocalProvenanceFile  = "release/storage-artifacts/build-provenance.json"
+	storageReleaseManifestFile  = "artifacts/storage-datanode-release-sha256.txt"
+	storageE2ESpec              = "tests/storage-datanode-management.remote.e2e.spec.ts"
+	storageDeploymentNodeID     = "storage-node-0"
+	storageBrowserFixtureOwner  = "storage-browser-e2e"
+	storageBrowserFixtureMaxAge = time.Hour
 )
 
 type storageVerifyResult struct {
-	Status             string                      `json:"status"`
-	Commit             string                      `json:"commit"`
-	Components         map[string]storageComponent `json:"components"`
-	BinaryHashes       map[string]string           `json:"binary_hashes"`
-	SchemaVersion      int                         `json:"schema_version"`
-	DataNode           storageDataNodeIdentity     `json:"data_node"`
-	NodeCount          int                         `json:"node_count"`
-	DatasetCount       int                         `json:"dataset_count"`
-	RouteRPCRegistered bool                        `json:"route_rpc_registered"`
+	Status        string                      `json:"status"`
+	Commit        string                      `json:"commit"`
+	Components    map[string]storageComponent `json:"components"`
+	BinaryHashes  map[string]string           `json:"binary_hashes"`
+	SchemaVersion int                         `json:"schema_version"`
+	DataNode      storageDataNodeIdentity     `json:"data_node"`
+	NodeCount     int                         `json:"node_count"`
+	DatasetCount  int                         `json:"dataset_count"`
 }
 
 type storageComponent struct {
@@ -157,89 +154,126 @@ type storageRuntimeAPI interface {
 	GetNodeState(context.Context, *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error)
 }
 
-type storageMetadataProxy struct {
-	proxy   storagepb.MetadataClientProxy
-	options []client.Option
-}
+type storageMetadataProxy struct{ gateway commandGateway }
 
 func (c *storageMetadataProxy) CreateSpace(ctx context.Context, req *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error) {
-	return c.proxy.CreateSpace(ctx, req, c.options...)
+	rsp := &storagepb.CreateSpaceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CreateSpace", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) UpdateSpace(ctx context.Context, req *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error) {
-	return c.proxy.UpdateSpace(ctx, req, c.options...)
+	rsp := &storagepb.UpdateSpaceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateSpace", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) DeleteSpace(ctx context.Context, req *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error) {
-	return c.proxy.DeleteSpace(ctx, req, c.options...)
+	rsp := &storagepb.DeleteSpaceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteSpace", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) ListSpaces(ctx context.Context, req *storagepb.ListSpacesReq) (*storagepb.ListSpacesRsp, error) {
-	return c.proxy.ListSpaces(ctx, req, c.options...)
+	rsp := &storagepb.ListSpacesRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListSpaces", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) CreateDataSource(ctx context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
-	return c.proxy.CreateDataSource(ctx, req, c.options...)
+	rsp := &storagepb.CreateDataSourceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CreateDataSource", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) UpdateDataSource(ctx context.Context, req *storagepb.UpdateDataSourceReq) (*storagepb.UpdateDataSourceRsp, error) {
-	return c.proxy.UpdateDataSource(ctx, req, c.options...)
+	rsp := &storagepb.UpdateDataSourceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateDataSource", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) DeleteDataSource(ctx context.Context, req *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error) {
-	return c.proxy.DeleteDataSource(ctx, req, c.options...)
+	rsp := &storagepb.DeleteDataSourceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataSource", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
-	return c.proxy.CreateDataset(ctx, req, c.options...)
+	rsp := &storagepb.CreateDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CreateDataset", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
-	return c.proxy.GetDataset(ctx, req, c.options...)
+	rsp := &storagepb.GetDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "GetDataset", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
-	return c.proxy.UpdateDataset(ctx, req, c.options...)
+	rsp := &storagepb.UpdateDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateDataset", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) DeleteDataset(ctx context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
-	return c.proxy.DeleteDataset(ctx, req, c.options...)
+	rsp := &storagepb.DeleteDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataset", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
-	return c.proxy.UpsertDatasetColumn(ctx, req, c.options...)
+	rsp := &storagepb.UpsertDatasetColumnRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpsertDatasetColumn", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
-	return c.proxy.ListDatasetColumns(ctx, req, c.options...)
+	rsp := &storagepb.ListDatasetColumnsRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDatasetColumns", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) RegisterDataNode(ctx context.Context, req *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error) {
-	return c.proxy.RegisterDataNode(ctx, req, c.options...)
+	rsp := &storagepb.RegisterDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "RegisterDataNode", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) UpdateDataNode(ctx context.Context, req *storagepb.UpdateDataNodeReq) (*storagepb.UpdateDataNodeRsp, error) {
-	return c.proxy.UpdateDataNode(ctx, req, c.options...)
+	rsp := &storagepb.UpdateDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateDataNode", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) RebindDatasetDataNode(ctx context.Context, req *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error) {
-	return c.proxy.RebindDatasetDataNode(ctx, req, c.options...)
+	rsp := &storagepb.RebindDatasetDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "RebindDatasetDataNode", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) DeleteDataNode(ctx context.Context, req *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error) {
-	return c.proxy.DeleteDataNode(ctx, req, c.options...)
+	rsp := &storagepb.DeleteDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataNode", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) ListDataNodes(ctx context.Context, req *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error) {
-	return c.proxy.ListDataNodes(ctx, req, c.options...)
+	rsp := &storagepb.ListDataNodesRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDataNodes", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return c.proxy.CheckDatasetActivation(ctx, req, c.options...)
+	rsp := &storagepb.CheckDatasetActivationRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CheckDatasetActivation", req, rsp)
+	return rsp, err
 }
 
 func (c *storageMetadataProxy) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	return c.proxy.ActivateDataset(ctx, req, c.options...)
+	rsp := &storagepb.ActivateDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ActivateDataset", req, rsp)
+	return rsp, err
 }
 
 type storageRuntimeProxy struct {
@@ -247,17 +281,18 @@ type storageRuntimeProxy struct {
 	options []client.Option
 }
 
-type storagePrimaryProxy struct {
-	proxy   storagepb.PrimaryStoreClientProxy
-	options []client.Option
-}
+type storagePrimaryProxy struct{ gateway commandGateway }
 
 func (c *storagePrimaryProxy) UpsertFields(ctx context.Context, req *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error) {
-	return c.proxy.UpsertFields(ctx, req, c.options...)
+	rsp := &storagepb.PrimaryUpsertFieldsRsp{}
+	err := postStorageRaw(ctx, c.gateway, accessServiceName, "UpsertFields", req, rsp)
+	return rsp, err
 }
 
 func (c *storagePrimaryProxy) ReadFields(ctx context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
-	return c.proxy.ReadFields(ctx, req, c.options...)
+	rsp := &storagepb.PrimaryReadFieldsRsp{}
+	err := postStorageRaw(ctx, c.gateway, accessServiceName, "ReadFields", req, rsp)
+	return rsp, err
 }
 
 func (c *storageRuntimeProxy) GetNodeState(ctx context.Context, req *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error) {
@@ -265,68 +300,31 @@ func (c *storageRuntimeProxy) GetNodeState(ctx context.Context, req *storagepb.G
 }
 
 type remoteStorageSession struct {
-	transport       setupssh.Client
-	metadata        storageMetadataAPI
-	primary         storagePrimaryAPI
-	auth            *storagepb.AuthInfo
-	nodeAuth        *storagepb.AuthInfo
-	primaryAuth     *storagepb.AuthInfo
-	cancel          context.CancelFunc
-	listener        net.Listener
-	primaryCancel   context.CancelFunc
-	primaryListener net.Listener
+	transport   setupssh.Client
+	gateway     commandGateway
+	metadata    storageMetadataAPI
+	primary     storagePrimaryAPI
+	auth        *storagepb.AuthInfo
+	nodeAuth    *storagepb.AuthInfo
+	primaryAuth *storagepb.AuthInfo
 }
 
 func (s *remoteStorageSession) Close() {
-	if s == nil {
-		return
-	}
-	if s.listener != nil {
-		_ = s.listener.Close()
-	}
-	if s.primaryListener != nil {
-		_ = s.primaryListener.Close()
-	}
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.primaryCancel != nil {
-		s.primaryCancel()
+	if s != nil && s.gateway != nil {
+		_ = s.gateway.Close()
 	}
 }
 
-func newRemoteStorageSession(ctx context.Context, transport setupssh.Client, secret, primarySecret string) (*remoteStorageSession, error) {
-	if transport == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(primarySecret) == "" {
+func newRemoteStorageSession(transport setupssh.Client, gateway commandGateway, secret, primarySecret string) (*remoteStorageSession, error) {
+	if transport == nil || gateway == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(primarySecret) == "" {
 		return nil, errors.New("storage_verification_unavailable")
 	}
-	forwardContext, cancel := context.WithCancel(ctx)
-	listener, err := transport.ForwardLocal(forwardContext, storageMetadataRemoteAddress)
-	if err != nil {
-		cancel()
-		return nil, errors.New("storage_not_reachable")
-	}
-	primaryForwardContext, primaryCancel := context.WithCancel(ctx)
-	primaryListener, err := transport.ForwardLocal(primaryForwardContext, storagePrimaryRemoteAddress)
-	if err != nil {
-		_ = listener.Close()
-		cancel()
-		primaryCancel()
-		return nil, errors.New("storage_primary_not_reachable")
-	}
-	target := "ip://" + listener.Addr().String()
-	options := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("http")}
-	primaryOptions := []client.Option{client.WithTarget("ip://" + primaryListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 	return &remoteStorageSession{
-		transport:       transport,
-		metadata:        &storageMetadataProxy{proxy: storagepb.NewMetadataClientProxy(options...), options: options},
-		primary:         &storagePrimaryProxy{proxy: storagepb.NewPrimaryStoreClientProxy(primaryOptions...), options: primaryOptions},
-		auth:            &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
-		nodeAuth:        &storagepb.AuthInfo{AppId: "storage-deployer", AppKey: security.HMACSHA256Hex(secret, []byte("storage-deployer"))},
-		primaryAuth:     &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: security.HMACSHA256Hex(primarySecret, []byte("storage-e2e"))},
-		cancel:          cancel,
-		listener:        listener,
-		primaryCancel:   primaryCancel,
-		primaryListener: primaryListener,
+		transport: transport, gateway: gateway,
+		metadata: &storageMetadataProxy{gateway: gateway}, primary: &storagePrimaryProxy{gateway: gateway},
+		auth:        &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		nodeAuth:    &storagepb.AuthInfo{AppId: "storage-deployer", AppKey: security.HMACSHA256Hex(secret, []byte("storage-deployer"))},
+		primaryAuth: &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: security.HMACSHA256Hex(primarySecret, []byte("storage-e2e"))},
 	}, nil
 }
 
@@ -471,8 +469,14 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
 	}
-	session, err := newRemoteStorageSession(ctx, transport, secret, primarySecret)
+	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	session, err := newRemoteStorageSession(transport, gateway, secret, primarySecret)
+	if err != nil {
+		_ = gateway.Close()
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
 	}
@@ -550,13 +554,6 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 	if err := verifyStockCNKlineColumns(ctx, session.metadata, session.auth); err != nil {
 		return storageVerifyResult{}, err
 	}
-	routeRPCRegistered, err := readRemoteRouteRPCRegistered(ctx, transport)
-	if err != nil {
-		return storageVerifyResult{}, err
-	}
-	if routeRPCRegistered {
-		return storageVerifyResult{}, errors.New("storage_route_rpc_registered")
-	}
 	schemaVersion, err := readStorageSchemaVersion(ctx, transport, storageRoot)
 	if err != nil {
 		return storageVerifyResult{}, err
@@ -587,15 +584,14 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 		return storageVerifyResult{}, errors.New("storage_verification_failed")
 	}
 	return storageVerifyResult{
-		Status:             "passed",
-		Commit:             remoteProvenance.Commit,
-		Components:         components,
-		BinaryHashes:       hashes,
-		SchemaVersion:      schemaVersion,
-		DataNode:           storageDataNodeIdentity{NodeID: state.GetNodeId(), Status: state.GetStatus()},
-		NodeCount:          len(items),
-		DatasetCount:       datasetCount,
-		RouteRPCRegistered: routeRPCRegistered,
+		Status:        "passed",
+		Commit:        remoteProvenance.Commit,
+		Components:    components,
+		BinaryHashes:  hashes,
+		SchemaVersion: schemaVersion,
+		DataNode:      storageDataNodeIdentity{NodeID: state.GetNodeId(), Status: state.GetStatus()},
+		NodeCount:     len(items),
+		DatasetCount:  datasetCount,
 	}, nil
 }
 
@@ -791,36 +787,6 @@ func validStorageSHA256(value string) bool {
 func validStorageHex(value string) bool {
 	_, err := hex.DecodeString(value)
 	return err == nil
-}
-
-func readRemoteRouteRPCRegistered(ctx context.Context, transport setupssh.Client) (bool, error) {
-	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-body=$(mktemp)
-trap 'rm -f "$body"' EXIT
-status=$(curl -sS -o "$body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-  --data '{}' http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListStorageRoutes || true)
-case "$status" in
-  2??) printf registered ;;
-  404) printf absent ;;
-  *)
-    if grep -Eiq 'method.*(not found|unknown)|not implemented|no such method' "$body"; then
-      printf absent
-    else
-      exit 1
-    fi
-    ;;
-esac`}, nil)
-	if err != nil {
-		return false, errors.New("storage_route_probe_unavailable")
-	}
-	switch strings.TrimSpace(result.Stdout) {
-	case "registered":
-		return true, nil
-	case "absent":
-		return false, nil
-	default:
-		return false, errors.New("storage_route_probe_unavailable")
-	}
 }
 
 func readStorageComponents(ctx context.Context, transport setupssh.Client, storageRoot string) (map[string]storageComponent, error) {

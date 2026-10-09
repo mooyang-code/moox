@@ -75,15 +75,15 @@ func TestRemoteTradeRegistrationDisablesUnreachableHealthProbe(t *testing.T) {
 	require.Contains(t, control, "11210/readyz")
 }
 
-func TestStrategyRegistrationUsesHTTPServicePort(t *testing.T) {
+func TestStrategyRegistrationUsesNativeServicePort(t *testing.T) {
 	canonical, spec := lookupServiceDeployment("strategy")
 	require.Equal(t, "moox_strategy", canonical)
-	require.Equal(t, "http", spec.protocol)
-	require.Equal(t, int32(11433), spec.port)
+	require.Equal(t, "trpc", spec.protocol)
+	require.Equal(t, int32(11430), spec.port)
 	require.Equal(t, int32(11431), spec.healthPort)
 }
 
-func TestStrategyRegistrationMigratesExistingNativePortToHTTP(t *testing.T) {
+func TestStrategyRegistrationUpdatesExistingRowToNativeProtocol(t *testing.T) {
 	rows := map[string]*pb.ServiceDeployment{
 		"control/moox_strategy": {
 			NodeId: "control", ServiceName: "moox_strategy", Protocol: "http",
@@ -93,8 +93,8 @@ func TestStrategyRegistrationMigratesExistingNativePortToHTTP(t *testing.T) {
 	c := New(tradeRegistryForwarder(t, rows, ""))
 	require.NoError(t, c.RegisterServiceDeployment(context.Background(), "control", "strategy", "127.0.0.1"))
 	updated := rows["control/moox_strategy"]
-	require.Equal(t, int32(11433), updated.GetPort())
-	require.Equal(t, "http", updated.GetProtocol())
+	require.Equal(t, int32(11430), updated.GetPort())
+	require.Equal(t, "trpc", updated.GetProtocol())
 }
 
 func tradeRegistryForwarder(t *testing.T, rows map[string]*pb.ServiceDeployment, failService string) *fakeForwarder {

@@ -352,7 +352,7 @@ func TestServiceImpl_SeedDefaults_MigratesHistoricalPrimaryStoreEndpointWithoutD
 		}
 	}
 	require.NotEmpty(t, existing.ServiceName)
-	existing.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20201,"gateway_methods":["MergeTimeSeriesRows","ReadTimeSeriesRows","MergeRecordRows","ReadRecordRows"],"gateway_callers":["admin-gateway","collector"],"owner":"historical"}]}`
+	existing.ExtraConfig = `{"gateway_methods":["GetSpace"],"gateway_callers":["admin-gateway"],"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20101,"gateway_methods":["MergeTimeSeriesRows","ReadTimeSeriesRows","MergeRecordRows","ReadRecordRows"],"gateway_callers":["admin-gateway","collector"],"owner":"historical"}]}`
 	require.NoError(t, svc.dao.Create(context.Background(), &existing))
 
 	require.NoError(t, svc.SeedDefaults(context.Background()))
@@ -726,7 +726,7 @@ func TestServiceImpl_SeedDefaults_ReplacesFactorWithFactorManager(t *testing.T) 
 	svc.dao = NewDAO(db)
 	ctx := context.Background()
 	require.NoError(t, svc.dao.Create(ctx, &Deployment{
-		NodeID: testAdminNodeID, ServiceName: "moox_factor", Host: "127.0.0.1", Port: 11404, Status: "active",
+		NodeID: testAdminNodeID, ServiceName: "moox_factor", Host: "127.0.0.1", Port: 11403, Status: "active",
 		Protocol: "http", GatewayPath: "trpc.moox.factor.FactorMgr", GatewayServiceID: "factormgr", GatewayEnabled: true,
 	}))
 

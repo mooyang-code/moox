@@ -64,13 +64,13 @@ services:
   - name: storage-primary
     kind: storage
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
-    port: 20200
+    port: 20100
     gateway_path: trpc.moox.storage.Metadata
     gateway_service_id: storage-primary
     gateway_enabled: true
-    scope: public
+    scope: internal
     status: active
     description: moox-storage PrimaryStore + Metadata 服务
     extra_config:
@@ -134,13 +134,13 @@ services:
   - name: storage-view
     kind: storage
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
-    port: 20202
+    port: 20103
     gateway_path: trpc.moox.storage.DataView
     gateway_service_id: storage-view
     gateway_enabled: true
-    scope: public
+    scope: internal
     status: active
     description: moox-storage DataView + ViewBuilder 服务
     extra_config:
@@ -270,9 +270,9 @@ services:
   - name: moox_factor_mgr
     kind: factor
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
-    port: 11404
+    port: 11403
     gateway_path: trpc.moox.factor.FactorMgr
     gateway_service_id: factormgr
     gateway_enabled: true
@@ -298,9 +298,9 @@ services:
   - name: moox_strategy
     kind: strategy
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
-    port: 11433
+    port: 11430
     gateway_path: trpc.moox.strategy.StrategyMgr
     gateway_service_id: strategymgr
     gateway_enabled: true

@@ -34,12 +34,6 @@ server:
       protocol: trpc
       transport: go-net
       timeout: 30000
-    - name: trpc.moox.storage.DataView.http
-      ip: 127.0.0.1
-      port: 20202
-      network: tcp
-      protocol: http
-      timeout: 30000
     - name: trpc.moox.storage.ViewIndex
       ip: 127.0.0.1
       port: 20104

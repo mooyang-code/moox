@@ -128,21 +128,7 @@ func isSQLiteLockError(err error) bool {
 }
 
 func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayroute.Route, error) {
-	basePort := row.Port
-	switch row.GatewayServiceID {
-	case "storage-primary":
-		basePort = 20100
-	case "storage-view":
-		basePort = 20103
-	case "factormgr":
-		basePort = 11403
-	case "strategymgr":
-		// Strategy keeps its browser-facing HTTP listener on 11433, while the
-		// native service gateway must speak tRPC to the dedicated 11430 listener.
-		// Deployment.Port remains the HTTP endpoint used by the Admin BFF.
-		basePort = 11430
-	}
-	base := gatewayroute.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
+	base := gatewayroute.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {
 		base.TimeoutMS = *extra.TimeoutMS
 	}

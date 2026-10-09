@@ -167,7 +167,7 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 }
 
 func PrivateServicePorts(eventBusPort int) []string {
-	ports := []int{eventBusPort, 11003, 11012, 20100, 20200, 20201, 20202}
+	ports := []int{eventBusPort, 11003, 11012}
 	out := make([]string, 0, len(ports))
 	seen := map[string]struct{}{}
 	for _, port := range ports {

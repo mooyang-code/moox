@@ -262,14 +262,14 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if !monitorEnabled(byName["moox_strategy"].ExtraConfig) {
 		t.Fatal("moox_strategy monitoring must be enabled after standard release integration")
 	}
-	if item := byName["moox_strategy"]; item.Port != 11433 || item.Protocol != "http" || item.GatewayPath != "trpc.moox.strategy.StrategyMgr" {
-		t.Fatalf("moox_strategy endpoint = %+v, want HTTP 11433", item)
+	if item := byName["moox_strategy"]; item.Port != 11430 || item.Protocol != "trpc" || item.GatewayPath != "trpc.moox.strategy.StrategyMgr" {
+		t.Fatalf("moox_strategy endpoint = %+v, want tRPC 11430", item)
 	}
 	if healthURL(byName["storage-primary"].ExtraConfig) != "http://127.0.0.1:20210/readyz" {
 		t.Fatalf("storage-primary extra_config = %s", byName["storage-primary"].ExtraConfig)
 	}
-	if item := byName["storage-primary"]; item.Port != 20200 || item.GatewayPath != "trpc.moox.storage.Metadata" {
-		t.Fatalf("storage-primary endpoint = %d/%s, want 20200/trpc.moox.storage.Metadata", item.Port, item.GatewayPath)
+	if item := byName["storage-primary"]; item.Port != 20100 || item.GatewayPath != "trpc.moox.storage.Metadata" {
+		t.Fatalf("storage-primary endpoint = %d/%s, want 20100/trpc.moox.storage.Metadata", item.Port, item.GatewayPath)
 	}
 	var storageExtra struct {
 		GatewayMethods []string `json:"gateway_methods"`
@@ -700,7 +700,7 @@ func TestMergeDefaultExtraConfigPreservesExplicitSkillRemovalFromReadCallers(t *
 
 func TestMergeDefaultExtraConfigMergesDuplicateReadRoutesAtNativeEndpoint(t *testing.T) {
 	merged, changed := mergeDefaultExtraConfig(
-		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20201,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["admin-gateway"],"owner":"historical"},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["collector"],"timeout_ms":9000}]}`,
+		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20101,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["admin-gateway"],"owner":"historical"},{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["collector"],"timeout_ms":9000}]}`,
 		`{"gateway_routes":[{"service_path":"trpc.moox.storage.PrimaryStore","port":20102,"gateway_methods":["ReadTimeSeriesRows"],"gateway_callers":["moox-skill"]}]}`,
 	)
 	if !changed {
