@@ -207,17 +207,19 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	return result, nil
 }
 
-// holdingRebuilds 返回本期要重建的批次 offset：bar 序号对 bars 取模落在 offsets 上的那个批次，以及已满 bars 根
-// 却没能按时重建的批次（建仓 bar 没有产生 ok 决策）。offset 已不在配置里的过期批次直接丢弃，不补建。
+// holdingRebuilds 按配置顺序返回本期要建立或重建的批次 offset：bar 序号对 bars 取模落在其上的批次；还没有建立的
+// 批次（启用后的第一根 ok bar）；已满 bars 根却没能按时重建的批次（建仓 bar 没有产生 ok 决策）。
 func holdingRebuilds(holding *dsl.Holding, barIndex int64, previous RuleState) []int {
-	offset := int(barIndex % int64(holding.Bars))
-	rebuild := make([]int, 0, len(holding.Offsets))
-	if containsInt(holding.Offsets, offset) {
-		rebuild = append(rebuild, offset)
-	}
+	established := make(map[int]int64, len(previous.Batches))
 	for _, batch := range previous.Batches {
-		if barIndex-batch.EstablishedBar >= int64(holding.Bars) && containsInt(holding.Offsets, batch.Offset) && !containsInt(rebuild, batch.Offset) {
-			rebuild = append(rebuild, batch.Offset)
+		established[batch.Offset] = batch.EstablishedBar
+	}
+	current := int(barIndex % int64(holding.Bars))
+	rebuild := make([]int, 0, len(holding.Offsets))
+	for _, offset := range holding.Offsets {
+		at, built := established[offset]
+		if offset == current || !built || barIndex-at >= int64(holding.Bars) {
+			rebuild = append(rebuild, offset)
 		}
 	}
 	return rebuild
@@ -234,9 +236,9 @@ type holdingOutcome struct {
 
 // evaluateHolding 实现分批换仓：bar 序号落在某个 offset 上时用本期选择重建该批次，其余批次按基准权重延续。
 // 基准份额在 filter_after 之前按选中数量计算，filter_after 剔除与缺数移除的份额都留作现金，不重新分配；
-// 满 bars 根的批次到期并在同一 bar 重建。建仓 bar 没有产生 ok 决策（守门跳过、无数据、停机）时，到期的批次
-// 不会被丢弃清仓，而是在之后第一根 ok bar 上补建，建仓序号仍按它的 offset 对齐，下一次照常在 offset 上重建。
-// rebuild 是 holdingRebuilds 给出的本期要重建的批次。
+// 满 bars 根的批次到期并在同一 bar 重建。启用后的第一根 ok bar 上建立全部批次；建仓 bar 没有产生 ok 决策（守门跳过、
+// 无数据、停机）时，到期的批次不会被丢弃清仓，而是在之后第一根 ok bar 上补建。补建与首次建立的批次，建仓序号都按
+// 各自的 offset 对齐到最近一个应建仓的 bar，下一次照常在 offset 上重建。rebuild 是 holdingRebuilds 给出的本期批次。
 func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, rebuild []int, ordered []string, scores map[string]float64, count int, explain *explanation, rankOf map[string]int) (holdingOutcome, error) {
 	holding := rule.Rule.Holding
 	outcome := holdingOutcome{fresh: map[string]struct{}{}}
@@ -244,9 +246,14 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 	for _, id := range sets.available {
 		availableSet[id] = struct{}{}
 	}
-	batches := make([]HoldingBatch, 0, len(previous.Batches)+1)
+	previousByOffset := make(map[int]HoldingBatch, len(previous.Batches))
 	for _, batch := range previous.Batches {
-		if frame.BarIndex-batch.EstablishedBar >= int64(holding.Bars) && !containsInt(holding.Offsets, batch.Offset) {
+		previousByOffset[batch.Offset] = batch
+	}
+	batches := make([]HoldingBatch, 0, len(holding.Offsets))
+	for _, offset := range holding.Offsets {
+		batch, carried := previousByOffset[offset]
+		if !carried || containsInt(rebuild, offset) {
 			continue
 		}
 		kept := make(map[string]string, len(batch.BaseWeights))
@@ -282,23 +289,13 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			outcome.fresh[id] = struct{}{}
 		}
 		for _, target := range rebuild {
-			// 补建的批次把建仓序号记为它最近一个应建仓的 bar（offset 对齐），而不是本期：节奏不随补建漂移。
+			// 补建与首次建立的批次把建仓序号记为它最近一个应建仓的 bar（offset 对齐），而不是本期：节奏不随补建漂移。
 			established := frame.BarIndex - ((frame.BarIndex-int64(target))%int64(holding.Bars)+int64(holding.Bars))%int64(holding.Bars)
 			weights := make(map[string]string, len(raw))
 			for id, value := range raw {
 				weights[id] = value
 			}
-			rebuilt := HoldingBatch{Offset: target, EstablishedBar: established, BaseWeights: weights}
-			replaced := false
-			for i := range batches {
-				if batches[i].Offset == target {
-					batches[i] = rebuilt
-					replaced = true
-				}
-			}
-			if !replaced {
-				batches = append(batches, rebuilt)
-			}
+			batches = append(batches, HoldingBatch{Offset: target, EstablishedBar: established, BaseWeights: weights})
 		}
 	}
 	sort.Slice(batches, func(i, j int) bool { return batches[i].Offset < batches[j].Offset })

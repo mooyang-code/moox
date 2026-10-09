@@ -47,7 +47,7 @@ func TestUpdateDefinitionRequiresDisabledInstances(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "启用") {
 		t.Fatalf("启用实例应阻止修改定义：%v", err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.UpdateDefinition(ctx, Definition{StrategyID: "s1", Name: "new", DSLYaml: "name: new", DSLHash: "h-new", UpdatedAt: testNow}); err != nil {
@@ -60,7 +60,7 @@ func TestSoftDeleteDefinitionRequiresNoLiveInstances(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.SoftDeleteDefinition(ctx, "s1", testNow); err == nil || !strings.Contains(err.Error(), "引用") {

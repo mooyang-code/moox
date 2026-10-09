@@ -162,12 +162,12 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		return h.commitSkipped(ctx, p, store.SkipExpired, fmt.Sprintf("有效期 %s 已过", validUntil.Format(time.RFC3339)))
 	}
 	var adjacent *readiness.Record
-	if rt.resolved.UsesPreviousBar {
+	if len(rt.resolved.PreviousFactors) > 0 {
 		previousEnd, err := advance(calendar, bar, boundary.BarEnd, -1)
 		if err != nil {
 			return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 		}
-		_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, p.viewID, bar, calendar, previousEnd, rt.resolved.FactorIDs(), rt.sessionID)
+		_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, p.viewID, bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
 		if err != nil {
 			return err
 		}

@@ -291,9 +291,10 @@ portfolio:
 	bar0.BarIndex = 0
 	first := evaluate(t, program, bar0, State{})
 	assertOK(t, first)
-	assertWeights(t, first, map[string]string{"X": "0.4"})
+	assertWeights(t, first, map[string]string{"X": "0.8"})
 	batches := first.State.Rules["h"].Batches
-	if len(batches) != 1 || batches[0].Offset != 0 || batches[0].EstablishedBar != 0 || batches[0].BaseWeights["X"] != "1" {
+	// 启用后的第一根 ok bar 上建立全部批次，建仓序号按各自的 offset 对齐到最近一个应建仓的 bar。
+	if len(batches) != 2 || batches[0].Offset != 0 || batches[0].EstablishedBar != 0 || batches[1].Offset != 1 || batches[1].EstablishedBar != -1 || batches[0].BaseWeights["X"] != "1" || batches[1].BaseWeights["X"] != "1" {
 		t.Fatalf("批次不符：%+v", batches)
 	}
 

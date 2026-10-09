@@ -93,8 +93,11 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if err := repo.SetInstanceEnabled(ctx, "i1", true, &other, nil, testNow); err == nil {
 		t.Fatal("已启用实例不应接受另一个会话")
 	}
+	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, nil, testNow); err == nil {
+		t.Fatal("启用中的实例不应再挂会话")
+	}
 	// 带会话停用：保留会话直到 Trade 确认释放。
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", &session, &session, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := repo.GetInstance(ctx, "i1")
@@ -147,7 +150,7 @@ func TestSoftDeleteInstanceKeepsHistory(t *testing.T) {
 	if err := repo.SoftDeleteInstance(ctx, "i1", testNow); err == nil || !strings.Contains(err.Error(), "停用") {
 		t.Fatalf("启用中的实例不应可删除：%v", err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.SoftDeleteInstance(ctx, "i1", testNow.Add(time.Minute)); err != nil {

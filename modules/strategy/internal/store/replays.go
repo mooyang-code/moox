@@ -30,15 +30,15 @@ type Replay struct {
 	InstanceID *string
 	SessionID  *string
 	DSLYaml    string
-	// DSLHash 是被回放 DSL 的内容哈希（列表不带 DSL 全文时据此展示版本）；ViewIndexID 是提交时校验区间所用的活动索引：
-	// 同一索引只追加不删除行，执行时索引没变就沿用提交时的区间。
-	DSLHash     string
-	ViewIndexID string
-	SpaceID     string
-	ViewID      string
-	StartTime   time.Time
-	EndTime     time.Time
-	FeeBps      float64
+	// DSLHash 是被回放 DSL 的内容哈希（列表不带 DSL 全文时据此展示版本）；ViewGeneration 是提交时校验区间所用的
+	// 活动索引代次：同一代索引只追加、不删除行，执行时代次没变就沿用提交时的区间。
+	DSLHash        string
+	ViewGeneration string
+	SpaceID        string
+	ViewID         string
+	StartTime      time.Time
+	EndTime        time.Time
+	FeeBps         float64
 	// Factors 是发起回放时固化的因子定义指纹；执行时与当时的定义比对，排队期间变化即拒绝执行。
 	Factors      map[string]string
 	Status       string
@@ -76,30 +76,30 @@ type ReplayBar struct {
 }
 
 type replayRow struct {
-	ReplayID     string         `gorm:"column:c_replay_id"`
-	StrategyID   sql.NullString `gorm:"column:c_strategy_id"`
-	InstanceID   sql.NullString `gorm:"column:c_instance_id"`
-	SessionID    sql.NullString `gorm:"column:c_session_id"`
-	DSLYaml      string         `gorm:"column:c_dsl_yaml"`
-	DSLHash      string         `gorm:"column:c_dsl_hash"`
-	ViewIndexID  string         `gorm:"column:c_view_index_id"`
-	SpaceID      string         `gorm:"column:c_space_id"`
-	ViewID       string         `gorm:"column:c_view_id"`
-	StartTime    int64          `gorm:"column:c_start_time"`
-	EndTime      int64          `gorm:"column:c_end_time"`
-	FeeBps       float64        `gorm:"column:c_fee_bps"`
-	FactorsJSON  string         `gorm:"column:c_factors_json"`
-	Status       string         `gorm:"column:c_status"`
-	ProgressTime sql.NullInt64  `gorm:"column:c_progress_time"`
-	MetricsJSON  string         `gorm:"column:c_metrics_json"`
-	Error        string         `gorm:"column:c_error"`
-	CreatedAt    time.Time      `gorm:"column:c_ctime"`
-	UpdatedAt    time.Time      `gorm:"column:c_mtime"`
+	ReplayID       string         `gorm:"column:c_replay_id"`
+	StrategyID     sql.NullString `gorm:"column:c_strategy_id"`
+	InstanceID     sql.NullString `gorm:"column:c_instance_id"`
+	SessionID      sql.NullString `gorm:"column:c_session_id"`
+	DSLYaml        string         `gorm:"column:c_dsl_yaml"`
+	DSLHash        string         `gorm:"column:c_dsl_hash"`
+	ViewGeneration string         `gorm:"column:c_view_generation"`
+	SpaceID        string         `gorm:"column:c_space_id"`
+	ViewID         string         `gorm:"column:c_view_id"`
+	StartTime      int64          `gorm:"column:c_start_time"`
+	EndTime        int64          `gorm:"column:c_end_time"`
+	FeeBps         float64        `gorm:"column:c_fee_bps"`
+	FactorsJSON    string         `gorm:"column:c_factors_json"`
+	Status         string         `gorm:"column:c_status"`
+	ProgressTime   sql.NullInt64  `gorm:"column:c_progress_time"`
+	MetricsJSON    string         `gorm:"column:c_metrics_json"`
+	Error          string         `gorm:"column:c_error"`
+	CreatedAt      time.Time      `gorm:"column:c_ctime"`
+	UpdatedAt      time.Time      `gorm:"column:c_mtime"`
 }
 
 func (r replayRow) replay() Replay {
 	replay := Replay{
-		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, ViewIndexID: r.ViewIndexID, SpaceID: r.SpaceID, ViewID: r.ViewID,
+		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, ViewGeneration: r.ViewGeneration, SpaceID: r.SpaceID, ViewID: r.ViewID,
 		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), FeeBps: r.FeeBps, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
@@ -113,15 +113,15 @@ func (r replayRow) replay() Replay {
 	return replay
 }
 
-const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_view_index_id, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
+const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_view_generation, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
 
 // replayListColumns 与 replayColumns 相同，只是不读取 DSL 全文。
 var replayListColumns = strings.Replace(replayColumns, "c_dsl_yaml,", "'' AS c_dsl_yaml,", 1)
 
 // CreateReplay 登记一个 pending 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
-	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.ViewID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" {
-		return errors.New("回放缺少 replay_id、space_id、view_id、DSL 文本或版本哈希")
+	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.ViewID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" || strings.TrimSpace(replay.ViewGeneration) == "" {
+		return errors.New("回放缺少 replay_id、space_id、view_id、DSL 文本、版本哈希或 View 索引代次")
 	}
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {
 		return errors.New("回放区间必须满足 start < end")
@@ -152,8 +152,15 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		return tx.Exec(`
 			INSERT INTO t_strategy_replays (`+replayColumns+`)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewIndexID, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
+		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewGeneration, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
 	})
+}
+
+// CountActiveReplays 返回空间内排队与运行中的回放数。
+func (s *Store) CountActiveReplays(ctx context.Context, spaceID string) (int64, error) {
+	var active int64
+	err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`, spaceID).Scan(&active).Error
+	return active, err
 }
 
 // GetReplay 读取回放任务。

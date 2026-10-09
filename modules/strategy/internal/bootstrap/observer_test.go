@@ -79,7 +79,8 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 		t.Fatalf("首次观测应登记新实例：%+v", observer.expected)
 	}
 	// 停用后刷新清单即移出。
-	if err := repo.SetInstanceEnabled(context.Background(), "i1", false, nil, nil, seedTime); err != nil {
+	session := "i1-session"
+	if err := repo.DisableInstance(context.Background(), "i1", &session, nil, "", seedTime); err != nil {
 		t.Fatal(err)
 	}
 	if err := observer.refresh(context.Background()); err != nil {

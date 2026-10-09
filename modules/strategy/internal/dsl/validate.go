@@ -16,6 +16,8 @@ var ruleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 const (
 	// MaxCount 是 min_age_bars、min_universe、select.top / bottom / buffer 与 holding.bars 的上限。
 	MaxCount = 10000
+	// MaxHoldingOffsets 是 holding.offsets 个数的上限：每个批次都随规则状态逐期保存。
+	MaxHoldingOffsets = 64
 )
 
 // MaxLeverage 是 portfolio.leverage 的上限（各规则 weight.total 之和不超过 leverage，因此也限住了权重）。
@@ -259,6 +261,9 @@ func validateHolding(prefix string, holding *Holding) error {
 	}
 	if len(holding.Offsets) == 0 {
 		return fmt.Errorf("%s 的 holding.offsets 不能为空", prefix)
+	}
+	if len(holding.Offsets) > MaxHoldingOffsets {
+		return fmt.Errorf("%s 的 holding.offsets 不能超过 %d 个", prefix, MaxHoldingOffsets)
 	}
 	seen := make(map[int]struct{}, len(holding.Offsets))
 	for _, offset := range holding.Offsets {

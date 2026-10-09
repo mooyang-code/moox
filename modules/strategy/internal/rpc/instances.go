@@ -125,8 +125,11 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(err)}, nil
 	}
 	defer unlock()
-	if current.SpaceID != scoped || current.DeletedAt != nil {
+	if current.SpaceID != scoped {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
+	}
+	if current.DeletedAt != nil {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例已删除"))}, nil
 	}
 	updated := current
 	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())

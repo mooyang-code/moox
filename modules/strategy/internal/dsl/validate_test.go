@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,7 @@ func TestValidateRejectsSemanticErrors(t *testing.T) {
 		"min_age_bars 超过上限":          {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", portfolio: "universe: {min_age_bars: 10001}\n", want: "min_age_bars 不能超过"},
 		"固定 pool 小于 min_universe":    {rules: "  - {id: a, type: rank, pool: [A, B], score: close, select: {top: 1}, weight: 1}\n", portfolio: "portfolio: {min_universe: 3}\n", want: "少于 portfolio.min_universe=3"},
 		"权重量级过大":                     {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1e300000}\n", want: "指数的绝对值不能超过 30"},
+		"holding.offsets 过多":         {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, holding: {bars: 100, offsets: [" + offsetsList(65) + "]}}\n", want: "holding.offsets 不能超过 64 个"},
 		"只写 include 小于 min_universe": {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", portfolio: "universe: {include: [A, B, C], exclude: [C]}\nportfolio: {min_universe: 3}\n", want: "只由 include 给出 2 个标的"},
 	}
 	for name, tc := range cases {
@@ -222,4 +224,13 @@ func TestExpressionLimitsAtSaveTime(t *testing.T) {
 	if _, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, score: close, select: {top: -1}, weight: 1}\n")); err == nil || !strings.Contains(err.Error(), "负数") {
 		t.Fatalf("负数应明确报出：%v", err)
 	}
+}
+
+// offsetsList 返回 0 到 n-1 的逗号分隔列表。
+func offsetsList(n int) string {
+	parts := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		parts = append(parts, strconv.Itoa(i))
+	}
+	return strings.Join(parts, ", ")
 }

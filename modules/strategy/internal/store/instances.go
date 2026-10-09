@@ -204,8 +204,9 @@ func (s *Store) EnabledInstancesByView(ctx context.Context, spaceID, viewID stri
 	return instances, nil
 }
 
-// SetInstanceEnabled 持久化生命周期状态。启用需要会话 ID；带会话的停用保留会话直到 Trade 确认释放，
-// 不带会话的停用（观察实例）立即清空会话。enabled=false 且带会话也用于"启用进行中"的中间状态。
+// SetInstanceEnabled 推进启用握手：enabled=false 把会话挂到停用的实例上（启用流程先写会话再联系 Trade，认领响应
+// 丢失时启动对账能释放这个确定的身份）；enabled=true 把挂着该会话的实例置为启用。两步都对会话做比较交换。
+// 停用走 DisableInstance（同时关闭会话）。
 func (s *Store) SetInstanceEnabled(ctx context.Context, instanceID string, enabled bool, sessionID *string, resolvedJSON json.RawMessage, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
@@ -214,9 +215,10 @@ func (s *Store) SetInstanceEnabled(ctx context.Context, instanceID string, enabl
 	if strings.TrimSpace(instanceID) == "" {
 		return errors.New("instance_id 不能为空")
 	}
-	if enabled && (sessionID == nil || strings.TrimSpace(*sessionID) == "") {
-		return errors.New("启用实例需要会话 ID")
+	if sessionID == nil || strings.TrimSpace(*sessionID) == "" {
+		return errors.New("启用实例或挂会话需要会话 ID")
 	}
+	session := strings.TrimSpace(*sessionID)
 	return s.transaction(ctx, func(tx *gorm.DB) error {
 		current, err := readInstance(tx, instanceID)
 		if err != nil {
@@ -225,19 +227,19 @@ func (s *Store) SetInstanceEnabled(ctx context.Context, instanceID string, enabl
 		if current.DeletedAt.Valid {
 			return ErrNotFound
 		}
-		if enabled {
-			if current.Enabled == 1 {
-				if current.SessionID.Valid && current.SessionID.String == *sessionID {
-					return nil
-				}
-				return errors.New("实例已处于启用状态")
+		if current.Enabled == 1 {
+			if enabled && current.SessionID.Valid && current.SessionID.String == session {
+				return nil
 			}
-			// 比较交换：会话必须已经挂在实例上（启用流程先写会话再联系 Trade）、未关闭，并且与实例当前引用的
-			// 定义版本和 View 一致；期间被对账清掉、关闭，或实例被改绑，都拒绝启用。
-			if !current.SessionID.Valid || current.SessionID.String != *sessionID {
+			return errors.New("实例已处于启用状态")
+		}
+		if enabled {
+			// 比较交换：会话必须已经挂在实例上、未关闭，并且与实例当前引用的定义版本和 View 一致；
+			// 期间被对账清掉、关闭，或实例被改绑，都拒绝启用。
+			if !current.SessionID.Valid || current.SessionID.String != session {
 				return errors.New("实例的启用或停用操作尚未完成")
 			}
-			if err := requireMatchingSession(tx, current, *sessionID); err != nil {
+			if err := requireMatchingSession(tx, current, session); err != nil {
 				return err
 			}
 			resolved := current.ResolvedJSON
@@ -247,21 +249,17 @@ func (s *Store) SetInstanceEnabled(ctx context.Context, instanceID string, enabl
 					return err
 				}
 			}
-			return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok', c_mtime = ? WHERE c_instance_id = ?`, *sessionID, resolved, now, instanceID).Error
+			return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok', c_mtime = ? WHERE c_instance_id = ?`, session, resolved, now, instanceID).Error
 		}
-		if sessionID != nil && strings.TrimSpace(*sessionID) != "" {
-			session := strings.TrimSpace(*sessionID)
-			if current.SessionID.Valid && current.SessionID.String != session {
-				return errors.New("实例的启用或停用操作尚未完成")
-			}
-			// 挂上会话前确认它属于该实例、未关闭，并与实例当前引用的定义版本和 View 一致：打开会话之后实例被改绑
-			// 或定义被修改时，在联系 Trade 之前就拒绝。
-			if err := requireMatchingSession(tx, current, session); err != nil {
-				return err
-			}
-			return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`, session, now, instanceID).Error
+		if current.SessionID.Valid && current.SessionID.String != session {
+			return errors.New("实例的启用或停用操作尚未完成")
 		}
-		return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ?`, now, instanceID).Error
+		// 挂上会话前确认它属于该实例、未关闭，并与实例当前引用的定义版本和 View 一致：打开会话之后实例被改绑
+		// 或定义被修改时，在联系 Trade 之前就拒绝。
+		if err := requireMatchingSession(tx, current, session); err != nil {
+			return err
+		}
+		return tx.Exec(`UPDATE t_strategy_instances SET c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`, session, now, instanceID).Error
 	})
 }
 
@@ -341,6 +339,10 @@ func (s *Store) DisableInstance(ctx context.Context, instanceID string, sessionI
 		}
 		if current.DeletedAt.Valid {
 			return ErrNotFound
+		}
+		// 比较交换：调用方看到的会话必须仍是实例当前的会话，不能关掉或清空一个之后才挂上的会话。
+		if (sessionID == nil && current.SessionID.Valid) || (sessionID != nil && (!current.SessionID.Valid || current.SessionID.String != *sessionID)) {
+			return errors.New("实例的会话已变化，请刷新后重试")
 		}
 		if pending != nil {
 			if err := tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`, *pending, now, instanceID).Error; err != nil {

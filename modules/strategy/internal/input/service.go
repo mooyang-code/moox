@@ -22,7 +22,7 @@ func (s Service) Resolve(ctx context.Context, spaceID, viewID string, strategy d
 	return Resolve(ctx, s.Client, spaceID, viewID, strategy)
 }
 
-// ReplayWindow 读取 View 的覆盖范围，校验回放起点并截断终点，返回截断后的终点与校验所用的活动索引 ID。
+// ReplayWindow 读取 View 的覆盖范围，校验回放起点并截断终点，返回截断后的终点与校验所用的活动索引代次。
 func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error) {
 	if s.Client == nil {
 		return time.Time{}, "", errors.New("Storage 与 Factor 依赖未配置，不能回放")
@@ -35,7 +35,7 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 		return time.Time{}, "", err
 	}
 	end, err = ReplayWindow(resolved, program, view, start, end)
-	return end, view.ActiveIndexID, err
+	return end, view.Generation, err
 }
 
 // CheckAgeCoverage 在启用实例时校验 View 能追溯 min_age_bars。

@@ -30,8 +30,9 @@ const (
 type Binding struct {
 	// Factors 是实例引用的因子及其固化的 definition_hash；只引用源列时为空。
 	Factors map[string]string
-	// UsesPreviousBar 表示 DSL 用到了 bars[-1]，需要上一根的版本证据。
-	UsesPreviousBar bool
+	// PreviousFactors 是经 bars[-1] 读取的因子列所属的因子：上一根的值可能来自旧版本，需要上一根的版本证据；
+	// 只经 bars[-1] 读取 K 线列时为空。
+	PreviousFactors []string
 }
 
 // Record 是本实例对恰好相邻上一根的可信处理记录（ok 或 skipped 均可）中保存的因子指纹。
@@ -72,13 +73,13 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			return result
 		}
 	}
-	if binding.UsesPreviousBar && len(required) > 0 {
+	if len(binding.PreviousFactors) > 0 {
 		if adjacent == nil {
 			result.Reason = ReasonPreviousVersionUnknown
-			result.Detail = "DSL 用到 bars[-1]，但上一根没有可信的处理记录"
+			result.Detail = "DSL 经 bars[-1] 读取因子列，但上一根没有可信的处理记录"
 			return result
 		}
-		for _, factorID := range required {
+		for _, factorID := range binding.PreviousFactors {
 			previous, ok := adjacent.Factors[factorID]
 			if !ok || previous == "" {
 				result.Reason = ReasonPreviousVersionUnknown

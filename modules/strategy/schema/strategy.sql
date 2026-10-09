@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_result_items (c_ctime);
 
--- 回放任务：基于 View 的研究回放，按天数与每个空间的个数清理；c_view_index_id 是提交时校验区间所用的活动索引
+-- 回放任务：基于 View 的研究回放，按天数与每个空间的个数清理；c_view_generation 是提交时校验区间所用的活动索引代次
 CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_replay_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT,
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_session_id TEXT,
     c_dsl_yaml TEXT NOT NULL,
     c_dsl_hash TEXT NOT NULL,
-    c_view_index_id TEXT NOT NULL DEFAULT '',
+    c_view_generation TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL,
     c_start_time INTEGER NOT NULL,

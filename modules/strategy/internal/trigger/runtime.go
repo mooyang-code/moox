@@ -43,6 +43,13 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 		return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: resolved}, &input.SkipError{Reason: input.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
 	}
 	loaded := &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: resolved, program: program}
+	// 每次重新启用都会产生新会话：缓存超过上限时整体清空，按需从会话快照重建（编译很便宜）。
+	if len(h.programs) >= maxCachedPrograms {
+		h.programs = make(map[string]*runtime)
+	}
 	h.programs[sessionID] = loaded
 	return loaded, nil
 }
+
+// maxCachedPrograms 是进程内缓存的会话运行时上限。
+const maxCachedPrograms = 512

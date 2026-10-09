@@ -39,7 +39,7 @@ type eventClient struct {
 }
 
 func (c *eventClient) ViewCoverage(ctx context.Context, spaceID string, view ViewInfo, exact bool) (Coverage, error) {
-	key := spaceID + "\x00" + view.ViewID + "\x00" + view.ActiveIndexID
+	key := spaceID + "\x00" + view.ViewID + "\x00" + view.Generation
 	c.mu.Lock()
 	coverage, ok := c.coverage[key]
 	c.mu.Unlock()

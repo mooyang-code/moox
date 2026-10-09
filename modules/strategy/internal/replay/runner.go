@@ -186,20 +186,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if len(subjects) == 0 {
 		return Metrics{}, fmt.Errorf("View %s 的数据集没有标的绑定", job.ViewID)
 	}
-	// 同一个活动索引只追加、不删除行：执行时索引没变，提交时校验过的区间仍然有效（覆盖统计随新 bar 前移
-	// 不影响已有的行）。排队期间 View 重建了索引（新索引只保留最近的根数）才按新索引复查起点并截断终点；
-	// 新索引的统计暂时未知时沿用提交时的区间。
+	// 活动索引的代次没变：同一代索引只追加、不删除行，提交时校验过的区间仍然有效（覆盖统计随新 bar 前移不影响已有的行）。
+	// 代次变了（排队期间重建过索引，新一代只保留最近的根数）才按新索引的精确统计复查起点并截断终点。
 	end := job.EndTime
-	if job.ViewIndexID == "" || view.ActiveIndexID != job.ViewIndexID {
-		if view, err = input.WithCoverage(ctx, r.Client, job.SpaceID, view, true); err != nil {
-			return Metrics{}, err
-		}
-		if input.CoverageStart(view, resolved).IsZero() {
-			r.logf("回放 %s：View %s 的覆盖范围暂时未知，按提交时校验过的区间执行", job.ReplayID, job.ViewID)
-		} else if end, err = input.ReplayWindow(resolved, program, view, job.StartTime, job.EndTime); err != nil {
-			if job.ViewIndexID != "" {
-				return Metrics{}, fmt.Errorf("View %s 在排队期间重建了索引：%w；请重新发起回放", job.ViewID, err)
-			}
+	if view.Generation != job.ViewGeneration {
+		if view, end, err = r.recheckWindow(ctx, job, resolved, program, view, job.StartTime, "在排队期间"); err != nil {
 			return Metrics{}, err
 		}
 	}
@@ -228,15 +219,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	for start := 0; start < len(bars); start += chunk {
 		end := min(start+chunk, len(bars))
 		segment := bars[start:end]
-		readFrom := segment[0].StorageStart
-		if program.UsesPreviousBar {
-			readFrom = segment[0].PreviousStart
-		}
-		rows, err := loader.Load(ctx, readFrom, segment[len(segment)-1].StorageStart.Add(time.Nanosecond))
-		if err != nil {
-			return acc.finish(), err
-		}
-		presence, err := agePresence(ctx, history, resolved, segment)
+		rows, presence, err := r.loadSegment(ctx, job, resolved, program, segment, loader, history)
 		if err != nil {
 			return acc.finish(), err
 		}
@@ -287,6 +270,55 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		}
 	}
 	return acc.finish(), nil
+}
+
+// maxIndexSwitches 是一次回放内允许跟随的索引换代次数。
+const maxIndexSwitches = 3
+
+// recheckWindow 在活动索引换了一代后，按新索引的精确统计复查 [start, job.EndTime) 的起点并截断终点；when 说明换代
+// 发生在排队期间还是回放过程中。新索引的统计未知时无法确认区间仍然有效，拒绝继续。
+func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, view input.ViewInfo, start time.Time, when string) (input.ViewInfo, time.Time, error) {
+	view, err := input.WithCoverage(ctx, r.Client, job.SpaceID, view, true)
+	if err != nil {
+		return input.ViewInfo{}, time.Time{}, err
+	}
+	if input.CoverageStart(view, resolved).IsZero() {
+		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引，新索引的覆盖范围暂时未知，无法确认回放区间仍然有效；请稍后重新发起回放", job.ViewID, when)
+	}
+	end, err := input.ReplayWindow(resolved, program, view, start, job.EndTime)
+	if err != nil {
+		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引：%w；请重新发起回放", job.ViewID, when, err)
+	}
+	r.logf("回放 %s：View %s %s重建了索引（%s → %s），按新索引复查区间通过", job.ReplayID, job.ViewID, when, job.ViewGeneration, view.Generation)
+	return view, end, nil
+}
+
+// loadSegment 读取一段的行与年龄判定所需的历史。读取期间活动索引换了一代：按新索引复查从本段起的剩余区间，通过才让
+// 两个读取器一起切换过去重读本段，否则失败，不静默改读一代可能已经丢掉较早 bar 的新索引。
+func (r *Runner) loadSegment(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, segment []input.PeriodBoundaries, loader, history *input.RangeLoader) (input.RangeRows, *presence, error) {
+	readFrom := segment[0].StorageStart
+	if program.UsesPreviousBar {
+		readFrom = segment[0].PreviousStart
+	}
+	for switches := 0; ; switches++ {
+		rows, err := loader.Load(ctx, readFrom, segment[len(segment)-1].StorageStart.Add(time.Nanosecond))
+		var ages *presence
+		if err == nil {
+			ages, err = agePresence(ctx, history, resolved, segment)
+		}
+		var changed *input.IndexChangedError
+		if !errors.As(err, &changed) {
+			return rows, ages, err
+		}
+		if switches >= maxIndexSwitches {
+			return input.RangeRows{}, nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", job.ViewID)
+		}
+		view, _, err := r.recheckWindow(ctx, job, resolved, program, changed.View, segment[0].StorageStart, "在回放过程中")
+		if err != nil {
+			return input.RangeRows{}, nil, err
+		}
+		loader.View, history.View = view, view
+	}
 }
 
 // evaluate 装配一期的帧并求值。与实时一致：只有策略涉及的标的（∪E(r)，年龄剔除之前）在本期（用到 bars[-1]

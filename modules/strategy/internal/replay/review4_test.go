@@ -16,7 +16,7 @@ import (
 // submitReplay 按 StartReplay 的做法登记并认领一个回放：记录 DSL 哈希与提交时校验区间所用的活动索引。
 func submitReplay(t *testing.T, repo *store.Store, dslYaml, indexID string, start time.Time, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: "p1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), ViewIndexID: indexID, SpaceID: "crypto", ViewID: "view_a", StartTime: start, EndTime: start.Add(time.Duration(hours) * time.Hour), Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
+	job := store.Replay{ReplayID: "p1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), ViewGeneration: indexID, SpaceID: "crypto", ViewID: "view_a", StartTime: start, EndTime: start.Add(time.Duration(hours) * time.Hour), Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -60,15 +60,67 @@ func TestReplayRechecksWindowAfterIndexRebuild(t *testing.T) {
 	}
 }
 
-// 设了 min_age_bars 的策略在执行时覆盖统计未知：执行路径不做启用级的覆盖校验，沿用提交时的区间。
-func TestReplayWithMinAgeRunsWhenCoverageUnknown(t *testing.T) {
+// 设了 min_age_bars 的策略在执行时覆盖统计未知：代次没变时不读统计，按提交的区间执行（执行路径不做启用级的覆盖校验）；
+// 代次变了而新索引的统计未知时无法确认区间，拒绝执行。
+func TestReplayWithMinAgeAndUnknownCoverage(t *testing.T) {
 	repo := openStore(t)
 	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
-	job := submitReplay(t, repo, aged, "idx_old", origin.Add(4*time.Hour), 4)
+	job := submitReplay(t, repo, aged, "idx", origin.Add(4*time.Hour), 4)
 	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot", unknownCoverage: true}, ChunkBars: 10}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 4 {
-		t.Fatalf("覆盖未知时应按提交的区间执行：%+v", done)
+		t.Fatalf("代次没变时应按提交的区间执行：%+v", done)
+	}
+
+	other := openStore(t)
+	changed := submitReplay(t, other, aged, "idx_old", origin.Add(4*time.Hour), 4)
+	(&Runner{Store: other, Client: &fakeClient{marketType: "spot", unknownCoverage: true}, ChunkBars: 10}).Execute(context.Background(), changed)
+	failed, _ := other.GetReplay(context.Background(), "p1")
+	if failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "覆盖范围暂时未知") {
+		t.Fatalf("代次变了且统计未知时应拒绝执行：%+v", failed)
+	}
+}
+
+// A/B 槽位名在重建时交替复用：排队期间经历 A→B→A，槽位名相同、构建 ID 不同，必须按新一代复查区间。
+func TestReplayDetectsSameSlotRebuild(t *testing.T) {
+	repo := openStore(t)
+	job := submitReplay(t, repo, replayDSL, "idx@b1", origin.Add(2*time.Hour), 4)
+	client := &fakeClient{marketType: "spot", build: "b3", indexedFrom: origin.Add(10 * time.Hour)}
+	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
+	failed, _ := repo.GetReplay(context.Background(), "p1")
+	if failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "重建了索引") || client.coverageCalls == 0 {
+		t.Fatalf("同一槽位换了一代也应复查并发现起点越界：%+v coverage=%d", failed, client.coverageCalls)
+	}
+}
+
+// 回放过程中活动索引换了一代：读取器不静默改读新索引。新一代仍覆盖剩余区间时切换过去继续，不再覆盖时明确失败。
+func TestReplayHandlesIndexSwitchDuringRun(t *testing.T) {
+	repo := openStore(t)
+	job := submitReplay(t, repo, replayDSL, "idx", origin.Add(2*time.Hour), 12)
+	// 第 2 段（第 2 次读取）之前换代，新一代从 00:00 起仍有数据：复查通过，回放完成。
+	covered := &fakeClient{marketType: "spot", switchAtQuery: 2, switchedFrom: origin}
+	(&Runner{Store: repo, Client: covered, ChunkBars: 4}).Execute(context.Background(), job)
+	done, _ := repo.GetReplay(context.Background(), "p1")
+	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 12 {
+		t.Fatalf("新一代仍覆盖剩余区间时应切换过去继续：%+v bars=%d", done, len(barsOf(t, repo, "p1")))
+	}
+	for _, bar := range barsOf(t, repo, "p1") {
+		if bar.SkipReason == "no_data" {
+			t.Fatalf("切换后不应出现缺数据的周期：%+v", bar)
+		}
+	}
+
+	other := openStore(t)
+	trimmed := submitReplay(t, other, replayDSL, "idx", origin.Add(2*time.Hour), 12)
+	// 新一代从 20:00 起才有数据：第 2 段（06:00 起）已不再被覆盖。
+	cut := &fakeClient{marketType: "spot", switchAtQuery: 2, switchedFrom: origin.Add(20 * time.Hour)}
+	(&Runner{Store: other, Client: cut, ChunkBars: 4}).Execute(context.Background(), trimmed)
+	failed, _ := other.GetReplay(context.Background(), "p1")
+	if failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "在回放过程中重建了索引") {
+		t.Fatalf("新一代不再覆盖剩余区间时应失败：%+v", failed)
+	}
+	if written := len(barsOf(t, other, "p1")); written != 4 {
+		t.Fatalf("换代前写入的周期应保留：%d", written)
 	}
 }
 

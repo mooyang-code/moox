@@ -42,8 +42,10 @@ type instanceObserver struct {
 	datasets *report.DatasetMetrics
 	module   *report.ModuleMetrics
 	periods  *prometheus.CounterVec
-	now      func() time.Time
-	logf     func(format string, args ...any)
+	// cancelled 按原因累计被取消、没有送到 Trade 的目标（moox_strategy_target_cancelled_total）。
+	cancelled *prometheus.CounterVec
+	now       func() time.Time
+	logf      func(format string, args ...any)
 
 	mu       sync.Mutex
 	expected map[string]report.DatasetExpectation
@@ -62,7 +64,14 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 	if err := registerer.Register(periods); err != nil {
 		return nil, fmt.Errorf("注册策略周期指标失败：%w", err)
 	}
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}}, nil
+	cancelled := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_strategy_target_cancelled_total", Help: "被取消、没有送到 Trade 的策略目标数，按原因分类（superseded、expired、inactive、rejected）。"}, []string{"reason"})
+	if err := registerer.Register(cancelled); err != nil {
+		return nil, fmt.Errorf("注册策略目标取消指标失败：%w", err)
+	}
+	repo.SetCancelObserver(func(reason string, count int64) {
+		cancelled.WithLabelValues(reason).Add(float64(count))
+	})
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, cancelled: cancelled, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。

@@ -203,7 +203,8 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		}
 		from, to, err := AgeWindow(resolved.Calendar, resolved.Bar, barStart, resolved.MinAgeBars)
 		if err != nil {
-			return nil, err
+			// 日历换算是确定性的（数据不变、重试结果不变）：记 config_error，而不是按基础设施错误重试到预算耗尽。
+			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口无法换算：%v", resolved.MinAgeBars, err)}
 		}
 		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
 			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339))}

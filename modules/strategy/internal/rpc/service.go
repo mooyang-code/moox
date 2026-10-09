@@ -26,7 +26,7 @@ type Resolver interface {
 	// CheckAgeCoverage 在启用时校验 View 能追溯 min_age_bars。
 	CheckAgeCoverage(ctx context.Context, spaceID string, resolved input.Resolved) error
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
-	// ReplayWindow 校验并截断回放区间，返回截断后的终点与校验所用的活动索引 ID。
+	// ReplayWindow 校验并截断回放区间，返回截断后的终点与校验所用的活动索引代次。
 	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error)
 }
 
@@ -56,7 +56,15 @@ type Service struct {
 	Alerts   Alerter
 	Now      func() time.Time
 
-	strategyLocks sync.Map
+	// locks 是按定义 ID 的锁，引用计数归零即删除，不随出现过的定义无限增长。
+	locksMu sync.Mutex
+	locks   map[string]*strategyLock
+}
+
+// strategyLock 是一把定义锁及其当前的持有与等待者数。
+type strategyLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func (s *Service) nowTime() time.Time {
@@ -68,10 +76,27 @@ func (s *Service) nowTime() time.Time {
 
 // lockStrategy 串行化同一定义下的修改与实例启停。
 func (s *Service) lockStrategy(strategyID string) func() {
-	value, _ := s.strategyLocks.LoadOrStore(strategyID, &sync.Mutex{})
-	lock := value.(*sync.Mutex)
-	lock.Lock()
-	return lock.Unlock
+	s.locksMu.Lock()
+	if s.locks == nil {
+		s.locks = make(map[string]*strategyLock)
+	}
+	lock := s.locks[strategyID]
+	if lock == nil {
+		lock = &strategyLock{}
+		s.locks[strategyID] = lock
+	}
+	lock.refs++
+	s.locksMu.Unlock()
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.locksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.locks, strategyID)
+		}
+		s.locksMu.Unlock()
+	}
 }
 
 // lockStrategies 按 ID 排序依次加锁（去重），避免两个请求以相反顺序加锁而死锁。

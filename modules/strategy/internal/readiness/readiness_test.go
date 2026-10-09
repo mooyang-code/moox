@@ -24,7 +24,7 @@ func state(id, status, hash string, failed ...string) *storagepb.FactorPeriodSta
 // 设计文档 3.3 表格逐行覆盖。
 func TestCheckFollowsReadinessTable(t *testing.T) {
 	binding := Binding{Factors: map[string]string{"ma": "h1", "mom": "h2"}}
-	previousBinding := Binding{Factors: map[string]string{"ma": "h1", "mom": "h2"}, UsesPreviousBar: true}
+	previousBinding := Binding{Factors: map[string]string{"ma": "h1", "mom": "h2"}, PreviousFactors: []string{"ma", "mom"}}
 	adjacent := &Record{Factors: map[string]string{"ma": "h1", "mom": "h2"}}
 	cases := []struct {
 		name     string
@@ -48,7 +48,9 @@ func TestCheckFollowsReadinessTable(t *testing.T) {
 		{name: "未引用的因子 skipped 不影响", binding: Binding{Factors: map[string]string{"ma": "h1"}}, event: factorEvent(state("ma", "complete", "h1"), state("mom", "skipped", "h2"))},
 		{name: "K 线 View degraded 解析失败标的", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "degraded", FailedScopeRef: "SOL-USDT,ETH-USDT"}, subjects: []string{"ETH-USDT", "SOL-USDT"}},
 		{name: "K 线 View degraded 无具体标的", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "degraded", FailedScopeRef: "degraded"}},
-		{name: "K 线 View complete", binding: Binding{UsesPreviousBar: true}, event: &storagepb.ViewDataReady{Status: "complete"}},
+		{name: "K 线 View complete", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "complete"}},
+		{name: "bars[-1] 只读 K 线列不要求相邻记录", binding: binding, event: factorEvent(state("ma", "complete", "h1"), state("mom", "complete", "h2"))},
+		{name: "bars[-1] 只核对经它读取的因子", binding: Binding{Factors: map[string]string{"ma": "h1", "mom": "h2"}, PreviousFactors: []string{"ma"}}, adjacent: &Record{Factors: map[string]string{"ma": "h1"}}, event: factorEvent(state("ma", "complete", "h1"), state("mom", "complete", "h2"))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,7 +76,7 @@ func TestCheckFollowsReadinessTable(t *testing.T) {
 
 // S13：事件指纹与固化值不同，或 bars[-1] 的相邻记录指纹与本期不同，都记 factor_changed。
 func TestS13FactorChangedFromEventOrAdjacentRecord(t *testing.T) {
-	binding := Binding{Factors: map[string]string{"ma": "h1"}, UsesPreviousBar: true}
+	binding := Binding{Factors: map[string]string{"ma": "h1"}, PreviousFactors: []string{"ma"}}
 	event := factorEvent(state("ma", "complete", "h2"))
 	if result := Check(binding, &Record{Factors: map[string]string{"ma": "h1"}}, event); result.Reason != ReasonFactorChanged {
 		t.Fatalf("事件指纹变化应为 factor_changed：%+v", result)
@@ -88,7 +90,7 @@ func TestS13FactorChangedFromEventOrAdjacentRecord(t *testing.T) {
 // S18：因子 H1 → H2 后重新启用（固化 H2），DSL 用了 bars[-1]：
 // 旧会话留下 H1 记录时首期 factor_changed，没有记录时 previous_version_unknown；两者都记录本期指纹供次期使用。
 func TestS18ReenableAfterFactorChange(t *testing.T) {
-	binding := Binding{Factors: map[string]string{"ma": "h2"}, UsesPreviousBar: true}
+	binding := Binding{Factors: map[string]string{"ma": "h2"}, PreviousFactors: []string{"ma"}}
 	event := factorEvent(state("ma", "complete", "h2"))
 	withOld := Check(binding, &Record{Factors: map[string]string{"ma": "h1"}}, event)
 	if withOld.Reason != ReasonFactorChanged || withOld.Hashes["ma"] != "h2" {
@@ -108,7 +110,7 @@ func TestS18ReenableAfterFactorChange(t *testing.T) {
 // S19：停机漏掉一根 bar 后恢复，缺少相邻记录的那一期记 previous_version_unknown；不用 bars[-1] 的实例不受影响。
 func TestS19MissingAdjacentRecordOnlyMattersWithPreviousBar(t *testing.T) {
 	event := factorEvent(state("ma", "complete", "h1"))
-	if result := Check(Binding{Factors: map[string]string{"ma": "h1"}, UsesPreviousBar: true}, nil, event); result.Reason != ReasonPreviousVersionUnknown {
+	if result := Check(Binding{Factors: map[string]string{"ma": "h1"}, PreviousFactors: []string{"ma"}}, nil, event); result.Reason != ReasonPreviousVersionUnknown {
 		t.Fatalf("应为 previous_version_unknown：%+v", result)
 	}
 	if result := Check(Binding{Factors: map[string]string{"ma": "h1"}}, nil, event); result.Reason != "" {

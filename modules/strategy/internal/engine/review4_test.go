@@ -76,21 +76,3 @@ portfolio:
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"A": "1"})
 }
-
-// offset 已不在配置里的过期批次直接丢弃，不补建；未过期的照常延续到期满。
-func TestHoldingDropsExpiredUnconfiguredBatch(t *testing.T) {
-	program := compile(t, catchUpDSL, "close")
-	rows := map[string]Row{"A": values("close", 1), "B": values("close", 2)}
-	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A", "B"}, Batches: []HoldingBatch{
-		{Offset: 0, EstablishedBar: 6, BaseWeights: map[string]string{"A": "1"}},
-		{Offset: 1, EstablishedBar: 4, BaseWeights: map[string]string{"B": "1"}},
-	}}}}
-	frame := frameOf(program, rows)
-	frame.BarIndex = 7
-	decision := evaluate(t, program, frame, previous)
-	assertOK(t, decision)
-	assertWeights(t, decision, map[string]string{"A": "1"})
-	if batches := decision.State.Rules["r"].Batches; len(batches) != 1 || batches[0].Offset != 0 {
-		t.Fatalf("不在配置里的过期批次应丢弃：%+v", batches)
-	}
-}

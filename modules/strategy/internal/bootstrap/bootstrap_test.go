@@ -37,7 +37,7 @@ func TestInitializeWithoutDependenciesMarksInterruptedReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := repo.CreateReplay(ctx, store.Replay{ReplayID: "p1", DSLYaml: "name: demo", DSLHash: "sha256:demo", SpaceID: "crypto", ViewID: "view_a", StartTime: seedTime, EndTime: seedTime.Add(time.Hour), CreatedAt: seedTime}); err != nil {
+	if err := repo.CreateReplay(ctx, store.Replay{ReplayID: "p1", DSLYaml: "name: demo", DSLHash: "sha256:demo", ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: seedTime, EndTime: seedTime.Add(time.Hour), CreatedAt: seedTime}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := repo.ClaimNextReplay(ctx, seedTime); err != nil {

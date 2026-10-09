@@ -267,14 +267,14 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 	if !uses {
 		return "", false
 	}
-	err = input.StockCalendarReadiness(now, calendarWarningWindow)
+	err = input.StockCalendarReadiness(now, calendarWarningWindow, trigger.ValidBars)
 	switch {
 	case err == nil:
 		return "", false
 	case errors.Is(err, marketcalendar.ErrCalendarExpiring):
-		return "A 股内嵌交易日历即将到期，请更新日历数据：" + err.Error(), false
+		return err.Error(), false
 	default:
-		return "A 股内嵌交易日历不可用，使用它的实例无法求值：" + err.Error(), true
+		return err.Error() + "；使用 A 股日历的实例无法求值", true
 	}
 }
 
@@ -371,8 +371,10 @@ func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtim
 		if !stats.OldestPending.IsZero() {
 			oldestAge = max(0, time.Since(stats.OldestPending).Seconds())
 		}
-		// 待投递结果在投递正常时 1 秒内发出：最老一条等待超过阈值说明投递停滞（例如发布一直得不到确认），报未就绪以触发告警。
-		outboxStalled := oldestAge > outboxStallThreshold.Seconds()
+		// 待投递结果在投递正常时 1 秒内发出：最老一条等待超过阈值，或发布持续失败超过阈值（新结果会替代、过期取消旧的
+		// 待投递结果，短 bar 的实例最老一条的年龄不会超过一根 bar），都说明投递停滞，报未就绪以触发告警。
+		publishFailing := eventRuntime.PublishFailingFor(time.Now())
+		outboxStalled := oldestAge > outboxStallThreshold.Seconds() || publishFailing > outboxStallThreshold
 		calendarWarning, calendarExpired := stockCalendarWarning(ctx, db, time.Now())
 		ready := databaseReady && state.Ready() && eventBusConnected && consumerReady && statsErr == nil && !outboxStalled && !calendarExpired
 		rsp := healthz.Base("strategy", "strategy", "", "", state.StartedAt, ready)
@@ -380,6 +382,7 @@ func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtim
 			"database_ready": databaseReady, "eventbus_connected": eventBusConnected,
 			"ready_consumer_connected": consumerReady, "outbox_pending_count": stats.PendingCount,
 			"oldest_outbox_age_seconds": oldestAge, "outbox_stalled": outboxStalled,
+			"outbox_publish_failing_seconds": publishFailing.Seconds(),
 		}
 		if calendarWarning != "" {
 			rsp.Details["calendar_warning"] = calendarWarning

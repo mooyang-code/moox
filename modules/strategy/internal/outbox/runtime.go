@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,13 +28,16 @@ type RuntimeConfig struct {
 type Runtime struct {
 	cfg       RuntimeConfig
 	lastIssue string
-	mu        sync.RWMutex
-	client    JetStreamClient
-	cancel    context.CancelFunc
-	done      chan struct{}
-	started   bool
-	closed    bool
-	validated bool
+	// failingSince 是发布持续失败的起点（Unix 纳秒，0 表示没有在失败）：新结果会替代、过期取消旧的待投递结果，
+	// 最老待投递结果的年龄不会超过一根 bar，停滞只能看发布本身失败了多久。
+	failingSince atomic.Int64
+	mu           sync.RWMutex
+	client       JetStreamClient
+	cancel       context.CancelFunc
+	done         chan struct{}
+	started      bool
+	closed       bool
+	validated    bool
 }
 
 func NewRuntime(cfg RuntimeConfig) (*Runtime, error) {
@@ -107,6 +111,7 @@ func (r *Runtime) run(ctx context.Context) {
 		if err := relay.PublishPending(ctx, r.cfg.BatchSize); err != nil {
 			var publishFailure *PublishFailure
 			if errors.As(err, &publishFailure) {
+				r.failingSince.CompareAndSwap(0, time.Now().UnixNano())
 				r.issue("策略目标事件发布失败，断开重连：%v", err)
 				r.dropClient(client)
 				if !waitFor(ctx, r.cfg.ReconnectInterval) {
@@ -121,6 +126,7 @@ func (r *Runtime) run(ctx context.Context) {
 			}
 			continue
 		}
+		r.failingSince.Store(0)
 		r.recovered()
 		if !waitFor(ctx, r.cfg.RelayInterval) {
 			return
@@ -149,6 +155,21 @@ func (r *Runtime) recovered() {
 	if had && r.cfg.Logf != nil {
 		r.cfg.Logf("策略目标投递已恢复")
 	}
+}
+
+// PublishFailingFor 返回到 now 为止发布已持续失败的时长；没有在失败时返回 0。
+func (r *Runtime) PublishFailingFor(now time.Time) time.Duration {
+	if r == nil {
+		return 0
+	}
+	since := r.failingSince.Load()
+	if since == 0 {
+		return 0
+	}
+	if failing := now.Sub(time.Unix(0, since)); failing > 0 {
+		return failing
+	}
+	return 0
 }
 
 func (r *Runtime) Connected() bool {

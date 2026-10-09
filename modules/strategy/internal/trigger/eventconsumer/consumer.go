@@ -143,7 +143,7 @@ func (c *Consumer) supervise(ctx context.Context, config jetstream.ConsumerConfi
 		c.setCurrent(consumer, true)
 		runner := jetstream.NewRunner(consumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 			return HandleDelivery(ctx, delivery, c.handler)
-		}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+		}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize, InProgressInterval: c.cfg.AckWait / 3, ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 			c.logf("ViewDataReady 投递处理失败：%v", err)
 		})})
 		started := time.Now()

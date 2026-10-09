@@ -76,7 +76,7 @@ func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.
 
 func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error) {
 	end, err := input.ReplayWindow(resolved, program, f.view, start, end)
-	return end, f.view.ActiveIndexID, err
+	return end, f.view.Generation, err
 }
 
 // fakeOwner 记录认领与释放；claimErr 让下一次认领失败。
@@ -144,7 +144,7 @@ func newHarness(t *testing.T) *harness {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	coverage := input.ViewInfo{ViewID: "view_a", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
+	coverage := input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
 	h := &harness{t: t, resolver: &fakeResolver{view: coverage}, owner: &fakeOwner{}, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
 	h.service = &Service{Store: repo, Resolver: h.resolver, Owner: h.owner, Now: func() time.Time { return h.now }}
 	ctx := trpc.BackgroundContext()
@@ -557,7 +557,7 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只能给出其一")
 	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(neither.GetRetInfo().GetCode()), neither.GetRetInfo().GetMsg(), "只能给出其一")
-	h.resolver.view = input.ViewInfo{ViewID: "view_a", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
+	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
 	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
 	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-30"})

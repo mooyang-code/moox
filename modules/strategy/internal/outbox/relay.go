@@ -3,7 +3,6 @@ package outbox
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -32,7 +31,6 @@ func (e *PublishFailure) Unwrap() error { return e.Err }
 type Relay struct {
 	Store     ResultStore
 	Publisher ResultPublisher
-	mu        sync.Mutex
 }
 
 // PublishPending 扫描一批待投递结果。永久失败的事件被隔离（cancelled），不阻塞后续结果；遇到第一个发布失败
@@ -44,8 +42,6 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 	if limit <= 0 {
 		return nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	rows, err := r.Store.ListPendingResults(ctx, limit)
 	if err != nil {
 		return err
@@ -82,8 +78,13 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 			// 连接或 broker 问题：立即返回让运行时重连，不再让同一批其余的结果逐条等满超时、拖到过期。
 			return &PublishFailure{Err: err}
 		}
-		if err := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent); err != nil && !errors.Is(err, store.ErrNotFound) {
-			keep(err)
+		// 发布期间更新的 ok 结果可能已把这一行取消；事件已经发出，仍记为 sent，如实反映投递状态。
+		sentErr := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent)
+		if errors.Is(sentErr, store.ErrNotFound) {
+			sentErr = r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishCancelled, store.PublishSent)
+		}
+		if sentErr != nil && !errors.Is(sentErr, store.ErrNotFound) {
+			keep(sentErr)
 		}
 	}
 	return firstErr

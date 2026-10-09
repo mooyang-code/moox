@@ -45,7 +45,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 		t.Fatalf("按固化列重新编译失败：%v", err)
 	}
 	binding := resolved.ReadinessBinding()
-	if !binding.UsesPreviousBar || binding.Factors["ma"] != "sha256:ma" {
+	if len(binding.PreviousFactors) != 1 || binding.PreviousFactors[0] != "ma" || binding.Factors["ma"] != "sha256:ma" {
 		t.Fatalf("就绪绑定不符：%+v", binding)
 	}
 }
@@ -173,10 +173,14 @@ func TestRetentionBars(t *testing.T) {
 	}{
 		{"720h", "1h", 720, true}, {"720h", "4h", 180, true}, {"48h", "1d", 2, true}, {"forever", "1h", 0, false}, {"", "1h", 0, false}, {"abc", "1h", 0, false},
 	} {
-		bars, ok := retentionBars(tc.retention, tc.bar)
+		bars, ok := retentionBars(tc.retention, DefaultCalendar, tc.bar)
 		if bars != tc.bars || ok != tc.ok {
 			t.Fatalf("retentionBars(%s, %s) = %d、%v，不符", tc.retention, tc.bar, bars, ok)
 		}
+	}
+	// A 股日线按交易日折算：30 个自然日约 20 个交易日。
+	if bars, ok := retentionBars("720h", "cn_stock", "1d"); !ok || bars != 20 {
+		t.Fatalf("A 股日线应按交易日折算：%d、%v", bars, ok)
 	}
 }
 

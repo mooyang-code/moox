@@ -203,6 +203,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 	result := request.Result
 	var committed Result
 	created := false
+	var superseded int64
 	err := s.transaction(ctx, func(tx *gorm.DB) error {
 		instance, err := readInstance(tx, result.InstanceID)
 		if err != nil {
@@ -249,14 +250,19 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 			return err
 		}
 		if result.Status == StatusOK && result.PublishStatus == PublishPending {
-			if err := tx.Exec(`UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`, result.InstanceID, result.SessionID, millis(result.BarEndTime)).Error; err != nil {
-				return err
+			cancel := tx.Exec(`UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`, result.InstanceID, result.SessionID, millis(result.BarEndTime))
+			if cancel.Error != nil {
+				return cancel.Error
 			}
+			superseded = cancel.RowsAffected
 		}
 		committed = result
 		created = true
 		return nil
 	})
+	if err == nil {
+		s.cancelled(CancelSuperseded, superseded)
+	}
 	return committed, created, err
 }
 
@@ -456,6 +462,7 @@ func (s *Store) PreparePendingResult(ctx context.Context, resultID string, now t
 	}
 	var result Result
 	valid := false
+	reason := ""
 	err := s.transaction(ctx, func(tx *gorm.DB) error {
 		var row resultRow
 		if err := tx.Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_result_id = ? AND c_publish_status = 'pending'`, resultID).Scan(&row).Error; err != nil {
@@ -469,26 +476,39 @@ func (s *Store) PreparePendingResult(ctx context.Context, resultID string, now t
 		if err != nil {
 			return err
 		}
-		valid = instance.Enabled == 1 && !instance.DeletedAt.Valid && instance.SessionID.Valid && instance.SessionID.String == row.SessionID && row.ValidUntil > millis(now)
-		if valid {
+		active := instance.Enabled == 1 && !instance.DeletedAt.Valid && instance.SessionID.Valid && instance.SessionID.String == row.SessionID
+		switch {
+		case !active:
+			reason = CancelInactive
+		case row.ValidUntil <= millis(now):
+			reason = CancelExpired
+		default:
 			latest, hasLatest, err := readLatest(tx, row.InstanceID, row.SessionID, true)
 			if err != nil {
 				return err
 			}
-			valid = hasLatest && latest.ResultID == row.ResultID
+			if !hasLatest || latest.ResultID != row.ResultID {
+				reason = CancelSuperseded
+			}
 		}
+		valid = reason == ""
 		if !valid {
 			return tx.Exec(`UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_result_id = ? AND c_publish_status = 'pending'`, resultID).Error
 		}
 		return nil
 	})
+	if err == nil && !valid {
+		s.cancelled(reason, 1)
+	}
 	return result, valid, err
 }
 
 // TransitionPublishStatus 把待投递结果标记为已发送或已取消。
 func (s *Store) TransitionPublishStatus(ctx context.Context, resultID string, from, to PublishStatus) error {
-	if from != PublishPending || (to != PublishSent && to != PublishCancelled) {
-		return errors.New("投递状态只能从 pending 变为 sent 或 cancelled")
+	// pending 只能变为 sent 或 cancelled；事件已经发出、而这一行在发布期间被更新的结果并发取消时，允许 cancelled 变回 sent，
+	// 如实记录投递状态。
+	if !(from == PublishPending && (to == PublishSent || to == PublishCancelled)) && !(from == PublishCancelled && to == PublishSent) {
+		return errors.New("投递状态只能从 pending 变为 sent 或 cancelled，或在事件已发出时从 cancelled 变为 sent")
 	}
 	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_results SET c_publish_status = ? WHERE c_result_id = ? AND c_publish_status = ?`, to, resultID, from)
 	if result.Error != nil {
@@ -496,6 +516,9 @@ func (s *Store) TransitionPublishStatus(ctx context.Context, resultID string, fr
 	}
 	if result.RowsAffected != 1 {
 		return ErrNotFound
+	}
+	if to == PublishCancelled {
+		s.cancelled(CancelRejected, 1)
 	}
 	return nil
 }

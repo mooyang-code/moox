@@ -19,7 +19,7 @@ import (
 func (h *harness) rebindStock() {
 	h.t.Helper()
 	ctx := context.Background()
-	if err := h.repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, bar0); err != nil {
+	if err := h.repo.DisableInstance(ctx, "i1", &h.session, nil, "", bar0); err != nil {
 		h.t.Fatal(err)
 	}
 	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}

@@ -12,7 +12,8 @@ import (
 // DefaultReplayMaxBars 是一次回放允许的最多 bar 数。
 const DefaultReplayMaxBars = 20000
 
-// ReplayBars 返回 bar_start 落在 [start, end) 内的全部周期，超过 limit 根返回错误。
+// ReplayBars 返回 bar_start 落在 [start, end) 内的全部周期，超过 limit 根返回错误。A 股内嵌日历的最后一个交易日之后
+// 没有可知的周期，枚举到它为止。
 func ReplayBars(calendar, bar string, start, end time.Time, limit int) ([]PeriodBoundaries, error) {
 	if !end.After(start) {
 		return nil, errors.New("回放区间必须满足 start < end")
@@ -27,6 +28,9 @@ func ReplayBars(calendar, bar string, start, end time.Time, limit int) ([]Period
 			return nil, fmt.Errorf("回放区间超过 %d 根 bar，请缩短区间", limit)
 		}
 		bars = append(bars, current)
+		if current.NextEnd.IsZero() {
+			break
+		}
 		if current, err = FromBarEnd(calendar, bar, current.NextEnd); err != nil {
 			return nil, err
 		}
@@ -41,6 +45,9 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 		return PeriodBoundaries{}, err
 	}
 	for current.StorageStart.Before(at) {
+		if current.NextEnd.IsZero() {
+			return PeriodBoundaries{}, fmt.Errorf("%s 之后的周期超出 A 股内嵌交易日历的范围，请更新日历数据", at.UTC().Format(time.RFC3339))
+		}
 		if current, err = FromBarEnd(calendar, bar, current.NextEnd); err != nil {
 			return PeriodBoundaries{}, err
 		}
@@ -50,17 +57,22 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 
 // ReplayWindow 校验并截断回放区间 [start, end)：
 // 起点不能早于活跃序列的覆盖起点（CoverageStart）加上 min_age_bars 与 bars[-1] 所需的历史，否则报错并给出可用起点；
-// 终点截到最新一根（IndexedTo）之前：更晚的 bar 还没有数据，最新一根也可能还没写完，都不能当作完整的 bar 回放。
+// 终点截到最新一根（按日历规整后的 IndexedTo）之前：更晚的 bar 还没有数据，最新一根也可能还没写完，都不能当作
+// 完整的 bar 回放。
 func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start, end time.Time) (time.Time, error) {
 	if !end.After(start) {
 		return time.Time{}, errors.New("回放区间必须满足 start < end")
 	}
+	if view.SeriesBars > 0 && resolved.MinAgeBars > view.SeriesBars {
+		return time.Time{}, fmt.Errorf("universe.min_age_bars=%d 超过 View %s 每个序列保留的 %d 根，永远无法满足", resolved.MinAgeBars, resolved.ViewID, view.SeriesBars)
+	}
 	coverage := CoverageStart(view, resolved)
-	if coverage.IsZero() {
+	_, latestStart, ok := CoverageBounds(view, resolved)
+	if coverage.IsZero() || !ok {
 		return time.Time{}, fmt.Errorf("View %s 还没有数据（覆盖范围未知），暂不能回放", resolved.ViewID)
 	}
 	// 终点截到最新一根的 bar_start（整秒，落库按毫秒保存不会多出或丢掉一根）：回放到最新一根之前为止。
-	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, view.IndexedTo)
+	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, latestStart)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -68,7 +80,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		end = latest.StorageStart
 	}
 	if !end.After(start) {
-		return time.Time{}, fmt.Errorf("回放区间内没有完整的数据：View %s 最新一根的 bar_start 为 %s，回放只到它之前", resolved.ViewID, view.IndexedTo.Format(time.RFC3339))
+		return time.Time{}, fmt.Errorf("回放区间内没有完整的数据：View %s 最新一根的 bar_start 为 %s，回放只到它之前", resolved.ViewID, latest.StorageStart.Format(time.RFC3339))
 	}
 	need := resolved.MinAgeBars
 	if program != nil && program.UsesPreviousBar && need < 2 {
@@ -90,6 +102,9 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		}
 		earliest = shifted.StorageStart
 	}
+	if !earliest.Before(latest.StorageStart) {
+		return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，不够 min_age_bars 与 bars[-1] 要求的起点之前 %d 根历史，暂不能回放", resolved.ViewID, coverage.Format(time.RFC3339), latest.StorageStart.Format(time.RFC3339), need-1)
+	}
 	first, err := firstBarAtOrAfter(resolved.Calendar, resolved.Bar, start)
 	if err != nil {
 		return time.Time{}, err
@@ -100,7 +115,18 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	return end, nil
 }
 
-// RangeLoader 为回放分段读取 View 的历史行：每段固定活动索引与修订号，索引切换时刷新后整段重读。
+// IndexChangedError 表示读取期间 View 的活动索引换了一代（重建过）：新一代只保留最近的根数，调用方必须先按新索引
+// 复查剩余区间，再决定是否切换过去继续读。
+type IndexChangedError struct {
+	View ViewInfo
+}
+
+func (e *IndexChangedError) Error() string {
+	return fmt.Sprintf("View %s 的活动索引已换为 %s", e.View.ViewID, e.View.Generation)
+}
+
+// RangeLoader 为回放分段读取 View 的历史行：每段固定活动索引；活动索引换了一代时返回 *IndexChangedError，
+// 不静默改读新索引。
 type RangeLoader struct {
 	Client   Client
 	SpaceID  string
@@ -155,7 +181,9 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 			}
 			view, viewErr = l.Client.GetView(ctx, l.SpaceID, l.View.ViewID)
 		}
-		l.View.ActiveIndexID = view.ActiveIndexID
+		if view.Generation != l.View.Generation {
+			return RangeRows{}, &IndexChangedError{View: view}
+		}
 	}
 	return RangeRows{}, fmt.Errorf("View %s 的索引持续变化，读取放弃：%w", l.View.ViewID, lastErr)
 }

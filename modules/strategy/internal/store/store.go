@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	sqlitedriver "github.com/glebarez/go-sqlite"
 	"github.com/glebarez/sqlite"
@@ -47,6 +48,10 @@ func FriendlyMessage(err error) (message string, replaced bool) {
 				return strings.Replace(full, raw, known.friendly, 1), true
 			}
 		}
+		// 错误链里的超时或取消已经由上一层换成了中文说明（例如 Trade 请求超时、结果未知），原样保留，不能整句覆盖。
+		if containsHan(full) {
+			return full, false
+		}
 		return known.friendly + "，请稍后重试", true
 	}
 	if errors.Is(err, ErrNotFound) {
@@ -74,6 +79,16 @@ func FriendlyMessage(err error) (message string, replaced bool) {
 	return friendly, true
 }
 
+// containsHan 报告文本里是否有汉字。
+func containsHan(text string) bool {
+	for _, r := range text {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsPermanentWriteError 判断写入错误是否是确定性的：结果校验失败或违反表约束，原样重试不会成功。
 func IsPermanentWriteError(err error) bool {
 	if errors.Is(err, ErrResultInvalid) {
@@ -86,6 +101,25 @@ func IsPermanentWriteError(err error) bool {
 // Store 持有单写连接的 SQLite 数据库。
 type Store struct {
 	db *gorm.DB
+	// onCancel 在待投递结果被取消、事务提交之后调用，用于按原因计数。
+	onCancel func(reason string, count int64)
+}
+
+// 待投递结果被取消的原因。
+const (
+	CancelSuperseded = "superseded" // 被同一会话更新的 ok 结果替代
+	CancelExpired    = "expired"    // 投递前已过有效期
+	CancelInactive   = "inactive"   // 投递前实例已停用、删除或换了会话
+	CancelRejected   = "rejected"   // 事件无法通过契约校验（永久发布错误）
+)
+
+// SetCancelObserver 设置待投递结果被取消时的回调（事务提交之后调用）；传 nil 关闭。
+func (s *Store) SetCancelObserver(fn func(reason string, count int64)) { s.onCancel = fn }
+
+func (s *Store) cancelled(reason string, count int64) {
+	if count > 0 && s.onCancel != nil {
+		s.onCancel(reason, count)
+	}
 }
 
 // New 用已打开的连接构造 Store（测试使用）。

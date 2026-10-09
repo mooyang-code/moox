@@ -144,6 +144,10 @@ func newHarness(t *testing.T, dslYaml string, account *string, usesPrevious bool
 		t.Fatal(err)
 	}
 	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, UsesPreviousBar: usesPrevious, ViewColumns: []string{"close", "m"}}
+	if usesPrevious {
+		// previousBarDSL 经 bars[-1] 读取因子列 m。
+		resolved.PreviousFactors = []string{"f"}
+	}
 	raw, _ := json.Marshal(resolved)
 	session := "session-1"
 	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
@@ -578,7 +582,7 @@ func TestHandleIgnoresOtherCompletionKinds(t *testing.T) {
 	resolved.CompletionKind = events.FactorPeriodComputed.Name()
 	raw, _ := json.Marshal(resolved)
 	h.handler.programs = nil
-	if err := h.repo.SetInstanceEnabled(context.Background(), "i1", false, nil, nil, bar0); err != nil {
+	if err := h.repo.DisableInstance(context.Background(), "i1", &h.session, nil, "", bar0); err != nil {
 		t.Fatal(err)
 	}
 	session := "session-2"

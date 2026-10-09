@@ -17,12 +17,62 @@ var ErrUnsupportedCalendar = errors.New("不支持的策略日历")
 
 // PeriodBoundaries 是一根已闭合 bar 在日历上的标识：Storage 用 StorageStart（bar_start）作行键，
 // Strategy 与 Trade 用 BarEnd。PreviousStart 与 NextEnd 按有效 bar 推进，而不是按墙钟时长。
+// A 股内嵌日历的最后一个交易日没有下一根，NextEnd 为零值。
 type PeriodBoundaries struct {
 	StorageStart  time.Time
 	PreviousStart time.Time
 	BarEnd        time.Time
 	NextEnd       time.Time
 	BarIndex      int64
+}
+
+// calendarError 是换成中文说明的交易日历错误，保留原错误供 errors.Is 判断。
+type calendarError struct {
+	message string
+	cause   error
+}
+
+func (e *calendarError) Error() string { return e.message }
+func (e *calendarError) Unwrap() error { return e.cause }
+
+// translateCalendarError 把交易日历包的英文错误换成带覆盖范围的中文说明；nil 与已换过的错误原样返回。
+func translateCalendarError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var translated *calendarError
+	if errors.As(err, &translated) {
+		return err
+	}
+	first, last := "未知", "未知"
+	if calendar, _, loadErr := stockCalendar(); loadErr == nil {
+		first, last = calendar.FirstDate().String(), calendar.LastDate().String()
+	}
+	message := "A 股交易日历计算失败"
+	switch {
+	case errors.Is(err, marketcalendar.ErrNotTradingDay):
+		message = "不是 A 股交易日"
+	case errors.Is(err, marketcalendar.ErrNoNextTradingDay), errors.Is(err, marketcalendar.ErrCalendarExpired):
+		message = fmt.Sprintf("超出 A 股内嵌交易日历的范围（%s 至 %s），之后的交易日未知，请更新日历数据", first, last)
+	case errors.Is(err, marketcalendar.ErrNoPreviousTradingDay):
+		message = fmt.Sprintf("早于 A 股内嵌交易日历的起点 %s", first)
+	case errors.Is(err, marketcalendar.ErrOutOfCoverage):
+		message = fmt.Sprintf("超出 A 股内嵌交易日历的范围（%s 至 %s）", first, last)
+	case errors.Is(err, marketcalendar.ErrCalendarExpiring):
+		message = fmt.Sprintf("A 股内嵌交易日历即将到期（有效至 %s），请更新日历数据", last)
+	case errors.Is(err, marketcalendar.ErrInvalidCivilDate), errors.Is(err, marketcalendar.ErrInvalidRange):
+		message = "A 股交易日历的日期无效"
+	case errors.Is(err, marketcalendar.ErrUnknownCalendar), errors.Is(err, marketcalendar.ErrInvalidCalendarData),
+		errors.Is(err, marketcalendar.ErrInvalidManifest), errors.Is(err, marketcalendar.ErrCalendarChecksum):
+		message = "A 股内嵌交易日历无法加载"
+	}
+	return &calendarError{message: message, cause: err}
+}
+
+// stockDayError 给交易日历错误加上所涉日期的中文上下文。
+func stockDayError(day marketcalendar.CivilDate, err error) error {
+	translated := translateCalendarError(err)
+	return &calendarError{message: fmt.Sprintf("A 股日期 %s：%s", day, translated.Error()), cause: err}
 }
 
 // ClosedPeriod 返回 trigger 时刻最近一根已闭合的 bar。A 股日线的 bar_start 是上海时间零点，
@@ -41,18 +91,18 @@ func ClosedPeriod(calendarID, frequency string, trigger time.Time) (PeriodBounda
 		local := trigger.In(location)
 		day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
 		if err != nil {
-			return PeriodBoundaries{}, err
+			return PeriodBoundaries{}, translateCalendarError(err)
 		}
 		closeAt := time.Date(local.Year(), local.Month(), local.Day(), 15, 0, 0, 0, location)
 		if local.Before(closeAt) {
 			day, err = calendar.PrevTradingDay(day)
 		} else if status, statusErr := calendar.Status(day); statusErr != nil {
-			return PeriodBoundaries{}, statusErr
+			return PeriodBoundaries{}, stockDayError(day, statusErr)
 		} else if status != marketcalendar.TradingDay {
 			day, err = calendar.PrevTradingDay(day)
 		}
 		if err != nil {
-			return PeriodBoundaries{}, err
+			return PeriodBoundaries{}, stockDayError(day, err)
 		}
 		return boundariesForStockDay(calendar, location, day)
 	}
@@ -81,17 +131,16 @@ func FromStorageStart(calendarID, frequency string, storageStart time.Time) (Per
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
-		local := storageStart.In(location)
-		day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+		day, err := localDay(storageStart, location)
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
 		status, err := calendar.Status(day)
-		if err != nil || status != marketcalendar.TradingDay {
-			if err == nil {
-				err = fmt.Errorf("Storage 周期 %s 不是交易日", day)
-			}
-			return PeriodBoundaries{}, err
+		if err != nil {
+			return PeriodBoundaries{}, stockDayError(day, err)
+		}
+		if status != marketcalendar.TradingDay {
+			return PeriodBoundaries{}, fmt.Errorf("Storage 周期 %s 不是 A 股交易日", day)
 		}
 		return boundariesForStockDay(calendar, location, day)
 	}
@@ -116,13 +165,12 @@ func FromBarEnd(calendarID, frequency string, end time.Time) (PeriodBoundaries, 
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
-		local := end.In(location)
-		day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+		day, err := localDay(end, location)
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
 		if status, err := calendar.Status(day); err != nil {
-			return PeriodBoundaries{}, err
+			return PeriodBoundaries{}, stockDayError(day, err)
 		} else if status != marketcalendar.TradingDay {
 			return PeriodBoundaries{}, fmt.Errorf("bar_end %s 不在 A 股交易日上", end.UTC().Format(time.RFC3339))
 		}
@@ -139,24 +187,31 @@ func FromBarEnd(calendarID, frequency string, end time.Time) (PeriodBoundaries, 
 	return PeriodBoundaries{}, fmt.Errorf("%w：日历 %q 不支持频率 %q", ErrUnsupportedCalendar, calendarID, frequency)
 }
 
+// boundariesForStockDay 计算交易日 day 的周期边界。下一根只在推进 bar 时需要：日历的最后一个交易日没有下一根，
+// NextEnd 留空，而不是让这一根本身也无法处理。
 func boundariesForStockDay(calendar marketcalendar.TradingCalendar, location *time.Location, day marketcalendar.CivilDate) (PeriodBoundaries, error) {
 	previous, err := calendar.PrevTradingDay(day)
 	if err != nil {
-		return PeriodBoundaries{}, err
+		return PeriodBoundaries{}, stockDayError(day, err)
 	}
-	next, err := calendar.NextTradingDay(day)
-	if err != nil {
-		return PeriodBoundaries{}, err
-	}
-	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location).UTC()
-	previousStart := time.Date(previous.Year(), previous.Month(), previous.Day(), 0, 0, 0, 0, location).UTC()
-	barEnd := time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, location).UTC()
-	nextEnd := time.Date(next.Year(), next.Month(), next.Day(), 15, 0, 0, 0, location).UTC()
 	index, err := calendar.TradingDayIndex(day)
 	if err != nil {
-		return PeriodBoundaries{}, err
+		return PeriodBoundaries{}, stockDayError(day, err)
 	}
-	return PeriodBoundaries{StorageStart: start, PreviousStart: previousStart, BarEnd: barEnd, NextEnd: nextEnd, BarIndex: int64(index)}, nil
+	boundaries := PeriodBoundaries{
+		StorageStart:  time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location).UTC(),
+		PreviousStart: time.Date(previous.Year(), previous.Month(), previous.Day(), 0, 0, 0, 0, location).UTC(),
+		BarEnd:        time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, location).UTC(),
+		BarIndex:      int64(index),
+	}
+	next, err := calendar.NextTradingDay(day)
+	switch {
+	case err == nil:
+		boundaries.NextEnd = time.Date(next.Year(), next.Month(), next.Day(), 15, 0, 0, 0, location).UTC()
+	case !errors.Is(err, marketcalendar.ErrNoNextTradingDay):
+		return PeriodBoundaries{}, stockDayError(day, err)
+	}
+	return boundaries, nil
 }
 
 // AdvanceBarEnd 按有效 bar 移动 bar_end：n 为负表示向前回溯，0 原样返回。
@@ -182,8 +237,7 @@ func AdvanceBarEnd(calendarID, frequency string, end time.Time, n int) (time.Tim
 	if err != nil {
 		return time.Time{}, err
 	}
-	local := end.In(location)
-	day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+	day, err := localDay(end, location)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -194,7 +248,7 @@ func AdvanceBarEnd(calendarID, frequency string, end time.Time, n int) (time.Tim
 			day, err = calendar.PrevTradingDay(day)
 		}
 		if err != nil {
-			return time.Time{}, err
+			return time.Time{}, stockDayError(day, err)
 		}
 	}
 	return time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, location).UTC(), nil
@@ -205,9 +259,6 @@ func PreviousStorageStart(calendarID, frequency string, storageStart time.Time) 
 	period, err := FromStorageStart(calendarID, frequency, storageStart)
 	if err != nil {
 		return time.Time{}, err
-	}
-	if period.PreviousStart.IsZero() {
-		return time.Time{}, errors.New("无法确定上一周期")
 	}
 	return period.PreviousStart, nil
 }
@@ -236,18 +287,84 @@ func HistoryStart(calendarID, frequency string, storageStart time.Time, count in
 	if err != nil {
 		return time.Time{}, err
 	}
-	local := period.StorageStart.In(location)
-	day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+	day, err := localDay(period.StorageStart, location)
 	if err != nil {
 		return time.Time{}, err
 	}
 	for i := 1; i < count; i++ {
 		day, err = calendar.PrevTradingDay(day)
 		if err != nil {
-			return time.Time{}, err
+			return time.Time{}, stockDayError(day, err)
 		}
 	}
 	return time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location).UTC(), nil
+}
+
+// FloorStorageStart 把一个 Storage 行键规整为不晚于它的周期起点：A 股日线取不晚于它的交易日，并夹到内嵌日历的
+// 最后一个交易日之内（索引里可能有误写在节假日或日历之外的行）；crypto 原样返回。用于映射索引统计的最新一根。
+func FloorStorageStart(calendarID, frequency string, at time.Time) (time.Time, error) {
+	if normalizeCalendar(calendarID) != "cn_stock" || strings.ToLower(strings.TrimSpace(frequency)) != "1d" {
+		return at.UTC(), nil
+	}
+	calendar, location, err := stockCalendar()
+	if err != nil {
+		return time.Time{}, err
+	}
+	day, err := localDay(at, location)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if day.After(calendar.LastDate()) {
+		day = calendar.LastDate()
+	}
+	if day.Before(calendar.FirstDate()) {
+		return time.Time{}, stockDayError(day, marketcalendar.ErrOutOfCoverage)
+	}
+	if status, err := calendar.Status(day); err != nil {
+		return time.Time{}, stockDayError(day, err)
+	} else if status != marketcalendar.TradingDay {
+		if day, err = calendar.PrevTradingDay(day); err != nil {
+			return time.Time{}, stockDayError(day, err)
+		}
+	}
+	return time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location).UTC(), nil
+}
+
+// CeilStorageStart 把一个 Storage 行键规整为不早于它的周期起点：A 股日线取不早于它的交易日；crypto 原样返回。
+// 用于映射索引统计的最早一根。
+func CeilStorageStart(calendarID, frequency string, at time.Time) (time.Time, error) {
+	if normalizeCalendar(calendarID) != "cn_stock" || strings.ToLower(strings.TrimSpace(frequency)) != "1d" {
+		return at.UTC(), nil
+	}
+	calendar, location, err := stockCalendar()
+	if err != nil {
+		return time.Time{}, err
+	}
+	day, err := localDay(at, location)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if day.Before(calendar.FirstDate()) {
+		day = calendar.FirstDate()
+	}
+	if status, err := calendar.Status(day); err != nil {
+		return time.Time{}, stockDayError(day, err)
+	} else if status != marketcalendar.TradingDay {
+		if day, err = calendar.NextTradingDay(day); err != nil {
+			return time.Time{}, stockDayError(day, err)
+		}
+	}
+	return time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location).UTC(), nil
+}
+
+// localDay 返回时刻在给定时区的日期。
+func localDay(at time.Time, location *time.Location) (marketcalendar.CivilDate, error) {
+	local := at.In(location)
+	day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+	if err != nil {
+		return marketcalendar.CivilDate{}, translateCalendarError(err)
+	}
+	return day, nil
 }
 
 var (
@@ -274,19 +391,45 @@ func CheckCalendar(calendarID, frequency string) error {
 	}
 }
 
-// StockCalendarReadiness 检查内嵌 A 股日历在 now 是否可用：已过期返回 marketcalendar.ErrCalendarExpired，
-// warning 时间内将到期返回 marketcalendar.ErrCalendarExpiring。
-func StockCalendarReadiness(now time.Time, warning time.Duration) error {
+// StockCalendarReadiness 检查内嵌 A 股日历在 now 是否还能完整处理当天的周期。周期的有效期要推到其后 validBars 个
+// 交易日，日历最后 validBars 个交易日的周期已推不出有效期，实际可用截止日是“最后一个交易日往前 validBars 个交易日”：
+// 过了它返回 marketcalendar.ErrCalendarExpired，warning 时间内将到它返回 marketcalendar.ErrCalendarExpiring。
+func StockCalendarReadiness(now time.Time, warning time.Duration, validBars int) error {
 	calendar, location, err := stockCalendar()
 	if err != nil {
 		return err
 	}
-	local := now.In(location)
-	day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+	usable := calendar.LastDate()
+	if status, err := calendar.Status(usable); err != nil {
+		return stockDayError(usable, err)
+	} else if status != marketcalendar.TradingDay {
+		if usable, err = calendar.PrevTradingDay(usable); err != nil {
+			return stockDayError(usable, err)
+		}
+	}
+	for i := 0; i < validBars; i++ {
+		if usable, err = calendar.PrevTradingDay(usable); err != nil {
+			return stockDayError(usable, err)
+		}
+	}
+	today, err := localDay(now, location)
 	if err != nil {
 		return err
 	}
-	return calendar.Readiness(day, warning)
+	if today.After(usable) {
+		return &calendarError{
+			message: fmt.Sprintf("A 股内嵌交易日历止于 %s，%s 之后的周期已无法推算有效期，请更新日历数据", calendar.LastDate(), usable),
+			cause:   marketcalendar.ErrCalendarExpired,
+		}
+	}
+	usableEnd := time.Date(usable.Year(), usable.Month(), usable.Day(), 15, 0, 0, 0, location)
+	if warning > 0 && !now.Add(warning).Before(usableEnd) {
+		return &calendarError{
+			message: fmt.Sprintf("A 股内嵌交易日历止于 %s，%s 之后的周期将无法处理，请在此之前更新日历数据", calendar.LastDate(), usable),
+			cause:   marketcalendar.ErrCalendarExpiring,
+		}
+	}
+	return nil
 }
 
 // stockCalendar 返回 A 股交易日历与上海时区。内嵌日历的解析与校验较重，进程内只做一次；日历本身不可变。
@@ -294,9 +437,13 @@ func stockCalendar() (marketcalendar.TradingCalendar, *time.Location, error) {
 	stockCalendarOnce.Do(func() {
 		stockCalendarValue, stockCalendarErr = marketcalendar.Load("cn_stock")
 		if stockCalendarErr != nil {
+			stockCalendarErr = &calendarError{message: "A 股内嵌交易日历无法加载", cause: stockCalendarErr}
 			return
 		}
 		stockCalendarLocation, stockCalendarErr = time.LoadLocation("Asia/Shanghai")
+		if stockCalendarErr != nil {
+			stockCalendarErr = fmt.Errorf("无法加载上海时区：%w", stockCalendarErr)
+		}
 	})
 	if stockCalendarErr != nil {
 		return marketcalendar.TradingCalendar{}, nil, stockCalendarErr

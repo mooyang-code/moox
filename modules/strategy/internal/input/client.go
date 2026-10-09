@@ -32,6 +32,18 @@ func (c *RPCClient) pageSize() uint32 {
 	return 500
 }
 
+// activeBuildIDAttribute 是 Storage 激活索引时记录构建 ID 的内部属性。
+const activeBuildIDAttribute = "moox.active_build_id"
+
+// viewGeneration 组合活动索引的代次：活动索引 ID 加上激活它的构建 ID；没有构建 ID 时只有活动索引 ID。
+func viewGeneration(activeIndexID, buildID string) string {
+	activeIndexID, buildID = strings.TrimSpace(activeIndexID), strings.TrimSpace(buildID)
+	if activeIndexID == "" || buildID == "" {
+		return activeIndexID
+	}
+	return activeIndexID + "@" + buildID
+}
+
 // GetView 读取 View 及其全部列（不含覆盖范围，见 ViewCoverage）。
 func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error) {
 	if c == nil || c.Metadata == nil {
@@ -52,6 +64,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 		return ViewInfo{}, fmt.Errorf("View %s 不存在", viewID)
 	}
 	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus(), ActiveIndexID: strings.TrimSpace(view.GetActiveIndexId())}
+	info.Generation = viewGeneration(info.ActiveIndexID, view.GetAttributes()[activeBuildIDAttribute])
 	for page := uint32(1); ; page++ {
 		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {

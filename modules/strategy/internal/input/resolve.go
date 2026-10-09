@@ -52,9 +52,6 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	}
 	resolved := Resolved{ViewID: viewID, DatasetID: view.DatasetID, Bar: strings.ToLower(view.Frequency), Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars}
 	resolved.Calendar = strings.ToLower(strings.TrimSpace(dataset.Attributes["calendar"]))
-	if resolved.Calendar == "" {
-		resolved.Calendar = DefaultCalendar
-	}
 	source := dataset
 	if sourceID := strings.TrimSpace(dataset.Attributes["source_dataset_id"]); sourceID != "" && sourceID != dataset.DatasetID {
 		source, err = client.GetDataset(ctx, spaceID, sourceID)
@@ -62,8 +59,20 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 			return Resolved{}, nil, err
 		}
 		resolved.SourceDatasetID = sourceID
-		if calendar := strings.ToLower(strings.TrimSpace(source.Attributes["calendar"])); calendar != "" {
+		// 只有因子结果沿用源数据集的行键（同一套 bar_start），可以继承源数据集的日历；重采样等派生数据集按自己的
+		// 对齐方式写行，继承源日历会把行键算错。
+		if calendar := strings.ToLower(strings.TrimSpace(source.Attributes["calendar"])); calendar != "" && resolved.Calendar == "" && strings.TrimSpace(dataset.Attributes["dataset_role"]) == datasetRoleFactorResult {
 			resolved.Calendar = calendar
+		}
+	}
+	if resolved.Calendar == "" {
+		resolved.Calendar = DefaultCalendar
+	}
+	if resolved.Calendar == "cn_stock" {
+		for _, attributes := range []map[string]string{dataset.Attributes, source.Attributes} {
+			if strings.EqualFold(strings.TrimSpace(attributes["alignment"]), "epoch_utc") {
+				return Resolved{}, nil, fmt.Errorf("数据集 %s 的行按 UTC 零点对齐（alignment=epoch_utc），不能使用 A 股日历 cn_stock", view.DatasetID)
+			}
 		}
 	}
 	marketType, err := sourceMarketType(ctx, client, spaceID, source)
@@ -85,7 +94,7 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 			}
 		}
 	}
-	if bars, ok := retentionBars(dataset.Retention, resolved.Bar); ok {
+	if bars, ok := retentionBars(dataset.Retention, resolved.Calendar, resolved.Bar); ok {
 		if strategy.Universe.MinAgeBars > bars {
 			return Resolved{}, nil, fmt.Errorf("universe.min_age_bars=%d 超过 View 的保留根数 %d", strategy.Universe.MinAgeBars, bars)
 		}
@@ -142,6 +151,15 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 		return Resolved{}, nil, err
 	}
 	resolved.UsesPreviousBar = program.UsesPreviousBar
+	previousFactors := make([]string, 0)
+	for _, column := range program.PreviousColumns {
+		if binding := resolved.Columns[column]; binding.Source == SourceFactor && binding.FactorID != "" {
+			previousFactors = append(previousFactors, binding.FactorID)
+		}
+	}
+	if len(previousFactors) > 0 {
+		resolved.PreviousFactors = uniqueSorted(previousFactors)
+	}
 	resolved.CompletionKind = events.CollectorPeriodCompleted.Name()
 	if strings.TrimSpace(dataset.Attributes["dataset_role"]) == datasetRoleFactorResult {
 		resolved.CompletionKind = events.FactorPeriodComputed.Name()
@@ -221,16 +239,17 @@ func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int) error {
 		return fmt.Errorf("universe.min_age_bars=%d 超过 View %s 每个序列保留的 %d 根，永远无法满足", minAgeBars, resolved.ViewID, view.SeriesBars)
 	}
 	start := CoverageStart(view, resolved)
-	if start.IsZero() {
+	_, latest, ok := CoverageBounds(view, resolved)
+	if start.IsZero() || !ok {
 		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认 universe.min_age_bars=%d 所需的历史，请等数据写入后再启用", resolved.ViewID, minAgeBars)
 	}
-	target, err := HistoryStart(resolved.Calendar, resolved.Bar, view.IndexedTo, minAgeBars)
+	target, err := HistoryStart(resolved.Calendar, resolved.Bar, latest, minAgeBars)
 	if err != nil {
 		return err
 	}
 	if target.Before(start) {
 		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 %s，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars 或等待 View 积累更多历史",
-			minAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339), view.IndexedTo.Format(time.RFC3339))
+			minAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339), latest.Format(time.RFC3339))
 	}
 	return nil
 }
@@ -264,8 +283,11 @@ func sourceMarketType(ctx context.Context, client Client, spaceID string, source
 	return marketType, nil
 }
 
-// retentionBars 把数据集保留期（"<n>h" 或 "forever"）换算为根数；forever 或无法解析返回 false。
-func retentionBars(retention, bar string) (int, bool) {
+// stockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
+const stockTradingDaysPerYear = 244
+
+// retentionBars 把数据集保留期（"<n>h" 或 "forever"）换算为根数；A 股日线按交易日折算。forever 或无法解析返回 false。
+func retentionBars(retention, calendar, bar string) (int, bool) {
 	retention = strings.TrimSpace(strings.ToLower(retention))
 	if retention == "" || retention == "forever" || !strings.HasSuffix(retention, "h") {
 		return 0, false
@@ -273,6 +295,9 @@ func retentionBars(retention, bar string) (int, bool) {
 	hours, err := strconv.Atoi(strings.TrimSuffix(retention, "h"))
 	if err != nil || hours <= 0 {
 		return 0, false
+	}
+	if normalizeCalendar(calendar) == "cn_stock" {
+		return hours / 24 * stockTradingDaysPerYear / 365, true
 	}
 	duration, err := parseBarDuration(bar)
 	if err != nil || duration <= 0 {
@@ -314,5 +339,5 @@ func (r Resolved) ReadinessBinding() readiness.Binding {
 	for id, hash := range r.Factors {
 		factors[id] = hash
 	}
-	return readiness.Binding{Factors: factors, UsesPreviousBar: r.UsesPreviousBar}
+	return readiness.Binding{Factors: factors, PreviousFactors: append([]string(nil), r.PreviousFactors...)}
 }

@@ -197,7 +197,7 @@ func TestCommitResultRequiresActiveInstanceAndValidPayload(t *testing.T) {
 	if _, _, err := repo.CommitResult(ctx, CommitRequest{Result: nullTargets, Now: testNow}); !errors.Is(err, ErrResultInvalid) {
 		t.Fatalf("null 目标应无效：%v", err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := repo.CommitResult(ctx, CommitRequest{Result: okResult("r1", "i1", "session-1", 1, PublishNone), Now: testNow}); !errors.Is(err, ErrResultInstanceNotActive) {
@@ -223,7 +223,7 @@ func TestPreparePendingResultCancelsStaleRows(t *testing.T) {
 	}
 	// 实例停用：取消。
 	mustCommit(t, repo, okResult("r2", "i1", "session-1", 2, PublishPending), nil, testNow)
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, ptr("session-1"), nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), ptr("session-1"), "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, valid, err := repo.PreparePendingResult(ctx, "r2", testNow.Add(2*time.Hour)); err != nil || valid {
@@ -240,7 +240,7 @@ func TestAdjacentRecordTrustRules(t *testing.T) {
 	// 旧会话在 view_a 上的记录。
 	mustCommit(t, repo, okResult("old", "i1", "session-1", 1, PublishNone), nil, testNow)
 	// 停用并以新会话重新启用。
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.OpenSession(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {

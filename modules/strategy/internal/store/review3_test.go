@@ -96,7 +96,7 @@ func TestDeleteReplaysBeyondKeepsLatestPerSpace(t *testing.T) {
 	instance, session := "i1", "session-1"
 	for i := 0; i < 5; i++ {
 		for _, space := range []string{"a", "b"} {
-			replay := Replay{ReplayID: fmt.Sprintf("%s-%d", space, i), DSLYaml: "name: demo", DSLHash: testHash, SpaceID: space, ViewID: "view", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute), InstanceID: &instance, SessionID: &session}
+			replay := Replay{ReplayID: fmt.Sprintf("%s-%d", space, i), DSLYaml: "name: demo", DSLHash: testHash, ViewGeneration: "idx", SpaceID: space, ViewID: "view", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute), InstanceID: &instance, SessionID: &session}
 			if err := repo.CreateReplay(ctx, replay); err != nil {
 				t.Fatal(err)
 			}
