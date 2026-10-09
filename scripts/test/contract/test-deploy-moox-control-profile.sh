@@ -10,6 +10,20 @@ WEB_HOST_OVERLAY_ARCHIVE="${TMP_ROOT}/web-host-overlay.tar.gz"
 WEB_HOST_OVERLAY_REVERSED_ARCHIVE="${TMP_ROOT}/web-host-overlay-reversed.tar.gz"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
+# This packaging contract uses stub service binaries throughout. Keep Caddy's
+# archive and checksum local too; engine/runtime validation has separate tests.
+mkdir -p "${TMP_ROOT}/caddy-fixture"
+cat >"${TMP_ROOT}/caddy-fixture/caddy" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == version ]]; then printf 'v2.11.4\n'; fi
+exit 0
+EOF
+chmod +x "${TMP_ROOT}/caddy-fixture/caddy"
+export MOOX_CADDY_ARCHIVE_CACHE="${TMP_ROOT}/caddy_2.11.4_linux_amd64.tar.gz"
+tar -C "${TMP_ROOT}/caddy-fixture" -czf "${MOOX_CADDY_ARCHIVE_CACHE}" caddy
+shasum -a 512 "${MOOX_CADDY_ARCHIVE_CACHE}" | \
+  awk '{print $1 "  caddy_2.11.4_linux_amd64.tar.gz"}' >"${TMP_ROOT}/caddy-checksums.txt"
+
 file_mode() {
   local mode
   if mode=$(stat -f '%Lp' "$1" 2>/dev/null); then
@@ -57,7 +71,7 @@ cp "${ROOT}/scripts/runtime/moox-log-rotate.sh" "${FIXTURE_ROOT}/scripts/runtime
 ln -s "${ROOT}/scripts/deploy/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/deploy/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
-ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
+ln -s "${TMP_ROOT}/caddy-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
 ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
