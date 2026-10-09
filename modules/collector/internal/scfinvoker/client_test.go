@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/stretchr/testify/require"
@@ -73,85 +74,55 @@ func TestParsePublishFencingToken(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSubmitRuntimeConfigsRejectsMissingJobIdentityAsAmbiguous(t *testing.T) {
-	for _, body := range []string{"", `{"ret_info":{"code":0}}`, `{"ret_info":{"code":0},"job_id":"  "}`} {
-		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(body))
-			}))
-			defer server.Close()
-			client := &Client{target: server.URL, auth: runtimeapp.AuthConfig{AccessKey: "collector", SecretKey: "secret", Caller: "collector", TargetNode: "gateway"}, http: server.Client()}
+type gatewayFunc func(context.Context, string, string, any, any) error
 
-			jobID, err := client.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
-			require.ErrorIs(t, err, ErrRuntimeConfigSubmissionUnknown)
-			require.Empty(t, jobID)
-		})
-	}
+func (f gatewayFunc) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return f(ctx, service, method, req, rsp)
 }
 
-func TestSubmitRuntimeConfigsClassifiesPostSendUnknownOutcomes(t *testing.T) {
-	for name, response := range map[string]struct {
-		status int
-		body   string
+func TestCloudNodeGatewayKeepsSubmissionUnknownAndBusinessRejectionDistinct(t *testing.T) {
+	for _, scenario := range []struct {
+		name, job string
+		code      cloudnodepb.ErrorCode
+		transport error
+		unknown   bool
 	}{
-		"server error":      {status: http.StatusBadGateway, body: `upstream unavailable`},
-		"malformed success": {status: http.StatusOK, body: `{"ret_info":{"code":0},`},
-		"empty success":     {status: http.StatusOK, body: ""},
+		{name: "accepted", job: "job-1"},
+		{name: "missing job", unknown: true},
+		{name: "blank job", job: "  ", unknown: true},
+		{name: "connection lost", transport: errors.New("response connection lost"), unknown: true},
+		{name: "timeout", transport: context.DeadlineExceeded, unknown: true},
+		{name: "business rejection", code: cloudnodepb.ErrorCode(14)},
 	} {
-		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(response.status)
-				_, _ = w.Write([]byte(response.body))
-			}))
-			defer server.Close()
-			client := &Client{target: server.URL, auth: runtimeapp.AuthConfig{AccessKey: "collector", SecretKey: "secret", Caller: "collector", TargetNode: "gateway"}, http: server.Client()}
-
-			_, err := client.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
-			require.ErrorIs(t, err, ErrRuntimeConfigSubmissionUnknown)
+		t.Run(scenario.name, func(t *testing.T) {
+			calls := 0
+			c := New(Config{Gateway: gatewayFunc(func(ctx context.Context, service, method string, req, rsp any) error {
+				calls++
+				require.Equal(t, "trpc.moox.cloudnode.CloudNodeMgr", service)
+				require.Equal(t, "SubmitUpdateNodeRuntimeConfigs", method)
+				require.Equal(t, "crypto", gatewayclient.CallMetadataFromContext(ctx).SpaceID)
+				require.Equal(t, "timer-1", req.(*cloudnodepb.BatchUpdateNodeRuntimeConfigsReq).GetNodes()[0].GetNodeId())
+				response := rsp.(*cloudnodepb.SubmitNodeBatchRsp)
+				response.JobId = scenario.job
+				response.RetInfo = &cloudnodepb.RetInfo{Code: scenario.code, Msg: "business rejection"}
+				return scenario.transport
+			})})
+			job, err := c.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
+			require.Equal(t, 1, calls, "writes are never reissued")
+			if scenario.name == "accepted" {
+				require.NoError(t, err)
+				require.Equal(t, "job-1", job)
+			} else {
+				require.Error(t, err)
+				require.Equal(t, scenario.unknown, errors.Is(err, ErrRuntimeConfigSubmissionUnknown))
+			}
 		})
 	}
-}
-
-func TestSubmitRuntimeConfigsClassifiesConnectionLossAfterRequestAsUnknown(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hijacker, ok := w.(http.Hijacker)
-		if !ok {
-			http.Error(w, "HTTP test server does not support hijacking", http.StatusInternalServerError)
-			return
-		}
-		connection, _, err := hijacker.Hijack()
-		if err != nil {
-			t.Errorf("hijack connection: %v", err)
-			return
-		}
-		_ = connection.Close()
-	}))
-	defer server.Close()
-	client := &Client{target: server.URL, auth: runtimeapp.AuthConfig{AccessKey: "collector", SecretKey: "secret", Caller: "collector", TargetNode: "gateway"}, http: server.Client()}
-
-	_, err := client.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
-	require.ErrorIs(t, err, ErrRuntimeConfigSubmissionUnknown)
-}
-
-func TestSubmitRuntimeConfigsKeepsLocalAndExplicitBusinessErrorsDefinite(t *testing.T) {
-	t.Run("local configuration", func(t *testing.T) {
-		client := &Client{}
-		_, err := client.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
+	for _, ctx := range []context.Context{context.Background(), func() context.Context { ctx, cancel := context.WithCancel(context.Background()); cancel(); return ctx }()} {
+		_, err := (&Client{}).SubmitRuntimeConfigs(ctx, "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
 		require.Error(t, err)
-		require.False(t, errors.Is(err, ErrRuntimeConfigSubmissionUnknown))
-	})
-	t.Run("business rejection", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ret_info":{"code":14,"msg":"publish lease conflict"}}`))
-		}))
-		defer server.Close()
-		client := &Client{target: server.URL, auth: runtimeapp.AuthConfig{AccessKey: "collector", SecretKey: "secret", Caller: "collector", TargetNode: "gateway"}, http: server.Client()}
-		_, err := client.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
-		require.Error(t, err)
-		require.False(t, errors.Is(err, ErrRuntimeConfigSubmissionUnknown))
-	})
+		require.NotErrorIs(t, err, ErrRuntimeConfigSubmissionUnknown)
+	}
 }
 
 func TestRenewCollectorPublishLeaseClassifiesConflictAsStale(t *testing.T) {

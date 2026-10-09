@@ -45,7 +45,7 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			err := disableCollectorBlacklistedTimers(context.Background(), adminclient.New(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}})
+			err := disableCollectorBlacklistedTimers(context.Background(), collectorTestClient(server), &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}})
 			if status == "SUCCESS" {
 				require.NoError(t, err)
 			} else {
@@ -87,7 +87,7 @@ func TestDisableCollectorTimerFleetLeavesInvokeNodesUntouched(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, disableCollectorTimerFleet(context.Background(), adminclient.New(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}))
+	require.NoError(t, disableCollectorTimerFleet(context.Background(), collectorTestClient(server), &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}))
 	require.Len(t, submitted, 2)
 	require.Equal(t, []string{"timer-a", "timer-b"}, []string{submitted[0].NodeID, submitted[1].NodeID})
 	for _, patch := range submitted {

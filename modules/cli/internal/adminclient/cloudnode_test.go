@@ -240,6 +240,6 @@ func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 
 func collectorTestClient(server *httptest.Server) *Client {
 	c := New(server.URL)
-	c.CollectorGateway = testfixture.CollectorHandlerGateway{Handler: server.Config.Handler}
+	c.Gateway = testfixture.HandlerGateway{Handler: server.Config.Handler}
 	return c
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
@@ -231,35 +230,12 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 		return nil, nil
 	}
 
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
-		return nil, fmt.Errorf("cloud_accounts: connect control host: %w", err)
+		return nil, fmt.Errorf("cloud_accounts: open gateway: %w", err)
 	}
-	defer control.Close()
-
-	paths := snapshot.Manifest.Paths.Resolved()
-	serviceKeyRaw, err := readRemoteControlFile(ctx, control, filepath.Join(paths.ControlRoot, "secrets/gateway-moox-cli.key"))
-	if err != nil {
-		return nil, fmt.Errorf("cloud_accounts: read CLI service credential: %w", err)
-	}
-	serviceKey, err := normalizeCollectorServiceKey(serviceKeyRaw)
-	if err != nil {
-		return nil, fmt.Errorf("cloud_accounts: validate CLI service credential: %w", err)
-	}
-
-	client := newControlClient(
-		fmt.Sprintf("https://%s:11001", snapshot.Manifest.ControlHost.Address),
-		"", "moox-cli", serviceKey, "",
-	)
-	if client.ServiceAuth == nil {
-		return nil, fmt.Errorf("cloud_accounts: service authentication is unavailable")
-	}
-	client.ServiceAuth.Caller = "moox-cli"
-	client.ServiceAuth.TargetNode = snapshot.Manifest.ControlHost.Name
-	if setupdeploy.RequiresLocalCATrust(setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode), snapshot.Manifest.ControlHost.Address) {
-		client.ServiceAuth.CAFile = setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address)
-	}
-
+	defer gateway.Close()
+	client := &adminclient.Client{Gateway: gateway}
 	existingAccounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return nil, fmt.Errorf("cloud_accounts: list Tencent cloud accounts: %w", err)

@@ -87,6 +87,8 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 
 主计划 D2a 的 CollectMgr 与全部调用方迁移已完成：11402 改为原生 tRPC，删除 11418，MarketFetchRuntime 保留 11422；部署登记与监听契约同步。Monitor 清单复用进程级客户端，删除旧 HTTP 配置及凭据读取，只增加清单读取 ACL；CLI 任务 CRUD 与金丝雀清单共用已有 SSH 客户端，分别使用 JSON 与 PB，旧 HTTP 路径拒绝回退。全包 race、相关 vet、真实 SSH/原生 RPC 和 Monitor HMAC 清单回归通过；四个静态程序及 11 个 Linux 测试包均在本机关闭 CGO 构建，11 包在 Linux 全量运行通过。边界、851 模块图、架构文档、格式及 15 份 schema 检查通过。CloudNode Timer 盘点留到 D2b，其他 D2～J、最终独立审查与正式切换仍待完成。
 
+主计划 D2b 的 CloudNodeMgr 与全部调用方同批迁移已完成：11401 改为原生 tRPC，生产处理器从元数据读取空间标识；Collector 四个方法复用进程客户端，Admin 垃圾回收使用独立 `admin` 身份，CLI 全部 CloudNode 操作经同一 SSH 网关客户端。保留 COS HTTPS 上传、发布围栏、写入单发与未知结果处理；取消后的清理可复用隧道，退出统一关闭。函数调用采用目录中的 960 秒预算，删除固定 5 秒覆盖及远端执行 CLI 的出口探针回退。相关模块全包 race、vet、真实 SSH/原生 RPC、生产处理器空间隔离、垃圾回收 ACL 与长调用验证通过；五个静态程序及 14 个 Linux 测试包均在本机关闭 CGO 构建，14 包在 Linux 全量运行通过。协议生成、边界、851 模块图、文档、格式及 15 份 schema 检查通过。Admin 租约与密钥调用、其他 D2～J、最终独立审查及正式发布仍待完成。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。

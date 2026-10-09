@@ -15,13 +15,14 @@ import (
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Config struct {
+	Gateway              gatewayclient.Invoker
 	ServiceGatewayTarget string
 	Auth                 runtimeapp.AuthConfig
 	Timeout              time.Duration
@@ -35,6 +36,7 @@ var (
 )
 
 type Client struct {
+	gateway   gatewayclient.Invoker
 	target    string
 	auth      runtimeapp.AuthConfig
 	http      *http.Client
@@ -75,7 +77,7 @@ type CollectorPublishLease struct {
 func New(cfg Config) *Client {
 	target := strings.TrimRight(strings.TrimSpace(cfg.ServiceGatewayTarget), "/")
 	httpClient, err := runtimeapp.NewGatewayHTTPClient(cfg.Timeout, cfg.Auth)
-	return &Client{target: target, auth: cfg.Auth, http: httpClient, httpError: err}
+	return &Client{gateway: cfg.Gateway, target: target, auth: cfg.Auth, http: httpClient, httpError: err}
 }
 
 func (c *Client) ListMarketFetchers(ctx context.Context, spaceID string) ([]Node, error) {
@@ -95,12 +97,9 @@ func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType st
 	}
 	var all []Node
 	for page := uint32(1); ; page++ {
-		raw, err := protojson.Marshal(&cloudnodepb.GetNodeListReq{BizType: "market_fetcher", TriggerType: triggerType, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize}})
-		if err != nil {
-			return nil, err
-		}
+		request := &cloudnodepb.GetNodeListReq{BizType: "market_fetcher", TriggerType: triggerType, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize}}
 		var rsp cloudnodepb.GetNodeListRsp
-		if err := c.post(ctx, spaceID, "GetNodeList", raw, &rsp); err != nil {
+		if err := c.callCloudNode(ctx, spaceID, "GetNodeList", request, &rsp, false); err != nil {
 			return nil, err
 		}
 		if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -150,12 +149,9 @@ func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patch
 	if len(patches) == 0 {
 		return "", fmt.Errorf("runtime config patches are required")
 	}
-	raw, err := protojson.Marshal(&cloudnodepb.BatchUpdateNodeRuntimeConfigsReq{Nodes: patches})
-	if err != nil {
-		return "", err
-	}
+	request := &cloudnodepb.BatchUpdateNodeRuntimeConfigsReq{Nodes: patches}
 	var rsp cloudnodepb.SubmitNodeBatchRsp
-	if err := c.postRuntimeConfigSubmission(ctx, spaceID, raw, &rsp); err != nil {
+	if err := c.callCloudNode(ctx, spaceID, "SubmitUpdateNodeRuntimeConfigs", request, &rsp, true); err != nil {
 		return "", err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -176,12 +172,9 @@ func (c *Client) GetRuntimeConfigBatchStatus(ctx context.Context, spaceID, jobID
 	if strings.TrimSpace(jobID) == "" {
 		return nil, fmt.Errorf("job_id is required")
 	}
-	raw, err := protojson.Marshal(&cloudnodepb.GetNodeBatchChangeReq{JobId: jobID})
-	if err != nil {
-		return nil, err
-	}
+	request := &cloudnodepb.GetNodeBatchChangeReq{JobId: jobID}
 	var rsp cloudnodepb.GetNodeBatchChangeRsp
-	if err := c.post(ctx, spaceID, "GetNodeBatchChange", raw, &rsp); err != nil {
+	if err := c.callCloudNode(ctx, spaceID, "GetNodeBatchChange", request, &rsp, false); err != nil {
 		return nil, err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -325,12 +318,9 @@ func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[s
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build invoke event: %w", err)
 	}
-	raw, err := protojson.Marshal(&cloudnodepb.InvokeFunctionReq{NodeId: nodeID, EventData: value, ScfInvokeType: invokeType})
-	if err != nil {
-		return InvocationResult{}, err
-	}
+	request := &cloudnodepb.InvokeFunctionReq{NodeId: nodeID, EventData: value, ScfInvokeType: invokeType}
 	var rsp cloudnodepb.InvokeFunctionRsp
-	if err := c.post(ctx, spaceID, "InvokeFunction", raw, &rsp); err != nil {
+	if err := c.callCloudNode(ctx, spaceID, "InvokeFunction", request, &rsp, false); err != nil {
 		return InvocationResult{}, err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
@@ -350,27 +340,35 @@ func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[s
 	return InvocationResult{RequestID: result.GetRequestId(), Code: result.GetCode(), Message: result.GetMessage(), Result: resultMap, DurationMS: result.GetDuration(), BillDuration: result.GetBillDuration()}, nil
 }
 
-func (c *Client) post(ctx context.Context, spaceID, method string, body []byte, out proto.Message) error {
-	return c.postPath(ctx, spaceID, "/api/service/cloudnode/"+method, "cloudnode "+method, body, out, false)
+func (c *Client) callCloudNode(ctx context.Context, spaceID, method string, request, response proto.Message, unknownAfterSend bool) error {
+	if c == nil || c.gateway == nil {
+		return errors.New("CloudNode requires the process gateway client")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	metadata := gatewayclient.CallMetadataFromContext(ctx)
+	metadata.SpaceID = spaceID
+	err := c.gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), "trpc.moox.cloudnode.CloudNodeMgr", method, request, response)
+	if err != nil && unknownAfterSend {
+		return fmt.Errorf("%w: CloudNode %s: %w", ErrRuntimeConfigSubmissionUnknown, method, err)
+	}
+	return err
 }
 
 func (c *Client) postService(ctx context.Context, spaceID, method string, body []byte, out any) error {
-	return c.postPath(ctx, spaceID, "/api/service/publishlease/"+method, "publishlease "+method, body, out, false)
+	return c.postPath(ctx, spaceID, "/api/service/publishlease/"+method, "publishlease "+method, body, out)
 }
 
-func (c *Client) postRuntimeConfigSubmission(ctx context.Context, spaceID string, body []byte, out proto.Message) error {
-	return c.postPath(ctx, spaceID, "/api/service/cloudnode/SubmitUpdateNodeRuntimeConfigs", "cloudnode SubmitUpdateNodeRuntimeConfigs", body, out, true)
-}
-
-func (c *Client) postPath(ctx context.Context, spaceID, path, label string, body []byte, out any, unknownAfterSend bool) error {
-	if c == nil || c.httpError != nil {
-		if c == nil {
-			return fmt.Errorf("SCF invoker is nil")
-		}
+func (c *Client) postPath(ctx context.Context, spaceID, path, label string, body []byte, out any) error {
+	if c == nil {
+		return errors.New("SCF invoker is nil")
+	}
+	if c.httpError != nil {
 		return c.httpError
 	}
 	if c.target == "" {
-		return fmt.Errorf("service gateway target is required")
+		return errors.New("service gateway target is required")
 	}
 	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, c.target+path, body, map[string]string{"X-Space-Id": spaceID}, c.auth)
 	if err != nil {
@@ -378,46 +376,21 @@ func (c *Client) postPath(ctx context.Context, spaceID, path, label string, body
 	}
 	response, err := c.http.Do(req)
 	if err != nil {
-		if unknownAfterSend {
-			return fmt.Errorf("%w: %s request transport failed: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
-		}
 		return err
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
-		if unknownAfterSend {
-			return fmt.Errorf("%w: read %s response: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
-		}
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		if unknownAfterSend && response.StatusCode >= http.StatusInternalServerError {
-			return fmt.Errorf("%w: %s status=%d body=%s", ErrRuntimeConfigSubmissionUnknown, label, response.StatusCode, string(responseBody))
-		}
 		return fmt.Errorf("%s status=%d body=%s", label, response.StatusCode, string(responseBody))
 	}
 	if len(bytes.TrimSpace(responseBody)) == 0 || out == nil {
-		if unknownAfterSend && out != nil {
-			return fmt.Errorf("%w: %s returned an empty response", ErrRuntimeConfigSubmissionUnknown, label)
-		}
 		return nil
 	}
-	switch value := out.(type) {
-	case proto.Message:
-		if err := protojson.Unmarshal(responseBody, value); err != nil {
-			if unknownAfterSend {
-				return fmt.Errorf("%w: decode %s response: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
-			}
-			return fmt.Errorf("decode %s response: %w", label, err)
-		}
-	default:
-		if err := json.Unmarshal(responseBody, value); err != nil {
-			if unknownAfterSend {
-				return fmt.Errorf("%w: decode %s response: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
-			}
-			return fmt.Errorf("decode %s response: %w", label, err)
-		}
+	if err := json.Unmarshal(responseBody, out); err != nil {
+		return fmt.Errorf("decode %s response: %w", label, err)
 	}
 	return nil
 }

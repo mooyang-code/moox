@@ -2,15 +2,12 @@ package test
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
@@ -22,7 +19,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -46,35 +42,10 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.Equal(t, 5, summary.TasksCreated)
 
 	var invocationCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		var response proto.Message
-		switch r.URL.Path {
-		case "/api/service/cloudnode/GetNodeList":
-			response = &cloudnodepb.GetNodeListRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Items:   []*cloudnodepb.CloudNode{{NodeId: "node-symbols", FunctionName: "node-symbols", Region: "ap-guangzhou", PackageId: "pkg", BizType: "market_fetcher", TriggerType: "invoke", Metadata: &structpb.Struct{Fields: map[string]*structpb.Value{"deployment_ready": structpb.NewBoolValue(true)}}}},
-				Page:    &commonpb.PageResult{Page: 1, Size: 100, Total: 1, HasMore: false},
-			}
-		case "/api/service/cloudnode/InvokeFunction":
-			invocationCount.Add(1)
-			response = &cloudnodepb.InvokeFunctionRsp{RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"}, Scf: &cloudnodepb.ScfInvokeResult{Code: 0, RequestId: "request-1"}}
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		message, marshalErr := protojson.Marshal(response)
-		if marshalErr != nil {
-			http.Error(w, marshalErr.Error(), http.StatusInternalServerError)
-			return
-		}
-		_, _ = w.Write(message)
-	}))
-	defer server.Close()
 
 	scheduler := &marketfetch.Scheduler{
 		Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
-		Invoker:           scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
+		Invoker:           scfinvoker.New(scfinvoker.Config{Gateway: defaultRuleCloudNodeGateway{invocations: &invocationCount}}),
 		ResolveSymbol:     marketwiring.ResolveSymbol,
 		ResolveSourceID:   marketwiring.DefaultSourceID,
 		Symbols:           defaultRuleDatasetSource{},
@@ -126,4 +97,17 @@ func (defaultRuleDatasetSource) ResolveSubjects(_ context.Context, _ string, tag
 		}
 	}
 	return []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}}, nil
+}
+
+type defaultRuleCloudNodeGateway struct{ invocations *atomic.Int32 }
+
+func (g defaultRuleCloudNodeGateway) Invoke(_ context.Context, _ string, method string, _ any, rsp any) error {
+	switch method {
+	case "GetNodeList":
+		proto.Merge(rsp.(proto.Message), &cloudnodepb.GetNodeListRsp{Items: []*cloudnodepb.CloudNode{{NodeId: "node-symbols", FunctionName: "node-symbols", Region: "ap-guangzhou", PackageId: "pkg", BizType: "market_fetcher", TriggerType: "invoke", Metadata: &structpb.Struct{Fields: map[string]*structpb.Value{"deployment_ready": structpb.NewBoolValue(true)}}}}, Page: &commonpb.PageResult{Page: 1, Size: 100, Total: 1}})
+	case "InvokeFunction":
+		g.invocations.Add(1)
+		proto.Merge(rsp.(proto.Message), &cloudnodepb.InvokeFunctionRsp{Scf: &cloudnodepb.ScfInvokeResult{RequestId: "request-1"}})
+	}
+	return nil
 }

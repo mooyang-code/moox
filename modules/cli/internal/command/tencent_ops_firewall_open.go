@@ -13,6 +13,7 @@ import (
 
 // lighthouseFirewallOpenOptions 通过控制面云账户凭证开放防火墙端口的选项。
 type lighthouseFirewallOpenOptions struct {
+	File             string
 	ControlURL       string
 	ServiceAccessKey string
 	ServiceSecretKey string
@@ -55,6 +56,7 @@ var lighthouseFirewallOpenCmd = &cobra.Command{
 func init() {
 	lighthouseFirewallCmd.AddCommand(lighthouseFirewallOpenCmd)
 	f := lighthouseFirewallOpenCmd.Flags()
+	f.StringVar(&lighthouseFirewallOpenFlags.File, "file", "./moox.toml", "可信 SSH 主机配置")
 	f.StringVar(&lighthouseFirewallOpenFlags.ControlURL, "control-url", "", "控制面地址，形如 http://ip:port（必填）")
 	f.StringVar(&lighthouseFirewallOpenFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名 access_key（与控制面 gateway.yaml 一致）")
 	f.StringVar(&lighthouseFirewallOpenFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret_key（与控制面 gateway.yaml 一致）")
@@ -84,6 +86,12 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 	}
 
 	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, "")
+	gateway, gatewayErr := openCommandGateway(cmd.Context(), opts.File, nil)
+	if gatewayErr != nil {
+		return gatewayErr
+	}
+	defer gateway.Close()
+	client.Gateway = gateway
 	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 	defer cancel()
 

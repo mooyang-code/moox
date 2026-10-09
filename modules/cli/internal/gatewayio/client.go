@@ -67,7 +67,7 @@ func open(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath stri
 	source := &directorySource{control: snapshot.Manifest.ControlHost.Name, tunnels: resolver}
 	shared, err := gatewayclient.New(gatewayclient.Config{
 		Mode: gatewayclient.Tunnel, Credentials: gatewayauth.Credentials{Caller: "moox-cli", KeyID: identity.KeyID, Secret: secret},
-		Source: source, Tunnels: resolver, Timeout: 5 * time.Second,
+		Source: source, Tunnels: resolver,
 	})
 	if err != nil {
 		_ = source.Close()

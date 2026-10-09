@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
 func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
@@ -265,7 +266,7 @@ func TestCollectorZipUploadRejectsCredentialsBeforeControlAccess(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "external.zip")
 	writeMinimalSCFZip(t, zipPath, map[string]string{"sources/market/extra.yaml": "password: leaked-test-password\n", "main": "binary", "certs/eventbus-ca.pem": string(mustTestEventBusCAPEM(t))})
 	called := 0
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
+	server := newControlFixtureServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
 	defer server.Close()
 	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{ControlURL: server.URL, SpaceID: "stockcn", StorageRPCGatewayTarget: "ip://storage.example:11003", CloudAccountID: "account", Region: "ap-singapore", NodeCount: 1, AccessToken: "test-token", ZipPath: zipPath})
 	require.ErrorContains(t, err, "password")
@@ -449,14 +450,14 @@ function_count = 1
 }
 
 func TestEnsureCollectorSpaceCloudAccountsRegistersOnlyMissingAccount(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/admin/cloudnode/CreateCloudAccount", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"account":{"account_id":"tencent-scf-singapore","cos_region":"ap-singapore","cos_bucket":"moox-scf-singapore-1255382561"}}`))
 	}))
 	defer server.Close()
 
 	accounts := map[string]adminclient.CloudAccount{}
-	err := ensureCollectorSpaceCloudAccounts(context.Background(), adminclient.New(server.URL), &setupconfig.SCFFetcherSpace{
+	err := ensureCollectorSpaceCloudAccounts(context.Background(), collectorTestClient(server), &setupconfig.SCFFetcherSpace{
 		SpaceID: "crypto",
 		Regions: []setupconfig.SCFFetcherRegion{{
 			Region: "ap-singapore", Enabled: true, CloudAccountID: "tencent-scf-singapore",
@@ -1069,7 +1070,7 @@ func TestCollectorPublishStatusCommandExists(t *testing.T) {
 }
 
 func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/admin/cloudnode/GetNodeList", r.URL.Path)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ret_info": map[string]any{"code": 0},
@@ -1096,7 +1097,7 @@ func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
 
 func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
 	var calls []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -1121,7 +1122,7 @@ func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
 func TestDeleteCollectorFunctionsAcquiresLeaseBeforeTargetSnapshot(t *testing.T) {
 	var calls []string
 	leaseHeld := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -1157,7 +1158,7 @@ func TestCleanupUnknownCanarySubmissionDoesNotTreatEmptyInventoryAsComplete(t *t
 	var calls []string
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -1170,7 +1171,7 @@ func TestCleanupUnknownCanarySubmissionDoesNotTreatEmptyInventoryAsComplete(t *t
 		}
 	}))
 	defer server.Close()
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 
 	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, client, collectorPublishOptions{
 		SpaceID: "crypto", CloudAccountID: "account-1", Region: "ap-singapore", Namespace: "canary",
@@ -1185,7 +1186,7 @@ func TestDeleteCollectorFunctionsHoldsLeaseUntilNodeBatchCompletes(t *testing.T)
 	statusReads := 0
 	var sawFence bool
 	var released bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/GetNodeList":
@@ -1235,7 +1236,7 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 	var submittedSizes []int
 	var statusReads = map[string]int{}
 	var released bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/GetNodeList":
@@ -1392,7 +1393,7 @@ func TestPublishSubmitRetainsAcceptedJobWhenLaterSubmissionIsAmbiguous(t *testin
 
 func TestWaitCollectorBatchChecksEveryJobAfterTerminalFailure(t *testing.T) {
 	var checked []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			JobID string `json:"job_id"`
 		}
@@ -1406,7 +1407,7 @@ func TestWaitCollectorBatchChecksEveryJobAfterTerminalFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := waitCollectorBatch(context.Background(), adminclient.New(server.URL), "job-failed,job-success")
+	err := waitCollectorBatch(context.Background(), collectorTestClient(server), "job-failed,job-success")
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, errCollectorBatchOutcomeUnknown)
@@ -1426,6 +1427,9 @@ func TestCollectorPublishUnknownSubmissionErrorsAreAmbiguous(t *testing.T) {
 		err  error
 		want bool
 	}{
+		{name: "native network loss", err: errs.NewFrameError(errs.RetClientNetErr, "lost response"), want: true},
+		{name: "native server timeout", err: errs.NewFrameError(errs.RetServerTimeout, "timed out"), want: true},
+		{name: "native authentication", err: errs.NewFrameError(errs.RetServerAuthFail, "denied"), want: false},
 		{name: "gateway 503", err: fmt.Errorf("control returned HTTP 503 Service Unavailable"), want: true},
 		{name: "service 500", err: fmt.Errorf("SubmitCreateNodes: code 500: internal error"), want: true},
 		{name: "missing job id", err: fmt.Errorf("SubmitCreateNodes: empty job_id"), want: true},
@@ -1442,7 +1446,7 @@ func TestCollectorPublishUnknownSubmissionErrorsAreAmbiguous(t *testing.T) {
 func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
 	uploadCalled := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/ListCloudAccounts":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a"}]}`))
@@ -1473,7 +1477,7 @@ func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 
 func TestPublishSubmitRejectsNodeCountAboveBatchLimitBeforeControlPlaneAccess(t *testing.T) {
 	controlPlaneCalled := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		controlPlaneCalled = true
 		t.Fatalf("node count validation must run before control-plane access: %s", r.URL.Path)
 	}))
@@ -1493,7 +1497,7 @@ func TestPublishSubmitRejectsNodeCountAboveBatchLimitBeforeControlPlaneAccess(t 
 }
 
 func TestPublishStatusPrintsJobAndItems(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/admin/cloudnode/GetNodeBatchChange", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"node-batch-1","status":"NODE_BATCH_STATUS_PARTIAL","total_count":2},"items":[{"item_id":"item-1","node_id":"node-1","status":"NODE_BATCH_ITEM_STATUS_SUCCESS"},{"item_id":"item-2","node_id":"node-2","status":"NODE_BATCH_ITEM_STATUS_FAILED","error_message":"failed"}]}`))
 	}))
@@ -1520,13 +1524,13 @@ func TestCollectorCLSCredentialsPreferDedicatedRuntimeIdentity(t *testing.T) {
 }
 
 func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/service/secret/GetSecretValue", r.URL.Path)
 		require.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_id":"secret-shanghai","category":"cloud","provider":"tencent","status":"active","key_id":"shanghai-id","secret_value":"shanghai-key"}}`))
 	}))
 	defer server.Close()
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.ServiceAuth = &adminclient.ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", Caller: "moox-cli", TargetNode: "gateway", ExpireSecs: 60}
 	previous := newCollectorCLSAPI
 	defer func() { newCollectorCLSAPI = previous }()
@@ -1734,7 +1738,7 @@ func TestCollectorTimerAssignmentsMatchFenceSnapshot(t *testing.T) {
 func TestHandoffCollectorPublishLeaseWaitsForAssignmentAndReacquiresHigherFence(t *testing.T) {
 	server, state := newStockCNHandoffTestServer(t, "assignment-a", "assignment-a", "assignment-a")
 	defer server.Close()
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	baseCtx := context.Background()
 	_, guard, err := acquireCollectorPublishLease(baseCtx, client, "stockcn")
 	require.NoError(t, err)
@@ -1758,7 +1762,7 @@ func TestHandoffCollectorPublishLeaseWaitsForAssignmentAndReacquiresHigherFence(
 func TestHandoffCollectorPublishLeaseRejectsChangedAssignmentWithoutRollbackAuthority(t *testing.T) {
 	server, _ := newStockCNHandoffTestServer(t, "assignment-a", "assignment-a", "assignment-b")
 	defer server.Close()
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	baseCtx := context.Background()
 	_, guard, err := acquireCollectorPublishLease(baseCtx, client, "stockcn")
 	require.NoError(t, err)
@@ -1784,7 +1788,7 @@ type stockCNHandoffTestState struct {
 func newStockCNHandoffTestServer(t *testing.T, assignmentHashes ...string) (*httptest.Server, *stockCNHandoffTestState) {
 	t.Helper()
 	state := &stockCNHandoffTestState{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/admin/publishlease/AcquireCollectorPublishLease":
@@ -1816,7 +1820,7 @@ func newStockCNHandoffTestServer(t *testing.T, assignmentHashes ...string) (*htt
 
 func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T) {
 	batchSizes := make([]int, 0, 3)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Nodes []collectorRuntimeConfigPatch `json:"nodes"`
 		}
@@ -1830,7 +1834,7 @@ func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T)
 		patches[index] = collectorRuntimeConfigPatch{NodeID: fmt.Sprintf("node-%03d", index)}
 	}
 
-	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), adminclient.New(server.URL), patches)
+	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), collectorTestClient(server), patches)
 
 	require.NoError(t, err)
 	assert.Equal(t, []int{100, 100, 1}, batchSizes)
@@ -1839,14 +1843,12 @@ func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T)
 
 func TestSubmitCollectorTimerRuntimeConfigsRetainsAcceptedChunkOnAmbiguousNextChunk(t *testing.T) {
 	var submitCount, statusCount int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
 			submitCount++
 			if submitCount == 2 {
-				conn, _, err := w.(http.Hijacker).Hijack()
-				require.NoError(t, err)
-				_ = conn.Close()
+				http.Error(w, "response lost after submission", http.StatusBadGateway)
 				return
 			}
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"timer-job-1"}`))
@@ -1864,7 +1866,7 @@ func TestSubmitCollectorTimerRuntimeConfigsRetainsAcceptedChunkOnAmbiguousNextCh
 		patches[index] = collectorRuntimeConfigPatch{NodeID: fmt.Sprintf("node-%03d", index)}
 	}
 
-	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), adminclient.New(server.URL), patches)
+	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), collectorTestClient(server), patches)
 
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
 	assert.Equal(t, []string{"timer-job-1"}, jobs)
@@ -1962,7 +1964,7 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 
 	var requests int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		t.Errorf("canary-blocked deployment made unexpected control-plane request: %s", r.URL.Path)
 		http.Error(w, "control-plane request must be blocked", http.StatusInternalServerError)
@@ -1988,7 +1990,7 @@ func TestDeployCollectorFunctionBudgetAndMissingMasterFailBeforeUpload(t *testin
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
 	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 	called := 0
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
+	server := newControlFixtureServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
 	defer server.Close()
 	opts := collectorDeployOptions{ControlURL: server.URL, CloudAccountID: "account", NodeID: "node", ZipPath: zipPath, EventBusCredentialFile: credentialFile}
 	require.NoError(t, os.WriteFile(credentialFile, []byte("version: 1\nurls: [tls://203.0.113.10:4222]\nusername: publisher\npassword: "+strings.Repeat("private-value", 400)+"\nca_file: eventbus-ca.pem\n"), 0o600))
@@ -2019,7 +2021,7 @@ func TestCollectorPackageIDBudgetCheckedBeforeUpload(t *testing.T) {
 	// Only the realistic package name/version/UUID pushes the final map over 4096.
 	name := strings.Repeat("n", 4096-tencent.SCFEnvironmentBytes(env)+len("preflight-package-id"))
 	called := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called++
 		http.Error(w, "unexpected control access", http.StatusInternalServerError)
 	}))

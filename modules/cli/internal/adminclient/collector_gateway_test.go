@@ -112,7 +112,7 @@ func TestCollectorTaskWorkflowUsesNativeGatewayJSONAndInventoryPB(t *testing.T) 
 	gateway, err := gatewayio.Open(context.Background(), snapshot)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
-	c := &Client{CollectorGateway: gateway}
+	c := &Client{Gateway: gateway}
 	ctx := context.Background()
 	id, err := c.CreateTask(ctx, "stockcn", "task", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{"frequency": "1m"}, nil)
 	require.NoError(t, err)

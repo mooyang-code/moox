@@ -250,7 +250,7 @@ services:
   - name: moox_cloudnode
     kind: cloudnode
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11401
     gateway_path: trpc.moox.cloudnode.CloudNodeMgr

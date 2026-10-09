@@ -36,7 +36,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	initialized := false
 	defer func() {
 		if !initialized {
-			services.closeConsoleGateway()
+			services.closeGateways()
 		}
 	}()
 
@@ -55,7 +55,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB())); err != nil {
 		return nil, err
 	}
-	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.SysDeploy, cfg.AdminNodeID)
+	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.machineGateway)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")
-	s.RegisterOnShutdown(services.closeConsoleGateway)
+	s.RegisterOnShutdown(services.closeGateways)
 	initialized = true
 	return s, nil
 }

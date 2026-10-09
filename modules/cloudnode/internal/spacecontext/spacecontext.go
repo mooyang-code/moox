@@ -1,4 +1,4 @@
-// Package spacecontext provides space_id injection from gateway headers.
+// Package spacecontext reads the space identity forwarded by the native gateway.
 package spacecontext
 
 import (
@@ -6,31 +6,13 @@ import (
 	"fmt"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-go/filter"
-	thttp "trpc.group/trpc-go/trpc-go/http"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-const (
-	// SpaceIDHeader is the HTTP header used by admin gateway forwarding.
-	SpaceIDHeader = "X-Space-Id"
-	// SpaceFilterName is the trpc server filter registration name.
-	SpaceFilterName = "spacectx"
-)
+// SpaceIDHeader is the metadata key used by gateway forwarding.
+const SpaceIDHeader = "X-Space-Id"
 
 type ctxKey struct{}
-
-func init() {
-	filter.Register(SpaceFilterName, spaceServerFilter, nil)
-}
-
-func spaceServerFilter(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
-	if r := thttp.Request(ctx); r != nil {
-		if sid := r.Header.Get(SpaceIDHeader); sid != "" {
-			ctx = WithSpaceID(ctx, sid)
-		}
-	}
-	return next(ctx, req)
-}
 
 // WithSpaceID stores space_id in context.
 func WithSpaceID(ctx context.Context, spaceID string) context.Context {
@@ -47,11 +29,19 @@ func FromContext(ctx context.Context) (string, bool) {
 		spaceID := strings.TrimSpace(v)
 		return spaceID, spaceID != ""
 	}
-	if r := thttp.Request(ctx); r != nil {
-		spaceID := strings.TrimSpace(r.Header.Get(SpaceIDHeader))
-		return spaceID, spaceID != ""
+	var spaceID string
+	var found bool
+	for key, value := range codec.Message(ctx).ServerMetaData() {
+		if !strings.EqualFold(key, SpaceIDHeader) {
+			continue
+		}
+		candidate := strings.TrimSpace(string(value))
+		if found && candidate != spaceID {
+			return "", false
+		}
+		spaceID, found = candidate, true
 	}
-	return "", false
+	return spaceID, spaceID != ""
 }
 
 // MustFromContext reads space_id or returns an error.

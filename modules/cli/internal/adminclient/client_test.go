@@ -23,9 +23,9 @@ func TestPostJSONSendsSpaceHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
-	if _, err := client.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListCloudAccounts", map[string]string{}); err != nil {
+	if _, err := client.postJSON(context.Background(), http.MethodPost, "/api/admin/secret/GetSecretValue", map[string]string{}); err != nil {
 		t.Fatalf("postJSON() error = %v", err)
 	}
 	if gotSpaceID != "crypto" {
@@ -41,7 +41,7 @@ func TestRewriteToServiceRoute(t *testing.T) {
 func TestServiceAuthRejectsRemotePlainHTTP(t *testing.T) {
 	c := New("http://example.com")
 	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", ExpireSecs: 60}
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/secret/GetSecretValue", map[string]any{})
 	require.ErrorContains(t, err, "non-loopback HTTP")
 }
 
@@ -49,7 +49,7 @@ func TestServiceAuthCannotBypassSafeTransportWithInjectedClient(t *testing.T) {
 	c := New("http://example.com")
 	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
 	c.HTTPClient = &http.Client{}
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/secret/GetSecretValue", map[string]any{})
 	require.ErrorContains(t, err, "non-loopback HTTP")
 }
 
@@ -65,7 +65,7 @@ func TestServiceAuthSignsConstructedEscapedPathWithBasePrefix(t *testing.T) {
 	defer server.Close()
 	c := New(server.URL + "/tenant%2Fone")
 	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]string{"a": "b"})
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/secret/GetSecretValue", map[string]string{"a": "b"})
 	require.NoError(t, err)
 }
 
@@ -75,11 +75,11 @@ func TestServiceAuthUsesConfiguredHTTPTimeout(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
 	}))
 	defer server.Close()
-	c := New(server.URL)
+	c := collectorTestClient(server)
 	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
 	c.HTTPClient = &http.Client{Timeout: 10 * time.Millisecond}
 
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
+	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/secret/GetSecretValue", map[string]any{})
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "error does not report a timeout: %v", err)
@@ -115,7 +115,7 @@ func TestSubmitCreateNodesAndGetNodeBatchChange(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	submitted, err := client.SubmitCreateNodes(context.Background(), []NodeCreateItem{{PackageID: "pkg-1"}})
 	require.NoError(t, err)
 	assert.Equal(t, "node-batch-1", submitted.JobID)
@@ -148,7 +148,7 @@ func TestSubmitNodeBatchResponsesMustBeComplete(t *testing.T) {
 				_, _ = w.Write([]byte(response))
 			}))
 			defer server.Close()
-			_, err := New(server.URL).SubmitDeployNodes(context.Background(), []NodeDeployItem{{NodeID: "node-1", PackageID: "pkg-1"}})
+			_, err := collectorTestClient(server).SubmitDeployNodes(context.Background(), []NodeDeployItem{{NodeID: "node-1", PackageID: "pkg-1"}})
 			require.Error(t, err)
 		})
 	}
@@ -159,7 +159,7 @@ func TestGetNodeBatchChangeRequiresJob(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[]}`))
 	}))
 	defer server.Close()
-	_, err := New(server.URL).GetNodeBatchChange(context.Background(), "node-batch-1")
+	_, err := collectorTestClient(server).GetNodeBatchChange(context.Background(), "node-batch-1")
 	require.ErrorContains(t, err, "empty job")
 }
 
@@ -169,7 +169,7 @@ func TestGetNodeBatchChangeAcceptsRuntimeConfigOperation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	status, err := New(server.URL).GetNodeBatchChange(context.Background(), "runtime-batch-1")
+	status, err := collectorTestClient(server).GetNodeBatchChange(context.Background(), "runtime-batch-1")
 	require.NoError(t, err)
 	require.NotNil(t, status.Job)
 	assert.Equal(t, "NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS", status.Job.Operation)

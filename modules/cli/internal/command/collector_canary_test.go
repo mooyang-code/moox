@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,7 +75,7 @@ func TestCollectorSCFCanaryEnsuresPeriodBeforeInvoke(t *testing.T) {
 	view.complete = true
 
 	var ensureCallsAtInvoke atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		ensureCallsAtInvoke.Store(primary.ensureCalls.Load())
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"scf":{"code":0,"result":{"success":true}}}`))
@@ -104,7 +103,7 @@ func TestCollectorSCFCanaryDoesNotInvokeWhenEnsureFails(t *testing.T) {
 	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 	view.complete = true
 	var invokeCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		invokeCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"scf":{"code":0,"result":{"success":true}}}`))
@@ -214,7 +213,7 @@ function_count = 1
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var reads, uploads, mutations atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/admin/cloudnode/ListCloudAccounts", "/api/service/cloudnode/ListCloudAccounts":
 					reads.Add(1)
@@ -403,7 +402,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 			var cancelOnce atomic.Bool
 			var inventoryReads atomic.Int32
 			var createJobTerminal atomic.Bool
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case "/api/admin/cloudnode/GetNodeList":
@@ -508,7 +507,7 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 	}
 	var deletedIDs []string
 	var statusReads atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/GetNodeList":
@@ -548,7 +547,7 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 func TestCleanupWaitsForKnownCanaryDeploymentBatchBeforeInventory(t *testing.T) {
 	var statusReads atomic.Int32
 	var inventoryAfterTerminal atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/GetNodeBatchChange":
@@ -582,7 +581,7 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 	var inventoryReads atomic.Int32
 	var statusReads atomic.Int32
 	var deletedIDs []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/GetNodeList":
@@ -625,7 +624,7 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 
 func TestCleanupCanceledKnownCanaryBatchFailsClosedBeforeInventory(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		t.Errorf("canceled cleanup must not issue follow-up requests, got %s", r.URL.Path)
 		http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -645,7 +644,7 @@ func TestCleanupCanceledKnownCanaryBatchFailsClosedBeforeInventory(t *testing.T)
 func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 	const prefix = "release-canary-0123456789abcdef0123456789abcdef"
 	var statusReads atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/admin/cloudnode/GetNodeList":
@@ -889,7 +888,7 @@ func canaryResponseClient(t *testing.T, result map[string]any) *adminclient.Clie
 		"ret_info": map[string]any{"code": 0},
 		"scf":      map[string]any{"code": 0, "result": result},
 	})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/admin/cloudnode/InvokeFunction", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write(raw)

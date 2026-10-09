@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,7 +20,7 @@ func TestInspectCollectorTimerInventoryRequiresFreshScopedReadback(t *testing.T)
 	collectorTimerInventoryNow = func() time.Time { return now }
 	t.Cleanup(func() { collectorTimerInventoryNow = oldNow })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "crypto", r.Header.Get("X-Space-Id"))
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
@@ -68,7 +67,7 @@ func TestInspectCollectorTimerInventoryRequiresFreshScopedReadback(t *testing.T)
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -87,7 +86,7 @@ func TestInspectCollectorTimerInventoryRejectsCachedReadbackFromBeforeStart(t *t
 	collectorTimerInventoryNow = func() time.Time { return now }
 	t.Cleanup(func() { collectorTimerInventoryNow = oldNow })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		metadata := map[string]any{
@@ -112,7 +111,7 @@ func TestInspectCollectorTimerInventoryRejectsCachedReadbackFromBeforeStart(t *t
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -133,7 +132,7 @@ func TestInspectCollectorTimerInventoryRejectsDesiredActualDrift(t *testing.T) {
 	collectorTimerInventoryNow = func() time.Time { return now }
 	t.Cleanup(func() { collectorTimerInventoryNow = oldNow })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		metadata := map[string]any{
@@ -157,7 +156,7 @@ func TestInspectCollectorTimerInventoryRejectsDesiredActualDrift(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -175,7 +174,7 @@ func TestInspectCollectorTimerInventoryRejectsTriggerContractDrift(t *testing.T)
 	collectorTimerInventoryNow = func() time.Time { return now }
 	t.Cleanup(func() { collectorTimerInventoryNow = oldNow })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		metadata := map[string]any{
@@ -199,7 +198,7 @@ func TestInspectCollectorTimerInventoryRejectsTriggerContractDrift(t *testing.T)
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -220,7 +219,7 @@ func TestReadCollectorTimerNodesBoundsConcurrentFuzzyPagination(t *testing.T) {
 	}
 	var activeRequests atomic.Int32
 	var maxActiveRequests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		current := activeRequests.Add(1)
 		defer activeRequests.Add(-1)
 		for observed := maxActiveRequests.Load(); current > observed; observed = maxActiveRequests.Load() {
@@ -253,7 +252,7 @@ func TestReadCollectorTimerNodesBoundsConcurrentFuzzyPagination(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
 	results := readCollectorTimerNodes(context.Background(), client, collectorTimerInventoryOptions{
 		CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -284,7 +283,7 @@ func TestTimerInventoryAvailableRequiresProviderAvailableStatus(t *testing.T) {
 }
 
 func TestInspectCollectorTimerInventoryRejectsEmptyScope(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "market_fetcher", body["biz_type"])
@@ -296,7 +295,7 @@ func TestInspectCollectorTimerInventoryRejectsEmptyScope(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -312,7 +311,7 @@ func TestInspectCollectorTimerInventoryFailsClosedOnScopeMismatch(t *testing.T) 
 	collectorTimerInventoryNow = func() time.Time { return now }
 	t.Cleanup(func() { collectorTimerInventoryNow = oldNow })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "market_fetcher", body["biz_type"])
@@ -332,7 +331,7 @@ func TestInspectCollectorTimerInventoryFailsClosedOnScopeMismatch(t *testing.T) 
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := collectorTestClient(server)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",

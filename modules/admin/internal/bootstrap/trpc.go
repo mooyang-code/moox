@@ -110,7 +110,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 
-	gateway, err := newConsoleGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master)
+	gateway, err := newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "console")
 	if err != nil {
 		return err
 	}
@@ -119,6 +119,11 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 	services.consoleGateway = gateway
+	services.machineGateway, err = newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "admin")
+	if err != nil {
+		services.closeGateways()
+		return err
+	}
 
 	log.Info("TRPC 服务注册完成")
 	return nil

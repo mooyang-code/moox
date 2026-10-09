@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,7 +13,37 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
+
+func TestCloudNodeManagerListenerIsNativeLoopbackWithLongEnvelope(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
+	require.NoError(t, err)
+	var config struct {
+		Server struct {
+			Service []struct {
+				Name     string `yaml:"name"`
+				IP       string `yaml:"ip"`
+				Port     int    `yaml:"port"`
+				Protocol string `yaml:"protocol"`
+				Timeout  int    `yaml:"timeout"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &config))
+	count := 0
+	for _, service := range config.Server.Service {
+		if service.Name != "trpc.moox.cloudnode.CloudNodeMgr" {
+			continue
+		}
+		count++
+		require.Equal(t, "127.0.0.1", service.IP)
+		require.Equal(t, 11401, service.Port)
+		require.Equal(t, "trpc", service.Protocol)
+		require.Equal(t, 960000, service.Timeout)
+	}
+	require.Equal(t, 1, count)
+}
 
 func TestStartNodeBatchRunnerUsesRuntimeContextAndRecoversInterruptedItems(t *testing.T) {
 	dbm, err := store.Open(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "cloudnode.db")})

@@ -43,11 +43,14 @@ type Services struct {
 	CollectorPublishLease *publishlease.Service
 
 	consoleGateway *gatewayclient.Client
+	machineGateway *gatewayclient.Client
 }
 
-func (s *Services) closeConsoleGateway() {
-	if s.consoleGateway != nil {
-		_ = s.consoleGateway.Close()
+func (s *Services) closeGateways() {
+	for _, gateway := range []*gatewayclient.Client{s.consoleGateway, s.machineGateway} {
+		if gateway != nil {
+			_ = gateway.Close()
+		}
 	}
 }
 

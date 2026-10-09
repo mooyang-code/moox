@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -29,7 +30,7 @@ func (s adminDirectorySource) Fetch(ctx context.Context, version string) (gatewa
 	return gatewayclient.DirectoryUpdate{Changed: compiled.Directory.Version != version, Directory: compiled.Directory}, nil
 }
 
-func newConsoleGateway(ctx context.Context, db *gorm.DB, hostID, master string) (*gatewayclient.Client, error) {
+func newAdminGateway(ctx context.Context, db *gorm.DB, hostID, master, caller string) (*gatewayclient.Client, error) {
 	topology, err := sysdeploy.NewTopologyDAO(db, hostID)
 	if err != nil {
 		return nil, err
@@ -38,15 +39,19 @@ func newConsoleGateway(ctx context.Context, db *gorm.DB, hostID, master string) 
 	if err != nil {
 		return nil, err
 	}
-	key, err := store.Current(ctx, "console")
+	key, err := store.Current(ctx, caller)
 	if err != nil {
-		return nil, fmt.Errorf("load provisioned console signing key: %w", err)
+		return nil, fmt.Errorf("load provisioned %s signing key: %w", caller, err)
 	}
-	return gatewayclient.New(gatewayclient.Config{
+	serialization := codec.SerializationTypePB
+	if caller == "admin" {
+		serialization = codec.SerializationTypeJSON
+	}
+	return gatewayclient.New(gatewayclient.Config{Serialization: serialization,
 		Mode: gatewayclient.Internal, Credentials: key.Credentials(), LocalHostID: hostID,
 		CAFile:         filepath.Join(newCertificateWatchFromEnvironment(db).PKIDir, "ca.crt"),
 		Source:         adminDirectorySource{topology: topology, hostID: hostID},
-		OnRefreshError: func(err error) { log.Warnf("console directory refresh failed: %v", err) },
+		OnRefreshError: func(err error) { log.Warnf("%s directory refresh failed: %v", caller, err) },
 	})
 }
 

@@ -5,14 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -30,19 +27,13 @@ import (
 
 func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
-	goEnvironment, err := exec.Command("go", "env", "-json", "GOPATH", "GOCACHE").Output()
-	require.NoError(t, err)
-	var paths map[string]string
-	require.NoError(t, json.Unmarshal(goEnvironment, &paths))
-	t.Setenv("GOPATH", paths["GOPATH"])
-	t.Setenv("GOCACHE", paths["GOCACHE"])
 	t.Setenv("HOME", t.TempDir())
 	ca := mustTestEventBusCAPEM(t)
 	var sshReads, cloudReads atomic.Int32
 	host := startCollectorPublicationSSH(t, ca, &sshReads, "ap-nanjing")
 	var uploads, creates, mutations, reads atomic.Int32
 	var accountMissing, legacyTimer atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reads.Add(1)
 		switch r.URL.Path {
 		case "/api/admin/collectmgr/GetTaskList", "/api/service/collectmgr/GetTaskList":

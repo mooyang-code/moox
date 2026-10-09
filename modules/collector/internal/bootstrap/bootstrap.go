@@ -450,15 +450,8 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		log.Warn("collector market fetch timer service is not configured, scheduler registration skipped")
 	}
 	auth := runtimeAuth(deps.ServiceAuth)
-	// CloudNode control calls are service-gateway requests.  The admin gateway
-	// is only used to discover active deployments; using it here makes every
-	// scheduled invocation hit the browser/admin auth surface instead of the
-	// authenticated service route.
-	// A stockcn reconciliation reads the complete 170-node Timer fleet from
-	// CloudNode. Keep the request bounded, but allow the control-plane query
-	// enough time to serialize the full fleet instead of treating a healthy
-	// large-fleet response as a coordination failure.
-	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
+	// CloudNode calls borrow the process gateway; publish leases migrate in D2c.
+	invoker := scfinvoker.New(scfinvoker.Config{Gateway: process.gateway, ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
 	plannerSource := metadataSource
 	newStorage := func(_ string, marketType, writeSource string) (marketfetch.Storage, error) {

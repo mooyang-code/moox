@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"encoding/json"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -68,6 +69,18 @@ func TestCollectorTaskWorkflowHelpUsesTaskTerminology(t *testing.T) {
 
 func collectorTestClient(server *httptest.Server) *adminclient.Client {
 	c := adminclient.New(server.URL)
-	c.CollectorGateway = testfixture.CollectorHandlerGateway{Handler: server.Config.Handler}
+	c.Gateway = testfixture.HandlerGateway{Handler: server.Config.Handler}
 	return c
+}
+
+func newControlFixtureServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	previous := openCommandGateway
+	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) {
+		return testfixture.HandlerGateway{Handler: handler}, nil
+	}
+	t.Cleanup(func() { openCommandGateway = previous })
+	return server
 }

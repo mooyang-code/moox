@@ -479,7 +479,7 @@ func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter)
 	}
 	var nodes []CloudNode
 	for page := 1; ; page++ {
-		raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
+		raw, err := c.callCloudNodeJSON(ctx, "GetNodeList", map[string]any{
 			"cloud_account_id": filter.CloudAccountID,
 			"namespace":        filter.Namespace,
 			"region":           filter.Region,
@@ -519,7 +519,7 @@ func (c *Client) InvokeFunction(ctx context.Context, nodeID string, event map[st
 	if strings.TrimSpace(nodeID) == "" {
 		return nil, fmt.Errorf("node_id is required")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/InvokeFunction", map[string]any{
+	raw, err := c.callCloudNodeJSON(ctx, "InvokeFunction", map[string]any{
 		"node_id": nodeID, "event_data": event, "scf_invoke_type": "SCF_INVOKE_TYPE_REQUEST_RESPONSE",
 	})
 	if err != nil {
@@ -563,7 +563,7 @@ func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]Clou
 	if provider != "" {
 		body["provider"] = provider
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/ListCloudAccounts", body)
+	raw, err := c.callCloudNodeJSON(ctx, "ListCloudAccounts", body)
 	if err != nil {
 		return nil, err
 	}
@@ -583,7 +583,7 @@ func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]Clou
 // CreateCloudAccount registers a cloud account before a fleet publish. COS
 // bucket creation remains CloudNode's responsibility during package upload.
 func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput) (*CloudAccount, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CreateCloudAccount", map[string]CloudAccountInput{"account": input})
+	raw, err := c.callCloudNodeJSON(ctx, "CreateCloudAccount", map[string]CloudAccountInput{"account": input})
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +605,7 @@ func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput
 
 // UploadPackage 两阶段上传：InitPackageUpload -> COS PUT -> CompletePackageUpload。
 func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, data []byte) (*UploadPackageResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/InitPackageUpload", req)
+	raw, err := c.callCloudNodeJSON(ctx, "InitPackageUpload", req)
 	if err != nil {
 		return nil, err
 	}
@@ -644,7 +644,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 		"file_md5":   hex.EncodeToString(sum[:]),
 		"file_size":  len(data),
 	}
-	raw, err = c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CompletePackageUpload", completeBody)
+	raw, err = c.callCloudNodeJSON(ctx, "CompletePackageUpload", completeBody)
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +662,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 
 func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*SubmitNodeBatchResponse, error) {
 	nodes = c.withPublishFenceToCreateItems(nodes)
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitCreateNodes", map[string]any{"nodes": nodes})
+	raw, err := c.callCloudNodeJSON(ctx, "SubmitCreateNodes", map[string]any{"nodes": nodes})
 	if err != nil {
 		return nil, err
 	}
@@ -671,7 +671,7 @@ func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) 
 
 func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*SubmitNodeBatchResponse, error) {
 	deployments = c.withPublishFenceToDeployItems(deployments)
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeployNodes", map[string]any{"deployments": deployments})
+	raw, err := c.callCloudNodeJSON(ctx, "SubmitDeployNodes", map[string]any{"deployments": deployments})
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +685,7 @@ func (c *Client) SubmitDeleteNodes(ctx context.Context, nodeIDs []string) (*Subm
 		body["collector_publish_lease_id"] = fence.LeaseID
 		body["collector_publish_fencing_token"] = fence.FencingToken
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeleteNodes", body)
+	raw, err := c.callCloudNodeJSON(ctx, "SubmitDeleteNodes", body)
 	if err != nil {
 		return nil, err
 	}
@@ -696,7 +696,7 @@ func (c *Client) GetNodeBatchChange(ctx context.Context, jobID string) (*NodeBat
 	if strings.TrimSpace(jobID) == "" {
 		return nil, fmt.Errorf("GetNodeBatchChange: job_id is required")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeBatchChange", map[string]any{"job_id": jobID})
+	raw, err := c.callCloudNodeJSON(ctx, "GetNodeBatchChange", map[string]any{"job_id": jobID})
 	if err != nil {
 		return nil, err
 	}

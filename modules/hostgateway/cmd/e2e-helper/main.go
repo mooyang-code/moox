@@ -39,7 +39,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "kline-native", "kline-native or collector-period-native")
+	mode := flag.String("mode", "kline-native", "kline-native, cloudnode-native or collector-period-native")
 	deploymentYAML := flag.String("deployment-yaml", "", "test deployment YAML")
 	routeScope := flag.String("route-scope", "", "test route scope")
 	nodeID := flag.String("node-id", "", "test host ID")
@@ -54,6 +54,8 @@ func main() {
 	switch *mode {
 	case "kline-native":
 		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+	case "cloudnode-native":
+		err = runCloudNodeNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "collector-period-native":
 		err = runCollectorPeriodNative(*deploymentYAML, *routeScope, *upstream, *metadata, *nodeID, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	default:
@@ -68,6 +70,21 @@ func main() {
 func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	return runNativeRoutes(nodeID, []gatewayroute.Route{{ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
 		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-cli"}}}, "moox-cli", listenAddress, readyFile, nonceDirectory, keyID, secret)
+}
+
+func runCloudNodeNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	spec, _ := catalog.Service("trpc.moox.cloudnode.CloudNodeMgr")
+	var methods []string
+	for _, method := range spec.Methods {
+		if catalog.Allowed("moox-cli", spec.Path, method) {
+			methods = append(methods, method)
+		}
+	}
+	return runNativeRoutes(nodeID, []gatewayroute.Route{{ServiceID: "cloudnode", Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{"moox-cli"}}}, "moox-cli", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
 type fixtureForwarder struct {

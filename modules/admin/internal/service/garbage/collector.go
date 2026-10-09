@@ -5,47 +5,32 @@
 package garbage
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/console"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const (
-	// historyRetention bounds the login and SSH session audit history.
-	historyRetention = 90 * 24 * time.Hour
-	// maxResponseBytes bounds a module's garbage summary.
-	maxResponseBytes = 1 << 20
-)
+// historyRetention bounds the login and SSH session audit history.
+const historyRetention = 90 * 24 * time.Hour
 
-// ServiceResolver finds a module deployment on the Admin node.
-type ServiceResolver interface {
-	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (console.ServiceDetail, bool)
-}
-
-// Collector removes system garbage once per timer invocation.
+// Collector borrows the process gateway signed as admin.
 type Collector struct {
-	db          *gorm.DB
-	resolver    ServiceResolver
-	adminNodeID string
-	client      *http.Client
-	now         func() time.Time
+	db      *gorm.DB
+	gateway gatewayclient.Invoker
+	now     func() time.Time
 }
 
-// NewCollector returns a Collector over the Admin database and deployments.
-func NewCollector(db *gorm.DB, resolver ServiceResolver, adminNodeID string) (*Collector, error) {
-	if db == nil || resolver == nil || adminNodeID == "" {
-		return nil, errors.New("garbage collector requires database, service resolver and admin node id")
+func NewCollector(db *gorm.DB, gateway gatewayclient.Invoker) (*Collector, error) {
+	if db == nil || gateway == nil {
+		return nil, errors.New("garbage collector requires database and admin gateway client")
 	}
-	return &Collector{db: db, resolver: resolver, adminNodeID: adminNodeID, client: &http.Client{}, now: time.Now}, nil
+	return &Collector{db: db, gateway: gateway, now: time.Now}, nil
 }
 
 // Run trims Admin history and collects CloudNode garbage. One failing part
@@ -70,43 +55,30 @@ func (c *Collector) trimHistory(ctx context.Context) error {
 	return nil
 }
 
-type retInfo struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-}
-
 func (c *Collector) collectCloudNode(ctx context.Context) error {
-	detail, ok := c.resolver.ResolveAdminServiceDetail(ctx, c.adminNodeID, "cloudnode")
-	if !ok {
-		return errors.New("collect CloudNode garbage: cloudnode has no active deployment on the admin node")
-	}
-	url := fmt.Sprintf("http://%s/%s/CollectGarbage", detail.Address, detail.Path)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(`{}`)))
-	if err != nil {
+	var summary cloudNodeGarbageSummary
+	if err := c.gateway.Invoke(ctx, "trpc.moox.cloudnode.CloudNodeMgr", "CollectGarbage", struct {
+		DryRun bool `json:"dry_run"`
+	}{}, &summary); err != nil {
 		return fmt.Errorf("collect CloudNode garbage: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.client.Do(request)
-	if err != nil {
-		return fmt.Errorf("collect CloudNode garbage: %w", err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-	if err != nil {
-		return fmt.Errorf("collect CloudNode garbage: read response: %w", err)
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("collect CloudNode garbage: HTTP %d", response.StatusCode)
-	}
-	var summary struct {
-		RetInfo retInfo `json:"ret_info"`
-	}
-	if err := json.Unmarshal(body, &summary); err != nil {
-		return fmt.Errorf("collect CloudNode garbage: decode response: %w", err)
 	}
 	if summary.RetInfo.Code != 0 {
 		return fmt.Errorf("collect CloudNode garbage: %s", summary.RetInfo.Msg)
 	}
-	log.InfoContextf(ctx, "[Garbage] cloudnode %s", body)
+	log.InfoContextf(ctx, "[Garbage] cloudnode packages=%d cos_objects=%d cos_bytes=%s deleted_nodes=%d node_batches=%d skipped=%v", summary.Packages, summary.COSObjects, summary.COSBytes, summary.DeletedNodes, summary.NodeBatches, summary.Skipped)
 	return nil
+}
+
+// Admin keeps business modules behind the generic native gateway boundary.
+type cloudNodeGarbageSummary struct {
+	RetInfo struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	} `json:"ret_info"`
+	Packages     uint32      `json:"packages"`
+	COSObjects   uint32      `json:"cos_objects"`
+	COSBytes     json.Number `json:"cos_bytes"`
+	DeletedNodes uint32      `json:"deleted_nodes"`
+	NodeBatches  uint32      `json:"node_batches"`
+	Skipped      []string    `json:"skipped"`
 }

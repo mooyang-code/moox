@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ func TestRunCLSPrepareUsesSignedControlClientAndExplicitAccount(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	credentialPath := filepath.Join(t.TempDir(), "cls.env")
+	newControlFixtureServer(t, http.NotFoundHandler())
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
 	clsPrepareRunner = prepareRunnerFunc(func(_ context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
@@ -51,6 +53,7 @@ func TestRunCLSPreparePassesEmptyAccountForDefaultSelection(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
+	newControlFixtureServer(t, http.NotFoundHandler())
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
 	clsPrepareRunner = prepareRunnerFunc(func(_ context.Context, _ clsprepare.AccountSource, _ clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
@@ -92,6 +95,7 @@ func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
+	newControlFixtureServer(t, http.NotFoundHandler())
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
 	clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
@@ -112,6 +116,7 @@ func TestCLSPreparePreservesKnownSafeRunnerDiagnostics(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 	cmd := newCLSPrepareCommand()
+	newControlFixtureServer(t, http.NotFoundHandler())
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
 	clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
@@ -132,6 +137,7 @@ func TestCLSPrepareUnknownContextErrorsKeepIdentityWithoutLeakingText(t *testing
 			t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
 			t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
 			cmd := newCLSPrepareCommand()
+			newControlFixtureServer(t, http.NotFoundHandler())
 			oldRunner := clsPrepareRunner
 			t.Cleanup(func() { clsPrepareRunner = oldRunner })
 			clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
