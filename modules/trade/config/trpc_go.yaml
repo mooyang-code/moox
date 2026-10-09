@@ -7,7 +7,6 @@ server:
     - recovery
     - validation
     - masking
-    - spacectx
     - prometheus
   timeout: 10000
   admin:
@@ -27,7 +26,7 @@ server:
       ip: 127.0.0.1
       port: 11200
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 15000
 
       ######## DNS Resolver RPC ########

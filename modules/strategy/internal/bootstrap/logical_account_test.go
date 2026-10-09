@@ -10,8 +10,9 @@ import (
 	"time"
 
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
-	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -66,10 +67,7 @@ func (s *logicalAccountServiceStub) ReleaseLogicalAccountOwner(
 }
 
 func (s *logicalAccountServiceStub) record(ctx context.Context, method string) {
-	spaceID := ""
-	if request := thttp.Request(ctx); request != nil {
-		spaceID = request.Header.Get("X-Space-Id")
-	}
+	spaceID := string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID))
 	s.mu.Lock()
 	s.spaces = append(s.spaces, spaceID)
 	s.methods = append(s.methods, method)
@@ -88,7 +86,7 @@ func (s *logicalAccountServiceStub) account(id string) *tradepb.LogicalAccount {
 
 func TestLogicalAccountOwnerDirectProxyCarriesTrustedSpace(t *testing.T) {
 	target, service := startLogicalAccountService(t)
-	owner := &logicalAccountOwnerClient{client: tradepb.NewTradeConsoleServiceClientProxy(client.WithTarget(target), client.WithProtocol("http")), timeout: time.Second}
+	owner := &logicalAccountOwnerClient{client: tradepb.NewTradeConsoleServiceClientProxy(client.WithTarget(target), client.WithProtocol("trpc")), timeout: time.Second}
 
 	if err := owner.Validate(context.Background(), "space-1", "logical-1"); err != nil {
 		t.Fatal(err)
@@ -121,7 +119,7 @@ func TestLogicalAccountOwnerDirectProxyCarriesTrustedSpace(t *testing.T) {
 	}
 	for _, spaceID := range service.spaces {
 		if spaceID != "space-1" {
-			t.Fatalf("X-Space-Id = %q, want space-1", spaceID)
+			t.Fatalf("x-space-id = %q, want space-1", spaceID)
 		}
 	}
 }
@@ -137,7 +135,7 @@ func startLogicalAccountService(
 	service := &logicalAccountServiceStub{}
 	tradeServer := server.New(
 		server.WithNetwork("tcp"),
-		server.WithProtocol("http"),
+		server.WithProtocol("trpc"),
 		server.WithServiceName("trpc.moox.trade.TradeConsoleService"),
 		server.WithListener(listener),
 	)

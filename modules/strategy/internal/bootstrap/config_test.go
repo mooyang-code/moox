@@ -24,8 +24,7 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 	if cfg.InstanceID != "strategy-1" || cfg.EventBus.RelayInterval != time.Second || cfg.EventBus.RelayBatchSize != 100 || cfg.EventBus.ConnectTimeout != 3*time.Second {
 		t.Fatalf("eventbus defaults=%+v", cfg)
 	}
-	if cfg.Trade.GatewayURL != "" ||
-		cfg.Trade.Timeout != defaultLogicalAccountTimeout {
+	if cfg.Trade.Timeout != defaultLogicalAccountTimeout {
 		t.Fatalf("logical account config=%+v", cfg)
 	}
 }
@@ -124,82 +123,10 @@ func TestLoadRejectsInvalidLogicalAccountTimeout(t *testing.T) {
 
 func TestNewRPCServiceUsesLogicalAccountOwnerClient(t *testing.T) {
 	service := newRPCService(nil, Config{
-		Trade: TradeConfig{GatewayURL: "https://trade:11001", TargetNode: "trade"},
+		Trade: TradeConfig{Timeout: time.Second},
 	}, nil)
 	if service.LogicalAccounts == nil {
 		t.Fatalf("service=%+v", service)
-	}
-}
-
-func TestLoadTradeGatewayConfiguration(t *testing.T) {
-	t.Setenv("MOOX_TRADE_GATEWAY_URL", "")
-	t.Setenv("MOOX_TRADE_GATEWAY_NODE_ID", "")
-	for _, test := range []struct {
-		name, fields string
-		valid        bool
-	}{
-		{"unwired", "", true},
-		{"remote HTTPS", "gateway_url: https://trade.example:11001\n  target_node: trade", true},
-		{"local HTTP", "gateway_url: http://127.0.0.1:11002\n  target_node: control", true},
-		{"native protocol", "gateway_url: ip://trade.example:11003\n  target_node: trade", false},
-		{"remote plaintext", "gateway_url: http://trade.example:11002\n  target_node: trade", false},
-		{"missing node", "gateway_url: https://trade.example:11001", false},
-		{"missing URL", "target_node: trade", false},
-		{"invalid node", "gateway_url: https://trade.example:11001\n  target_node: \"trade\\u0000node\"", false},
-		{"unregisterable node", "gateway_url: https://trade.example:11001\n  target_node: Trade.Node", false},
-		{"credentials in URL", "gateway_url: https://user:pass@trade.example\n  target_node: trade", false},
-		{"path", "gateway_url: https://trade.example/api/service\n  target_node: trade", false},
-		{"negative timeout", "timeout: -1s", false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "app.yaml")
-			if err := os.WriteFile(path, []byte("trade:\n  "+test.fields+"\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := Load(path)
-			if (err == nil) != test.valid {
-				t.Fatalf("Load error = %v, want valid=%t", err, test.valid)
-			}
-		})
-	}
-}
-
-func TestLoadRejectsIncompleteTradeGatewayEnvironment(t *testing.T) {
-	for _, name := range []string{"MOOX_TRADE_GATEWAY_URL", "MOOX_TRADE_GATEWAY_NODE_ID"} {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv("MOOX_TRADE_GATEWAY_URL", "")
-			t.Setenv("MOOX_TRADE_GATEWAY_NODE_ID", "")
-			value := "trade-node"
-			if name == "MOOX_TRADE_GATEWAY_URL" {
-				value = "https://trade.example:11001"
-			}
-			t.Setenv(name, value)
-			path := filepath.Join(t.TempDir(), "app.yaml")
-			if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := Load(path); err == nil {
-				t.Fatal("incomplete Trade gateway environment accepted")
-			}
-		})
-	}
-}
-
-func TestLoadTradeGatewayUsesDedicatedOverrides(t *testing.T) {
-	t.Setenv("MOOX_TRADE_GATEWAY_URL", "https://trade.example:11001")
-	t.Setenv("MOOX_TRADE_GATEWAY_NODE_ID", "trade-node")
-	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("trade:\n  gateway_url: http://127.0.0.1:11002\n  target_node: control\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Trade.GatewayURL != "https://trade.example:11001" || cfg.Trade.TargetNode != "trade-node" {
-		t.Fatalf("wrong Trade dependency: %+v", cfg.Trade)
 	}
 }
 

@@ -4,15 +4,14 @@ package bootstrap
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"trpc.group/trpc-go/trpc-go/client"
-	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
 func TestExternalStrategyClaimsLogicalAccountFromTrade(t *testing.T) {
@@ -23,12 +22,10 @@ func TestExternalStrategyClaimsLogicalAccountFromTrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	header := &thttp.ClientReqHeader{Header: make(http.Header)}
-	header.Header.Set("X-Space-Id", "space-e2e")
 	proxy := tradepb.NewTradeConsoleServiceClientProxy(
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
-		client.WithProtocol("http"),
+		client.WithProtocol("trpc"),
 		client.WithTimeout(3*time.Second),
 	)
 	created, err := proxy.CreateLogicalAccount(
@@ -39,7 +36,7 @@ func TestExternalStrategyClaimsLogicalAccountFromTrade(t *testing.T) {
 			MarketType:      tradepb.MarketType_MARKET_TYPE_SPOT,
 			SettlementAsset: "USDT",
 		},
-		client.WithReqHead(header),
+		client.WithMetaData(gatewayroute.MetadataSpaceID, []byte("space-e2e")),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +46,7 @@ func TestExternalStrategyClaimsLogicalAccountFromTrade(t *testing.T) {
 		t.Fatalf("create response = %+v", created)
 	}
 	logicalAccountID := created.GetLogicalAccount().GetLogicalAccountId()
-	// This direct-HTTP fixture checks the old RPC contract, not Gateway wiring.
+	// 直连 TradeConsole 检查逻辑账户归属契约，不经过主机网关。
 	owner := &logicalAccountOwnerClient{client: proxy, timeout: 3 * time.Second}
 	if err = owner.Validate(ctx, "space-e2e", logicalAccountID); err != nil {
 		t.Fatal(err)

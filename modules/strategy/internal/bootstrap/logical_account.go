@@ -4,16 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"trpc.group/trpc-go/trpc-go/client"
-	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
 const defaultLogicalAccountTimeout = 3 * time.Second
+
+// logicalAccountProxy 是 Strategy 用到的 TradeConsoleService 方法。
+type logicalAccountProxy interface {
+	GetLogicalAccount(context.Context, *tradepb.GetLogicalAccountReq, ...client.Option) (*tradepb.GetLogicalAccountRsp, error)
+	ClaimLogicalAccountOwner(context.Context, *tradepb.ClaimLogicalAccountOwnerReq, ...client.Option) (*tradepb.ClaimLogicalAccountOwnerRsp, error)
+	ReleaseLogicalAccountOwner(context.Context, *tradepb.ReleaseLogicalAccountOwnerReq, ...client.Option) (*tradepb.ReleaseLogicalAccountOwnerRsp, error)
+	RebindLogicalAccountOwner(context.Context, *tradepb.RebindLogicalAccountOwnerReq, ...client.Option) (*tradepb.RebindLogicalAccountOwnerRsp, error)
+}
 
 type logicalAccountOwnerClient struct {
 	client  logicalAccountProxy
@@ -46,15 +54,18 @@ func (e *logicalAccountResponseError) Code() int32 {
 	return int32(e.code)
 }
 
-func newLogicalAccountOwnerClient(cfg TradeConfig) *logicalAccountOwnerClient {
+// newLogicalAccountOwnerClient 经 gatewayclient（strategy 身份）调用 Trade 的逻辑账户归属方法；
+// 没有配置 gateway_client 时客户端不可用，调用会报错。
+func newLogicalAccountOwnerClient(cfg TradeConfig, gateway *gatewayclient.Client) *logicalAccountOwnerClient {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultLogicalAccountTimeout
 	}
-	return &logicalAccountOwnerClient{
-		client:  newLogicalAccountGateway(cfg),
-		timeout: timeout,
+	owner := &logicalAccountOwnerClient{timeout: timeout}
+	if gateway != nil {
+		owner.client = tradepb.NewTradeConsoleServiceClientProxy(gateway.ClientOptions()...)
 	}
+	return owner
 }
 
 func (c *logicalAccountOwnerClient) Validate(
@@ -331,11 +342,9 @@ func (c *logicalAccountOwnerClient) call(
 	if timeout <= 0 {
 		timeout = defaultLogicalAccountTimeout
 	}
-	callCtx, cancel := context.WithTimeout(context.WithValue(ctx, logicalAccountSpaceKey{}, spaceID), timeout)
-	reqHead := &thttp.ClientReqHeader{Header: make(http.Header)}
-	reqHead.Header.Set("X-Space-Id", spaceID)
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	return callCtx, cancel, []client.Option{
-		client.WithReqHead(reqHead),
+		client.WithMetaData(gatewayroute.MetadataSpaceID, []byte(spaceID)),
 		client.WithTimeout(timeout),
 	}, nil
 }

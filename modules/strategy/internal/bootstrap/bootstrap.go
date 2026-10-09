@@ -225,7 +225,7 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config, gatewa
 	}
 	reader := newStorageReader(cfg, gateway)
 	compilerFactory := newCompilerFactory(cfg, gateway)
-	logicalOwner := newLogicalAccountOwnerClient(cfg.Trade)
+	logicalOwner := newLogicalAccountOwnerClient(cfg.Trade, gateway)
 	poolRegistry := defaultPoolRegistry()
 	processor := &strategytrigger.Processor{
 		ObserveRun: func(result string, at time.Time) {
@@ -422,7 +422,7 @@ func newRPCService(repo *store.Store, cfg Config, gateway *gatewayclient.Client)
 	compilerFactory := newCompilerFactory(cfg, gateway)
 	return &rpc.Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, CompilerFactory: compilerFactory, PoolRegistry: defaultPoolRegistry(),
-		LogicalAccounts: newLogicalAccountOwnerClient(cfg.Trade),
+		LogicalAccounts: newLogicalAccountOwnerClient(cfg.Trade, gateway),
 	}
 }
 

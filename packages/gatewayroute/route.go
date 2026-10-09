@@ -28,6 +28,7 @@ var (
 	// callerPattern 允许 host-gateway@<主机> 形式的主机网关身份。
 	callerPattern      = regexp.MustCompile(`^[a-z0-9_-]+(@[a-z0-9_-]+)?$`)
 	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
+	methodPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 )
 
 var storageInternalMethods = map[string]struct{}{

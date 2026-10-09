@@ -28,11 +28,14 @@ for port in "$CONSOLE_PORT" "$HEALTH_PORT"; do
   fi
 done
 
-mkdir -p "$WORK_DIR/config"
+mkdir -p "$WORK_DIR/config" "$WORK_DIR/secrets"
 cp "$ROOT/modules/trade/config/app.yaml" "$WORK_DIR/config/app.yaml"
+# Trade 启动时加载 gateway_client 的调用方密钥；测试只直连 TradeConsole，密钥不会用于签名。
 perl -0pi -e \
-  's#path: ./data/moox_trade.db#path: ./data/e2e_trade.db#; s/enabled: true/enabled: false/' \
+  's#path: ./data/moox_trade.db#path: ./data/e2e_trade.db#; s/enabled: true/enabled: false/; s#\.\./secrets/caller-trade\.key#./secrets/caller-trade.key#' \
   "$WORK_DIR/config/app.yaml"
+printf '{"caller":"trade","key_id":"trade-e2e","secret":"isolated-local-trade-e2e-secret"}\n' >"$WORK_DIR/secrets/caller-trade.key"
+chmod 600 "$WORK_DIR/secrets/caller-trade.key"
 
 cp "$ROOT/modules/trade/config/trpc_go.yaml" "$WORK_DIR/trpc_go.yaml"
 perl -0pi -e \

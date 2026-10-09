@@ -1,8 +1,6 @@
 database: ./data/strategy.sqlite
+# 调用 Trade 的逻辑账户归属方法经 gateway_client（strategy 身份）发送
 trade:
-  gateway_url: ""
-  target_node: ""
-  ca_file: ""
   timeout: 3s
 instance_id: strategy-1
 eventbus:

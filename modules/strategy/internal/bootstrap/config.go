@@ -5,8 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -37,39 +35,14 @@ type RPCConfig struct {
 	Timeout    time.Duration `yaml:"timeout"`
 }
 
+// TradeConfig 是调用 Trade 逻辑账户归属方法的设置；请求经 gateway_client 以 strategy 身份发送。
 type TradeConfig struct {
-	GatewayURL string        `yaml:"gateway_url"`
-	TargetNode string        `yaml:"target_node"`
-	CAFile     string        `yaml:"ca_file"`
-	Timeout    time.Duration `yaml:"timeout"`
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 func (c TradeConfig) validate() error {
 	if c.Timeout <= 0 {
 		return fmt.Errorf("trade timeout must be positive")
-	}
-	if c.GatewayURL == "" && c.TargetNode == "" {
-		return nil
-	}
-	if c.GatewayURL == "" || c.TargetNode == "" {
-		return fmt.Errorf("trade gateway_url and target_node must be configured together")
-	}
-	// Match the Admin Gateway node registration contract, not merely the
-	// broader set of identifiers that can be represented in HMAC headers.
-	if strings.ContainsFunc(c.TargetNode, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_')
-	}) {
-		return fmt.Errorf("trade target_node must use lowercase letters, digits, dash, or underscore")
-	}
-	u, err := url.Parse(c.GatewayURL)
-	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("trade gateway_url must be an origin without credentials, path, query or fragment")
-	}
-	if u.Scheme != "https" {
-		ip := net.ParseIP(u.Hostname())
-		if u.Scheme != "http" || (!strings.EqualFold(u.Hostname(), "localhost") && (ip == nil || !ip.IsLoopback())) {
-			return fmt.Errorf("trade gateway_url requires HTTPS except on loopback")
-		}
 	}
 	return nil
 }
@@ -99,22 +72,6 @@ func Load(path string) (Config, error) {
 	}
 	if strings.TrimSpace(c.InstanceID) == "" {
 		c.InstanceID = "strategy-1"
-	}
-	// Trade may be on another node. Do not reuse the local native gateway
-	// overrides used by Factor and Storage.
-	if value := strings.TrimSpace(os.Getenv("MOOX_TRADE_GATEWAY_URL")); value != "" {
-		c.Trade.GatewayURL = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_TRADE_GATEWAY_NODE_ID")); value != "" {
-		c.Trade.TargetNode = value
-	}
-	c.Trade.GatewayURL = strings.TrimSpace(c.Trade.GatewayURL)
-	c.Trade.TargetNode = strings.TrimSpace(c.Trade.TargetNode)
-	if c.Trade.CAFile == "" {
-		c.Trade.CAFile = strings.TrimSpace(os.Getenv("MOOX_TRADE_GATEWAY_CA_FILE"))
-		if c.Trade.CAFile == "" {
-			c.Trade.CAFile = strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
-		}
 	}
 	if c.Trade.Timeout == 0 {
 		c.Trade.Timeout = defaultLogicalAccountTimeout
