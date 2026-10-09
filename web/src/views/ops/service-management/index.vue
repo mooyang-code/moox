@@ -18,13 +18,11 @@ import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import GatewayNodes from "./gateway-nodes.vue";
 import ServiceDeployments from "@/views/settings/service-deployments/index.vue";
-import HealthMonitor from "@/views/ops/health-monitor/index.vue";
 
-type ServiceManagementTab = "health" | "nodes" | "instances";
+type ServiceManagementTab = "nodes" | "instances";
 const tabs = [
   { key: "nodes", label: "网关节点" },
-  { key: "instances", label: "服务实例" },
-  { key: "health", label: "健康监控" }
+  { key: "instances", label: "服务实例" }
 ] as const;
 
 const route = useRoute();
@@ -37,14 +35,13 @@ if (route.query.tab !== undefined && normalizeTab(route.query.tab) !== route.que
 const activeComponent = computed(
   () =>
     ({
-      health: HealthMonitor,
       nodes: GatewayNodes,
       instances: ServiceDeployments
     })[activeTab.value]
 );
 
 function normalizeTab(value: unknown): ServiceManagementTab {
-  return value === "nodes" || value === "instances" || value === "health" ? value : "health";
+  return value === "instances" ? value : "nodes";
 }
 
 function onTabChange(value: string | number) {

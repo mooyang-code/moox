@@ -1,0 +1,411 @@
+{
+  "GeneratedAt": "2026-10-09T04:00:00Z",
+  "Summary": {
+    "Alerts": 3,
+    "Attention": 5,
+    "Healthy": 5,
+    "Unknown": 1
+  },
+  "Alerts": [
+    {
+      "ID": "default:placement:storage:storage-primary:placement:storage:storage-primary",
+      "Severity": "critical",
+      "Title": "存储主服务（storage）· 健康检查",
+      "Reason": "健康检查失败：服务端口拒绝连接",
+      "RawError": "Get \"http://203.0.113.20:20210/readyz\": dial tcp 203.0.113.20:20210: connect: connection refused",
+      "Stage": "",
+      "Target": {
+        "Kind": "component",
+        "HostID": "storage",
+        "ComponentID": "storage-primary",
+        "SpaceID": "",
+        "DatasetID": "",
+        "Frequency": ""
+      },
+      "TriggeredAt": "2026-10-09T03:59:00Z",
+      "LastCheckedAt": "2026-10-09T03:59:30Z"
+    },
+    {
+      "ID": "default:host_gateway:storage:host_gateway:storage",
+      "Severity": "critical",
+      "Title": "主机网关（storage）· 心跳与路由同步",
+      "Reason": "主机网关超过 2 分钟没有心跳（最近一次 10-09 11:50）",
+      "RawError": "",
+      "Stage": "",
+      "Target": {
+        "Kind": "host",
+        "HostID": "storage",
+        "ComponentID": "",
+        "SpaceID": "",
+        "DatasetID": "",
+        "Frequency": ""
+      },
+      "TriggeredAt": "2026-10-09T03:53:00Z",
+      "LastCheckedAt": "2026-10-09T03:59:50Z"
+    },
+    {
+      "ID": "default:host:aB3x:filesystem_usage:host:aB3x:filesystem_usage",
+      "Severity": "warning",
+      "Title": "主机 control · 磁盘空间使用率",
+      "Reason": "磁盘空间使用率当前 91.0%，告警阈值 85.0%",
+      "RawError": "",
+      "Stage": "",
+      "Target": {
+        "Kind": "host",
+        "HostID": "control",
+        "ComponentID": "",
+        "SpaceID": "",
+        "DatasetID": "",
+        "Frequency": ""
+      },
+      "TriggeredAt": "2026-10-09T03:57:00Z",
+      "LastCheckedAt": "2026-10-09T03:59:45Z"
+    }
+  ],
+  "Components": [
+    {
+      "HostID": "compute-1",
+      "ComponentID": "trade",
+      "Name": "交易服务",
+      "Status": "disabled",
+      "Reason": "主机已停用",
+      "Probe": {
+        "Status": "",
+        "URL": "http://203.0.113.30:11210/readyz",
+        "RawError": "",
+        "CheckedAt": "0001-01-01T00:00:00Z"
+      },
+      "History": null,
+      "Reporter": {
+        "Status": "",
+        "InstanceID": "",
+        "Version": "",
+        "LastSeenAt": "0001-01-01T00:00:00Z"
+      },
+      "StatusSince": "0001-01-01T00:00:00Z"
+    },
+    {
+      "HostID": "control",
+      "ComponentID": "console-proxy",
+      "Name": "控制台代理",
+      "Status": "healthy",
+      "Reason": "运行正常",
+      "Probe": {
+        "Status": "healthy",
+        "URL": "https://203.0.113.10:9527/",
+        "RawError": "",
+        "CheckedAt": "2026-10-09T03:59:30Z"
+      },
+      "History": [
+        {
+          "Status": "healthy",
+          "URL": "https://203.0.113.10:9527/",
+          "RawError": "",
+          "CheckedAt": "2026-10-09T03:59:30Z"
+        },
+        {
+          "Status": "healthy",
+          "URL": "https://203.0.113.10:9527/",
+          "RawError": "",
+          "CheckedAt": "2026-10-09T03:59:00Z"
+        },
+        {
+          "Status": "healthy",
+          "URL": "https://203.0.113.10:9527/",
+          "RawError": "",
+          "CheckedAt": "2026-10-09T03:58:30Z"
+        }
+      ],
+      "Reporter": {
+        "Status": "",
+        "InstanceID": "",
+        "Version": "",
+        "LastSeenAt": "0001-01-01T00:00:00Z"
+      },
+      "StatusSince": "2026-10-09T03:58:30Z"
+    },
+    {
+      "HostID": "control",
+      "ComponentID": "egress-proxy",
+      "Name": "出口代理",
+      "Status": "unchecked",
+      "Reason": "不探测",
+      "Probe": {
+        "Status": "unchecked",
+        "URL": "",
+        "RawError": "",
+        "CheckedAt": "0001-01-01T00:00:00Z"
+      },
+      "History": null,
+      "Reporter": {
+        "Status": "",
+        "InstanceID": "",
+        "Version": "",
+        "LastSeenAt": "0001-01-01T00:00:00Z"
+      },
+      "StatusSince": "0001-01-01T00:00:00Z"
+    },
+    {
+      "HostID": "control",
+      "ComponentID": "host-agent",
+      "Name": "主机采集器",
+      "Status": "healthy",
+      "Reason": "运行正常",
+      "Probe": {
+        "Status": "healthy",
+        "URL": "http://127.0.0.1:11425/readyz",
+        "RawError": "",
+        "CheckedAt": "2026-10-09T03:59:30Z"
+      },
+      "History": [
+        {
+          "Status": "healthy",
+          "URL": "http://127.0.0.1:11425/readyz",
+          "RawError": "",
+          "CheckedAt": "2026-10-09T03:59:30Z"
+        }
+      ],
+      "Reporter": {
+        "Status": "",
+        "InstanceID": "",
+        "Version": "",
+        "LastSeenAt": "0001-01-01T00:00:00Z"
+      },
+      "StatusSince": "2026-10-09T03:59:30Z"
+    },
+    {
+      "HostID": "control",
+      "ComponentID": "monitor",
+      "Name": "监控服务",
+      "Status": "healthy",
+      "Reason": "运行正常",
+      "Probe": {
+        "Status": "healthy",
+        "URL": "http://127.0.0.1:11409/readyz",
+        "RawError": "",
+        "CheckedAt": "2026-10-09T03:59:30Z"
+      },
+      "History": [
+        {
+          "Status": "healthy",
+          "URL": "http://127.0.0.1:11409/readyz",
+          "RawError": "",
+          "CheckedAt": "2026-10-09T03:59:30Z"
+        }
+      ],
+      "Reporter": {
+        "Status": "healthy",
+        "InstanceID": "monitor@control",
+        "Version": "v1.2.3",
+        "LastSeenAt": "2026-10-09T03:59:40Z"
+      },
+      "StatusSince": "2026-10-09T03:59:30Z"
+    },
+    {
+      "HostID": "storage",
+      "ComponentID": "access",
+      "Name": "外部接入",
+      "Status": "disabled",
+      "Reason": "部署已停用",
+      "Probe": {
+        "Status": "",
+        "URL": "http://203.0.113.20:11014/readyz",
+        "RawError": "",
+        "CheckedAt": "0001-01-01T00:00:00Z"
+      },
+      "History": null,
+      "Reporter": {
+        "Status": "",
+        "InstanceID": "",
+        "Version": "",
+        "LastSeenAt": "0001-01-01T00:00:00Z"
+      },
+      "StatusSince": "2026-10-09T02:00:00Z"
+    },
+    {
+      "HostID": "storage",
+      "ComponentID": "storage-primary",
+      "Name": "存储主服务",
+      "Status": "down",
+      "Reason": "健康检查失败：服务端口拒绝连接",
+      "Probe": {
+        "Status": "down",
+        "URL": "http://203.0.113.20:20210/readyz",
+        "RawError": "Get \"http://203.0.113.20:20210/readyz\": dial tcp 203.0.113.20:20210: connect: connection refused",
+        "CheckedAt": "2026-10-09T03:59:30Z"
+      },
+      "History": [
+        {
+          "Status": "down",
+          "URL": "http://203.0.113.20:20210/readyz",
+          "RawError": "Get \"http://203.0.113.20:20210/readyz\": dial tcp 203.0.113.20:20210: connect: connection refused",
+          "CheckedAt": "2026-10-09T03:59:30Z"
+        },
+        {
+          "Status": "down",
+          "URL": "http://203.0.113.20:20210/readyz",
+          "RawError": "Get \"http://203.0.113.20:20210/readyz\": dial tcp 203.0.113.20:20210: connect: connection refused",
+          "CheckedAt": "2026-10-09T03:59:00Z"
+        },
+        {
+          "Status": "down",
+          "URL": "http://203.0.113.20:20210/readyz",
+          "RawError": "Get \"http://203.0.113.20:20210/readyz\": dial tcp 203.0.113.20:20210: connect: connection refused",
+          "CheckedAt": "2026-10-09T03:58:30Z"
+        },
+        {
+          "Status": "healthy",
+          "URL": "http://203.0.113.20:20210/readyz",
+          "RawError": "",
+          "CheckedAt": "2026-10-09T03:58:00Z"
+        }
+      ],
+      "Reporter": {
+        "Status": "stale",
+        "InstanceID": "storage-primary@storage",
+        "Version": "v1.2.3",
+        "LastSeenAt": "2026-10-09T03:54:00Z"
+      },
+      "StatusSince": "2026-10-09T03:58:30Z"
+    }
+  ],
+  "Pipeline": [
+    {
+      "Stage": "collect",
+      "Name": "采集",
+      "Status": "unknown",
+      "Datasets": [
+        {
+          "SpaceID": "crypto",
+          "DatasetID": "dataset_crypto_funding",
+          "Frequency": "8h",
+          "Producer": "collector",
+          "Status": "unknown",
+          "Reason": "尚未收到运行上报，请检查任务是否启动、消费队列是否正常",
+          "RawError": "",
+          "WatermarkAt": "0001-01-01T00:00:00Z",
+          "LastSuccessAt": "0001-01-01T00:00:00Z",
+          "LagSeconds": 0
+        }
+      ]
+    },
+    {
+      "Stage": "storage",
+      "Name": "存储与视图",
+      "Status": "healthy",
+      "Datasets": [
+        {
+          "SpaceID": "crypto",
+          "DatasetID": "dataset_crypto_kline",
+          "Frequency": "1m",
+          "Producer": "storage",
+          "Status": "healthy",
+          "Reason": "数据按时更新",
+          "RawError": "",
+          "WatermarkAt": "2026-10-09T03:59:00Z",
+          "LastSuccessAt": "2026-10-09T03:59:30Z",
+          "LagSeconds": 60
+        }
+      ]
+    },
+    {
+      "Stage": "factor",
+      "Name": "因子",
+      "Status": "degraded",
+      "Datasets": [
+        {
+          "SpaceID": "crypto",
+          "DatasetID": "dataset_crypto_factor_momentum",
+          "Frequency": "1h",
+          "Producer": "factor",
+          "Status": "degraded",
+          "Reason": "已超过允许时间未更新；最近成功 10-09 09:00；当前落后 3 小时",
+          "RawError": "",
+          "WatermarkAt": "2026-10-09T01:00:00Z",
+          "LastSuccessAt": "2026-10-09T01:00:00Z",
+          "LagSeconds": 10800
+        }
+      ]
+    },
+    {
+      "Stage": "trade",
+      "Name": "交易",
+      "Status": "down",
+      "Datasets": []
+    }
+  ],
+  "BusinessChecks": [
+    {
+      "Kind": "balance",
+      "Name": "账户余额同步 · 交易服务",
+      "Module": "trade",
+      "SpaceID": "crypto",
+      "Status": "down",
+      "Reason": "账户余额已连续三次同步失败",
+      "RawError": "balance sync failed 3 consecutive runs",
+      "Stage": "trade",
+      "CheckedAt": "2026-10-09T04:00:00Z"
+    },
+    {
+      "Kind": "market_fetch",
+      "Name": "行情采集 · SCF 定时协调",
+      "Module": "scf_timer",
+      "SpaceID": "crypto",
+      "Status": "healthy",
+      "Reason": "Timer 分配和触发器正常",
+      "RawError": "",
+      "Stage": "collect",
+      "CheckedAt": "2026-10-09T04:00:00Z"
+    }
+  ],
+  "Hosts": [
+    {
+      "HostID": "compute-1",
+      "AgentID": "",
+      "Status": "disabled",
+      "Reason": "主机已停用",
+      "GatewayState": "",
+      "CPUPercent": 0,
+      "MemoryPercent": 0,
+      "DiskPercent": 0,
+      "LastSeenAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "HostID": "control",
+      "AgentID": "aB3x",
+      "Status": "degraded",
+      "Reason": "磁盘空间使用率当前 91.0%，告警阈值 85.0%",
+      "GatewayState": "online",
+      "CPUPercent": 12.5,
+      "MemoryPercent": 40.2,
+      "DiskPercent": 91,
+      "LastSeenAt": "2026-10-09T03:59:45Z"
+    },
+    {
+      "HostID": "storage",
+      "AgentID": "cD5y",
+      "Status": "down",
+      "Reason": "主机网关超过 2 分钟没有心跳（最近一次 10-09 11:50）",
+      "GatewayState": "offline",
+      "CPUPercent": 5,
+      "MemoryPercent": 30,
+      "DiskPercent": 60,
+      "LastSeenAt": "2026-10-09T03:50:00Z"
+    }
+  ],
+  "Unregistered": [
+    {
+      "HostID": "compute-1",
+      "ComponentID": "storage-node",
+      "InstanceID": "storage-node@compute-1",
+      "Version": "v1.2.3",
+      "LastSeenAt": "2026-10-09T03:59:35Z"
+    }
+  ],
+  "Notification": {
+    "ChannelType": "wecom",
+    "Configured": true,
+    "WebhookMasked": "https://...0042"
+  },
+  "Warnings": null
+}

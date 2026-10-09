@@ -385,7 +385,7 @@ func (b Builder) addHosts(ctx context.Context, nodeID string, now time.Time, out
 		return err
 	}
 	for _, host := range hosts {
-		if nodeID != "" && host.Hostname != nodeID && host.AgentID != nodeID {
+		if nodeID != "" && host.HostID != nodeID && host.Hostname != nodeID && host.AgentID != nodeID {
 			continue
 		}
 		out.Hosts = append(out.Hosts, host)
@@ -395,10 +395,18 @@ func (b Builder) addHosts(ctx context.Context, nodeID string, now time.Time, out
 		}
 		out.Forecasts[host.AgentID] = hostmetrics.ForecastDisks(history, now)
 		if len(out.Forecasts[host.AgentID]) == 0 {
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "disk_forecast", NodeID: host.Hostname, InstanceID: host.AgentID, Status: "UNKNOWN", Summary: "insufficient disk history"})
+			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "disk_forecast", NodeID: hostNodeID(host), InstanceID: host.AgentID, Status: "UNKNOWN", Summary: "insufficient disk history"})
 		}
 	}
 	return nil
+}
+
+// hostNodeID 返回主机采集器所在的主机 ID；Monitor 重启后收到下一次快照之前不知道主机 ID，退回到主机名。
+func hostNodeID(host hostmetrics.AgentView) string {
+	if host.HostID != "" {
+		return host.HostID
+	}
+	return host.Hostname
 }
 
 func selectComponents(all []doctor.Component, selected []string) ([]doctor.Component, error) {

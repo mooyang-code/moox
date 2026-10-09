@@ -39,6 +39,7 @@ func testAgent(t *testing.T) *Agent {
 		},
 		id:        identity.File{AgentID: uuid.New().String()},
 		collector: collector.New(),
+		hostID:    "test-host-id",
 		hostname:  "test-host",
 		bootID:    "boot-id",
 		version:   "test-version",

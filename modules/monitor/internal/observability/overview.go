@@ -11,8 +11,8 @@ import (
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -30,17 +30,12 @@ const (
 const ReporterNeverReported = "never_reported"
 
 // ServiceStatus 是一个组件实例的状态：NodeID 是主机 ID，ServiceName 是组件 ID。ReporterStatus 为 healthy、stale、
-// never_reported，只做健康探测的组件为空。
+// never_reported，只做健康探测的组件为空；Version 和 ReportedAt 是上报实例的版本和最近上报时间。
 type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
-	ReporterStatus                                  string
-}
-
-type HostStatus struct {
-	AgentID, Hostname, Status, Reason               string
-	LastSeenAt                                      time.Time
-	CPUPercent, MemoryPercent, FilesystemMaxPercent float64
+	ReporterStatus, Version                         string
+	ReportedAt                                      time.Time
 }
 
 type DatasetFrequencyStatus struct {
@@ -55,15 +50,16 @@ type DatasetFrequencyStatus struct {
 	LagSeconds                          int64
 }
 
+// BusinessStatus 是一项业务检查。Kind 为 market_fetch（行情采集协调）、canary（行情探针）、data_delivery（数据投递）
+// 或 balance（账户余额同步）；Name 是中文名称。
 type BusinessStatus struct {
-	SpaceID, Kind, Module, Status, Reason string
-	LastCheckedAt                         time.Time
+	SpaceID, Kind, Name, Module, Status, Reason string
+	LastCheckedAt                               time.Time
 }
 
 type Overview struct {
 	GeneratedAt    time.Time
 	Services       []ServiceStatus
-	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
 	// GatewayHosts 是各主机的主机网关状态；GatewayHostsErr 不为空时表示 SysDeploy 暂时读不到，调用方应保留上一次的判断。
@@ -75,7 +71,6 @@ type Overview struct {
 
 type Builder struct {
 	Metrics                    *monmetrics.QueryService
-	Hosts                      *hostmetrics.Store
 	GatewayHosts               HostGatewaySource
 	Unregistered               *monmetrics.UnregisteredProducers
 	Checks                     *store.CheckRepository
@@ -108,9 +103,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	out := Overview{GeneratedAt: now}
 	var err error
 	if out.Services, err = b.buildServices(ctx, spaceID); err != nil {
-		return Overview{}, err
-	}
-	if out.Hosts, err = b.buildHosts(ctx); err != nil {
 		return Overview{}, err
 	}
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
@@ -193,7 +185,7 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 		reason = fmt.Sprintf("正在投递 %.0f 条数据变更", pending)
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Module: "storage_outbox",
+		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Name: "数据投递队列", Module: "storage_outbox",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -230,6 +222,7 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 			services[key] = ServiceStatus{
 				NodeID: row.NodeID, ServiceName: row.ServiceName, InstanceID: row.InstanceID,
 				Status: status, ReporterStatus: status, Reason: reason, LastSeenAt: row.LastSeenAt.UTC(),
+				Version: row.Version, ReportedAt: row.LastSeenAt.UTC(),
 			}
 		}
 	}
@@ -358,38 +351,6 @@ func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) Servi
 	}
 	service.Reason = strings.Join([]string{service.Reason, healthReason}, "; ")
 	return service
-}
-
-func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
-	if b.Hosts == nil {
-		return []HostStatus{}, nil
-	}
-	rows, err := b.Hosts.ListAgents(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]HostStatus, 0, len(rows))
-	for _, row := range rows {
-		status, reason := "healthy", "agent reachable"
-		if !row.Reachable {
-			status, reason = "down", "agent unreachable"
-		}
-		item := HostStatus{AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
-		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
-		if snapshot := row.Snapshot; snapshot != nil {
-			if snapshot.GetCpu() != nil && snapshot.GetCpu().GetUsageAvailable() {
-				item.CPUPercent = snapshot.GetCpu().GetUsagePercent()
-			}
-			if snapshot.GetMemory() != nil {
-				item.MemoryPercent = snapshot.GetMemory().GetUsagePercent()
-			}
-			for _, filesystem := range snapshot.GetFilesystems() {
-				item.FilesystemMaxPercent = max(item.FilesystemMaxPercent, filesystem.GetUsagePercent())
-			}
-		}
-		out = append(out, item)
-	}
-	return out, nil
 }
 
 type datasetKey struct {
@@ -856,6 +817,25 @@ func parseOverviewFrequency(raw string) time.Duration {
 	return parsed.NominalDuration()
 }
 
+// canaryCheckPrefix 是行情探针检查 ID 的前缀。
+const canaryCheckPrefix = "market_canary:"
+
+// marketFetchName 是行情采集协调类业务检查的中文名称。
+func marketFetchName(module string) string {
+	switch {
+	case module == "scf_timer":
+		return "行情采集 · SCF 定时协调"
+	case module == "provider_feed":
+		return "行情采集 · 行情源"
+	case strings.HasPrefix(module, "provider_feed:"):
+		return "行情采集 · 行情源 " + strings.TrimPrefix(module, "provider_feed:")
+	case strings.HasPrefix(module, "instrument_snapshot:"):
+		return "行情采集 · 标的快照 " + strings.TrimPrefix(module, "instrument_snapshot:")
+	default:
+		return "行情采集 · " + module
+	}
+}
+
 func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
 	out := make([]BusinessStatus, 0)
 	if b.Checks != nil && b.Results != nil {
@@ -865,11 +845,11 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 			return nil, err
 		}
 		for _, check := range checks {
-			kind := businessKind(check)
-			if kind == "" {
+			target, ok := strings.CutPrefix(check.CheckID, canaryCheckPrefix)
+			if !ok {
 				continue
 			}
-			item := BusinessStatus{SpaceID: check.SpaceID, Kind: kind, Module: check.Source, Status: "unknown", Reason: "尚未上报"}
+			item := BusinessStatus{SpaceID: check.SpaceID, Kind: "canary", Name: check.Name, Module: target, Status: "unknown", Reason: "尚未上报"}
 			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
 			if err != nil {
 				return nil, err
@@ -950,7 +930,8 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 			status, reason = "down", "balance sync stale"
 		}
 		out = append(out, BusinessStatus{
-			SpaceID: "crypto", Kind: "balance", Module: successValue.serviceName, Status: status,
+			SpaceID: "crypto", Kind: "balance", Name: "账户余额同步 · " + alerttext.Service(successValue.serviceName),
+			Module: successValue.serviceName, Status: status,
 			Reason: reason, LastCheckedAt: lastCheckedAt,
 		})
 	}
@@ -1111,10 +1092,10 @@ func (b Builder) buildStockCNFeedHealth(ctx context.Context, now time.Time) ([]B
 		} else if rate := state.failures / state.requests; rate > threshold {
 			status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 失败率 %.1f%%，超过 %.1f%%", provider, window, rate*100, threshold*100)
 		}
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Name: marketFetchName("provider_feed:" + provider), Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	if len(out) == 0 {
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stockcn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Name: marketFetchName("provider_feed"), Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stockcn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1225,7 +1206,7 @@ func (b Builder) buildStockCNInstrumentHealth(ctx context.Context, now time.Time
 				}
 			}
 		}
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Name: marketFetchName("instrument_snapshot:" + state.provider), Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1535,19 +1516,19 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			if state.failureReasons["submit_timeout"] {
 				reason = "Timer 配置提交超时，正在自动重试"
 			}
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if state.hasCapacityTotal && state.hasCapacityRequired && state.capacityRequired > state.capacityTotal {
 			shortfall := state.capacityRequired - state.capacityTotal
 			reason := fmt.Sprintf("Timer SCF 容量不足：需要 %.0f 个节点，当前仅有 %.0f 个，缺口 %.0f 个", state.capacityRequired, state.capacityTotal, shortfall)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if state.hasConfiguredGroupsExpected && state.hasConfiguredGroupsActual &&
 			state.configuredGroupsExpected != state.configuredGroupsActual {
 			reason := fmt.Sprintf("stockcn Group 数量不一致：期望 %.0f，实际 %.0f", state.configuredGroupsExpected, state.configuredGroupsActual)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if state.hasHealth && state.healthy <= 0 {
@@ -1566,12 +1547,12 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			case state.failureReasons["capacity"] && state.hasRequired && state.required > state.active:
 				reason = fmt.Sprintf("Timer 分片节点不足：需要 %.0f 个，当前仅分配 %.0f 个", state.required, state.active)
 			}
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if !state.hasRequired || state.required <= 0 {
 			if state.staleSeries && !collectorReporterFresh {
-				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调指标已停止上报", LastCheckedAt: now})
+				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调指标已停止上报", LastCheckedAt: now})
 			}
 			continue
 		}
@@ -1591,7 +1572,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		case currentSpace == "stockcn" && state.hasConfiguredGroupsExpected:
 			status, reason = validateConfiguredGroupIDs(now, state, thresholds.CoordinationStaleAfter)
 		}
-		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1659,30 +1640,12 @@ func (b Builder) balanceMetricValues(ctx context.Context, metricName string) (ma
 	return out, nil
 }
 
-func businessKind(check domain.Check) string {
-	text := strings.ToLower(strings.Join([]string{check.CheckID, check.Name, check.GroupName, check.Source}, " "))
-	switch {
-	case strings.Contains(text, "canary"):
-		return "canary"
-	case strings.Contains(text, "balance"):
-		return "balance"
-	default:
-		return ""
-	}
-}
-
 func sortOverview(out *Overview) {
 	sort.Slice(out.Services, func(i, j int) bool {
 		if statusRank(out.Services[i].Status) != statusRank(out.Services[j].Status) {
 			return statusRank(out.Services[i].Status) < statusRank(out.Services[j].Status)
 		}
 		return out.Services[i].ServiceName < out.Services[j].ServiceName
-	})
-	sort.Slice(out.Hosts, func(i, j int) bool {
-		if statusRank(out.Hosts[i].Status) != statusRank(out.Hosts[j].Status) {
-			return statusRank(out.Hosts[i].Status) < statusRank(out.Hosts[j].Status)
-		}
-		return out.Hosts[i].Hostname < out.Hosts[j].Hostname
 	})
 	sort.Slice(out.Datasets, func(i, j int) bool {
 		if statusRank(out.Datasets[i].Status) != statusRank(out.Datasets[j].Status) {

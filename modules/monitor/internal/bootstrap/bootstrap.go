@@ -223,8 +223,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory)
+	placementSource := newPlacementSource(runtime)
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
-		Metrics: metricsQuery, Hosts: hostStore, GatewayHosts: newPlacementSource(runtime), Unregistered: runtime.Unregistered,
+		Metrics: metricsQuery, GatewayHosts: placementSource, Unregistered: runtime.Unregistered,
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
@@ -244,7 +245,21 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, GatewayHosts: newPlacementSource(runtime), Unregistered: runtime.Unregistered, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	health := &healthview.Builder{
+		Facts: &monitorobservability.Builder{
+			Metrics: metricsQuery, GatewayHosts: placementSource, Unregistered: runtime.Unregistered,
+			Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+			Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
+			BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
+			MarketFetchThresholds:      marketFetchThresholds,
+		},
+		Placements: placementSource,
+		Checks:     runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications,
+	}
+	if hostStore != nil {
+		health.Hosts = hostStore
+	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {

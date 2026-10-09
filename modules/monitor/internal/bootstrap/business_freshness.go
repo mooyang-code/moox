@@ -198,13 +198,10 @@ func buildBusinessFreshnessReporterWithInterval(
 			if spaceID == "" {
 				spaceID = "crypto"
 			}
-			checkID, name := "balance:"+business.Module, "账户余额同步 "+business.Module
-			if business.Kind == "market_fetch" {
-				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
-			} else if business.Kind == "data_delivery" {
-				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
+			item := businessFreshnessItem{
+				spaceID: spaceID, checkID: business.Kind + ":" + business.Module, name: business.Name,
+				success: business.Status == "healthy", reason: business.Reason,
 			}
-			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		moduleItems, err := moduleHealthItems(ctx, builder.Metrics, report.BuiltInModuleHealthChecks(), overview.GeneratedAt)

@@ -84,7 +84,7 @@ func EvaluateGatewayHost(host *adminpb.DeployHost, now time.Time) GatewayHostSta
 			status.Reason = "主机网关从未上报心跳：确认主机网关在运行，并能连上 control 的网关控制"
 		}
 	case status.GatewayState == gatewayOffline || (!status.LastSeenAt.IsZero() && now.Sub(status.LastSeenAt) > GatewayHeartbeatGrace):
-		status.Reason = fmt.Sprintf("主机网关超过 %s 没有心跳（最近一次 %s）", alerttext.Duration(GatewayHeartbeatGrace), alerttext.Time(status.LastSeenAt))
+		status.Reason = fmt.Sprintf("主机网关超过 %s没有心跳（最近一次 %s）", alerttext.Duration(GatewayHeartbeatGrace), alerttext.Time(status.LastSeenAt))
 		if strings.TrimSpace(status.LastError) != "" {
 			status.Reason += "；最近错误：" + strings.TrimSpace(status.LastError)
 		}

@@ -221,12 +221,13 @@ func buildMonitorMarketCanary(
 						continue
 					}
 					checkID := subjectTagCheckID(spaceID, tag.GetTagId())
+					name := "采集对象标签 · " + tag.GetTagName()
 					check, getErr := runtime.Repositories.Checks.Get(runCtx, spaceID, checkID)
 					if errors.Is(getErr, gorm.ErrRecordNotFound) {
-						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "采集对象标签 · " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
+						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: name, GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
 						getErr = runtime.Repositories.Checks.Create(runCtx, check)
-					} else if getErr == nil && check.Name != "Subject tag "+tag.GetTagName() {
-						check.Name = "Subject tag " + tag.GetTagName()
+					} else if getErr == nil && check.Name != name {
+						check.Name = name
 						getErr = runtime.Repositories.Checks.Update(runCtx, check)
 					}
 					if getErr != nil {

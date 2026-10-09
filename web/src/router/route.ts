@@ -165,6 +165,12 @@ export const staticRoutes = [
         meta: { title: "trading-orders" }
       },
       {
+        path: "/ops/monitor",
+        name: "ops-monitor",
+        component: () => import("@/views/ops/monitor/index.vue"),
+        meta: { title: "ops-monitor" }
+      },
+      {
         path: "/ops/services",
         name: "ops-services",
         component: () => import("@/views/ops/service-management/index.vue"),

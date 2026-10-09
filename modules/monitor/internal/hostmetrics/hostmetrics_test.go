@@ -16,7 +16,7 @@ import (
 )
 
 func validHostMetric() *hostmetricpb.HostMetric {
-	return &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host", BootId: "boot", AgentVersion: "test", Snapshot: &hostmetricpb.HostSnapshot{
+	return &hostmetricpb.HostMetric{AgentId: "aB3x", HostId: "storage", Hostname: "host", BootId: "boot", AgentVersion: "test", Snapshot: &hostmetricpb.HostSnapshot{
 		Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 25},
 		Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
 	}}

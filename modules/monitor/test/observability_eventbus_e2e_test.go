@@ -70,7 +70,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	publishObservabilityMetric(t, ctx, publisher, "metrics-deduplicated")
 	agentID := "aB3x"
 	if _, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
-		AgentId: agentID, Hostname: "worker-a", Snapshot: &hostmetricpb.HostSnapshot{},
+		AgentId: agentID, HostId: "storage", Hostname: "worker-a", Snapshot: &hostmetricpb.HostSnapshot{},
 	}, events.PublishOptions{
 		EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(),
 		SpaceID: "mooxsys", SubjectID: agentID,

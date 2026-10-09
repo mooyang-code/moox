@@ -20,7 +20,7 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 	out := make([]*monitorpb.HostAgentInfo, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, &monitorpb.HostAgentInfo{
-			AgentId: row.AgentID, Hostname: row.Hostname, BootId: row.BootID,
+			AgentId: row.AgentID, HostId: row.HostID, Hostname: row.Hostname, BootId: row.BootID,
 			LastSeenAt: row.LastSeenAt, Archived: row.Archived, Snapshot: row.Snapshot,
 			Reachable: row.Reachable, StaleSeconds: row.StaleSeconds,
 		})

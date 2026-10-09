@@ -60,6 +60,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { listSSHHosts, type SSHHost } from "@/api/modules/ssh";
 import HostMonitorCardGrid from "./host-monitor-card-grid.vue";
@@ -81,8 +82,14 @@ const historyRefreshKey = ref(0);
 const viewMode = ref<MonitorViewMode>(normalizeMonitorViewMode(localStorage.getItem(VIEW_MODE_KEY)));
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let requestID = 0;
+let requestApplied = false;
 
+const route = useRoute();
 const rows = computed(() => buildHostMonitorRows(monitors.value, sshHosts.value));
+// 从监控告警页「定位」过来时（?agent=<主机采集器 ID>）选中对应的主机。
+const requestedKey = computed(() =>
+  typeof route.query.agent === "string" && route.query.agent ? `monitor:${route.query.agent}` : ""
+);
 const selectedRow = computed(() => rows.value.find(row => row.key === selectedKey.value) || null);
 const onlineCount = computed(() => rows.value.filter(row => row.state === "online").length);
 const attentionCount = computed(() => rows.value.filter(row => row.attention || row.state === "offline").length);
@@ -126,7 +133,17 @@ function manualRefresh() {
 }
 watch(rows, value => {
   if (!value.length) selectedKey.value = "";
-  else if (!value.some(row => row.key === selectedKey.value)) selectedKey.value = value[0].key;
+  else if (requestedKey.value && value.some(row => row.key === requestedKey.value) && !requestApplied) {
+    selectedKey.value = requestedKey.value;
+    requestApplied = true;
+  } else if (!value.some(row => row.key === selectedKey.value)) selectedKey.value = value[0].key;
+});
+watch(requestedKey, value => {
+  requestApplied = false;
+  if (value && rows.value.some(row => row.key === value)) {
+    selectedKey.value = value;
+    requestApplied = true;
+  }
 });
 watch(viewMode, value => localStorage.setItem(VIEW_MODE_KEY, value));
 watch(autoRefresh, value => (value ? startAutoRefresh() : stopAutoRefresh()));

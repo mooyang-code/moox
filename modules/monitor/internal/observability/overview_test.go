@@ -804,7 +804,7 @@ func TestBuilderReturnsBoundedEmptyOverviewWhenSourcesAreDisabled(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.GeneratedAt.Equal(now) || len(got.Services) != 0 || len(got.Hosts) != 0 || len(got.Datasets) != 0 {
+	if !got.GeneratedAt.Equal(now) || len(got.Services) != 0 || len(got.Datasets) != 0 {
 		t.Fatalf("overview = %+v", got)
 	}
 }

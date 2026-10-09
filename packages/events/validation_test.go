@@ -219,9 +219,15 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 	}{
 		{
 			name: "host agent", event: ObservabilityHostSnapshotReported,
-			payload: &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
+			payload: &hostmetricpb.HostMetric{AgentId: "aB3x", HostId: "storage", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
 			opts:    validationOptions("host-event-1", "mooxsys", "aB3x"),
 			mutate:  func(value proto.Message) { value.(*hostmetricpb.HostMetric).AgentId = "other" },
+		},
+		{
+			name: "host agent without host id", event: ObservabilityHostSnapshotReported,
+			payload: &hostmetricpb.HostMetric{AgentId: "aB3x", HostId: "storage", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
+			opts:    validationOptions("host-event-1", "mooxsys", "aB3x"),
+			mutate:  func(value proto.Message) { value.(*hostmetricpb.HostMetric).HostId = " " },
 		},
 		{
 			name: "metrics producer", event: ObservabilityMetricsSnapshotReported,
@@ -273,7 +279,7 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}}
+	payload := &hostmetricpb.HostMetric{AgentId: "aB3x", HostId: "storage", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}}
 	encoded, err := registry.Encode(
 		ObservabilityHostSnapshotReported,
 		payload,

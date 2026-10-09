@@ -225,7 +225,7 @@ describe("page layout standards", () => {
   it("keeps dashboard page boundaries on the compact spacing rhythm", () => {
     const theme = readStyle("var/global-theme.scss");
     const globalStyle = readStyle("index.scss");
-    const healthMonitor = read("ops/health-monitor/index.vue");
+    const monitor = read("ops/monitor/index.vue");
     const dataImport = read("data/import/index.vue");
     const strategyOverview = read("strategy/overview/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
@@ -235,8 +235,9 @@ describe("page layout standards", () => {
     expect(theme).toMatch(/\$space-4:\s*16px;/);
     expect(globalStyle).toContain("--moox-space-2: #{$space-2};");
     expect(globalStyle).toContain("--moox-space-4: #{$space-4};");
-    expect(healthMonitor).toContain("健康监控");
-    expect(healthMonitor).toMatch(/\.health-section\s*\{[\s\S]*?margin-top:\s*24px;/);
+    expect(monitor).toContain("<h2>监控告警</h2>");
+    expectMargin(monitor, ".page-head", "margin-bottom", 8);
+    expectMargin(monitor, ".monitor-section", "margin-top", 20);
 
     expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
