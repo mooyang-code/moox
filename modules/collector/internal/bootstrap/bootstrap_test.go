@@ -80,8 +80,8 @@ func TestCollectorHealthSnapshot(t *testing.T) {
 	if rsp.Module != "collector" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)
 	}
-	if rsp.Details["storage_rpc_gateway_target"] != "ip://127.0.0.1:11003" {
-		t.Fatalf("storage_rpc_gateway_target = %v", rsp.Details["storage_rpc_gateway_target"])
+	if rsp.Details["gateway_caller"] != "collector" {
+		t.Fatalf("gateway_caller = %v", rsp.Details["gateway_caller"])
 	}
 	dnsDetails, ok := rsp.Details["dns_resolver"].(map[string]any)
 	if !ok || dnsDetails["enabled"] != false || dnsDetails["source"] != "local" {

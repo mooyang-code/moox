@@ -66,8 +66,8 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if deps.ServiceGatewayTarget != "https://gw.example.com:11001" {
 		t.Fatalf("ServiceGatewayTarget = %q, want service_gateway deployment target", deps.ServiceGatewayTarget)
 	}
-	if deps.StorageRPCGatewayTarget != "gw.example.com:11003" {
-		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
+	if deps.InvokeStorageRPCGatewayTarget != "gw.example.com:11003" {
+		t.Fatalf("InvokeStorageRPCGatewayTarget = %q, want native service gateway target", deps.InvokeStorageRPCGatewayTarget)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestResolveSelectsStorageGatewayNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assert.Equal(t, "compute.example.com:11003", deps.StorageRPCGatewayTarget)
+	assert.Equal(t, "compute.example.com:11003", deps.InvokeStorageRPCGatewayTarget)
 }
 
 func TestResolveSelectsCollectorRuntimeGatewayOnCollectorNode(t *testing.T) {
@@ -156,7 +156,7 @@ func TestResolveSelectsCollectorRuntimeGatewayOnCollectorNode(t *testing.T) {
 
 	deps, err := Resolve(context.Background(), cfg)
 	require.NoError(t, err)
-	assert.Equal(t, "storage-gw.example.com:11003", deps.StorageRPCGatewayTarget)
+	assert.Equal(t, "storage-gw.example.com:11003", deps.InvokeStorageRPCGatewayTarget)
 	assert.Equal(t, "collector-gw.example.com:11003", deps.CollectorRuntimeGatewayTarget)
 	assert.Equal(t, "collector-2", deps.CollectorRuntimeGatewayNodeID)
 }
@@ -210,10 +210,10 @@ func TestResolveFallsBackToExplicitStorageTargetWhenRouteIsIncomplete(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	assert.Equal(t, "ip://storage.example.com:11003", deps.StorageRPCGatewayTarget)
+	assert.Equal(t, "ip://storage.example.com:11003", deps.InvokeStorageRPCGatewayTarget)
 }
 
-func TestResolvePrefersExplicitPrivateStorageTargetForLocalRPC(t *testing.T) {
+func TestResolveUsesPublicStorageTargetForExternalSCF(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ret_info": map[string]any{"code": 0, "msg": "ok"},
@@ -238,19 +238,15 @@ func TestResolvePrefersExplicitPrivateStorageTargetForLocalRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assert.Equal(t, "ip://10.206.0.5:11003", deps.StorageRPCGatewayTarget)
 	assert.Equal(t, "146.56.196.204:11003", deps.InvokeStorageRPCGatewayTarget)
 }
 
-func TestSelectStorageRPCTargets(t *testing.T) {
-	local, invoke, err := selectStorageRPCTargets("ip://10.206.0.5:11003", "146.56.196.204:11003")
+func TestSelectExternalStorageTarget(t *testing.T) {
+	invoke, err := selectExternalStorageTarget("ip://10.206.0.5:11003", "146.56.196.204:11003")
 	require.NoError(t, err)
-	assert.Equal(t, "ip://10.206.0.5:11003", local)
 	assert.Equal(t, "146.56.196.204:11003", invoke)
-
-	local, invoke, err = selectStorageRPCTargets("ip://127.0.0.1:11003", "gw.example.com:11003")
+	invoke, err = selectExternalStorageTarget("ip://127.0.0.1:11003", "gw.example.com:11003")
 	require.NoError(t, err)
-	assert.Equal(t, "gw.example.com:11003", local)
 	assert.Equal(t, "gw.example.com:11003", invoke)
 }
 

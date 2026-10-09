@@ -1,5 +1,3 @@
-storage:
-  target: ""
 poll_interval: 1m
 fetch_timeout: 2m
 health_addr: 127.0.0.1:11413

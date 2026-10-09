@@ -29,14 +29,21 @@ const (
 // completion consumer: completions report a batch's outcome, while this
 // records when each subject's data actually reached Storage.
 func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *store.TaskInstanceRepository) error {
+	_, err := StartStorageWriteConsumerWithDone(ctx, spaceID, instances)
+	return err
+}
+
+func StartStorageWriteConsumerWithDone(ctx context.Context, spaceID string, instances *store.TaskInstanceRepository) (<-chan struct{}, error) {
 	if instances == nil {
-		return fmt.Errorf("task instance repository is required")
+		return nil, fmt.Errorf("task instance repository is required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
 	if spaceID == "" {
-		return fmt.Errorf("storage write consumer space_id is required")
+		return nil, fmt.Errorf("storage write consumer space_id is required")
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		backoff := time.Second
 		for ctx.Err() == nil {
 			client, err := completionEventBusClient(ctx)
@@ -79,7 +86,7 @@ func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *s
 			}
 		}
 	}()
-	return nil
+	return done, nil
 }
 
 func storageWriteConsumerName(spaceID string) string {

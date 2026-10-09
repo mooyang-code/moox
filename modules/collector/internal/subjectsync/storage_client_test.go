@@ -18,7 +18,7 @@ func TestStorageClientHostAuthPreservesMasterSecretDerivation(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "")
 	require.NoError(t, os.Unsetenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"))
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "subject-sync-test-secret")
-	storage, err := NewStorageClient("ip://127.0.0.1:11003")
+	storage, err := NewStorageClient(subjectGatewayFunc(func(context.Context, string, string, any, any) error { return nil }))
 	require.NoError(t, err)
 	require.Equal(t, "moox-collector", storage.auth.AppId)
 	require.Equal(t, mooxsecurity.HMACSHA256Hex("subject-sync-test-secret", []byte("moox-collector")), storage.auth.AppKey)
@@ -33,16 +33,11 @@ func TestStorageClientHostAuthPreservesMasterSecretDerivation(t *testing.T) {
 func TestStorageClientManagedAuthErrorsBeforeProxyCreation(t *testing.T) {
 	setSubjectSyncStorageConfig(t)
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "subject-sync-test-secret")
-	oldFactory := storagepb.NewMetadataClientProxy
-	t.Cleanup(func() { storagepb.NewMetadataClientProxy = oldFactory })
 	proxyCalls := 0
-	storagepb.NewMetadataClientProxy = func(...client.Option) storagepb.MetadataClientProxy {
-		proxyCalls++
-		return nil
-	}
+	gateway := subjectGatewayFunc(func(context.Context, string, string, any, any) error { proxyCalls++; return nil })
 	for _, raw := range []string{"", "null", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`} {
 		t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", raw)
-		storage, err := NewStorageClient("ip://127.0.0.1:11003")
+		storage, err := NewStorageClient(gateway)
 		require.Error(t, err)
 		require.Nil(t, storage)
 		require.NotContains(t, err.Error(), "subject-sync-test-secret")
@@ -148,4 +143,10 @@ func TestStorageClientListTagsStopsAtExactFullPage(t *testing.T) {
 
 func storageSuccess() *storagepb.RetInfo {
 	return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
+}
+
+type subjectGatewayFunc func(context.Context, string, string, any, any) error
+
+func (f subjectGatewayFunc) Invoke(ctx context.Context, service, method string, request, response any) error {
+	return f(ctx, service, method, request, response)
 }

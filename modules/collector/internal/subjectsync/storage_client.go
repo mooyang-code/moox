@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
+	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -34,14 +35,15 @@ type StorageClient struct {
 	auth   *storagepb.AuthInfo
 }
 
-func NewStorageClient(target string) (*StorageClient, error) {
+func NewStorageClient(gateway gatewayclient.Invoker) (*StorageClient, error) {
 	auth, err := marketstorage.ResolveStorageAuthInfo(marketstorage.InstTypeSPOT)
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage auth: %w", err)
 	}
-	target = marketstorage.NormalizeStorageTarget(target, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, marketstorage.StorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-	return &StorageClient{client: storagepb.NewMetadataClientProxy(options...), auth: auth}, nil
+	if gateway == nil {
+		return nil, fmt.Errorf("collector gateway client is required")
+	}
+	return &StorageClient{client: storageio.NewGatewayClient(gateway), auth: auth}, nil
 }
 
 func (c *StorageClient) ListTags(ctx context.Context) ([]*storagepb.Tag, error) {

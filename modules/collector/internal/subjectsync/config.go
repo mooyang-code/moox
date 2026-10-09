@@ -1,7 +1,9 @@
 package subjectsync
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -11,15 +13,10 @@ import (
 )
 
 type Config struct {
-	Storage      StorageConfig  `yaml:"storage"`
 	PollInterval time.Duration  `yaml:"poll_interval"`
 	FetchTimeout time.Duration  `yaml:"fetch_timeout"`
 	HealthAddr   string         `yaml:"health_addr"`
 	Attributes   []AttributeJob `yaml:"attributes"`
-}
-
-type StorageConfig struct {
-	Target string `yaml:"target"`
 }
 
 type AttributeJob struct {
@@ -36,14 +33,14 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if strings.TrimSpace(cfg.Storage.Target) == "" {
-		cfg.Storage.Target = strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"))
-	}
-	if strings.TrimSpace(cfg.Storage.Target) == "" {
-		return Config{}, fmt.Errorf("storage.target is required")
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return Config{}, fmt.Errorf("subject config must contain exactly one YAML document")
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = time.Minute

@@ -1,3 +1,7 @@
+gateway_client:
+  caller: collector
+  key_id: ""
+  key_file: ../../secrets/caller-collector.key
 # MooX Collector control-plane service configuration.
 
 database:
@@ -17,8 +21,6 @@ storage:
   # 本地开发默认值；生产部署应通过 t_service_deployments / SysDeploy active 部署信息解析依赖服务。
   gateway_target: ip://127.0.0.1:11003
   gateway_node_id: ""
-  key_id: collector
-  hmac_key_file: "../secrets/gateway-collector.key"
   result_data_node_id: storage-node-0
 
 period_readiness:

@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net/http"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -16,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func main() {
+func run() error {
 	configPath := flag.String("conf", "config/subject.yaml", "runtime config path")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -24,24 +27,33 @@ func main() {
 
 	cfg, err := subjectsync.LoadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("moox-collector-subject config error: %v", err)
+		return fmt.Errorf("moox-collector-subject config error: %v", err)
 	}
 	listers, err := marketwiring.NewSubjectListers()
 	if err != nil {
-		log.Fatalf("moox-collector-subject source initialization failed: %v", err)
+		return fmt.Errorf("moox-collector-subject source initialization failed: %v", err)
 	}
-	storage, err := subjectsync.NewStorageClient(cfg.Storage.Target)
+	appConfig, err := bootstrap.Load(filepath.Join(filepath.Dir(*configPath), "app.yaml"))
 	if err != nil {
-		log.Fatalf("moox-collector-subject storage initialization failed: %v", err)
+		return fmt.Errorf("collector module config: %w", err)
+	}
+	gateway, err := appConfig.OpenGateway(func(err error) { log.Warnf("collector subject directory refresh failed: %v", err) })
+	if err != nil {
+		return fmt.Errorf("collector subject gateway: %w", err)
+	}
+	defer gateway.Close()
+	storage, err := subjectsync.NewStorageClient(gateway)
+	if err != nil {
+		return fmt.Errorf("moox-collector-subject storage initialization failed: %v", err)
 	}
 	if err := storage.RegisterSubjectListing(ctx, listers.Supported()); err != nil {
-		log.Fatalf("moox-collector-subject source registration failed: %v", err)
+		return fmt.Errorf("moox-collector-subject source registration failed: %v", err)
 	}
 	metrics := subjectsync.NewMetrics(nil)
 	state := healthz.NewState("collector-subject", "", "", "")
 	healthHandler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
 	if err != nil {
-		log.Fatalf("moox-collector-subject health initialization failed: %v", err)
+		return fmt.Errorf("moox-collector-subject health initialization failed: %v", err)
 	}
 	go func() {
 		if err := http.ListenAndServe(cfg.HealthAddr, healthHandler); err != nil {
@@ -51,15 +63,18 @@ func main() {
 	state.SetReady(true)
 	reporter, err := report.NewHandler(report.DefaultConfig("collector", "moox_collector_subject"))
 	if err != nil {
-		log.Fatalf("moox-collector-subject metrics reporter initialization failed: %v", err)
+		return fmt.Errorf("moox-collector-subject metrics reporter initialization failed: %v", err)
 	}
-	go reportMetrics(ctx, reporter)
+	reportDone := make(chan struct{})
+	go func() { defer close(reportDone); reportMetrics(ctx, reporter) }()
+	defer func() { stop(); <-reportDone }()
 	log.Info("starting moox-collector-subject")
 	(&subjectsync.Service{
 		Tags:       &subjectsync.TagRunner{Store: storage, Listers: listers, FetchTimeout: cfg.FetchTimeout, Metrics: metrics},
 		Attributes: &subjectsync.AttributeRunner{Store: storage, Listers: listers, Jobs: cfg.Attributes, FetchTimeout: cfg.FetchTimeout, Metrics: metrics},
 		Poll:       cfg.PollInterval,
 	}).Run(ctx)
+	return nil
 }
 
 // reportMetrics publishes the process metrics snapshot every 30s, like the
@@ -77,5 +92,11 @@ func reportMetrics(ctx context.Context, reporter *report.Handler) {
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("moox-collector-subject 运行失败: %v", err)
 	}
 }

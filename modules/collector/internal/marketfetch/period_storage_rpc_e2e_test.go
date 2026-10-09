@@ -133,7 +133,7 @@ func TestPeriodStorageRPCE2E(t *testing.T) {
 
 	storage, err := marketstorage.NewBatchStorageWithWriteSource(gatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
-	metadata, err := marketstorage.NewResampleMetadataClient(gatewayTarget, marketstorage.InstTypeSPOT)
+	metadata, err := periodMetadataClient(gatewayTarget, marketstorage.InstTypeSPOT)
 	require.NoError(t, err)
 
 	// A known calendar session keeps this test independent of holidays and the
@@ -459,8 +459,6 @@ func configurePeriodE2EClients(t *testing.T, root string, ready periodE2EStorage
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", secret)
 	t.Setenv("MOOX_GATEWAY_TARGET_NODE", periodE2EGatewayNodeID)
 	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID", periodE2EGatewayNodeID)
-	t.Setenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET", "")
-	_ = os.Unsetenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET")
 }
 
 func applyPeriodE2ETagSnapshot(t *testing.T, ctx context.Context, metadata *marketstorage.ResampleMetadataClient, ready periodE2EStorageReady, items []*storagegen.TagSnapshotItem, at time.Time) {
@@ -587,7 +585,7 @@ func newPeriodE2ESnapshotScheduler(t *testing.T, ctx context.Context, root, targ
 	}))
 	return db, &marketfetch.Scheduler{
 		SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(),
-		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: storagesource.NewDatasetSource(target),
+		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: periodDatasetSource(target),
 		Invoker: periodE2EEmptyCloudNode{},
 	}
 }
@@ -637,7 +635,7 @@ func runPeriodMetadataDualProviderRPCE2E(t *testing.T, ctx context.Context, targ
 		CollectParams: fmt.Sprintf(`{"market_id":"crypto","instrument_type":"spot","source_id":"spot_http","target_dataset_id":%q,"frequency":"1m"}`, ready.DatasetID),
 		TagIDs:        []string{periodE2ESpotTagID, secondTag}, Enabled: true, PrepareState: domain.PrepareStateReady,
 	}))
-	scheduler := &marketfetch.Scheduler{SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: storagesource.NewDatasetSource(target), Invoker: periodE2EEmptyCloudNode{}}
+	scheduler := &marketfetch.Scheduler{SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: periodDatasetSource(target), Invoker: periodE2EEmptyCloudNode{}}
 	snapshot := periodE2ESchedulerSnapshot(t, ctx, db, scheduler, ready, period)
 	require.Equal(t, uint32(2), snapshot.ExpectedCount)
 	require.Len(t, snapshot.Entries, 2)
@@ -878,7 +876,7 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	scheduler := &marketfetch.Scheduler{
 		SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), Instances: db.TaskInstances(), Retries: db.FetchRetries(),
 		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(),
-		Symbols: storagesource.NewDatasetSource(target), Invoker: invoker, Storage: newStorage, StorageTarget: target,
+		Symbols: periodDatasetSource(target), Invoker: invoker, Storage: newStorage, StorageTarget: target,
 		// Separate initial batches isolate the real provider session guard: an
 		// ETH timeout should not turn the healthy BTC acquisition into a retry.
 		BatchSize: 1, InvokeConcurrency: 1, MaxRetryAttempts: 3, Now: func() time.Time { return now },
@@ -1182,7 +1180,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 		runID      = "stockcn-period-timer-e2e-run"
 	)
 
-	metadata, err := marketstorage.NewResampleMetadataClient(storageGatewayTarget, marketstorage.InstTypeSPOT)
+	metadata, err := periodMetadataClient(storageGatewayTarget, marketstorage.InstTypeSPOT)
 	require.NoError(t, err)
 	clockNow := time.Date(2026, time.September, 30, 7, 30, 0, 0, time.UTC)
 	require.NoError(t, replacePeriodE2EClock(ready.ClockFile, clockNow))
@@ -1973,4 +1971,18 @@ func (p *periodE2EStockFetcher) FetchKlines(ctx context.Context, request marketd
 		Open: 10, High: 11, Low: 9, Close: 10.5, VolumeShares: 100, AmountCNY: 1050,
 		ProviderTimestamp: end, FetchedAt: time.Now().UTC(), RequestID: request.RequestID,
 	}}, nil
+}
+
+func periodMetadataClient(target, instType string) (*marketstorage.ResampleMetadataClient, error) {
+	auth, err := marketstorage.ResolveStorageAuthInfo(instType)
+	if err != nil {
+		return nil, err
+	}
+	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.CredentialsFromEnv())
+	return &marketstorage.ResampleMetadataClient{Client: storagegen.NewMetadataClientProxy(options...), Primary: storagegen.NewPrimaryStoreClientProxy(options...), Auth: auth}, nil
+}
+
+func periodDatasetSource(target string) *storagesource.DatasetSource {
+	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.CredentialsFromEnv())
+	return storagesource.NewDatasetSource(storagegen.NewMetadataClientProxy(options...))
 }

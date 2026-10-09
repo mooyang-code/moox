@@ -65,25 +65,8 @@ func TestDatasetSourceResolveSubjectsDerivesFromTagsWithoutSymbolMapping(t *test
 	require.Equal(t, "BTC-USDT", items[0].SubjectID)
 }
 
-func TestMetadataFailoverClientSupportsGetTag(t *testing.T) {
-	primary := &fakeMetadataClient{tagErr: context.DeadlineExceeded}
-	secondary := &fakeMetadataClient{tag: &storagepb.Tag{SpaceId: "crypto", TagId: "binance_spot", Source: "binance", MarketType: "spot"}}
-	src := &DatasetSource{metadata: &metadataFailoverClient{primary: primary, secondary: secondary}}
-	tag, err := src.GetTag(context.Background(), "crypto", "binance_spot")
-	require.NoError(t, err)
-	require.Equal(t, "binance_spot", tag.GetTagId())
-	require.Equal(t, "binance", tag.GetSource())
-}
-
-func TestNormalizeTRPCTargetRawFormats(t *testing.T) {
-	require.Equal(t, "ip://127.0.0.1:20100", normalizeTRPCTarget("", "20100"))
-	require.Equal(t, "ip://10.0.0.1:20100", normalizeTRPCTarget("10.0.0.1:20100", "20100"))
-	require.Equal(t, "ip://custom", normalizeTRPCTarget("ip://custom", "20100"))
-}
-
-func TestDirectMetadataTargetDerivesPrivateMetadataListener(t *testing.T) {
-	require.Equal(t, "ip://146.56.196.204:20100", directMetadataTarget("ip://146.56.196.204:11003"))
-	require.Empty(t, directMetadataTarget("http://127.0.0.1:11002"))
-	t.Setenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET", "146.56.196.204:20100")
-	require.Equal(t, "ip://146.56.196.204:20100", directMetadataTarget("ip://127.0.0.1:11003"))
+func TestDatasetSourcePreservesCancellationAndDoesNotUseDirectFallback(t *testing.T) {
+	source := NewDatasetSource(&fakeMetadataClient{tagErr: context.Canceled})
+	_, err := source.GetTag(context.Background(), "crypto", "binance_spot")
+	require.ErrorIs(t, err, context.Canceled)
 }

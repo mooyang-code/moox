@@ -45,13 +45,20 @@ func NewPeriodReporter(periods *store.PeriodReadinessRepository, storage Dataset
 }
 
 func StartPeriodReporter(ctx context.Context, reporter *PeriodReporter, interval time.Duration) error {
+	_, err := StartPeriodReporterWithDone(ctx, reporter, interval)
+	return err
+}
+
+func StartPeriodReporterWithDone(ctx context.Context, reporter *PeriodReporter, interval time.Duration) (<-chan struct{}, error) {
 	if reporter == nil {
-		return fmt.Errorf("period reporter is required")
+		return nil, fmt.Errorf("period reporter is required")
 	}
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -65,7 +72,7 @@ func StartPeriodReporter(ctx context.Context, reporter *PeriodReporter, interval
 			}
 		}
 	}()
-	return nil
+	return done, nil
 }
 
 func (r *PeriodReporter) Flush(ctx context.Context) error {

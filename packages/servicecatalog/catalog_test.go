@@ -319,3 +319,20 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectorActivationPermissionRemainsBounded(t *testing.T) {
+	c := mustCatalog(t)
+	if !c.Allowed("collector", "trpc.moox.storage.Metadata", "ActivateDataset") {
+		t.Fatal("Collector must activate its task result datasets")
+	}
+	for _, caller := range []string{"scf-collector", "monitor", "strategy", "storage-view"} {
+		if c.Allowed(caller, "trpc.moox.storage.Metadata", "ActivateDataset") {
+			t.Fatalf("unexpected activation grant: %s", caller)
+		}
+	}
+	for _, method := range []string{"RebindDatasetDataNode", "DeleteDataNode", "RegisterDataNode"} {
+		if c.Allowed("collector", "trpc.moox.storage.Metadata", method) {
+			t.Fatalf("unexpected Collector administration grant: %s", method)
+		}
+	}
+}

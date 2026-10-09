@@ -313,3 +313,29 @@ func writeCollectorConfig(t *testing.T, content string) string {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
 }
+
+func TestCollectorGatewayIdentityUsesStrictConfiguration(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CALLER", "wrong-legacy-caller")
+	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID", "obsolete-key")
+	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE", "/nonexistent/obsolete-key")
+	cfg, err := Load(writeCollectorConfig(t, "gateway_client:\n  key_id: admin-assigned-collector-key\n"))
+	require.NoError(t, err)
+	require.Equal(t, "collector", cfg.GatewayClient.Caller)
+	require.Equal(t, "admin-assigned-collector-key", cfg.GatewayClient.KeyID)
+	require.Equal(t, "../../secrets/caller-collector.key", cfg.GatewayClient.KeyFile)
+	for _, raw := range []string{
+		"gateway_client: {caller: monitor}\n",
+		"gateway_client: {key_id: 'bad key'}\n",
+		"gateway_client: {target: 'ip://127.0.0.1:11003'}\n",
+		"gateway_client: {key_file: ''}\n",
+		"storage: {key_id: old}\n",
+		"storage: {hmac_key_file: old}\n",
+		"gateway_client: {caller: collector, caller: monitor}\n",
+		"{}\n---\n{}\n",
+	} {
+		_, err := Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
+	}
+	_, err = Default().OpenGateway(nil)
+	require.Error(t, err, "an in-memory default must not manufacture a deployment identity")
+}

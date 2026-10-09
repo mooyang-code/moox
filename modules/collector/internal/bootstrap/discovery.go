@@ -18,18 +18,15 @@ import (
 
 // Dependencies contains the service endpoints used by CollectMgr.
 type Dependencies struct {
-	AdminGatewayURL         string
-	ServiceGatewayTarget    string
-	ServiceAuth             ServiceAuthConfig
-	StorageRPCGatewayTarget string
+	AdminGatewayURL      string
+	ServiceGatewayTarget string
+	ServiceAuth          ServiceAuthConfig
 	// CollectorRuntimeGatewayTarget is the native tRPC Gateway on the node
 	// hosting MarketFetchRuntime. It must not be inferred from Storage routing.
 	CollectorRuntimeGatewayTarget string
 	CollectorRuntimeGatewayNodeID string
 	// InvokeStorageRPCGatewayTarget is the address sent to SCF invoke
-	// payloads. Overseas functions cannot reach a mainland private IP, so this
-	// stays on the discovered public native gateway when an explicit private
-	// target is used for Collector's own Storage RPC.
+	// payloads until E2. Internal clients obtain routes from Directory.
 	InvokeStorageRPCGatewayTarget string
 }
 
@@ -62,15 +59,13 @@ type activeDeploymentsRsp struct {
 // Local config remains the fallback so a developer can run collector without admin.
 // When sysdeploy.admin_gateway_url and service auth are configured, active
 // deployment records from t_service_deployments supply the public native
-// gateway used for SCF invoke payloads. An explicit non-loopback
-// storage.gateway_target (including a private IP from runtime.env) is kept for
-// Collector's own Storage RPC.
+// gateway used for SCF invoke payloads until E2. Internal Storage clients use
+// gatewayclient and do not consume a discovered RPC target.
 func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	deps := Dependencies{
 		AdminGatewayURL:               defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceGatewayTarget:          defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
 		ServiceAuth:                   cfg.SysDeploy.ServiceAuth,
-		StorageRPCGatewayTarget:       cfg.Storage.GatewayTarget,
 		InvokeStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 		CollectorRuntimeGatewayTarget: cfg.CollectorRuntime.GatewayTarget,
 		CollectorRuntimeGatewayNodeID: cfg.CollectorRuntime.NodeID,
@@ -99,11 +94,10 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	}
 	discovered := strings.TrimSpace(endpointTRPCTarget(active, nativeGateway))
 	configured := strings.TrimSpace(cfg.Storage.GatewayTarget)
-	local, invoke, err := selectStorageRPCTargets(configured, discovered)
+	invoke, err := selectExternalStorageTarget(configured, discovered)
 	if err != nil {
 		return deps, fmt.Errorf("active %s deployment has no native tRPC target", nativeGateway)
 	}
-	deps.StorageRPCGatewayTarget = local
 	deps.InvokeStorageRPCGatewayTarget = invoke
 	runtimeTarget, runtimeNodeID, runtimeErr := resolveCollectorRuntimeGateway(active, cfg.CollectorRuntime)
 	if runtimeErr != nil {
@@ -168,21 +162,16 @@ func collectorRuntimeNodeID(active map[string]endpoint) (string, error) {
 	return "", nil
 }
 
-func selectStorageRPCTargets(configured, discovered string) (local, invoke string, err error) {
+// selectExternalStorageTarget keeps the discovered public SCF route until E2.
+func selectExternalStorageTarget(configured, discovered string) (string, error) {
+	if discovered = strings.TrimSpace(discovered); discovered != "" {
+		return discovered, nil
+	}
 	configured = strings.TrimSpace(configured)
-	discovered = strings.TrimSpace(discovered)
-	switch {
-	case isUsableConfiguredStorageTarget(configured):
-		local = configured
-	case discovered != "":
-		local = discovered
-	default:
-		return "", "", fmt.Errorf("storage rpc target missing")
+	if isUsableConfiguredStorageTarget(configured) {
+		return configured, nil
 	}
-	if discovered != "" {
-		return local, discovered, nil
-	}
-	return local, local, nil
+	return "", fmt.Errorf("external storage rpc target missing")
 }
 
 // preferLocalServiceGatewayTarget avoids sending same-host control-plane

@@ -4,20 +4,24 @@ package bootstrap
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the root collector control-plane configuration.
 type Config struct {
+	GatewayClient       gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath          string                   `yaml:"-"`
 	SCFRegionBlacklists map[string][]string      `yaml:"scf_region_blacklists"`
 	Database            DatabaseConfig           `yaml:"database"`
 	CloudNode           CloudNodeConfig          `yaml:"cloudnode"`
@@ -60,12 +64,11 @@ type CloudNodeConfig struct {
 	ServicePath string `yaml:"service_path"`
 }
 
-// StorageConfig describes storage service addresses.
+// StorageConfig keeps the SCF external target until E2 and the result node ID.
+// Internal Storage calls use GatewayClient and never use these addresses.
 type StorageConfig struct {
 	GatewayTarget    string `yaml:"gateway_target"`
 	GatewayNodeID    string `yaml:"gateway_node_id"`
-	KeyID            string `yaml:"key_id"`
-	HMACKeyFile      string `yaml:"hmac_key_file"`
 	ResultDataNodeID string `yaml:"result_data_node_id"`
 }
 
@@ -185,10 +188,24 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
+	cfg.sourcePath, err = filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve collector config: %w", err)
+	}
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("collector config must contain exactly one YAML document")
+	}
+	if cfg.GatewayClient.Caller != "collector" {
+		return nil, fmt.Errorf("gateway_client.caller must be collector")
+	}
+	if err := cfg.GatewayClient.Validate(); err != nil {
+		return nil, err
 	}
 	cfg.applyEnv()
 	if err := cfg.validateStorageTargets(); err != nil {
@@ -249,12 +266,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_NODE_ID"); v != "" {
 		c.CollectorRuntime.NodeID = strings.TrimSpace(v)
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID"); v != "" {
-		c.Storage.KeyID = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
-		c.Storage.HMACKeyFile = v
-	}
 	if v := os.Getenv("MOOX_COLLECTOR_RESULT_DATA_NODE_ID"); v != "" {
 		c.Storage.ResultDataNodeID = v
 	}
@@ -309,11 +320,6 @@ func (c *Config) applyEnv() {
 func (c *Config) validateStorageTargets() error {
 	if !isStorageTRPCTarget(c.Storage.GatewayTarget) {
 		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
-	}
-	if strings.TrimSpace(c.Storage.HMACKeyFile) != "" {
-		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
-			return fmt.Errorf("storage hmac credentials: %w", err)
-		}
 	}
 	return nil
 }
@@ -472,6 +478,7 @@ func validDNSResolverDomain(domain string) bool {
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
+		GatewayClient: gatewayclient.FileConfig{Caller: "collector", KeyFile: "../../secrets/caller-collector.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_collector.db",
@@ -529,4 +536,12 @@ func splitCSV(raw string) []string {
 		}
 	}
 	return result
+}
+
+// OpenGateway opens one process-owned client using the canonical host identity.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" || c.GatewayClient.Caller != "collector" {
+		return nil, fmt.Errorf("collector gateway client requires a loaded collector configuration")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

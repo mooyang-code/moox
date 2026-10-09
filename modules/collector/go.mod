@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/collector
 
-go 1.25.0
+go 1.26.9
 
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
@@ -11,10 +11,12 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/tdx v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
@@ -115,6 +117,7 @@ require (
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
@@ -170,3 +173,9 @@ replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsr
 replace github.com/mooyang-code/moox/packages/cloudprovider => ../../packages/cloudprovider
 
 replace github.com/mooyang-code/moox/packages/storagepolicy => ../../packages/storagepolicy
+
+replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
+
+replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
+
+replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen

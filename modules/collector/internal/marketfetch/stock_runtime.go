@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// NewMarketStorage keeps one authenticated Storage adapter for both market
-// modules while the remaining Binance-specific configuration is retired.
+// NewMarketStorage constructs the external SCF adapter; its Access transport
+// migrates in E2. Internal workers use the process-owned gateway factory.
 func NewMarketStorage(target, writeSource string) (Storage, error) {
 	storage, err := marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, writeSource)
 	if err != nil {

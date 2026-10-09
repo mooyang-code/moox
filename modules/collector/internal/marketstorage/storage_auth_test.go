@@ -82,10 +82,10 @@ func assertStorageAuthConstructorsFailBeforeProxy(t *testing.T) {
 	writer, err := NewBatchStorageWithWriteSource("ip://127.0.0.1:11003", InstTypeSPOT, "test")
 	require.Error(t, err)
 	require.Nil(t, writer)
-	metadata, err := NewResampleMetadataClient("ip://127.0.0.1:11003", InstTypeSPOT)
+	metadata, err := NewGatewayResampleMetadataClient(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
 	require.Error(t, err)
 	require.Nil(t, metadata)
-	resample, err := NewResampleStorage("ip://127.0.0.1:11003", InstTypeSPOT, "test")
+	resample, err := NewGatewayResampleStorage(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT, "test")
 	require.Error(t, err)
 	require.Nil(t, resample)
 	auth, err := ResolveStorageAuthInfo(InstTypeSPOT)
@@ -111,10 +111,10 @@ func TestStorageRuntimeManagedAuthCompletesPeriodRPC(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writer.CommitTimeSeriesBatch(context.Background(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}}, "test-event"))
 	require.Equal(t, 2, access.calls)
-	metadata, err := NewResampleMetadataClient("", InstTypeSPOT)
+	metadata, err := NewGatewayResampleMetadataClient(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
 	require.NoError(t, err)
 	require.Equal(t, key, metadata.Auth.AppKey)
-	resample, err := NewResampleStorage("", InstTypeSPOT, "test")
+	resample, err := NewGatewayResampleStorage(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT, "test")
 	require.NoError(t, err)
 	require.Equal(t, key, resample.(*storageWriter).authInfo.AppKey)
 }
@@ -189,4 +189,54 @@ func (c *authPeriodClient) CommitTimeSeriesBatch(_ context.Context, req *storage
 	require.Equal(c.t, "moox-collector", req.AuthInfo.AppId)
 	require.Equal(c.t, c.wantKey, req.AuthInfo.AppKey)
 	return &storagepb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: storageSuccess(), AcceptedSeriesIndexes: []uint32{0}}, nil
+}
+
+type storageGatewayFunc func(context.Context, string, string, any, any) error
+
+func (f storageGatewayFunc) Invoke(ctx context.Context, service, method string, request, response any) error {
+	return f(ctx, service, method, request, response)
+}
+
+func TestInternalGatewayWriterDoesNotRepeatFailedCalls(t *testing.T) {
+	setStorageAuthConfig(t, "moox-collector", "host-config-key")
+	unsetStorageAuthEnv(t, storageAppKeysEnv)
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "fixture-primary-secret")
+	expectation := validStorageExpectation(time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC))
+	for _, operation := range []struct {
+		name string
+		call func(BatchStorage) error
+	}{
+		{"CommitTimeSeriesBatch", func(w BatchStorage) error {
+			return w.CommitTimeSeriesBatch(t.Context(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}}, "stable-event")
+		}},
+		{"RecordDatasetPeriodFailures", func(w BatchStorage) error {
+			_, err := w.RecordDatasetPeriodFailures(t.Context(), expectation, []uint32{0})
+			return err
+		}},
+		{"UpsertFields", func(w BatchStorage) error { return w.UpsertFields(t.Context(), nil) }},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			calls := 0
+			gateway := storageGatewayFunc(func(_ context.Context, service, method string, request, response any) error {
+				calls++
+				require.Equal(t, "trpc.moox.storage.PrimaryStore", service)
+				require.Equal(t, operation.name, method)
+				return context.DeadlineExceeded
+			})
+			writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "collector")
+			require.NoError(t, err)
+			require.ErrorIs(t, operation.call(writer), context.DeadlineExceeded)
+			require.Equal(t, 1, calls)
+		})
+	}
+	var methods []string
+	gateway := storageGatewayFunc(func(_ context.Context, _, method string, request, response any) error {
+		methods = append(methods, method)
+		return context.DeadlineExceeded
+	})
+	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "collector")
+	require.NoError(t, err)
+	_, err = writer.EnsureDatasetPeriod(t.Context(), expectation)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, []string{"EnsureDatasetPeriod", "GetDatasetPeriodStatus"}, methods, "an unknown write outcome is checked once without resending the write")
 }

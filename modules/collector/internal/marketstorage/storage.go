@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -53,52 +55,61 @@ type ResampleViewSyncWaiter interface {
 }
 
 type ResampleMetadataClient struct {
-	Client  storagepb.MetadataClientProxy
-	Primary storagepb.PrimaryStoreClientProxy
+	Client  storageio.Metadata
+	Primary storageio.Primary
 	Auth    *storagepb.AuthInfo
 }
 
 type storageWriter struct {
-	access      storagepb.PrimaryStoreClientProxy
+	access      storageio.Primary
 	period      periodStorageAccess
-	metadata    storagepb.MetadataClientProxy
+	metadata    storageio.Metadata
 	authInfo    *storagepb.AuthInfo
 	writeSource string
+	internal    bool
+}
+
+func newGatewayWriter(gateway gatewayclient.Invoker, instType, writeSource string) (*storageWriter, error) {
+	if gateway == nil {
+		return nil, fmt.Errorf("collector gateway client is required")
+	}
+	auth, err := ResolveStorageAuthInfo(instType)
+	if err != nil {
+		return nil, err
+	}
+	adapter := storageio.NewGatewayClient(gateway)
+	return &storageWriter{access: adapter, period: adapter, metadata: adapter, authInfo: auth, writeSource: strings.TrimSpace(writeSource), internal: true}, nil
+}
+
+func NewGatewayBatchStorage(gateway gatewayclient.Invoker, instType, writeSource string) (BatchStorage, error) {
+	return newGatewayWriter(gateway, instType, writeSource)
+}
+
+func NewGatewayResampleStorage(gateway gatewayclient.Invoker, instType, writeSource string) (ResampleStorage, error) {
+	return newGatewayWriter(gateway, instType, writeSource)
+}
+
+func NewGatewayResampleMetadataClient(gateway gatewayclient.Invoker, instType string) (*ResampleMetadataClient, error) {
+	writer, err := newGatewayWriter(gateway, instType, "")
+	if err != nil {
+		return nil, err
+	}
+	return &ResampleMetadataClient{Client: writer.metadata, Primary: writer.access, Auth: writer.authInfo}, nil
+}
+
+// External SCF callers keep their existing policy until Access is migrated in
+// E2. Internal callers rely on gatewayclient for reads and send writes once.
+func (w *storageWriter) runRPC(ctx context.Context, operation func() error) error {
+	if w.internal {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return operation()
+	}
+	return retryStorage(ctx, operation)
 }
 
 func NewBatchStorageWithWriteSource(accessTarget, instType, writeSource string) (BatchStorage, error) {
-	binding, err := ResolveStorageBinding(instType)
-	if err != nil {
-		return nil, err
-	}
-	auth, err := storageAuthInfo(binding)
-	if err != nil {
-		return nil, err
-	}
-	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-	primary := storagepb.NewPrimaryStoreClientProxy(options...)
-	return &storageWriter{
-		access: primary, period: primary, metadata: storagepb.NewMetadataClientProxy(options...),
-		authInfo: auth, writeSource: strings.TrimSpace(writeSource),
-	}, nil
-}
-
-func NewResampleMetadataClient(accessTarget, instType string) (*ResampleMetadataClient, error) {
-	binding, err := ResolveStorageBinding(instType)
-	if err != nil {
-		return nil, err
-	}
-	auth, err := storageAuthInfo(binding)
-	if err != nil {
-		return nil, err
-	}
-	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(options...), Primary: storagepb.NewPrimaryStoreClientProxy(options...), Auth: auth}, nil
-}
-
-func NewResampleStorage(accessTarget, instType, writeSource string) (ResampleStorage, error) {
 	binding, err := ResolveStorageBinding(instType)
 	if err != nil {
 		return nil, err
@@ -123,11 +134,6 @@ func collectorStorageGatewayNodeID() string {
 	return strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 }
 
-// StorageGatewayNodeID returns the gateway node used by collector control-plane
-// calls. Subject synchronization is a separate binary, but it must use the
-// same routing identity as the regular collector.
-func StorageGatewayNodeID() string { return collectorStorageGatewayNodeID() }
-
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
 	return w.UpsertFieldsWithSource(ctx, rows, "")
 }
@@ -140,7 +146,11 @@ func (w *storageWriter) EnsureDatasetPeriod(ctx context.Context, expectation *st
 		return domain.PeriodStorageState{}, err
 	}
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	attempts := 3
+	if w.internal {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return domain.PeriodStorageState{}, err
 		}
@@ -177,7 +187,7 @@ func (w *storageWriter) EnsureDatasetPeriod(ctx context.Context, expectation *st
 		if err := ctx.Err(); err != nil {
 			return domain.PeriodStorageState{}, err
 		}
-		if attempt < 2 {
+		if attempt+1 < attempts {
 			select {
 			case <-ctx.Done():
 				return domain.PeriodStorageState{}, ctx.Err()
@@ -222,7 +232,7 @@ func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *
 	if expectation == nil || len(items) == 0 {
 		return fmt.Errorf("commit time-series batch: expectation and items are required")
 	}
-	return retryStorage(ctx, func() error {
+	return w.runRPC(ctx, func() error {
 		response, err := w.period.CommitTimeSeriesBatch(ctx, &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: w.authInfo, Expectation: expectation, Items: items, SourceEventId: sourceEventID, WriteSource: w.writeSource})
 		if err != nil {
 			return fmt.Errorf("commit time-series batch: %w", err)
@@ -255,7 +265,7 @@ func (w *storageWriter) RecordDatasetPeriodFailures(ctx context.Context, expecta
 	}
 	sort.Slice(dedupedIndexes, func(i, j int) bool { return dedupedIndexes[i] < dedupedIndexes[j] })
 	var confirmed []*storagepb.DatasetPeriodFailureResult
-	err := retryStorage(ctx, func() error {
+	err := w.runRPC(ctx, func() error {
 		response, err := w.period.RecordDatasetPeriodFailures(ctx, &storagepb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: w.authInfo, Expectation: expectation, SeriesIndexes: dedupedIndexes})
 		if err != nil {
 			return fmt.Errorf("record dataset period failures: %w", err)
@@ -286,7 +296,7 @@ func (w *storageWriter) RecordDatasetPeriodFailures(ctx context.Context, expecta
 }
 
 func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
-	return retryStorage(ctx, func() error {
+	return w.runRPC(ctx, func() error {
 		response, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: w.authInfo, Rows: rows, SourceEventId: sourceEventID, WriteSource: w.writeSource})
 		if err != nil {
 			return fmt.Errorf("write time-series rows: %w", err)
@@ -319,7 +329,7 @@ func (w *storageWriter) ReportCollectorPeriodCompleted(ctx context.Context, spac
 		FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CommittedPositions: positions,
 		CollectedAt: payload.GetCollectedAt(),
 	}
-	return retryStorage(ctx, func() error {
+	return w.runRPC(ctx, func() error {
 		response, err := w.access.ReportCollectorPeriodCompleted(ctx, &storagepb.ReportCollectorPeriodCompletedReq{AuthInfo: w.authInfo, SpaceId: spaceID, Marker: marker})
 		if err != nil {
 			return fmt.Errorf("report collector period completed: %w", err)
@@ -334,7 +344,7 @@ func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey
 	}
 	fieldIDs = expandResampleFieldIDs(keys, fieldIDs)
 	var response *storagepb.PrimaryReadFieldsRsp
-	err := retryStorage(ctx, func() error {
+	err := w.runRPC(ctx, func() error {
 		var err error
 		response, err = w.access.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{AuthInfo: w.authInfo, Keys: keys, FieldIds: fieldIDs, AttributeKeys: attributeKeys})
 		if err != nil {
@@ -372,7 +382,7 @@ func (w *storageWriter) ListInstrumentNames(ctx context.Context, spaceID string,
 			end = len(unique)
 		}
 		var response *storagepb.ListSubjectsRsp
-		err := retryStorage(ctx, func() error {
+		err := w.runRPC(ctx, func() error {
 			var err error
 			response, err = w.metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{AuthInfo: w.authInfo, SpaceId: strings.TrimSpace(spaceID), SubjectIds: unique[start:end], Page: &storagepb.Page{Page: 1, Size: uint32(end - start)}})
 			if err != nil {
@@ -566,10 +576,4 @@ func normalizeStorageTarget(raw, defaultPort string) string {
 		return "ip://" + raw
 	}
 	return raw
-}
-
-// NormalizeStorageTarget normalizes a gateway target for standalone collector
-// binaries that share the collector's Storage client configuration.
-func NormalizeStorageTarget(raw, defaultPort string) string {
-	return normalizeStorageTarget(raw, defaultPort)
 }

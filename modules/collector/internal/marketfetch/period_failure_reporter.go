@@ -85,7 +85,7 @@ func (r *PeriodFailureReporter) Wake() {
 // cursor advances after every attempted row, including failures, so an early
 // unreachable Storage row cannot starve later retry keys.
 func (r *PeriodFailureReporter) RunOnce(ctx context.Context, spaceID string) error {
-	if r == nil || r.retries == nil || r.storage == nil || strings.TrimSpace(r.storageTarget) == "" {
+	if r == nil || r.retries == nil || r.storage == nil {
 		return fmt.Errorf("period failure reporter is not initialized")
 	}
 	if !r.runMu.TryLock() {
@@ -491,13 +491,20 @@ func logPeriodFailureReportScanError(ctx context.Context, spaceID string, err er
 }
 
 func StartPeriodFailureReporter(ctx context.Context, reporter *PeriodFailureReporter, spaceID string, interval time.Duration) error {
+	_, err := StartPeriodFailureReporterWithDone(ctx, reporter, spaceID, interval)
+	return err
+}
+
+func StartPeriodFailureReporterWithDone(ctx context.Context, reporter *PeriodFailureReporter, spaceID string, interval time.Duration) (<-chan struct{}, error) {
 	if reporter == nil {
-		return fmt.Errorf("period failure reporter is required")
+		return nil, fmt.Errorf("period failure reporter is required")
 	}
 	if interval <= 0 {
 		interval = periodFailureReportInterval
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -510,5 +517,5 @@ func StartPeriodFailureReporter(ctx context.Context, reporter *PeriodFailureRepo
 			}
 		}
 	}()
-	return nil
+	return done, nil
 }

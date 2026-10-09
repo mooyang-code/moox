@@ -1238,6 +1238,7 @@ components:
               - ActivateDataset
             callers:
               - factor-mgr
+              - collector
       - path: trpc.moox.storage.PrimaryStore
         port: 20102
         console_name: storage
