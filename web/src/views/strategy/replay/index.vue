@@ -12,7 +12,7 @@
           ></a-space
         >
       </div>
-      <a-alert v-if="error" type="error" show-icon class="top-alert">{{ error }}</a-alert>
+      <a-alert v-for="message in errorMessages" :key="message" type="error" show-icon class="top-alert">{{ message }}</a-alert>
       <a-alert v-if="pollFailures >= 3" type="warning" show-icon class="top-alert"
         >后台暂时无法访问，页面上的回放状态可能不是最新；恢复后会自动刷新。</a-alert
       >
@@ -22,19 +22,36 @@
           <a-form layout="vertical">
             <a-form-item v-if="form.instance_id" label="回放对象">
               <a-alert type="info" class="instance-alert"
-                >按实例 <span class="mono">{{ form.instance_id }}</span> 当前会话固化的 DSL 版本回放，与实例实际在跑的策略一致。
+                >按实例 <span class="mono">{{ form.instance_id }}</span>
+                当前会话（停用时为最近一次会话）固化的 DSL 版本回放；重新启用实例会按定义的当前版本重新解析。
                 <template #action
                   ><a-button size="mini" type="text" @click="form.instance_id = ''">改为选择定义</a-button></template
                 ></a-alert
               >
             </a-form-item>
-            <a-form-item v-else label="策略定义" required>
-              <a-select v-model="form.strategy_id" allow-search placeholder="选择定义">
-                <a-option v-for="item in strategyStore.strategies" :key="item.strategy_id" :value="item.strategy_id"
-                  >{{ item.name }}（{{ item.strategy_id }}）</a-option
-                >
-              </a-select>
-            </a-form-item>
+            <template v-else>
+              <a-form-item label="回放对象">
+                <a-radio-group v-model="form.source" type="button" size="small">
+                  <a-radio value="definition">已保存的定义</a-radio>
+                  <a-radio value="dsl">DSL 文本（草稿）</a-radio>
+                </a-radio-group>
+              </a-form-item>
+              <a-form-item v-if="form.source === 'definition'" label="策略定义" required>
+                <a-select v-model="form.strategy_id" allow-search placeholder="选择定义">
+                  <a-option v-for="item in strategyStore.strategies" :key="item.strategy_id" :value="item.strategy_id"
+                    >{{ item.name }}（{{ item.strategy_id }}）</a-option
+                  >
+                </a-select>
+              </a-form-item>
+              <a-form-item v-else label="DSL 文本" required>
+                <a-textarea
+                  v-model="form.dsl_yaml"
+                  aria-label="回放用的 DSL 文本"
+                  :auto-size="{ minRows: 6, maxRows: 16 }"
+                  placeholder="粘贴未保存的策略 DSL，直接回放"
+                />
+              </a-form-item>
+            </template>
             <a-form-item label="View" required>
               <a-select v-model="form.view_id" allow-search :loading="viewsLoading" placeholder="选择 View（第一版只支持现货）">
                 <a-option v-for="view in views" :key="view.view_id" :value="view.view_id"
@@ -73,8 +90,9 @@
                 <div class="replay-row">
                   <div>
                     <a-tag size="small" :color="replayStatusColor(item.status)">{{ replayStatusLabel(item.status) }}</a-tag>
-                    <span class="mono">{{ item.view_id }}</span>
+                    <span>{{ sourceLabel(item) }}</span>
                   </div>
+                  <div class="muted mono">{{ item.view_id }}</div>
                   <div class="muted">{{ formatUtcTime(item.start_time) }} → {{ formatUtcTime(item.end_time) }}</div>
                   <div v-if="item.status === 'running' && item.progress_time" class="muted">
                     进度 {{ formatUtcTime(item.progress_time) }}
@@ -95,7 +113,8 @@
           />
         </a-grid-item>
         <a-grid-item :span="{ xs: 1, md: 2 }">
-          <a-empty v-if="!selected" description="选择或发起一个回放" />
+          <div v-if="detailLoading" class="detail-loading"><a-spin tip="正在加载回放详情" /></div>
+          <a-empty v-else-if="!selected" description="选择或发起一个回放" />
           <template v-else>
             <div class="detail-head">
               <div>
@@ -105,7 +124,7 @@
               </div>
               <a-space>
                 <a-popconfirm
-                  v-if="selected.status === 'pending' || selected.status === 'running'"
+                  v-if="(selected.status === 'pending' || selected.status === 'running') && selected.replay_id === selectedId"
                   content="回放不支持续跑，取消后只保留已写入的周期记录。确定取消？"
                   ok-text="取消回放"
                   cancel-text="继续运行"
@@ -116,7 +135,12 @@
               </a-space>
             </div>
             <div class="muted detail-info">
-              View {{ selected.view_id }} · 区间 {{ formatUtcTime(selected.start_time) }} →
+              {{ sourceLabel(selected) }}
+              <template v-if="selected.instance_id">
+                · 实例 <span class="mono">{{ selected.instance_id }}</span
+                >，会话 <span class="mono">{{ selected.session_id }}</span></template
+              >
+              · View {{ selected.view_id }} · 区间 {{ formatUtcTime(selected.start_time) }} →
               {{ formatUtcTime(selected.end_time) }} · 手续费 {{ selected.fee_bps }} bps
               <template v-if="metrics?.first_bar_end">
                 · 实际首根 {{ formatUtcTime(metrics.first_bar_end) }}，末根 {{ formatUtcTime(metrics.last_bar_end) }}</template
@@ -126,6 +150,13 @@
               >回放失败：{{
                 selected.error === "interrupted" ? "进程重启中断，已写入的周期保留，可重新发起" : selected.error
               }}</a-alert
+            >
+            <a-alert v-if="metrics && partialMetrics" type="warning" class="top-alert"
+              >回放{{ selected.status === "cancelled" ? "已取消" : "失败" }}，以下是截至中断时的部分指标（共
+              {{ metrics.bars }} 根）。</a-alert
+            >
+            <a-alert v-else-if="awaitingMetrics" type="info" class="top-alert"
+              >已取消，正在等待写入截至取消时的部分指标……</a-alert
             >
             <div v-if="metrics" class="metrics">
               <div class="metric">
@@ -178,6 +209,11 @@
                 </div>
               </a-collapse-item>
             </a-collapse>
+            <a-collapse v-if="selected.dsl_yaml" class="limits">
+              <a-collapse-item key="dsl" :header="`被回放的 DSL（${shortHash(selected.dsl_hash)}）`">
+                <pre class="dsl">{{ selected.dsl_yaml }}</pre>
+              </a-collapse-item>
+            </a-collapse>
             <a-table
               row-key="bar_end_time"
               size="small"
@@ -185,8 +221,46 @@
               :loading="tableLoading"
               :pagination="tablePagination"
               :scroll="{ x: 960 }"
+              :expandable="{ title: '明细', width: 60 }"
               @page-change="changeTablePage"
             >
+              <template #expand-row="{ record }">
+                <div class="bar-detail">
+                  <div>
+                    现金 {{ pct(barDetail(record).cash) }}（占期末权益）· 成交额 {{ barDetail(record).traded.toFixed(4) }} ·
+                    手续费 {{ barDetail(record).fee.toFixed(6) }}
+                  </div>
+                  <div v-if="barDetail(record).unfilled.length">未达成目标：{{ barDetail(record).unfilled.join("、") }}</div>
+                  <div v-if="barDetail(record).liquidated.length">缺价清算：{{ barDetail(record).liquidated.join("、") }}</div>
+                  <div v-for="note in barDetail(record).notes" :key="note" class="muted">{{ note }}</div>
+                  <a-table
+                    v-if="barDetail(record).positions.length"
+                    size="mini"
+                    :data="barDetail(record).positions"
+                    :pagination="false"
+                    row-key="id"
+                  >
+                    <template #columns>
+                      <a-table-column title="标的" data-index="id" />
+                      <a-table-column title="数量"
+                        ><template #cell="{ record: position }">{{ position.quantity.toPrecision(6) }}</template></a-table-column
+                      >
+                      <a-table-column title="估值价"
+                        ><template #cell="{ record: position }">{{ position.last_price }}</template></a-table-column
+                      >
+                      <a-table-column title="市值"
+                        ><template #cell="{ record: position }">{{ position.value.toFixed(4) }}</template></a-table-column
+                      >
+                      <a-table-column title="状态"
+                        ><template #cell="{ record: position }">{{
+                          position.frozen ? `冻结（连续缺价 ${position.missing_bars} 期）` : "可成交"
+                        }}</template></a-table-column
+                      >
+                    </template>
+                  </a-table>
+                  <div v-else class="muted">本期没有持仓</div>
+                </div>
+              </template>
               <template #columns>
                 <a-table-column title="K 线结束（UTC）" :width="170"
                   ><template #cell="{ record }">{{ formatUtcTime(record.bar_end_time) }}</template></a-table-column
@@ -239,7 +313,7 @@ import { Message } from "@arco-design/web-vue";
 import { default as VChart } from "@visactor/vchart";
 import { useRoute } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
-import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
+import type { InstrumentTarget, Replay, ReplayBar, Strategy } from "@/api/strategy-types";
 import { listViews } from "@/api/storage/metadata";
 import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -249,6 +323,7 @@ import {
   equitySeries,
   formatUtcTime,
   mergeBars,
+  parseBarDetail,
   parseMetrics,
   parseUtcInput,
   recentUtcRange,
@@ -275,24 +350,44 @@ const tablePage = ref(1);
 const tableLoading = ref(false);
 const selectedId = ref("");
 const selected = ref<Replay | null>(null);
+const detailLoading = ref(false);
 const listLoading = ref(false);
 const viewsLoading = ref(false);
 const starting = ref(false);
 const cancelling = ref(false);
-const error = ref("");
+// 错误按来源分别记录：某一处成功只清除自己的错误，不会误清其它来源的提示；切换空间时全部清空。
+const errors = reactive<Record<"strategies" | "views" | "list" | "detail" | "start", string>>({
+  strategies: "",
+  views: "",
+  list: "",
+  detail: "",
+  start: ""
+});
+const errorMessages = computed(() => Object.values(errors).filter(Boolean));
 const pollFailures = ref(0);
+// awaitingMetrics 是刚取消、执行器还没写入部分指标的回放：继续轮询直到指标出现或超时。
+const awaitingMetrics = ref<{ replayId: string; until: number } | null>(null);
 const chartContainer = ref<HTMLElement>();
 const [presetStart, presetEnd] = recentUtcRange(30);
-const form = reactive<{ strategy_id: string; instance_id: string; view_id: string; start: string; end: string; fee_bps: number }>(
-  {
-    strategy_id: String(route.query.strategy_id || ""),
-    instance_id: String(route.query.instance_id || ""),
-    view_id: String(route.query.view_id || ""),
-    start: presetStart,
-    end: presetEnd,
-    fee_bps: 10
-  }
-);
+const form = reactive<{
+  source: "definition" | "dsl";
+  strategy_id: string;
+  dsl_yaml: string;
+  instance_id: string;
+  view_id: string;
+  start: string;
+  end: string;
+  fee_bps: number;
+}>({
+  source: "definition",
+  strategy_id: String(route.query.strategy_id || ""),
+  dsl_yaml: "",
+  instance_id: String(route.query.instance_id || ""),
+  view_id: String(route.query.view_id || ""),
+  start: presetStart,
+  end: presetEnd,
+  fee_bps: 10
+});
 let chart: VChart | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 let polling = false;
@@ -302,6 +397,25 @@ let selectRequest = 0;
 let tableRequest = 0;
 
 const metrics = computed(() => parseMetrics(selected.value?.metrics_json));
+const partialMetrics = computed(() => selected.value?.status === "cancelled" || selected.value?.status === "failed");
+const detailCache = new WeakMap<ReplayBar, ReturnType<typeof parseBarDetail>>();
+
+/** 一期的持仓账本与摘要（完整记录才有），按记录缓存解析结果。 */
+function barDetail(bar: ReplayBar) {
+  let detail = detailCache.get(bar);
+  if (!detail) {
+    detail = parseBarDetail(bar);
+    detailCache.set(bar, detail);
+  }
+  return detail;
+}
+
+/** 回放对象的说明：定义名称（或 ID），或未保存的 DSL 文本。 */
+function sourceLabel(replay: Replay): string {
+  if (!replay.strategy_id) return "DSL 文本（草稿）";
+  const definition = strategyStore.strategies.find((item: Strategy) => item.strategy_id === replay.strategy_id);
+  return definition ? `${definition.name}（${replay.strategy_id}）` : replay.strategy_id;
+}
 const tablePagination = computed(() => ({ current: tablePage.value, pageSize: tablePageSize, total: tableTotal.value }));
 
 function pct(value: number | null) {
@@ -315,8 +429,9 @@ function applyPreset(days: number) {
 async function loadStrategies() {
   try {
     await strategyStore.loadAllStrategies(200);
+    errors.strategies = "";
   } catch (err) {
-    error.value = `策略定义加载失败：${err instanceof Error ? err.message : "未知错误"}`;
+    errors.strategies = `策略定义加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   }
 }
 
@@ -328,9 +443,10 @@ async function loadReplays() {
     if (gen !== generation) return;
     replays.value = result.items;
     replayTotal.value = result.page.total;
+    errors.list = "";
     if (!selectedId.value && result.items.length) await select(result.items[0].replay_id);
   } catch (err) {
-    if (gen === generation) error.value = err instanceof Error ? err.message : "回放列表加载失败";
+    if (gen === generation) errors.list = `回放列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
     if (gen === generation) listLoading.value = false;
   }
@@ -355,8 +471,9 @@ async function loadViews() {
       if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
     }
     views.value = items;
+    errors.views = "";
   } catch (err) {
-    if (gen === generation) error.value = err instanceof Error ? err.message : "View 列表加载失败";
+    if (gen === generation) errors.views = `View 列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
     if (gen === generation) viewsLoading.value = false;
   }
@@ -391,8 +508,16 @@ async function select(replayId: string) {
   const requestId = ++selectRequest;
   const gen = generation;
   const isCurrent = () => requestId === selectRequest && gen === generation;
+  // 立即清掉上一个回放的详情：加载期间不能显示旧回放，取消等操作也不能作用在旧回放上。
   selectedId.value = replayId;
+  selected.value = null;
+  series.value = [];
+  tableRows.value = [];
+  tableTotal.value = 0;
   tablePage.value = 1;
+  chart?.release();
+  chart = null;
+  detailLoading.value = true;
   try {
     const replay = await getReplay(replayId);
     if (!isCurrent()) return;
@@ -400,10 +525,13 @@ async function select(replayId: string) {
     if (all === null) return;
     selected.value = replay;
     series.value = all;
-    error.value = "";
+    errors.detail = "";
+    detailLoading.value = false;
     await Promise.all([renderChart(true), loadTablePage(replayId, isCurrent)]);
   } catch (err) {
-    if (isCurrent()) error.value = err instanceof Error ? err.message : "回放详情加载失败";
+    if (isCurrent()) errors.detail = `回放详情加载失败：${err instanceof Error ? err.message : "未知错误"}`;
+  } finally {
+    if (isCurrent()) detailLoading.value = false;
   }
 }
 
@@ -413,15 +541,28 @@ function changeTablePage(page: number) {
   const requestId = selectRequest;
   const gen = generation;
   loadTablePage(replayId, () => requestId === selectRequest && gen === generation && selectedId.value === replayId).catch(err => {
-    error.value = err instanceof Error ? err.message : "周期记录加载失败";
+    errors.detail = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   });
 }
 
-/** 轮询只刷新排队或运行中的所选回放：曲线增量追加并就地更新，表格停在末页时一并刷新。 */
+/** 所选回放是否还需要轮询：排队或运行中，或刚取消、部分指标尚未写入（最多等 2 分钟）。 */
+function selectedNeedsRefresh(): boolean {
+  const current = selected.value;
+  if (!current || current.replay_id !== selectedId.value) return false;
+  if (current.status === "pending" || current.status === "running") return true;
+  const waiting = awaitingMetrics.value;
+  if (!waiting || waiting.replayId !== current.replay_id) return false;
+  if (parseMetrics(current.metrics_json) || Date.now() > waiting.until) {
+    awaitingMetrics.value = null;
+    return false;
+  }
+  return true;
+}
+
+/** 轮询只刷新需要刷新的所选回放：曲线增量追加并就地更新，表格停在末页时一并刷新。 */
 async function refreshSelected() {
   const current = selected.value;
-  if (!current || current.replay_id !== selectedId.value) return;
-  if (current.status !== "pending" && current.status !== "running") return;
+  if (!current || !selectedNeedsRefresh()) return;
   const replayId = current.replay_id;
   const requestId = selectRequest;
   const gen = generation;
@@ -456,34 +597,58 @@ async function renderChart(rebuild: boolean) {
       xField: "time",
       yField: "value",
       axes: [
-        { orient: "bottom", type: "time" },
+        // 页面其余位置都按 UTC 显示：时间轴与提示框同样用 UTC，并带上时分。
+        { orient: "bottom", type: "time", layers: [{ timeFormat: "%m-%d %H:%M", timeFormatMode: "utc" }] },
         { orient: "left", type: "linear", zero: false }
       ],
       line: { style: { lineWidth: 2 } },
-      point: { visible: false }
+      point: { visible: false },
+      tooltip: {
+        mark: {
+          title: { value: (datum: any) => utcLabel(datum?.time) },
+          content: [{ key: "权益", value: (datum: any) => Number(datum?.value).toFixed(4) }]
+        },
+        dimension: {
+          title: { value: (datum: any) => utcLabel(datum?.time) },
+          content: [{ key: "权益", value: (datum: any) => Number(datum?.value).toFixed(4) }]
+        }
+      }
     },
     { dom: chartContainer.value }
   );
   chart.renderSync();
 }
 
+function utcLabel(time: unknown): string {
+  const value = typeof time === "number" ? time : Number(time);
+  return Number.isFinite(value) ? formatUtcTime(new Date(value).toISOString()) : "";
+}
+
+/** 回放对象三选一：实例会话固化的版本、已保存的定义，或未保存的 DSL 文本。 */
+function replaySource(): { instance_id: string } | { strategy_id: string } | { dsl_yaml: string } | null {
+  if (form.instance_id) return { instance_id: form.instance_id };
+  if (form.source === "dsl") return form.dsl_yaml.trim() ? { dsl_yaml: form.dsl_yaml } : null;
+  return form.strategy_id ? { strategy_id: form.strategy_id } : null;
+}
+
 async function start() {
-  error.value = "";
+  errors.start = "";
   const startTime = parseUtcInput(form.start);
   const endTime = parseUtcInput(form.end);
-  if (!form.view_id || (!form.instance_id && !form.strategy_id)) {
-    error.value = "请选择定义（或从实例详情进入）与 View";
+  const source = replaySource();
+  if (!form.view_id || !source) {
+    errors.start = "请选择 View，并选择定义、粘贴 DSL 文本或从实例详情进入";
     return;
   }
   if (!startTime || !endTime) {
-    error.value = "时间格式应为 YYYY-MM-DD HH:mm（UTC），例如 2026-09-01 00:00";
+    errors.start = "时间格式应为 YYYY-MM-DD HH:mm（UTC），例如 2026-09-01 00:00";
     return;
   }
   const gen = generation;
   starting.value = true;
   try {
     const started = await startReplay({
-      ...(form.instance_id ? { instance_id: form.instance_id } : { strategy_id: form.strategy_id }),
+      ...source,
       view_id: form.view_id,
       start_time: startTime,
       end_time: endTime,
@@ -498,20 +663,23 @@ async function start() {
     if (gen !== generation) return;
     await select(started.replay.replay_id);
   } catch (err) {
-    if (gen === generation) error.value = err instanceof Error ? err.message : "回放发起失败";
+    if (gen === generation) errors.start = `回放发起失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
     starting.value = false;
   }
 }
 
 async function cancel() {
-  if (!selected.value) return;
+  // 只能取消正在显示的回放：切换选择后详情尚未加载完成时不能作用在旧回放上。
+  if (!selected.value || selected.value.replay_id !== selectedId.value) return;
   const gen = generation;
   const replayId = selected.value.replay_id;
   cancelling.value = true;
   try {
     await cancelReplay(replayId);
     if (gen !== generation) return;
+    // 执行器读完当前分段才写入部分指标：继续轮询这个回放，直到指标出现。
+    awaitingMetrics.value = { replayId, until: Date.now() + 120_000 };
     await loadReplays();
     // 取消后整体重读：补上取消前写入的最后几根与部分指标。
     if (gen === generation && selectedId.value === replayId) await select(replayId);
@@ -526,7 +694,8 @@ function startPolling() {
   poll = setInterval(async () => {
     if (polling) return;
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-    if (!replays.value.some(item => item.status === "pending" || item.status === "running")) return;
+    // 所选回放不在当前列表页时也要刷新：轮询条件看列表与所选回放两处。
+    if (!replays.value.some(item => item.status === "pending" || item.status === "running") && !selectedNeedsRefresh()) return;
     polling = true;
     const gen = generation;
     try {
@@ -558,6 +727,9 @@ watch(
     tableRequest += 1;
     selectedId.value = "";
     selected.value = null;
+    detailLoading.value = false;
+    awaitingMetrics.value = null;
+    for (const key of Object.keys(errors) as (keyof typeof errors)[]) errors[key] = "";
     series.value = [];
     tableRows.value = [];
     tableTotal.value = 0;
@@ -683,6 +855,22 @@ onBeforeUnmount(() => {
 }
 .targets {
   color: var(--color-text-2);
+  font-size: 12px;
+}
+.detail-loading {
+  display: flex;
+  justify-content: center;
+  padding: 48px 0;
+}
+.dsl {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.bar-detail {
+  display: grid;
+  gap: 6px;
   font-size: 12px;
 }
 @media (max-width: 900px) {

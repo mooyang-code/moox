@@ -126,3 +126,63 @@ export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[
   }
   return merged.sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
 }
+
+/** 一期理论账本里的一个持仓。 */
+export interface ReplayPosition {
+  id: string;
+  quantity: number;
+  last_price: number;
+  value: number;
+  frozen: boolean;
+  missing_bars: number;
+}
+
+/** 一期的持仓账本与摘要：现金占期末权益的比例、持仓、成交、未达成与清算的标的、求值说明。 */
+export interface ReplayBarDetail {
+  cash: number;
+  positions: ReplayPosition[];
+  traded: number;
+  fee: number;
+  unfilled: string[];
+  liquidated: string[];
+  notes: string[];
+}
+
+function parseObject(raw?: string): any {
+  if (!raw) return {};
+  try {
+    const value = JSON.parse(raw);
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 解析一期的完整记录（positions_json 与 summary_json）；brief 记录或无法解析时返回空明细。 */
+export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
+  const positions = parseObject(bar.positions_json);
+  const summary = parseObject(bar.summary_json);
+  const ledger = summary.ledger && typeof summary.ledger === "object" ? summary.ledger : {};
+  const items: ReplayPosition[] = Object.entries(
+    positions.positions && typeof positions.positions === "object" ? positions.positions : {}
+  ).map(([id, value]: [string, any]) => ({
+    id,
+    quantity: Number(value?.quantity ?? 0),
+    last_price: Number(value?.last_price ?? 0),
+    value: Number(value?.value ?? 0),
+    frozen: Boolean(value?.frozen),
+    missing_bars: Number(value?.missing_bars ?? 0)
+  }));
+  items.sort((a, b) => b.value - a.value || a.id.localeCompare(b.id));
+  const equity = bar.equity > 0 ? bar.equity : 1;
+  const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
+  return {
+    cash: Number(positions.cash ?? 0) / equity,
+    positions: items,
+    traded: Number(ledger.traded ?? 0),
+    fee: Number(ledger.fee ?? 0),
+    unfilled: list(ledger.unfilled),
+    liquidated: list(ledger.liquidated),
+    notes: list(summary.decision?.notes)
+  };
+}

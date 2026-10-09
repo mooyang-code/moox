@@ -106,8 +106,11 @@ export interface Replay {
   error: string;
   created_at: string;
   updated_at: string;
-  /** 被回放的 DSL 版本（内容哈希）。 */
+  /** 被回放的 DSL 版本（内容哈希）。列表不带 dsl_yaml 全文，详情才有。 */
   dsl_hash: string;
+  /** 从实例发起时的来源实例与固化 DSL 的会话。 */
+  instance_id: string;
+  session_id: string;
 }
 
 /** 回放中一个周期的记录；brief 列表不含目标、持仓与摘要 JSON。 */

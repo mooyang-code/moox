@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { equitySeries, formatUtcTime, mergeBars, parseMetrics, parseUtcInput, recentUtcRange, replayStatusLabel } from "./model";
+import {
+  equitySeries,
+  formatUtcTime,
+  mergeBars,
+  parseBarDetail,
+  parseMetrics,
+  parseUtcInput,
+  recentUtcRange,
+  replayStatusLabel
+} from "./model";
 
 describe("replay model helpers", () => {
   it("parses finished metrics and ignores empty ones", () => {
@@ -91,5 +100,35 @@ describe("replay model helpers", () => {
     expect(parseUtcInput("2026-09-01 24:00")).toBeNull();
     expect(parseUtcInput("09/01/2026")).toBeNull();
     expect(recentUtcRange(7, new Date("2026-10-08T15:42:10Z"))).toEqual(["2026-10-01 15:00", "2026-10-08 15:00"]);
+  });
+
+  it("parses a bar's ledger and summary for the detail row", () => {
+    const bar = {
+      bar_end_time: "2026-09-01T01:00:00Z",
+      status: "ok",
+      targets: [],
+      positions_json:
+        '{"cash":0.5,"positions":{"B":{"quantity":2,"last_price":0.25,"value":0.5,"frozen":true,"missing_bars":2},"A":{"quantity":1,"last_price":1,"value":1}}}',
+      summary_json: '{"decision":{"notes":["说明"]},"ledger":{"traded":0.3,"fee":0.001,"unfilled":["C"],"liquidated":["D"]}}',
+      bar_return: 0,
+      equity: 2,
+      turnover: 0,
+      fee: 0,
+      holdings: 2,
+      frozen: 1,
+      skip_reason: "",
+      unfilled: 1,
+      liquidated: 1
+    };
+    const detail = parseBarDetail(bar);
+    expect(detail.cash).toBe(0.25);
+    expect(detail.positions.map(position => position.id)).toEqual(["A", "B"]);
+    expect(detail.positions[1]).toMatchObject({ frozen: true, missing_bars: 2 });
+    expect(detail).toMatchObject({ traded: 0.3, fee: 0.001, unfilled: ["C"], liquidated: ["D"], notes: ["说明"] });
+    expect(parseBarDetail({ ...bar, positions_json: "", summary_json: "oops" })).toMatchObject({
+      positions: [],
+      notes: [],
+      cash: 0
+    });
   });
 });

@@ -94,7 +94,9 @@ function normalizeReplay(value: any): Replay {
     error: value?.error ?? "",
     created_at: value?.created_at ?? "",
     updated_at: value?.updated_at ?? "",
-    dsl_hash: value?.dsl_hash ?? ""
+    dsl_hash: value?.dsl_hash ?? "",
+    instance_id: value?.instance_id ?? "",
+    session_id: value?.session_id ?? ""
   };
 }
 

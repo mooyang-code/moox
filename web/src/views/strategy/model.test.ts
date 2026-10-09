@@ -63,6 +63,7 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("holding:filter")).toBe("延续批次持有，本期filter 未通过（holding:filter）");
     expect(itemReasonLabel("missing:close")).toBe("缺少 close（missing:close）");
     expect(itemReasonLabel("factor_failed:ma_20")).toContain("上游因子失败（ma_20）");
+    expect(itemReasonLabel("source_failed:close")).toContain("上游数据失败（close）");
     expect(itemReasonLabel("custom_reason")).toBe("custom_reason");
   });
 });
