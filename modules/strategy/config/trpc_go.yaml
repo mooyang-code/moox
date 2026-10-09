@@ -15,6 +15,7 @@ server:
       port: 11430
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.strategy.StrategyMgr
       ip: 127.0.0.1

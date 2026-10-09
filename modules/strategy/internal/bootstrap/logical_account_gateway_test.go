@@ -66,7 +66,7 @@ func TestLogicalAccountOwnerUsesConfiguredSignedGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := newRPCService(nil, cfg).LogicalAccounts
+	owner := newRPCService(nil, cfg, nil).LogicalAccounts
 	if err := owner.Validate(context.Background(), "space-1", "logical-1"); err != nil {
 		t.Fatal(err)
 	}

@@ -27,8 +27,8 @@ type Config struct {
 type Consumer struct {
 	cfg       Config
 	processor *trigger.Processor
-	runners   []*jetstream.Runner
 	consumers []*jetstream.Consumer
+	done      chan struct{}
 	cancel    context.CancelFunc
 	ready     bool
 	mu        sync.Mutex
@@ -81,11 +81,13 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}), jetstream.RunnerConfig{BatchSize: c.cfg.BatchSize})
 	c.mu.Lock()
 	c.consumers = []*jetstream.Consumer{readyConsumer}
-	c.runners = []*jetstream.Runner{runner}
+	done := make(chan struct{})
+	c.done = done
 	c.cancel = cancel
 	c.ready = true
 	c.mu.Unlock()
 	go func() {
+		defer close(done)
 		_ = runner.Run(runCtx)
 		c.mu.Lock()
 		c.ready = false
@@ -96,16 +98,20 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 func (c *Consumer) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.cancel != nil {
 		c.cancel()
 	}
 	c.ready = false
+	consumers, done := c.consumers, c.done
+	c.mu.Unlock()
 	var closeErr error
-	for _, consumer := range c.consumers {
+	for _, consumer := range consumers {
 		if consumer != nil {
 			closeErr = errors.Join(closeErr, consumer.Close())
 		}
+	}
+	if done != nil {
+		<-done
 	}
 	return closeErr
 }

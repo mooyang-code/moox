@@ -54,13 +54,13 @@ func TestLoadRejectsInvalidEventBusRuntimeSettings(t *testing.T) {
 	}
 }
 
-func TestDeclarativeConfigMayOmitDependencyTargets(t *testing.T) {
+func TestOfflineConfigDoesNotOpenGatewayIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.yaml")
 	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err != nil {
-		t.Fatalf("expected declarative config without worker path to load: %v", err)
+		t.Fatalf("expected offline config without signing identity to load: %v", err)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestLoadDerivesStorageAppKeysFromRuntimeSecrets(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nstorage:\n  target: ip://storage:11003\n  app_id: strategy\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nstorage:\n  app_id: strategy\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -83,26 +83,34 @@ func TestLoadDerivesStorageAppKeysFromRuntimeSecrets(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsConfiguredStorageWithoutAppKey(t *testing.T) {
+func TestOpenGatewayRejectsStorageWithoutAppKey(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
 	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "")
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nstorage:\n  target: ip://storage:11003\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil {
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.OpenGateway(nil); err == nil {
 		t.Fatal("expected configured storage without app key to fail")
 	}
 }
 
-func TestLoadRejectsConfiguredStorageWithoutViewAppKey(t *testing.T) {
+func TestOpenGatewayRejectsStorageWithoutViewAppKey(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "")
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\nstorage:\n  target: ip://storage:11003\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil {
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.OpenGateway(nil); err == nil {
 		t.Fatal("expected configured storage without view app key to fail")
 	}
 }
@@ -124,7 +132,7 @@ func TestLoadRejectsInvalidLogicalAccountTimeout(t *testing.T) {
 func TestNewRPCServiceUsesLogicalAccountOwnerClient(t *testing.T) {
 	service := newRPCService(nil, Config{
 		Trade: TradeConfig{GatewayURL: "https://trade:11001", TargetNode: "trade"},
-	})
+	}, nil)
 	if service.LogicalAccounts == nil {
 		t.Fatalf("service=%+v", service)
 	}
@@ -202,13 +210,28 @@ func TestLoadTradeGatewayUsesDedicatedOverrides(t *testing.T) {
 	}
 }
 
-func TestStorageGatewayEndpointPrefersLocalStorageNode(t *testing.T) {
-	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
-	t.Setenv("MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET", "ip://146.56.196.204:11003")
-	t.Setenv("MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID", "storage")
-	target, node := storageGatewayEndpoint(Config{Storage: RPCConfig{Target: "ip://127.0.0.1:11003", TargetNode: "storage-gateway"}})
-	if target != "ip://146.56.196.204:11003" || node != "storage" {
-		t.Fatalf("storage gateway endpoint = %s %s", target, node)
+func TestStrategyConfigRejectsOldOrInvalidGatewayFields(t *testing.T) {
+	for _, raw := range []string{
+		"factor:\n  target: ip://127.0.0.1:11003\n",
+		"storage:\n  target_node: storage\n",
+		"storage:\n  target: ip://127.0.0.1:11003\n",
+		"storage:\n  timeout: 5s\n",
+		"gateway_client:\n  target: ip://127.0.0.1:11003\n",
+		"gateway_client:\n  caller: factor-mgr\n",
+		"gateway_client:\n  key_id: first\n  key_id: second\n",
+		"database: ./strategy.sqlite\n---\ndatabase: ignored\n",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app.yaml")
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("invalid configuration accepted")
+			}
+		})
+	}
+	if _, err := (Config{}).OpenGateway(nil); err == nil {
+		t.Fatal("gateway opened without a loaded configuration")
 	}
 }

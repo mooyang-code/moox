@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
+	"sync"
 	"time"
 
-	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/factorio"
@@ -27,61 +25,76 @@ import (
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-// Initialize opens the control-plane database, starts the declarative ready
-// consumer when Factor/Storage dependencies are configured, and registers the
-// StrategyMgr service before the tRPC server starts listening.
+// Initialize opens the database and gateway client, starts the ready consumer,
+// and registers StrategyMgr before the tRPC server starts listening.
 func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Server, func() error, error) {
 	db, err := store.Open(cfg.Database)
 	if err != nil {
 		return nil, nil, err
 	}
-	keepResources := false
+	var gateway *gatewayclient.Client
 	var eventRuntime *strategyoutbox.Runtime
 	var readyConsumer *strategyeventconsumer.Consumer
 	var readyClient *jetstream.Client
 	var readyProcessor *strategytrigger.Processor
 	var scheduler *strategytrigger.Scheduler
 	var cancelReconcile context.CancelFunc
+	var reconcileDone chan struct{}
 	var readyErr error
+	var closeOnce sync.Once
+	var closeErr error
+	closeFn := func() error {
+		closeOnce.Do(func() {
+			if cancelReconcile != nil {
+				cancelReconcile()
+				<-reconcileDone
+			}
+			if scheduler != nil {
+				scheduler.Stop()
+			}
+			if readyConsumer != nil {
+				closeErr = errors.Join(closeErr, readyConsumer.Close())
+			}
+			if readyClient != nil {
+				closeErr = errors.Join(closeErr, readyClient.Close())
+			}
+			if eventRuntime != nil {
+				closeErr = errors.Join(closeErr, eventRuntime.Close())
+			}
+			if gateway != nil {
+				closeErr = errors.Join(closeErr, gateway.Close())
+			}
+			closeErr = errors.Join(closeErr, db.Close())
+		})
+		return closeErr
+	}
+	keepResources := false
 	defer func() {
-		if keepResources {
-			return
+		if !keepResources {
+			_ = closeFn()
 		}
-		if eventRuntime != nil {
-			_ = eventRuntime.Close()
-		}
-		if readyConsumer != nil {
-			_ = readyConsumer.Close()
-		}
-		if readyClient != nil {
-			_ = readyClient.Close()
-		}
-		if scheduler != nil {
-			scheduler.Stop()
-		}
-		if cancelReconcile != nil {
-			cancelReconcile()
-		}
-		_ = db.Close()
 	}()
 	if err := db.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, nil, fmt.Errorf("apply strategy schema: %w", err)
 	}
 	repo := db
+	gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "strategy gateway directory refresh: %v", err) })
+	if err != nil {
+		return nil, nil, fmt.Errorf("open strategy gateway client: %w", err)
+	}
 	eventRuntime, err = newEventBusRuntime(db, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	service := newRPCService(repo, cfg)
+	service := newRPCService(repo, cfg, gateway)
 	// Reconcile incomplete modern disable/enable handshakes before subscribing
 	// to Factor-ready events. Historical V1 owner rows are audit data and are
 	// never implicitly released or rebound during startup.
@@ -91,9 +104,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := service.ReconcileEnabledInstances(ctx); err != nil {
 		return nil, nil, fmt.Errorf("reconcile enabled Strategy instances: %w", err)
 	}
-	if err := requireExecutionDependencies(ctx, repo, cfg); err != nil {
-		return nil, nil, err
-	}
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -101,7 +111,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err != nil {
 		return nil, nil, err
 	}
-	readyConsumer, readyClient, readyProcessor, readyErr = newReadyConsumer(ctx, repo, cfg, moduleMetrics)
+	readyConsumer, readyClient, readyProcessor, readyErr = newReadyConsumer(ctx, repo, cfg, gateway, moduleMetrics)
 	if readyErr != nil {
 		return nil, nil, readyErr
 	}
@@ -114,9 +124,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	// Disable is committed locally before the Trade release RPC. Retry modern
 	// session/owner release on startup and periodically so a crash or temporary
 	// network outage cannot leave an ACTIVE owner behind indefinitely.
-	reconcileCtx, cancel := context.WithCancel(context.Background())
+	reconcileCtx, cancel := context.WithCancel(ctx)
 	cancelReconcile = cancel
+	reconcileDone = make(chan struct{})
 	go func() {
+		defer close(reconcileDone)
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -137,47 +149,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
 		return nil, nil, fmt.Errorf("register strategy health service: %w", err)
 	}
-	closeFn := func() error {
-		cancelReconcile()
-		var eventBusErr error
-		if eventRuntime != nil {
-			eventBusErr = eventRuntime.Close()
-		}
-		if readyConsumer != nil {
-			_ = readyConsumer.Close()
-		}
-		if readyClient != nil {
-			_ = readyClient.Close()
-		}
-		if scheduler != nil {
-			scheduler.Stop()
-		}
-		dbErr := db.Close()
-		if eventBusErr != nil {
-			return eventBusErr
-		}
-		return dbErr
-	}
 	keepResources = true
 	return s, closeFn, nil
-}
-
-// requireExecutionDependencies prevents a restart from silently keeping an
-// enabled instance and its Trade authorization alive while no input/Factor
-// execution path can consume it. Observation-only instances may still run
-// without these optional worker targets.
-func requireExecutionDependencies(ctx context.Context, repo *store.Store, cfg Config) error {
-	if repo == nil || (strings.TrimSpace(cfg.Factor.Target) != "" && strings.TrimSpace(cfg.Storage.Target) != "") {
-		return nil
-	}
-	instances, err := repo.ListAllInstances(ctx, boolPtr(true))
-	if err != nil {
-		return fmt.Errorf("check enabled Strategy instances: %w", err)
-	}
-	if len(instances) > 0 {
-		return errors.New("enabled strategy instances require configured Factor and Storage targets")
-	}
-	return nil
 }
 
 func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime, error) {
@@ -205,16 +178,13 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 	})
 }
 
-func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config, moduleMetrics *report.ModuleMetrics) (*strategyeventconsumer.Consumer, *jetstream.Client, *strategytrigger.Processor, error) {
-	if strings.TrimSpace(cfg.Factor.Target) == "" || strings.TrimSpace(cfg.Storage.Target) == "" {
-		return nil, nil, nil, nil
-	}
+func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config, gateway gatewayclient.Invoker, moduleMetrics *report.ModuleMetrics) (*strategyeventconsumer.Consumer, *jetstream.Client, *strategytrigger.Processor, error) {
 	client, err := connectEventBus(ctx, cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	reader := newStorageReader(cfg)
-	compilerFactory := newCompilerFactory(cfg)
+	reader := newStorageReader(cfg, gateway)
+	compilerFactory := newCompilerFactory(cfg, gateway)
 	logicalOwner := newLogicalAccountOwnerClient(cfg.Trade)
 	poolRegistry := defaultPoolRegistry()
 	processor := &strategytrigger.Processor{
@@ -398,80 +368,31 @@ func connectEventBus(ctx context.Context, cfg Config) (*jetstream.Client, error)
 	return jetstream.Connect(ctx, jsConfig)
 }
 
-func newStorageReader(cfg Config) *storageio.RPCClient {
-	credentials := gatewayauth.CredentialsFromEnv()
-	target, node := storageGatewayEndpoint(cfg)
-	options := storageRPCOptions(target, node, credentials, cfg.Storage.Timeout)
-	return &storageio.RPCClient{
-		Metadata: storagepb.NewMetadataClientProxy(options...),
-		DataView: storagepb.NewDataViewClientProxy(options...),
-		Auth:     &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.AppKey, Operator: "strategy"},
-		ViewAuth: &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.ViewAppKey, Operator: "strategy"},
-	}
+func newStorageReader(cfg Config, gateway gatewayclient.Invoker) *storageio.RPCClient {
+	reader := storageio.NewGatewayClient(gateway)
+	reader.Auth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.AppKey, Operator: "strategy"}
+	reader.ViewAuth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.ViewAppKey, Operator: "strategy"}
+	return reader
 }
 
-func newRPCService(repo *store.Store, cfg Config) *rpc.Service {
-	compilerFactory := newCompilerFactory(cfg)
+func newRPCService(repo *store.Store, cfg Config, gateway gatewayclient.Invoker) *rpc.Service {
+	compilerFactory := newCompilerFactory(cfg, gateway)
 	return &rpc.Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, CompilerFactory: compilerFactory, PoolRegistry: defaultPoolRegistry(),
 		LogicalAccounts: newLogicalAccountOwnerClient(cfg.Trade),
 	}
 }
 
-func newCompilerFactory(cfg Config) func(string) *compiler.Compiler {
-	if strings.TrimSpace(cfg.Factor.Target) == "" || strings.TrimSpace(cfg.Storage.Target) == "" {
+func newCompilerFactory(cfg Config, gateway gatewayclient.Invoker) func(string) *compiler.Compiler {
+	if gateway == nil {
 		return nil
 	}
+	factorClient := factorio.NewGatewayClient(gateway)
 	return func(spaceID string) *compiler.Compiler {
-		credentials := gatewayauth.CredentialsFromEnv()
-		factorOptions := rpcOptions(cfg.Factor.Target, cfg.Factor.TargetNode, credentials, cfg.Factor.Timeout)
-		storageTarget, storageNode := storageGatewayEndpoint(cfg)
-		storageOptions := storageRPCOptions(storageTarget, storageNode, credentials, cfg.Storage.Timeout)
-		factorClient := &factorio.RPCClient{Proxy: factorpb.NewFactorMgrClientProxy(factorOptions...)}
-		storageClient := &storageio.RPCClient{
-			SpaceID:  spaceID,
-			Metadata: storagepb.NewMetadataClientProxy(storageOptions...),
-			DataView: storagepb.NewDataViewClientProxy(storageOptions...),
-			Auth:     &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.AppKey, Operator: "strategy"},
-			ViewAuth: &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.ViewAppKey, Operator: "strategy"},
-		}
+		storageClient := newStorageReader(cfg, gateway)
+		storageClient.SpaceID = spaceID
 		return &compiler.Compiler{Factors: factorClient, Storage: storageClient}
 	}
-}
-
-func rpcOptions(target, targetNode string, credentials gatewayauth.Credentials, timeout time.Duration) []client.Option {
-	target = gatewayauth.ServiceGatewayTarget(target)
-	if envNode := gatewayauth.ServiceGatewayNodeID(); envNode != "" {
-		targetNode = envNode
-	}
-	return appendTimeout(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials), timeout)
-}
-
-// storageGatewayEndpoint prefers the Storage node's native gateway. Control
-// injects MOOX_SERVICE_GATEWAY_TARGET / MOOX_GATEWAY_TARGET_NODE for local
-// FactorMgr, and those must not pin Metadata/GetView to a stale control-side
-// storage-primary replica.
-func storageGatewayEndpoint(cfg Config) (string, string) {
-	target := strings.TrimSpace(cfg.Storage.Target)
-	node := strings.TrimSpace(cfg.Storage.TargetNode)
-	if value := strings.TrimSpace(os.Getenv("MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET")); value != "" {
-		target = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID")); value != "" {
-		node = value
-	}
-	return target, node
-}
-
-func storageRPCOptions(target, targetNode string, credentials gatewayauth.Credentials, timeout time.Duration) []client.Option {
-	return appendTimeout(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials), timeout)
-}
-
-func appendTimeout(options []client.Option, timeout time.Duration) []client.Option {
-	if timeout > 0 {
-		return append(options, client.WithTimeout(timeout))
-	}
-	return options
 }
 
 func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumers ...*strategyeventconsumer.Consumer) func(context.Context) healthz.Response {

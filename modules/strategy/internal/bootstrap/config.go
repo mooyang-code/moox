@@ -1,16 +1,20 @@
 package bootstrap
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,19 +28,14 @@ type EventBusConfig struct {
 	ConnectTimeout    time.Duration `yaml:"connect_timeout"`
 }
 
-// RPCConfig describes an authenticated Strategy metadata/data dependency.
-// Targets are optional so an installation can run the control plane before
-// wiring Factor and Storage; V2 publication is rejected until both are set.
-type RPCConfig struct {
-	Target     string `yaml:"target"`
-	TargetNode string `yaml:"target_node"`
-	AppID      string `yaml:"app_id"`
-	AppKey     string `yaml:"app_key"`
+// StorageConfig carries role authentication independently of gateway signing.
+type StorageConfig struct {
+	AppID  string `yaml:"app_id"`
+	AppKey string `yaml:"app_key"`
 	// ViewAppKey authenticates DataView requests. Storage deliberately uses a
 	// separate secret for the read/index service from the Primary/Metadata
 	// caller secret, so Strategy must carry both identities explicitly.
-	ViewAppKey string        `yaml:"view_app_key"`
-	Timeout    time.Duration `yaml:"timeout"`
+	ViewAppKey string `yaml:"view_app_key"`
 }
 
 type TradeConfig struct {
@@ -77,12 +76,13 @@ func (c TradeConfig) validate() error {
 }
 
 type Config struct {
-	Database   string         `yaml:"database"`
-	Trade      TradeConfig    `yaml:"trade"`
-	InstanceID string         `yaml:"instance_id"`
-	EventBus   EventBusConfig `yaml:"eventbus"`
-	Factor     RPCConfig      `yaml:"factor"`
-	Storage    RPCConfig      `yaml:"storage"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath    string                   `yaml:"-"`
+	Database      string                   `yaml:"database"`
+	Trade         TradeConfig              `yaml:"trade"`
+	InstanceID    string                   `yaml:"instance_id"`
+	EventBus      EventBusConfig           `yaml:"eventbus"`
+	Storage       StorageConfig            `yaml:"storage"`
 }
 
 func Load(path string) (Config, error) {
@@ -90,15 +90,30 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	var c Config
-	if err = yaml.Unmarshal(b, &c); err != nil {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve strategy config: %w", err)
+	}
+	c := Config{sourcePath: absolute, GatewayClient: gatewayclient.FileConfig{Caller: "strategy", KeyFile: "../../secrets/caller-strategy.key"}}
+	decoder := yaml.NewDecoder(bytes.NewReader(b))
+	decoder.KnownFields(true)
+	if err = decoder.Decode(&c); err != nil {
+		return Config{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return Config{}, fmt.Errorf("strategy config must contain exactly one YAML document")
+	}
+	if c.GatewayClient.Caller != "strategy" {
+		return Config{}, fmt.Errorf("gateway_client.caller must be strategy")
+	}
+	if err := c.GatewayClient.Validate(); err != nil {
 		return Config{}, err
 	}
 	if strings.TrimSpace(c.InstanceID) == "" {
 		c.InstanceID = "strategy-1"
 	}
-	// Trade may be on another node. Do not reuse the local native gateway
-	// overrides used by Factor and Storage.
+	// Trade migrates with its service protocol in D2d.
 	if value := strings.TrimSpace(os.Getenv("MOOX_TRADE_GATEWAY_URL")); value != "" {
 		c.Trade.GatewayURL = value
 	}
@@ -137,9 +152,6 @@ func Load(path string) (Config, error) {
 	if c.EventBus.ConsumerName == "" {
 		c.EventBus.ConsumerName = "strategy_view_data_ready_v1"
 	}
-	if c.Factor.AppID == "" {
-		c.Factor.AppID = "strategy"
-	}
 	if c.Storage.AppID == "" {
 		c.Storage.AppID = "strategy"
 	}
@@ -156,20 +168,6 @@ func Load(path string) (Config, error) {
 			c.Storage.ViewAppKey = serviceAuthKey(secret, c.Storage.AppID)
 		}
 	}
-	if strings.TrimSpace(c.Storage.Target) != "" {
-		if strings.TrimSpace(c.Storage.AppKey) == "" {
-			return Config{}, fmt.Errorf("storage app_key is required when storage target is configured (set app_key or MOOX_STORAGE_PRIMARY_AUTH_SECRET)")
-		}
-		if strings.TrimSpace(c.Storage.ViewAppKey) == "" {
-			return Config{}, fmt.Errorf("storage view_app_key is required when storage target is configured (set view_app_key or MOOX_STORAGE_VIEW_AUTH_SECRET)")
-		}
-	}
-	if c.Factor.Timeout == 0 {
-		c.Factor.Timeout = 5 * time.Second
-	}
-	if c.Storage.Timeout == 0 {
-		c.Storage.Timeout = 5 * time.Second
-	}
 	for _, rawURL := range c.EventBus.URLs {
 		if strings.TrimSpace(rawURL) == "" {
 			return Config{}, fmt.Errorf("strategy eventbus URLs must not be empty")
@@ -178,10 +176,25 @@ func Load(path string) (Config, error) {
 	if c.EventBus.RelayInterval <= 0 || c.EventBus.RelayBatchSize <= 0 || c.EventBus.ReconnectInterval <= 0 || c.EventBus.ConnectTimeout <= 0 {
 		return Config{}, fmt.Errorf("strategy eventbus durations and batch size must be positive")
 	}
-	if c.Factor.Timeout <= 0 || c.Storage.Timeout <= 0 {
-		return Config{}, fmt.Errorf("factor/storage timeouts must be positive")
-	}
 	return c, nil
+}
+
+// OpenGateway requires the deployment identity and both Storage role secrets.
+// Offline configuration loading does not open signing keys or the directory.
+func (c Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c.sourcePath == "" {
+		return nil, fmt.Errorf("strategy gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "strategy" {
+		return nil, fmt.Errorf("gateway_client.caller must be strategy")
+	}
+	if strings.TrimSpace(c.Storage.AppKey) == "" {
+		return nil, fmt.Errorf("storage app_key is required (set app_key or MOOX_STORAGE_PRIMARY_AUTH_SECRET)")
+	}
+	if strings.TrimSpace(c.Storage.ViewAppKey) == "" {
+		return nil, fmt.Errorf("storage view_app_key is required (set view_app_key or MOOX_STORAGE_VIEW_AUTH_SECRET)")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database), onRefreshError)
 }
 
 func serviceAuthKey(secret, appID string) string {

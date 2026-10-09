@@ -1,4 +1,8 @@
 database: ./data/strategy.sqlite
+gateway_client:
+  caller: strategy
+  key_id: ""
+  key_file: ../../secrets/caller-strategy.key
 trade:
   gateway_url: ""
   target_node: ""
@@ -14,16 +18,8 @@ eventbus:
   reconnect_interval: 1s
   connect_timeout: 3s
   consumer_name: strategy_view_data_ready_v1
-factor:
-  target: ip://127.0.0.1:11003
-  target_node: factor
-  app_id: strategy
-  timeout: 5s
 storage:
-  target: ip://127.0.0.1:11003
-  target_node: storage-gateway
   app_id: strategy
   # AppKey/ViewAppKey are derived from the deployment's Storage auth secrets.
   app_key: ""
   view_app_key: ""
-  timeout: 5s

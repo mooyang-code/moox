@@ -7,18 +7,18 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
-// Client is an adapter boundary for the Factor metadata API. Keeping the
-// generated tRPC proxy behind function fields makes catalog use easy to test.
-type Client struct {
-	ListFactorSetsFunc func(context.Context) ([]compiler.FactorSetDescriptor, error)
-	ListFactorsFunc    func(context.Context, compiler.FactorSetDescriptor) ([]compiler.FactorDescriptor, error)
+// MetadataClient contains only the Factor methods used by the compiler.
+type MetadataClient interface {
+	ListFactorSets(context.Context, *factorpb.ListFactorSetsReq, ...client.Option) (*factorpb.ListFactorSetsRsp, error)
+	ListFactors(context.Context, *factorpb.ListFactorsReq, ...client.Option) (*factorpb.ListFactorsRsp, error)
 }
 
-// RPCClient adapts the FactorMgr metadata proxy to the compiler catalog.
+// RPCClient adapts Factor metadata to the compiler catalog.
 type RPCClient struct {
-	Proxy    factorpb.FactorMgrClientProxy
+	Proxy    MetadataClient
 	PageSize uint32
 }
 

@@ -13,14 +13,26 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"trpc.group/trpc-go/trpc-go/client"
 )
+
+type MetadataClient interface {
+	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
+	ListViewColumns(context.Context, *storagepb.ListViewColumnsReq, ...client.Option) (*storagepb.ListViewColumnsRsp, error)
+	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
+	GetSubject(context.Context, *storagepb.GetSubjectReq, ...client.Option) (*storagepb.GetSubjectRsp, error)
+}
+
+type DataViewClient interface {
+	QueryTimeSeriesRows(context.Context, *storagepb.QueryTimeSeriesRowsReq, ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error)
+}
 
 // RPCClient is the narrow Storage Metadata/DataView adapter used by Strategy.
 // It keeps generated transport messages outside compiler and evaluator code.
 type RPCClient struct {
 	SpaceID  string
-	Metadata storagepb.MetadataClientProxy
-	DataView storagepb.DataViewClientProxy
+	Metadata MetadataClient
+	DataView DataViewClient
 	// Auth is the Primary/Metadata caller identity. ViewAuth is intentionally
 	// separate because Storage DataView validates MOOX_STORAGE_VIEW_AUTH_SECRET.
 	Auth     *commonpb.AuthInfo
@@ -267,12 +279,7 @@ func (c *RPCClient) viewAuth() *commonpb.AuthInfo {
 	if c == nil {
 		return nil
 	}
-	if c.ViewAuth != nil {
-		return c.ViewAuth
-	}
-	// Keep test and embedding compatibility for callers that predate the
-	// split identity. Production bootstrap always supplies ViewAuth.
-	return c.Auth
+	return c.ViewAuth
 }
 
 func (c *RPCClient) pageSize() uint32 {
