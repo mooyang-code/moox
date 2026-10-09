@@ -3,7 +3,7 @@
   "date": "2026-10-09",
   "scope": "Go workspace selected module metadata; not runtime binary dependency coverage",
   "baseline_modules": 417,
-  "current_modules": 848,
+  "current_modules": 851,
   "baseline_unresolved": [
     "trpc.group/trpc-go/go_reuseport@v1.7.1-0.20230423021710-f5eeff5d87a3"
   ],
@@ -2034,6 +2034,10 @@
       "v1.1.0"
     ],
     [
+      "modernc.org/httpfs",
+      "v1.0.6"
+    ],
+    [
       "modernc.org/lex",
       "v1.1.1"
     ],
@@ -2044,6 +2048,14 @@
     [
       "modernc.org/scannertest",
       "v1.0.2"
+    ],
+    [
+      "modernc.org/tcl",
+      "v1.15.2"
+    ],
+    [
+      "modernc.org/z",
+      "v1.7.3"
     ],
     [
       "mvdan.cc/gofumpt",

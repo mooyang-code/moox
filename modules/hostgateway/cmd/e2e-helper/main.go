@@ -22,6 +22,7 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/directory"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
@@ -66,7 +67,7 @@ func main() {
 
 func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	return runNativeRoutes(nodeID, []gatewayroute.Route{{ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
-		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-skill"}}}, "moox-skill", listenAddress, readyFile, nonceDirectory, keyID, secret)
+		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-cli"}}}, "moox-cli", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
 type fixtureForwarder struct {
@@ -93,10 +94,7 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	}
 	internalCaller := caller
 	externalPrincipal := ""
-	if caller == "moox-skill" {
-		internalCaller = "access"
-		externalPrincipal = caller
-	}
+
 	// The legacy period harness uses collector credentials for its simulated
 	// SCF worker. ClaimTimerBatch belongs to scf-collector's external policy;
 	// this test boundary models Access without widening the production ACL.
@@ -184,6 +182,9 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	boundary := func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
 		message := codec.Message(ctx)
 		path := message.ServerRPCName()
+		if caller == "moox-cli" && path == "/"+directory.Path+"/GetDirectory" {
+			return next(ctx, req)
+		}
 		servicePath, method, ok := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 		if !ok {
 			return nil, errors.New("invalid fixture RPC")
@@ -220,6 +221,11 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 		server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithFilter(boundary))
 	if err := proxy.Register(service); err != nil {
 		return err
+	}
+	if caller == "moox-cli" {
+		if err := directory.Register(service, state); err != nil {
+			return err
+		}
 	}
 	if err := writeReadyFile(readyFile, "ip://"+listener.Addr().String()); err != nil {
 		return err

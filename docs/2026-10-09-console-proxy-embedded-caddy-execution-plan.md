@@ -31,7 +31,7 @@
 
 `make test-go` 已在固定 Go `1.26.9` 下对当前工作区的 55 个模块统一执行测试与 vet，全部通过。验证环境使用 Python `3.12.14`、pandas `2.2.3`、numpy `2.3.5` 和 PyYAML `6.0.2`，覆盖 Factor 的 Python 依赖与 CLI 的脚本测试。早期 Admin 的全局函数补丁测试在 macOS ARM64 下触发 goom 内存权限错误，原分支 Go `1.25.0` 也可复现；B2 已用真实 tRPC 查询 SQLite 的断言替代该重复测试，没有跳过测试。原 RPC 适配器测试包也已由本机交叉编译并在 Linux amd64 全包运行通过。此为当前源码的 Go 回归证据，自建 CI runner 与后续最终候选仍需验证。
 
-后续已解决完整依赖解析阻塞：旧 Slime 重试库间接引用了无法下载的 `go_reuseport`，现已改为项目内的两次只读重试，保留退避、上下文取消、服务端 pushback 与每次尝试的输出隔离，并补齐元数据字节复制。重试包、Gateway 转发及 Archive/Monitor 调用方的 race 回归和 vet 通过。当前完整模块图为 848 项；与 `503f5a37` 可解析的 417 项元数据比较，61 项已有模块版本升级、436 项新增、5 项移除（包括共享路由包改名）。基线仍有上述失效模块的元数据缺失，差异清单不推断其未知依赖。当前依赖最低 Go 最高为 `1.25.1`，固定的 `1.26.9` 满足要求。[完整版本差异清单](计划/console-proxy-dependency-audit.json)记录了全部条目；这是模块元数据审计，不代表所有依赖均进入最终二进制。Zap 升至 `1.28.0`、x/net 升至 `0.55.0`、x/crypto 升至 `0.52.0`；Prometheus client_golang 保持 `1.23.2`。`make check-go-module-graph` 已在禁止网络代理的条件下通过，已接入 `make verify-pr` 和 CNB；上述完整依赖解析门禁已通过，自建 runner 预置与最终候选的完整门禁仍待完成。
+后续已解决完整依赖解析阻塞：旧 Slime 重试库间接引用了无法下载的 `go_reuseport`，现已改为项目内的两次只读重试，保留退避、上下文取消、服务端 pushback 与每次尝试的输出隔离，并补齐元数据字节复制。重试包、Gateway 转发及 Archive/Monitor 调用方的 race 回归和 vet 通过。当前完整模块图为 851 项；与 `503f5a37` 可解析的 417 项元数据比较，61 项已有模块版本升级、439 项新增、5 项移除（包括共享路由包改名）。基线仍有上述失效模块的元数据缺失，差异清单不推断其未知依赖。当前依赖最低 Go 最高为 `1.25.1`，固定的 `1.26.9` 满足要求。[完整版本差异清单](计划/console-proxy-dependency-audit.json)记录了全部条目；这是模块元数据审计，不代表所有依赖均进入最终二进制。Zap 升至 `1.28.0`、x/net 升至 `0.55.0`、x/crypto 升至 `0.52.0`；Prometheus client_golang 保持 `1.23.2`。`make check-go-module-graph` 已在禁止网络代理的条件下通过，已接入 `make verify-pr` 和 CNB；上述完整依赖解析门禁已通过，自建 runner 预置与最终候选的完整门禁仍待完成。
 
 A8 已让 Doctor 使用共享目录，删除 `components.yaml`，发布与 shell 部署改为复制 `config/servicecatalog/catalog.yaml` 及其字节校验值。Doctor/目录/相关诊断调用方的 race 测试、CLI 全量测试、Monitor 各包测试及 vet 通过；CLI 回归使用 Python `3.12`，避免系统 Python `3.9` 在临时 HOME 下生成缓存引发的清理竞态。Doctor 聚焦 E2E、监控覆盖契约和发布契约通过；旧 Factor 构建包装脚本的 target 已修正为 `factor-mgr`。这些契约检查不等于三类最终发布包验收，部署种子与实际探针仍须随 B/F/G 迁移。
 
@@ -82,6 +82,8 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 现场仍有旧 Caddy 及 `11001`、2019 监听；本任务未切换、停止或安装运行服务。上述结果只是迁移前核验，不能作为新组件正式环境验收证据。
 
 主计划 D1 的 Collector 内部调用迁移已完成：计划、结果 Metadata、重采样、周期账本、失败上报及标的同步共用 Collector 签名身份，32 个 Storage 方法使用共享网关适配器并保留原角色认证。删除内部固定目标、直接 Metadata 回退和旧密钥配置；严格拒绝未知字段、重复键及额外 YAML 文档。内部写请求单发，Ensure 未知结果只查询状态；关闭时取消并等待后台任务，再释放客户端和数据库。补齐既有 ActivateDataset 权限，仅放行 Collector。Collector、目录、共享客户端、主机网关和 Admin 全量 race、Collector vet 通过；32 方法真实 tRPC 回归、生命周期及取消检查通过。四个 Linux amd64 静态程序和七个测试包均在本机关闭 CGO 构建，七包在 Linux 全量执行通过，与既有 CGO Storage 辅助程序联调的全部 30 个周期场景也通过；配额预算保持 15/30 秒。边界、848 模块图、格式、文档及 15 份 schema 检查通过。SCF 外部调用、DNS、旧监听、标的进程合并及实际部署仍待对应 E/D2/G/J 阶段。
+
+主计划 D1 的 CLI K 线与金丝雀 Storage 调用迁移已完成：独立的操作员 caller/KeyID/密钥配置通过真实 SSH 隧道读取 control Directory，按可信 manifest 主机转发 loopback 11002；Directory 公网地址不能覆盖 SSH 目标。保留 Storage 请求角色认证，删除数据配置中的旧网关密钥与导出逻辑，Admin bootstrap bundle 生成对应配置。连接复用、断连重建、目录切换及关闭有实际回归；CLI 日志写 stderr，JSON 输出可独立解析。CLI 全包 race、Admin CLI/辅助程序 race、vet、Skill 查询契约及实际 K 线全链路通过；两个静态程序和五个 Linux 测试包均在本机关闭 CGO 构建，五包在 Linux 全量执行通过。独立模块构建、851 模块图、边界、架构文档、格式及 15 份 schema 检查通过。依赖图新增三个间接元数据模块，已有选择版本不变，差异清单已更新。CLI 的其他 HTTP 入口与对应服务在 D2 同批迁移，D2f 已补齐运维入口清单；身份安装、独立审查与正式部署仍待 G/J。
 
 ## 1. 目标与已确定的决策
 

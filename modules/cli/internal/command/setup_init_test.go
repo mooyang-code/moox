@@ -65,11 +65,11 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
 	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{
 		FactorType: "timeseries",
-		FactorID:   "bias", File: "timeseries/bias.py", InputColumns: []string{"close"},
+		FactorID:   "Bias", File: "timeseries/Bias.py", InputColumns: []string{"close"},
 		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
 	}}
 	snapshot.Manifest.Factors.Members = []setupconfig.FactorSetupMember{{
-		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "bias",
+		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "Bias",
 	}}
 	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
 	factor := &fakeSetupInitFactor{}
@@ -83,7 +83,7 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	require.Len(t, factor.plan.Definitions, 1)
 	require.Len(t, factor.plan.Members, 1)
-	assert.Equal(t, "bias", factor.plan.Definitions[0].FactorID)
+	assert.Equal(t, "Bias", factor.plan.Definitions[0].FactorID)
 	assert.Equal(t, "fset_binance_kline_1m", factor.plan.Members[0].SetID)
 	assert.Contains(t, output.String(), `"status":"ready"`)
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -895,15 +896,12 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		if selectErr != nil {
 			return collectorPublishSummary{}, selectErr
 		}
-		canaryOpts := opts
-		canaryOpts.Region = canaryRegion.Region
-		canaryOpts = applyCollectorStorageRoute(canaryOpts, storageRoutes, fetcherConfig, storageTargetExplicit)
-		storageTarget := collectorStorageRPCGatewayTarget(canaryOpts)
-		storageNode := firstNonEmpty(fetcherConfig.StorageAccessTargetNode(canaryRegion.Region), os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
-		canaryFetcher := *fetcherConfig
-		canaryFetcher.CollectorRPCGatewayTarget = firstNonEmpty(opts.CollectorRPCGatewayTarget, fetcherConfig.CollectorRPCGatewayTarget, os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
-		canaryFetcher.CollectorGatewayTargetNode = firstNonEmpty(opts.CollectorGatewayTargetNode, fetcherConfig.CollectorGatewayTargetNode, os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
-		canaryAccess, accessErr := newCollectorCanaryAccess(&canaryFetcher, collectorHTTPInventoryReader{control: client}, storageTarget, storageNode, collectorCanaryTrust)
+		proofGateway, gatewayErr := gatewayio.Open(ctx, manifest)
+		if gatewayErr != nil {
+			return collectorPublishSummary{}, gatewayErr
+		}
+		defer proofGateway.Close()
+		canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorHTTPInventoryReader{control: client}, proofGateway, collectorCanaryTrust)
 		if accessErr != nil {
 			return collectorPublishSummary{}, accessErr
 		}
@@ -1524,14 +1522,12 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		StorageRPCGatewayTarget: fetcherConfig.StorageRPCGatewayTarget, FetcherConfig: fetcherConfig,
 	}
 	canaryOpts = applyCollectorStorageRoute(canaryOpts, storageRoutes, fetcherConfig, false)
-	canaryFetcher := *fetcherConfig
-	canaryFetcher.CollectorRPCGatewayTarget = firstNonEmpty(fetcherConfig.CollectorRPCGatewayTarget, os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
-	canaryFetcher.CollectorGatewayTargetNode = firstNonEmpty(fetcherConfig.CollectorGatewayTargetNode, os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
-	canaryAccess, accessErr := newCollectorCanaryAccess(
-		&canaryFetcher, collectorHTTPInventoryReader{control: client}, collectorStorageRPCGatewayTarget(canaryOpts),
-		firstNonEmpty(fetcherConfig.StorageAccessTargetNode(canaryRegion.Region), os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE")),
-		trustMaterial,
-	)
+	proofGateway, gatewayErr := gatewayio.Open(ctx, manifest)
+	if gatewayErr != nil {
+		return summary, gatewayErr
+	}
+	defer proofGateway.Close()
+	canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorHTTPInventoryReader{control: client}, proofGateway, trustMaterial)
 	if accessErr != nil {
 		return summary, accessErr
 	}

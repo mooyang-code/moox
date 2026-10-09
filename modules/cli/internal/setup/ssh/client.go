@@ -221,9 +221,18 @@ func isAuthenticationError(err error) bool {
 }
 
 func (t *transport) Check(ctx context.Context) error {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return ErrUnreachable
+	}
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := t.client.SendRequest("keepalive@moox", true, nil)
+		// A no-reply keepalive checks transport writability without entering
+		// x/crypto's global-response drain, which can spin on a closed channel.
+		// The subsequent RPC independently bounds response and dial time.
+		_, _, err := t.client.SendRequest("keepalive@moox", false, nil)
 		done <- err
 	}()
 	select {

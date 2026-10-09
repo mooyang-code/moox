@@ -40,7 +40,7 @@ cp "${WRAPPER_SOURCE}" "${SKILL_ROOT}/scripts/data-kline.sh"
 chmod +x "${SKILL_ROOT}/scripts/data-kline.sh"
 CONFIG="${SKILL_ROOT}/config/data-access.yaml"
 SECRET_SENTINEL='WRAPPER_TEST_SECRET_DO_NOT_PRINT_9vQ3'
-printf 'gateway:\n  secret: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
+printf 'storage:\n  app_key: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
 chmod 0600 "${CONFIG}"
 EXPECTED_CONFIG="$(cd "${SKILL_ROOT}/config" && pwd -P)/data-access.yaml"
 
@@ -143,7 +143,7 @@ fi
 grep -Fq 'packaged data-access config is missing or unsafe' <<<"${output}" || fail "missing config error is unclear"
 grep -Fq "${SECRET_SENTINEL}" <<<"${output}" && fail "config error leaked credential content"
 
-printf 'gateway:\n  secret: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
+printf 'storage:\n  app_key: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
 chmod 0644 "${CONFIG}"
 if output="$(PATH="${TEST_ROOT}/path-bin:${PATH}" "${SKILL_ROOT}/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT 2>&1)"; then
   fail "wrapper accepted a non-0600 packaged config"
@@ -152,7 +152,7 @@ grep -Fq 'packaged data-access config must have permission 0600' <<<"${output}" 
 grep -Fq "${SECRET_SENTINEL}" <<<"${output}" && fail "config mode error leaked credential content"
 
 rm "${CONFIG}"
-printf 'gateway:\n  secret: %s\n' "${SECRET_SENTINEL}" >"${TEST_ROOT}/linked-config.yaml"
+printf 'storage:\n  app_key: %s\n' "${SECRET_SENTINEL}" >"${TEST_ROOT}/linked-config.yaml"
 chmod 0600 "${TEST_ROOT}/linked-config.yaml"
 ln -s "${TEST_ROOT}/linked-config.yaml" "${CONFIG}"
 if output="$(PATH="${TEST_ROOT}/path-bin:${PATH}" "${SKILL_ROOT}/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT 2>&1)"; then

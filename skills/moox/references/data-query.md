@@ -8,6 +8,8 @@ From the currently loaded `SKILL.md`, obtain its real absolute parent directory 
 
 The wrapper locates its Skill root from `BASH_SOURCE`, injects the absolute packaged `config/data-access.yaml`, rejects caller-supplied `--config`, and resolves `moox-cli` from the repository's `../../bin/moox-cli` before checking `PATH`. It refuses a missing, symlinked, or non-`0600` config.
 
+The CLI opens SSH tunnels using `moox.toml` (pass `--file /absolute/path/moox.toml` when needed). Its operator identity is installed separately as mode-`0600` `~/.config/moox/gateway-client.yaml` and `caller-moox-cli.key`; the public KeyID comes from Admin bootstrap. Directory chooses a host ID, while SSH addresses and host keys come from the operator configuration. The packaged data config contains only the dataset catalog and derived Storage read credentials. Re-export old configs containing `gateway` fields.
+
 The Skill archive deliberately does not contain a cross-platform `moox-cli` binary. It depends on that repository binary or an installed `moox-cli` on `PATH`; the wrapper fails clearly when neither exists.
 
 Make each query self-contained in one shell invocation:

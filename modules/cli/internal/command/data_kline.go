@@ -3,13 +3,15 @@ package command
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -21,23 +23,23 @@ type timeSeriesReader interface {
 
 type dataKlineDeps struct {
 	loadConfig func(string) (dataAccessConfig, error)
-	newReader  func(dataAccessConfig) timeSeriesReader
+	newReader  func(context.Context, string) (timeSeriesReader, io.Closer, error)
 }
 
 func defaultDataKlineDeps() dataKlineDeps {
 	return dataKlineDeps{
 		loadConfig: loadDataAccessConfig,
-		newReader: func(cfg dataAccessConfig) timeSeriesReader {
-			options := gatewayauth.NewTRPCClientOptions(
-				strings.TrimSpace(cfg.Gateway.Target),
-				strings.TrimSpace(cfg.Gateway.TargetNode),
-				gatewayauth.Credentials{
-					KeyID:  strings.TrimSpace(cfg.Gateway.KeyID),
-					Caller: strings.TrimSpace(cfg.Gateway.Caller),
-					Secret: cfg.Gateway.Secret,
-				},
-			)
-			return pb.NewPrimaryStoreClientProxy(options...)
+		newReader: func(ctx context.Context, file string) (timeSeriesReader, io.Closer, error) {
+			snapshot, err := setupconfig.Load(file, filepath.Dir(file))
+			if err != nil {
+				return nil, nil, err
+			}
+			defer clearSetupSecrets(snapshot)
+			gateway, err := gatewayio.Open(ctx, snapshot)
+			if err != nil {
+				return nil, nil, err
+			}
+			return storageGateway{gateway: gateway}, gateway, nil
 		},
 	}
 }
@@ -45,6 +47,7 @@ func defaultDataKlineDeps() dataKlineDeps {
 func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 	var (
 		configPath string
+		file       string
 		dataType   string
 		exchange   string
 		symbol     string
@@ -88,6 +91,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			if err := rejectInputOutputCollision(resolveDataAccessConfigPath(configPath), output); err != nil {
 				return fmt.Errorf("write kline response: %w", err)
 			}
+			if err := rejectInputOutputCollision(file, output); err != nil {
+				return fmt.Errorf("write kline response: %w", err)
+			}
 			selection, err := cfg.resolveKline(dataType, exchange, interval)
 			if err != nil {
 				return err
@@ -113,7 +119,14 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			}
 			rpcCtx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			rsp, err := deps.newReader(cfg).ReadTimeSeriesRows(rpcCtx, req)
+			reader, owner, err := deps.newReader(rpcCtx, file)
+			if err != nil {
+				return fmt.Errorf("open Storage gateway tunnel: %w", err)
+			}
+			if owner != nil {
+				defer owner.Close()
+			}
+			rsp, err := reader.ReadTimeSeriesRows(rpcCtx, req)
 			if err != nil {
 				return fmt.Errorf("PrimaryStore/ReadTimeSeriesRows RPC failed: %w", err)
 			}
@@ -126,6 +139,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			return writeKlineResponse(cmd, rsp, output)
 		},
 	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "SSH 主机配置文件")
 	cmd.Flags().StringVar(&configPath, "config", "", "独立数据访问配置；默认读取 MOOX_SKILL_CONFIG 或 config/data-access.yaml")
 	cmd.Flags().StringVar(&dataType, "data-type", "", "数据类型，例如 crypto")
 	cmd.Flags().StringVar(&exchange, "exchange", "", "交易所；省略时使用数据类型配置的默认值")

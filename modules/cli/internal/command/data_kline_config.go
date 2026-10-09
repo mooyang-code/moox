@@ -18,17 +18,8 @@ const (
 
 type dataAccessConfig struct {
 	Version   int                       `yaml:"version"`
-	Gateway   dataGatewayConfig         `yaml:"gateway"`
 	Storage   dataStorageAuthConfig     `yaml:"storage"`
 	DataTypes map[string]dataTypeConfig `yaml:"data_types"`
-}
-
-type dataGatewayConfig struct {
-	Target     string `yaml:"target"`
-	TargetNode string `yaml:"target_node"`
-	KeyID      string `yaml:"key_id"`
-	Caller     string `yaml:"caller"`
-	Secret     string `yaml:"secret"`
 }
 
 type dataStorageAuthConfig struct {
@@ -152,11 +143,6 @@ func (cfg dataAccessConfig) validate() error {
 		name  string
 		value string
 	}{
-		{"gateway.target", cfg.Gateway.Target},
-		{"gateway.target_node", cfg.Gateway.TargetNode},
-		{"gateway.key_id", cfg.Gateway.KeyID},
-		{"gateway.caller", cfg.Gateway.Caller},
-		{"gateway.secret", cfg.Gateway.Secret},
 		{"storage.app_id", cfg.Storage.AppID},
 		{"storage.app_key", cfg.Storage.AppKey},
 	}
@@ -164,9 +150,6 @@ func (cfg dataAccessConfig) validate() error {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("%s is required", field.name)
 		}
-	}
-	if _, err := validateDataGatewayTarget(cfg.Gateway.Target); err != nil {
-		return fmt.Errorf("gateway.target %w", err)
 	}
 	if len(cfg.DataTypes) == 0 {
 		return fmt.Errorf("data_types is required")

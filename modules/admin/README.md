@@ -20,7 +20,7 @@ go test -count=1 ./modules/admin/...
 
 `moox-admin-cli bootstrap` 不依赖运行中的服务，参数为 `--topology-file`、`--db-path`、`--encryption-key-file`、`--pki-dir`、`--output-dir`。拓扑输入是部署 CLI 提取的 0600 JSON（版本 1），只含 `control_host_id` 和 `hosts`；每台主机包含 `host_id`、`address`、可选的 `private_address`、`region`、`description` 及完整业务 `components` 列表。主机组件由 DAO 自动维护，不能出现在该列表中。
 
-命令建立 schema，按与在线 API 相同的校验在一个事务内写入拓扑和全部调用方密钥，验证或生成 MooX CA，提交后发布完整的 control 网关配置、证书与签名文件。输出只有包目录、相对路径、KeyID 和证书摘要等元数据。主密钥与 CA 始终留在持久目录；输出中的 `operator/caller-moox-cli.key` 只供部署端取回。Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密钥。
+命令建立 schema，按与在线 API 相同的校验在一个事务内写入拓扑和全部调用方密钥，验证或生成 MooX CA，提交后发布完整的 control 网关配置、证书与签名文件。输出只有包目录、相对路径、KeyID 和证书摘要等元数据。主密钥与 CA 始终留在持久目录；输出中的 `operator/caller-moox-cli.key` 及 `operator/gateway-client.yaml` 只供部署端取回，配置记录实际分配的 KeyID 与相对密钥路径。Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密钥。
 
 重跑复用 CA、主密钥和调用方密钥，保留主机与组件启停状态；每次部署重新签发叶证书。已存在加密记录却丢失主密钥，或已有网关密钥却丢失 CA 时，必须恢复原件。数据库提交后的输出错误可直接重跑，失败暂存目录不会成为可安装包。
 

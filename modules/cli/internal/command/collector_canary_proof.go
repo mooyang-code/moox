@@ -19,7 +19,7 @@ import (
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -144,30 +144,28 @@ func (r collectorHTTPInventoryReader) GetTaskResultInventory(ctx context.Context
 	return rsp, nil
 }
 
-func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, inventory collectorCanaryInventoryReader, storageTarget, storageNode string, trust collectorSCFTrustMaterial) (collectorCanaryAccess, error) {
+func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, inventory collectorCanaryInventoryReader, gateway gatewayclient.Invoker, trust collectorSCFTrustMaterial) (collectorCanaryAccess, error) {
 	if fetcher == nil {
 		return collectorCanaryAccess{}, errors.New("SCF canary requires manifest task ownership")
 	}
 	if inventory == nil {
 		return collectorCanaryAccess{}, errors.New("Collector inventory reader is required")
 	}
-	if strings.TrimSpace(storageTarget) == "" || strings.TrimSpace(storageNode) == "" {
-		return collectorCanaryAccess{}, errors.New("Storage proof gateway target and node are required")
+	if gateway == nil {
+		return collectorCanaryAccess{}, errors.New("Storage proof gateway tunnel is required")
 	}
 	if strings.TrimSpace(trust.StoragePrimaryAuthSecret) == "" || strings.TrimSpace(trust.StorageViewAuthSecret) == "" {
 		return collectorCanaryAccess{}, errors.New("Storage Primary and View proof credentials are required")
 	}
 
-	storageOptions := gatewayauth.NewTRPCClientOptions(storageTarget, storageNode, gatewayauth.Credentials{
-		KeyID: "collector", Caller: "collector", Secret: trust.CollectorServiceKey,
-	})
-	storageOptions = append(storageOptions, client.WithTimeout(5*time.Second))
+	storage := storageGateway{gateway: gateway}
+
 	primaryReadAppID := "scf-market-canary"
 	viewReadAppID := "scf-market-canary"
 	return collectorCanaryAccess{
 		inventory: inventory,
-		primary:   storagepb.NewPrimaryStoreClientProxy(storageOptions...),
-		view:      storagepb.NewDataViewClientProxy(storageOptions...),
+		primary:   storage,
+		view:      storage,
 		periodAuth: &commonpb.AuthInfo{
 			AppId: "collector", AppKey: mooxsecurity.HMACSHA256Hex(trust.StoragePrimaryAuthSecret, []byte("collector")),
 		},

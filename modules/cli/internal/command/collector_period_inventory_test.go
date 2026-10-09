@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +22,7 @@ func TestCollectorPeriodInventoryIsReadOnlyAndRedactsSeriesMembers(t *testing.T)
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(`PRAGMA journal_mode=WAL`).Error)
-	_, sourceFile, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../.."))
-	schemaSQL, err := os.ReadFile(filepath.Join(repoRoot, "modules/collector/schema/collector.sql"))
+	schemaSQL, err := os.ReadFile(filepath.Join("../../../..", "modules/collector/schema/collector.sql"))
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(string(schemaSQL)).Error)
 	seedCollectorPeriodInventoryFixture(t, db)
@@ -959,10 +955,7 @@ func openCollectorPeriodInventoryFixture(t *testing.T, dbPath string) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
-	_, sourceFile, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../.."))
-	schemaSQL, err := os.ReadFile(filepath.Join(repoRoot, "modules/collector/schema/collector.sql"))
+	schemaSQL, err := os.ReadFile(filepath.Join("../../../..", "modules/collector/schema/collector.sql"))
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(string(schemaSQL)).Error)
 	seedCollectorPeriodInventoryFixture(t, db)

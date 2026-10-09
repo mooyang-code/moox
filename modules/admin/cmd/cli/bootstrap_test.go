@@ -22,9 +22,11 @@ import (
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func newBootstrapFixture(t *testing.T) bootstrapOptions {
@@ -66,6 +68,25 @@ func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(
 	result := runBootstrapFixture(t, opts)
 	require.True(t, result.CA.Created)
 	require.Len(t, result.ExpectedHash, 64)
+	operatorConfig := filepath.Join(result.BundleDir, "operator", "gateway-client.yaml")
+	rawOperator, err := os.ReadFile(operatorConfig)
+	require.NoError(t, err)
+	var operator gatewayclient.FileConfig
+	require.NoError(t, yaml.Unmarshal(rawOperator, &operator))
+	require.Equal(t, "moox-cli", operator.Caller)
+	var operatorKeyID string
+	for _, credential := range result.Credentials {
+		if credential.Caller == "moox-cli" {
+			operatorKeyID = credential.KeyID
+		}
+	}
+	require.NotEmpty(t, operatorKeyID)
+	require.NotEqual(t, "moox-cli", operatorKeyID)
+	require.Equal(t, operatorKeyID, operator.KeyID)
+	require.Equal(t, "caller-moox-cli.key", operator.KeyFile)
+	info, err := os.Stat(operatorConfig)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	config, err := hostgatewayconfig.Load(filepath.Join(result.BundleDir, result.ConfigFile))
 	require.NoError(t, err)
 	require.Equal(t, "control", config.Host.ID)

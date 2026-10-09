@@ -9,8 +9,10 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
 	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
+	"gopkg.in/yaml.v3"
 )
 
 type bootstrapCredential struct {
@@ -66,6 +68,13 @@ func publishBootstrapBundle(parentDir string, control bootstrapHost, exported []
 		}
 		name := "caller-" + caller + ".key"
 		err = privatefiles.Write(root, name, []byte(key.Credentials().Secret+"\n"))
+		if err == nil && key.Caller == "moox-cli" {
+			var config []byte
+			config, err = yaml.Marshal(gatewayclient.FileConfig{Caller: "moox-cli", KeyID: key.KeyID, KeyFile: name})
+			if err == nil {
+				err = privatefiles.Write(root, "gateway-client.yaml", config)
+			}
+		}
 		root.Close()
 		if err != nil {
 			return bootstrapResult{}, err
