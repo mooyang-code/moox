@@ -29,7 +29,6 @@ type collectorTaskPurgeFlags struct {
 	SeedFile              string
 	CollectorInitBin      string
 	MetadataTarget        string
-	MetadataURL           string
 	MetadataServiceKey    string
 	MetadataServiceSecret string
 	Apply                 bool
@@ -97,12 +96,12 @@ type collectorStorageMetadataProxy struct {
 	auth    *storagepb.AuthInfo
 }
 
-var newCollectorStorageMetadataClient = func(target, protocol, accessKey, secret string) collectorStorageMetadataClient {
+var newCollectorStorageMetadataClient = func(target, accessKey, secret string) collectorStorageMetadataClient {
 	accessKey = firstNonEmpty(strings.TrimSpace(accessKey), "storage-metadata")
 	options := []client.Option{
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
-		client.WithProtocol(protocol),
+		client.WithProtocol("trpc"),
 	}
 	return &collectorStorageMetadataProxy{
 		proxy:   storagepb.NewMetadataClientProxy(options...),
@@ -205,15 +204,14 @@ func init() {
 	collectorTaskCmd.AddCommand(collectorTaskPurgeCmd)
 
 	flags := collectorTaskPurgeCmd.Flags()
-	flags.StringVar(&collectorTaskPurgeFlagsValue.File, "file", "", "部署配置文件；用于解析数据库路径和可选 StorageRPCGatewayTarget")
+	flags.StringVar(&collectorTaskPurgeFlagsValue.File, "file", "", "部署配置文件；用于解析数据库路径")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.DBPath, "db-path", "", "Collector SQLite 数据库路径；默认取 MOOX_COLLECTOR_DB_PATH 或 ./data/moox_collector.db")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SpaceID, "space-id", "", "只清理指定空间；留空表示清理全部空间")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.StopCommand, "stop-command", "", "执行 apply 时首先停止 Collector 写入的本地命令")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.BackupDir, "backup-dir", "", "备份目录；默认写入数据库所在目录")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SeedFile, "seed-file", "", "重建 Schema 后使用的 Collector 任务种子文件")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.CollectorInitBin, "collector-init-bin", "moox-collector-cli", "Collector CLI 初始化程序路径")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataTarget, "metadata-target", "", "Storage Metadata tRPC target；未指定时尝试从 --file 的 StorageRPCGatewayTarget 读取")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataURL, "metadata-url", "", "Storage Metadata HTTP URL；与 --metadata-target 二选一")
+	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataTarget, "metadata-target", "", "Storage Metadata 的 tRPC 地址（ip://host:port）；不指定时只清点本地数据")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataServiceKey, "metadata-service-key", "", "Storage Metadata AuthInfo app_id；默认 storage-metadata")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataServiceSecret, "metadata-service-secret", "", "Storage Metadata AuthInfo secret；默认取 MOOX_STORAGE_NODE_AUTH_SECRET")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataServiceKey, "metadata-service-access-key", "", "Storage Metadata AuthInfo app_id；--metadata-service-key 的别名")
@@ -273,13 +271,10 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 		return summary, err
 	}
 
-	metadataTarget, metadataProtocol, metadataReason, err := resolveCollectorMetadataEndpoint(flags, snapshot)
-	if err != nil {
-		return summary, err
-	}
+	metadataTarget := strings.TrimSpace(flags.MetadataTarget)
 	var metadataClient collectorStorageMetadataClient
 	if metadataTarget == "" {
-		summary.StorageInventoryReason = metadataReason
+		summary.StorageInventoryReason = "no --metadata-target was supplied"
 	} else {
 		metadataSecret := firstNonEmpty(
 			strings.TrimSpace(flags.MetadataServiceSecret),
@@ -289,7 +284,7 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 			strings.TrimSpace(flags.MetadataServiceKey),
 			"storage-metadata",
 		)
-		metadataClient = newCollectorStorageMetadataClient(metadataTarget, metadataProtocol, metadataKey, metadataSecret)
+		metadataClient = newCollectorStorageMetadataClient(metadataTarget, metadataKey, metadataSecret)
 		if err := inspectCollectorStorageInventory(ctx, metadataClient, summary); err != nil {
 			resetCollectorStorageInventory(summary)
 			summary.StorageInventoryStatus = "unavailable"
@@ -393,61 +388,6 @@ func inspectCollectorTaskPurge(dbPath string, summary *collectorTaskPurgeSummary
 func collectorTableExists(db *gorm.DB, table string) bool {
 	var count int64
 	return db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error == nil && count > 0
-}
-
-func resolveCollectorMetadataEndpoint(flags collectorTaskPurgeFlags, snapshot *setupconfig.Snapshot) (string, string, string, error) {
-	explicitTarget := strings.TrimSpace(flags.MetadataTarget)
-	explicitURL := strings.TrimSpace(flags.MetadataURL)
-	if explicitTarget != "" && explicitURL != "" {
-		return "", "", "", fmt.Errorf("collector task purge accepts only one of --metadata-target and --metadata-url")
-	}
-	if explicitURL != "" {
-		return explicitURL, "http", "", nil
-	}
-	if explicitTarget != "" {
-		return explicitTarget, collectorMetadataProtocol(explicitTarget), "", nil
-	}
-
-	targets := collectorManifestStorageTargets(snapshot, strings.TrimSpace(flags.SpaceID))
-	switch len(targets) {
-	case 0:
-		return "", "", "no metadata target/url was supplied and --file has no StorageRPCGatewayTarget", nil
-	case 1:
-		return targets[0], collectorMetadataProtocol(targets[0]), "", nil
-	default:
-		return "", "", "manifest contains multiple StorageRPCGatewayTarget values; specify --metadata-target or --metadata-url", nil
-	}
-}
-
-func collectorManifestStorageTargets(snapshot *setupconfig.Snapshot, spaceID string) []string {
-	if snapshot == nil {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	targets := make([]string, 0, len(snapshot.Manifest.SCFFetcher.Spaces))
-	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		if spaceID != "" && strings.TrimSpace(space.SpaceID) != spaceID {
-			continue
-		}
-		target := strings.TrimSpace(space.StorageRPCGatewayTarget)
-		if target == "" {
-			continue
-		}
-		if _, ok := seen[target]; ok {
-			continue
-		}
-		seen[target] = struct{}{}
-		targets = append(targets, target)
-	}
-	return targets
-}
-
-func collectorMetadataProtocol(target string) string {
-	lower := strings.ToLower(strings.TrimSpace(target))
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return "http"
-	}
-	return "trpc"
 }
 
 func inspectCollectorStorageInventory(ctx context.Context, metadata collectorStorageMetadataClient, summary *collectorTaskPurgeSummary) error {

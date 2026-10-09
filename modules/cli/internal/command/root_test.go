@@ -144,17 +144,6 @@ func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 	assert.Equal(t, "v", env["K"])
 }
 
-func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_CA_FILE", "")
-	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
-	t.Setenv("TENCENTCLOUD_SECRET_ID", "test-cls-id")
-	t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
-	require.NoError(t, err)
-	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
-	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
-}
-
 func TestUseControlClientPrefersInjectedClientAndSetsSpace(t *testing.T) {
 	injected := admintest.Client("http://127.0.0.1:1")
 	client, closeControl, err := useControlClient(injected, nil, "/missing/moox.toml", " crypto ")
@@ -165,12 +154,6 @@ func TestUseControlClientPrefersInjectedClientAndSetsSpace(t *testing.T) {
 
 	_, _, err = useControlClient(nil, nil, filepath.Join(t.TempDir(), "moox.toml"), "crypto")
 	require.ErrorContains(t, err, "SSH 连接信息")
-}
-
-func TestDeployCollectorFunctionValidatesRequiredFields(t *testing.T) {
-	_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cloud-account-id")
 }
 
 func TestRunStorageImportDryRunPath(t *testing.T) {

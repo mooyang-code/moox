@@ -24,12 +24,9 @@ func TestManagedEnvironmentMembershipIsNotTimerClaimPayload(t *testing.T) {
 	}
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "")
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
 	invocation, err := marketfetch.TimerRequestFromEnv("request", "function", time.Now())
 	require.NoError(t, err)
 	require.Equal(t, "function", invocation.Claim.GetFunctionName())
-	require.Equal(t, "runtime.local:11003", invocation.RuntimeGatewayTarget)
 	require.NotContains(t, invocation.Claim.String(), "BTC-USDT")
 	require.NotContains(t, invocation.Claim.String(), "CUSTOM-USDT")
 	require.NotContains(t, invocation.Claim.String(), "EXPLICIT")

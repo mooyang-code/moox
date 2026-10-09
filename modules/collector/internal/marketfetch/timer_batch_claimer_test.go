@@ -190,9 +190,6 @@ func TestTimerBatchClaimerRejectsMismatchedPersistedBatchID(t *testing.T) {
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", timerPeriodBindingHash(plan.Assignment))
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
 	var storageCalls, executeCalls int
 	handler := &Handler{
 		TimerRuntimeClient: timerRuntimeClientFunc(func(callCtx context.Context, request *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
@@ -207,7 +204,7 @@ func TestTimerBatchClaimerRejectsMismatchedPersistedBatchID(t *testing.T) {
 			}
 			return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: result.Claimed, RequestJson: result.RequestJSON}, nil
 		}),
-		NewStorage: func(string, string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
+		NewStorage: func(string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
 		Execute: func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 			executeCalls++
 			return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil

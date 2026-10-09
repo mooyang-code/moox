@@ -23,6 +23,8 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -59,14 +61,20 @@ type dnsSnapshotter interface {
 	Snapshot() map[string]sources.DNSResolution
 }
 
+// directorySource 提供服务目录，用来按函数所在地域选择外部接入；Collector 进程传入自己的 gatewayclient。
+type directorySource interface {
+	Directory(context.Context) (gatewayclient.View, error)
+}
+
 // Reconciler is the Collector control-plane loop for static Timer-triggered
 // functions. It never invokes a function; it only submits desired config.
 type Reconciler struct {
-	SCFRegionBlacklists           map[string][]string
-	ResolveSourceID               func(string, string) string
-	ResolveSymbol                 SymbolResolver
-	CollectorRuntimeGatewayTarget string
-	CollectorRuntimeGatewayNodeID string
+	SCFRegionBlacklists map[string][]string
+	ResolveSourceID     func(string, string) string
+	ResolveSymbol       SymbolResolver
+	// Gateway 提供服务目录。按函数所在地域选出的外部接入地址和实例 ID 写进函数环境变量，SCF 经它领取批次、
+	// 写入 Storage；选择规则与 CLI 发布时相同（servicecatalog.Directory.AccessEndpointForRegion）。
+	Gateway                       directorySource
 	Tasks                         taskSource
 	Symbols                       datasetSource
 	Nodes                         runtimeConfigClient
@@ -321,6 +329,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// Monitor must not reinterpret a temporary HTTP failure as zero capacity.
 	r.observeAssignmentDesiredMetrics(spaceID, groups, assignments)
 	dnsAvailable := len(dns) > 0
+	if r.Gateway == nil {
+		return r.fail(spaceID, "environment", fmt.Errorf("collector gateway directory is required to select SCF access"))
+	}
+	view, err := r.Gateway.Directory(ctx)
+	if err != nil {
+		return r.fail(spaceID, "environment", fmt.Errorf("load service directory to select SCF access: %w", err))
+	}
 	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(assignments))
 	pendingFingerprints := make(map[string]string, len(assignments))
 	for _, assignment := range assignments {
@@ -328,18 +343,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if envErr != nil {
 			return r.fail(spaceID, "environment", envErr)
 		}
-		if assignment.Enabled && !r.DisableTimerTriggers && (strings.TrimSpace(r.CollectorRuntimeGatewayTarget) == "" || strings.TrimSpace(r.CollectorRuntimeGatewayNodeID) == "") {
-			return r.fail(spaceID, "environment", fmt.Errorf("collector runtime gateway target and node are required before enabling Timer"))
+		access, accessErr := view.Directory.AccessEndpointForRegion(assignment.Region, servicecatalog.AccessFallbackHostID)
+		if accessErr != nil {
+			return r.fail(spaceID, "environment", fmt.Errorf("select SCF access for node %s: %w", assignment.NodeID, accessErr))
 		}
-		if r.CollectorRuntimeGatewayTarget != "" || r.CollectorRuntimeGatewayNodeID != "" {
-			if strings.TrimSpace(r.CollectorRuntimeGatewayTarget) == "" || strings.TrimSpace(r.CollectorRuntimeGatewayNodeID) == "" {
-				return r.fail(spaceID, "environment", fmt.Errorf("collector runtime gateway target and node must be configured together"))
-			}
-			environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = strings.TrimSpace(r.CollectorRuntimeGatewayTarget)
-			environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] = strings.TrimSpace(r.CollectorRuntimeGatewayNodeID)
-			if environmentBytes(environment) > managedBudget {
-				return r.fail(spaceID, "environment", fmt.Errorf("timer assignment environment is %d bytes after Collector runtime routing before provider variables (managed budget %d)", environmentBytes(environment), managedBudget))
-			}
+		environment[gatewayclient.EnvAccessAddress] = access.Address
+		environment[gatewayclient.EnvAccessID] = access.ID
+		if environmentBytes(environment) > managedBudget {
+			return r.fail(spaceID, "environment", fmt.Errorf("timer assignment environment is %d bytes after SCF access routing before provider variables (managed budget %d)", environmentBytes(environment), managedBudget))
 		}
 		if !dnsAvailable {
 			// A Collector restart can reach this tick before its first DNS
@@ -372,7 +383,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		}
 		environment["MOOX_FETCH_TIMEOUT_SECONDS"] = strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)
 		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(desiredTimerEnabled) + "\x00" + cron
-		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] + "\x00" + environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"] + "\x00" + environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
+		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + access.Address + "\x00" + access.ID + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"] + "\x00" + environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
 		if !r.shouldPatch(assignment, nodes, fingerprint, desiredTimerEnabled) {
 			continue
 		}
@@ -1449,7 +1460,7 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 		}
 		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], storedDNSHash, metadata["timer_enabled"], metadata["timer_cron"])
 		if strings.Count(fingerprint, "\x00") > 3 {
-			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "collector_rpc_gateway_target") + "\x00" + metadataStringValue(metadata, "collector_gateway_target_node") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds") + "\x00" + fmt.Sprint(metadata["assignment_count"])
+			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "access_address") + "\x00" + metadataStringValue(metadata, "access_id") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds") + "\x00" + fmt.Sprint(metadata["assignment_count"])
 		}
 		if stored == fingerprint {
 			if timerTriggerNeedsRepair(assignment, metadata, wantTimerEnabled) {

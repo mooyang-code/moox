@@ -1,11 +1,8 @@
 package engine
 
 import (
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -13,110 +10,108 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
+	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const testEngineSecret = "0123456789abcdef0123456789abcdef"
-
-func managerClientFor(t *testing.T, handler http.HandlerFunc) *ManagerClient {
-	t.Helper()
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-	keyFile := filepath.Join(t.TempDir(), "gateway-factor-engine.key")
-	require.NoError(t, os.WriteFile(keyFile, []byte(testEngineSecret+"\n"), 0o600))
-	client, err := NewManagerClient(ManagerConfig{
-		URL: server.URL, NodeID: "control", KeyID: "factor-engine", HMACKeyFile: keyFile, Timeout: 5 * time.Second,
-	}, domain.EngineIdentity{EngineID: "factor-engine@mac", BootID: "boot", Version: "v1"})
-	require.NoError(t, err)
-	return client
+// fakeFactorEngine 是 moox-factor-mgr 的 FactorEngine 服务桩，记录收到的请求和签名元数据。
+type fakeFactorEngine struct {
+	factorpb.UnimplementedFactorEngine
+	caller     string
+	targetNode string
+	syncReq    *factorpb.SyncEngineCatalogReq
+	sync       *factorpb.SyncEngineCatalogRsp
+	heartbeat  *factorpb.EngineHeartbeatRsp
+	pull       *factorpb.PullRecalcJobRsp
 }
 
-func writeProto(t *testing.T, w http.ResponseWriter, message proto.Message) {
-	t.Helper()
-	raw, err := protojson.Marshal(message)
-	require.NoError(t, err)
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(raw)
+func (f *fakeFactorEngine) SyncEngineCatalog(ctx context.Context, req *factorpb.SyncEngineCatalogReq) (*factorpb.SyncEngineCatalogRsp, error) {
+	f.caller = string(trpc.GetMetaData(ctx, "X-Moox-Caller"))
+	f.targetNode = string(trpc.GetMetaData(ctx, "X-Moox-Target-Node"))
+	f.syncReq = req
+	return f.sync, nil
 }
 
-func TestManagerClientSignsRequests(t *testing.T) {
-	var verified gatewayauth.Claims
-	var path string
-	client := managerClientFor(t, func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		path = r.URL.Path
-		verified, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "factor-engine", Secret: testEngineSecret},
-			gatewayauth.Request{Method: r.Method, Path: r.URL.EscapedPath(), TargetNode: "control", Body: body}, r.Header, time.Now())
-		require.NoError(t, err)
-		var req factorpb.SyncEngineCatalogReq
-		require.NoError(t, protojson.Unmarshal(body, &req))
-		require.Equal(t, "hash-0", req.GetKnownHash())
-		require.Equal(t, "factor-engine@mac", req.GetEngine().GetEngineId())
-		writeProto(t, w, &factorpb.SyncEngineCatalogRsp{
-			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1",
-			Sets: []*factorpb.EngineSet{{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}, ResultReady: true,
-				Factors: []*factorpb.FactorDef{{FactorId: "bias", SourceCode: "src"}}}},
-		})
+func (f *fakeFactorEngine) EngineHeartbeat(context.Context, *factorpb.EngineHeartbeatReq) (*factorpb.EngineHeartbeatRsp, error) {
+	return f.heartbeat, nil
+}
+
+func (f *fakeFactorEngine) PullRecalcJob(context.Context, *factorpb.PullRecalcJobReq) (*factorpb.PullRecalcJobRsp, error) {
+	return f.pull, nil
+}
+
+// managerClientFor 在本机启动 FactorEngine 桩，返回经外部方式 gatewayclient 访问它的客户端：桩扮演外部接入。
+func managerClientFor(t *testing.T, fake *fakeFactorEngine) *ManagerClient {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	service := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.factor.FactorEngine"), server.WithListener(listener))
+	factorpb.RegisterFactorEngineService(service, fake)
+	go func() { _ = service.Serve() }()
+	t.Cleanup(func() { _ = service.Close(nil) })
+	credentials := gatewayauth.Credentials{KeyID: "factor-engine-1", Caller: "factor-engine", Secret: "0123456789abcdef0123456789abcdef"}
+	gateway, err := gatewayclient.New(gatewayclient.Options{
+		Config: gatewayclient.Config{
+			Mode: gatewayclient.ModeAccess, Caller: "factor-engine", AccessAddress: listener.Addr().String(), AccessID: "access@storage",
+		},
+		Credentials: &credentials,
 	})
+	require.NoError(t, err)
+	t.Cleanup(gateway.Close)
+	return NewManagerClient(gateway, ManagerConfig{Timeout: 5 * time.Second}, domain.EngineIdentity{EngineID: "factor-engine@mac", BootID: "boot", Version: "v1"})
+}
+
+func TestManagerClientCallsFactorEngineThroughAccess(t *testing.T) {
+	fake := &fakeFactorEngine{sync: &factorpb.SyncEngineCatalogRsp{
+		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1",
+		Sets: []*factorpb.EngineSet{{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}, ResultReady: true,
+			Factors: []*factorpb.FactorDef{{FactorId: "bias", SourceCode: "src"}}}},
+	}}
+	client := managerClientFor(t, fake)
 
 	snapshot, err := client.SyncCatalog(t.Context(), "hash-0")
 
 	require.NoError(t, err)
-	require.Equal(t, "/api/service/factormgr/SyncEngineCatalog", path)
-	require.Equal(t, "factor-engine", verified.Caller)
+	require.Equal(t, "factor-engine", fake.caller, "以 factor-engine 身份签名")
+	require.Equal(t, "access@storage", fake.targetNode, "签名的目标是外部接入实例")
+	require.Equal(t, "hash-0", fake.syncReq.GetKnownHash())
+	require.Equal(t, "factor-engine@mac", fake.syncReq.GetEngine().GetEngineId())
 	require.Equal(t, "hash-1", snapshot.Hash)
 	require.Len(t, snapshot.Sets, 1)
 	require.True(t, snapshot.Sets[0].ResultReady)
 	require.Equal(t, "src", snapshot.Sets[0].Factors[0].SourceCode)
 }
 
-func TestManagerClientIgnoresProxyEnv(t *testing.T) {
-	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
-	t.Setenv("NO_PROXY", "")
-	client := managerClientFor(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeProto(t, w, &factorpb.EngineHeartbeatRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, LeaseTtlSeconds: 45})
-	})
-
+func TestManagerClientHeartbeatAndConflict(t *testing.T) {
+	fake := &fakeFactorEngine{heartbeat: &factorpb.EngineHeartbeatRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, LeaseTtlSeconds: 45}}
+	client := managerClientFor(t, fake)
 	ttl, err := client.Heartbeat(t.Context(), domain.EngineStatus{})
-
 	require.NoError(t, err)
 	require.Equal(t, 45*time.Second, ttl)
-}
 
-func TestManagerClientMapsConflict(t *testing.T) {
-	client := managerClientFor(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeProto(t, w, &factorpb.EngineHeartbeatRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "held by factor-engine@other"}})
-	})
-
-	_, err := client.Heartbeat(t.Context(), domain.EngineStatus{})
-
+	fake.heartbeat = &factorpb.EngineHeartbeatRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "held by factor-engine@other"}}
+	_, err = client.Heartbeat(t.Context(), domain.EngineStatus{})
 	require.ErrorIs(t, err, ErrLeaseConflict)
 }
 
-func TestManagerClientRejectsHTTPErrors(t *testing.T) {
-	client := managerClientFor(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	})
-
-	_, err := client.Heartbeat(t.Context(), domain.EngineStatus{})
-
-	require.ErrorContains(t, err, "HTTP 403")
+func TestManagerClientRejectsTransportErrors(t *testing.T) {
+	fake := &fakeFactorEngine{}
+	client := managerClientFor(t, fake)
+	// 桩没有实现 ReportRecalcProgress，tRPC 返回传输层错误，不能当成租约冲突。
+	_, err := client.ReportRecalcProgress(t.Context(), "job-1", "token", time.Now(), "running", "")
+	require.ErrorContains(t, err, "call ReportRecalcProgress")
 	require.NotErrorIs(t, err, ErrLeaseConflict)
 }
 
 func TestManagerClientPullDecodesWindow(t *testing.T) {
-	client := managerClientFor(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeProto(t, w, &factorpb.PullRecalcJobRsp{
-			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Found: true, LeaseToken: "token",
-			Job: &factorpb.RecalcJob{JobId: "job-1", StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z",
-				ProgressTime: "2026-10-04T00:30:00Z", Subjects: []string{"BTC"}},
-			Set: &factorpb.EngineSet{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}},
-		})
-	})
+	client := managerClientFor(t, &fakeFactorEngine{pull: &factorpb.PullRecalcJobRsp{
+		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Found: true, LeaseToken: "token",
+		Job: &factorpb.RecalcJob{JobId: "job-1", StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z",
+			ProgressTime: "2026-10-04T00:30:00Z", Subjects: []string{"BTC"}},
+		Set: &factorpb.EngineSet{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}},
+	}})
 
 	job, found, err := client.PullRecalcJob(t.Context())
 

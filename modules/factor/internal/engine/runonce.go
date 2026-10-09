@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 )
 
@@ -27,7 +28,12 @@ type RunOnceRequest struct {
 // the saved snapshot), then computes and writes a single period like a
 // recalc chunk.
 func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Outcome, error) {
-	storage, err := newStorageClient(cfg.Storage)
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	if err != nil {
+		return pipeline.Outcome{}, fmt.Errorf("创建因子引擎的 gatewayclient: %w", err)
+	}
+	defer gateway.Close()
+	storage, err := newStorageClient(gateway, cfg.Storage)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -38,9 +44,8 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if _, err := cache.Load(); err != nil {
 		return pipeline.Outcome{}, err
 	}
-	if manager, err := NewManagerClient(cfg.Manager, domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: "run-once"}); err == nil {
-		_ = (&catalogSyncer{client: manager, cache: cache}).SyncOnce(ctx)
-	}
+	manager := NewManagerClient(gateway, cfg.Manager, domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: "run-once"})
+	_ = (&catalogSyncer{client: manager, cache: cache}).SyncOnce(ctx)
 	set, err := cache.Set(strings.TrimSpace(req.SetID))
 	if err != nil {
 		return pipeline.Outcome{}, err

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -24,9 +24,9 @@ type timerRuntimeRPCClient struct {
 	proxy collectorpb.MarketFetchRuntimeClientProxy
 }
 
-func newTimerRuntimeRPCClient(target, nodeID string) TimerRuntimeClient {
-	options := gatewayauth.NewTRPCClientOptions(target, nodeID, gatewayauth.CredentialsFromEnv())
-	return &timerRuntimeRPCClient{proxy: collectorpb.NewMarketFetchRuntimeClientProxy(options...)}
+// NewTimerRuntimeClient 返回经 gatewayclient 领取 Timer 批次的客户端。SCF 用外部方式，经外部接入调用 Collector。
+func NewTimerRuntimeClient(gateway *gatewayclient.Client) TimerRuntimeClient {
+	return &timerRuntimeRPCClient{proxy: collectorpb.NewMarketFetchRuntimeClientProxy(gateway.ClientOptions()...)}
 }
 
 func (c *timerRuntimeRPCClient) ClaimTimerBatch(ctx context.Context, request *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {

@@ -22,11 +22,9 @@ func TestSetupPrivateNetworkDryRunJSON(t *testing.T) {
 		ensurePrivateNetwork: func(_ context.Context, got *setupconfig.Snapshot, opts privatenet.Options, _ io.Writer) (privatenet.Result, error) {
 			called = true
 			require.True(t, opts.DryRun)
-			require.True(t, opts.SkipSCF)
-			require.True(t, opts.SkipHosts)
-			require.False(t, opts.RestoreSCFPublic)
+			require.False(t, opts.SkipProbe)
 			require.Equal(t, snapshot, got)
-			return privatenet.Result{DryRun: true, Status: "dry_run", RecommendedConfig: privatenet.RecommendedConfig{StoragePublicIP: "203.0.113.9"}}, nil
+			return privatenet.Result{DryRun: true, Status: "dry_run", Plan: privatenet.Plan{Ports: []string{"11003"}}}, nil
 		},
 	})
 	var stdout bytes.Buffer
@@ -37,16 +35,30 @@ func TestSetupPrivateNetworkDryRunJSON(t *testing.T) {
 	var result privatenet.Result
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
 	require.Equal(t, "dry_run", result.Status)
-	require.Equal(t, "203.0.113.9", result.RecommendedConfig.StoragePublicIP)
+	require.Equal(t, []string{"11003"}, result.Plan.Ports)
 	require.NotContains(t, stdout.String(), "admin-test-password")
 	require.NotContains(t, stdout.String(), "AKID-test-secret")
 }
 
+func TestSetupPrivateNetworkSkipProbeFlag(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		ensurePrivateNetwork: func(_ context.Context, _ *setupconfig.Snapshot, opts privatenet.Options, _ io.Writer) (privatenet.Result, error) {
+			require.False(t, opts.DryRun)
+			require.True(t, opts.SkipProbe)
+			return privatenet.Result{Status: "ready"}, nil
+		},
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetArgs([]string{"private-network", "--file", "moox.toml", "--skip-probe"})
+	require.NoError(t, cmd.Execute())
+}
+
 func TestSetupSCFNetworkPlanCommandPrintsResolvedRoutes(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	plan := privatenet.SCFRoutePlan{Routes: []privatenet.SCFStorageRoute{
-		{Region: "ap-guangzhou", Network: "public", Target: "ip://203.0.113.9:11003"},
-		{Region: "ap-nanjing", Network: "vpc", SameRegion: true, Target: "ip://10.0.0.5:11003"},
+	plan := privatenet.SCFRoutePlan{Routes: []privatenet.SCFAccessRoute{
+		{Region: "ap-nanjing", Network: "vpc", AccessHostID: "storage", AccessID: "access@storage", AccessAddress: "10.0.0.5:11004", VpcID: "vpc-1", SubnetID: "subnet-1"},
 	}}
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -62,59 +74,5 @@ func TestSetupSCFNetworkPlanCommandPrintsResolvedRoutes(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	var got privatenet.SCFRoutePlan
 	require.NoError(t, json.Unmarshal(output.Bytes(), &got))
-	require.Len(t, got.Routes, 1)
-	require.Equal(t, "ip://10.0.0.5:11003", got.Routes[0].Target)
-}
-
-func TestSetupPrivateNetworkRestorePublicFlag(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	snapshot.Manifest.ControlHost.Provider = "tencent"
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "203.0.113.9", Provider: "tencent"}
-	cmd := newSetupCommand(setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		ensurePrivateNetwork: func(_ context.Context, _ *setupconfig.Snapshot, opts privatenet.Options, _ io.Writer) (privatenet.Result, error) {
-			require.True(t, opts.RestoreSCFPublic)
-			require.True(t, opts.UnbindSCFVPC)
-			require.False(t, opts.SkipSCF)
-			require.True(t, opts.SkipHosts)
-			require.True(t, opts.SkipProbe)
-			require.True(t, opts.DryRun)
-			return privatenet.Result{DryRun: true, Status: "dry_run"}, nil
-		},
-	})
-	cmd.SetOut(io.Discard)
-	cmd.SetArgs([]string{"private-network", "--file", "moox.toml", "--restore-scf-public", "--dry-run"})
-	require.NoError(t, cmd.Execute())
-}
-
-func TestPrivateNetworkRewriteRunsWhenProbesSkipped(t *testing.T) {
-	opts := privatenet.Options{SkipProbe: true, RewriteRuntime: true}
-	require.False(t, shouldRunPrivateNetworkProbes(opts))
-	require.True(t, shouldRewritePublicStorageRPC(opts))
-	require.False(t, shouldRewritePublicStorageRPC(privatenet.Options{DryRun: true, RewriteRuntime: true}))
-}
-
-func TestRewriteStorageRPCUsesPublicGateway(t *testing.T) {
-	result := privatenet.Result{
-		RecommendedConfig: privatenet.RecommendedConfig{
-			StoragePublicIP:  "146.56.196.204",
-			StoragePrivateIP: "10.206.0.5",
-		},
-		Plan: privatenet.Plan{Hosts: []privatenet.ResolvedHost{
-			{HostTarget: privatenet.HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}},
-		}},
-	}
-	seen := map[string]string{}
-	exec := func(_ context.Context, publicIP, script string) (string, error) {
-		seen[publicIP] = script
-		require.Contains(t, script, "10.206.0.5 146.56.196.204")
-		require.NotContains(t, script, "146.56.196.204 10.206.0.5")
-		require.Equal(t, "106.53.107.122", publicIP)
-		require.Contains(t, script, "/data/moox/prod/config/runtime.env")
-		require.Contains(t, script, "./start.sh collector")
-		return "rewrote ip://10.206.0.5:11003 -> ip://146.56.196.204:11003\nMOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=ip://146.56.196.204:11003\n", nil
-	}
-	require.NoError(t, rewriteMainlandStorageRPC(t.Context(), exec, result, io.Discard))
-	require.Len(t, seen, 1)
-	require.Contains(t, seen, "106.53.107.122")
+	require.Equal(t, plan.Routes, got.Routes)
 }

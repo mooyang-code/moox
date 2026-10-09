@@ -11,12 +11,11 @@ import (
 )
 
 const validDataAccessYAML = `version: 1
-gateway:
-  target: ip://127.0.0.1:11003
-  target_node: storage
-  key_id: moox-skill
+access:
+  address: 146.56.196.204:11004
+  id: access@storage
   caller: moox-skill
-  secret: gateway-secret
+  key: moox-skill-1:skill-secret
 storage:
   app_id: moox-skill
   app_key: storage-key
@@ -58,7 +57,8 @@ func TestDataAccessConfigLoadsStrictCatalog(t *testing.T) {
 	path := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cfg, err := loadDataAccessConfig(path)
 	require.NoError(t, err)
-	assert.Equal(t, "ip://127.0.0.1:11003", cfg.Gateway.Target)
+	assert.Equal(t, "146.56.196.204:11004", cfg.Access.Address)
+	assert.Equal(t, "access@storage", cfg.Access.ID)
 	selection, err := cfg.resolveKline(" CRYPTO ", "", " 1M ")
 	require.NoError(t, err)
 	assert.Equal(t, "binance", selection.Exchange)
@@ -86,24 +86,29 @@ func TestDataAccessConfigRejectsUnknownFieldAndVersion(t *testing.T) {
 	assert.Contains(t, err.Error(), "version")
 }
 
-func TestDataAccessConfigRejectsNonNativeGatewayTarget(t *testing.T) {
-	for _, target := range []string{
-		"http://127.0.0.1:11003",
-		"ip://127.0.0.1:0",
-		"ip://127.0.0.1:not-a-port",
+func TestDataAccessConfigRejectsInvalidAccess(t *testing.T) {
+	for _, tc := range []struct{ old, new, field string }{
+		{"address: 146.56.196.204:11004", "address: ip://146.56.196.204:11004", "access.address"},
+		{"address: 146.56.196.204:11004", "address: 146.56.196.204", "access.address"},
+		{"id: access@storage", "id: storage", "access.id"},
+		{"key: moox-skill-1:skill-secret", "key: skill-secret", "access.key"},
+		{"caller: moox-skill", "caller: \"\"", "access.caller"},
 	} {
-		t.Run(target, func(t *testing.T) {
-			content := strings.Replace(validDataAccessYAML, "ip://127.0.0.1:11003", target, 1)
+		t.Run(tc.new, func(t *testing.T) {
+			content := strings.Replace(validDataAccessYAML, tc.old, tc.new, 1)
 			_, err := loadDataAccessConfig(writeDataAccessConfig(t, content, 0o600))
-			require.ErrorContains(t, err, "gateway.target")
+			require.ErrorContains(t, err, tc.field)
 		})
 	}
 }
 
-func TestDataAccessConfigAllowsConfiguredNativeGatewayPort(t *testing.T) {
-	content := strings.Replace(validDataAccessYAML, "ip://127.0.0.1:11003", "ip://127.0.0.1:39123", 1)
-	_, err := loadDataAccessConfig(writeDataAccessConfig(t, content, 0o600))
+func TestDataAccessConfigBuildsAccessModeGateway(t *testing.T) {
+	cfg, err := loadDataAccessConfig(writeDataAccessConfig(t, validDataAccessYAML, 0o600))
 	require.NoError(t, err)
+	gateway, err := cfg.newGateway()
+	require.NoError(t, err)
+	defer gateway.Close()
+	assert.Equal(t, "moox-skill", gateway.Caller())
 }
 
 func TestDataAccessConfigRejectsUnsafeFiles(t *testing.T) {

@@ -68,16 +68,6 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
-	collectorTarget, collectorNode, err := CollectorRuntimeTarget(&snapshot.Manifest.SCFFetcher)
-	if err != nil {
-		return nil, err
-	}
-	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", orderedMapping(
-		mappingField{"gateway_target", collectorTarget}, mappingField{"node_id", collectorNode},
-	))
-	if err != nil {
-		return nil, err
-	}
 	retention := snapshot.Manifest.CollectorRetention
 	rendered, err = replaceYAMLMapping(rendered, "collector_retention", orderedMapping(
 		mappingField{"maintenance_interval", retention.MaintenanceInterval},

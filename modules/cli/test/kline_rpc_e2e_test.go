@@ -16,6 +16,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -25,17 +26,25 @@ import (
 
 const (
 	klineGatewayNode   = "gateway-kline-e2e"
-	klineGatewayKeyID  = "moox-skill-e2e"
-	klineGatewaySecret = "gateway-kline-e2e-secret"
+	klineAccessKeyID   = "access-kline-e2e"
+	klineAccessSecret  = "access-kline-e2e-secret"
+	klineSkillKeyID    = "moox-skill-e2e"
+	klineSkillSecret   = "skill-kline-e2e-secret"
 	klineStorageAppID  = "moox-skill"
 	klineStorageAppKey = "storage-kline-e2e-app-key"
 )
 
-func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
+// TestKlineRPCGoesThroughAccess 验证 moox-skill 的完整读取链路：moox-cli data kline（外部方式）→ 外部接入（校验
+// moox-skill 的签名和白名单）→ 主机网关（以 access 身份）→ Storage；白名单之外的写方法在外部接入处被拒绝。
+func TestKlineRPCGoesThroughAccess(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	storageAddress := startKlineStorage(t, storage)
 	gatewayTarget := startKlineNativeGateway(t, storageAddress)
-	configPath := writeKlineConfig(t, gatewayTarget)
+	accessAddress := startAccessProcess(t, buildAccessBinary(t), strings.TrimPrefix(gatewayTarget, "ip://"),
+		gatewayauth.CallerKey{Caller: "access", KeyID: klineAccessKeyID, Secret: klineAccessSecret},
+		gatewayauth.CallerKey{Caller: "moox-skill", KeyID: klineSkillKeyID, Secret: klineSkillSecret},
+	)
+	configPath := writeKlineConfig(t, accessAddress)
 
 	binary := buildMooxCLI(t)
 	command := exec.Command(binary, "data", "kline", "get",
@@ -47,7 +56,7 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "kline CLI output: %s", output)
-	require.NotContains(t, string(output), klineGatewaySecret)
+	require.NotContains(t, string(output), klineSkillSecret)
 	require.NotContains(t, string(output), klineStorageAppKey)
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
@@ -69,15 +78,23 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 		t.Fatal("storage did not receive ReadTimeSeriesRows")
 	}
 
-	credentials := gatewayauth.Credentials{KeyID: klineGatewayKeyID, Caller: "moox-skill", Secret: klineGatewaySecret}
-	proxy := pb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(gatewayTarget, klineGatewayNode, credentials)...)
+	credentials := gatewayauth.Credentials{KeyID: klineSkillKeyID, Caller: "moox-skill", Secret: klineSkillSecret}
+	skill, err := gatewayclient.New(gatewayclient.Options{
+		Config: gatewayclient.Config{
+			Mode: gatewayclient.ModeAccess, Caller: "moox-skill", AccessAddress: accessAddress, AccessID: "access@" + klineGatewayNode,
+		},
+		Credentials: &credentials,
+	})
+	require.NoError(t, err)
+	defer skill.Close()
+	proxy := pb.NewPrimaryStoreClientProxy(skill.ClientOptions()...)
 	writeContext, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelWrite()
 	_, err = proxy.UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: klineStorageAppID, AppKey: klineStorageAppKey},
 	})
 	require.Error(t, err)
-	require.Equal(t, gatewayroute.RetForbidden, int(errs.Code(err)), "写方法不经主机网关开放: %v", err)
+	require.Equal(t, gatewayroute.RetForbidden, int(errs.Code(err)), "moox-skill 的白名单不含写方法: %v", err)
 	require.Equal(t, int32(0), storage.writeCalls.Load(), "写请求必须在到达 Storage 之前被拒绝")
 }
 
@@ -179,13 +196,14 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	return target
 }
 
-// klineHelperArgs 让主机网关只向 moox-skill 开放 PrimaryStore 的 ReadTimeSeriesRows。
+// klineHelperArgs 让主机网关向外部接入（access）开放 PrimaryStore 的读写方法，与生产一致：access 代 scf-collector
+// 写入、代 moox-skill 读取，外部调用方能调用哪些方法由外部接入按组件目录的白名单限制。
 func klineHelperArgs(upstreamAddress, readyFile, nonceDir string) []string {
 	return []string{
 		"-host-id", klineGatewayNode,
 		"-route", "trpc.moox.storage.PrimaryStore=" + upstreamAddress,
-		"-callers", klineStorageAppID,
-		"-methods", "ReadTimeSeriesRows",
+		"-callers", "access",
+		"-methods", "ReadTimeSeriesRows,UpsertFields",
 		"-ready-file", readyFile,
 		"-nonce-dir", nonceDir,
 	}
@@ -211,7 +229,7 @@ type gatewayHelperProcess struct {
 
 func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gatewayHelperProcess {
 	t.Helper()
-	return startGatewayHelperProcessWithKeys(t, helper, klineStorageAppID+":"+klineGatewayKeyID+":"+klineGatewaySecret, args...)
+	return startGatewayHelperProcessWithKeys(t, helper, "access:"+klineAccessKeyID+":"+klineAccessSecret, args...)
 }
 
 // startGatewayHelperProcessWithKeys 启动 e2e-helper；keys 是 caller:key_id:secret，多个用逗号分隔。
@@ -304,16 +322,15 @@ func (buffer *lockedBuffer) String() string {
 	return buffer.content.String()
 }
 
-func writeKlineConfig(t *testing.T, gatewayTarget string) string {
+func writeKlineConfig(t *testing.T, accessAddress string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
 	content := fmt.Sprintf(`version: 1
-gateway:
-  target: %q
-  target_node: %q
-  key_id: %q
+access:
+  address: %q
+  id: "access@%s"
   caller: moox-skill
-  secret: %q
+  key: "%s:%s"
 storage:
   app_id: %q
   app_key: %q
@@ -326,7 +343,7 @@ data_types:
         series_tag: venue:binance
         kline_datasets:
           1m: dataset_binance_kline_1m
-`, gatewayTarget, klineGatewayNode, klineGatewayKeyID, klineGatewaySecret, klineStorageAppID, klineStorageAppKey)
+`, accessAddress, klineGatewayNode, klineSkillKeyID, klineSkillSecret, klineStorageAppID, klineStorageAppKey)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
 }

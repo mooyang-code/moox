@@ -109,24 +109,22 @@ func expansionCacheKey(spaceID string, tagIDs []string) string {
 // applies. It is intentionally a single process timer handler; SQLite unique
 // indexes provide the only idempotency needed by this single-user system.
 type Scheduler struct {
-	SCFRegionBlacklists        map[string][]string
-	ResolveSymbol              SymbolResolver
-	ResolveSourceID            func(string, string) string
-	Tasks                      *store.TaskRepository
-	Instances                  *store.TaskInstanceRepository
-	Batches                    *store.FetchBatchRepository
-	Runs                       *store.RunRepository
-	Retries                    *store.FetchRetryRepository
-	PeriodSeriesSnapshot       *store.PeriodSeriesSnapshotRepository
-	PeriodStorageStates        *store.PeriodStorageStateRepository
-	TimerPeriodBatches         *store.TimerPeriodBatchRepository
-	TimerPeriodPlanner         *TimerPeriodPlanner
-	TimerAssignments           func() []NodeAssignment
-	TimerMeasuredSafeGroupSize int
-	Invoker                    MarketFetchInvoker
-	Storage                    StorageFactory
-	// InvokeStorageTarget 写入 SCF 调用载荷，是 SCF 函数访问 Storage 的网关地址。
-	InvokeStorageTarget           string
+	SCFRegionBlacklists           map[string][]string
+	ResolveSymbol                 SymbolResolver
+	ResolveSourceID               func(string, string) string
+	Tasks                         *store.TaskRepository
+	Instances                     *store.TaskInstanceRepository
+	Batches                       *store.FetchBatchRepository
+	Runs                          *store.RunRepository
+	Retries                       *store.FetchRetryRepository
+	PeriodSeriesSnapshot          *store.PeriodSeriesSnapshotRepository
+	PeriodStorageStates           *store.PeriodStorageStateRepository
+	TimerPeriodBatches            *store.TimerPeriodBatchRepository
+	TimerPeriodPlanner            *TimerPeriodPlanner
+	TimerAssignments              func() []NodeAssignment
+	TimerMeasuredSafeGroupSize    int
+	Invoker                       MarketFetchInvoker
+	Storage                       StorageFactory
 	BatchSize                     int
 	InvokeConcurrency             int
 	MaintenanceBatchLimit         int
@@ -1469,7 +1467,7 @@ func (s *Scheduler) planOneDeferred(ctx context.Context, task domain.CollectionT
 	if err != nil {
 		return false, err
 	}
-	if _, err := marketFetchEvent(*req, s.eventStorageTarget()); err != nil {
+	if _, err := marketFetchEvent(*req); err != nil {
 		return false, err
 	}
 	now := time.Now().UTC()
@@ -1561,7 +1559,7 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 	}
 	req = persistedRequest
 	for attempt, candidate := range invocationCandidates(node, nodes) {
-		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
+		event, err := marketFetchEvent(requestForNode(req, candidate))
 		if err != nil {
 			log.WarnContextf(ctx, "build SCF market fetch failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
@@ -2039,7 +2037,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if err != nil {
 			return err
 		}
-		if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
+		if _, err := marketFetchEvent(req); err != nil {
 			for _, retryKey := range retryKeys {
 				if markErr := markPermanent(retryKey, "invalid_retry_request", err.Error()); markErr != nil {
 					return markErr
@@ -2212,7 +2210,7 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 		attemptTimeout = defaultSCFInvokeAttemptTimeout
 	}
 	for attempt, candidate := range invocationCandidates(node, nodes) {
-		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
+		event, err := marketFetchEvent(requestForNode(req, candidate))
 		if err != nil {
 			log.WarnContextf(ctx, "build SCF market fetch retry failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
@@ -2756,14 +2754,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (s *Scheduler) eventStorageTarget() string {
-	if s == nil {
-		return ""
-	}
-	return strings.TrimSpace(s.InvokeStorageTarget)
-}
-
-func marketFetchEvent(req Request, storageTarget string) (map[string]any, error) {
+func marketFetchEvent(req Request) (map[string]any, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -2773,12 +2764,11 @@ func marketFetchEvent(req Request, storageTarget string) (map[string]any, error)
 		return nil, err
 	}
 	event := map[string]any{
-		"action":                     "market_fetch",
-		"source":                     model.EventSourceCollectorScheduler,
-		"request_id":                 req.BatchID,
-		"timestamp":                  time.Now().UTC().Format(time.RFC3339Nano),
-		"storage_rpc_gateway_target": strings.TrimSpace(storageTarget),
-		"data":                       data,
+		"action":     "market_fetch",
+		"source":     model.EventSourceCollectorScheduler,
+		"request_id": req.BatchID,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339Nano),
+		"data":       data,
 	}
 	// Validate the exact JSON object sent as Tencent ClientContext, not only
 	// the inner Request. Keep headroom below SCF's 128KB limit for provider

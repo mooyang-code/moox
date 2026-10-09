@@ -52,26 +52,6 @@ func (c TencentCloud) DescribeVpc(ctx context.Context, region, vpcID string) (te
 	return c.Network.ForRegion(region).DescribeVpc(ctx, vpcID)
 }
 
-func (c TencentCloud) FindCCN(ctx context.Context, homeRegion, name string) (tencent.CCNInfo, bool, error) {
-	return c.Network.ForRegion(homeRegion).FindCCNByName(ctx, name)
-}
-
-func (c TencentCloud) DetachVPC(ctx context.Context, homeRegion, ccnID, vpcRegion, vpcID string) error {
-	return c.Network.ForRegion(homeRegion).DetachVPCFromCCN(ctx, ccnID, vpcRegion, vpcID)
-}
-
-func (c TencentCloud) ListSCF(ctx context.Context, region, namespace string, prefixes []string) ([]tencent.SCFFunction, error) {
-	return c.Network.ForRegion(region).ListSCFFunctions(ctx, namespace, prefixes)
-}
-
-func (c TencentCloud) GetSCF(ctx context.Context, region, namespace, name string) (tencent.SCFFunction, error) {
-	return c.Network.ForRegion(region).GetSCFFunction(ctx, namespace, name)
-}
-
-func (c TencentCloud) UpdateSCF(ctx context.Context, region, namespace, name, vpcID, subnetID, publicNet string, env map[string]string) error {
-	return c.Network.ForRegion(region).UpdateSCFNetwork(ctx, namespace, name, vpcID, subnetID, publicNet, env)
-}
-
 func tencentIgnorable(err error) bool {
 	if err == nil {
 		return false

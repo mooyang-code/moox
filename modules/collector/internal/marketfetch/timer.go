@@ -16,14 +16,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// TimerInvocationFromEnv parses only the managed identity and endpoints used
-// to Claim frozen work. Membership and write bindings come from Collector.
+// TimerInvocation 是 Timer 触发时领取批次需要的身份：只从函数环境变量解析，批次成员和写入绑定都由 Collector
+// 在领取结果中给出。领取和写入都经外部接入，地址同样来自函数环境变量（见 scfGateway）。
 type TimerInvocation struct {
-	Claim                *collectorpb.ClaimTimerBatchReq
-	RuntimeGatewayTarget string
-	RuntimeGatewayNodeID string
-	StorageGatewayTarget string
-	DNSRoutes            map[string]sources.DNSResolution
+	Claim     *collectorpb.ClaimTimerBatchReq
+	DNSRoutes map[string]sources.DNSResolution
 }
 
 func TimerRequestFromEnv(requestID, functionName string, now time.Time) (TimerInvocation, error) {
@@ -38,14 +35,9 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (TimerIn
 		return TimerInvocation{}, err
 	}
 	bindingHash := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_BINDING_HASH"))
-	runtimeTarget := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
-	runtimeNodeID := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
 	if spaceID == "" || functionName == "" || requestID == "" || bindingHash == "" ||
 		groupCount <= 0 || groupID < 0 || groupID >= groupCount {
 		return TimerInvocation{}, fmt.Errorf("timer claim identity is incomplete")
-	}
-	if runtimeTarget == "" || runtimeNodeID == "" {
-		return TimerInvocation{}, fmt.Errorf("collector runtime gateway target and node are required")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -59,9 +51,7 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (TimerIn
 			SpaceId: spaceID, FunctionName: functionName, RequestId: requestID,
 			GroupId: uint32(groupID), GroupCount: uint32(groupCount), BindingHash: bindingHash, TickTime: now.UTC().Unix(),
 		},
-		RuntimeGatewayTarget: runtimeTarget, RuntimeGatewayNodeID: runtimeNodeID,
-		StorageGatewayTarget: strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")),
-		DNSRoutes:            dnsRoutes,
+		DNSRoutes: dnsRoutes,
 	}, nil
 }
 

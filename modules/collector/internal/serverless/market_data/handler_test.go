@@ -18,9 +18,6 @@ import (
 func TestHandlerRoutesTimerToClaimedMarketFetch(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
 	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
@@ -41,7 +38,7 @@ func TestHandlerRoutesTimerToClaimedMarketFetch(t *testing.T) {
 				TimerRuntimeClient: serverlessTimerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
 					return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: claimed}, nil
 				}),
-				NewStorage: func(string, string, string) (marketfetch.Storage, error) {
+				NewStorage: func(string, string) (marketfetch.Storage, error) {
 					return timerStorage{}, nil
 				},
 				Publish: func(context.Context, marketfetch.Request, proto.Message) error { return nil },
@@ -74,16 +71,15 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	// never the source of execution membership.
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "kline")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage-runtime:12004")
 
 	published := 0
+	storageCreated := 0
 	var observed marketfetch.Request
-	var observedStorageTarget string
 	handler := &Handler{
 		NewMarketFetch: func() *marketfetch.Handler {
 			return &marketfetch.Handler{
-				NewStorage: func(target, _, _ string) (marketfetch.Storage, error) {
-					observedStorageTarget = target
+				NewStorage: func(_, _ string) (marketfetch.Storage, error) {
+					storageCreated++
 					return timerStorage{}, nil
 				},
 				Publish: func(_ context.Context, request marketfetch.Request, _ proto.Message) error {
@@ -110,7 +106,7 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	require.NoError(t, json.Unmarshal(rawReq, &data))
 	raw, err := json.Marshal(model.CloudFunctionEvent{
 		Action: model.EventActionMarketFetch, Source: model.EventSourceCollectorScheduler,
-		RequestID: "request-shared", StorageRPCGatewayTarget: "ip://storage:11003", Data: data,
+		RequestID: "request-shared", Data: data,
 	})
 	require.NoError(t, err)
 	response, err := handler.HandleRequest(context.Background(), raw)
@@ -118,7 +114,7 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	require.True(t, response.(*model.Response).Success)
 	require.Equal(t, 1, published, "durable scheduler invokes must publish BatchCompleted")
 	require.Equal(t, "batch-shared", observed.BatchID)
-	require.Equal(t, "ip://storage-runtime:12004", observedStorageTarget, "SCF runtime routing must override stale scheduler payloads")
+	require.Equal(t, 1, storageCreated, "Storage 客户端按函数环境变量中的外部接入创建，调用载荷不携带地址")
 }
 
 func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {

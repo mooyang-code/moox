@@ -280,7 +280,9 @@ components:
             callers: [strategy]
       - path: trpc.moox.factor.FactorEngine
         port: 11405
-        # 只给操作员机器上的因子引擎，经外部接入转发（见 principals）。
+        # 只给操作员机器上的因子引擎，经外部接入转发（见 principals）。目录快照较大，放宽超时和大小上限。
+        timeout_ms: 30000
+        max_body_bytes: 33554432
         rpcs: [SyncEngineCatalog, EngineHeartbeat, PullRecalcJob, ReportRecalcProgress]
 
   - id: strategy

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -21,23 +20,19 @@ type timeSeriesReader interface {
 
 type dataKlineDeps struct {
 	loadConfig func(string) (dataAccessConfig, error)
-	newReader  func(dataAccessConfig) timeSeriesReader
+	// newReader 返回读取时序数据的客户端和释放它的函数。
+	newReader func(dataAccessConfig) (timeSeriesReader, func(), error)
 }
 
 func defaultDataKlineDeps() dataKlineDeps {
 	return dataKlineDeps{
 		loadConfig: loadDataAccessConfig,
-		newReader: func(cfg dataAccessConfig) timeSeriesReader {
-			options := gatewayauth.NewTRPCClientOptions(
-				strings.TrimSpace(cfg.Gateway.Target),
-				strings.TrimSpace(cfg.Gateway.TargetNode),
-				gatewayauth.Credentials{
-					KeyID:  strings.TrimSpace(cfg.Gateway.KeyID),
-					Caller: strings.TrimSpace(cfg.Gateway.Caller),
-					Secret: cfg.Gateway.Secret,
-				},
-			)
-			return pb.NewPrimaryStoreClientProxy(options...)
+		newReader: func(cfg dataAccessConfig) (timeSeriesReader, func(), error) {
+			gateway, err := cfg.newGateway()
+			if err != nil {
+				return nil, nil, err
+			}
+			return pb.NewPrimaryStoreClientProxy(gateway.ClientOptions()...), gateway.Close, nil
 		},
 	}
 }
@@ -111,9 +106,14 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 				SpaceId:   selection.SpaceID,
 				DatasetId: selection.DatasetID,
 			}
+			reader, closeReader, err := deps.newReader(cfg)
+			if err != nil {
+				return err
+			}
+			defer closeReader()
 			rpcCtx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			rsp, err := deps.newReader(cfg).ReadTimeSeriesRows(rpcCtx, req)
+			rsp, err := reader.ReadTimeSeriesRows(rpcCtx, req)
 			if err != nil {
 				return fmt.Errorf("PrimaryStore/ReadTimeSeriesRows RPC failed: %w", err)
 			}

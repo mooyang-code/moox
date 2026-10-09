@@ -9,14 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const minimalEngineConfig = `manager:
-  url: https://control.example:11001
-  node_id: control
-  hmac_key_file: ./secrets/gateway-factor-engine.key
-storage:
-  gateway_target: ip://storage.example:11004
-  gateway_node_id: access-storage
-  hmac_key_file: ./secrets/access-factor-engine.key
+const minimalEngineConfig = `gateway_client:
+  key_file: ./secrets/caller-factor-engine.key
+  access_address: 146.56.196.204:11004
+  access_id: access@storage
 eventbus:
   urls: [tls://control.example:4222]
 `
@@ -42,9 +38,10 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, time.Minute, cfg.CatalogSync.Interval)
 	require.Equal(t, 45*time.Second, cfg.CatalogSync.Offset)
 	require.Equal(t, filepath.Join(root, "data/engine/catalog.json"), cfg.CatalogSync.StateFile)
-	require.Equal(t, filepath.Join(root, "secrets/gateway-factor-engine.key"), cfg.Manager.HMACKeyFile)
-	require.Equal(t, "factor-engine", cfg.Manager.KeyID)
-	require.Equal(t, "factor-engine", cfg.Storage.KeyID)
+	require.Equal(t, filepath.Join(root, "secrets/caller-factor-engine.key"), cfg.GatewayClient.KeyFile)
+	require.Equal(t, "access", string(cfg.GatewayClient.Mode))
+	require.Equal(t, "factor-engine", cfg.GatewayClient.Caller)
+	require.Equal(t, 30*time.Second, cfg.Manager.Timeout)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
 	require.Equal(t, filepath.Join(root, "pyworker/worker.py"), cfg.Python.WorkerPath)
 }
@@ -54,10 +51,17 @@ func TestEngineConfigRejectsDatabaseSection(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestEngineConfigRequiresManagerAndStorageTargets(t *testing.T) {
+func TestEngineConfigRequiresAccessGatewayClient(t *testing.T) {
 	_, err := Load(writeEngineConfig(t, "eventbus:\n  urls: [nats://127.0.0.1:4222]\n"))
-	require.ErrorContains(t, err, "manager.url")
-	require.ErrorContains(t, err, "storage.gateway_target")
+	require.ErrorContains(t, err, "access_address")
+	require.ErrorContains(t, err, "gateway_client.key_file")
+
+	_, err = Load(writeEngineConfig(t, minimalEngineConfig+"manager:\n  url: https://control.example:11001\n"))
+	require.Error(t, err, "旧的 manager.url 等网关配置已删除")
+
+	local := "gateway_client:\n  mode: local\n  caller: factor-engine\n  key_file: ./k\n  ca_file: ./ca\n  cache_dir: ./cache\neventbus:\n  urls: [tls://control.example:4222]\n"
+	_, err = Load(writeEngineConfig(t, local))
+	require.ErrorContains(t, err, "gateway_client.mode must be access")
 }
 
 func TestEngineConfigRejectsOffsetNotLessThanInterval(t *testing.T) {

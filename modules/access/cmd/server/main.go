@@ -1,3 +1,5 @@
+// moox-access 是外部接入：接收 SCF、因子引擎和 moox-skill 等外部调用方的签名请求，按组件目录中的白名单
+// 放行后，以 access 身份经本机主机网关转发。
 package main
 
 import (
@@ -5,18 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
-	"net/url"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/access/internal/accessproxy"
+	"github.com/mooyang-code/moox/modules/access/internal/config"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -31,154 +32,102 @@ var (
 	GitCommit = ""
 )
 
+const (
+	healthServiceName   = "trpc.moox.access.Health"
+	readyCheckInterval  = 5 * time.Second
+	readyCheckTimeout   = 3 * time.Second
+	defaultConfigPath   = "./config/app.yaml"
+	healthModuleName    = "access"
+	healthInstanceName  = "access"
+	upstreamCallerLabel = "access"
+)
+
 func main() {
-	trpclog.InstallServiceName("access")
-	nonces, err := accessproxy.OpenSQLiteNonces(envOrDefault("MOOX_ACCESS_NONCE_PATH", "./data/access/nonces.db"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer nonces.Close()
-
-	principals, err := accessproxy.LoadPrincipals(envOrDefault("MOOX_ACCESS_PRINCIPALS_FILE", "./secrets/access-principals.yaml"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	proxy, err := accessproxy.New(accessproxy.Options{
-		Principals:         principals,
-		InboundTargetNode:  strings.TrimSpace(os.Getenv("MOOX_ACCESS_TARGET_NODE")),
-		UpstreamTargetNode: strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET_NODE")),
-		UpstreamTarget:     strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET")),
-		NonceNamespace:     envOrDefault("MOOX_ACCESS_NONCE_NAMESPACE", "access"),
-		MaxBodyBytes:       envInt64("MOOX_ACCESS_MAX_BODY_BYTES", 32<<20),
-		Timeout:            envDuration("MOOX_ACCESS_TIMEOUT", 30*time.Second),
-		Nonces:             nonces,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	s := trpc.NewServer(server.WithCurrentSerializationType(codec.SerializationTypeNoop))
-	accessService := s.Service(accessproxy.AccessServiceName)
-	if accessService == nil {
-		log.Fatalf("access service %q is not configured", accessproxy.AccessServiceName)
-	}
-	if err := accessproxy.RegisterAccessService(accessService, proxy); err != nil {
-		log.Fatal(fmt.Errorf("register access service: %w", err))
-	}
-	stopHealth, err := registerHealth(s, strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET")))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer stopHealth()
-	if err := s.Serve(); err != nil {
+	trpclog.InstallServiceName(healthModuleName)
+	if err := run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-const healthServiceName = "trpc.moox.access.Health"
-
-func registerHealth(s *server.Server, upstreamTarget string) (func(), error) {
-	if s == nil || s.Service(healthServiceName) == nil {
-		return func() {}, errors.New("access health service is not configured")
+func run() error {
+	cfg, err := config.Load(defaultConfigPath)
+	if err != nil {
+		return err
 	}
-	state := healthz.NewState("access", "access", Version, GitCommit)
+	catalog := servicecatalog.Default()
+	registry, principals, err := accessproxy.LoadPrincipalKeys(cfg.PrincipalsFile, catalog)
+	if err != nil {
+		return err
+	}
+	log.Printf("外部接入登记的外部调用方: %v", principals)
+	nonces, err := accessproxy.OpenSQLiteNonces(cfg.NoncePath)
+	if err != nil {
+		return err
+	}
+	defer nonces.Close()
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient, Catalog: catalog})
+	if err != nil {
+		return fmt.Errorf("创建 %s 的 gatewayclient: %w", upstreamCallerLabel, err)
+	}
+	defer gateway.Close()
+	metrics, err := accessproxy.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+	if err != nil {
+		return err
+	}
+	proxy, err := accessproxy.New(accessproxy.Options{
+		Registry: registry, Catalog: catalog, Upstream: gateway, Nonces: nonces, Metrics: metrics,
+		MaxBodyBytes: cfg.MaxBodyBytes, Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		return err
+	}
+
+	s := trpc.NewServer(server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	if err := accessproxy.RegisterAccessService(s.Service(accessproxy.AccessServiceName), proxy); err != nil {
+		return fmt.Errorf("注册外部接入服务: %w", err)
+	}
+	stopHealth, err := registerHealth(s, gateway)
+	if err != nil {
+		return err
+	}
+	defer stopHealth()
+	return s.Serve()
+}
+
+// registerHealth 注册健康检查：拿到本机的服务目录后才就绪，否则无法确定自己的实例 ID，也无法转发。
+func registerHealth(s *server.Server, gateway *gatewayclient.Client) (func(), error) {
+	service := s.Service(healthServiceName)
+	if service == nil {
+		return func() {}, errors.New("外部接入的健康检查服务未配置")
+	}
+	state := healthz.NewState(healthModuleName, healthInstanceName, Version, GitCommit)
 	state.SetReady(false)
 	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
 	if err != nil {
 		return func() {}, err
 	}
-	if err := healthz.RegisterNoProtocolServiceMux(s.Service(healthServiceName), handler); err != nil {
-		return func() {}, fmt.Errorf("register access health: %w", err)
+	if err := healthz.RegisterNoProtocolServiceMux(service, handler); err != nil {
+		return func() {}, fmt.Errorf("注册外部接入健康检查: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	interval := envDuration("MOOX_ACCESS_READY_CHECK_INTERVAL", 5*time.Second)
-	timeout := envDuration("MOOX_ACCESS_READY_CHECK_TIMEOUT", 2*time.Second)
-	go monitorUpstream(ctx, state, upstreamTarget, interval, timeout)
-	return cancel, nil
-}
-
-func monitorUpstream(ctx context.Context, state *healthz.State, target string, interval, timeout time.Duration) {
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	if timeout <= 0 {
-		timeout = 2 * time.Second
-	}
-	var previous bool
-	first := true
-	probe := func() {
-		probeCtx, cancel := context.WithTimeout(ctx, timeout)
-		err := probeUpstream(probeCtx, target)
-		cancel()
-		ready := err == nil
-		state.SetReady(ready)
-		if first || ready != previous {
-			if err != nil {
-				log.Printf("access upstream readiness=%t target=%s err=%v", ready, target, err)
-			} else {
-				log.Printf("access upstream readiness=%t target=%s", ready, target)
+	go func() {
+		ticker := time.NewTicker(readyCheckInterval)
+		defer ticker.Stop()
+		for {
+			checkCtx, checkCancel := context.WithTimeout(ctx, readyCheckTimeout)
+			view, err := gateway.Directory(checkCtx)
+			checkCancel()
+			ready := err == nil && view.LocalHostID != ""
+			if ready != state.Ready() {
+				log.Printf("外部接入就绪状态变为 %t（本机主机 %q，错误 %v）", ready, view.LocalHostID, err)
+			}
+			state.SetReady(ready)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
 			}
 		}
-		first = false
-		previous = ready
-	}
-	probe()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			probe()
-		}
-	}
-}
-
-func probeUpstream(ctx context.Context, target string) error {
-	parsed, err := url.Parse(strings.TrimSpace(target))
-	if err != nil || parsed.Scheme != "ip" || parsed.Host == "" {
-		return fmt.Errorf("invalid upstream target")
-	}
-	if _, _, err := net.SplitHostPort(parsed.Host); err != nil {
-		return fmt.Errorf("invalid upstream target: %w", err)
-	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", parsed.Host)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return strings.TrimSpace(fallback)
-}
-
-func envDuration(name string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil || parsed <= 0 {
-		log.Printf("invalid %s=%q; using %s", name, value, fallback)
-		return fallback
-	}
-	return parsed
-}
-
-func envInt64(name string, fallback int64) int64 {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || parsed <= 0 {
-		log.Printf("invalid %s=%q; using %d", name, value, fallback)
-		return fallback
-	}
-	return parsed
+	}()
+	return cancel, nil
 }

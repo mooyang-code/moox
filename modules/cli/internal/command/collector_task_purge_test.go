@@ -245,7 +245,7 @@ func TestCollectorTaskPurgeMetadataDeleteFailureKeepsLocalRetryState(t *testing.
 		},
 		failViewID: "view-fail",
 	}
-	newCollectorStorageMetadataClient = func(string, string, string, string) collectorStorageMetadataClient {
+	newCollectorStorageMetadataClient = func(string, string, string) collectorStorageMetadataClient {
 		return fake
 	}
 
@@ -295,7 +295,7 @@ func TestCollectorTaskPurgeStorageInventoryCountsOnlyCollectorOwnedObjects(t *te
 		},
 		pageSize: 1,
 	}
-	newCollectorStorageMetadataClient = func(string, string, string, string) collectorStorageMetadataClient {
+	newCollectorStorageMetadataClient = func(string, string, string) collectorStorageMetadataClient {
 		return fake
 	}
 
@@ -406,7 +406,7 @@ func storageOKForCollectorPurge() *storagepb.RetInfo {
 func useEmptyCollectorStorageInventory(t *testing.T) {
 	t.Helper()
 	original := newCollectorStorageMetadataClient
-	newCollectorStorageMetadataClient = func(string, string, string, string) collectorStorageMetadataClient {
+	newCollectorStorageMetadataClient = func(string, string, string) collectorStorageMetadataClient {
 		return &fakeCollectorStorageMetadataClient{}
 	}
 	t.Cleanup(func() {

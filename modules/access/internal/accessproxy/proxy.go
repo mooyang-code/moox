@@ -1,257 +1,202 @@
+// Package accessproxy 是外部接入的转发入口：校验外部调用方（SCF、因子引擎、moox-skill）的签名，按组件目录中
+// 外部调用方的白名单放行，再以 access 身份经本机主机网关把请求原样转发给目标服务。
 package accessproxy
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
-	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const (
-	AccessServiceName = "trpc.moox.access.Access"
-	PrimaryStoreName  = "trpc.moox.storage.PrimaryStore"
-	MetadataName      = "trpc.moox.storage.Metadata"
-	DataViewName      = "trpc.moox.storage.DataView"
+// AccessServiceName 是外部接入入口（11004）的 tRPC 服务名。
+const AccessServiceName = "trpc.moox.access.Access"
 
+const (
 	defaultMaxBodyBytes = 32 << 20
 	defaultTimeout      = 30 * time.Second
-	defaultNonceNS      = "access"
+	nonceNamespace      = "access"
+	// unknownPrincipal 是签名未通过时指标中使用的调用方名。
+	unknownPrincipal = "unknown"
 )
 
-// NonceStore persists inbound gateway nonces so a process restart does not
-// reopen the replay window.
+// 拒绝原因，用作指标标签。
+const (
+	ReasonUnauthenticated = "unauthenticated"
+	ReasonForbidden       = "forbidden"
+	ReasonReplayed        = "replayed"
+	ReasonTooLarge        = "too_large"
+	ReasonUnavailable     = "unavailable"
+)
+
+// NonceStore 持久化入站 nonce，进程重启后重放窗口不会重新打开。
 type NonceStore interface {
 	Consume(context.Context, string, string, time.Duration) (bool, error)
 }
 
-// Invoker is the small part of the tRPC client needed by the raw proxy.
-type Invoker interface {
-	Invoke(context.Context, interface{}, interface{}, ...client.Option) error
+// Upstream 是外部接入用到的 gatewayclient 能力：从服务目录取本机主机 ID，并以 access 身份转发请求。
+type Upstream interface {
+	Directory(ctx context.Context) (gatewayclient.View, error)
+	Forward(ctx context.Context, servicePath, method string, serialization int, body []byte, opts ...gatewayclient.CallOption) ([]byte, error)
 }
 
+// Metrics 记录拒绝与转发结果。
+type Metrics interface {
+	Rejected(principal, reason string)
+	Forwarded(principal, servicePath, method string, code int, elapsed time.Duration)
+}
+
+// Options 是转发入口的依赖。
 type Options struct {
-	Principals         []Principal
-	InboundTargetNode  string
-	UpstreamTargetNode string
-	UpstreamTarget     string
-	Nonces             NonceStore
-	NonceNamespace     string
-	MaxBodyBytes       int64
-	Timeout            time.Duration
-	Now                func() time.Time
-	Invoker            Invoker
+	Registry     *gatewayauth.CredentialRegistry
+	Catalog      *servicecatalog.Catalog
+	Upstream     Upstream
+	Nonces       NonceStore
+	Metrics      Metrics
+	MaxBodyBytes int64
+	Timeout      time.Duration
+	Now          func() time.Time
 }
 
+// Proxy 是外部接入的转发实现。
 type Proxy struct {
-	principals         map[string]Principal
-	inbound            *gatewayauth.CredentialRegistry
-	inboundTargetNode  string
-	upstreamTargetNode string
-	upstreamTarget     string
-	nonces             NonceStore
-	nonceNamespace     string
-	maxBodyBytes       int64
-	timeout            time.Duration
-	now                func() time.Time
-	invoker            Invoker
+	registry     *gatewayauth.CredentialRegistry
+	catalog      *servicecatalog.Catalog
+	upstream     Upstream
+	nonces       NonceStore
+	metrics      Metrics
+	maxBodyBytes int64
+	timeout      time.Duration
+	now          func() time.Time
 }
 
+// New 校验依赖并创建转发入口。
 func New(options Options) (*Proxy, error) {
-	if len(options.Principals) == 0 {
-		return nil, errors.New("at least one storage access principal is required")
+	if options.Registry == nil {
+		return nil, errors.New("外部接入缺少外部调用方的校验密钥")
 	}
-	principals := make(map[string]Principal, len(options.Principals))
-	inbound := make([]gatewayauth.Credentials, 0, len(options.Principals))
-	for _, principal := range options.Principals {
-		if principal.Inbound.Caller == "" || principal.Upstream.Caller == "" {
-			return nil, fmt.Errorf("principal %q requires inbound and upstream callers", principal.Name)
-		}
-		if _, err := gatewayauth.Sign(principal.Inbound, gatewayauth.Request{
-			Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.InboundTargetNode),
-		}, time.Unix(1, 0)); err != nil {
-			return nil, fmt.Errorf("validate principal %q inbound credentials: %w", principal.Name, err)
-		}
-		if _, err := gatewayauth.Sign(principal.Upstream, gatewayauth.Request{
-			Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.UpstreamTargetNode),
-		}, time.Unix(1, 0)); err != nil {
-			return nil, fmt.Errorf("validate principal %q upstream credentials: %w", principal.Name, err)
-		}
-		if _, duplicate := principals[principal.Inbound.KeyID]; duplicate {
-			return nil, fmt.Errorf("inbound key id %q is used by more than one principal", principal.Inbound.KeyID)
-		}
-		if len(principal.Methods) == 0 {
-			return nil, fmt.Errorf("principal %q allows no methods", principal.Name)
-		}
-		principals[principal.Inbound.KeyID] = principal
-		inbound = append(inbound, principal.Inbound)
+	if options.Upstream == nil {
+		return nil, errors.New("外部接入缺少上游 gatewayclient")
 	}
-	registry, err := gatewayauth.NewCredentialRegistry(inbound)
-	if err != nil {
-		return nil, fmt.Errorf("build inbound credential registry: %w", err)
+	if options.Nonces == nil {
+		return nil, errors.New("外部接入缺少 nonce 存储")
 	}
-	if err := validateTarget(options.UpstreamTarget); err != nil {
-		return nil, fmt.Errorf("validate upstream target: %w", err)
+	proxy := &Proxy{
+		registry: options.Registry, catalog: options.Catalog, upstream: options.Upstream, nonces: options.Nonces,
+		metrics: options.Metrics, maxBodyBytes: options.MaxBodyBytes, timeout: options.Timeout, now: options.Now,
 	}
-	if strings.TrimSpace(options.InboundTargetNode) == "" || strings.TrimSpace(options.UpstreamTargetNode) == "" {
-		return nil, errors.New("inbound and upstream target nodes are required")
+	if proxy.catalog == nil {
+		proxy.catalog = servicecatalog.Default()
 	}
-	maxBodyBytes := options.MaxBodyBytes
-	if maxBodyBytes <= 0 {
-		maxBodyBytes = defaultMaxBodyBytes
+	if proxy.maxBodyBytes <= 0 {
+		proxy.maxBodyBytes = defaultMaxBodyBytes
 	}
-	timeout := options.Timeout
-	if timeout <= 0 {
-		timeout = defaultTimeout
+	if proxy.timeout <= 0 {
+		proxy.timeout = defaultTimeout
 	}
-	nonceNamespace := strings.TrimSpace(options.NonceNamespace)
-	if nonceNamespace == "" {
-		nonceNamespace = defaultNonceNS
+	if proxy.now == nil {
+		proxy.now = time.Now
 	}
-	now := options.Now
-	if now == nil {
-		now = time.Now
-	}
-	invoker := options.Invoker
-	if invoker == nil {
-		invoker = client.New()
-	}
-	return &Proxy{
-		principals: principals, inbound: registry,
-		inboundTargetNode: strings.TrimSpace(options.InboundTargetNode), upstreamTargetNode: strings.TrimSpace(options.UpstreamTargetNode),
-		upstreamTarget: strings.TrimSpace(options.UpstreamTarget),
-		nonces:         options.Nonces, nonceNamespace: nonceNamespace, maxBodyBytes: maxBodyBytes, timeout: timeout,
-		now: now, invoker: invoker,
-	}, nil
+	return proxy, nil
 }
 
-// Forward transparently proxies the protobuf body while terminating and
-// re-signing the Gateway HMAC at the regional Access boundary.
-func (p *Proxy) Forward(ctx context.Context, reqbody *codec.Body) (*codec.Body, error) {
-	if p == nil {
-		return nil, errors.New("storage access proxy is nil")
+// Forward 校验外部调用方并把 PB 字节原样转发；返回的错误带网关错误码（4401、4403、4413、4503）或上游的错误码。
+func (p *Proxy) Forward(ctx context.Context, request *codec.Body) (*codec.Body, error) {
+	started := time.Now()
+	principal, servicePath, method := unknownPrincipal, "", ""
+	response, err := p.forward(ctx, request, &principal, &servicePath, &method)
+	if p.metrics != nil && servicePath != "" {
+		p.metrics.Forwarded(principal, servicePath, method, int(errs.Code(err)), time.Since(started))
 	}
-	if reqbody == nil {
-		return nil, errors.New("storage access request body is required")
+	return response, err
+}
+
+func (p *Proxy) forward(ctx context.Context, request *codec.Body, principal, servicePath, method *string) (*codec.Body, error) {
+	if request == nil {
+		return nil, errs.New(errs.RetServerDecodeFail, "外部接入请求体为空")
 	}
 	msg := codec.Message(ctx)
-	if msg == nil {
-		return nil, errors.New("storage access tRPC message is missing")
-	}
-	servicePath, method, ok := splitRPCName(msg.ServerRPCName())
+	service, rpc, ok := splitRPCName(msg.ServerRPCName())
 	if !ok {
-		return nil, fmt.Errorf("storage access RPC name is invalid: %q", msg.ServerRPCName())
+		return nil, errs.New(gatewayroute.RetServiceNotHere, fmt.Sprintf("无效的 RPC 名 %q", msg.ServerRPCName()))
 	}
-	if int64(len(reqbody.Data)) > p.maxBodyBytes {
-		return nil, fmt.Errorf("storage access request body exceeds %d bytes", p.maxBodyBytes)
+	*servicePath, *method = service, rpc
+	if int64(len(request.Data)) > p.maxBodyBytes {
+		p.rejected(*principal, ReasonTooLarge)
+		return nil, errs.New(gatewayroute.RetBodyTooLarge, fmt.Sprintf("请求体超过 %d 字节", p.maxBodyBytes))
 	}
-	metadata := metadataToHeader(msg.ServerMetaData())
-	claims, err := p.inbound.Verify(gatewayauth.Request{
-		Method: http.MethodPost, Path: "/" + strings.TrimPrefix(msg.ServerRPCName(), "/"), TargetNode: p.inboundTargetNode,
-		Callee: servicePath, Func: method, Body: reqbody.Data,
-	}, metadata, p.now())
-	if err != nil {
-		return nil, fmt.Errorf("storage access inbound authentication failed: %w", err)
+	view, err := p.upstream.Directory(ctx)
+	if err != nil || strings.TrimSpace(view.LocalHostID) == "" {
+		p.rejected(*principal, ReasonUnavailable)
+		return nil, errs.New(gatewayroute.RetHostDisabled, "外部接入还没有拿到本机的服务目录")
 	}
-	principal, ok := p.principals[claims.KeyID]
-	if !ok || claims.Caller != principal.Inbound.Caller {
-		return nil, fmt.Errorf("storage access caller is not allowed: %s", claims.Caller)
-	}
-	if !principal.allows(servicePath, method) {
-		return nil, fmt.Errorf("storage access method is not allowed for %s: %s/%s", principal.Name, servicePath, method)
-	}
-	if p.nonces != nil {
-		consumed, err := p.nonces.Consume(ctx, p.nonceNamespace, claims.Nonce, claims.TTL)
-		if err != nil {
-			return nil, fmt.Errorf("consume storage access nonce: %w", err)
-		}
-		if !consumed {
-			return nil, errors.New("storage access request replayed")
-		}
-	}
-
-	upstreamCtx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-	upstreamCtx, upstreamMsg := codec.WithCloneMessage(upstreamCtx)
-	upstreamMsg.WithClientRPCName("/" + servicePath + "/" + method)
-	upstreamMsg.WithCalleeServiceName(servicePath)
-	upstreamMsg.WithCalleeMethod(method)
-
-	invokeOptions := []client.Option{
-		client.WithTarget(p.upstreamTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
-		client.WithServiceName(servicePath), client.WithCalleeMethod(method),
-		client.WithSerializationType(msg.SerializationType()), client.WithCurrentSerializationType(codec.SerializationTypeNoop),
-		client.WithTimeout(p.timeout), client.WithFilter(rawGatewayClientFilter(principal.Upstream, p.upstreamTargetNode, p.now)),
-	}
-	for key, value := range msg.ServerMetaData() {
-		if strings.HasPrefix(strings.ToLower(key), "x-moox-") {
-			continue
-		}
-		invokeOptions = append(invokeOptions, client.WithMetaData(key, value))
-	}
-	response := &codec.Body{}
-	if err := p.invoker.Invoke(upstreamCtx, reqbody, response, invokeOptions...); err != nil {
-		return nil, fmt.Errorf("storage access upstream invoke failed: %w", err)
-	}
-	if int64(len(response.Data)) > p.maxBodyBytes {
-		return nil, fmt.Errorf("storage access response body exceeds %d bytes", p.maxBodyBytes)
-	}
-	return response, nil
-}
-
-func rawGatewayClientFilter(credentials gatewayauth.Credentials, targetNode string, now func() time.Time) filter.ClientFilter {
-	if now == nil {
-		now = time.Now
-	}
-	return func(ctx context.Context, req, rsp interface{}, next filter.ClientHandleFunc) error {
-		body, ok := req.(*codec.Body)
-		if !ok || body == nil {
-			return errors.New("storage access upstream request body is invalid")
-		}
-		msg := codec.Message(ctx)
-		if msg == nil {
-			return errors.New("storage access upstream tRPC message is missing")
-		}
-		path := msg.ClientRPCName()
-		if path == "" {
-			path = "/" + strings.TrimPrefix(msg.CalleeServiceName(), "/") + "/" + msg.CalleeMethod()
-		}
-		headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
-			Method: http.MethodPost, Path: path, TargetNode: targetNode, Caller: credentials.Caller,
-			Callee: msg.CalleeServiceName(), Func: msg.CalleeMethod(), Body: body.Data,
-		}, now())
-		if err != nil {
-			return err
-		}
-		metadata := make(codec.MetaData, len(msg.ClientMetaData())+len(headers))
-		for key, value := range msg.ClientMetaData() {
-			metadata[key] = value
-		}
-		for key, values := range headers {
-			if len(values) == 1 {
-				metadata[key] = []byte(values[0])
-			}
-		}
-		msg.WithClientMetaData(metadata)
-		return next(ctx, req, rsp)
-	}
-}
-
-func metadataToHeader(metadata codec.MetaData) http.Header {
+	instanceID := servicecatalog.AccessCaller + "@" + view.LocalHostID
+	metadata := msg.ServerMetaData()
 	headers := make(http.Header, len(metadata))
 	for key, value := range metadata {
 		headers.Add(key, string(value))
 	}
-	return headers
+	claims, err := p.registry.Verify(gatewayauth.Request{
+		Method: http.MethodPost, Path: "/" + service + "/" + rpc, TargetNode: instanceID,
+		Callee: service, Func: rpc, Body: request.Data,
+	}, headers, p.now())
+	if err != nil {
+		p.rejected(*principal, ReasonUnauthenticated)
+		return nil, errs.New(gatewayroute.RetUnauthenticated, "外部调用方签名校验失败: "+err.Error())
+	}
+	*principal = claims.Caller
+	if !p.catalog.PrincipalAllowed(claims.Caller, service, rpc) {
+		p.rejected(*principal, ReasonForbidden)
+		return nil, errs.New(gatewayroute.RetForbidden, fmt.Sprintf("外部调用方 %s 不能调用 %s/%s", claims.Caller, service, rpc))
+	}
+	consumed, err := p.nonces.Consume(ctx, nonceNamespace, claims.Nonce, claims.TTL)
+	if err != nil {
+		return nil, errs.New(errs.RetServerSystemErr, "外部接入无法登记 nonce: "+err.Error())
+	}
+	if !consumed {
+		p.rejected(*principal, ReasonReplayed)
+		return nil, errs.New(gatewayroute.RetUnauthenticated, "请求被重放")
+	}
+
+	timeout := p.timeout
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
+		timeout = time.Until(deadline)
+	}
+	opts := []gatewayclient.CallOption{
+		gatewayclient.WithTimeout(timeout),
+		gatewayclient.WithMetadata(gatewayroute.MetadataAccessPrincipal, []byte(claims.Caller)),
+	}
+	for key, value := range metadata {
+		// 入站的签名头（x-moox-*）由 gatewayclient 丢弃，上游只认外部接入自己的 access 签名。
+		if key == gatewayroute.MetadataAccessPrincipal {
+			continue
+		}
+		opts = append(opts, gatewayclient.WithMetadata(key, value))
+	}
+	out, err := p.upstream.Forward(ctx, service, rpc, msg.SerializationType(), request.Data, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(out)) > p.maxBodyBytes {
+		return nil, errs.New(gatewayroute.RetBodyTooLarge, fmt.Sprintf("响应体超过 %d 字节", p.maxBodyBytes))
+	}
+	return &codec.Body{Data: out}, nil
+}
+
+func (p *Proxy) rejected(principal, reason string) {
+	if p.metrics != nil {
+		p.metrics.Rejected(principal, reason)
+	}
 }
 
 func splitRPCName(rpcName string) (string, string, bool) {
@@ -260,32 +205,22 @@ func splitRPCName(rpcName string) (string, string, bool) {
 	return servicePath, method, ok && servicePath != "" && method != "" && !strings.Contains(method, "/")
 }
 
-func validateTarget(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "ip" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("target must be an ip://host:port address")
-	}
-	if _, port, err := net.SplitHostPort(parsed.Host); err != nil || port == "" {
-		return errors.New("target must include a port")
-	}
-	return nil
-}
-
-// AccessServiceDesc exposes a wildcard service so the request protobuf is
-// never decoded and re-encoded at the regional boundary.
+// AccessServiceDesc 是通配方法的服务描述：请求的 PB 字节不解码，原样转发。
 var AccessServiceDesc = server.ServiceDesc{
 	ServiceName: AccessServiceName,
 	HandlerType: ((*AccessServer)(nil)),
 	Methods:     []server.Method{{Name: "*", Func: accessForwardHandler}},
 }
 
+// AccessServer 是转发入口的接口。
 type AccessServer interface {
 	Forward(context.Context, *codec.Body) (*codec.Body, error)
 }
 
+// RegisterAccessService 把转发入口注册到外部接入的监听上。
 func RegisterAccessService(s server.Service, impl AccessServer) error {
 	if s == nil {
-		return errors.New("storage access service is unavailable")
+		return errors.New("外部接入服务未配置")
 	}
 	return s.Register(&AccessServiceDesc, impl)
 }
@@ -299,7 +234,7 @@ func accessForwardHandler(svr interface{}, ctx context.Context, f server.FilterF
 	handle := func(ctx context.Context, req interface{}) (interface{}, error) {
 		body, ok := req.(*codec.Body)
 		if !ok {
-			return nil, errors.New("storage access request body is invalid")
+			return nil, errs.New(errs.RetServerDecodeFail, "外部接入请求体无效")
 		}
 		return svr.(AccessServer).Forward(ctx, body)
 	}

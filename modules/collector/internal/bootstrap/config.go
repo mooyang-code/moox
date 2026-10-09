@@ -22,7 +22,6 @@ type Config struct {
 	Database            DatabaseConfig           `yaml:"database"`
 	CloudNode           CloudNodeConfig          `yaml:"cloudnode"`
 	Storage             StorageConfig            `yaml:"storage"`
-	CollectorRuntime    CollectorRuntimeConfig   `yaml:"collector_runtime"`
 	CollectorRetention  CollectorRetentionConfig `yaml:"collector_retention"`
 	StockCN             StockCNConfig            `yaml:"stockcn"`
 	PeriodReadiness     PeriodReadinessConfig    `yaml:"period_readiness"`
@@ -59,38 +58,9 @@ type CloudNodeConfig struct {
 	ServicePath string `yaml:"service_path"`
 }
 
-// StorageConfig 描述 Storage 相关的设置。Collector 自己访问 Storage 走 gateway_client；
-// GatewayTarget、GatewayNodeID 只用来确定写入 SCF 调用载荷的 Storage 网关。
+// StorageConfig 描述 Storage 相关的设置。Collector 自己访问 Storage 走 gateway_client。
 type StorageConfig struct {
-	GatewayTarget    string `yaml:"gateway_target"`
-	GatewayNodeID    string `yaml:"gateway_node_id"`
 	ResultDataNodeID string `yaml:"result_data_node_id"`
-}
-
-// CollectorRuntimeConfig overrides the native Gateway endpoint used to reach
-// the Collector host that owns MarketFetchRuntime. Both values are required
-// together; Storage routing is never a fallback for runtime claims.
-type CollectorRuntimeConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	NodeID        string `yaml:"node_id"`
-}
-
-// Dependencies 是写入 SCF 调用载荷的网关地址，取自配置。Collector 自己调用其他组件都走 gatewayclient。
-type Dependencies struct {
-	// CollectorRuntimeGatewayTarget、CollectorRuntimeGatewayNodeID 是 SCF 领取 Timer 批次时访问的网关。
-	CollectorRuntimeGatewayTarget string
-	CollectorRuntimeGatewayNodeID string
-	// InvokeStorageRPCGatewayTarget 是 SCF 写入 Storage 时访问的网关。
-	InvokeStorageRPCGatewayTarget string
-}
-
-// SCFTargets 返回写入 SCF 调用载荷的网关地址。
-func (c *Config) SCFTargets() Dependencies {
-	return Dependencies{
-		CollectorRuntimeGatewayTarget: strings.TrimSpace(c.CollectorRuntime.GatewayTarget),
-		CollectorRuntimeGatewayNodeID: strings.TrimSpace(c.CollectorRuntime.NodeID),
-		InvokeStorageRPCGatewayTarget: strings.TrimSpace(c.Storage.GatewayTarget),
-	}
 }
 
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
@@ -190,13 +160,7 @@ func Load(path string) (*Config, error) {
 	if err := cfg.GatewayClient.Validate(); err != nil {
 		return nil, err
 	}
-	if err := cfg.validateStorageTargets(); err != nil {
-		return nil, err
-	}
 	if err := cfg.validateDNSResolver(); err != nil {
-		return nil, err
-	}
-	if err := cfg.validateCollectorRuntime(); err != nil {
 		return nil, err
 	}
 	if err := cfg.validateKlineResample(); err != nil {
@@ -214,18 +178,6 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
-		c.Storage.GatewayTarget = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID"); v != "" {
-		c.Storage.GatewayNodeID = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET"); v != "" {
-		c.CollectorRuntime.GatewayTarget = strings.TrimSpace(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_NODE_ID"); v != "" {
-		c.CollectorRuntime.NodeID = strings.TrimSpace(v)
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_RESULT_DATA_NODE_ID"); v != "" {
 		c.Storage.ResultDataNodeID = v
@@ -270,28 +222,6 @@ func (c *Config) applyEnv() {
 			c.DNSResolver.CacheTTL = parsed
 		}
 	}
-}
-
-func (c *Config) validateStorageTargets() error {
-	if !isStorageTRPCTarget(c.Storage.GatewayTarget) {
-		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
-	}
-	return nil
-}
-
-func (c *Config) validateCollectorRuntime() error {
-	target := strings.TrimSpace(c.CollectorRuntime.GatewayTarget)
-	nodeID := strings.TrimSpace(c.CollectorRuntime.NodeID)
-	if (target == "") != (nodeID == "") {
-		if target == "" {
-			return fmt.Errorf("collector_runtime.gateway_target and collector_runtime.node_id must be configured together")
-		}
-		return fmt.Errorf("collector_runtime.node_id is required when gateway_target is configured")
-	}
-	if target != "" && !isStorageTRPCTarget(target) {
-		return fmt.Errorf("collector_runtime.gateway_target must be a native tRPC target, got %q", target)
-	}
-	return nil
 }
 
 func (c *Config) validateDNSResolver() error {
@@ -372,11 +302,6 @@ func (c *Config) validatePeriodReadiness() error {
 	return nil
 }
 
-func isStorageTRPCTarget(raw string) bool {
-	raw = strings.TrimSpace(strings.ToLower(raw))
-	return raw != "" && !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://")
-}
-
 func validDNSResolverDomain(domain string) bool {
 	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
 		return false
@@ -413,7 +338,7 @@ func Default() *Config {
 			Address:     "127.0.0.1:11401",
 			ServicePath: "trpc.moox.cloudnode.CloudNodeMgr",
 		},
-		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", ResultDataNodeID: "storage-node-0"},
+		Storage: StorageConfig{ResultDataNodeID: "storage-node-0"},
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,

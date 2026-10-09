@@ -766,6 +766,8 @@
           "service_id": "factor-mgr",
           "address": "127.0.0.1:11405",
           "service_path": "trpc.moox.factor.FactorEngine",
+          "timeout_ms": 30000,
+          "max_body_bytes": 33554432,
           "allowed_methods": [
             "EngineHeartbeat",
             "PullRecalcJob",

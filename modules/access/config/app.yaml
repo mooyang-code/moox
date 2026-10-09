@@ -1,0 +1,15 @@
+# moox-access 配置：相对路径按组件目录解析。
+
+# 转发外部调用方的请求：以 access 身份经本机主机网关
+gateway_client:
+  mode: local
+  caller: access
+  key_file: ../secrets/caller-access.key
+  ca_file: ../certs/moox-ca.crt
+  cache_dir: ./data/gatewayclient
+
+# 外部调用方的密钥集（moox-admin-cli keys export-principals 导出）；外部调用方能调用的方法写在组件目录中
+principals_file: ../secrets/access-principals.json
+nonce_path: ./data/nonces.db
+max_body_bytes: 33554432
+timeout: 30s

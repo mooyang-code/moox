@@ -22,9 +22,6 @@ cloudnode:
   service_path: trpc.moox.cloudnode.CloudNodeMgr
 
 storage:
-  # 只用于确定写入 SCF 调用载荷的 Storage 网关；Collector 自己访问 Storage 走 gateway_client。
-  gateway_target: ip://127.0.0.1:11003
-  gateway_node_id: ""
   result_data_node_id: storage-node-0
 
 period_readiness:

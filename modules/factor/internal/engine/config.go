@@ -12,18 +12,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
+// factorEngineCaller 是因子引擎的外部调用方身份。
+const factorEngineCaller = "factor-engine"
+
 type Config struct {
-	Engine      IdentityConfig    `yaml:"engine"`
-	Manager     ManagerConfig     `yaml:"manager"`
-	CatalogSync CatalogSyncConfig `yaml:"catalog_sync"`
-	Storage     StorageConfig     `yaml:"storage"`
-	EventBus    EventBusConfig    `yaml:"eventbus"`
-	Python      PythonConfig      `yaml:"python"`
-	Pipeline    PipelineConfig    `yaml:"pipeline"`
-	Recalc      RecalcConfig      `yaml:"recalc"`
+	Engine IdentityConfig `yaml:"engine"`
+	// GatewayClient 是因子引擎访问 MooX 的 gatewayclient：外部方式，经外部接入调用 moox-factor-mgr 的
+	// FactorEngine 服务和 Storage。
+	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+	Manager       ManagerConfig        `yaml:"manager"`
+	CatalogSync   CatalogSyncConfig    `yaml:"catalog_sync"`
+	Storage       StorageConfig        `yaml:"storage"`
+	EventBus      EventBusConfig       `yaml:"eventbus"`
+	Python        PythonConfig         `yaml:"python"`
+	Pipeline      PipelineConfig       `yaml:"pipeline"`
+	Recalc        RecalcConfig         `yaml:"recalc"`
 }
 
 // IdentityConfig names the engine; engine_id must stay stable across restarts
@@ -33,15 +40,9 @@ type IdentityConfig struct {
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
 }
 
-// ManagerConfig reaches moox-factor-mgr through the service gateway's HTTPS
-// entry of the control host.
+// ManagerConfig 是调用 moox-factor-mgr 的 FactorEngine 服务的设置。
 type ManagerConfig struct {
-	URL         string        `yaml:"url"`
-	NodeID      string        `yaml:"node_id"`
-	CAFile      string        `yaml:"ca_file"`
-	KeyID       string        `yaml:"key_id"`
-	HMACKeyFile string        `yaml:"hmac_key_file"`
-	Timeout     time.Duration `yaml:"timeout"`
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 // CatalogSyncConfig aligns catalog pulls to UTC multiples of interval plus
@@ -52,14 +53,9 @@ type CatalogSyncConfig struct {
 	StateFile string        `yaml:"state_file"`
 }
 
-// StorageConfig reaches Storage through access with the factor-engine
-// principal; auth_secret_file holds the Storage primary secret that signs the
-// factor AppID.
+// StorageConfig 中 auth_secret_file 保存 Storage Primary 的密钥，用来签名因子引擎的 AppID；访问 Storage 走
+// gateway_client。
 type StorageConfig struct {
-	GatewayTarget  string `yaml:"gateway_target"`
-	GatewayNodeID  string `yaml:"gateway_node_id"`
-	KeyID          string `yaml:"key_id"`
-	HMACKeyFile    string `yaml:"hmac_key_file"`
 	AuthSecretFile string `yaml:"auth_secret_file"`
 }
 
@@ -127,11 +123,11 @@ func Default() *Config {
 		hostname = short
 	}
 	return &Config{
-		Engine:      IdentityConfig{ID: "factor-engine@" + hostname, HeartbeatInterval: 10 * time.Second},
-		Manager:     ManagerConfig{KeyID: "factor-engine", Timeout: 30 * time.Second},
-		CatalogSync: CatalogSyncConfig{Interval: time.Minute, Offset: 45 * time.Second, StateFile: "./data/engine/catalog.json"},
-		Storage:     StorageConfig{KeyID: "factor-engine"},
-		EventBus:    EventBusConfig{FetchMaxWait: 10 * time.Second},
+		Engine:        IdentityConfig{ID: "factor-engine@" + hostname, HeartbeatInterval: 10 * time.Second},
+		GatewayClient: gatewayclient.Config{Mode: gatewayclient.ModeAccess, Caller: factorEngineCaller},
+		Manager:       ManagerConfig{Timeout: 30 * time.Second},
+		CatalogSync:   CatalogSyncConfig{Interval: time.Minute, Offset: 45 * time.Second, StateFile: "./data/engine/catalog.json"},
+		EventBus:      EventBusConfig{FetchMaxWait: 10 * time.Second},
 		Python: PythonConfig{
 			Bin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./data/engine/factors",
 			Workers: 8, TaskTimeout: 30 * time.Second,
@@ -148,11 +144,9 @@ func (c *Config) applyDefaults() {
 	d := Default()
 	setString(&c.Engine.ID, d.Engine.ID)
 	setDuration(&c.Engine.HeartbeatInterval, d.Engine.HeartbeatInterval)
-	setString(&c.Manager.KeyID, d.Manager.KeyID)
 	setDuration(&c.Manager.Timeout, d.Manager.Timeout)
 	setDuration(&c.CatalogSync.Interval, d.CatalogSync.Interval)
 	setString(&c.CatalogSync.StateFile, d.CatalogSync.StateFile)
-	setString(&c.Storage.KeyID, d.Storage.KeyID)
 	setDuration(&c.EventBus.FetchMaxWait, d.EventBus.FetchMaxWait)
 	setString(&c.Python.Bin, d.Python.Bin)
 	setString(&c.Python.WorkerPath, d.Python.WorkerPath)
@@ -171,8 +165,7 @@ func (c *Config) applyDefaults() {
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
-		&c.Manager.CAFile, &c.Manager.HMACKeyFile, &c.CatalogSync.StateFile,
-		&c.Storage.HMACKeyFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
+		&c.GatewayClient.KeyFile, &c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
 		&c.Python.WorkerPath, &c.Python.FactorsDir,
 	} {
 		value := strings.TrimSpace(*path)
@@ -195,14 +188,15 @@ func (c *Config) Validate() error {
 	}
 	require(strings.TrimSpace(c.Engine.ID) != "", "engine.id is required")
 	require(c.Engine.HeartbeatInterval > 0, "engine.heartbeat_interval must be positive")
-	require(strings.HasPrefix(c.Manager.URL, "https://") || strings.HasPrefix(c.Manager.URL, "http://"), "manager.url must be an http(s) URL")
-	require(strings.TrimSpace(c.Manager.NodeID) != "", "manager.node_id is required")
-	require(strings.TrimSpace(c.Manager.HMACKeyFile) != "", "manager.hmac_key_file is required")
+	if err := c.GatewayClient.Validate(); err != nil {
+		problems = append(problems, err.Error())
+	}
+	require(c.GatewayClient.Mode == gatewayclient.ModeAccess, "gateway_client.mode must be access")
+	require(strings.TrimSpace(c.GatewayClient.Caller) == factorEngineCaller, "gateway_client.caller must be "+factorEngineCaller)
+	require(strings.TrimSpace(c.GatewayClient.KeyFile) != "", "gateway_client.key_file is required")
+	require(c.Manager.Timeout > 0, "manager.timeout must be positive")
 	require(c.CatalogSync.Interval >= 10*time.Second, "catalog_sync.interval must be at least 10s")
 	require(c.CatalogSync.Offset >= 0 && c.CatalogSync.Offset < c.CatalogSync.Interval, "catalog_sync.offset must be within [0, interval)")
-	target := strings.ToLower(strings.TrimSpace(c.Storage.GatewayTarget))
-	require(target != "" && !strings.HasPrefix(target, "http"), "storage.gateway_target must be a tRPC target")
-	require(strings.TrimSpace(c.Storage.HMACKeyFile) != "", "storage.hmac_key_file is required")
 	require(len(c.EventBus.URLs) > 0, "eventbus.urls must not be empty")
 	require(c.Python.Workers > 0 && c.Python.TaskTimeout > 0, "python.workers and python.task_timeout must be positive")
 	require(c.Pipeline.PeriodBudgetMin <= c.Pipeline.PeriodBudgetMax, "pipeline.period_budget_min must not exceed period_budget_max")

@@ -143,10 +143,6 @@ request_timeout_ms = 1000
 http_max_attempts = 4
 storage_max_attempts = 1
 storage_timeout_ms = 5000
-collector_rpc_gateway_target = "ip://203.0.113.10:11003"
-collector_gateway_target_node = "collector"
-storage_gateway_host = "203.0.113.20"
-storage_access_target_nodes = { ap-guangzhou = "a", ap-singapore = "%s" }
 [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 enabled = true
@@ -155,52 +151,49 @@ function_count = 1
 region = "ap-singapore"
 enabled = true
 function_count = 1
-`, host.Port, strings.Repeat("b", 120))
+`, host.Port)
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifest), 0o600))
 	fetcher, _, err := loadCollectorSCFFetcherConfigSnapshot(manifestPath, "stockcn")
 	require.NoError(t, err)
 	base := collectorPublishOptions{
 		collectorPackageOptions: collectorPackageOptions{CollectorRoot: collectorRoot, SpaceID: "stockcn", PackageConfigDir: fetcher.PackageConfigDir, Entrypoint: fetcher.Entrypoint, CLSLogsetID: "logset-from-api", CLSTopicID: "topic-from-api", EventBusCAPEM: ca},
 		SpaceID:                 "stockcn", Region: "ap-guangzhou", TriggerType: "timer", BizType: "market_fetcher", PackageName: fetcher.PackageName, FetcherConfig: fetcher,
-		StorageRPCGatewayTarget: fetcher.StorageRPCGatewayTarget, StoragePrimaryAuthSecret: "primary-secret", RuntimeServiceKeyID: "collector", RuntimeServiceSecretKey: "aabbccdd",
+		AccessRoute: collectorTestAccessRoute("ap-guangzhou"), StoragePrimaryAuthSecret: "primary-secret", CallerKey: collectorTestCallerKey,
 		EventBusCredential: &jetstream.CredentialFile{Version: 1, URLs: []string{"tls://203.0.113.10:4222"}, Username: "publisher", Password: "publisher-secret"},
 		CLSHost:            "ap-guangzhou.cls.tencentcs.com",
 	}
 	require.NoError(t, prepareCollectorPublicationTrust(&base))
 	item, err := buildCollectorCreateNodeItem(base, collectorPreflightPackageID(base))
 	require.NoError(t, err)
-	padding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(item.Environment)-len("PADDING")-2-64)
 	knownEnvironment := make(map[string]string, len(item.Environment))
 	for key, value := range item.Environment {
 		knownEnvironment[key] = value
 	}
-	for _, key := range []string{"MOOX_GATEWAY_SERVICE_SECRET_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_LOGSET_ID", "MOOX_CLS_TOPIC_ID", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD"} {
+	for _, key := range []string{"MOOX_CALLER_KEY", "MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_LOGSET_ID", "MOOX_CLS_TOPIC_ID", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD"} {
 		delete(knownEnvironment, key)
 	}
 	mandatoryPadding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(knownEnvironment)-len("PADDING")-2)
 	for key, minimum := range map[string]string{
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY": "0", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("0", 64) + `"}`,
-		"MOOX_CLS_LOGSET_ID": "x", "MOOX_CLS_TOPIC_ID": "x", "MOOX_EVENTBUS_NATS_USERNAME": "x", "MOOX_EVENTBUS_NATS_PASSWORD": "x",
+		"MOOX_CALLER_KEY": "k:s", "MOOX_ACCESS_ADDRESS": "a:1", "MOOX_ACCESS_ID": "access@a",
+		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("0", 64) + `"}`,
+		"MOOX_CLS_LOGSET_ID":                      "x", "MOOX_CLS_TOPIC_ID": "x", "MOOX_EVENTBUS_NATS_USERNAME": "x", "MOOX_EVENTBUS_NATS_PASSWORD": "x",
 	} {
 		knownEnvironment[key] = minimum
 	}
-	require.NoError(t, tencent.ValidateCollectorTimerEnvironment(knownEnvironment), "the lower-bound placeholders must form a valid minimum runtime environment")
+	require.NoError(t, tencent.ValidateCollectorMarketFetchEnvironment(knownEnvironment), "the lower-bound placeholders must form a valid minimum runtime environment")
 	localPadding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(knownEnvironment)-len("PADDING")-2-64)
 	invokePadding := localPadding + strings.Repeat("x", 64)
 	for _, tc := range []struct {
 		name, packageName, padding, failingRegion, spaceID string
-		missingRoute, missingAccount, legacyTimer          bool
+		missingAccount, legacyTimer                        bool
 	}{
-		{"first region overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", false, false, true},
-		{"second region overflow", "moox-collector", padding, "ap-singapore", "stockcn", false, false, true},
-		{"unregistered account overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", false, true, false},
-		{"crypto legacy Timer overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "crypto", false, false, true},
-		{"local env overflow", "moox-collector", strings.Repeat("x", 4096), "ap-guangzhou", "stockcn", false, false, true},
-		{"mandatory dynamic fields overflow", "moox-collector", mandatoryPadding, "ap-guangzhou", "stockcn", false, false, true},
-		{"second region local overflow", "moox-collector", localPadding, "ap-singapore", "stockcn", false, false, true},
-		{"local config overflow", "moox-collector", "", "ap-guangzhou", "stockcn", false, false, true},
-		{"local invoke overflow", "moox-collector", invokePadding, "ap-guangzhou", "stockcn", false, false, true},
-		{"missing claim route", "moox-collector", "", "", "stockcn", true, false, true},
+		{"first region overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", false, true},
+		{"unregistered account overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", true, false},
+		{"crypto legacy Timer overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "crypto", false, true},
+		{"local env overflow", "moox-collector", strings.Repeat("x", 4096), "ap-guangzhou", "stockcn", false, true},
+		{"mandatory dynamic fields overflow", "moox-collector", mandatoryPadding, "ap-guangzhou", "stockcn", false, true},
+		{"local config overflow", "moox-collector", "", "ap-guangzhou", "stockcn", false, true},
+		{"local invoke overflow", "moox-collector", invokePadding, "ap-guangzhou", "stockcn", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mutations.Store(0)
@@ -216,10 +209,6 @@ function_count = 1
 				content = strings.ReplaceAll(content, "measured_safe_group_size = 1\n", "")
 				content = strings.ReplaceAll(content, "instrument_type = \"equity\"", "instrument_type = \"spot\"")
 				content = strings.ReplaceAll(content, "provider_id = \"eastmoney\"", "provider_id = \"binance\"")
-			}
-			if tc.missingRoute {
-				content = strings.ReplaceAll(content, "collector_rpc_gateway_target = \"ip://203.0.113.10:11003\"\n", "")
-				content = strings.ReplaceAll(content, "collector_gateway_target_node = \"collector\"\n", "")
 			}
 			if tc.name == "local invoke overflow" {
 				content = strings.ReplaceAll(content, "timeout_seconds = 60\n", "timeout_seconds = 60\ninvoke_timeout_seconds = 900\n")
@@ -240,11 +229,6 @@ function_count = 1
 			}
 			_, err := publishCollectorFunction(context.Background(), opts)
 			require.Zero(t, mutations.Load(), "invalid publication must not change existing fleets or register accounts")
-			if tc.missingRoute {
-				require.ErrorContains(t, err, "Collector")
-				require.Zero(t, reads.Load(), "missing Collector route must fail before cloud API access")
-				return
-			}
 			require.ErrorContains(t, err, "4096")
 			require.ErrorContains(t, err, "region "+tc.failingRegion)
 			if tc.name == "local invoke overflow" {
@@ -264,14 +248,13 @@ func TestCollectorManifestLowerBoundIgnoresRemoteOwnedValues(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", strings.Repeat("stale", 1000))
 	t.Setenv("MOOX_CLS_SECRET_ID", "")
 	t.Setenv("MOOX_CLS_SECRET_KEY", strings.Repeat("stale", 1000))
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", strings.Repeat("stale", 1000))
 	t.Setenv("MOOX_CLS_TOPIC_ID", strings.Repeat("stale", 1000))
 	fetcher := defaultCollectorSCFFetcherSpace()
 	fetcher.SpaceID = "stockcn"
 	fetcher.Regions = []setupconfig.SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1}}
 	manifest := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{EventBus: setupconfig.EventBus{PublicAddress: "203.0.113.10", Port: 4222}}}
 	opts := collectorPublishOptions{
-		RuntimeServiceSecretKey: strings.Repeat("stale", 1000), StorageAppKeysJSON: strings.Repeat("stale", 1000),
+		CallerKey: strings.Repeat("stale", 1000), StorageAppKeysJSON: strings.Repeat("stale", 1000),
 		collectorPackageOptions: collectorPackageOptions{CLSLogsetID: strings.Repeat("stale", 1000), CLSTopicID: strings.Repeat("stale", 1000)},
 		EventBusCredentialFile:  filepath.Join(t.TempDir(), "must-not-read.yaml"),
 	}

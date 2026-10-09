@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -704,28 +703,14 @@ type SCFFetcherSpace struct {
 	// TimerFunctionCount is retained as the manifest field name for fleet capacity.
 	// It is a Timer count for stockcn and an Invoke-pool count for crypto. stockcn
 	// must set it explicitly; other Spaces may use the built-in default.
-	TimerFunctionCount             int    `toml:"timer_function_count"`
-	MeasuredSafeGroupSize          int    `toml:"measured_safe_group_size"`
-	StaggerStartSecond             int    `toml:"stagger_start_second"`
-	StaggerWindowSeconds           int    `toml:"stagger_window_seconds"`
-	StaggerMaxStartsPerSecond      int    `toml:"stagger_max_starts_per_second"`
-	StorageGatewayNodeID           string `toml:"storage_gateway_node_id"`
-	StorageGatewayHost             string `toml:"storage_gateway_host"`
-	StorageRPCGatewayTarget        string `toml:"-"`
-	CollectorRPCGatewayTarget      string `toml:"collector_rpc_gateway_target"`
-	CollectorGatewayTargetNode     string `toml:"collector_gateway_target_node"`
-	StoragePrivateGatewayHost      string `toml:"storage_private_gateway_host"`
-	StoragePrivateRPCGatewayTarget string `toml:"-"`
-	// StorageAccessTargets overrides the central Storage gateway per SCF
-	// region. Values are regional stateless Access endpoints, while the
-	// central gateway remains the fallback for regions without an override.
-	StorageAccessTargets map[string]string `toml:"storage_access_targets"`
-	// StorageAccessTargetNodes selects the target-node identity used by the
-	// regional Access endpoint for each SCF region. The central gateway node
-	// remains the fallback when a region is not listed.
-	StorageAccessTargetNodes map[string]string `toml:"storage_access_target_nodes"`
-	MemorySize               int               `toml:"memory_size"`
-	TimeoutSeconds           int               `toml:"timeout_seconds"`
+	TimerFunctionCount        int `toml:"timer_function_count"`
+	MeasuredSafeGroupSize     int `toml:"measured_safe_group_size"`
+	StaggerStartSecond        int `toml:"stagger_start_second"`
+	StaggerWindowSeconds      int `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond int `toml:"stagger_max_starts_per_second"`
+	// 函数经外部接入访问 MooX：发布时按函数所在地域从服务目录选择外部接入（设计文档 3.7），不再单独配置。
+	MemorySize     int `toml:"memory_size"`
+	TimeoutSeconds int `toml:"timeout_seconds"`
 	// InvokeTimeoutSeconds is used by deployment canary Invoke nodes. Timer
 	// nodes retain TimeoutSeconds.
 	InvokeTimeoutSeconds int                `toml:"invoke_timeout_seconds"`
@@ -742,31 +727,6 @@ type SCFFetcherSpace struct {
 	RetryDelays          []string           `toml:"retry_delays"`
 	StaggerEnabled       bool               `toml:"stagger_enabled"`
 	Regions              []SCFFetcherRegion `toml:"regions"`
-}
-
-// StorageAccessTarget returns the normalized regional Access target for one
-// SCF region, if the manifest explicitly configured one.
-func (s SCFFetcherSpace) StorageAccessTarget(region string) string {
-	region = strings.ToLower(strings.TrimSpace(region))
-	for configuredRegion, target := range s.StorageAccessTargets {
-		if strings.EqualFold(strings.TrimSpace(configuredRegion), region) {
-			return strings.TrimSpace(target)
-		}
-	}
-	return ""
-}
-
-// StorageAccessTargetNode returns the target-node identity for one SCF
-// region. Regional Access nodes use distinct replay namespaces; callers that
-// do not configure a regional identity retain the legacy central node.
-func (s SCFFetcherSpace) StorageAccessTargetNode(region string) string {
-	region = strings.ToLower(strings.TrimSpace(region))
-	for configuredRegion, node := range s.StorageAccessTargetNodes {
-		if strings.EqualFold(strings.TrimSpace(configuredRegion), region) {
-			return strings.TrimSpace(node)
-		}
-	}
-	return strings.TrimSpace(s.StorageGatewayNodeID)
 }
 
 // DefaultTimerFunctionCount returns the built-in Timer capacity for a known
@@ -1125,39 +1085,6 @@ func resolveManifestReferences(manifest *Manifest) error {
 	manifest.EventBus.Host = eventBusHost.Host
 	manifest.EventBus.PublicAddress = eventBusHost.Address
 
-	for index := range manifest.SCFFetcher.Spaces {
-		space := &manifest.SCFFetcher.Spaces[index]
-		space.StorageGatewayHost = strings.TrimSpace(space.StorageGatewayHost)
-		if space.StorageGatewayHost != "" {
-			storageHost, err := lookup(fmt.Sprintf("scf_fetcher.spaces[%d]", index), space.StorageGatewayHost)
-			if err != nil {
-				return err
-			}
-			space.StorageGatewayHost = storageHost.Host
-			space.StorageRPCGatewayTarget = "ip://" + net.JoinHostPort(storageHost.Address, "11003")
-		}
-		space.StoragePrivateGatewayHost = strings.TrimSpace(space.StoragePrivateGatewayHost)
-		if space.StoragePrivateGatewayHost == "" {
-			continue
-		}
-		privateAddress := space.StoragePrivateGatewayHost
-		if net.ParseIP(privateAddress) == nil {
-			if _, address, ok := findHostDefinition(manifest.HostCatalog, privateAddress); ok {
-				privateAddress = address
-			} else {
-				resolved, resolveErr := net.LookupIP(privateAddress)
-				if resolveErr != nil || len(resolved) == 0 {
-					return fmt.Errorf("config_invalid: resolve scf_fetcher.spaces[%d].storage_private_gateway_host: %w", index, resolveErr)
-				}
-				privateAddress = resolved[0].String()
-			}
-		}
-		if net.ParseIP(privateAddress) == nil {
-			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].storage_private_gateway_host must resolve to an IP", index)
-		}
-		space.StoragePrivateGatewayHost = privateAddress
-		space.StoragePrivateRPCGatewayTarget = "ip://" + net.JoinHostPort(privateAddress, "11003")
-	}
 	return nil
 }
 
@@ -1579,14 +1506,6 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	if cfg == nil {
 		return nil
 	}
-	collectorTarget, collectorNode, err := CollectorRuntimeTarget(cfg)
-	if err != nil {
-		return err
-	}
-	for index := range cfg.Spaces {
-		cfg.Spaces[index].CollectorRPCGatewayTarget = collectorTarget
-		cfg.Spaces[index].CollectorGatewayTargetNode = collectorNode
-	}
 	cfg.TencentLimits.normalize()
 	if !cfg.Enabled {
 		return nil
@@ -1649,51 +1568,6 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 		if accountID != account.AccountID {
 			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].cls_cloud_account_id must match scf_fetcher.cloud_account.account_id", index)
 		}
-	}
-	return nil
-}
-
-// CollectorRuntimeTarget resolves the one process-wide Claim route. Empty
-// Spaces inherit it; explicit routes must agree because Collector has one
-// collector_runtime configuration for all Spaces.
-func CollectorRuntimeTarget(cfg *SCFFetcher) (string, string, error) {
-	if cfg == nil {
-		return "", "", nil
-	}
-	target, node := "", ""
-	for index, space := range cfg.Spaces {
-		spaceTarget := strings.TrimSpace(space.CollectorRPCGatewayTarget)
-		spaceNode := strings.TrimSpace(space.CollectorGatewayTargetNode)
-		if spaceTarget == "" && spaceNode == "" {
-			continue
-		}
-		if spaceTarget == "" || spaceNode == "" {
-			return "", "", fmt.Errorf("config_invalid: Collector gateway target and node must be configured together for scf_fetcher.spaces[%d]", index)
-		}
-		if err := ValidateCollectorRuntimeRoute(spaceTarget, spaceNode); err != nil {
-			return "", "", err
-		}
-		if target != "" && (target != spaceTarget || node != spaceNode) {
-			return "", "", fmt.Errorf("config_invalid: Collector gateway target and node must be identical across all Spaces")
-		}
-		target, node = spaceTarget, spaceNode
-	}
-	return target, node, nil
-}
-
-// ValidateCollectorRuntimeRoute validates the Collector-owned Claim endpoint
-// separately from the Storage WriteBatch route.
-func ValidateCollectorRuntimeRoute(target, node string) error {
-	if !hostNamePattern.MatchString(strings.TrimSpace(node)) {
-		return fmt.Errorf("config_invalid: collector_gateway_target_node must be a valid Collector node")
-	}
-	if err := validateStorageRPCTarget(target, "collector_rpc_gateway_target"); err != nil {
-		return err
-	}
-	parsed, _ := url.Parse(strings.TrimSpace(target))
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil || port < 1 || port > 65535 || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("config_invalid: collector_rpc_gateway_target must be an ip://host:port target without credentials, path, query, or fragment")
 	}
 	return nil
 }
@@ -1911,56 +1785,6 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	}
 	if cfg.Namespace == "" {
 		cfg.Namespace = "default"
-	}
-	cfg.StorageRPCGatewayTarget = strings.TrimSpace(cfg.StorageRPCGatewayTarget)
-	if err := validateStorageRPCTarget(cfg.StorageRPCGatewayTarget, path+".storage_rpc_gateway_target"); err != nil {
-		return err
-	}
-	cfg.CollectorRPCGatewayTarget = strings.TrimSpace(cfg.CollectorRPCGatewayTarget)
-	cfg.CollectorGatewayTargetNode = strings.TrimSpace(cfg.CollectorGatewayTargetNode)
-	if cfg.CollectorRPCGatewayTarget != "" || cfg.CollectorGatewayTargetNode != "" {
-		if cfg.CollectorGatewayTargetNode == "" || !hostNamePattern.MatchString(cfg.CollectorGatewayTargetNode) {
-			return fmt.Errorf("config_invalid: %s.collector_gateway_target_node must be a valid Collector node", path)
-		}
-		if err := validateStorageRPCTarget(cfg.CollectorRPCGatewayTarget, path+".collector_rpc_gateway_target"); err != nil {
-			return err
-		}
-	}
-	if len(cfg.StorageAccessTargets) > 0 {
-		normalizedAccessTargets := make(map[string]string, len(cfg.StorageAccessTargets))
-		for rawRegion, rawTarget := range cfg.StorageAccessTargets {
-			region := strings.ToLower(strings.TrimSpace(rawRegion))
-			if !supportedSCFRegion(region) {
-				return fmt.Errorf("config_invalid: %s.storage_access_targets[%q] uses unsupported SCF region", path, rawRegion)
-			}
-			target := strings.TrimSpace(rawTarget)
-			if err := validateStorageRPCTarget(target, fmt.Sprintf("%s.storage_access_targets[%s]", path, region)); err != nil {
-				return err
-			}
-			if _, exists := normalizedAccessTargets[region]; exists {
-				return fmt.Errorf("config_invalid: %s.storage_access_targets contains duplicate region %q", path, region)
-			}
-			normalizedAccessTargets[region] = target
-		}
-		cfg.StorageAccessTargets = normalizedAccessTargets
-	}
-	if len(cfg.StorageAccessTargetNodes) > 0 {
-		normalizedAccessNodes := make(map[string]string, len(cfg.StorageAccessTargetNodes))
-		for rawRegion, rawNode := range cfg.StorageAccessTargetNodes {
-			region := strings.ToLower(strings.TrimSpace(rawRegion))
-			if !supportedSCFRegion(region) {
-				return fmt.Errorf("config_invalid: %s.storage_access_target_nodes[%q] uses unsupported SCF region", path, rawRegion)
-			}
-			node := strings.ToLower(strings.TrimSpace(rawNode))
-			if !hostNamePattern.MatchString(node) {
-				return fmt.Errorf("config_invalid: %s.storage_access_target_nodes[%s] must be a valid target node", path, region)
-			}
-			if _, exists := normalizedAccessNodes[region]; exists {
-				return fmt.Errorf("config_invalid: %s.storage_access_target_nodes contains duplicate region %q", path, region)
-			}
-			normalizedAccessNodes[region] = node
-		}
-		cfg.StorageAccessTargetNodes = normalizedAccessNodes
 	}
 	if cfg.Runtime == "" {
 		cfg.Runtime = "Go1"

@@ -4,13 +4,16 @@ engine:
   id: ""
   heartbeat_interval: 10s
 
-# 经控制机服务 HTTPS 入口调用 moox-factor-mgr 的 FactorEngine 服务
+# 经外部接入访问 MooX：调用 moox-factor-mgr 的 FactorEngine 服务、读写 Storage 都以 factor-engine 身份签名
+gateway_client:
+  mode: access
+  caller: factor-engine
+  key_file: ./secrets/caller-factor-engine.key
+  access_address: 127.0.0.1:11004
+  access_id: access@storage
+
+# 调用 FactorEngine 服务的超时
 manager:
-  url: https://127.0.0.1:11001
-  node_id: control
-  ca_file: ./secrets/control-caddy-root.crt
-  key_id: factor-engine
-  hmac_key_file: ./secrets/gateway-factor-engine.key
   timeout: 30s
 
 # 按 UTC 对齐：每 interval 的第 offset 拉取一次目录
@@ -19,12 +22,8 @@ catalog_sync:
   offset: 45s
   state_file: ./data/engine/catalog.json
 
-# 经 Storage 机 access 读写数据（factor-engine 主体）
+# Storage Primary 的密钥，用来签名因子引擎的 AppID
 storage:
-  gateway_target: "ip://127.0.0.1:11004"
-  gateway_node_id: ""
-  key_id: factor-engine
-  hmac_key_file: ./secrets/access-factor-engine.key
   auth_secret_file: ./secrets/storage-primary-auth.secret
 
 eventbus:

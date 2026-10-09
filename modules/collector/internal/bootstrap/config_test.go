@@ -35,47 +35,26 @@ func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
 func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_DB_PATH", "./override/collector.db")
 	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
-	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET", "ip://127.0.0.1:30100")
 
 	path := writeCollectorConfig(t, `
 database:
   path: ./original/collector.db
 storage:
-  gateway_target: ip://127.0.0.1:20100
+  result_data_node_id: storage-node-1
 `)
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
-	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
+	assert.Equal(t, "storage-node-1", cfg.Storage.ResultDataNodeID)
 }
 
-func TestCollectorRuntimeGatewayConfigIsExplicitPair(t *testing.T) {
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "")
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "")
-	cfg, err := Load(writeCollectorConfig(t, `collector_runtime:
-  gateway_target: ip://10.0.0.5:11003
-  node_id: collector-2
-`))
-	require.NoError(t, err)
-	assert.Equal(t, "ip://10.0.0.5:11003", cfg.CollectorRuntime.GatewayTarget)
-	assert.Equal(t, "collector-2", cfg.CollectorRuntime.NodeID)
-
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "collector-gw.example.com:11003")
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "collector-3")
-	cfg, err = Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
-	require.NoError(t, err)
-	assert.Equal(t, "collector-gw.example.com:11003", cfg.CollectorRuntime.GatewayTarget)
-	assert.Equal(t, "collector-3", cfg.CollectorRuntime.NodeID)
-}
-
-func TestLoadRejectsPartialCollectorRuntimeGatewayConfig(t *testing.T) {
-	_, err := Load(writeCollectorConfig(t, `collector_runtime:
-  gateway_target: collector-gw.example.com:11003
-`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collector_runtime.node_id")
+func TestLoadRejectsRemovedSCFGatewaySettings(t *testing.T) {
+	for _, body := range []string{"storage:\n  gateway_target: ip://127.0.0.1:20100\n", "collector_runtime:\n  node_id: collector-2\n"} {
+		_, err := Load(writeCollectorConfig(t, body))
+		require.Error(t, err, "SCF 改走外部接入后，Collector 不再配置 SCF 的网关地址")
+	}
 }
 
 func TestCollectorServicesListenOnLoopbackTRPC(t *testing.T) {

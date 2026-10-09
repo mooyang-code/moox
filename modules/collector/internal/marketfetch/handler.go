@@ -26,8 +26,10 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage         func(string, string, string) (Storage, error)
-	Publish            func(context.Context, Request, proto.Message) error
+	// NewStorage 按市场类型和写入来源创建 Storage 客户端；生产环境经外部接入访问 Storage。
+	NewStorage func(marketType, writeSource string) (Storage, error)
+	Publish    func(context.Context, Request, proto.Message) error
+	// TimerRuntimeClient 为空时经外部接入领取 Timer 批次。
 	TimerRuntimeClient TimerRuntimeClient
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
@@ -67,8 +69,12 @@ const (
 )
 
 func NewHandler() *Handler {
-	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
-		return NewMarketStorageForMarket(scfGatewayOptions(target), market, writeSource)
+	return &Handler{NewStorage: func(market, writeSource string) (Storage, error) {
+		gateway, err := scfGateway()
+		if err != nil {
+			return nil, err
+		}
+		return NewMarketStorageForMarket(gateway.ClientOptions(), market, writeSource)
 	}, Publish: publishCompletion}
 }
 
@@ -99,7 +105,11 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	}
 	runtimeClient := h.TimerRuntimeClient
 	if runtimeClient == nil {
-		runtimeClient = newTimerRuntimeRPCClient(invocation.RuntimeGatewayTarget, invocation.RuntimeGatewayNodeID)
+		gateway, gatewayErr := scfGateway()
+		if gatewayErr != nil {
+			return &model.Response{Success: false, Message: gatewayErr.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+		}
+		runtimeClient = NewTimerRuntimeClient(gateway)
 	}
 	req, claimed, err := claimTimerRequest(budgetCtx, runtimeClient, invocation)
 	if err != nil {
@@ -108,13 +118,10 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	if !claimed {
 		return &model.Response{Success: true, Message: "no_work", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	if invocation.StorageGatewayTarget == "" {
-		return &model.Response{Success: false, Message: "storage_rpc_gateway_target is required", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-	}
 	if h.Publish == nil {
 		return &model.Response{Success: false, Message: "completion publisher is not configured", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	return h.handleRequest(budgetCtx, req, invocation.StorageGatewayTarget, true)
+	return h.handleRequest(budgetCtx, req, true)
 }
 
 func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, publish bool, runtimeFunctionName string) (*model.Response, error) {
@@ -153,12 +160,8 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if req.Concurrency == 0 {
 		req.Concurrency = envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	}
-	storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
-	if storageTarget == "" {
-		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
-	}
 	defer h.reportMetrics(ctx)
-	return h.handleRequest(ctx, req, storageTarget, publish)
+	return h.handleRequest(ctx, req, publish)
 }
 
 // mergeDNSRoutes puts the preferred route map first and appends unique
@@ -205,17 +208,13 @@ func mergeDNSRoutes(preferred, fallback map[string]sources.DNSResolution) map[st
 	return merged
 }
 
-func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget string, publish bool) (*model.Response, error) {
-	storageTarget = strings.TrimSpace(storageTarget)
-	if storageTarget == "" {
-		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
-	}
+func (h *Handler) handleRequest(ctx context.Context, req Request, publish bool) (*model.Response, error) {
 	if publish && h.Publish == nil {
 		return nil, fmt.Errorf("completion publisher is not configured")
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storage, err := h.NewStorage(storageTarget, req.MarketType, writeSourceForFunctionName(req.FunctionName))
+	storage, err := h.NewStorage(req.MarketType, writeSourceForFunctionName(req.FunctionName))
 	if err != nil {
 		return nil, err
 	}

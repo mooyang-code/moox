@@ -40,7 +40,7 @@ func newTestDataKlineCommand(t *testing.T, reader *fakeTimeSeriesReader) (*bytes
 	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cmd := newDataKlineGetCmd(dataKlineDeps{
 		loadConfig: func(string) (dataAccessConfig, error) { return loadDataAccessConfig(configPath) },
-		newReader:  func(dataAccessConfig) timeSeriesReader { return reader },
+		newReader:  func(dataAccessConfig) (timeSeriesReader, func(), error) { return reader, func() {}, nil },
 	})
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	cmd.SetOut(stdout)
@@ -174,7 +174,7 @@ func TestDataKlineRejectsConfigAsOutput(t *testing.T) {
 	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cmd := newDataKlineGetCmd(dataKlineDeps{
 		loadConfig: func(string) (dataAccessConfig, error) { return loadDataAccessConfig(configPath) },
-		newReader:  func(dataAccessConfig) timeSeriesReader { return reader },
+		newReader:  func(dataAccessConfig) (timeSeriesReader, func(), error) { return reader, func() {}, nil },
 	})
 	cmd.SetArgs([]string{"--config", configPath, "--data-type", "crypto", "--symbol", "BTC-USDT", "--output", configPath})
 	err := cmd.Execute()

@@ -10,15 +10,14 @@ DIR="$(cd "${DIR}" && pwd -P)"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${DIR}/bin/moox-factor-engine"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${DIR}/venv/bin/python"
 chmod +x "${DIR}/bin/moox-factor-engine" "${DIR}/venv/bin/python"
-for secret in gateway-factor-engine.key access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
+for secret in caller-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
   printf 'secret-%s\n' "${secret}" >"${DIR}/secrets/${secret}"
   chmod 0600 "${DIR}/secrets/${secret}"
 done
 
 install_args=(
   --dir "${DIR}" --skip-build --no-start --engine-id factor-engine@contract
-  --manager-url https://control.example:11001 --manager-node-id control
-  --storage-target ip://storage.example:11004 --storage-node-id access-storage
+  --access-address storage.example:11004 --access-id access@storage
   --eventbus-url tls://control.example:4222
 )
 export MOOX_LAUNCH_AGENTS_DIR="${TMP_ROOT}/LaunchAgents" MOOX_SYSTEMD_USER_DIR="${TMP_ROOT}/systemd"
@@ -26,9 +25,12 @@ HTTPS_PROXY=http://127.0.0.1:7897 "${ROOT}/scripts/deploy/deploy-factor-engine.s
 
 config="${DIR}/config/engine.yaml"
 grep -Fq 'id: factor-engine@contract' "${config}"
-grep -Fq 'url: https://control.example:11001' "${config}"
-grep -Fq 'gateway_target: "ip://storage.example:11004"' "${config}"
-grep -Fq "hmac_key_file: ${DIR}/secrets/gateway-factor-engine.key" "${config}"
+grep -Fq 'mode: access' "${config}"
+grep -Fq 'caller: factor-engine' "${config}"
+grep -Fq 'access_address: storage.example:11004' "${config}"
+grep -Fq 'access_id: access@storage' "${config}"
+grep -Fq "key_file: ${DIR}/secrets/caller-factor-engine.key" "${config}"
+! grep -Eq 'gateway_target|hmac_key_file|url: https' "${config}"
 grep -Fq 'tls://control.example:4222' "${config}"
 ! grep -Eq '^database:' "${config}"
 [[ -s "${DIR}/config/trpc_go.engine.yaml" && -s "${DIR}/pyworker/worker.py" && -s "${DIR}/pyworker/codec.py" ]]
@@ -50,12 +52,17 @@ if grep -Eq '(HTTPS?_PROXY|https?_proxy)[^ ]*=|<key>HTTPS?_PROXY' "${service}"; 
   exit 1
 fi
 
-chmod 0644 "${DIR}/secrets/gateway-factor-engine.key"
+chmod 0644 "${DIR}/secrets/caller-factor-engine.key"
 if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" "${install_args[@]}" >/dev/null 2>&1; then
   echo "installer accepted a group-readable credential" >&2
   exit 1
 fi
-chmod 0600 "${DIR}/secrets/gateway-factor-engine.key"
+chmod 0600 "${DIR}/secrets/caller-factor-engine.key"
+bad_args=("${install_args[@]/access@storage/storage}")
+if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" "${bad_args[@]}" >/dev/null 2>&1; then
+  echo "installer accepted an access id without the access@ prefix" >&2
+  exit 1
+fi
 rm "${DIR}/secrets/storage-primary-auth.secret"
 if "${ROOT}/scripts/deploy/deploy-factor-engine.sh" "${install_args[@]}" >/dev/null 2>&1; then
   echo "installer accepted a missing Storage auth secret" >&2

@@ -140,15 +140,12 @@ func newSetupInspectSCFCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			envTarget := ""
-			if fn.Environment != nil {
-				envTarget = fn.Environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]
-			}
 			return writeSetupJSON(cmd, map[string]any{
 				"region": region, "namespace": namespace, "function": functionName,
 				"status": fn.Status, "vpc_id": fn.VpcID, "subnet_id": fn.SubnetID,
 				"public_net_status": fn.PublicNetStatus,
-				"storage_target":    envTarget,
+				"access_address":    fn.Environment[cloudtencent.EnvAccessAddress],
+				"access_id":         fn.Environment[cloudtencent.EnvAccessID],
 			})
 		},
 	}

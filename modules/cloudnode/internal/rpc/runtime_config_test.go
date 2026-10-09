@@ -17,12 +17,12 @@ func TestManagedEnvironmentRejectsUnknownKey(t *testing.T) {
 	}
 }
 
-func TestManagedEnvironmentAcceptsTimerClaimRouting(t *testing.T) {
-	for _, key := range []string{"MOOX_MARKET_FETCH_BINDING_HASH", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE"} {
+func TestManagedEnvironmentAcceptsAccessRouting(t *testing.T) {
+	for _, key := range []string{"MOOX_MARKET_FETCH_BINDING_HASH", "MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID"} {
 		_, ok := managedEnvironmentKeys[key]
-		require.True(t, ok, "missing Timer Claim key %s", key)
+		require.True(t, ok, "Collector 维护的外部接入路由 %s 必须可以下发", key)
 	}
-	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_STORAGE_PRIMARY_AUTH_SECRET", "MOOX_EVENTBUS_NATS_PASSWORD"} {
+	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_STORAGE_PRIMARY_AUTH_SECRET", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_CALLER", "MOOX_CALLER_KEY"} {
 		_, ok := managedEnvironmentKeys[key]
 		require.False(t, ok, "assignment patches must not replace credentials: %s", key)
 	}

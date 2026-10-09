@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Installs moox-factor-engine on the machine that runs it (macOS with launchd,
-# Linux with a systemd user unit). The engine only dials out: to
-# moox-factor-mgr through the control host's gateway HTTPS entry, to EventBus
-# and to access on the Storage host.
+# 在运行因子引擎的机器上安装 moox-factor-engine（macOS 用 launchd，Linux 用 systemd 用户服务）。引擎只发起
+# 出站连接：经外部接入调用 moox-factor-mgr 的 FactorEngine 服务、读写 Storage，以及连接 EventBus。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -12,11 +10,8 @@ OS="$(uname -s)"
 DEPLOY_DIR="${HOME}/moox/factor-engine"
 SECRETS_DIR=""
 ENGINE_ID=""
-MANAGER_URL=""
-MANAGER_NODE_ID=""
-MANAGER_CA=""
-STORAGE_TARGET=""
-STORAGE_NODE_ID=""
+ACCESS_ADDRESS=""
+ACCESS_ID=""
 EVENTBUS_URL=""
 SKIP_BUILD=0
 NO_START=0
@@ -25,28 +20,23 @@ SYSTEMD_USER_DIR="${MOOX_SYSTEMD_USER_DIR:-${HOME}/.config/systemd/user}"
 
 usage() {
   cat <<'EOF'
-Usage:
-  scripts/deploy/deploy-factor-engine.sh --manager-url URL --manager-node-id ID \
-    --storage-target ip://HOST:PORT --storage-node-id ID --eventbus-url URL [options]
+用法：
+  scripts/deploy/deploy-factor-engine.sh --access-address HOST:PORT --access-id access@HOST --eventbus-url URL [选项]
 
-Options:
-  --dir <path>              Install directory. Default: ~/moox/factor-engine. On macOS keep it out of ~/Documents.
-  --secrets-dir <path>      Directory holding the engine credentials. Default: <dir>/secrets.
-  --engine-id <id>          Stable engine id. Default: factor-engine@<short hostname>.
-  --manager-url <url>       Control host service HTTPS entry, e.g. https://106.53.107.122:11001.
-  --manager-node-id <id>    Gateway node id of the control host.
-  --manager-ca <path>       Caddy root certificate of the control host (copied to secrets/).
-  --storage-target <target> access tRPC target, e.g. ip://146.56.196.204:11004.
-  --storage-node-id <id>    access inbound target node id.
-  --eventbus-url <url>      EventBus URL, e.g. tls://106.53.107.122:4222.
-  --skip-build              Reuse <dir>/bin/moox-factor-engine.
-  --no-start                Install files only; do not (re)start the service.
+选项：
+  --dir <path>              安装目录，默认 ~/moox/factor-engine；macOS 上不要放在 ~/Documents 下。
+  --secrets-dir <path>      存放引擎密钥的目录，默认 <dir>/secrets。
+  --engine-id <id>          稳定的引擎 ID，默认 factor-engine@<短主机名>。
+  --access-address <addr>   外部接入地址，例如 146.56.196.204:11004。
+  --access-id <id>          外部接入实例 ID，例如 access@storage。
+  --eventbus-url <url>      EventBus 地址，例如 tls://106.53.107.122:4222。
+  --skip-build              复用 <dir>/bin/moox-factor-engine。
+  --no-start                只安装文件，不（重新）启动服务。
 
-Credentials expected in the secrets directory (regular files, mode 0600):
-  gateway-factor-engine.key          factor-engine gateway service key (control host secrets/)
-  access-factor-engine.key   factor-engine access key (Storage host secrets/)
-  storage-primary-auth.secret        MOOX_STORAGE_PRIMARY_AUTH_SECRET of the Storage deployment
-  factor-eventbus.yaml               factor EventBus role credential (its ca_file next to it)
+密钥目录中需要的文件（普通文件，权限 0600）：
+  caller-factor-engine.key           factor-engine 外部调用方的签名密钥（control 主机的 secrets/principal-factor-engine.key）
+  storage-primary-auth.secret        Storage 部署的 MOOX_STORAGE_PRIMARY_AUTH_SECRET
+  factor-eventbus.yaml               因子 EventBus 角色凭据（ca_file 放在同一目录）
 EOF
 }
 
@@ -64,11 +54,8 @@ while [[ $# -gt 0 ]]; do
     --dir) DEPLOY_DIR="$2"; shift 2 ;;
     --secrets-dir) SECRETS_DIR="$2"; shift 2 ;;
     --engine-id) ENGINE_ID="$2"; shift 2 ;;
-    --manager-url) MANAGER_URL="$2"; shift 2 ;;
-    --manager-node-id) MANAGER_NODE_ID="$2"; shift 2 ;;
-    --manager-ca) MANAGER_CA="$2"; shift 2 ;;
-    --storage-target) STORAGE_TARGET="$2"; shift 2 ;;
-    --storage-node-id) STORAGE_NODE_ID="$2"; shift 2 ;;
+    --access-address) ACCESS_ADDRESS="$2"; shift 2 ;;
+    --access-id) ACCESS_ID="$2"; shift 2 ;;
     --eventbus-url) EVENTBUS_URL="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --no-start) NO_START=1; shift ;;
@@ -77,10 +64,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "${MANAGER_URL}" =~ ^https?:// ]] || fail "--manager-url must be an http(s) URL"
-[[ -n "${MANAGER_NODE_ID}" ]] || fail "--manager-node-id is required"
-[[ "${STORAGE_TARGET}" =~ ^ip://[^/]+:[0-9]+$ ]] || fail "--storage-target must be ip://host:port"
-[[ -n "${STORAGE_NODE_ID}" ]] || fail "--storage-node-id is required"
+[[ "${ACCESS_ADDRESS}" =~ ^[^/:@[:space:]]+:[0-9]+$ ]] || fail "--access-address 必须是 host:port"
+[[ "${ACCESS_ID}" =~ ^access@[A-Za-z0-9_-]+$ ]] || fail "--access-id 必须是 access@<主机 ID>"
 [[ "${EVENTBUS_URL}" =~ ^(nats|tls):// ]] || fail "--eventbus-url must be a nats:// or tls:// URL"
 mkdir -p "${DEPLOY_DIR}"
 DEPLOY_DIR="$(cd "${DEPLOY_DIR}" && pwd -P)"
@@ -104,13 +89,9 @@ require_secret() {
 mkdir -p "${DEPLOY_DIR}/bin" "${DEPLOY_DIR}/config" "${DEPLOY_DIR}/pyworker" "${DEPLOY_DIR}/data/engine" "${DEPLOY_DIR}/logs"
 mkdir -p "${SECRETS_DIR}"
 chmod 0700 "${SECRETS_DIR}"
-for secret in gateway-factor-engine.key access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
+for secret in caller-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
   require_secret "${secret}"
 done
-if [[ -n "${MANAGER_CA}" ]]; then
-  [[ -s "${MANAGER_CA}" ]] || fail "--manager-ca ${MANAGER_CA} is missing"
-  install -m 0600 "${MANAGER_CA}" "${SECRETS_DIR}/control-caddy-root.crt"
-fi
 
 # Go module downloads stall behind an operator's local HTTP proxy; the build
 # talks to the module mirror directly.
@@ -145,10 +126,6 @@ if ! "${python_bin}" -c 'import pandas, numpy' >/dev/null 2>&1; then
   "${python_bin}" -c 'import pandas, numpy' || fail "the engine Python environment cannot import pandas and numpy"
 fi
 
-manager_ca_line=""
-if [[ -s "${SECRETS_DIR}/control-caddy-root.crt" ]]; then
-  manager_ca_line="  ca_file: ${SECRETS_DIR}/control-caddy-root.crt"
-fi
 umask 077
 cat >"${DEPLOY_DIR}/config/engine.yaml" <<EOF
 # Rendered by scripts/deploy/deploy-factor-engine.sh; edit the flags, not this file.
@@ -156,12 +133,14 @@ engine:
   id: ${ENGINE_ID}
   heartbeat_interval: 10s
 
+gateway_client:
+  mode: access
+  caller: factor-engine
+  key_file: ${SECRETS_DIR}/caller-factor-engine.key
+  access_address: ${ACCESS_ADDRESS}
+  access_id: ${ACCESS_ID}
+
 manager:
-  url: ${MANAGER_URL}
-  node_id: ${MANAGER_NODE_ID}
-${manager_ca_line}
-  key_id: factor-engine
-  hmac_key_file: ${SECRETS_DIR}/gateway-factor-engine.key
   timeout: 30s
 
 catalog_sync:
@@ -170,10 +149,6 @@ catalog_sync:
   state_file: ./data/engine/catalog.json
 
 storage:
-  gateway_target: "${STORAGE_TARGET}"
-  gateway_node_id: "${STORAGE_NODE_ID}"
-  key_id: factor-engine
-  hmac_key_file: ${SECRETS_DIR}/access-factor-engine.key
   auth_secret_file: ${SECRETS_DIR}/storage-primary-auth.secret
 
 eventbus:

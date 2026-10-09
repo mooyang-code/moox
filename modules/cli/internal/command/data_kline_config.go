@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,17 +21,18 @@ const (
 
 type dataAccessConfig struct {
 	Version   int                       `yaml:"version"`
-	Gateway   dataGatewayConfig         `yaml:"gateway"`
+	Access    dataAccessEndpoint        `yaml:"access"`
 	Storage   dataStorageAuthConfig     `yaml:"storage"`
 	DataTypes map[string]dataTypeConfig `yaml:"data_types"`
 }
 
-type dataGatewayConfig struct {
-	Target     string `yaml:"target"`
-	TargetNode string `yaml:"target_node"`
-	KeyID      string `yaml:"key_id"`
-	Caller     string `yaml:"caller"`
-	Secret     string `yaml:"secret"`
+// dataAccessEndpoint 是 moox-skill 访问 MooX 的外部接入：地址、实例 ID（access@<主机>）、外部调用方身份和签名密钥。
+type dataAccessEndpoint struct {
+	Address string `yaml:"address"`
+	ID      string `yaml:"id"`
+	Caller  string `yaml:"caller"`
+	// Key 是签名密钥，格式 <key_id>:<secret>。
+	Key string `yaml:"key"`
 }
 
 type dataStorageAuthConfig struct {
@@ -152,11 +156,10 @@ func (cfg dataAccessConfig) validate() error {
 		name  string
 		value string
 	}{
-		{"gateway.target", cfg.Gateway.Target},
-		{"gateway.target_node", cfg.Gateway.TargetNode},
-		{"gateway.key_id", cfg.Gateway.KeyID},
-		{"gateway.caller", cfg.Gateway.Caller},
-		{"gateway.secret", cfg.Gateway.Secret},
+		{"access.address", cfg.Access.Address},
+		{"access.id", cfg.Access.ID},
+		{"access.caller", cfg.Access.Caller},
+		{"access.key", cfg.Access.Key},
 		{"storage.app_id", cfg.Storage.AppID},
 		{"storage.app_key", cfg.Storage.AppKey},
 	}
@@ -165,8 +168,14 @@ func (cfg dataAccessConfig) validate() error {
 			return fmt.Errorf("%s is required", field.name)
 		}
 	}
-	if _, err := validateDataGatewayTarget(cfg.Gateway.Target); err != nil {
-		return fmt.Errorf("gateway.target %w", err)
+	if _, _, err := net.SplitHostPort(strings.TrimSpace(cfg.Access.Address)); err != nil {
+		return fmt.Errorf("access.address 必须是 host:port")
+	}
+	if err := gatewayclient.ValidateAccessID(cfg.Access.ID); err != nil {
+		return fmt.Errorf("access.id: %w", err)
+	}
+	if _, err := gatewayauth.ParseCallerKeyValue(cfg.Access.Caller, cfg.Access.Key); err != nil {
+		return fmt.Errorf("access.key: %w", err)
 	}
 	if len(cfg.DataTypes) == 0 {
 		return fmt.Errorf("data_types is required")
@@ -206,6 +215,22 @@ func (cfg dataAccessConfig) validate() error {
 		}
 	}
 	return nil
+}
+
+// newGateway 创建以外部方式经外部接入访问 MooX 的 gatewayclient。
+func (cfg dataAccessConfig) newGateway() (*gatewayclient.Client, error) {
+	caller := strings.TrimSpace(cfg.Access.Caller)
+	credentials, err := gatewayauth.ParseCallerKeyValue(caller, cfg.Access.Key)
+	if err != nil {
+		return nil, fmt.Errorf("access.key: %w", err)
+	}
+	return gatewayclient.New(gatewayclient.Options{
+		Config: gatewayclient.Config{
+			Mode: gatewayclient.ModeAccess, Caller: caller,
+			AccessAddress: strings.TrimSpace(cfg.Access.Address), AccessID: strings.TrimSpace(cfg.Access.ID),
+		},
+		Credentials: &credentials,
+	})
 }
 
 func (cfg dataAccessConfig) resolveKline(dataType, exchange, interval string) (klineSelection, error) {

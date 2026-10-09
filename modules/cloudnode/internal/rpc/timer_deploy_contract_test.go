@@ -17,12 +17,11 @@ import (
 
 func completeTimerEnvironment() map[string]string {
 	return map[string]string{
-		"MOOX_GATEWAY_CALLER":                     "collector",
+		"MOOX_CALLER": "scf-collector",
 		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
-		"MOOX_SPACE_ID":                           "crypto", "MOOX_CODE_PACKAGE_ID": "old-package", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://storage.example:11003", "MOOX_GATEWAY_NODE_ID": "storage-node", "MOOX_GATEWAY_TARGET_NODE": "storage-node",
-		"MOOX_GATEWAY_SERVICE_KEY_ID": "collector", "MOOX_GATEWAY_SERVICE_SECRET_KEY": "private-test-secret",
-		"MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11004", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "collector-node",
+		"MOOX_SPACE_ID": "crypto", "MOOX_CODE_PACKAGE_ID": "old-package", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+		"MOOX_CALLER_KEY":     "scf-collector-1:private-test-secret",
+		"MOOX_ACCESS_ADDRESS": "146.56.196.204:11004", "MOOX_ACCESS_ID": "access@storage",
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic",
 		"MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
 		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret",
@@ -90,8 +89,8 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 		downgrade     bool
 		wantSuccess   bool
 	}{
-		{"timeout downgrade", "", true, false}, {"Storage route", "MOOX_STORAGE_RPC_GATEWAY_TARGET", false, false},
-		{"Collector route", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", false, false}, {"Gateway identity", "MOOX_GATEWAY_SERVICE_SECRET_KEY", false, false},
+		{"timeout downgrade", "", true, false}, {"Access address", "MOOX_ACCESS_ADDRESS", false, false},
+		{"Access ID", "MOOX_ACCESS_ID", false, false}, {"Caller key", "MOOX_CALLER_KEY", false, false},
 		{"CLS credential", "MOOX_CLS_SECRET_KEY", false, false}, {"EventBus credential", "MOOX_EVENTBUS_NATS_PASSWORD", false, false},
 		{"complete remote patch", "", false, true},
 		{"Storage app keys", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", false, false},

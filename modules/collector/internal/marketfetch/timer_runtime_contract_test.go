@@ -21,7 +21,7 @@ func TestTimerClaimRequired(t *testing.T) {
 		TimerRuntimeClient: timerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
 			return nil, context.DeadlineExceeded
 		}),
-		NewStorage: func(string, string, string) (Storage, error) {
+		NewStorage: func(string, string) (Storage, error) {
 			storageCalls++
 			return timerHandlerStorage{}, nil
 		},
@@ -55,7 +55,7 @@ func TestTimerNoWorkAndAuthFailureDoNotCreateStorage(t *testing.T) {
 				TimerRuntimeClient: timerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
 					return test.response, nil
 				}),
-				NewStorage: func(string, string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
+				NewStorage: func(string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
 				Execute: func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 					executeCalls++
 					return nil, nil
@@ -81,7 +81,7 @@ func TestTimerIncompleteClaimIdentityDoesNotCreateStorage(t *testing.T) {
 		TimerRuntimeClient: timerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
 			return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: raw}, nil
 		}),
-		NewStorage: func(string, string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
+		NewStorage: func(string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
 	}
 	response, err := handler.HandleTimerAt(context.Background(), "request-1", "function-1", time.Now())
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestTimerPublishesDurableCompletion(t *testing.T) {
 		TimerRuntimeClient: timerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
 			return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: reqJSON}, nil
 		}),
-		NewStorage: func(string, string, string) (Storage, error) { return timerHandlerStorage{}, nil },
+		NewStorage: func(string, string) (Storage, error) { return timerHandlerStorage{}, nil },
 		Execute: func(_ context.Context, req Request, _ Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 			return &marketfetchpb.MarketFetchBatchCompleted{BatchId: req.BatchID, Status: "succeeded"}, nil
 		},

@@ -451,7 +451,7 @@ func TestExecuteCreateNodeItemRejectsEnvironmentOverLimitBeforeCreate(t *testing
 		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "60"},
 		Environment: map[string]string{"MOOX_SPACE_ID": strings.Repeat("x", maxSCFEnvironmentBytes)}, Metadata: metadata,
 	}, 0)
-	require.ErrorContains(t, err, "environment is")
+	require.ErrorContains(t, err, "超过上限 4096")
 	assert.Empty(t, fake.created)
 }
 
@@ -486,7 +486,6 @@ func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-0", Metadata: `{"biz_type":"market_fetcher","handler":"main"}`,
 	}))
 	remote := completeInvokeEnvironment("15")
-	remote["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = "ip://collector.example:11004"
 	remote["MOOX_COLLECTOR_NODE_ID"] = "collector-node"
 	remote["MOOX_RPC_SERVICE_ID"] = "moox-collector"
 	remote["MOOX_RPC_SERVICE_SECRET"] = "private-test-secret"
@@ -534,7 +533,7 @@ func TestExecuteDeployNodeItemRejectsMergedTimerEnvironmentOverLimit(t *testing.
 		NodeId: "timer-node", PackageId: "moox-collector_dev", Environment: map[string]string{"MOOX_SPACE_ID": "crypto"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "environment is")
+	assert.Contains(t, err.Error(), "超过上限 4096")
 	assert.Empty(t, fake.updated)
 	assert.Empty(t, fake.configured)
 }
@@ -580,7 +579,7 @@ func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *tes
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
 	}))
 	environment := completeTimerEnvironment()
-	delete(environment, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	delete(environment, "MOOX_ACCESS_ADDRESS")
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{
 		catalog:            catalog,
@@ -591,7 +590,7 @@ func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *tes
 		NodeId: "timer-node", ManagedEnvironment: map[string]string{"MOOX_MARKET_FETCH_BINDING_HASH": "binding"},
 		TimerCron: "0 * * * * * *", TimerEnabled: true,
 	})
-	require.ErrorContains(t, err, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	require.ErrorContains(t, err, "MOOX_ACCESS_ADDRESS")
 	require.Empty(t, fake.configured, "invalid runtime dependencies must be rejected before updating configuration")
 	require.Zero(t, fake.timerEnsures, "invalid runtime dependencies must not enable the Timer trigger")
 }
@@ -613,7 +612,7 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
-		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "80", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11002", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "control-a", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "80", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_ACCESS_ADDRESS": "10.206.0.5:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
 	}}
 	require.Nil(t, svc.preflightRuntimeConfig(context.Background(), "stockcn", patch))
 	_, err := svc.executeRuntimeConfigItem(context.Background(), "stockcn", patch)
@@ -626,7 +625,8 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	require.NotContains(t, fake.currentEnvironment, "MOOX_MARKET_FETCH_SUBJECTS")
 	node, err := catalog.GetNode(context.Background(), "stockcn", "timer-node")
 	require.NoError(t, err)
-	require.Contains(t, node.Metadata, "collector_rpc_gateway_target")
+	require.Contains(t, node.Metadata, `"access_address":"10.206.0.5:11004"`)
+	require.Contains(t, node.Metadata, `"access_id":"access@storage"`)
 	require.Contains(t, node.Metadata, `"timeout_seconds":60`, "later redeploys must not restore the legacy catalog timeout")
 	require.Contains(t, node.Metadata, `"assignment_count":80`, "the assignment readback must persist the verified subject count")
 }

@@ -16,6 +16,10 @@ const MetadataVerifiedCaller = "x-moox-verified-caller"
 // 服务从 tRPC 元数据中读取。主机网关原样透传。
 const MetadataSpaceID = "x-space-id"
 
+// MetadataAccessPrincipal 是外部接入转发时写入的外部调用方名称（例如 scf-collector），只用于日志和指标；
+// 鉴权以主机网关校验的 access 身份为准。
+const MetadataAccessPrincipal = "x-access-principal"
+
 // VerificationKey 是快照中的一把调用方校验密钥。
 type VerificationKey struct {
 	KeyID  string `json:"key_id"`

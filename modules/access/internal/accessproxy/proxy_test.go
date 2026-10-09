@@ -2,19 +2,29 @@ package accessproxy
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
-type memoryNonces struct{ seen map[string]struct{} }
+type memoryNonces struct {
+	mu   sync.Mutex
+	seen map[string]struct{}
+}
 
 func (m *memoryNonces) Consume(_ context.Context, namespace, nonce string, _ time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.seen == nil {
 		m.seen = map[string]struct{}{}
 	}
@@ -26,49 +36,67 @@ func (m *memoryNonces) Consume(_ context.Context, namespace, nonce string, _ tim
 	return true, nil
 }
 
-type captureInvoker struct {
-	called  bool
-	options *client.Options
+// fakeUpstream 模拟 gatewayclient：返回固定的本机主机 ID，并记录转发的请求。
+type fakeUpstream struct {
+	localHostID   string
+	directoryErr  error
+	forwardErr    error
+	response      []byte
+	calls         int
+	servicePath   string
+	method        string
+	serialization int
+	body          []byte
 }
 
-func (c *captureInvoker) Invoke(_ context.Context, _ interface{}, rsp interface{}, opts ...client.Option) error {
-	c.called = true
-	c.options = &client.Options{}
-	for _, opt := range opts {
-		opt(c.options)
-	}
-	rsp.(*codec.Body).Data = []byte("upstream-response")
-	return nil
+func (f *fakeUpstream) Directory(context.Context) (gatewayclient.View, error) {
+	return gatewayclient.View{LocalHostID: f.localHostID}, f.directoryErr
 }
 
-func testPrincipal(t *testing.T, name, preset, inboundCaller, upstreamCaller string) Principal {
+func (f *fakeUpstream) Forward(_ context.Context, servicePath, method string, serialization int, body []byte, _ ...gatewayclient.CallOption) ([]byte, error) {
+	f.calls++
+	f.servicePath, f.method, f.serialization, f.body = servicePath, method, serialization, append([]byte(nil), body...)
+	return f.response, f.forwardErr
+}
+
+// fakeMetrics 记录拒绝和转发结果。
+type fakeMetrics struct {
+	rejected  []string
+	forwarded []string
+}
+
+func (m *fakeMetrics) Rejected(principal, reason string) {
+	m.rejected = append(m.rejected, principal+":"+reason)
+}
+
+func (m *fakeMetrics) Forwarded(principal, servicePath, method string, code int, _ time.Duration) {
+	m.forwarded = append(m.forwarded, principal+":"+servicePath+"/"+method+":"+strconv.Itoa(code))
+}
+
+var (
+	testNow       = time.Unix(1_800_000_000, 0)
+	scfCollector  = gatewayauth.Credentials{KeyID: "scf-collector-1", Caller: "scf-collector", Secret: "scf-collector-secret"}
+	factorEngine  = gatewayauth.Credentials{KeyID: "factor-engine-1", Caller: "factor-engine", Secret: "factor-engine-secret"}
+	commitBatch   = "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch"
+	writeFactors  = "/trpc.moox.storage.PrimaryStore/WriteFactorRows"
+	claimTimer    = "/trpc.moox.collector.MarketFetchRuntime/ClaimTimerBatch"
+	storageAccess = "access@storage"
+)
+
+func testProxy(t *testing.T, upstream *fakeUpstream, metrics *fakeMetrics) *Proxy {
 	t.Helper()
-	methods, err := presetMethods(preset)
+	registry, err := gatewayauth.NewCredentialRegistry([]gatewayauth.Credentials{scfCollector, factorEngine})
 	require.NoError(t, err)
-	return Principal{
-		Name:     name,
-		Inbound:  gatewayauth.Credentials{KeyID: inboundCaller, Caller: inboundCaller, Secret: inboundCaller + "-inbound-secret"},
-		Upstream: gatewayauth.Credentials{KeyID: upstreamCaller, Caller: upstreamCaller, Secret: upstreamCaller + "-upstream-secret"},
-		Methods:  methods,
-	}
-}
-
-func testProxy(t *testing.T, invoker Invoker, nonces NonceStore) (*Proxy, gatewayauth.Credentials, gatewayauth.Credentials, time.Time) {
-	t.Helper()
-	now := time.Unix(1_800_000_000, 0)
-	collector := testPrincipal(t, "collector", "collector", "collector", "collector")
-	engine := testPrincipal(t, "factor-engine", "factor-engine", "factor-engine", "factor")
 	proxy, err := New(Options{
-		Principals:        []Principal{collector, engine},
-		InboundTargetNode: "access-nj", UpstreamTargetNode: "gateway-nj",
-		UpstreamTarget: "ip://127.0.0.1:11003",
-		Nonces:         nonces, Now: func() time.Time { return now }, Invoker: invoker,
+		Registry: registry, Upstream: upstream, Nonces: &memoryNonces{}, Metrics: metrics,
+		MaxBodyBytes: 1024, Now: func() time.Time { return testNow },
 	})
 	require.NoError(t, err)
-	return proxy, collector.Inbound, engine.Inbound, now
+	return proxy
 }
 
-func inboundContext(t *testing.T, credentials gatewayauth.Credentials, now time.Time, rpcName string, body []byte) context.Context {
+// signedContext 构造外部调用方发给 targetNode 的已签名请求。
+func signedContext(t *testing.T, credentials gatewayauth.Credentials, targetNode, rpcName string, body []byte) context.Context {
 	t.Helper()
 	ctx, msg := codec.WithNewMessage(context.Background())
 	msg.WithServerRPCName(rpcName)
@@ -76,11 +104,11 @@ func inboundContext(t *testing.T, credentials gatewayauth.Credentials, now time.
 	servicePath, method, ok := splitRPCName(rpcName)
 	require.True(t, ok)
 	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: rpcName, TargetNode: "access-nj",
+		Method: http.MethodPost, Path: rpcName, TargetNode: targetNode, Caller: credentials.Caller,
 		Callee: servicePath, Func: method, Body: body,
-	}, now)
+	}, testNow)
 	require.NoError(t, err)
-	metadata := codec.MetaData{}
+	metadata := codec.MetaData{gatewayroute.MetadataSpaceID: []byte("crypto")}
 	for key, values := range headers {
 		metadata[key] = []byte(values[0])
 	}
@@ -88,187 +116,102 @@ func inboundContext(t *testing.T, credentials gatewayauth.Credentials, now time.
 	return ctx
 }
 
-func TestProxyAllowsCollectorPeriodMethods(t *testing.T) {
-	for _, method := range []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"} {
-		t.Run(method, func(t *testing.T) {
-			invoker := &captureInvoker{}
-			proxy, inbound, _, now := testProxy(t, invoker, &memoryNonces{})
-			body := []byte("protobuf-body")
-			rpcName := "/trpc.moox.storage.PrimaryStore/" + method
-			ctx := inboundContext(t, inbound, now, rpcName, body)
-
-			rsp, err := proxy.Forward(ctx, &codec.Body{Data: body})
-			require.NoError(t, err)
-			require.Equal(t, []byte("upstream-response"), rsp.Data)
-			require.True(t, invoker.called)
-			require.Equal(t, method, invoker.options.CalleeMethod)
-		})
-	}
+func requireCode(t *testing.T, err error, code int) {
+	t.Helper()
+	require.Error(t, err)
+	require.EqualValues(t, code, errs.Code(err), "错误：%v", err)
 }
 
-func TestProxyAllowsCollectorStorageMethodAndBuildsUpstreamOptions(t *testing.T) {
-	invoker := &captureInvoker{}
-	proxy, inbound, _, now := testProxy(t, invoker, &memoryNonces{})
-	body := []byte("protobuf-body")
-	ctx := inboundContext(t, inbound, now, "/trpc.moox.storage.PrimaryStore/UpsertFields", body)
+func TestForwardSendsOriginalBytesForAllowedMethod(t *testing.T) {
+	upstream := &fakeUpstream{localHostID: "storage", response: []byte("upstream-response")}
+	metrics := &fakeMetrics{}
+	proxy := testProxy(t, upstream, metrics)
+	body := []byte{0x0a, 0x03, 'p', 'b', '!'}
 
-	rsp, err := proxy.Forward(ctx, &codec.Body{Data: body})
+	response, err := proxy.Forward(signedContext(t, scfCollector, storageAccess, commitBatch, body), &codec.Body{Data: body})
 	require.NoError(t, err)
-	require.Equal(t, []byte("upstream-response"), rsp.Data)
-	require.True(t, invoker.called)
-	require.Equal(t, "ip://127.0.0.1:11003", invoker.options.Target)
-	require.Equal(t, PrimaryStoreName, invoker.options.ServiceName)
-	require.Equal(t, "UpsertFields", invoker.options.CalleeMethod)
-	require.Equal(t, codec.SerializationTypeNoop, invoker.options.CurrentSerializationType)
+	require.Equal(t, []byte("upstream-response"), response.Data)
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, "trpc.moox.storage.PrimaryStore", upstream.servicePath)
+	require.Equal(t, "CommitTimeSeriesBatch", upstream.method)
+	require.Equal(t, codec.SerializationTypePB, upstream.serialization)
+	require.Equal(t, body, upstream.body, "转发的 PB 字节必须与原始请求一致")
+	require.Empty(t, metrics.rejected)
+	require.Len(t, metrics.forwarded, 1)
+
+	_, err = proxy.Forward(signedContext(t, scfCollector, storageAccess, claimTimer, body), &codec.Body{Data: body})
+	require.NoError(t, err, "scf-collector 可以经外部接入领取 Timer 批次")
 }
 
-func TestProxyRejectsDisallowedMethodBeforeUpstream(t *testing.T) {
-	invoker := &captureInvoker{}
-	proxy, inbound, _, now := testProxy(t, invoker, &memoryNonces{})
-	body := []byte("protobuf-body")
-	ctx := inboundContext(t, inbound, now, "/trpc.moox.storage.PrimaryStore/DeleteDatasetRows", body)
+func TestForwardRejectsMethodOutsideAllowlist(t *testing.T) {
+	upstream := &fakeUpstream{localHostID: "storage"}
+	metrics := &fakeMetrics{}
+	proxy := testProxy(t, upstream, metrics)
+	body := []byte("rows")
 
+	_, err := proxy.Forward(signedContext(t, scfCollector, storageAccess, writeFactors, body), &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetForbidden)
+	require.Zero(t, upstream.calls, "白名单之外的方法不能转发")
+	require.Equal(t, []string{"scf-collector:" + ReasonForbidden}, metrics.rejected)
+
+	_, err = proxy.Forward(signedContext(t, factorEngine, storageAccess, writeFactors, body), &codec.Body{Data: body})
+	require.NoError(t, err, "factor-engine 可以写入因子结果")
+}
+
+func TestForwardRejectsReplayUnknownCallerAndWrongInstance(t *testing.T) {
+	upstream := &fakeUpstream{localHostID: "storage"}
+	metrics := &fakeMetrics{}
+	proxy := testProxy(t, upstream, metrics)
+	body := []byte("batch")
+
+	ctx := signedContext(t, scfCollector, storageAccess, commitBatch, body)
 	_, err := proxy.Forward(ctx, &codec.Body{Data: body})
-	require.ErrorContains(t, err, "method is not allowed")
-	require.False(t, invoker.called)
-}
-
-func TestProxyRejectsInvalidAuthAndReplay(t *testing.T) {
-	invoker := &captureInvoker{}
-	nonces := &memoryNonces{}
-	proxy, inbound, _, now := testProxy(t, invoker, nonces)
-	body := []byte("protobuf-body")
-	ctx := inboundContext(t, inbound, now, "/trpc.moox.storage.PrimaryStore/UpsertFields", body)
-	require.NoError(t, func() error {
-		_, err := proxy.Forward(ctx, &codec.Body{Data: body})
-		return err
-	}())
-	_, err := proxy.Forward(ctx, &codec.Body{Data: body})
-	require.ErrorContains(t, err, "replayed")
-
-	badCtx := inboundContext(t, inbound, now, "/trpc.moox.storage.PrimaryStore/UpsertFields", []byte("different-body"))
-	_, err = proxy.Forward(badCtx, &codec.Body{Data: body})
-	require.ErrorContains(t, err, "authentication failed")
-}
-
-func TestMethodAllowedIncludesCollectorResampleMethods(t *testing.T) {
-	collector := testPrincipal(t, "collector", "collector", "collector", "collector")
-	for _, method := range []string{"ResolveSubjects", "UpdateView", "UpsertViewColumn", "RequestViewRebuild"} {
-		require.True(t, collector.allows(MetadataName, method), method)
-	}
-}
-
-func TestFactorEnginePrincipalAllowsSevenMethods(t *testing.T) {
-	for _, rpcName := range []string{
-		"/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows", "/trpc.moox.storage.PrimaryStore/WriteFactorRows",
-		"/trpc.moox.storage.PrimaryStore/ReportFactorPeriodComputed", "/trpc.moox.storage.PrimaryStore/GetFactorPeriodComputed",
-		"/trpc.moox.storage.Metadata/GetDataset", "/trpc.moox.storage.Metadata/ListDatasetColumns",
-		"/trpc.moox.storage.Metadata/ListDatasetSubjects",
-	} {
-		t.Run(rpcName, func(t *testing.T) {
-			invoker := &captureInvoker{}
-			proxy, _, engine, now := testProxy(t, invoker, &memoryNonces{})
-			body := []byte("protobuf-body")
-
-			_, err := proxy.Forward(inboundContext(t, engine, now, rpcName, body), &codec.Body{Data: body})
-
-			require.NoError(t, err)
-			require.True(t, invoker.called)
-		})
-	}
-}
-
-func TestFactorEnginePrincipalRejectsOtherMethods(t *testing.T) {
-	for _, rpcName := range []string{
-		"/trpc.moox.storage.PrimaryStore/DeleteDatasetRows", "/trpc.moox.storage.PrimaryStore/UpsertFields",
-		"/trpc.moox.storage.Metadata/DeleteDataset", "/trpc.moox.storage.Metadata/CreateDataset",
-	} {
-		invoker := &captureInvoker{}
-		proxy, _, engine, now := testProxy(t, invoker, &memoryNonces{})
-		body := []byte("protobuf-body")
-
-		_, err := proxy.Forward(inboundContext(t, engine, now, rpcName, body), &codec.Body{Data: body})
-
-		require.ErrorContains(t, err, "method is not allowed", rpcName)
-		require.False(t, invoker.called)
-	}
-}
-
-func TestCollectorPrincipalCannotWriteFactorRows(t *testing.T) {
-	invoker := &captureInvoker{}
-	proxy, collector, _, now := testProxy(t, invoker, &memoryNonces{})
-	body := []byte("protobuf-body")
-
-	_, err := proxy.Forward(inboundContext(t, collector, now, "/trpc.moox.storage.PrimaryStore/WriteFactorRows", body), &codec.Body{Data: body})
-
-	require.ErrorContains(t, err, "method is not allowed")
-}
-
-func TestUpstreamCredentialsSelectedByPrincipal(t *testing.T) {
-	var captured []string
-	invoker := &captureInvoker{}
-	proxy, _, engine, now := testProxy(t, invoker, &memoryNonces{})
-	body := []byte("protobuf-body")
-
-	_, err := proxy.Forward(inboundContext(t, engine, now, "/trpc.moox.storage.PrimaryStore/WriteFactorRows", body), &codec.Body{Data: body})
 	require.NoError(t, err)
-	require.Len(t, invoker.options.Filters, 1)
-	ctx, msg := codec.WithNewMessage(context.Background())
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/WriteFactorRows")
-	require.NoError(t, invoker.options.Filters[0](ctx, &codec.Body{Data: body}, &codec.Body{}, func(ctx context.Context, _, _ interface{}) error {
-		captured = append(captured, string(codec.Message(ctx).ClientMetaData()["X-Moox-Caller"]))
-		return nil
-	}))
+	_, err = proxy.Forward(ctx, &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetUnauthenticated)
 
-	require.Equal(t, []string{"factor"}, captured, "factor-engine is re-signed upstream as the factor caller")
+	unknown := gatewayauth.Credentials{KeyID: "intruder-1", Caller: "scf-collector", Secret: "guessed"}
+	_, err = proxy.Forward(signedContext(t, unknown, storageAccess, commitBatch, body), &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetUnauthenticated)
+
+	_, err = proxy.Forward(signedContext(t, scfCollector, "access@compute-1", commitBatch, body), &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetUnauthenticated)
+
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, []string{
+		"scf-collector:" + ReasonReplayed, unknownPrincipal + ":" + ReasonUnauthenticated, unknownPrincipal + ":" + ReasonUnauthenticated,
+	}, metrics.rejected)
 }
 
-func TestUnknownKeyRejected(t *testing.T) {
-	invoker := &captureInvoker{}
-	proxy, _, _, now := testProxy(t, invoker, &memoryNonces{})
-	body := []byte("protobuf-body")
-	stranger := gatewayauth.Credentials{KeyID: "stranger", Caller: "stranger", Secret: "stranger-secret"}
+func TestForwardRequiresDirectoryAndBoundsBody(t *testing.T) {
+	body := []byte("batch")
+	waiting := &fakeUpstream{directoryErr: errors.New("本机主机网关不可达")}
+	_, err := testProxy(t, waiting, &fakeMetrics{}).Forward(signedContext(t, scfCollector, storageAccess, commitBatch, body), &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetHostDisabled)
 
-	_, err := proxy.Forward(inboundContext(t, stranger, now, "/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows", body), &codec.Body{Data: body})
-
-	require.ErrorContains(t, err, "authentication failed")
-	require.False(t, invoker.called)
+	upstream := &fakeUpstream{localHostID: "storage", response: make([]byte, 2048)}
+	proxy := testProxy(t, upstream, &fakeMetrics{})
+	large := make([]byte, 2048)
+	_, err = proxy.Forward(signedContext(t, scfCollector, storageAccess, commitBatch, large), &codec.Body{Data: large})
+	requireCode(t, err, gatewayroute.RetBodyTooLarge)
+	_, err = proxy.Forward(signedContext(t, scfCollector, storageAccess, commitBatch, body), &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetBodyTooLarge)
 }
 
-func TestNewRejectsDuplicateInboundKeys(t *testing.T) {
-	collector := testPrincipal(t, "collector", "collector", "collector", "collector")
-	_, err := New(Options{
-		Principals: []Principal{collector, collector}, InboundTargetNode: "access-nj", UpstreamTargetNode: "gateway-nj",
-		UpstreamTarget: "ip://127.0.0.1:11003",
-	})
-	require.ErrorContains(t, err, "more than one principal")
+func TestForwardReturnsUpstreamErrorCode(t *testing.T) {
+	upstream := &fakeUpstream{localHostID: "storage", forwardErr: errs.New(gatewayroute.RetServiceNotHere, "服务不在本机")}
+	body := []byte("batch")
+	_, err := testProxy(t, upstream, &fakeMetrics{}).Forward(signedContext(t, scfCollector, storageAccess, commitBatch, body), &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetServiceNotHere)
 }
 
-func TestRawGatewayClientFilterSignsUpstreamBody(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	credentials := gatewayauth.Credentials{KeyID: "collector", Caller: "collector", Secret: "upstream-secret"}
-	body := []byte("protobuf-body")
-	ctx, msg := codec.WithNewMessage(context.Background())
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/UpsertFields")
-	msg.WithCalleeServiceName(PrimaryStoreName)
-	msg.WithCalleeMethod("UpsertFields")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	var headers http.Header
-	filter := rawGatewayClientFilter(credentials, "gateway-nj", func() time.Time { return now })
-	require.NoError(t, filter(ctx, &codec.Body{Data: body}, &codec.Body{}, func(ctx context.Context, _ interface{}, _ interface{}) error {
-		headers = metadataToHeader(codec.Message(ctx).ClientMetaData())
-		return nil
-	}))
-	_, err := gatewayauth.Verify(credentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: "/trpc.moox.storage.PrimaryStore/UpsertFields", TargetNode: "gateway-nj",
-		Callee: PrimaryStoreName, Func: "UpsertFields", Body: body,
-	}, headers, now)
+func TestNewRequiresDependencies(t *testing.T) {
+	registry, err := gatewayauth.NewCredentialRegistry([]gatewayauth.Credentials{scfCollector})
 	require.NoError(t, err)
-}
-
-func TestValidateTargetRejectsNonIPOrPathTargets(t *testing.T) {
-	for _, raw := range []string{"", "http://127.0.0.1:11003", "ip://127.0.0.1", "ip://127.0.0.1:11003/path", "ip://"} {
-		require.Error(t, validateTarget(raw), raw)
-	}
-	require.NoError(t, validateTarget("ip://127.0.0.1:11003"))
+	_, err = New(Options{Upstream: &fakeUpstream{}, Nonces: &memoryNonces{}})
+	require.Error(t, err)
+	_, err = New(Options{Registry: registry, Nonces: &memoryNonces{}})
+	require.Error(t, err)
+	_, err = New(Options{Registry: registry, Upstream: &fakeUpstream{}})
+	require.Error(t, err)
 }

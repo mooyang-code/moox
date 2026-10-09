@@ -1,13 +1,9 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -15,45 +11,25 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
 // ErrLeaseConflict means the manager rejected the call because another engine
 // holds the engine lease or the recalc job lease moved on.
 var ErrLeaseConflict = errors.New("factor engine lease conflict")
 
-// managerServiceID is the gateway service id that routes FactorEngine calls to
-// moox-factor-mgr.
-const managerServiceID = "factormgr"
-
-const maxManagerResponseBytes = 32 << 20
-
-// ManagerClient calls moox-factor-mgr's FactorEngine service through the
-// service gateway's HTTP entry, signing every request with the factor-engine
-// gateway credential.
+// ManagerClient 经外部接入调用 moox-factor-mgr 的 FactorEngine 服务（tRPC），以 factor-engine 身份签名。
 type ManagerClient struct {
-	baseURL     string
-	targetNode  string
-	credentials gatewayauth.Credentials
-	http        *http.Client
-	identity    domain.EngineIdentity
+	proxy    factorpb.FactorEngineClientProxy
+	identity domain.EngineIdentity
 }
 
-func NewManagerClient(cfg ManagerConfig, identity domain.EngineIdentity) (*ManagerClient, error) {
-	credentials, err := gatewayauth.CredentialsFromKeyFile(cfg.KeyID, cfg.HMACKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load manager gateway credentials: %w", err)
-	}
-	client, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.Timeout, CAFile: cfg.CAFile, IgnoreProxyEnv: true})
-	if err != nil {
-		return nil, fmt.Errorf("create manager gateway client: %w", err)
-	}
+// NewManagerClient 用外部方式的 gatewayclient 创建 FactorEngine 客户端。
+func NewManagerClient(gateway *gatewayclient.Client, cfg ManagerConfig, identity domain.EngineIdentity) *ManagerClient {
 	return &ManagerClient{
-		baseURL: strings.TrimRight(cfg.URL, "/"), targetNode: cfg.NodeID,
-		credentials: credentials, http: client, identity: identity,
-	}, nil
+		proxy:    factorpb.NewFactorEngineClientProxy(gateway.ClientOptions(gatewayclient.WithTimeout(cfg.Timeout))...),
+		identity: identity,
+	}
 }
 
 // CatalogSnapshot is one SyncEngineCatalog answer.
@@ -64,9 +40,8 @@ type CatalogSnapshot struct {
 }
 
 func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (CatalogSnapshot, error) {
-	var rsp factorpb.SyncEngineCatalogRsp
-	req := &factorpb.SyncEngineCatalogReq{Engine: factorwire.EngineIdentityToPB(c.identity), KnownHash: knownHash}
-	if err := c.call(ctx, "SyncEngineCatalog", req, &rsp, rsp.GetRetInfo); err != nil {
+	rsp, err := c.proxy.SyncEngineCatalog(ctx, &factorpb.SyncEngineCatalogReq{Engine: factorwire.EngineIdentityToPB(c.identity), KnownHash: knownHash})
+	if err := managerResult("SyncEngineCatalog", rsp.GetRetInfo(), err); err != nil {
 		return CatalogSnapshot{}, err
 	}
 	snapshot := CatalogSnapshot{Hash: rsp.GetCatalogHash(), NotModified: rsp.GetNotModified()}
@@ -81,9 +56,8 @@ func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (Cata
 }
 
 func (c *ManagerClient) Heartbeat(ctx context.Context, status domain.EngineStatus) (time.Duration, error) {
-	var rsp factorpb.EngineHeartbeatRsp
-	req := &factorpb.EngineHeartbeatReq{Engine: factorwire.EngineIdentityToPB(c.identity), Status: factorwire.EngineStatusToPB(status)}
-	if err := c.call(ctx, "EngineHeartbeat", req, &rsp, rsp.GetRetInfo); err != nil {
+	rsp, err := c.proxy.EngineHeartbeat(ctx, &factorpb.EngineHeartbeatReq{Engine: factorwire.EngineIdentityToPB(c.identity), Status: factorwire.EngineStatusToPB(status)})
+	if err := managerResult("EngineHeartbeat", rsp.GetRetInfo(), err); err != nil {
 		return 0, err
 	}
 	return time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second, nil
@@ -99,9 +73,8 @@ type PulledJob struct {
 }
 
 func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, error) {
-	var rsp factorpb.PullRecalcJobRsp
-	req := &factorpb.PullRecalcJobReq{Engine: factorwire.EngineIdentityToPB(c.identity)}
-	if err := c.call(ctx, "PullRecalcJob", req, &rsp, rsp.GetRetInfo); err != nil {
+	rsp, err := c.proxy.PullRecalcJob(ctx, &factorpb.PullRecalcJobReq{Engine: factorwire.EngineIdentityToPB(c.identity)})
+	if err := managerResult("PullRecalcJob", rsp.GetRetInfo(), err); err != nil {
 		return PulledJob{}, false, err
 	}
 	if !rsp.GetFound() {
@@ -132,55 +105,21 @@ func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, err
 
 // ReportRecalcProgress returns the manager's current status of the job.
 func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string) (string, error) {
-	var rsp factorpb.ReportRecalcProgressRsp
-	req := &factorpb.ReportRecalcProgressReq{
+	rsp, err := c.proxy.ReportRecalcProgress(ctx, &factorpb.ReportRecalcProgressReq{
 		Engine: factorwire.EngineIdentityToPB(c.identity), JobId: jobID, LeaseToken: leaseToken,
 		ProgressTime: factorwire.FormatTime(progress), Status: status, Error: errText,
-	}
-	if err := c.call(ctx, "ReportRecalcProgress", req, &rsp, rsp.GetRetInfo); err != nil {
+	})
+	if err := managerResult("ReportRecalcProgress", rsp.GetRetInfo(), err); err != nil {
 		return "", err
 	}
 	return rsp.GetJobStatus(), nil
 }
 
-func (c *ManagerClient) call(ctx context.Context, method string, req, rsp proto.Message, retInfo func() *commonpb.RetInfo) error {
-	body, err := protojson.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", method, err)
-	}
-	path := "/api/service/" + managerServiceID + "/" + method
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create %s request: %w", method, err)
-	}
-	headers, err := gatewayauth.Sign(c.credentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: path, TargetNode: c.targetNode, Body: body,
-	}, time.Now())
-	if err != nil {
-		return fmt.Errorf("sign %s: %w", method, err)
-	}
-	request.Header = headers
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("call %s: %w", method, err)
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxManagerResponseBytes+1))
-	if err != nil {
-		return fmt.Errorf("read %s response: %w", method, err)
-	}
-	if len(raw) > maxManagerResponseBytes {
-		return fmt.Errorf("%s response exceeds %d bytes", method, maxManagerResponseBytes)
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned HTTP %d", method, response.StatusCode)
-	}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, rsp); err != nil {
-		return fmt.Errorf("decode %s response: %w", method, err)
-	}
-	ret := retInfo()
+// managerResult 把一次 FactorEngine 调用的传输错误和业务返回码统一成错误。
+func managerResult(method string, ret *commonpb.RetInfo, err error) error {
 	switch {
+	case err != nil:
+		return fmt.Errorf("call %s: %w", method, err)
 	case ret == nil:
 		return fmt.Errorf("%s returned no ret_info", method)
 	case ret.GetCode() == commonpb.ErrorCode_SUCCESS:

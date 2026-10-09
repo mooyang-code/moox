@@ -1,24 +1,19 @@
 package privatenet
 
 import (
-	"net"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 type Options struct {
-	HomeRegion       string
-	CCNName          string
-	ProbeRegions     []string
-	DryRun           bool
-	SkipSCF          bool
-	SkipHosts        bool
-	SkipProbe        bool
-	ProbeOnly        bool
-	RewriteRuntime   bool
-	RestoreSCFPublic bool
-	UnbindSCFVPC     bool
+	HomeRegion   string
+	ProbeRegions []string
+	DryRun       bool
+	SkipProbe    bool
 }
 
 type ResolvedHost struct {
@@ -28,104 +23,59 @@ type ResolvedHost struct {
 	Area      string                `json:"area,omitempty"`
 }
 
-type PlannedVPC struct {
-	Region    string `json:"region"`
-	Area      string `json:"area"`
-	Name      string `json:"name"`
-	CidrBlock string `json:"cidr_block"`
-	ReuseVpc  string `json:"reuse_vpc_id,omitempty"`
-	ReuseSub  string `json:"reuse_subnet_id,omitempty"`
-	Reason    string `json:"reason"`
+// SCFAccessRoute 是一个地域的 SCF 采集函数访问外部接入的方式（设计文档 3.7）：
+//   - vpc：与函数同地域的主机上有外部接入，函数绑定该主机所在的 VPC，访问它的私网地址；
+//   - public：同地域没有外部接入，函数不绑定 VPC，访问兜底主机上外部接入的公网地址。
+//
+// Collector 按同一规则维护函数环境变量中的外部接入地址，所以发布时绑定的 VPC 与之一致。
+type SCFAccessRoute struct {
+	Region        string `json:"region"`
+	Network       string `json:"network"`
+	AccessHostID  string `json:"access_host_id"`
+	AccessID      string `json:"access_id"`
+	AccessAddress string `json:"access_address"`
+	VpcID         string `json:"vpc_id,omitempty"`
+	SubnetID      string `json:"subnet_id,omitempty"`
+	Reason        string `json:"reason"`
 }
 
-type PlannedSCFBind struct {
-	SCFTarget
-	Area     string `json:"area"`
-	VpcID    string `json:"vpc_id,omitempty"`
-	SubnetID string `json:"subnet_id,omitempty"`
-	VpcName  string `json:"vpc_name,omitempty"`
-}
-
-// SCFStorageRoute is the effective Storage data-plane route for one SCF
-// region.  A private route is selected only when Tencent reports that the
-// function region is the same as Storage's region and Storage exposes a
-// usable VPC/subnet/private address.  All other regions deliberately fall
-// back to the public Storage gateway; no CCN is required.
-type SCFStorageRoute struct {
-	Region           string `json:"region"`
-	SameRegion       bool   `json:"same_region"`
-	Network          string `json:"network"`
-	StorageRegion    string `json:"storage_region,omitempty"`
-	StorageZone      string `json:"storage_zone,omitempty"`
-	StoragePublicIP  string `json:"storage_public_ip,omitempty"`
-	StoragePrivateIP string `json:"storage_private_ip,omitempty"`
-	VpcID            string `json:"vpc_id,omitempty"`
-	SubnetID         string `json:"subnet_id,omitempty"`
-	Target           string `json:"storage_target"`
-	Reason           string `json:"reason"`
-}
-
-// SCFRoutePlan is a side-effect-free deployment decision produced from the
-// Storage host in moox.toml and Tencent's live instance metadata.
+// SCFRoutePlan 是各地域 SCF 采集函数访问外部接入的计划。
 type SCFRoutePlan struct {
-	Storage                 ResolvedHost      `json:"storage"`
-	StorageRegionConfigured bool              `json:"storage_region_configured"`
-	Routes                  []SCFStorageRoute `json:"routes"`
-	Notes                   []string          `json:"notes"`
+	Routes []SCFAccessRoute `json:"routes"`
+	// PreferredRegion 是兜底外部接入（access@storage）所在的地域，也就是 Storage 所在地域；同地域优先发布时先占满它。
+	PreferredRegion string   `json:"preferred_region,omitempty"`
+	Notes           []string `json:"notes"`
+}
+
+// Route 返回某个地域的路由。
+func (p SCFRoutePlan) Route(region string) (SCFAccessRoute, bool) {
+	for _, route := range p.Routes {
+		if strings.EqualFold(route.Region, strings.TrimSpace(region)) {
+			return route, true
+		}
+	}
+	return SCFAccessRoute{}, false
 }
 
 type RecommendedConfig struct {
-	StoragePublicIP  string           `json:"storage_public_ip,omitempty"`
-	StoragePrivateIP string           `json:"storage_private_ip,omitempty"`
-	StorageRegion    string           `json:"storage_region,omitempty"`
-	StorageZone      string           `json:"storage_zone,omitempty"`
-	StorageVPCID     string           `json:"storage_vpc_id,omitempty"`
-	StorageSubnetID  string           `json:"storage_subnet_id,omitempty"`
-	StorageArea      string           `json:"storage_area,omitempty"`
-	SCFGatewayTarget string           `json:"scf_storage_rpc_gateway_target,omitempty"`
-	Hosts            []map[string]any `json:"hosts"`
-	Notes            []string         `json:"notes"`
+	Hosts []map[string]any `json:"hosts"`
+	Notes []string         `json:"notes"`
 }
 
 type Plan struct {
-	CCNName         string              `json:"ccn_name"`
-	MainlandCCN     string              `json:"mainland_ccn"`
-	OverseasCCN     string              `json:"overseas_ccn"`
-	NeedCCN         bool                `json:"need_ccn"`
-	NeedMainlandCCN bool                `json:"need_mainland_ccn"`
-	NeedOverseasCCN bool                `json:"need_overseas_ccn"`
-	Hosts           []ResolvedHost      `json:"hosts"`
-	SCF             []PlannedSCFBind    `json:"scf"`
-	SCFRoutes       []SCFStorageRoute   `json:"scf_routes"`
-	VPCs            []PlannedVPC        `json:"vpcs"`
-	CIDRs           []string            `json:"cidrs"`
-	CIDRsByArea     map[string][]string `json:"cidrs_by_area"`
-	Ports           []string            `json:"ports"`
-	Recommended     RecommendedConfig   `json:"recommended_config"`
+	Hosts       []ResolvedHost      `json:"hosts"`
+	CIDRs       []string            `json:"cidrs"`
+	CIDRsByArea map[string][]string `json:"cidrs_by_area"`
+	Ports       []string            `json:"ports"`
+	Recommended RecommendedConfig   `json:"recommended_config"`
 }
 
-func CCNNames(base string) (mainland, overseas string) {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		base = DefaultCCNName
-	}
-	if base == DefaultCCNName {
-		return DefaultCCNName, DefaultCCNName + "-global"
-	}
-	return base + "-mainland", base + "-overseas"
-}
-
-func BuildPlan(opts Options, hosts []ResolvedHost, scf []SCFTarget, ports []string) Plan {
-	if strings.TrimSpace(opts.CCNName) == "" {
-		opts.CCNName = DefaultCCNName
-	}
-	mainlandCCN, overseasCCN := CCNNames(opts.CCNName)
+// BuildPlan 汇总主机的网络拓扑。只读，不修改任何云资源。
+func BuildPlan(hosts []ResolvedHost, ports []string) Plan {
 	plan := Plan{
-		CCNName: opts.CCNName, MainlandCCN: mainlandCCN, OverseasCCN: overseasCCN,
 		Hosts: hosts, Ports: ports, CIDRsByArea: map[string][]string{"mainland": {}, "overseas": {}},
 		Recommended: RecommendedConfig{Hosts: []map[string]any{}},
 	}
-
 	for i := range plan.Hosts {
 		host := &plan.Hosts[i]
 		host.Area = tencent.NetworkArea(host.Instance.Region)
@@ -145,103 +95,62 @@ func BuildPlan(opts Options, hosts []ResolvedHost, scf []SCFTarget, ports []stri
 			"private_ip": privateIP, "kind": host.Instance.Kind, "region": host.Instance.Region,
 			"area": host.Area, "vpc_id": host.Instance.VpcID,
 		})
-		if hostHasRole(host.HostTarget, "storage") {
-			plan.Recommended.StoragePublicIP = host.Address
-			plan.Recommended.StoragePrivateIP = privateIP
-			plan.Recommended.StorageArea = host.Area
-			plan.Recommended.StorageRegion = host.Instance.Region
-			plan.Recommended.StorageZone = host.Instance.Zone
-			plan.Recommended.StorageVPCID = host.Instance.VpcID
-			plan.Recommended.StorageSubnetID = host.Instance.SubnetID
-			if host.Address != "" {
-				plan.Recommended.SCFGatewayTarget = "ip://" + host.Address + ":11003"
-			}
-		}
-	}
-	storage := ResolvedHost{}
-	for _, host := range plan.Hosts {
-		if hostHasRole(host.HostTarget, "storage") {
-			storage = host
-			break
-		}
-	}
-	for _, target := range scf {
-		plan.SCFRoutes = append(plan.SCFRoutes, BuildSCFStorageRoute(storage, target.Region))
-	}
-
-	if opts.RestoreSCFPublic {
-		for _, target := range scf {
-			plan.SCF = append(plan.SCF, PlannedSCFBind{SCFTarget: target, Area: tencent.NetworkArea(target.Region)})
-		}
-	}
-
-	if publicIP := strings.TrimSpace(plan.Recommended.StoragePublicIP); publicIP != "" {
-		plan.Recommended.Notes = append(plan.Recommended.Notes,
-			"SCF 与 Storage 同地域且 VPC 信息完整时走私网；跨地域或缺少私网条件时走 Storage 公网 IP "+publicIP+"。",
-			"不创建云联网（CCN）；SCF 的 VPC 绑定只用于同地域 Storage 数据面，公网出口由 public_net_status 独立控制。",
-		)
 	}
 	plan.Recommended.Notes = append(plan.Recommended.Notes,
+		"SCF 采集函数按地域访问外部接入：同地域主机上有外部接入时绑定其 VPC 走私网，否则走 access@storage 的公网地址（moox-cli setup scf-network-plan）。",
 		"不会调用 ModifyInstancesVpcAttribute，因此不会重启现有机器。SSH 和控制台入口继续使用公网 IP。",
 	)
 	return plan
 }
 
-// BuildSCFStorageRoute computes one deterministic route without making cloud
-// API calls.  Keeping this function pure makes the deployment plan testable
-// and ensures cross-region traffic never accidentally receives a private IP.
-func BuildSCFStorageRoute(storage ResolvedHost, region string) SCFStorageRoute {
-	region = strings.ToLower(strings.TrimSpace(region))
-	storageRegion := strings.ToLower(strings.TrimSpace(storage.Instance.Region))
-	publicIP := strings.TrimSpace(storage.Address)
-	if publicIP == "" && len(storage.Instance.PublicIPs) > 0 {
-		publicIP = strings.TrimSpace(storage.Instance.PublicIPs[0])
+// PrivateAccessHosts 返回这些地域会走私网的外部接入主机，发布前需要查询它们的 VPC 和子网。
+func PrivateAccessHosts(directory servicecatalog.Directory, regions []string) ([]HostTarget, error) {
+	var hosts []HostTarget
+	seen := map[string]bool{}
+	for _, region := range regions {
+		endpoint, err := directory.AccessEndpointForRegion(region, servicecatalog.AccessFallbackHostID)
+		if err != nil {
+			return nil, err
+		}
+		if !endpoint.Private || seen[endpoint.HostID] {
+			continue
+		}
+		seen[endpoint.HostID] = true
+		host, _ := directory.Host(endpoint.HostID)
+		hosts = append(hosts, HostTarget{Name: endpoint.HostID, Address: host.Address, Roles: []string{servicecatalog.AccessComponentID}, Provider: "tencent"})
 	}
-	privateIP := ""
-	if len(storage.Instance.PrivateIPs) > 0 {
-		privateIP = strings.TrimSpace(storage.Instance.PrivateIPs[0])
-	}
-	route := SCFStorageRoute{
-		Region: region, Network: "public", StorageRegion: storageRegion,
-		StorageZone: strings.TrimSpace(storage.Instance.Zone), StoragePublicIP: publicIP,
-		StoragePrivateIP: privateIP, Target: "ip://" + net.JoinHostPort(publicIP, "11003"),
-	}
-	if publicIP == "" {
-		route.Target = ""
-	}
-	if region == "" {
-		route.Reason = "SCF region is empty; public route is required"
-		return route
-	}
-	if region != storageRegion {
-		route.Reason = "SCF and Storage are in different Tencent regions"
-		return route
-	}
-	route.SameRegion = true
-	if privateIP == "" || strings.TrimSpace(storage.Instance.VpcID) == "" || strings.TrimSpace(storage.Instance.SubnetID) == "" {
-		route.Reason = "same region but Storage has no complete private VPC route"
-		return route
-	}
-	route.Network = "vpc"
-	route.VpcID = strings.TrimSpace(storage.Instance.VpcID)
-	route.SubnetID = strings.TrimSpace(storage.Instance.SubnetID)
-	route.Target = "ip://" + net.JoinHostPort(privateIP, "11003")
-	route.Reason = "same Tencent region with Storage VPC/subnet/private IP"
-	return route
+	return hosts, nil
 }
 
-// BuildSCFStorageRouteForTarget applies an explicit regional Access endpoint
-// without changing the legacy same-region VPC/public fallback behavior.
-func BuildSCFStorageRouteForTarget(storage ResolvedHost, target SCFTarget) SCFStorageRoute {
-	route := BuildSCFStorageRoute(storage, target.Region)
-	if strings.TrimSpace(target.StorageAccessTarget) == "" {
-		return route
+// BuildSCFAccessRoute 按服务目录为一个地域选择外部接入。选中同地域主机的私网地址时，hosts 中必须有该主机的
+// 实例信息（VPC、子网、私网地址），否则报错：函数无法访问一个没有绑定 VPC 的私网地址。
+func BuildSCFAccessRoute(directory servicecatalog.Directory, hosts map[string]ResolvedHost, region string) (SCFAccessRoute, error) {
+	region = strings.ToLower(strings.TrimSpace(region))
+	endpoint, err := directory.AccessEndpointForRegion(region, servicecatalog.AccessFallbackHostID)
+	if err != nil {
+		return SCFAccessRoute{}, err
 	}
-	route.Target = strings.TrimSpace(target.StorageAccessTarget)
-	route.Network = "access"
-	route.StoragePrivateIP = ""
-	route.VpcID = ""
-	route.SubnetID = ""
-	route.Reason = "explicit regional Storage Access route"
-	return route
+	route := SCFAccessRoute{
+		Region: region, Network: "public", AccessHostID: endpoint.HostID, AccessID: endpoint.ID, AccessAddress: endpoint.Address,
+		Reason: "函数所在地域没有外部接入，走 " + endpoint.ID + " 的公网地址",
+	}
+	if !endpoint.Private {
+		return route, nil
+	}
+	host, ok := hosts[endpoint.HostID]
+	if !ok {
+		return SCFAccessRoute{}, fmt.Errorf("缺少外部接入主机 %s 的实例信息，地域 %s 的函数无法绑定它的 VPC", endpoint.HostID, region)
+	}
+	directoryHost, _ := directory.Host(endpoint.HostID)
+	if strings.TrimSpace(host.Instance.VpcID) == "" || strings.TrimSpace(host.Instance.SubnetID) == "" {
+		return SCFAccessRoute{}, fmt.Errorf("外部接入主机 %s 没有完整的 VPC 和子网信息，地域 %s 的函数无法走私网", endpoint.HostID, region)
+	}
+	if !slices.Contains(host.Instance.PrivateIPs, directoryHost.PrivateAddress) {
+		return SCFAccessRoute{}, fmt.Errorf("外部接入主机 %s 登记的私网地址 %s 与腾讯云实例的私网地址 %v 不一致", endpoint.HostID, directoryHost.PrivateAddress, host.Instance.PrivateIPs)
+	}
+	route.Network = "vpc"
+	route.VpcID = strings.TrimSpace(host.Instance.VpcID)
+	route.SubnetID = strings.TrimSpace(host.Instance.SubnetID)
+	route.Reason = "与外部接入主机 " + endpoint.HostID + " 同地域，绑定其 VPC 走私网"
+	return route, nil
 }

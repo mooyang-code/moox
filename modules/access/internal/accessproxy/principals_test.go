@@ -5,49 +5,36 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/require"
 )
 
-func writePrincipalsFixture(t *testing.T, secretMode os.FileMode, preset string) string {
+func writeKeySet(t *testing.T, mode os.FileMode, keys ...gatewayauth.CallerKey) string {
 	t.Helper()
-	dir := t.TempDir()
-	for _, name := range []string{"collector.key", "factor-engine.key", "factor.key"} {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name+"-secret\n"), secretMode))
-	}
-	path := filepath.Join(dir, "principals.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`version: 1
-principals:
-  - name: collector
-    methods: collector
-    inbound: {key_id: collector, caller: collector, secret_file: collector.key}
-    upstream: {key_id: collector, caller: collector, secret_file: collector.key}
-  - name: factor-engine
-    methods: `+preset+`
-    inbound: {key_id: factor-engine, caller: factor-engine, secret_file: factor-engine.key}
-    upstream: {key_id: factor, caller: factor, secret_file: factor.key}
-`), 0o600))
+	raw, err := gatewayauth.MarshalKeySet(keys)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "access-principals.json")
+	require.NoError(t, os.WriteFile(path, raw, mode))
+	require.NoError(t, os.Chmod(path, mode))
 	return path
 }
 
-func TestLoadPrincipals(t *testing.T) {
-	principals, err := LoadPrincipals(writePrincipalsFixture(t, 0o600, "factor-engine"))
-
+func TestLoadPrincipalKeysAcceptsCatalogPrincipals(t *testing.T) {
+	path := writeKeySet(t, 0o600,
+		gatewayauth.CallerKey{Caller: "scf-collector", KeyID: "scf-collector-1", Secret: "s1"},
+		gatewayauth.CallerKey{Caller: "scf-collector", KeyID: "scf-collector-2", Secret: "s2"},
+		gatewayauth.CallerKey{Caller: "factor-engine", KeyID: "factor-engine-1", Secret: "s3"},
+	)
+	registry, principals, err := LoadPrincipalKeys(path, nil)
 	require.NoError(t, err)
-	require.Len(t, principals, 2)
-	engine := principals[1]
-	require.Equal(t, "factor-engine", engine.Inbound.Caller)
-	require.Equal(t, "factor", engine.Upstream.Caller)
-	require.Equal(t, "factor-engine.key-secret", engine.Inbound.Secret)
-	require.True(t, engine.allows(PrimaryStoreName, "WriteFactorRows"))
-	require.False(t, engine.allows(PrimaryStoreName, "DeleteDatasetRows"))
+	require.NotNil(t, registry)
+	require.Equal(t, []string{"factor-engine", "scf-collector"}, principals, "轮换期间同一外部调用方可以有多把密钥")
 }
 
-func TestPrincipalsFileRequires0600Secrets(t *testing.T) {
-	_, err := LoadPrincipals(writePrincipalsFixture(t, 0o644, "factor-engine"))
+func TestLoadPrincipalKeysRejectsInternalCallersAndLooseFiles(t *testing.T) {
+	_, _, err := LoadPrincipalKeys(writeKeySet(t, 0o600, gatewayauth.CallerKey{Caller: "collector", KeyID: "collector-1", Secret: "s"}), nil)
+	require.ErrorContains(t, err, "不是组件目录中的外部调用方", "内部调用方不能经外部接入")
+
+	_, _, err = LoadPrincipalKeys(writeKeySet(t, 0o644, gatewayauth.CallerKey{Caller: "moox-skill", KeyID: "moox-skill-1", Secret: "s"}), nil)
 	require.ErrorContains(t, err, "0600")
-}
-
-func TestPrincipalsRejectUnknownPreset(t *testing.T) {
-	_, err := LoadPrincipals(writePrincipalsFixture(t, 0o600, "everything"))
-	require.ErrorContains(t, err, "unknown method preset")
 }

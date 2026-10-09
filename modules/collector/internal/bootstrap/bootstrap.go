@@ -95,8 +95,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
 	}
-	deps := cfg.SCFTargets()
-
 	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "collector")
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
@@ -177,7 +175,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
 	registerDNSRefreshSchedule(s, dnsSnapshot)
-	registerMarketFetchSchedule(ctx, s, cfg, deps, gateway, dbm, dnsSnapshot, marketFetchMetrics)
+	registerMarketFetchSchedule(ctx, s, cfg, gateway, dbm, dnsSnapshot, marketFetchMetrics)
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err
 	}
@@ -439,7 +437,7 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter) {
 	})
 }
 
-func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, deps Dependencies, gateway *gatewayclient.Client, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
+func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, gateway *gatewayclient.Client, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -508,12 +506,11 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		invokeConcurrency := marketFetchInvokeConcurrency(spaceID)
 		maintenanceBatchLimit, recoveryBatchLimit := marketFetchMaintenanceLimits(spaceID, invokeConcurrency, cfg.StockCN.ExpectedTimerFunctionCount)
 		reconciler := &marketfetch.Reconciler{
-			SCFRegionBlacklists:           cfg.SCFRegionBlacklists,
-			ResolveSourceID:               marketwiring.DefaultSourceID,
-			ResolveSymbol:                 marketwiring.ResolveSymbol,
-			CollectorRuntimeGatewayTarget: deps.CollectorRuntimeGatewayTarget,
-			CollectorRuntimeGatewayNodeID: deps.CollectorRuntimeGatewayNodeID,
-			Tasks:                         dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
+			ResolveSourceID:     marketwiring.DefaultSourceID,
+			ResolveSymbol:       marketwiring.ResolveSymbol,
+			Gateway:             gateway,
+			Tasks:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: marketfetch.DefaultMaxSubjects(spaceID),
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
@@ -529,8 +526,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			ResolveSourceID:     marketwiring.DefaultSourceID,
 			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(), PeriodStorageStates: dbm.PeriodStorageStates(),
-			// Collector 自己经 gatewayclient 访问 Storage；SCF 调用载荷带上它访问 Storage 的网关地址。
-			Invoker: invoker, Storage: storageFactory, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
+			Invoker: invoker, Storage: storageFactory,
 			InvokeConcurrency: invokeConcurrency, MaintenanceBatchLimit: maintenanceBatchLimit, MaintenanceRecoveryBatchLimit: recoveryBatchLimit,
 			MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
 			Symbols:                    plannerSource,
