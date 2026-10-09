@@ -77,7 +77,7 @@ Prefer bundled scripts in this skill when a workflow needs deterministic parsing
 For requests to fetch collected market data, such as “获取 BTC-USDT 的 1m K 线”, read
 [`references/data-query.md`](references/data-query.md). It defines the natural-language mapping,
 catalog constraints, packaged credential handling, and result summary contract for
-`moox-cli data kline get`.
+`moox-cli data skill kline get`.
 
 For View recovery, read
 [`references/cli-operations.md`](references/cli-operations.md) before operating. It documents
@@ -236,7 +236,7 @@ skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-caddy-root-
 skills/moox/scripts/caddy-ca.sh status --ca-file "$CA_FILE"
 ```
 
-Internal-mode backend processes use `MOOX_SERVICE_GATEWAY_CA_FILE`; SCF uses `MOOX_SERVICE_GATEWAY_CA_PEM_B64`. Public mode must not set either service-edge CA variable. The separate `MOOX_GATEWAY_CA_FILE` peer bundle remains required in both modes. Never disable TLS verification.
+Host gateways use the private CA configured in `hostgateway/config/app.yaml`. SCF connects to Access using `MOOX_ACCESS_ADDRESS`, `MOOX_ACCESS_ID`, `MOOX_CALLER=scf-collector`, and the Admin-assigned `MOOX_CALLER_KEY_ID` / `MOOX_CALLER_KEY`; it carries no service-edge CA or internal gateway credential. Access uses its separate internal identity for the gateway hop.
 
 For a CLS-enabled release, `scripts/deploy/deploy-moox.sh --enable-cls` runs the CLS
 predeploy check after stage creation and before release archive sync or service

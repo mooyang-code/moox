@@ -165,13 +165,10 @@ realtime_batch_size = 10
 max_inflight_requests = 10
 request_timeout_ms = 1000
 http_max_attempts = 4
-storage_max_attempts = 1
 storage_timeout_ms = 5000
 max_retry_attempts = 3
-collector_rpc_gateway_target = "ip://192.0.2.10:11003"
-collector_gateway_target_node = "control"
-storage_gateway_node_id = "control"
-storage_gateway_host = "192.0.2.20"
+access_id = "control"
+access_host = "192.0.2.20"
 [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 enabled = false
@@ -264,7 +261,7 @@ func TestCollectorSCFReleaseCanaryOptionsUseIsolatedInvokeSlot(t *testing.T) {
 	limits := setupconfig.TencentSCFLimits{RegionLimits: map[string]setupconfig.TencentSCFRegionLimit{
 		"ap-nanjing": {MaxNamespacesPerRegion: 3, MaxFunctionsPerNamespace: 2},
 	}}
-	base := collectorPublishOptions{FunctionNamePrefix: fetcher.FunctionPrefix, TriggerType: "timer", NodeCount: 3, StorageRPCGatewayTarget: "ip://storage:11003"}
+	base := collectorPublishOptions{FunctionNamePrefix: fetcher.FunctionPrefix, TriggerType: "timer", NodeCount: 3, AccessAddress: "storage:11004"}
 
 	got, err := collectorSCFReleaseCanaryOptions(base, fetcher, region, limits)
 	require.NoError(t, err)
@@ -274,7 +271,7 @@ func TestCollectorSCFReleaseCanaryOptionsUseIsolatedInvokeSlot(t *testing.T) {
 	assert.Equal(t, 1, got.NodeCount)
 	assert.Zero(t, got.IndexOffset)
 	assert.Equal(t, "moox-fetcher-crypto-release-canary", got.FunctionNamePrefix)
-	assert.Equal(t, base.StorageRPCGatewayTarget, got.StorageRPCGatewayTarget)
+	assert.Equal(t, base.AccessAddress, got.AccessAddress)
 }
 
 func TestCollectorSCFReleaseCanaryOptionsSupportStockCN(t *testing.T) {
@@ -471,7 +468,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 			opts := collectorPublishOptions{
 				CloudAccountID: "account-a", SpaceID: "crypto", Region: "ap-nanjing", Namespace: "canary-ns",
 				NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
-				FunctionNamePrefix: prefix, StorageRPCGatewayTarget: "ip://192.0.2.20:11003",
+				FunctionNamePrefix: prefix, AccessAddress: "192.0.2.20:11004",
 				EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON,
 				canaryProof: proof,
 			}
@@ -829,7 +826,7 @@ func TestCollectorSCFCanaryEventBindsInventoryTaskPeriodAndView(t *testing.T) {
 	proof := &collectorSCFCanaryProof{entry: collectorCanaryTestEntry(), period: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), interval: time.Minute}
 	proof.entry.OutputFields = []string{"close", "volume"}
 	proof.entry.SeriesHash = "series-hash"
-	opts := collectorPublishOptions{SpaceID: "crypto", Region: "ap-singapore", StorageRPCGatewayTarget: "ip://storage:11003"}
+	opts := collectorPublishOptions{SpaceID: "crypto", Region: "ap-singapore", AccessAddress: "storage:11004"}
 	event := collectorSCFCanaryEventForProof(opts, "canary-node", "batch-123", proof)
 	data, ok := event["data"].(map[string]any)
 	require.True(t, ok)

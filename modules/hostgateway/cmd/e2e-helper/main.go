@@ -45,6 +45,7 @@ func main() {
 	nodeID := flag.String("node-id", "", "test host ID")
 	upstream := flag.String("upstream-addr", "", "loopback fixture upstream")
 	metadata := flag.String("metadata-upstream-addr", "", "optional metadata fixture upstream")
+	runtimeAddress := flag.String("runtime-upstream-addr", "", "optional Collector runtime fixture upstream")
 	address := flag.String("listen-addr", "127.0.0.1:0", "fixture listener")
 	ready := flag.String("ready-file", "", "fixture readiness file")
 	nonces := flag.String("nonce-dir", "", "fixture nonce directory")
@@ -52,6 +53,8 @@ func main() {
 	flag.Parse()
 	var err error
 	switch *mode {
+	case "access-native":
+		err = runAccessNative(*nodeID, *upstream, *runtimeAddress, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "kline-native":
 		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "storage-native":
@@ -71,6 +74,36 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// runAccessNative uses the real router verification boundary. Access supplies
+// its own internal signature; no synthetic caller or signing adapter is used.
+func runAccessNative(hostID, storageAddress, runtimeAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	var routes []gatewayroute.Route
+	for _, selected := range []struct{ id, path, address string }{
+		{"storage-primary", "trpc.moox.storage.PrimaryStore", storageAddress},
+		{"collector", "trpc.moox.collector.MarketFetchRuntime", runtimeAddress},
+	} {
+		if selected.address == "" {
+			continue
+		}
+		spec, _ := catalog.Service(selected.path)
+		var methods []string
+		for _, method := range spec.Methods {
+			if catalog.Allowed("access", selected.path, method) {
+				methods = append(methods, method)
+			}
+		}
+		routes = append(routes, gatewayroute.Route{ServiceID: selected.id, ServicePath: selected.path, Address: selected.address, AllowedMethods: methods, AllowedCallers: []string{"access"}})
+	}
+	if len(routes) == 0 {
+		return errors.New("Access fixture requires at least one upstream")
+	}
+	return runNativeRoutes(hostID, routes, "access", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
 func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
@@ -126,6 +159,9 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	}
 	digest := sha256.Sum256([]byte("synthetic fixture/" + secret))
 	internal := gatewayauth.Credentials{Caller: internalCaller, KeyID: keyID, Secret: hex.EncodeToString(digest[:])}
+	if caller == "access" {
+		internal = incoming
+	}
 	dir := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{hostID: {Address: "127.0.0.1"}}, Services: map[string][]string{}}
 	raw := &pb.HostGatewaySnapshot{SchemaVersion: 1, HostId: hostID}
 	addresses := map[string]string{}
@@ -203,6 +239,9 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	}
 	defer listener.Close()
 	boundary := func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
+		if caller == "access" {
+			return next(ctx, req)
+		}
 		message := codec.Message(ctx)
 		path := message.ServerRPCName()
 		if caller == "moox-cli" && path == "/"+directory.Path+"/GetDirectory" {
@@ -245,7 +284,7 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	if err := proxy.Register(service); err != nil {
 		return err
 	}
-	if caller == "moox-cli" {
+	if caller == "moox-cli" || caller == "access" {
 		if err := directory.Register(service, state); err != nil {
 			return err
 		}

@@ -208,7 +208,7 @@ func TestTimerBatchClaimerRejectsMismatchedPersistedBatchID(t *testing.T) {
 			}
 			return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: result.Claimed, RequestJson: result.RequestJSON}, nil
 		}),
-		NewStorage: func(string, string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
+		NewStorage: func(string, string) (Storage, error) { storageCalls++; return timerHandlerStorage{}, nil },
 		Execute: func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 			executeCalls++
 			return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil

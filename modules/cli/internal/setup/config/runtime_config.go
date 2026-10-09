@@ -68,13 +68,37 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
-	collectorTarget, collectorNode, err := CollectorRuntimeTarget(&snapshot.Manifest.SCFFetcher)
+	access, routes, err := SCFAccessRoutes(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", orderedMapping(
-		mappingField{"gateway_target", collectorTarget}, mappingField{"node_id", collectorNode},
-	))
+	var prior map[string]any
+	if len(existing) > 0 {
+		if err := yaml.Unmarshal(existing, &prior); err != nil {
+			return nil, err
+		}
+	}
+	if values, ok := prior["scf_access"].(map[string]any); ok {
+		if keyID, ok := values["key_id"].(string); ok {
+			access["key_id"] = keyID
+		}
+	}
+	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", nil)
+	if err != nil {
+		return nil, err
+	}
+	if storage, ok := prior["storage"].(map[string]any); ok {
+		delete(storage, "gateway_target")
+		rendered, err = replaceYAMLMapping(rendered, "storage", valueNode(storage))
+		if err != nil {
+			return nil, err
+		}
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_access", valueNode(access))
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_access_routes", valueNode(routes))
 	if err != nil {
 		return nil, err
 	}
@@ -187,11 +211,17 @@ func replaceYAMLMapping(existing []byte, key string, value *yaml.Node) ([]byte, 
 	root := document.Content[0]
 	for index := 0; index+1 < len(root.Content); index += 2 {
 		if root.Content[index].Value == key {
-			root.Content[index+1] = value
+			if value == nil {
+				root.Content = append(root.Content[:index], root.Content[index+2:]...)
+			} else {
+				root.Content[index+1] = value
+			}
 			return encodeYAML(document)
 		}
 	}
-	root.Content = append(root.Content, scalarNode(key), value)
+	if value != nil {
+		root.Content = append(root.Content, scalarNode(key), value)
+	}
 	return encodeYAML(document)
 }
 
@@ -262,4 +292,37 @@ func writeRenderedBytes(path string, rendered []byte) error {
 		return fmt.Errorf("runtime_config: replace %s: %w", path, err)
 	}
 	return nil
+}
+
+// SCFAccessRoutes emits fixed external endpoints independently of internal
+// Collector routing. Regional endpoint identities must agree across Spaces.
+func SCFAccessRoutes(snapshot *Snapshot) (map[string]string, map[string]map[string]string, error) {
+	base := map[string]string{"caller": "scf-collector", "key_id": "", "key_file": "../../secrets/caller-scf-collector.key"}
+	routes := map[string]map[string]string{}
+	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
+		if space.AccessAddress != "" {
+			if base["access_address"] != "" && (base["access_address"] != space.AccessAddress || base["access_id"] != space.AccessID) {
+				return nil, nil, fmt.Errorf("config_invalid: SCF Access default identity must agree across Spaces")
+			}
+			base["access_address"], base["access_id"] = space.AccessAddress, space.AccessID
+		}
+		for region, address := range space.AccessAddresses {
+			identity := space.AccessIDForRegion(region)
+			if old, ok := routes[region]; ok && (old["access_address"] != address || old["access_id"] != identity) {
+				return nil, nil, fmt.Errorf("config_invalid: SCF Access routes for %s must agree across Spaces", region)
+			}
+			routes[region] = map[string]string{"access_address": address, "access_id": identity}
+		}
+	}
+	if base["access_address"] == "" {
+		host := snapshot.Manifest.StorageHost
+		if host.Address == "" {
+			host = snapshot.Manifest.ControlHost
+		}
+		if host.Address != "" {
+			base["access_address"] = net.JoinHostPort(host.Address, "11004")
+			base["access_id"] = "access@" + host.Name
+		}
+	}
+	return base, routes, nil
 }

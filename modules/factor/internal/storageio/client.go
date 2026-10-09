@@ -8,7 +8,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -43,11 +42,6 @@ type Client struct {
 
 func NewClient(primary PrimaryStoreClient, metadata MetadataClient, auth *commonpb.AuthInfo) *Client {
 	return &Client{primary: primary, metadata: metadata, auth: auth}
-}
-
-func NewClientWithCredentials(storageTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
-	options := gatewayauth.NewTRPCClientOptions(storageTarget, targetNode, credentials)
-	return NewClient(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), auth)
 }
 
 type Frame struct {

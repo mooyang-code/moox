@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -13,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
@@ -66,7 +63,6 @@ type storageWriter struct {
 	metadata    storageio.Metadata
 	authInfo    *storagepb.AuthInfo
 	writeSource string
-	internal    bool
 }
 
 func newGatewayWriter(gateway gatewayclient.Invoker, instType, writeSource string) (*storageWriter, error) {
@@ -78,7 +74,7 @@ func newGatewayWriter(gateway gatewayclient.Invoker, instType, writeSource strin
 		return nil, err
 	}
 	adapter := storageio.NewGatewayClient(gateway)
-	return &storageWriter{access: adapter, period: adapter, metadata: adapter, authInfo: auth, writeSource: strings.TrimSpace(writeSource), internal: true}, nil
+	return &storageWriter{access: adapter, period: adapter, metadata: adapter, authInfo: auth, writeSource: strings.TrimSpace(writeSource)}, nil
 }
 
 func NewGatewayBatchStorage(gateway gatewayclient.Invoker, instType, writeSource string) (BatchStorage, error) {
@@ -97,41 +93,11 @@ func NewGatewayResampleMetadataClient(gateway gatewayclient.Invoker, instType st
 	return &ResampleMetadataClient{Client: writer.metadata, Primary: writer.access, Auth: writer.authInfo}, nil
 }
 
-// External SCF callers keep their existing policy until Access is migrated in
-// E2. Internal callers rely on gatewayclient for reads and send writes once.
 func (w *storageWriter) runRPC(ctx context.Context, operation func() error) error {
-	if w.internal {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return operation()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return retryStorage(ctx, operation)
-}
-
-func NewBatchStorageWithWriteSource(accessTarget, instType, writeSource string) (BatchStorage, error) {
-	binding, err := ResolveStorageBinding(instType)
-	if err != nil {
-		return nil, err
-	}
-	auth, err := storageAuthInfo(binding)
-	if err != nil {
-		return nil, err
-	}
-	target := normalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-	primary := storagepb.NewPrimaryStoreClientProxy(options...)
-	return &storageWriter{
-		access: primary, period: primary, metadata: storagepb.NewMetadataClientProxy(options...),
-		authInfo: auth, writeSource: strings.TrimSpace(writeSource),
-	}, nil
-}
-
-func collectorStorageGatewayNodeID() string {
-	if nodeID := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID")); nodeID != "" {
-		return nodeID
-	}
-	return strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
+	return operation()
 }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
@@ -145,57 +111,39 @@ func (w *storageWriter) EnsureDatasetPeriod(ctx context.Context, expectation *st
 	if err := validateDatasetPeriodExpectation(expectation, true); err != nil {
 		return domain.PeriodStorageState{}, err
 	}
-	var lastErr error
-	attempts := 3
-	if w.internal {
-		attempts = 1
+	if err := ctx.Err(); err != nil {
+		return domain.PeriodStorageState{}, err
 	}
-	for attempt := 0; attempt < attempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return domain.PeriodStorageState{}, err
+	response, err := w.period.EnsureDatasetPeriod(ctx, &storagepb.PrimaryEnsureDatasetPeriodReq{AuthInfo: w.authInfo, Expectation: expectation})
+	var unknownOutcomeErr error
+	if err != nil {
+		unknownOutcomeErr = fmt.Errorf("ensure dataset period: %w", err)
+	} else {
+		if response == nil {
+			return domain.PeriodStorageState{}, fmt.Errorf("ensure dataset period: empty response")
 		}
-		response, err := w.period.EnsureDatasetPeriod(ctx, &storagepb.PrimaryEnsureDatasetPeriodReq{AuthInfo: w.authInfo, Expectation: expectation})
-		var unknownOutcomeErr error
-		if err != nil {
-			unknownOutcomeErr = fmt.Errorf("ensure dataset period: %w", err)
+		ret := response.GetRetInfo()
+		if ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
+			return domain.PeriodStorageState{}, fmt.Errorf("%w: %s", ErrDatasetPeriodConflict, ret.GetMsg())
+		}
+		if ret != nil && ret.GetCode() == storagepb.ErrorCode_INNER_ERR {
+			unknownOutcomeErr = ensureStorageOK("ensure dataset period", ret)
 		} else {
-			if response == nil {
-				return domain.PeriodStorageState{}, fmt.Errorf("ensure dataset period: empty response")
+			if err := ensureStorageOK("ensure dataset period", ret); err != nil {
+				return domain.PeriodStorageState{}, err
 			}
-			ret := response.GetRetInfo()
-			if ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
-				return domain.PeriodStorageState{}, fmt.Errorf("%w: %s", ErrDatasetPeriodConflict, ret.GetMsg())
+			state, err := periodStorageStateFromEnsure(expectation, response)
+			if err != nil {
+				return domain.PeriodStorageState{}, err
 			}
-			if ret != nil && ret.GetCode() == storagepb.ErrorCode_INNER_ERR {
-				unknownOutcomeErr = ensureStorageOK("ensure dataset period", ret)
-			} else {
-				if err := ensureStorageOK("ensure dataset period", ret); err != nil {
-					return domain.PeriodStorageState{}, err
-				}
-				state, err := periodStorageStateFromEnsure(expectation, response)
-				if err != nil {
-					return domain.PeriodStorageState{}, err
-				}
-				return state, nil
-			}
-		}
-		state, statusErr := w.GetDatasetPeriodStatus(ctx, expectation)
-		if statusErr == nil {
 			return state, nil
 		}
-		lastErr = errors.Join(unknownOutcomeErr, fmt.Errorf("read status after Ensure unknown outcome: %w", statusErr))
-		if err := ctx.Err(); err != nil {
-			return domain.PeriodStorageState{}, err
-		}
-		if attempt+1 < attempts {
-			select {
-			case <-ctx.Done():
-				return domain.PeriodStorageState{}, ctx.Err()
-			case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
-			}
-		}
 	}
-	return domain.PeriodStorageState{}, lastErr
+	state, statusErr := w.GetDatasetPeriodStatus(ctx, expectation)
+	if statusErr == nil {
+		return state, nil
+	}
+	return domain.PeriodStorageState{}, errors.Join(unknownOutcomeErr, fmt.Errorf("read status after Ensure unknown outcome: %w", statusErr))
 }
 
 func (w *storageWriter) GetDatasetPeriodStatus(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
@@ -558,22 +506,4 @@ func ResolveStorageAuthInfo(instType string) (*storagepb.AuthInfo, error) {
 		return nil, err
 	}
 	return storageAuthInfo(binding)
-}
-
-func normalizeStorageTarget(raw, defaultPort string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:" + defaultPort
-	}
-	if strings.HasPrefix(raw, "ip://") || strings.Contains(raw, "://") {
-		return raw
-	}
-	parsed, err := url.Parse(raw)
-	if err == nil && parsed.Host != "" {
-		return "ip://" + parsed.Host
-	}
-	if strings.Contains(raw, ":") {
-		return "ip://" + raw
-	}
-	return raw
 }

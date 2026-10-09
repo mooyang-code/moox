@@ -439,7 +439,7 @@ func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 		engine := extra.GatewayRoutes[1]
 		if engine.ServicePath != "trpc.moox.factor.FactorEngine" || engine.Port != 11405 ||
 			!reflect.DeepEqual(engine.GatewayMethods, []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}) ||
-			!reflect.DeepEqual(engine.GatewayCallers, []string{"factor-engine"}) {
+			!reflect.DeepEqual(engine.GatewayCallers, []string{"access"}) {
 			t.Fatalf("moox_factor_mgr engine gateway contract = %+v", engine)
 		}
 		for _, method := range append(extra.GatewayMethods, extra.GatewayRoutes[0].GatewayMethods...) {

@@ -92,7 +92,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					storage := &capturedStorage{}
 					h := NewHandler()
 					h.Now = func() time.Time { return now }
-					h.NewStorage = func(string, string, string) (marketfetch.Storage, error) { return storage, nil }
+					h.NewStorage = func(string, string) (marketfetch.Storage, error) { return storage, nil }
 					// Replace only the network-bound registry. Production factory
 					// selection, pipeline configuration, handler and writes remain real.
 					h.NewMarketKlinePipeline = func(s marketfetch.Storage, market string, instrument marketdata.InstrumentType, provider, source string) (*marketfetch.KlinePipeline, error) {
@@ -148,7 +148,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 						require.NoError(t, marshalErr)
 						var data map[string]interface{}
 						require.NoError(t, json.Unmarshal(encoded, &data))
-						response, err = h.HandleWithFunctionNameWithoutCompletion(context.Background(), model.CloudFunctionEvent{Action: model.EventActionMarketFetch, Data: data, StorageRPCGatewayTarget: "storage"}, "function")
+						response, err = h.HandleWithFunctionNameWithoutCompletion(context.Background(), model.CloudFunctionEvent{Action: model.EventActionMarketFetch, Data: data}, "function")
 					}
 					require.NoError(t, err)
 					require.True(t, response.Success, "%+v", response)

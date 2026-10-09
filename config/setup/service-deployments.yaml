@@ -294,7 +294,7 @@ services:
         - service_path: trpc.moox.factor.FactorEngine
           port: 11405
           gateway_methods: [SyncEngineCatalog, EngineHeartbeat, PullRecalcJob, ReportRecalcProgress]
-          gateway_callers: [factor-engine]
+          gateway_callers: [access]
   - name: moox_strategy
     kind: strategy
     deployment_mode: process

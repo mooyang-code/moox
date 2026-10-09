@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/prometheus/client_golang/prometheus"
@@ -35,6 +34,7 @@ const healthService = "trpc.moox.factor.Health"
 type Runtime struct {
 	cfg      *Config
 	identity domain.EngineIdentity
+	gateway  *gatewayclient.Client
 	storage  *storageio.Client
 	manager  *ManagerClient
 	catalog  *CatalogCache
@@ -88,10 +88,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		}
 	}()
 
-	if r.storage, err = newStorageClient(cfg.Storage); err != nil {
+	if r.gateway, err = cfg.GatewayClient.OpenExternal(cfg.sourcePath); err != nil {
 		return nil, err
 	}
-	if r.manager, err = NewManagerClient(cfg.Manager, r.identity); err != nil {
+	if r.storage, err = newStorageClient(r.gateway, cfg.Storage); err != nil {
+		return nil, err
+	}
+	if r.manager, err = NewManagerClient(r.gateway, cfg.Manager.Timeout, r.identity); err != nil {
 		return nil, err
 	}
 	if r.catalog, err = NewCatalogCache(cfg.Python.FactorsDir, cfg.CatalogSync.StateFile); err != nil {
@@ -339,29 +342,23 @@ func (r *Runtime) Close() error {
 		if r.python != nil {
 			r.err = errors.Join(r.err, r.python.Close())
 		}
+		if r.gateway != nil {
+			r.err = errors.Join(r.err, r.gateway.Close())
+		}
 	})
 	return r.err
 }
 
-func newStorageClient(cfg StorageConfig) (*storageio.Client, error) {
-	credentials, err := gatewayauth.CredentialsFromKeyFile(cfg.KeyID, cfg.HMACKeyFile)
+func newStorageClient(gateway gatewayclient.Invoker, cfg StorageConfig) (*storageio.Client, error) {
+	secret, err := gatewayauth.ReadSigningSecret(cfg.AuthSecretFile)
 	if err != nil {
-		return nil, fmt.Errorf("load access credentials: %w", err)
-	}
-	secret := ""
-	if strings.TrimSpace(cfg.AuthSecretFile) != "" {
-		raw, err := os.ReadFile(cfg.AuthSecretFile)
-		if err != nil {
-			return nil, fmt.Errorf("read Storage auth secret: %w", err)
-		}
-		secret = strings.TrimSpace(string(raw))
+		return nil, fmt.Errorf("read Storage auth secret: %w", err)
 	}
 	requestID, err := randomHex(8)
 	if err != nil {
 		return nil, err
 	}
-	return storageio.NewClientWithCredentials(cfg.GatewayTarget, cfg.GatewayNodeID, credentials,
-		storageio.NewAuthInfo("factor-engine-"+requestID, secret)), nil
+	return storageio.NewGatewayClient(gateway, storageio.NewAuthInfo("factor-engine-"+requestID, secret)), nil
 }
 
 func randomHex(n int) (string, error) {

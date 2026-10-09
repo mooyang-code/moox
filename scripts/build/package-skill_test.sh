@@ -52,8 +52,10 @@ printf '%s\n' "$@" >"${ARGS_LOG:?}"
 [[ "$5" == --space && "$6" == crypto ]]
 [[ "$7" == --output ]]
 mkdir -p "$(dirname "$8")"
-printf '%s\n' 'version: 1' 'gateway:' '  secret: TEST_ONLY_EXPORTED_GATEWAY_SECRET' >"$8"
-chmod 0600 "$8"
+printf '%s\n' 'version: 1' 'gateway_client:' '  access_address: access.example:11004' '  access_id: access@storage' '  caller: moox-skill' '  key_id: assigned-skill-key-17' '  key_file: .moox-skill-keys/fixture.key' >"$8"
+mkdir -m 0700 "$(dirname "$8")/.moox-skill-keys"
+printf '%s\n' 'TEST_ONLY_EXPORTED_ACCESS_SIGNING_KEY_32_BYTES' >"$(dirname "$8")/.moox-skill-keys/fixture.key"
+chmod 0600 "$8" "$(dirname "$8")/.moox-skill-keys/fixture.key"
 EOF
 chmod +x "${FAKE_CLI}"
 
@@ -82,7 +84,14 @@ PACKAGED_CONFIG="${EXTRACTED}/moox/config/data-access.yaml"
 [[ -f "${PACKAGED_CONFIG}" && ! -L "${PACKAGED_CONFIG}" ]] || fail "packaged config is not a regular file"
 [[ "$(file_mode "${PACKAGED_CONFIG}")" == 600 ]] || fail "packaged config mode is not 0600"
 [[ -x "${EXTRACTED}/moox/scripts/data-kline.sh" ]] || fail "packaged data-kline wrapper is not executable"
-grep -q 'TEST_ONLY_EXPORTED_GATEWAY_SECRET' "${PACKAGED_CONFIG}" || fail "fake CLI output was not packaged"
+PACKAGED_KEY="${EXTRACTED}/moox/config/.moox-skill-keys/fixture.key"
+[[ -f "${PACKAGED_KEY}" && ! -L "${PACKAGED_KEY}" ]] || fail "Access signing key missing from archive"
+[[ "$(file_mode "${PACKAGED_KEY}")" == 600 ]] || fail "Access signing key mode is not 0600"
+[[ "$(file_mode "${PACKAGED_KEY%/*}")" == 700 ]] || fail "Access signing key directory mode is not 0700"
+grep -q 'TEST_ONLY_EXPORTED_ACCESS_SIGNING_KEY_32_BYTES' "${PACKAGED_KEY}" || fail "fake CLI key output was not packaged"
+if grep -q 'TEST_ONLY_EXPORTED_ACCESS_SIGNING_KEY_32_BYTES' "${PACKAGED_CONFIG}"; then
+  fail "signing key was inlined into public configuration"
+fi
 if rg --hidden -F "${SENTINEL_ROOT}" "${EXTRACTED}" >/dev/null || \
    rg --hidden -F "${SENTINEL_SSH}" "${EXTRACTED}" >/dev/null || \
    rg --hidden -F "${SENTINEL_CLOUD}" "${EXTRACTED}" >/dev/null; then

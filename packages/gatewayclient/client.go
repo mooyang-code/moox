@@ -179,6 +179,10 @@ func (c *Client) Directory() servicecatalog.Directory {
 	return c.directory.Clone()
 }
 
+// LocalHostID is the identity loaded from this internal client's host gateway
+// configuration. External clients have no local host identity.
+func (c *Client) LocalHostID() string { return c.config.LocalHostID }
+
 func (c *Client) Refresh(ctx context.Context) error {
 	if c.closed.Load() {
 		return net.ErrClosed

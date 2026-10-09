@@ -1,0 +1,8 @@
+gateway_client:
+  caller: access
+  key_id: ""
+  key_file: ../../secrets/caller-access.key
+
+# Admin keys export-access publishes this registry and versioned private keys.
+verification_file: ../../secrets/access/access-verification.json
+nonce_path: ../../data/access/nonces.db

@@ -14,25 +14,27 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	GatewayClient       gatewayclient.FileConfig `yaml:"gateway_client"`
-	sourcePath          string                   `yaml:"-"`
-	SCFRegionBlacklists map[string][]string      `yaml:"scf_region_blacklists"`
-	Database            DatabaseConfig           `yaml:"database"`
-	Storage             StorageConfig            `yaml:"storage"`
-	CollectorRuntime    CollectorRuntimeConfig   `yaml:"collector_runtime"`
-	CollectorRetention  CollectorRetentionConfig `yaml:"collector_retention"`
-	StockCN             StockCNConfig            `yaml:"stockcn"`
-	PeriodReadiness     PeriodReadinessConfig    `yaml:"period_readiness"`
-	KlineResample       KlineResampleConfig      `yaml:"kline_resample"`
-	Health              HealthConfig             `yaml:"health"`
-	DNS                 DNSConfig                `yaml:"dns"`
-	DNSResolver         DNSResolverConfig        `yaml:"dns_resolver"`
+	GatewayClient       gatewayclient.FileConfig         `yaml:"gateway_client"`
+	sourcePath          string                           `yaml:"-"`
+	SCFRegionBlacklists map[string][]string              `yaml:"scf_region_blacklists"`
+	Database            DatabaseConfig                   `yaml:"database"`
+	Storage             StorageConfig                    `yaml:"storage"`
+	SCFAccess           gatewayclient.ExternalFileConfig `yaml:"scf_access"`
+	SCFAccessRoutes     map[string]SCFAccessEndpoint     `yaml:"scf_access_routes"`
+	CollectorRetention  CollectorRetentionConfig         `yaml:"collector_retention"`
+	StockCN             StockCNConfig                    `yaml:"stockcn"`
+	PeriodReadiness     PeriodReadinessConfig            `yaml:"period_readiness"`
+	KlineResample       KlineResampleConfig              `yaml:"kline_resample"`
+	Health              HealthConfig                     `yaml:"health"`
+	DNS                 DNSConfig                        `yaml:"dns"`
+	DNSResolver         DNSResolverConfig                `yaml:"dns_resolver"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -56,19 +58,16 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
 }
 
-// StorageConfig keeps the SCF external target until E2 and the result node ID.
-// Internal Storage calls use GatewayClient and never use these addresses.
+// StorageConfig identifies the node used for collected results.
 type StorageConfig struct {
-	GatewayTarget    string `yaml:"gateway_target"`
 	ResultDataNodeID string `yaml:"result_data_node_id"`
 }
 
-// CollectorRuntimeConfig overrides the native Gateway endpoint used to reach
-// the Collector host that owns MarketFetchRuntime. Both values are required
-// together; Storage routing is never a fallback for runtime claims.
-type CollectorRuntimeConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	NodeID        string `yaml:"node_id"`
+// SCFAccessEndpoint is the fixed endpoint selected for one function region.
+// The publisher supplies private endpoints only after verifying its VPC route.
+type SCFAccessEndpoint struct {
+	Address    string `yaml:"access_address"`
+	InstanceID string `yaml:"access_id"`
 }
 
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
@@ -182,13 +181,10 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.applyEnv()
-	if err := cfg.validateStorageTargets(); err != nil {
-		return nil, err
-	}
 	if err := cfg.validateDNSResolver(); err != nil {
 		return nil, err
 	}
-	if err := cfg.validateCollectorRuntime(); err != nil {
+	if err := cfg.validateSCFAccess(); err != nil {
 		return nil, err
 	}
 	if err := cfg.validateKlineResample(); err != nil {
@@ -206,15 +202,6 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
-		c.Storage.GatewayTarget = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET"); v != "" {
-		c.CollectorRuntime.GatewayTarget = strings.TrimSpace(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_NODE_ID"); v != "" {
-		c.CollectorRuntime.NodeID = strings.TrimSpace(v)
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_RESULT_DATA_NODE_ID"); v != "" {
 		c.Storage.ResultDataNodeID = v
@@ -267,24 +254,26 @@ func (c *Config) applyEnv() {
 	}
 }
 
-func (c *Config) validateStorageTargets() error {
-	if !isStorageTRPCTarget(c.Storage.GatewayTarget) {
-		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
+func (c *Config) validateSCFAccess() error {
+	if c.SCFAccess.Caller != "scf-collector" {
+		return fmt.Errorf("scf_access.caller must be scf-collector")
 	}
-	return nil
-}
-
-func (c *Config) validateCollectorRuntime() error {
-	target := strings.TrimSpace(c.CollectorRuntime.GatewayTarget)
-	nodeID := strings.TrimSpace(c.CollectorRuntime.NodeID)
-	if (target == "") != (nodeID == "") {
-		if target == "" {
-			return fmt.Errorf("collector_runtime.gateway_target and collector_runtime.node_id must be configured together")
+	// Offline Collector configuration can precede Admin credential assignment.
+	if c.SCFAccess.KeyID == "" {
+		return nil
+	}
+	if err := c.SCFAccess.Validate(); err != nil {
+		return fmt.Errorf("scf_access: %w", err)
+	}
+	for region, endpoint := range c.SCFAccessRoutes {
+		if region == "" || region != strings.ToLower(strings.TrimSpace(region)) {
+			return fmt.Errorf("scf_access_routes requires canonical regions")
 		}
-		return fmt.Errorf("collector_runtime.node_id is required when gateway_target is configured")
-	}
-	if target != "" && !isStorageTRPCTarget(target) {
-		return fmt.Errorf("collector_runtime.gateway_target must be a native tRPC target, got %q", target)
+		config := c.SCFAccess
+		config.Address, config.InstanceID = endpoint.Address, endpoint.InstanceID
+		if err := config.Validate(); err != nil {
+			return fmt.Errorf("scf_access_routes[%s]: %w", region, err)
+		}
 	}
 	return nil
 }
@@ -399,11 +388,6 @@ func isPublicResolverIP(ip net.IP) bool {
 		!(first == 203 && second == 0 && third == 113)
 }
 
-func isStorageTRPCTarget(raw string) bool {
-	raw = strings.TrimSpace(strings.ToLower(raw))
-	return raw != "" && !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://")
-}
-
 func validDNSResolverDomain(domain string) bool {
 	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
 		return false
@@ -437,7 +421,8 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", ResultDataNodeID: "storage-node-0"},
+		Storage:   StorageConfig{ResultDataNodeID: "storage-node-0"},
+		SCFAccess: gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
@@ -487,4 +472,23 @@ func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client,
 		return nil, fmt.Errorf("collector gateway client requires a loaded collector configuration")
 	}
 	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
+}
+
+func (c *Config) scfAccessEnvironment(region string) (map[string]string, error) {
+	config := c.SCFAccess
+	if route, ok := c.SCFAccessRoutes[strings.ToLower(strings.TrimSpace(region))]; ok {
+		config.Address, config.InstanceID = route.Address, route.InstanceID
+	}
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("SCF Access configuration: %w", err)
+	}
+	keyPath := config.KeyFile
+	if !filepath.IsAbs(keyPath) {
+		keyPath = filepath.Join(filepath.Dir(c.sourcePath), keyPath)
+	}
+	secret, err := gatewayauth.ReadSigningSecret(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("SCF Access signing key: %w", err)
+	}
+	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret}, nil
 }

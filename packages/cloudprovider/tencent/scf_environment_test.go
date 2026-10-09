@@ -27,11 +27,9 @@ func TestValidateSCFEnvironmentRejectsPrimaryMasterSecret(t *testing.T) {
 
 func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *testing.T) {
 	valid := map[string]string{
-		"MOOX_GATEWAY_CALLER":                     "collector",
+		"MOOX_CALLER": "scf-collector", "MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64),
 		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
-		"MOOX_SPACE_ID":                           "stockcn", "MOOX_CODE_PACKAGE_ID": "collector_dev_00000000-0000-0000-0000-000000000000",
-		"MOOX_GATEWAY_NODE_ID": "storage", "MOOX_GATEWAY_TARGET_NODE": "storage", "MOOX_GATEWAY_SERVICE_KEY_ID": "collector", "MOOX_GATEWAY_SERVICE_SECRET_KEY": "private-test-secret",
-		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://storage.example:11003", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11004", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "collector",
+		"MOOX_SPACE_ID": "stockcn", "MOOX_CODE_PACKAGE_ID": "collector_dev_00000000-0000-0000-0000-000000000000",
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic", "MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
 		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret", "MOOX_EVENTBUS_NATS_TLS_CA_FILE": "certs/eventbus-ca.pem",
 	}
@@ -50,14 +48,12 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 	for key, value := range valid {
 		invoke[key] = value
 	}
-	delete(invoke, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
-	delete(invoke, "MOOX_COLLECTOR_GATEWAY_TARGET_NODE")
 	invoke["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
 	if err := ValidateCollectorMarketFetchEnvironment(invoke); err != nil {
-		t.Fatalf("Invoke has its own timeout and no Claim route: %v", err)
+		t.Fatalf("Invoke has its own timeout and shares Access: %v", err)
 	}
-	if err := ValidateCollectorTimerEnvironment(invoke); err == nil {
-		t.Fatal("Timer must still require its Claim route")
+	if err := ValidateCollectorTimerEnvironment(invoke); err != nil {
+		t.Fatalf("Timer shares the same Access connection: %v", err)
 	}
 	for _, test := range []struct {
 		name, appKeys string
@@ -103,12 +99,12 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 		})
 	}
 	for _, test := range []struct{ key, value string }{
-		{"MOOX_GATEWAY_CALLER", "strategy"},
+		{"MOOX_CALLER", "collector"},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{}`}, {"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"short"}`},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("g", 64) + `"}`},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`},
-		{"MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://localhost:11003"}, {"MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector.example:0"},
-		{"MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector.example:11004/path"}, {"MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "bad node"},
+		{"MOOX_ACCESS_ADDRESS", "localhost:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:0"}, {"MOOX_ACCESS_ADDRESS", "ip://storage.example:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:11004/path"},
+		{"MOOX_ACCESS_ID", "storage"}, {"MOOX_ACCESS_ID", "access@bad_node"}, {"MOOX_CALLER_KEY_ID", "bad key"}, {"MOOX_CALLER_KEY_ID", ""}, {"MOOX_CALLER_KEY", "short"}, {"MOOX_CALLER_KEY", strings.Repeat("a", 4097)}, {"MOOX_CALLER_KEY", strings.Repeat("a", 32) + "\n"},
 		{"MOOX_EVENTBUS_NATS_URL", "nats://eventbus.example:4222"}, {"MOOX_CLS_ENABLED", "false"}, {"MOOX_CLS_TIMEOUT_MS", "invalid"}, {"MOOX_EVENTBUS_NATS_TLS_CA_FILE", "/tmp/ca.pem"},
 	} {
 		t.Run("invalid "+test.key+" "+test.value, func(t *testing.T) {
@@ -121,5 +117,20 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 				t.Fatalf("invalid %s must fail closed", test.key)
 			}
 		})
+	}
+}
+
+func TestCollectorAccessPublicationRemovesInternalGatewayCredentials(t *testing.T) {
+	for _, key := range collectorInternalGatewayEnvironmentKeys {
+		values := map[string]string{key: "private-internal-test-value", "MOOX_CALLER_KEY": strings.Repeat("a", 64), "MOOX_CLS_SECRET_KEY": "preserve-cls-key"}
+		if err := ValidateCollectorMarketFetchEnvironment(values); err == nil || !strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "private-internal-test-value") {
+			t.Fatalf("internal field %s must be rejected without disclosure: %v", key, err)
+		}
+		if !RemoveCollectorInternalGatewayEnvironment(values) || RemoveCollectorInternalGatewayEnvironment(values) {
+			t.Fatalf("internal field %s was not removed exactly once", key)
+		}
+		if len(values) != 2 || values["MOOX_CLS_SECRET_KEY"] != "preserve-cls-key" || values["MOOX_CALLER_KEY"] != strings.Repeat("a", 64) {
+			t.Fatalf("removing %s changed unrelated credentials", key)
+		}
 	}
 }

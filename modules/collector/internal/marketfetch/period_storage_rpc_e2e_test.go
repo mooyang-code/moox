@@ -35,6 +35,7 @@ import (
 	storagegen "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	accesskit "github.com/mooyang-code/moox/packages/gatewayclient/testkit"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -45,6 +46,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
@@ -129,9 +131,11 @@ func TestPeriodStorageRPCE2E(t *testing.T) {
 
 	secret := periodE2ERandomHex(t, 32)
 	gatewayTarget := startPeriodStorageGateway(t, ctx, root, gatewayBinary, ready, secret)
+	configurePeriodAccess(t, gatewayBinary, stripPeriodE2EURL(t, ready.PrimaryTarget), "", secret)
 	configurePeriodE2EClients(t, root, ready, secret)
+	t.Setenv("MOOX_PERIOD_E2E_PRIMARY_TARGET", ready.PrimaryTarget)
 
-	storage, err := marketstorage.NewBatchStorageWithWriteSource(gatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(gatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	metadata, err := periodMetadataClient(gatewayTarget, marketstorage.InstTypeSPOT)
 	require.NoError(t, err)
@@ -645,7 +649,7 @@ func runPeriodMetadataDualProviderRPCE2E(t *testing.T, ctx context.Context, targ
 		providers[entry.Provider] = true
 	}
 	require.Equal(t, map[string]bool{"binance": true, "okx": true}, providers)
-	storage, err := marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	expectation := periodE2EStorageExpectation(snapshot, deadline)
 	_, err = storage.EnsureDatasetPeriod(ctx, expectation)
@@ -708,10 +712,12 @@ func runPeriodFailureReporterRPCE2E(t *testing.T, ctx context.Context, root, tar
 		PeriodFailureReportState: domain.PeriodFailureReportPending,
 	}
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &retry))
-	newStorage := func(target, market, source string) (marketfetch.Storage, error) {
-		return marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, source)
+	newStorage := func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(target, marketstorage.InstTypeSPOT, source)
 	}
-	unreachable := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), newStorage, unusedPeriodE2ETarget(t), ready.SpaceID)
+	unreachable := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(unusedPeriodE2ETarget(t), market, source)
+	}, ready.SpaceID)
 	require.Error(t, unreachable.RunOnce(ctx, ready.SpaceID))
 	pending, err := db.FetchRetries().Get(ctx, ready.SpaceID, retry.RetryKey)
 	require.NoError(t, err)
@@ -719,7 +725,7 @@ func runPeriodFailureReporterRPCE2E(t *testing.T, ctx context.Context, root, tar
 	require.NotEmpty(t, pending.PeriodFailureLastError)
 	// Restore the actual Gateway client, not a success stub. The single response
 	// contains a replayed receipt and a first-after-deadline receipt.
-	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), newStorage, target, ready.SpaceID)
+	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), newStorage, ready.SpaceID)
 	require.NoError(t, reporter.RunOnce(ctx, ready.SpaceID))
 	settled, err := db.FetchRetries().Get(ctx, ready.SpaceID, retry.RetryKey)
 	require.NoError(t, err)
@@ -870,13 +876,13 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 		}, nil
 	}
 	invoker := &periodE2EInvoke{handler: handler, results: make(chan error, 5), ctx: ctx}
-	newStorage := func(target, market, source string) (marketfetch.Storage, error) {
-		return marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, source)
+	newStorage := func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(target, marketstorage.InstTypeSPOT, source)
 	}
 	scheduler := &marketfetch.Scheduler{
 		SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), Instances: db.TaskInstances(), Retries: db.FetchRetries(),
 		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(),
-		Symbols: periodDatasetSource(target), Invoker: invoker, Storage: newStorage, StorageTarget: target,
+		Symbols: periodDatasetSource(target), Invoker: invoker, Storage: newStorage,
 		// Separate initial batches isolate the real provider session guard: an
 		// ETH timeout should not turn the healthy BTC acquisition into a retry.
 		BatchSize: 1, InvokeConcurrency: 1, MaxRetryAttempts: 3, Now: func() time.Time { return now },
@@ -967,7 +973,7 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 		counts[(<-provider.requests).SubjectID]++
 	}
 	require.Equal(t, map[string]int{"BTC-USDT": 1, "ETH-USDT": 4}, counts, "BTC is successful once; ETH executes initial plus exactly three retries")
-	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), newStorage, target, ready.SpaceID)
+	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), newStorage, ready.SpaceID)
 	require.NoError(t, reporter.RunOnce(ctx, ready.SpaceID))
 	retry, err := db.FetchRetries().Get(ctx, ready.SpaceID, retryKey)
 	require.NoError(t, err)
@@ -977,7 +983,7 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	})
 	require.NoError(t, err)
 	require.True(t, found)
-	storage, err := marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	expectation := periodE2EStorageExpectation(snapshot, time.Time{})
 	expectation.Frequency = ready.Frequency
@@ -1017,7 +1023,7 @@ func periodE2ESnapshot(expectation *storagegen.DatasetPeriodExpectation) domain.
 func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target string, ready periodE2EStorageReady, clock time.Time) {
 	t.Helper()
 	db := openPeriodE2EDB(t, filepath.Join(root, "period-cleanup.db"))
-	storage, err := marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	period := clock.Add(-40 * 24 * time.Hour)
 	deadline := clock.Add(time.Hour)
@@ -1052,7 +1058,7 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	}
 	_, err = storage.GetDatasetPeriodStatus(ctx, missing)
 	require.Error(t, err, "status query must not create a missing period")
-	unreachable, err := marketstorage.NewBatchStorageWithWriteSource(unusedPeriodE2ETarget(t), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	unreachable, err := periodBatchStorage(unusedPeriodE2ETarget(t), marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	networkReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), unreachable, ready.SpaceID)
 	counts, err = networkReconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
@@ -1111,9 +1117,9 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	_, retained, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(waiting).Key)
 	require.NoError(t, err)
 	require.True(t, retained)
-	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), func(target, market, source string) (marketfetch.Storage, error) {
-		return marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, source)
-	}, target, ready.SpaceID)
+	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(target, marketstorage.InstTypeSPOT, source)
+	}, ready.SpaceID)
 	require.NoError(t, reporter.RunOnce(ctx, ready.SpaceID))
 	settled, err := db.FetchRetries().Get(ctx, ready.SpaceID, unresolved.RetryKey)
 	require.NoError(t, err)
@@ -1243,7 +1249,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	deadline := time.Now().UTC().Truncate(time.Second).Add(30 * time.Minute)
 	ensureStorage := func(ensureCtx context.Context, current domain.PeriodSeriesSnapshot) (domain.PeriodStorageState, error) {
 		expectation := periodE2EStorageExpectation(current, deadline)
-		storage, storageErr := marketstorage.NewBatchStorageWithWriteSource(storageGatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
+		storage, storageErr := periodBatchStorage(storageGatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 		if storageErr != nil {
 			return domain.PeriodStorageState{}, storageErr
 		}
@@ -1385,9 +1391,6 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", oldestManifest.BindingHash)
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", collectorGatewayTarget)
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", periodE2EGatewayNodeID+"-runtime")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", storageGatewayTarget)
 	t.Setenv("MOOX_FETCH_TIMEOUT_SECONDS", "60")
 	t.Setenv("MOOX_FETCH_STORAGE_TIMEOUT_MS", "5000")
 	t.Setenv("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", "1")
@@ -1434,7 +1437,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	}, 10*time.Second, 50*time.Millisecond, "second Timer completion must reconcile the next oldest period")
 	oldPeriodExpectation := periodE2EStorageExpectation(olderPlan.Snapshot, deadline)
 	latestPeriodExpectation := periodE2EStorageExpectation(latestPlan.Snapshot, deadline)
-	periodState, err := marketstorage.NewBatchStorageWithWriteSource(storageGatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	periodState, err := periodBatchStorage(storageGatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	oldStatus, err := periodState.GetDatasetPeriodStatus(ctx, oldPeriodExpectation)
 	require.NoError(t, err)
@@ -1569,11 +1572,15 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	t.Log("SCENARIO PASS timer-expired-unclaimed-recovery")
 	storageCreated := 0
 	newStorage := handler.NewStorage
-	handler.NewStorage = func(target, market, source string) (marketfetch.Storage, error) {
+	handler.NewStorage = func(market, source string) (marketfetch.Storage, error) {
 		storageCreated++
-		return newStorage(target, market, source)
+		return nil, fmt.Errorf("writer must not be constructed after an unreachable Claim")
 	}
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", unusedPeriodE2ETarget(t))
+	accessHost, _, err := net.SplitHostPort(os.Getenv("MOOX_ACCESS_ADDRESS"))
+	require.NoError(t, err)
+	_, unusedPort, err := net.SplitHostPort(stripPeriodE2EURL(t, unusedPeriodE2ETarget(t)))
+	require.NoError(t, err)
+	t.Setenv("MOOX_ACCESS_ADDRESS", net.JoinHostPort(accessHost, unusedPort))
 	unreachableResponse, err := handler.HandleTimerAt(ctx, "stockcn-period-e2e-unreachable", function, clockNow)
 	require.True(t, err != nil || unreachableResponse != nil && !unreachableResponse.Success, "Claim transport failure cannot return a successful worker response")
 	if unreachableResponse != nil {
@@ -1602,7 +1609,7 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 	require.NoError(t, err)
 	plan.Task = *task
 	plan.TaskModifyTime = task.ModifyTime
-	storage, err := marketstorage.NewBatchStorageWithWriteSource(storageTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(storageTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	planner := &marketfetch.TimerPeriodPlanner{
 		Snapshots: db.PeriodSeriesSnapshot(), States: db.PeriodStorageStates(), Batches: db.TimerPeriodBatches(), Now: time.Now,
@@ -1618,7 +1625,7 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 	require.True(t, planned)
 	manifest, err := db.TimerPeriodBatches().GetByPeriod(ctx, plan.Snapshot.Key, 0)
 	require.NoError(t, err)
-	runtimeTarget := startPeriodCollectorRuntimeE2E(t, ctx, root, gatewayBinary, secret, db)
+	startPeriodCollectorRuntimeE2E(t, ctx, root, gatewayBinary, secret, db)
 	bus := configurePeriodE2EEventBus(t)
 	completionCtx, cancel := context.WithCancel(ctx)
 	done, err := marketfetch.StartCompletionConsumerWithDone(completionCtx, ready.StockSpaceID, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil)
@@ -1637,7 +1644,6 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 			t.Error("publish-recovery Completion consumer did not stop")
 		}
 	})
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", runtimeTarget)
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", manifest.BindingHash)
 	busURL := os.Getenv("MOOX_EVENTBUS_NATS_URL")
 	// Fail the actual JetStream publisher's transport, not a replacement Publish
@@ -1665,7 +1671,7 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 	now := initial.DeadlineAt.Add(time.Second)
 	scheduler := &marketfetch.Scheduler{
 		SpaceID: ready.StockSpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Instances: db.TaskInstances(),
-		Invoker: invoker, StorageTarget: storageTarget, InvokeNonRealtimeOnly: true, InvokeConcurrency: 1, MaxRetryAttempts: 3, Now: func() time.Time { return now },
+		Invoker: invoker, InvokeNonRealtimeOnly: true, InvokeConcurrency: 1, MaxRetryAttempts: 3, Now: func() time.Time { return now },
 	}
 	require.NoError(t, scheduler.Tick(ctx, ready.StockSpaceID))
 	var timedOut *domain.BatchInvocation
@@ -1905,6 +1911,7 @@ func startPeriodCollectorRuntimeE2E(t *testing.T, ctx context.Context, root, gat
 	parsed, err := url.Parse(target)
 	require.NoError(t, err)
 	require.Equal(t, "ip", parsed.Scheme)
+	configurePeriodAccess(t, gatewayBinary, stripPeriodE2EURL(t, os.Getenv("MOOX_PERIOD_E2E_PRIMARY_TARGET")), listener.Addr().String(), secret)
 	return target
 }
 
@@ -1985,4 +1992,37 @@ func periodMetadataClient(target, instType string) (*marketstorage.ResampleMetad
 func periodDatasetSource(target string) *storagesource.DatasetSource {
 	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.CredentialsFromEnv())
 	return storagesource.NewDatasetSource(storagegen.NewMetadataClientProxy(options...))
+}
+
+// periodNativeGateway is the explicit signed boundary for the existing period
+// fixture. It neither discovers production routes nor retries writes.
+type periodNativeGateway struct{ target, host string }
+
+func (g periodNativeGateway) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	ctx, message := codec.WithNewMessage(ctx)
+	defer codec.PutBackMessage(message)
+	message.WithClientRPCName("/" + service + "/" + method)
+	message.WithCalleeServiceName(service)
+	message.WithCalleeMethod(method)
+	options := gatewayauth.NewTRPCClientOptions(g.target, g.host, gatewayauth.CredentialsFromEnv())
+	options = append(options, client.WithServiceName(service), client.WithCalleeMethod(method))
+	return client.DefaultClient.Invoke(ctx, req, rsp, options...)
+}
+func periodBatchStorage(target, market, source string) (marketstorage.BatchStorage, error) {
+	return marketstorage.NewGatewayBatchStorage(periodNativeGateway{target: target, host: periodE2EGatewayNodeID}, market, source)
+}
+
+func configurePeriodAccess(t *testing.T, gatewayBinary, storageAddress, runtimeAddress, secret string) {
+	t.Helper()
+	credential := gatewayauth.Credentials{Caller: "scf-collector", KeyID: "assigned-scf-period-73", Secret: secret}
+	fixture := accesskit.StartAccess(t, accesskit.AccessOptions{
+		AccessBinary: requirePeriodE2EFile(t, "MOOX_PERIOD_E2E_ACCESS_BINARY"), GatewayBinary: gatewayBinary,
+		HostID: periodE2EGatewayNodeID, StorageAddress: storageAddress, RuntimeAddress: runtimeAddress,
+		ExternalCredentials: []gatewayauth.Credentials{credential}, SCF: true,
+	})
+	t.Setenv("MOOX_ACCESS_ADDRESS", fixture.Address)
+	t.Setenv("MOOX_ACCESS_ID", fixture.InstanceID)
+	t.Setenv("MOOX_CALLER", credential.Caller)
+	t.Setenv("MOOX_CALLER_KEY_ID", credential.KeyID)
+	t.Setenv("MOOX_CALLER_KEY", credential.Secret)
 }

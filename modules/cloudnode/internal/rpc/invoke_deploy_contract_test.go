@@ -44,14 +44,12 @@ func TestMarketFetcherPackageWorkloadIdentityCannotBypassTimerContract(t *testin
 
 func completeInvokeEnvironment(timeout string) map[string]string {
 	env := completeTimerEnvironment()
-	delete(env, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
-	delete(env, "MOOX_COLLECTOR_GATEWAY_TARGET_NODE")
 	env["MOOX_FETCH_TIMEOUT_SECONDS"] = timeout
 	return env
 }
 
 func TestMarketFetcherInvokeCreateRejectsIncompleteBasicEnvironmentBeforeCloudAPI(t *testing.T) {
-	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_GATEWAY_CALLER"} {
+	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_CALLER"} {
 		t.Run(key, func(t *testing.T) {
 			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
@@ -73,17 +71,15 @@ func TestMarketFetcherInvokeDeployValidatesBasicEnvironmentWithoutTimerRules(t *
 	}{
 		{"missing appkeys", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "", true},
 		{"missing EventBus", "MOOX_EVENTBUS_NATS_PASSWORD", "", true},
-		{"missing caller", "MOOX_GATEWAY_CALLER", "", true},
-		{"wrong caller", "MOOX_GATEWAY_CALLER", "strategy", true},
-		{"valid Invoke needs no Claim route or Timer timeout", "", "", false},
+		{"missing caller", "MOOX_CALLER", "", true},
+		{"wrong caller", "MOOX_CALLER", "strategy", true},
+		{"valid Invoke shares Access without Timer timeout", "", "", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
 			require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
 			env := completeTimerEnvironment()
-			delete(env, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
-			delete(env, "MOOX_COLLECTOR_GATEWAY_TARGET_NODE")
 			env["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
 			if test.key != "" {
 				env[test.key] = test.value

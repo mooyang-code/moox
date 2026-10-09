@@ -10,8 +10,7 @@ import (
 	"time"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
 const timerClaimTimeout = 3 * time.Second
@@ -20,20 +19,21 @@ type TimerRuntimeClient interface {
 	ClaimTimerBatch(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error)
 }
 
-type timerRuntimeRPCClient struct {
-	proxy collectorpb.MarketFetchRuntimeClientProxy
-}
+type timerRuntimeRPCClient struct{ gateway gatewayclient.Invoker }
 
-func newTimerRuntimeRPCClient(target, nodeID string) TimerRuntimeClient {
-	options := gatewayauth.NewTRPCClientOptions(target, nodeID, gatewayauth.CredentialsFromEnv())
-	return &timerRuntimeRPCClient{proxy: collectorpb.NewMarketFetchRuntimeClientProxy(options...)}
+func newTimerRuntimeRPCClient(gateway gatewayclient.Invoker) TimerRuntimeClient {
+	return &timerRuntimeRPCClient{gateway: gateway}
 }
 
 func (c *timerRuntimeRPCClient) ClaimTimerBatch(ctx context.Context, request *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("collector runtime client is not configured")
 	}
-	return c.proxy.ClaimTimerBatch(ctx, request, client.WithTimeout(timerClaimTimeout))
+	response := new(collectorpb.ClaimTimerBatchRsp)
+	if err := c.gateway.Invoke(ctx, "trpc.moox.collector.MarketFetchRuntime", "ClaimTimerBatch", request, response); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func claimTimerRequest(ctx context.Context, client TimerRuntimeClient, invocation TimerInvocation) (Request, bool, error) {

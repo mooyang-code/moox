@@ -41,7 +41,7 @@ func TestHandlerRoutesTimerToClaimedMarketFetch(t *testing.T) {
 				TimerRuntimeClient: serverlessTimerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
 					return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: claimed}, nil
 				}),
-				NewStorage: func(string, string, string) (marketfetch.Storage, error) {
+				NewStorage: func(string, string) (marketfetch.Storage, error) {
 					return timerStorage{}, nil
 				},
 				Publish: func(context.Context, marketfetch.Request, proto.Message) error { return nil },
@@ -78,12 +78,12 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 
 	published := 0
 	var observed marketfetch.Request
-	var observedStorageTarget string
+	var observedMarket string
 	handler := &Handler{
 		NewMarketFetch: func() *marketfetch.Handler {
 			return &marketfetch.Handler{
-				NewStorage: func(target, _, _ string) (marketfetch.Storage, error) {
-					observedStorageTarget = target
+				NewStorage: func(market, _ string) (marketfetch.Storage, error) {
+					observedMarket = market
 					return timerStorage{}, nil
 				},
 				Publish: func(_ context.Context, request marketfetch.Request, _ proto.Message) error {
@@ -110,7 +110,7 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	require.NoError(t, json.Unmarshal(rawReq, &data))
 	raw, err := json.Marshal(model.CloudFunctionEvent{
 		Action: model.EventActionMarketFetch, Source: model.EventSourceCollectorScheduler,
-		RequestID: "request-shared", StorageRPCGatewayTarget: "ip://storage:11003", Data: data,
+		RequestID: "request-shared", Data: data,
 	})
 	require.NoError(t, err)
 	response, err := handler.HandleRequest(context.Background(), raw)
@@ -118,7 +118,7 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	require.True(t, response.(*model.Response).Success)
 	require.Equal(t, 1, published, "durable scheduler invokes must publish BatchCompleted")
 	require.Equal(t, "batch-shared", observed.BatchID)
-	require.Equal(t, "ip://storage-runtime:12004", observedStorageTarget, "SCF runtime routing must override stale scheduler payloads")
+	require.Equal(t, "spot", observedMarket)
 }
 
 func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {

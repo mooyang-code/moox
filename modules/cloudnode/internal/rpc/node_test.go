@@ -486,10 +486,6 @@ func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-0", Metadata: `{"biz_type":"market_fetcher","handler":"main"}`,
 	}))
 	remote := completeInvokeEnvironment("15")
-	remote["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = "ip://collector.example:11004"
-	remote["MOOX_COLLECTOR_NODE_ID"] = "collector-node"
-	remote["MOOX_RPC_SERVICE_ID"] = "moox-collector"
-	remote["MOOX_RPC_SERVICE_SECRET"] = "private-test-secret"
 	fake := &fakeSCFClient{currentEnvironment: remote}
 	svc := &Service{
 		catalog:            catalog,
@@ -580,7 +576,7 @@ func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *tes
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
 	}))
 	environment := completeTimerEnvironment()
-	delete(environment, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	delete(environment, "MOOX_ACCESS_ADDRESS")
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{
 		catalog:            catalog,
@@ -591,7 +587,7 @@ func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *tes
 		NodeId: "timer-node", ManagedEnvironment: map[string]string{"MOOX_MARKET_FETCH_BINDING_HASH": "binding"},
 		TimerCron: "0 * * * * * *", TimerEnabled: true,
 	})
-	require.ErrorContains(t, err, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	require.ErrorContains(t, err, "MOOX_ACCESS_ADDRESS")
 	require.Empty(t, fake.configured, "invalid runtime dependencies must be rejected before updating configuration")
 	require.Zero(t, fake.timerEnsures, "invalid runtime dependencies must not enable the Timer trigger")
 }
@@ -609,11 +605,12 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "80"
 	environment["MOOX_MARKET_FETCH_SUBJECTS"] = strings.Repeat("old-subject|", 80)
 	environment["MOOX_EVENTBUS_NATS_PASSWORD"] = "keep-password"
+	environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] = "remove-internal-key"
 	environment["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
-		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "80", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11002", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "control-a", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "80", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_ACCESS_ADDRESS": "access.example:11004", "MOOX_ACCESS_ID": "access@control-a", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-18", "MOOX_CALLER_KEY": strings.Repeat("b", 64), "MOOX_FETCH_TIMEOUT_SECONDS": "60",
 	}}
 	require.Nil(t, svc.preflightRuntimeConfig(context.Background(), "stockcn", patch))
 	_, err := svc.executeRuntimeConfigItem(context.Background(), "stockcn", patch)
@@ -621,12 +618,15 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	require.Len(t, fake.configured, 1)
 	require.EqualValues(t, 60, fake.configured[0].Timeout)
 	require.Equal(t, "keep-password", fake.currentEnvironment["MOOX_EVENTBUS_NATS_PASSWORD"])
+	require.NotContains(t, fake.currentEnvironment, "MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	require.NotContains(t, fake.currentEnvironment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	require.NotContains(t, fake.currentEnvironment, "MOOX_MARKET_FETCH_SUBJECTS")
 	node, err := catalog.GetNode(context.Background(), "stockcn", "timer-node")
 	require.NoError(t, err)
-	require.Contains(t, node.Metadata, "collector_rpc_gateway_target")
+	require.Contains(t, node.Metadata, `"access_address":"access.example:11004"`)
+	require.Contains(t, node.Metadata, `"access_key_id":"assigned-scf-key-18"`)
+	require.NotContains(t, node.Metadata, strings.Repeat("b", 64))
 	require.Contains(t, node.Metadata, `"timeout_seconds":60`, "later redeploys must not restore the legacy catalog timeout")
 	require.Contains(t, node.Metadata, `"assignment_count":80`, "the assignment readback must persist the verified subject count")
 }

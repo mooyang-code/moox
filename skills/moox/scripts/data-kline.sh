@@ -7,8 +7,8 @@ CONFIG="${SKILL_ROOT}/config/data-access.yaml"
 
 for arg in "$@"; do
   case "${arg}" in
-    --config|--config=*)
-      echo "caller must not override --config" >&2
+    --config|--config=*|--file|--file=*)
+      echo "caller must not override packaged configuration" >&2
       exit 2
       ;;
   esac
@@ -39,4 +39,4 @@ if [[ "${config_mode}" != 600 ]]; then
   exit 1
 fi
 
-exec "${CLI}" data kline get --config "${CONFIG}" "$@"
+exec "${CLI}" data skill kline get --config "${CONFIG}" "$@"

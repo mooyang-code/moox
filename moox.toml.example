@@ -338,21 +338,19 @@ region_blacklist = ["ap-guangzhou"]
 # 被禁地域的 function_count 必须为 0；总容量在允许的地域中分配。
 # 南京承载现货和 Storage 同地域私网；香港承载 Binance 合约（国内 SCF 到不了 fapi）。
 timer_function_count = 80
-# Timer 先向 Collector Claim 冻结批次，再访问独立配置的 Storage 数据面。
-collector_rpc_gateway_target = "ip://203.0.113.11:11003"
-collector_gateway_target_node = "control"
-storage_gateway_node_id = "control"
-storage_gateway_host = "203.0.113.11"
-# storage_gateway_host 是跨地域回源和故障回退地址；同地域 SCF 会自动使用
-# storage_private_gateway_host 与 Storage VPC/子网。不要手工把私网地址写入公网字段。
+# Timer 用同一个 Access 连接向 Collector Claim 冻结批次，再写入 Storage 周期账本。
+access_id = "access@storage"
+access_host = "203.0.113.11"
+# access_host 是跨地域回源和故障回退地址；同地域 SCF 会自动使用
+# access_private_host 与 Storage VPC/子网。不要手工把私网地址写入公网字段。
 # 可选：填写 Storage 当前私网 IP 作为提示；CLI 仍以腾讯云实例发现结果为准。
-# storage_private_gateway_host = "10.0.0.5"
-# 可选：按 SCF 地域接入本地无状态 Storage Access；未配置的地域继续回退到
-# storage_gateway_host / storage_private_gateway_host。
-# storage_access_targets = { ap-nanjing = "ip://203.0.113.11:11004", ap-hongkong = "ip://203.0.113.12:12004" }
-# 可选：为每个 Access 入口配置独立 Gateway target node，避免不同地域的
-# nonce/replay 语义互相混用；未配置的地域回退到 storage_gateway_node_id。
-# storage_access_target_nodes = { ap-nanjing = "access-nanjing", ap-hongkong = "access-hongkong" }
+# access_private_host = "10.0.0.5"
+# 可选：按 SCF 地域配置固定 Access 入口；未配置的地域继续回退到
+# access_host / access_private_host。
+# access_addresses = { ap-nanjing = "203.0.113.11:11004", ap-hongkong = "203.0.113.12:12004" }
+# 可选：填写每个入口实际的 access@host 身份；KeyID 由 Admin 分配。
+# 未配置的地域回退到 access_id。
+# access_ids = { ap-nanjing = "access@access-nanjing", ap-hongkong = "access@access-hongkong" }
 memory_size = 64
 timeout_seconds = 60
 # Timer and Invoke both reserve time for Storage and durable Completion.
@@ -364,7 +362,6 @@ catchup_bar_limit = 1000
 max_inflight_requests = 10
 request_timeout_ms = 2000
 http_max_attempts = 4
-storage_max_attempts = 1
 storage_timeout_ms = 5000
 max_retry_attempts = 3
 retry_delays = ["5s", "30s", "2m"]
@@ -410,11 +407,9 @@ function_prefix = "moox-fetcher-stockcn"
 timer_function_count = 170
 # 单个 stockcn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
 measured_safe_group_size = 40
-storage_gateway_node_id = "control"
-collector_rpc_gateway_target = "ip://203.0.113.11:11003"
-collector_gateway_target_node = "control"
-storage_gateway_host = "203.0.113.11"
-# Storage 同地域的 SCF 自动使用私网 VPC 路径；跨地域自动回退到 storage_gateway_host。
+access_id = "access@storage"
+access_host = "203.0.113.11"
+# Storage 同地域的 SCF 自动使用私网 VPC 路径；跨地域自动回退到 access_host。
 memory_size = 64
 timeout_seconds = 60
 # 仅 Invoke 辅助函数使用该独立超时。
@@ -426,7 +421,6 @@ catchup_bar_limit = 1000
 max_inflight_requests = 10
 request_timeout_ms = 2000
 http_max_attempts = 4
-storage_max_attempts = 1
 storage_timeout_ms = 5000
 max_retry_attempts = 3
 retry_delays = ["5s", "30s", "2m"]
@@ -459,7 +453,7 @@ function_count = 0
 
 # 腾讯云主机将 provider 设为 tencent。CLI 会从 storage_host 发现 Storage 的
 # 地域、VPC、子网和私网地址；同地域 SCF 绑定该 VPC，跨地域不创建 CCN 而走
-# storage_gateway_host。SSH 和控制台入口仍使用主机公网地址。
+# access_host。SSH 和控制台入口仍使用主机公网地址。
 # 操作说明见 skills/moox/references/private-network.md。
 [hosts."203.0.113.10"]
   port = 22

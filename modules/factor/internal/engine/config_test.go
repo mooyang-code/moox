@@ -9,14 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const minimalEngineConfig = `manager:
-  url: https://control.example:11001
-  node_id: control
-  hmac_key_file: ./secrets/gateway-factor-engine.key
-storage:
-  gateway_target: ip://storage.example:11004
-  gateway_node_id: access-storage
-  hmac_key_file: ./secrets/access-factor-engine.key
+const minimalEngineConfig = `gateway_client:
+  access_address: storage.example:11004
+  access_id: access@storage
+  caller: factor-engine
+  key_id: assigned-factor-engine-47
+  key_file: ../secrets/access-factor-engine.key
 eventbus:
   urls: [tls://control.example:4222]
 `
@@ -42,9 +40,9 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, time.Minute, cfg.CatalogSync.Interval)
 	require.Equal(t, 45*time.Second, cfg.CatalogSync.Offset)
 	require.Equal(t, filepath.Join(root, "data/engine/catalog.json"), cfg.CatalogSync.StateFile)
-	require.Equal(t, filepath.Join(root, "secrets/gateway-factor-engine.key"), cfg.Manager.HMACKeyFile)
-	require.Equal(t, "factor-engine", cfg.Manager.KeyID)
-	require.Equal(t, "factor-engine", cfg.Storage.KeyID)
+	require.Equal(t, "../secrets/access-factor-engine.key", cfg.GatewayClient.KeyFile)
+	require.Equal(t, "assigned-factor-engine-47", cfg.GatewayClient.KeyID)
+	require.Equal(t, filepath.Join(root, "secrets/storage-primary-auth.secret"), cfg.Storage.AuthSecretFile)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
 	require.Equal(t, filepath.Join(root, "pyworker/worker.py"), cfg.Python.WorkerPath)
 }
@@ -54,10 +52,9 @@ func TestEngineConfigRejectsDatabaseSection(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestEngineConfigRequiresManagerAndStorageTargets(t *testing.T) {
+func TestEngineConfigRequiresCompleteExternalGateway(t *testing.T) {
 	_, err := Load(writeEngineConfig(t, "eventbus:\n  urls: [nats://127.0.0.1:4222]\n"))
-	require.ErrorContains(t, err, "manager.url")
-	require.ErrorContains(t, err, "storage.gateway_target")
+	require.ErrorContains(t, err, "access address")
 }
 
 func TestEngineConfigRejectsOffsetNotLessThanInterval(t *testing.T) {

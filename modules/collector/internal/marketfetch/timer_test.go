@@ -20,22 +20,13 @@ func TestTimerRequestFromEnvBuildsClaimWithoutUsingLegacyMembership(t *testing.T
 		SpaceId: "stockcn", FunctionName: "function-1", RequestId: "request-1",
 		GroupId: 3, GroupCount: 200, BindingHash: "binding-hash", TickTime: 1785805323,
 	}, invocation.Claim)
-	require.Equal(t, "runtime.local:11003", invocation.RuntimeGatewayTarget)
-	require.Equal(t, "collector-node", invocation.RuntimeGatewayNodeID)
-	require.Equal(t, "storage.local:11003", invocation.StorageGatewayTarget)
 	require.NotContains(t, invocation.Claim.String(), "stale-subject")
 }
 
 func TestTimerRequestFromEnvRequiresCompleteRuntimeIdentity(t *testing.T) {
 	setTimerClaimEnvironment(t)
-	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "")
-	_, err := TimerRequestFromEnv("request-1", "function-1", time.Now())
+	_, err := TimerRequestFromEnv("", "function-1", time.Now())
 	require.ErrorContains(t, err, "claim identity is incomplete")
-
-	setTimerClaimEnvironment(t)
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "")
-	_, err = TimerRequestFromEnv("request-1", "function-1", time.Now())
-	require.ErrorContains(t, err, "runtime gateway target and node are required")
 }
 
 func TestTimerRequestFromEnvRejectsOutOfRangeGroup(t *testing.T) {

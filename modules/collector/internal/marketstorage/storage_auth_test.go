@@ -11,6 +11,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -78,8 +79,8 @@ func TestStorageRuntimeAuthMissingBindingAppIDFailsBeforeProxy(t *testing.T) {
 func assertStorageAuthConstructorsFailBeforeProxy(t *testing.T) {
 	t.Helper()
 	access := &authPeriodClient{}
-	proxyCalls := installAuthProxyFactories(t, access)
-	writer, err := NewBatchStorageWithWriteSource("ip://127.0.0.1:11003", InstTypeSPOT, "test")
+	gateway := storageGatewayFunc(func(context.Context, string, string, any, any) error { access.calls++; return nil })
+	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "test")
 	require.Error(t, err)
 	require.Nil(t, writer)
 	metadata, err := NewGatewayResampleMetadataClient(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
@@ -93,7 +94,6 @@ func assertStorageAuthConstructorsFailBeforeProxy(t *testing.T) {
 	require.Nil(t, auth)
 	require.NotContains(t, err.Error(), "host-test-secret")
 	require.NotContains(t, err.Error(), "private-test-value")
-	require.Zero(t, *proxyCalls, "credential errors must be raised before constructing a proxy")
 	require.Zero(t, access.calls, "invalid credentials must never reach Storage")
 }
 
@@ -103,8 +103,27 @@ func TestStorageRuntimeManagedAuthCompletesPeriodRPC(t *testing.T) {
 	t.Setenv(storageAppKeysEnv, `{"other":"`+strings.Repeat("b", 64)+`","moox-collector":"`+key+`"}`)
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "host-test-secret")
 	access := &authPeriodClient{t: t, wantKey: key}
-	installAuthProxyFactories(t, access)
-	writer, err := NewBatchStorageWithWriteSource("ip://127.0.0.1:11003", InstTypeSPOT, "test")
+	gateway := storageGatewayFunc(func(ctx context.Context, service, method string, req, rsp any) error {
+		require.Equal(t, "trpc.moox.storage.PrimaryStore", service)
+		switch method {
+		case "EnsureDatasetPeriod":
+			response, err := access.EnsureDatasetPeriod(ctx, req.(*storagepb.PrimaryEnsureDatasetPeriodReq))
+			if err != nil {
+				return err
+			}
+			proto.Merge(rsp.(proto.Message), response)
+		case "CommitTimeSeriesBatch":
+			response, err := access.CommitTimeSeriesBatch(ctx, req.(*storagepb.PrimaryCommitTimeSeriesBatchReq))
+			if err != nil {
+				return err
+			}
+			proto.Merge(rsp.(proto.Message), response)
+		default:
+			t.Fatalf("unexpected Storage method %s", method)
+		}
+		return nil
+	})
+	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "test")
 	require.NoError(t, err)
 	expectation := validStorageExpectation(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
 	_, err = writer.EnsureDatasetPeriod(context.Background(), expectation)
@@ -150,24 +169,6 @@ func unsetStorageAuthEnv(t *testing.T, name string) {
 	t.Helper()
 	t.Setenv(name, "")
 	require.NoError(t, os.Unsetenv(name))
-}
-
-func installAuthProxyFactories(t *testing.T, access storagepb.PrimaryStoreClientProxy) *int {
-	t.Helper()
-	oldPrimary, oldMetadata := storagepb.NewPrimaryStoreClientProxy, storagepb.NewMetadataClientProxy
-	t.Cleanup(func() {
-		storagepb.NewPrimaryStoreClientProxy, storagepb.NewMetadataClientProxy = oldPrimary, oldMetadata
-	})
-	calls := new(int)
-	storagepb.NewPrimaryStoreClientProxy = func(...client.Option) storagepb.PrimaryStoreClientProxy {
-		*calls += 1
-		return access
-	}
-	storagepb.NewMetadataClientProxy = func(...client.Option) storagepb.MetadataClientProxy {
-		*calls += 1
-		return nil
-	}
-	return calls
 }
 
 type authPeriodClient struct {

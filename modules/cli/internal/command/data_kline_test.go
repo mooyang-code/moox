@@ -38,7 +38,7 @@ func TestDataKlineOwnsGatewayUntilRequestFinishes(t *testing.T) {
 			reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}}, err: rpcError}
 			cmd := newDataKlineGetCmd(dataKlineDeps{
 				loadConfig: func(string) (dataAccessConfig, error) { return testSkillDataAccessConfig(), nil },
-				newReader: func(ctx context.Context, file string) (timeSeriesReader, io.Closer, error) {
+				newReader: func(ctx context.Context, file string, _ dataAccessConfig, _ string) (timeSeriesReader, io.Closer, error) {
 					require.Equal(t, "operator.toml", file)
 					_, bounded := ctx.Deadline()
 					require.True(t, bounded)
@@ -71,7 +71,9 @@ func newTestDataKlineCommand(t *testing.T, reader *fakeTimeSeriesReader) (*bytes
 	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cmd := newDataKlineGetCmd(dataKlineDeps{
 		loadConfig: func(string) (dataAccessConfig, error) { return loadDataAccessConfig(configPath) },
-		newReader:  func(context.Context, string) (timeSeriesReader, io.Closer, error) { return reader, nil, nil },
+		newReader: func(context.Context, string, dataAccessConfig, string) (timeSeriesReader, io.Closer, error) {
+			return reader, nil, nil
+		},
 	})
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	cmd.SetOut(stdout)
@@ -205,7 +207,9 @@ func TestDataKlineRejectsConfigAsOutput(t *testing.T) {
 	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cmd := newDataKlineGetCmd(dataKlineDeps{
 		loadConfig: func(string) (dataAccessConfig, error) { return loadDataAccessConfig(configPath) },
-		newReader:  func(context.Context, string) (timeSeriesReader, io.Closer, error) { return reader, nil, nil },
+		newReader: func(context.Context, string, dataAccessConfig, string) (timeSeriesReader, io.Closer, error) {
+			return reader, nil, nil
+		},
 	})
 	cmd.SetArgs([]string{"--config", configPath, "--data-type", "crypto", "--symbol", "BTC-USDT", "--output", configPath})
 	err := cmd.Execute()

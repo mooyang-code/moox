@@ -444,7 +444,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: process.gateway})
 	metadataSource := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
 	plannerSource := metadataSource
-	newStorage := func(_ string, marketType, writeSource string) (marketfetch.Storage, error) {
+	newStorage := func(marketType, writeSource string) (marketfetch.Storage, error) {
 		if strings.EqualFold(strings.TrimSpace(marketType), "equity") || strings.EqualFold(strings.TrimSpace(marketType), marketfetch.StockCNSpaceID) {
 			marketType = marketstorage.InstTypeSPOT
 		}
@@ -502,12 +502,11 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		invokeConcurrency := marketFetchInvokeConcurrency(spaceID)
 		maintenanceBatchLimit, recoveryBatchLimit := marketFetchMaintenanceLimits(spaceID, invokeConcurrency, cfg.StockCN.ExpectedTimerFunctionCount)
 		reconciler := &marketfetch.Reconciler{
-			SCFRegionBlacklists:           cfg.SCFRegionBlacklists,
-			ResolveSourceID:               marketwiring.DefaultSourceID,
-			ResolveSymbol:                 marketwiring.ResolveSymbol,
-			CollectorRuntimeGatewayTarget: cfg.CollectorRuntime.GatewayTarget,
-			CollectorRuntimeGatewayNodeID: cfg.CollectorRuntime.NodeID,
-			Tasks:                         dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
+			ResolveSourceID:     marketwiring.DefaultSourceID,
+			ResolveSymbol:       marketwiring.ResolveSymbol,
+			AccessEnvironment:   cfg.scfAccessEnvironment,
+			Tasks:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: marketfetch.DefaultMaxSubjects(spaceID),
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
@@ -525,7 +524,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(), PeriodStorageStates: dbm.PeriodStorageStates(),
 			// Internal Storage uses the process gateway client. The external
 			// SCF payload keeps its discovered public target until E2.
-			Lifetime: ctx, Invoker: invoker, Storage: newStorage, InvokeStorageTarget: cfg.Storage.GatewayTarget,
+			Lifetime: ctx, Invoker: invoker, Storage: newStorage,
 			InvokeConcurrency: invokeConcurrency, MaintenanceBatchLimit: maintenanceBatchLimit, MaintenanceRecoveryBatchLimit: recoveryBatchLimit,
 			MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
 			Symbols:                    plannerSource,
@@ -545,7 +544,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			invokeScheduler.TimerPeriodPlanner = timerPlanner
 			invokeScheduler.TimerAssignments = reconciler.TimerAssignments
 		}
-		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), newStorage, "", spaceID)
+		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), newStorage, spaceID)
 		failureReporter.SetMetrics(metrics)
 		invokeScheduler.WakePeriodFailureReporter = failureReporter.Wake
 		process.beforeClose = append(process.beforeClose, invokeScheduler.Close)
@@ -720,7 +719,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		if strings.EqualFold(runtime.spaceID, marketfetch.StockCNSpaceID) {
 			periodMarketType = "equity"
 		}
-		periodStorage, storageErr := newStorage("", periodMarketType, "collector")
+		periodStorage, storageErr := newStorage(periodMarketType, "collector")
 		if storageErr != nil {
 			log.WarnContextf(process.ctx, "collector Storage period reporter and cleanup disabled space=%s: %v", runtime.spaceID, storageErr)
 			continue

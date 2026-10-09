@@ -104,6 +104,8 @@ D3 首批清理删除已无生产调用方的 CLI Admin HTTP 客户端、旧认�
 
 主计划 E2 的共享依赖已补齐：`ExternalFileConfig.OpenExternal` 从明确的配置路径加载外部身份私密文件，固定 Access 地址与实例 ID，不查目录或环境凭据，不推导 KeyID。三个外部身份的真实 tRPC 回归验证 PB/JSON 字节、签名、元数据、权限和连接释放；查询重新签名重试，领批次及周期写入单发。相关全包及独立模块 race/vet 通过；17 个测试包与主机网关在本机关闭 CGO 编译，17 包在 Linux 全量运行通过，852 模块图及质量门禁、15 份 schema 检查通过。审计补充覆盖 Factor Engine `run-once`、SCF 领批次与 Storage 共用连接，以及由 CLI 生成的 Skill 私密配置；Access 和全部外部调用方仍待同一提交整体切换，正式验收尚未开始。
 
+主计划 E2 的整体切换已实现：Access 使用目录白名单、分配的 caller/KeyID、`access@host` 签名目标、持久化 nonce 和共享内部客户端；SCF 的 Claim 与 Storage 共用调用级连接，Factor Engine 的常驻和 `run-once` 共用外部客户端，11405 改为原生 tRPC。Skill 使用独立外部入口，CLI 从 Admin 导出身份，以版本化密钥侧文件和原子配置完成分发；CloudNode 清理内部凭据，公开元数据不含私密字段。真实 Access、主机网关和 CGO Storage 的全部 30 个周期场景通过，Skill 的真实生产进程链路通过；相关本机全包 race、vet 和独立模块整理通过，Collector 保持原有 15/30 秒配额。13 个测试制品及三个静态程序均在本机关闭 CGO 编译，13 项在 Linux amd64 运行通过（CLI 制品运行新的 Skill/Access 场景，其余全包运行）；852 模块图的选择版本、边界/格式/文档及 15 份空库 schema 检查通过。经实例发现核验的地域/VPC 地址落盘、安装体系替换、后续 E3～J、独立审查与正式验收仍待完成。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。

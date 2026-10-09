@@ -29,7 +29,6 @@ func TestManagedEnvironmentMembershipIsNotTimerClaimPayload(t *testing.T) {
 	invocation, err := marketfetch.TimerRequestFromEnv("request", "function", time.Now())
 	require.NoError(t, err)
 	require.Equal(t, "function", invocation.Claim.GetFunctionName())
-	require.Equal(t, "runtime.local:11003", invocation.RuntimeGatewayTarget)
 	require.NotContains(t, invocation.Claim.String(), "BTC-USDT")
 	require.NotContains(t, invocation.Claim.String(), "CUSTOM-USDT")
 	require.NotContains(t, invocation.Claim.String(), "EXPLICIT")

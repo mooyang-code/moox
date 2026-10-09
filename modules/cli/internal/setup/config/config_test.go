@@ -289,10 +289,9 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 			},
 			Spaces: []SCFFetcherSpace{{
 				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
-				StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-				MaxInflightRequests:     32, RequestTimeoutMS: 1500,
-				HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
-				Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+				AccessAddress:       "106.53.107.122:11004",
+				MaxInflightRequests: 32, RequestTimeoutMS: 1500,
+				HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
 			}},
 		}
 	}
@@ -323,12 +322,12 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		assert.Contains(t, err.Error(), "between 1 and 64")
 	})
 
-	t.Run("caps aggregate Storage retries at three attempts", func(t *testing.T) {
+	t.Run("requires the fixed HTTP attempt budget", func(t *testing.T) {
 		cfg := base()
-		cfg.Spaces[0].StorageMaxAttempts = 4
+		cfg.Spaces[0].HTTPMaxAttempts = 3
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "request/storage attempts")
+		assert.Contains(t, err.Error(), "request timeout or HTTP attempts")
 	})
 
 	t.Run("allows a 30-item realtime batch for fleet fanout", func(t *testing.T) {
@@ -384,9 +383,8 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
 		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
 	}, Spaces: []SCFFetcherSpace{{
-		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, AccessAddress: "106.53.107.122:11004",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
 	require.Error(t, err)
@@ -397,28 +395,13 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 	require.NoError(t, validateSCFFetcher(&cfg))
 }
 
-func TestValidateSCFFetcherRequiresOneGlobalCollectorRoute(t *testing.T) {
-	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
-		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
-		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
-	}, Spaces: []SCFFetcherSpace{{
-		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		MarketID: "stockcn", InstrumentType: "equity", ProviderID: "eastmoney", SourceID: "stockcn_http",
-		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		CollectorRPCGatewayTarget: "ip://collector.example:11003", CollectorGatewayTargetNode: "collector",
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
-	}}}
-	second := cfg.Spaces[0]
-	second.SpaceID = "other"
-	second.MeasuredSafeGroupSize = 0
-	second.CollectorRPCGatewayTarget = "ip://other.example:11003"
-	cfg.Spaces = append(cfg.Spaces, second)
-	require.ErrorContains(t, validateSCFFetcher(&cfg), "Collector gateway")
-	cfg.Spaces[1].CollectorRPCGatewayTarget = ""
-	cfg.Spaces[1].CollectorGatewayTargetNode = ""
-	require.NoError(t, validateSCFFetcher(&cfg))
-	require.Equal(t, cfg.Spaces[0].CollectorRPCGatewayTarget, cfg.Spaces[1].CollectorRPCGatewayTarget)
-	require.Equal(t, cfg.Spaces[0].CollectorGatewayTargetNode, cfg.Spaces[1].CollectorGatewayTargetNode)
+func TestValidateSCFAccessInstanceIDs(t *testing.T) {
+	for _, id := range []string{"access@storage", "access@regional-sg"} {
+		require.True(t, validAccessInstanceID(id))
+	}
+	for _, id := range []string{"storage", "access@bad_node", "access@Bad", "access@"} {
+		require.False(t, validAccessInstanceID(id))
+	}
 }
 
 func TestValidateSCFFetcherNormalizesMarketPublicNetworkStatus(t *testing.T) {
@@ -428,9 +411,8 @@ func TestValidateSCFFetcherNormalizesMarketPublicNetworkStatus(t *testing.T) {
 	}, Spaces: []SCFFetcherSpace{{
 		SpaceID: "crypto", Entrypoint: "market_data", MarketID: "crypto", InstrumentType: "spot",
 		ProviderID: "binance", SourceID: "spot_http", PublicNetStatus: "enable",
-		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", MemorySize: 64, TimeoutSeconds: 15,
-		RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf"}},
+		AccessAddress: "106.53.107.122:11004", MemorySize: 64, TimeoutSeconds: 15,
+		RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf"}},
 	}}}
 
 	require.NoError(t, validateSCFFetcher(&cfg))
@@ -447,9 +429,8 @@ func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
 	}, Spaces: []SCFFetcherSpace{{
 		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, MarketID: "stockcn", InstrumentType: "equity",
-		ProviderID: "tdx", SourceID: "normal_7709", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+		ProviderID: "tdx", SourceID: "normal_7709", AccessAddress: "106.53.107.122:11004",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
 	require.ErrorContains(t, err, "tdx_host")
@@ -466,10 +447,9 @@ func TestValidateSCFFetcherCopiesOneCloudAccountToEveryRegion(t *testing.T) {
 			AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
 		},
 		Spaces: []SCFFetcherSpace{{
-			SpaceID: "crypto", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+			SpaceID: "crypto", AccessAddress: "106.53.107.122:11004",
 			MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000,
-			HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-			Regions: []SCFFetcherRegion{
+			HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{
 				{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1},
 				{Region: "ap-shanghai", Enabled: true, FunctionCount: 1},
 			},
@@ -548,10 +528,9 @@ func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {
 func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
 	base := SCFFetcherSpace{
 		SpaceID: "stockcn", TimerFunctionCount: 192, MemorySize: 64, TimeoutSeconds: 15,
-		MeasuredSafeGroupSize: 30, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		MeasuredSafeGroupSize: 30, AccessAddress: "106.53.107.122:11004",
 		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"}},
+		HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"}},
 	}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
 
@@ -566,9 +545,9 @@ func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
 func TestValidateSCFFetcherRejectsUnsafeStockStaggerRate(t *testing.T) {
 	base := SCFFetcherSpace{SpaceID: "stockcn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
 		MeasuredSafeGroupSize: 30, StaggerStartSecond: 5, StaggerWindowSeconds: 35, StaggerMaxStartsPerSecond: 5,
-		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", RealtimeBatchSize: 10, RealtimeBarLimit: 10,
+		AccessAddress: "106.53.107.122:11004", RealtimeBatchSize: 10, RealtimeBarLimit: 10,
 		CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
+		HTTPMaxAttempts: 4, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 200, CloudAccountID: "gz"}}}
 	err := validateSCFFetcherSpace(&base, "stockcn")
 	require.ErrorContains(t, err, "requires up to 6 starts per second")
@@ -602,9 +581,9 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	manifest.SCFFetcher.Enabled = true
 	for index := range manifest.SCFFetcher.Spaces {
 		space := &manifest.SCFFetcher.Spaces[index]
-		_, address, ok := findHostDefinition(manifest.HostCatalog, space.StorageGatewayHost)
+		_, address, ok := findHostDefinition(manifest.HostCatalog, space.AccessHost)
 		require.True(t, ok)
-		space.StorageRPCGatewayTarget = "ip://" + address + ":11003"
+		space.AccessAddress = address + ":11004"
 	}
 	require.NoError(t, validateSCFFetcher(&manifest.SCFFetcher))
 
@@ -640,12 +619,11 @@ canary_task_id = "task-canary-1"
 func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
 	base := SCFFetcherSpace{
 		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
-		TimerFunctionCount:      192,
-		MeasuredSafeGroupSize:   30,
-		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{
+		TimerFunctionCount:    192,
+		MeasuredSafeGroupSize: 30,
+		AccessAddress:         "106.53.107.122:11004",
+		RealtimeBatchSize:     10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"},
 			{Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"},
@@ -663,8 +641,8 @@ func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
 
 func TestValidateSCFTimerClaimCompletionBudget(t *testing.T) {
 	base := SCFFetcherSpace{SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 60,
-		StorageRPCGatewayTarget: "ip://storage.example:11003", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 3, StorageTimeoutMS: 5000,
+		AccessAddress: "storage.example:11004", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
+		HTTPMaxAttempts: 4, StorageTimeoutMS: 5000,
 		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
 	base.RequestTimeoutMS = 4000
@@ -673,17 +651,11 @@ func TestValidateSCFTimerClaimCompletionBudget(t *testing.T) {
 	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "reserves")
 }
 
-func TestValidateSCFCollectorClaimEndpointPair(t *testing.T) {
-	base := SCFFetcherSpace{SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 60,
-		StorageRPCGatewayTarget: "ip://storage.example:11003", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 3, StorageTimeoutMS: 5000,
-		CollectorRPCGatewayTarget: "ip://collector.example:11003",
-		Regions:                   []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
-	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf"), "collector_gateway_target_node")
-	base.CollectorGatewayTargetNode = "collector-node"
-	require.NoError(t, validateSCFFetcherSpace(&base, "scf"))
-	base.CollectorRPCGatewayTarget = "https://collector.example"
-	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf"), "collector_rpc_gateway_target")
+func TestValidateSCFAccessAddress(t *testing.T) {
+	require.NoError(t, validateAccessAddress("storage.example:11004", "scf"))
+	for _, value := range []string{"ip://storage.example:11004", "https://storage.example", "storage.example:0", "storage.example:11004/path"} {
+		require.Error(t, validateAccessAddress(value, "scf"))
+	}
 }
 
 const validManifest = `[admin]
@@ -789,14 +761,14 @@ func TestLoadResolvesStorageGatewayHostFromSharedCatalog(t *testing.T) {
 
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-storage_gateway_host = "192.0.2.10"
+access_host = "192.0.2.10"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	require.Len(t, snapshot.Manifest.SCFFetcher.Spaces, 1)
-	assert.Equal(t, "192.0.2.10", snapshot.Manifest.SCFFetcher.Spaces[0].StorageGatewayHost)
-	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
-	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+	assert.Equal(t, "192.0.2.10", snapshot.Manifest.SCFFetcher.Spaces[0].AccessHost)
+	assert.Equal(t, "192.0.2.10:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessAddress)
+	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].AccessPrivateAddress)
 }
 
 func TestLoadNormalizesRegionalStorageAccessTargets(t *testing.T) {
@@ -805,17 +777,17 @@ func TestLoadNormalizesRegionalStorageAccessTargets(t *testing.T) {
 
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-storage_gateway_host = "192.0.2.10"
-storage_access_targets = { AP-NANJING = "ip://192.0.2.20:11004", ap-hongkong = "ip://192.0.2.21:12004" }
-storage_access_target_nodes = { AP-NANJING = "access-nanjing", ap-hongkong = "access-hongkong" }
+access_host = "192.0.2.10"
+access_addresses = { AP-NANJING = "192.0.2.20:11004", ap-hongkong = "192.0.2.21:12004" }
+access_ids = { AP-NANJING = "access@access-nanjing", ap-hongkong = "access@access-hongkong" }
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	space := snapshot.Manifest.SCFFetcher.Spaces[0]
-	assert.Equal(t, "ip://192.0.2.20:11004", space.StorageAccessTarget("ap-nanjing"))
-	assert.Equal(t, "ip://192.0.2.21:12004", space.StorageAccessTarget("ap-hongkong"))
-	assert.Equal(t, "access-nanjing", space.StorageAccessTargetNode("ap-nanjing"))
-	assert.Equal(t, "access-hongkong", space.StorageAccessTargetNode("ap-hongkong"))
+	assert.Equal(t, "192.0.2.20:11004", space.AccessAddressForRegion("ap-nanjing"))
+	assert.Equal(t, "192.0.2.21:12004", space.AccessAddressForRegion("ap-hongkong"))
+	assert.Equal(t, "access@access-nanjing", space.AccessIDForRegion("ap-nanjing"))
+	assert.Equal(t, "access@access-hongkong", space.AccessIDForRegion("ap-hongkong"))
 }
 
 func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {
@@ -824,13 +796,13 @@ func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {
 
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-storage_gateway_host = "192.0.2.10"
-storage_private_gateway_host = "10.206.0.5"
+access_host = "192.0.2.10"
+access_private_host = "10.206.0.5"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
-	assert.Equal(t, "ip://10.206.0.5:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+	assert.Equal(t, "192.0.2.10:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessAddress)
+	assert.Equal(t, "10.206.0.5:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessPrivateAddress)
 }
 
 func TestLoadAcceptsPublicStoragePrivateGatewayHostAsConfiguredValue(t *testing.T) {
@@ -839,12 +811,12 @@ func TestLoadAcceptsPublicStoragePrivateGatewayHostAsConfiguredValue(t *testing.
 
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-storage_gateway_host = "192.0.2.10"
-storage_private_gateway_host = "192.0.2.10"
+access_host = "192.0.2.10"
+access_private_host = "192.0.2.10"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+	assert.Equal(t, "192.0.2.10:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessPrivateAddress)
 }
 
 func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {

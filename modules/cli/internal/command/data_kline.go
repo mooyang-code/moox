@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -22,14 +23,15 @@ type timeSeriesReader interface {
 }
 
 type dataKlineDeps struct {
+	external   bool
 	loadConfig func(string) (dataAccessConfig, error)
-	newReader  func(context.Context, string) (timeSeriesReader, io.Closer, error)
+	newReader  func(context.Context, string, dataAccessConfig, string) (timeSeriesReader, io.Closer, error)
 }
 
 func defaultDataKlineDeps() dataKlineDeps {
 	return dataKlineDeps{
 		loadConfig: loadDataAccessConfig,
-		newReader: func(ctx context.Context, file string) (timeSeriesReader, io.Closer, error) {
+		newReader: func(ctx context.Context, file string, _ dataAccessConfig, _ string) (timeSeriesReader, io.Closer, error) {
 			snapshot, err := setupconfig.Load(file, filepath.Dir(file))
 			if err != nil {
 				return nil, nil, err
@@ -119,9 +121,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			}
 			rpcCtx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			reader, owner, err := deps.newReader(rpcCtx, file)
+			reader, owner, err := deps.newReader(gatewayclient.WithCallMetadata(rpcCtx, gatewayclient.CallMetadata{SpaceID: selection.SpaceID}), file, cfg, resolveDataAccessConfigPath(configPath))
 			if err != nil {
-				return fmt.Errorf("open Storage gateway tunnel: %w", err)
+				return fmt.Errorf("open data gateway: %w", err)
 			}
 			if owner != nil {
 				defer owner.Close()
@@ -139,7 +141,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			return writeKlineResponse(cmd, rsp, output)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "SSH 主机配置文件")
+	if !deps.external {
+		cmd.Flags().StringVar(&file, "file", defaultSetupFile, "SSH 主机配置文件")
+	}
 	cmd.Flags().StringVar(&configPath, "config", "", "独立数据访问配置；默认读取 MOOX_SKILL_CONFIG 或 config/data-access.yaml")
 	cmd.Flags().StringVar(&dataType, "data-type", "", "数据类型，例如 crypto")
 	cmd.Flags().StringVar(&exchange, "exchange", "", "交易所；省略时使用数据类型配置的默认值")
@@ -242,4 +246,22 @@ var dataKlineCmd = &cobra.Command{
 func init() {
 	dataCmd.AddCommand(dataKlineCmd)
 	dataKlineCmd.AddCommand(newDataKlineGetCmd(defaultDataKlineDeps()))
+	skill := &cobra.Command{Use: "skill", Short: "Skill 外部数据读取"}
+	kline := &cobra.Command{Use: "kline", Short: "K 线数据读取"}
+	kline.AddCommand(newDataKlineGetCmd(defaultSkillDataKlineDeps()))
+	skill.AddCommand(kline)
+	dataCmd.AddCommand(skill)
+}
+
+func defaultSkillDataKlineDeps() dataKlineDeps {
+	return dataKlineDeps{external: true, loadConfig: loadDataAccessConfig, newReader: func(_ context.Context, _ string, cfg dataAccessConfig, path string) (timeSeriesReader, io.Closer, error) {
+		if err := cfg.validateSkill(); err != nil {
+			return nil, nil, err
+		}
+		gateway, err := cfg.GatewayClient.OpenExternal(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		return storageGateway{gateway: gateway}, gateway, nil
+	}}
 }

@@ -79,7 +79,7 @@ func TestRenderCollectorDNSResolverConfigDerivesTradeTarget(t *testing.T) {
 	require.Equal(t, "compute-1", resolver["node_id"])
 	require.Equal(t, "300s", resolver["refresh_interval"])
 	require.Equal(t, "3000ms", resolver["request_timeout"])
-	require.NotContains(t, string(rendered), "secret")
+	require.NotContains(t, string(rendered), "secret_key:")
 }
 
 func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
@@ -122,58 +122,29 @@ func TestRenderCollectorDNSResolverConfigIncludesRetentionPolicy(t *testing.T) {
 	require.Equal(t, "720h", retention["period_snapshot_retention"])
 }
 
-func TestRenderCollectorRuntimeClaimTargetDistinctFromStorage(t *testing.T) {
-	snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{
-		SpaceID: "stockcn", CollectorRPCGatewayTarget: "ip://collector.example:11003", CollectorGatewayTargetNode: "collector-node",
-		StorageRPCGatewayTarget: "ip://storage.example:11003", StorageGatewayNodeID: "storage-node",
-	}}}}}
-	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("storage:\n  gateway_target: ip://storage.example:11003\n"))
+func TestRenderCollectorSCFAccessPreservesAssignedKeyID(t *testing.T) {
+	snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{SpaceID: "crypto", AccessAddress: "storage.example:11004", AccessID: "access@storage", AccessAddresses: map[string]string{"ap-singapore": "regional.example:11004"}, AccessIDs: map[string]string{"ap-singapore": "access@regional-sg"}}}}}}
+	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("scf_access:\n  key_id: assigned-scf-key-17\ndatabase:\n  path: keep.db\ncollector_runtime:\n  gateway_target: ip://old.example:11003\nstorage:\n  gateway_target: ip://old-storage.example:11003\n  result_data_node_id: keep-node\n"))
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(rendered, &got))
-	runtime, ok := got["collector_runtime"].(map[string]any)
-	require.True(t, ok, "Collector Claim endpoint must be rendered separately")
-	require.Equal(t, "ip://collector.example:11003", runtime["gateway_target"])
-	require.Equal(t, "collector-node", runtime["node_id"])
+	access := got["scf_access"].(map[string]any)
+	require.Equal(t, "assigned-scf-key-17", access["key_id"])
+	require.Equal(t, "access@storage", access["access_id"])
+	require.Equal(t, "storage.example:11004", access["access_address"])
+	require.Equal(t, "scf-collector", access["caller"])
+	require.Equal(t, "keep.db", got["database"].(map[string]any)["path"])
+	require.NotContains(t, got, "collector_runtime")
+	require.Equal(t, map[string]any{"result_data_node_id": "keep-node"}, got["storage"])
 }
 
-func TestRenderCollectorRuntimeRejectsConflictsAndClearsStaleRoute(t *testing.T) {
+func TestRenderCollectorSCFAccessRejectsConflictingRegionalRoutes(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{
-		{SpaceID: "crypto", CollectorRPCGatewayTarget: "ip://first.example:11003", CollectorGatewayTargetNode: "first"},
-		{SpaceID: "stockcn", CollectorRPCGatewayTarget: "ip://second.example:11003", CollectorGatewayTargetNode: "second"},
+		{SpaceID: "crypto", AccessAddresses: map[string]string{"ap-singapore": "first.example:11004"}, AccessID: "access@first"},
+		{SpaceID: "stockcn", AccessAddresses: map[string]string{"ap-singapore": "second.example:11004"}, AccessID: "access@second"},
 	}}}}
 	_, err := RenderCollectorDNSResolverConfig(snapshot, nil)
-	require.ErrorContains(t, err, "Collector gateway")
-	snapshot.Manifest.SCFFetcher.Spaces[1].CollectorRPCGatewayTarget = ""
-	snapshot.Manifest.SCFFetcher.Spaces[1].CollectorGatewayTargetNode = "second"
-	_, err = RenderCollectorDNSResolverConfig(snapshot, nil)
-	require.ErrorContains(t, err, "configured together")
-	snapshot.Manifest.SCFFetcher.Spaces = nil
-	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("collector_runtime:\n  gateway_target: ip://stale.example:11003\n  node_id: stale\ndatabase:\n  path: keep.db\n"))
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, yaml.Unmarshal(rendered, &got))
-	runtime := got["collector_runtime"].(map[string]any)
-	require.Empty(t, runtime["gateway_target"])
-	require.Empty(t, runtime["node_id"])
-	require.Equal(t, "keep.db", got["database"].(map[string]any)["path"])
-}
-
-func TestRenderCollectorRuntimeGlobalPairIsOrderIndependent(t *testing.T) {
-	configured := SCFFetcherSpace{SpaceID: "crypto", CollectorRPCGatewayTarget: "ip://collector.example:11003", CollectorGatewayTargetNode: "collector"}
-	inherited := SCFFetcherSpace{SpaceID: "stockcn"}
-	matching := configured
-	matching.SpaceID = "stockcn"
-	for _, spaces := range [][]SCFFetcherSpace{{configured, inherited}, {inherited, configured}, {configured, matching}} {
-		snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: spaces}}}
-		rendered, err := RenderCollectorDNSResolverConfig(snapshot, nil)
-		require.NoError(t, err)
-		var got map[string]any
-		require.NoError(t, yaml.Unmarshal(rendered, &got))
-		runtime := got["collector_runtime"].(map[string]any)
-		require.Equal(t, configured.CollectorRPCGatewayTarget, runtime["gateway_target"])
-		require.Equal(t, configured.CollectorGatewayTargetNode, runtime["node_id"])
-	}
+	require.ErrorContains(t, err, "must agree across Spaces")
 }
 
 func TestRenderDisabledResolverReplacesStaleSettings(t *testing.T) {

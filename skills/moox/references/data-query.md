@@ -1,14 +1,16 @@
 # Collected K-line queries
 
-Use `moox-cli data kline get` when the user asks for collected candlestick data. This is a read-only RPC query and does not use a browser login session.
+Use `moox-cli data skill kline get` when the user asks for collected candlestick data. This is a read-only RPC query and does not use a browser login session.
 
 ## Resolve the command and config
 
 From the currently loaded `SKILL.md`, obtain its real absolute parent directory and use that as `SKILL_ROOT`. In every example below, the value `/absolute/path/resolved-from-the-loaded-SKILL.md` is a metavalue: the Agent must replace it with that real parent directory before executing the block and must never use the metavalue literally. Invoke the wrapper at `"$SKILL_ROOT/scripts/data-kline.sh"`; do not infer the Skill location from the shell working directory and do not call `moox-cli` directly.
 
-The wrapper locates its Skill root from `BASH_SOURCE`, injects the absolute packaged `config/data-access.yaml`, rejects caller-supplied `--config`, and resolves `moox-cli` from the repository's `../../bin/moox-cli` before checking `PATH`. It refuses a missing, symlinked, or non-`0600` config.
+The wrapper locates its Skill root from `BASH_SOURCE`, injects the absolute packaged `config/data-access.yaml`, rejects caller-supplied `--config` or `--file`, and resolves `moox-cli` from the repository's `../../bin/moox-cli` before checking `PATH`. It refuses a missing, symlinked, or non-`0600` config.
 
-The CLI opens SSH tunnels using `moox.toml` (pass `--file /absolute/path/moox.toml` when needed). Its operator identity is installed separately as mode-`0600` `~/.config/moox/gateway-client.yaml` and `caller-moox-cli.key`; the public KeyID comes from Admin bootstrap. Directory chooses a host ID, while SSH addresses and host keys come from the operator configuration. The packaged data config contains only the dataset catalog and derived Storage read credentials. Re-export old configs containing `gateway` fields.
+The packaged `gateway_client` selects one Access endpoint (`access_address`, `access_id: access@host`) and the `moox-skill` caller. Admin assigns `key_id`; `key_file` resolves relative to `config/data-access.yaml` and points to a bundled mode-`0600` signing key in the mode-`0700` `.moox-skill-keys` directory. The CLI opens a signed native tRPC connection to Access and needs no operator manifest, SSH identity, directory cache or CA bundle. The same config carries the dataset catalog and derived Storage read credentials. Generate it with `setup export-skill-config` or package the Skill with `scripts/build/package-skill.sh`.
+
+The separate operator command `moox-cli data kline get` uses the operator's SSH configuration. Skill queries always use the bundled wrapper and the `moox-skill` Access identity.
 
 The Skill archive deliberately does not contain a cross-platform `moox-cli` binary. It depends on that repository binary or an installed `moox-cli` on `PATH`; the wrapper fails clearly when neither exists.
 

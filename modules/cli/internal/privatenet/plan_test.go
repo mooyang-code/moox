@@ -25,8 +25,8 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 				{
 					SpaceID: "crypto", FunctionPrefix: "moox-fetcher-crypto-binance", Namespace: "default",
 					PublicNetStatus: "ENABLE", RegionBlacklist: []string{"ap-guangzhou"},
-					StorageAccessTargets: map[string]string{
-						"ap-hongkong": "ip://43.132.204.177:12004",
+					AccessAddresses: map[string]string{
+						"ap-hongkong": "43.132.204.177:12004",
 					},
 					Regions: []setupconfig.SCFFetcherRegion{
 						{Region: "ap-singapore", Enabled: true, FunctionCount: 18},
@@ -53,7 +53,7 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 	_, hasGZ := regions["ap-guangzhou"]
 	assert.False(t, hasGZ)
 	assert.Contains(t, regions["ap-hongkong"].Prefixes, "moox-fetcher-crypto-binance")
-	assert.Equal(t, "ip://43.132.204.177:12004", regions["ap-hongkong"].StorageAccessTarget)
+	assert.Equal(t, "43.132.204.177:12004", regions["ap-hongkong"].AccessAddress)
 	assert.Contains(t, regions["ap-chengdu"].Prefixes, "moox-fetcher-stockcn")
 	assert.Equal(t, 32, regions["ap-chengdu"].FunctionCount)
 }
@@ -95,7 +95,7 @@ func TestBuildPlanDoesNotCreatePrivateNetwork(t *testing.T) {
 	require.Empty(t, plan.VPCs)
 	require.Empty(t, plan.SCF)
 	require.Equal(t, "146.56.196.204", plan.Recommended.StoragePublicIP)
-	require.Equal(t, "ip://146.56.196.204:11003", plan.Recommended.SCFGatewayTarget)
+	require.Equal(t, "146.56.196.204:11004", plan.Recommended.SCFGatewayTarget)
 	require.Len(t, plan.SCFRoutes, 2)
 	assert.Equal(t, "vpc", plan.SCFRoutes[0].Network)
 	assert.Equal(t, "public", plan.SCFRoutes[1].Network)
@@ -110,13 +110,13 @@ func TestBuildSCFStorageRouteSelectsPrivateOnlyForSameRegion(t *testing.T) {
 	private := BuildSCFStorageRoute(storage, "ap-nanjing")
 	assert.True(t, private.SameRegion)
 	assert.Equal(t, "vpc", private.Network)
-	assert.Equal(t, "ip://10.206.0.5:11003", private.Target)
+	assert.Equal(t, "10.206.0.5:11004", private.Target)
 	assert.Equal(t, "vpc-storage", private.VpcID)
 
 	public := BuildSCFStorageRoute(storage, "ap-hongkong")
 	assert.False(t, public.SameRegion)
 	assert.Equal(t, "public", public.Network)
-	assert.Equal(t, "ip://146.56.196.204:11003", public.Target)
+	assert.Equal(t, "146.56.196.204:11004", public.Target)
 	assert.Empty(t, public.VpcID)
 }
 
@@ -124,10 +124,10 @@ func TestBuildSCFStorageRouteForTargetUsesExplicitAccess(t *testing.T) {
 	route := BuildSCFStorageRouteForTarget(ResolvedHost{
 		HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}},
 		Instance:   tencent.CloudInstance{Region: "ap-nanjing", VpcID: "vpc-storage", SubnetID: "subnet-storage", PrivateIPs: []string{"10.206.0.5"}},
-	}, SCFTarget{Region: "ap-hongkong", StorageAccessTarget: "ip://43.132.204.177:12004"})
+	}, SCFTarget{Region: "ap-hongkong", AccessAddress: "43.132.204.177:12004"})
 
 	assert.Equal(t, "access", route.Network)
-	assert.Equal(t, "ip://43.132.204.177:12004", route.Target)
+	assert.Equal(t, "43.132.204.177:12004", route.Target)
 	assert.Empty(t, route.VpcID)
 	assert.Empty(t, route.SubnetID)
 	assert.Contains(t, route.Reason, "Access")
@@ -140,7 +140,7 @@ func TestBuildSCFStorageRouteFallsBackWhenPrivateMetadataIncomplete(t *testing.T
 	}, "ap-guangzhou")
 	assert.True(t, route.SameRegion)
 	assert.Equal(t, "public", route.Network)
-	assert.Equal(t, "ip://203.0.113.9:11003", route.Target)
+	assert.Equal(t, "203.0.113.9:11004", route.Target)
 	assert.Contains(t, route.Reason, "no complete private")
 }
 
@@ -217,7 +217,7 @@ func TestApplyRetriesSCFUpdating(t *testing.T) {
 		function: tencent.SCFFunction{
 			Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0",
 			VpcID: "vpc-scf", SubnetID: "subnet-scf",
-			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://10.206.0.5:11003"},
+			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "10.206.0.5:11004"},
 		},
 	}
 	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
@@ -227,7 +227,7 @@ func TestApplyRetriesSCFUpdating(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SCFUpdated)
 	assert.Equal(t, 2, fake.updateSCF)
-	assert.Equal(t, "ip://146.56.196.204:11003", fake.lastEnv["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+	assert.Equal(t, "146.56.196.204:11004", fake.lastEnv["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
 	assert.Empty(t, fake.lastVPC)
 }
 
@@ -242,7 +242,7 @@ func TestApplyRestoresPublicGatewayAndUnbindsVPC(t *testing.T) {
 		function: tencent.SCFFunction{
 			Namespace: "default", FunctionName: "moox-fetcher-stockcn-ap-shanghai-0",
 			VpcID: "vpc-scf", SubnetID: "subnet-scf", Region: "ap-shanghai",
-			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://10.206.0.5:11003"},
+			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "10.206.0.5:11004"},
 		},
 	}
 	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
@@ -254,7 +254,7 @@ func TestApplyRestoresPublicGatewayAndUnbindsVPC(t *testing.T) {
 	assert.Zero(t, fake.ensureCCN)
 	assert.Equal(t, "scf_public_restored", result.Status)
 	assert.Equal(t, 1, result.SCFUpdated)
-	assert.Equal(t, "ip://146.56.196.204:11003", fake.lastEnv["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+	assert.Equal(t, "146.56.196.204:11004", fake.lastEnv["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
 	assert.Empty(t, fake.lastVPC)
 	assert.Empty(t, fake.lastSubnet)
 	assert.Equal(t, 1, fake.detachVPC)
@@ -269,7 +269,7 @@ func TestApplyRestoreDoesNotDetachHostVPC(t *testing.T) {
 		function: tencent.SCFFunction{
 			Namespace: "default", FunctionName: "moox-fetcher-crypto-binance-ap-hongkong-0",
 			VpcID: "vpc-compute", SubnetID: "subnet-compute", Region: "ap-hongkong",
-			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://10.206.0.5:11003"},
+			Environment: map[string]string{"MOOX_STORAGE_RPC_GATEWAY_TARGET": "10.206.0.5:11004"},
 		},
 	}
 	plan := BuildPlan(Options{RestoreSCFPublic: true}, []ResolvedHost{
@@ -446,6 +446,6 @@ func TestPlannedProbesUsePublicIPs(t *testing.T) {
 }
 
 func TestReplacePrivateIPWithPublic(t *testing.T) {
-	assert.Equal(t, "ip://146.56.196.204:11003", replaceIP("ip://10.1.2.8:11003", "10.1.2.8", "146.56.196.204"))
+	assert.Equal(t, "146.56.196.204:11004", replaceIP("10.1.2.8:11004", "10.1.2.8", "146.56.196.204"))
 	assert.True(t, strings.Contains(PrivateServicePorts(4222)[0], "4222"))
 }

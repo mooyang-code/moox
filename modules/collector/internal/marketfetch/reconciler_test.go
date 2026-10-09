@@ -24,7 +24,7 @@ type reconcilerTasksStub struct{ tasks []domain.CollectionTask }
 func TestReconcilerMissingClaimRouteCannotEnableTimer(t *testing.T) {
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", FunctionName: "market-fetcher-timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
 	r := &Reconciler{Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}}, Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}}, Nodes: nodes}
-	require.ErrorContains(t, r.Reconcile(context.Background(), "crypto"), "collector runtime")
+	require.ErrorContains(t, r.Reconcile(context.Background(), "crypto"), "SCF Access")
 	require.Zero(t, nodes.submits)
 }
 
@@ -43,19 +43,23 @@ func TestReconcilerUpgradesSameAssignmentClaimRouting(t *testing.T) {
 	r := &Reconciler{
 		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
 		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}}, Nodes: nodes,
-		CollectorRuntimeGatewayTarget: "ip://collector.example:11002", CollectorRuntimeGatewayNodeID: "control-a",
+		AccessEnvironment: testSCFAccessEnvironment,
 	}
 	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 1, nodes.submits)
 	// Keep assignment, DNS and actual Timer metadata unchanged, but remove the
 	// new runtime metadata to model a pre-period fleet.
 	delete(nodes.nodes[0].Metadata, "binding_hash")
-	delete(nodes.nodes[0].Metadata, "collector_rpc_gateway_target")
-	delete(nodes.nodes[0].Metadata, "collector_gateway_target_node")
+	delete(nodes.nodes[0].Metadata, "access_address")
+	delete(nodes.nodes[0].Metadata, "access_id")
 	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 2, nodes.submits, "existing assignments must receive the Claim routing upgrade")
-	require.Equal(t, "control-a", nodes.patches[0].GetManagedEnvironment()["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"])
-	r.CollectorRuntimeGatewayTarget = "ip://new-control.example:11002"
+	require.Equal(t, "access@storage", nodes.patches[0].GetManagedEnvironment()["MOOX_ACCESS_ID"])
+	r.AccessEnvironment = func(region string) (map[string]string, error) {
+		values, _ := testSCFAccessEnvironment(region)
+		values["MOOX_ACCESS_ADDRESS"] = "new-storage.example:11004"
+		return values, nil
+	}
 	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 3, nodes.submits, "routing changes must repatch even when assignment is unchanged")
 }
@@ -95,7 +99,7 @@ func TestReconcilerRegionBlacklistMigratesOrPreservesOnCapacityFailure(t *testin
 				nodes.nodes = append(nodes.nodes, scfinvoker.Node{NodeID: "allowed", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"})
 			}
 			r := &Reconciler{
-				CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
+				AccessEnvironment:   testSCFAccessEnvironment,
 				SCFRegionBlacklists: map[string][]string{"crypto": {"ap-guangzhou"}},
 				Tasks:               reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
 				Symbols:             reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}}, Nodes: nodes,
@@ -221,8 +225,8 @@ func TestReconcilerUsesTaskTagsAsAuthoritativeCrossProviderRoutes(t *testing.T) 
 		CollectParams: `{"target_dataset_id":"task_dataset","frequency":"1m"}`,
 	}
 	r := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
 		Symbols: reconcilerTagSymbolsStub{
 			tags: map[string]*storagepb.Tag{
 				"binance_spot": {TagId: "binance_spot", Source: "binance", MarketType: "spot"},
@@ -312,8 +316,10 @@ func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, 
 			s.nodes[index].Metadata["assignment_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
 			s.nodes[index].Metadata["assignment_count"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
 			s.nodes[index].Metadata["binding_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_BINDING_HASH"]
-			s.nodes[index].Metadata["collector_rpc_gateway_target"] = patch.GetManagedEnvironment()["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"]
-			s.nodes[index].Metadata["collector_gateway_target_node"] = patch.GetManagedEnvironment()["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"]
+			s.nodes[index].Metadata["access_address"] = patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"]
+			s.nodes[index].Metadata["access_id"] = patch.GetManagedEnvironment()["MOOX_ACCESS_ID"]
+			s.nodes[index].Metadata["access_caller"] = patch.GetManagedEnvironment()["MOOX_CALLER"]
+			s.nodes[index].Metadata["access_key_id"] = patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"]
 			s.nodes[index].Metadata["fetch_timeout_seconds"] = patch.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"]
 			s.nodes[index].Metadata["dns_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_DNS_HASH"]
 			s.nodes[index].Metadata["timer_enabled"] = patch.GetTimerEnabled()
@@ -361,10 +367,10 @@ func (s *reconcilerNodesStub) RenewCollectorPublishLease(_ context.Context, leas
 func TestReconcilerRepairsLegacyAssignmentWithoutSubjectCount(t *testing.T) {
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", FunctionName: "timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
 	r := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
-		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols:           reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes,
 	}
 	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 1, nodes.submits)
@@ -383,10 +389,10 @@ func TestReconcilerEmptySubmitJobIDWaitsForExpiryThenFencesUnknownJob(t *testing
 		submitJobID:    "",
 	}
 	r := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
-		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols:           reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes,
 	}
 	require.ErrorIs(t, r.Reconcile(context.Background(), "crypto"), scfinvoker.ErrRuntimeConfigSubmissionUnknown)
 	jobs, _ := r.pendingRuntimeJobsState()
@@ -419,10 +425,10 @@ func TestReconcilerStaleLeaseRenewalPollsTerminalJobThenAcquiresHigherFence(t *t
 		renewError:    scfinvoker.ErrCollectorPublishLeaseStale,
 	}
 	r := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
-		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols:           reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes,
 	}
 	oldLease, err := r.ensurePublishLease(context.Background(), "crypto")
 	require.NoError(t, err)
@@ -470,10 +476,10 @@ func (s *reconcilerNodesStub) ReleaseCollectorPublishLease(_ context.Context, le
 func TestTimerRuntimeConfigFencingLeaseCoversAsyncBatchLifetime(t *testing.T) {
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", FunctionName: "market-fetcher-timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
 	r := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
-		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols:           reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes,
 	}
 	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
 	require.EqualValues(t, 1, nodes.leaseAcquires)
@@ -511,10 +517,10 @@ func TestReconcilerResolvesMissingInstrumentIdentity(t *testing.T) {
 	for _, product := range []string{"spot", "swap"} {
 		t.Run(product, func(t *testing.T) {
 			r := &Reconciler{
-				CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-				ResolveSourceID: func(provider, instrument string) string { return instrument + "_test" },
-				Tasks:           reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", DataType: "kline", CollectParams: fmt.Sprintf(`{"provider":"binance","market_type":%q,"subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`, product)}}},
-				Symbols:         reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbols"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+				AccessEnvironment: testSCFAccessEnvironment,
+				ResolveSourceID:   func(provider, instrument string) string { return instrument + "_test" },
+				Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", DataType: "kline", CollectParams: fmt.Sprintf(`{"provider":"binance","market_type":%q,"subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`, product)}}},
+				Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbols"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
 			}
 			groups, err := r.groups(context.Background(), "crypto")
 			require.NoError(t, err)
@@ -540,11 +546,11 @@ func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
 	}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes,
-		Metrics: metrics,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes,
+		Metrics:           metrics,
 	}
 
 	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto"), context.DeadlineExceeded)
@@ -651,7 +657,7 @@ func TestReconcilerRecordsCompletedBatchBeforeNextDNSChange(t *testing.T) {
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	routes := map[string]sources.DNSResolution{"api.binance.com": {IPs: []string{"203.0.113.1"}}}
 	r := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
+		AccessEnvironment: testSCFAccessEnvironment,
 		Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", DataType: "kline", Enabled: true,
 			CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`}}},
 		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
@@ -738,8 +744,8 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 		{NodeID: "timer-1", FunctionName: "market-fetch-guangzhou", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
 		Symbols: reconcilerSymbolsStub{
 			dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"},
 			subjects: []domain.DatasetSubject{
@@ -776,10 +782,10 @@ func TestReconcilerExposesOnlyRuntimeObservedTimerAssignments(t *testing.T) {
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", FunctionName: "market-fetch", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"}}}
 	r := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes, MaxSubjects: 30,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes, MaxSubjects: 30,
 	}
 	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
 	require.Empty(t, r.TimerAssignments(), "submitted but not observed assignments are not claimable")
@@ -807,9 +813,8 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 			{SubjectID: "600000.XSHG", Status: "active"},
 			{SubjectID: "000001.XSHE", Status: "active"},
 		}},
-		Nodes:                         nodes,
-		CollectorRuntimeGatewayTarget: "ip://collector-runtime:11003",
-		CollectorRuntimeGatewayNodeID: "collector-runtime-node",
+		Nodes:             nodes,
+		AccessEnvironment: testSCFAccessEnvironment,
 		DNS: reconcilerDNSStub{routes: map[string]sources.DNSResolution{
 			"api.binance.com": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)},
 		}},
@@ -827,8 +832,8 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 		require.Equal(t, StockCNRouteID, env["MOOX_MARKET_FETCH_ROUTE_VERSION"])
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_PROVIDER_CHAIN"])
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_GROUP_ID"])
-		require.Equal(t, "ip://collector-runtime:11003", env["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"])
-		require.Equal(t, "collector-runtime-node", env["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"])
+		require.Equal(t, "storage.example:11004", env["MOOX_ACCESS_ADDRESS"])
+		require.Equal(t, "access@storage", env["MOOX_ACCESS_ID"])
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_BINDING_HASH"])
 		_, hasDNSRoutes := env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"]
 		_, hasDNSHash := env["MOOX_MARKET_FETCH_DNS_HASH"]
@@ -846,8 +851,8 @@ func TestReconcilerSkipsMalformedActiveStockSubjectWithoutBlockingValidSubjects(
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stockcn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
 			{SubjectID: "600000.XSHG", Status: "active"},
 			{SubjectID: "BAD", Status: "active"},
@@ -869,8 +874,8 @@ func TestReconcilerFailsClosedWhenAllActiveStockSubjectsAreMalformed(t *testing.
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stockcn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
 			{SubjectID: "BAD-1", Status: "active"},
 			{SubjectID: "BAD-2", Status: "active"},
@@ -905,8 +910,8 @@ func TestReconcilerSkipsUnavailableTaskWithoutBlockingHealthyGroups(t *testing.T
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-fetcher-crypto-0", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{badTask, goodTask}},
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{badTask, goodTask}},
 		Symbols: reconcilerSymbolsStub{
 			getErrs:  map[string]error{"dataset_binance_swap_kline": fmt.Errorf("metadata unavailable")},
 			subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}},
@@ -935,10 +940,10 @@ func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(
 		{NodeID: "timer-2", FunctionName: "moox-stockcn-002", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
-		Nodes:   nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 1,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
+		Nodes:             nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 1,
 	}
 
 	require.ErrorContains(t, reconciler.Reconcile(context.Background(), StockCNSpaceID), "required_group_size 2 exceeds measured_safe_group_size 1")
@@ -960,10 +965,10 @@ func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *te
 		{NodeID: "timer-2", FunctionName: "moox-stockcn-002", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
-		Nodes:   nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 40,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
+		Nodes:             nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 40,
 	}
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
@@ -983,10 +988,10 @@ func TestReconcilerRejectsStockGroupSizeAboveRealtimeLimit(t *testing.T) {
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stockcn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "600000.XSHG", Status: "active"}}},
-		Nodes:   nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: MaxRealtimeItems + 1,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "600000.XSHG", Status: "active"}}},
+		Nodes:             nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: MaxRealtimeItems + 1,
 	}
 
 	require.ErrorContains(t, reconciler.Reconcile(context.Background(), StockCNSpaceID), "measured_safe_group_size must be between 1 and 40")
@@ -1001,11 +1006,11 @@ func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 	nodes := &reconcilerNodesStub{}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes,
-		Metrics: metrics,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes,
+		Metrics:           metrics,
 	}
 	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "capacity")
 	require.Zero(t, nodes.submits)
@@ -1024,11 +1029,11 @@ func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"dns_hash": "old-dns"}}}}
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   nodes,
-		DNS:     reconcilerDNSStub{routes: nil},
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             nodes,
+		DNS:               reconcilerDNSStub{routes: nil},
 	}
 	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Len(t, nodes.patches, 1)
@@ -1043,7 +1048,7 @@ func TestReconcilerSkipsOverlappingTicks(t *testing.T) {
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "bars", DataType: "kline", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}, listStarted: make(chan struct{}), listRelease: make(chan struct{})}
-	reconciler := &Reconciler{CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node", Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{task}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}}, Nodes: nodes}
+	reconciler := &Reconciler{AccessEnvironment: testSCFAccessEnvironment, Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{task}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}}, Nodes: nodes}
 	first := make(chan error, 1)
 	go func() { first <- reconciler.Reconcile(context.Background(), "crypto") }()
 	<-nodes.listStarted
@@ -1082,11 +1087,11 @@ func TestReconcilerRejectsExhaustedRemoteEnvironmentBudget(t *testing.T) {
 		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	reconciler := &Reconciler{
-		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
-		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
-		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
-		Nodes:   &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"managed_environment_budget_bytes": 0}}}},
-		Metrics: metrics,
+		AccessEnvironment: testSCFAccessEnvironment,
+		Tasks:             reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols:           reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:             &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"managed_environment_budget_bytes": 0}}}},
+		Metrics:           metrics,
 	}
 	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "no available timer environment budget")
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "1m")))
@@ -1166,4 +1171,8 @@ func (r *Reconciler) pendingRuntimeJobState() (string, time.Time) {
 		return "", since
 	}
 	return jobs[0], since
+}
+
+func testSCFAccessEnvironment(string) (map[string]string, error) {
+	return map[string]string{"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64)}, nil
 }

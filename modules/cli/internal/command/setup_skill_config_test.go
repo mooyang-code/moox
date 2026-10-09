@@ -14,13 +14,14 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	testSkillGatewaySecret = "gateway-skill-secret"
+	testSkillGatewaySecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	testSkillPrimarySecret = "storage-primary-secret"
 )
 
@@ -50,6 +51,7 @@ func TestSetupExportSkillConfigWritesStrict0600ConfigWithoutLeakingSecrets(t *te
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&got))
+	want.SigningKey = ""
 	require.Equal(t, want, got)
 	require.JSONEq(t, `{"status":"exported","output":"`+output+`"}`, stdout.String())
 	combined := stdout.String() + stderr.String()
@@ -174,6 +176,7 @@ func (localSkillSSH) Close() error { return nil }
 
 func testSkillDataAccessConfig() dataAccessConfig {
 	return dataAccessConfig{
+		GatewayClient: &gatewayclient.ExternalFileConfig{Address: "storage.example:11004", InstanceID: "access@storage", Caller: "moox-skill", KeyID: "assigned-skill-key-17", KeyFile: ".moox-skill-keys/fixture.key"}, SigningKey: testSkillGatewaySecret,
 		Version: 1,
 		Storage: dataStorageAuthConfig{AppID: "moox-skill", AppKey: security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill"))},
 		DataTypes: map[string]dataTypeConfig{
@@ -208,7 +211,7 @@ func setupSkillSnapshotWithPath(t *testing.T, space, target, node string) (*setu
 	require.NoError(t, err)
 	snapshot.Manifest.SCFFetcher.Enabled = true
 	snapshot.Manifest.SCFFetcher.Spaces = []setupconfig.SCFFetcherSpace{{
-		SpaceID: space, StorageRPCGatewayTarget: target, StorageGatewayNodeID: node,
+		SpaceID: space, AccessAddress: target, AccessID: node,
 	}}
 	return snapshot, path
 }

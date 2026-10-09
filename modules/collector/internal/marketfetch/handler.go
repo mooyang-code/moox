@@ -17,6 +17,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"google.golang.org/protobuf/proto"
@@ -26,7 +27,7 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage         func(string, string, string) (Storage, error)
+	NewStorage         func(string, string) (Storage, error)
 	Publish            func(context.Context, Request, proto.Message) error
 	TimerRuntimeClient TimerRuntimeClient
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
@@ -67,9 +68,29 @@ const (
 )
 
 func NewHandler() *Handler {
-	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
-		return NewMarketStorageForMarket(target, market, writeSource)
-	}, Publish: publishCompletion}
+	return &Handler{Publish: publishCompletion}
+}
+
+// prepareInvocation owns one Access connection for both the Claim and Storage
+// adapters. Injected library adapters remain borrowed by the invocation.
+func (h *Handler) prepareInvocation(timer bool) (*Handler, func(), error) {
+	invocation := *h
+	if invocation.NewStorage != nil && (!timer || invocation.TimerRuntimeClient != nil) {
+		return &invocation, func() {}, nil
+	}
+	gateway, err := newSCFAccessClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	if invocation.NewStorage == nil {
+		invocation.NewStorage = func(market, source string) (Storage, error) {
+			return NewMarketStorageForMarket(gateway, market, source)
+		}
+	}
+	if timer && invocation.TimerRuntimeClient == nil {
+		invocation.TimerRuntimeClient = newTimerRuntimeRPCClient(gateway)
+	}
+	return &invocation, func() { _ = gateway.Close() }, nil
 }
 
 // HandleWithFunctionName binds an Invoke request to the function identity
@@ -97,10 +118,13 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	runtimeClient := h.TimerRuntimeClient
-	if runtimeClient == nil {
-		runtimeClient = newTimerRuntimeRPCClient(invocation.RuntimeGatewayTarget, invocation.RuntimeGatewayNodeID)
+	invocationHandler, closeGateway, err := h.prepareInvocation(true)
+	if err != nil {
+		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
+	defer closeGateway()
+	budgetCtx = gatewayclient.WithCallMetadata(budgetCtx, gatewayclient.CallMetadata{SpaceID: invocation.Claim.GetSpaceId(), TraceID: requestID})
+	runtimeClient := invocationHandler.TimerRuntimeClient
 	req, claimed, err := claimTimerRequest(budgetCtx, runtimeClient, invocation)
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
@@ -108,13 +132,10 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	if !claimed {
 		return &model.Response{Success: true, Message: "no_work", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	if invocation.StorageGatewayTarget == "" {
-		return &model.Response{Success: false, Message: "storage_rpc_gateway_target is required", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-	}
 	if h.Publish == nil {
 		return &model.Response{Success: false, Message: "completion publisher is not configured", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	return h.handleRequest(budgetCtx, req, invocation.StorageGatewayTarget, true)
+	return invocationHandler.handleRequest(budgetCtx, req, true)
 }
 
 func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, publish bool, runtimeFunctionName string) (*model.Response, error) {
@@ -153,12 +174,17 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if req.Concurrency == 0 {
 		req.Concurrency = envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	}
-	storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
-	if storageTarget == "" {
-		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
+	if h.NewStorage == nil && !req.RequirePeriodCommit {
+		return nil, fmt.Errorf("SCF requests must require period commit")
 	}
+	invocationHandler, closeGateway, err := h.prepareInvocation(false)
+	if err != nil {
+		return nil, err
+	}
+	defer closeGateway()
+	ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{SpaceID: req.SpaceID, TraceID: req.RequestID})
 	defer h.reportMetrics(ctx)
-	return h.handleRequest(ctx, req, storageTarget, publish)
+	return invocationHandler.handleRequest(ctx, req, publish)
 }
 
 // mergeDNSRoutes puts the preferred route map first and appends unique
@@ -205,17 +231,16 @@ func mergeDNSRoutes(preferred, fallback map[string]sources.DNSResolution) map[st
 	return merged
 }
 
-func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget string, publish bool) (*model.Response, error) {
-	storageTarget = strings.TrimSpace(storageTarget)
-	if storageTarget == "" {
-		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
+func (h *Handler) handleRequest(ctx context.Context, req Request, publish bool) (*model.Response, error) {
+	if h.NewStorage == nil {
+		return nil, fmt.Errorf("market Storage factory is required")
 	}
 	if publish && h.Publish == nil {
 		return nil, fmt.Errorf("completion publisher is not configured")
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storage, err := h.NewStorage(storageTarget, req.MarketType, writeSourceForFunctionName(req.FunctionName))
+	storage, err := h.NewStorage(req.MarketType, writeSourceForFunctionName(req.FunctionName))
 	if err != nil {
 		return nil, err
 	}

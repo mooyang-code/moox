@@ -974,6 +974,9 @@ func (s *Service) updateSCFFunctionCode(
 	for key, value := range desiredEnvironment {
 		environment[key] = value
 	}
+	if modernMarketFetchNode(&node, pkg) {
+		tencent.RemoveCollectorInternalGatewayEnvironment(environment)
+	}
 	if strings.TrimSpace(environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"]) != "" {
 		delete(environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	}

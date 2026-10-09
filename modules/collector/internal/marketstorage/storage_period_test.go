@@ -81,7 +81,7 @@ func TestEnsureDatasetPeriodDoesNotProbeNonRetryableStorageErrors(t *testing.T) 
 	}
 }
 
-func TestEnsureDatasetPeriodBoundsRetriesWhenInnerErrorStatusIsNotFound(t *testing.T) {
+func TestEnsureDatasetPeriodNeverResendsUnknownWriteWhenStatusIsNotFound(t *testing.T) {
 	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	access := &periodAccessStub{
 		ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{
@@ -91,8 +91,8 @@ func TestEnsureDatasetPeriodBoundsRetriesWhenInnerErrorStatusIsNotFound(t *testi
 	}
 	_, err := (&storageWriter{period: access}).EnsureDatasetPeriod(context.Background(), validStorageExpectation(period))
 	require.Error(t, err)
-	require.Equal(t, 3, access.ensureCalls, "Ensure retries remain bounded")
-	require.Equal(t, 3, access.statusCalls, "each unknown outcome is checked before retrying Ensure")
+	require.Equal(t, 1, access.ensureCalls, "an unknown write outcome must never resend Ensure")
+	require.Equal(t, 1, access.statusCalls, "the unknown outcome is checked using a read-only query")
 }
 
 func TestEnsureDatasetPeriodRejectsInvalidStorageResponse(t *testing.T) {

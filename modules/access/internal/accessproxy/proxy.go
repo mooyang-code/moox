@@ -4,271 +4,166 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/codec"
-	"trpc.group/trpc-go/trpc-go/filter"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const (
-	AccessServiceName = "trpc.moox.storage.Access"
-	PrimaryStoreName  = "trpc.moox.storage.PrimaryStore"
-	MetadataName      = "trpc.moox.storage.Metadata"
-	DataViewName      = "trpc.moox.storage.DataView"
+const AccessServiceName = "trpc.moox.access.Access"
 
-	defaultMaxBodyBytes = 32 << 20
-	defaultTimeout      = 30 * time.Second
-	defaultNonceNS      = "access"
-)
-
-// NonceStore persists inbound gateway nonces so a process restart does not
-// reopen the replay window.
+// NonceStore persists inbound nonces across process restarts.
 type NonceStore interface {
 	Consume(context.Context, string, string, time.Duration) (bool, error)
 }
 
-// Invoker is the small part of the tRPC client needed by the raw proxy.
-type Invoker interface {
-	Invoke(context.Context, interface{}, interface{}, ...client.Option) error
+// Forwarder borrows the process-owned internal gateway client. The client
+// signs as access and selects the destination using the current directory.
+type Forwarder interface {
+	Forward(context.Context, string, string, int, []byte) ([]byte, error)
 }
 
 type Options struct {
-	Principals         []Principal
-	InboundTargetNode  string
-	UpstreamTargetNode string
-	UpstreamTarget     string
-	Nonces             NonceStore
-	NonceNamespace     string
-	MaxBodyBytes       int64
-	Timeout            time.Duration
-	Now                func() time.Time
-	Invoker            Invoker
+	HostID      string
+	Credentials *gatewayauth.CredentialRegistry
+	Gateway     Forwarder
+	Nonces      NonceStore
+	Registerer  prometheus.Registerer
+	Now         func() time.Time
 }
 
 type Proxy struct {
-	principals         map[string]Principal
-	inbound            *gatewayauth.CredentialRegistry
-	inboundTargetNode  string
-	upstreamTargetNode string
-	upstreamTarget     string
-	nonces             NonceStore
-	nonceNamespace     string
-	maxBodyBytes       int64
-	timeout            time.Duration
-	now                func() time.Time
-	invoker            Invoker
+	options Options
+	catalog servicecatalog.Catalog
+	denials *prometheus.CounterVec
 }
 
 func New(options Options) (*Proxy, error) {
-	if len(options.Principals) == 0 {
-		return nil, errors.New("at least one storage access principal is required")
+	if !servicecatalog.ValidHostID(options.HostID) || options.Credentials == nil || options.Gateway == nil || options.Nonces == nil {
+		return nil, errors.New("access requires a canonical host ID, credential registry, internal gateway and durable nonce store")
 	}
-	principals := make(map[string]Principal, len(options.Principals))
-	inbound := make([]gatewayauth.Credentials, 0, len(options.Principals))
-	for _, principal := range options.Principals {
-		if principal.Inbound.Caller == "" || principal.Upstream.Caller == "" {
-			return nil, fmt.Errorf("principal %q requires inbound and upstream callers", principal.Name)
-		}
-		if _, err := gatewayauth.Sign(principal.Inbound, gatewayauth.Request{
-			Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.InboundTargetNode),
-		}, time.Unix(1, 0)); err != nil {
-			return nil, fmt.Errorf("validate principal %q inbound credentials: %w", principal.Name, err)
-		}
-		if _, err := gatewayauth.Sign(principal.Upstream, gatewayauth.Request{
-			Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.UpstreamTargetNode),
-		}, time.Unix(1, 0)); err != nil {
-			return nil, fmt.Errorf("validate principal %q upstream credentials: %w", principal.Name, err)
-		}
-		if _, duplicate := principals[principal.Inbound.KeyID]; duplicate {
-			return nil, fmt.Errorf("inbound key id %q is used by more than one principal", principal.Inbound.KeyID)
-		}
-		if len(principal.Methods) == 0 {
-			return nil, fmt.Errorf("principal %q allows no methods", principal.Name)
-		}
-		principals[principal.Inbound.KeyID] = principal
-		inbound = append(inbound, principal.Inbound)
-	}
-	registry, err := gatewayauth.NewCredentialRegistry(inbound)
+	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
-		return nil, fmt.Errorf("build inbound credential registry: %w", err)
+		return nil, err
 	}
-	if err := validateTarget(options.UpstreamTarget); err != nil {
-		return nil, fmt.Errorf("validate upstream target: %w", err)
+	if options.Now == nil {
+		options.Now = time.Now
 	}
-	if strings.TrimSpace(options.InboundTargetNode) == "" || strings.TrimSpace(options.UpstreamTargetNode) == "" {
-		return nil, errors.New("inbound and upstream target nodes are required")
+	if options.Registerer == nil {
+		options.Registerer = prometheus.DefaultRegisterer
 	}
-	maxBodyBytes := options.MaxBodyBytes
-	if maxBodyBytes <= 0 {
-		maxBodyBytes = defaultMaxBodyBytes
+	denials := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "moox_access_denials_total", Help: "External Access requests rejected before forwarding.",
+	}, []string{"caller", "service", "method", "reason"})
+	if err := options.Registerer.Register(denials); err != nil {
+		return nil, fmt.Errorf("register access metrics: %w", err)
 	}
-	timeout := options.Timeout
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
-	nonceNamespace := strings.TrimSpace(options.NonceNamespace)
-	if nonceNamespace == "" {
-		nonceNamespace = defaultNonceNS
-	}
-	now := options.Now
-	if now == nil {
-		now = time.Now
-	}
-	invoker := options.Invoker
-	if invoker == nil {
-		invoker = client.New()
-	}
-	return &Proxy{
-		principals: principals, inbound: registry,
-		inboundTargetNode: strings.TrimSpace(options.InboundTargetNode), upstreamTargetNode: strings.TrimSpace(options.UpstreamTargetNode),
-		upstreamTarget: strings.TrimSpace(options.UpstreamTarget),
-		nonces:         options.Nonces, nonceNamespace: nonceNamespace, maxBodyBytes: maxBodyBytes, timeout: timeout,
-		now: now, invoker: invoker,
-	}, nil
+	return &Proxy{options: options, catalog: catalog, denials: denials}, nil
 }
 
-// Forward transparently proxies the protobuf body while terminating and
-// re-signing the Gateway HMAC at the regional Access boundary.
-func (p *Proxy) Forward(ctx context.Context, reqbody *codec.Body) (*codec.Body, error) {
-	if p == nil {
-		return nil, errors.New("storage access proxy is nil")
+func (p *Proxy) deny(caller, service, method, reason, message string) (*codec.Body, error) {
+	known := false
+	for _, principal := range p.catalog.Principals {
+		known = known || principal.ID == caller
 	}
-	if reqbody == nil {
-		return nil, errors.New("storage access request body is required")
+	if !known {
+		caller = "unknown"
 	}
-	msg := codec.Message(ctx)
-	if msg == nil {
-		return nil, errors.New("storage access tRPC message is missing")
-	}
-	servicePath, method, ok := splitRPCName(msg.ServerRPCName())
+	spec, ok := p.catalog.Service(service)
 	if !ok {
-		return nil, fmt.Errorf("storage access RPC name is invalid: %q", msg.ServerRPCName())
-	}
-	if int64(len(reqbody.Data)) > p.maxBodyBytes {
-		return nil, fmt.Errorf("storage access request body exceeds %d bytes", p.maxBodyBytes)
-	}
-	metadata := metadataToHeader(msg.ServerMetaData())
-	claims, err := p.inbound.Verify(gatewayauth.Request{
-		Method: http.MethodPost, Path: "/" + strings.TrimPrefix(msg.ServerRPCName(), "/"), TargetNode: p.inboundTargetNode,
-		Callee: servicePath, Func: method, Body: reqbody.Data,
-	}, metadata, p.now())
-	if err != nil {
-		return nil, fmt.Errorf("storage access inbound authentication failed: %w", err)
-	}
-	principal, ok := p.principals[claims.KeyID]
-	if !ok || claims.Caller != principal.Inbound.Caller {
-		return nil, fmt.Errorf("storage access caller is not allowed: %s", claims.Caller)
-	}
-	if !principal.allows(servicePath, method) {
-		return nil, fmt.Errorf("storage access method is not allowed for %s: %s/%s", principal.Name, servicePath, method)
-	}
-	if p.nonces != nil {
-		consumed, err := p.nonces.Consume(ctx, p.nonceNamespace, claims.Nonce, claims.TTL)
-		if err != nil {
-			return nil, fmt.Errorf("consume storage access nonce: %w", err)
+		service, method = "unknown", "unknown"
+	} else {
+		found := false
+		for _, registered := range spec.Methods {
+			found = found || registered == method
 		}
-		if !consumed {
-			return nil, errors.New("storage access request replayed")
+		if !found {
+			method = "unknown"
 		}
 	}
-
-	upstreamCtx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-	upstreamCtx, upstreamMsg := codec.WithCloneMessage(upstreamCtx)
-	upstreamMsg.WithClientRPCName("/" + servicePath + "/" + method)
-	upstreamMsg.WithCalleeServiceName(servicePath)
-	upstreamMsg.WithCalleeMethod(method)
-
-	invokeOptions := []client.Option{
-		client.WithTarget(p.upstreamTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
-		client.WithServiceName(servicePath), client.WithCalleeMethod(method),
-		client.WithSerializationType(msg.SerializationType()), client.WithCurrentSerializationType(codec.SerializationTypeNoop),
-		client.WithTimeout(p.timeout), client.WithFilter(rawGatewayClientFilter(principal.Upstream, p.upstreamTargetNode, p.now)),
-	}
-	for key, value := range msg.ServerMetaData() {
-		if strings.HasPrefix(strings.ToLower(key), "x-moox-") {
-			continue
-		}
-		invokeOptions = append(invokeOptions, client.WithMetaData(key, value))
-	}
-	response := &codec.Body{}
-	if err := p.invoker.Invoke(upstreamCtx, reqbody, response, invokeOptions...); err != nil {
-		return nil, fmt.Errorf("storage access upstream invoke failed: %w", err)
-	}
-	if int64(len(response.Data)) > p.maxBodyBytes {
-		return nil, fmt.Errorf("storage access response body exceeds %d bytes", p.maxBodyBytes)
-	}
-	return response, nil
+	p.denials.WithLabelValues(caller, service, method, reason).Inc()
+	return nil, errors.New(message)
 }
 
-func rawGatewayClientFilter(credentials gatewayauth.Credentials, targetNode string, now func() time.Time) filter.ClientFilter {
-	if now == nil {
-		now = time.Now
+// Forward verifies the fixed access@host signature and catalog grant before
+// passing the original PB/JSON bytes to the internal gateway client. External
+// user IDs and roles are not trusted application authorization context.
+func (p *Proxy) Forward(ctx context.Context, body *codec.Body) (*codec.Body, error) {
+	if p == nil {
+		return nil, errors.New("access proxy is unavailable")
 	}
-	return func(ctx context.Context, req, rsp interface{}, next filter.ClientHandleFunc) error {
-		body, ok := req.(*codec.Body)
-		if !ok || body == nil {
-			return errors.New("storage access upstream request body is invalid")
-		}
-		msg := codec.Message(ctx)
-		if msg == nil {
-			return errors.New("storage access upstream tRPC message is missing")
-		}
-		path := msg.ClientRPCName()
-		if path == "" {
-			path = "/" + strings.TrimPrefix(msg.CalleeServiceName(), "/") + "/" + msg.CalleeMethod()
-		}
-		headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
-			Method: http.MethodPost, Path: path, TargetNode: targetNode, Caller: credentials.Caller,
-			Callee: msg.CalleeServiceName(), Func: msg.CalleeMethod(), Body: body.Data,
-		}, now())
-		if err != nil {
-			return err
-		}
-		metadata := make(codec.MetaData, len(msg.ClientMetaData())+len(headers))
-		for key, value := range msg.ClientMetaData() {
-			metadata[key] = value
-		}
-		for key, values := range headers {
-			if len(values) == 1 {
-				metadata[key] = []byte(values[0])
-			}
-		}
-		msg.WithClientMetaData(metadata)
-		return next(ctx, req, rsp)
+	message := codec.Message(ctx)
+	if body == nil || message == nil {
+		return p.deny("", "", "", "request", "access requires a tRPC message and body")
 	}
-}
-
-func metadataToHeader(metadata codec.MetaData) http.Header {
-	headers := make(http.Header, len(metadata))
-	for key, value := range metadata {
+	path := message.ServerRPCName()
+	service, method, ok := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	if !ok || path != "/"+service+"/"+method || service == "" || method == "" || strings.Contains(method, "/") {
+		return p.deny("", "", "", "request", "invalid access RPC path")
+	}
+	serialization := message.SerializationType()
+	if serialization != codec.SerializationTypePB && serialization != codec.SerializationTypeJSON {
+		return p.deny("", service, method, "serialization", "access requires PB or JSON serialization")
+	}
+	spec, exists := p.catalog.Service(service)
+	limit := int64(servicecatalog.DefaultMaxBodyBytes)
+	if exists && spec.MaxBodyBytes != 0 {
+		limit = spec.MaxBodyBytes
+	}
+	if int64(len(body.Data)) > limit {
+		return p.deny("", service, method, "request_limit", "access request exceeds service body limit")
+	}
+	headers := make(http.Header, len(message.ServerMetaData()))
+	for key, value := range message.ServerMetaData() {
 		headers.Add(key, string(value))
 	}
-	return headers
-}
-
-func splitRPCName(rpcName string) (string, string, bool) {
-	value := strings.TrimPrefix(strings.TrimSpace(rpcName), "/")
-	servicePath, method, ok := strings.Cut(value, "/")
-	return servicePath, method, ok && servicePath != "" && method != "" && !strings.Contains(method, "/")
-}
-
-func validateTarget(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "ip" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("target must be an ip://host:port address")
+	claims, err := p.options.Credentials.Verify(gatewayauth.Request{
+		Method: http.MethodPost, Path: path, TargetNode: "access@" + p.options.HostID,
+		Callee: service, Func: method, Body: body.Data,
+	}, headers, p.options.Now())
+	if err != nil {
+		return p.deny("", service, method, "authentication", "access authentication failed")
 	}
-	if _, port, err := net.SplitHostPort(parsed.Host); err != nil || port == "" {
-		return errors.New("target must include a port")
+	if !p.catalog.PrincipalAllowed(claims.Caller, service, method) {
+		return p.deny(claims.Caller, service, method, "permission", "access caller is not allowed for this method")
 	}
-	return nil
+	consumed, err := p.options.Nonces.Consume(ctx, "access:"+p.options.HostID+":"+claims.KeyID, claims.Nonce, claims.TTL)
+	if err != nil {
+		return p.deny(claims.Caller, service, method, "nonce_store", "access replay store unavailable")
+	}
+	if !consumed {
+		return p.deny(claims.Caller, service, method, "replay", "access request replayed")
+	}
+	metadata := gatewayclient.CallMetadata{}
+	for name, output := range map[string]*string{"X-Space-Id": &metadata.SpaceID, "X-Trace-Id": &metadata.TraceID} {
+		values := headers.Values(name)
+		if len(values) > 1 || len(values) == 1 && (len(values[0]) > 512 || strings.ContainsAny(values[0], "\x00\r\n")) {
+			return p.deny(claims.Caller, service, method, "metadata", "invalid access application metadata")
+		}
+		if len(values) == 1 {
+			*output = values[0]
+		}
+	}
+	timeout := spec.TimeoutMS
+	if timeout == 0 {
+		timeout = servicecatalog.DefaultTimeoutMS
+	}
+	upstream, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(ctx, metadata), time.Duration(timeout)*time.Millisecond)
+	defer cancel()
+	response, err := p.options.Gateway.Forward(upstream, service, method, serialization, body.Data)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(response)) > limit {
+		return nil, errors.New("access response exceeds service body limit")
+	}
+	return &codec.Body{Data: response}, nil
 }
 
 // AccessServiceDesc exposes a wildcard service so the request protobuf is
@@ -285,7 +180,7 @@ type AccessServer interface {
 
 func RegisterAccessService(s server.Service, impl AccessServer) error {
 	if s == nil {
-		return errors.New("storage access service is unavailable")
+		return errors.New("access service is unavailable")
 	}
 	return s.Register(&AccessServiceDesc, impl)
 }
@@ -299,7 +194,7 @@ func accessForwardHandler(svr interface{}, ctx context.Context, f server.FilterF
 	handle := func(ctx context.Context, req interface{}) (interface{}, error) {
 		body, ok := req.(*codec.Body)
 		if !ok {
-			return nil, errors.New("storage access request body is invalid")
+			return nil, errors.New("access request body is invalid")
 		}
 		return svr.(AccessServer).Forward(ctx, body)
 	}

@@ -13,8 +13,6 @@ database:
   conn_max_idle_time: 10m
 
 storage:
-  # SCF 外部调用地址暂留至 E2；进程内调用使用 gateway_client。
-  gateway_target: ip://127.0.0.1:11003
   result_data_node_id: storage-node-0
 
 period_readiness:
@@ -72,3 +70,12 @@ dns_resolver:
   refresh_interval: 5m
   request_timeout: 3s
   cache_ttl: 5m
+
+# 外部 SCF 身份由 Admin 分配；按地域的地址由发布器根据 VPC 路由生成。
+scf_access:
+  access_address: access.example.test:11004
+  access_id: access@storage
+  caller: scf-collector
+  key_id: ""
+  key_file: ../../secrets/caller-scf-collector.key
+scf_access_routes: {}

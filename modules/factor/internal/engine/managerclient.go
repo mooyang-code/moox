@@ -1,13 +1,9 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -15,8 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -24,36 +19,20 @@ import (
 // holds the engine lease or the recalc job lease moved on.
 var ErrLeaseConflict = errors.New("factor engine lease conflict")
 
-// managerServiceID is the gateway service id that routes FactorEngine calls to
-// moox-factor-mgr.
-const managerServiceID = "factormgr"
+const managerServicePath = "trpc.moox.factor.FactorEngine"
 
-const maxManagerResponseBytes = 32 << 20
-
-// ManagerClient calls moox-factor-mgr's FactorEngine service through the
-// service gateway's HTTP entry, signing every request with the factor-engine
-// gateway credential.
+// ManagerClient borrows the engine's external client, also used by Storage.
 type ManagerClient struct {
-	baseURL     string
-	targetNode  string
-	credentials gatewayauth.Credentials
-	http        *http.Client
-	identity    domain.EngineIdentity
+	gateway  gatewayclient.Invoker
+	timeout  time.Duration
+	identity domain.EngineIdentity
 }
 
-func NewManagerClient(cfg ManagerConfig, identity domain.EngineIdentity) (*ManagerClient, error) {
-	credentials, err := gatewayauth.CredentialsFromKeyFile(cfg.KeyID, cfg.HMACKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load manager gateway credentials: %w", err)
+func NewManagerClient(gateway gatewayclient.Invoker, timeout time.Duration, identity domain.EngineIdentity) (*ManagerClient, error) {
+	if gateway == nil || timeout <= 0 {
+		return nil, errors.New("factor manager requires a shared external gateway and positive timeout")
 	}
-	client, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.Timeout, CAFile: cfg.CAFile, IgnoreProxyEnv: true})
-	if err != nil {
-		return nil, fmt.Errorf("create manager gateway client: %w", err)
-	}
-	return &ManagerClient{
-		baseURL: strings.TrimRight(cfg.URL, "/"), targetNode: cfg.NodeID,
-		credentials: credentials, http: client, identity: identity,
-	}, nil
+	return &ManagerClient{gateway: gateway, timeout: timeout, identity: identity}, nil
 }
 
 // CatalogSnapshot is one SyncEngineCatalog answer.
@@ -144,40 +123,13 @@ func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID, leaseTo
 }
 
 func (c *ManagerClient) call(ctx context.Context, method string, req, rsp proto.Message, retInfo func() *commonpb.RetInfo) error {
-	body, err := protojson.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", method, err)
+	if c == nil || c.gateway == nil {
+		return errors.New("factor manager gateway is unavailable")
 	}
-	path := "/api/service/" + managerServiceID + "/" + method
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create %s request: %w", method, err)
-	}
-	headers, err := gatewayauth.Sign(c.credentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: path, TargetNode: c.targetNode, Body: body,
-	}, time.Now())
-	if err != nil {
-		return fmt.Errorf("sign %s: %w", method, err)
-	}
-	request.Header = headers
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.http.Do(request)
-	if err != nil {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	if err := c.gateway.Invoke(callCtx, managerServicePath, method, req, rsp); err != nil {
 		return fmt.Errorf("call %s: %w", method, err)
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxManagerResponseBytes+1))
-	if err != nil {
-		return fmt.Errorf("read %s response: %w", method, err)
-	}
-	if len(raw) > maxManagerResponseBytes {
-		return fmt.Errorf("%s response exceeds %d bytes", method, maxManagerResponseBytes)
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned HTTP %d", method, response.StatusCode)
-	}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, rsp); err != nil {
-		return fmt.Errorf("decode %s response: %w", method, err)
 	}
 	ret := retInfo()
 	switch {

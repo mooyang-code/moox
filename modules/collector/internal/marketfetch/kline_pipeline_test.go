@@ -46,7 +46,7 @@ func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
 		t.Run(string(test.instrument), func(t *testing.T) {
 			item := domain.CollectionItem{SubjectID: test.subject, Symbol: "sh" + test.subject[:6], DatasetID: test.dataset, Provider: "sina", SourceID: "stockcn_http", MarketType: string(test.instrument), TargetDataTime: period.Format(time.RFC3339Nano), SeriesHash: "one-logical-series", ExpectedCount: 1, PeriodReservationID: "release-canary-123"}
 			storage := &recordingPeriodFailureStorage{}
-			scheduler := &Scheduler{StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+			scheduler := &Scheduler{Storage: func(string, string) (Storage, error) { return storage, nil }}
 			require.NoError(t, scheduler.ensureDatasetPeriod(context.Background(), domain.CollectionTask{SpaceID: StockCNSpaceID}, []domain.CollectionItem{item}, "1m", period, period.Add(time.Minute)))
 			require.Len(t, storage.ensured, 1)
 			ensured := storage.ensured[0]

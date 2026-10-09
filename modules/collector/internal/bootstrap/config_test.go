@@ -43,42 +43,42 @@ func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 database:
   path: ./original/collector.db
 storage:
-  gateway_target: ip://127.0.0.1:20100
+  result_data_node_id: result-test
 `)
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
-	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
+	assert.Equal(t, "result-test", cfg.Storage.ResultDataNodeID)
 	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
 }
 
-func TestCollectorRuntimeGatewayConfigIsExplicitPair(t *testing.T) {
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "")
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "")
-	cfg, err := Load(writeCollectorConfig(t, `collector_runtime:
-  gateway_target: ip://10.0.0.5:11003
-  node_id: collector-2
+func TestSCFAccessConfigUsesAssignedIdentityAndRegionalRoutes(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `scf_access:
+  access_address: storage.example:11004
+  access_id: access@storage
+  caller: scf-collector
+  key_id: assigned-scf-key-17
+  key_file: ../secrets/scf.key
+scf_access_routes:
+  ap-guangzhou:
+    access_address: 10.0.0.5:11004
+    access_id: access@storage
 `))
 	require.NoError(t, err)
-	assert.Equal(t, "ip://10.0.0.5:11003", cfg.CollectorRuntime.GatewayTarget)
-	assert.Equal(t, "collector-2", cfg.CollectorRuntime.NodeID)
-
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "collector-gw.example.com:11003")
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "collector-3")
-	cfg, err = Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
-	require.NoError(t, err)
-	assert.Equal(t, "collector-gw.example.com:11003", cfg.CollectorRuntime.GatewayTarget)
-	assert.Equal(t, "collector-3", cfg.CollectorRuntime.NodeID)
+	require.Equal(t, "assigned-scf-key-17", cfg.SCFAccess.KeyID)
+	require.Equal(t, "10.0.0.5:11004", cfg.SCFAccessRoutes["ap-guangzhou"].Address)
+	_, err = cfg.scfAccessEnvironment("ap-guangzhou")
+	require.ErrorContains(t, err, "signing key")
 }
 
-func TestLoadRejectsPartialCollectorRuntimeGatewayConfig(t *testing.T) {
+func TestLoadRejectsRemovedCollectorRuntimeGatewayConfig(t *testing.T) {
 	_, err := Load(writeCollectorConfig(t, `collector_runtime:
-  gateway_target: collector-gw.example.com:11003
+  gateway_target: collector.example:11003
+  node_id: control
 `))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collector_runtime.node_id")
 }
 
 func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {

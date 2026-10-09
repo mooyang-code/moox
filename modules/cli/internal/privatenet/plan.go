@@ -82,7 +82,7 @@ type RecommendedConfig struct {
 	StorageVPCID     string           `json:"storage_vpc_id,omitempty"`
 	StorageSubnetID  string           `json:"storage_subnet_id,omitempty"`
 	StorageArea      string           `json:"storage_area,omitempty"`
-	SCFGatewayTarget string           `json:"scf_storage_rpc_gateway_target,omitempty"`
+	SCFGatewayTarget string           `json:"scf_access_address,omitempty"`
 	Hosts            []map[string]any `json:"hosts"`
 	Notes            []string         `json:"notes"`
 }
@@ -154,7 +154,7 @@ func BuildPlan(opts Options, hosts []ResolvedHost, scf []SCFTarget, ports []stri
 			plan.Recommended.StorageVPCID = host.Instance.VpcID
 			plan.Recommended.StorageSubnetID = host.Instance.SubnetID
 			if host.Address != "" {
-				plan.Recommended.SCFGatewayTarget = "ip://" + host.Address + ":11003"
+				plan.Recommended.SCFGatewayTarget = net.JoinHostPort(host.Address, "11004")
 			}
 		}
 	}
@@ -204,7 +204,7 @@ func BuildSCFStorageRoute(storage ResolvedHost, region string) SCFStorageRoute {
 	route := SCFStorageRoute{
 		Region: region, Network: "public", StorageRegion: storageRegion,
 		StorageZone: strings.TrimSpace(storage.Instance.Zone), StoragePublicIP: publicIP,
-		StoragePrivateIP: privateIP, Target: "ip://" + net.JoinHostPort(publicIP, "11003"),
+		StoragePrivateIP: privateIP, Target: net.JoinHostPort(publicIP, "11004"),
 	}
 	if publicIP == "" {
 		route.Target = ""
@@ -225,19 +225,19 @@ func BuildSCFStorageRoute(storage ResolvedHost, region string) SCFStorageRoute {
 	route.Network = "vpc"
 	route.VpcID = strings.TrimSpace(storage.Instance.VpcID)
 	route.SubnetID = strings.TrimSpace(storage.Instance.SubnetID)
-	route.Target = "ip://" + net.JoinHostPort(privateIP, "11003")
+	route.Target = net.JoinHostPort(privateIP, "11004")
 	route.Reason = "same Tencent region with Storage VPC/subnet/private IP"
 	return route
 }
 
 // BuildSCFStorageRouteForTarget applies an explicit regional Access endpoint
-// without changing the legacy same-region VPC/public fallback behavior.
+// after evaluating the same-region VPC/public route.
 func BuildSCFStorageRouteForTarget(storage ResolvedHost, target SCFTarget) SCFStorageRoute {
 	route := BuildSCFStorageRoute(storage, target.Region)
-	if strings.TrimSpace(target.StorageAccessTarget) == "" {
+	if strings.TrimSpace(target.AccessAddress) == "" {
 		return route
 	}
-	route.Target = strings.TrimSpace(target.StorageAccessTarget)
+	route.Target = strings.TrimSpace(target.AccessAddress)
 	route.Network = "access"
 	route.StoragePrivateIP = ""
 	route.VpcID = ""

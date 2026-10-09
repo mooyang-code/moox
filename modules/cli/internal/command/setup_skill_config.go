@@ -2,13 +2,19 @@ package command
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -45,7 +51,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := config.validate(); err != nil {
+			if err := config.validateSkill(); err != nil {
 				return fmt.Errorf("skill_config_invalid: %w", err)
 			}
 			raw, err := yaml.Marshal(config)
@@ -55,6 +61,10 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
 			}
+			if err := writeSkillSigningKey(output, config); err != nil {
+				return err
+			}
+			config.SigningKey = ""
 			if err := writeSkillConfigAtomic0600(output, raw, os.Rename); err != nil {
 				return fmt.Errorf("write skill config: %w", err)
 			}
@@ -104,7 +114,26 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
 	}
-	return buildSkillDataAccessConfig(ctx, snapshot, space, read, klineDatasets)
+	config, err := buildSkillDataAccessConfig(ctx, snapshot, space, read, klineDatasets)
+	if err != nil {
+		return dataAccessConfig{}, err
+	}
+	control, err := transportFor(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return dataAccessConfig{}, err
+	}
+	credentials, err := exportRemoteExternalCaller(ctx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, "moox-skill")
+	if err != nil {
+		return dataAccessConfig{}, err
+	}
+	host := snapshot.Manifest.StorageHost
+	if !snapshot.Manifest.HasStorageHost() {
+		host = snapshot.Manifest.ControlHost
+	}
+	digest := sha256.Sum256([]byte(credentials.KeyID))
+	config.GatewayClient = &gatewayclient.ExternalFileConfig{Address: net.JoinHostPort(host.Address, "11004"), InstanceID: "access@" + host.Name, Caller: "moox-skill", KeyID: credentials.KeyID, KeyFile: filepath.Join(".moox-skill-keys", hex.EncodeToString(digest[:])+".key")}
+	config.SigningKey = credentials.Secret
+	return config, nil
 }
 
 func buildSkillDataAccessConfig(
@@ -225,7 +254,7 @@ done
 exit 1`,
 		"moox-read-skill-secret", path,
 	}, nil)
-	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 4096 {
+	if err != nil || result.ExitCode != 0 || len(result.Stdout) == 0 || len(result.Stdout) > 4096 {
 		return nil, fmt.Errorf("remote secret unavailable")
 	}
 	return []byte(result.Stdout), nil
@@ -272,4 +301,39 @@ func writeSkillConfigAtomic0600(path string, content []byte, rename func(string,
 		return err
 	}
 	return nil
+}
+
+// Publish the immutable key file first, and the referencing config last. A
+// failed config replacement leaves the previous config and key usable.
+func writeSkillSigningKey(output string, config dataAccessConfig) error {
+	if config.GatewayClient == nil {
+		return fmt.Errorf("Skill Access configuration is required")
+	}
+	key := config.SigningKey
+	if len(key) < 32 || len(key) > 4096 || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("invalid Skill signing key")
+	}
+	relative := config.GatewayClient.KeyFile
+	if filepath.IsAbs(relative) || filepath.Dir(relative) != ".moox-skill-keys" || filepath.Base(relative) == "." {
+		return fmt.Errorf("Skill signing key must use its private adjacent directory")
+	}
+	directory := filepath.Join(filepath.Dir(output), ".moox-skill-keys")
+	if err := os.Mkdir(directory, 0o700); err != nil && !os.IsExist(err) {
+		return err
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("Skill signing key directory must be a non-symlink directory with permission 0700")
+	}
+	path := filepath.Join(filepath.Dir(output), relative)
+	if _, err := os.Lstat(path); err == nil {
+		current, err := gatewayauth.ReadSigningSecret(path)
+		if err != nil || current != key {
+			return fmt.Errorf("Skill signing key for the assigned KeyID conflicts with existing file")
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return writeSkillConfigAtomic0600(path, []byte(key+"\n"), os.Rename)
 }

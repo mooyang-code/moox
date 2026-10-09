@@ -68,7 +68,6 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 			event.Action = timerAction(timerMode)
 		}
 		event.Source = "tencent_timer"
-		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
 	}
 	functionName := strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
 	if function, _ := functioncontext.FromContext(ctx); function != nil {
@@ -78,12 +77,6 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		if strings.TrimSpace(function.FunctionName) != "" {
 			functionName = function.FunctionName
 		}
-	}
-	// The SCF deployment owns the reachable Storage route for this function.
-	// Scheduler payloads may be delayed or retried after Storage endpoints move,
-	// so prefer the current function environment over a stale serialized target.
-	if storageTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")); storageTarget != "" {
-		event.StorageRPCGatewayTarget = storageTarget
 	}
 	fetch := h.NewMarketFetch
 	if fetch == nil {

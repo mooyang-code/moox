@@ -19,12 +19,12 @@ type HostTarget struct {
 }
 
 type SCFTarget struct {
-	Region              string   `json:"region"`
-	Namespace           string   `json:"namespace"`
-	Prefixes            []string `json:"prefixes"`
-	PublicNetStatus     string   `json:"public_net_status"`
-	FunctionCount       int      `json:"function_count"`
-	StorageAccessTarget string   `json:"storage_access_target,omitempty"`
+	Region          string   `json:"region"`
+	Namespace       string   `json:"namespace"`
+	Prefixes        []string `json:"prefixes"`
+	PublicNetStatus string   `json:"public_net_status"`
+	FunctionCount   int      `json:"function_count"`
+	AccessAddress   string   `json:"access_address,omitempty"`
 }
 
 func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
@@ -112,8 +112,8 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 		if !ok {
 			item = &SCFTarget{
 				Region: region, Namespace: namespace,
-				PublicNetStatus:     firstNonEmpty(publicNet, "ENABLE"),
-				StorageAccessTarget: strings.TrimSpace(storageAccessTarget),
+				PublicNetStatus: firstNonEmpty(publicNet, "ENABLE"),
+				AccessAddress:   strings.TrimSpace(storageAccessTarget),
 			}
 			byKey[key] = item
 		}
@@ -123,7 +123,7 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 			item.PublicNetStatus = publicNet
 		}
 		if strings.TrimSpace(storageAccessTarget) != "" {
-			item.StorageAccessTarget = strings.TrimSpace(storageAccessTarget)
+			item.AccessAddress = strings.TrimSpace(storageAccessTarget)
 		}
 	}
 	for _, space := range manifest.SCFFetcher.Spaces {
@@ -135,7 +135,7 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 			}
 			shards := setupconfig.SpaceRegionNamespaceShards(space, region, manifest.SCFFetcher.TencentLimits)
 			if len(shards) == 0 {
-				add(region.Region, namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), region.FunctionCount)
+				add(region.Region, namespace, space.FunctionPrefix, publicNet, space.AccessAddressForRegion(region.Region), region.FunctionCount)
 				continue
 			}
 			for _, shard := range shards {
@@ -143,11 +143,11 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 				if strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") {
 					poolCount = shard.Invokes
 				}
-				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), poolCount)
+				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.AccessAddressForRegion(region.Region), poolCount)
 			}
 			if region.Enabled && region.FunctionCount > 0 && strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") && !space.IsRegionBlacklisted(region.Region) {
 				if namespace, err := setupconfig.SpaceRegionReleaseCanaryNamespace(space, region, manifest.SCFFetcher.TencentLimits); err == nil {
-					add(region.Region, namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), 1)
+					add(region.Region, namespace, space.FunctionPrefix, publicNet, space.AccessAddressForRegion(region.Region), 1)
 				}
 			}
 		}

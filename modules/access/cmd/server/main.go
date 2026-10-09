@@ -3,20 +3,23 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
-	"net"
-	"net/url"
-	"os"
-	"strconv"
-	"strings"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/access/internal/accessproxy"
+	"github.com/mooyang-code/moox/modules/access/internal/config"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -25,162 +28,94 @@ import (
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
-var (
-	Version   = "dev"
-	BuildTime = ""
-	GitCommit = ""
-)
+var Version = "dev"
+var BuildTime, GitCommit string
 
 func main() {
+	path := flag.String("config", "config/app.yaml", "Access application configuration")
+	framework := flag.String("conf", "config/trpc_go.yaml", "tRPC framework configuration")
+	flag.Parse()
+	trpc.ServerConfigPath = *framework
 	trpclog.InstallServiceName("access")
-	nonces, err := accessproxy.OpenSQLiteNonces(envOrDefault("MOOX_ACCESS_NONCE_PATH", "./data/access/nonces.db"))
+	cfg, err := config.Load(*path)
 	if err != nil {
 		log.Fatal(err)
+	}
+	ctx, stop := signal.NotifyContext(trpc.BackgroundContext(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, cfg); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context, cfg config.Config) error {
+	nonces, err := accessproxy.OpenSQLiteNonces(cfg.NoncePath)
+	if err != nil {
+		return err
 	}
 	defer nonces.Close()
-
-	principals, err := accessproxy.LoadPrincipals(envOrDefault("MOOX_ACCESS_PRINCIPALS_FILE", "./secrets/access-principals.yaml"))
+	credentials, err := gatewayauth.LoadCredentialRegistry(cfg.VerificationFile)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	proxy, err := accessproxy.New(accessproxy.Options{
-		Principals:         principals,
-		InboundTargetNode:  strings.TrimSpace(os.Getenv("MOOX_ACCESS_TARGET_NODE")),
-		UpstreamTargetNode: strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET_NODE")),
-		UpstreamTarget:     strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET")),
-		NonceNamespace:     envOrDefault("MOOX_ACCESS_NONCE_NAMESPACE", "access"),
-		MaxBodyBytes:       envInt64("MOOX_ACCESS_MAX_BODY_BYTES", 32<<20),
-		Timeout:            envDuration("MOOX_ACCESS_TIMEOUT", 30*time.Second),
-		Nonces:             nonces,
-	})
+	gateway, err := cfg.GatewayClient.OpenInternal(cfg.SourcePath, filepath.Dir(cfg.NoncePath), func(err error) { log.Printf("access directory refresh failed: %v", err) })
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-
+	defer gateway.Close()
+	proxy, err := accessproxy.New(accessproxy.Options{HostID: gateway.LocalHostID(), Credentials: credentials, Gateway: gateway, Nonces: nonces})
+	if err != nil {
+		return err
+	}
 	s := trpc.NewServer(server.WithCurrentSerializationType(codec.SerializationTypeNoop))
-	accessService := s.Service(accessproxy.AccessServiceName)
-	if accessService == nil {
-		log.Fatalf("storage access service %q is not configured", accessproxy.AccessServiceName)
+	if err := accessproxy.RegisterAccessService(s.Service(accessproxy.AccessServiceName), proxy); err != nil {
+		return err
 	}
-	if err := accessproxy.RegisterAccessService(accessService, proxy); err != nil {
-		log.Fatal(fmt.Errorf("register storage access service: %w", err))
-	}
-	stopHealth, err := registerHealth(s, strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET")))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer stopHealth()
-	if err := s.Serve(); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func registerHealth(s *server.Server, upstreamTarget string) (func(), error) {
-	if s == nil || s.Service("trpc.moox.storage.Health") == nil {
-		return func() {}, errors.New("storage access health service is not configured")
-	}
-	state := healthz.NewState("access", "access", Version, GitCommit)
-	state.SetReady(false)
-	if err := registerHealthHandler(s.Service("trpc.moox.storage.Health"), state); err != nil {
-		return func() {}, fmt.Errorf("register storage access health: %w", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	interval := envDuration("MOOX_ACCESS_READY_CHECK_INTERVAL", 5*time.Second)
-	timeout := envDuration("MOOX_ACCESS_READY_CHECK_TIMEOUT", 2*time.Second)
-	go monitorUpstream(ctx, state, upstreamTarget, interval, timeout)
-	return cancel, nil
-}
-
-func registerHealthHandler(service server.Service, state *healthz.State) error {
+	state := healthz.NewState("access", "access@"+gateway.LocalHostID(), Version, GitCommit)
 	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
 	if err != nil {
 		return err
 	}
-	return healthz.RegisterNoProtocolServiceMux(service, handler)
-}
-
-func monitorUpstream(ctx context.Context, state *healthz.State, target string, interval, timeout time.Duration) {
-	if interval <= 0 {
-		interval = 5 * time.Second
+	if s.Service("trpc.moox.access.Health") == nil {
+		return errors.New("access health service is required")
 	}
-	if timeout <= 0 {
-		timeout = 2 * time.Second
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.access.Health"), handler); err != nil {
+		return err
 	}
-	var previous bool
-	first := true
-	probe := func() {
-		probeCtx, cancel := context.WithTimeout(ctx, timeout)
-		err := probeUpstream(probeCtx, target)
-		cancel()
-		ready := err == nil
-		state.SetReady(ready)
-		if first || ready != previous {
-			if err != nil {
-				log.Printf("storage access upstream readiness=%t target=%s err=%v", ready, target, err)
-			} else {
-				log.Printf("storage access upstream readiness=%t target=%s", ready, target)
-			}
-		}
-		first = false
-		previous = ready
-	}
-	probe()
-	ticker := time.NewTicker(interval)
+	done := make(chan error, 1)
+	go func() { done <- s.Serve() }()
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	updateReady(state, gateway)
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			state.SetReady(false)
+			closeErr := s.Close(nil)
+			return errors.Join(closeErr, <-done)
+		case err := <-done:
+			state.SetReady(false)
+			_ = s.Close(nil)
+			if err == nil {
+				err = errors.New("server exited without an error")
+			}
+			return fmt.Errorf("access server stopped unexpectedly: %w", err)
 		case <-ticker.C:
-			probe()
+			updateReady(state, gateway)
 		}
 	}
 }
 
-func probeUpstream(ctx context.Context, target string) error {
-	parsed, err := url.Parse(strings.TrimSpace(target))
-	if err != nil || parsed.Scheme != "ip" || parsed.Host == "" {
-		return fmt.Errorf("invalid upstream target")
+// Readiness follows the client's verified directory. Control-plane downtime
+// does not withdraw valid cached routes; missing service placements do.
+func updateReady(state *healthz.State, gateway *gatewayclient.Client) {
+	directory := gateway.Directory()
+	catalog, err := servicecatalog.LoadEmbedded()
+	ready := err == nil && directory.Version != ""
+	for _, principal := range catalog.Principals {
+		for _, grant := range principal.Allow {
+			ready = ready && len(directory.Services[grant.Service]) > 0
+		}
 	}
-	if _, _, err := net.SplitHostPort(parsed.Host); err != nil {
-		return fmt.Errorf("invalid upstream target: %w", err)
-	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", parsed.Host)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return strings.TrimSpace(fallback)
-}
-
-func envDuration(name string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil || parsed <= 0 {
-		log.Printf("invalid %s=%q; using %s", name, value, fallback)
-		return fallback
-	}
-	return parsed
-}
-
-func envInt64(name string, fallback int64) int64 {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || parsed <= 0 {
-		log.Printf("invalid %s=%q; using %d", name, value, fallback)
-		return fallback
-	}
-	return parsed
+	state.SetReady(ready)
 }
