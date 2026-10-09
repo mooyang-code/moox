@@ -20,7 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -52,7 +52,7 @@ func TestServiceRouterProxiesAuthenticatedRequestAndPreservesHeaders(t *testing.
 }
 
 func TestNativeServiceDescUsesWildcardMethod(t *testing.T) {
-	desc, implementation := NativeServiceDesc(NativeOptions{Table: &gatewayproxy.Table{}})
+	desc, implementation := NativeServiceDesc(NativeOptions{Table: &gatewayroute.Table{}})
 	if implementation == nil || desc == nil || len(desc.Methods) != 1 || desc.Methods[0].Name != "*" {
 		t.Fatalf("native descriptor = %+v implementation=%T", desc, implementation)
 	}
@@ -116,12 +116,12 @@ func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T)
 		}
 	})
 
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
 		ServiceID: "storage-primary", Address: listener.Addr().String(), ServicePath: "trpc.moox.storage.Metadata",
 		AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"admin-gateway"}, MaxBodyBytes: 1 << 20,
 	}})
 	require.NoError(t, err)
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	require.NoError(t, table.Replace(snapshot))
 	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
 	require.NoError(t, err)
@@ -182,12 +182,12 @@ func TestNativeGatewayRoutesSkillReadToCanonicalPrimaryStoreEndpoint(t *testing.
 		}
 	})
 
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
 		ServiceID: "storage-primary", Address: listener.Addr().String(), ServicePath: "trpc.moox.storage.PrimaryStore",
 		AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"moox-skill"}, MaxBodyBytes: 1 << 20,
 	}})
 	require.NoError(t, err)
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	require.NoError(t, table.Replace(snapshot))
 	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
 	desc, implementation := NativeServiceDesc(NativeOptions{
@@ -236,7 +236,7 @@ func TestNativeGatewayUsesSeededCollectorPeriodRoutesForGeneratedPrimaryStoreCli
 	})
 
 	snapshot, nonCollectorCallers := seededPrimaryStoreSnapshot(t, listener.Addr().String())
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	require.NoError(t, table.Replace(snapshot))
 	credentials := gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}
 	desc, implementation := NativeServiceDesc(NativeOptions{
@@ -314,7 +314,7 @@ func TestNativeGatewayUsesSeededCollectorPeriodRoutesForGeneratedPrimaryStoreCli
 	require.EqualValues(t, len(periodRPCs), upstreamStub.periodRPCCalls.Load(), "Collector period RPCs must reach PrimaryStore exactly once each")
 }
 
-func seededPrimaryStoreSnapshot(t *testing.T, upstreamAddress string) (gatewayproxy.Snapshot, []string) {
+func seededPrimaryStoreSnapshot(t *testing.T, upstreamAddress string) (gatewayroute.Snapshot, []string) {
 	t.Helper()
 	var seed struct {
 		Services []struct {
@@ -339,7 +339,7 @@ func seededPrimaryStoreSnapshot(t *testing.T, upstreamAddress string) (gatewaypr
 	require.NoError(t, err)
 	require.NoError(t, yaml.Unmarshal(raw, &seed))
 
-	var routes []gatewayproxy.Route
+	var routes []gatewayroute.Route
 	callers := make(map[string]struct{})
 	for _, service := range seed.Services {
 		for _, caller := range service.ExtraConfig.GatewayCallers {
@@ -357,12 +357,12 @@ func seededPrimaryStoreSnapshot(t *testing.T, upstreamAddress string) (gatewaypr
 		if serviceID == "" {
 			serviceID = service.Name
 		}
-		routes = append(routes, gatewayproxy.Route{
+		routes = append(routes, gatewayroute.Route{
 			ServiceID: serviceID, Address: upstreamAddress, ServicePath: service.GatewayPath,
 			AllowedMethods: service.ExtraConfig.GatewayMethods, AllowedCallers: service.ExtraConfig.GatewayCallers,
 		})
 		for _, route := range service.ExtraConfig.GatewayRoutes {
-			routes = append(routes, gatewayproxy.Route{
+			routes = append(routes, gatewayroute.Route{
 				ServiceID: serviceID, Address: upstreamAddress, ServicePath: route.ServicePath,
 				TimeoutMS: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes,
 				AllowedMethods: route.GatewayMethods, AllowedCallers: route.GatewayCallers,
@@ -380,7 +380,7 @@ func seededPrimaryStoreSnapshot(t *testing.T, upstreamAddress string) (gatewaypr
 		}
 	}
 	sort.Strings(nonCollectorCallers)
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, routes)
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, routes)
 	require.NoError(t, err)
 	return snapshot, nonCollectorCallers
 }
@@ -401,12 +401,12 @@ func TestNativeGatewayRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T
 		}
 	})
 
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
 		ServiceID: "collectmgr", Address: listener.Addr().String(), ServicePath: "trpc.moox.collector.CollectMgr",
 		AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}, MaxBodyBytes: 1 << 20,
 	}})
 	require.NoError(t, err)
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	require.NoError(t, table.Replace(snapshot))
 	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
 	desc, implementation := NativeServiceDesc(NativeOptions{NodeID: testNode, Credentials: credentials, Table: &table})
@@ -481,11 +481,11 @@ func (*nativeMetadataStub) GetSpace(context.Context, *storagepb.GetSpaceReq) (*s
 }
 
 func TestNativeGatewayAuthenticatesReplaysAndEnforcesRouteBodyLimit(t *testing.T) {
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
 		ServiceID: "echo", Address: "127.0.0.1:1", ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"}, AllowedCallers: []string{"*"}, MaxBodyBytes: 1,
 	}})
 	require.NoError(t, err)
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	require.NoError(t, table.Replace(snapshot))
 	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
 	require.NoError(t, err)
@@ -543,11 +543,11 @@ func TestServiceRouterAllowsAuthenticatedGetSecretValue(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_value":"plain"}}`))
 	}))
 	defer upstream.Close()
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{ServiceID: "secret", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.ops.SecretMgr", MaxBodyBytes: 1024, AllowedMethods: []string{"GetSecretValue"}, AllowedCallers: []string{"*"}}})
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{ServiceID: "secret", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.ops.SecretMgr", MaxBodyBytes: 1024, AllowedMethods: []string{"GetSecretValue"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -570,12 +570,12 @@ func TestServiceRouterRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T
 		upstreamCalls.Add(1)
 	}))
 	defer upstream.Close()
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, false, []gatewayproxy.Route{{
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
 		ServiceID: "collectmgr", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.collector.CollectMgr",
 		MaxBodyBytes: 1024, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"},
 	}})
 	require.NoError(t, err)
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	require.NoError(t, table.Replace(snapshot))
 	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
 	require.NoError(t, err)
@@ -745,11 +745,11 @@ func newHandlerWithOptions(t *testing.T, upstream *httptest.Server, disabled boo
 	if upstream != nil {
 		address = upstream.Listener.Addr().String()
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHashState(testNode, disabled, []gatewayproxy.Route{{ServiceID: "monitor", Address: address, ServicePath: "trpc.moox.monitor.MonitorMgr", MaxBodyBytes: 1024, TimeoutMS: timeoutMS, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, disabled, []gatewayroute.Route{{ServiceID: "monitor", Address: address, ServicePath: "trpc.moox.monitor.MonitorMgr", MaxBodyBytes: 1024, TimeoutMS: timeoutMS, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}

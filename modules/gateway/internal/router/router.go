@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 const serviceNonceNamespace = "gateway-service"
@@ -25,8 +25,8 @@ type credentialVerifier interface {
 }
 
 type routeTable interface {
-	Resolve(string) (gatewayproxy.Route, bool)
-	ResolveMethod(string, string) (gatewayproxy.Route, bool)
+	Resolve(string) (gatewayroute.Route, bool)
+	ResolveMethod(string, string) (gatewayroute.Route, bool)
 }
 
 type Metrics interface {
@@ -136,10 +136,10 @@ func (handler *Handler) HandleService(response http.ResponseWriter, request *htt
 		writeError(response, http.StatusRequestEntityTooLarge)
 		return
 	}
-	upstream, err := gatewayproxy.Forward(request.Context(), nil, route, requestedMethod, body, request.Header)
+	upstream, err := gatewayroute.Forward(request.Context(), nil, route, requestedMethod, body, request.Header)
 	if err != nil {
 		switch {
-		case errors.Is(err, gatewayproxy.ErrMethodNotAllowed):
+		case errors.Is(err, gatewayroute.ErrMethodNotAllowed):
 			method = "rejected"
 			status = http.StatusMethodNotAllowed
 			writeError(response, http.StatusMethodNotAllowed)

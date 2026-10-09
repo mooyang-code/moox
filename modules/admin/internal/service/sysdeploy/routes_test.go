@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -116,7 +116,7 @@ func TestValidateDeployment_GatewayRouteRules(t *testing.T) {
 		mutate(&item)
 		assert.Error(t, validateDeployment(&item))
 	}
-	_ = gatewayproxy.Route{}
+	_ = gatewayroute.Route{}
 }
 
 func TestDAO_DeploymentIdentityIsScopedToNode(t *testing.T) {

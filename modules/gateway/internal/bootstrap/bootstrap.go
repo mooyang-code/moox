@@ -18,7 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/router"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/healthz"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -26,12 +26,12 @@ import (
 )
 
 type routeStore interface {
-	Load() (gatewayproxy.Snapshot, error)
-	Save(gatewayproxy.Snapshot) error
+	Load() (gatewayroute.Snapshot, error)
+	Save(gatewayroute.Snapshot) error
 }
 
 type controlClient interface {
-	Pull(context.Context, string) (gatewayproxy.Snapshot, error)
+	Pull(context.Context, string) (gatewayroute.Snapshot, error)
 	Report(context.Context, string, int32, string) error
 }
 
@@ -62,7 +62,7 @@ type Runtime struct {
 	routes        routeStore
 	control       controlClient
 	health        *health.State
-	table         gatewayproxy.Table
+	table         gatewayroute.Table
 	mu            sync.Mutex
 	now           func() time.Time
 	warn          func(string)
@@ -99,7 +99,7 @@ func New(options Options) *Runtime {
 	}
 }
 
-func (runtime *Runtime) Table() *gatewayproxy.Table { return &runtime.table }
+func (runtime *Runtime) Table() *gatewayroute.Table { return &runtime.table }
 
 func (runtime *Runtime) Initialize(ctx context.Context) error {
 	runtime.mu.Lock()
@@ -192,12 +192,12 @@ func (runtime *Runtime) resetSyncFailure() {
 	runtime.lastWarning = time.Time{}
 }
 
-func (runtime *Runtime) apply(snapshot gatewayproxy.Snapshot, persist bool) error {
+func (runtime *Runtime) apply(snapshot gatewayroute.Snapshot, persist bool) error {
 	if snapshot.NodeID != runtime.nodeID {
 		runtime.health.RouteValidationFailed()
 		return fmt.Errorf("route snapshot targets %q, want %q", snapshot.NodeID, runtime.nodeID)
 	}
-	var validated gatewayproxy.Table
+	var validated gatewayroute.Table
 	if err := validated.Replace(snapshot); err != nil {
 		runtime.health.RouteValidationFailed()
 		return err

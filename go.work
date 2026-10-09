@@ -32,7 +32,7 @@ use (
 	./packages/events
 	./packages/frequency
 	./packages/gatewayauth
-	./packages/gatewayproxy
+	./packages/gatewayroute
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream

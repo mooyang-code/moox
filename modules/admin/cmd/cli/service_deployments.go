@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
@@ -598,7 +598,7 @@ func validateServiceDeploymentSeed(seed serviceDeploymentSeed) error {
 		return errors.New("service deployment seed must contain at least one service")
 	}
 	seen := make(map[string]struct{}, len(seed.Services))
-	gatewayRoutes := make([]gatewayproxy.Route, 0)
+	gatewayRoutes := make([]gatewayroute.Route, 0)
 	for _, item := range seed.Services {
 		name := strings.TrimSpace(item.Name)
 		if name == "" {
@@ -640,7 +640,7 @@ func validateServiceDeploymentSeed(seed serviceDeploymentSeed) error {
 			gatewayRoutes = append(gatewayRoutes, routes...)
 		}
 	}
-	if _, err := gatewayproxy.NormalizeAndHash(seed.Node.ID, gatewayRoutes); err != nil {
+	if _, err := gatewayroute.NormalizeAndHash(seed.Node.ID, gatewayRoutes); err != nil {
 		return fmt.Errorf("invalid gateway route set: %w", err)
 	}
 	return nil
@@ -658,14 +658,14 @@ func validateSeedGatewayConfig(item serviceDeploymentEntry) error {
 	if err != nil {
 		return err
 	}
-	baseRoute := gatewayproxy.Route{
+	baseRoute := gatewayroute.Route{
 		ServiceID:      item.GatewayService,
 		Address:        net.JoinHostPort(item.Host, strconv.Itoa(int(item.Port))),
 		ServicePath:    item.GatewayPath,
 		AllowedMethods: methods,
 		AllowedCallers: callers,
 	}
-	if err := gatewayproxy.ValidateRoute(baseRoute); err != nil {
+	if err := gatewayroute.ValidateRoute(baseRoute); err != nil {
 		return err
 	}
 	rawRoutes, ok := item.ExtraConfig["gateway_routes"]
@@ -697,14 +697,14 @@ func validateSeedGatewayConfig(item serviceDeploymentEntry) error {
 		if err != nil {
 			return err
 		}
-		nestedRoute := gatewayproxy.Route{
+		nestedRoute := gatewayroute.Route{
 			ServiceID:      item.GatewayService,
 			Address:        net.JoinHostPort(item.Host, strconv.Itoa(port)),
 			ServicePath:    servicePath,
 			AllowedMethods: methods,
 			AllowedCallers: callers,
 		}
-		if err := gatewayproxy.ValidateRoute(nestedRoute); err != nil {
+		if err := gatewayroute.ValidateRoute(nestedRoute); err != nil {
 			return err
 		}
 	}
@@ -731,7 +731,7 @@ func validateSeedACL(values map[string]any, key string) ([]string, error) {
 	return result, nil
 }
 
-func seedGatewayRoutes(item serviceDeploymentEntry) ([]gatewayproxy.Route, error) {
+func seedGatewayRoutes(item serviceDeploymentEntry) ([]gatewayroute.Route, error) {
 	methods, err := validateSeedACL(item.ExtraConfig, "gateway_methods")
 	if err != nil {
 		return nil, err
@@ -748,7 +748,7 @@ func seedGatewayRoutes(item serviceDeploymentEntry) ([]gatewayproxy.Route, error
 	if err != nil {
 		return nil, err
 	}
-	routes := []gatewayproxy.Route{{
+	routes := []gatewayroute.Route{{
 		ServiceID:      item.GatewayService,
 		Address:        net.JoinHostPort(item.Host, strconv.Itoa(int(item.Port))),
 		ServicePath:    item.GatewayPath,
@@ -791,7 +791,7 @@ func seedGatewayRoutes(item serviceDeploymentEntry) ([]gatewayproxy.Route, error
 		if err != nil {
 			return nil, err
 		}
-		routes = append(routes, gatewayproxy.Route{
+		routes = append(routes, gatewayroute.Route{
 			ServiceID:      item.GatewayService,
 			Address:        net.JoinHostPort(item.Host, strconv.Itoa(port)),
 			ServicePath:    servicePath,

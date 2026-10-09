@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -24,11 +24,11 @@ type Service interface {
 	pb.SysDeployService
 	SeedDefaults(ctx context.Context) error
 	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool)
-	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error)
+	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayroute.Snapshot, error)
 	ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error
 }
 
-func (s *ServiceImpl) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
+func (s *ServiceImpl) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayroute.Snapshot, error) {
 	return s.dao.CompileGatewaySnapshot(ctx, nodeID)
 }
 
@@ -341,7 +341,7 @@ func validateDeployment(item *Deployment) error {
 				}
 			}
 		}
-		if _, err := gatewayproxy.NormalizeAndHash("validation", routes); err != nil {
+		if _, err := gatewayroute.NormalizeAndHash("validation", routes); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
 		}
 	}

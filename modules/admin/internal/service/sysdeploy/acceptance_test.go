@@ -8,7 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -282,7 +282,7 @@ func TestDefaultSysdeployRouteAllowsBoundedInventoryLookup(t *testing.T) {
 	require.NoError(t, svc.SeedDefaults(ctx))
 	snapshot, err := svc.CompileGatewaySnapshot(ctx, "node-a")
 	require.NoError(t, err)
-	var sysdeployRoute gatewayproxy.Route
+	var sysdeployRoute gatewayroute.Route
 	for _, route := range snapshot.Routes {
 		if route.ServiceID == "sysdeploy" {
 			sysdeployRoute = route
@@ -302,7 +302,7 @@ func TestDefaultSysdeployRouteAllowsBoundedInventoryLookup(t *testing.T) {
 			assert.Equal(t, []string{"ListActiveServiceDeployments", "ListServiceDeployments"}, route.GetAllowedMethods())
 		}
 	}
-	var secretRoute gatewayproxy.Route
+	var secretRoute gatewayroute.Route
 	for _, route := range snapshot.Routes {
 		if route.ServiceID == "secret" {
 			secretRoute = route

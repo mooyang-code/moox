@@ -10,7 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
 func TestAdminGatewayControlPlaneContract(t *testing.T) {
@@ -56,7 +56,7 @@ func TestAdminGatewayControlPlaneContract(t *testing.T) {
 	}
 
 	seenAt := time.Now().UTC().Truncate(time.Microsecond)
-	report := gatewayproxy.GatewayStatusReport{
+	report := gatewayroute.GatewayStatusReport{
 		NodeID: nodeID, AppliedRouteHash: snapshot.RouteHash, RouteCount: int32(len(snapshot.Routes)), LastSeenAt: seenAt,
 	}
 	if err := service.ReportGatewayStatus(ctx, report); err != nil {

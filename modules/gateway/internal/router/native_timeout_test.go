@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -16,9 +16,9 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-type staticNativeTable struct{ route gatewayproxy.Route }
+type staticNativeTable struct{ route gatewayroute.Route }
 
-func (t staticNativeTable) ResolveRPC(rpcName string) (gatewayproxy.Route, string, bool) {
+func (t staticNativeTable) ResolveRPC(rpcName string) (gatewayroute.Route, string, bool) {
 	_, method, ok := splitRPCName(rpcName)
 	return t.route, method, ok
 }
@@ -62,7 +62,7 @@ func TestNativeUpstreamTimeoutAnswersCallerPromptly(t *testing.T) {
 		return &codec.Body{Data: []byte(`{"ok":true}`)}, nil
 	})
 	creds := gatewayauth.Credentials{KeyID: "moox-gateway-service", Secret: "secret"}
-	desc, impl := NativeServiceDesc(NativeOptions{NodeID: "storage", Credentials: creds, Table: staticNativeTable{route: gatewayproxy.Route{
+	desc, impl := NativeServiceDesc(NativeOptions{NodeID: "storage", Credentials: creds, Table: staticNativeTable{route: gatewayroute.Route{
 		Address: upstream, ServicePath: "trpc.moox.storage.DataView", TimeoutMS: 1000, AllowedMethods: []string{"*"},
 	}}})
 	svc := server.New(server.WithAddress(gateway), server.WithNetwork("tcp"), server.WithProtocol("trpc"),

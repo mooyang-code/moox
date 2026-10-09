@@ -18,7 +18,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,9 +27,9 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 	require.NotEmpty(t, coord)
 	address, err := os.ReadFile(filepath.Join(coord, "trade-ready"))
 	require.NoError(t, err)
-	snapshot, err := gatewayproxy.NormalizeAndHash("gateway-owner-e2e", []gatewayproxy.Route{{ServiceID: "trade_owner", Address: string(address), ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, AllowedCallers: []string{"strategy"}}})
+	snapshot, err := gatewayroute.NormalizeAndHash("gateway-owner-e2e", []gatewayroute.Route{{ServiceID: "trade_owner", Address: string(address), ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, AllowedCallers: []string{"strategy"}}})
 	require.NoError(t, err)
-	var table gatewayproxy.Table
+	var table gatewayroute.Table
 	require.NoError(t, table.Replace(snapshot))
 	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
 	require.NoError(t, err)

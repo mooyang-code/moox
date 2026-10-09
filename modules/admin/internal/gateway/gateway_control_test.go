@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,9 +19,9 @@ import (
 const testGatewayControlSecret = "gateway-control-test-secret"
 
 type fakeGatewayControlProvider struct {
-	snapshots map[string]gatewayproxy.Snapshot
+	snapshots map[string]gatewayroute.Snapshot
 	err       error
-	reports   []gatewayproxy.GatewayStatusReport
+	reports   []gatewayroute.GatewayStatusReport
 	details   map[string]ServiceDetail
 	lastNode  string
 }
@@ -32,18 +32,18 @@ func (p *fakeGatewayControlProvider) ResolveAdminServiceDetail(_ context.Context
 	return detail, ok
 }
 
-func (p *fakeGatewayControlProvider) CompileGatewaySnapshot(_ context.Context, nodeID string) (gatewayproxy.Snapshot, error) {
+func (p *fakeGatewayControlProvider) CompileGatewaySnapshot(_ context.Context, nodeID string) (gatewayroute.Snapshot, error) {
 	if p.err != nil {
-		return gatewayproxy.Snapshot{}, p.err
+		return gatewayroute.Snapshot{}, p.err
 	}
 	snapshot, ok := p.snapshots[nodeID]
 	if !ok {
-		return gatewayproxy.Snapshot{}, gatewayproxy.ErrGatewayNodeNotFound
+		return gatewayroute.Snapshot{}, gatewayroute.ErrGatewayNodeNotFound
 	}
 	return snapshot, nil
 }
 
-func (p *fakeGatewayControlProvider) ReportGatewayStatus(_ context.Context, report gatewayproxy.GatewayStatusReport) error {
+func (p *fakeGatewayControlProvider) ReportGatewayStatus(_ context.Context, report gatewayroute.GatewayStatusReport) error {
 	if p.err != nil {
 		return p.err
 	}
@@ -74,7 +74,7 @@ func setupGatewayControlRouter(t *testing.T, provider GatewayProvider) (*HTTPRou
 }
 
 func TestGatewayControlRoutesReturnsOnlySignedTargetSnapshot(t *testing.T) {
-	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayproxy.Snapshot{
+	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayroute.Snapshot{
 		"node-a": {NodeID: "node-a", RouteHash: strings.Repeat("a", 64)},
 		"node-b": {NodeID: "node-b", RouteHash: strings.Repeat("b", 64)},
 	}}
@@ -107,7 +107,7 @@ func TestGatewayControlStatusReportsExactFieldsWithServerTime(t *testing.T) {
 }
 
 func TestGatewayControlAuthenticationFailures(t *testing.T) {
-	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayproxy.Snapshot{"node-a": {NodeID: "node-a"}}}
+	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayroute.Snapshot{"node-a": {NodeID: "node-a"}}}
 	router, _ := setupGatewayControlRouter(t, provider)
 	tests := map[string]func() *http.Request{
 		"missing": func() *http.Request {
@@ -148,8 +148,8 @@ func TestGatewayControlProviderErrorsAreClassified(t *testing.T) {
 		err    error
 		status int
 	}{
-		"missing":  {gatewayproxy.ErrGatewayNodeNotFound, http.StatusNotFound},
-		"invalid":  {gatewayproxy.ErrInvalidGatewayRoute, http.StatusBadRequest},
+		"missing":  {gatewayroute.ErrGatewayNodeNotFound, http.StatusNotFound},
+		"invalid":  {gatewayroute.ErrInvalidGatewayRoute, http.StatusBadRequest},
 		"internal": {errors.New("database unavailable"), http.StatusInternalServerError},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestGatewayControlStatusRejectsInvalidBodiesWithoutCallingProvider(t *testi
 }
 
 func TestGatewayControlRoutesRejectsBody(t *testing.T) {
-	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayproxy.Snapshot{"node-a": {NodeID: "node-a"}}}
+	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayroute.Snapshot{"node-a": {NodeID: "node-a"}}}
 	router, _ := setupGatewayControlRouter(t, provider)
 	recorder := httptest.NewRecorder()
 	req := signedGatewayControlRequest(t, http.MethodGet, "node-a", "unexpected", time.Now())
@@ -204,7 +204,7 @@ func TestGatewayControlRoutesRejectsBody(t *testing.T) {
 }
 
 func TestGatewayControlMissingSecretIsUnavailableAndMethodsStayNarrow(t *testing.T) {
-	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayproxy.Snapshot{"node-a": {NodeID: "node-a"}}}
+	provider := &fakeGatewayControlProvider{snapshots: map[string]gatewayroute.Snapshot{"node-a": {NodeID: "node-a"}}}
 	router, _ := setupGatewayControlRouter(t, provider)
 	t.Setenv("MOOX_GATEWAY_CONTROL_SECRET_KEY", "")
 	recorder := httptest.NewRecorder()
