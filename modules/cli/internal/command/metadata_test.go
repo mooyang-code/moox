@@ -908,3 +908,5 @@ func TestApplyProbeResultDatasetColumns(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, column, actual)
 }
+
+func storageOK() *pb.RetInfo { return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS} }

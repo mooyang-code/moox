@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	xssh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -34,6 +35,16 @@ type Target struct {
 	Address  string
 	Port     int
 	Username string
+}
+
+// HostTarget 返回 moox.toml 中一台主机的 SSH 目标。
+func HostTarget(host setupconfig.Host) Target {
+	return Target{Name: host.ID, Address: host.Address, Port: host.SSH.Port, Username: host.SSH.Username}
+}
+
+// DialHost 用 moox.toml 中的 SSH 口令连接一台主机。
+func DialHost(ctx context.Context, host setupconfig.Host, opts Options) (Client, error) {
+	return Dial(ctx, HostTarget(host), host.SSH.Password, opts)
 }
 
 func (t Target) DialAddress() string {

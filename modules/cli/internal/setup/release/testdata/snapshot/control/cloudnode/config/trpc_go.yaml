@@ -1,0 +1,50 @@
+global:
+  namespace: Development
+  env_name: dev
+server:
+  filter:
+    - recovery
+    - validation
+    - prometheus
+  # SCF request-response invocations may use the full 900s function timeout.
+  # Keep the CloudNode RPC envelope longer than the provider request timeout.
+  timeout: 960000
+  admin:
+    ip: 127.0.0.1
+    port: 11941
+    read_timeout: 3000
+    write_timeout: 960000
+  service:
+    - name: trpc.moox.cloudnode.CloudNodeMgr
+      ip: 127.0.0.1
+      port: 11401
+      network: tcp
+      protocol: trpc
+      timeout: 960000
+    - name: trpc.moox.cloudnode.Health
+      ip: 127.0.0.1
+      port: 11411
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.cloudnode.metrics.timer
+      port: 11413
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
+plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12941
+      path: /metrics
+      enablepush: false
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: console
+        level: info

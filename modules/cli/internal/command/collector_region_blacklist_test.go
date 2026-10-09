@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -112,24 +111,21 @@ func TestCollectorBlacklistRuntimePreflight(t *testing.T) {
 	require.NoError(t, preflightCollectorBlacklistRuntime(context.Background(), nil, nil))
 	require.Error(t, preflightCollectorBlacklistRuntime(context.Background(), nil, &setupconfig.SCFFetcherSpace{}))
 	raw := "scf_region_blacklists:\n  crypto: [ap-guangzhou]\n"
-	hash := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(raw)))
 	cfg := &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}}
 	empty := &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}
-	require.ErrorContains(t, validateCollectorBlacklistRuntime(empty, []byte(raw), hash, "/data/moox/bin/moox-collector"), "differs")
-	cleared := []byte("scf_region_blacklists:\n  crypto: []\n")
-	require.NoError(t, validateCollectorBlacklistRuntime(empty, cleared, fmt.Sprintf("sha256:%x", sha256.Sum256(cleared)), "/data/moox/bin/moox-collector"))
+	exe := "/data/moox/control/releases/r1/bin/moox-collector"
+	require.ErrorContains(t, validateCollectorBlacklistRuntime(empty, []byte(raw), exe), "differs")
+	require.NoError(t, validateCollectorBlacklistRuntime(empty, []byte("scf_region_blacklists:\n  crypto: []\n"), exe))
 	for _, test := range []struct {
-		name, config, hash, exe string
-		fail                    bool
+		name, config, exe string
+		fail              bool
 	}{
-		{"loaded", raw, hash, "/data/moox/bin/moox-collector", false},
-		{"missing identity", raw, "", "/data/moox/bin/moox-collector", true},
-		{"not restarted", raw, "sha256:old", "/data/moox/bin/moox-collector", true},
-		{"wrong process", raw, hash, "/data/moox/bin/moox-admin", true},
-		{"missing policy", "{}\n", fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("{}\n"))), "/data/moox/bin/moox-collector", true},
+		{"loaded", raw, exe, false},
+		{"wrong process", raw, "/data/moox/control/releases/r1/bin/moox-admin", true},
+		{"missing policy", "{}\n", exe, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateCollectorBlacklistRuntime(cfg, []byte(test.config), test.hash, test.exe)
+			err := validateCollectorBlacklistRuntime(cfg, []byte(test.config), test.exe)
 			if test.fail {
 				require.Error(t, err)
 			} else {
@@ -137,9 +133,9 @@ func TestCollectorBlacklistRuntimePreflight(t *testing.T) {
 			}
 		})
 	}
-	ssh := &collectorBlacklistSSHStub{result: setupssh.Result{Stdout: hash + "\n/data/moox/bin/moox-collector\n" + raw}}
-	require.NoError(t, verifyCollectorBlacklistRuntime(context.Background(), ssh, "/data/moox", cfg))
-	require.Equal(t, "/data/moox", ssh.args[len(ssh.args)-1])
+	ssh := &collectorBlacklistSSHStub{result: setupssh.Result{Stdout: exe + "\n" + raw}}
+	require.NoError(t, verifyCollectorBlacklistRuntime(context.Background(), ssh, "/data/moox/control", cfg))
+	require.Equal(t, "/data/moox/control", ssh.args[len(ssh.args)-1])
 	ssh.err = fmt.Errorf("sensitive remote output")
 	err := verifyCollectorBlacklistRuntime(context.Background(), ssh, "/data/moox", cfg)
 	require.Error(t, err)

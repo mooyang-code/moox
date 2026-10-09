@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -580,7 +581,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return collectorPublishSummary{}, err
 	}
-	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost())
 	if trustErr != nil {
 		return collectorPublishSummary{}, trustErr
 	}
@@ -594,7 +595,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		trustMaterial.EventBusCredential, trustErr = preflightCollectorSCFEventBusCredential(
 			trustMaterial.EventBusCredential,
 			trustMaterial.EventBusCAPEM,
-			manifest.Manifest.EventBus,
+			manifest.Manifest,
 		)
 		if trustErr != nil {
 			return collectorPublishSummary{}, trustErr
@@ -1195,7 +1196,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return summary, err
 	}
-	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost())
 	if trustErr != nil {
 		return summary, trustErr
 	}
@@ -1577,42 +1578,45 @@ func loadCollectorSCFFetcherConfigSnapshot(path, spaceID string) (*setupconfig.S
 	return nil, nil, fmt.Errorf("scf_fetcher has no configuration for space %q", spaceID)
 }
 
-func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconfig.Host, controlRoot string) (collectorSCFTrustMaterial, error) {
-	transport, err := setupssh.Dial(ctx, sshTarget(controlHost), controlHost.Password, setupssh.Options{Timeout: 15 * time.Second})
+// resolveCollectorSCFTrustMaterial 在 control 上读取 SCF 采集函数需要的材料：消息总线的发布凭据与 CA、
+// 存储内部签名密钥，以及 scf-collector 外部调用方的签名密钥（没有时生成）。
+func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconfig.Host) (collectorSCFTrustMaterial, error) {
+	transport, err := dialSetupHost(ctx, controlHost)
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("connect control host to read SCF trust material: %w", err)
+		return collectorSCFTrustMaterial{}, fmt.Errorf("连接 control 读取 SCF 采集函数的凭据: %w", err)
 	}
 	defer transport.Close()
+	root := controlHost.Root
 
-	credentialRaw, err := readRemoteControlFile(ctx, transport, ".config/moox/eventbus/market-fetch-publisher.yaml")
+	credentialRaw, err := readControlFile(ctx, transport, root+"/secrets/eventbus/market-fetch-publisher.yaml")
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("read control EventBus publisher credential: %w", err)
+		return collectorSCFTrustMaterial{}, fmt.Errorf("读取 control 上的消息总线发布凭据: %w", err)
 	}
 	credential, err := decodeEventBusCredential(string(credentialRaw))
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("decode control EventBus publisher credential: %w", err)
+		return collectorSCFTrustMaterial{}, fmt.Errorf("解析 control 上的消息总线发布凭据: %w", err)
 	}
-	eventBusCA, err := readRemoteControlFile(ctx, transport, ".config/moox/eventbus/ca.pem")
+	eventBusCA, err := readControlFile(ctx, transport, root+"/secrets/eventbus/ca.pem")
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("read control EventBus CA: %w", err)
+		return collectorSCFTrustMaterial{}, fmt.Errorf("读取 control 上的消息总线 CA: %w", err)
 	}
-	storageAuthRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/storage-internal-auth.env"))
+	storageAuthRaw, err := readControlFile(ctx, transport, root+"/secrets/storage-internal-auth.env")
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Storage auth: %w", err)
+		return collectorSCFTrustMaterial{}, fmt.Errorf("读取 control 上的存储内部签名密钥: %w", err)
 	}
 	storagePrimaryAuthSecret, err := collectorStoragePrimaryAuthSecret(storageAuthRaw)
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control Storage auth: %w", err)
+		return collectorSCFTrustMaterial{}, err
 	}
 	storageViewAuthSecret, err := collectorStorageViewAuthSecret(storageAuthRaw)
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control Storage View auth: %w", err)
+		return collectorSCFTrustMaterial{}, err
 	}
-	callerKeyRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, collectorSCFCallerKeyFile))
+	keyRaw, err := ensureControlPrincipalKey(ctx, transport, root, tencent.SCFCollectorCaller)
 	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("读取 control 主机上 scf-collector 的签名密钥 %s: %w", collectorSCFCallerKeyFile, err)
+		return collectorSCFTrustMaterial{}, err
 	}
-	callerKey, err := collectorSCFCallerKeyValue(callerKeyRaw)
+	callerKey, err := collectorSCFCallerKeyValue(keyRaw)
 	if err != nil {
 		return collectorSCFTrustMaterial{}, err
 	}
@@ -1624,9 +1628,6 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 		CallerKey:                callerKey,
 	}, nil
 }
-
-// collectorSCFCallerKeyFile 是 control 主机安装根目录下 scf-collector 外部调用方的签名密钥（CallerKey JSON）。
-const collectorSCFCallerKeyFile = "secrets/principal-scf-collector.key"
 
 // collectorSCFCallerKeyValue 把 scf-collector 的密钥文件转换为函数环境变量 MOOX_CALLER_KEY 的值 <key_id>:<secret>。
 func collectorSCFCallerKeyValue(raw []byte) (string, error) {
@@ -1644,42 +1645,40 @@ func collectorSCFCallerKeyValue(raw []byte) (string, error) {
 	return credentials.KeyID + ":" + credentials.Secret, nil
 }
 
-func readRemoteControlFile(ctx context.Context, transport setupssh.Client, relativePath string) ([]byte, error) {
-	command := `cat "$HOME/$1"`
-	if filepath.IsAbs(relativePath) {
-		command = `cat "$1"`
-	}
-	result, err := transport.Run(ctx, []string{"sh", "-lc", command, "moox-scf-trust", relativePath}, nil)
-	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 1<<20 {
-		return nil, fmt.Errorf("control_public_file_unavailable")
-	}
-	return []byte(result.Stdout), nil
-}
-
 func collectorStoragePrimaryAuthSecret(raw []byte) (string, error) {
-	normalized, err := normalizeStorageInternalAuth(string(raw))
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(normalized, "\n") {
-		if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_PRIMARY_AUTH_SECRET="); ok {
-			return value, nil
-		}
-	}
-	return "", fmt.Errorf("primary auth secret is missing")
+	return secretEnvValue(raw, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 }
 
 func collectorStorageViewAuthSecret(raw []byte) (string, error) {
-	normalized, err := normalizeStorageInternalAuth(string(raw))
-	if err != nil {
-		return "", err
+	return secretEnvValue(raw, "MOOX_STORAGE_VIEW_AUTH_SECRET")
+}
+
+// secretValuePattern 是密钥文件中取值允许的字符。
+var secretValuePattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
+
+// secretEnvValue 从 KEY=VALUE 格式的密钥文件中取出 key 的值。
+func secretEnvValue(raw []byte, key string) (string, error) {
+	if len(raw) == 0 || len(raw) > 4096 {
+		return "", fmt.Errorf("密钥文件无效")
 	}
-	for _, line := range strings.Split(normalized, "\n") {
-		if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_VIEW_AUTH_SECRET="); ok {
-			return value, nil
+	value, found := "", false
+	for _, line := range strings.Split(string(raw), "\n") {
+		name, candidate, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || name != key {
+			continue
 		}
+		if found {
+			return "", fmt.Errorf("密钥文件中 %s 重复", key)
+		}
+		if !secretValuePattern.MatchString(candidate) {
+			return "", fmt.Errorf("密钥文件中 %s 的取值无效", key)
+		}
+		value, found = candidate, true
 	}
-	return "", fmt.Errorf("Storage View auth secret is missing")
+	if !found {
+		return "", fmt.Errorf("密钥文件中缺少 %s", key)
+	}
+	return value, nil
 }
 
 func collectorStorageBindingAppKeys(raw []byte, secret string) (string, error) {
@@ -3434,7 +3433,7 @@ func preflightCollectorManifestEnvironmentLowerBound(opts collectorPublishOption
 				environment["MOOX_CLS_SECRET_ID"] = "x"
 				environment["MOOX_CLS_SECRET_KEY"] = "x"
 			}
-			environment["MOOX_EVENTBUS_NATS_URL"] = "tls://" + net.JoinHostPort(manifest.Manifest.EventBus.PublicAddress, strconv.Itoa(manifest.Manifest.EventBus.Port))
+			environment["MOOX_EVENTBUS_NATS_URL"] = "tls://" + net.JoinHostPort(manifest.Manifest.EventBusHost().Address, strconv.Itoa(manifest.Manifest.EventBus.Port))
 			environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"] = "certs/eventbus-ca.pem"
 			applyCollectorRuntimeEnvironmentOverrides(environment, parseCollectorOverrides(opts.Config))
 			if err := tencent.ValidateSCFEnvironment(environment); err != nil {
@@ -3628,15 +3627,14 @@ func collectorEventBusCredentialMaterial(opts collectorPublishOptions) (jetstrea
 	return credential, caPEM, nil
 }
 
-// preflightCollectorSCFEventBusCredential validates the trust material loaded
-// from the control host and rewrites its endpoint from the deployment manifest.
-// Control-plane credentials intentionally point at the local EventBus listener;
-// that address is valid for host services but cannot be used by an SCF function.
+// preflightCollectorSCFEventBusCredential 校验从 control 读到的消息总线凭据，并把其中的地址换成消息总线所在主机的
+// 公网地址：control 上的凭据可能指向本机回环地址，SCF 函数无法使用。
 func preflightCollectorSCFEventBusCredential(
 	credential jetstream.CredentialFile,
 	caPEM []byte,
-	eventBus setupconfig.EventBus,
+	manifest setupconfig.Manifest,
 ) (jetstream.CredentialFile, error) {
+	eventBus := manifest.EventBus
 	if err := validateCollectorEventBusCredentialShape(credential); err != nil {
 		return jetstream.CredentialFile{}, fmt.Errorf("invalid control EventBus credential: %w", err)
 	}
@@ -3646,9 +3644,9 @@ func preflightCollectorSCFEventBusCredential(
 	if err := validateCollectorEventBusCAPEM(caPEM); err != nil {
 		return jetstream.CredentialFile{}, fmt.Errorf("invalid control EventBus CA material: %w", err)
 	}
-	address := strings.TrimSpace(eventBus.PublicAddress)
+	address := strings.TrimSpace(manifest.EventBusHost().Address)
 	if address == "" || isCollectorEventBusLoopbackHost(address) {
-		return jetstream.CredentialFile{}, fmt.Errorf("eventbus.public_address must be a non-loopback host for SCF")
+		return jetstream.CredentialFile{}, fmt.Errorf("消息总线所在主机的地址必须是公网地址，SCF 函数才能连接")
 	}
 	if eventBus.Port < 1 || eventBus.Port > 65535 {
 		return jetstream.CredentialFile{}, fmt.Errorf("eventbus.port must be between 1 and 65535")

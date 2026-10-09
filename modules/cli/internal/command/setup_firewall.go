@@ -4,45 +4,78 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/release"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 )
 
-// setupFirewallSummary is intentionally small and secret-free so setup output
-// can be persisted by CI without exposing Tencent credentials.
+// setupFirewallSummary 是防火墙同步的结果，不含任何凭据。
 type setupFirewallSummary struct {
-	Status      string `json:"status"`
-	Targets     int    `json:"targets"`
-	Rules       int    `json:"rules"`
-	Skipped     int    `json:"skipped"`
-	AlreadyOpen int    `json:"already_open"`
-	Created     int    `json:"created"`
+	Status      string              `json:"status"`
+	Targets     int                 `json:"targets"`
+	Rules       int                 `json:"rules"`
+	Skipped     int                 `json:"skipped"`
+	AlreadyOpen int                 `json:"already_open"`
+	Created     int                 `json:"created"`
+	Deleted     int                 `json:"deleted"`
+	Hosts       []setupFirewallHost `json:"hosts,omitempty"`
+	DryRun      bool                `json:"dry_run,omitempty"`
+	Prune       bool                `json:"prune,omitempty"`
 }
 
-type setupFirewallTarget struct {
-	Host  setupconfig.Host
-	Rules []cloudtencent.CreateFirewallRulesOptions
+// setupFirewallHost 是一台主机的防火墙变更。
+type setupFirewallHost struct {
+	Host     string               `json:"host"`
+	Address  string               `json:"address"`
+	Kind     string               `json:"kind,omitempty"`
+	Region   string               `json:"region,omitempty"`
+	Created  []setupFirewallEntry `json:"created,omitempty"`
+	Deleted  []setupFirewallEntry `json:"deleted,omitempty"`
+	Obsolete []setupFirewallEntry `json:"obsolete,omitempty"`
+	Skipped  string               `json:"skipped,omitempty"`
+}
+
+// setupFirewallEntry 是一条入站规则：TCP 端口与来源。
+type setupFirewallEntry struct {
+	Port        string `json:"port"`
+	Source      string `json:"source"`
+	Description string `json:"description,omitempty"`
+}
+
+type setupFirewallOptions struct {
+	// Prune 时删除受管端口上不在期望规则中的旧规则（例如 11001、12004，以及对公网开放的 11003）。
+	Prune  bool
+	DryRun bool
 }
 
 func newSetupFirewallCommand(deps setupDeps) *cobra.Command {
 	var file string
+	var opts setupFirewallOptions
 	cmd := &cobra.Command{
 		Use:   "firewall",
-		Short: "初始化所有目标主机的腾讯云防火墙端口",
+		Short: "按部署表同步腾讯云主机的防火墙入站规则",
+		Long: `按 moox.toml 的部署表同步每台腾讯云主机的入站规则：
+  - 控制台代理所在主机：9527 对公网开放；证书方式为 public 时 80 也对公网开放；
+  - 每台主机：跨主机入口 11003 只对其他 MooX 主机开放；
+  - 部署了外部接入的主机：11004 对公网开放；
+  - 消息总线所在主机：消息总线端口对公网开放（SCF 采集函数直接发布事件）；
+  - control 以外的主机：组件健康端口（含主机网关的 11012）只对 control 开放。
+默认只补齐缺少的规则；--prune 同时删除受管端口上多余的规则（例如旧的 11001、12004 和对公网开放的 11003）。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			result, err := deps.ensureFirewall(cmd.Context(), snapshot)
+			result, err := runSetupFirewall(cmd.Context(), snapshot, opts)
 			if err != nil {
 				return err
 			}
@@ -53,115 +86,149 @@ func newSetupFirewallCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().BoolVar(&opts.Prune, "prune", false, "删除受管端口上多余的旧规则")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "只列出要新增和删除的规则，不修改")
 	return cmd
 }
 
-// defaultSetupEnsureFirewall opens only ports used by the deployed runtime.
-// It is idempotent and is safe to run before or after any service deployment.
+// defaultSetupEnsureFirewall 补齐部署表需要的入站规则，不删除任何规则；setup init 使用。
 func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) (setupFirewallSummary, error) {
+	return runSetupFirewall(ctx, snapshot, setupFirewallOptions{})
+}
+
+func runSetupFirewall(ctx context.Context, snapshot *setupconfig.Snapshot, opts setupFirewallOptions) (setupFirewallSummary, error) {
 	if snapshot == nil {
-		return setupFirewallSummary{}, fmt.Errorf("firewall: setup configuration is missing")
+		return setupFirewallSummary{}, fmt.Errorf("firewall: 缺少 moox.toml")
 	}
-	tencent, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
-		SecretID:  snapshot.Manifest.TencentCloud.SecretID,
-		SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-		Region:    snapshot.Manifest.TencentCloud.Region,
-	})
+	manifest := snapshot.Manifest
+	addresses, err := setupFirewallAddresses(ctx, manifest)
+	if err != nil {
+		return setupFirewallSummary{}, err
+	}
+	cloud, err := newSetupFirewallCloud(manifest)
 	if err != nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: %w", err)
 	}
-
-	targets := setupFirewallTargets(snapshot.Manifest)
-	summary := setupFirewallSummary{Status: "ready", Targets: len(targets)}
-	for _, target := range targets {
-		address, err := setupFirewallAddress(ctx, target.Host.Address)
-		if err != nil {
-			return summary, fmt.Errorf("firewall %s: resolve address: %w", target.Host.Name, err)
+	desired := setupFirewallRules(manifest, addresses)
+	managed := setupFirewallManagedPorts(manifest)
+	summary := setupFirewallSummary{Status: "ready", DryRun: opts.DryRun, Prune: opts.Prune}
+	for _, host := range manifest.HostList() {
+		item := setupFirewallHost{Host: host.ID, Address: addresses[host.ID]}
+		switch {
+		case host.Provider != "tencent":
+			item.Skipped = "不是腾讯云主机"
+		case !isPublicFirewallIP(addresses[host.ID]):
+			item.Skipped = "不是公网 IPv4 地址"
 		}
-		if !isPublicFirewallIP(address) {
+		if item.Skipped != "" {
 			summary.Skipped++
+			summary.Hosts = append(summary.Hosts, item)
 			continue
 		}
-		for _, rule := range target.Rules {
-			result, err := tencent.EnsureFirewallRule(ctx, address, rule)
-			if err != nil {
-				// The manifest home region need not be the region of every
-				// configured host. Resolve the actual Tencent region before
-				// falling back to a CVM security group or retrying Lighthouse.
-				created, fallbackErr := ensureFirewallRuleAtDiscoveredRegion(ctx, snapshot.Manifest, address, rule)
-				if fallbackErr == nil {
-					summary.Rules++
-					if created {
-						summary.Created++
-					} else {
-						summary.AlreadyOpen++
-					}
-					continue
-				}
-				fmt.Fprintf(os.Stderr, "firewall %s port %s skipped: lighthouse=%v; discovered=%v\n", target.Host.Name, rule.Ports, err, fallbackErr)
-				summary.Skipped++
-				continue
-			}
-			summary.Rules++
-			if result.Created {
-				summary.Created++
-			} else {
-				summary.AlreadyOpen++
-			}
+		summary.Targets++
+		if err := cloud.sync(ctx, &item, desired[host.ID], managed, opts); err != nil {
+			item.Skipped = err.Error()
+			summary.Skipped++
 		}
+		summary.Rules += len(desired[host.ID])
+		summary.Created += len(item.Created)
+		summary.Deleted += len(item.Deleted)
+		summary.AlreadyOpen += len(desired[host.ID]) - len(item.Created)
+		summary.Hosts = append(summary.Hosts, item)
 	}
 	if summary.Skipped > 0 {
-		// A skipped target is not equivalent to an already-open rule. Keep the
-		// command idempotent, but make partial cloud-account/region resolution
-		// explicit to callers and initialization reports.
 		summary.Status = "partial"
 	}
 	return summary, nil
 }
 
-// ensureFirewallRuleAtDiscoveredRegion handles hosts placed outside the
-// manifest's home region. Lighthouse rules and CVM security-group rules both
-// require the actual region in their signed request, so retrying with the
-// home-region client can never succeed for those hosts.
-func ensureFirewallRuleAtDiscoveredRegion(ctx context.Context, manifest setupconfig.Manifest, address string, rule cloudtencent.CreateFirewallRulesOptions) (bool, error) {
-	network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
-		Region: manifest.TencentCloud.Region,
-	})
-	if err != nil {
-		return false, err
-	}
-	lighthouse, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
-		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
-		Region: manifest.TencentCloud.Region,
-	})
-	if err != nil {
-		return false, err
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	instance, err := (privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(
-		lookupCtx, address, cloudtencent.ProbeRegions(manifest.TencentCloud.Region),
-	)
-	if err != nil {
-		return false, err
-	}
-	switch instance.Kind {
-	case cloudtencent.KindLighthouse:
-		result, err := lighthouse.ForRegion(instance.Region).EnsureFirewallRule(ctx, address, rule)
-		return result.Created, err
-	case cloudtencent.KindCVM:
-		cvm, err := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
-			SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
-			Region: instance.Region,
-		})
+// setupFirewallAddresses 把每台主机的地址解析为 IPv4。
+func setupFirewallAddresses(ctx context.Context, manifest setupconfig.Manifest) (map[string]string, error) {
+	out := map[string]string{}
+	for _, host := range manifest.HostList() {
+		address, err := setupFirewallAddress(ctx, host.Address)
 		if err != nil {
-			return false, err
+			return nil, fmt.Errorf("firewall: 解析主机 %s 的地址: %w", host.ID, err)
 		}
-		return false, cvm.EnsureSecurityGroupRule(ctx, address, rule)
-	default:
-		return false, fmt.Errorf("unsupported Tencent instance kind %q", instance.Kind)
+		out[host.ID] = address
 	}
+	return out, nil
+}
+
+// setupFirewallRules 按部署表计算每台主机期望的入站规则。
+func setupFirewallRules(manifest setupconfig.Manifest, addresses map[string]string) map[string][]setupFirewallEntry {
+	catalog := servicecatalog.Default()
+	controlAddress := addresses[servicecatalog.ControlHostID]
+	out := map[string][]setupFirewallEntry{}
+	add := func(hostID string, entry setupFirewallEntry) {
+		for _, existing := range out[hostID] {
+			if existing.Port == entry.Port && existing.Source == entry.Source {
+				return
+			}
+		}
+		out[hostID] = append(out[hostID], entry)
+	}
+	fromOtherHosts := func(hostID, port, description string) {
+		for _, other := range manifest.HostIDs() {
+			if other != hostID && addresses[other] != "" {
+				add(hostID, setupFirewallEntry{Port: port, Source: addresses[other], Description: description + " from " + other})
+			}
+		}
+	}
+	for _, host := range manifest.HostList() {
+		fromOtherHosts(host.ID, "11003", "MooX host gateway")
+		if manifest.HasComponent(host.ID, "console-proxy") {
+			add(host.ID, setupFirewallEntry{Port: "9527", Source: "0.0.0.0/0", Description: "MooX console HTTPS"})
+			if release.ResolveTLSMode(host.TLSMode, host.Address) == release.TLSModePublic {
+				add(host.ID, setupFirewallEntry{Port: "80", Source: "0.0.0.0/0", Description: "MooX ACME HTTP challenge"})
+			}
+		}
+		if manifest.HasComponent(host.ID, "access") {
+			add(host.ID, setupFirewallEntry{Port: "11004", Source: "0.0.0.0/0", Description: "MooX access"})
+		}
+		if manifest.HasComponent(host.ID, "eventbus") {
+			// SCF 采集函数直接向消息总线发布事件，消息总线端口保持对公网开放（TLS + 账号口令）。
+			add(host.ID, setupFirewallEntry{Port: strconv.Itoa(manifest.EventBus.Port), Source: "0.0.0.0/0", Description: "MooX EventBus TLS"})
+		}
+		if host.ID == servicecatalog.ControlHostID || controlAddress == "" {
+			continue
+		}
+		components := append(catalog.HostComponents(), manifest.Components(host.ID)...)
+		for _, id := range components {
+			component, ok := catalog.Component(id)
+			if !ok || component.Health.Port <= 0 {
+				continue
+			}
+			add(host.ID, setupFirewallEntry{
+				Port: strconv.Itoa(component.Health.Port), Source: controlAddress, Description: "MooX health " + id + " from control",
+			})
+		}
+	}
+	for hostID := range out {
+		sort.Slice(out[hostID], func(i, j int) bool {
+			left, right := out[hostID][i], out[hostID][j]
+			if left.Port != right.Port {
+				return left.Port < right.Port
+			}
+			return left.Source < right.Source
+		})
+	}
+	return out
+}
+
+// setupFirewallManagedPorts 是 MooX 管理的端口：--prune 只删除这些端口上的多余规则，其余端口（例如 SSH）不动。
+// 其中 11001、11200、12004 是旧版本使用的端口，现在不再开放。
+func setupFirewallManagedPorts(manifest setupconfig.Manifest) map[string]bool {
+	ports := map[string]bool{
+		"80": true, "9527": true, "11001": true, "11003": true, "11004": true, "11012": true, "11200": true, "12004": true,
+		strconv.Itoa(manifest.EventBus.Port): true,
+	}
+	for _, component := range servicecatalog.Default().Components {
+		if component.Health.Port > 0 {
+			ports[strconv.Itoa(component.Health.Port)] = true
+		}
+	}
+	return ports
 }
 
 func setupFirewallAddress(ctx context.Context, address string) (string, error) {
@@ -170,67 +237,221 @@ func setupFirewallAddress(ctx context.Context, address string) (string, error) {
 		if v4 := ip.To4(); v4 != nil {
 			return v4.String(), nil
 		}
-		return "", fmt.Errorf("IPv4 address is required")
+		return "", fmt.Errorf("需要 IPv4 地址")
 	}
-	return eventBusFirewallIP(ctx, address, net.DefaultResolver.LookupIP)
-}
-
-func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
-	byAddress := make(map[string]int)
-	targets := make([]setupFirewallTarget, 0, len(manifest.Hosts()))
-	add := func(host setupconfig.Host, rules []cloudtencent.CreateFirewallRulesOptions) {
-		if strings.TrimSpace(host.Address) == "" || len(rules) == 0 {
-			return
-		}
-		key := strings.ToLower(strings.TrimSpace(host.Address))
-		if index, ok := byAddress[key]; ok {
-			targets[index].Rules = appendUniqueFirewallRules(targets[index].Rules, rules...)
-			return
-		}
-		byAddress[key] = len(targets)
-		targets = append(targets, setupFirewallTarget{Host: host, Rules: append([]cloudtencent.CreateFirewallRulesOptions(nil), rules...)})
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", address)
+	if err != nil {
+		return "", err
 	}
-
-	controlRules := append([]cloudtencent.CreateFirewallRulesOptions(nil), setupControlFirewallRulesForTLS(
-		setupdeploy.TLSMode(manifest.ControlHost.TLSMode), manifest.ControlHost.Address,
-	)...)
-	controlRules = appendUniqueFirewallRules(controlRules, setupRuntimeFirewallRules(manifest.EventBus.Port)...)
-	add(manifest.ControlHost, controlRules)
-
-	if setupconfigHostConfigured(manifest.StorageHost) {
-		add(manifest.StorageHost, []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
-	}
-	if setupconfigHostConfigured(manifest.ViewHost) {
-		add(manifest.ViewHost, []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
-	}
-	tradeNode := strings.TrimSpace(manifest.DNSResolver.TradeNode)
-	for _, host := range manifest.Hosts() {
-		if strings.EqualFold(strings.TrimSpace(host.Name), tradeNode) {
-			add(host, []cloudtencent.CreateFirewallRulesOptions{
-				{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"},
-				{Protocol: "TCP", Ports: "11200", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX Trade console"},
-			})
+	unique := map[string]bool{}
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			unique[v4.String()] = true
 		}
 	}
-	return targets
+	if len(unique) != 1 {
+		return "", fmt.Errorf("域名 %s 必须恰好解析到一个 IPv4 地址", address)
+	}
+	for ip := range unique {
+		return ip, nil
+	}
+	return "", fmt.Errorf("域名 %s 没有 IPv4 地址", address)
 }
 
-func setupconfigHostConfigured(host setupconfig.Host) bool {
-	return strings.TrimSpace(host.Name) != "" && strings.TrimSpace(host.Address) != ""
+func isPublicFirewallIP(address string) bool {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	return ip != nil && ip.To4() != nil && ip.IsGlobalUnicast() &&
+		!ip.IsPrivate() && !ip.IsLoopback() && !ip.IsUnspecified() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsMulticast()
 }
 
-func appendUniqueFirewallRules(dst []cloudtencent.CreateFirewallRulesOptions, rules ...cloudtencent.CreateFirewallRulesOptions) []cloudtencent.CreateFirewallRulesOptions {
+// normalizeFirewallSource 统一来源的写法：单个 IP 的 /32 写成 IP 本身。
+func normalizeFirewallSource(source string) string {
+	return strings.TrimSuffix(strings.TrimSpace(source), "/32")
+}
+
+// setupFirewallCloud 读写腾讯云主机的入站规则：轻量应用服务器用防火墙，云服务器用安全组。
+type setupFirewallCloud struct {
+	manifest   setupconfig.Manifest
+	lighthouse *cloudtencent.Client
+	locator    privatenet.TencentCloud
+}
+
+func newSetupFirewallCloud(manifest setupconfig.Manifest) (*setupFirewallCloud, error) {
+	options := cloudtencent.ClientOptions{
+		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey, Region: manifest.TencentCloud.Region,
+	}
+	network, err := cloudtencent.NewNetworkClient(options)
+	if err != nil {
+		return nil, err
+	}
+	lighthouse, err := cloudtencent.NewClient(options)
+	if err != nil {
+		return nil, err
+	}
+	return &setupFirewallCloud{manifest: manifest, lighthouse: lighthouse, locator: privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}}, nil
+}
+
+// locate 查找主机对应的腾讯云实例（类型与地域）。
+func (c *setupFirewallCloud) locate(ctx context.Context, address string) (cloudtencent.CloudInstance, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	return c.locator.LookupHost(lookupCtx, address, cloudtencent.ProbeRegions(c.manifest.TencentCloud.Region))
+}
+
+func (c *setupFirewallCloud) cvm(region string) (*cloudtencent.CVMClient, error) {
+	return cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
+		SecretID: c.manifest.TencentCloud.SecretID, SecretKey: c.manifest.TencentCloud.SecretKey, Region: region,
+	})
+}
+
+func (c *setupFirewallCloud) sync(ctx context.Context, item *setupFirewallHost, desired []setupFirewallEntry, managed map[string]bool, opts setupFirewallOptions) error {
+	instance, err := c.locate(ctx, item.Address)
+	if err != nil {
+		return fmt.Errorf("查找腾讯云实例: %w", err)
+	}
+	item.Kind, item.Region = instance.Kind, instance.Region
+	switch instance.Kind {
+	case cloudtencent.KindLighthouse:
+		return c.syncLighthouse(ctx, item, instance, desired, managed, opts)
+	case cloudtencent.KindCVM:
+		return c.syncCVM(ctx, item, instance, desired, managed, opts)
+	default:
+		return fmt.Errorf("不支持的实例类型 %q", instance.Kind)
+	}
+}
+
+func (c *setupFirewallCloud) syncLighthouse(ctx context.Context, item *setupFirewallHost, instance cloudtencent.CloudInstance, desired []setupFirewallEntry, managed map[string]bool, opts setupFirewallOptions) error {
+	client := c.lighthouse.ForRegion(instance.Region)
+	instanceID, rules, err := client.ListFirewallRules(ctx, item.Address)
+	if err != nil {
+		return fmt.Errorf("读取防火墙规则: %w", err)
+	}
+	existing := make([]setupFirewallEntry, 0, len(rules))
 	for _, rule := range rules {
-		duplicate := false
-		for _, existing := range dst {
-			if strings.EqualFold(existing.Protocol, rule.Protocol) && existing.Ports == rule.Ports && existing.CidrBlock == rule.CidrBlock && strings.EqualFold(existing.Action, rule.Action) {
-				duplicate = true
-				break
+		if strings.EqualFold(rule.Protocol, "TCP") && strings.EqualFold(rule.Action, "ACCEPT") {
+			existing = append(existing, setupFirewallEntry{Port: rule.Port, Source: normalizeFirewallSource(rule.CidrBlock), Description: rule.FirewallRuleDescription})
+		}
+	}
+	missing, obsolete := diffFirewallEntries(desired, existing, managed)
+	item.Obsolete = obsolete
+	if opts.DryRun {
+		item.Created = missing
+		if opts.Prune {
+			item.Deleted = obsolete
+		}
+		return nil
+	}
+	if len(missing) > 0 {
+		request := cloudtencent.CreateFirewallRulesRequest{InstanceID: instanceID}
+		for _, entry := range missing {
+			one, err := cloudtencent.NewCreateFirewallRulesRequest(firewallRuleOptions(instanceID, entry))
+			if err != nil {
+				return err
+			}
+			request.FirewallRules = append(request.FirewallRules, one.FirewallRules...)
+		}
+		if _, err := client.CreateFirewallRules(ctx, request); err != nil {
+			return fmt.Errorf("新增防火墙规则: %w", err)
+		}
+		item.Created = missing
+	}
+	if opts.Prune && len(obsolete) > 0 {
+		var remove []cloudtencent.FirewallRule
+		for _, rule := range rules {
+			entry := setupFirewallEntry{Port: rule.Port, Source: normalizeFirewallSource(rule.CidrBlock)}
+			if strings.EqualFold(rule.Protocol, "TCP") && strings.EqualFold(rule.Action, "ACCEPT") && containsFirewallEntry(obsolete, entry) {
+				remove = append(remove, rule)
 			}
 		}
-		if !duplicate {
-			dst = append(dst, rule)
+		if err := client.DeleteFirewallRules(ctx, instanceID, remove); err != nil {
+			return fmt.Errorf("删除防火墙规则: %w", err)
+		}
+		item.Deleted = obsolete
+	}
+	return nil
+}
+
+func (c *setupFirewallCloud) syncCVM(ctx context.Context, item *setupFirewallHost, instance cloudtencent.CloudInstance, desired []setupFirewallEntry, managed map[string]bool, opts setupFirewallOptions) error {
+	client, err := c.cvm(instance.Region)
+	if err != nil {
+		return err
+	}
+	policies, err := client.ListSecurityGroupIngress(ctx, item.Address)
+	if err != nil {
+		return fmt.Errorf("读取安全组规则: %w", err)
+	}
+	existing := make([]setupFirewallEntry, 0, len(policies))
+	for _, policy := range policies {
+		if strings.EqualFold(policy.Protocol, "TCP") && strings.EqualFold(policy.Action, "ACCEPT") {
+			existing = append(existing, setupFirewallEntry{Port: policy.Port, Source: normalizeFirewallSource(policy.CidrBlock), Description: policy.Description})
 		}
 	}
-	return dst
+	missing, obsolete := diffFirewallEntries(desired, existing, managed)
+	item.Obsolete = obsolete
+	if opts.DryRun {
+		item.Created = missing
+		if opts.Prune {
+			item.Deleted = obsolete
+		}
+		return nil
+	}
+	for _, entry := range missing {
+		if err := client.EnsureSecurityGroupRule(ctx, item.Address, firewallRuleOptions("", entry)); err != nil {
+			return fmt.Errorf("新增安全组规则: %w", err)
+		}
+		item.Created = append(item.Created, entry)
+	}
+	if opts.Prune && len(obsolete) > 0 {
+		byGroup := map[string][]int64{}
+		for _, policy := range policies {
+			entry := setupFirewallEntry{Port: policy.Port, Source: normalizeFirewallSource(policy.CidrBlock)}
+			if strings.EqualFold(policy.Protocol, "TCP") && strings.EqualFold(policy.Action, "ACCEPT") && containsFirewallEntry(obsolete, entry) {
+				byGroup[policy.SecurityGroupID] = append(byGroup[policy.SecurityGroupID], policy.PolicyIndex)
+			}
+		}
+		for groupID, indexes := range byGroup {
+			if err := client.DeleteSecurityGroupIngress(ctx, groupID, indexes); err != nil {
+				return fmt.Errorf("删除安全组规则: %w", err)
+			}
+		}
+		item.Deleted = obsolete
+	}
+	return nil
+}
+
+// diffFirewallEntries 返回缺少的期望规则，以及受管端口上多余的规则。
+func diffFirewallEntries(desired, existing []setupFirewallEntry, managed map[string]bool) ([]setupFirewallEntry, []setupFirewallEntry) {
+	var missing, obsolete []setupFirewallEntry
+	for _, entry := range desired {
+		if !containsFirewallEntry(existing, entry) {
+			missing = append(missing, entry)
+		}
+	}
+	for _, entry := range existing {
+		if managed[entry.Port] && !containsFirewallEntry(desired, entry) && !containsFirewallEntry(obsolete, entry) {
+			obsolete = append(obsolete, entry)
+		}
+	}
+	return missing, obsolete
+}
+
+func containsFirewallEntry(entries []setupFirewallEntry, want setupFirewallEntry) bool {
+	for _, entry := range entries {
+		if entry.Port == want.Port && normalizeFirewallSource(entry.Source) == normalizeFirewallSource(want.Source) {
+			return true
+		}
+	}
+	return false
+}
+
+func firewallRuleOptions(instanceID string, entry setupFirewallEntry) cloudtencent.CreateFirewallRulesOptions {
+	description := entry.Description
+	if len([]rune(description)) > 64 {
+		description = string([]rune(description)[:64])
+	}
+	return cloudtencent.CreateFirewallRulesOptions{
+		InstanceID: instanceID, Protocol: "TCP", Ports: entry.Port, CidrBlock: entry.Source,
+		Action: "ACCEPT", Description: description,
+	}
 }

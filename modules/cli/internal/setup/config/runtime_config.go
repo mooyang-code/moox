@@ -3,8 +3,6 @@ package config
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -16,14 +14,16 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if snapshot == nil {
 		return nil, fmt.Errorf("runtime_config: 缺少 moox.toml 快照")
 	}
-	resolver := snapshot.Manifest.DNSResolver
-	dnsDomains := []string{}
-	if resolver.Enabled {
+	egress := snapshot.Manifest.EgressProxy
+	resolver := egress.DNS
+	httpDomains, dnsDomains := []string{}, []string{}
+	// 没有部署出口代理时，Collector 的请求全部直连。
+	if len(snapshot.Manifest.HostsOf("egress-proxy")) > 0 {
+		httpDomains = append(httpDomains, egress.HTTPDomains...)
 		dnsDomains = normalizedDomains(resolver.Domains)
 	}
-	// moox.toml 目前没有 HTTP 白名单，Collector 的 HTTP 请求全部直连；DNS 快照的域名由出口代理解析。
 	rendered, err := replaceYAMLMapping(existing, "egress_proxy", orderedMapping(
-		mappingField{"domains", []string{}},
+		mappingField{"domains", httpDomains},
 		mappingField{"dns", orderedMapping(
 			mappingField{"domains", dnsDomains},
 			mappingField{"refresh_interval", durationSeconds(resolver.RefreshIntervalSeconds)},
@@ -70,11 +70,6 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 		return replaceYAMLMapping(rendered, "stockcn", stockFields)
 	}
 	return rendered, nil
-}
-
-// WriteRenderedRuntimeConfig 原子地写入已渲染好的 YAML，并保留原文件的权限。
-func WriteRenderedRuntimeConfig(path string, rendered []byte) error {
-	return writeRenderedBytes(path, rendered)
 }
 
 func normalizedDomains(domains []string) []string {
@@ -157,44 +152,4 @@ func valueNode(value any) *yaml.Node {
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
 	}
 	return document.Content[0]
-}
-
-func writeRenderedBytes(path string, rendered []byte) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return fmt.Errorf("runtime_config: output path is required")
-	}
-	mode := os.FileMode(0o644)
-	if info, statErr := os.Stat(path); statErr == nil {
-		mode = info.Mode().Perm()
-	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("runtime_config: create %s: %w", dir, err)
-	}
-	temporary, err := os.CreateTemp(dir, ".moox-runtime-config-*")
-	if err != nil {
-		return fmt.Errorf("runtime_config: create temporary file: %w", err)
-	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
-		return fmt.Errorf("runtime_config: chmod temporary file: %w", err)
-	}
-	if _, err := temporary.Write(rendered); err != nil {
-		temporary.Close()
-		return fmt.Errorf("runtime_config: write temporary file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return fmt.Errorf("runtime_config: sync temporary file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("runtime_config: close temporary file: %w", err)
-	}
-	if err := os.Rename(temporaryName, path); err != nil {
-		return fmt.Errorf("runtime_config: replace %s: %w", path, err)
-	}
-	return nil
 }

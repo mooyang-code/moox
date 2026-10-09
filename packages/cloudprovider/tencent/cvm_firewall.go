@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -100,10 +99,6 @@ type vpcCreatePoliciesRequest struct {
 // CVM's VPC security group. Existing broad ACCEPT rules are also accepted as
 // satisfying the request.
 func (c *CVMClient) EnsureSecurityGroupRule(ctx context.Context, publicIP string, opts CreateFirewallRulesOptions) error {
-	publicIP = strings.TrimSpace(publicIP)
-	if net.ParseIP(publicIP) == nil {
-		return fmt.Errorf("invalid public ip: %s", publicIP)
-	}
 	rule, err := NewCreateFirewallRulesRequest(CreateFirewallRulesOptions{
 		InstanceID:    "cvm",
 		Protocol:      opts.Protocol,
@@ -121,21 +116,9 @@ func (c *CVMClient) EnsureSecurityGroupRule(ctx context.Context, publicIP string
 		CidrBlock: rule.FirewallRules[0].CidrBlock, Action: rule.FirewallRules[0].Action,
 		PolicyDescription: rule.FirewallRules[0].FirewallRuleDescription,
 	}
-	var instances cvmDescribeInstancesResponse
-	if err := c.do(ctx, "cvm", cvmVersion, "DescribeInstances", c.endpointFor("cvm"), map[string]any{
-		"Filters": []map[string]any{{"Name": "public-ip-address", "Values": []string{publicIP}}}, "Limit": 1,
-	}, &instances); err != nil {
+	groups, err := c.securityGroups(ctx, publicIP)
+	if err != nil {
 		return err
-	}
-	if instances.Response.Error != nil {
-		return fmt.Errorf("%s: %s", instances.Response.Error.Code, instances.Response.Error.Message)
-	}
-	if len(instances.Response.InstanceSet) == 0 {
-		return fmt.Errorf("cvm instance not found for public ip %s", publicIP)
-	}
-	groups := instances.Response.InstanceSet[0].SecurityGroupIDs
-	if len(groups) == 0 {
-		return fmt.Errorf("cvm instance has no security group for public ip %s", publicIP)
 	}
 	for _, groupID := range groups {
 		var policies vpcDescribePoliciesResponse

@@ -12,10 +12,18 @@ import (
 
 func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 	manifest := setupconfig.Manifest{
-		ControlHost: setupconfig.Host{Name: "control", Address: "106.53.107.122", Provider: "tencent"},
-		StorageHost: setupconfig.Host{Name: "storage", Address: "146.56.196.204", Provider: "tencent"},
-		ViewHost:    setupconfig.Host{Name: "view", Address: "146.56.196.204", Provider: "tencent"},
-		OtherHosts:  []setupconfig.Host{{Name: "compute-1", Address: "43.132.204.177", Provider: "tencent"}},
+		Hosts: map[string]setupconfig.Host{
+			"control":   {ID: "control", Address: "106.53.107.122", Provider: "tencent"},
+			"storage":   {ID: "storage", Address: "146.56.196.204", Provider: "tencent"},
+			"compute-1": {ID: "compute-1", Address: "43.132.204.177", Provider: "tencent"},
+			"offsite":   {ID: "offsite", Address: "198.51.100.7", Provider: "aws"},
+		},
+		Placements: map[string][]string{
+			"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor"},
+			"storage":   {"storage-primary", "storage-node", "storage-view", "access"},
+			"compute-1": {"trade", "access", "egress-proxy"},
+		},
+		CompileHost: setupconfig.CompileHost{Address: "146.56.196.204", Provider: "tencent", SSH: setupconfig.SSH{Username: "builder"}},
 		SCFFetcher: setupconfig.SCFFetcher{
 			Enabled: true,
 			Spaces: []setupconfig.SCFFetcherSpace{
@@ -39,7 +47,15 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 		},
 	}
 	hosts := CollectTencentHosts(manifest)
-	require.Len(t, hosts, 3)
+	require.Len(t, hosts, 3, "只收集腾讯云主机，编译主机与 storage 同址时合并")
+	byName := map[string]HostTarget{}
+	for _, host := range hosts {
+		byName[host.Name] = host
+	}
+	assert.True(t, hostHasRole(byName["control"], "eventbus"))
+	assert.True(t, hostHasRole(byName["control"], "host-gateway"), "主机组件也算作角色")
+	assert.True(t, hostHasRole(byName["storage"], "compile"))
+	assert.True(t, hostHasRole(byName["compute-1"], "egress-proxy"))
 	scf := CollectSCFTargets(manifest)
 	regions := map[string]SCFTarget{}
 	for _, item := range scf {
@@ -78,8 +94,8 @@ func TestCollectSCFTargetsSplitsOverflowNamespaces(t *testing.T) {
 
 func TestBuildPlanSummarizesHostsWithoutSCFMutation(t *testing.T) {
 	plan := BuildPlan([]ResolvedHost{
-		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}, Instance: tencent.CloudInstance{Kind: tencent.KindLighthouse, Region: "ap-guangzhou", InstanceID: "lhins-1", PrivateIPs: []string{"10.0.1.12"}}, CidrBlock: "10.0.0.0/16"},
-		{HostTarget: HostTarget{Name: "compute-1", Address: "43.132.204.177", Roles: []string{"compute-1"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-hongkong", InstanceID: "ins-1", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIPs: []string{"172.19.32.13"}}, CidrBlock: "172.19.0.0/16"},
+		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"eventbus", "host-gateway"}}, Instance: tencent.CloudInstance{Kind: tencent.KindLighthouse, Region: "ap-guangzhou", InstanceID: "lhins-1", PrivateIPs: []string{"10.0.1.12"}}, CidrBlock: "10.0.0.0/16"},
+		{HostTarget: HostTarget{Name: "compute-1", Address: "43.132.204.177", Roles: []string{"host-gateway", "trade"}}, Instance: tencent.CloudInstance{Kind: tencent.KindCVM, Region: "ap-hongkong", InstanceID: "ins-1", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIPs: []string{"172.19.32.13"}}, CidrBlock: "172.19.0.0/16"},
 	}, []string{"11003"})
 	require.Equal(t, []string{"10.0.0.0/16", "172.19.0.0/16"}, plan.CIDRs)
 	require.Equal(t, []string{"10.0.0.0/16"}, plan.CIDRsByArea["mainland"])
@@ -166,9 +182,9 @@ func TestSCFRoutePlanRouteLookup(t *testing.T) {
 
 func TestPlannedProbesUsePublicIPs(t *testing.T) {
 	hosts := []ResolvedHost{
-		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"10.1.12.13"}}, Area: "mainland"},
-		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"10.206.0.5"}}, Area: "mainland"},
-		{HostTarget: HostTarget{Name: "compute-1", Address: "43.132.204.177", Roles: []string{"compute-1"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"172.19.32.13"}}, Area: "overseas"},
+		{HostTarget: HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"eventbus", "host-gateway"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"10.1.12.13"}}, Area: "mainland"},
+		{HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"host-gateway", "storage-primary"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"10.206.0.5"}}, Area: "mainland"},
+		{HostTarget: HostTarget{Name: "compute-1", Address: "43.132.204.177", Roles: []string{"host-gateway", "trade"}}, Instance: tencent.CloudInstance{PrivateIPs: []string{"172.19.32.13"}}, Area: "overseas"},
 	}
 	probes := PlannedProbes(hosts, "4222")
 	require.NotEmpty(t, probes)

@@ -1,0 +1,66 @@
+global:
+  namespace: Development
+  env_name: dev
+server:
+  filter:
+    - recovery
+    - validation
+    - prometheus
+  timeout: 120000
+  admin:
+    ip: 127.0.0.1
+    port: 11944
+    read_timeout: 3000
+    write_timeout: 60000
+  service:
+    - name: trpc.moox.factor.FactorMgr
+      ip: 127.0.0.1
+      port: 11403
+      network: tcp
+      protocol: trpc
+      timeout: 120000
+    - name: trpc.moox.factor.FactorEngine
+      ip: 127.0.0.1
+      port: 11405
+      network: tcp
+      protocol: trpc
+      timeout: 60000
+    - name: trpc.moox.factor.Health
+      ip: 127.0.0.1
+      port: 11414
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.factor.metrics.timer
+      port: 11407
+      network: "*/30 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 10000
+client:
+  filter:
+    - transinfo-blocker
+plugins:
+  security:
+    transinfo-blocker:
+      default:
+        mode: whitelist
+        keys:
+          - traceparent
+          - tracestate
+          - x-moox-trace-id
+          - x-moox-space-id
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12944
+      path: /metrics
+      enablepush: false
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: console
+        level: info

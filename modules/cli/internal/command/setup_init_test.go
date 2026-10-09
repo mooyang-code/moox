@@ -172,7 +172,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	}, stages)
 	require.JSONEq(t, `{
 		"status":"ready",
-		"firewall":{"status":"ready","targets":3,"rules":0,"skipped":0,"already_open":0,"created":0},
+		"firewall":{"status":"ready","targets":3,"rules":0,"skipped":0,"already_open":0,"created":0,"deleted":0},
 		"business_spaces":1,
 		"business_space_ids":["crypto"],
 		"admin":{"action":"created","users":0,"secrets":0,"hosts":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},

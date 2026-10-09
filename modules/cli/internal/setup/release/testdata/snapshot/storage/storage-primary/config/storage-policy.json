@@ -1,0 +1,54 @@
+{
+  "retention": {
+    "defaults": {
+      "15m": "90d",
+      "1d": "forever",
+      "1h": "365d",
+      "1m": "7d",
+      "1mo": "forever",
+      "1w": "forever",
+      "30m": "180d",
+      "30s": "48h",
+      "4h": "1095d",
+      "5m": "30d"
+    },
+    "spaces": {
+      "mooxsys": {
+        "1m": "180d",
+        "30s": "48h"
+      },
+      "stockcn": {
+        "15m": "730d",
+        "1h": "forever",
+        "1m": "45d",
+        "30m": "forever",
+        "4h": "forever",
+        "5m": "240d"
+      },
+      "stockhk": {
+        "15m": "730d",
+        "1h": "forever",
+        "1m": "30d",
+        "30m": "forever",
+        "4h": "forever",
+        "5m": "240d"
+      },
+      "stockus": {
+        "15m": "730d",
+        "1h": "forever",
+        "1m": "30d",
+        "30m": "forever",
+        "4h": "forever",
+        "5m": "240d"
+      }
+    }
+  },
+  "view": {
+    "bars": 5000,
+    "trim_bars": 6000,
+    "maintenance_check_interval": "1m",
+    "capacity_check_interval": "1h",
+    "capacity_check_jitter": "1h",
+    "max_view_file_bytes": 1073741824
+  }
+}

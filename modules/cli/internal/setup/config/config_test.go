@@ -646,22 +646,19 @@ secret_id = "secret-id"
 secret_key = "secret-key"
 
 [eventbus]
-host = "192.0.2.10"
 port = 4222
 tls_enabled = true
-
-[hosts."192.0.2.10"]
-port = 22
-username = "ubuntu"
-password = "control-password"
 
 [notification]
 channel_type = "wecom"
 webhook_url = ""
 
-[control_host]
-name = "control"
-host = "192.0.2.10"
+[hosts.control]
+address = "192.0.2.10"
+ssh = { username = "ubuntu", password = "control-password" }
+
+[placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor"]
 `
 
 func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
@@ -670,81 +667,6 @@ func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
 	require.NoError(t, os.WriteFile(path, []byte(body), mode))
 	require.NoError(t, os.Chmod(path, mode))
 	return path
-}
-
-func TestLoadValidManifest(t *testing.T) {
-	root := t.TempDir()
-	path := writeManifest(t, root, validManifest, 0o600)
-
-	snapshot, err := Load(path, root)
-	require.NoError(t, err)
-	assert.Equal(t, "admin", snapshot.Manifest.Admin.Username)
-	assert.Equal(t, "192.0.2.10", snapshot.Manifest.EventBus.PublicAddress)
-	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
-	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
-	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
-	assert.Equal(t, DefaultDeployRoot, snapshot.Manifest.Paths.DeployRoot)
-	assert.Equal(t, DefaultControlRoot, snapshot.Manifest.Paths.ControlRoot)
-	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
-	assert.Equal(t, "1m", snapshot.Manifest.StorageView.MaintenanceCheckInterval)
-	assert.Equal(t, "1h", snapshot.Manifest.StorageView.CapacityCheckInterval)
-	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
-	assert.Equal(t, int64(1<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
-	policy := snapshot.Manifest.StoragePolicy()
-	assert.Equal(t, storagepolicy.Default().Retention, policy.Retention, "an omitted [storage_retention] uses the recommended retention")
-	assert.Equal(t, uint64(5000), policy.View.Bars)
-	assert.Equal(t, uint64(6000), policy.View.TrimBars)
-	require.NoError(t, policy.Validate())
-	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
-	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
-	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
-	assert.Empty(t, snapshot.Manifest.Notification.WebhookURL)
-	assert.Empty(t, snapshot.Manifest.OtherHosts)
-	require.NoError(t, snapshot.VerifyUnchanged())
-}
-
-func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-
-[storage_host]
-name = "storage"
-host = "192.0.2.20"
-
-[view_host]
-name = "view"
-host = "192.0.2.20"
-`
-	body = strings.Replace(body, "\n[storage_host]", `
-
-[hosts."192.0.2.20"]
-port = 22
-username = "ubuntu"
-password = "storage-password"
-provider = "Tencent"
-
-[storage_host]`, 1)
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	require.Equal(t, "storage", snapshot.Manifest.StorageHost.Name)
-	require.Equal(t, "view", snapshot.Manifest.ViewHost.Name)
-	require.Equal(t, snapshot.Manifest.StorageHost.Address, snapshot.Manifest.ViewHost.Address)
-	assert.Equal(t, "ubuntu", snapshot.Manifest.StorageHost.Username)
-	assert.Equal(t, "storage-password", snapshot.Manifest.ViewHost.Password)
-	assert.Equal(t, "tencent", snapshot.Manifest.StorageHost.Provider)
-}
-
-func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
-	paths := &Paths{
-		DeployRoot:  "/data/moox",
-		ControlRoot: "/data/moox/prod",
-		StorageRoot: "/data/moox/prod/storage",
-	}
-	require.ErrorContains(t, validatePaths(paths), "must not overlap")
-	paths.StorageRoot = "/data/moox"
-	require.ErrorContains(t, validatePaths(paths), "must not overlap")
-	paths.StorageRoot = "/data/moox/storage"
-	require.NoError(t, validatePaths(paths))
 }
 
 func TestLoadLocalLogRotationFromManifest(t *testing.T) {
@@ -772,45 +694,6 @@ func TestLoadRejectsInvalidLocalLogRotation(t *testing.T) {
 			require.Contains(t, err.Error(), "local_logs")
 		})
 	}
-}
-
-func TestLoadPathsFromManifest(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[paths]
-deploy_root = "/data/custom"
-control_root = "/data/custom/control"
-storage_root = "/data/custom/storage"
-`
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
-}
-
-func TestLoadAllowsStorageRootOnSeparateHostMount(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[paths]
-deploy_root = "/data/moox"
-control_root = "/data/moox/prod"
-storage_root = "/home/ubuntu/moox/storage"
-`
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.Equal(t, "/home/ubuntu/moox/storage", snapshot.Manifest.Paths.StorageRoot)
-}
-
-func TestLoadRejectsPathsOutsideDeployRoot(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[paths]
-deploy_root = "/data/moox"
-control_root = "/var/lib/moox"
-storage_root = "/data/moox/storage"
-`
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "paths.control_root")
 }
 
 func TestLoadStorageRetentionFromManifest(t *testing.T) {
@@ -1152,186 +1035,6 @@ func TestLoadTencentCloudRegion(t *testing.T) {
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, "ap-shanghai", snapshot.Manifest.TencentCloud.Region)
-}
-
-func TestLoadDefaultsHostPorts(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[hosts."192.0.2.11"]
-username = "ubuntu"
-password = "compute-password"
-
-[[other_hosts]]
-name = "compute"
-host = "192.0.2.11"
-`
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
-	assert.Equal(t, 22, snapshot.Manifest.OtherHosts[0].Port)
-}
-
-func TestLoadDNSResolverConfiguration(t *testing.T) {
-	valid := validManifest + `
-[hosts."43.132.204.177"]
-username = "ubuntu"
-password = "compute-password"
-
-[[other_hosts]]
-name = "compute-1"
-host = "43.132.204.177"
-
-[dns_resolver]
-enabled = true
-trade_node = "compute-1"
-refresh_interval_seconds = 300
-request_timeout_ms = 3000
-lookup_timeout_ms = 1500
-probe_timeout_ms = 500
-probe_port = 443
-cache_ttl_seconds = 300
-max_ips_per_domain = 4
-domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
-`
-	root := t.TempDir()
-	snapshot, err := Load(writeManifest(t, root, valid, 0o600), root)
-	require.NoError(t, err)
-	require.True(t, snapshot.Manifest.DNSResolver.Enabled)
-	require.Equal(t, "compute-1", snapshot.Manifest.DNSResolver.TradeNode)
-	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, snapshot.Manifest.DNSResolver.Domains)
-
-	for name, mutate := range map[string]func(*DNSResolver){
-		"missing trade node": func(cfg *DNSResolver) { cfg.TradeNode = "missing" },
-		"duplicate domain":   func(cfg *DNSResolver) { cfg.Domains = []string{"api.binance.com", "API.BINANCE.COM."} },
-		"invalid interval":   func(cfg *DNSResolver) { cfg.RequestTimeoutMS = 0 },
-		"invalid port":       func(cfg *DNSResolver) { cfg.ProbePort = 70000 },
-		"invalid cap":        func(cfg *DNSResolver) { cfg.MaxIPsPerDomain = 5 },
-		"too many domains":   func(cfg *DNSResolver) { cfg.Domains = make([]string, 17) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			manifest := snapshot.Manifest
-			mutate(&manifest.DNSResolver)
-			err := validateDNSResolver(&manifest.DNSResolver, &manifest)
-			require.Error(t, err)
-		})
-	}
-	unsafe := snapshot.Manifest
-	unsafe.OtherHosts[0].Address = "127.0.0.1"
-	require.ErrorContains(t, validateDNSResolver(&unsafe.DNSResolver, &unsafe), "public address")
-
-	disabled := snapshot.Manifest
-	disabled.DNSResolver = DNSResolver{Enabled: false, TradeNode: "missing"}
-	require.Error(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
-	disabled.DNSResolver.TradeNode = ""
-	require.NoError(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
-}
-
-func TestLoadOptionalCompileHost(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[hosts."192.0.2.20"]
-username = "builder"
-password = "compile-password"
-
-[compile_host]
-name = "compile"
-host = "192.0.2.20"
-`
-
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.True(t, snapshot.Manifest.HasCompileHost())
-	assert.Equal(t, "compile", snapshot.Manifest.CompileHost.Name)
-	assert.Equal(t, 22, snapshot.Manifest.CompileHost.Port)
-	assert.Len(t, snapshot.Manifest.Hosts(), 1)
-}
-
-func TestLoadOptionalStrategyHost(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[hosts."192.0.2.21"]
-username = "ubuntu"
-password = "strategy-password"
-
-[strategy_host]
-name = "strategy"
-host = "192.0.2.21"
-`
-
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.True(t, snapshot.Manifest.HasStrategyHost())
-	assert.Equal(t, "strategy", snapshot.Manifest.StrategyHost.Name)
-	assert.Equal(t, 22, snapshot.Manifest.StrategyHost.Port)
-	require.Len(t, snapshot.Manifest.Hosts(), 2)
-	assert.Equal(t, "strategy", snapshot.Manifest.Hosts()[1].Name)
-}
-
-func TestLoadRejectsInvalidManifest(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "missing admin password", body: strings.Replace(validManifest, `password = "admin-password"`, `password = ""`, 1), want: "admin.password"},
-		{name: "bcrypt password too long", body: strings.Replace(validManifest, "admin-password", strings.Repeat("x", 73), 1), want: "72 bytes"},
-		{name: "missing secret id", body: strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), want: "tencent_cloud.secret_id"},
-		{name: "missing secret key", body: strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), want: "tencent_cloud.secret_key"},
-		{name: "empty region", body: strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \" \"", 1), want: "tencent_cloud.region"},
-		{name: "missing eventbus host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
-		{name: "eventbus host with scheme", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "tls://192.0.2.10"`, 1), want: "hosts"},
-		{name: "eventbus host with path", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10/nats"`, 1), want: "hosts"},
-		{name: "eventbus host with port", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10:4222"`, 1), want: "hosts"},
-		{name: "eventbus ipv6 host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "2001:db8::1"`, 1), want: "hosts"},
-		{name: "eventbus explicit zero port", body: strings.Replace(validManifest, "port = 4222", "port = 0", 1), want: "eventbus.port"},
-		{name: "eventbus invalid port", body: strings.Replace(validManifest, "port = 4222", "port = 70000", 1), want: "eventbus.port"},
-		{name: "eventbus tls disabled", body: strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), want: "eventbus.tls_enabled"},
-		{name: "notification webhook must use HTTPS", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "http://example.test/hook"`, 1), want: "notification.webhook_url"},
-		{name: "notification webhook must be a URL", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "not-a-url"`, 1), want: "notification.webhook_url"},
-		{name: "notification webhook must match channel host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://open.feishu.cn/hook"`, 1), want: "notification.webhook_url"},
-		{name: "notification webhook must use approved platform host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://example.invalid/hook"`, 1), want: "notification.webhook_url"},
-		{name: "missing host reference", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
-		{name: "invalid host name", body: strings.Replace(validManifest, `name = "control"`, `name = "Storage A"`, 1), want: "control_host.name"},
-		{name: "missing compile host address", body: validManifest + `
-[compile_host]
-name = "compile"
-host = "192.0.2.99"
-`, want: "compile_host.host"},
-		{name: "unknown field", body: validManifest + "unexpected = true\n", want: "unknown field"},
-		{name: "invalid port", body: strings.Replace(validManifest, "port = 22", "port = 70000", 1), want: "hosts"},
-		{
-			name: "duplicate host name",
-			body: validManifest + `
-[hosts."192.0.2.11"]
-username = "ubuntu"
-password = "password"
-
-[[other_hosts]]
-name = "control"
-host = "192.0.2.11"
-`,
-			want: "duplicate host name",
-		},
-		{
-			name: "duplicate host address",
-			body: validManifest + `
-[[other_hosts]]
-name = "compute"
-host = "192.0.2.10"
-`,
-			want: "duplicate host address",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			_, err := Load(writeManifest(t, root, tt.body, 0o600), root)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.want)
-			assert.NotContains(t, err.Error(), "admin-password")
-			assert.NotContains(t, err.Error(), "secret-key")
-		})
-	}
 }
 
 func TestLoadRejectsInsecureFile(t *testing.T) {

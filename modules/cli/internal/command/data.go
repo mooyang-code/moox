@@ -109,15 +109,8 @@ func dataPrimaryAuth(path string) (*pb.AuthInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("读取 Storage 鉴权文件失败: %w", err)
 		}
-		normalized, err := normalizeStorageInternalAuth(string(raw))
-		if err != nil {
+		if secret, err = secretEnvValue(raw, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"); err != nil {
 			return nil, fmt.Errorf("Storage 鉴权文件无效: %w", err)
-		}
-		for _, line := range strings.Split(normalized, "\n") {
-			if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_PRIMARY_AUTH_SECRET="); ok {
-				secret = value
-				break
-			}
 		}
 	}
 	if secret == "" {

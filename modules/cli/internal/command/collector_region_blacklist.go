@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -76,28 +75,34 @@ func preflightCollectorBlacklistRuntime(ctx context.Context, snapshot *setupconf
 	if snapshot == nil {
 		return fmt.Errorf("deploy and restart Collector with the Space region blacklist before publishing SCFs")
 	}
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	host, err := collectorHost(snapshot.Manifest)
 	if err != nil {
-		return fmt.Errorf("cannot verify running Collector blacklist; deploy and restart Collector first")
+		return err
+	}
+	transport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return fmt.Errorf("连接主机 %s 校验行情采集服务的地域黑名单失败，请先部署并重启行情采集服务: %w", host.ID, err)
 	}
 	defer transport.Close()
-	return verifyCollectorBlacklistRuntime(ctx, transport, snapshot.Manifest.Paths.Resolved().ControlRoot, cfg)
+	return verifyCollectorBlacklistRuntime(ctx, transport, host.Root, cfg)
 }
 
 func verifyCollectorBlacklistRuntime(ctx context.Context, transport setupssh.Client, root string, cfg *setupconfig.SCFFetcherSpace) error {
-	result, err := transport.Run(ctx, []string{"bash", "-lc", collectorBlacklistRuntimeScript, "moox-collector-blacklist-preflight", root}, nil)
+	result, err := transport.Run(ctx, []string{"bash", "-c", collectorBlacklistRuntimeScript, "moox-collector-blacklist-preflight", root}, nil)
 	if err != nil || result.ExitCode != 0 {
 		return fmt.Errorf("cannot verify live Collector process identity; deploy and restart Collector with the Space region blacklist first")
 	}
-	parts := strings.SplitN(result.Stdout, "\n", 3)
-	if len(parts) != 3 {
+	executable, raw, ok := strings.Cut(result.Stdout, "\n")
+	if !ok {
 		return fmt.Errorf("missing Collector runtime identity; deploy and restart Collector first")
 	}
-	return validateCollectorBlacklistRuntime(cfg, []byte(parts[2]), parts[0], parts[1])
+	return validateCollectorBlacklistRuntime(cfg, []byte(raw), executable)
 }
 
-func validateCollectorBlacklistRuntime(cfg *setupconfig.SCFFetcherSpace, raw []byte, configHash, executable string) error {
-	if filepath.Base(executable) != "moox-collector" || configHash != fmt.Sprintf("sha256:%x", sha256.Sum256(raw)) {
+// validateCollectorBlacklistRuntime 校验运行中的行情采集服务使用的配置与 moox.toml 的地域黑名单一致。进程必须
+// 来自当前发布（发布目录不可变，所以发布中的 app.yaml 就是进程读到的配置）。
+func validateCollectorBlacklistRuntime(cfg *setupconfig.SCFFetcherSpace, raw []byte, executable string) error {
+	if filepath.Base(executable) != "moox-collector" {
 		return fmt.Errorf("Collector process does not match its current app configuration; deploy and restart Collector before publishing SCFs")
 	}
 	var config struct {
@@ -120,18 +125,26 @@ func validateCollectorBlacklistRuntime(cfg *setupconfig.SCFFetcherSpace, raw []b
 	return nil
 }
 
+// collectorBlacklistRuntimeScript 输出运行中行情采集服务的可执行文件和当前发布中的 app.yaml；进程不是当前发布
+// 启动的时候失败。
 const collectorBlacklistRuntimeScript = `set -eu
 root=$1
 pid=$(cat "$root/run/collector.pid")
 case "$pid" in ''|*[!0-9]*) exit 1 ;; esac
 kill -0 "$pid"
+release=$(readlink -f "$root/current")
 exe=$(readlink "/proc/$pid/exe")
-test "$exe" = "$root/bin/moox-collector"
-hash=$(tr '\000' '\n' < "/proc/$pid/environ" | sed -n 's/^MOOX_CONFIG_HASH=//p')
-test -n "$hash"
-printf '%s\n%s\n' "$hash" "$exe"
-cat "$root/collector/config/app.yaml"
-kill -0 "$pid"
-test "$(cat "$root/run/collector.pid")" = "$pid"
-test "$(readlink "/proc/$pid/exe")" = "$exe"
+test "$exe" = "$release/bin/moox-collector"
+printf '%s\n' "$exe"
+cat "$release/collector/config/app.yaml"
 `
+
+// collectorHost 返回部署了行情采集服务的主机。
+func collectorHost(manifest setupconfig.Manifest) (setupconfig.Host, error) {
+	hosts := manifest.HostsOf("collector")
+	if len(hosts) == 0 {
+		return setupconfig.Host{}, fmt.Errorf("moox.toml 的部署表中没有行情采集服务（collector）")
+	}
+	host, _ := manifest.Host(hosts[0])
+	return host, nil
+}

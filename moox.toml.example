@@ -7,8 +7,8 @@ secret_id = ""
 secret_key = ""
 region = "ap-guangzhou"
 
+# 消息总线的地址取自 [placements] 中部署 eventbus 的主机。
 [eventbus]
-  host = "203.0.113.10"
 port = 4222
 tls_enabled = true
 
@@ -18,11 +18,10 @@ tls_enabled = true
 [observability]
 # deliver_policy = "all"
 
+# 主机的部署根目录默认为 <deploy_root>/<主机 ID>，也可以在 [hosts.<主机 ID>] 中用 root 单独指定。
 # 所有运行时目录使用云磁盘 /data 下的统一根目录。
 [paths]
 deploy_root = "/data/moox"
-control_root = "/data/moox/prod"
-storage_root = "/data/moox/storage"
 
 # 每个本地 .log 文件达到上限后保留尾部并原地截断，避免 stdout/stderr
 # 或框架日志无限占用磁盘。健康检查每分钟执行一次滚动维护。
@@ -439,66 +438,54 @@ display_name = "西南（成都）"
 enabled = true
 function_count = 0
 
-# 腾讯云主机将 provider 设为 tencent。发布 SCF 时 CLI 从腾讯云查询外部接入主机的
-# VPC 和子网；同地域 SCF 绑定该 VPC，跨地域不创建 CCN 而走 access@storage 的公网地址。
-# SSH 和控制台入口仍使用主机公网地址。
+# MooX 主机：键是主机 ID。address 是公网地址（SSH、跨主机入口和控制台都用它）；private_address 与 region 用于
+# SCF 选择外部接入：同地域的 SCF 经私网地址访问，跨地域走公网地址。腾讯云主机将 provider 设为 tencent，
+# 发布 SCF 时 CLI 从腾讯云查询外部接入主机的 VPC 和子网。root 省略时为 <paths.deploy_root>/<主机 ID>。
 # 操作说明见 skills/moox/references/private-network.md。
-[hosts."203.0.113.10"]
-  port = 22
-  username = "ubuntu"
-  password = ""
-  provider = "tencent"
+[hosts.control]
+address = "203.0.113.10"
+root = "/data/moox/prod"
+provider = "tencent"
+# 控制台代理的证书：公网 IP 一般申请不到公网证书时用 internal（Caddy 内置 CA），省略时按地址自动选择。
+tls_mode = "auto"
+ssh = { port = 22, username = "ubuntu", password = "" }
 
-[hosts."203.0.113.11"]
-  port = 22
-  username = "ubuntu"
-  password = ""
-  provider = "tencent"
+[hosts.storage]
+address = "203.0.113.11"
+private_address = "10.206.0.5"
+region = "ap-nanjing"
+root = "/data/moox/storage"
+provider = "tencent"
+ssh = { port = 22, username = "ubuntu", password = "" }
 
-[hosts."203.0.113.12"]
-  port = 22
-  username = "ubuntu"
-  password = ""
-  provider = "tencent"
+[hosts.compute-1]
+address = "203.0.113.12"
+private_address = "172.19.32.13"
+region = "ap-hongkong"
+provider = "tencent"
+ssh = { port = 22, username = "ubuntu", password = "" }
 
-[control_host]
-  name = "control"
-  host = "203.0.113.10"
-# Raw public IPs normally cannot obtain a public ACME certificate. Use the
-# bundled Caddy internal CA in that case; omit this field for host-based auto.
-  tls_mode = "auto"
+# 部署表：每台主机上的业务组件。主机组件（主机网关、主机采集器）每台主机自动部署，不用写。
+# CLI 部署某台主机时按这张表同步它在 Admin 中的部署记录；管理台上设置的启用 / 停用状态保留。
+[placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode",
+           "factor-mgr", "strategy"]
+storage = ["storage-primary", "storage-node", "storage-view", "access"]
+compute-1 = ["trade", "access", "egress-proxy"]
 
-[storage_host]
-  name = "storage"
-  host = "203.0.113.11"
-  tls_mode = "auto"
-
-[view_host]
-  name = "view"
-  host = "203.0.113.11"
-  tls_mode = "auto"
-
-# Storage、factor-mgr 等 CGO 组件在 compile_host 上编译（Linux amd64，glibc 不高于生产机）。
-# 不要使用运行中的生产机：编译 DuckDB 会占满 CPU/内存，拖慢同机的调度、网关与 SCF 调用。
+# Storage、factor-mgr 等 CGO 组件在编译主机上编译（Linux amd64，glibc 不高于生产机）。编译主机不是 MooX 主机，
+# 不要使用运行中的生产机：编译 DuckDB 会占满 CPU/内存，拖慢同机的调度与 SCF 调用。
 [compile_host]
-  name = "compile"
-  host = "203.0.113.10"
+address = "198.51.100.20"
+ssh = { port = 22, username = "builder", password = "" }
 
-[[other_hosts]]
-  name = "compute-1"
-  host = "203.0.113.12"
+# 出口代理：http_domains 是 Collector 经出口代理访问的域名（支持 "*." 前缀通配），没有部署出口代理时全部直连。
+[egress_proxy]
+http_domains = ["*.binance.com", "data-api.binance.vision"]
 
-# moox-cli renders the non-sensitive resolver fields below into Trade's
-# config/app.yaml. When enabled, trade_node is also the dedicated Trade
-# execution host; deploy-control records its TradeConsole endpoint in the
-# control-plane route so the browser does not fall back to 127.0.0.1:11200.
-# setup deploy-service binds the dedicated Trade listener on all interfaces
-# because the SSH/public address may be NAT'ed; restrict TCP 11200 in the
-# cloud firewall to control_host before enabling real order operations.
-# Trade does not read this full moox.toml directly.
-[dns_resolver]
-enabled = false
-trade_node = "compute-1"
+# 出口代理为 SCF 的 DNS 快照解析的域名。
+[egress_proxy.dns]
+domains = ["data-api.binance.vision", "api-gcp.binance.com", "api.binance.com", "fapi.binance.com"]
 refresh_interval_seconds = 300
 request_timeout_ms = 3000
 lookup_timeout_ms = 1500
@@ -506,4 +493,3 @@ probe_timeout_ms = 500
 probe_port = 443
 cache_ttl_seconds = 300
 max_ips_per_domain = 4
-domains = ["data-api.binance.vision", "api.binance.com", "fapi.binance.com"]

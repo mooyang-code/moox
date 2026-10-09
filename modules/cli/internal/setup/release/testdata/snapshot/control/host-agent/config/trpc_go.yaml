@@ -1,0 +1,40 @@
+global:
+  namespace: Production
+  env_name: prod
+server:
+  filter:
+    - recovery
+    - validation
+    - prometheus
+  timeout: 5000
+  service:
+    - name: trpc.moox.hostagent.HostAgentMgr
+      ip: 127.0.0.1
+      port: 11426
+      network: tcp
+      protocol: trpc
+      timeout: 30000
+    - name: trpc.moox.hostagent.Health
+      ip: 127.0.0.1
+      port: 11425
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.hostagent.sample.timer
+      ip: 127.0.0.1
+      port: 11427
+      network: "0 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 30000
+plugins:
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12926
+      path: /metrics
+      enablepush: false

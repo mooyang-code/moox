@@ -25,7 +25,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -59,11 +58,11 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	}
 	fs := flag.NewFlagSet("eventbus-credentials", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dbPath, keyFile, nodeID, outputDir, credential := "./data/admin.db", "", "", "", ""
+	dbPath, keyFile, natsURL, outputDir, credential := "./data/admin.db", "", "", "", ""
 	confirm := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&keyFile, "encryption-key-file", "", "0600 encryption key file")
-	fs.StringVar(&nodeID, "node-id", "", "gateway node ID containing the EventBus deployment")
+	fs.StringVar(&natsURL, "nats-url", "", "消息总线的公网地址，例如 tls://106.53.107.122:4222（由 moox-cli 按 moox.toml 传入）")
 	fs.StringVar(&outputDir, "output-dir", "", "credential output directory")
 	fs.StringVar(&credential, "credential", "", "role token to rotate")
 	fs.BoolVar(&confirm, "confirm", false, "confirm rotation and immediate invalidation")
@@ -92,18 +91,16 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	secretDAO := dao.NewSecretDAO(db)
 	switch sub {
 	case "ensure":
-		natsURL, err := eventBusNATSURL(db, nodeID)
-		if err != nil {
-			return err
+		if _, err := validateEventBusNATSURL(natsURL); err != nil {
+			return fmt.Errorf("--nats-url: %w", err)
 		}
 		return ensureEventBus(secretDAO, natsURL, stdout)
 	case "export":
 		if outputDir == "" {
 			return errors.New("--output-dir is required")
 		}
-		natsURL, err := eventBusNATSURL(db, nodeID)
-		if err != nil {
-			return err
+		if _, err := validateEventBusNATSURL(natsURL); err != nil {
+			return fmt.Errorf("--nats-url: %w", err)
 		}
 		return exportEventBus(secretDAO, outputDir, natsURL, stdout)
 	case "rotate":
@@ -144,29 +141,6 @@ func parseCredentialToken(raw string) string {
 		}
 	}
 	return ""
-}
-
-func eventBusNATSURL(db *gorm.DB, nodeID string) (string, error) {
-	if nodeID == "" || nodeID != strings.TrimSpace(nodeID) {
-		return "", errors.New("--node-id is required and must not contain surrounding whitespace")
-	}
-	var deployment sysdeploy.Deployment
-	result := db.Where("c_node_id = ? AND c_service_name = ? AND c_status = ?", nodeID, "eventbus", "active").Find(&deployment)
-	if result.Error != nil {
-		return "", fmt.Errorf("query EventBus service deployment: %w", result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return "", fmt.Errorf("active EventBus service deployment for node %q not found", nodeID)
-	}
-	var extra map[string]any
-	if err := json.Unmarshal([]byte(deployment.ExtraConfig), &extra); err != nil {
-		return "", fmt.Errorf("decode EventBus extra_config: %w", err)
-	}
-	raw, _ := extra["nats_url"].(string)
-	if _, err := validateEventBusNATSURL(raw); err != nil {
-		return "", fmt.Errorf("EventBus service deployment nats_url: %w", err)
-	}
-	return raw, nil
 }
 
 func openAdminCLIDB(path string) (*gorm.DB, error) {

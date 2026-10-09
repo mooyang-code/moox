@@ -117,6 +117,9 @@ type SCFFunction struct {
 	SubnetID        string
 	PublicNetStatus string
 	Environment     map[string]string
+	// FunctionVersion、ModTime 只由 GetSCFFunction 填写，用于导出发布前的状态。
+	FunctionVersion string
+	ModTime         string
 }
 
 // NetworkClient talks to CVM, VPC/CCN and SCF APIs with the same TC3 signer
@@ -760,10 +763,12 @@ func (c *NetworkClient) ListSCFFunctions(ctx context.Context, namespace string, 
 func (c *NetworkClient) GetSCFFunction(ctx context.Context, namespace, name string) (SCFFunction, error) {
 	var resp struct {
 		Response struct {
-			Error        *apiError `json:"Error,omitempty"`
-			FunctionName string    `json:"FunctionName"`
-			Status       string    `json:"Status"`
-			VpcConfig    *struct {
+			Error           *apiError `json:"Error,omitempty"`
+			FunctionName    string    `json:"FunctionName"`
+			Status          string    `json:"Status"`
+			FunctionVersion string    `json:"FunctionVersion"`
+			ModTime         string    `json:"ModTime"`
+			VpcConfig       *struct {
 				VpcID    string `json:"VpcId"`
 				SubnetID string `json:"SubnetId"`
 			} `json:"VpcConfig"`
@@ -786,7 +791,10 @@ func (c *NetworkClient) GetSCFFunction(ctx context.Context, namespace, name stri
 	if err := apiCodeMessage(resp.Response.Error); err != nil {
 		return SCFFunction{}, err
 	}
-	out := SCFFunction{Region: c.region, Namespace: namespace, FunctionName: name, Status: resp.Response.Status, Environment: map[string]string{}}
+	out := SCFFunction{
+		Region: c.region, Namespace: namespace, FunctionName: name, Status: resp.Response.Status, Environment: map[string]string{},
+		FunctionVersion: resp.Response.FunctionVersion, ModTime: resp.Response.ModTime,
+	}
 	if resp.Response.VpcConfig != nil {
 		out.VpcID = resp.Response.VpcConfig.VpcID
 		out.SubnetID = resp.Response.VpcConfig.SubnetID

@@ -1,0 +1,23 @@
+# 调用 Admin（发布租约、SecretMgr）经本机主机网关
+gateway_client:
+  mode: local
+  caller: cloudnode
+  key_file: /data/moox/prod/secrets/caller-cloudnode.key
+  ca_file: /data/moox/prod/certs/moox-ca.crt
+  cache_dir: /data/moox/prod/data/cloudnode/gatewayclient
+database:
+  type: sqlite
+  path: /data/moox/prod/data/cloudnode/moox_cloudnode.db
+  max_idle_conns: 1
+  max_open_conns: 1
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+node_batch:
+  batch_size: 3
+  poll_interval: 500ms
+tencent_scf:
+  default_region: ap-guangzhou
+  default_namespace: default
+  default_runtime: Go1
+health:
+  addr: ":11411"

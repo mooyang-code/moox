@@ -104,8 +104,7 @@ func New(manifest setupconfig.Manifest, sshOptions setupssh.Options) (*Client, e
 		if err != nil {
 			return nil, err
 		}
-		target := setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}
-		return setupssh.Dial(ctx, target, host.Password, sshOptions)
+		return setupssh.DialHost(ctx, host, sshOptions)
 	})
 }
 
@@ -130,10 +129,8 @@ func NewWithDial(dial DialFunc) (*Client, error) {
 }
 
 func findHost(manifest setupconfig.Manifest, hostID string) (setupconfig.Host, error) {
-	for _, host := range manifest.Hosts() {
-		if strings.EqualFold(strings.TrimSpace(host.Name), hostID) {
-			return host, nil
-		}
+	if host, ok := manifest.Host(strings.TrimSpace(hostID)); ok {
+		return host, nil
 	}
 	return setupconfig.Host{}, fmt.Errorf("moox.toml 中没有主机 %s", hostID)
 }

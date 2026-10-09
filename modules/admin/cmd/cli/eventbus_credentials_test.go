@@ -31,8 +31,7 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := applySchema(dbPath, adminschema.AdminSQL()); err != nil {
 		t.Fatal(err)
 	}
-	seedEventBusDeployment(t, dbPath)
-	args := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"}
+	args := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--nats-url", "tls://203.0.113.10:4222"}
 	var out bytes.Buffer
 	if err := runEventBusCredentialsCommand(args, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -88,14 +87,13 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	keyPath := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(keyPath, []byte("test-encryption-key-for-eventbus"), 0o600))
 	require.NoError(t, applySchema(dbPath, adminschema.AdminSQL()))
-	seedEventBusDeployment(t, dbPath)
 
-	ensureArgs := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"}
+	ensureArgs := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--nats-url", "tls://203.0.113.10:4222"}
 	var out bytes.Buffer
 	require.NoError(t, runEventBusCredentialsCommand(ensureArgs, &out, &bytes.Buffer{}))
 
 	exportDir := filepath.Join(dir, "out")
-	exportArgs := []string{"eventbus-credentials", "export", "--db-path", dbPath, "--encryption-key-file", keyPath, "--output-dir", exportDir, "--node-id", "gateway-node-1"}
+	exportArgs := []string{"eventbus-credentials", "export", "--db-path", dbPath, "--encryption-key-file", keyPath, "--output-dir", exportDir, "--nats-url", "tls://203.0.113.10:4222"}
 	out.Reset()
 	require.NoError(t, runEventBusCredentialsCommand(exportArgs, &out, &bytes.Buffer{}))
 	assert.FileExists(t, filepath.Join(exportDir, "users.yaml"))
@@ -310,16 +308,6 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 	assert.Contains(t, text, "strategy-token")
 	assert.Contains(t, text, "factor-token")
 	assert.Contains(t, text, "trade-token")
-}
-
-func seedEventBusDeployment(t *testing.T, dbPath string) {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.Exec(`INSERT INTO t_gateway_nodes(c_node_id,c_name,c_public_address,c_status) VALUES (?,?,?,?)`,
-		"gateway-node-1", "Gateway", "203.0.113.10", "enabled").Error)
-	require.NoError(t, db.Exec(`INSERT INTO t_service_deployments(c_node_id,c_service_name,c_service_kind,c_status,c_extra_config) VALUES (?,?,?,?,?)`,
-		"gateway-node-1", "eventbus", "eventbus", "active", `{"nats_url":"tls://203.0.113.10:4222"}`).Error)
 }
 
 func eventBusACLBlock(yaml, username string) string {

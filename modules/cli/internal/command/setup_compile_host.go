@@ -44,8 +44,8 @@ func runSetupBuildLinux(ctx context.Context, snapshot *setupconfig.Snapshot, fil
 	default:
 		return fmt.Errorf("unsupported linux CGO module %q", module)
 	}
-	if snapshot == nil || !snapshot.Manifest.HasCompileHost() {
-		return fmt.Errorf("compile_host is required")
+	if snapshot == nil || !snapshot.Manifest.CompileHost.Configured() {
+		return fmt.Errorf("moox.toml 中没有配置编译主机 [compile_host]")
 	}
 	root, err := os.Getwd()
 	if err != nil {
@@ -64,10 +64,9 @@ func runSetupBuildLinux(ctx context.Context, snapshot *setupconfig.Snapshot, fil
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
 	command.Env = append(os.Environ(),
-		"MOOX_SSH_PASSWORD="+snapshot.Manifest.CompileHost.Password,
+		"MOOX_SSH_PASSWORD="+snapshot.Manifest.CompileHost.SSH.Password,
 		"MOOX_CLI="+cli,
 		"CONFIG="+configPath,
-		"MOOX_STORAGE_BUILD_HOST="+snapshot.Manifest.CompileHost.Name,
 		"MOOX_STORAGE_BUILD_HOST_ROLE=compile",
 		"MOOX_LINUX_CGO_TARGET="+module,
 	)

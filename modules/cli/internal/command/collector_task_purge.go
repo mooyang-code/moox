@@ -234,8 +234,11 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 			return nil, fmt.Errorf("load collector purge config: %w", err)
 		}
 		if dbPath == "" {
-			paths := snapshot.Manifest.Paths.Resolved()
-			dbPath = filepath.Join(paths.ControlRoot, "data", "moox_collector.db")
+			host, err := collectorHost(snapshot.Manifest)
+			if err != nil {
+				return nil, err
+			}
+			dbPath = filepath.Join(host.Root, "data", "collector", "moox_collector.db")
 		}
 	}
 	if dbPath == "" {

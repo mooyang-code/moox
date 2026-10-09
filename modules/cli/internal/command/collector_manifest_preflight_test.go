@@ -2,21 +2,15 @@ package command
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -27,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/require"
-	xssh "golang.org/x/crypto/ssh"
 )
 
 func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
@@ -41,7 +34,12 @@ func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ca := mustTestEventBusCAPEM(t)
 	var sshReads, cloudReads atomic.Int32
-	host := startCollectorPublicationSSH(t, ca, &sshReads, "ap-nanjing")
+	previousDial := dialSetupHost
+	dialSetupHost = func(context.Context, setupconfig.Host) (setupssh.Client, error) {
+		sshReads.Add(1)
+		return nil, errors.New("不应连接主机")
+	}
+	t.Cleanup(func() { dialSetupHost = previousDial })
 	var uploads, creates, mutations, reads atomic.Int32
 	var accountMissing, legacyTimer atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +85,7 @@ func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	collectorRoot, err := filepath.Abs(filepath.Join("..", "..", "..", "collector"))
 	require.NoError(t, err)
 	manifestPath := filepath.Join(t.TempDir(), "moox.toml")
-	manifest := fmt.Sprintf(`[admin]
+	manifest := `[admin]
 username = "admin"
 password = "test-password"
 [tencent_cloud]
@@ -95,24 +93,18 @@ secret_id = "test-id"
 secret_key = "test-key"
 region = "ap-guangzhou"
 [eventbus]
-host = "203.0.113.10"
 port = 4222
 tls_enabled = true
-[hosts."127.0.0.1"]
-port = %d
-username = "test"
-password = "test"
-[hosts."203.0.113.10"]
-port = 22
-username = "test"
-password = "test"
-[hosts."203.0.113.20"]
-port = 22
-username = "test"
-password = "test"
-[control_host]
-name = "control"
-host = "127.0.0.1"
+[hosts.control]
+address = "203.0.113.10"
+ssh = { username = "test", password = "test" }
+[hosts.storage]
+address = "203.0.113.20"
+region = "ap-guangzhou"
+ssh = { username = "test", password = "test" }
+[placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector"]
+storage = ["storage-primary", "storage-node", "storage-view", "access"]
 [scf_fetcher]
 enabled = true
 [scf_fetcher.cloud_account]
@@ -151,7 +143,7 @@ function_count = 1
 region = "ap-singapore"
 enabled = true
 function_count = 1
-`, host.Port)
+`
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifest), 0o600))
 	fetcher, _, err := loadCollectorSCFFetcherConfigSnapshot(manifestPath, "stockcn")
 	require.NoError(t, err)
@@ -252,98 +244,11 @@ func TestCollectorManifestLowerBoundIgnoresRemoteOwnedValues(t *testing.T) {
 	fetcher := defaultCollectorSCFFetcherSpace()
 	fetcher.SpaceID = "stockcn"
 	fetcher.Regions = []setupconfig.SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1}}
-	manifest := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{EventBus: setupconfig.EventBus{PublicAddress: "203.0.113.10", Port: 4222}}}
+	manifest := &setupconfig.Snapshot{Manifest: eventBusManifest("203.0.113.10", 4222, true)}
 	opts := collectorPublishOptions{
 		CallerKey: strings.Repeat("stale", 1000), StorageAppKeysJSON: strings.Repeat("stale", 1000),
 		collectorPackageOptions: collectorPackageOptions{CLSLogsetID: strings.Repeat("stale", 1000), CLSTopicID: strings.Repeat("stale", 1000)},
 		EventBusCredentialFile:  filepath.Join(t.TempDir(), "must-not-read.yaml"),
 	}
 	require.NoError(t, preflightCollectorManifestEnvironmentLowerBound(opts, fetcher, manifest))
-}
-
-func startCollectorPublicationSSH(t *testing.T, ca []byte, reads *atomic.Int32, blacklists ...string) setupconfig.Host {
-	t.Helper()
-	_, private, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	signer, err := xssh.NewSignerFromKey(private)
-	require.NoError(t, err)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	_, portText, err := net.SplitHostPort(listener.Addr().String())
-	require.NoError(t, err)
-	port, err := strconv.Atoi(portText)
-	require.NoError(t, err)
-	config := &xssh.ServerConfig{NoClientAuth: true}
-	config.AddHostKey(signer)
-	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		for {
-			raw, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
-				defer raw.Close()
-				connection, channels, requests, err := xssh.NewServerConn(raw, config)
-				if err != nil {
-					return
-				}
-				defer connection.Close()
-				go xssh.DiscardRequests(requests)
-				for request := range channels {
-					if request.ChannelType() != "session" {
-						_ = request.Reject(xssh.UnknownChannelType, "unsupported")
-						continue
-					}
-					channel, requests, err := request.Accept()
-					if err != nil {
-						continue
-					}
-					go func() {
-						defer channel.Close()
-						for request := range requests {
-							if request.Type != "exec" {
-								_ = request.Reply(false, nil)
-								continue
-							}
-							var payload struct{ Command string }
-							_ = xssh.Unmarshal(request.Payload, &payload)
-							reads.Add(1)
-							_ = request.Reply(true, nil)
-							var stdout string
-							switch {
-							case strings.Contains(payload.Command, "moox-collector-blacklist-preflight"):
-								raw := "scf_region_blacklists:\n  stockcn: [" + strings.Join(blacklists, ", ") + "]\n  crypto: [" + strings.Join(blacklists, ", ") + "]\n"
-								stdout = fmt.Sprintf("sha256:%x\n/data/moox/bin/moox-collector\n%s", sha256.Sum256([]byte(raw)), raw)
-							case strings.Contains(payload.Command, "market-fetch-publisher.yaml"):
-								stdout = "version: 1\nurls: [tls://203.0.113.10:4222]\nusername: publisher\npassword: publisher-secret\n"
-							case strings.Contains(payload.Command, "ca.pem"), strings.Contains(payload.Command, "peers.pem"):
-								stdout = string(ca)
-							case strings.Contains(payload.Command, "storage-internal-auth.env"):
-								stdout = "MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"
-							case strings.Contains(payload.Command, "gateway-moox-cli.key"):
-								stdout = "11223344"
-							case strings.Contains(payload.Command, "gateway-collector.key"):
-								stdout = "aabbccdd"
-							case strings.Contains(payload.Command, "root.crt"):
-							default:
-								t.Errorf("unexpected SSH command: %s", payload.Command)
-							}
-							_, _ = io.WriteString(channel, stdout)
-							_, _ = channel.SendRequest("exit-status", false, xssh.Marshal(struct{ Status uint32 }{}))
-							return
-						}
-					}()
-				}
-			}()
-		}
-	}()
-	t.Cleanup(func() { _ = listener.Close(); workers.Wait() })
-	host := setupconfig.Host{Name: "control", Address: "127.0.0.1", Port: port, Username: "test", Password: "test"}
-	require.NoError(t, setupssh.TrustHost(context.Background(), sshTarget(host), xssh.FingerprintSHA256(signer.PublicKey()), setupssh.Options{}))
-	return host
 }

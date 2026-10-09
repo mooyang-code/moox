@@ -150,7 +150,7 @@ func TestPreflightCollectorSCFEventBusCredentialUsesManifestPublicEndpoint(t *te
 			CAFile:   "ca.pem",
 		},
 		ca,
-		setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4333, TLSEnabled: true},
+		eventBusManifest("eventbus.example.test", 4333, true),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"tls://eventbus.example.test:4333"}, credential.URLs)
@@ -168,14 +168,14 @@ func TestPreflightCollectorSCFEventBusCredentialRejectsUnsafeManifest(t *testing
 	validCA := mustTestEventBusCAPEM(t)
 	tests := []struct {
 		name     string
-		eventBus setupconfig.EventBus
+		eventBus setupconfig.Manifest
 		ca       []byte
 		want     string
 	}{
-		{name: "loopback public address", eventBus: setupconfig.EventBus{PublicAddress: "127.0.0.1", Port: 4222, TLSEnabled: true}, ca: validCA, want: "non-loopback"},
-		{name: "unspecified public address", eventBus: setupconfig.EventBus{PublicAddress: "0.0.0.0", Port: 4222, TLSEnabled: true}, ca: validCA, want: "non-loopback"},
-		{name: "tls disabled", eventBus: setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4222}, ca: validCA, want: "tls_enabled"},
-		{name: "missing ca", eventBus: setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4222, TLSEnabled: true}, want: "CA material"},
+		{name: "loopback public address", eventBus: eventBusManifest("127.0.0.1", 4222, true), ca: validCA, want: "公网地址"},
+		{name: "unspecified public address", eventBus: eventBusManifest("0.0.0.0", 4222, true), ca: validCA, want: "公网地址"},
+		{name: "tls disabled", eventBus: eventBusManifest("eventbus.example.test", 4222, false), ca: validCA, want: "tls_enabled"},
+		{name: "missing ca", eventBus: eventBusManifest("eventbus.example.test", 4222, true), want: "CA material"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -183,6 +183,15 @@ func TestPreflightCollectorSCFEventBusCredentialRejectsUnsafeManifest(t *testing
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 		})
+	}
+}
+
+// eventBusManifest 返回消息总线部署在 control（地址为 address）上的部署表。
+func eventBusManifest(address string, port int, tlsEnabled bool) setupconfig.Manifest {
+	return setupconfig.Manifest{
+		EventBus:   setupconfig.EventBus{Port: port, TLSEnabled: tlsEnabled},
+		Hosts:      map[string]setupconfig.Host{"control": {ID: "control", Address: address}},
+		Placements: map[string][]string{"control": {"eventbus"}},
 	}
 }
 
@@ -314,23 +323,15 @@ secret_key = "secret-key"
 region = "ap-guangzhou"
 
 [eventbus]
-host = "192.0.2.10"
 port = 4222
 tls_enabled = true
 
-[hosts."192.0.2.10"]
-port = 22
-username = "ubuntu"
-password = "password"
+[hosts.control]
+address = "192.0.2.10"
+ssh = { username = "ubuntu", password = "password" }
 
-[hosts."106.53.107.122"]
-port = 22
-username = "ubuntu"
-password = "password"
-
-[control_host]
-name = "control"
-host = "192.0.2.10"
+[placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector"]
 
 [scf_fetcher]
 enabled = true

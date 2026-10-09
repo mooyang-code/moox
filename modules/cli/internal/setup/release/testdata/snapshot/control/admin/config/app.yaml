@@ -1,0 +1,12 @@
+database:
+  path: /data/moox/prod/data/admin/admin.db
+  max_idle_conns: 4
+  max_open_conns: 8
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+# 调用其他组件的 gatewayclient：控制台以 console 身份转发浏览器请求，内部任务以 admin 身份调用。
+gateway_client:
+  ca_file: /data/moox/prod/certs/moox-ca.crt
+  cache_dir: /data/moox/prod/data/admin/gatewayclient
+  console_key_file: /data/moox/prod/secrets/caller-console.key
+  admin_key_file: /data/moox/prod/secrets/caller-admin.key

@@ -51,20 +51,7 @@ func Run(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies)
 		return result, fmt.Errorf("%w: tencent_auth_failed", ErrValidationFailed)
 	}
 	result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "valid"})
-	return appendHostChecks(ctx, snapshot, deps.SSH, result, snapshot.Manifest.Hosts())
-}
-
-// RunSSHHosts validates only the supplied deployment targets. Deployment
-// commands should not be blocked by an unrelated host in the manifest.
-func RunSSHHosts(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies, hosts []setupconfig.Host) (Result, error) {
-	if snapshot == nil || deps.SSH == nil {
-		return Result{}, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
-	}
-	result, err := configResult(snapshot)
-	if err != nil {
-		return result, err
-	}
-	return appendHostChecks(ctx, snapshot, deps.SSH, result, hosts)
+	return appendHostChecks(ctx, snapshot, deps.SSH, result, snapshot.Manifest.HostList())
 }
 
 func configResult(snapshot *setupconfig.Snapshot) (Result, error) {
@@ -97,7 +84,7 @@ func uniqueHosts(hosts []setupconfig.Host) []setupconfig.Host {
 	result := make([]setupconfig.Host, 0, len(hosts))
 	seen := make(map[string]struct{}, len(hosts))
 	for _, host := range hosts {
-		key := strings.ToLower(strings.TrimSpace(host.Name))
+		key := strings.ToLower(strings.TrimSpace(host.ID))
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -136,7 +123,7 @@ func checkHosts(ctx context.Context, checker SSHChecker, hosts []setupconfig.Hos
 }
 
 func hostCheck(ctx context.Context, checker SSHChecker, host setupconfig.Host) Check {
-	check := Check{Name: "host:" + host.Name, Status: "valid"}
+	check := Check{Name: "host:" + host.ID, Status: "valid"}
 	if err := checker.Check(ctx, host); err != nil {
 		check.Status = "invalid"
 		check.Code = sshErrorCode(err)

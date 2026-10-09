@@ -1,0 +1,15 @@
+database:
+  path: /data/moox/prod/data/factor-mgr/factor.db
+# FactorMgr 经本机主机网关访问 Storage
+gateway_client:
+  mode: local
+  caller: factor-mgr
+  key_file: /data/moox/prod/secrets/caller-factor-mgr.key
+  ca_file: /data/moox/prod/certs/moox-ca.crt
+  cache_dir: /data/moox/prod/data/factor-mgr/gatewayclient
+# python 只用于创建、编辑因子定义时试加载源码，需要能 import pandas 与 numpy
+python:
+  bin: python3
+engine:
+  lease_ttl: 45s
+  job_lease_ttl: 15m

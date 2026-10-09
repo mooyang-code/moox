@@ -14,8 +14,6 @@ import (
 
 func TestSetupPrivateNetworkDryRunJSON(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.ControlHost.Provider = "tencent"
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "203.0.113.9", Provider: "tencent"}
 	called := false
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },

@@ -93,8 +93,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录")
-	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
-	_ = cmd.MarkFlagRequired("storage-host")
+	cmd.Flags().StringVar(&storageHost, "storage-host", "", "部署了存储主服务的主机 ID，默认取部署表中的存储主机")
 	return cmd
 }
 
@@ -105,12 +104,9 @@ func runSetupInit(
 	file, configDir, storageHost string,
 	bundle setupInitBundle,
 ) (setupInitSummary, error) {
-	// Resolve the Storage placement before mutating Admin/metadata. This is a
-	// read-only preflight: collector publication later consumes the same plan
-	// and applies private routing only to SCF functions in Storage's Tencent
-	// region.
+	// 写入 Admin 和元数据之前先只读地生成 SCF 访问外部接入的路由计划，发布采集函数时使用同一份计划。
 	var scfRoutes *privatenet.SCFRoutePlan
-	if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost.Provider), "tencent") {
+	if snapshot.Manifest.SCFFetcher.Enabled && len(snapshot.Manifest.HostsOf("access")) > 0 {
 		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")
 		if routeErr != nil {
 			return setupInitSummary{}, fmt.Errorf("scf-network: %w", routeErr)
@@ -629,7 +625,7 @@ func defaultOpenSetupInitStorage(
 	snapshot *setupconfig.Snapshot,
 	host string,
 ) (setupInitStorage, error) {
-	_, transport, session, _, err := openRemoteStorage(ctx, snapshot, host)
+	transport, session, err := openRemoteStorage(ctx, snapshot, host)
 	if err != nil {
 		return nil, err
 	}

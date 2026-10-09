@@ -1,0 +1,79 @@
+global:
+  namespace: Development
+  env_name: dev
+server:
+  filter:
+    - recovery
+    - validation
+    - prometheus
+  timeout: 5000
+  admin:
+    ip: 127.0.0.1
+    port: 11942
+    read_timeout: 3000
+    write_timeout: 60000
+  service:
+    - name: trpc.moox.collector.CollectMgr
+      ip: 127.0.0.1
+      port: 11402
+      network: tcp
+      protocol: trpc
+      timeout: 30000
+    - name: trpc.moox.collector.MarketFetchRuntime
+      ip: 127.0.0.1
+      port: 11422
+      network: tcp
+      protocol: trpc
+      timeout: 30000
+    - name: trpc.moox.collector.Health
+      ip: 127.0.0.1
+      port: 11412
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.collector.metrics.timer
+      port: 11412
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 25000
+    - name: trpc.moox.collector.schedule.timer
+      port: 11413
+      network: "0 * * * * *"
+      protocol: timer
+      timeout: 10000
+    - name: trpc.moox.collector.kline_resample.timer
+      port: 11415
+      network: "0 * * * * *"
+      protocol: timer
+      timeout: 10000
+    - name: trpc.moox.collector.dns.timer
+      port: 11414
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
+    - name: trpc.moox.collector.subject_tags.timer
+      port: 11416
+      network: "30 * * * * *"
+      protocol: timer
+      timeout: 600000
+    - name: trpc.moox.collector.subject_attributes.timer
+      port: 11417
+      network: "45 * * * * *"
+      protocol: timer
+      timeout: 600000
+plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12942
+      path: /metrics
+      enablepush: false
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: console
+        level: info

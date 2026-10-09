@@ -1,0 +1,12 @@
+# 转发外部调用方的请求：以 access 身份经本机主机网关
+gateway_client:
+  mode: local
+  caller: access
+  key_file: /data/moox/compute-1/secrets/caller-access.key
+  ca_file: /data/moox/compute-1/certs/moox-ca.crt
+  cache_dir: /data/moox/compute-1/data/access/gatewayclient
+# 外部调用方的密钥集（moox-admin-cli keys export-principals 导出）；外部调用方能调用的方法写在组件目录中
+principals_file: /data/moox/compute-1/secrets/access-principals.json
+nonce_path: /data/moox/compute-1/data/access/nonces.db
+max_body_bytes: 33554432
+timeout: 30s

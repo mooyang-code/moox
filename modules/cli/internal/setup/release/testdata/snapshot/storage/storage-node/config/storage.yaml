@@ -1,0 +1,19 @@
+storage:
+  root: /data/moox/storage/data/storage-node
+  roles:
+    - node
+  primary:
+    node_id: storage-node-0
+    outbox:
+      flush_batch_size: 100
+      flush_max_bytes: 1048576
+      flush_interval_ms: 200
+      max_rows: 100000
+      max_bytes: 268435456
+      max_age_hours: 24
+      backoff_base_ms: 200
+      backoff_max_ms: 30000
+  eventbus:
+    credential_file: /data/moox/storage/secrets/eventbus/storage-eventbus.yaml
+  health:
+    addr: ":20212"

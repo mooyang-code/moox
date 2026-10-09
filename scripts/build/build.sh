@@ -227,7 +227,7 @@ case "${TARGET_MODULE}" in
   monitor-cli)
     build_go modules/monitor ./cmd/cli moox-monitor-cli 0
     ;;
-  hostagent)
+  host-agent)
     build_hostagent
     ;;
   web-host)

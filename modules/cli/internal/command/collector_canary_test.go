@@ -128,16 +128,12 @@ password = "test-password"
 secret_id = "test-id"
 secret_key = "test-key"
 [eventbus]
-host = "192.0.2.10"
 tls_enabled = true
-[hosts."192.0.2.10"]
-username = "ubuntu"
-password = "test-password"
-[hosts."192.0.2.20"]
-username = "ubuntu"
-password = "test-password"
-[control_host]
-host = "192.0.2.10"
+[hosts.control]
+address = "192.0.2.10"
+ssh = { username = "ubuntu", password = "test-password" }
+[placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector"]
 [scf_fetcher]
 enabled = true
 [scf_fetcher.cloud_account]

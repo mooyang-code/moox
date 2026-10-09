@@ -1,0 +1,273 @@
+{
+  "host": "compute-1",
+  "root": "/data/moox/compute-1",
+  "registration": {
+    "host_id": "compute-1",
+    "address": "203.0.113.12",
+    "private_address": "172.19.32.13",
+    "region": "ap-hongkong",
+    "components": [
+      "trade",
+      "access",
+      "egress-proxy"
+    ]
+  },
+  "components": [
+    {
+      "ID": "host-gateway",
+      "Binary": "moox-host-gateway",
+      "Binaries": [
+        "moox-host-gateway",
+        "moox-host-gateway-cli"
+      ],
+      "BuildTargets": [
+        "host-gateway"
+      ],
+      "CGOTarget": "",
+      "Caddy": false,
+      "Workdir": "host-gateway",
+      "Args": [
+        "-config=config/app.yaml",
+        "-conf=config/trpc_go.yaml"
+      ],
+      "Env": [
+        "MOOX_SERVICE_NAME=host-gateway",
+        "MOOX_INSTANCE_ID=host-gateway@compute-1",
+        "MOOX_NODE_ID=compute-1",
+        "MOOX_VERSION=test",
+        "MOOX_OTEL_SERVICE_NAME=moox-host-gateway",
+        "MOOX_EVENTBUS_NATS_URL=tls://203.0.113.10:4222",
+        "MOOX_METRICS_EVENTBUS_URL=tls://203.0.113.10:4222",
+        "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=/data/moox/compute-1/secrets/eventbus/metrics-publisher.yaml"
+      ],
+      "SecretEnv": [
+        "health-auth.env"
+      ],
+      "CallerKeys": [
+        {
+          "Identity": "host-gateway@compute-1",
+          "File": "caller-host-gateway.key"
+        }
+      ],
+      "EventBusFiles": [
+        "metrics-publisher.yaml",
+        "ca.pem"
+      ],
+      "SharedSecrets": [
+        "health-auth.env"
+      ],
+      "Health": {
+        "Kind": "readyz",
+        "Port": 11012,
+        "URL": ""
+      },
+      "StartupGrace": 60,
+      "StopTimeout": 30,
+      "DataDirs": [
+        "data/host-gateway"
+      ],
+      "Prestart": null,
+      "Poststart": null
+    },
+    {
+      "ID": "host-agent",
+      "Binary": "moox-host-agent",
+      "Binaries": [
+        "moox-host-agent",
+        "moox-host-agent-cli"
+      ],
+      "BuildTargets": [
+        "host-agent"
+      ],
+      "CGOTarget": "",
+      "Caddy": false,
+      "Workdir": "host-agent",
+      "Args": [
+        "-conf=config/trpc_go.yaml"
+      ],
+      "Env": [
+        "MOOX_SERVICE_NAME=host-agent",
+        "MOOX_INSTANCE_ID=host-agent@compute-1",
+        "MOOX_NODE_ID=compute-1",
+        "MOOX_VERSION=test",
+        "MOOX_OTEL_SERVICE_NAME=moox-host-agent",
+        "MOOX_EVENTBUS_NATS_URL=tls://203.0.113.10:4222",
+        "MOOX_HOST_AGENT_HEALTH_ADDR=0.0.0.0:11425"
+      ],
+      "SecretEnv": [
+        "health-auth.env"
+      ],
+      "CallerKeys": null,
+      "EventBusFiles": [
+        "hostagent-publisher.yaml",
+        "ca.pem"
+      ],
+      "SharedSecrets": [
+        "health-auth.env"
+      ],
+      "Health": {
+        "Kind": "readyz",
+        "Port": 11425,
+        "URL": ""
+      },
+      "StartupGrace": 60,
+      "StopTimeout": 30,
+      "DataDirs": [
+        "data/host-agent"
+      ],
+      "Prestart": null,
+      "Poststart": null
+    },
+    {
+      "ID": "access",
+      "Binary": "moox-access",
+      "Binaries": [
+        "moox-access"
+      ],
+      "BuildTargets": [
+        "access"
+      ],
+      "CGOTarget": "",
+      "Caddy": false,
+      "Workdir": "access",
+      "Args": [
+        "-conf=config/trpc_go.yaml"
+      ],
+      "Env": [
+        "MOOX_SERVICE_NAME=access",
+        "MOOX_INSTANCE_ID=access@compute-1",
+        "MOOX_NODE_ID=compute-1",
+        "MOOX_VERSION=test",
+        "MOOX_OTEL_SERVICE_NAME=moox-access",
+        "MOOX_EVENTBUS_NATS_URL=tls://203.0.113.10:4222"
+      ],
+      "SecretEnv": [
+        "health-auth.env"
+      ],
+      "CallerKeys": [
+        {
+          "Identity": "access",
+          "File": "caller-access.key"
+        }
+      ],
+      "EventBusFiles": [],
+      "SharedSecrets": [
+        "health-auth.env"
+      ],
+      "Health": {
+        "Kind": "readyz",
+        "Port": 11014,
+        "URL": ""
+      },
+      "StartupGrace": 60,
+      "StopTimeout": 30,
+      "DataDirs": [
+        "data/access"
+      ],
+      "Prestart": null,
+      "Poststart": null
+    },
+    {
+      "ID": "egress-proxy",
+      "Binary": "moox-egress-proxy",
+      "Binaries": [
+        "moox-egress-proxy"
+      ],
+      "BuildTargets": [
+        "egress-proxy"
+      ],
+      "CGOTarget": "",
+      "Caddy": false,
+      "Workdir": "egress-proxy",
+      "Args": [
+        "-conf=config/trpc_go.yaml"
+      ],
+      "Env": [
+        "MOOX_SERVICE_NAME=egress-proxy",
+        "MOOX_INSTANCE_ID=egress-proxy@compute-1",
+        "MOOX_NODE_ID=compute-1",
+        "MOOX_VERSION=test",
+        "MOOX_OTEL_SERVICE_NAME=moox-egress-proxy",
+        "MOOX_EVENTBUS_NATS_URL=tls://203.0.113.10:4222"
+      ],
+      "SecretEnv": [
+        "health-auth.env"
+      ],
+      "CallerKeys": null,
+      "EventBusFiles": [],
+      "SharedSecrets": [
+        "health-auth.env"
+      ],
+      "Health": {
+        "Kind": "readyz",
+        "Port": 11441,
+        "URL": ""
+      },
+      "StartupGrace": 60,
+      "StopTimeout": 30,
+      "DataDirs": [
+        "data/egress-proxy"
+      ],
+      "Prestart": null,
+      "Poststart": null
+    },
+    {
+      "ID": "trade",
+      "Binary": "moox-trade",
+      "Binaries": [
+        "moox-trade",
+        "moox-trade-cli"
+      ],
+      "BuildTargets": [
+        "trade"
+      ],
+      "CGOTarget": "",
+      "Caddy": false,
+      "Workdir": "trade",
+      "Args": [
+        "-conf=config/trpc_go.yaml"
+      ],
+      "Env": [
+        "MOOX_SERVICE_NAME=trade",
+        "MOOX_INSTANCE_ID=trade@compute-1",
+        "MOOX_NODE_ID=compute-1",
+        "MOOX_VERSION=test",
+        "MOOX_OTEL_SERVICE_NAME=moox-trade",
+        "MOOX_EVENTBUS_NATS_URL=tls://203.0.113.10:4222",
+        "MOOX_METRICS_EVENTBUS_URL=tls://203.0.113.10:4222",
+        "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=/data/moox/compute-1/secrets/eventbus/metrics-publisher.yaml"
+      ],
+      "SecretEnv": [
+        "health-auth.env"
+      ],
+      "CallerKeys": [
+        {
+          "Identity": "trade",
+          "File": "caller-trade.key"
+        }
+      ],
+      "EventBusFiles": [
+        "metrics-publisher.yaml",
+        "ca.pem",
+        "trade-eventbus.yaml"
+      ],
+      "SharedSecrets": [
+        "health-auth.env"
+      ],
+      "Health": {
+        "Kind": "readyz",
+        "Port": 11210,
+        "URL": ""
+      },
+      "StartupGrace": 60,
+      "StopTimeout": 30,
+      "DataDirs": [
+        "data/trade"
+      ],
+      "Prestart": [
+        "\"${RELEASE}\"/'bin/moox-trade-cli' 'init' '--db-path' '/data/moox/compute-1/data/trade/moox_trade.db'"
+      ],
+      "Poststart": null
+    }
+  ]
+}

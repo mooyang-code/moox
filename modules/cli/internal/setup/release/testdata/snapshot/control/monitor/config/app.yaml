@@ -1,0 +1,96 @@
+# Monitor 访问 Storage 等组件统一经本机主机网关
+gateway_client:
+  mode: local
+  caller: monitor
+  key_file: /data/moox/prod/secrets/caller-monitor.key
+  ca_file: /data/moox/prod/certs/moox-ca.crt
+  cache_dir: /data/moox/prod/data/monitor/gatewayclient
+database:
+  type: sqlite
+  path: /data/moox/prod/data/monitor/monitor.db
+  max_idle_conns: 1
+  max_open_conns: 1
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+health:
+  addr: 127.0.0.1:11409
+health_auth:
+  version: "moox-health-v1"
+instance:
+  instance_id: monitor@control
+scheduler:
+  result_retention_days: 14
+  max_concurrency: 16
+# 按 SysDeploy 的部署（placement:<主机>:<组件>）生成健康检查，探测方式取自组件目录。
+placement_checks:
+  enabled: true
+alert:
+  send_timeout_seconds: 10
+observability:
+  enabled: true
+  deliver_policy: all
+  eventbus_urls: ['tls://127.0.0.1:4222']
+  credential_file: /data/moox/prod/secrets/eventbus/monitor-observability.yaml
+  balance_difference_threshold: 0.05
+market_canary:
+  enabled: true
+  freshness: 3m
+  return_threshold: 0.05
+  settle_delay: 5s
+  post_close_delay: 1m
+  calendar_warning_lead: 336h
+  closed_bar_count: 3
+  closed_bar_min_coverage: 0.99
+  subjects:
+    - space_id: crypto
+      # Result Dataset of the Binance spot 1m collection task (dataset_<task_id>).
+      dataset_id: dataset_dasftksvjhj2jom4vhd0
+      # Use a liquid, currently listed spot subject. The catalog may still
+      # store the unsuffixed identity; the canary resolver maps either form.
+      symbol: BTC-USDT
+      frequency: 1m
+      series_tag: venue:binance|market:spot|source:spot_http
+market_health:
+  timer_coordination_stale_after: 15m
+  timer_coordination_pending_grace: 5m
+  low_capacity_headroom: 2
+  feed_failure_rate_window: 5m
+  feed_failure_rate_threshold: 0.2
+  instrument_snapshot_max_age: 36h
+  instrument_minimum_count: 4000
+  instrument_required_exchanges: [XSHG, XSHE, XBSE]
+kline_freshness:
+  enabled: true
+  space_ids:
+    - crypto
+    - stockcn
+  evaluation_interval: 30s
+  inventory_refresh_interval: 1m
+  inventory_page_size: 100
+  inventory_max_entries: 1000
+  stale_after: 5m
+  max_subjects_per_alert: 20
+metrics:
+  enabled: true
+  dataset_health_policy_path: /data/moox/prod/current/monitor/config/dataset-health-policy.yaml
+  no_data_intervals: 2
+  storage:
+    app_id: monitor
+    space_id: mooxsys
+    dataset_id: dataset_mooxsys_service_metrics
+    frequency: 30s
+    metadata_validation_interval: 30s
+    write_batch_size: 1000
+  host_storage:
+    enabled: true
+    app_id: monitor
+    space_id: mooxsys
+    frequency: 1m
+    write_timeout: 5s
+    read_limit: 500
+    metadata_refresh_interval: 1m
+    rule_refresh_interval: 30s
+    resource_dataset_id: dataset_mooxsys_host_resource
+    filesystem_dataset_id: dataset_mooxsys_host_filesystem
+    disk_dataset_id: dataset_mooxsys_host_disk
+    network_dataset_id: dataset_mooxsys_host_network

@@ -30,7 +30,7 @@ components:
 
   - id: host-agent
     name: 主机采集器
-    binary: moox-hostagent
+    binary: moox-host-agent
     scope: host
     replicas: per_host
     protected: false

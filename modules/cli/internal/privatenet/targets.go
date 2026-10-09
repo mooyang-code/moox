@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 type HostTarget struct {
@@ -24,17 +25,13 @@ type SCFTarget struct {
 	FunctionCount   int      `json:"function_count"`
 }
 
+// CollectTencentHosts 返回腾讯云上的 MooX 主机和编译主机；Roles 是主机上部署的组件，编译主机为 compile。
+// 同一地址只出现一次。
 func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 	byAddr := make(map[string]*HostTarget)
-	add := func(host setupconfig.Host, role string) {
-		if !strings.EqualFold(strings.TrimSpace(host.Provider), "tencent") {
-			return
-		}
-		address := strings.TrimSpace(host.Address)
-		if address == "" {
-			address = strings.TrimSpace(host.Host)
-		}
-		if address == "" {
+	add := func(name, address, provider string, roles []string) {
+		address = strings.TrimSpace(address)
+		if !strings.EqualFold(strings.TrimSpace(provider), "tencent") || address == "" {
 			return
 		}
 		key := strings.ToLower(address)
@@ -43,38 +40,19 @@ func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 		}
 		item, ok := byAddr[key]
 		if !ok {
-			item = &HostTarget{
-				Name: strings.TrimSpace(host.Name), Address: address,
-				Provider: "tencent",
-			}
+			item = &HostTarget{Name: name, Address: address, Provider: "tencent"}
 			byAddr[key] = item
 		}
-		if strings.TrimSpace(role) != "" {
+		for _, role := range roles {
 			item.Roles = appendUnique(item.Roles, role)
 		}
-		if item.Name == "" {
-			item.Name = strings.TrimSpace(host.Name)
-		}
 	}
-	add(manifest.ControlHost, "control")
-	if manifest.HasStrategyHost() {
-		add(manifest.StrategyHost, "strategy")
+	for _, host := range manifest.HostList() {
+		roles := append(servicecatalog.Default().HostComponents(), manifest.Components(host.ID)...)
+		add(host.ID, host.Address, host.Provider, roles)
 	}
-	if manifest.HasStorageHost() {
-		add(manifest.StorageHost, "storage")
-	}
-	if manifest.HasViewHost() {
-		add(manifest.ViewHost, "view")
-	}
-	if manifest.HasCompileHost() {
-		add(manifest.CompileHost, "compile")
-	}
-	for _, host := range manifest.OtherHosts {
-		role := "other"
-		if name := strings.TrimSpace(host.Name); name != "" {
-			role = name
-		}
-		add(host, role)
+	if manifest.CompileHost.Configured() {
+		add("compile", manifest.CompileHost.Address, manifest.CompileHost.Provider, []string{"compile"})
 	}
 	out := make([]HostTarget, 0, len(byAddr))
 	for _, item := range byAddr {
@@ -159,8 +137,9 @@ func SCFRegions(targets []SCFTarget) []string {
 	return regions
 }
 
+// PrivateServicePorts 是主机之间、SCF 到主机经私网访问的端口：消息总线、跨主机入口和外部接入。
 func PrivateServicePorts(eventBusPort int) []string {
-	ports := []int{eventBusPort, 11003, 11012, 20100}
+	ports := []int{eventBusPort, 11003, 11004}
 	out := make([]string, 0, len(ports))
 	seen := map[string]struct{}{}
 	for _, port := range ports {

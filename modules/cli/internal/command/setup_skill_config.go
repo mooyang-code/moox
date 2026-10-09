@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -18,10 +17,8 @@ import (
 
 const skillConfigIdentity = "moox-skill"
 
-// skillCallerKeyFile 是 control 主机安装根目录下 moox-skill 外部调用方的签名密钥（CallerKey JSON）。
-const skillCallerKeyFile = "secrets/principal-moox-skill.key"
-
-type skillSecretReader func(context.Context, setupconfig.Host, string) ([]byte, error)
+// skillSecretReader 返回 moox-skill 需要的密钥：外部调用方签名密钥（CallerKey JSON）和存储内部签名密钥文件，都取自 control。
+type skillSecretReader func(context.Context) (callerKey, storageAuth []byte, err error)
 
 // skillAccessEndpoint 返回 moox-skill 使用的外部接入：操作员机器不在任何 VPC 内，固定用 access@storage 的公网地址。
 type skillAccessEndpoint func(context.Context) (servicecatalog.AccessEndpoint, error)
@@ -81,13 +78,22 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	if snapshot == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: setup snapshot is required")
 	}
-	read := func(ctx context.Context, host setupconfig.Host, path string) ([]byte, error) {
-		transport, err := dialSetupHost(ctx, host)
+	read := func(ctx context.Context) ([]byte, []byte, error) {
+		control := snapshot.Manifest.ControlHost()
+		transport, err := dialSetupHost(ctx, control)
 		if err != nil {
-			return nil, fmt.Errorf("connect deployment host: %w", err)
+			return nil, nil, fmt.Errorf("连接 control: %w", err)
 		}
 		defer transport.Close()
-		return readRemoteSkillSecret(ctx, transport, path)
+		callerKey, err := ensureControlPrincipalKey(ctx, transport, control.Root, skillConfigIdentity)
+		if err != nil {
+			return nil, nil, err
+		}
+		storageAuth, err := readControlFile(ctx, transport, control.Root+"/secrets/storage-internal-auth.env")
+		if err != nil {
+			return nil, nil, err
+		}
+		return callerKey, storageAuth, nil
 	}
 	access := func(ctx context.Context) (servicecatalog.AccessEndpoint, error) {
 		gateway, err := openControlGateway(snapshot.Manifest)
@@ -122,28 +128,20 @@ func buildSkillDataAccessConfig(
 	if spaceID = strings.ToLower(strings.TrimSpace(spaceID)); spaceID != "crypto" {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
 	}
-	paths := snapshot.Manifest.Paths.Resolved()
-	if !filepath.IsAbs(strings.TrimSpace(paths.ControlRoot)) || !filepath.IsAbs(strings.TrimSpace(paths.StorageRoot)) {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: control 或 Storage 的安装目录未知")
-	}
-	if !snapshot.Manifest.HasStorageHost() {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: 没有配置 Storage 主机")
+	if len(snapshot.Manifest.HostsOf("storage-primary")) == 0 {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: moox.toml 的部署表中没有存储主服务")
 	}
 	endpoint, err := access(ctx)
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: 选择外部接入: %w", err)
 	}
-	keyRaw, err := read(ctx, snapshot.Manifest.ControlHost, filepath.Join(paths.ControlRoot, skillCallerKeyFile))
+	keyRaw, storageRaw, err := read(ctx)
 	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: 读取 moox-skill 的签名密钥失败")
+		return dataAccessConfig{}, fmt.Errorf("skill_config: 读取 moox-skill 的签名密钥失败: %w", err)
 	}
 	callerKey, err := skillCallerKeyValue(keyRaw)
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
-	}
-	storageRaw, err := read(ctx, snapshot.Manifest.StorageHost, filepath.Join(paths.StorageRoot, "secrets/storage-internal-auth.env"))
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth unavailable")
 	}
 	primarySecret, err := collectorStoragePrimaryAuthSecret(storageRaw)
 	if err != nil {
@@ -202,43 +200,6 @@ func skillCallerKeyValue(raw []byte) (string, error) {
 		return "", fmt.Errorf("签名密钥属于调用方 %s，不是 %s", credentials.Caller, skillConfigIdentity)
 	}
 	return credentials.KeyID + ":" + credentials.Secret, nil
-}
-
-func readRemoteSkillSecret(ctx context.Context, transport setupssh.Client, path string) ([]byte, error) {
-	if transport == nil || !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("remote secret unavailable")
-	}
-	result, err := transport.Run(ctx, []string{
-		"sh", "-lc",
-		`set -eu
-path="$1"
-file_id() { stat -c '%d:%i:%s:%Y' "$1" 2>/dev/null || stat -f '%d:%i:%z:%m' "$1"; }
-file_hash() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
-  else shasum -a 256 "$1" | awk '{print $1}'; fi
-}
-attempt=1
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
-while [ "$attempt" -le 3 ]; do
-  [ -f "$path" ] && [ ! -L "$path" ] || exit 1
-  mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
-  [ "$mode" = 600 ] || exit 1
-  size=$(wc -c <"$path")
-  [ "$size" -gt 0 ] && [ "$size" -le 4096 ] || exit 1
-  before="$(file_id "$path"):$(file_hash "$path")"
-  cp "$path" "$tmp"
-  after="$(file_id "$path"):$(file_hash "$path")"
-  if [ "$before" = "$after" ]; then cat "$tmp"; exit 0; fi
-  attempt=$((attempt + 1))
-done
-exit 1`,
-		"moox-read-skill-secret", path,
-	}, nil)
-	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 4096 {
-		return nil, fmt.Errorf("remote secret unavailable")
-	}
-	return []byte(result.Stdout), nil
 }
 
 func writeSkillConfigAtomic0600(path string, content []byte, rename func(string, string) error) (err error) {

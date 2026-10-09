@@ -17,12 +17,13 @@ type Probe struct {
 	Detail   string `json:"detail,omitempty"`
 }
 
+// listenerPorts 是其他主机需要连得上的端口：主机网关的跨主机入口，以及消息总线所在主机的消息总线端口。
 func listenerPorts(host ResolvedHost, eventBusPort string) []string {
-	ports := make([]string, 0, 4)
-	if hostHasRole(host.HostTarget, "storage") || hostHasRole(host.HostTarget, "view") {
-		ports = append(ports, "11003", "11012")
+	ports := make([]string, 0, 2)
+	if hostHasRole(host.HostTarget, "host-gateway") {
+		ports = append(ports, "11003")
 	}
-	if hostHasRole(host.HostTarget, "control") && eventBusPort != "" {
+	if hostHasRole(host.HostTarget, "eventbus") && eventBusPort != "" {
 		ports = append(ports, eventBusPort)
 	}
 	return ports

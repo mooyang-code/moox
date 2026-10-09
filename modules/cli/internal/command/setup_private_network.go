@@ -138,8 +138,8 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 
 func findSetupHostByAddress(manifest setupconfig.Manifest, address string) (setupconfig.Host, error) {
 	want := strings.TrimSpace(address)
-	for _, host := range manifest.Hosts() {
-		if host.Address == want || host.Host == want {
+	for _, host := range manifest.HostList() {
+		if host.Address == want {
 			return host, nil
 		}
 	}

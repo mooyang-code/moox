@@ -4,17 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"io"
-	"io/fs"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -115,28 +109,6 @@ func TestSetupExportSkillConfigRejectsSetupFileAsOutput(t *testing.T) {
 	require.False(t, called)
 }
 
-func TestReadRemoteSkillSecretRejectsUnsafeRemoteFiles(t *testing.T) {
-	dir := t.TempDir()
-	valid := filepath.Join(dir, "valid.key")
-	require.NoError(t, os.WriteFile(valid, []byte("secret\n"), 0o600))
-	got, err := readRemoteSkillSecret(context.Background(), localSkillSSH{}, valid)
-	require.NoError(t, err)
-	require.Equal(t, "secret\n", string(got))
-
-	unsafeMode := filepath.Join(dir, "mode.key")
-	require.NoError(t, os.WriteFile(unsafeMode, []byte("secret"), 0o644))
-	symlink := filepath.Join(dir, "link.key")
-	require.NoError(t, os.Symlink(valid, symlink))
-	empty := filepath.Join(dir, "empty.key")
-	require.NoError(t, os.WriteFile(empty, nil, 0o600))
-	oversize := filepath.Join(dir, "oversize.key")
-	require.NoError(t, os.WriteFile(oversize, bytes.Repeat([]byte("x"), 4097), 0o600))
-	for _, path := range []string{filepath.Join(dir, "missing.key"), unsafeMode, symlink, empty, oversize} {
-		_, err := readRemoteSkillSecret(context.Background(), localSkillSSH{}, path)
-		require.ErrorContains(t, err, "unavailable", path)
-	}
-}
-
 func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
@@ -151,29 +123,6 @@ func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
 	require.NoError(t, globErr)
 	require.Empty(t, matches)
 }
-
-type localSkillSSH struct{}
-
-func (localSkillSSH) Check(context.Context) error { return nil }
-func (localSkillSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
-	return nil, errors.New("not implemented")
-}
-func (localSkillSSH) Download(context.Context, string, io.Writer) (int64, error) {
-	return 0, errors.New("not implemented")
-}
-func (localSkillSSH) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
-	return errors.New("not implemented")
-}
-func (localSkillSSH) Run(ctx context.Context, argv []string, stdin io.Reader) (setupssh.Result, error) {
-	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	command.Stdin = stdin
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err := command.Run()
-	return setupssh.Result{Stdout: stdout.String(), Stderr: stderr.String()}, err
-}
-func (localSkillSSH) Close() error { return nil }
 
 func testSkillDataAccessConfig() dataAccessConfig {
 	return dataAccessConfig{
@@ -206,11 +155,29 @@ func setupSkillSnapshotWithPath(t *testing.T) (*setupconfig.Snapshot, string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "moox.toml")
-	raw := []byte("[admin]\nusername='admin'\npassword='admin-secret'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-secret'\n[eventbus]\nhost='203.0.113.8'\nport=4333\ntls_enabled=true\n[hosts.\"203.0.113.8\"]\nport=22\nusername='ubuntu'\npassword='ssh-secret'\n[control_host]\nname='control'\nhost='203.0.113.8'\n")
+	raw := []byte(`[admin]
+username = "admin"
+password = "admin-secret"
+[tencent_cloud]
+secret_id = "AKID-test"
+secret_key = "cloud-secret"
+[eventbus]
+port = 4333
+tls_enabled = true
+[hosts.control]
+address = "203.0.113.8"
+ssh = { username = "ubuntu", password = "ssh-secret" }
+[hosts.storage]
+address = "146.56.196.204"
+region = "ap-nanjing"
+ssh = { username = "ubuntu", password = "ssh-secret" }
+[placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor"]
+storage = ["storage-primary", "storage-node", "storage-view", "access"]
+`)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	snapshot, err := setupconfig.Load(path, dir)
 	require.NoError(t, err)
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "146.56.196.204", Port: 22, Username: "ubuntu"}
 	return snapshot, path
 }
 
@@ -219,24 +186,14 @@ func testSkillAccess(context.Context) (servicecatalog.AccessEndpoint, error) {
 	return servicecatalog.AccessEndpoint{Address: "146.56.196.204:11004", ID: "access@storage", HostID: "storage"}, nil
 }
 
-// testSkillSecrets 按路径返回 control 上的 moox-skill 密钥和 storage 上的 Storage 鉴权文件。
-func testSkillSecrets(t *testing.T, snapshot *setupconfig.Snapshot, callerKey []byte) skillSecretReader {
+// testSkillSecrets 返回 control 上的 moox-skill 签名密钥和存储内部签名密钥。
+func testSkillSecrets(t *testing.T, _ *setupconfig.Snapshot, callerKey []byte) skillSecretReader {
 	t.Helper()
-	paths := snapshot.Manifest.Paths.Resolved()
-	return func(_ context.Context, host setupconfig.Host, path string) ([]byte, error) {
-		switch path {
-		case filepath.Join(paths.ControlRoot, "secrets/principal-moox-skill.key"):
-			require.Equal(t, "control", host.Name, "moox-skill 的密钥只从 control 主机读取")
-			if callerKey == nil {
-				return nil, errors.New("missing")
-			}
-			return callerKey, nil
-		case filepath.Join(paths.StorageRoot, "secrets/storage-internal-auth.env"):
-			require.Equal(t, "storage", host.Name, "Storage 鉴权只从 Storage 主机读取")
-			return []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
-		default:
-			return nil, fmt.Errorf("unexpected path %s", path)
+	return func(context.Context) ([]byte, []byte, error) {
+		if callerKey == nil {
+			return nil, nil, errors.New("missing")
 		}
+		return callerKey, []byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=" + testSkillPrimarySecret + "\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"), nil
 	}
 }
 
@@ -271,8 +228,7 @@ func TestBuildSkillDataAccessConfigFailsClosed(t *testing.T) {
 		{name: "unsupported space", space: "stockus", want: "unsupported space"},
 		{name: "missing key", callerKey: func(*testing.T) []byte { return nil }, want: "签名密钥"},
 		{name: "other caller key", callerKey: func(t *testing.T) []byte { return testSkillCallerKey(t, "factor-engine") }, want: "factor-engine"},
-		{name: "relative storage root", prepare: func(snapshot *setupconfig.Snapshot) { snapshot.Manifest.Paths.StorageRoot = "relative/storage" }, want: "安装目录"},
-		{name: "no storage host", prepare: func(snapshot *setupconfig.Snapshot) { snapshot.Manifest.StorageHost = setupconfig.Host{} }, want: "Storage 主机"},
+		{name: "no storage primary", prepare: func(snapshot *setupconfig.Snapshot) { delete(snapshot.Manifest.Placements, "storage") }, want: "存储主服务"},
 		{name: "directory unavailable", access: func(context.Context) (servicecatalog.AccessEndpoint, error) {
 			return servicecatalog.AccessEndpoint{}, errors.New("控制面不可达")
 		}, want: "控制面不可达"},

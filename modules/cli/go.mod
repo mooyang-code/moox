@@ -9,6 +9,7 @@ replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/pr
 replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
 
 require (
+	github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000
@@ -131,3 +132,5 @@ replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gat
 replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
 
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
+
+replace github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen => ../egressproxy/proto/egressgen

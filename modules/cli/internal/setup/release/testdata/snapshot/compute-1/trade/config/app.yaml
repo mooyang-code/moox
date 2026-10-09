@@ -1,0 +1,17 @@
+database:
+  path: /data/moox/compute-1/data/trade/moox_trade.db
+# 读取交易所凭据（SecretMgr）经本机主机网关
+gateway_client:
+  mode: local
+  caller: trade
+  key_file: /data/moox/compute-1/secrets/caller-trade.key
+  ca_file: /data/moox/compute-1/certs/moox-ca.crt
+  cache_dir: /data/moox/compute-1/data/trade/gatewayclient
+eventbus:
+  enabled: true
+  urls: ['tls://203.0.113.10:4222']
+  credential_file: /data/moox/compute-1/secrets/eventbus/trade-eventbus.yaml
+runtime:
+  # Production order submission is disabled unless explicitly enabled.
+  # TESTNET and account synchronization are unaffected.
+  live_trading_enabled: false
