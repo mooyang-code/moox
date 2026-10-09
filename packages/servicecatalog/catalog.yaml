@@ -450,6 +450,16 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11441}
+    services:
+      - path: trpc.moox.egress.Proxy
+        port: 11440
+        # 替 Collector 访问国内连不上的外部接口；单次请求最长 60 秒，响应最大 32MiB。
+        timeout_ms: 65000
+        max_body_bytes: 33554432
+        rpcs: [Do, ResolveDomains]
+        acl:
+          - all: true
+            callers: [collector]
 
   - id: trade
     name: 交易服务

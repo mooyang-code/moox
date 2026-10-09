@@ -77,9 +77,12 @@ func TestCompileProductionDeployment(t *testing.T) {
 		t.Fatalf("control 的校验密钥范围不完整: %v", control.Callers)
 	}
 	compute, _ := compiled.HostConfig("compute-1")
-	if !containsCaller(compute.Callers, "strategy") || containsCaller(compute.Callers, "collector") {
+	if !containsCaller(compute.Callers, "strategy") || !containsCaller(compute.Callers, "collector") || containsCaller(compute.Callers, "factor-mgr") {
 		t.Fatalf("compute-1 的校验密钥范围不对: %v", compute.Callers)
 	}
+	// 出口代理只给 Collector 调用。
+	assertRouteCallers(t, compute, "trpc.moox.egress.Proxy", "Do", []string{"collector"})
+	assertRouteCallers(t, compute, "trpc.moox.egress.Proxy", "ResolveDomains", []string{"collector"})
 	if got := compiled.Directory.ServiceHostIDs("trpc.moox.storage.Metadata"); strings.Join(got, ",") != "storage" {
 		t.Fatalf("Metadata 应当在 storage，实际 %v", got)
 	}

@@ -10,6 +10,8 @@ use (
 	./modules/cloudnode/proto/cloudnodegen
 	./modules/collector
 	./modules/collector/proto/collectorgen
+	./modules/egressproxy
+	./modules/egressproxy/proto/egressgen
 	./modules/eventbus
 	./modules/eventbus/proto/eventbusgen
 	./modules/factor

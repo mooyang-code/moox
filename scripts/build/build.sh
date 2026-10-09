@@ -141,6 +141,7 @@ case "${TARGET_MODULE}" in
     build_storage
     build_storage_cli
     build_go modules/access ./cmd/server moox-access 0
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     build_archive
     ;;
   cli)
@@ -217,6 +218,9 @@ case "${TARGET_MODULE}" in
     ;;
   access)
     build_go modules/access ./cmd/server moox-access 0
+    ;;
+  egress-proxy)
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     ;;
   archive)
     build_archive

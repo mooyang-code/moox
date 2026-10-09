@@ -1,6 +1,6 @@
 {
   "Directory": {
-    "version": "f6de06b481cf659189c98562623fbb7bfe626925d8bdc2091e8cd17ae11f6779",
+    "version": "b14beb2ca143f155d6c79a698996cdbbcfe0f70bbea3814dd77f1db3217ef38a",
     "services": [
       {
         "path": "trpc.moox.admin.CollectorPublishLease",
@@ -42,6 +42,12 @@
         "path": "trpc.moox.collector.MarketFetchRuntime",
         "host_ids": [
           "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.egress.Proxy",
+        "host_ids": [
+          "compute-1"
         ]
       },
       {
@@ -267,6 +273,20 @@
       "Disabled": false,
       "Routes": [
         {
+          "service_id": "egress-proxy",
+          "address": "127.0.0.1:11440",
+          "service_path": "trpc.moox.egress.Proxy",
+          "timeout_ms": 65000,
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "Do",
+            "ResolveDomains"
+          ],
+          "allowed_callers": [
+            "collector"
+          ]
+        },
+        {
           "service_id": "host-agent",
           "address": "127.0.0.1:11426",
           "service_path": "trpc.moox.hostagent.HostAgentMgr",
@@ -363,6 +383,7 @@
         }
       ],
       "Callers": [
+        "collector",
         "console",
         "monitor",
         "moox-cli",

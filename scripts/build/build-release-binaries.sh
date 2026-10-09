@@ -124,6 +124,7 @@ binary_names=(
   moox-monitor moox-monitor-cli
   moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli
   moox-access
+  moox-egress-proxy
   moox-archive moox-archive-cli
 )
 if [[ "${TARGET_GOOS}" == "linux" ]]; then
