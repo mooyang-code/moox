@@ -73,6 +73,9 @@ func (c Catalog) ValidateTopology(t Topology) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	if len(t.Hosts) == 0 || len(t.Hosts) > 1024 {
+		return fmt.Errorf("topology requires 1..1024 hosts")
+	}
 	hosts := map[string]Host{}
 	addresses := map[string]bool{}
 	for _, host := range t.Hosts {
@@ -80,7 +83,7 @@ func (c Catalog) ValidateTopology(t Topology) error {
 		if ip := net.ParseIP(host.Address); ip != nil {
 			key = ip.String()
 		}
-		if !identifier.MatchString(host.ID) || !validAddress(host.Address) || host.PrivateAddress != "" && !validAddress(host.PrivateAddress) || !validStatus(host.Status) {
+		if !validDirectoryHost(host.ID, DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}) || !validStatus(host.Status) {
 			return fmt.Errorf("invalid host %q", host.ID)
 		}
 		if _, exists := hosts[host.ID]; exists || addresses[key] {

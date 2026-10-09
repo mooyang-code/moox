@@ -60,6 +60,8 @@ func TestTopologyRejectsInvalidPlacementsAtomically(t *testing.T) {
 		{"duplicate address", func(c *Catalog, p *Topology) { p.Hosts[1].Address = p.Hosts[0].Address }},
 		{"host address includes scheme", func(c *Catalog, p *Topology) { p.Hosts[1].Address = "http://storage:11003" }},
 		{"host address includes port", func(c *Catalog, p *Topology) { p.Hosts[1].Address = "storage:11003" }},
+		{"host ID exceeds directory limit", func(c *Catalog, p *Topology) { p.Hosts[1].ID = strings.Repeat("s", 129) }},
+		{"region exceeds directory limit", func(c *Catalog, p *Topology) { p.Hosts[1].Region = strings.Repeat("r", 129) }},
 		{"invalid host status", func(c *Catalog, p *Topology) { p.Hosts[1].Status = "active" }},
 		{"invalid placement status", func(c *Catalog, p *Topology) { p.Placements[0].Status = "active" }},
 		{"control disabled", func(c *Catalog, p *Topology) { p.Hosts[0].Status = Disabled }},

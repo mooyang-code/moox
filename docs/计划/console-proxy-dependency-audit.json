@@ -3,7 +3,7 @@
   "date": "2026-10-09",
   "scope": "Go workspace selected module metadata; not runtime binary dependency coverage",
   "baseline_modules": 417,
-  "current_modules": 850,
+  "current_modules": 848,
   "baseline_unresolved": [
     "trpc.group/trpc-go/go_reuseport@v1.7.1-0.20230423021710-f5eeff5d87a3"
   ],
@@ -2064,12 +2064,20 @@
   ],
   "removed": [
     [
+      "github.com/RussellLuo/timingwheel",
+      "v0.0.0-20191022104228-f534fd34a762"
+    ],
+    [
       "github.com/mooyang-code/moox/packages/gatewayproxy",
       "workspace"
     ],
     [
       "trpc.group/trpc-go/go_reuseport",
       "v1.7.1-0.20230423021710-f5eeff5d87a3"
+    ],
+    [
+      "trpc.group/trpc-go/trpc-database/localcache",
+      "v1.0.0"
     ],
     [
       "trpc.group/trpc-go/trpc-filter/slime",

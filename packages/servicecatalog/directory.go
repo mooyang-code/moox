@@ -18,7 +18,7 @@ func (d Directory) Validate() error {
 		return fmt.Errorf("directory requires bounded host and service maps")
 	}
 	for id, host := range d.Hosts {
-		if len(id) > 128 || !identifier.MatchString(id) || !validAddress(host.Address) || host.PrivateAddress != "" && !validAddress(host.PrivateAddress) || len(host.Region) > 128 {
+		if !validDirectoryHost(id, host) {
 			return fmt.Errorf("invalid directory host %q", id)
 		}
 	}
@@ -42,6 +42,10 @@ func (d Directory) Validate() error {
 		return fmt.Errorf("directory version does not match its contents")
 	}
 	return nil
+}
+
+func validDirectoryHost(id string, host DirectoryHost) bool {
+	return len(id) <= 128 && identifier.MatchString(id) && validAddress(host.Address) && (host.PrivateAddress == "" || validAddress(host.PrivateAddress)) && len(host.Region) <= 128
 }
 
 func (d Directory) Clone() Directory {

@@ -153,6 +153,67 @@ CREATE TABLE IF NOT EXISTS t_ssh_host (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
 
+-- 部署配置与网关运行状态分表，SSH 主机仅通过地址关联。
+CREATE TABLE IF NOT EXISTS t_hosts (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_address TEXT NOT NULL,
+    c_private_address TEXT NOT NULL DEFAULT '',
+    c_region TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'enabled',
+    c_description TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('enabled', 'disabled')),
+    UNIQUE (c_address)
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_hosts_mtime
+AFTER UPDATE ON t_hosts
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
+END;
+
+CREATE TABLE IF NOT EXISTS t_placements (
+    c_host_id TEXT NOT NULL,
+    c_component_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'enabled',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('enabled', 'disabled')),
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id),
+    PRIMARY KEY (c_host_id, c_component_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_placements_component ON t_placements (c_component_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_placements_mtime
+AFTER UPDATE ON t_placements
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_placements SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_host_id = OLD.c_host_id AND c_component_id = OLD.c_component_id;
+END;
+
+CREATE TABLE IF NOT EXISTS t_host_gateway_status (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_version TEXT NOT NULL DEFAULT '',
+    c_expected_hash TEXT NOT NULL DEFAULT '',
+    c_applied_hash TEXT NOT NULL DEFAULT '',
+    c_route_count INTEGER NOT NULL DEFAULT 0,
+    c_last_seen_at DATETIME,
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_previous_instance_id TEXT NOT NULL DEFAULT '',
+    c_replaced_at DATETIME,
+    c_conflict_instance_id TEXT NOT NULL DEFAULT '',
+    c_conflict_seen_at DATETIME,
+    CHECK (c_route_count >= 0),
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
+);
+
 -- ************ 网关节点表 ************
 CREATE TABLE IF NOT EXISTS t_gateway_nodes (
     c_node_id TEXT NOT NULL PRIMARY KEY,

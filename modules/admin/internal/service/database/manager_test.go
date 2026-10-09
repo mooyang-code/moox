@@ -1,6 +1,8 @@
 package database
 
 import (
+	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -32,12 +34,41 @@ func TestInitializeDoesNotCreateSchema(t *testing.T) {
 SELECT count(*)
 FROM sqlite_master
 WHERE type = 'table'
-  AND name IN ('t_spaces', 't_users', 't_ssh_host', 't_secrets')
+  AND name IN ('t_spaces', 't_users', 't_ssh_host', 't_secrets', 't_hosts', 't_placements', 't_host_gateway_status')
 `).Scan(&count).Error; err != nil {
 		t.Fatalf("query table count: %v", err)
 	}
 	if count != 0 {
 		t.Fatalf("Initialize() created %d admin tables, want 0", count)
+	}
+}
+
+func TestInitializeEnforcesForeignKeysOnEveryConnection(t *testing.T) {
+	mgr := NewManager()
+	if err := mgr.Initialize(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "admin.db")}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := mgr.GetDB().DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Keep both leases open so the pool must create distinct connections.
+	first, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	for _, conn := range []*sql.Conn{first, second} {
+		var enabled int
+		if err := conn.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&enabled); err != nil || enabled != 1 {
+			t.Fatalf("foreign keys = %d, error = %v", enabled, err)
+		}
 	}
 }
 

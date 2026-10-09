@@ -1,8 +1,11 @@
 package schema
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestAdminSchemaUsesBoolSoftDelete(t *testing.T) {
@@ -18,6 +21,39 @@ func TestAdminSchemaUsesBoolSoftDelete(t *testing.T) {
 	}
 	if got := strings.Count(sql, "c_is_deleted INTEGER NOT NULL DEFAULT 0"); got != 3 {
 		t.Fatalf("expected 3 bool soft-delete columns, got %d", got)
+	}
+}
+
+func TestHostTopologySchemaEnforcesReferencesAndStatuses(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(AdminSQL()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO t_hosts (c_host_id, c_address) VALUES ('control', 'control.example.test')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO t_hosts (c_host_id, c_address, c_status) VALUES ('invalid', 'invalid.example.test', 'active')`,
+		`INSERT INTO t_hosts (c_host_id, c_address) VALUES ('duplicate', 'control.example.test')`,
+		`INSERT INTO t_placements (c_host_id, c_component_id) VALUES ('missing', 'admin')`,
+		`INSERT INTO t_placements (c_host_id, c_component_id, c_status) VALUES ('control', 'admin', 'active')`,
+		`INSERT INTO t_host_gateway_status (c_host_id) VALUES ('missing')`,
+		`INSERT INTO t_host_gateway_status (c_host_id, c_route_count) VALUES ('control', -1)`,
+	} {
+		if _, err := db.Exec(statement); err == nil {
+			t.Fatalf("schema accepted invalid input: %s", statement)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO t_placements (c_host_id, c_component_id) VALUES ('control', 'admin')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM t_hosts WHERE c_host_id = 'control'`); err == nil {
+		t.Fatal("host with placements was deleted without removing dependent rows")
 	}
 }
 

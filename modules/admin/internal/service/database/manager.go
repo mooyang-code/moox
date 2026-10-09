@@ -86,6 +86,7 @@ func (dm *Manager) GetCache() *badger.DB {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		"_pragma=foreign_keys(1)",
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(OFF)",
 		// SQLite has one writer. Keep a bounded wait for short lock
