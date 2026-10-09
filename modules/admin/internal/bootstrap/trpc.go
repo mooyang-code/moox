@@ -3,7 +3,10 @@ package bootstrap
 import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
+	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
@@ -27,6 +30,23 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 	adminpb.RegisterAuthService(s.Service("trpc.moox.infra.Auth"), authImp)
+	// Auth initializes the shared durable Badger cache. GatewayControl uses its
+	// own nonce namespace, independent of each host gateway's local nonce DB.
+	cache, err := authdao.NewCacheDBFromBadger(services.DBManager.GetCache())
+	if err != nil {
+		return err
+	}
+	master, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return err
+	}
+	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID, master, authdao.NewUserDAO(services.DBManager.GetDB(), cache))
+	if err != nil {
+		return err
+	}
+	if err := gatewaycontrol.Register(s.Service("trpc.moox.admin.GatewayControl"), control); err != nil {
+		return err
+	}
 
 	// 2. 初始化网关服务
 	log.Info("正在初始化网关服务...")

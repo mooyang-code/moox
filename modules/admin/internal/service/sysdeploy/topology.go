@@ -83,6 +83,7 @@ func (d *TopologyDAO) GetGatewayStatus(ctx context.Context, hostID string) (*Hos
 	if err := d.db.WithContext(ctx).Where("c_host_id = ?", hostID).First(status).Error; err != nil {
 		return nil, err
 	}
+	status.ClearExpiredConflict(time.Now().UTC())
 	return status, nil
 }
 

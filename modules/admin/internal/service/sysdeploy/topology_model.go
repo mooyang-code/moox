@@ -2,6 +2,8 @@ package sysdeploy
 
 import "time"
 
+const GatewayConflictWindow = 5 * time.Minute
+
 type HostRecord struct {
 	HostID         string    `gorm:"column:c_host_id;primaryKey"`
 	Address        string    `gorm:"column:c_address"`
@@ -41,6 +43,14 @@ type HostGatewayStatus struct {
 }
 
 func (HostGatewayStatus) TableName() string { return "t_host_gateway_status" }
+
+// ClearExpiredConflict gives readers the same expiry even when an offline
+// gateway sends no further heartbeat. The next status write persists it.
+func (s *HostGatewayStatus) ClearExpiredConflict(now time.Time) {
+	if s.ConflictSeenAt != nil && !now.Before(s.ConflictSeenAt.Add(GatewayConflictWindow)) {
+		s.ConflictInstanceID, s.ConflictSeenAt = "", nil
+	}
+}
 
 // HostSpec contains deployment input, not runtime status. Synchronization keeps
 // the existing host and placement enablement values.

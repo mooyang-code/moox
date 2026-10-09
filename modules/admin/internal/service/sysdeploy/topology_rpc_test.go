@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -24,6 +25,8 @@ import (
 )
 
 func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
+	const master = "fixture-only-topology-gateway-master-0123456789"
+	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", master)
 	manager := database.NewManager()
 	require.NoError(t, manager.Initialize(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "admin.db")}))
 	db := manager.GetDB()
@@ -73,6 +76,10 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 		response, err := proxy.SyncHostPlacements(ctx, spec)
 		check(response.GetRetInfo(), err)
 	}
+	keyStore, err := keys.NewStore(db, master)
+	require.NoError(t, err)
+	_, err = keyStore.EnsureAll(ctx)
+	require.NoError(t, err)
 	hosts, err = proxy.ListHosts(ctx, &pb.ListDeploymentHostsReq{})
 	check(hosts.GetRetInfo(), err)
 	require.Len(t, hosts.GetHosts(), 2)
@@ -95,7 +102,22 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	check(routes.GetRetInfo(), err)
 	require.NotEmpty(t, routes.GetDefinitionHash())
 	require.NotEmpty(t, routes.GetRoutes())
-	require.Empty(t, routes.GetGatewayStatus().GetExpectedHash(), "definition hash must not stand in for the final signed-key snapshot hash")
+	require.NotEmpty(t, routes.GetGatewayStatus().GetExpectedHash())
+	require.NotEqual(t, routes.GetDefinitionHash(), routes.GetGatewayStatus().GetExpectedHash(), "definition hash must not stand in for the final signed-key snapshot hash")
+	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt(), "reading desired state must not create a heartbeat")
+	definitionHash, expectedHash := routes.GetDefinitionHash(), routes.GetGatewayStatus().GetExpectedHash()
+	_, err = keyStore.Rotate(ctx, "console")
+	require.NoError(t, err)
+	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "storage"})
+	check(routes.GetRetInfo(), err)
+	require.Equal(t, definitionHash, routes.GetDefinitionHash(), "key rotation does not change route definitions")
+	require.NotEqual(t, expectedHash, routes.GetGatewayStatus().GetExpectedHash(), "desired hash must include key rotation before the next gateway heartbeat")
+	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt())
+	topology, err := sysdeploy.NewTopologyDAO(db, "control")
+	require.NoError(t, err)
+	_, snapshot, err := topology.CompileSnapshot(ctx, "storage", master)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.GetHash(), routes.GetGatewayStatus().GetExpectedHash())
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "unknown"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, routes.GetRetInfo().GetCode())

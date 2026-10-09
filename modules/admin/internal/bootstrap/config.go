@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -39,9 +40,12 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	if err := validateSetupListener("./config/trpc_go.yaml"); err != nil {
 		return nil, err
 	}
+	if err := validateGatewayControlListener("./config/trpc_go.yaml"); err != nil {
+		return nil, err
+	}
 	adminNodeID := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID"))
-	if adminNodeID == "" {
-		return nil, fmt.Errorf("MOOX_ADMIN_NODE_ID is required in server mode")
+	if !servicecatalog.ValidHostID(adminNodeID) {
+		return nil, fmt.Errorf("MOOX_ADMIN_NODE_ID must be a canonical control host ID")
 	}
 	log.Info("应用配置加载成功")
 
@@ -74,6 +78,44 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		AdminNodeID: adminNodeID,
 	}
 	return cfg, nil
+}
+
+func validateGatewayControlListener(path string) error {
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return fmt.Errorf("read gateway control listener config: %w", err)
+	}
+	var document struct {
+		Server struct {
+			Services []struct {
+				Name     string `yaml:"name"`
+				IP       string `yaml:"ip"`
+				Port     int    `yaml:"port"`
+				Address  string `yaml:"address"`
+				Nic      string `yaml:"nic"`
+				Network  string `yaml:"network"`
+				Protocol string `yaml:"protocol"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("decode gateway control listener config")
+	}
+	count := 0
+	for _, listener := range document.Server.Services {
+		if listener.Name != servicecatalog.GatewayControlPath {
+			continue
+		}
+		count++
+		ip := net.ParseIP(listener.IP)
+		if ip == nil || !ip.IsLoopback() || listener.Port != 11112 || listener.Network != "tcp" || listener.Protocol != "trpc" || listener.Address != "" || listener.Nic != "" {
+			return fmt.Errorf("gateway control listener must bind tcp trpc to loopback port 11112 without address or NIC override")
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("exactly one gateway control listener is required")
+	}
+	return nil
 }
 
 func validateSetupListener(path string) error {

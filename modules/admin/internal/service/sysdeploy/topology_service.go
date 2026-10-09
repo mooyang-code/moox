@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -116,7 +117,11 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
-	compiled, err := dao.Compile(ctx, req.GetHostId())
+	encryptionKey, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
+	}
+	compiled, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId(), encryptionKey)
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
@@ -127,6 +132,9 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
+	// Always show the current desired snapshot, including rotations/withdrawals
+	// since the latest heartbeat. The gateway cannot choose its expected hash.
+	status.ExpectedHash = snapshot.Hash
 	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, DefinitionHash: compiled.Hash, GatewayStatus: statusToProto(status)}
 	for _, route := range compiled.Routes {
 		response.Routes = append(response.Routes, routeToProto(route))
