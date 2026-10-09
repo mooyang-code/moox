@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
@@ -71,7 +72,8 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", req.GetViewId(), resolved.MarketType))}, nil
 	}
 	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
-	if end, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end); err != nil {
+	indexID := ""
+	if end, indexID, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, start, end, input.DefaultReplayMaxBars)
@@ -85,7 +87,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), ViewIndexID: indexID, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -202,12 +204,10 @@ func (s *Service) ListReplays(ctx context.Context, req *strategypb.ListReplaysRe
 	if err != nil {
 		return &strategypb.ListReplaysRsp{RetInfo: failure(err)}, nil
 	}
+	// 列表不带 DSL 全文（存储层不读取），详情用 GetReplay 读取。
 	items := make([]*strategypb.Replay, 0, len(replays))
 	for _, replay := range replays {
-		item := replayProto(replay)
-		// 列表每 5 秒轮询一次：不带 DSL 全文，详情用 GetReplay 读取。
-		item.DslYaml = ""
-		items = append(items, item)
+		items = append(items, replayProto(replay))
 	}
 	return &strategypb.ListReplaysRsp{RetInfo: success(), Replays: items, Total: total, Page: int32(page), PageSize: int32(size)}, nil
 }

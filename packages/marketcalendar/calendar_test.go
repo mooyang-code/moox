@@ -370,7 +370,7 @@ func TestTradingDayIndexMatchesTradingDays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := calendar.TradingDayIndex(weekend); err == nil {
-		t.Fatal("非交易日应报错")
+	if _, err := calendar.TradingDayIndex(weekend); !errors.Is(err, ErrNotTradingDay) {
+		t.Fatalf("非交易日应返回 ErrNotTradingDay：%v", err)
 	}
 }

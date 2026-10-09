@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,6 +60,21 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	if missing := MissingColumns(view, program, resolved.MinAgeBars); len(missing) > 0 {
 		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), resolved.ViewID)}
+	}
+	// 标签只在启用时校验过：运行期被删除时成员列表为空，exclude_tags 悄悄失效、按标签选池变空，必须报出来。
+	for _, tag := range referencedTags(program.Strategy) {
+		if _, err := l.Client.GetTag(ctx, spaceID, tag); err != nil {
+			if errors.Is(err, ErrTagNotFound) {
+				return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("DSL 引用的标签 %s 已不存在，请修改策略后重新启用实例", tag)}
+			}
+			return Loaded{}, err
+		}
+	}
+	if resolved.MinAgeBars > 0 {
+		// 年龄探针需要覆盖统计；事件路径只读 Storage 缓存的统计，不触发全量统计，未知时由探针的确认查询兜底。
+		if view, err = WithCoverage(ctx, l.Client, spaceID, view, false); err != nil {
+			return Loaded{}, err
+		}
 	}
 	subjects, err := l.Client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
 	if err != nil {

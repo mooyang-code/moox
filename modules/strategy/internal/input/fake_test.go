@@ -21,6 +21,8 @@ type fakeClient struct {
 	rows       func(query Query) ([]Row, uint64, error)
 	queries    []Query
 	errors     map[string]error
+	// coverageReads 依次记录每次读取覆盖统计时是否要求精确统计。
+	coverageReads []bool
 }
 
 func (f *fakeClient) GetView(_ context.Context, _, viewID string) (ViewInfo, error) {
@@ -31,7 +33,18 @@ func (f *fakeClient) GetView(_ context.Context, _, viewID string) (ViewInfo, err
 	if !ok {
 		return ViewInfo{}, fmt.Errorf("View %s 不存在", viewID)
 	}
+	// 与生产一致：View 元数据不带覆盖统计，需要时由 ViewCoverage 单独读取。
+	view.IndexedFrom, view.IndexedTo, view.SeriesBars = time.Time{}, time.Time{}, 0
 	return view, nil
+}
+
+func (f *fakeClient) ViewCoverage(_ context.Context, _ string, view ViewInfo, exact bool) (Coverage, error) {
+	f.coverageReads = append(f.coverageReads, exact)
+	if err := f.errors["coverage"]; err != nil {
+		return Coverage{}, err
+	}
+	stored := f.views[view.ViewID]
+	return Coverage{IndexedFrom: stored.IndexedFrom, IndexedTo: stored.IndexedTo, SeriesBars: stored.SeriesBars}, nil
 }
 
 func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (DatasetInfo, error) {
@@ -61,6 +74,9 @@ func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]strin
 }
 
 func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (TagInfo, error) {
+	if err := f.errors["tag"]; err != nil {
+		return TagInfo{}, err
+	}
 	if marketType, ok := f.tagMarkets[tagID]; ok {
 		return TagInfo{TagID: tagID, MarketType: marketType}, nil
 	}

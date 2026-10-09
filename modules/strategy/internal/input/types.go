@@ -44,7 +44,7 @@ type ViewInfo struct {
 	Status        string
 	ActiveIndexID string
 	// IndexedFrom 与 IndexedTo 是活动索引全部行的最早与最晚 bar_start（取自 DataView 的索引统计，至多每 5 分钟
-	// 刷新，最晚一根可能略滞后；最早时间只会提前，可能来自已停更的序列）；零值表示未知。
+	// 刷新，最晚一根可能略滞后；最早时间只会提前，可能来自已停更的序列）；只有经 WithCoverage 读取后才有值，零值表示未知。
 	IndexedFrom time.Time
 	IndexedTo   time.Time
 	// SeriesBars 是 View 每个序列至少保留的最近根数；0 表示未知。活跃序列可回溯的起点见 CoverageStart。
@@ -112,9 +112,19 @@ type Query struct {
 	Limit int
 }
 
+// Coverage 是 View 活动索引的覆盖统计：全部行的最早与最晚 bar_start、每个序列至少保留的根数；零值表示未知。
+type Coverage struct {
+	IndexedFrom time.Time
+	IndexedTo   time.Time
+	SeriesBars  int
+}
+
 // Client 是 Storage 与 Factor 的窄适配。
 type Client interface {
+	// GetView 读取 View 元数据与列，不含覆盖范围；需要覆盖范围时另调 ViewCoverage（见 WithCoverage）。
 	GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error)
+	// ViewCoverage 读取 View 活动索引的覆盖统计；exact 为 true 时统计未缓存也要求现算（代价是一次全量统计）。
+	ViewCoverage(ctx context.Context, spaceID string, view ViewInfo, exact bool) (Coverage, error)
 	GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error)
 	ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]Subject, error)
 	ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error)

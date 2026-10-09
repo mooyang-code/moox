@@ -31,16 +31,26 @@ rules:
 
 // fakeResolver 按 View 返回固定的解析结果；swap 结尾的 View 视为合约。view 是回放区间校验使用的覆盖范围。
 type fakeResolver struct {
-	calls   int
-	err     error
-	columns []string
-	loaded  input.Loaded
-	loadErr error
-	view    input.ViewInfo
+	calls       int
+	err         error
+	columns     []string
+	loaded      input.Loaded
+	loadErr     error
+	view        input.ViewInfo
+	coverageErr error
+	// onResolve 在每次解析开始时调用，用来模拟解析期间的并发修改。
+	onResolve func()
+}
+
+func (f *fakeResolver) CheckAgeCoverage(context.Context, string, input.Resolved) error {
+	return f.coverageErr
 }
 
 func (f *fakeResolver) Resolve(_ context.Context, _, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
 	f.calls++
+	if f.onResolve != nil {
+		f.onResolve()
+	}
 	if f.err != nil {
 		return input.Resolved{}, nil, f.err
 	}
@@ -64,8 +74,9 @@ func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.
 	return f.loaded, f.loadErr
 }
 
-func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, error) {
-	return input.ReplayWindow(resolved, program, f.view, start, end)
+func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error) {
+	end, err := input.ReplayWindow(resolved, program, f.view, start, end)
+	return end, f.view.ActiveIndexID, err
 }
 
 // fakeOwner 记录认领与释放；claimErr 让下一次认领失败。
@@ -76,6 +87,8 @@ type fakeOwner struct {
 	releaseErr  error
 	validateErr error
 	owner       map[string]string
+	// onRelease 在每次释放时调用，用来模拟 Trade 调用期间的并发操作。
+	onRelease func(instance, session string)
 }
 
 func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session string) error {
@@ -92,6 +105,9 @@ func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, sessio
 
 func (f *fakeOwner) ReleaseSession(_ context.Context, _, account, instance, session string) error {
 	f.releases = append(f.releases, session)
+	if f.onRelease != nil {
+		f.onRelease(instance, session)
+	}
 	if f.releaseErr != nil {
 		return f.releaseErr
 	}

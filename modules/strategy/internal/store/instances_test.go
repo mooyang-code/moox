@@ -28,11 +28,18 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 	if err != nil || got.Enabled || got.SessionID != nil || got.ViewID != "view_a" || got.Health != HealthOK || string(got.ResolvedJSON) != "{}" || *got.LogicalAccountID != account {
 		t.Fatalf("实例不符：%+v err=%v", got, err)
 	}
-	session := "session-1"
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, json.RawMessage(`{"view_id":"view_a"}`), testNow); err != nil {
+	session, secondSession := "session-1", "session-2"
+	for _, opened := range []Session{{SessionID: session, InstanceID: "i1"}, {SessionID: secondSession, InstanceID: "i2"}} {
+		opened.DSLHash, opened.ResolvedJSON, opened.CreatedAt = testHash, `{"view_id":"view_a"}`, testNow
+		if err := repo.OpenSession(ctx, opened, "name: demo"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attachAndEnable(t, repo, "i1", session, json.RawMessage(`{"view_id":"view_a"}`))
+	if err := repo.SetInstanceEnabled(ctx, "i2", false, &secondSession, nil, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i2", true, &session, nil, testNow); err == nil {
+	if err := repo.SetInstanceEnabled(ctx, "i2", true, &secondSession, nil, testNow); err == nil {
 		t.Fatal("同一账户不能被两个启用实例占用")
 	}
 	enabled, err := repo.GetInstance(ctx, "i1")
@@ -61,6 +68,13 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := "session-1"
+	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+		t.Fatal(err)
+	}
+	// 启用前必须先把会话写到实例上（启用流程先写会话再联系 Trade）。
+	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, nil, testNow); err == nil {
+		t.Fatal("会话尚未挂到实例上时不应能启用")
+	}
 	// 启用进行中：停用状态 + 会话。
 	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, nil, testNow); err != nil {
 		t.Fatal(err)
@@ -116,9 +130,10 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if degraded, err := repo.GetInstance(ctx, "i1"); err != nil || degraded.Health != HealthDegraded {
 		t.Fatalf("健康状态应为 degraded：%+v err=%v", degraded, err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &other, nil, testNow); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: other, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_b"}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
+	attachAndEnable(t, repo, "i1", other, nil)
 	if healthy, err := repo.GetInstance(ctx, "i1"); err != nil || healthy.Health != HealthOK {
 		t.Fatalf("启用应重置健康状态：%+v err=%v", healthy, err)
 	}

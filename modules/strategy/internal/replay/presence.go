@@ -18,18 +18,20 @@ func newPresence() *presence {
 	return &presence{indexes: make(map[string]map[int64]struct{}), cache: make(map[int64]int64)}
 }
 
-// add 登记一段读取到的行。
-func (p *presence) add(resolved input.Resolved, rows input.RangeRows) error {
+// add 登记一段读取到的行。不在日历上的行（例如 A 股节假日误写的一行）不能作为年龄依据，跳过而不是让整个回放失败。
+func (p *presence) add(resolved input.Resolved, rows input.RangeRows) {
 	for unix, bySubject := range rows.Bars {
 		index, ok := p.cache[unix]
 		if !ok {
+			onCalendar := false
 			for _, row := range bySubject {
 				boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, row.DataTime)
-				if err != nil {
-					return err
-				}
+				onCalendar = err == nil
 				index = boundary.BarIndex
 				break
+			}
+			if !onCalendar {
+				continue
 			}
 			p.cache[unix] = index
 		}
@@ -40,7 +42,6 @@ func (p *presence) add(resolved input.Resolved, rows input.RangeRows) error {
 			p.indexes[subjectID][index] = struct{}{}
 		}
 	}
-	return nil
 }
 
 // probe 返回本期的年龄探针。

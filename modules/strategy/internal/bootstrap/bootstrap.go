@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -241,6 +243,41 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 	}
 }
 
+// calendarWarningWindow 是 A 股内嵌日历到期前的提醒窗口。
+const calendarWarningWindow = 30 * 24 * time.Hour
+
+// stockCalendarWarning 在有启用实例使用 A 股日历时检查内嵌日历：将到期时给出提醒，已过期时报未就绪
+// （之后的周期无法换算，会被丢弃）。
+func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (string, bool) {
+	enabled := true
+	instances, err := db.ListInstances(ctx, "", &enabled)
+	if err != nil {
+		return "", false
+	}
+	uses := false
+	for _, instance := range instances {
+		var resolved struct {
+			Calendar string `json:"calendar"`
+		}
+		if json.Unmarshal(instance.ResolvedJSON, &resolved) == nil && strings.EqualFold(resolved.Calendar, "cn_stock") {
+			uses = true
+			break
+		}
+	}
+	if !uses {
+		return "", false
+	}
+	err = input.StockCalendarReadiness(now, calendarWarningWindow)
+	switch {
+	case err == nil:
+		return "", false
+	case errors.Is(err, marketcalendar.ErrCalendarExpiring):
+		return "A 股内嵌交易日历即将到期，请更新日历数据：" + err.Error(), false
+	default:
+		return "A 股内嵌交易日历不可用，使用它的实例无法求值：" + err.Error(), true
+	}
+}
+
 // tradeDetail 把 Trade 业务错误附带的原始说明拼到日志后面。
 func tradeDetail(err error) string {
 	if detail := tradeowner.Detail(err); detail != "" {
@@ -279,7 +316,7 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 			return strategyoutbox.ValidateJetStreamPublisher(ctx, client, cfg.InstanceID)
 		},
 		RelayInterval: cfg.EventBus.RelayInterval, ReconnectInterval: cfg.EventBus.ReconnectInterval, BatchSize: cfg.EventBus.RelayBatchSize,
-		PublishTimeout: cfg.EventBus.PublishTimeout,
+		PublishTimeout: cfg.EventBus.PublishTimeout, Logf: log.Warnf,
 	})
 }
 
@@ -336,12 +373,16 @@ func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtim
 		}
 		// 待投递结果在投递正常时 1 秒内发出：最老一条等待超过阈值说明投递停滞（例如发布一直得不到确认），报未就绪以触发告警。
 		outboxStalled := oldestAge > outboxStallThreshold.Seconds()
-		ready := databaseReady && state.Ready() && eventBusConnected && consumerReady && statsErr == nil && !outboxStalled
+		calendarWarning, calendarExpired := stockCalendarWarning(ctx, db, time.Now())
+		ready := databaseReady && state.Ready() && eventBusConnected && consumerReady && statsErr == nil && !outboxStalled && !calendarExpired
 		rsp := healthz.Base("strategy", "strategy", "", "", state.StartedAt, ready)
 		rsp.Details = map[string]any{
 			"database_ready": databaseReady, "eventbus_connected": eventBusConnected,
 			"ready_consumer_connected": consumerReady, "outbox_pending_count": stats.PendingCount,
 			"oldest_outbox_age_seconds": oldestAge, "outbox_stalled": outboxStalled,
+		}
+		if calendarWarning != "" {
+			rsp.Details["calendar_warning"] = calendarWarning
 		}
 		return rsp
 	}

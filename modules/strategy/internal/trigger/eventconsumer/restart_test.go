@@ -98,12 +98,11 @@ func TestConsumerRecoversAfterEventBusRestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{srv.ClientURL()}, Name: "strategy-consumer-restart"})
-	if err != nil {
-		t.Fatal(err)
+	url := srv.ClientURL()
+	connect := func(ctx context.Context) (*jetstream.Client, error) {
+		return jetstream.Connect(ctx, jetstream.Config{URLs: []string{url}, Name: "strategy-consumer-restart"})
 	}
-	t.Cleanup(func() { _ = client.Close() })
-	consumer := New(ConsumerConfig{Connect: func(context.Context) (*jetstream.Client, error) { return client, nil }, ConsumerName: "strategy-restart-test", FetchMaxWait: 200 * time.Millisecond, Logf: t.Logf}, &trigger.Handler{Store: repo, Loader: unusedLoader{}})
+	consumer := New(ConsumerConfig{Connect: connect, ConsumerName: "strategy-restart-test", FetchMaxWait: 200 * time.Millisecond, Logf: t.Logf}, &trigger.Handler{Store: repo, Loader: unusedLoader{}})
 	if err := consumer.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +131,12 @@ func TestConsumerRecoversAfterEventBusRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PublishRaw(ctx, encoded.Subject, "ready-after-restart", body, events.ContentType); err != nil {
+	publisher, err := connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.Close()
+	if _, err := publisher.PublishRaw(ctx, encoded.Subject, "ready-after-restart", body, events.ContentType); err != nil {
 		t.Fatal(err)
 	}
 	monitor, err := nats.Connect(srv.ClientURL())

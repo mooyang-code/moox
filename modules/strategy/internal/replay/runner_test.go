@@ -31,6 +31,9 @@ type fakeClient struct {
 	// failQuery 返回非空错误时本次读取失败；unknownCoverage 模拟索引统计暂时未知。
 	failQuery       func(query input.Query) error
 	unknownCoverage bool
+	// activeIndex 是 View 当前的活动索引，为空时是 idx；coverageCalls 统计读取覆盖统计的次数。
+	activeIndex   string
+	coverageCalls int
 }
 
 func price(id string, hour int) float64 {
@@ -44,9 +47,10 @@ func price(id string, hour int) float64 {
 	}
 }
 
-func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
+func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool) (input.Coverage, error) {
+	f.coverageCalls++
 	if f.unknownCoverage {
-		return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
+		return input.Coverage{}, nil
 	}
 	indexedFrom, indexedTo := f.indexedFrom, f.indexedTo
 	if indexedFrom.IsZero() {
@@ -55,7 +59,16 @@ func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, e
 	if indexedTo.IsZero() {
 		indexedTo = origin.Add(1000 * time.Hour)
 	}
-	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", IndexedFrom: indexedFrom, IndexedTo: indexedTo, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
+	return input.Coverage{IndexedFrom: indexedFrom, IndexedTo: indexedTo}, nil
+}
+
+// GetView 与生产一致：View 元数据不带覆盖统计，需要时由 ViewCoverage 单独读取。
+func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
+	index := f.activeIndex
+	if index == "" {
+		index = "idx"
+	}
+	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: index, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
 }
 
 func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
@@ -162,7 +175,7 @@ func pinnedFactors(t *testing.T, dslYaml string) map[string]string {
 
 func startReplay(t *testing.T, repo *store.Store, id, dslYaml string, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
+	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +362,7 @@ func TestReplayRejectsSwapAndEarlyStart(t *testing.T) {
 func TestRunnerDrainsQueueAndWakes(t *testing.T) {
 	repo := openStore(t)
 	for _, id := range []string{"p1", "p2"} {
-		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
+		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -449,7 +462,7 @@ func TestReplayPreviousBarAmbiguitySkips(t *testing.T) {
 // 发起时固化的因子指纹与执行时不一致：拒绝执行，提示重新发起。
 func TestReplayRejectsFactorDrift(t *testing.T) {
 	repo := openStore(t)
-	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
+	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}

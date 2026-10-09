@@ -122,8 +122,9 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	}
 	status, message := store.ReplayDone, ""
 	if err != nil {
-		// 记录里只保存不含服务地址的概述，原始错误写日志。
-		status, message = store.ReplayFailed, err.Error()
+		// 记录里只保存不含服务地址、也不含数据库驱动英文原文的概述，原始错误写日志。
+		friendly, _ := store.FriendlyMessage(err)
+		status, message = store.ReplayFailed, friendly
 		r.logf("回放 %s 失败：%v；原始错误：%v", job.ReplayID, err, input.RawCause(err))
 	}
 	finishErr := r.Store.FinishReplay(ctx, job.ReplayID, status, raw, message, r.now())
@@ -185,13 +186,22 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if len(subjects) == 0 {
 		return Metrics{}, fmt.Errorf("View %s 的数据集没有标的绑定", job.ViewID)
 	}
-	// 排队期间 View 可能已推进或重建：执行时复查起点并重新截断终点。索引统计暂时未知（Storage 刚重启、索引
-	// 刚切换且还没有统计）时沿用提交时校验过的区间，不让排队的任务因此失败。
+	// 同一个活动索引只追加、不删除行：执行时索引没变，提交时校验过的区间仍然有效（覆盖统计随新 bar 前移
+	// 不影响已有的行）。排队期间 View 重建了索引（新索引只保留最近的根数）才按新索引复查起点并截断终点；
+	// 新索引的统计暂时未知时沿用提交时的区间。
 	end := job.EndTime
-	if input.CoverageStart(view, resolved).IsZero() {
-		r.logf("回放 %s：View %s 的覆盖范围暂时未知，按提交时校验过的区间执行", job.ReplayID, job.ViewID)
-	} else if end, err = input.ReplayWindow(resolved, program, view, job.StartTime, job.EndTime); err != nil {
-		return Metrics{}, err
+	if job.ViewIndexID == "" || view.ActiveIndexID != job.ViewIndexID {
+		if view, err = input.WithCoverage(ctx, r.Client, job.SpaceID, view, true); err != nil {
+			return Metrics{}, err
+		}
+		if input.CoverageStart(view, resolved).IsZero() {
+			r.logf("回放 %s：View %s 的覆盖范围暂时未知，按提交时校验过的区间执行", job.ReplayID, job.ViewID)
+		} else if end, err = input.ReplayWindow(resolved, program, view, job.StartTime, job.EndTime); err != nil {
+			if job.ViewIndexID != "" {
+				return Metrics{}, fmt.Errorf("View %s 在排队期间重建了索引：%w；请重新发起回放", job.ViewID, err)
+			}
+			return Metrics{}, err
+		}
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, end, r.maxBars())
 	if err != nil {
@@ -209,7 +219,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	members := cachedMembership(r.Client, job.SpaceID)
 	history := &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}}
 	ledger := NewLedger(r.initialEquity(), job.FeeBps, r.liquidateAfter())
-	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, freq.NominalDuration()), freq.NominalDuration())
+	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, freq.NominalDuration()), minAnnualizedBars(resolved.Calendar, freq.NominalDuration()))
 	acc.metrics.Factors = resolved.Factors
 	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy))
 	state := engine.State{}
@@ -261,15 +271,16 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			if ok {
 				state = decision.State
 			}
-			acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, ledger.Holdings())
 			barReturn := 0.0
 			if previousEquity > 0 {
 				barReturn = outcome.EquityAfter/previousEquity - 1
 			}
 			previousEquity = outcome.EquityAfter
+			// 先写入周期再累计指标：写入失败时，保留的部分指标与已写入的周期一致。
 			if err := r.writeBar(ctx, job.ReplayID, bar.BarEnd, decision, ledger, outcome, barReturn); err != nil {
 				return acc.finish(), err
 			}
+			acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, ledger.Holdings())
 		}
 		if err := r.Store.UpdateReplayProgress(ctx, job.ReplayID, segment[len(segment)-1].BarEnd, r.now()); err != nil {
 			return acc.finish(), err
@@ -292,14 +303,10 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 	if err != nil {
 		return engine.Decision{}, err
 	}
+	// 判定顺序与实时一致：当期的歧义 → 年龄探针 → 上一根的歧义。
 	involved := sets.Instruments()
 	if detail := firstAmbiguous(involved, rows.Ambiguous[key]); detail != "" {
 		return skippedDecision(state, input.SkipAmbiguousSeries, detail), nil
-	}
-	if program.UsesPreviousBar {
-		if detail := firstAmbiguous(involved, rows.Ambiguous[bar.PreviousStart.Unix()]); detail != "" {
-			return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+detail), nil
-		}
 	}
 	var probe input.AgeProbe
 	if resolved.MinAgeBars > 0 {
@@ -311,6 +318,11 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 			return skippedDecision(state, skip.Reason, skip.Detail), nil
 		}
 		return engine.Decision{}, err
+	}
+	if program.UsesPreviousBar {
+		if detail := firstAmbiguous(involved, rows.Ambiguous[bar.PreviousStart.Unix()]); detail != "" {
+			return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+detail), nil
+		}
 	}
 	previous := rows.Bars[bar.PreviousStart.Unix()]
 	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Spot: true, Rows: make(map[string]engine.Row, len(current)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut}
@@ -410,9 +422,7 @@ func agePresence(ctx context.Context, history *input.RangeLoader, resolved input
 	if err != nil {
 		return nil, fmt.Errorf("读取年龄判定所需的历史：%w", err)
 	}
-	if err := result.add(resolved, rows); err != nil {
-		return nil, err
-	}
+	result.add(resolved, rows)
 	return result, nil
 }
 

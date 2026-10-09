@@ -97,9 +97,16 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		explain.reject(id, StageDropped, reason, nil, 0)
 	}
 	live := without(passed, scored.failed)
-	// 本期要用分数选择时（普通规则，或 holding 的建仓 bar），分数全部无效说明表达式本身有问题；holding 的其余 bar
-	// 只延续批次、不使用本期分数，不能因此整期跳过。
-	if len(passed) > 0 && len(live) == 0 && (rule.Rule.Holding == nil || rebuildBar(rule.Rule.Holding, frame.BarIndex)) {
+	var rebuild []int
+	if rule.Rule.Holding != nil {
+		if frame.BarIndex < 0 {
+			return ruleResult{}, fmt.Errorf("holding 需要非负的 bar 序号，当前为 %d", frame.BarIndex)
+		}
+		rebuild = holdingRebuilds(rule.Rule.Holding, frame.BarIndex, previous)
+	}
+	// 本期要用分数选择时（普通规则，或 holding 要建仓、补建批次的 bar），分数全部无效说明表达式本身有问题；
+	// holding 的其余 bar 只延续批次、不使用本期分数，不能因此整期跳过。
+	if len(passed) > 0 && len(live) == 0 && (rule.Rule.Holding == nil || len(rebuild) > 0) {
 		return ruleResult{}, fmt.Errorf("score 对全部 %d 个通过 filter 的候选都无效", len(passed))
 	}
 	result.scored = len(live)
@@ -141,7 +148,7 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	fresh := make(map[string]struct{})
 	notChosenReason := reasonNotSelected
 	if rule.Rule.Holding != nil {
-		outcome, err := evaluateHolding(rule, frame, sets, previous, ordered, scored.values, count, explain, rankOf)
+		outcome, err := evaluateHolding(rule, frame, sets, previous, rebuild, ordered, scored.values, count, explain, rankOf)
 		if err != nil {
 			return ruleResult{}, err
 		}
@@ -200,9 +207,20 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	return result, nil
 }
 
-// rebuildBar 报告这根 bar 是否是 holding 某个批次的建仓 bar（bar 序号对 bars 取模落在 offsets 上）。
-func rebuildBar(holding *dsl.Holding, barIndex int64) bool {
-	return barIndex >= 0 && containsInt(holding.Offsets, int(barIndex%int64(holding.Bars)))
+// holdingRebuilds 返回本期要重建的批次 offset：bar 序号对 bars 取模落在 offsets 上的那个批次，以及已满 bars 根
+// 却没能按时重建的批次（建仓 bar 没有产生 ok 决策）。offset 已不在配置里的过期批次直接丢弃，不补建。
+func holdingRebuilds(holding *dsl.Holding, barIndex int64, previous RuleState) []int {
+	offset := int(barIndex % int64(holding.Bars))
+	rebuild := make([]int, 0, len(holding.Offsets))
+	if containsInt(holding.Offsets, offset) {
+		rebuild = append(rebuild, offset)
+	}
+	for _, batch := range previous.Batches {
+		if barIndex-batch.EstablishedBar >= int64(holding.Bars) && containsInt(holding.Offsets, batch.Offset) && !containsInt(rebuild, batch.Offset) {
+			rebuild = append(rebuild, batch.Offset)
+		}
+	}
+	return rebuild
 }
 
 // holdingOutcome 是分批换仓一期的结果。
@@ -216,20 +234,19 @@ type holdingOutcome struct {
 
 // evaluateHolding 实现分批换仓：bar 序号落在某个 offset 上时用本期选择重建该批次，其余批次按基准权重延续。
 // 基准份额在 filter_after 之前按选中数量计算，filter_after 剔除与缺数移除的份额都留作现金，不重新分配；
-// 满 bars 根的批次到期并在同一 bar 重建。
-func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, ordered []string, scores map[string]float64, count int, explain *explanation, rankOf map[string]int) (holdingOutcome, error) {
+// 满 bars 根的批次到期并在同一 bar 重建。建仓 bar 没有产生 ok 决策（守门跳过、无数据、停机）时，到期的批次
+// 不会被丢弃清仓，而是在之后第一根 ok bar 上补建，建仓序号仍按它的 offset 对齐，下一次照常在 offset 上重建。
+// rebuild 是 holdingRebuilds 给出的本期要重建的批次。
+func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, rebuild []int, ordered []string, scores map[string]float64, count int, explain *explanation, rankOf map[string]int) (holdingOutcome, error) {
 	holding := rule.Rule.Holding
 	outcome := holdingOutcome{fresh: map[string]struct{}{}}
-	if frame.BarIndex < 0 {
-		return outcome, fmt.Errorf("holding 需要非负的 bar 序号，当前为 %d", frame.BarIndex)
-	}
 	availableSet := make(map[string]struct{}, len(sets.available))
 	for _, id := range sets.available {
 		availableSet[id] = struct{}{}
 	}
 	batches := make([]HoldingBatch, 0, len(previous.Batches)+1)
 	for _, batch := range previous.Batches {
-		if frame.BarIndex-batch.EstablishedBar >= int64(holding.Bars) {
+		if frame.BarIndex-batch.EstablishedBar >= int64(holding.Bars) && !containsInt(holding.Offsets, batch.Offset) {
 			continue
 		}
 		kept := make(map[string]string, len(batch.BaseWeights))
@@ -240,8 +257,7 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 		}
 		batches = append(batches, HoldingBatch{Offset: batch.Offset, EstablishedBar: batch.EstablishedBar, BaseWeights: kept})
 	}
-	offset := int(frame.BarIndex % int64(holding.Bars))
-	if containsInt(holding.Offsets, offset) {
+	if len(rebuild) > 0 {
 		outcome.rebuilt = true
 		chosen := ordered
 		if count < len(chosen) {
@@ -265,16 +281,24 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			raw[id] = base[id].String()
 			outcome.fresh[id] = struct{}{}
 		}
-		rebuilt := HoldingBatch{Offset: offset, EstablishedBar: frame.BarIndex, BaseWeights: raw}
-		replaced := false
-		for i := range batches {
-			if batches[i].Offset == offset {
-				batches[i] = rebuilt
-				replaced = true
+		for _, target := range rebuild {
+			// 补建的批次把建仓序号记为它最近一个应建仓的 bar（offset 对齐），而不是本期：节奏不随补建漂移。
+			established := frame.BarIndex - ((frame.BarIndex-int64(target))%int64(holding.Bars)+int64(holding.Bars))%int64(holding.Bars)
+			weights := make(map[string]string, len(raw))
+			for id, value := range raw {
+				weights[id] = value
 			}
-		}
-		if !replaced {
-			batches = append(batches, rebuilt)
+			rebuilt := HoldingBatch{Offset: target, EstablishedBar: established, BaseWeights: weights}
+			replaced := false
+			for i := range batches {
+				if batches[i].Offset == target {
+					batches[i] = rebuilt
+					replaced = true
+				}
+			}
+			if !replaced {
+				batches = append(batches, rebuilt)
+			}
 		}
 	}
 	sort.Slice(batches, func(i, j int) bool { return batches[i].Offset < batches[j].Offset })

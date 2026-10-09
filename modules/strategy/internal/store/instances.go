@@ -232,8 +232,13 @@ func (s *Store) SetInstanceEnabled(ctx context.Context, instanceID string, enabl
 				}
 				return errors.New("实例已处于启用状态")
 			}
-			if current.SessionID.Valid && current.SessionID.String != *sessionID {
+			// 比较交换：会话必须已经挂在实例上（启用流程先写会话再联系 Trade）、未关闭，并且与实例当前引用的
+			// 定义版本和 View 一致；期间被对账清掉、关闭，或实例被改绑，都拒绝启用。
+			if !current.SessionID.Valid || current.SessionID.String != *sessionID {
 				return errors.New("实例的启用或停用操作尚未完成")
+			}
+			if err := requireMatchingSession(tx, current, *sessionID); err != nil {
+				return err
 			}
 			resolved := current.ResolvedJSON
 			if len(resolvedJSON) > 0 {
@@ -245,10 +250,16 @@ func (s *Store) SetInstanceEnabled(ctx context.Context, instanceID string, enabl
 			return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 1, c_session_id = ?, c_resolved_json = ?, c_health = 'ok', c_mtime = ? WHERE c_instance_id = ?`, *sessionID, resolved, now, instanceID).Error
 		}
 		if sessionID != nil && strings.TrimSpace(*sessionID) != "" {
-			if current.SessionID.Valid && current.SessionID.String != strings.TrimSpace(*sessionID) {
+			session := strings.TrimSpace(*sessionID)
+			if current.SessionID.Valid && current.SessionID.String != session {
 				return errors.New("实例的启用或停用操作尚未完成")
 			}
-			return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`, strings.TrimSpace(*sessionID), now, instanceID).Error
+			// 挂上会话前确认它属于该实例、未关闭，并与实例当前引用的定义版本和 View 一致：打开会话之后实例被改绑
+			// 或定义被修改时，在联系 Trade 之前就拒绝。
+			if err := requireMatchingSession(tx, current, session); err != nil {
+				return err
+			}
+			return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`, session, now, instanceID).Error
 		}
 		return tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ?`, now, instanceID).Error
 	})
@@ -348,6 +359,34 @@ func (s *Store) DisableInstance(ctx context.Context, instanceID string, sessionI
 		}
 		return nil
 	})
+}
+
+// requireMatchingSession 确认会话属于该实例、未关闭，且固化的 DSL 版本与解析出的 View 与实例当前的定义和 View 一致。
+func requireMatchingSession(tx *gorm.DB, instance instanceRow, sessionID string) error {
+	var session struct {
+		InstanceID   string       `gorm:"column:c_instance_id"`
+		DSLHash      string       `gorm:"column:c_dsl_hash"`
+		ResolvedJSON string       `gorm:"column:c_resolved_json"`
+		ClosedAt     sql.NullTime `gorm:"column:c_closed_at"`
+	}
+	if err := tx.Raw(`SELECT c_instance_id, c_dsl_hash, c_resolved_json, c_closed_at FROM t_strategy_sessions WHERE c_session_id = ?`, sessionID).Scan(&session).Error; err != nil {
+		return err
+	}
+	if session.InstanceID != instance.InstanceID || session.ClosedAt.Valid {
+		return errors.New("实例的会话已关闭或不属于该实例，请重新启用")
+	}
+	var definitionHash string
+	if err := tx.Raw(`SELECT c_dsl_hash FROM t_strategy_defs WHERE c_strategy_id = ? AND c_deleted_at IS NULL`, instance.StrategyID).Scan(&definitionHash).Error; err != nil {
+		return err
+	}
+	var resolved struct {
+		ViewID string `json:"view_id"`
+	}
+	_ = json.Unmarshal([]byte(session.ResolvedJSON), &resolved)
+	if definitionHash != session.DSLHash || resolved.ViewID != instance.ViewID {
+		return errors.New("实例在启用期间被修改，请重新启用")
+	}
+	return nil
 }
 
 // requireLiveDefinition 在写实例的事务里确认引用的定义存在且未删除：与软删除定义在同一连接上串行，

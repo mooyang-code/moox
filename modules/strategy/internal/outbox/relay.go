@@ -35,7 +35,8 @@ type Relay struct {
 	mu        sync.Mutex
 }
 
-// PublishPending 扫描一批待投递结果。永久失败的事件被隔离（cancelled），不阻塞后续结果。
+// PublishPending 扫描一批待投递结果。永久失败的事件被隔离（cancelled），不阻塞后续结果；遇到第一个发布失败
+// （连接或 broker 问题）立即返回 *PublishFailure。
 func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 	if r == nil || r.Store == nil || r.Publisher == nil {
 		return errors.New("策略投递缺少存储或发布器")
@@ -78,8 +79,8 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 				keep(err)
 				continue
 			}
-			keep(&PublishFailure{Err: err})
-			continue
+			// 连接或 broker 问题：立即返回让运行时重连，不再让同一批其余的结果逐条等满超时、拖到过期。
+			return &PublishFailure{Err: err}
 		}
 		if err := r.Store.TransitionPublishStatus(ctx, prepared.ResultID, store.PublishPending, store.PublishSent); err != nil && !errors.Is(err, store.ErrNotFound) {
 			keep(err)

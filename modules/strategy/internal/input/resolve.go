@@ -72,7 +72,7 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	}
 	resolved.MarketType = marketType
 	resolved.Spot = marketType == "spot"
-	if _, err := FromBarEnd(resolved.Calendar, resolved.Bar, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+	if err := CheckCalendar(resolved.Calendar, resolved.Bar); err != nil {
 		return Resolved{}, nil, fmt.Errorf("日历 %s 与周期 %s 的组合不受支持：%w", resolved.Calendar, resolved.Bar, err)
 	}
 	if resolved.Spot {
@@ -99,9 +99,6 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	if strategy.Universe.MinAgeBars > 0 {
 		if _, ok := columns[ageProbeColumn]; !ok {
 			return Resolved{}, nil, fmt.Errorf("universe.min_age_bars 通过 %s 列判断上市时间，但 View %s 没有该列", ageProbeColumn, viewID)
-		}
-		if err := checkAgeCoverage(view, resolved, strategy.Universe.MinAgeBars); err != nil {
-			return Resolved{}, nil, err
 		}
 	}
 	if err := checkReferences(ctx, client, spaceID, view, strategy); err != nil {
@@ -155,17 +152,13 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 // checkReferences 校验 DSL 引用的标签存在、固定写出的标的（pool 列表、universe 的 include 与 exclude）
 // 在 View 的数据集中有绑定。ID 区分大小写；拼写错误会让池悄悄变空或排除失效，必须在启用时报出。
 func checkReferences(ctx context.Context, client Client, spaceID string, view ViewInfo, strategy dsl.Strategy) error {
-	tags := make([]string, 0)
 	instruments := make([]string, 0)
-	tags = append(tags, strategy.Universe.Tags...)
-	tags = append(tags, strategy.Universe.ExcludeTags...)
 	instruments = append(instruments, strategy.Universe.Include...)
 	instruments = append(instruments, strategy.Universe.Exclude...)
 	for _, rule := range strategy.Rules {
-		tags = append(tags, rule.Pool.Tags...)
 		instruments = append(instruments, rule.Pool.Fixed...)
 	}
-	for _, tag := range uniqueSorted(tags) {
+	for _, tag := range referencedTags(strategy) {
 		if _, err := client.GetTag(ctx, spaceID, tag); err != nil {
 			if errors.Is(err, ErrTagNotFound) {
 				return fmt.Errorf("DSL 引用的标签 %s 不存在（ID 区分大小写）", tag)
@@ -194,6 +187,31 @@ func checkReferences(ctx context.Context, client Client, spaceID string, view Vi
 		return fmt.Errorf("DSL 写出的标的 %s 不在 View %s 的数据集中（ID 区分大小写）", strings.Join(unknown, "、"), view.ViewID)
 	}
 	return nil
+}
+
+// referencedTags 返回 DSL 引用的全部标签（去重、排序）。
+func referencedTags(strategy dsl.Strategy) []string {
+	tags := append(append([]string(nil), strategy.Universe.Tags...), strategy.Universe.ExcludeTags...)
+	for _, rule := range strategy.Rules {
+		tags = append(tags, rule.Pool.Tags...)
+	}
+	return uniqueSorted(tags)
+}
+
+// CheckAgeCoverage 在启用实例时校验 View 能追溯 min_age_bars（需要读取覆盖统计，统计未缓存时现算）。
+// 没有设置 min_age_bars 时不读取。
+func CheckAgeCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved) error {
+	if resolved.MinAgeBars <= 0 {
+		return nil
+	}
+	view, err := client.GetView(ctx, spaceID, resolved.ViewID)
+	if err != nil {
+		return err
+	}
+	if view, err = WithCoverage(ctx, client, spaceID, view, true); err != nil {
+		return err
+	}
+	return checkAgeCoverage(view, resolved, resolved.MinAgeBars)
 }
 
 // checkAgeCoverage 校验 View 能追溯 min_age_bars：N 不超过每个序列保留的根数，且以最新一根为 T，

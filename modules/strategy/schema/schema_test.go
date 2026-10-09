@@ -51,7 +51,7 @@ func TestStrategySchemaColumns(t *testing.T) {
 		"t_strategy_sessions":     {"c_session_id", "c_instance_id", "c_dsl_hash", "c_resolved_json", "c_ctime", "c_closed_at"},
 		"t_strategy_results":      {"c_result_id", "c_instance_id", "c_session_id", "c_bar_end_time", "c_valid_until", "c_status", "c_skip_reason", "c_dsl_hash", "c_input_json", "c_targets_json", "c_rule_states_json", "c_summary_json", "c_event_data", "c_publish_status", "c_ctime"},
 		"t_strategy_result_items": {"c_result_id", "c_rule_id", "c_instrument_id", "c_stage", "c_score", "c_rank", "c_weight", "c_reason", "c_ctime"},
-		"t_strategy_replays":      {"c_replay_id", "c_strategy_id", "c_instance_id", "c_session_id", "c_dsl_yaml", "c_space_id", "c_view_id", "c_start_time", "c_end_time", "c_fee_bps", "c_factors_json", "c_status", "c_progress_time", "c_metrics_json", "c_error", "c_ctime", "c_mtime"},
+		"t_strategy_replays":      {"c_replay_id", "c_strategy_id", "c_instance_id", "c_session_id", "c_dsl_yaml", "c_dsl_hash", "c_view_index_id", "c_space_id", "c_view_id", "c_start_time", "c_end_time", "c_fee_bps", "c_factors_json", "c_status", "c_progress_time", "c_metrics_json", "c_error", "c_ctime", "c_mtime"},
 		"t_strategy_replay_bars":  {"c_replay_id", "c_bar_end_time", "c_status", "c_targets_json", "c_positions_json", "c_summary_json", "c_return", "c_equity", "c_turnover", "c_fee", "c_holdings", "c_frozen", "c_skip_reason", "c_unfilled", "c_liquidated"},
 	}
 	for table, columns := range want {

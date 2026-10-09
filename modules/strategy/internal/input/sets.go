@@ -205,7 +205,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		if err != nil {
 			return nil, err
 		}
-		if target, start := to.Add(-time.Nanosecond), CoverageStart(view, resolved); !start.IsZero() && target.Before(start) {
+		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
 			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339))}
 		}
 		selected := make([]Subject, 0, len(instruments))

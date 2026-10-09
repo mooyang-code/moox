@@ -164,10 +164,16 @@ func (c *Consumer) supervise(ctx context.Context, config jetstream.ConsumerConfi
 	}
 }
 
-// open 在需要时建立连接（只建立一次，之后由 nats.go 自动重连），再创建 durable 消费者。
+// open 在需要时建立连接，再创建 durable 消费者。连接不可用（正在重连，或因鉴权失败等原因被 nats.go 永久关闭）
+// 时丢弃它重新拨号：被关闭的连接不会自行恢复，durable 消费者的进度保存在服务端，重新拨号不丢消息。
 func (c *Consumer) open(ctx context.Context, config jetstream.ConsumerConfig) (*jetstream.Consumer, error) {
 	c.mu.Lock()
 	client := c.client
+	if client != nil && !client.Ready() {
+		_ = client.Close()
+		c.client = nil
+		client = nil
+	}
 	c.mu.Unlock()
 	if client == nil {
 		connected, err := c.cfg.Connect(ctx)

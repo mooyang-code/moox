@@ -63,9 +63,15 @@ func Validate(s *Strategy) error {
 		if _, exists := ids[rule.ID]; exists {
 			return fmt.Errorf("规则 id %q 重复", rule.ID)
 		}
-		// rank 规则的可用标的数达不到 min_universe 时整期跳过：固定写出的 pool 比它还小就永远无法运行。
+		// rank 规则的可用标的数达不到 min_universe 时整期跳过：固定写出的 pool、或只由 include 构成的白名单
+		// 比它还小，这条规则就永远无法运行。
 		if rule.Type == RuleTypeRank && rule.Pool.Explicit && len(rule.Pool.Fixed) > 0 && len(rule.Pool.Fixed) < s.Portfolio.MinUniverse {
 			return fmt.Errorf("规则 %s 的 pool 只有 %d 个标的，少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, len(rule.Pool.Fixed), s.Portfolio.MinUniverse)
+		}
+		if rule.Type == RuleTypeRank && !rule.Pool.Explicit && len(s.Universe.Tags) == 0 && len(s.Universe.Include) > 0 {
+			if size := includeOnlyUniverse(s.Universe); size < s.Portfolio.MinUniverse {
+				return fmt.Errorf("规则 %s 使用的 universe 只由 include 给出 %d 个标的（去掉 exclude 后），少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, size, s.Portfolio.MinUniverse)
+			}
 		}
 		ids[rule.ID] = struct{}{}
 		totalBudget = totalBudget.Add(rule.Weight.Total)
@@ -74,6 +80,21 @@ func Validate(s *Strategy) error {
 		return fmt.Errorf("各规则 weight.total 之和 %s 超过 portfolio.leverage %s", totalBudget.String(), s.Portfolio.Leverage.String())
 	}
 	return nil
+}
+
+// includeOnlyUniverse 返回只由 include 构成的白名单去掉 exclude 后的标的数。
+func includeOnlyUniverse(universe Universe) int {
+	excluded := make(map[string]struct{}, len(universe.Exclude))
+	for _, id := range universe.Exclude {
+		excluded[id] = struct{}{}
+	}
+	size := 0
+	for _, id := range universe.Include {
+		if _, ok := excluded[id]; !ok {
+			size++
+		}
+	}
+	return size
 }
 
 func validatePortfolio(p *Portfolio) error {

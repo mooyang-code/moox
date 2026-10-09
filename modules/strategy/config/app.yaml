@@ -13,6 +13,7 @@ eventbus:
   relay_batch_size: 100
   reconnect_interval: 1s
   connect_timeout: 3s
+  publish_timeout: 10s
   consumer_name: strategy_view_data_ready_v1
 factor:
   target: ip://127.0.0.1:11003
@@ -32,6 +33,7 @@ evaluation:
 retention:
   result_items_days: 90
   replays_days: 90
+  replays_max: 50
 replay:
   chunk_bars: 50
   page_size: 2000

@@ -123,13 +123,18 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if rt != nil && rt.resolved.Bar != "" {
 		calendar, bar = rt.resolved.Calendar, rt.resolved.Bar
 	}
+	// 日历换算失败（例如 A 股内嵌日历已过期、周期不在交易日上）无法确定周期与有效期，只能 ACK：
+	// 记日志并计入模块健康失败，不能悄悄丢掉这一期。
 	boundary, err := input.FromStorageStart(calendar, bar, periodTime)
 	if err != nil {
-		h.logf("实例 %s 无法确定周期边界（%s/%s）：%v", instance.InstanceID, calendar, bar, err)
+		h.logf("实例 %s 无法确定周期边界（%s/%s），本期丢弃：%v", instance.InstanceID, calendar, bar, err)
+		h.observe(instance, bar, time.Time{}, store.StatusSkipped, input.SkipConfigError)
 		return nil
 	}
 	validUntil, err := advance(calendar, bar, boundary.BarEnd, ValidBars)
 	if err != nil {
+		h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339), calendar, bar, err)
+		h.observe(instance, bar, boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
 		return nil
 	}
 	p := &period{loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}

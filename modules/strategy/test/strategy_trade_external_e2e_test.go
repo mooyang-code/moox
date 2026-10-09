@@ -77,6 +77,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
 	require.NoError(t, repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
+	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", false, &session, resolvedJSON, now))
 	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", true, &session, resolvedJSON, now))
 
 	// 启用时与进程启动时，Strategy 都要求 Trade 的账户所有者就是本实例本会话。

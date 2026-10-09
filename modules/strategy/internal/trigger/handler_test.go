@@ -149,6 +149,9 @@ func newHarness(t *testing.T, dslYaml string, account *string, usesPrevious bool
 	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, raw, bar0); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, raw, bar0); err != nil {
 		t.Fatal(err)
 	}
@@ -580,6 +583,9 @@ func TestHandleIgnoresOtherCompletionKinds(t *testing.T) {
 	}
 	session := "session-2"
 	if err := h.repo.OpenSession(context.Background(), store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(rankDSL)), ResolvedJSON: string(raw), CreatedAt: bar0}, rankDSL); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.SetInstanceEnabled(context.Background(), "i1", false, &session, raw, bar0); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.repo.SetInstanceEnabled(context.Background(), "i1", true, &session, raw, bar0); err != nil {

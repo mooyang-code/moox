@@ -35,15 +35,26 @@ type accumulator struct {
 	turnoverSum  float64
 	holdingsSum  float64
 	periodsPerYr float64
-	barDuration  time.Duration
+	minBars      int
 }
 
-func newAccumulator(initialEquity, periodsPerYear float64, barDuration time.Duration) *accumulator {
-	return &accumulator{metrics: Metrics{InitialEquity: initialEquity, FinalEquity: initialEquity, SkipReasons: map[string]int{}}, peak: initialEquity, periodsPerYr: periodsPerYear, barDuration: barDuration}
+func newAccumulator(initialEquity, periodsPerYear float64, minBars int) *accumulator {
+	return &accumulator{metrics: Metrics{InitialEquity: initialEquity, FinalEquity: initialEquity, SkipReasons: map[string]int{}}, peak: initialEquity, periodsPerYr: periodsPerYear, minBars: minBars}
 }
 
-// minAnnualizedSpan 是给出年化收益所需的最短区间：根数 × bar 时长不短于一周。
+// minAnnualizedSpan 是给出年化收益所需的最短区间：一周。
 const minAnnualizedSpan = 7 * 24 * time.Hour
+
+// minAnnualizedBars 返回给出年化收益所需的最少根数：A 股日线是一周的 5 个交易日，其余按根数 × bar 时长不短于一周。
+func minAnnualizedBars(calendar string, duration time.Duration) int {
+	if strings.EqualFold(calendar, "cn_stock") {
+		return 5
+	}
+	if duration <= 0 {
+		return 0
+	}
+	return int((minAnnualizedSpan + duration - 1) / duration)
+}
 
 func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outcome, holdings int) {
 	m := &a.metrics
@@ -102,7 +113,7 @@ func (a *accumulator) annualize(m *Metrics) string {
 	if m.Bars == 0 || a.periodsPerYr <= 0 {
 		return ""
 	}
-	if time.Duration(m.Bars)*a.barDuration < minAnnualizedSpan {
+	if m.Bars < a.minBars {
 		return "区间不足一周，不给出年化收益"
 	}
 	if 1+m.TotalReturn <= 0 {

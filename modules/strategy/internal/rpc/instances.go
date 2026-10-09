@@ -118,16 +118,13 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetViewId()) == "" {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 view_id 不能为空"))}, nil
 	}
-	current, err := s.Store.GetInstance(ctx, v.GetInstanceId())
+	// 改绑同时锁住实例当前的定义与新定义：启用新定义的实例、修改或删除新定义都不能与改绑交错；
+	// 等锁期间实例被并发改绑时换锁重试，保证持有的锁覆盖重读到的定义。
+	current, unlock, err := s.lockInstance(ctx, v.GetInstanceId(), strings.TrimSpace(v.GetStrategyId()))
 	if err != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(err)}, nil
 	}
-	// 改绑同时锁住旧定义与新定义：启用新定义的实例、修改或删除新定义都不能与改绑交错。拿锁后重读确认没被并发改绑。
-	unlock := s.lockStrategies(current.StrategyID, strings.TrimSpace(v.GetStrategyId()))
 	defer unlock()
-	if current, err = s.Store.GetInstance(ctx, v.GetInstanceId()); err != nil {
-		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(err)}, nil
-	}
 	if current.SpaceID != scoped || current.DeletedAt != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
@@ -214,15 +211,14 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	if req == nil || strings.TrimSpace(req.GetInstanceId()) == "" {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id 不能为空"))}, nil
 	}
-	instance, err := s.Store.GetInstance(ctx, req.GetInstanceId())
+	instance, unlock, err := s.lockInstance(ctx, req.GetInstanceId())
 	if err != nil {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(err)}, nil
 	}
+	defer unlock()
 	if instance.SpaceID != scoped {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
-	unlock := s.lockStrategy(instance.StrategyID)
-	defer unlock()
 	if err := s.Store.SoftDeleteInstance(ctx, instance.InstanceID, s.nowTime()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(err)}, nil
@@ -244,7 +240,7 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("instance_id 不能为空"))}, nil
 	}
 	// 拿锁后重读，避免并发启停作用在过期快照上；等锁期间实例被改绑时换成新定义的锁。
-	instance, unlock, err := s.lockInstanceStrategy(ctx, req.GetInstanceId())
+	instance, unlock, err := s.lockInstance(ctx, req.GetInstanceId())
 	if err != nil {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: failure(err)}, nil
 	}
@@ -260,7 +256,10 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 			// 重复启用幂等：不新建会话；绑定账户时核对 Trade 的所有者仍是本会话。
 			if instance.LogicalAccountID != nil && instance.SessionID != nil && s.Owner != nil {
 				if err := s.Owner.ValidateSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, *instance.SessionID); err != nil {
-					return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(fmt.Errorf("实例的会话已不再被 Trade 授权：%w", err))}, nil
+					if tradeowner.IsSessionRejected(err) {
+						return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(fmt.Errorf("实例的会话已不再被 Trade 授权：%w", err))}, nil
+					}
+					return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(fmt.Errorf("暂时无法向 Trade 核实实例的会话：%w", err))}, nil
 				}
 			}
 			return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: success(), Instance: instanceProto(instance)}, nil
@@ -307,7 +306,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 	var resolvedJSON json.RawMessage
 	if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
 		previous := *instance.SessionID
-		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash {
+		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash && sessionView(session) == instance.ViewID {
 			sessionID = session.SessionID
 			resolvedJSON = json.RawMessage(session.ResolvedJSON)
 		} else {
@@ -334,6 +333,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if err != nil {
 			return reload(), err
 		}
+		if err := s.Resolver.CheckAgeCoverage(ctx, instance.SpaceID, resolved); err != nil {
+			return reload(), err
+		}
 		resolvedJSON, err = json.Marshal(resolved)
 		if err != nil {
 			return reload(), err
@@ -346,7 +348,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 			return reload(), fmt.Errorf("写入会话快照失败：%w", err)
 		}
 		// 先把会话写到停用状态的实例上再联系 Trade：认领响应丢失时，启动对账能释放这个确定的身份。
+		// 挂不上（期间实例被改绑或定义被修改）时这个会话从未交给 Trade，直接关闭。
 		if err := s.Store.SetInstanceEnabled(ctx, instance.InstanceID, false, &sessionID, resolvedJSON, now); err != nil {
+			_ = s.Store.CloseSession(ctx, sessionID, s.nowTime())
 			return reload(), err
 		}
 	}
@@ -368,6 +372,17 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		return reload(), err
 	}
 	return reload(), nil
+}
+
+// sessionView 返回会话固化的解析结果里的 View（与存储层启用时的核对口径一致）；解析失败时返回空串。
+func sessionView(session store.Session) string {
+	var resolved struct {
+		ViewID string `json:"view_id"`
+	}
+	if err := json.Unmarshal([]byte(session.ResolvedJSON), &resolved); err != nil {
+		return ""
+	}
+	return resolved.ViewID
 }
 
 // disable 执行停用流程：先落库再释放 Trade；释放确认前保留会话，供重启对账恢复。
@@ -415,16 +430,16 @@ func (s *Service) ReconcileDisabledInstances(ctx context.Context) error {
 		if instance.SessionID == nil {
 			continue
 		}
-		unlock := s.lockStrategy(instance.StrategyID)
 		func() {
-			defer unlock()
-			current, err := s.Store.GetInstance(ctx, instance.InstanceID)
+			current, unlock, err := s.lockInstance(ctx, instance.InstanceID)
 			if err != nil {
 				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("实例 %s：重读失败：%w", instance.InstanceID, err))
 				return
 			}
-			// 拿锁后重读：正在进行的启用握手不能被当成过期的停用会话释放掉。
-			if current.Enabled || current.SessionID == nil {
+			defer unlock()
+			// 拿锁后重读并与列表快照比较：快照之后用户已重新停用、改绑或开始启用时，会话已不是快照里那个，
+			// 不能把正在进行的启用握手当成过期的停用会话释放掉。
+			if current.Enabled || current.SessionID == nil || *current.SessionID != *instance.SessionID {
 				return
 			}
 			if current.LogicalAccountID != nil {
@@ -473,13 +488,12 @@ func (s *Service) ReconcileEnabledInstances(ctx context.Context) error {
 }
 
 func (s *Service) reconcileEnabled(ctx context.Context, listed store.Instance) error {
-	unlock := s.lockStrategy(listed.StrategyID)
-	defer unlock()
 	// 拿锁后重读：并发的停用或重新启用已经改变了会话时，以最新状态为准。
-	instance, err := s.Store.GetInstance(ctx, listed.InstanceID)
+	instance, unlock, err := s.lockInstance(ctx, listed.InstanceID)
 	if err != nil {
 		return fmt.Errorf("实例 %s：重读失败：%w", listed.InstanceID, err)
 	}
+	defer unlock()
 	if !instance.Enabled || instance.LogicalAccountID == nil || instance.SessionID == nil || *instance.SessionID != *listed.SessionID {
 		return nil
 	}

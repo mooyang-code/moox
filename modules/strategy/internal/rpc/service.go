@@ -23,8 +23,11 @@ import (
 // Resolver 解析绑定、装配最新周期（试算）并校验回放区间。
 type Resolver interface {
 	Resolve(ctx context.Context, spaceID, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+	// CheckAgeCoverage 在启用时校验 View 能追溯 min_age_bars。
+	CheckAgeCoverage(ctx context.Context, spaceID string, resolved input.Resolved) error
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
-	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, error)
+	// ReplayWindow 校验并截断回放区间，返回截断后的终点与校验所用的活动索引 ID。
+	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error)
 }
 
 // Owner 是 Trade 组合账户的会话所有权接口。
@@ -89,14 +92,15 @@ func (s *Service) lockStrategies(strategyIDs ...string) func() {
 	}
 }
 
-// lockInstanceStrategy 锁住实例当前引用的定义并返回拿锁后重读的实例；等锁期间实例被改绑时换锁重试。
-func (s *Service) lockInstanceStrategy(ctx context.Context, instanceID string) (store.Instance, func(), error) {
+// lockInstance 锁住实例当前引用的定义（以及 extra 中的定义，例如改绑的目标），返回拿锁后重读的实例；
+// 等锁期间实例被改绑到别的定义时换锁重试。所有修改实例或其会话的路径都经过这里。
+func (s *Service) lockInstance(ctx context.Context, instanceID string, extra ...string) (store.Instance, func(), error) {
 	instance, err := s.Store.GetInstance(ctx, instanceID)
 	if err != nil {
 		return store.Instance{}, nil, err
 	}
 	for attempt := 0; ; attempt++ {
-		unlock := s.lockStrategy(instance.StrategyID)
+		unlock := s.lockStrategies(append([]string{instance.StrategyID}, extra...)...)
 		current, err := s.Store.GetInstance(ctx, instanceID)
 		if err != nil {
 			unlock()

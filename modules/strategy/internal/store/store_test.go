@@ -49,7 +49,17 @@ func seedEnabledInstance(t *testing.T, repo *Store, instanceID, sessionID string
 	if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: testHash, ResolvedJSON: `{"view_id":"view_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, instanceID, true, &sessionID, json.RawMessage(`{"view_id":"view_a"}`), testNow); err != nil {
+	attachAndEnable(t, repo, instanceID, sessionID, json.RawMessage(`{"view_id":"view_a"}`))
+}
+
+// attachAndEnable 按启用流程先把会话写到停用的实例上，再启用到该会话。
+func attachAndEnable(t *testing.T, repo *Store, instanceID, sessionID string, resolved json.RawMessage) {
+	t.Helper()
+	ctx := context.Background()
+	if err := repo.SetInstanceEnabled(ctx, instanceID, false, &sessionID, resolved, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetInstanceEnabled(ctx, instanceID, true, &sessionID, resolved, testNow); err != nil {
 		t.Fatal(err)
 	}
 }

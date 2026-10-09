@@ -66,17 +66,26 @@ func (s *coverageStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.Que
 	return rsp, nil
 }
 
-// Metadata 的 View 记录不维护覆盖范围（生产上恒为空）：GetView 以 DataView 服务该 View 的活动索引统计为准。
-// 探测查询固定活动索引、只带时间范围、不命中任何行；统计未缓存时再要求现算一次。
-func TestGetViewReadsCoverageFromDataView(t *testing.T) {
+// Metadata 的 View 记录不维护覆盖范围（生产上恒为空）：GetView 只读元数据、不探测，也不采信 Metadata 的覆盖字段；
+// 覆盖统计由 ViewCoverage 按需向 DataView 读取该 View 活动索引的统计。探测查询固定活动索引、只带时间范围、
+// 不命中任何行；非精确读取只用已缓存的统计，精确读取在未缓存时再要求现算一次。
+func TestViewCoverageProbesDataViewOnDemand(t *testing.T) {
 	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active", ActiveIndexId: "idx_a", IndexedFrom: "2001-01-01T00:00:00Z"}}
 	cached := &coverageStub{cached: true}
-	info, err := (&RPCClient{Metadata: metadata, DataView: cached}).GetView(context.Background(), "space", "view")
+	client := &RPCClient{Metadata: metadata, DataView: cached}
+	info, err := client.GetView(context.Background(), "space", "view")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.IndexedFrom.Equal(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)) || !info.IndexedTo.Equal(time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)) || info.SeriesBars != 5000 {
-		t.Fatalf("覆盖范围与保留根数应取 DataView 的统计：%s ~ %s bars=%d", info.IndexedFrom, info.IndexedTo, info.SeriesBars)
+	if !info.IndexedFrom.IsZero() || !info.IndexedTo.IsZero() || info.SeriesBars != 0 || len(cached.requests) != 0 {
+		t.Fatalf("GetView 不应探测覆盖范围、不应采信 Metadata 的覆盖字段：%+v requests=%d", info, len(cached.requests))
+	}
+	coverage, err := client.ViewCoverage(context.Background(), "space", info, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.IndexedFrom.Equal(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)) || !coverage.IndexedTo.Equal(time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)) || coverage.SeriesBars != 5000 {
+		t.Fatalf("覆盖范围与保留根数应取 DataView 的统计：%+v", coverage)
 	}
 	probe := cached.requests[0]
 	if len(cached.requests) != 1 || probe.GetExpectedActiveIndexId() != "idx_a" || probe.GetLimit() != 1 || probe.GetTimeRange() == nil || len(probe.GetSelectors()) != 0 || probe.GetTotalMode() != commonpb.TotalMode_NONE {
@@ -84,15 +93,20 @@ func TestGetViewReadsCoverageFromDataView(t *testing.T) {
 	}
 
 	uncached := &coverageStub{}
-	info, err = (&RPCClient{Metadata: metadata, DataView: uncached}).GetView(context.Background(), "space", "view")
-	if err != nil || info.IndexedFrom.IsZero() || len(uncached.requests) != 2 || uncached.requests[1].GetTotalMode() != commonpb.TotalMode_FORCE_EXACT {
-		t.Fatalf("统计未缓存时应要求现算：%v requests=%v err=%v", info.IndexedFrom, uncached.requests, err)
+	client.DataView = uncached
+	if coverage, err := client.ViewCoverage(context.Background(), "space", info, false); err != nil || !coverage.IndexedFrom.IsZero() || len(uncached.requests) != 1 {
+		t.Fatalf("非精确读取在统计未缓存时应返回未知、不要求现算：%+v requests=%d err=%v", coverage, len(uncached.requests), err)
+	}
+	uncached.requests = nil
+	if coverage, err := client.ViewCoverage(context.Background(), "space", info, true); err != nil || coverage.IndexedFrom.IsZero() || len(uncached.requests) != 2 || uncached.requests[1].GetTotalMode() != commonpb.TotalMode_FORCE_EXACT {
+		t.Fatalf("精确读取在统计未缓存时应要求现算：%+v requests=%v err=%v", coverage, uncached.requests, err)
 	}
 
-	metadata.view.Status = "disabled"
 	idle := &coverageStub{}
-	if _, err := (&RPCClient{Metadata: metadata, DataView: idle}).GetView(context.Background(), "space", "view"); err != nil || len(idle.requests) != 0 {
-		t.Fatalf("非活动 View 不应探测覆盖范围：requests=%d err=%v", len(idle.requests), err)
+	client.DataView = idle
+	info.Status = "disabled"
+	if coverage, err := client.ViewCoverage(context.Background(), "space", info, true); err != nil || !coverage.IndexedFrom.IsZero() || len(idle.requests) != 0 {
+		t.Fatalf("非活动 View 不应探测覆盖范围：%+v requests=%d err=%v", coverage, len(idle.requests), err)
 	}
 }
 

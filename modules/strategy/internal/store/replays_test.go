@@ -9,7 +9,7 @@ import (
 )
 
 func newReplay(id string, created time.Time) Replay {
-	return Replay{ReplayID: id, DSLYaml: "name: demo", SpaceID: "space", ViewID: "view_a", StartTime: testNow, EndTime: testNow.Add(24 * time.Hour), FeeBps: 10, CreatedAt: created}
+	return Replay{ReplayID: id, DSLYaml: "name: demo", DSLHash: testHash, SpaceID: "space", ViewID: "view_a", StartTime: testNow, EndTime: testNow.Add(24 * time.Hour), FeeBps: 10, CreatedAt: created}
 }
 
 func TestReplayLifecycle(t *testing.T) {

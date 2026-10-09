@@ -30,11 +30,15 @@ type Replay struct {
 	InstanceID *string
 	SessionID  *string
 	DSLYaml    string
-	SpaceID    string
-	ViewID     string
-	StartTime  time.Time
-	EndTime    time.Time
-	FeeBps     float64
+	// DSLHash 是被回放 DSL 的内容哈希（列表不带 DSL 全文时据此展示版本）；ViewIndexID 是提交时校验区间所用的活动索引：
+	// 同一索引只追加不删除行，执行时索引没变就沿用提交时的区间。
+	DSLHash     string
+	ViewIndexID string
+	SpaceID     string
+	ViewID      string
+	StartTime   time.Time
+	EndTime     time.Time
+	FeeBps      float64
 	// Factors 是发起回放时固化的因子定义指纹；执行时与当时的定义比对，排队期间变化即拒绝执行。
 	Factors      map[string]string
 	Status       string
@@ -47,6 +51,10 @@ type Replay struct {
 
 // MaxReplayFeeBps 是回放单边手续费的上限（bps）。
 const MaxReplayFeeBps = 1000
+
+// MaxActiveReplays 是每个空间同时排队与运行的回放上限：回放由一个执行循环逐个运行，排队过多只会让后发起的
+// 任务长时间等待，并让按个数清理失去意义。
+const MaxActiveReplays = 20
 
 // ReplayBar 是回放中一个周期的记录。
 type ReplayBar struct {
@@ -73,6 +81,8 @@ type replayRow struct {
 	InstanceID   sql.NullString `gorm:"column:c_instance_id"`
 	SessionID    sql.NullString `gorm:"column:c_session_id"`
 	DSLYaml      string         `gorm:"column:c_dsl_yaml"`
+	DSLHash      string         `gorm:"column:c_dsl_hash"`
+	ViewIndexID  string         `gorm:"column:c_view_index_id"`
 	SpaceID      string         `gorm:"column:c_space_id"`
 	ViewID       string         `gorm:"column:c_view_id"`
 	StartTime    int64          `gorm:"column:c_start_time"`
@@ -89,7 +99,7 @@ type replayRow struct {
 
 func (r replayRow) replay() Replay {
 	replay := Replay{
-		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, SpaceID: r.SpaceID, ViewID: r.ViewID,
+		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, ViewIndexID: r.ViewIndexID, SpaceID: r.SpaceID, ViewID: r.ViewID,
 		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), FeeBps: r.FeeBps, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
@@ -103,12 +113,15 @@ func (r replayRow) replay() Replay {
 	return replay
 }
 
-const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
+const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_view_index_id, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
+
+// replayListColumns 与 replayColumns 相同，只是不读取 DSL 全文。
+var replayListColumns = strings.Replace(replayColumns, "c_dsl_yaml,", "'' AS c_dsl_yaml,", 1)
 
 // CreateReplay 登记一个 pending 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
-	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.ViewID) == "" || strings.TrimSpace(replay.DSLYaml) == "" {
-		return errors.New("回放缺少 replay_id、space_id、view_id 或 DSL 文本")
+	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.ViewID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" {
+		return errors.New("回放缺少 replay_id、space_id、view_id、DSL 文本或版本哈希")
 	}
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {
 		return errors.New("回放区间必须满足 start < end")
@@ -128,10 +141,19 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_strategy_replays (`+replayColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-	`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
+	return s.transaction(ctx, func(tx *gorm.DB) error {
+		var active int64
+		if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`, replay.SpaceID).Scan(&active).Error; err != nil {
+			return err
+		}
+		if active >= MaxActiveReplays {
+			return fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", replay.SpaceID, active)
+		}
+		return tx.Exec(`
+			INSERT INTO t_strategy_replays (`+replayColumns+`)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
+		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewIndexID, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
+	})
 }
 
 // GetReplay 读取回放任务。
@@ -159,7 +181,8 @@ func (s *Store) ListReplays(ctx context.Context, spaceID string, offset, limit i
 		return nil, 0, err
 	}
 	var rows []replayRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+replayColumns+` FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`, spaceID, limit, offset).Scan(&rows).Error; err != nil {
+	// 列表每 5 秒轮询一次：不读 DSL 全文（每行最多 64 KiB），版本用 c_dsl_hash 展示。
+	if err := s.db.WithContext(ctx).Raw(`SELECT `+replayListColumns+` FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`, spaceID, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	replays := make([]Replay, 0, len(rows))

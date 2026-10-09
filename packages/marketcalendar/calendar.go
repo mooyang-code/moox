@@ -339,15 +339,17 @@ func (c TradingCalendar) NextTradingDay(date CivilDate) (CivilDate, error) {
 	}
 }
 
-// TradingDayIndex returns the zero-based position of a trading day in the
-// calendar (the first covered trading day is 0) without copying the days.
+// ErrNotTradingDay 表示给定日期在日历覆盖范围内，但不是交易日。
+var ErrNotTradingDay = errors.New("不是交易日")
+
+// TradingDayIndex 返回交易日在日历中的序号（首个交易日为 0），不复制交易日列表；非交易日返回 ErrNotTradingDay。
 func (c TradingCalendar) TradingDayIndex(date CivilDate) (int, error) {
 	if err := c.checkCovered(date); err != nil {
 		return 0, err
 	}
 	index := lowerBound(c.data.tradingDays, date)
 	if index >= len(c.data.tradingDays) || c.data.tradingDays[index] != date {
-		return 0, fmt.Errorf("%w: %s is not a trading day", ErrInvalidRange, date)
+		return 0, fmt.Errorf("%w：%s", ErrNotTradingDay, date)
 	}
 	return index, nil
 }

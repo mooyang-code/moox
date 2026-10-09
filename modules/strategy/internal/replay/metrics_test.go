@@ -9,7 +9,7 @@ import (
 
 // 年化只在区间不短于一周且结果有限时给出，否则省略并在局限中说明。
 func TestAnnualizedReturnRequiresAWeekAndFiniteValue(t *testing.T) {
-	short := newAccumulator(1, periodsPerYear("", time.Hour), time.Hour)
+	short := newAccumulator(1, periodsPerYear("", time.Hour), minAnnualizedBars("", time.Hour))
 	for bar := 0; bar < 10; bar++ {
 		short.add(origin.Add(time.Duration(bar)*time.Hour), true, "", Outcome{EquityAfter: 1.5}, 1)
 	}
@@ -20,14 +20,14 @@ func TestAnnualizedReturnRequiresAWeekAndFiniteValue(t *testing.T) {
 	if _, err := json.Marshal(metrics); err != nil {
 		t.Fatalf("指标应能编码：%v", err)
 	}
-	overflow := newAccumulator(1, periodsPerYear("", time.Hour), time.Hour)
+	overflow := newAccumulator(1, periodsPerYear("", time.Hour), minAnnualizedBars("", time.Hour))
 	for bar := 0; bar < 200; bar++ {
 		overflow.add(origin.Add(time.Duration(bar)*time.Hour), true, "", Outcome{EquityAfter: 1e10}, 1)
 	}
 	if metrics := overflow.finish(); metrics.AnnualizedReturn != nil {
 		t.Fatalf("溢出的年化应省略：%v", *metrics.AnnualizedReturn)
 	}
-	normal := newAccumulator(1, periodsPerYear("", time.Hour), time.Hour)
+	normal := newAccumulator(1, periodsPerYear("", time.Hour), minAnnualizedBars("", time.Hour))
 	for bar := 0; bar < 200; bar++ {
 		normal.add(origin.Add(time.Duration(bar)*time.Hour), true, "", Outcome{EquityAfter: 1.01}, 1)
 	}
@@ -38,21 +38,21 @@ func TestAnnualizedReturnRequiresAWeekAndFiniteValue(t *testing.T) {
 
 // 恰好一周（168 根 1h）给出年化；期末权益不为正时说明原因。
 func TestAnnualizedBoundaryAndReasons(t *testing.T) {
-	week := newAccumulator(1, periodsPerYear("", time.Hour), time.Hour)
+	week := newAccumulator(1, periodsPerYear("", time.Hour), minAnnualizedBars("", time.Hour))
 	for bar := 0; bar < 168; bar++ {
 		week.add(origin.Add(time.Duration(bar)*time.Hour), true, "", Outcome{EquityAfter: 1.01}, 1)
 	}
 	if metrics := week.finish(); metrics.AnnualizedReturn == nil {
 		t.Fatalf("恰好一周应给出年化：%+v", metrics)
 	}
-	ruined := newAccumulator(1, periodsPerYear("", time.Hour), time.Hour)
+	ruined := newAccumulator(1, periodsPerYear("", time.Hour), minAnnualizedBars("", time.Hour))
 	for bar := 0; bar < 200; bar++ {
 		ruined.add(origin.Add(time.Duration(bar)*time.Hour), true, "", Outcome{EquityAfter: 0}, 0)
 	}
 	if metrics := ruined.finish(); metrics.AnnualizedReturn != nil || !strings.Contains(strings.Join(metrics.Limitations, "；"), "期末权益不为正") {
 		t.Fatalf("权益归零应说明原因：%+v", metrics)
 	}
-	raw, err := json.Marshal(newAccumulator(1, 0, time.Hour).finish())
+	raw, err := json.Marshal(newAccumulator(1, 0, minAnnualizedBars("", time.Hour)).finish())
 	if err != nil || strings.Contains(string(raw), "first_bar_end") {
 		t.Fatalf("没有周期时不应输出零值时间：%s err=%v", raw, err)
 	}

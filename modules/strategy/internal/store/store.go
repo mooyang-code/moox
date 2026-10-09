@@ -28,13 +28,26 @@ const sqliteConstraint = 19
 // FriendlyMessage 把错误链中的 SQLite 驱动错误替换为中文概述，避免把表名、列名等内部细节返回给接口调用方；
 // replaced 为 true 时调用方应把原始错误写入日志。
 func FriendlyMessage(err error) (message string, replaced bool) {
-	switch {
-	case errors.Is(err, context.Canceled):
-		return "请求已取消", true
-	case errors.Is(err, context.DeadlineExceeded):
-		return "请求超时，请稍后重试", true
-	case errors.Is(err, sql.ErrConnDone) || strings.Contains(err.Error(), "sql: database is closed"):
-		return "策略数据库不可用（进程正在关闭），请稍后重试", true
+	// 取消、超时与数据库关闭只替换错误链里的英文原文，保留前面的中文上下文（例如“已停用但 Trade 释放未确认”）。
+	for _, known := range []struct {
+		match    bool
+		raw      []string
+		friendly string
+	}{
+		{errors.Is(err, context.Canceled), []string{context.Canceled.Error()}, "请求已取消"},
+		{errors.Is(err, context.DeadlineExceeded), []string{context.DeadlineExceeded.Error()}, "请求超时"},
+		{errors.Is(err, sql.ErrConnDone) || strings.Contains(err.Error(), "sql: database is closed"), []string{sql.ErrConnDone.Error(), "sql: database is closed"}, "策略数据库不可用（进程正在关闭）"},
+	} {
+		if !known.match {
+			continue
+		}
+		full := err.Error()
+		for _, raw := range known.raw {
+			if strings.Contains(full, raw) {
+				return strings.Replace(full, raw, known.friendly, 1), true
+			}
+		}
+		return known.friendly + "，请稍后重试", true
 	}
 	if errors.Is(err, ErrNotFound) {
 		full := err.Error()
@@ -120,7 +133,8 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return errors.New("策略 schema 为空")
 	}
-	if err := s.db.Exec(sql).Error; err != nil {
+	// 多条建表语句放在一个事务里：首次启动中途崩溃不会留下残缺的 schema（残缺的库下次启动会被拒绝）。
+	if err := s.db.Transaction(func(tx *gorm.DB) error { return tx.Exec(sql).Error }); err != nil {
 		return err
 	}
 	return s.validateCurrentSchema()
@@ -199,19 +213,36 @@ func readSchemaObjects(db *gorm.DB) (map[string]schemaObject, error) {
 	return byKey, nil
 }
 
-// normalizeSchemaSQL 去掉 -- 注释并统一空白，纯格式调整（换行、缩进、注释）不影响比较。
+// normalizeSchemaSQL 规范化建表语句以便比较：去掉 -- 注释，引号外的空白全部去掉、字母统一小写，
+// 只按 AGENTS.md 调整排版（换行、缩进、括号与逗号两侧的空格、关键字大小写、注释）不影响结果。
 func normalizeSchemaSQL(text string) string {
-	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		if index := strings.Index(line, "--"); index >= 0 && strings.Count(line[:index], "'")%2 == 0 {
-			lines[i] = line[:index]
+	var out strings.Builder
+	quote := byte(0)
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if quote != 0 {
+			out.WriteByte(c)
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch {
+		case c == '\'' || c == '"':
+			quote = c
+			out.WriteByte(c)
+		case c == '-' && i+1 < len(text) && text[i+1] == '-':
+			for i < len(text) && text[i] != '\n' {
+				i++
+			}
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		case c >= 'A' && c <= 'Z':
+			out.WriteByte(c + ('a' - 'A'))
+		default:
+			out.WriteByte(c)
 		}
 	}
-	normalized := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
-	for _, pair := range [][2]string{{"( ", "("}, {" )", ")"}, {" ,", ","}} {
-		normalized = strings.ReplaceAll(normalized, pair[0], pair[1])
-	}
-	return normalized
+	return out.String()
 }
 
 // validateSchema 校验策略表与当前 schema 一致：表的集合相同，每个表与索引的定义（列、约束、索引列与条件）逐字等价。

@@ -121,6 +121,11 @@ func FromBarEnd(calendarID, frequency string, end time.Time) (PeriodBoundaries, 
 		if err != nil {
 			return PeriodBoundaries{}, err
 		}
+		if status, err := calendar.Status(day); err != nil {
+			return PeriodBoundaries{}, err
+		} else if status != marketcalendar.TradingDay {
+			return PeriodBoundaries{}, fmt.Errorf("bar_end %s 不在 A 股交易日上", end.UTC().Format(time.RFC3339))
+		}
 		return boundariesForStockDay(calendar, location, day)
 	}
 	if calendarID == DefaultCalendar {
@@ -251,6 +256,38 @@ var (
 	stockCalendarLocation *time.Location
 	stockCalendarErr      error
 )
+
+// CheckCalendar 校验日历与周期的组合受支持：crypto 支持定长的分钟、小时、日线周期，A 股只支持日线且内嵌日历可用。
+// 不依赖任何具体日期，避免拿一个恰好不是交易日的日期去探测。
+func CheckCalendar(calendarID, frequency string) error {
+	calendarID = normalizeCalendar(calendarID)
+	frequency = strings.ToLower(strings.TrimSpace(frequency))
+	switch {
+	case calendarID == DefaultCalendar:
+		_, err := parseBarDuration(frequency)
+		return err
+	case calendarID == "cn_stock" && frequency == "1d":
+		_, _, err := stockCalendar()
+		return err
+	default:
+		return fmt.Errorf("%w：日历 %q 不支持频率 %q", ErrUnsupportedCalendar, calendarID, frequency)
+	}
+}
+
+// StockCalendarReadiness 检查内嵌 A 股日历在 now 是否可用：已过期返回 marketcalendar.ErrCalendarExpired，
+// warning 时间内将到期返回 marketcalendar.ErrCalendarExpiring。
+func StockCalendarReadiness(now time.Time, warning time.Duration) error {
+	calendar, location, err := stockCalendar()
+	if err != nil {
+		return err
+	}
+	local := now.In(location)
+	day, err := marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+	if err != nil {
+		return err
+	}
+	return calendar.Readiness(day, warning)
+}
 
 // stockCalendar 返回 A 股交易日历与上海时区。内嵌日历的解析与校验较重，进程内只做一次；日历本身不可变。
 func stockCalendar() (marketcalendar.TradingCalendar, *time.Location, error) {

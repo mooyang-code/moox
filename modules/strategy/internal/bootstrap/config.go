@@ -200,7 +200,7 @@ func Load(path string) (Config, error) {
 		return Config{}, errors.New("evaluation.attempt_budget 必须大于 0")
 	}
 	if c.Retention.ResultItemsDays <= 0 || c.Retention.ReplaysDays <= 0 || c.Retention.ReplaysMax <= 0 {
-		return Config{}, errors.New("retention 的保留天数必须大于 0")
+		return Config{}, errors.New("retention 的保留天数与 replays_max 必须大于 0")
 	}
 	if c.Replay.ChunkBars <= 0 || c.Replay.PageSize <= 0 || c.Replay.MissingPriceLiquidateBars <= 0 {
 		return Config{}, errors.New("replay 的 chunk_bars、page_size 与 missing_price_liquidate_bars 必须大于 0")

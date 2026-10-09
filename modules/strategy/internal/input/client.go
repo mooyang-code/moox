@@ -32,7 +32,7 @@ func (c *RPCClient) pageSize() uint32 {
 	return 500
 }
 
-// GetView 读取 View 及其全部列；覆盖范围取 DataView 实际服务的活动索引统计（见 viewCoverage）。
+// GetView 读取 View 及其全部列（不含覆盖范围，见 ViewCoverage）。
 func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error) {
 	if c == nil || c.Metadata == nil {
 		return ViewInfo{}, errors.New("Storage Metadata 客户端未配置")
@@ -74,48 +74,51 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 			break
 		}
 	}
-	if info.ActiveIndexID != "" && (info.Status == "" || info.Status == "active") {
-		if err := c.viewCoverage(ctx, spaceID, &info); err != nil {
-			return ViewInfo{}, err
-		}
-	}
 	return info, nil
 }
 
-// viewCoverage 读取 View 活动索引的覆盖范围与每序列保留根数。Metadata 的 View 记录不维护覆盖范围；DataView 在
-// 查询响应里带上服务该查询的索引统计。这里用一个不会命中任何行的时间范围探测：先取缓存的统计，缓存为空时
-// （Storage 刚重启或索引刚切换）要求现算；索引没有任何行时覆盖范围保持未知。
-func (c *RPCClient) viewCoverage(ctx context.Context, spaceID string, info *ViewInfo) error {
-	if c.DataView == nil {
-		return errors.New("Storage DataView 客户端未配置")
+// ViewCoverage 读取 View 活动索引的覆盖范围与每序列保留根数。Metadata 的 View 记录不维护覆盖范围；DataView 在
+// 查询响应里带上服务该查询的索引统计。这里用一个不会命中任何行的时间范围探测，先取缓存的统计；exact 为 true 且
+// 缓存为空时（Storage 刚重启或索引刚切换）要求现算。索引没有任何行、或统计尚未就绪时覆盖范围为零值（未知）。
+func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewInfo, exact bool) (Coverage, error) {
+	if c == nil || c.DataView == nil {
+		return Coverage{}, errors.New("Storage DataView 客户端未配置")
+	}
+	if view.ActiveIndexID == "" || (view.Status != "" && view.Status != "active") {
+		return Coverage{}, nil
 	}
 	auth := c.ViewAuth
 	if auth == nil {
 		auth = c.Auth
 	}
+	modes := []commonpb.TotalMode{commonpb.TotalMode_NONE}
+	if exact {
+		modes = append(modes, commonpb.TotalMode_FORCE_EXACT)
+	}
 	epoch := time.Unix(0, 0).UTC()
-	for _, mode := range []commonpb.TotalMode{commonpb.TotalMode_NONE, commonpb.TotalMode_FORCE_EXACT} {
+	var coverage Coverage
+	for _, mode := range modes {
 		rsp, err := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: spaceID, ViewId: info.ViewID,
+			AuthInfo: auth, SpaceId: spaceID, ViewId: view.ViewID,
 			TimeRange: &storagepb.TimeRange{StartTime: epoch.Format(time.RFC3339Nano), EndTime: epoch.Add(time.Nanosecond).Format(time.RFC3339Nano)},
 			Page:      &commonpb.Page{Page: 1, Size: 1}, Limit: 1, TotalMode: mode,
-			ExpectedActiveIndexId: info.ActiveIndexID,
+			ExpectedActiveIndexId: view.ActiveIndexID,
 		})
 		if err != nil {
-			return transport("读取 View "+info.ViewID+" 的覆盖范围", err)
+			return Coverage{}, transport("读取 View "+view.ViewID+" 的覆盖范围", err)
 		}
 		if err := viewRetError(rsp.GetRetInfo()); err != nil {
-			return err
+			return Coverage{}, err
 		}
-		info.SeriesBars = int(min(rsp.GetServedSeriesBars(), uint64(math.MaxInt32)))
+		coverage.SeriesBars = int(min(rsp.GetServedSeriesBars(), uint64(math.MaxInt32)))
 		from, fromErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetServedIndexedFrom()))
 		to, toErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetServedIndexedTo()))
 		if fromErr == nil && toErr == nil && !to.Before(from) {
-			info.IndexedFrom, info.IndexedTo = from.UTC(), to.UTC()
-			return nil
+			coverage.IndexedFrom, coverage.IndexedTo = from.UTC(), to.UTC()
+			return coverage, nil
 		}
 	}
-	return nil
+	return coverage, nil
 }
 
 // GetDataset 读取数据集元数据。

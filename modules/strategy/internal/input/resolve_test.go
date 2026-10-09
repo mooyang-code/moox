@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +181,8 @@ func TestRetentionBars(t *testing.T) {
 }
 
 // min_age_bars 需要 View 提供 close 列，且 View 当前覆盖的历史要足够长；只按数据集保留期校验不够。
+// Resolve 只做静态解析（回放与校验也用它，不读取覆盖统计）；启用时由 CheckAgeCoverage 精确读取覆盖统计，
+// 覆盖不足、统计未知、N 超过每个序列保留的根数都拒绝启用。
 func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 240\n", 1))
 	client := newFakeClient("spot")
@@ -187,14 +190,33 @@ func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	view.IndexedTo = barStart
 	view.IndexedFrom = barStart.Add(-100 * time.Hour)
 	client.views["view_factor_1h"] = view
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy); err == nil || !strings.Contains(err.Error(), "当前只覆盖") {
+	resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	if err != nil {
+		t.Fatalf("Resolve 不应读取覆盖统计：%v", err)
+	}
+	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "当前只覆盖") {
 		t.Fatalf("View 覆盖不足时应拒绝启用：%v", err)
 	}
 	view.IndexedFrom = barStart.Add(-300 * time.Hour)
 	client.views["view_factor_1h"] = view
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy); err != nil {
+	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err != nil {
 		t.Fatalf("覆盖足够时应允许启用：%v", err)
 	}
+	view.SeriesBars = 200
+	client.views["view_factor_1h"] = view
+	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
+		t.Fatalf("N 超过每个序列保留的根数应拒绝启用：%v", err)
+	}
+	view.SeriesBars, view.IndexedFrom, view.IndexedTo = 0, time.Time{}, time.Time{}
+	client.views["view_factor_1h"] = view
+	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+		t.Fatalf("覆盖统计未知时应拒绝启用：%v", err)
+	}
+	client.errors["coverage"] = errors.New("覆盖统计读取失败")
+	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "覆盖统计读取失败") {
+		t.Fatalf("覆盖统计读取失败应返回错误：%v", err)
+	}
+	delete(client.errors, "coverage")
 	noClose := newFakeClient("spot")
 	view = noClose.views["view_factor_1h"]
 	view.Columns = append([]ViewColumn{}, view.Columns[4:]...)

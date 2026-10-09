@@ -63,10 +63,11 @@ func (s *Store) DeleteReplaysBeyond(ctx context.Context, keep int) (int64, error
 	var ids []string
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT c_replay_id FROM (
-			SELECT c_replay_id, c_status, ROW_NUMBER() OVER (PARTITION BY c_space_id ORDER BY c_ctime DESC, c_replay_id DESC) AS c_rank
+			SELECT c_replay_id, ROW_NUMBER() OVER (PARTITION BY c_space_id ORDER BY c_ctime DESC, c_replay_id DESC) AS c_rank
 			FROM t_strategy_replays
+			WHERE c_status IN ('done', 'failed', 'cancelled')
 		)
-		WHERE c_rank > ? AND c_status IN ('done', 'failed', 'cancelled')
+		WHERE c_rank > ?
 	`, keep).Scan(&ids).Error; err != nil {
 		return 0, err
 	}

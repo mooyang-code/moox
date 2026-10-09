@@ -243,12 +243,10 @@ func TestAdjacentRecordTrustRules(t *testing.T) {
 	if err := repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.OpenSession(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, ptr("session-2"), nil, testNow); err != nil {
-		t.Fatal(err)
-	}
+	attachAndEnable(t, repo, "i1", "session-2", nil)
 	record, input, found, err := repo.AdjacentRecord(ctx, "i1", "view_a", "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2")
 	if err != nil || !found || record.ResultID != "old" || input.Factors["ma"] != "h1" {
 		t.Fatalf("应找到旧会话的可信记录：found=%v record=%+v err=%v", found, record, err)

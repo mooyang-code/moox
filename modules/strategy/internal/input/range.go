@@ -95,7 +95,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		return time.Time{}, err
 	}
 	if first.StorageStart.Before(earliest) {
-		return time.Time{}, fmt.Errorf("回放起点 %s 早于 View 活跃序列的覆盖起点 %s 加上所需的 %d 根历史；可用起点为 %s", first.StorageStart.Format(time.RFC3339), coverage.Format(time.RFC3339), need, earliest.Format(time.RFC3339))
+		return time.Time{}, fmt.Errorf("回放起点 %s 太早：View 的活跃序列从 %s 起才有数据，min_age_bars 与 bars[-1] 要求起点之前还有 %d 根历史；可用起点为 %s", first.StorageStart.Format(time.RFC3339), coverage.Format(time.RFC3339), max(need-1, 0), earliest.Format(time.RFC3339))
 	}
 	return end, nil
 }
@@ -142,8 +142,18 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 		}
 		lastErr = err
 		view, viewErr := l.Client.GetView(ctx, l.SpaceID, l.View.ViewID)
-		if viewErr != nil {
-			return RangeRows{}, viewErr
+		for viewErr != nil {
+			var transportErr *TransportError
+			if !errors.As(viewErr, &transportErr) || transportRetries >= maxRangeTransportRetries {
+				return RangeRows{}, viewErr
+			}
+			transportRetries++
+			select {
+			case <-ctx.Done():
+				return RangeRows{}, viewErr
+			case <-time.After(time.Duration(transportRetries) * rangeRetryBackoff):
+			}
+			view, viewErr = l.Client.GetView(ctx, l.SpaceID, l.View.ViewID)
 		}
 		l.View.ActiveIndexID = view.ActiveIndexID
 	}

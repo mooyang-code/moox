@@ -36,7 +36,7 @@ func runCLI(args []string, out, errOut io.Writer) error {
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
-		return err
+		return fmt.Errorf("读取 DSL 文件 %s 失败：%w", fs.Arg(0), err)
 	}
 	strategy, err := dsl.Parse(raw)
 	if err != nil {

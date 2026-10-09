@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
@@ -71,7 +70,7 @@ func replayProto(value store.Replay) *strategypb.Replay {
 		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID, ViewId: value.ViewID,
 		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), FeeBps: value.FeeBps, Status: value.Status,
 		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
-		DslHash: dsl.Hash([]byte(value.DSLYaml)), InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID),
+		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID),
 	}
 	if value.ProgressTime != nil {
 		replay.ProgressTime = formatTime(*value.ProgressTime)
