@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   equitySeries,
+  equitySummary,
   formatUtcTime,
   mergeBars,
   parseBarDetail,
@@ -124,11 +125,44 @@ describe("replay model helpers", () => {
     expect(detail.cash).toBe(0.25);
     expect(detail.positions.map(position => position.id)).toEqual(["A", "B"]);
     expect(detail.positions[1]).toMatchObject({ frozen: true, missing_bars: 2 });
-    expect(detail).toMatchObject({ traded: 0.3, fee: 0.001, unfilled: ["C"], liquidated: ["D"], notes: ["说明"] });
+    expect(detail).toMatchObject({
+      traded: 0.3,
+      fee: 0.001,
+      unfilled: ["C"],
+      liquidated: ["D"],
+      notes: ["说明"],
+      buyScale: null
+    });
     expect(parseBarDetail({ ...bar, positions_json: "", summary_json: "oops" })).toMatchObject({
       positions: [],
       notes: [],
-      cash: 0
+      cash: 0,
+      buyScale: null
     });
+    expect(parseBarDetail({ ...bar, summary_json: '{"ledger":{"buy_scale":0}}' }).buyScale).toBe(0);
+    expect(parseBarDetail({ ...bar, summary_json: '{"ledger":{"buy_scale":0.4}}' }).buyScale).toBe(0.4);
+  });
+
+  it("summarizes the equity curve in text", () => {
+    const point = (time: string, equity: number) => ({
+      bar_end_time: time,
+      status: "ok",
+      targets: [],
+      positions_json: "{}",
+      summary_json: "{}",
+      bar_return: 0,
+      equity,
+      turnover: 0,
+      fee: 0,
+      holdings: 0,
+      frozen: 0,
+      skip_reason: "",
+      unfilled: 0,
+      liquidated: 0
+    });
+    expect(equitySummary([])).toBe("暂无权益曲线");
+    expect(
+      equitySummary([point("2026-09-01T01:00:00Z", 1), point("2026-09-01T02:00:00Z", 1.2), point("2026-09-01T03:00:00Z", 0.9)])
+    ).toBe("权益曲线：共 3 根，2026-09-01 01:00 UTC 权益 1.0000，2026-09-01 03:00 UTC 权益 0.9000，最高 1.2000，最低 0.9000");
   });
 });

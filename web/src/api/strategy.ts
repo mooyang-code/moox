@@ -136,8 +136,19 @@ function ensureResponse<T extends Record<string, any>>(response: T): T {
   return response;
 }
 
-async function call<Req extends object, Rsp extends Record<string, any>>(method: string, request: Req): Promise<Rsp> {
-  return ensureResponse(await callControl<Req, Rsp>("strategy", method, request));
+/** 请求选项：silent 为 true 时失败不弹全局错误提示（后台轮询由页面自己提示）。 */
+export interface RequestOptions {
+  silent?: boolean;
+}
+
+async function call<Req extends object, Rsp extends Record<string, any>>(
+  method: string,
+  request: Req,
+  options: RequestOptions = {}
+): Promise<Rsp> {
+  return ensureResponse(
+    await callControl<Req, Rsp>("strategy", method, request, options.silent ? { silentError: true } : undefined)
+  );
 }
 
 export async function createStrategy(strategy: { strategy_id?: string; dsl_yaml: string }) {
@@ -307,16 +318,16 @@ export async function startReplay(request: StartReplayRequest): Promise<StartedR
   };
 }
 
-export async function getReplay(replay_id: string) {
-  const response = await call<{ replay_id: string }, { replay?: Replay }>("GetReplay", { replay_id });
+export async function getReplay(replay_id: string, options: RequestOptions = {}) {
+  const response = await call<{ replay_id: string }, { replay?: Replay }>("GetReplay", { replay_id }, options);
   return normalizeReplay(response.replay);
 }
 
-export async function listReplays(params: PageRequest = {}): Promise<PageResult<Replay>> {
+export async function listReplays(params: PageRequest = {}, options: RequestOptions = {}): Promise<PageResult<Replay>> {
   const response = await call<
     { page: Required<PageRequest> },
     { replays?: Replay[]; total?: number; page?: number; page_size?: number }
-  >("ListReplays", { page: pageRequest(params) });
+  >("ListReplays", { page: pageRequest(params) }, options);
   return {
     items: (response.replays ?? []).map(normalizeReplay),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -329,16 +340,21 @@ export async function listReplays(params: PageRequest = {}): Promise<PageResult<
  */
 export async function listReplayBars(
   replay_id: string,
-  params: PageRequest & { brief?: boolean } = {}
+  params: PageRequest & { brief?: boolean } = {},
+  options: RequestOptions = {}
 ): Promise<PageResult<ReplayBar>> {
   const response = await call<
     { replay_id: string; page: Required<PageRequest>; brief: boolean },
     { bars?: ReplayBar[]; total?: number; page?: number; page_size?: number }
-  >("ListReplayBars", {
-    replay_id,
-    page: { page: params.page ?? 1, page_size: params.page_size ?? 50 },
-    brief: Boolean(params.brief)
-  });
+  >(
+    "ListReplayBars",
+    {
+      replay_id,
+      page: { page: params.page ?? 1, page_size: params.page_size ?? 50 },
+      brief: Boolean(params.brief)
+    },
+    options
+  );
   return {
     items: (response.bars ?? []).map(normalizeReplayBar),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }

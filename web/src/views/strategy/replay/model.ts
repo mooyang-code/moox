@@ -145,6 +145,8 @@ export interface ReplayBarDetail {
   fee: number;
   unfilled: string[];
   liquidated: string[];
+  /** 现金不足时买入实际执行的比例（0~1）；没有缩减时为 null。 */
+  buyScale: number | null;
   notes: string[];
 }
 
@@ -183,6 +185,18 @@ export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
     fee: Number(ledger.fee ?? 0),
     unfilled: list(ledger.unfilled),
     liquidated: list(ledger.liquidated),
+    buyScale: ledger.buy_scale === undefined || ledger.buy_scale === null ? null : Number(ledger.buy_scale),
     notes: list(summary.decision?.notes)
   };
+}
+
+/** 权益曲线的文字摘要，供屏幕阅读器等无法查看图形的场景使用。 */
+export function equitySummary(bars: ReplayBar[]): string {
+  const points = equitySeries(bars);
+  if (!points.length) return "暂无权益曲线";
+  const values = points.map(point => point.value);
+  const first = points[0];
+  const last = points[points.length - 1];
+  const label = (time: number) => formatUtcTime(new Date(time).toISOString());
+  return `权益曲线：共 ${points.length} 根，${label(first.time)} 权益 ${first.value.toFixed(4)}，${label(last.time)} 权益 ${last.value.toFixed(4)}，最高 ${Math.max(...values).toFixed(4)}，最低 ${Math.min(...values).toFixed(4)}`;
 }

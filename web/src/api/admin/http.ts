@@ -6,6 +6,13 @@ import { isRetInfoSuccess } from "../ret-info";
 import type { ControlResponse } from "./types";
 import { expireBrowserSession, installSpaceAwareSignedClient } from "./signed-client";
 
+declare module "axios" {
+  interface AxiosRequestConfig {
+    /** 为 true 时请求失败不弹全局错误提示，由调用方自行展示（例如后台轮询已有自己的失败提示）。 */
+    silentError?: boolean;
+  }
+}
+
 const adminClient = axios.create({
   baseURL: gatewayOrigin(),
   timeout: 30000,
@@ -14,7 +21,10 @@ const adminClient = axios.create({
 const reportedErrors = new WeakSet<object>();
 
 export class ControlRequestError<T = unknown> extends Error {
-  constructor(message: string, public readonly response?: ControlResponse<T>) {
+  constructor(
+    message: string,
+    public readonly response?: ControlResponse<T>
+  ) {
     super(message);
     this.name = "ControlRequestError";
   }
@@ -72,7 +82,7 @@ adminClient.interceptors.response.use(
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
     const message = data?.ret_info?.msg || error?.message || "Control 请求失败";
     const reportedError = new ControlRequestError(message, data);
-    reportControlError(reportedError);
+    if (!error?.config?.silentError) reportControlError(reportedError);
     return Promise.reject(reportedError);
   }
 );

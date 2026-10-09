@@ -5,7 +5,9 @@ vi.mock("@/api/admin/http", () => ({ callControl }));
 
 import {
   createInstance,
+  getReplay,
   getStrategyResult,
+  listReplays,
   listStrategies,
   listStrategyResults,
   listStrategyTargets,
@@ -36,9 +38,12 @@ describe("strategy API", () => {
       instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", view_id: "view_a", enabled: false }
     });
     const instance = await createInstance({ strategy_id: "s-1", view_id: "view_a", logical_account_id: "" });
-    expect(callControl).toHaveBeenCalledWith("strategy", "CreateStrategyInstance", {
-      instance: { strategy_id: "s-1", view_id: "view_a", logical_account_id: "", enabled: false }
-    });
+    expect(callControl).toHaveBeenCalledWith(
+      "strategy",
+      "CreateStrategyInstance",
+      { instance: { strategy_id: "s-1", view_id: "view_a", logical_account_id: "", enabled: false } },
+      undefined
+    );
     expect(instance).toMatchObject({ instance_id: "i-1", view_id: "view_a", resolved_json: "{}", health: "ok" });
   });
 
@@ -68,11 +73,13 @@ describe("strategy API", () => {
     const detail = await getStrategyResult("r1");
     expect(detail.items[0]).toMatchObject({ rule_id: "r", rank: 1, weight: "0.5" });
     expect(detail.dsl_yaml).toBe("name: a");
-    expect(callControl).toHaveBeenNthCalledWith(2, "strategy", "ListStrategyResults", {
-      instance_id: "i-1",
-      session_id: "s1",
-      page: { page: 2, page_size: 10 }
-    });
+    expect(callControl).toHaveBeenNthCalledWith(
+      2,
+      "strategy",
+      "ListStrategyResults",
+      { instance_id: "i-1", session_id: "s1", page: { page: 2, page_size: 10 } },
+      undefined
+    );
   });
 
   it("returns diagnostics instead of throwing when validation fails", async () => {
@@ -114,11 +121,26 @@ describe("strategy API", () => {
       total: 1
     });
     const page = await listReplayBars("p1", { page: 2, page_size: 2000, brief: true });
-    expect(callControl).toHaveBeenLastCalledWith("strategy", "ListReplayBars", {
-      replay_id: "p1",
-      page: { page: 2, page_size: 2000 },
-      brief: true
-    });
+    expect(callControl).toHaveBeenLastCalledWith(
+      "strategy",
+      "ListReplayBars",
+      { replay_id: "p1", page: { page: 2, page_size: 2000 }, brief: true },
+      undefined
+    );
     expect(page.items[0]).toMatchObject({ equity: 1.2, holdings: 3, skip_reason: "no_data", targets: [] });
+  });
+
+  it("silences the global error toast for background polling requests", async () => {
+    callControl.mockResolvedValueOnce({ replays: [], total: 0 });
+    await listReplays({ page: 1, page_size: 20 }, { silent: true });
+    expect(callControl).toHaveBeenLastCalledWith(
+      "strategy",
+      "ListReplays",
+      { page: { page: 1, page_size: 20 } },
+      { silentError: true }
+    );
+    callControl.mockResolvedValueOnce({ replay: { replay_id: "p1" } });
+    await getReplay("p1", { silent: true });
+    expect(callControl).toHaveBeenLastCalledWith("strategy", "GetReplay", { replay_id: "p1" }, { silentError: true });
   });
 });
