@@ -217,7 +217,7 @@
           <a-select v-model="batchAddForm.nodeType" placeholder="请选择节点类型" style="width: 100%">
             <a-option value="scf-event">云函数（事件型）</a-option>
             <a-option value="scf-web">云函数（Web型）</a-option>
-          <a-option value="server">服务器</a-option>
+            <a-option value="server">服务器</a-option>
           </a-select>
         </a-form-item>
 
@@ -289,7 +289,6 @@
             style="width: 100%"
           />
         </a-form-item>
-
       </a-form>
     </a-modal>
 
@@ -631,7 +630,6 @@
         <div style="margin-top: var(--moox-space-4)">加载中...</div>
       </div>
     </a-modal>
-
   </div>
 </template>
 
@@ -669,9 +667,9 @@ import { captureDeleteSelection, updateDeleteSelection, type CloudNodeDeleteSnap
 import {
   formatDateTime,
   formatFileSize,
-	formatMetadata,
-	formatTime,
-	getBatchChangeTypeText,
+  formatMetadata,
+  formatTime,
+  getBatchChangeTypeText,
   getNodeTypeColor,
   getTriggerTypeLabel,
   getNodeTypeLabel,
@@ -1786,7 +1784,6 @@ const handleSingleDeployOk = async () => {
     Message.error("创建部署变更失败: " + (error?.message || "未知错误"));
   }
 };
-
 </script>
 
 <style scoped src="./cloud-node.scss"></style>

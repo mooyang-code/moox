@@ -113,18 +113,25 @@ export const useStrategyStore = defineStore("strategy", () => {
       const strategyResponse = await getStrategy(current.strategy_id);
       if (requestId !== detailRequest) return false;
       strategy.value = strategyResponse.strategy;
-      const resultTask = current.session_id || allHistory
-        ? listStrategyResults(instanceId, { session_id: allHistory ? undefined : current.session_id, page, page_size: pageSize })
-        : Promise.resolve(null);
-      void resultTask.then(resultResponse => {
-        if (requestId !== detailRequest || resultRequestId !== resultRequest) return;
-        results.value = resultResponse?.items ?? [];
-        totalResults.value = resultResponse?.page.total ?? 0;
-      }).catch(err => {
-        if (requestId === detailRequest && resultRequestId === resultRequest) {
-          detailError.value = errorMessage(err, "策略结果加载失败");
-        }
-      });
+      const resultTask =
+        current.session_id || allHistory
+          ? listStrategyResults(instanceId, {
+              session_id: allHistory ? undefined : current.session_id,
+              page,
+              page_size: pageSize
+            })
+          : Promise.resolve(null);
+      void resultTask
+        .then(resultResponse => {
+          if (requestId !== detailRequest || resultRequestId !== resultRequest) return;
+          results.value = resultResponse?.items ?? [];
+          totalResults.value = resultResponse?.page.total ?? 0;
+        })
+        .catch(err => {
+          if (requestId === detailRequest && resultRequestId === resultRequest) {
+            detailError.value = errorMessage(err, "策略结果加载失败");
+          }
+        });
       const targetResponse = await listStrategyTargets(instanceId);
       if (requestId !== detailRequest) return false;
       targetSnapshot.value = targetResponse;

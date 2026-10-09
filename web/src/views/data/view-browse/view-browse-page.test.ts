@@ -30,22 +30,43 @@ import ViewBrowse from "./index.vue";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
+  const promise = new Promise<T>(done => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
 function mountPage() {
-  const stubs = Object.fromEntries([
-    "a-empty", "a-tabs", "a-tab-pane", "a-tag", "a-button", "a-input", "a-dropdown", "a-doption", "a-table",
-    "a-table-column", "a-tooltip", "a-modal", "a-descriptions", "a-descriptions-item", "a-list", "a-list-item",
-    "icon-refresh", "icon-bar-chart", "icon-left", "icon-right"
-  ].map(name => [name, true]));
+  const stubs = Object.fromEntries(
+    [
+      "a-empty",
+      "a-tabs",
+      "a-tab-pane",
+      "a-tag",
+      "a-button",
+      "a-input",
+      "a-dropdown",
+      "a-doption",
+      "a-table",
+      "a-table-column",
+      "a-tooltip",
+      "a-modal",
+      "a-descriptions",
+      "a-descriptions-item",
+      "a-list",
+      "a-list-item",
+      "icon-refresh",
+      "icon-bar-chart",
+      "icon-left",
+      "icon-right"
+    ].map(name => [name, true])
+  );
   return shallowMount(ViewBrowse, {
     props: { embedded: true, viewIds: ["view-known"], activeViewId: "view-known", refreshKey: 0 },
     global: {
       stubs: {
         ...stubs,
-        "a-button": { emits: ["click"], template: '<button @click="$emit(\'click\')"><slot /></button>' },
+        "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
         "a-spin": { template: "<div><slot /></div>" },
         "a-alert": { template: "<div class='alert'><slot /></div>" },
         ResultTable: { props: ["rows"], template: '<div data-testid="rows">{{ rows.map(row => row.key).join(",") }}</div>' }
@@ -128,7 +149,10 @@ describe("View result refresh", () => {
   });
 
   it("queues a refresh requested while the View catalog is still loading", async () => {
-    const catalog = deferred<{ views: { view_id: string; dataset_id: string }[]; datasets: { dataset_id: string; data_kind: string }[] }>();
+    const catalog = deferred<{
+      views: { view_id: string; dataset_id: string }[];
+      datasets: { dataset_id: string; data_kind: string }[];
+    }>();
     mocks.catalog.mockReturnValueOnce(catalog.promise);
     const wrapper = mountPage();
     await wrapper.setProps({ refreshKey: 1 });
@@ -148,7 +172,10 @@ describe("View result refresh", () => {
     await flushPromises();
     expect(mocks.queryTimeSeries).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain("Storage unavailable");
-    await wrapper.findAll("button").find(button => button.text().includes("重试"))?.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(button => button.text().includes("重试"))
+      ?.trigger("click");
     await flushPromises();
     expect(mocks.catalog).toHaveBeenCalledTimes(2);
     expect(wrapper.get("[data-testid='rows']").text()).toBe("BTC");

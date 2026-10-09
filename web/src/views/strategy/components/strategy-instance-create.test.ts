@@ -7,7 +7,7 @@ const source = readFileSync(resolve(process.cwd(), "src/views/strategy/component
 describe("strategy instance creation contract", () => {
   it("creates a disabled instance and never claims the account locally", () => {
     expect(source).toContain("createInstance({");
-    expect(source).toContain("Message.success(\"策略实例已创建并保持停用\")");
+    expect(source).toContain('Message.success("策略实例已创建并保持停用")');
     expect(source).not.toContain("setInstanceEnabled(");
   });
 

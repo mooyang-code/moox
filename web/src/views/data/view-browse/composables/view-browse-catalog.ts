@@ -9,7 +9,9 @@ export async function loadTargetedViewCatalog(spaceId: string, viewIds: string[]
 
   const viewResults = await Promise.all(uniqueViewIds.map(view_id => getView({ space_id: spaceId, view_id })));
   const views = viewResults.map(result => result.view);
-  if (views.some((view, index) => !view || view.view_id.trim() !== uniqueViewIds[index] || view.space_id.trim() !== spaceId.trim())) {
+  if (
+    views.some((view, index) => !view || view.view_id.trim() !== uniqueViewIds[index] || view.space_id.trim() !== spaceId.trim())
+  ) {
     throw new Error("采集结果视图身份与请求不一致");
   }
   const datasetIds = [...new Set(views.map(view => view.dataset_id.trim()).filter(Boolean))];

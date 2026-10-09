@@ -19,7 +19,12 @@ describe("health monitor page", () => {
     expect(source).toContain("系统一切正常");
     expect(source).toContain("clear-state");
     expect(source).toContain("systemHealthy");
-    for (const token of [["新增", "探测"].join(""), ["手动", "运行"].join(""), ["原始", "指标名"].join(""), ["Headers", " JSON"].join("")]) {
+    for (const token of [
+      ["新增", "探测"].join(""),
+      ["手动", "运行"].join(""),
+      ["原始", "指标名"].join(""),
+      ["Headers", " JSON"].join("")
+    ]) {
       expect(source).not.toContain(token);
     }
   });

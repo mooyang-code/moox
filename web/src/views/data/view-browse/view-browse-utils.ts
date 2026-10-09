@@ -99,11 +99,7 @@ export function buildViewFilterFieldOptions(
   const projected = viewColumns.some(column => column.column_name) ? viewColumns : datasetColumns;
   for (const column of projected) {
     if (!column.column_name) continue;
-    push(
-      column.column_name,
-      labels[column.column_name] || column.column_name,
-      column.value_type || "FIELD_VALUE_TYPE_STRING"
-    );
+    push(column.column_name, labels[column.column_name] || column.column_name, column.value_type || "FIELD_VALUE_TYPE_STRING");
   }
   return options;
 }
@@ -155,7 +151,9 @@ export function buildViewColumnLabels(
     }
     labels[column.column_name] =
       factorOutputName(column.attributes) ||
-      displayName(column.attributes) || systemViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
+      displayName(column.attributes) ||
+      systemViewLabels[column.origin_id] ||
+      readableViewColumnLabel(column.column_name);
   }
   return labels;
 }

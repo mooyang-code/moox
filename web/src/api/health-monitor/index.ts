@@ -15,4 +15,11 @@ export const healthMonitorApi = {
   }
 };
 
-export type { HealthAlert, HealthInstance, HealthItem, HealthOverview, NotificationChannelResponse, NotificationChannelSetting } from "./types";
+export type {
+  HealthAlert,
+  HealthInstance,
+  HealthItem,
+  HealthOverview,
+  NotificationChannelResponse,
+  NotificationChannelSetting
+} from "./types";

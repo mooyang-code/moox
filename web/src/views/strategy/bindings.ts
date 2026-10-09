@@ -12,7 +12,12 @@ export interface BindingSelection {
 
 export function validateAliasConflicts(selections: BindingSelection[]): string | null {
   const owners = new Map<string, number>();
-  const sourceFields = new Set(selections.flatMap(selection => selection.factor.input_columns || []).map(value => value.trim()).filter(Boolean));
+  const sourceFields = new Set(
+    selections
+      .flatMap(selection => selection.factor.input_columns || [])
+      .map(value => value.trim())
+      .filter(Boolean)
+  );
   const reserved = new Set(["open", "high", "low", "close", "volume", "instrument_id", "score"]);
   for (const [index, selection] of selections.entries()) {
     for (const raw of [selection.factor.factor_id, selection.output, selection.column_name]) {
@@ -28,9 +33,11 @@ export function validateAliasConflicts(selections: BindingSelection[]): string |
   return null;
 }
 
-
 export function findOutputColumn(columns: ViewColumn[], factorId: string, output: string): ViewColumn | null {
-  return columns.find(column => column.attributes?.origin_factor_id === factorId && column.attributes?.factor_output === output) ?? null;
+  return (
+    columns.find(column => column.attributes?.origin_factor_id === factorId && column.attributes?.factor_output === output) ??
+    null
+  );
 }
 
 /** 因子集里「已启用」成员对应的定义；策略只能绑定已启用成员。 */
@@ -40,9 +47,12 @@ export function enabledFactors(info: FactorSetInfo | undefined): FactorDef[] {
 
 export function validFactorSets(sets: FactorSetInfo[], sourceView: View, frequency: string): FactorSetInfo[] {
   const normalizedFrequency = normalizeFrequency(frequency);
-  return sets.filter(({ factor_set: set }) =>
-    set.status === "enabled" && set.space_id === sourceView.space_id && set.source_dataset_id === sourceView.dataset_id &&
-    normalizeFrequency(set.freq) === normalizedFrequency
+  return sets.filter(
+    ({ factor_set: set }) =>
+      set.status === "enabled" &&
+      set.space_id === sourceView.space_id &&
+      set.source_dataset_id === sourceView.dataset_id &&
+      normalizeFrequency(set.freq) === normalizedFrequency
   );
 }
 

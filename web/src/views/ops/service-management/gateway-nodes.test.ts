@@ -32,9 +32,7 @@ describe("gateway node and service instance contracts", () => {
   it("keeps the health and service management tabs in the required order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["健康监控", "网关节点", "服务实例"].map(label =>
-      normalized.indexOf(`label:"${label}"`)
-    );
+    const positions = ["健康监控", "网关节点", "服务实例"].map(label => normalized.indexOf(`label:"${label}"`));
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions[0]).toBeGreaterThan(positions[2]);
     expect(positions[1]).toBeLessThan(positions[2]);
@@ -152,9 +150,9 @@ describe("gateway node and service instance contracts", () => {
   it("keeps health monitoring as the last tab and removes its embedded duplicate title", () => {
     const healthSource = fs.readFileSync(path.resolve(__dirname, "../health-monitor/index.vue"), "utf8");
     expect(healthSource).toContain("props.embedded");
-    expect(healthSource).toContain("@click=\"openItem(item)\"");
-    expect(healthSource).not.toContain("@click.stop=\"openItem(item)\"");
-    expect(healthSource).not.toContain("@click.stop=\"openItem(item)\">详情");
+    expect(healthSource).toContain('@click="openItem(item)"');
+    expect(healthSource).not.toContain('@click.stop="openItem(item)"');
+    expect(healthSource).not.toContain('@click.stop="openItem(item)">详情');
     expect(healthSource).toContain('width="min(860px, 100vw)"');
     expect(healthSource).toContain("最后上报：");
     expect(healthSource).toContain("displayConclusion");

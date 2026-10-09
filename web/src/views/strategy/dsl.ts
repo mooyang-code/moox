@@ -66,7 +66,30 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
 }
 
 const builtinBarFields = new Set(["open", "high", "low", "close", "volume"]);
-const expressionFunctions = new Set(["abs", "ceil", "floor", "round", "min", "max", "sum", "avg", "mean", "std", "log", "sqrt", "pow", "rank", "zscore", "true", "false", "null", "and", "or", "not", "in"]);
+const expressionFunctions = new Set([
+  "abs",
+  "ceil",
+  "floor",
+  "round",
+  "min",
+  "max",
+  "sum",
+  "avg",
+  "mean",
+  "std",
+  "log",
+  "sqrt",
+  "pow",
+  "rank",
+  "zscore",
+  "true",
+  "false",
+  "null",
+  "and",
+  "or",
+  "not",
+  "in"
+]);
 const expressionBuiltins = new Set([...builtinBarFields, "instrument_id", "score"]);
 
 function expressionFields(expression: string): string[] {
@@ -74,9 +97,9 @@ function expressionFields(expression: string): string[] {
   const withoutBars = expression
     .replace(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g, " ")
     .replace(/\bbars\[-?\d+\]\.([A-Za-z_][A-Za-z0-9_]*)/g, (_, field: string) => {
-    if (!builtinBarFields.has(field)) fields.add(field);
-    return " ";
-  });
+      if (!builtinBarFields.has(field)) fields.add(field);
+      return " ";
+    });
   for (const match of withoutBars.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\b/g)) {
     const field = match[1];
     const next = withoutBars.slice(match.index! + field.length).match(/^\s*\(/);
@@ -93,7 +116,8 @@ export function requiredFactorFields(source: string): string[] {
   const expressionKeys = new Set(["score", "filter_before", "filter_after", "entry", "exit", "signal", "where"]);
   const visit = (value: unknown, key = "") => {
     if (typeof value === "string" && expressionKeys.has(key)) expressionFields(value).forEach(field => fields.add(field));
-    else if (value && typeof value === "object") Object.entries(value as Record<string, unknown>).forEach(([childKey, child]) => visit(child, childKey));
+    else if (value && typeof value === "object")
+      Object.entries(value as Record<string, unknown>).forEach(([childKey, child]) => visit(child, childKey));
   };
   visit(rules);
   return [...fields];

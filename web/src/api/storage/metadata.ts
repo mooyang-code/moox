@@ -58,7 +58,10 @@ export function listSubjects(params: {
 }
 
 export async function upsertTag(tag: Tag, createOnly = false) {
-  const rsp = await callMetadata<{ tag: Tag; create_only?: boolean }, RetRsp & { tag: Tag }>("UpsertTag", { tag, ...(createOnly ? { create_only: true } : {}) });
+  const rsp = await callMetadata<{ tag: Tag; create_only?: boolean }, RetRsp & { tag: Tag }>("UpsertTag", {
+    tag,
+    ...(createOnly ? { create_only: true } : {})
+  });
   return rsp.tag;
 }
 
@@ -76,13 +79,7 @@ export function deleteTag(spaceId: string, tagId: string) {
   });
 }
 
-export function listTagMembers(params: {
-  space_id: string;
-  tag_id?: string;
-  status?: string;
-  keyword?: string;
-  page: Page;
-}) {
+export function listTagMembers(params: { space_id: string; tag_id?: string; status?: string; keyword?: string; page: Page }) {
   return callMetadata<typeof params, RetRsp & { members: TagMember[]; page_result: PageResult }>("ListTagMembers", params);
 }
 

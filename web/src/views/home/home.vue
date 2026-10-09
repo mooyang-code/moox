@@ -626,7 +626,10 @@ async function loadSpaceScoped() {
       if (!isCurrent()) return;
       const sets = (rsp.factor_sets ?? []).filter(item => item.factor_set.space_id === spaceId);
       counts.factorSets = sets.length;
-      counts.factors = sets.reduce((total, item) => total + (item.members ?? []).filter(member => member.status === "enabled").length, 0);
+      counts.factors = sets.reduce(
+        (total, item) => total + (item.members ?? []).filter(member => member.status === "enabled").length,
+        0
+      );
     }),
     listSubjects({ space_id: spaceId, page }).then(rsp => {
       if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
@@ -646,9 +649,7 @@ async function loadSpaceScoped() {
       const totalState = rsp.page?.total_state;
       const skipped = totalState === 2 || totalState === "SKIPPED" || totalState === "TOTAL_STATE_SKIPPED";
       counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
-      taskCountLabel.value = skipped
-        ? (rsp.page?.has_more ? "2+" : String(rsp.instances?.length ?? 0))
-        : null;
+      taskCountLabel.value = skipped ? (rsp.page?.has_more ? "2+" : String(rsp.instances?.length ?? 0)) : null;
     }),
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;

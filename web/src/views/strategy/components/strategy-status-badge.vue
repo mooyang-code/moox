@@ -1,4 +1,6 @@
-<template><a-tag size="small" :color="color">{{ label }}</a-tag></template>
+<template>
+  <a-tag size="small" :color="color">{{ label }}</a-tag>
+</template>
 
 <script setup lang="ts">
 import { computed } from "vue";

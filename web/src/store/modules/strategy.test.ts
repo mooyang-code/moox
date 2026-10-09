@@ -30,7 +30,10 @@ const instance = (overrides: Record<string, unknown> = {}) => ({
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
   return { promise, resolve, reject };
 }
 
@@ -38,7 +41,9 @@ describe("strategy store request isolation", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     Object.values(api).forEach(mock => mock.mockReset());
-    api.getStrategy.mockResolvedValue({ strategy: { strategy_id: "strategy-1", name: "策略", dsl_yaml: "name: 策略", created_at: "" } });
+    api.getStrategy.mockResolvedValue({
+      strategy: { strategy_id: "strategy-1", name: "策略", dsl_yaml: "name: 策略", created_at: "" }
+    });
   });
 
   it("does not query all history when the current instance has no session", async () => {
@@ -62,7 +67,12 @@ describe("strategy store request isolation", () => {
 
     const request = store.loadInstanceDetail("instance-1");
     await Promise.resolve();
-    targets.resolve({ targets: [], session_id: "session-1", bar_end_time: "2026-09-06T01:00:00Z", valid_until: "2026-09-06T02:00:00Z" });
+    targets.resolve({
+      targets: [],
+      session_id: "session-1",
+      bar_end_time: "2026-09-06T01:00:00Z",
+      valid_until: "2026-09-06T02:00:00Z"
+    });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -74,7 +84,9 @@ describe("strategy store request isolation", () => {
 
   it("ignores a stale detail response after navigating to another instance", async () => {
     const first = deferred<{ instance: ReturnType<typeof instance> }>();
-    api.getInstance.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ instance: instance({ instance_id: "instance-2" }) });
+    api.getInstance
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ instance: instance({ instance_id: "instance-2" }) });
     api.listStrategyTargets.mockResolvedValue({ targets: [], session_id: "", bar_end_time: "", valid_until: "" });
     api.listStrategyResults.mockResolvedValue({ items: [], page: { total: 0 } });
     const store = useStrategyStore();

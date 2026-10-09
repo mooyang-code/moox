@@ -8,7 +8,9 @@
     <a-alert v-if="error" type="error" show-icon class="form-alert">{{ error }}</a-alert>
 
     <a-form v-if="step === 1" layout="vertical">
-      <a-form-item label="实例 ID" required><a-input v-model="form.instance_id" placeholder="例如 momentum-paper-1" /></a-form-item>
+      <a-form-item label="实例 ID" required
+        ><a-input v-model="form.instance_id" placeholder="例如 momentum-paper-1"
+      /></a-form-item>
       <a-form-item label="策略定义" required>
         <a-select v-model="form.strategy_id" allow-search @change="resetBindings">
           <a-option v-for="item in strategies" :key="item.strategy_id" :value="item.strategy_id">
@@ -48,7 +50,13 @@
             {{ setInfo.factor_set.set_id }} · {{ setInfo.factor_set.freq }}
           </a-option>
         </a-select>
-        <a-select v-model="row.factor_id" allow-search placeholder="因子定义" :disabled="!row.set_id" @change="factorChanged(row)">
+        <a-select
+          v-model="row.factor_id"
+          allow-search
+          placeholder="因子定义"
+          :disabled="!row.set_id"
+          @change="factorChanged(row)"
+        >
           <a-option v-for="factor in factorsForSet(row.set_id)" :key="factor.factor_id" :value="factor.factor_id">
             {{ factor.name }}（{{ factor.factor_id }}）
           </a-option>
@@ -61,7 +69,9 @@
             {{ column.column_name }}
           </a-option>
         </a-select>
-        <a-button type="text" status="danger" aria-label="移除因子" @click="removeFactor(index)"><template #icon><icon-delete /></template></a-button>
+        <a-button type="text" status="danger" aria-label="移除因子" @click="removeFactor(index)"
+          ><template #icon><icon-delete /></template
+        ></a-button>
       </div>
       <a-alert v-if="bindingReason" type="warning" show-icon>{{ bindingReason }}</a-alert>
       <a-divider />
@@ -83,10 +93,16 @@
         <a-descriptions-item label="实例 ID">{{ form.instance_id }}</a-descriptions-item>
         <a-descriptions-item label="策略">{{ selectedStrategy?.name || form.strategy_id }}</a-descriptions-item>
         <a-descriptions-item label="输入">{{ form.source_view_id }} · {{ form.frequency }}</a-descriptions-item>
-        <a-descriptions-item label="模式"><a-tag :color="form.logical_account_id ? 'orange' : 'blue'">{{ form.logical_account_id ? "发送给交易模块" : "仅计算" }}</a-tag></a-descriptions-item>
+        <a-descriptions-item label="模式"
+          ><a-tag :color="form.logical_account_id ? 'orange' : 'blue'">{{
+            form.logical_account_id ? "发送给交易模块" : "仅计算"
+          }}</a-tag></a-descriptions-item
+        >
         <a-descriptions-item v-if="form.logical_account_id" label="逻辑账户">{{ form.logical_account_id }}</a-descriptions-item>
       </a-descriptions>
-      <a-alert type="info" show-icon class="confirm-note">创建后实例保持停用。启用时后台才会完整校验依赖并在交易模式下认领账户会话。</a-alert>
+      <a-alert type="info" show-icon class="confirm-note"
+        >创建后实例保持停用。启用时后台才会完整校验依赖并在交易模式下认领账户会话。</a-alert
+      >
     </a-form>
 
     <template #footer>
@@ -110,13 +126,30 @@ import type { View, ViewColumn } from "@/api/storage/types";
 import { listLogicalAccounts } from "@/api/trade";
 import type { LogicalAccount } from "@/api/trade/types";
 import { parseDSL, requiredFactorFields } from "@/views/strategy/dsl";
-import { buildInputBindings, canCombineSelections, enabledFactors, findOutputColumn, validFactorSets, validateAliasConflicts, type BindingSelection } from "@/views/strategy/bindings";
+import {
+  buildInputBindings,
+  canCombineSelections,
+  enabledFactors,
+  findOutputColumn,
+  validFactorSets,
+  validateAliasConflicts,
+  type BindingSelection
+} from "@/views/strategy/bindings";
 import { normalizeFrequency } from "@/utils/frequency";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import type { Strategy } from "@/api/strategy-types";
 
-interface FactorRow { key: number; set_id: string; factor_id: string; output: string; column_name: string; }
-interface ResultViewInfo { view: View; columns: ViewColumn[]; }
+interface FactorRow {
+  key: number;
+  set_id: string;
+  factor_id: string;
+  output: string;
+  column_name: string;
+}
+interface ResultViewInfo {
+  view: View;
+  columns: ViewColumn[];
+}
 
 const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: string }>();
 const emit = defineEmits<{ "update:visible": [boolean]; created: [string] }>();
@@ -139,10 +172,16 @@ let sourceRequest = 0;
 const resultRequests = reactive<Record<string, number>>({});
 
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
-const dslPreview = computed(() => selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null);
+const dslPreview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
 const sourceView = computed(() => views.value.find(view => view.view_id === form.source_view_id));
-const compatibleSets = computed(() => sourceView.value ? validFactorSets(factorSets.value, sourceView.value, form.frequency) : []);
-const bindingsJson = computed(() => sourceView.value ? buildInputBindings(sourceView.value, form.frequency || dslPreview.value?.bar || "", completedSelections()) : "{}");
+const compatibleSets = computed(() =>
+  sourceView.value ? validFactorSets(factorSets.value, sourceView.value, form.frequency) : []
+);
+const bindingsJson = computed(() =>
+  sourceView.value
+    ? buildInputBindings(sourceView.value, form.frequency || dslPreview.value?.bar || "", completedSelections())
+    : "{}"
+);
 
 function close() {
   submitRequest += 1;
@@ -184,7 +223,11 @@ async function loadMetadata() {
   metadataLoading.value = true;
   error.value = "";
   try {
-    const [nextViews, nextSets, nextAccounts] = await Promise.all([loadAllViews(spaceId), loadAllFactorSets(), loadAllAccounts()]);
+    const [nextViews, nextSets, nextAccounts] = await Promise.all([
+      loadAllViews(spaceId),
+      loadAllFactorSets(),
+      loadAllAccounts()
+    ]);
     if (requestId !== metadataRequest || props.spaceId !== spaceId) return;
     views.value = nextViews.filter(view => view.space_id === spaceId);
     factorSets.value = nextSets.filter(info => info.factor_set?.space_id === spaceId);
@@ -247,7 +290,9 @@ function resultColumns(row: FactorRow) {
   const result = resultViews[row.set_id];
   const factor = factorFor(row);
   if (!result || !factor) return [];
-  const matches = factor.outputs.map(output => findOutputColumn(result.columns, factor.factor_id, output)).filter(Boolean) as ViewColumn[];
+  const matches = factor.outputs
+    .map(output => findOutputColumn(result.columns, factor.factor_id, output))
+    .filter(Boolean) as ViewColumn[];
   return row.output ? matches.filter(column => column.attributes?.factor_output === row.output) : matches;
 }
 
@@ -271,14 +316,17 @@ async function loadResultView(setId: string) {
   try {
     const items: View[] = [];
     for (let page = 1; ; page += 1) {
-      const rsp = await listViews({ space_id: set.space_id, dataset_id: set.result_dataset_id, status: "active", page: { page, size: 200 } });
+      const rsp = await listViews({
+        space_id: set.space_id,
+        dataset_id: set.result_dataset_id,
+        status: "active",
+        page: { page, size: 200 }
+      });
       items.push(...(rsp.views || []));
       if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
     }
     if (requestId !== resultRequests[setId] || props.spaceId !== set.space_id) return;
-    const view = items.find(item =>
-      item.attributes?.owner_module === "factor" && item.attributes?.view_role === "factor_result"
-    );
+    const view = items.find(item => item.attributes?.owner_module === "factor" && item.attributes?.view_role === "factor_result");
     if (!view) {
       error.value = `计算任务 ${setId} 的结果 View 尚未就绪`;
       return;
@@ -297,14 +345,16 @@ function resultViewId(setId: string) {
 }
 
 function completedSelections(): BindingSelection[] {
-  return factors.value.map(row => {
-    const factor = factorFor(row);
-    const factorSet = factorSetFor(row.set_id);
-    const result_view_id = resultViewId(row.set_id);
-    return factor && factorSet && row.output && row.column_name && result_view_id
-      ? { factor, factorSet, output: row.output, column_name: row.column_name, result_view_id }
-      : null;
-  }).filter((value): value is BindingSelection => value !== null);
+  return factors.value
+    .map(row => {
+      const factor = factorFor(row);
+      const factorSet = factorSetFor(row.set_id);
+      const result_view_id = resultViewId(row.set_id);
+      return factor && factorSet && row.output && row.column_name && result_view_id
+        ? { factor, factorSet, output: row.output, column_name: row.column_name, result_view_id }
+        : null;
+    })
+    .filter((value): value is BindingSelection => value !== null);
 }
 
 function addFactor() {
@@ -349,24 +399,58 @@ function validateStep() {
   }
   if (step.value !== 2) return true;
   const source = sourceView.value;
-  if (!source) { error.value = "请选择源 View"; return false; }
-  if (sourceFrequencyError.value) { error.value = sourceFrequencyError.value; return false; }
+  if (!source) {
+    error.value = "请选择源 View";
+    return false;
+  }
+  if (sourceFrequencyError.value) {
+    error.value = sourceFrequencyError.value;
+    return false;
+  }
   if (!form.frequency.trim() || normalizeFrequency(form.frequency) !== normalizeFrequency(dslPreview.value?.bar || "")) {
     error.value = `实例频率必须与 DSL data.bar (${dslPreview.value?.bar || "未配置"}) 一致`;
     return false;
   }
   const selections = completedSelections();
-  if (selections.length !== factors.value.length) { error.value = "每个因子都必须选择计算任务、定义、输出和结果列"; return false; }
-  const selectedOutputs = new Set(selections.flatMap(selection => [selection.factor.factor_id, selection.output, selection.column_name, ...(selection.factor.input_columns || [])]));
+  if (selections.length !== factors.value.length) {
+    error.value = "每个因子都必须选择计算任务、定义、输出和结果列";
+    return false;
+  }
+  const selectedOutputs = new Set(
+    selections.flatMap(selection => [
+      selection.factor.factor_id,
+      selection.output,
+      selection.column_name,
+      ...(selection.factor.input_columns || [])
+    ])
+  );
   const missingFields = requiredFactorFields(selectedStrategy.value?.dsl_yaml || "").filter(field => !selectedOutputs.has(field));
-  if (missingFields.length) { error.value = `DSL 需要因子输出 ${missingFields.join("、")}，请完成对应选择`; return false; }
+  if (missingFields.length) {
+    error.value = `DSL 需要因子输出 ${missingFields.join("、")}，请完成对应选择`;
+    return false;
+  }
   const aliasError = validateAliasConflicts(selections);
-  if (aliasError) { error.value = aliasError; return false; }
+  if (aliasError) {
+    error.value = aliasError;
+    return false;
+  }
   const selectedFactorIds = factors.value.map(row => row.factor_id).filter(Boolean);
-  if (new Set(selectedFactorIds).size !== selectedFactorIds.length) { error.value = "同一个因子不能重复添加"; return false; }
+  if (new Set(selectedFactorIds).size !== selectedFactorIds.length) {
+    error.value = "同一个因子不能重复添加";
+    return false;
+  }
   const result = canCombineSelections(selections, source);
-  if (!result.ok) { bindingReason.value = result.reason || "计算任务不兼容"; error.value = bindingReason.value; return false; }
-  if (selections.length && !["viewdataready", "view.data.ready", "ready", "event.storage.view.data.ready"].includes((dslPreview.value?.eventName || "").trim().toLowerCase())) {
+  if (!result.ok) {
+    bindingReason.value = result.reason || "计算任务不兼容";
+    error.value = bindingReason.value;
+    return false;
+  }
+  if (
+    selections.length &&
+    !["viewdataready", "view.data.ready", "ready", "event.storage.view.data.ready"].includes(
+      (dslPreview.value?.eventName || "").trim().toLowerCase()
+    )
+  ) {
     error.value = "绑定因子需要 DSL 配置 ViewDataReady 事件；纯定时触发不能运行因子策略";
     return false;
   }
@@ -418,30 +502,67 @@ async function submit() {
   }
 }
 
-watch(() => props.visible, value => {
-  if (value) {
-    resetForm();
-    step.value = 1;
-    error.value = "";
-    loadMetadata();
+watch(
+  () => props.visible,
+  value => {
+    if (value) {
+      resetForm();
+      step.value = 1;
+      error.value = "";
+      loadMetadata();
+    }
   }
-});
+);
 
-watch(() => props.spaceId, (value, previous) => {
-  if (value !== previous && props.visible) {
-    resetForm();
-    step.value = 1;
-    loadMetadata();
+watch(
+  () => props.spaceId,
+  (value, previous) => {
+    if (value !== previous && props.visible) {
+      resetForm();
+      step.value = 1;
+      loadMetadata();
+    }
   }
-});
+);
 </script>
 
 <style scoped>
-.steps { margin-bottom: 22px; }
-.form-alert { margin-bottom: 16px; }
-.binding-head { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
-.binding-row { display: grid; grid-template-columns: 1.1fr 1.2fr .8fr 1fr 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
-.code-input { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.confirm-note { margin-top: 16px; }
-@media (max-width: 700px) { .binding-row { grid-template-columns: 1fr 1fr; } .binding-row .arco-btn { grid-column: 2; justify-self: end; } }
+.steps {
+  margin-bottom: 22px;
+}
+.form-alert {
+  margin-bottom: 16px;
+}
+.binding-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0;
+}
+.binding-row {
+  display: grid;
+  grid-template-columns: 1.1fr 1.2fr 0.8fr 1fr 32px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.code-input {
+  font:
+    12px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.confirm-note {
+  margin-top: 16px;
+}
+@media (max-width: 700px) {
+  .binding-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .binding-row .arco-btn {
+    grid-column: 2;
+    justify-self: end;
+  }
+}
 </style>

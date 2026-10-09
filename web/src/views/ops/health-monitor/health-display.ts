@@ -1,12 +1,40 @@
 export function statusLabel(status?: string) {
-  switch (status) { case "healthy": case "ok": return "正常"; case "degraded": case "stale": return "需关注"; case "down": case "firing": return "异常"; default: return "未知"; }
+  switch (status) {
+    case "healthy":
+    case "ok":
+      return "正常";
+    case "degraded":
+    case "stale":
+      return "需关注";
+    case "down":
+    case "firing":
+      return "异常";
+    default:
+      return "未知";
+  }
 }
 
 export function statusColor(status?: string) {
-  switch (status) { case "healthy": case "ok": return "green"; case "degraded": case "stale": return "orange"; case "down": case "firing": return "red"; default: return "gray"; }
+  switch (status) {
+    case "healthy":
+    case "ok":
+      return "green";
+    case "degraded":
+    case "stale":
+      return "orange";
+    case "down":
+    case "firing":
+      return "red";
+    default:
+      return "gray";
+  }
 }
 
-export function formatCheckedAt(value?: string) { if (!value) return "暂无"; const date = new Date(value); return Number.isNaN(date.getTime()) ? "暂无" : date.toLocaleString("zh-CN", { hour12: false }); }
+export function formatCheckedAt(value?: string) {
+  if (!value) return "暂无";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "暂无" : date.toLocaleString("zh-CN", { hour12: false });
+}
 
 const conclusionTranslations: Array<[string, string]> = [
   ["reporter fresh", "监控上报正常"],
@@ -32,7 +60,12 @@ const conclusionTranslations: Array<[string, string]> = [
 export function displayConclusion(value?: string): string {
   const raw = (value || "").trim();
   if (!raw) return "";
-  if (raw.includes(";")) return raw.split(";").map(part => displayConclusion(part)).filter(Boolean).join("；");
+  if (raw.includes(";"))
+    return raw
+      .split(";")
+      .map(part => displayConclusion(part))
+      .filter(Boolean)
+      .join("；");
   const exact = conclusionTranslations.find(([source]) => source === raw);
   if (exact) return exact[1];
   if (raw.startsWith("balance difference ")) {

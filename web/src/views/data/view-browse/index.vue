@@ -1040,20 +1040,20 @@ watch(
   }
 );
 
-watch(() => props.refreshKey, () => {
-  void refreshRowsInBackground();
-});
+watch(
+  () => props.refreshKey,
+  () => {
+    void refreshRowsInBackground();
+  }
+);
 
 // Coalesce requests during a query/context load into a follow-up read instead
 // of silently dropping the user's refresh while the browser is busy.
-watch(
-  [pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id],
-  () => {
-    if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
-    pendingRowsRefresh.value = false;
-    void reloadRows(true);
-  }
-);
+watch([pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id], () => {
+  if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
+  pendingRowsRefresh.value = false;
+  void reloadRows(true);
+});
 
 async function onViewChange() {
   clearViewState();

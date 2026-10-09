@@ -4,7 +4,12 @@ import { parseDSL, rankedTemplate, signalTemplate } from "./dsl";
 
 describe("strategy DSL parser", () => {
   it("returns a compact preview from structured YAML", () => {
-    expect(parseDSL(rankedTemplate).preview).toMatchObject({ name: "收盘价排序示例", bar: "1h", calendar: "crypto_24x7", rules: ["rank"] });
+    expect(parseDSL(rankedTemplate).preview).toMatchObject({
+      name: "收盘价排序示例",
+      bar: "1h",
+      calendar: "crypto_24x7",
+      rules: ["rank"]
+    });
   });
   it("reports duplicate keys and malformed YAML without erasing source", () => {
     const result = parseDSL("name: one\nname: two\n");

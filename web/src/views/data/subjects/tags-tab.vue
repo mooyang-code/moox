@@ -96,36 +96,36 @@
           </a-radio-group>
         </a-form-item>
         <a-form-item field="source" label="数据源" required>
-            <a-select v-model="form.source" :disabled="editing" allow-search placeholder="选择标的列表数据源">
-              <a-option v-for="source in listingSources" :key="source.data_source_id" :value="source.data_source_id">
-                {{ source.name || source.data_source_id }}（{{ source.data_source_id }}）
-              </a-option>
-            </a-select>
-          </a-form-item>
+          <a-select v-model="form.source" :disabled="editing" allow-search placeholder="选择标的列表数据源">
+            <a-option v-for="source in listingSources" :key="source.data_source_id" :value="source.data_source_id">
+              {{ source.name || source.data_source_id }}（{{ source.data_source_id }}）
+            </a-option>
+          </a-select>
+        </a-form-item>
         <a-form-item field="market_type" label="市场类型" required>
-            <a-select v-model="form.market_type" :disabled="editing" placeholder="选择市场类型">
-              <a-option v-for="type in instrumentTypes" :key="type" :value="type">{{ type }}</a-option>
-            </a-select>
-          </a-form-item>
-          <a-row :gutter="16">
-            <a-col :span="12">
-              <a-form-item field="cron" label="定时更新" required>
-                <a-input v-model="form.cron" placeholder="0 * * * *" />
-              </a-form-item>
-            </a-col>
-            <a-col :span="12">
-              <a-form-item field="timezone" label="时区" required>
-                <a-select v-model="form.timezone" allow-search allow-create>
-                  <a-option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</a-option>
-                </a-select>
-              </a-form-item>
-            </a-col>
-          </a-row>
-          <div class="next-runs">
-            <span class="muted">接下来运行</span>
-            <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
-            <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
-          </div>
+          <a-select v-model="form.market_type" :disabled="editing" placeholder="选择市场类型">
+            <a-option v-for="type in instrumentTypes" :key="type" :value="type">{{ type }}</a-option>
+          </a-select>
+        </a-form-item>
+        <a-row :gutter="16">
+          <a-col :span="12">
+            <a-form-item field="cron" label="定时更新" required>
+              <a-input v-model="form.cron" placeholder="0 * * * *" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item field="timezone" label="时区" required>
+              <a-select v-model="form.timezone" allow-search allow-create>
+                <a-option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <div class="next-runs">
+          <span class="muted">接下来运行</span>
+          <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
+          <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
+        </div>
       </a-form>
     </a-modal>
 

@@ -207,7 +207,9 @@ describe("collection task result label", () => {
 
 describe("collection task live result inspection", () => {
   const task = (taskId: string, status: string, viewId = `view_${taskId}`) =>
-    ({ task_id: taskId, prepare_state: "ready", result: { view_id: viewId, status } }) as unknown as Parameters<typeof collectionTaskResultLabel>[0] & { task_id: string };
+    ({ task_id: taskId, prepare_state: "ready", result: { view_id: viewId, status } }) as unknown as Parameters<
+      typeof collectionTaskResultLabel
+    >[0] & { task_id: string };
 
   it("inspects only rows the list left uninspected", () => {
     const rows = [task("a", "unknown"), task("b", "ready"), task("c", "unknown", "")];

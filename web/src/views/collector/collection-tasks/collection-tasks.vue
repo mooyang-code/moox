@@ -110,17 +110,34 @@
           数据类型、标签范围、结果身份和结果形态不可修改，如需变更请创建新任务。
         </a-alert>
         <section class="editor-section">
-          <header class="editor-section__header"><h3>任务信息</h3><span>用于识别和说明这项采集任务</span></header>
+          <header class="editor-section__header">
+            <h3>任务信息</h3>
+            <span>用于识别和说明这项采集任务</span>
+          </header>
           <a-form-item field="task_name" label="任务名称" validate-trigger="blur">
-            <a-input v-model="editor.task_name" placeholder="例如：币安现货 1 小时行情" allow-clear :max-length="80" show-word-limit />
+            <a-input
+              v-model="editor.task_name"
+              placeholder="例如：币安现货 1 小时行情"
+              allow-clear
+              :max-length="80"
+              show-word-limit
+            />
           </a-form-item>
           <a-form-item field="description" label="描述">
-            <a-textarea v-model="editor.description" placeholder="补充任务用途、数据范围或负责人信息" :max-length="200" show-word-limit allow-clear />
+            <a-textarea
+              v-model="editor.description"
+              placeholder="补充任务用途、数据范围或负责人信息"
+              :max-length="200"
+              show-word-limit
+              allow-clear
+            />
           </a-form-item>
           <a-row v-if="editing" :gutter="16">
             <a-col :span="12">
               <a-form-item field="enabled" label="启用状态" required>
-                <a-select v-model="editor.enabled"><a-option :value="true">启用</a-option><a-option :value="false">禁用</a-option></a-select>
+                <a-select v-model="editor.enabled"
+                  ><a-option :value="true">启用</a-option><a-option :value="false">禁用</a-option></a-select
+                >
               </a-form-item>
             </a-col>
             <a-col :span="12">
@@ -131,21 +148,48 @@
         </section>
 
         <section class="editor-section">
-          <header class="editor-section__header"><h3>执行方式</h3><span>选择采集方法及其必需参数</span></header>
+          <header class="editor-section__header">
+            <h3>执行方式</h3>
+            <span>选择采集方法及其必需参数</span>
+          </header>
           <a-row :gutter="16">
             <a-col :span="12">
               <a-form-item field="data_type" label="执行任务类型" required>
-                <a-select v-model="editor.data_type" placeholder="请选择执行任务类型" :disabled="editing" @change="onDataTypeChange">
-                  <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">{{ config.type_name }}</a-option>
+                <a-select
+                  v-model="editor.data_type"
+                  placeholder="请选择执行任务类型"
+                  :disabled="editing"
+                  @change="onDataTypeChange"
+                >
+                  <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">{{
+                    config.type_name
+                  }}</a-option>
                 </a-select>
               </a-form-item>
             </a-col>
           </a-row>
           <a-row :gutter="16">
             <a-col :span="12">
-              <a-form-item field="frequency" :label="taskFieldLabel(editor.data_type === 'kline_resample' ? 'target_frequency' : 'intervals', editor.data_type === 'kline_resample' ? '目标频率' : '采集频率')" required>
-                <a-select v-if="frequencyOptions.length" v-model="frequencyValue" placeholder="请选择频率" allow-clear :disabled="editing">
-                  <a-option v-for="option in frequencyOptions" :key="option.value" :value="option.value">{{ option.label }}</a-option>
+              <a-form-item
+                field="frequency"
+                :label="
+                  taskFieldLabel(
+                    editor.data_type === 'kline_resample' ? 'target_frequency' : 'intervals',
+                    editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'
+                  )
+                "
+                required
+              >
+                <a-select
+                  v-if="frequencyOptions.length"
+                  v-model="frequencyValue"
+                  placeholder="请选择频率"
+                  allow-clear
+                  :disabled="editing"
+                >
+                  <a-option v-for="option in frequencyOptions" :key="option.value" :value="option.value">{{
+                    option.label
+                  }}</a-option>
                 </a-select>
                 <a-input v-else v-model="frequencyValue" placeholder="例如 1m、5m、1h" allow-clear :disabled="editing" />
               </a-form-item>
@@ -154,9 +198,24 @@
         </section>
 
         <section class="editor-section">
-          <header class="editor-section__header"><h3>采集范围</h3><span>确定本任务要处理的标的或源数据</span></header>
-          <a-form-item v-if="editor.data_type === 'kline' || editor.data_type === 'kline_resample'" label="采集标的" :required="editor.data_type === 'kline'">
-            <a-select v-model="subjectTagIds" placeholder="请选择一个或多个标签" :loading="loadingTags" allow-search allow-clear multiple :disabled="editing">
+          <header class="editor-section__header">
+            <h3>采集范围</h3>
+            <span>确定本任务要处理的标的或源数据</span>
+          </header>
+          <a-form-item
+            v-if="editor.data_type === 'kline' || editor.data_type === 'kline_resample'"
+            label="采集标的"
+            :required="editor.data_type === 'kline'"
+          >
+            <a-select
+              v-model="subjectTagIds"
+              placeholder="请选择一个或多个标签"
+              :loading="loadingTags"
+              allow-search
+              allow-clear
+              multiple
+              :disabled="editing"
+            >
               <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
                 {{ tag.tag_name }}（{{ tag.source || "-" }} / {{ tag.market_type || "-" }}）
               </a-option>
@@ -167,22 +226,58 @@
 
           <template v-if="editor.data_type === 'kline_resample'">
             <a-form-item :label="taskFieldLabel('source_dataset_id', '源行情')" required>
-              <a-select v-model="sourceIdValue" placeholder="请选择源行情" @change="loadSourceSubjectTags" :loading="loadingSources" allow-search allow-clear :disabled="editing">
-                <a-option v-for="source in resampleSourceOptions" :key="source.source_id" :value="source.source_id">{{ source.name || "源行情" }}</a-option>
+              <a-select
+                v-model="sourceIdValue"
+                placeholder="请选择源行情"
+                @change="loadSourceSubjectTags"
+                :loading="loadingSources"
+                allow-search
+                allow-clear
+                :disabled="editing"
+              >
+                <a-option v-for="source in resampleSourceOptions" :key="source.source_id" :value="source.source_id">{{
+                  source.name || "源行情"
+                }}</a-option>
               </a-select>
             </a-form-item>
             <a-row :gutter="16">
-              <a-col :span="12"><a-form-item :label="taskFieldLabel('source_frequency', '源周期')" required><a-input v-model="sourceFrequencyValue" placeholder="例如 1m、5m、1h" allow-clear :disabled="editing" /></a-form-item></a-col>
-              <a-col :span="12"><a-form-item :label="taskFieldLabel('source_series_tag', '序列标签')" required><a-input v-model="sourceSeriesTagValue" placeholder="例如 venue:binance" allow-clear :disabled="editing" /></a-form-item></a-col>
+              <a-col :span="12"
+                ><a-form-item :label="taskFieldLabel('source_frequency', '源周期')" required
+                  ><a-input
+                    v-model="sourceFrequencyValue"
+                    placeholder="例如 1m、5m、1h"
+                    allow-clear
+                    :disabled="editing" /></a-form-item
+              ></a-col>
+              <a-col :span="12"
+                ><a-form-item :label="taskFieldLabel('source_series_tag', '序列标签')" required
+                  ><a-input
+                    v-model="sourceSeriesTagValue"
+                    placeholder="例如 venue:binance"
+                    allow-clear
+                    :disabled="editing" /></a-form-item
+              ></a-col>
             </a-row>
             <a-form-item :label="taskFieldLabel('settle_delay_ms', '收盘等待（毫秒）')">
-              <a-input-number v-model="settleDelayMSValue" :min="0" :max="86400000" :precision="0" placeholder="留空使用默认值" allow-clear :disabled="editing" style="width: 100%" />
+              <a-input-number
+                v-model="settleDelayMSValue"
+                :min="0"
+                :max="86400000"
+                :precision="0"
+                placeholder="留空使用默认值"
+                allow-clear
+                :disabled="editing"
+                style="width: 100%"
+              />
             </a-form-item>
           </template>
         </section>
 
         <section class="editor-section editor-section--output">
-          <header class="editor-section__header"><h3>输出字段</h3><span>选择任务结果要保存的字段</span></header>
+          <header class="editor-section__header">
+            <h3>输出字段</h3>
+            <span>选择任务结果要保存的字段</span>
+          </header>
           <div class="output-selection-summary">
             <a-button type="outline" @click="openOutputFieldPicker">管理输出字段</a-button>
             <strong>{{ selectedOutputFields.length }} 个字段</strong>
@@ -191,7 +286,9 @@
             <a-tag v-for="field in selectedOutputFieldLabels.slice(0, 6)" :key="field.id" color="arcoblue" :title="field.id">
               {{ field.name }}
             </a-tag>
-            <span v-if="selectedOutputFieldLabels.length > 6" class="field-hint">另有 {{ selectedOutputFieldLabels.length - 6 }} 个</span>
+            <span v-if="selectedOutputFieldLabels.length > 6" class="field-hint"
+              >另有 {{ selectedOutputFieldLabels.length - 6 }} 个</span
+            >
           </div>
           <span v-else class="field-hint">未选择时使用采集方法的默认输出字段。</span>
         </section>
@@ -219,7 +316,16 @@
       </a-form>
     </a-modal>
 
-    <a-modal v-model:visible="outputFieldsVisible" title="选择输出字段" width="900px" ok-text="确认选择" :ok-loading="loadingOutputFields" @before-ok="confirmOutputFieldSelection" @cancel="cancelOutputFieldSelection" @close="cancelOutputFieldSelection">
+    <a-modal
+      v-model:visible="outputFieldsVisible"
+      title="选择输出字段"
+      width="900px"
+      ok-text="确认选择"
+      :ok-loading="loadingOutputFields"
+      @before-ok="confirmOutputFieldSelection"
+      @cancel="cancelOutputFieldSelection"
+      @close="cancelOutputFieldSelection"
+    >
       <a-alert type="info" show-icon>展示当前空间全部分类的启用字段，可按需选择输出字段。</a-alert>
       <a-alert v-if="outputFieldLoadError" class="output-field-error" type="error" show-icon>
         字段目录加载失败 <a-link @click="loadOutputFieldCatalog(true)">重试</a-link>
@@ -232,19 +338,44 @@
         <div class="output-field-sections">
           <section v-for="section in visibleOutputFieldSections" :key="section.id" class="output-field-section">
             <header class="output-field-section__header">
-              <div><strong>{{ section.name }}</strong><span>{{ section.fields.length }} 个字段</span></div>
+              <div>
+                <strong>{{ section.name }}</strong
+                ><span>{{ section.fields.length }} 个字段</span>
+              </div>
               <a-button size="mini" type="text" @click="toggleOutputFieldSection(section.fields)">
-                {{ section.fields.every(field => outputFieldDraft.includes(field.field_id)) ? (outputFieldKeyword ? "取消匹配项" : "取消本组") : (outputFieldKeyword ? "选择匹配项" : "选择本组") }}
+                {{
+                  section.fields.every(field => outputFieldDraft.includes(field.field_id))
+                    ? outputFieldKeyword
+                      ? "取消匹配项"
+                      : "取消本组"
+                    : outputFieldKeyword
+                      ? "选择匹配项"
+                      : "选择本组"
+                }}
               </a-button>
             </header>
             <div class="output-field-grid">
-              <label v-for="field in section.fields" :key="field.field_id" class="output-field-option" :title="field.description || field.field_id">
-                <a-checkbox :model-value="outputFieldDraft.includes(field.field_id)" @change="setOutputField(field.field_id, $event)" />
-                <span class="output-field-option__text"><strong>{{ field.name }}</strong><code>{{ field.field_id }}</code></span>
+              <label
+                v-for="field in section.fields"
+                :key="field.field_id"
+                class="output-field-option"
+                :title="field.description || field.field_id"
+              >
+                <a-checkbox
+                  :model-value="outputFieldDraft.includes(field.field_id)"
+                  @change="setOutputField(field.field_id, $event)"
+                />
+                <span class="output-field-option__text"
+                  ><strong>{{ field.name }}</strong
+                  ><code>{{ field.field_id }}</code></span
+                >
               </label>
             </div>
           </section>
-          <a-empty v-if="!loadingOutputFields && !visibleOutputFieldSections.length" :description="outputFieldKeyword ? '没有匹配的字段' : '当前空间暂无启用字段'" />
+          <a-empty
+            v-if="!loadingOutputFields && !visibleOutputFieldSections.length"
+            :description="outputFieldKeyword ? '没有匹配的字段' : '当前空间暂无启用字段'"
+          />
         </div>
       </a-spin>
     </a-modal>
@@ -411,7 +542,11 @@ const outputFieldSections = computed(() => {
   const activeGroups = outputFieldGroups.value.filter(group => group.status === "active");
   const sections = activeGroups
     .filter(group => grouped.has(group.group_id))
-    .map(group => ({ id: group.group_id, name: groupPath(outputFieldGroups.value, group.group_id), fields: grouped.get(group.group_id) || [] }))
+    .map(group => ({
+      id: group.group_id,
+      name: groupPath(outputFieldGroups.value, group.group_id),
+      fields: grouped.get(group.group_id) || []
+    }))
     .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
   const knownGroups = allGroupIDs;
   for (const [groupID, fields] of grouped) {
@@ -427,14 +562,18 @@ const visibleOutputFieldSections = computed(() => {
   return outputFieldSections.value
     .map(section => ({
       ...section,
-      fields: section.fields.filter(field => `${field.name} ${field.field_id} ${field.description || ""}`.toLocaleLowerCase().includes(keyword))
+      fields: section.fields.filter(field =>
+        `${field.name} ${field.field_id} ${field.description || ""}`.toLocaleLowerCase().includes(keyword)
+      )
     }))
     .filter(section => section.fields.length > 0);
 });
-const selectedOutputFieldLabels = computed(() => selectedOutputFields.value.map(id => {
-  const field = outputFieldCatalog.value.find(item => item.field_id === id);
-  return { id, name: field?.name || id };
-}));
+const selectedOutputFieldLabels = computed(() =>
+  selectedOutputFields.value.map(id => {
+    const field = outputFieldCatalog.value.find(item => item.field_id === id);
+    return { id, name: field?.name || id };
+  })
+);
 const detailOutputFieldLabels = computed(() => {
   if (!detailData.value) return [];
   const outputFields = parseCollectionTaskInput(detailData.value).outputFields || [];
@@ -500,7 +639,8 @@ const frequencyOptions = computed(() => {
   const field = taskTypeFields.value.find(item => item.field_key === "intervals");
   const configuredOptions = field?.field_options?.options;
   if (!Array.isArray(configuredOptions)) return [];
-  return configuredOptions.map(value => typeof value === "string" ? { value, label: value } : value as { value?: unknown; label?: unknown })
+  return configuredOptions
+    .map(value => (typeof value === "string" ? { value, label: value } : (value as { value?: unknown; label?: unknown })))
     .filter(option => option.value !== undefined && option.value !== null)
     .map(option => ({ value: String(option.value), label: String(option.label || option.value) }));
 });
@@ -664,7 +804,13 @@ async function loadOutputFieldCatalog(force = false) {
     }
     const fields: Field[] = [];
     for (let page = 1; ; page += 1) {
-      const response = await listFields({ space_id: spaceID, status: "active", sort_by: "sort_order", sort_order: "asc", page: { page, size: 500 } });
+      const response = await listFields({
+        space_id: spaceID,
+        status: "active",
+        sort_by: "sort_order",
+        sort_order: "asc",
+        page: { page, size: 500 }
+      });
       if (token !== outputCatalogRequestToken || spaceID !== selectedSpaceId.value) return;
       fields.push(...(response.fields || []));
       if (!response.page_result?.has_more || !(response.fields || []).length) break;
@@ -673,7 +819,9 @@ async function loadOutputFieldCatalog(force = false) {
     const allGroupIDs = new Set(groups.map(group => group.group_id));
     const activeGroupIDs = new Set(groups.filter(group => group.status === "active").map(group => group.group_id));
     outputFieldGroups.value = groups;
-    outputFieldCatalog.value = fields.filter(field => !field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id));
+    outputFieldCatalog.value = fields.filter(
+      field => !field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id)
+    );
     outputCatalogSpaceID.value = spaceID;
   } catch (error) {
     if (token === outputCatalogRequestToken) {
@@ -714,7 +862,10 @@ function cancelOutputFieldSelection() {
 async function loadTaskTypeFields() {
   const token = ++taskTypeFieldRequestToken;
   const dataType = editor.data_type;
-  if (!dataType) { taskTypeFields.value = []; return; }
+  if (!dataType) {
+    taskTypeFields.value = [];
+    return;
+  }
   taskTypeFields.value = [];
   loadingTypeFields.value = true;
   try {
@@ -726,7 +877,9 @@ async function loadTaskTypeFields() {
       taskTypeFields.value = [];
       Message.warning(error instanceof Error ? error.message : "读取执行任务类型参数失败");
     }
-  } finally { if (token === taskTypeFieldRequestToken) loadingTypeFields.value = false; }
+  } finally {
+    if (token === taskTypeFieldRequestToken) loadingTypeFields.value = false;
+  }
 }
 
 function afterClose() {
@@ -1167,7 +1320,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.field-hint { display: block; margin-top: 4px; color: var(--color-text-3); font-size: 12px; }
+.field-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
 .editor-section {
   margin-bottom: 16px;
   padding: 16px 18px 2px;
@@ -1181,31 +1339,145 @@ onMounted(() => {
   gap: 10px;
   margin: 0 0 16px;
 }
-.editor-section__header h3 { margin: 0; color: var(--color-text-1); font-size: 14px; font-weight: 600; }
-.editor-section__header span { color: var(--color-text-3); font-size: 12px; }
-.output-selection-summary { display: flex; align-items: center; gap: 12px; }
-.output-selection-summary strong { color: var(--color-text-2); font-size: 13px; font-weight: 500; }
-.selected-output-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
-.output-field-error { margin-top: 12px; }
-.output-field-picker-spin { display: block; margin-top: 14px; }
-.output-field-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
-.output-field-toolbar > :first-child { max-width: 420px; }
-.output-field-toolbar > span { flex: none; color: var(--color-text-3); font-size: 12px; }
-.output-field-sections { display: grid; gap: 10px; max-height: min(56vh, 560px); overflow: auto; padding: 1px 4px 4px 1px; }
-.output-field-section { overflow: hidden; border: 1px solid var(--color-border-2); border-radius: 6px; background: var(--color-bg-2); }
-.output-field-section__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--color-border-2); background: var(--color-fill-1); }
-.output-field-section__header > div { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.output-field-section__header strong { overflow: hidden; color: var(--color-text-1); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.output-field-section__header span { flex: none; color: var(--color-text-3); font-size: 12px; }
-.output-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px 12px; padding: 8px 12px; }
-.output-field-option { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 6px 2px; cursor: pointer; }
-.output-field-option__text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
-.output-field-option__text strong { overflow: hidden; color: var(--color-text-1); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.output-field-option__text code { overflow: hidden; color: var(--color-text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.output-field-option--unsupported { cursor: not-allowed; opacity: 0.55; }
-.output-field-option__text small { color: var(--color-text-3); font-size: 11px; }
-.output-field-option--unsupported { cursor: not-allowed; opacity: 0.55; }
-.output-field-option__text small { color: var(--color-text-3); font-size: 11px; }
+.editor-section__header h3 {
+  margin: 0;
+  color: var(--color-text-1);
+  font-size: 14px;
+  font-weight: 600;
+}
+.editor-section__header span {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.output-selection-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.output-selection-summary strong {
+  color: var(--color-text-2);
+  font-size: 13px;
+  font-weight: 500;
+}
+.selected-output-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.output-field-error {
+  margin-top: 12px;
+}
+.output-field-picker-spin {
+  display: block;
+  margin-top: 14px;
+}
+.output-field-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.output-field-toolbar > :first-child {
+  max-width: 420px;
+}
+.output-field-toolbar > span {
+  flex: none;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.output-field-sections {
+  display: grid;
+  gap: 10px;
+  max-height: min(56vh, 560px);
+  overflow: auto;
+  padding: 1px 4px 4px 1px;
+}
+.output-field-section {
+  overflow: hidden;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-bg-2);
+}
+.output-field-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border-2);
+  background: var(--color-fill-1);
+}
+.output-field-section__header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.output-field-section__header strong {
+  overflow: hidden;
+  color: var(--color-text-1);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.output-field-section__header span {
+  flex: none;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.output-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px 12px;
+  padding: 8px 12px;
+}
+.output-field-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 2px;
+  cursor: pointer;
+}
+.output-field-option__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.output-field-option__text strong {
+  overflow: hidden;
+  color: var(--color-text-1);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.output-field-option__text code {
+  overflow: hidden;
+  color: var(--color-text-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.output-field-option--unsupported {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.output-field-option__text small {
+  color: var(--color-text-3);
+  font-size: 11px;
+}
+.output-field-option--unsupported {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.output-field-option__text small {
+  color: var(--color-text-3);
+  font-size: 11px;
+}
 /* a-spin 默认 inline-block，会被宽表格撑开，导致右侧（含固定的操作列）被外层裁掉。 */
 .moox-page :deep(.arco-spin) {
   display: block;
@@ -1241,9 +1513,22 @@ pre {
 }
 
 @media (max-width: 640px) {
-  .editor-section { padding: 12px 12px 0; }
-  .editor-section__header { align-items: flex-start; flex-direction: column; gap: 3px; margin-bottom: 12px; }
-  .output-field-grid { grid-template-columns: minmax(0, 1fr); }
-  .output-field-toolbar { align-items: stretch; flex-direction: column; gap: 6px; }
+  .editor-section {
+    padding: 12px 12px 0;
+  }
+  .editor-section__header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 12px;
+  }
+  .output-field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .output-field-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
 }
 </style>

@@ -9,5 +9,4 @@ describe("resample backfill helpers", () => {
     expect(countBackfillBuckets("2026-08-29T00:00:00Z", "2026-08-29T04:00:00Z", "1h")).toBe(4);
     expect(countBackfillBuckets("2026-08-29T00:01:00Z", "2026-08-29T04:00:00Z", "1h")).toBe(0);
   });
-
 });

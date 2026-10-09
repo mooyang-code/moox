@@ -81,7 +81,7 @@ export const getNodeTypeLabel = (value: string) =>
   ({ "scf-event": "云函数（事件型）", "scf-web": "云函数（Web型）", server: "服务器" })[value] || value;
 export const getNodeTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
-export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || (value || "-");
+export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || value || "-";
 
 export function getPackageTypeColor(value: number | string) {
   return (

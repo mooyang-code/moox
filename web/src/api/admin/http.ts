@@ -14,7 +14,10 @@ const adminClient = axios.create({
 const reportedErrors = new WeakSet<object>();
 
 export class ControlRequestError<T = unknown> extends Error {
-  constructor(message: string, public readonly response?: ControlResponse<T>) {
+  constructor(
+    message: string,
+    public readonly response?: ControlResponse<T>
+  ) {
     super(message);
     this.name = "ControlRequestError";
   }

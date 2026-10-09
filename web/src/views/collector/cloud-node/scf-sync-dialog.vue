@@ -81,12 +81,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import {
-  importSCFFunctions,
-  previewSCFFunctions,
-  type SCFFunctionCandidate,
-  type SCFRegionScanError
-} from "@/api/cloud-node";
+import { importSCFFunctions, previewSCFFunctions, type SCFFunctionCandidate, type SCFRegionScanError } from "@/api/cloud-node";
 import type { CloudAccount } from "@/api/cloud-account";
 
 const props = defineProps<{ visible: boolean; accounts: CloudAccount[] }>();
@@ -97,7 +92,8 @@ const regionErrors = ref<SCFRegionScanError[]>([]);
 const selectedKeys = ref<Record<string, boolean>>({});
 const scanning = ref(false);
 const importing = ref(false);
-const functionKey = (item: SCFFunctionCandidate) => `${item.function.region}/${item.function.namespace}/${item.function.function_name}`;
+const functionKey = (item: SCFFunctionCandidate) =>
+  `${item.function.region}/${item.function.namespace}/${item.function.function_name}`;
 const tableRows = computed(() => candidates.value.map(item => ({ ...item, ...item.function, key: functionKey(item) })));
 const selectedCandidates = computed(() => candidates.value.filter(item => selectedKeys.value[functionKey(item)]));
 
@@ -105,7 +101,8 @@ watch(
   () => [props.visible, props.accounts] as const,
   ([visible, accounts]) => {
     if (!visible) return;
-    if (!accounts.some(item => item.account_id === accountId.value)) accountId.value = accounts.length === 1 ? accounts[0].account_id : "";
+    if (!accounts.some(item => item.account_id === accountId.value))
+      accountId.value = accounts.length === 1 ? accounts[0].account_id : "";
     candidates.value = [];
     regionErrors.value = [];
     selectedKeys.value = {};
@@ -141,7 +138,9 @@ const scan = async () => {
     const response = await previewSCFFunctions(accountId.value);
     candidates.value = response.functions;
     regionErrors.value = response.region_errors;
-    selectedKeys.value = Object.fromEntries(response.functions.filter(item => item.importable).map(item => [functionKey(item), true]));
+    selectedKeys.value = Object.fromEntries(
+      response.functions.filter(item => item.importable).map(item => [functionKey(item), true])
+    );
     if (!response.functions.length && !response.region_errors.length) Message.info("未发现云函数");
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "扫描云函数失败");
@@ -164,7 +163,11 @@ const importSelected = async () => {
     const summary = `同步完成：新增 ${response.created}，恢复 ${response.restored}，已存在 ${response.unchanged}，失败 ${response.failed}`;
     if (response.failed > 0) {
       Message.warning(summary);
-      const failures = new Map(response.results.filter(item => item.error_message).map(item => [`${item.function.region}/${item.function.namespace}/${item.function.function_name}`, item.error_message]));
+      const failures = new Map(
+        response.results
+          .filter(item => item.error_message)
+          .map(item => [`${item.function.region}/${item.function.namespace}/${item.function.function_name}`, item.error_message])
+      );
       candidates.value = candidates.value
         .filter(item => failures.has(functionKey(item)))
         .map(item => ({ ...item, reason: failures.get(functionKey(item)) || item.reason }));
@@ -184,8 +187,17 @@ const importSelected = async () => {
 </script>
 
 <style scoped>
-.sync-toolbar { display: flex; align-items: center; gap: var(--moox-space-3); margin-bottom: var(--moox-space-3); flex-wrap: wrap; }
-.sync-hint { color: var(--color-text-3); font-size: 12px; }
+.sync-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-3);
+  flex-wrap: wrap;
+}
+.sync-hint {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
 .sync-loading {
   display: flex;
   align-items: center;
@@ -215,5 +227,7 @@ const importSelected = async () => {
 .import-loading :deep(.arco-progress) {
   display: block;
 }
-.region-error { margin-bottom: var(--moox-space-2); }
+.region-error {
+  margin-bottom: var(--moox-space-2);
+}
 </style>

@@ -8,7 +8,7 @@ export function taskInstancePaginationTotal(
   page: number,
   pageSize: number,
   itemCount: number,
-  pageResult?: TaskInstancePageResult,
+  pageResult?: TaskInstancePageResult
 ): number {
   const totalState = pageResult?.total_state;
   const skipped = totalState === 2 || totalState === "SKIPPED" || totalState === "TOTAL_STATE_SKIPPED";

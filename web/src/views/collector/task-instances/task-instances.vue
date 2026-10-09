@@ -395,7 +395,7 @@ async function getInstanceList() {
       pagination.value.current,
       pagination.value.pageSize,
       instanceList.value.length,
-      data.page,
+      data.page
     );
   } catch (error) {
     console.error("获取任务实例列表失败:", error);

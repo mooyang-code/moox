@@ -1,17 +1,44 @@
 import { describe, expect, it } from "vitest";
 import type { FactorDef, FactorSet, FactorSetInfo } from "@/api/factor/types";
 import type { View, ViewColumn } from "@/api/storage/types";
-import { buildInputBindings, enabledFactors, canCombineSelections, findOutputColumn, validFactorSets, validateAliasConflicts } from "./bindings";
+import {
+  buildInputBindings,
+  enabledFactors,
+  canCombineSelections,
+  findOutputColumn,
+  validFactorSets,
+  validateAliasConflicts
+} from "./bindings";
 
 const source = { space_id: "s", view_id: "price", name: "价格", dataset_id: "prices", status: "active" } as View;
-const factor = { factor_id: "ma", name: "MA", input_columns: ["close"], outputs: ["ma20"], params_json: "{}", lookback_periods: 20 } as FactorDef;
-const set: FactorSet = { set_id: "set-1", space_id: "s", source_dataset_id: "prices", freq: "1h", subject_mode: "all", subjects: [], result_dataset_id: "result", status: "enabled" };
+const factor = {
+  factor_id: "ma",
+  name: "MA",
+  input_columns: ["close"],
+  outputs: ["ma20"],
+  params_json: "{}",
+  lookback_periods: 20
+} as FactorDef;
+const set: FactorSet = {
+  set_id: "set-1",
+  space_id: "s",
+  source_dataset_id: "prices",
+  freq: "1h",
+  subject_mode: "all",
+  subjects: [],
+  result_dataset_id: "result",
+  status: "enabled"
+};
 const member = { set_id: "set-1", factor_id: "ma", status: "enabled" as const, factor, created_at: "", updated_at: "" };
 const info: FactorSetInfo = { factor_set: set, members: [member] };
 
 describe("strategy factor-set bindings", () => {
   it("maps factor output to the metadata column instead of guessing the name", () => {
-    const column = { view_id: "factor_result", column_name: "ma_20_value", attributes: { origin_factor_id: "ma", factor_output: "ma20" } } as ViewColumn;
+    const column = {
+      view_id: "factor_result",
+      column_name: "ma_20_value",
+      attributes: { origin_factor_id: "ma", factor_output: "ma20" }
+    } as ViewColumn;
     expect(findOutputColumn([column], "ma", "ma20")?.column_name).toBe("ma_20_value");
   });
 
@@ -76,10 +103,20 @@ describe("strategy factor-set bindings", () => {
   });
 
   it("compares backend frequency spellings and rejects output alias collisions", () => {
-    expect(validateAliasConflicts([{ factor, factorSet: set, output: "close", column_name: "value", result_view_id: "view_result" }])).toContain("内置");
-    expect(validateAliasConflicts([
-      { factor, factorSet: set, output: "ma20", column_name: "value", result_view_id: "view_result" },
-      { factor: { ...factor, factor_id: "rsi" }, factorSet: set, output: "rsi", column_name: "value", result_view_id: "view_result" }
-    ])).toContain("多个");
+    expect(
+      validateAliasConflicts([{ factor, factorSet: set, output: "close", column_name: "value", result_view_id: "view_result" }])
+    ).toContain("内置");
+    expect(
+      validateAliasConflicts([
+        { factor, factorSet: set, output: "ma20", column_name: "value", result_view_id: "view_result" },
+        {
+          factor: { ...factor, factor_id: "rsi" },
+          factorSet: set,
+          output: "rsi",
+          column_name: "value",
+          result_view_id: "view_result"
+        }
+      ])
+    ).toContain("多个");
   });
 });
