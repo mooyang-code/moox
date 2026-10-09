@@ -1,6 +1,9 @@
 package bootstrap
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
@@ -13,23 +16,41 @@ import (
 	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
-	"time"
-
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
 // RegisterTRPCServices 注册所有TRPC服务。
-// 本进程业务服务均开有协议 http（trpc_go.yaml protocol:http），由统一网关 forwardHTTP 透传，
-// 不再注册 dispatcher / ServiceHandler。
+// 控制台复用相同实例及生成的 RPC handler，独立校验 console ACL。
 func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) error {
+	local, err := console.NewLocalDispatcher()
+	if err != nil {
+		return err
+	}
+	register := func(desc *server.ServiceDesc, implementation any) error {
+		filters, err := localServiceFilters(desc.ServiceName)
+		if err != nil {
+			return err
+		}
+		if err := local.Register(desc, implementation, filters...); err != nil {
+			return err
+		}
+		rpc := s.Service(desc.ServiceName)
+		if rpc == nil {
+			return fmt.Errorf("Admin RPC service %q is not configured", desc.ServiceName)
+		}
+		return rpc.Register(desc, implementation)
+	}
 	// 1. 注册认证服务
 	log.Info("正在初始化认证服务...")
 	authImp, err := authsvr.NewService(cfg.Auth, services.DBManager)
 	if err != nil {
 		return err
 	}
-	adminpb.RegisterAuthService(s.Service("trpc.moox.infra.Auth"), authImp)
+	if err := register(&adminpb.AuthServer_ServiceDesc, authImp); err != nil {
+		return err
+	}
 	// Auth initializes the shared durable Badger cache. GatewayControl uses its
 	// own nonce namespace, independent of each host gateway's local nonce DB.
 	cache, err := authdao.NewCacheDBFromBadger(services.DBManager.GetCache())
@@ -48,26 +69,19 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 
-	// 2. 初始化控制台服务
-	log.Info("正在初始化控制台服务...")
-	if err := console.InitConsoleServices(s, services.SysDeploy, cfg.AdminNodeID, services.SpaceMgr); err != nil {
-		return err
-	}
 	if err := adminhealth.Register(s.Service("trpc.moox.admin.Health"), time.Now()); err != nil {
 		return err
 	}
 
-	// 3. 注册各模块 RPC 服务（本进程有协议 http，经统一网关透传 /api/admin/{service}/{method}）
-	// 3.0 Space 管理服务
-	adminpb.RegisterSpaceMgrService(s.Service("trpc.moox.admin.SpaceMgr"), services.SpaceMgr)
-
-	// 3.1 云节点/采集管理已拆为独立服务；admin 仅通过 gateway 转发
-	// /api/admin/cloudnode/* -> moox-cloudnode
-	// /api/admin/collectmgr/* -> moox-collector
+	if err := register(&adminpb.SpaceMgrServer_ServiceDesc, services.SpaceMgr); err != nil {
+		return err
+	}
 
 	// 3.5 SSH 管理服务（直连端点走 rawhandler）
 	sshSvc := sshrpc.NewService(services.SSHService)
-	adminpb.RegisterSshService(s.Service("trpc.moox.ops.Ssh"), sshSvc)
+	if err := register(&adminpb.SshServer_ServiceDesc, sshSvc); err != nil {
+		return err
+	}
 	console.SetRawSessionOwnerVerifier(services.SSHService.SessionBelongsToUser)
 	// 注册 SSH 裸 HTTP 处理器。每次连接/传输必须先通过已签名的管理 RPC
 	// 获取与操作类型绑定的一次性 ticket；session_id 本身不承担鉴权。
@@ -77,15 +91,34 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 
 	// 3.7 秘钥管理服务
 	secretSvc := secretrpc.NewService(services.SecretService)
-	adminpb.RegisterSecretMgrService(s.Service("trpc.moox.ops.SecretMgr"), secretSvc)
+	if err := register(&adminpb.SecretMgrServer_ServiceDesc, secretSvc); err != nil {
+		return err
+	}
 
 	// 3.8 服务部署信息
 	sysDeploySvc := sysdeployrpc.NewService(services.SysDeploy)
-	adminpb.RegisterSysDeployService(s.Service("trpc.moox.ops.SysDeploy"), sysDeploySvc)
+	if err := register(&adminpb.SysDeployServer_ServiceDesc, sysDeploySvc); err != nil {
+		return err
+	}
 
-	// Setup is intentionally registered only on its dedicated loopback listener.
-	adminpb.RegisterSetupService(s.Service("trpc.moox.admin.Setup"), setuprpc.NewService(services.Setup))
-	adminpb.RegisterCollectorPublishLeaseService(s.Service("trpc.moox.admin.CollectorPublishLease"), services.CollectorPublishLease)
+	// Machine setup uses its dedicated loopback listener; the browser surface
+	// uses the same implementation and the catalog's console ACL.
+	if err := register(&adminpb.SetupServer_ServiceDesc, setuprpc.NewService(services.Setup)); err != nil {
+		return err
+	}
+	if err := register(&adminpb.CollectorPublishLeaseServer_ServiceDesc, services.CollectorPublishLease); err != nil {
+		return err
+	}
+
+	gateway, err := newConsoleGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master)
+	if err != nil {
+		return err
+	}
+	if err := console.InitConsoleServices(s, local, gateway, services.SpaceMgr); err != nil {
+		_ = gateway.Close()
+		return err
+	}
+	services.consoleGateway = gateway
 
 	log.Info("TRPC 服务注册完成")
 	return nil

@@ -1593,9 +1593,6 @@ components:
               - UpdateLogicalAccount
               - AddLogicalAccountMember
               - RemoveLogicalAccountMember
-              - ClaimLogicalAccountOwner
-              - ReleaseLogicalAccountOwner
-              - RebindLogicalAccountOwner
               - PauseLogicalAccount
               - ResumeLogicalAccount
               - FlattenLogicalAccount
@@ -1615,6 +1612,12 @@ components:
               - ListHoldings
             callers:
               - console
+              - moox-cli
+          - methods:
+              - ClaimLogicalAccountOwner
+              - ReleaseLogicalAccountOwner
+              - RebindLogicalAccountOwner
+            callers:
               - moox-cli
           - methods:
               - GetLogicalAccount

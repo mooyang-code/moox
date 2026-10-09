@@ -33,6 +33,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "启动后台服务失败: %v", err)
 		return nil, err
 	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			services.closeConsoleGateway()
+		}
+	}()
 
 	// 3. 注册TRPC服务
 	if err := RegisterTRPCServices(s, cfg, services); err != nil {
@@ -62,6 +68,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")
+	s.RegisterOnShutdown(services.closeConsoleGateway)
+	initialized = true
 	return s, nil
 }
 

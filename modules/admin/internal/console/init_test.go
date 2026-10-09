@@ -10,7 +10,7 @@ import (
 
 func TestInitConsoleServices_NilConfig_ShouldError(t *testing.T) {
 	SetConfig(nil)
-	err := InitConsoleServices(&server.Server{}, nil, "admin-node-test")
+	err := InitConsoleServices(&server.Server{}, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "控制台配置未初始化")
 }

@@ -32,11 +32,11 @@ describe("health monitor page", () => {
   it("uses only the health overview and global notification APIs", async () => {
     mockedCallControl.mockResolvedValue({ overview: { alerts: [], business_items: [], service_items: [] } });
     await healthMonitorApi.getOverview();
-    expect(mockedCallControl).toHaveBeenLastCalledWith("moox_monitor", "GetHealthOverview", {});
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", {});
 
     mockedCallControl.mockResolvedValue({ channel: { channel_type: "wecom", configured: false } });
     await healthMonitorApi.getNotification();
-    expect(mockedCallControl).toHaveBeenLastCalledWith("moox_monitor", "GetNotificationChannel", {});
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetNotificationChannel", {});
   });
 
   it("renders monitoring conclusions in Chinese", () => {

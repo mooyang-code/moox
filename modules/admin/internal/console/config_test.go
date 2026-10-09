@@ -69,10 +69,10 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestAdminRouterKeepsAdminAndGatewayControlButRejectsMachineService(t *testing.T) {
-	hr := NewHTTPRouter(NewConsoleHandle(), &fakeGatewayControlProvider{}, "admin-node-test")
+func TestAdminRouterKeepsBrowserRoutesAndRejectsMachineSurfaces(t *testing.T) {
+	hr := newTestRouter(t, nil, nil)
 	router := hr.buildControlRouter()
-	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health"} {
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health", "/api/gateway-control/routes", "/api/gateway-control/status"} {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
 		if rr.Code != http.StatusNotFound {
@@ -82,7 +82,6 @@ func TestAdminRouterKeepsAdminAndGatewayControlButRejectsMachineService(t *testi
 
 	for _, path := range []string{
 		"/api/admin/auth/GetLoginSalt",
-		"/api/gateway-control/routes",
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		match := &mux.RouteMatch{}

@@ -317,6 +317,15 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 		if err != nil {
 			return nil, err
 		}
+		metadata := CallMetadataFromContext(ctx)
+		for name, value := range map[string]string{
+			"X-Space-Id": metadata.SpaceID, "X-User-Id": metadata.UserID,
+			"X-User-Role": metadata.UserRole, "X-Trace-Id": metadata.TraceID,
+		} {
+			if value != "" {
+				headers.Set(name, value)
+			}
+		}
 		response, err := c.invoke(ctx, ep, service, method, serialization, body, headers)
 		if err == nil {
 			if int64(len(response)) > limit {

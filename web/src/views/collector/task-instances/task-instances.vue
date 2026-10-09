@@ -386,7 +386,7 @@ async function getInstanceList() {
     if (form.value.includeDeleted) filter.include_deleted = true;
 
     const data = await callControl<{ filter: typeof filter }, { instances?: RawTaskInstance[]; page?: TaskInstancePageResult }>(
-      "collectmgr",
+      "collector",
       "GetTaskInstanceList",
       { filter }
     );

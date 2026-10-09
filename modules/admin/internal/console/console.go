@@ -12,9 +12,13 @@ import (
 
 	"github.com/gorilla/mux"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/requestauth"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -53,26 +57,33 @@ var NewConsoleHandle = func() *ConsoleHandle {
 
 // HTTPRouter HTTP路由管理器
 type HTTPRouter struct {
-	console              *ConsoleHandle
-	controlProvider      ConsoleProvider
-	adminServiceProvider AdminServiceDetailProvider
-	tradeAuthorizer      TradeSpaceAuthorizer
-	adminNodeID          string
+	console         *ConsoleHandle
+	catalog         servicecatalog.Catalog
+	local           *LocalDispatcher
+	gateway         RPCForwarder
+	tradeAuthorizer TradeSpaceAuthorizer
 }
 
-// NewHTTPRouter 创建HTTP路由管理器
-func NewHTTPRouter(console *ConsoleHandle, provider ConsoleProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) *HTTPRouter {
+func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, authorizers ...TradeSpaceAuthorizer) (*HTTPRouter, error) {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return nil, err
+	}
+	if console == nil {
+		return nil, errors.New("console handle is required")
+	}
 	var authorizer TradeSpaceAuthorizer
 	if len(authorizers) > 0 {
 		authorizer = authorizers[0]
 	}
-	return &HTTPRouter{console: console, controlProvider: provider, adminServiceProvider: provider, tradeAuthorizer: authorizer, adminNodeID: adminNodeID}
+	return &HTTPRouter{console: console, catalog: catalog, local: local, gateway: gateway, tradeAuthorizer: authorizer}, nil
 }
 
-// RegisterConsoleHTTPHandlers 注册控制台 HTTP 接口
-func RegisterConsoleHTTPHandlers(s *server.Server, provider ConsoleProvider, adminNodeID string, authorizers ...TradeSpaceAuthorizer) error {
-	console := GetConsoleHandleInstance()
-	router := NewHTTPRouter(console, provider, adminNodeID, authorizers...)
+func RegisterConsoleHTTPHandlers(s *server.Server, local *LocalDispatcher, gateway RPCForwarder, authorizers ...TradeSpaceAuthorizer) error {
+	router, err := NewHTTPRouter(GetConsoleHandleInstance(), local, gateway, authorizers...)
+	if err != nil {
+		return err
+	}
 	return router.setupRoutes(s)
 }
 
@@ -87,18 +98,6 @@ func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
 func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	router := mux.NewRouter()
 	router.MethodNotAllowedHandler = http.NotFoundHandler()
-	if hr.controlProvider != nil {
-		router.HandleFunc("/api/gateway-control/routes", hr.handleGatewayRoutes).Methods(http.MethodGet)
-		router.HandleFunc("/api/gateway-control/status", hr.handleGatewayStatus).Methods(http.MethodPost)
-	}
-
-	// Storage is a fixed browser BFF surface. Keep it ahead of the generic
-	// route so the browser cannot choose the underlying service ID.
-	router.Handle(
-		"/api/admin/storage/{method}",
-		corsMiddleware(http.HandlerFunc(hr.handleStorageBFFRequest))).
-		Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-
 	// 注册新控制台 API 路由: /api/admin/{service}/{method}
 	router.Handle(
 		"/api/admin/{service}/{method}",
@@ -113,14 +112,10 @@ func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Reques
 	hr.handleConsoleRequest(w, r)
 }
 
-func (hr *HTTPRouter) handleStorageBFFRequest(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	r = mux.SetURLVars(r, map[string]string{"service": "storage", "method": vars["method"]})
-	hr.handleControlRequest(w, r)
-}
-
 func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, message := codec.WithCloneMessage(r.Context())
+	defer codec.PutBackMessage(message)
+	r = r.WithContext(ctx)
 	handler := hr.console.requestHandler
 
 	// 解析请求参数
@@ -130,42 +125,22 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	storageFacade := serviceID == "storage"
-	if storageFacade {
-		mappedServiceID, ok := storageBFFServiceID(method)
-		if !ok {
+	// RPC aliases and permissions come only from the shared catalog. SSH
+	// streaming routes are a separate fixed surface bound to one-time tickets.
+	_, rawRoute := rawRouteOperations[serviceID+"/"+method]
+	spec, allowed := hr.catalog.ConsoleService(serviceID, method)
+	if rawRoute {
+		if _, registered := LookupRawHandler(serviceID, method); !registered {
 			http.NotFound(w, r)
 			return
 		}
-		serviceID = mappedServiceID
-	} else if isInternalStorageService(serviceID) || isInternalCollectorRuntimeService(serviceID) {
-		http.NotFound(w, r)
-		return
-	}
-	// trade_owner is an internal Strategy-only alias for the TradeConsole
-	// service. It intentionally has a different Gateway ACL and must never be
-	// reachable through the browser-facing Admin BFF, which otherwise forwards
-	// non-console deployments directly to their loopback listener.
-	if isInternalTradeService(serviceID) {
-		http.NotFound(w, r)
-		return
-	}
-	if isMachineOnlyAdminMethod(serviceID, method) {
-		http.NotFound(w, r)
-		return
-	}
-	// Ownership fencing is a machine-to-machine Strategy lifecycle contract.
-	// Even a Space administrator using the browser TradeConsole must not be
-	// able to release or rebind another instance's session through the local
-	// direct-forward path; those methods are exposed only by trade_owner with
-	// the service-gateway caller ACL set to strategy.
-	if isTradeOwnerOnlyMethod(serviceID, method) {
+	} else if !allowed {
 		http.NotFound(w, r)
 		return
 	}
 
-	if !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
-		if _, usesTicket := rawRouteOperations[serviceID+"/"+method]; usesTicket {
+	if rawRoute || !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
+		if rawRoute {
 			claims, err := validateRawRouteTicket(r, serviceID, method)
 			if err != nil {
 				log.WarnContextf(ctx, "admin raw request authentication failed: %v", err)
@@ -196,7 +171,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 			trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(claims.SessionID))
 		}
 	}
-	if storageFacade && method == "RequestViewRebuild" {
+	if serviceID == "storage" && method == "RequestViewRebuild" {
 		role, err := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
 		if err != nil || role < 2 {
 			log.WarnContextf(ctx, "manual view rebuild denied: administrator role required")
@@ -223,10 +198,14 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		headers["user_role"] = role
 	}
 
-	// 裸 HTTP 处理器分派（用于 multipart/流式等不适合 PB RPC 的场景）。
-	// 必须在读取请求体之前分派，避免 multipart body 被网关读干。
-	// 裸处理器仍使用管理台 JWT 或一次性 raw ticket 鉴权。
-	if rawAndServe(ctx, w, r, serviceID, method, headers) {
+	ctx = spacecontext.InjectFromHeaders(ctx, headers)
+	ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{
+		SpaceID: headers["space_id"], UserID: headers["user_id"], UserRole: headers["user_role"], TraceID: headers["trace_id"],
+	})
+	if rawRoute {
+		if !rawAndServe(ctx, w, r, serviceID, method, headers) {
+			http.NotFound(w, r)
+		}
 		return
 	}
 
@@ -239,79 +218,37 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	}
 	if isSpaceScopedService(serviceID) {
 		if err := validateSpaceScopedBody(r.Header.Get("X-Space-Id"), body); err != nil {
-			writeForwardError(ctx, w, err, nil)
+			writeForwardError(ctx, w, err, headers)
 			return
 		}
 	}
-	if storageFacade {
-		body, err = storageBFFBody(serviceID, body)
-		if err != nil {
-			writeForwardError(ctx, w, err, headers)
-			return
+	var target RPCForwarder = hr.gateway
+	admin, _ := hr.catalog.Component("admin")
+	for _, service := range admin.Services {
+		if service.Path == spec.Path {
+			if hr.local == nil {
+				writeForwardError(ctx, w, errors.New("local Admin dispatcher is unavailable"), headers)
+				return
+			}
+			target = hr.local
+			break
 		}
-		response, _, err := forwardStorageToNodeGateway(ctx, serviceID, method, body, headers)
-		if err != nil {
-			writeForwardError(ctx, w, err, headers)
-			return
-		}
-		if response != nil {
-			writeNodeGatewayResponse(w, response, headers)
-			return
-		}
-		writeForwardError(ctx, w, errors.New("Node Service Gateway returned no response"), headers)
+	}
+	if target == nil {
+		writeForwardError(ctx, w, errors.New("console gateway is unavailable"), headers)
 		return
 	}
-	detail, err := resolveAdminServiceDetail(ctx, hr.adminServiceProvider, hr.adminNodeID, serviceID)
+	response, err := target.Forward(ctx, spec.Path, method, codec.SerializationTypeJSON, body)
 	if err != nil {
 		writeForwardError(ctx, w, err, headers)
 		return
 	}
-	if isMachineOnlyResolvedMethod(detail, method) || isInternalStorageServicePath(detail.Path) || isInternalCollectorRuntimeServicePath(detail.Path) {
-		http.NotFound(w, r)
-		return
-	}
-	if detail.GatewayURL != "" {
-		respBody, err := forwardTradeConsoleToGateway(ctx, method, detail, body, headers)
-		if err != nil {
-			writeForwardError(ctx, w, err, headers)
-			return
-		}
-		writeForwardResponse(w, respBody, headers)
-		return
-	}
-	// 纯透传到目标服务的有协议 http 端口（本进程服务 / 远端 storage），
-	// 框架服务端自动 JSON↔PB，网关不加工 body；未配置 serviceID 返回 404。
-	respBody, err := forwardHTTPToDetail(ctx, serviceID, method, detail, body, headers)
-	if err != nil {
-		writeForwardError(ctx, w, err, headers)
-		return
-	}
-	writeForwardResponse(w, respBody, headers)
-}
-
-func isTradeConsoleService(serviceID string) bool {
-	return canonicalAdminSegment(serviceID) == "tradeconsole"
-}
-
-func isInternalTradeService(serviceID string) bool {
-	return canonicalAdminSegment(serviceID) == "tradeowner"
-}
-
-func isTradeOwnerOnlyMethod(serviceID, method string) bool {
-	if !isTradeConsoleService(serviceID) {
-		return false
-	}
-	switch canonicalAdminSegment(method) {
-	case "claimlogicalaccountowner", "releaselogicalaccountowner", "rebindlogicalaccountowner":
-		return true
-	default:
-		return false
-	}
+	writeForwardResponse(w, response, headers)
 }
 
 func isSpaceScopedService(serviceID string) bool {
-	switch canonicalAdminSegment(serviceID) {
-	case "tradeconsole", "strategy", "strategymgr", "mooxstrategy", "collectmgr", "collector", "cloudnode":
+	switch serviceID {
+	case "trade", "strategy", "collector", "cloudnode":
 		return true
 	default:
 		return false
@@ -371,70 +308,6 @@ func (hr *HTTPRouter) authorizeSpaceRequest(ctx context.Context, r *http.Request
 	}
 	role, _ := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
 	return hr.tradeAuthorizer.AuthorizeTradeRequest(ctx, userID, spaceID, method, int32(role))
-}
-
-func isMachineOnlyAdminMethod(serviceID, method string) bool {
-	switch canonicalAdminSegment(serviceID) {
-	case "secret", "secretmgr", "trpcmooxopssecretmgr":
-		return canonicalAdminSegment(method) == "getsecretvalue"
-	case "cloudnode", "trpcmooxcloudnodecloudnodemgr":
-		// Only Admin's daily garbage collection timer calls CollectGarbage.
-		return canonicalAdminSegment(method) == "collectgarbage"
-	case "publishlease", "collectorpublishlease", "trpcmooxadmincollectorpublishlease":
-		// Browser deletion still needs Acquire/Renew/Release lease access.
-		// Validation and operation claims belong only to machine callers.
-		switch canonicalAdminSegment(method) {
-		case "validatecollectorpublishlease", "begincollectorpublishoperation", "renewcollectorpublishoperation", "endcollectorpublishoperation":
-			return true
-		}
-	}
-	return false
-}
-
-func isMachineOnlyResolvedMethod(detail ServiceDetail, method string) bool {
-	return isMachineOnlyAdminMethod(detail.Path, method)
-}
-
-func isInternalStorageService(serviceID string) bool {
-	switch canonicalAdminSegment(serviceID) {
-	case "storageprimary", "storageview":
-		return true
-	default:
-		return false
-	}
-}
-
-func isInternalStorageServicePath(servicePath string) bool {
-	switch canonicalAdminSegment(servicePath) {
-	case "trpcmooxstoragemetadata", "trpcmooxstorageprimarystore", "trpcmooxstoragedataview":
-		return true
-	default:
-		return false
-	}
-}
-
-func isInternalCollectorRuntimeService(serviceID string) bool {
-	switch canonicalAdminSegment(serviceID) {
-	case "collectormarketruntime", "collectormarketruntimeendpoint":
-		return true
-	default:
-		return false
-	}
-}
-
-func isInternalCollectorRuntimeServicePath(servicePath string) bool {
-	return canonicalAdminSegment(servicePath) == "trpcmooxcollectormarketfetchruntime"
-}
-
-func canonicalAdminSegment(value string) string {
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case '.', '-', '_':
-			return -1
-		default:
-			return r
-		}
-	}, strings.ToLower(strings.TrimSpace(value)))
 }
 
 // ============================================================================

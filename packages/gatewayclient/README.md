@@ -2,6 +2,8 @@
 
 `Invoke` 将对象按配置的 PB 或 JSON 编码后签名；`Forward` 对传入的 PB/JSON 字节签名并原样发送。调用权限、请求与响应大小、默认超时以及只读方法均取自 `servicecatalog`。
 
+调用方完成身份认证及空间授权后，可用 `WithCallMetadata` 传入可信的用户 ID、角色、空间 ID 和 trace ID，客户端将其作为固定的四个 tRPC 元数据字段发送。此接口不能修改网关签名身份，也不加工请求 JSON。Admin 控制台使用数据库中的 `console` 身份，目录来源直接读取 Admin 拓扑表，避免首次启动依赖尚未启动的本机网关。
+
 `Config.Mode` 支持三种方式：
 
 - `local`（`Internal`）：从本机 `127.0.0.1:11002` 取得目录，优先调用本机服务；跨主机连接目标的 TLS `11003`，只信任 `CAFile` 指定的 MooX 私有 CA，并使用主机 ID 校验证书名称。

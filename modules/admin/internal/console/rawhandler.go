@@ -22,8 +22,7 @@ var (
 )
 
 // RegisterRawHandler 注册某 service 的某 method 为裸 HTTP 处理器。
-// 与 RegisterDispatcher 互斥：同一 (serviceID, method) 若已注册裸处理器，
-// dispatchAndServe 不会再被触达（handleConsoleRequest 优先分派裸处理器）。
+// 控制台只允许三个固定 SSH 流式路由进入此分派器，并先消费对应操作的一次性 ticket。
 func RegisterRawHandler(serviceID, method string, h RawHandler) {
 	rawHandlersMutex.Lock()
 	defer rawHandlersMutex.Unlock()
@@ -31,7 +30,7 @@ func RegisterRawHandler(serviceID, method string, h RawHandler) {
 		rawHandlers[serviceID] = make(map[string]RawHandler)
 	}
 	rawHandlers[serviceID][method] = h
-	log.Infof("[gateway] 已注册 raw handler: service=%s method=%s", serviceID, method)
+	log.Infof("[console] 已注册 raw handler: service=%s method=%s", serviceID, method)
 }
 
 // LookupRawHandler 查找 (serviceID, method) 的裸处理器。
@@ -47,7 +46,7 @@ func LookupRawHandler(serviceID, method string) (RawHandler, bool) {
 }
 
 // rawAndServe 分派裸 HTTP 处理器。
-// 返回 true 表示已处理（命中裸处理器），false 表示未命中、调用方应继续走 forwardHTTP 纯转发。
+// 返回 true 表示已处理（命中裸处理器），false 表示未命中。
 // 注意：调用方应在读取请求体之前调用本函数，避免 multipart body 被网关读干。
 // 鉴权（JWT/HMAC）由调用方在调用本函数之前完成；space_id/trace_id 在此注入 ctx。
 func rawAndServe(ctx context.Context, w http.ResponseWriter, r *http.Request, serviceID, method string, headers map[string]string) bool {

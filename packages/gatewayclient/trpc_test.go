@@ -51,7 +51,7 @@ func testCertificates(t *testing.T) (string, string, string) {
 	return ca, cert, keyPath
 }
 
-func startWireServer(t *testing.T, listener net.Listener, credentials gatewayauth.Credentials, target string) {
+func startWireServer(t *testing.T, listener net.Listener, credentials gatewayauth.Credentials, target string, expected ...CallMetadata) {
 	t.Helper()
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithServiceName("trpc.moox.test.Gateway"))
 	var mu sync.Mutex
@@ -67,6 +67,13 @@ func startWireServer(t *testing.T, listener net.Listener, credentials gatewayaut
 			headers := http.Header{}
 			for key, value := range message.ServerMetaData() {
 				headers.Set(key, string(value))
+			}
+			if len(expected) > 0 {
+				want := expected[0]
+				got := CallMetadata{SpaceID: headers.Get("X-Space-Id"), UserID: headers.Get("X-User-Id"), UserRole: headers.Get("X-User-Role"), TraceID: headers.Get("X-Trace-Id")}
+				if want != got {
+					t.Errorf("wire metadata = %+v, want %+v", got, want)
+				}
 			}
 			body := input.(*codec.Body).Data
 			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: target, Callee: secretService, Func: "GetSecret", Body: body}, headers, time.Now())
@@ -86,6 +93,21 @@ func startWireServer(t *testing.T, listener net.Listener, credentials gatewayaut
 	require.NoError(t, svc.Register(desc, struct{}{}))
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
+}
+
+func TestRealTRPCForwardsTrustedMetadataWithoutChangingSignedBody(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	source := &sourceStub{directory: testDirectory(t, "storage")}
+	config := tunnelConfig(source)
+	config.Tunnels = tunnelFunc(func(context.Context, string) (string, error) { return listener.Addr().String(), nil })
+	metadata := CallMetadata{SpaceID: "space-1", UserID: "user-1", UserRole: "2", TraceID: "trace-1"}
+	startWireServer(t, listener, config.Credentials, "storage", metadata)
+	c := newTestClient(t, config)
+	body := []byte(" {\n\"data\": \"exact bytes\", \"number\": 1e+03 }\n")
+	response, err := c.Forward(WithCallMetadata(context.Background(), metadata), secretService, "GetSecret", codec.SerializationTypeJSON, body)
+	require.NoError(t, err)
+	require.Equal(t, body, response)
 }
 
 func TestRealTRPCObjectAndRawJSONRoundTrip(t *testing.T) {

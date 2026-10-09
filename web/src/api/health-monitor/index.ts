@@ -1,7 +1,7 @@
 import { callControl } from "@/api/admin/http";
 import type { HealthOverview, NotificationChannelResponse } from "./types";
 
-const SERVICE = "moox_monitor";
+const SERVICE = "monitor";
 
 export const healthMonitorApi = {
   getOverview(req: { space_id?: string } = {}) {

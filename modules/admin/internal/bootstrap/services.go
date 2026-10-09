@@ -14,6 +14,7 @@ import (
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -40,6 +41,14 @@ type Services struct {
 
 	// Collector 发布租约由 Admin 控制面持久化与校验。
 	CollectorPublishLease *publishlease.Service
+
+	consoleGateway *gatewayclient.Client
+}
+
+func (s *Services) closeConsoleGateway() {
+	if s.consoleGateway != nil {
+		_ = s.consoleGateway.Close()
+	}
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。

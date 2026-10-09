@@ -147,47 +147,47 @@ export interface DataTypeConfigDetail {
 }
 
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {
-  return callControl<GetTaskListRequest, GetTaskListResponse>("collectmgr", "GetTaskList", params);
+  return callControl<GetTaskListRequest, GetTaskListResponse>("collector", "GetTaskList", params);
 }
 
 export async function GetTaskDetail(params: GetTaskDetailRequest): Promise<GetTaskDetailResponse> {
-  return callControl<GetTaskDetailRequest, GetTaskDetailResponse>("collectmgr", "GetTaskDetail", params);
+  return callControl<GetTaskDetailRequest, GetTaskDetailResponse>("collector", "GetTaskDetail", params);
 }
 
 export async function CreateTask(params: CreateTaskRequest): Promise<CreateTaskResponse> {
-  return callControl<CreateTaskRequest, CreateTaskResponse>("collectmgr", "CreateTask", params);
+  return callControl<CreateTaskRequest, CreateTaskResponse>("collector", "CreateTask", params);
 }
 
 export async function UpdateTask(params: UpdateTaskRequest): Promise<UpdateTaskResponse> {
-  return callControl<UpdateTaskRequest, UpdateTaskResponse>("collectmgr", "UpdateTask", params);
+  return callControl<UpdateTaskRequest, UpdateTaskResponse>("collector", "UpdateTask", params);
 }
 
 export async function DisableTask(params: DisableTaskRequest): Promise<Record<string, unknown>> {
-  return callControl<DisableTaskRequest, Record<string, unknown>>("collectmgr", "DisableTask", params);
+  return callControl<DisableTaskRequest, Record<string, unknown>>("collector", "DisableTask", params);
 }
 
 export async function DeleteTask(params: DeleteTaskRequest): Promise<Record<string, unknown>> {
-  return callControl<DeleteTaskRequest, Record<string, unknown>>("collectmgr", "DeleteTask", params);
+  return callControl<DeleteTaskRequest, Record<string, unknown>>("collector", "DeleteTask", params);
 }
 
 export async function GetDataTypeConfigs(): Promise<{ configs?: DataTypeConfig[] }> {
-  return callControl<Record<string, never>, { configs?: DataTypeConfig[] }>("collectmgr", "GetDataTypeConfigs", {});
+  return callControl<Record<string, never>, { configs?: DataTypeConfig[] }>("collector", "GetDataTypeConfigs", {});
 }
 
 export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ detail?: DataTypeConfigDetail }> {
-  return callControl<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collectmgr", "GetDataTypeConfigWithFields", {
+  return callControl<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collector", "GetDataTypeConfigWithFields", {
     data_type: dataType
   });
 }
 
 export async function startKlineResampleBackfill(request: KlineResampleBackfillRequest) {
-  return callControl<KlineResampleBackfillRequest, Record<string, unknown>>("collectmgr", "StartKlineResampleBackfill", request);
+  return callControl<KlineResampleBackfillRequest, Record<string, unknown>>("collector", "StartKlineResampleBackfill", request);
 }
 
 export async function cancelKlineResampleBackfill(
   request: Pick<KlineResampleBackfillRequest, "space_id" | "task_id" | "request_id">
 ) {
-  return callControl<typeof request, Record<string, unknown>>("collectmgr", "CancelKlineResampleBackfill", request);
+  return callControl<typeof request, Record<string, unknown>>("collector", "CancelKlineResampleBackfill", request);
 }
 
 export async function getKlineResampleBackfillStatus(
@@ -211,7 +211,7 @@ export async function getKlineResampleBackfillStatus(
   };
   try {
     response = await callControl<{ space_id: string; task_id: string; request_id?: string }, typeof response>(
-      "collectmgr",
+      "collector",
       "GetKlineResampleBackfill",
       { space_id: spaceId, task_id: taskId, request_id: requestId }
     );

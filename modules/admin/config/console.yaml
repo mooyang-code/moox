@@ -26,17 +26,15 @@ console:
   # 是否开启调试模式
   debug: true
 
-  # 节点网关控制面使用独立 HMAC 凭据：
-  # MOOX_GATEWAY_CONTROL_KEY_ID（默认 moox-gateway-control）
-  # MOOX_GATEWAY_CONTROL_SECRET_KEY（必填）
-
   # 不需要鉴权的接口列表
   no_auth_methods:
     - "/api/admin/auth/GetLoginSalt"
     - "/api/admin/auth/Login"
-  # 网关不在本地 YAML 中维护服务地址。
-  # /api/admin/* 的转发目标来自 Admin 节点的 t_service_deployments。
-  # 缺失 active 部署记录时请求会直接失败，避免 console.yaml 与系统服务部署表出现双来源。
+  # /api/admin/{console_name}/{method} 从共享 servicecatalog 解析服务和 console ACL。
+  # Admin 自身服务进程内调用；其余服务由 gatewayclient 透传原始 JSON。
+  # 目录直接读取 Admin 的主机/部署表，启动不依赖本机网关。
+  # console 签名密钥读取已初始化的加密数据库，不在此配置密钥。
+  # 私有 CA 使用 MOOX_ADMIN_PKI_DIR/ca.crt；默认位于 Admin 主密钥同目录的 pki/。
 
 # CORS 跨域配置（生产环境请配置具体前端域名，避免使用 *）
 cors:
