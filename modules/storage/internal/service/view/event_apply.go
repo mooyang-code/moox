@@ -69,7 +69,16 @@ func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventM
 		return err
 	}
 	s.noteAppliedFromPayload(message.GetSpaceId(), payload)
-	return s.FlushViewDataReady(ctx, message.GetSpaceId(), "")
+	s.flushReadyAfterRows(ctx, message.GetSpaceId())
+	return nil
+}
+
+// flushReadyAfterRows 在行写入后顺带刷新就绪队列。行已经写入，就绪事件发布失败时留在落盘的队列里由后续刷新与
+// 后台重试补发，不能让行事件因此失败重投。
+func (s *Service) flushReadyAfterRows(ctx context.Context, spaceID string) {
+	if err := s.FlushViewDataReady(ctx, spaceID, ""); err != nil {
+		log.Printf("行写入后刷新 View 就绪队列失败（空间 %s），稍后重试：%v", spaceID, err)
+	}
 }
 
 // HandleDatasetRowsBatch merges contiguous rows events for one Dataset before
@@ -110,7 +119,8 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	for _, item := range items {
 		s.noteAppliedFromPayload(spaceID, item.Payload)
 	}
-	return s.FlushViewDataReady(ctx, spaceID, "")
+	s.flushReadyAfterRows(ctx, spaceID)
+	return nil
 }
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {

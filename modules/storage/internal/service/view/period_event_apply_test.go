@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -607,18 +608,19 @@ func TestViewDataReadyKeepsInFlightEventPersisted(t *testing.T) {
 	}
 }
 
-// 确认丢失时发布不能一直挂起：超时后返回错误，事件留在队列里，并重连发布器的专用连接。
+// 确认丢失时发布不能一直挂起：超时后返回错误，事件留在队列里，在刷新锁之外重连发布器的专用连接；
+// 退避期内的刷新直接跳过，不再每次都付出一次超时，退避结束后照常重试。
 func TestViewDataReadyPublishTimesOutAndReconnects(t *testing.T) {
-	previous := readyPublishTimeout
-	readyPublishTimeout = 50 * time.Millisecond
-	defer func() { readyPublishTimeout = previous }()
+	previousTimeout, previousBackoff := readyPublishTimeout, readyRetryBackoff
+	readyPublishTimeout, readyRetryBackoff = 50*time.Millisecond, 300*time.Millisecond
+	defer func() { readyPublishTimeout, readyRetryBackoff = previousTimeout, previousBackoff }()
 	publisher := &readyHangingPublisher{started: make(chan string, 4), release: make(chan struct{})}
 	service := newPeriodTestService(newPeriodMetadataFake(), publisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	reconnects := 0
+	var reconnects atomic.Int32
 	service.readyReconnect = func(context.Context) error {
-		reconnects++
+		reconnects.Add(1)
 		return nil
 	}
 	readyTestPeriod(t, service, "prices-ready-1", 0)
@@ -631,10 +633,48 @@ func TestViewDataReadyPublishTimesOutAndReconnects(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("发布超时后应尽快返回：%s", elapsed)
 	}
-	if reconnects != 1 {
-		t.Fatalf("发布超时后应重连一次：%d", reconnects)
-	}
-	if eventID := <-publisher.started; !service.pendingReadyContains(eventID) {
+	eventID := <-publisher.started
+	if !service.pendingReadyContains(eventID) {
 		t.Fatalf("超时的事件 %s 应留在队列中等待重试", eventID)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for reconnects.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if reconnects.Load() != 1 {
+		t.Fatalf("发布超时后应在后台重连一次：%d", reconnects.Load())
+	}
+	if err := service.FlushViewDataReady(context.Background(), "quant", "source-view"); err != nil {
+		t.Fatalf("退避期内的刷新应直接跳过：%v", err)
+	}
+	select {
+	case id := <-publisher.started:
+		t.Fatalf("退避期内不应再发布：%s", id)
+	default:
+	}
+	time.Sleep(readyRetryBackoff)
+	close(publisher.release)
+	if err := service.FlushViewDataReady(context.Background(), "quant", "source-view"); err != nil {
+		t.Fatalf("退避结束后应照常发布：%v", err)
+	}
+	if service.pendingReadyContains(eventID) {
+		t.Fatal("发布成功后应移出队列")
+	}
+}
+
+// 行已经写入：就绪事件发布失败只记日志，留在队列里稍后补发，行事件不能因此失败重投。
+func TestRowDeliveryIgnoresReadyPublishFailure(t *testing.T) {
+	previousTimeout := readyPublishTimeout
+	readyPublishTimeout = 20 * time.Millisecond
+	defer func() { readyPublishTimeout = previousTimeout }()
+	publisher := &readyHangingPublisher{started: make(chan string, 4), release: make(chan struct{})}
+	service := newPeriodTestService(newPeriodMetadataFake(), publisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	readyTestPeriod(t, service, "prices-ready-1", 0)
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)
+	service.flushReadyAfterRows(context.Background(), "quant")
+	if !service.hasPendingReady() {
+		t.Fatal("发布失败的就绪事件应留在队列里")
 	}
 }

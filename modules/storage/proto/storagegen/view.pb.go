@@ -313,7 +313,8 @@ type QueryTimeSeriesRowsRsp struct {
 	ServedActiveIndexRevision  uint64 `protobuf:"varint,8,opt,name=served_active_index_revision,json=servedActiveIndexRevision,proto3" json:"served_active_index_revision,omitempty"`
 	ServedActiveIndexId        string `protobuf:"bytes,9,opt,name=served_active_index_id,json=servedActiveIndexId,proto3" json:"served_active_index_id,omitempty"`
 	ServedInputContractVersion string `protobuf:"bytes,10,opt,name=served_input_contract_version,json=servedInputContractVersion,proto3" json:"served_input_contract_version,omitempty"`
-	// served_series_bars 是时序 View 每个 (标的, 周期, 序列标签) 至少保留的最近根数；0 表示未知。
+	// served_series_bars 是时序 View 每个 (标的, 周期, 序列标签) 至少保留的最近根数，取 Storage 当前配置；
+	// 调大配置后、View 重建之前它会偏大。0 表示未知。
 	// 覆盖范围（served_indexed_from/to）是整个索引的最早与最晚时间，可能来自已停更的序列，调用方用它与
 	// “最新一根往前 served_series_bars 根”中较晚者判断活跃序列可回溯的深度。
 	ServedSeriesBars uint64 `protobuf:"varint,11,opt,name=served_series_bars,json=servedSeriesBars,proto3" json:"served_series_bars,omitempty"`

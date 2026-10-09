@@ -74,8 +74,11 @@ type Service struct {
 	appliedFenceMu             sync.Mutex
 	appliedFence               map[appliedFenceKey]uint64
 
-	// readyReconnect 替换就绪事件发布器的专用连接；发布超时（确认丢失）后调用。
+	// readyReconnect 替换就绪事件发布器的专用连接；发布超时或连接被关闭后在刷新锁之外异步调用。
 	readyReconnect func(context.Context) error
+	// readyBackoffUntil 之前不再尝试发布就绪事件（上一次发布因连接问题失败）；readyReconnecting 保证同一时刻只有一个重连。
+	readyBackoffUntil time.Time
+	readyReconnecting atomic.Bool
 	// seriesBars 是时序 View 每个序列保留的根数，随查询响应告知调用方。
 	seriesBars uint64
 }

@@ -138,7 +138,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: indexedFrom, ServedIndexedTo: indexedTo, Complete: complete, ServedActiveIndexRevision: startRevision, ServedSeriesBars: s.servedSeriesBars()}, nil
 }
 
-// servedSeriesBars 返回时序 View 每个序列保留的根数；维护器尚未启动时为 0（未知）。
+// servedSeriesBars 返回时序 View 每个序列保留的根数（启动时由 SetSeriesBars 按配置设置）；未设置时为 0（未知）。
 func (s *Service) servedSeriesBars() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

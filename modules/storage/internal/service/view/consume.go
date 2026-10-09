@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	"github.com/mooyang-code/moox/packages/events"
@@ -70,7 +72,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	// 就绪事件用专用连接发布：发布超时（确认丢失）后只重连这条连接，不影响主连接上的其它用途。
 	readyClient, err := client.Fork(ctx, "storage-view-ready")
 	if err != nil {
-		return nil, fmt.Errorf("fork eventbus client for storage view ready publisher: %w", err)
+		return nil, fmt.Errorf("为 View 就绪事件发布器建立 EventBus 连接失败：%w", err)
 	}
 	publisher, err := events.NewPublisher(readyClient, registry)
 	if err != nil {
@@ -248,7 +250,30 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if opts.Metrics != nil && reader != nil {
 		opts.Metrics.SetConsumerBound(reader())
 	}
+	// 就绪事件主要随投递刷新；发布失败或进入退避后，没有新投递的 View 也要有人重试积压的事件。
+	retryCtx, stopRetry := context.WithCancel(ctx)
+	retryDone := make(chan struct{})
+	go func() {
+		defer close(retryDone)
+		ticker := time.NewTicker(readyRetryBackoff)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-retryCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			if !s.hasPendingReady() {
+				continue
+			}
+			if err := s.FlushViewDataReady(retryCtx, "", ""); err != nil && retryCtx.Err() == nil {
+				log.Printf("View 就绪队列后台重试失败：%v", err)
+			}
+		}
+	}()
 	stop := func() {
+		stopRetry()
+		<-retryDone
 		stopAll()
 		if opts.Metrics != nil {
 			opts.Metrics.SetConsumerBound(false)
