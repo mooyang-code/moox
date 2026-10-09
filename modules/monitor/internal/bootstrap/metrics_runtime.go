@@ -235,6 +235,9 @@ func metricsObservabilityRoute(
 				return fmt.Errorf("authorize metric producer: %w", err)
 			}
 			if !registered {
+				if runtime != nil {
+					runtime.Unregistered.Record(metricReport.GetServiceName(), metricReport.GetNodeId(), metricReport.GetInstanceId(), metricReport.GetServiceVersion(), message.GetOccurredAt().AsTime())
+				}
 				return observabilityconsumer.Permanent(fmt.Errorf("unregistered metric producer %s/%s", metricReport.GetServiceName(), metricReport.GetNodeId()))
 			}
 		}

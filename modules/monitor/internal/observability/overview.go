@@ -26,7 +26,11 @@ const (
 	maxOverviewMetricNames      = 2000
 )
 
-// ServiceStatus 是一个组件实例的状态：NodeID 是主机 ID，ServiceName 是组件 ID。
+// ReporterNeverReported 是已登记的部署从未上报运行指标时的上报状态。
+const ReporterNeverReported = "never_reported"
+
+// ServiceStatus 是一个组件实例的状态：NodeID 是主机 ID，ServiceName 是组件 ID。ReporterStatus 为 healthy、stale、
+// never_reported，只做健康探测的组件为空。
 type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
@@ -65,12 +69,15 @@ type Overview struct {
 	// GatewayHosts 是各主机的主机网关状态；GatewayHostsErr 不为空时表示 SysDeploy 暂时读不到，调用方应保留上一次的判断。
 	GatewayHosts    []GatewayHostStatus
 	GatewayHostsErr error
+	// Unregistered 是在上报运行指标、但没有登记部署的进程。
+	Unregistered []monmetrics.UnregisteredProducer
 }
 
 type Builder struct {
 	Metrics                    *monmetrics.QueryService
 	Hosts                      *hostmetrics.Store
 	GatewayHosts               HostGatewaySource
+	Unregistered               *monmetrics.UnregisteredProducers
 	Checks                     *store.CheckRepository
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
@@ -128,6 +135,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out.BusinessChecks = append(out.BusinessChecks, delivery...)
 	out.GatewayHosts, out.GatewayHostsErr = b.buildGatewayHosts(ctx, now)
+	out.Unregistered = b.Unregistered.List(now)
 	sortOverview(&out)
 	return out, nil
 }
@@ -246,8 +254,9 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 			key := serviceInstanceKey(nodeID, serviceName, "")
 			service := ServiceStatus{NodeID: nodeID, ServiceName: serviceName, Status: "unknown", Reason: "health not checked"}
 			if reporterServices[serviceName] {
-				service.ReporterStatus = "missing"
-				service.Reason = "reporter missing"
+				// 已登记的部署从未上报运行指标（或已超过 24 小时没有上报，上报目录已清理）。
+				service.ReporterStatus = ReporterNeverReported
+				service.Reason = "从未上报运行指标"
 			}
 			services[key] = service
 			matched = append(matched, key)

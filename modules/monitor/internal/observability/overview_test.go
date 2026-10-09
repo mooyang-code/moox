@@ -570,8 +570,8 @@ func TestBuilderIncludesPlacementServiceWithoutReporter(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got.Services) != 1 || got.Services[0].Status != "unknown" ||
-		got.Services[0].ReporterStatus != "missing" ||
-		!strings.Contains(got.Services[0].Reason, "reporter missing") {
+		got.Services[0].ReporterStatus != ReporterNeverReported ||
+		!strings.Contains(got.Services[0].Reason, "从未上报") {
 		t.Fatalf("services = %+v", got.Services)
 	}
 }

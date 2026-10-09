@@ -17,15 +17,17 @@ import (
 
 // Runtime owns monitor's process-scoped resources and shutdown ordering.
 type Runtime struct {
-	StartedAt                time.Time
-	cancel                   context.CancelFunc
-	workers                  sync.WaitGroup
-	closeOnce                sync.Once
-	closeErr                 error
-	Store                    *store.Store
-	Gateway                  *gatewayclient.Client
-	Repositories             *store.Repositories
-	MetricStores             *monmetrics.Stores
+	StartedAt    time.Time
+	cancel       context.CancelFunc
+	workers      sync.WaitGroup
+	closeOnce    sync.Once
+	closeErr     error
+	Store        *store.Store
+	Gateway      *gatewayclient.Client
+	Repositories *store.Repositories
+	MetricStores *monmetrics.Stores
+	// Unregistered 记录在上报运行指标、但没有登记部署的进程。
+	Unregistered             *monmetrics.UnregisteredProducers
 	HostRuleCache            *hostmetrics.RuleCache
 	Scheduler                *scheduler.Scheduler
 	ObservabilityIngestReady atomic.Bool
