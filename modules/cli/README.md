@@ -31,3 +31,5 @@ key_file: caller-moox-cli.key
 CloudNode 的节点、账号、代码包登记、发布、批次查询与函数调用均使用同一 SSH 网关入口。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。函数调用采用服务目录中的超时预算，命令取消后的发布清理可继续复用隧道，命令退出统一关闭连接。Admin 的租约与密钥方法继续随 D2c 迁移。
 
 Admin 的密钥、发布租约、Setup、部署诊断和浏览器测试空间管理复用命令持有的 SSH 网关客户端，不再转发 11107、11109 或 11110 的 HTTP 监听。`doctor bootstrap/diagnose --file <moox.toml>` 从同一操作员身份访问 SysDeploy；Monitor 调用在 D2e 迁移，Storage 管理入口在 D2f 迁移。发布和部署回滚在操作取消后仍可用独立清理上下文复用连接；命令结束时统一释放。
+
+Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的 SSH 原生网关客户端；本地 CLI 配置只保存 Doctor 选项，严格拒绝旧 RPC 目标、未知字段、重复键和额外 YAML 文档。

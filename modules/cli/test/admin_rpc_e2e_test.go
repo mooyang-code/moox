@@ -8,6 +8,8 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"net"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 )
 
 type adminRPCWire struct {
+	monitorpb.UnimplementedMonitorMgr
 	adminpb.UnimplementedSecretMgr
 	adminpb.UnimplementedCollectorPublishLease
 	adminpb.UnimplementedSetup
@@ -30,6 +33,7 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	require.NoError(t, err)
 	service := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTimeout(time.Minute))
 	adminpb.RegisterSecretMgrService(service, wire)
+	monitorpb.RegisterMonitorMgrService(service, wire)
 	adminpb.RegisterCollectorPublishLeaseService(service, wire)
 	adminpb.RegisterSetupService(service, wire)
 	adminpb.RegisterSysDeployService(service, wire)
@@ -38,7 +42,7 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	t.Cleanup(func() { _ = service.Close(nil) })
 	temp := t.TempDir()
 	ready := filepath.Join(temp, "ready")
-	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "admin-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready, "--nonce-dir", filepath.Join(temp, "nonces"), "--key-id", klineGatewayKeyID)
+	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "doctor-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready, "--nonce-dir", filepath.Join(temp, "nonces"), "--key-id", klineGatewayKeyID)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
 			t.Errorf("Admin gateway required kill: %s", process.logs.String())
@@ -74,7 +78,11 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	applied, err := setup.Apply(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
-	rows, err := doctorcli.New("ip://unused.invalid", gateway).ListDeployments(t.Context(), "control")
+	doctor := doctorcli.New(gateway)
+	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
+	require.NoError(t, err)
+	require.Equal(t, "fixture-doctor-checksum", doctorContext.GetManifestChecksum())
+	rows, err := doctor.ListDeployments(t.Context(), "control")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	var space adminpb.CreateSpaceRsp
@@ -118,4 +126,11 @@ func (w *adminRPCWire) ListServiceDeployments(_ context.Context, req *adminpb.Li
 
 func (w *adminRPCWire) CreateSpace(_ context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
 	return &adminpb.CreateSpaceRsp{RetInfo: &adminpb.RetInfo{}, Space: req.GetSpace()}, nil
+}
+
+func (*adminRPCWire) GetDoctorContext(_ context.Context, req *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
+	if req.GetNodeId() != "control" {
+		return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM}}, nil
+	}
+	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
 }

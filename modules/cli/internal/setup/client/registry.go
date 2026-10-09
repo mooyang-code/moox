@@ -172,9 +172,9 @@ func lookupServiceDeployment(name string) (string, serviceDeploymentCatalogEntry
 		"admin_gateway":   {canonical: "admin_gateway", kind: "gateway", protocol: "https", scope: "public", port: 9527, healthPort: 11010, public: true, description: "MooX 管理台入口"},
 		"web-host":        {canonical: "web_host", kind: "frontend", protocol: "https", scope: "public", port: 9527, healthPort: 19527, public: true, description: "MooX 管理台 Web 入口"},
 		"web_host":        {canonical: "web_host", kind: "frontend", protocol: "https", scope: "public", port: 9527, healthPort: 19527, public: true, description: "MooX 管理台 Web 入口"},
-		"eventbus":        {canonical: "eventbus", kind: "eventbus", protocol: "http", scope: "internal", port: 11420, healthPort: 11419, description: "MooX EventBus"},
-		"monitor":         {canonical: "moox_monitor", kind: "monitor", protocol: "http", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
-		"moox_monitor":    {canonical: "moox_monitor", kind: "monitor", protocol: "http", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
+		"eventbus":        {canonical: "eventbus", kind: "eventbus", protocol: "trpc", scope: "internal", port: 11420, healthPort: 11419, description: "MooX EventBus"},
+		"monitor":         {canonical: "moox_monitor", kind: "monitor", protocol: "trpc", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
+		"moox_monitor":    {canonical: "moox_monitor", kind: "monitor", protocol: "trpc", scope: "internal", port: 11410, healthPort: 11409, description: "MooX Monitor"},
 		"gateway":         {canonical: "moox_gateway", kind: "gateway", protocol: "http", scope: "internal", port: 11002, healthPort: 11012, description: "MooX node gateway"},
 		"moox_gateway":    {canonical: "moox_gateway", kind: "gateway", protocol: "http", scope: "internal", port: 11002, healthPort: 11012, description: "MooX node gateway"},
 		"collector":       {canonical: "moox_collector", kind: "collector", protocol: "trpc", scope: "internal", port: 11402, healthPort: 11412, description: "MooX Collector"},
@@ -187,8 +187,8 @@ func lookupServiceDeployment(name string) (string, serviceDeploymentCatalogEntry
 		"moox_strategy":   {canonical: "moox_strategy", kind: "strategy", protocol: "http", scope: "internal", port: 11433, healthPort: 11431, description: "MooX Strategy"},
 		"archive":         {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
 		"moox_archive":    {canonical: "moox_archive", kind: "archive", protocol: "http", scope: "internal", port: 11416, healthPort: 11416, description: "MooX Archive"},
-		"hostagent":       {canonical: "moox_hostagent", kind: "hostagent", protocol: "http", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
-		"moox_hostagent":  {canonical: "moox_hostagent", kind: "hostagent", protocol: "http", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
+		"hostagent":       {canonical: "moox_hostagent", kind: "hostagent", protocol: "trpc", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
+		"moox_hostagent":  {canonical: "moox_hostagent", kind: "hostagent", protocol: "trpc", scope: "internal", port: 11426, healthPort: 11425, description: "MooX HostAgent"},
 		// Trade health is loopback-only on dedicated execution nodes. Remote
 		// registrations are monitored through the deployment/SSH acceptance
 		// path rather than advertising an unreachable public /readyz URL.

@@ -93,6 +93,8 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 
 主计划 D2d 的 Trade 与全部相关调用已迁移：TradeConsole 11200 使用 loopback 原生 tRPC，空间标识来自原生元数据并拒绝冲突。Strategy 的四个账户授权方法复用进程级客户端，保留业务超时、身份检查与 fencing，删除专用 HTTP 目标、CA、环境覆盖及独立客户端。删除旧服务别名，部署登记与 CLI 探针同步。三进程真实 Directory、私有 TLS 网关和 Trade SQLite 链路覆盖授权、释放、会话、空间隔离、nonce 重放、下单拒绝及原生 JSON 探针；本机全模块 race、vet、原生链路 race 和质量门禁通过。六个静态程序、11 个测试包及三个原生链路测试制品均在本机关闭 CGO 编译，11 包与完整链路在 Linux 运行通过。Strategy 独立模块构建、851 模块图、格式、边界与 15 份 schema 检查通过。D2e～J、代理后续阶段、独立审查与正式切换继续推进。
 
+主计划 D2e 的三类管理服务与相关调用方已迁移：MonitorMgr、EventBusMgr、HostAgentMgr 使用 loopback 原生 tRPC，健康 HTTP 保留，部署登记同步。CLI Doctor 的 Monitor 与部署诊断共用 SSH 客户端，删除旧目标和未使用配置，严格拒绝非法 YAML；核对 EventBus/HostAgent 无其他直接管理调用方。真实原生 PB/JSON、SSH/Directory 链路、相关全模块 race/vet 和 CLI 独立构建通过。八个静态程序与 16 个测试包均在本机关闭 CGO 编译，16 包在 Linux 全量运行通过；851 模块图、边界、格式、架构文档及 15 份 schema 检查通过。D2f～J、代理后续阶段、独立审查与正式切换继续推进。
+
 
 ## 1. 目标与已确定的决策
 

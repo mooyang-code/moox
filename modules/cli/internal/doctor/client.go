@@ -8,31 +8,28 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type Client struct {
-	monitor monitorpb.MonitorMgrClientProxy
 	gateway gatewayclient.Invoker
 }
 
-func New(monitorTarget string, gateway gatewayclient.Invoker) *Client {
-	return &Client{
-		monitor: monitorpb.NewMonitorMgrClientProxy(client.WithTarget(monitorTarget), client.WithProtocol("http"), client.WithNetwork("tcp")),
-		gateway: gateway,
-	}
+// New borrows the command-owned gateway for both Monitor and SysDeploy.
+func New(gateway gatewayclient.Invoker) *Client {
+	return &Client{gateway: gateway}
 }
 
 func (c *Client) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
-	if c == nil || c.monitor == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("monitor client is unavailable")
 	}
-	rsp, err := c.monitor.GetDoctorContext(ctx, req)
+	rsp := &monitorpb.GetDoctorContextRsp{}
+	err := c.gateway.Invoke(ctx, "trpc.moox.monitor.MonitorMgr", "GetDoctorContext", req, rsp)
 	if err != nil {
 		return nil, err
 	}
-	if rsp == nil {
-		return nil, fmt.Errorf("Monitor GetDoctorContext returned an empty response")
+	if rsp.GetRetInfo() == nil {
+		return nil, fmt.Errorf("Monitor GetDoctorContext returned no status")
 	}
 	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		return nil, fmt.Errorf("Monitor GetDoctorContext failed: %s", rsp.GetRetInfo().GetMsg())

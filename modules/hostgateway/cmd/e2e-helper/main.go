@@ -39,7 +39,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "kline-native", "kline-native, cloudnode-native or collector-period-native")
+	mode := flag.String("mode", "kline-native", "kline-native, admin-native, doctor-native, cloudnode-native or collector-period-native")
 	deploymentYAML := flag.String("deployment-yaml", "", "test deployment YAML")
 	routeScope := flag.String("route-scope", "", "test route scope")
 	nodeID := flag.String("node-id", "", "test host ID")
@@ -54,6 +54,8 @@ func main() {
 	switch *mode {
 	case "kline-native":
 		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+	case "doctor-native":
+		err = runComponentsNative([]string{"admin", "monitor"}, *nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "admin-native":
 		err = runAdminNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "cloudnode-native":
@@ -414,13 +416,17 @@ func writeReadyFile(path, value string) error {
 }
 
 func runAdminNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	return runComponentsNative([]string{"admin"}, nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret)
+}
+
+func runComponentsNative(components []string, nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
 	}
 	var routes []gatewayroute.Route
 	for _, component := range catalog.Components {
-		if component.ID != "admin" {
+		if !slices.Contains(components, component.ID) {
 			continue
 		}
 		for _, spec := range component.Services {
@@ -431,7 +437,7 @@ func runAdminNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDire
 				}
 			}
 			if len(methods) > 0 {
-				routes = append(routes, gatewayroute.Route{ServiceID: "admin", Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{"moox-cli"}})
+				routes = append(routes, gatewayroute.Route{ServiceID: component.ID, Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{"moox-cli"}})
 			}
 		}
 	}

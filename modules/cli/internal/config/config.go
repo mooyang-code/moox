@@ -1,31 +1,21 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
-// MooxConfig moox服务配置
-type MooxConfig struct {
-	AuthTarget string `yaml:"auth_target"` // 认证服务地址
-}
-
-// Config CLI 配置。
+// Config stores local Doctor options. RPC routing comes from the shared gateway.
 type Config struct {
-	Storage struct {
-		Target string `yaml:"target"`
-	} `yaml:"storage"`
-
-	MooX *MooxConfig `yaml:"moox"` // moox服务配置
-
 	Doctor DoctorConfig `yaml:"doctor"`
 }
 
 type DoctorConfig struct {
-	MonitorTarget           string `yaml:"monitor_target"`
 	NodeID                  string `yaml:"node_id"`
 	ReleaseRoot             string `yaml:"release_root"`
 	SeedPath                string `yaml:"seed_path"`
@@ -34,8 +24,7 @@ type DoctorConfig struct {
 
 func (c *Config) EffectiveDoctor() DoctorConfig {
 	value := DoctorConfig{
-		MonitorTarget: "ip://127.0.0.1:11410",
-		ReleaseRoot:   ".", SeedPath: "config/setup/service-deployments.yaml",
+		ReleaseRoot: ".", SeedPath: "config/setup/service-deployments.yaml",
 		DatasetHealthPolicyPath: "config/setup/dataset-health-policy.yaml",
 	}
 	if c != nil {
@@ -49,9 +38,6 @@ func (c *Config) EffectiveDoctor() DoctorConfig {
 }
 
 func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
-	if source.MonitorTarget != "" {
-		target.MonitorTarget = source.MonitorTarget
-	}
 	if source.NodeID != "" {
 		target.NodeID = source.NodeID
 	}
@@ -68,8 +54,7 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 
 func overrideDoctorFromEnv(value *DoctorConfig) {
 	for name, target := range map[string]*string{
-		"MOOX_DOCTOR_MONITOR_TARGET": &value.MonitorTarget,
-		"MOOX_NODE_ID":               &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
+		"MOOX_NODE_ID": &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
 		"MOOX_SERVICE_DEPLOYMENTS_SEED": &value.SeedPath,
 		"MOOX_DATASET_HEALTH_POLICY":    &value.DatasetHealthPolicyPath,
 	} {
@@ -116,10 +101,14 @@ func LoadConfig() (*Config, error) {
 			continue // 尝试下一个路径
 		}
 
-		// 解析YAML到Config结构
-		if err := yaml.Unmarshal(yamlFile, &config); err != nil {
-			lastErr = fmt.Errorf("解析YAML失败 (%s): %v", configPath, err)
-			continue
+		decoder := yaml.NewDecoder(bytes.NewReader(yamlFile))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&config); err != nil {
+			return nil, fmt.Errorf("解析YAML失败 (%s): %w", configPath, err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return nil, fmt.Errorf("CLI 配置必须且只能包含一个 YAML 文档 (%s)", configPath)
 		}
 
 		// 成功加载配置
@@ -128,5 +117,5 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// 所有路径都失败了
-	return nil, fmt.Errorf("\033[91m⚠️  警告：加载配置失败: 无法找到配置文件，尝试的路径: %v，最后的错误: %v\033[0m", getConfigPaths(), lastErr)
+	return nil, fmt.Errorf("\033[91m⚠️  警告：加载配置失败: 无法找到配置文件，尝试的路径: %v，最后的错误: %w\033[0m", getConfigPaths(), lastErr)
 }

@@ -30,7 +30,7 @@ func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
-	newClient         func(string, gatewayclient.Invoker) *doctorcli.Client
+	newClient         func(gatewayclient.Invoker) *doctorcli.Client
 	newMetadataClient func(string, string) doctorcli.StorageActivationClient
 }
 
@@ -76,6 +76,9 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := deps.loadConfig()
 			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
 				cfg = &config.Config{}
 			}
 			doctorCfg := cfg.EffectiveDoctor()
@@ -87,7 +90,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 				return err
 			}
 			defer gateway.Close()
-			client := deps.newClient(doctorCfg.MonitorTarget, gateway)
+			client := deps.newClient(gateway)
 			metadataClientFactory := deps.newMetadataClient
 			if metadataClientFactory == nil {
 				metadataClientFactory = newSignedStorageMetadataClient

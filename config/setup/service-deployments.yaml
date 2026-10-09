@@ -154,7 +154,7 @@ services:
   - name: eventbus
     kind: eventbus
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11420
     gateway_path: trpc.moox.eventbus.EventBusMgr
@@ -185,7 +185,7 @@ services:
   - name: moox_monitor
     kind: monitor
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11410
     gateway_path: trpc.moox.monitor.MonitorMgr
@@ -330,7 +330,7 @@ services:
   - name: moox_hostagent
     kind: hostagent
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11426
     gateway_path: trpc.moox.hostagent.HostAgentMgr

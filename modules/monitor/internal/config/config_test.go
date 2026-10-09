@@ -65,8 +65,10 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	var cfg struct {
 		Server struct {
 			Service []struct {
-				Name string `yaml:"name"`
-				Port int    `yaml:"port"`
+				Name     string `yaml:"name"`
+				Protocol string `yaml:"protocol"`
+				IP       string `yaml:"ip"`
+				Port     int    `yaml:"port"`
 			} `yaml:"service"`
 		} `yaml:"server"`
 	}
@@ -76,7 +78,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if len(cfg.Server.Service) != 7 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
-	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
+	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 || cfg.Server.Service[0].Protocol != "trpc" || cfg.Server.Service[0].IP != "127.0.0.1" {
 		t.Fatalf("service = %+v", cfg.Server.Service[0])
 	}
 	if cfg.Server.Service[1].Name != "trpc.moox.monitor.Health" || cfg.Server.Service[1].Port != 11409 {
