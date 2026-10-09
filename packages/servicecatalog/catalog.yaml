@@ -1,0 +1,1676 @@
+# 组件、公开 RPC、ACL 与 Doctor 的共同事实源；不包含地址或凭据。
+version: 1
+components:
+  - id: host-gateway
+    name: 主机网关
+    binary: moox-host-gateway
+    scope: host
+    replicas: single
+    protected: true
+    ports:
+      - 11002
+      - 11003
+    health:
+      kind: readyz
+      port: 11012
+      ready_body: '"ready":true'
+    doctor:
+      role: host-gateway
+      description: 按主机提供签名校验与本机 tRPC 转发
+      duties:
+        - 同步路由、服务目录与校验密钥
+        - 校验签名和 ACL 并仅转发本机服务
+      inputs:
+        - 签名 tRPC 请求
+        - GatewayControl 快照
+      outputs:
+        - 本机服务响应
+        - 服务目录与同步状态
+      dependencies: []
+      transport: reporter
+      functional_observability: not_applicable
+      config_paths:
+        - host-gateway/config/app.yaml
+        - host-gateway/config/trpc_go.yaml
+      writable_paths:
+        - data/host-gateway
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: host-agent
+    name: 主机采集器
+    binary: moox-host-agent
+    scope: host
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11425
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.hostagent.HostAgentMgr
+        port: 11426
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - GetStatus
+          - GetSnapshot
+          - RunOnce
+        read_only_methods:
+          - GetStatus
+          - GetSnapshot
+        acl:
+          - methods:
+              - GetStatus
+              - GetSnapshot
+              - RunOnce
+            callers:
+              - monitor
+              - moox-cli
+    doctor:
+      role: host-agent
+      description: Host resource snapshot agent
+      duties:
+        - collect bounded host resource snapshots
+      inputs:
+        - host operating system facts
+      outputs:
+        - host snapshots
+      dependencies:
+        - eventbus
+      transport: host_snapshot
+      functional_observability: not_applicable
+      config_paths:
+        - host-agent/config/trpc_go.yaml
+      writable_paths:
+        - data/hostagent
+      recovery_action_ids:
+        - free_disk_space
+        - restart_service_manually
+      required_in_default_profile: false
+  - id: console-proxy
+    name: 控制台代理
+    binary: moox-console-proxy
+    scope: control
+    replicas: single
+    protected: true
+    ports:
+      - 9527
+    health:
+      kind: readyz
+      port: 19528
+      loopback: true
+      ready_body: '"ready":true'
+    doctor:
+      role: console-proxy
+      description: 内嵌 Caddy 的控制台 HTTPS 代理
+      duties:
+        - 终止浏览器 TLS 并转发控制台与静态资源请求
+        - 保留 CA 与续期状态并排空完整流式请求
+      inputs:
+        - HTTPS 浏览器请求
+        - Caddy 证书与 ACME 状态
+      outputs:
+        - Admin 与 web-host 响应
+        - 内部鉴权诊断
+      dependencies:
+        - admin
+        - web-host
+      transport: health_only
+      functional_observability: not_applicable
+      config_paths:
+        - console-proxy/config/app.yaml
+      writable_paths:
+        - data/caddy
+        - certs/caddy
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: web-host
+    name: 控制台前端
+    binary: moox-web-host
+    scope: control
+    replicas: single
+    protected: true
+    ports:
+      - 9528
+    health:
+      kind: readyz
+      port: 19527
+      loopback: true
+      ready_body: '"ready":true'
+    doctor:
+      role: web-host
+      description: Embedded MooX administration web host
+      duties:
+        - serve static administration assets
+      inputs:
+        - HTTP requests
+      outputs:
+        - web assets
+      dependencies: []
+      transport: health_only
+      functional_observability: not_applicable
+      config_paths: []
+      writable_paths:
+        - data/web-host
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: admin
+    name: 管理后台
+    binary: moox-admin
+    scope: control
+    replicas: single
+    protected: true
+    ports:
+      - 11000
+    health:
+      kind: readyz
+      port: 11010
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.infra.Auth
+        port: 11100
+        console_name: auth
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - GetLoginSalt
+          - Login
+          - Logout
+          - IssueRawSessionTicket
+          - GetUserInfo
+          - UpdateUserInfo
+        read_only_methods:
+          - GetLoginSalt
+          - GetUserInfo
+        acl:
+          - methods:
+              - GetLoginSalt
+              - Login
+              - Logout
+              - IssueRawSessionTicket
+              - GetUserInfo
+              - UpdateUserInfo
+            callers:
+              - console
+      - path: trpc.moox.ops.Ssh
+        port: 11106
+        console_name: ssh
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - ListHosts
+          - CreateHost
+          - UpdateHost
+          - DeleteHost
+          - GetHost
+          - CreateSession
+          - DisconnectSession
+          - ResizeWindow
+          - SftpList
+          - SftpMkdir
+          - SftpDelete
+        read_only_methods:
+          - ListHosts
+          - GetHost
+        acl:
+          - methods:
+              - ListHosts
+              - CreateHost
+              - UpdateHost
+              - DeleteHost
+              - GetHost
+              - CreateSession
+              - DisconnectSession
+              - ResizeWindow
+              - SftpList
+              - SftpMkdir
+              - SftpDelete
+            callers:
+              - console
+              - moox-cli
+      - path: trpc.moox.admin.SpaceMgr
+        port: 11107
+        console_name: space
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - CreateSpace
+          - UpdateSpace
+          - DeleteSpace
+          - ListSpaces
+          - ListSpaceMembers
+        read_only_methods:
+          - ListSpaces
+          - ListSpaceMembers
+        acl:
+          - methods:
+              - CreateSpace
+              - UpdateSpace
+              - DeleteSpace
+              - ListSpaces
+              - ListSpaceMembers
+            callers:
+              - console
+              - moox-cli
+      - path: trpc.moox.ops.SecretMgr
+        port: 11108
+        console_name: secret
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - ListSecrets
+          - GetSecret
+          - GetSecretValue
+          - CreateSecret
+          - UpdateSecret
+          - DeleteSecret
+          - ToggleSecretStatus
+        read_only_methods:
+          - ListSecrets
+          - GetSecret
+          - GetSecretValue
+        acl:
+          - methods:
+              - ListSecrets
+              - GetSecret
+              - CreateSecret
+              - UpdateSecret
+              - DeleteSecret
+              - ToggleSecretStatus
+            callers:
+              - console
+              - moox-cli
+          - methods:
+              - ListSecrets
+              - GetSecretValue
+            callers:
+              - cloudnode
+              - trade
+              - moox-cli
+      - path: trpc.moox.ops.SysDeploy
+        port: 11109
+        console_name: sysdeploy
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - GetCatalog
+          - ListHosts
+          - ListPlacements
+          - GetHostRoutes
+          - GetDirectory
+          - SetHostStatus
+          - SetPlacementStatus
+          - SyncHostPlacements
+          - DeleteHost
+        read_only_methods:
+          - GetCatalog
+          - ListHosts
+          - ListPlacements
+          - GetHostRoutes
+          - GetDirectory
+        acl:
+          - methods:
+              - GetCatalog
+              - ListHosts
+              - ListPlacements
+              - GetHostRoutes
+              - GetDirectory
+              - SetHostStatus
+              - SetPlacementStatus
+            callers:
+              - console
+              - moox-cli
+          - methods:
+              - SyncHostPlacements
+              - DeleteHost
+            callers:
+              - moox-cli
+      - path: trpc.moox.admin.Setup
+        port: 11110
+        console_name: setup
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - ApplySetup
+          - GetSetupStatus
+        read_only_methods:
+          - GetSetupStatus
+        acl:
+          - methods:
+              - ApplySetup
+              - GetSetupStatus
+            callers:
+              - console
+              - moox-cli
+      - path: trpc.moox.admin.CollectorPublishLease
+        port: 11111
+        console_name: publishlease
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - AcquireCollectorPublishLease
+          - RenewCollectorPublishLease
+          - ReleaseCollectorPublishLease
+          - ValidateCollectorPublishLease
+          - BeginCollectorPublishOperation
+          - RenewCollectorPublishOperation
+          - EndCollectorPublishOperation
+        acl:
+          - methods:
+              - AcquireCollectorPublishLease
+              - RenewCollectorPublishLease
+              - ReleaseCollectorPublishLease
+            callers:
+              - console
+              - moox-cli
+              - collector
+              - cloudnode
+          - methods:
+              - ValidateCollectorPublishLease
+              - BeginCollectorPublishOperation
+              - RenewCollectorPublishOperation
+              - EndCollectorPublishOperation
+            callers:
+              - admin
+              - cloudnode
+      - path: trpc.moox.admin.GatewayControl
+        port: 11112
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - PullSnapshot
+          - ReportStatus
+        acl:
+          - methods:
+              - PullSnapshot
+              - ReportStatus
+            callers:
+              - host-gateway@*
+    doctor:
+      role: admin
+      description: 认证、空间、密钥、部署与网关控制面
+      duties:
+        - 提供浏览器控制台与 Admin RPC
+        - 管理主机、部署、调用方密钥与路由快照
+      inputs:
+        - 用户会话与控制台请求
+        - CLI 部署登记与网关心跳
+      outputs:
+        - 管理数据
+        - 按主机编译的路由、目录与校验密钥
+      dependencies:
+        - eventbus
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - admin/config/app.yaml
+        - admin/config/trpc_go.yaml
+      writable_paths:
+        - data/admin
+        - secrets/pki
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: eventbus
+    name: 消息总线
+    binary: moox-eventbus
+    scope: any
+    replicas: single
+    protected: false
+    ports:
+      - 4222
+    health:
+      kind: readyz
+      port: 11419
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.eventbus.EventBusMgr
+        port: 11420
+        console_name: eventbus
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - GetOverview
+          - ListEvents
+          - ListStreams
+          - ListConsumers
+          - GetConsumer
+        read_only_methods:
+          - GetOverview
+          - ListEvents
+          - ListStreams
+          - ListConsumers
+          - GetConsumer
+        acl:
+          - methods:
+              - GetOverview
+              - ListEvents
+              - ListStreams
+              - ListConsumers
+              - GetConsumer
+            callers:
+              - console
+              - moox-cli
+    doctor:
+      role: eventbus
+      description: NATS JetStream event transport
+      duties:
+        - transport metrics and business events
+      inputs:
+        - published events
+      outputs:
+        - durable subscriptions
+      dependencies: []
+      transport: reporter
+      functional_observability: not_applicable
+      config_paths:
+        - eventbus/config/app.yaml
+        - eventbus/config/trpc_go.yaml
+      writable_paths:
+        - data/eventbus
+      recovery_action_ids:
+        - verify_eventbus_credentials
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: monitor
+    name: 监控服务
+    binary: moox-monitor
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11409
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.monitor.MonitorMgr
+        port: 11410
+        console_name: monitor
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - GetHealthOverview
+          - GetNotificationChannel
+          - UpdateNotificationChannel
+          - ListHostAgents
+          - QueryHostMetricHistory
+          - GetDoctorContext
+        read_only_methods:
+          - GetHealthOverview
+          - GetNotificationChannel
+          - ListHostAgents
+          - QueryHostMetricHistory
+          - GetDoctorContext
+        acl:
+          - methods:
+              - GetHealthOverview
+              - GetNotificationChannel
+              - UpdateNotificationChannel
+              - ListHostAgents
+              - QueryHostMetricHistory
+              - GetDoctorContext
+            callers:
+              - console
+              - moox-cli
+    doctor:
+      role: monitor
+      description: Single-instance monitoring fact store and alert evaluator
+      duties:
+        - ingest monitoring facts
+        - evaluate alerts
+        - serve bounded context
+      inputs:
+        - metrics and host snapshots
+      outputs:
+        - monitoring observations
+      dependencies:
+        - eventbus
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - monitor/config/app.yaml
+        - monitor/config/trpc_go.yaml
+      writable_paths:
+        - data/monitor
+      recovery_action_ids:
+        - verify_eventbus_credentials
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: collector
+    name: 行情采集服务
+    binary: moox-collector
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11412
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.collector.CollectMgr
+        port: 11402
+        console_name: collector
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - GetTaskList
+          - GetTaskDetail
+          - GetTaskResultInventory
+          - CreateTask
+          - UpdateTask
+          - DisableTask
+          - DeleteTask
+          - GetTaskInstanceList
+          - GetDataTypeConfigs
+          - GetDataTypeConfigWithFields
+          - StartKlineResampleBackfill
+          - CancelKlineResampleBackfill
+          - GetKlineResampleBackfill
+        read_only_methods:
+          - GetTaskList
+          - GetTaskDetail
+          - GetTaskResultInventory
+          - GetTaskInstanceList
+          - GetDataTypeConfigs
+          - GetDataTypeConfigWithFields
+          - GetKlineResampleBackfill
+        acl:
+          - methods:
+              - GetTaskList
+              - GetTaskDetail
+              - GetTaskResultInventory
+              - CreateTask
+              - UpdateTask
+              - DisableTask
+              - DeleteTask
+              - GetTaskInstanceList
+              - GetDataTypeConfigs
+              - GetDataTypeConfigWithFields
+              - StartKlineResampleBackfill
+              - CancelKlineResampleBackfill
+              - GetKlineResampleBackfill
+            callers:
+              - console
+              - moox-cli
+      - path: trpc.moox.collector.MarketFetchRuntime
+        port: 11422
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - ClaimTimerBatch
+        acl: []
+    doctor:
+      role: collector
+      description: Market data collection planner and executor
+      duties:
+        - plan and execute collection tasks
+        - 同步标的标签与属性
+      inputs:
+        - collector rules and market windows
+      outputs:
+        - committed collection tasks
+      dependencies:
+        - eventbus
+        - storage-primary
+        - cloudnode
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - collector/config/app.yaml
+        - collector/config/trpc_go.yaml
+      writable_paths:
+        - data/collector
+      recovery_action_ids:
+        - inspect_health_check_input
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: cloudnode
+    name: 云节点服务
+    binary: moox-cloudnode
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11411
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.cloudnode.CloudNodeMgr
+        port: 11401
+        console_name: cloudnode
+        timeout_ms: 960000
+        max_body_bytes: 33554432
+        methods:
+          - GetNodeList
+          - UpdateNode
+          - InvokeFunction
+          - SubmitCreateNodes
+          - SubmitDeployNodes
+          - SubmitDeleteNodes
+          - GetNodeBatchChange
+          - BatchDeleteNodes
+          - SubmitUpdateNodeRuntimeConfigs
+          - ListCloudAccounts
+          - CreateCloudAccount
+          - UpdateCloudAccount
+          - DeleteCloudAccount
+          - ListCloudRegions
+          - PreviewSCFFunctions
+          - ImportSCFFunctions
+          - GetPackageList
+          - GetPackageDetail
+          - DeletePackage
+          - GetPackageDownloadURL
+          - InitPackageUpload
+          - CompletePackageUpload
+          - CollectGarbage
+        read_only_methods:
+          - GetNodeList
+          - GetNodeBatchChange
+          - ListCloudAccounts
+          - ListCloudRegions
+          - PreviewSCFFunctions
+          - GetPackageList
+          - GetPackageDetail
+          - GetPackageDownloadURL
+        acl:
+          - methods:
+              - GetNodeList
+              - UpdateNode
+              - InvokeFunction
+              - SubmitCreateNodes
+              - SubmitDeployNodes
+              - SubmitDeleteNodes
+              - GetNodeBatchChange
+              - BatchDeleteNodes
+              - SubmitUpdateNodeRuntimeConfigs
+              - ListCloudAccounts
+              - CreateCloudAccount
+              - UpdateCloudAccount
+              - DeleteCloudAccount
+              - ListCloudRegions
+              - PreviewSCFFunctions
+              - ImportSCFFunctions
+              - GetPackageList
+              - GetPackageDetail
+              - DeletePackage
+              - GetPackageDownloadURL
+              - InitPackageUpload
+              - CompletePackageUpload
+            callers:
+              - console
+              - moox-cli
+          - methods:
+              - GetNodeList
+              - InvokeFunction
+              - GetNodeBatchChange
+              - SubmitUpdateNodeRuntimeConfigs
+            callers:
+              - collector
+          - methods:
+              - CollectGarbage
+            callers:
+              - admin
+    doctor:
+      role: cloudnode
+      description: Cloud job dispatch and execution coordinator
+      duties:
+        - dispatch and track cloud jobs
+      inputs:
+        - job items
+      outputs:
+        - job results
+      dependencies:
+        - eventbus
+        - admin
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - cloudnode/config/app.yaml
+        - cloudnode/config/trpc_go.yaml
+      writable_paths:
+        - data/cloudnode
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: factor-mgr
+    name: 因子管理服务
+    binary: moox-factor-mgr
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11414
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.factor.FactorMgr
+        port: 11403
+        console_name: factor-mgr
+        timeout_ms: 120000
+        max_body_bytes: 4194304
+        methods:
+          - CreateFactorSet
+          - UpdateFactorSet
+          - SetFactorSetStatus
+          - DeleteFactorSet
+          - GetFactorSet
+          - ListFactorSets
+          - CreateFactor
+          - UpdateFactor
+          - DeleteFactor
+          - GetFactor
+          - AddFactorToSet
+          - RemoveFactorFromSet
+          - SetFactorMemberStatus
+          - ListFactors
+          - RecalcFactors
+          - ListRecalcJobs
+          - GetRecalcJob
+          - CancelRecalcJob
+          - GetStatus
+        read_only_methods:
+          - GetFactorSet
+          - ListFactorSets
+          - GetFactor
+          - ListFactors
+          - ListRecalcJobs
+          - GetRecalcJob
+          - GetStatus
+        acl:
+          - methods:
+              - CreateFactorSet
+              - UpdateFactorSet
+              - SetFactorSetStatus
+              - DeleteFactorSet
+              - GetFactorSet
+              - ListFactorSets
+              - CreateFactor
+              - UpdateFactor
+              - DeleteFactor
+              - GetFactor
+              - AddFactorToSet
+              - RemoveFactorFromSet
+              - SetFactorMemberStatus
+              - ListFactors
+              - RecalcFactors
+              - ListRecalcJobs
+              - GetRecalcJob
+              - CancelRecalcJob
+              - GetStatus
+            callers:
+              - console
+              - moox-cli
+          - methods:
+              - GetFactorSet
+              - ListFactorSets
+              - GetFactor
+              - ListFactors
+              - ListRecalcJobs
+              - GetStatus
+            callers:
+              - strategy
+      - path: trpc.moox.factor.FactorEngine
+        port: 11405
+        timeout_ms: 120000
+        max_body_bytes: 4194304
+        methods:
+          - SyncEngineCatalog
+          - EngineHeartbeat
+          - PullRecalcJob
+          - ReportRecalcProgress
+        acl: []
+    doctor:
+      role: factor-mgr
+      description: Factor catalog manager serving definitions, sets and recalc jobs to the compute engine
+      duties:
+        - manage factor definitions
+        - sets and recalc jobs
+      inputs:
+        - factor inputs
+      outputs:
+        - factor results
+      dependencies:
+        - storage-primary
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - factor-mgr/config/app.yaml
+        - factor-mgr/config/trpc_go.yaml
+      writable_paths:
+        - data/factor-mgr
+      recovery_action_ids:
+        - replay_factor_window_manually
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: strategy
+    name: 策略服务
+    binary: moox-strategy
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11431
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.strategy.StrategyMgr
+        port: 11430
+        console_name: strategy
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - CreateStrategy
+          - UpdateStrategy
+          - GetStrategy
+          - ListStrategies
+          - ListStrategyResults
+          - GetStrategyResult
+          - ListStrategyTargets
+          - CreateStrategyInstance
+          - GetStrategyInstance
+          - ListStrategyInstances
+          - SetStrategyInstanceEnabled
+        read_only_methods:
+          - GetStrategy
+          - ListStrategies
+          - ListStrategyResults
+          - GetStrategyResult
+          - ListStrategyTargets
+          - GetStrategyInstance
+          - ListStrategyInstances
+        acl:
+          - methods:
+              - CreateStrategy
+              - UpdateStrategy
+              - GetStrategy
+              - ListStrategies
+              - ListStrategyResults
+              - GetStrategyResult
+              - ListStrategyTargets
+              - CreateStrategyInstance
+              - GetStrategyInstance
+              - ListStrategyInstances
+              - SetStrategyInstanceEnabled
+            callers:
+              - console
+              - moox-cli
+    doctor:
+      role: strategy
+      description: Strategy evaluation and target generation service
+      duties:
+        - evaluate strategies and persist targets
+      inputs:
+        - factor and view inputs
+      outputs:
+        - strategy evaluations
+      dependencies:
+        - factor-mgr
+        - storage-view
+        - eventbus
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - strategy/config/app.yaml
+        - strategy/config/trpc_go.yaml
+      writable_paths:
+        - data/strategy
+      recovery_action_ids:
+        - inspect_health_check_input
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: archive
+    name: 归档服务
+    binary: moox-archive
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11416
+      ready_body: '"ready":true'
+    doctor:
+      role: archive
+      description: Journal archive and materialization service
+      duties:
+        - archive journals and complete materialization
+      inputs:
+        - accepted journals
+      outputs:
+        - archive completions
+      dependencies:
+        - eventbus
+        - storage-primary
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - archive/config/app.yaml
+        - archive/config/trpc_go.yaml
+      writable_paths:
+        - data/archive
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: storage-primary
+    name: 存储主服务
+    binary: moox-storage-primary
+    scope: any
+    replicas: single
+    protected: false
+    ports:
+      - 20101
+      - 20106
+    health:
+      kind: readyz
+      port: 20210
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.storage.Metadata
+        port: 20100
+        console_name: storage
+        timeout_ms: 5000
+        max_body_bytes: 33554432
+        methods:
+          - CreateSpace
+          - UpdateSpace
+          - DeleteSpace
+          - GetSpace
+          - ListSpaces
+          - CreateView
+          - UpdateView
+          - DeleteView
+          - RequestViewRebuild
+          - GetView
+          - ListViews
+          - UpsertViewColumn
+          - ListViewColumns
+          - ClaimViewIndexBuild
+          - UpdateViewIndexBuild
+          - ActivateViewIndex
+          - CommitViewSchemaExtension
+          - FailViewIndexBuild
+          - ListViewRebuildLogs
+          - CreateViewRebuildLog
+          - UpdateViewRebuildLog
+          - UpsertSkippedViewRebuildLog
+          - UpsertViewPeriodDatasetState
+          - ListViewPeriodDatasetStates
+          - RecordViewSyncPoint
+          - CreateDataSource
+          - UpdateDataSource
+          - DeleteDataSource
+          - GetDataSource
+          - ListDataSources
+          - UpsertSubject
+          - GetSubject
+          - ListSubjects
+          - UpsertTag
+          - GetTag
+          - ListTags
+          - DeleteTag
+          - ListTagMembers
+          - AddTagMembers
+          - RemoveTagMembers
+          - SetTagMemberStatus
+          - ApplyTagSnapshot
+          - ReportTagRunFailure
+          - UpdateSubjectAttributes
+          - ResolveSubjects
+          - CreateDataset
+          - UpdateDataset
+          - DeleteDataset
+          - GetDataset
+          - ListDatasets
+          - RebindDatasetDataNode
+          - CheckDatasetActivation
+          - ActivateDataset
+          - ListDatasetSubjects
+          - CreateFieldGroup
+          - UpdateFieldGroup
+          - GetFieldGroup
+          - ListFieldGroups
+          - CreateField
+          - UpdateField
+          - GetField
+          - ListFields
+          - BatchUpdateFields
+          - DeleteFieldGroup
+          - UpsertDatasetColumn
+          - ListDatasetColumns
+          - RegisterDataNode
+          - UpdateDataNode
+          - GetDataNode
+          - ListDataNodes
+          - DeleteDataNode
+          - CreateDevice
+          - UpdateDevice
+          - GetDevice
+          - ListDevices
+          - RegisterArchiveFile
+          - ListArchiveFiles
+        read_only_methods:
+          - GetSpace
+          - ListSpaces
+          - GetView
+          - ListViews
+          - ListViewColumns
+          - ListViewRebuildLogs
+          - ListViewPeriodDatasetStates
+          - GetDataSource
+          - ListDataSources
+          - GetSubject
+          - ListSubjects
+          - GetTag
+          - ListTags
+          - ListTagMembers
+          - ResolveSubjects
+          - GetDataset
+          - ListDatasets
+          - CheckDatasetActivation
+          - ListDatasetSubjects
+          - GetFieldGroup
+          - ListFieldGroups
+          - GetField
+          - ListFields
+          - ListDatasetColumns
+          - GetDataNode
+          - ListDataNodes
+          - GetDevice
+          - ListDevices
+          - ListArchiveFiles
+        acl:
+          - methods:
+              - CreateSpace
+              - UpdateSpace
+              - DeleteSpace
+              - GetSpace
+              - ListSpaces
+              - CreateView
+              - UpdateView
+              - DeleteView
+              - RequestViewRebuild
+              - GetView
+              - ListViews
+              - UpsertViewColumn
+              - ListViewColumns
+              - ListViewRebuildLogs
+              - CreateDataSource
+              - UpdateDataSource
+              - DeleteDataSource
+              - GetDataSource
+              - ListDataSources
+              - UpsertSubject
+              - GetSubject
+              - ListSubjects
+              - UpsertTag
+              - GetTag
+              - ListTags
+              - DeleteTag
+              - ListTagMembers
+              - AddTagMembers
+              - RemoveTagMembers
+              - SetTagMemberStatus
+              - ResolveSubjects
+              - CreateDataset
+              - UpdateDataset
+              - DeleteDataset
+              - GetDataset
+              - ListDatasets
+              - RebindDatasetDataNode
+              - CheckDatasetActivation
+              - ActivateDataset
+              - ListDatasetSubjects
+              - CreateFieldGroup
+              - UpdateFieldGroup
+              - GetFieldGroup
+              - ListFieldGroups
+              - CreateField
+              - UpdateField
+              - GetField
+              - ListFields
+              - BatchUpdateFields
+              - DeleteFieldGroup
+              - UpsertDatasetColumn
+              - ListDatasetColumns
+              - UpdateDataNode
+              - GetDataNode
+              - ListDataNodes
+              - DeleteDataNode
+              - RegisterArchiveFile
+              - ListArchiveFiles
+            callers:
+              - console
+              - moox-cli
+          - methods:
+              - RegisterDataNode
+              - CreateDevice
+              - UpdateDevice
+              - GetDevice
+              - ListDevices
+            callers:
+              - moox-cli
+          - methods:
+              - ClaimViewIndexBuild
+              - UpdateViewIndexBuild
+              - ActivateViewIndex
+              - CommitViewSchemaExtension
+              - FailViewIndexBuild
+              - CreateViewRebuildLog
+              - UpdateViewRebuildLog
+              - UpsertSkippedViewRebuildLog
+              - UpsertViewPeriodDatasetState
+              - ListViewPeriodDatasetStates
+              - RecordViewSyncPoint
+            callers:
+              - storage-view
+          - methods:
+              - ApplyTagSnapshot
+              - ReportTagRunFailure
+              - UpdateSubjectAttributes
+            callers:
+              - collector
+          - methods:
+              - GetSpace
+              - ListSpaces
+              - GetView
+              - ListViews
+              - ListViewColumns
+              - ListViewRebuildLogs
+              - GetDataSource
+              - ListDataSources
+              - GetSubject
+              - ListSubjects
+              - GetTag
+              - ListTags
+              - ListTagMembers
+              - ResolveSubjects
+              - GetDataset
+              - ListDatasets
+              - CheckDatasetActivation
+              - ListDatasetSubjects
+              - GetFieldGroup
+              - ListFieldGroups
+              - GetField
+              - ListFields
+              - ListDatasetColumns
+              - GetDataNode
+              - ListDataNodes
+              - ListArchiveFiles
+            callers:
+              - collector
+              - factor-mgr
+              - monitor
+              - strategy
+              - archive
+              - storage-view
+          - methods:
+              - CreateDataset
+              - UpdateDataset
+              - DeleteDataset
+              - CreateView
+              - UpdateView
+              - DeleteView
+              - CreateDataSource
+              - UpdateDataSource
+              - CreateField
+              - UpdateField
+              - CreateFieldGroup
+              - UpdateFieldGroup
+              - UpsertSubject
+              - UpsertDatasetColumn
+              - UpsertViewColumn
+              - RegisterArchiveFile
+            callers:
+              - collector
+              - factor-mgr
+              - archive
+      - path: trpc.moox.storage.PrimaryStore
+        port: 20102
+        console_name: storage
+        timeout_ms: 5000
+        max_body_bytes: 33554432
+        methods:
+          - UpsertFields
+          - EnsureDatasetPeriod
+          - GetDatasetPeriodStatus
+          - CommitTimeSeriesBatch
+          - RecordDatasetPeriodFailures
+          - WriteFactorRows
+          - ReadFields
+          - DeleteDatasetRows
+          - RestoreDatasetRows
+          - ReadTimeSeriesRows
+          - ListHistorySubjects
+          - ReadRecordRows
+          - ReportCollectorPeriodCompleted
+          - ReportFactorPeriodComputed
+          - AppendDatasetSyncPoint
+          - GetFactorPeriodComputed
+          - WaitViewSyncPoint
+        read_only_methods:
+          - GetDatasetPeriodStatus
+          - ReadFields
+          - ReadTimeSeriesRows
+          - ListHistorySubjects
+          - ReadRecordRows
+          - GetFactorPeriodComputed
+        acl:
+          - methods:
+              - UpsertFields
+            callers:
+              - console
+          - methods:
+              - UpsertFields
+              - EnsureDatasetPeriod
+              - GetDatasetPeriodStatus
+              - CommitTimeSeriesBatch
+              - RecordDatasetPeriodFailures
+              - WriteFactorRows
+              - ReadFields
+              - DeleteDatasetRows
+              - RestoreDatasetRows
+              - ReadTimeSeriesRows
+              - ListHistorySubjects
+              - ReadRecordRows
+              - ReportCollectorPeriodCompleted
+              - ReportFactorPeriodComputed
+              - AppendDatasetSyncPoint
+              - GetFactorPeriodComputed
+              - WaitViewSyncPoint
+            callers:
+              - moox-cli
+          - methods:
+              - EnsureDatasetPeriod
+              - GetDatasetPeriodStatus
+              - CommitTimeSeriesBatch
+              - RecordDatasetPeriodFailures
+              - ReportCollectorPeriodCompleted
+              - AppendDatasetSyncPoint
+              - DeleteDatasetRows
+              - RestoreDatasetRows
+              - UpsertFields
+            callers:
+              - collector
+          - methods:
+              - ReadFields
+              - ReadRecordRows
+              - ReadTimeSeriesRows
+              - ListHistorySubjects
+              - WaitViewSyncPoint
+              - GetFactorPeriodComputed
+            callers:
+              - collector
+              - factor-mgr
+              - monitor
+              - strategy
+              - archive
+              - storage-view
+          - methods:
+              - WriteFactorRows
+              - ReportFactorPeriodComputed
+            callers:
+              - factor-mgr
+    doctor:
+      role: storage-primary
+      description: Storage 元数据与写入路由主服务
+      duties:
+        - 管理空间、数据集、字段、视图与数据节点
+        - 将数据读写路由到对应的数据节点
+      inputs:
+        - 元数据管理与数据读写请求
+      outputs:
+        - 元数据与主存储响应
+      dependencies:
+        - eventbus
+      transport: reporter
+      functional_observability: deferred
+      config_paths:
+        - storage-primary/config/app.yaml
+        - storage-primary/config/trpc_go.yaml
+      writable_paths:
+        - data/storage-primary
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: storage-node
+    name: 存储数据节点
+    binary: moox-storage-node
+    scope: any
+    replicas: single
+    protected: false
+    ports:
+      - 20107
+    health:
+      kind: readyz
+      port: 20212
+      ready_body: '"ready":true'
+    doctor:
+      role: storage-node
+      description: Storage 事实数据与事务发件箱节点
+      duties:
+        - 持久化数据集字段、周期完成状态与发件箱
+        - 向派生视图发布数据变更
+      inputs:
+        - 主服务转发的数据读写请求
+      outputs:
+        - 事实数据与数据变更事件
+      dependencies:
+        - eventbus
+        - storage-primary
+      transport: reporter
+      functional_observability: deferred
+      config_paths:
+        - storage-node/config/app.yaml
+        - storage-node/config/trpc_go.yaml
+      writable_paths:
+        - data/storage-node
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: storage-view
+    name: 存储视图服务
+    binary: moox-storage-view
+    scope: any
+    replicas: single
+    protected: false
+    ports:
+      - 20104
+    health:
+      kind: readyz
+      port: 20211
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.storage.DataView
+        port: 20103
+        console_name: storage
+        timeout_ms: 25000
+        max_body_bytes: 33554432
+        methods:
+          - QueryTimeSeriesRows
+          - SearchRecordRows
+        read_only_methods:
+          - QueryTimeSeriesRows
+          - SearchRecordRows
+        acl:
+          - methods:
+              - QueryTimeSeriesRows
+              - SearchRecordRows
+            callers:
+              - console
+              - moox-cli
+              - collector
+              - factor-mgr
+              - monitor
+              - strategy
+    doctor:
+      role: storage-view
+      description: Storage 可重建查询视图服务
+      duties:
+        - 构建数据集查询视图与索引
+        - 执行时间序列与记录查询
+      inputs:
+        - 主存储数据变更与视图查询
+      outputs:
+        - 视图查询结果与构建状态
+      dependencies:
+        - eventbus
+        - storage-primary
+      transport: reporter
+      functional_observability: deferred
+      config_paths:
+        - storage-view/config/app.yaml
+        - storage-view/config/trpc_go.yaml
+      writable_paths:
+        - data/storage-view
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: true
+  - id: access
+    name: 外部接入
+    binary: moox-access
+    scope: any
+    replicas: multi
+    protected: false
+    ports:
+      - 11004
+    health:
+      kind: readyz
+      port: 11014
+      ready_body: '"ready":true'
+    doctor:
+      role: access
+      description: 外部签名 tRPC 接入与重新签名转发
+      duties:
+        - 校验外部调用方签名、防重放与逐方法白名单
+        - 以 access 身份转发原始请求字节
+      inputs:
+        - 外部调用方的签名 tRPC 请求
+      outputs:
+        - 主机网关返回的原始响应
+      dependencies:
+        - host-gateway
+      transport: reporter
+      functional_observability: not_applicable
+      config_paths:
+        - access/config/app.yaml
+        - access/config/trpc_go.yaml
+      writable_paths:
+        - data/access
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
+  - id: egress-proxy
+    name: 出口代理
+    binary: moox-egress-proxy
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11441
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.egress.Proxy
+        port: 11440
+        timeout_ms: 120000
+        max_body_bytes: 33554432
+        methods:
+          - Do
+          - ResolveDomains
+        read_only_methods:
+          - ResolveDomains
+        acl:
+          - methods:
+              - Do
+              - ResolveDomains
+            callers:
+              - collector
+    doctor:
+      role: egress-proxy
+      description: 受限网络出口与 DNS 解析服务
+      duties:
+        - 按域名白名单代理 Collector 请求
+        - 解析域名并返回连通性结果
+      inputs:
+        - Collector 的出口请求与域名解析请求
+      outputs:
+        - 上游响应与域名地址
+      dependencies: []
+      transport: reporter
+      functional_observability: not_applicable
+      config_paths:
+        - egress-proxy/config/app.yaml
+        - egress-proxy/config/trpc_go.yaml
+      writable_paths:
+        - data/egress-proxy
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
+  - id: trade
+    name: 交易服务
+    binary: moox-trade
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11210
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.trade.TradeConsoleService
+        port: 11200
+        console_name: trade
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - CreateTradingAccount
+          - UpdateTradingAccount
+          - GetTradingAccount
+          - ListTradingAccounts
+          - SetLeverage
+          - SyncTradingAccount
+          - CreateLogicalAccount
+          - GetLogicalAccount
+          - ListLogicalAccounts
+          - UpdateLogicalAccount
+          - AddLogicalAccountMember
+          - RemoveLogicalAccountMember
+          - ClaimLogicalAccountOwner
+          - ReleaseLogicalAccountOwner
+          - RebindLogicalAccountOwner
+          - PauseLogicalAccount
+          - ResumeLogicalAccount
+          - FlattenLogicalAccount
+          - PlaceManualOrder
+          - SubmitOrder
+          - CancelOrder
+          - GetOperatorAction
+          - GetLogicalAccountTarget
+          - GetOrder
+          - ListOrders
+          - ListFills
+          - ListPositions
+          - CreatePaperSimulation
+          - ClosePaperSimulation
+          - GetExecutionCapabilities
+          - QueryEquityCurve
+          - ListHoldings
+        read_only_methods:
+          - GetTradingAccount
+          - ListTradingAccounts
+          - GetLogicalAccount
+          - ListLogicalAccounts
+          - GetOperatorAction
+          - GetLogicalAccountTarget
+          - GetOrder
+          - ListOrders
+          - ListFills
+          - ListPositions
+          - GetExecutionCapabilities
+          - QueryEquityCurve
+          - ListHoldings
+        acl:
+          - methods:
+              - CreateTradingAccount
+              - UpdateTradingAccount
+              - GetTradingAccount
+              - ListTradingAccounts
+              - SetLeverage
+              - SyncTradingAccount
+              - CreateLogicalAccount
+              - GetLogicalAccount
+              - ListLogicalAccounts
+              - UpdateLogicalAccount
+              - AddLogicalAccountMember
+              - RemoveLogicalAccountMember
+              - ClaimLogicalAccountOwner
+              - ReleaseLogicalAccountOwner
+              - RebindLogicalAccountOwner
+              - PauseLogicalAccount
+              - ResumeLogicalAccount
+              - FlattenLogicalAccount
+              - PlaceManualOrder
+              - SubmitOrder
+              - CancelOrder
+              - GetOperatorAction
+              - GetLogicalAccountTarget
+              - GetOrder
+              - ListOrders
+              - ListFills
+              - ListPositions
+              - CreatePaperSimulation
+              - ClosePaperSimulation
+              - GetExecutionCapabilities
+              - QueryEquityCurve
+              - ListHoldings
+            callers:
+              - console
+              - moox-cli
+          - methods:
+              - GetLogicalAccount
+              - ClaimLogicalAccountOwner
+              - ReleaseLogicalAccountOwner
+              - RebindLogicalAccountOwner
+            callers:
+              - strategy
+    doctor:
+      role: trade
+      description: Trade execution and reconciliation service
+      duties:
+        - execute orders and reconcile state
+      inputs:
+        - target positions
+      outputs:
+        - orders and reconciliations
+      dependencies:
+        - eventbus
+        - admin
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - trade/config/app.yaml
+        - trade/config/trpc_go.yaml
+      writable_paths:
+        - data/trade
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
+principals:
+  - id: scf-collector
+    allow:
+      - service: trpc.moox.storage.PrimaryStore
+        methods:
+          - EnsureDatasetPeriod
+          - CommitTimeSeriesBatch
+          - RecordDatasetPeriodFailures
+          - GetDatasetPeriodStatus
+      - service: trpc.moox.collector.MarketFetchRuntime
+        methods:
+          - ClaimTimerBatch
+  - id: factor-engine
+    allow:
+      - service: trpc.moox.storage.PrimaryStore
+        methods:
+          - ReadTimeSeriesRows
+          - WriteFactorRows
+          - ReportFactorPeriodComputed
+          - GetFactorPeriodComputed
+      - service: trpc.moox.storage.Metadata
+        methods:
+          - GetDataset
+          - ListDatasetColumns
+          - ListDatasetSubjects
+      - service: trpc.moox.factor.FactorEngine
+        methods:
+          - SyncEngineCatalog
+          - EngineHeartbeat
+          - PullRecalcJob
+          - ReportRecalcProgress
+  - id: moox-skill
+    allow:
+      - service: trpc.moox.storage.PrimaryStore
+        methods:
+          - ReadTimeSeriesRows

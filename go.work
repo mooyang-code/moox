@@ -45,6 +45,7 @@ use (
 	./packages/requestauth
 	./packages/routeprobe
 	./packages/security
+	./packages/servicecatalog
 	./packages/storagepolicy
 	./packages/storagepb
 	./packages/tdx

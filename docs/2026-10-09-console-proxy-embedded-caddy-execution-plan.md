@@ -18,8 +18,8 @@
 | --- | --- | --- |
 | P0 | 已通过 CLI 只读检查 control、storage、compute-1 的监听与进程，核对 control 旧 CA；compute-1 确认仍有 storage 与 trade-move 两套网关进程；CLI 已支持本机 SSH agent/默认私钥，compile_host 认证成功，并单独完成 Go 1.26.9 预置及 GCC/G++ 检查；配置凭据未输出 | compute-1 配置目录与实际运行目录不一致，需核对切换归档范围及旧监听归属；完整迁移表待补齐 |
 | P1 | 已新增模块、版本/配置命令和构建 target；固定 Caddy `v2.11.4`，工作区与 CI/CNB 配置使用 Go `1.26.9`，构建入口拒绝未预置的工具链；远程编译机已完成预置 | 完整依赖图仍有旧 `go_reuseport` 模块下载未解析；自建 runner 未完成预置；全工作区回归尚未通过 |
-| P2 | 真实 internal HTTPS、路由、CA 连续性、流式/WS 完整排空、启动端口冲突清理已测；public-only 配置不创建 internal CA | public 本地 ACME 签发/续期及完整模式切换、HTTP/3、真实 SSH/SFTP 和实际启停脚本仍需验证 |
-| P3 | 内部鉴权诊断已实现；匿名、错误 HMAC、重放被拒绝；上游失败与 readiness 分离，排空时 not-ready 且保持 live | `servicecatalog`、Doctor、Monitor 和新部署登记尚未接入 |
+| P2 | 真实 internal HTTPS、路由、CA 连续性、流式/WS 完整排空、启动端口冲突清理已测；public-only 配置不创建 internal CA；本机交叉编译的四个测试包已在 Linux amd64 运行通过 | public 本地 ACME 签发/续期及完整模式切换、HTTP/3、Linux arm64 运行、真实 SSH/SFTP 和实际启停脚本仍需验证 |
+| P3 | 内部鉴权诊断已实现；匿名、错误 HMAC、重放被拒绝；上游失败与 readiness 分离，排空时 not-ready 且保持 live；`servicecatalog` 已登记 control / single / protected 的代理与 `127.0.0.1:19528` | Doctor、Monitor 和新部署登记尚未接入 |
 | P4～P7 | 尚未完成 | 三类最终包、双部署路径、网关主计划依赖、旧源码清理、最终全链路验证及独立 Agent 审查均保留 |
 | 正式切换 | 未执行 | 必须先通过 P7，再执行主计划第 13 节并验证真实业务及 SCF |
 
@@ -27,7 +27,9 @@
 
 构建策略按用户确认执行：只有需要 CGO 的 Linux 目标交给编译机；其余目标在本机编译或交叉编译。远程 Storage 构建已拆出 `storage-cgo`，无 CGO 的 Storage Access 留在本机。`setup build-linux --source-dir <worktree>` 从指定 worktree 同步源码，配置仍由原仓库的 CLI 读取；认证优先使用现有 SSH key/agent。`--prepare-only` 独立预置 `.go-version` 指定的 Go 并检查 C/C++ 编译器；实际构建使用 `GOTOOLCHAIN=local`，不会临时下载工具链。
 
-`make test-go` 在 Admin 的 `TestSysDeployService_GoomMock_DelegatesList` 因 macOS ARM64 的 goom 运行时内存权限错误失败。原分支 Go `1.25.0` 下也已复现同一错误，不能将其算作通过或直接跳过。另逐模块运行了当前工作区 52 个模块；Factor 首次因系统 Python 缺少 pandas 失败，使用已安装的 Python `3.12.14`、pandas `2.2.3`、numpy `2.3.5` 后测试通过。其余模块测试通过；Admin 问题、完整依赖解析和 Linux 全量回归仍是未通过门禁。
+上述路径已实际构建并回传 Linux amd64 的 Factor Manager/CLI、Storage Primary/Node/View/CLI；Storage Access 在本机交叉编译。文件架构确认前两类为动态链接的 Linux CGO 制品，Access 为静态链接制品；均为阶段原型，不是正式候选发布包。
+
+`make test-go` 在 Admin 的 `TestSysDeployService_GoomMock_DelegatesList` 因 macOS ARM64 的 goom 运行时内存权限错误失败。原分支 Go `1.25.0` 下也已复现同一错误，不能将其算作通过或直接跳过。该 `sysdeploy/rpc` 测试包已在本机以固定 Go、禁用内联的原有测试选项交叉编译，并在 Linux amd64 全包运行通过。另逐模块运行了当时工作区的 52 个模块；Factor 首次因系统 Python 缺少 pandas 失败，使用已安装的 Python `3.12.14`、pandas `2.2.3`、numpy `2.3.5` 后测试通过。新增的第 53 个模块 `servicecatalog` 已通过 race 测试和 vet；其余模块测试通过。固定 CI runner、完整依赖解析和最终统一回归仍是未通过门禁。
 
 control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
 
