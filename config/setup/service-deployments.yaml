@@ -233,20 +233,6 @@ services:
     extra_config:
       gateway_methods: [ClaimTimerBatch]
       gateway_callers: [collector]
-  - name: moox_collector_subject
-    kind: collector_subject
-    deployment_mode: process
-    protocol: http
-    host: 127.0.0.1
-    port: 11413
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 独立 Subject 标签和属性同步服务
-    extra_config:
-      health_url: http://127.0.0.1:11413/readyz
-      health_kind: readiness
-      monitor_enabled: true
   - name: moox_cloudnode
     kind: cloudnode
     deployment_mode: process

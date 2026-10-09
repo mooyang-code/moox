@@ -169,6 +169,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	registerDNSRefreshSchedule(s, dnsSnapshot)
 	registerMarketFetchSchedule(ctx, s, cfg, gateway, dbm, dnsSnapshot, marketFetchMetrics)
+	if err := setupSubjectSync(ctx, s, cfg, gatewayOptions, egressProxy); err != nil {
+		return nil, err
+	}
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err
 	}

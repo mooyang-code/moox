@@ -1034,7 +1034,7 @@ func (x *DataSource) GetAttributes() map[string]string {
 	return nil
 }
 
-// Tag 是 Subject 的分组；auto 标签成员由 moox-collector-subject 同步。
+// Tag 是 Subject 的分组；auto 标签成员由 Collector 的标的同步按 cron 维护。
 type Tag struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

@@ -120,21 +120,6 @@ components:
     writable_paths: [data/collector]
     recovery_action_ids: [inspect_health_check_input, restart_service_manually]
     required_in_default_profile: true
-  - component_id: moox_collector_subject
-    service_name: moox_collector_subject
-    role: collector_subject
-    description: Subject metadata and tag synchronization process
-    duties: [synchronize subject metadata and tags]
-    inputs: [subject synchronization requests and source metadata]
-    outputs: [normalized subject metadata]
-    dependencies: [eventbus]
-    transport: reporter
-    functional_observability: active
-    health_path: /readyz
-    config_paths: [collector/config/subject.yaml]
-    writable_paths: [data/collector-subject]
-    recovery_action_ids: [inspect_health_check_input, restart_service_manually]
-    required_in_default_profile: true
   - component_id: moox_cloudnode
     service_name: moox_cloudnode
     role: cloudnode

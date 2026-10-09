@@ -77,7 +77,7 @@ ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 for binary in \
   moox-admin moox-cli moox-host-gateway moox-host-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-subject \
+  moox-collector moox-collector-cli \
   moox-factor-mgr moox-factor-mgr-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli moox-host-agent; do
@@ -117,7 +117,7 @@ tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in \
   moox-admin moox-admin-cli moox-cli moox-host-gateway moox-host-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-subject \
+  moox-collector moox-collector-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli moox-host-agent; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }

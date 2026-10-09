@@ -22,6 +22,7 @@ require (
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/tdx v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/rs/xid v1.6.0
@@ -173,3 +174,5 @@ replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => 
 replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute
 
 replace github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen => ../egressproxy/proto/egressgen
+
+replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob

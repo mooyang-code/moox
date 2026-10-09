@@ -269,6 +269,24 @@ func TestLoadShippedConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, cfg.EgressProxy.Domains, "仓库里的配置默认直连，生产的白名单由 CLI 渲染")
 	assert.Len(t, cfg.SnapshotDomains(), 4)
+	require.Len(t, cfg.SubjectSync.Attributes, 2)
+	for _, job := range cfg.SubjectSync.Attributes {
+		assert.Equal(t, "10 8 * * *", job.Cron, "属性同步统一在北京时间 08:10 执行")
+		assert.Equal(t, "Asia/Shanghai", job.Timezone)
+	}
+	assert.Equal(t, 2*time.Minute, cfg.SubjectSync.FetchTimeout)
+}
+
+func TestLoadRejectsInvalidSubjectSyncConfig(t *testing.T) {
+	for name, body := range map[string]string{
+		"拉取超时为 0": "subject_sync:\n  fetch_timeout: 0s\n",
+		"cron 无效": "subject_sync:\n  attributes:\n    - {space_id: crypto, sources: [binance], cron: bad}\n",
+		"缺少数据源":   "subject_sync:\n  attributes:\n    - {space_id: crypto}\n",
+		"未知字段":    "subject_sync:\n  poll_interval: 1m\n",
+	} {
+		_, err := Load(writeCollectorConfig(t, body))
+		require.Error(t, err, name)
+	}
 }
 
 func TestLoadRejectsInvalidEgressProxyConfig(t *testing.T) {

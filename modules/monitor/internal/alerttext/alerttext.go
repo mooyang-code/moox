@@ -51,7 +51,6 @@ var serviceNames = map[string]string{
 	"eventbus":                 "消息总线",
 	"moox_monitor":             "监控服务",
 	"moox_collector":           "行情采集服务",
-	"moox_collector_subject":   "采集对象同步服务",
 	"collector_market_runtime": "行情采集运行环境",
 	"moox_cloudnode":           "云节点服务",
 	"moox_factor_mgr":          "因子管理服务",

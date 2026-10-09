@@ -2065,7 +2065,6 @@ probe_service() {
     archive) url=http://127.0.0.1:11416/readyz ;;
     cloudnode) url=http://127.0.0.1:11411/readyz ;;
     collector) url=http://127.0.0.1:11412/readyz ;;
-    collector-subject) url=http://127.0.0.1:11413/readyz ;;
     eventbus) url=http://127.0.0.1:11419/readyz ;;
     hostagent) url=http://127.0.0.1:11425/readyz ;;
     factor-mgr) url=http://127.0.0.1:11414/readyz ;;
@@ -2085,7 +2084,7 @@ listener_open() {
   local name="$1" port health_addr
   case "${name}" in
     admin) port=11010 ;; gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}" ;; archive) port=11416 ;;
-    cloudnode) port=11411 ;; collector) port=11412 ;; collector-subject) port=11413 ;; eventbus) port=11419 ;;
+    cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
     factor-mgr) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
     monitor) port=11409 ;; hostagent) port=11425 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
     storage-view) port=20211 ;; storage-node) port=20212 ;; *) return 1 ;;
@@ -2702,23 +2701,6 @@ start_collector() {
       "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
 
-start_collector_subject() {
-  if [[ "${WITH_COLLECTOR}" != "1" ]]; then
-    echo "collector subject is disabled in this deployment package" >&2
-    exit 2
-  fi
-  gateway_service_env_for collector
-  runtime_identity_env moox_collector_subject "${ROOT}/collector/config/subject.yaml"
-  STARTUP_WAIT_SECONDS="${MOOX_COLLECTOR_SUBJECT_STARTUP_WAIT_SECONDS:-25}"
-  start_service "collector-subject" "${ROOT}/collector" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
-      "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" \
-      "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
-      "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector-subject" -conf=config/subject.yaml
-  wait_http http://127.0.0.1:11413/readyz "${MOOX_WAIT_COLLECTOR_SUBJECT_SECONDS:-60}"
-}
-
 start_factor_mgr() {
   if [[ "${WITH_FACTOR_MGR}" != "1" ]]; then
     echo "factor is disabled in this deployment package" >&2
@@ -2919,7 +2901,6 @@ case "${SERVICE}" in
     fi
     if [[ "${WITH_COLLECTOR}" == "1" ]]; then
       start_collector
-      start_collector_subject
     fi
     if [[ "${WITH_FACTOR_MGR}" == "1" ]]; then
       start_factor_mgr
@@ -2982,11 +2963,7 @@ case "${SERVICE}" in
     wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
     ;;
   cloudnode) start_cloudnode ;;
-  collector)
-    start_collector
-    start_collector_subject
-    ;;
-  collector-subject) start_collector_subject ;;
+  collector) start_collector ;;
   factor-mgr) start_factor_mgr ;;
   strategy) start_strategy ;;
   trade) start_trade ;;
@@ -2995,7 +2972,7 @@ case "${SERVICE}" in
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus hostagent storage access storage-primary storage-view storage-node cloudnode collector collector-subject factor-mgr strategy trade monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus hostagent storage access storage-primary storage-view storage-node cloudnode collector factor-mgr strategy trade monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -3164,7 +3141,6 @@ case "${SERVICE}" in
       stop_service "admin"
     fi
     if [[ "${WITH_COLLECTOR}" == "1" ]]; then
-      stop_service "collector-subject"
       stop_service "collector"
     fi
     if [[ "${WITH_FACTOR_MGR}" == "1" ]]; then
@@ -3261,14 +3237,6 @@ case "${SERVICE}" in
       echo "collector is disabled in this deployment package" >&2
       exit 2
     fi
-    stop_service "collector-subject"
-    stop_service "${SERVICE}"
-    ;;
-  collector-subject)
-    if [[ "${WITH_COLLECTOR}" != "1" ]]; then
-      echo "collector subject is disabled in this deployment package" >&2
-      exit 2
-    fi
     stop_service "${SERVICE}"
     ;;
   factor-mgr)
@@ -3300,7 +3268,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus hostagent storage access storage-primary storage-view storage-node cloudnode collector collector-subject factor-mgr strategy trade monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus hostagent storage access storage-primary storage-view storage-node cloudnode collector factor-mgr strategy trade monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -3396,7 +3364,6 @@ if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
 fi
 if [[ "${WITH_COLLECTOR}" == "1" ]]; then
   services=(collector "${services[@]}")
-  services=(collector-subject "${services[@]}")
 fi
 if [[ "${WITH_FACTOR_MGR}" == "1" ]]; then
   services=(factor-mgr "${services[@]}")
@@ -3502,7 +3469,6 @@ probe_service() {
     archive) url=http://127.0.0.1:11416/healthz ;;
     cloudnode) url=http://127.0.0.1:11411/healthz ;;
     collector) url=http://127.0.0.1:11412/healthz ;;
-    collector-subject) url=http://127.0.0.1:11413/healthz ;;
     eventbus) url=http://127.0.0.1:11419/healthz ;;
     hostagent) url=http://127.0.0.1:11425/healthz ;;
     factor-mgr) url=http://127.0.0.1:11414/readyz; health_path=/readyz ;;
@@ -3553,7 +3519,7 @@ listener_open() {
   local name="$1" port health_addr
   case "${name}" in
     admin) port=11010 ;; gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}" ;; archive) port=11416 ;;
-    cloudnode) port=11411 ;; collector) port=11412 ;; collector-subject) port=11413 ;; eventbus) port=11419 ;;
+    cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
     factor-mgr) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
     monitor) port=11409 ;; hostagent) port=11425 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
     storage-view) port=20211 ;; storage-node) port=20212 ;; access) port=11014 ;; *) return 1 ;;
@@ -3594,7 +3560,6 @@ if [[ "${WITH_MONITOR}" == "1" ]]; then
 fi
 if [[ "${WITH_COLLECTOR}" == "1" ]]; then
   default_services+=(collector)
-  default_services+=(collector-subject)
 fi
 if [[ "${WITH_FACTOR_MGR}" == "1" ]]; then
   default_services+=(factor-mgr)
@@ -4248,7 +4213,6 @@ EOF
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     copy_required_binary "moox-collector"
     copy_required_binary "moox-collector-cli"
-    copy_required_binary "moox-collector-subject"
   fi
   if [[ "${WITH_FACTOR_MGR}" -eq 1 ]]; then
     copy_required_binary "moox-factor-mgr"
@@ -4734,7 +4698,7 @@ sync_local_stage() {
       rsync_excludes+=(--exclude '/cloudnode/' --exclude '/bin/moox-cloudnode' --exclude '/bin/moox-cloudnode-cli')
     fi
 	  if [[ "${WITH_COLLECTOR}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/collector/' --exclude '/bin/moox-collector' --exclude '/bin/moox-collector-cli' --exclude '/bin/moox-collector-subject' --exclude '/bin/moox-collector-scf')
+      rsync_excludes+=(--exclude '/collector/' --exclude '/bin/moox-collector' --exclude '/bin/moox-collector-cli' --exclude '/bin/moox-collector-scf')
     fi
     if [[ "${component_overlay}" -eq 1 && ( "${WITH_COLLECTOR}" -eq 0 || "${MOOX_SPACE_CONFIG_EXPLICIT}" -eq 0 ) ]]; then
       rsync_excludes+=(--exclude '/config/collector-runtime.env')
@@ -4787,7 +4751,7 @@ sync_local_stage() {
     fi
     if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/collector"
-      rm -f "${deploy_dir}/bin/moox-collector" "${deploy_dir}/bin/moox-collector-cli" "${deploy_dir}/bin/moox-collector-subject" "${deploy_dir}/bin/moox-collector-scf"
+      rm -f "${deploy_dir}/bin/moox-collector" "${deploy_dir}/bin/moox-collector-cli" "${deploy_dir}/bin/moox-collector-scf"
     fi
     if [[ "${WITH_FACTOR_MGR}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/factor-mgr"
@@ -5479,7 +5443,7 @@ if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
 fi
 if [[ "${WITH_COLLECTOR}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/collector"
-  rm -f "${DEPLOY_DIR}/bin/moox-collector" "${DEPLOY_DIR}/bin/moox-collector-cli" "${DEPLOY_DIR}/bin/moox-collector-subject" "${DEPLOY_DIR}/bin/moox-collector-scf"
+  rm -f "${DEPLOY_DIR}/bin/moox-collector" "${DEPLOY_DIR}/bin/moox-collector-cli" "${DEPLOY_DIR}/bin/moox-collector-scf"
 fi
 if [[ "${WITH_FACTOR_MGR}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/factor-mgr"

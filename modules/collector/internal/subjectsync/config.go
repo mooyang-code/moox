@@ -2,23 +2,16 @@ package subjectsync
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/robfig/cron"
-	"gopkg.in/yaml.v3"
 )
 
-type Config struct {
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	PollInterval  time.Duration        `yaml:"poll_interval"`
-	FetchTimeout  time.Duration        `yaml:"fetch_timeout"`
-	HealthAddr    string               `yaml:"health_addr"`
-	Attributes    []AttributeJob       `yaml:"attributes"`
-}
+// DefaultFetchTimeout 是拉取一次标的列表的默认超时。
+const DefaultFetchTimeout = 2 * time.Minute
 
+// AttributeJob 是一项属性同步任务：按带时区的 cron 计划，从数据源刷新一个空间的标的属性。
 type AttributeJob struct {
 	SpaceID        string   `yaml:"space_id"`
 	Sources        []string `yaml:"sources"`
@@ -27,29 +20,10 @@ type AttributeJob struct {
 	Timezone       string   `yaml:"timezone"`
 }
 
-func LoadConfig(path string) (Config, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, err
-	}
-	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if err := cfg.GatewayClient.Validate(); err != nil {
-		return Config{}, err
-	}
-	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = time.Minute
-	}
-	if cfg.FetchTimeout <= 0 {
-		cfg.FetchTimeout = 2 * time.Minute
-	}
-	if cfg.HealthAddr == "" {
-		cfg.HealthAddr = "127.0.0.1:11413"
-	}
-	for i := range cfg.Attributes {
-		job := &cfg.Attributes[i]
+// NormalizeAttributeJobs 校验属性同步任务并补上默认值：时区默认 UTC，cron 默认每天 00:00。
+func NormalizeAttributeJobs(jobs []AttributeJob) error {
+	for i := range jobs {
+		job := &jobs[i]
 		job.SpaceID = strings.TrimSpace(job.SpaceID)
 		if job.Timezone == "" {
 			job.Timezone = "UTC"
@@ -58,14 +32,14 @@ func LoadConfig(path string) (Config, error) {
 			job.Cron = "0 0 * * *"
 		}
 		if job.SpaceID == "" || len(job.Sources) == 0 {
-			return Config{}, fmt.Errorf("attributes[%d]: space_id and sources are required", i)
+			return fmt.Errorf("attributes[%d]: space_id 和 sources 不能为空", i)
 		}
 		if _, err := cron.ParseStandard(job.Cron); err != nil {
-			return Config{}, fmt.Errorf("attributes[%d].cron: %w", i, err)
+			return fmt.Errorf("attributes[%d].cron 无效: %w", i, err)
 		}
 		if _, err := time.LoadLocation(job.Timezone); err != nil {
-			return Config{}, fmt.Errorf("attributes[%d].timezone: %w", i, err)
+			return fmt.Errorf("attributes[%d].timezone 无效: %w", i, err)
 		}
 	}
-	return cfg, nil
+	return nil
 }

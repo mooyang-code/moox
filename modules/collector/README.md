@@ -8,7 +8,6 @@
 
 ```bash
 ./scripts/build/build.sh collector
-./scripts/build/build.sh collector-subject
 ./scripts/build/build.sh collector-scf
 ./scripts/build/build-collector-scf-package.sh
 go test -count=1 ./modules/collector/...
@@ -16,4 +15,4 @@ go test -count=1 ./modules/collector/...
 
 ## 配置
 
-`config/trpc_go.yaml`、`config/app.yaml`、`config/subject.yaml`、`config/markets/`；schema 在 `schema/collector.sql`。行情源参考见 [docs/行情接口目录.md](docs/行情接口目录.md)。
+`config/trpc_go.yaml`、`config/app.yaml`、`config/markets/`；schema 在 `schema/collector.sql`。行情源参考见 [docs/行情接口目录.md](docs/行情接口目录.md)。

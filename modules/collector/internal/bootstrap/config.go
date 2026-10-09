@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
@@ -29,6 +30,14 @@ type Config struct {
 	Health              HealthConfig             `yaml:"health"`
 	DNS                 DNSConfig                `yaml:"dns"`
 	EgressProxy         EgressProxyConfig        `yaml:"egress_proxy"`
+	SubjectSync         SubjectSyncConfig        `yaml:"subject_sync"`
+}
+
+// SubjectSyncConfig 是标的同步的设置。标签同步按标签自己的计划每分钟检查一次；属性同步按 Attributes 的计划执行。
+type SubjectSyncConfig struct {
+	// FetchTimeout 是拉取一次标的列表的超时。
+	FetchTimeout time.Duration              `yaml:"fetch_timeout"`
+	Attributes   []subjectsync.AttributeJob `yaml:"attributes"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -193,6 +202,12 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateEgressProxy(); err != nil {
 		return nil, err
 	}
+	if cfg.SubjectSync.FetchTimeout <= 0 {
+		return nil, fmt.Errorf("subject_sync.fetch_timeout 必须大于 0")
+	}
+	if err := subjectsync.NormalizeAttributeJobs(cfg.SubjectSync.Attributes); err != nil {
+		return nil, fmt.Errorf("subject_sync.%w", err)
+	}
 	if err := cfg.validateKlineResample(); err != nil {
 		return nil, err
 	}
@@ -342,5 +357,6 @@ func Default() *Config {
 			RequestTimeout:  3 * time.Second,
 			CacheTTL:        5 * time.Minute,
 		}},
+		SubjectSync: SubjectSyncConfig{FetchTimeout: subjectsync.DefaultFetchTimeout},
 	}
 }

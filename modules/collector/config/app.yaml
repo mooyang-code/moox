@@ -81,3 +81,19 @@ egress_proxy:
     refresh_interval: 5m
     request_timeout: 3s
     cache_ttl: 5m
+
+# 标的同步：标签同步每分钟第 30 秒检查一次，按各标签在管理台设置的计划同步自动标签的成员；
+# 属性同步每分钟第 45 秒检查一次，执行本分钟内到点的任务（计划带时区，与主机时区无关）。
+subject_sync:
+  fetch_timeout: 2m
+  attributes:
+    - space_id: stockcn
+      sources: [eastmoney]
+      instrument_type: equity
+      cron: "10 8 * * *"
+      timezone: Asia/Shanghai
+    - space_id: crypto
+      sources: [binance]
+      instrument_type: spot
+      cron: "10 8 * * *"
+      timezone: Asia/Shanghai

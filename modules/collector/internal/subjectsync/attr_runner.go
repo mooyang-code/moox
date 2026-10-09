@@ -2,6 +2,8 @@ package subjectsync
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,48 +17,51 @@ type AttributeStore interface {
 	UpdateSubjectAttributes(context.Context, string, []*pb.SubjectAttributes) (int, int, error)
 }
 
+// AttributeRunner 按任务计划刷新标的属性。
 type AttributeRunner struct {
 	Store        AttributeStore
 	Listers      Listers
 	Jobs         []AttributeJob
 	FetchTimeout time.Duration
-	Now          func() time.Time
 	Metrics      *Metrics
-	next         []time.Time
 }
 
-func (r *AttributeRunner) RunOnce(ctx context.Context) {
-	now := time.Now().UTC()
-	if r.Now != nil {
-		now = r.Now().UTC()
-	}
-	if len(r.next) != len(r.Jobs) {
-		r.next = make([]time.Time, len(r.Jobs))
-	}
-	for i, job := range r.Jobs {
-		schedule, err := cron.ParseStandard(job.Cron)
+// attributeWindow 是判断任务是否到点的区间长度，与属性同步定时器的触发间隔相同。
+const attributeWindow = time.Minute
+
+// RunDue 执行在 (now-1分钟, now] 内有计划时间的任务。判断不依赖任何状态：定时器每分钟触发一次，每个计划时间恰好
+// 落在一次触发的区间里，所以只执行一次；计划带时区，执行时间与主机时区无关。错过的计划（例如恰好在这时重启）不补跑。
+func (r *AttributeRunner) RunDue(ctx context.Context, now time.Time) error {
+	var errs []error
+	for _, job := range r.Jobs {
+		due, err := attributeJobDue(job, now)
 		if err != nil {
-			log.ErrorContextf(ctx, "attribute job %s cron: %v", job.SpaceID, err)
+			errs = append(errs, fmt.Errorf("属性同步任务 %s 的计划无效: %w", job.SpaceID, err))
 			continue
 		}
-		loc, err := time.LoadLocation(job.Timezone)
-		if err != nil {
-			log.ErrorContextf(ctx, "attribute job %s timezone: %v", job.SpaceID, err)
+		if !due {
 			continue
 		}
-		if r.next[i].IsZero() {
-			r.next[i] = schedule.Next(now.In(loc))
-			continue
+		if err := r.runJob(ctx, job); err != nil {
+			errs = append(errs, err)
 		}
-		if now.Before(r.next[i]) {
-			continue
-		}
-		r.runJob(ctx, job)
-		r.next[i] = schedule.Next(now.In(loc))
 	}
+	return errors.Join(errs...)
 }
 
-func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
+func attributeJobDue(job AttributeJob, now time.Time) (bool, error) {
+	schedule, err := cron.ParseStandard(job.Cron)
+	if err != nil {
+		return false, err
+	}
+	loc, err := time.LoadLocation(job.Timezone)
+	if err != nil {
+		return false, err
+	}
+	return !schedule.Next(now.Add(-attributeWindow).In(loc)).After(now), nil
+}
+
+func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 	instrumentType := job.InstrumentType
 	if instrumentType == "" {
 		if job.SpaceID == "crypto" {
@@ -67,28 +72,27 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
 	}
 	timeout := r.FetchTimeout
 	if timeout <= 0 {
-		timeout = 2 * time.Minute
+		timeout = DefaultFetchTimeout
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	instruments, err := FetchSnapshot(fetchCtx, r.Listers, job.Sources, instrumentType)
+	if err == nil {
+		items := make([]*pb.SubjectAttributes, 0, len(instruments))
+		for _, instrument := range instruments {
+			items = append(items, &pb.SubjectAttributes{SubjectId: instrument.SubjectID, Name: instrument.Name, Attributes: attributes(job.SpaceID, instrument)})
+		}
+		_, _, err = r.Store.UpdateSubjectAttributes(ctx, job.SpaceID, items)
+	}
 	if err != nil {
 		log.WarnContextf(ctx, "attribute job %s failed: %v", job.SpaceID, err)
 		if r.Metrics != nil {
 			r.Metrics.observeAttributeFailure(job.SpaceID)
 		}
-		return
+		return fmt.Errorf("属性同步任务 %s 失败: %w", job.SpaceID, err)
 	}
-	items := make([]*pb.SubjectAttributes, 0, len(instruments))
-	for _, instrument := range instruments {
-		items = append(items, &pb.SubjectAttributes{SubjectId: instrument.SubjectID, Name: instrument.Name, Attributes: attributes(job.SpaceID, instrument)})
-	}
-	if _, _, err := r.Store.UpdateSubjectAttributes(ctx, job.SpaceID, items); err != nil {
-		log.WarnContextf(ctx, "update subject attributes %s failed: %v", job.SpaceID, err)
-		if r.Metrics != nil {
-			r.Metrics.observeAttributeFailure(job.SpaceID)
-		}
-	}
+	log.InfoContextf(ctx, "attribute job %s updated subjects=%d", job.SpaceID, len(instruments))
+	return nil
 }
 
 func attributes(spaceID string, item marketdata.Instrument) map[string]string {
