@@ -25,7 +25,7 @@ const (
 
 	defaultMaxBodyBytes = 32 << 20
 	defaultTimeout      = 30 * time.Second
-	defaultNonceNS      = "storage-access"
+	defaultNonceNS      = "access"
 )
 
 // NonceStore persists inbound gateway nonces so a process restart does not

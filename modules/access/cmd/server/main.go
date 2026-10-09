@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/accessproxy"
-	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
+	"github.com/mooyang-code/moox/modules/access/internal/accessproxy"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -31,25 +32,25 @@ var (
 )
 
 func main() {
-	trpclog.InstallServiceName("storage-access")
-	nonces, err := accessproxy.OpenSQLiteNonces(envOrDefault("MOOX_STORAGE_ACCESS_NONCE_PATH", "./data/storage-access/nonces.db"))
+	trpclog.InstallServiceName("access")
+	nonces, err := accessproxy.OpenSQLiteNonces(envOrDefault("MOOX_ACCESS_NONCE_PATH", "./data/access/nonces.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer nonces.Close()
 
-	principals, err := accessproxy.LoadPrincipals(envOrDefault("MOOX_STORAGE_ACCESS_PRINCIPALS_FILE", "./secrets/storage-access-principals.yaml"))
+	principals, err := accessproxy.LoadPrincipals(envOrDefault("MOOX_ACCESS_PRINCIPALS_FILE", "./secrets/access-principals.yaml"))
 	if err != nil {
 		log.Fatal(err)
 	}
 	proxy, err := accessproxy.New(accessproxy.Options{
 		Principals:         principals,
-		InboundTargetNode:  strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET_NODE")),
-		UpstreamTargetNode: strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_TARGET_NODE")),
-		UpstreamTarget:     strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_TARGET")),
-		NonceNamespace:     envOrDefault("MOOX_STORAGE_ACCESS_NONCE_NAMESPACE", "storage-access"),
-		MaxBodyBytes:       envInt64("MOOX_STORAGE_ACCESS_MAX_BODY_BYTES", 32<<20),
-		Timeout:            envDuration("MOOX_STORAGE_ACCESS_TIMEOUT", 30*time.Second),
+		InboundTargetNode:  strings.TrimSpace(os.Getenv("MOOX_ACCESS_TARGET_NODE")),
+		UpstreamTargetNode: strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET_NODE")),
+		UpstreamTarget:     strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET")),
+		NonceNamespace:     envOrDefault("MOOX_ACCESS_NONCE_NAMESPACE", "access"),
+		MaxBodyBytes:       envInt64("MOOX_ACCESS_MAX_BODY_BYTES", 32<<20),
+		Timeout:            envDuration("MOOX_ACCESS_TIMEOUT", 30*time.Second),
 		Nonces:             nonces,
 	})
 	if err != nil {
@@ -64,7 +65,7 @@ func main() {
 	if err := accessproxy.RegisterAccessService(accessService, proxy); err != nil {
 		log.Fatal(fmt.Errorf("register storage access service: %w", err))
 	}
-	stopHealth, err := registerHealth(s, strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_TARGET")))
+	stopHealth, err := registerHealth(s, strings.TrimSpace(os.Getenv("MOOX_ACCESS_UPSTREAM_TARGET")))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,19 +79,27 @@ func registerHealth(s *server.Server, upstreamTarget string) (func(), error) {
 	if s == nil || s.Service("trpc.moox.storage.Health") == nil {
 		return func() {}, errors.New("storage access health service is not configured")
 	}
-	state := storagehealth.New("storage", "storage-access", Version, GitCommit)
+	state := healthz.NewState("access", "access", Version, GitCommit)
 	state.SetReady(false)
-	if err := storagehealth.Register(s.Service("trpc.moox.storage.Health"), state); err != nil {
+	if err := registerHealthHandler(s.Service("trpc.moox.storage.Health"), state); err != nil {
 		return func() {}, fmt.Errorf("register storage access health: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	interval := envDuration("MOOX_STORAGE_ACCESS_READY_CHECK_INTERVAL", 5*time.Second)
-	timeout := envDuration("MOOX_STORAGE_ACCESS_READY_CHECK_TIMEOUT", 2*time.Second)
+	interval := envDuration("MOOX_ACCESS_READY_CHECK_INTERVAL", 5*time.Second)
+	timeout := envDuration("MOOX_ACCESS_READY_CHECK_TIMEOUT", 2*time.Second)
 	go monitorUpstream(ctx, state, upstreamTarget, interval, timeout)
 	return cancel, nil
 }
 
-func monitorUpstream(ctx context.Context, state *storagehealth.State, target string, interval, timeout time.Duration) {
+func registerHealthHandler(service server.Service, state *healthz.State) error {
+	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
+	if err != nil {
+		return err
+	}
+	return healthz.RegisterNoProtocolServiceMux(service, handler)
+}
+
+func monitorUpstream(ctx context.Context, state *healthz.State, target string, interval, timeout time.Duration) {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}

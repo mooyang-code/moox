@@ -34,7 +34,7 @@ Use this order unless evidence points elsewhere:
 4. Timer: the trigger is enabled with the expected cron (`collector function timer-inventory`).
 5. Claim: the function claims its Timer batch through `ClaimTimerBatch`.
 6. Execution: CLS logs show per-subject provider results.
-7. Storage: `EnsureDatasetPeriod`/`CommitTimeSeriesBatch` succeed through storage-access, and the function publishes `MarketFetchBatchCompleted`.
+7. Storage: `EnsureDatasetPeriod`/`CommitTimeSeriesBatch` succeed through access, and the function publishes `MarketFetchBatchCompleted`.
 8. Result: rows appear in the task's result View for the space, subject and frequency.
 
 ## Evidence To Preserve

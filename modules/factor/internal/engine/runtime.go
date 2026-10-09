@@ -346,7 +346,7 @@ func (r *Runtime) Close() error {
 func newStorageClient(cfg StorageConfig) (*storageio.Client, error) {
 	credentials, err := gatewayauth.CredentialsFromKeyFile(cfg.KeyID, cfg.HMACKeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("load storage-access credentials: %w", err)
+		return nil, fmt.Errorf("load access credentials: %w", err)
 	}
 	secret := ""
 	if strings.TrimSpace(cfg.AuthSecretFile) != "" {

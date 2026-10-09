@@ -1,6 +1,6 @@
 global:
   namespace: Production
-  env_name: storage-access
+  env_name: access
 
 server:
   filter: []

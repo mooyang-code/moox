@@ -212,9 +212,9 @@ for binary in "${linux_cgo_binaries[@]}"; do
 done
 
 if [[ "${linux_cgo_target}" == storage ]]; then
-  echo '==> build non-CGO Storage access locally'
+  echo '==> build non-CGO Access locally'
   BIN_DIR="${BIN_DIR}" VERSION="${version}" GIT_COMMIT="${git_commit}" TARGET_GOOS=linux TARGET_GOARCH="${target_goarch}" \
-    bash "${ROOT}/scripts/build/build.sh" storage-access
+    bash "${ROOT}/scripts/build/build.sh" access
 fi
 
 for binary in "${linux_cgo_binaries[@]}"; do

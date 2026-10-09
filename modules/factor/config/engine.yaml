@@ -19,12 +19,12 @@ catalog_sync:
   offset: 45s
   state_file: ./data/engine/catalog.json
 
-# 经 Storage 机 storage-access 读写数据（factor-engine 主体）
+# 经 Storage 机 access 读写数据（factor-engine 主体）
 storage:
   gateway_target: "ip://127.0.0.1:11004"
   gateway_node_id: ""
   key_id: factor-engine
-  hmac_key_file: ./secrets/storage-access-factor-engine.key
+  hmac_key_file: ./secrets/access-factor-engine.key
   auth_secret_file: ./secrets/storage-primary-auth.secret
 
 eventbus:

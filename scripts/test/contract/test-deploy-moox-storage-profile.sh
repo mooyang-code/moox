@@ -21,6 +21,7 @@ ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/script
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/config/setup" "${FIXTURE_ROOT}/config/setup"
 ln -s "${ROOT}/modules/storage" "${FIXTURE_ROOT}/modules/storage"
+ln -s "${ROOT}/modules/access" "${FIXTURE_ROOT}/modules/access"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
 ln -s "${ROOT}/modules/hostgateway" "${FIXTURE_ROOT}/modules/hostgateway"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
@@ -29,7 +30,7 @@ ln -s "${ROOT}/packages/servicecatalog" "${FIXTURE_ROOT}/packages/servicecatalog
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/scripts/runtime/reset-storage-view-indexes.sh" "${FIXTURE_ROOT}/scripts/runtime/reset-storage-view-indexes.sh"
 
-for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-storage-access moox-host-gateway moox-host-gateway-cli moox-admin moox-admin-cli moox-cli; do
+for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-access moox-host-gateway moox-host-gateway-cli moox-admin moox-admin-cli moox-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
@@ -48,7 +49,7 @@ EOF
 done
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" \
-MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:20201 \
+MOOX_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003 \
 "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
   --profile storage --package-only --archive "${ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
@@ -58,6 +59,14 @@ MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:20201 \
 [[ -f "${ARCHIVE}" ]]
 mkdir "${TMP_ROOT}/unpacked"
 tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
+[[ -x "${TMP_ROOT}/unpacked/bin/moox-access" ]]
+[[ -f "${TMP_ROOT}/unpacked/access/config/trpc_go.yaml" ]]
+[[ -f "${TMP_ROOT}/unpacked/secrets/access-principals.yaml" ]]
+[[ $(stat -f '%Lp' "${TMP_ROOT}/unpacked/secrets/access-principals.yaml" 2>/dev/null || stat -c '%a' "${TMP_ROOT}/unpacked/secrets/access-principals.yaml") == 600 ]]
+grep -q '^MOOX_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003$' "${TMP_ROOT}/unpacked/secrets/access.env"
+grep -q 'source "\${ROOT}/secrets/access.env"' "${TMP_ROOT}/unpacked/start.sh"
+[[ ! -e "${TMP_ROOT}/unpacked/bin/moox-storage-access" ]]
+[[ ! -e "${TMP_ROOT}/unpacked/storage-access" ]]
 for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing storage binary: ${binary}" >&2; exit 1; }
 done
@@ -109,7 +118,7 @@ if grep -q 'view.timer' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml";
   echo 'unimplemented Storage View scheduler must not be deployed' >&2
   exit 1
 fi
-grep -q 'target: ip://127.0.0.1:20201' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
+grep -q 'target: ip://127.0.0.1:20102' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 grep -q '^    - view$' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 grep -q 'source "\${ROOT}/secrets/storage-node-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'source "\${ROOT}/secrets/storage-internal-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
@@ -175,7 +184,7 @@ grep -q 'start_storage_view' <<<"${bootstrap_body}"
 grep -q 'defer Dataset activation' <<<"${doctor_body}"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" \
-MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003 \
+MOOX_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003 \
 "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
   --profile storage --no-gateway --package-only --archive "${SHARED_GATEWAY_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-shared-gateway" --stage "${TMP_ROOT}/stage-shared-gateway" \
@@ -205,7 +214,8 @@ grep -q 'credential_file: ""' "${TMP_ROOT}/unpacked-shard/storage/config/storage
 grep -q 'default_services+=(storage-node)' "${TMP_ROOT}/unpacked-shard/healthcheck.sh"
 grep -q 'service_name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
 grep -q 'name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml"
-grep -A5 'name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml" | grep -q 'timeout: 300000'
+awk '/name: trpc.moox.storage.DataNodeRuntime$/ {service=1; next} service && /^    - name:/ {exit} service {print}' \
+  "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml" | grep -q 'timeout: 300000'
 grep -q 'start_storage_node' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'register-node' "${TMP_ROOT}/unpacked-shard/start.sh"
 if grep -q 'import-seed' "${TMP_ROOT}/unpacked-shard/start.sh"; then

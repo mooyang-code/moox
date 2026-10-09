@@ -7,7 +7,7 @@ Use this reference when a MooX collector cloud function does not publish, does n
 1. Collector plans one Timer batch per period and function shard (`t_collector_timer_period_batches`).
 2. CloudNode writes each function's shard assignment into its SCF environment and keeps its Timer trigger enabled.
 3. At each Timer tick the function calls `ClaimTimerBatch` through the node gateway's native target (`MOOX_COLLECTOR_RPC_GATEWAY_TARGET`) and receives its batch.
-4. It fetches the providers concurrently and writes through the regional storage-access target (`MOOX_STORAGE_RPC_GATEWAY_TARGET`): `EnsureDatasetPeriod`, `CommitTimeSeriesBatch`, `RecordDatasetPeriodFailures`.
+4. It fetches the providers concurrently and writes through the regional access target (`MOOX_STORAGE_RPC_GATEWAY_TARGET`): `EnsureDatasetPeriod`, `CommitTimeSeriesBatch`, `RecordDatasetPeriodFailures`.
 5. It publishes `MarketFetchBatchCompleted` to EventBus; the Collector completion consumer updates the batch and schedules retries.
 6. At the period deadline the Storage DataNode marks the period `complete` or `degraded` and emits `CollectorPeriodCompleted`.
 
@@ -27,7 +27,7 @@ Never paste SecretKey, service auth secret, SSH password, signed headers, or Eve
 1. No package: local build or COS upload failed.
 2. No function or Timer disabled: CloudNode node batch or Tencent SCF API failed.
 3. Timer fires but claims nothing: no planned batch for the shard, or the gateway runtime target/credentials are wrong.
-4. Claim succeeds but no Storage rows: provider fetch or storage-access write failed.
+4. Claim succeeds but no Storage rows: provider fetch or access write failed.
 5. Rows written but the period stays waiting: completion not published or not consumed; check `MOOX_MARKET_FETCH` and the Collector completion consumer.
 6. Preserve `git status --short` before touching code.
 
@@ -80,7 +80,7 @@ Use the `cls-query` skill when available. Query one Timer tick first, then widen
 | No invocation at the expected tick | Timer disabled, wrong cron, or function not deployed |
 | Claim returns nothing | no planned batch, wrong group/binding hash, or runtime gateway auth |
 | Provider errors for most subjects | egress IP blocked or provider down; run `moox-cli collector probe-egress` |
-| Commit rejected | Storage period snapshot mismatch or storage-access principal/method allowlist |
+| Commit rejected | Storage period snapshot mismatch or access principal/method allowlist |
 | Commit ok but no completion | EventBus TLS/credential (`market-fetch-publisher`) or CA mismatch |
 
 ## K-line Data Verification
@@ -93,6 +93,6 @@ Use the `cls-query` skill when available. Query one Timer tick first, then widen
 
 - Timer disabled or cron drift after a manual change in the Tencent console.
 - Function environment not updated after a task or subject change (stale binding hash).
-- storage-access target or principal missing for the function's region.
+- access target or principal missing for the function's region.
 - EventBus CA or `market-fetch-publisher` token rotated without republishing the functions.
 - Provider throttling or egress IP blocked for the region.

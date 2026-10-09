@@ -807,15 +807,15 @@ func TestLoadNormalizesRegionalStorageAccessTargets(t *testing.T) {
 space_id = "crypto"
 storage_gateway_host = "192.0.2.10"
 storage_access_targets = { AP-NANJING = "ip://192.0.2.20:11004", ap-hongkong = "ip://192.0.2.21:12004" }
-storage_access_target_nodes = { AP-NANJING = "storage-access-nanjing", ap-hongkong = "storage-access-hongkong" }
+storage_access_target_nodes = { AP-NANJING = "access-nanjing", ap-hongkong = "access-hongkong" }
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	space := snapshot.Manifest.SCFFetcher.Spaces[0]
 	assert.Equal(t, "ip://192.0.2.20:11004", space.StorageAccessTarget("ap-nanjing"))
 	assert.Equal(t, "ip://192.0.2.21:12004", space.StorageAccessTarget("ap-hongkong"))
-	assert.Equal(t, "storage-access-nanjing", space.StorageAccessTargetNode("ap-nanjing"))
-	assert.Equal(t, "storage-access-hongkong", space.StorageAccessTargetNode("ap-hongkong"))
+	assert.Equal(t, "access-nanjing", space.StorageAccessTargetNode("ap-nanjing"))
+	assert.Equal(t, "access-hongkong", space.StorageAccessTargetNode("ap-hongkong"))
 }
 
 func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {

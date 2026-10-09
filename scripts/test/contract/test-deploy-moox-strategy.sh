@@ -48,7 +48,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --node-id strategy \
   --gateway-control-url http://127.0.0.1:11000 \
-  --no-admin --no-storage --no-storage-access --no-archive --no-eventbus --no-cloudnode \
+  --no-admin --no-storage --no-access --no-archive --no-eventbus --no-cloudnode \
   --no-collector --no-factor-mgr --no-trade --no-monitor --no-hostagent >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked"
@@ -142,7 +142,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --dir "${TMP_ROOT}/control-deploy" --stage "${TMP_ROOT}/control-stage" \
   --goos linux --goarch amd64 --skip-build --node-id control \
   --gateway-control-url http://127.0.0.1:11000 \
-  --no-strategy --no-web-host --no-storage --no-storage-access --no-archive --no-eventbus --no-cloudnode \
+  --no-strategy --no-web-host --no-storage --no-access --no-archive --no-eventbus --no-cloudnode \
   --no-collector --no-factor-mgr --no-trade --no-monitor --no-hostagent >/dev/null
 cmp "${TMP_ROOT}/unpacked/config/trade-gateway.json" "${TMP_ROOT}/control-stage/config/trade-gateway.json"
 [[ ! -e "${TMP_ROOT}/control-stage/strategy/config/app.yaml" ]]

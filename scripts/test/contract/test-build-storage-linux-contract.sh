@@ -125,9 +125,9 @@ grep -Fq -- 'GOTMPDIR="$PWD/.gotmp"' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'GOTOOLCHAIN=local' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'check-go-version.sh' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'storage-cgo' "${TMP_ROOT}/ssh.log"
-! grep -Fq -- 'build.sh storage-access' "${TMP_ROOT}/ssh.log"
+! grep -Fq -- 'build.sh access' "${TMP_ROOT}/ssh.log"
 ! grep -Fq -- 'fixture-password' "${TMP_ROOT}/rsync.log" "${TMP_ROOT}/scp.log" "${TMP_ROOT}/ssh.log"
-for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli moox-storage-access; do
+for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli moox-access; do
   test -s "${TMP_ROOT}/output/${binary}"
 done
 

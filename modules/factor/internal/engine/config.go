@@ -52,7 +52,7 @@ type CatalogSyncConfig struct {
 	StateFile string        `yaml:"state_file"`
 }
 
-// StorageConfig reaches Storage through storage-access with the factor-engine
+// StorageConfig reaches Storage through access with the factor-engine
 // principal; auth_secret_file holds the Storage primary secret that signs the
 // factor AppID.
 type StorageConfig struct {

@@ -15,8 +15,8 @@ const minimalEngineConfig = `manager:
   hmac_key_file: ./secrets/gateway-factor-engine.key
 storage:
   gateway_target: ip://storage.example:11004
-  gateway_node_id: storage-access-storage
-  hmac_key_file: ./secrets/storage-access-factor-engine.key
+  gateway_node_id: access-storage
+  hmac_key_file: ./secrets/access-factor-engine.key
 eventbus:
   urls: [tls://control.example:4222]
 `

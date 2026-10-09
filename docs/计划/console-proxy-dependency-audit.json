@@ -3,7 +3,7 @@
   "date": "2026-10-09",
   "scope": "Go workspace selected module metadata; not runtime binary dependency coverage",
   "baseline_modules": 417,
-  "current_modules": 851,
+  "current_modules": 852,
   "baseline_unresolved": [
     "trpc.group/trpc-go/go_reuseport@v1.7.1-0.20230423021710-f5eeff5d87a3"
   ],
@@ -317,26 +317,6 @@
     ]
   ],
   "added": [
-    [
-      "github.com/mooyang-code/moox/modules/consoleproxy",
-      "workspace"
-    ],
-    [
-      "github.com/mooyang-code/moox/packages/gatewayclient",
-      "workspace"
-    ],
-    [
-      "github.com/mooyang-code/moox/packages/gatewayroute",
-      "workspace"
-    ],
-    [
-      "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen",
-      "workspace"
-    ],
-    [
-      "github.com/mooyang-code/moox/packages/servicecatalog",
-      "workspace"
-    ],
     [
       "4d63.com/gocheckcompilerdirectives",
       "v1.3.0"
@@ -1396,6 +1376,30 @@
     [
       "github.com/mitchellh/reflectwalk",
       "v1.0.2"
+    ],
+    [
+      "github.com/mooyang-code/moox/modules/access",
+      "workspace"
+    ],
+    [
+      "github.com/mooyang-code/moox/modules/consoleproxy",
+      "workspace"
+    ],
+    [
+      "github.com/mooyang-code/moox/packages/gatewayclient",
+      "workspace"
+    ],
+    [
+      "github.com/mooyang-code/moox/packages/gatewayroute",
+      "workspace"
+    ],
+    [
+      "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen",
+      "workspace"
+    ],
+    [
+      "github.com/mooyang-code/moox/packages/servicecatalog",
+      "workspace"
     ],
     [
       "github.com/moricho/tparallel",
