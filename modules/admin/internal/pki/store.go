@@ -13,7 +13,6 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"math/big"
 	"net"
 	"os"
@@ -76,33 +75,7 @@ func (s *Store) GoString() string { return s.String() }
 // lock coordinates distinct CLI processes as well as callers in one process.
 // The OS releases it on process exit; the persistent file is not a stale lock.
 func (s *Store) lock() (*os.File, error) {
-	if info, err := s.root.Lstat(".pki.lock"); err == nil {
-		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-			return nil, errors.New("PKI lock must be a regular 0600 file")
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-	// Separate first creation from opening an existing lock. Concurrent
-	// O_CREATE opens can fail with ENOENT on the macOS filesystem.
-	file, err := s.root.OpenFile(".pki.lock", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if os.IsExist(err) {
-		file, err = s.root.OpenFile(".pki.lock", os.O_RDWR, 0o600)
-	}
-	if err != nil {
-		return nil, err
-	}
-	opened, err := file.Stat()
-	current, statErr := s.root.Lstat(".pki.lock")
-	if err != nil || statErr != nil || !opened.Mode().IsRegular() || opened.Mode().Perm() != 0o600 || !os.SameFile(opened, current) {
-		file.Close()
-		return nil, errors.New("PKI lock changed while opening")
-	}
-	if err := lockFile(file); err != nil {
-		file.Close()
-		return nil, fmt.Errorf("lock PKI: %w", err)
-	}
-	return file, nil
+	return privatefiles.Lock(s.root, ".pki.lock")
 }
 
 func certificateInfo(cert *x509.Certificate) CertificateInfo {
@@ -350,7 +323,10 @@ func publishBundle(dir, id string, files map[string][]byte) error {
 	if err := stage.Close(); err != nil {
 		return err
 	}
-	return parent.Rename(stageName, name)
+	if err := parent.Rename(stageName, name); err != nil {
+		return err
+	}
+	return privatefiles.SyncDirectory(parent)
 }
 
 // ExportCA publishes only the public root, after validating the original pair.

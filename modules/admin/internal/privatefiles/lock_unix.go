@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package pki
+package privatefiles
 
 import (
 	"errors"

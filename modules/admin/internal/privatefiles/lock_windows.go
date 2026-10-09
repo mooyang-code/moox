@@ -1,4 +1,4 @@
-package pki
+package privatefiles
 
 import (
 	"os"

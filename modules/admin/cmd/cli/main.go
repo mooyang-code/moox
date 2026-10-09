@@ -6,6 +6,20 @@ import (
 )
 
 func main() {
+	if isBootstrapCommand(os.Args) {
+		if err := runBootstrapCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isTopologyRecoveryCommand(os.Args) {
+		if err := runTopologyRecoveryCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if isPKICommand(os.Args) {
 		if err := runPKICommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 			printInitError(os.Stderr, err)
@@ -49,7 +63,7 @@ func main() {
 		return
 	}
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use init, user, random-secret, eventbus-credentials, keys, pki, or service-deployments"))
+		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host, placement, init, user, random-secret, eventbus-credentials, keys, pki, or service-deployments"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

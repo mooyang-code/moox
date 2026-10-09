@@ -74,6 +74,19 @@ func OpenRoot(dir string) (*os.Root, error) {
 		root.Close()
 		return nil, errors.New("credential output directory changed while opening")
 	}
+	// Persist the directory entry too: bootstrap may commit encrypted master
+	// copies immediately after generating credentials in a new directory.
+	parent, err := os.OpenRoot(filepath.Dir(dir))
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	err = SyncDirectory(parent)
+	parent.Close()
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
 	return root, nil
 }
 
@@ -96,6 +109,10 @@ func OpenSubRoot(parent *os.Root, name string) (*os.Root, error) {
 	if err != nil || !os.SameFile(info, opened) {
 		root.Close()
 		return nil, errors.New("credential subdirectory changed while opening")
+	}
+	if err := SyncDirectory(parent); err != nil {
+		root.Close()
+		return nil, err
 	}
 	return root, nil
 }
@@ -134,5 +151,8 @@ func Write(root *os.Root, name string, data []byte) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return root.Rename(tmp, name)
+	if err := root.Rename(tmp, name); err != nil {
+		return err
+	}
+	return SyncDirectory(root)
 }

@@ -69,6 +69,9 @@ func TestInitializeEnforcesForeignKeysOnEveryConnection(t *testing.T) {
 		if err := conn.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&enabled); err != nil || enabled != 1 {
 			t.Fatalf("foreign keys = %d, error = %v", enabled, err)
 		}
+		if err := conn.QueryRowContext(context.Background(), "PRAGMA synchronous").Scan(&enabled); err != nil || enabled != 2 {
+			t.Fatalf("synchronous = %d, error = %v; want FULL on every connection", enabled, err)
+		}
 	}
 }
 

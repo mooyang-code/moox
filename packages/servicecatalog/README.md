@@ -10,4 +10,6 @@
 - `host-gateway@*` 只允许用于 GatewayControl，编译时展开为已登记主机；控制服务仍须校验调用方主机与请求中的主机一致。
 - `CompiledHost.Hash` 是路由定义哈希。GatewayControl 应把实际下发的校验密钥及 KeyID 加入最终快照哈希，保证密钥轮换能触发更新。
 
-当前只完成主计划 A1～A4。SysDeploy v2、GatewayControl 和出口代理的方法按目标协议声明，运行服务、调用方和 Doctor 尚未接入本包；此目录不能作为已完成生产迁移的证明。
+SysDeploy v2、GatewayControl、调用方密钥管理、离线初始化与 Doctor 已使用此目录；网关运行端及业务调用方的迁移仍在进行。出口代理等尚未运行的方法仍按目标协议声明；此目录不能作为已完成生产迁移的证明。
+
+`hostgatewayconfig` 子包定义离线部署与主机网关运行端共用的配置格式。`Default` 生成发布目录中的相对路径和 control 的直连配置；`Decode` 严格校验有界单份 YAML，`Load` 另将路径解析为相对于配置文件的绝对路径。该层只校验结构，实际 TLS 证书、私有 CA 与签名文件由运行端检查。bootstrap 已接入；运行网关和其余业务调用方的接入仍待 C/D/E。

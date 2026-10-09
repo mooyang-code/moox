@@ -173,7 +173,7 @@ func openAdminCLIDB(path string) (*gorm.DB, error) {
 	if path == "" {
 		return nil, errors.New("db path is required")
 	}
-	return gorm.Open(sqlite.Open(path), &gorm.Config{})
+	return gorm.Open(sqlite.Open(initSQLiteDSN(path)), &gorm.Config{})
 }
 func closeAdminCLIDB(db *gorm.DB) {
 	if db != nil {
