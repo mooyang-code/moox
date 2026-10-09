@@ -34,14 +34,14 @@ func TestStorageImporterForFormat(t *testing.T) {
 
 func TestValidateStorageImportOptions(t *testing.T) {
 	err := validateStorageImportOptions(storageImportOptions{
-		File: "a.csv", MetadataURL: "http://meta", SpaceID: "s", DatasetID: "d",
-		SubjectID: "sub", TimeColumn: "t", AccessURL: "http://access", Freq: "1m",
+		File: "a.csv", SpaceID: "s", DatasetID: "d",
+		SubjectID: "sub", TimeColumn: "t", Freq: "1m",
 	})
 	require.NoError(t, err)
 	err = validateStorageImportOptions(storageImportOptions{File: "a.csv"})
 	require.Error(t, err)
 	err = validateStorageImportOptions(storageImportOptions{
-		File: "a.csv", MetadataURL: "http://meta", SpaceID: "s", DatasetID: "d",
+		File: "a.csv", SpaceID: "s", DatasetID: "d",
 		SubjectID: "sub", TimeColumn: "t", DryRun: true, Freq: "1m",
 	})
 	require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestRunStorageImportWritePath(t *testing.T) {
 	}
 	writer := &trackingStorageWriter{}
 	summary, err := runStorageImport(context.Background(), storageImportOptions{
-		Format: "csv", File: path, MetadataURL: "http://meta", AccessURL: "http://access",
+		Format: "csv", File: path,
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", TimeColumn: "open_time",
 		BatchSize: 100,
 	}, &meta, writer)
@@ -275,7 +275,7 @@ func newStorageImportMetaFull() *fakeStorageImportMetaFull {
 
 func validStorageImportOptions(path string, seriesTag string, dryRun bool) storageImportOptions {
 	return storageImportOptions{
-		Format: "csv", File: path, MetadataURL: "http://meta", AccessURL: "http://access",
+		Format: "csv", File: path,
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m",
 		TimeColumn: "data_time", SeriesTag: seriesTag, BatchSize: 100, DryRun: dryRun,
 	}

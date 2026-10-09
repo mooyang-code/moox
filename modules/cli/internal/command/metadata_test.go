@@ -2,12 +2,6 @@ package command
 
 import (
 	"context"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestValidateReservedInternalSpacesRejectsUndeclaredLogicalResource(t *testing.T) {
@@ -529,7 +530,7 @@ func TestRunMetadataImportCreatesResource(t *testing.T) {
 		Resource: "spaces", Method: "CreateSpace",
 		Request: &pb.CreateSpaceReq{Space: space}, Response: &pb.CreateSpaceRsp{},
 	}}
-	summary, err := runMetadataImport(context.Background(), server.URL, calls, false)
+	summary, err := runMetadataImport(context.Background(), httpStorageInvoker{server.URL}, calls, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, summary.Applied)
 	assert.Equal(t, 0, summary.Skipped)
@@ -554,7 +555,7 @@ func TestRunMetadataImportSkipsWhenExists(t *testing.T) {
 			Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{},
 		},
 	}}
-	summary, err := runMetadataImport(context.Background(), server.URL, calls, true)
+	summary, err := runMetadataImport(context.Background(), httpStorageInvoker{server.URL}, calls, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, summary.Applied)
 	assert.Equal(t, 1, summary.Skipped)
@@ -569,7 +570,7 @@ func TestMetadataResourceExists(t *testing.T) {
 		})
 		defer server.Close()
 		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		ok, err := metadataResourceExists(context.Background(), server.URL, probe)
+		ok, err := metadataResourceExists(context.Background(), httpStorageInvoker{server.URL}, probe)
 		require.NoError(t, err)
 		assert.True(t, ok)
 	})
@@ -581,7 +582,7 @@ func TestMetadataResourceExists(t *testing.T) {
 		})
 		defer server.Close()
 		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		ok, err := metadataResourceExists(context.Background(), server.URL, probe)
+		ok, err := metadataResourceExists(context.Background(), httpStorageInvoker{server.URL}, probe)
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
@@ -593,7 +594,7 @@ func TestMetadataResourceExists(t *testing.T) {
 		})
 		defer server.Close()
 		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		_, err := metadataResourceExists(context.Background(), server.URL, probe)
+		_, err := metadataResourceExists(context.Background(), httpStorageInvoker{server.URL}, probe)
 		require.Error(t, err)
 	})
 }
@@ -619,7 +620,7 @@ func TestRunMetadataApplyCreatesWhenMissing(t *testing.T) {
 			Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{},
 		},
 	}}
-	summary, err := runMetadataApply(context.Background(), server.URL, calls)
+	summary, err := runMetadataApply(context.Background(), httpStorageInvoker{server.URL}, calls)
 	require.NoError(t, err)
 	assert.True(t, createCalled)
 	assert.Equal(t, 1, summary.Applied)
@@ -644,7 +645,7 @@ func TestRunMetadataApplySkipsUnchanged(t *testing.T) {
 			Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{},
 		},
 	}}
-	summary, err := runMetadataApply(context.Background(), server.URL, calls)
+	summary, err := runMetadataApply(context.Background(), httpStorageInvoker{server.URL}, calls)
 	require.NoError(t, err)
 	assert.Equal(t, 0, summary.Applied)
 	assert.Equal(t, 1, summary.Skipped)
@@ -669,7 +670,7 @@ func TestRunMetadataApplyDatasetColumnProbe(t *testing.T) {
 		Resource: "dataset_columns", Method: "UpsertDatasetColumn",
 		Request: &pb.UpsertDatasetColumnReq{Column: column}, Response: &pb.UpsertDatasetColumnRsp{},
 	}}
-	summary, err := runMetadataApply(context.Background(), server.URL, calls)
+	summary, err := runMetadataApply(context.Background(), httpStorageInvoker{server.URL}, calls)
 	require.NoError(t, err)
 	assert.True(t, createCalled)
 	assert.Equal(t, 1, summary.Applied)
@@ -705,7 +706,7 @@ func TestRunMetadataApplyFindsDatasetColumnOnLaterPage(t *testing.T) {
 	})
 	defer server.Close()
 
-	summary, err := runMetadataApply(context.Background(), server.URL, []metadataImportCall{{
+	summary, err := runMetadataApply(context.Background(), httpStorageInvoker{server.URL}, []metadataImportCall{{
 		Resource: "dataset_columns", Method: "UpsertDatasetColumn",
 		Request: &pb.UpsertDatasetColumnReq{Column: column}, Response: &pb.UpsertDatasetColumnRsp{},
 	}})
@@ -746,7 +747,7 @@ func TestRunMetadataApplyFindsViewColumnOnLaterPage(t *testing.T) {
 	})
 	defer server.Close()
 
-	summary, err := runMetadataApply(context.Background(), server.URL, []metadataImportCall{{
+	summary, err := runMetadataApply(context.Background(), httpStorageInvoker{server.URL}, []metadataImportCall{{
 		Resource: "view_columns", Method: "UpsertViewColumn",
 		Request: &pb.UpsertViewColumnReq{Column: column}, Response: &pb.UpsertViewColumnRsp{},
 	}})
@@ -841,7 +842,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 	})
 	defer server.Close()
 
-	summary, err := runMetadataApply(context.Background(), server.URL, calls)
+	summary, err := runMetadataApply(context.Background(), httpStorageInvoker{server.URL}, calls)
 	require.NoError(t, err)
 	assert.Zero(t, summary.Applied)
 	assert.Equal(t, len(calls), summary.Unchanged)
@@ -863,7 +864,7 @@ func TestRunMetadataApplyRejectsViewColumnConflict(t *testing.T) {
 	})
 	defer server.Close()
 
-	_, err := runMetadataApply(context.Background(), server.URL, []metadataImportCall{{
+	_, err := runMetadataApply(context.Background(), httpStorageInvoker{server.URL}, []metadataImportCall{{
 		Resource: "view_columns", Method: "UpsertViewColumn",
 		Request: &pb.UpsertViewColumnReq{Column: expected}, Response: &pb.UpsertViewColumnRsp{},
 	}})
@@ -871,7 +872,7 @@ func TestRunMetadataApplyRejectsViewColumnConflict(t *testing.T) {
 }
 
 func TestRunMetadataApplyRejectsUnsupportedResource(t *testing.T) {
-	_, err := runMetadataApply(context.Background(), "http://unused", []metadataImportCall{{
+	_, err := runMetadataApply(context.Background(), httpStorageInvoker{"http://unused"}, []metadataImportCall{{
 		Resource: "subjects", Method: "UpsertSubject",
 		Request: &pb.UpsertSubjectReq{Subject: &pb.Subject{SpaceId: "crypto", SubjectId: "BTC"}},
 	}})

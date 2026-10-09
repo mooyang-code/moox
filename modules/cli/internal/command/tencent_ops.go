@@ -57,11 +57,11 @@ var lighthouseFirewallAddCmd = &cobra.Command{
 	Long: `添加腾讯云轻量应用服务器防火墙规则。
 
 示例：
-  moox-cli ops tencent lighthouse firewall add --public-ip <lighthouse-public-ip> --ports 20201,20200,11000
-  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201 --cidr 0.0.0.0/0 --description moox-storage
-  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201,20200 --dry-run
+  moox-cli ops tencent lighthouse firewall add --public-ip <lighthouse-public-ip> --ports 11004
+  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 11003 --cidr 10.0.0.0/8 --description moox-host-gateway
+  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 11003,11004 --dry-run
 
-提示：public-ip 可从云厂商控制台获取；MooX 服务部署地址以管理台“服务部署信息”页为准。`,
+提示：public-ip 可从云厂商控制台获取；各主机的组件以管理台“服务部署”页为准。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLighthouseFirewallAdd(cmd, lighthouseFirewallAddFlags)
 	},
@@ -80,7 +80,7 @@ func init() {
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Endpoint, "endpoint", "https://lighthouse.tencentcloudapi.com", "腾讯云 Lighthouse API endpoint")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.InstanceID, "instance-id", "", "轻量应用服务器实例 ID；与 --public-ip 二选一")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.PublicIP, "public-ip", "", "公网 IP；未传 --instance-id 时用 DescribeInstances 自动解析")
-	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Ports, "ports", "", "端口：ALL、单端口、逗号分隔端口或范围，如 20201,20200,11000")
+	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Ports, "ports", "", "端口：ALL、单端口、逗号分隔端口或范围，如 11003,11004")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Protocol, "protocol", "TCP", "协议：TCP、UDP、ICMP、ICMPv6、ALL")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Cidr, "cidr", "0.0.0.0/0", "IPv4 CIDR 或 IP；与 --ipv6-cidr 互斥")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.IPv6Cidr, "ipv6-cidr", "", "IPv6 CIDR 或 IP；与 --cidr 互斥")

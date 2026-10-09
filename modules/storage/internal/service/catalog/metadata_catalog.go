@@ -6,13 +6,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	thttp "trpc.group/trpc-go/trpc-go/http"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // 本文件聚合数据源、主体、数据集、字段、因子及其列绑定相关的元数据 CRUD 入口。
@@ -559,17 +559,15 @@ func (s *Service) DeleteFieldGroup(ctx context.Context, req *pb.DeleteFieldGroup
 	return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
+// validateFieldSpaceContext 校验调用方在 tRPC 元数据 x-space-id 中声明的空间与请求一致。控制台转发时总会
+// 写入它；内部组件不带时不校验。
 func validateFieldSpaceContext(ctx context.Context, requestSpaceID string) error {
-	head := thttp.Head(ctx)
-	if head == nil || head.Request == nil {
+	scoped := strings.TrimSpace(string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID)))
+	if scoped == "" {
 		return nil
 	}
-	headerSpaceID := strings.TrimSpace(head.Request.Header.Get("X-Space-Id"))
-	if headerSpaceID == "" {
-		return fmt.Errorf("%s header is required", http.CanonicalHeaderKey("X-Space-Id"))
-	}
-	if requestSpaceID == "" || requestSpaceID != headerSpaceID {
-		return fmt.Errorf("request space_id does not match %s header", http.CanonicalHeaderKey("X-Space-Id"))
+	if requestSpaceID == "" || requestSpaceID != scoped {
+		return fmt.Errorf("request space_id does not match %s metadata", gatewayroute.MetadataSpaceID)
 	}
 	return nil
 }

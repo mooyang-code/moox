@@ -45,16 +45,6 @@ server:
       network: tcp
       protocol: trpc
       transport: go-net
-    - name: trpc.moox.storage.PrimaryStore.http
-      ip: 127.0.0.1
-      port: 20201
-      network: tcp
-      protocol: http
-    - name: trpc.moox.storage.Metadata.http
-      ip: 127.0.0.1
-      port: 20200
-      network: tcp
-      protocol: http
     - name: trpc.moox.storage.primary.metrics.timer
       port: 20303
       network: "*/30 * * * * *"

@@ -25,6 +25,16 @@ func openControlGateway(manifest setupconfig.Manifest) (*clicgateway.Client, err
 	return gateway, nil
 }
 
+// openControlGatewayFromFile 读取 moox.toml（manifestFile 为空时读当前目录的 moox.toml），再创建隧道方式的 gatewayclient。
+func openControlGatewayFromFile(manifestFile string) (*clicgateway.Client, error) {
+	path := defaultFlag(strings.TrimSpace(manifestFile), defaultSetupFile)
+	snapshot, err := setupconfig.Load(path, filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("加载 %s（访问 MooX 服务需要其中的 SSH 连接信息）: %w", path, err)
+	}
+	return openControlGateway(snapshot.Manifest)
+}
+
 // useControlClient 返回命令访问控制面的 adminclient 和对应的关闭函数：
 //   - injected 非空时直接使用（测试注入）；
 //   - 否则经 SSH 隧道创建，moox.toml 优先用已加载的 manifest，其次用 manifestFile，都没有时读当前目录的 moox.toml。
@@ -34,15 +44,13 @@ func useControlClient(injected *adminclient.Client, manifest *setupconfig.Snapsh
 		injected.SpaceID = spaceID
 		return injected, func() {}, nil
 	}
-	if manifest == nil {
-		path := defaultFlag(strings.TrimSpace(manifestFile), defaultSetupFile)
-		loaded, err := setupconfig.Load(path, filepath.Dir(path))
-		if err != nil {
-			return nil, nil, fmt.Errorf("加载 %s（访问控制面需要其中的 SSH 连接信息）: %w", path, err)
-		}
-		manifest = loaded
+	var gateway *clicgateway.Client
+	var err error
+	if manifest != nil {
+		gateway, err = openControlGateway(manifest.Manifest)
+	} else {
+		gateway, err = openControlGatewayFromFile(manifestFile)
 	}
-	gateway, err := openControlGateway(manifest.Manifest)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -47,7 +47,7 @@ if [[ "${process_alive}" -eq 1 && "${process_age}" -lt "${STARTING_GRACE_SECONDS
   exit 0
 fi
 
-if [[ "${process_alive}" -eq 1 ]] && port_open 20103 && port_open 20202; then
+if [[ "${process_alive}" -eq 1 ]] && port_open 20103 && port_open 20104; then
   exit 0
 fi
 

@@ -1597,23 +1597,16 @@ func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snaps
 	if err != nil {
 		return metadataImportSummary{}, err
 	}
-	host, err := findSetupHost(snapshot.Manifest, hostName)
-	if err != nil {
+	// Storage 经 control 主机网关路由，这里只校验目标主机写在 moox.toml 中。
+	if _, err := findSetupHost(snapshot.Manifest, hostName); err != nil {
 		return metadataImportSummary{}, err
 	}
-	transport, err := dialSetupHost(ctx, host)
+	gateway, err := openControlGateway(snapshot.Manifest)
 	if err != nil {
-		return metadataImportSummary{}, err
+		return metadataImportSummary{}, fmt.Errorf("storage_not_reachable: %w", err)
 	}
-	defer transport.Close()
-	forwardContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	listener, err := transport.ForwardLocal(forwardContext, "127.0.0.1:20200")
-	if err != nil {
-		return metadataImportSummary{}, fmt.Errorf("storage_not_reachable")
-	}
-	defer listener.Close()
-	return runMetadataImport(ctx, "http://"+listener.Addr().String(), calls, true)
+	defer gateway.Close()
+	return runMetadataImport(ctx, gateway, calls, true)
 }
 
 func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (setupvalidate.Result, error) {

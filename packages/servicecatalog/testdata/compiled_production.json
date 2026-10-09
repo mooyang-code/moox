@@ -1068,9 +1068,9 @@
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "AppendDatasetSyncPoint",
-            "DeleteDatasetRows",
-            "ReportCollectorPeriodCompleted",
-            "RestoreDatasetRows"
+            "ReadFields",
+            "ReadRecordRows",
+            "WaitViewSyncPoint"
           ],
           "allowed_callers": [
             "archive",
@@ -1078,6 +1078,7 @@
             "console",
             "factor-mgr",
             "monitor",
+            "moox-cli",
             "storage-view"
           ]
         },
@@ -1106,7 +1107,28 @@
           "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
-            "GetFactorPeriodComputed"
+            "DeleteDatasetRows",
+            "ReportCollectorPeriodCompleted",
+            "RestoreDatasetRows"
+          ],
+          "allowed_callers": [
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "GetFactorPeriodComputed",
+            "UpsertFields"
           ],
           "allowed_callers": [
             "access",
@@ -1139,27 +1161,6 @@
           "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
-            "ReadFields",
-            "ReadRecordRows",
-            "WaitViewSyncPoint"
-          ],
-          "allowed_callers": [
-            "archive",
-            "collector",
-            "console",
-            "factor-mgr",
-            "monitor",
-            "moox-cli",
-            "storage-view"
-          ]
-        },
-        {
-          "service_id": "storage-primary",
-          "address": "127.0.0.1:20102",
-          "service_path": "trpc.moox.storage.PrimaryStore",
-          "timeout_ms": 300000,
-          "max_body_bytes": 33554432,
-          "allowed_methods": [
             "ReadTimeSeriesRows"
           ],
           "allowed_callers": [
@@ -1181,8 +1182,7 @@
           "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
-            "ReportFactorPeriodComputed",
-            "UpsertFields"
+            "ReportFactorPeriodComputed"
           ],
           "allowed_callers": [
             "access",

@@ -2371,7 +2371,7 @@ start_storage() {
   # after the node is serving so that cleanup and history reads cannot race the
   # DataNode listener during a deployment restart.
   start_storage_primary
-  wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
+  wait_tcp 127.0.0.1 20102 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
   wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
   wait_http http://127.0.0.1:20210/healthz "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
   register_storage_node
@@ -2404,7 +2404,7 @@ complete_storage_bootstrap() {
     return 0
   fi
   wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
-  wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
+  wait_tcp 127.0.0.1 20103 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
   # A durable backlog makes /readyz return 503 even when the restored View is
   # correctly consuming. Deployment requires a healthy restore and a bound
   # consumer, not an already-drained backlog.
@@ -2999,7 +2999,7 @@ case "${SERVICE}" in
       echo "storage is disabled in this deployment package" >&2
       exit 2
     fi
-    wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
+    wait_tcp 127.0.0.1 20102 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
     wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
     start_storage_view
     ;;

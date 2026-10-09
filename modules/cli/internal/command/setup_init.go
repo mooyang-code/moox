@@ -637,10 +637,10 @@ func defaultOpenSetupInitStorage(
 }
 
 func (s *remoteSetupInitStorage) Apply(ctx context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
-	if s == nil || s.session == nil || s.session.listener == nil {
+	if s == nil || s.session == nil || s.session.gateway == nil {
 		return metadataImportSummary{}, fmt.Errorf("storage_not_reachable")
 	}
-	return runMetadataApply(ctx, "http://"+s.session.listener.Addr().String(), calls)
+	return runMetadataApply(ctx, s.session.gateway, calls)
 }
 
 func (s *remoteSetupInitStorage) Activate(ctx context.Context, datasets []seedDataset) (setupDatasetActivationSummary, error) {

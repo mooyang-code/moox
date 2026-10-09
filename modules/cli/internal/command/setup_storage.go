@@ -18,6 +18,7 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	clicgateway "github.com/mooyang-code/moox/modules/cli/internal/gateway"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -29,27 +30,24 @@ import (
 )
 
 const (
-	storageMetadataRemoteAddress = "127.0.0.1:20200"
-	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
-	storageBrowserRemoteAddress  = "127.0.0.1:9527"
-	storageLocalProvenanceFile   = "release/storage-artifacts/build-provenance.json"
-	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
-	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
-	storageDeploymentNodeID      = "storage-node-0"
-	storageBrowserFixtureOwner   = "storage-browser-e2e"
-	storageBrowserFixtureMaxAge  = time.Hour
+	storageBrowserRemoteAddress = "127.0.0.1:9527"
+	storageLocalProvenanceFile  = "release/storage-artifacts/build-provenance.json"
+	storageReleaseManifestFile  = "artifacts/storage-datanode-release-sha256.txt"
+	storageE2ESpec              = "tests/storage-datanode-management.remote.e2e.spec.ts"
+	storageDeploymentNodeID     = "storage-node-0"
+	storageBrowserFixtureOwner  = "storage-browser-e2e"
+	storageBrowserFixtureMaxAge = time.Hour
 )
 
 type storageVerifyResult struct {
-	Status             string                      `json:"status"`
-	Commit             string                      `json:"commit"`
-	Components         map[string]storageComponent `json:"components"`
-	BinaryHashes       map[string]string           `json:"binary_hashes"`
-	SchemaVersion      int                         `json:"schema_version"`
-	DataNode           storageDataNodeIdentity     `json:"data_node"`
-	NodeCount          int                         `json:"node_count"`
-	DatasetCount       int                         `json:"dataset_count"`
-	RouteRPCRegistered bool                        `json:"route_rpc_registered"`
+	Status        string                      `json:"status"`
+	Commit        string                      `json:"commit"`
+	Components    map[string]storageComponent `json:"components"`
+	BinaryHashes  map[string]string           `json:"binary_hashes"`
+	SchemaVersion int                         `json:"schema_version"`
+	DataNode      storageDataNodeIdentity     `json:"data_node"`
+	NodeCount     int                         `json:"node_count"`
+	DatasetCount  int                         `json:"dataset_count"`
 }
 
 type storageComponent struct {
@@ -262,69 +260,37 @@ func (c *storageRuntimeProxy) GetNodeState(ctx context.Context, req *storagepb.G
 	return c.proxy.GetNodeState(ctx, req, c.options...)
 }
 
+// remoteStorageSession 是 setup 验证 Storage 用的会话：Metadata 与 PrimaryStore 经 SSH 隧道的 gatewayclient
+// （moox-cli 身份）访问；不在组件目录中的 DataNode 运行时接口仍经 SSH 端口转发访问。
 type remoteStorageSession struct {
-	transport       setupssh.Client
-	metadata        storageMetadataAPI
-	primary         storagePrimaryAPI
-	auth            *storagepb.AuthInfo
-	nodeAuth        *storagepb.AuthInfo
-	primaryAuth     *storagepb.AuthInfo
-	cancel          context.CancelFunc
-	listener        net.Listener
-	primaryCancel   context.CancelFunc
-	primaryListener net.Listener
+	transport   setupssh.Client
+	gateway     *clicgateway.Client
+	metadata    storageMetadataAPI
+	primary     storagePrimaryAPI
+	auth        *storagepb.AuthInfo
+	nodeAuth    *storagepb.AuthInfo
+	primaryAuth *storagepb.AuthInfo
 }
 
 func (s *remoteStorageSession) Close() {
-	if s == nil {
-		return
-	}
-	if s.listener != nil {
-		_ = s.listener.Close()
-	}
-	if s.primaryListener != nil {
-		_ = s.primaryListener.Close()
-	}
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.primaryCancel != nil {
-		s.primaryCancel()
+	if s != nil && s.gateway != nil {
+		s.gateway.Close()
 	}
 }
 
-func newRemoteStorageSession(ctx context.Context, transport setupssh.Client, secret, primarySecret string) (*remoteStorageSession, error) {
-	if transport == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(primarySecret) == "" {
+func newRemoteStorageSession(transport setupssh.Client, gateway *clicgateway.Client, secret, primarySecret string) (*remoteStorageSession, error) {
+	if transport == nil || gateway == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(primarySecret) == "" {
 		return nil, errors.New("storage_verification_unavailable")
 	}
-	forwardContext, cancel := context.WithCancel(ctx)
-	listener, err := transport.ForwardLocal(forwardContext, storageMetadataRemoteAddress)
-	if err != nil {
-		cancel()
-		return nil, errors.New("storage_not_reachable")
-	}
-	primaryForwardContext, primaryCancel := context.WithCancel(ctx)
-	primaryListener, err := transport.ForwardLocal(primaryForwardContext, storagePrimaryRemoteAddress)
-	if err != nil {
-		_ = listener.Close()
-		cancel()
-		primaryCancel()
-		return nil, errors.New("storage_primary_not_reachable")
-	}
-	target := "ip://" + listener.Addr().String()
-	options := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("http")}
-	primaryOptions := []client.Option{client.WithTarget("ip://" + primaryListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+	options := gateway.ClientOptions(gatewayclient.WithTimeout(storageCallTimeout))
 	return &remoteStorageSession{
-		transport:       transport,
-		metadata:        &storageMetadataProxy{proxy: storagepb.NewMetadataClientProxy(options...), options: options},
-		primary:         &storagePrimaryProxy{proxy: storagepb.NewPrimaryStoreClientProxy(primaryOptions...), options: primaryOptions},
-		auth:            &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
-		nodeAuth:        &storagepb.AuthInfo{AppId: "storage-deployer", AppKey: security.HMACSHA256Hex(secret, []byte("storage-deployer"))},
-		primaryAuth:     &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: security.HMACSHA256Hex(primarySecret, []byte("storage-e2e"))},
-		cancel:          cancel,
-		listener:        listener,
-		primaryCancel:   primaryCancel,
-		primaryListener: primaryListener,
+		transport:   transport,
+		gateway:     gateway,
+		metadata:    &storageMetadataProxy{proxy: storagepb.NewMetadataClientProxy(options...)},
+		primary:     &storagePrimaryProxy{proxy: storagepb.NewPrimaryStoreClientProxy(options...)},
+		auth:        &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		nodeAuth:    &storagepb.AuthInfo{AppId: "storage-deployer", AppKey: security.HMACSHA256Hex(secret, []byte("storage-deployer"))},
+		primaryAuth: &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: security.HMACSHA256Hex(primarySecret, []byte("storage-e2e"))},
 	}, nil
 }
 
@@ -469,8 +435,14 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
 	}
-	session, err := newRemoteStorageSession(ctx, transport, secret, primarySecret)
+	gateway, err := openControlGateway(snapshot.Manifest)
 	if err != nil {
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	session, err := newRemoteStorageSession(transport, gateway, secret, primarySecret)
+	if err != nil {
+		gateway.Close()
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
 	}
@@ -548,13 +520,6 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 	if err := verifyStockCNKlineColumns(ctx, session.metadata, session.auth); err != nil {
 		return storageVerifyResult{}, err
 	}
-	routeRPCRegistered, err := readRemoteRouteRPCRegistered(ctx, transport)
-	if err != nil {
-		return storageVerifyResult{}, err
-	}
-	if routeRPCRegistered {
-		return storageVerifyResult{}, errors.New("storage_route_rpc_registered")
-	}
 	schemaVersion, err := readStorageSchemaVersion(ctx, transport, storageRoot)
 	if err != nil {
 		return storageVerifyResult{}, err
@@ -585,15 +550,14 @@ func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session
 		return storageVerifyResult{}, errors.New("storage_verification_failed")
 	}
 	return storageVerifyResult{
-		Status:             "passed",
-		Commit:             remoteProvenance.Commit,
-		Components:         components,
-		BinaryHashes:       hashes,
-		SchemaVersion:      schemaVersion,
-		DataNode:           storageDataNodeIdentity{NodeID: state.GetNodeId(), Status: state.GetStatus()},
-		NodeCount:          len(items),
-		DatasetCount:       datasetCount,
-		RouteRPCRegistered: routeRPCRegistered,
+		Status:        "passed",
+		Commit:        remoteProvenance.Commit,
+		Components:    components,
+		BinaryHashes:  hashes,
+		SchemaVersion: schemaVersion,
+		DataNode:      storageDataNodeIdentity{NodeID: state.GetNodeId(), Status: state.GetStatus()},
+		NodeCount:     len(items),
+		DatasetCount:  datasetCount,
 	}, nil
 }
 
@@ -789,36 +753,6 @@ func validStorageSHA256(value string) bool {
 func validStorageHex(value string) bool {
 	_, err := hex.DecodeString(value)
 	return err == nil
-}
-
-func readRemoteRouteRPCRegistered(ctx context.Context, transport setupssh.Client) (bool, error) {
-	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-body=$(mktemp)
-trap 'rm -f "$body"' EXIT
-status=$(curl -sS -o "$body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-  --data '{}' http://127.0.0.1:20200/trpc.moox.storage.Metadata/ListStorageRoutes || true)
-case "$status" in
-  2??) printf registered ;;
-  404) printf absent ;;
-  *)
-    if grep -Eiq 'method.*(not found|unknown)|not implemented|no such method' "$body"; then
-      printf absent
-    else
-      exit 1
-    fi
-    ;;
-esac`}, nil)
-	if err != nil {
-		return false, errors.New("storage_route_probe_unavailable")
-	}
-	switch strings.TrimSpace(result.Stdout) {
-	case "registered":
-		return true, nil
-	case "absent":
-		return false, nil
-	default:
-		return false, errors.New("storage_route_probe_unavailable")
-	}
 }
 
 func readStorageComponents(ctx context.Context, transport setupssh.Client, storageRoot string) (map[string]storageComponent, error) {

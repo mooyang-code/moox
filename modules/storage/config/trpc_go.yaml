@@ -58,22 +58,6 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 60000
-    - name: trpc.moox.storage.PrimaryStore.http
-      ip: 127.0.0.1
-      port: 20201
-      network: tcp
-      protocol: http
-    - name: trpc.moox.storage.Metadata.http
-      ip: 127.0.0.1
-      port: 20200
-      network: tcp
-      protocol: http
-    - name: trpc.moox.storage.DataView.http
-      ip: 127.0.0.1
-      port: 20202
-      network: tcp
-      protocol: http
-      timeout: 30000
 
 client:
   filter:
@@ -84,21 +68,6 @@ client:
       target: ip://127.0.0.1:20101
       network: tcp
       protocol: trpc
-      timeout: 3000
-    - name: trpc.moox.storage.PrimaryStore
-      target: ip://127.0.0.1:20201
-      network: tcp
-      protocol: http
-      timeout: 3000
-    - name: trpc.moox.storage.Metadata
-      target: ip://127.0.0.1:20200
-      network: tcp
-      protocol: http
-      timeout: 3000
-    - name: trpc.moox.storage.DataView
-      target: ip://127.0.0.1:20202
-      network: tcp
-      protocol: http
       timeout: 3000
     - name: trpc.moox.storage.ViewIndex
       target: ip://127.0.0.1:20104

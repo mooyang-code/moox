@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	dataStorageURL      string
+	dataManifestFile    string
 	dataSpaceID         string
 	dataDatasetID       string
 	dataSubjectID       string
@@ -45,28 +45,30 @@ var dataRowsExportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if dataStorageURL != "" {
-			auth, err := dataPrimaryAuth(dataStorageAuthFile)
-			if err != nil {
-				return err
-			}
-			selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
-			rsp, err := exportRowsRemote(trpc.BackgroundContext(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth,
-				SpaceId:  defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
-				Selectors: []*pb.TimeSeriesSelector{selector},
-				TimeRange: &pb.TimeRange{
-					StartTime: dataStartTime,
-					EndTime:   dataEndTime,
-				},
-				Page: &pb.Page{Page: 1, Size: dataPageSize},
-			})
-			if err != nil {
-				return err
-			}
-			return writeRowsExport(rsp, dataOutputFile, dataStorageURL, datasetID, dataSubjectID)
+		auth, err := dataPrimaryAuth(dataStorageAuthFile)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("必须指定 --storage-url，通过 moox-storage Access Service 读取")
+		storage, closeStorage, err := openStorageInvoker(dataManifestFile)
+		if err != nil {
+			return err
+		}
+		defer closeStorage()
+		selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
+		rsp, err := exportRowsRemote(trpc.BackgroundContext(), storage, &pb.ReadTimeSeriesRowsReq{
+			AuthInfo: auth,
+			SpaceId:  defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
+			Selectors: []*pb.TimeSeriesSelector{selector},
+			TimeRange: &pb.TimeRange{
+				StartTime: dataStartTime,
+				EndTime:   dataEndTime,
+			},
+			Page: &pb.Page{Page: 1, Size: dataPageSize},
+		})
+		if err != nil {
+			return err
+		}
+		return writeRowsExport(rsp, dataOutputFile, accessServiceName, datasetID, dataSubjectID)
 	},
 }
 
@@ -86,7 +88,7 @@ func init() {
 	dataCmd.AddCommand(dataRowsCmd)
 	dataRowsCmd.AddCommand(dataRowsExportCmd)
 
-	dataRowsExportCmd.Flags().StringVar(&dataStorageURL, "storage-url", "", "远端 moox-storage HTTP 地址，例如 http://127.0.0.1:20201")
+	dataRowsExportCmd.Flags().StringVar(&dataManifestFile, "manifest", "", "moox.toml；访问存储所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
 	dataRowsExportCmd.Flags().StringVar(&dataStorageAuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")

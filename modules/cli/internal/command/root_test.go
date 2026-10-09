@@ -66,14 +66,6 @@ func TestMetadataNotFound(t *testing.T) {
 	assert.False(t, metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_SUCCESS}))
 }
 
-func TestDefaultMetadataImportURL(t *testing.T) {
-	t.Setenv("MOOX_METADATA_URL", "")
-	assert.Equal(t, "http://127.0.0.1:20200", defaultMetadataImportURL(""))
-	assert.Equal(t, "http://meta:20200", defaultMetadataImportURL("meta:20200"))
-	t.Setenv("MOOX_METADATA_URL", "http://env-meta:20200")
-	assert.Equal(t, "http://env-meta:20200", defaultMetadataImportURL(""))
-}
-
 func TestCountMetadataCalls(t *testing.T) {
 	calls := []metadataImportCall{{Resource: "spaces"}, {Resource: "spaces"}, {Resource: "datasets"}}
 	got := countMetadataCalls(calls)
@@ -116,7 +108,7 @@ func TestSeedToPBHelpers(t *testing.T) {
 }
 
 func TestRunMetadataImportWithNoCalls(t *testing.T) {
-	summary, err := runMetadataImport(context.Background(), "http://unused", nil, false)
+	summary, err := runMetadataImport(context.Background(), httpStorageInvoker{"http://unused"}, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, summary.Applied)
 }
@@ -194,7 +186,7 @@ func TestRunStorageImportDryRunPath(t *testing.T) {
 		},
 	}
 	summary, err := runStorageImport(context.Background(), storageImportOptions{
-		Format: "csv", File: path, MetadataURL: "http://meta", AccessURL: "http://access",
+		Format: "csv", File: path,
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", TimeColumn: "open_time",
 		DryRun: true,
 	}, meta, fakeStorageWriter{})

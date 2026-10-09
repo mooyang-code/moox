@@ -33,7 +33,7 @@ func (e doctorExitError) ExitCode() int { return e.code }
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
 	newClient         func([]client.Option) *doctorcli.Client
-	newMetadataClient func(string, string) doctorcli.StorageActivationClient
+	newMetadataClient func([]client.Option, string) doctorcli.StorageActivationClient
 }
 
 func init() {
@@ -89,12 +89,13 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 				return err
 			}
 			defer closeGateway()
-			client := deps.newClient(gateway.ClientOptions(gatewayclient.WithTimeout(15 * time.Second)))
+			options := gateway.ClientOptions(gatewayclient.WithTimeout(15 * time.Second))
+			client := deps.newClient(options)
 			metadataClientFactory := deps.newMetadataClient
 			if metadataClientFactory == nil {
 				metadataClientFactory = newSignedStorageMetadataClient
 			}
-			storageActivation := metadataClientFactory(defaultMetadataImportURL(""), os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
+			storageActivation := metadataClientFactory(options, os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
 			auth, err := loadDoctorHealthAuth(doctorCfg.ReleaseRoot)
 			if err != nil {
 				return err
@@ -170,9 +171,10 @@ type signedStorageMetadataClient struct {
 	auth  *commonpb.AuthInfo
 }
 
-func newSignedStorageMetadataClient(target, secret string) doctorcli.StorageActivationClient {
+// newSignedStorageMetadataClient 用给定的 tRPC 客户端选项（gatewayclient）以 storage-metadata 只读身份读取数据集激活状态。
+func newSignedStorageMetadataClient(options []client.Option, secret string) doctorcli.StorageActivationClient {
 	return &signedStorageMetadataClient{
-		proxy: pb.NewMetadataClientProxy(client.WithTarget(target), client.WithProtocol("http"), client.WithNetwork("tcp")),
+		proxy: pb.NewMetadataClientProxy(options...),
 		auth:  &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -801,13 +802,9 @@ func decodeCompiled(strategy domain.Strategy) (compiler.CompiledStrategy, error)
 	return compiled, nil
 }
 
+// requestSpaceID 读取调用方在 tRPC 元数据 x-space-id 中声明的空间（控制台转发时写入，主机网关原样透传）。
 func requestSpaceID(ctx context.Context) string {
-	for _, key := range []string{"space_id", "X-Space-Id", "x-space-id"} {
-		if value := string(trpc.GetMetaData(ctx, key)); value != "" {
-			return value
-		}
-	}
-	return ""
+	return strings.TrimSpace(string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID)))
 }
 
 func requireSpaceID(ctx context.Context) (string, error) {

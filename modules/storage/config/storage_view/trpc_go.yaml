@@ -29,12 +29,6 @@ server:
       network: tcp
       protocol: trpc
       timeout: 30000
-    - name: trpc.moox.storage.DataView.http
-      ip: 127.0.0.1
-      port: 20202
-      network: tcp
-      protocol: http
-      timeout: 30000
     - name: trpc.moox.storage.ViewIndex
       ip: 127.0.0.1
       port: 20104
@@ -54,21 +48,11 @@ server:
       protocol: timer
       timeout: 20000
 
+# 访问 Metadata 与 PrimaryStore 经顶层的 gateway_client。
 client:
   filter:
     - validation
     - opentelemetry
-  service:
-    - name: trpc.moox.storage.PrimaryStore
-      target: ip://127.0.0.1:20201
-      network: tcp
-      protocol: http
-      timeout: 30000
-    - name: trpc.moox.storage.Metadata
-      target: ip://127.0.0.1:20200
-      network: tcp
-      protocol: http
-      timeout: 3000
 
 plugins:
   metrics:

@@ -38,7 +38,7 @@ func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {
 }
 
 func TestStorageMetadataClientUsesReadOnlySignedIdentity(t *testing.T) {
-	client := newSignedStorageMetadataClient("http://127.0.0.1:20200", "storage-secret")
+	client := newSignedStorageMetadataClient(nil, "storage-secret")
 	signed, ok := client.(*signedStorageMetadataClient)
 	require.True(t, ok)
 	require.Equal(t, "storage-metadata", signed.auth.GetAppId())

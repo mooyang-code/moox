@@ -358,7 +358,7 @@ assert_grep 'enabled: true' "${DEPLOY_DIR}/storage/config/trpc_go.yaml"
 assert_grep 'log_path: \.\./logs/storage-primary' "${DEPLOY_DIR}/storage/config/trpc_go.yaml"
 assert_grep 'log_path: \.\./logs/storage-view' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20104' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-assert_grep 'port: 20202' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'port: 20103' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy/deploy-moox.sh"; then
   echo 'legacy storage route seed environment remains in deployment script' >&2
   exit 1

@@ -391,6 +391,9 @@ components:
           - methods: [UpsertFields, DeleteDatasetRows, RestoreDatasetRows, AppendDatasetSyncPoint,
                       ReportCollectorPeriodCompleted, ReportFactorPeriodComputed]
             callers: [console, archive, collector, factor-mgr, monitor, storage-view]
+          # 历史数据导入（moox-cli storage import）和 setup 的存储验收要写入行并追加同步点。
+          - methods: [UpsertFields, AppendDatasetSyncPoint]
+            callers: [moox-cli]
           - methods: [EnsureDatasetPeriod, GetDatasetPeriodStatus, CommitTimeSeriesBatch, RecordDatasetPeriodFailures]
             callers: [collector, moox-cli]
           - methods: [WriteFactorRows]

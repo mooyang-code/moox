@@ -18,7 +18,6 @@ import (
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
-	_ "github.com/mooyang-code/moox/modules/strategy/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/strategy/internal/storageio"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategytrigger "github.com/mooyang-code/moox/modules/strategy/internal/trigger"
@@ -137,7 +136,12 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 			}
 		}
 	}()
-	strategypb.RegisterStrategyMgrService(s, service)
+	// 只注册到 StrategyMgr 自己的监听；注册到整个 server 会让健康检查端口也能调用管理方法。
+	strategyMgr := s.Service("trpc.moox.strategy.StrategyMgr")
+	if strategyMgr == nil {
+		return nil, nil, errors.New("strategy service \"trpc.moox.strategy.StrategyMgr\" is required")
+	}
+	strategypb.RegisterStrategyMgrService(strategyMgr, service)
 	healthState := health.New("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, healthState, readyConsumer)
 	healthState.SetReady(true)

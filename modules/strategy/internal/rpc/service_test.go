@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -75,7 +76,7 @@ func TestStrategyInstanceRPCRequiresMatchingSpaceMetadata(t *testing.T) {
 	require.NotEqual(t, int32(0), missing.GetRetInfo().GetCode())
 
 	mismatch := trpc.BackgroundContext()
-	trpc.SetMetaData(mismatch, "X-Space-Id", []byte("space-b"))
+	trpc.SetMetaData(mismatch, gatewayroute.MetadataSpaceID, []byte("space-b"))
 	got, err := service.GetStrategyInstance(mismatch, &strategypb.GetStrategyInstanceReq{InstanceId: "scope-instance"})
 	require.NoError(t, err)
 	require.NotEqual(t, int32(0), got.GetRetInfo().GetCode())

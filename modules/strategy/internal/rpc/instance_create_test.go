@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -54,7 +55,7 @@ rules: {r: {pool: [BTC], score: close, weight: 1}}
 	catalog := runnerVerifyCatalog{}
 	svc := &Service{Repo: repo, LogicalAccounts: owner, Compiler: &compiler.Compiler{Factors: catalog, Storage: catalog}}
 	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, "X-Space-Id", []byte("space"))
+	trpc.SetMetaData(ctx, gatewayroute.MetadataSpaceID, []byte("space"))
 	req := &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{
 		InstanceId: "create-instance", StrategyId: "create-strategy", SpaceId: "space",
 		InputBindingsJson: `{"source_view_id":"source"}`, LogicalAccountId: "logical-a", Enabled: true,
@@ -207,7 +208,7 @@ func TestCreateInstanceRetryRejectsDifferentConfiguration(t *testing.T) {
 			switch field {
 			case "space":
 				req.Instance.SpaceId = "other"
-				trpc.SetMetaData(ctx, "X-Space-Id", []byte("other"))
+				trpc.SetMetaData(ctx, gatewayroute.MetadataSpaceID, []byte("other"))
 			case "strategy":
 				req.Instance.StrategyId = "other"
 			case "bindings":

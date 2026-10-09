@@ -108,7 +108,10 @@ if grep -q 'view.timer' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml";
   echo 'unimplemented Storage View scheduler must not be deployed' >&2
   exit 1
 fi
-grep -q 'target: ip://127.0.0.1:20201' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
+if grep -Eq '2020[012]' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"; then
+  echo 'storage-view must not reference the removed Storage HTTP ports' >&2
+  exit 1
+fi
 grep -q '^    - view$' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 grep -q 'source "\${ROOT}/secrets/storage-node-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'source "\${ROOT}/secrets/storage-internal-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
