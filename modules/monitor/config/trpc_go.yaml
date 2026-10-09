@@ -18,7 +18,7 @@ server:
       ip: 127.0.0.1
       port: 11410
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 30000
     - name: trpc.moox.monitor.Health
       ip: 127.0.0.1
