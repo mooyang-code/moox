@@ -10,11 +10,11 @@ trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 command -v jq >/dev/null 2>&1 || { echo 'jq is required' >&2; exit 1; }
 bash -n "${WRAPPER}"
-grep -Fq 'MOOX_LINUX_CGO_TARGET="${MOOX_LINUX_CGO_TARGET:-factor}"' "${WRAPPER}"
+grep -Fq 'MOOX_LINUX_CGO_TARGET="${MOOX_LINUX_CGO_TARGET:-factor-mgr}"' "${WRAPPER}"
 grep -Fq 'build-storage-linux.sh' "${WRAPPER}"
-grep -Fq 'MOOX_LINUX_CGO_TARGET=factor' "${DEPLOY_SCRIPT}"
+grep -Fq 'MOOX_LINUX_CGO_TARGET=factor-mgr' "${DEPLOY_SCRIPT}"
 grep -Fq 'moox-cli.host' "${DEPLOY_SCRIPT}"
-grep -Fq 'MOOX_CLI="${host_cli}" MOOX_LINUX_CGO_TARGET=factor' "${DEPLOY_SCRIPT}"
+grep -Fq 'MOOX_CLI="${host_cli}" MOOX_LINUX_CGO_TARGET=factor-mgr' "${DEPLOY_SCRIPT}"
 grep -Fq 'linux_cgo_target="${MOOX_LINUX_CGO_TARGET:-storage}"' "${SCRIPT}"
 
 FAKE_BIN="${TMP_ROOT}/bin"
@@ -67,7 +67,7 @@ SSH_LOG="${TMP_ROOT}/ssh.log" \
 PATH="${FAKE_BIN}:${PATH}" \
 MOOX_CLI="${FAKE_BIN}/moox-cli" \
 MOOX_SSH_PASSWORD=fixture-password \
-MOOX_LINUX_CGO_TARGET=factor \
+MOOX_LINUX_CGO_TARGET=factor-mgr \
 CONFIG="${ROOT}/moox.toml.contract-test" \
 KNOWN_HOSTS_PATH="${TMP_ROOT}/known_hosts" \
 BIN_DIR="${TMP_ROOT}/output" \
@@ -77,7 +77,7 @@ VERSION=test-version \
 bash "${SCRIPT}"
 
 grep -Fq -- 'bash ./scripts/build/build.sh' "${TMP_ROOT}/ssh.log"
-grep -Fq -- 'factor' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'factor-mgr' "${TMP_ROOT}/ssh.log"
 ! grep -Fq -- 'build.sh storage' "${TMP_ROOT}/ssh.log"
 test -s "${TMP_ROOT}/output/moox-factor-mgr"
 test -s "${TMP_ROOT}/output/moox-factor-mgr-cli"
