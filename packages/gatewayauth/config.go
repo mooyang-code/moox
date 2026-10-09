@@ -125,19 +125,3 @@ func CredentialsFromKeyFile(keyID, path string) (Credentials, error) {
 	}
 	return Credentials{KeyID: keyID, Secret: secretText}, nil
 }
-
-// ResolveCredentials prefers an explicitly configured key file and otherwise
-// uses the process-injected credential pair for local and SCF runtimes.
-func ResolveCredentials(keyID, keyFile string) (Credentials, error) {
-	if strings.TrimSpace(keyFile) != "" {
-		return CredentialsFromKeyFile(keyID, keyFile)
-	}
-	credentials := CredentialsFromEnv()
-	if strings.TrimSpace(credentials.KeyID) == "" && strings.TrimSpace(keyID) != "" {
-		credentials.KeyID = strings.TrimSpace(keyID)
-	}
-	if _, _, err := validateCredentials(credentials); err != nil {
-		return Credentials{}, fmt.Errorf("gateway credentials are required: %w", err)
-	}
-	return credentials, nil
-}

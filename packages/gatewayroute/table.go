@@ -23,39 +23,6 @@ func (table *Table) Replace(snapshot Snapshot) error {
 	return nil
 }
 
-func (table *Table) Resolve(serviceID string) (Route, bool) {
-	snapshot := table.current.Load()
-	if snapshot == nil || snapshot.Disabled {
-		return Route{}, false
-	}
-	for _, route := range snapshot.Routes {
-		if route.ServiceID == serviceID {
-			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
-			route.AllowedCallers = append([]string(nil), route.AllowedCallers...)
-			return route, true
-		}
-	}
-	return Route{}, false
-}
-
-// ResolveMethod resolves an HTTP service route by its logical service and
-// method. A process may expose multiple tRPC services under one deployment
-// identity as long as their method allowlists do not overlap.
-func (table *Table) ResolveMethod(serviceID, method string) (Route, bool) {
-	snapshot := table.current.Load()
-	if snapshot == nil || snapshot.Disabled {
-		return Route{}, false
-	}
-	for _, route := range snapshot.Routes {
-		if route.ServiceID == serviceID && route.AllowsMethod(method) {
-			route.AllowedMethods = append([]string(nil), route.AllowedMethods...)
-			route.AllowedCallers = append([]string(nil), route.AllowedCallers...)
-			return route, true
-		}
-	}
-	return Route{}, false
-}
-
 // HasService 判断快照中是否有这个 tRPC 服务的路由，用来区分「服务不在本机」与「方法未开放」。
 func (table *Table) HasService(servicePath string) bool {
 	snapshot := table.current.Load()

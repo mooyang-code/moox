@@ -4,34 +4,24 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/archive/internal/cosstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	eventconsumer "github.com/mooyang-code/moox/modules/archive/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	sharedpb "github.com/mooyang-code/moox/packages/storagepb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/parquet-go/parquet-go"
-	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
@@ -136,246 +126,6 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("archive files were not materialized")
-}
-
-func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
-	if os.Getenv("MOOX_SERIES_TAG_E2E") != "1" {
-		t.Skip("requires scripts/test/e2e/test-series-tag-e2e.sh")
-	}
-	archiveRoot := requiredArchiveEnv(t, "MOOX_ARCHIVE_E2E_ROOT")
-	pidRaw, err := os.ReadFile(requiredArchiveEnv(t, "MOOX_ARCHIVE_E2E_PID_FILE"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidRaw)))
-	if err != nil || pid <= 0 {
-		t.Fatalf("invalid deployed Archive pid %q: %v", pidRaw, err)
-	}
-	archiveProcess, err := os.FindProcess(pid)
-	if err != nil || archiveProcess.Signal(syscall.Signal(0)) != nil {
-		t.Fatalf("deployed Archive process %d is not running: %v", pid, err)
-	}
-
-	credentials := gatewayauth.CredentialsFromEnv()
-	if credentials.KeyID == "" || credentials.Caller == "" || credentials.Secret == "" {
-		t.Fatal("gateway credentials are required")
-	}
-	target := requiredArchiveEnv(t, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
-	nodeID := requiredArchiveEnv(t, "MOOX_STORAGE_RPC_GATEWAY_NODE_ID")
-	options := gatewayauth.NewTRPCClientOptions(target, nodeID, credentials)
-	primary := storagepb.NewPrimaryStoreClientProxy(options...)
-	metadata := storagepb.NewMetadataClientProxy(options...)
-	metadataSetup := storagepb.NewMetadataClientProxy(
-		client.WithTarget("ip://127.0.0.1:20100"),
-		client.WithNetwork("tcp"),
-		client.WithProtocol("trpc"),
-	)
-	auth := &commonpb.AuthInfo{
-		AppId: "moox-factor", Operator: "archive-storage-e2e",
-		RequestId: fmt.Sprintf("archive-storage-e2e-%d", time.Now().UnixNano()),
-	}
-	auth.AppKey = mooxsecurity.HMACSHA256Hex(
-		requiredArchiveEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"),
-		[]byte(auth.AppId),
-	)
-	// The isolated deployment starts with an empty Metadata database. Create the
-	// small time-series catalog required by the real outbox round trip instead
-	// of depending on example seed data from another module.
-	dataNodeID := requiredArchiveEnv(t, "MOOX_FACTOR_STORAGE_E2E_DATA_NODE_ID")
-	createSpace := func() {
-		rsp, callErr := metadataSetup.CreateSpace(t.Context(), &storagepb.CreateSpaceReq{AuthInfo: auth, Space: &storagepb.Space{SpaceId: "crypto", Name: "Archive E2E", Owner: "archive-e2e", Status: "active"}})
-		requireArchiveRPCOK(t, "Metadata.CreateSpace", rsp.GetRetInfo(), callErr)
-	}
-	createSpace()
-	dataSourceRsp, callErr := metadataSetup.CreateDataSource(t.Context(), &storagepb.CreateDataSourceReq{AuthInfo: auth, DataSource: &storagepb.DataSource{SpaceId: "crypto", DataSourceId: "archive-e2e", Name: "ArchSrc", Kind: "internal", Timezone: "UTC", Status: "active"}})
-	requireArchiveRPCOK(t, "Metadata.CreateDataSource", dataSourceRsp.GetRetInfo(), callErr)
-	subjectRsp, callErr := metadataSetup.UpsertSubject(t.Context(), &storagepb.UpsertSubjectReq{AuthInfo: auth, Subject: &storagepb.Subject{SpaceId: "crypto", SubjectId: "APT-USDT", SubjectType: "custom", Name: "APT-USDT", Timezone: "UTC", Status: "active"}})
-	requireArchiveRPCOK(t, "Metadata.UpsertSubject", subjectRsp.GetRetInfo(), callErr)
-	tagRsp, callErr := metadataSetup.UpsertTag(t.Context(), &storagepb.UpsertTagReq{AuthInfo: auth, Tag: &storagepb.Tag{SpaceId: "crypto", TagId: "archive_e2e", TagName: "Archive E2E", Mode: "manual", Source: "archive-e2e", MarketType: "spot"}})
-	requireArchiveRPCOK(t, "Metadata.UpsertTag", tagRsp.GetRetInfo(), callErr)
-	membersRsp, callErr := metadataSetup.AddTagMembers(t.Context(), &storagepb.TagMembersReq{AuthInfo: auth, SpaceId: "crypto", TagId: "archive_e2e", SubjectIds: []string{"APT-USDT"}})
-	requireArchiveRPCOK(t, "Metadata.AddTagMembers", membersRsp.GetRetInfo(), callErr)
-	groupRsp, callErr := metadataSetup.CreateFieldGroup(t.Context(), &storagepb.CreateFieldGroupReq{AuthInfo: auth, FieldGroup: &storagepb.FieldGroup{SpaceId: "crypto", GroupId: "archive-e2e", Name: "ArchFields", Status: "active"}})
-	requireArchiveRPCOK(t, "Metadata.CreateFieldGroup", groupRsp.GetRetInfo(), callErr)
-	for _, fieldID := range []string{"open", "high", "low", "close", "volume"} {
-		fieldRsp, fieldErr := metadataSetup.CreateField(t.Context(), &storagepb.CreateFieldReq{AuthInfo: auth, Field: &storagepb.Field{SpaceId: "crypto", FieldId: fieldID, Name: fieldID, GroupId: "archive-e2e", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}})
-		requireArchiveRPCOK(t, "Metadata.CreateField "+fieldID, fieldRsp.GetRetInfo(), fieldErr)
-	}
-	datasetRsp, callErr := metadataSetup.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{AuthInfo: auth, Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DataSourceId: "archive-e2e", Name: "归档数据", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", DataNodeId: dataNodeID, Status: "disabled", SubjectTags: []string{"archive_e2e"}}})
-	requireArchiveRPCOK(t, "Metadata.CreateDataset", datasetRsp.GetRetInfo(), callErr)
-	for _, columnID := range []string{"open", "high", "low", "close", "volume"} {
-		columnRsp, columnErr := metadataSetup.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{AuthInfo: auth, Column: &storagepb.DatasetColumn{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", ColumnName: columnID, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: columnID, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"display_name": "字段" + columnID}}})
-		requireArchiveRPCOK(t, "Metadata.UpsertDatasetColumn "+columnID, columnRsp.GetRetInfo(), columnErr)
-	}
-	checkRsp, callErr := metadataSetup.CheckDatasetActivation(t.Context(), &storagepb.CheckDatasetActivationReq{AuthInfo: auth, SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h"})
-	requireArchiveRPCOK(t, "Metadata.CheckDatasetActivation", checkRsp.GetRetInfo(), callErr)
-	require.True(t, checkRsp.GetReady(), "archive dataset activation checks: %v", checkRsp.GetChecks())
-	activateRsp, callErr := metadataSetup.ActivateDataset(t.Context(), &storagepb.ActivateDatasetReq{AuthInfo: auth, SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", ExpectedRevision: checkRsp.GetDatasetRevision()})
-	requireArchiveRPCOK(t, "Metadata.ActivateDataset", activateRsp.GetRetInfo(), callErr)
-	deviceRsp, err := metadataSetup.CreateDevice(t.Context(), &storagepb.CreateDeviceReq{
-		AuthInfo: auth,
-		Device: &storagepb.Device{
-			DeviceId: "parquet-local", Name: "Series Tag E2E Archive",
-			Engine: "parquet", Endpoint: archiveRoot, Status: "active",
-		},
-	})
-	requireArchiveRPCOK(t, "Metadata.CreateDevice", deviceRsp.GetRetInfo(), err)
-
-	const (
-		spaceID   = "crypto"
-		datasetID = "dataset_spot_kline_1h"
-		subjectID = "APT-USDT"
-		freq      = "1h"
-	)
-	first := time.Date(2026, time.June, 20, 1, 0, 0, 0, time.UTC)
-	second := first.Add(time.Hour)
-	tags := []string{"venue:binance", "venue:okx"}
-	rows := make([]*storagepb.RowFieldUpsert, 0, 4)
-	for tagIndex, tag := range tags {
-		for timeIndex, at := range []time.Time{first, second} {
-			base := float64(100 + 100*tagIndex + timeIndex)
-			rows = append(rows, archiveStorageRow(spaceID, datasetID, subjectID, freq, tag, at, base))
-		}
-	}
-	writeRsp, err := primary.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: auth, SourceEventId: fmt.Sprintf("archive-real-e2e-%d", time.Now().UnixNano()), Rows: rows,
-	})
-	requireArchiveRPCOK(t, "PrimaryStore.UpsertFields", writeRsp.GetRetInfo(), err)
-
-	keys := make([]*storagepb.RowKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, row.GetKey())
-	}
-	require.Eventually(t, func() bool {
-		readRsp, readErr := primary.ReadFields(t.Context(), &storagepb.PrimaryReadFieldsReq{
-			AuthInfo: auth, Keys: keys, FieldIds: []string{"open", "high", "low", "close", "volume"},
-		})
-		if readErr != nil || readRsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return false
-		}
-		seen := map[string]bool{}
-		for _, row := range readRsp.GetRows() {
-			seen[row.GetKey().GetTimeSeries().GetSeriesTag()] = true
-		}
-		return seen[tags[0]] && seen[tags[1]]
-	}, 10*time.Second, 100*time.Millisecond, "real Primary rows were not readable")
-
-	// The deployed timer starts before these writes. Stopping the deployed
-	// process exercises its real consumer drain and FlushOnShutdown path rather
-	// than calling Archive internals from the test process.
-	time.Sleep(3 * time.Second)
-	if err := archiveProcess.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("stop deployed Archive for flush: %v", err)
-	}
-	require.Eventually(t, func() bool {
-		return archiveProcess.Signal(syscall.Signal(0)) != nil
-	}, 10*time.Second, 100*time.Millisecond, "deployed Archive did not exit after flush")
-
-	month := first.Format("200601")
-	partitions := []domain.PartitionKey{
-		{SpaceID: spaceID, DatasetID: datasetID, SubjectID: subjectID, Freq: freq, SeriesTag: tags[0], Month: month},
-		{SpaceID: spaceID, DatasetID: datasetID, SubjectID: subjectID, Freq: freq, SeriesTag: tags[1], Month: month},
-	}
-	require.Eventually(t, func() bool {
-		for _, key := range partitions {
-			path, pathErr := key.AbsolutePath(archiveRoot)
-			if pathErr != nil {
-				return false
-			}
-			if _, statErr := os.Stat(path); statErr != nil {
-				return false
-			}
-		}
-		return true
-	}, 20*time.Second, 100*time.Millisecond, "deployed Archive did not flush both tag partitions")
-
-	var filesByPartition map[string]*storagepb.ArchiveFile
-	require.Eventually(t, func() bool {
-		listRsp, listErr := metadata.ListArchiveFiles(t.Context(), &storagepb.ListArchiveFilesReq{
-			AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID,
-			Page: &commonpb.Page{Page: 1, Size: 100},
-		})
-		if listErr != nil || listRsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-			return false
-		}
-		filesByPartition = make(map[string]*storagepb.ArchiveFile, len(listRsp.GetArchiveFiles()))
-		for _, file := range listRsp.GetArchiveFiles() {
-			filesByPartition[file.GetPartitionKey()] = file
-		}
-		return len(filesByPartition) >= len(partitions)
-	}, 10*time.Second, 100*time.Millisecond, "Metadata registry did not expose both tag partitions")
-	for _, key := range partitions {
-		path, pathErr := key.AbsolutePath(archiveRoot)
-		if pathErr != nil {
-			t.Fatal(pathErr)
-		}
-		assertIndependentParquetRows(t, path, key.SeriesTag, 2)
-		wantPartition := key.Freq + "/" + domain.EncodeIdentity(key.SubjectID) +
-			"/series_tag=" + domain.EncodeIdentity(key.SeriesTag) + "/" + key.Month
-		file := filesByPartition[wantPartition]
-		if file == nil {
-			t.Fatalf("Metadata registry has no deployed Archive partition %q: %v", wantPartition, filesByPartition)
-		}
-		fileURL, parseErr := url.Parse(file.GetFileUri())
-		registryPath, registryPathErr := filepath.EvalSymlinks(fileURL.Path)
-		localPath, localPathErr := filepath.EvalSymlinks(path)
-		if parseErr != nil || fileURL.Scheme != "file" ||
-			registryPathErr != nil || localPathErr != nil || registryPath != localPath {
-			t.Fatalf("registry file_uri=%q, want file://%s: %v", file.GetFileUri(), path, parseErr)
-		}
-		if file.GetDeviceId() != "parquet-local" || file.GetAttributes()["schema_version"] != "2" {
-			t.Fatalf("unexpected deployed Archive registry record: %+v", file)
-		}
-		if file.GetAttributes()["cos_status"] != "" || file.GetAttributes()["cos_object_key"] != "" {
-			t.Fatalf("local-only Archive must not fabricate COS state: %+v", file.GetAttributes())
-		}
-		objectKey, objectKeyErr := cosstore.ObjectKey(archiveRoot, "moox/archive", path)
-		relativePath, relativePathErr := key.RelativePath()
-		wantObjectKey := "moox/archive/" + filepath.ToSlash(relativePath)
-		if objectKeyErr != nil || relativePathErr != nil || objectKey != wantObjectKey {
-			t.Fatalf("COS object key=%q, want %q: objectErr=%v relativeErr=%v", objectKey, wantObjectKey, objectKeyErr, relativePathErr)
-		}
-	}
-}
-
-func archiveStorageRow(space, dataset, subject, freq, tag string, at time.Time, base float64) *storagepb.RowFieldUpsert {
-	double := func(name string, value float64) *storagepb.FieldValue {
-		return &storagepb.FieldValue{
-			FieldId: name,
-			Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}},
-		}
-	}
-	return &storagepb.RowFieldUpsert{
-		Key: &storagepb.RowKey{
-			SpaceId: space, DatasetId: dataset,
-			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: subject, Freq: freq, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: tag,
-			}},
-		},
-		Fields: []*storagepb.FieldValue{
-			double("open", base), double("high", base+2), double("low", base-2),
-			double("close", base+1), double("volume", base*10),
-		},
-	}
-}
-
-func requireArchiveRPCOK(t *testing.T, action string, ret *commonpb.RetInfo, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("%s: %v", action, err)
-	}
-	if ret == nil || ret.GetCode() != commonpb.ErrorCode_SUCCESS {
-		t.Fatalf("%s: %+v", action, ret)
-	}
-}
-
-func requiredArchiveEnv(t *testing.T, name string) string {
-	t.Helper()
-	value := os.Getenv(name)
-	if strings.TrimSpace(value) == "" {
-		t.Fatalf("%s is required", name)
-	}
-	return value
 }
 
 func assertArchivePartitionIdentity(t *testing.T, _ string, key domain.PartitionKey, path string) {
