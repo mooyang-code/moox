@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -102,7 +103,7 @@ func TestConsumerRecoversAfterEventBusRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	consumer := New(ConsumerConfig{Client: client, ConsumerName: "strategy-restart-test", FetchMaxWait: 200 * time.Millisecond, Logf: t.Logf}, &trigger.Handler{Store: repo, Loader: unusedLoader{}})
+	consumer := New(ConsumerConfig{Connect: func(context.Context) (*jetstream.Client, error) { return client, nil }, ConsumerName: "strategy-restart-test", FetchMaxWait: 200 * time.Millisecond, Logf: t.Logf}, &trigger.Handler{Store: repo, Loader: unusedLoader{}})
 	if err := consumer.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -147,4 +148,54 @@ func TestConsumerRecoversAfterEventBusRestart(t *testing.T) {
 		info, err := monitorJS.ConsumerInfo("MOOX_STORAGE", "strategy-restart-test")
 		return err == nil && info.Delivered.Consumer > 0 && info.NumAckPending == 0 && info.NumPending == 0
 	})
+}
+
+// EventBus 在策略启动时不可用：进程照常启动、消费者未就绪；EventBus 恢复后自行连接并就绪。关闭时等监督循环退出。
+func TestConsumerStartsWithoutEventBus(t *testing.T) {
+	port, dir := freePort(t), t.TempDir()
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	url := "nats://127.0.0.1:" + strconv.Itoa(port)
+	connect := func(ctx context.Context) (*jetstream.Client, error) {
+		return jetstream.Connect(ctx, jetstream.Config{URLs: []string{url}, Name: "strategy-consumer-late"})
+	}
+	consumer := New(ConsumerConfig{Connect: connect, ConsumerName: "strategy-late-test", FetchMaxWait: 200 * time.Millisecond, Logf: t.Logf}, &trigger.Handler{Store: repo, Loader: unusedLoader{}})
+	if err := consumer.Start(context.Background()); err != nil {
+		t.Fatalf("EventBus 不可用时也应能启动：%v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if consumer.Ready() {
+		t.Fatal("连上 EventBus 之前不应就绪")
+	}
+	srv := startNATS(t, port, dir)
+	t.Cleanup(func() { srv.Shutdown(); srv.WaitForShutdown() })
+	admin, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, err := admin.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.>"}, Storage: nats.FileStorage}); err != nil {
+		t.Fatal(err)
+	}
+	admin.Close()
+	eventually(t, 40*time.Second, "EventBus 恢复后消费者应自行连接并就绪", consumer.Ready)
+	closed := make(chan error, 1)
+	go func() { closed <- consumer.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("关闭应在监督循环退出后返回")
+	}
+	if consumer.Ready() {
+		t.Fatal("关闭后不应就绪")
+	}
 }

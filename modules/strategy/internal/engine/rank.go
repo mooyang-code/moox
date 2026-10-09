@@ -97,7 +97,9 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		explain.reject(id, StageDropped, reason, nil, 0)
 	}
 	live := without(passed, scored.failed)
-	if len(passed) > 0 && len(live) == 0 {
+	// 本期要用分数选择时（普通规则，或 holding 的建仓 bar），分数全部无效说明表达式本身有问题；holding 的其余 bar
+	// 只延续批次、不使用本期分数，不能因此整期跳过。
+	if len(passed) > 0 && len(live) == 0 && (rule.Rule.Holding == nil || rebuildBar(rule.Rule.Holding, frame.BarIndex)) {
 		return ruleResult{}, fmt.Errorf("score 对全部 %d 个通过 filter 的候选都无效", len(passed))
 	}
 	result.scored = len(live)
@@ -196,6 +198,11 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	result.weights = weights
 	result.items = explain.list()
 	return result, nil
+}
+
+// rebuildBar 报告这根 bar 是否是 holding 某个批次的建仓 bar（bar 序号对 bars 取模落在 offsets 上）。
+func rebuildBar(holding *dsl.Holding, barIndex int64) bool {
+	return barIndex >= 0 && containsInt(holding.Offsets, int(barIndex%int64(holding.Bars)))
 }
 
 // holdingOutcome 是分批换仓一期的结果。

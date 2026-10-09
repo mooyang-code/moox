@@ -32,7 +32,7 @@ func (c *RPCClient) pageSize() uint32 {
 	return 500
 }
 
-// GetView 读取 View 及其全部列。
+// GetView 读取 View 及其全部列；覆盖范围取 DataView 实际服务的活动索引统计（见 viewCoverage）。
 func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error) {
 	if c == nil || c.Metadata == nil {
 		return ViewInfo{}, errors.New("Storage Metadata 客户端未配置")
@@ -52,16 +52,6 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 		return ViewInfo{}, fmt.Errorf("View %s 不存在", viewID)
 	}
 	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus(), ActiveIndexID: strings.TrimSpace(view.GetActiveIndexId())}
-	if from := strings.TrimSpace(view.GetIndexedFrom()); from != "" {
-		if at, err := time.Parse(time.RFC3339Nano, from); err == nil {
-			info.IndexedFrom = at.UTC()
-		}
-	}
-	if to := strings.TrimSpace(view.GetIndexedTo()); to != "" {
-		if at, err := time.Parse(time.RFC3339Nano, to); err == nil {
-			info.IndexedTo = at.UTC()
-		}
-	}
 	for page := uint32(1); ; page++ {
 		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
@@ -84,7 +74,48 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 			break
 		}
 	}
+	if info.ActiveIndexID != "" && (info.Status == "" || info.Status == "active") {
+		if err := c.viewCoverage(ctx, spaceID, &info); err != nil {
+			return ViewInfo{}, err
+		}
+	}
 	return info, nil
+}
+
+// viewCoverage 读取 View 活动索引的覆盖范围与每序列保留根数。Metadata 的 View 记录不维护覆盖范围；DataView 在
+// 查询响应里带上服务该查询的索引统计。这里用一个不会命中任何行的时间范围探测：先取缓存的统计，缓存为空时
+// （Storage 刚重启或索引刚切换）要求现算；索引没有任何行时覆盖范围保持未知。
+func (c *RPCClient) viewCoverage(ctx context.Context, spaceID string, info *ViewInfo) error {
+	if c.DataView == nil {
+		return errors.New("Storage DataView 客户端未配置")
+	}
+	auth := c.ViewAuth
+	if auth == nil {
+		auth = c.Auth
+	}
+	epoch := time.Unix(0, 0).UTC()
+	for _, mode := range []commonpb.TotalMode{commonpb.TotalMode_NONE, commonpb.TotalMode_FORCE_EXACT} {
+		rsp, err := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: spaceID, ViewId: info.ViewID,
+			TimeRange: &storagepb.TimeRange{StartTime: epoch.Format(time.RFC3339Nano), EndTime: epoch.Add(time.Nanosecond).Format(time.RFC3339Nano)},
+			Page:      &commonpb.Page{Page: 1, Size: 1}, Limit: 1, TotalMode: mode,
+			ExpectedActiveIndexId: info.ActiveIndexID,
+		})
+		if err != nil {
+			return transport("读取 View "+info.ViewID+" 的覆盖范围", err)
+		}
+		if err := viewRetError(rsp.GetRetInfo()); err != nil {
+			return err
+		}
+		info.SeriesBars = int(min(rsp.GetServedSeriesBars(), uint64(math.MaxInt32)))
+		from, fromErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetServedIndexedFrom()))
+		to, toErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetServedIndexedTo()))
+		if fromErr == nil && toErr == nil && !to.Before(from) {
+			info.IndexedFrom, info.IndexedTo = from.UTC(), to.UTC()
+			return nil
+		}
+	}
+	return nil
 }
 
 // GetDataset 读取数据集元数据。
@@ -119,12 +150,15 @@ func (c *RPCClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo,
 	if err != nil {
 		return TagInfo{}, transport("读取标签 "+tagID, err)
 	}
+	if rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_NOT_FOUND {
+		return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
+	}
 	if err := retError("GetTag", rsp.GetRetInfo()); err != nil {
 		return TagInfo{}, err
 	}
 	tag := rsp.GetTag()
 	if tag == nil {
-		return TagInfo{}, fmt.Errorf("标签 %s 不存在", tagID)
+		return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
 	}
 	return TagInfo{TagID: tag.GetTagId(), MarketType: strings.ToLower(strings.TrimSpace(tag.GetMarketType()))}, nil
 }
@@ -185,7 +219,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 	}
 	subjects := make([]Subject, 0, len(order))
 	for _, id := range order {
-		subject := Subject{SubjectID: id, InstrumentID: id, Active: bindings[id]}
+		subject := Subject{SubjectID: id, Active: bindings[id]}
 		if detail, ok := details[id]; ok {
 			attributes := detail.GetAttributes()
 			subject.Attributes = make(map[string]string, len(attributes))
@@ -202,15 +236,9 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 	return subjects, nil
 }
 
-// seriesTag 取标的的序列标签；旧的采集标的没有显式 series_tag 时按交易所派生。
+// seriesTag 取标的显式声明的序列标签；没有声明时不按序列过滤，同一周期出现多个序列由 ambiguous_series 处理。
 func seriesTag(attributes map[string]string) string {
-	if tag := strings.TrimSpace(attributes["series_tag"]); tag != "" {
-		return tag
-	}
-	if exchange := strings.TrimSpace(attributes["exchange"]); exchange != "" {
-		return "venue:" + strings.ToLower(exchange)
-	}
-	return ""
+	return strings.TrimSpace(attributes["series_tag"])
 }
 
 // ListTagMembers 返回标签的活跃成员标的 ID。
@@ -374,6 +402,9 @@ func retError(method string, info *commonpb.RetInfo) error {
 	}
 	return fmt.Errorf("%s 失败（%s）：%s", method, info.GetCode().String(), info.GetMsg())
 }
+
+// ErrTagNotFound 表示标签不存在（ID 区分大小写）。
+var ErrTagNotFound = errors.New("标签不存在")
 
 // TransportError 是调用 Storage 或 Factor 失败、结果未知的错误。Error 只给出中文概述；
 // 原始错误可能包含服务地址，经 Unwrap 保留给日志，不写入结果记录，也不返回给接口调用方。

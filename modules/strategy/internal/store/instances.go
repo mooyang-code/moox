@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -106,10 +107,15 @@ func (s *Store) CreateInstance(ctx context.Context, instance Instance) error {
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_strategy_instances (c_instance_id, c_strategy_id, c_space_id, c_view_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_deleted_at, c_ctime, c_mtime)
-		VALUES (?, ?, ?, ?, ?, 0, NULL, ?, 'ok', NULL, ?, ?)
-	`, instance.InstanceID, instance.StrategyID, instance.SpaceID, instance.ViewID, stringValue(instance.LogicalAccountID), resolved, now, now).Error
+	return s.transaction(ctx, func(tx *gorm.DB) error {
+		if err := requireLiveDefinition(tx, instance.StrategyID); err != nil {
+			return err
+		}
+		return tx.Exec(`
+			INSERT INTO t_strategy_instances (c_instance_id, c_strategy_id, c_space_id, c_view_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_deleted_at, c_ctime, c_mtime)
+			VALUES (?, ?, ?, ?, ?, 0, NULL, ?, 'ok', NULL, ?, ?)
+		`, instance.InstanceID, instance.StrategyID, instance.SpaceID, instance.ViewID, stringValue(instance.LogicalAccountID), resolved, now, now).Error
+	})
 }
 
 // GetInstance 读取实例，包括已软删除的（DeletedAt 非空）。
@@ -146,6 +152,9 @@ func (s *Store) UpdateInstance(ctx context.Context, instance Instance) error {
 		}
 		if current.SpaceID != instance.SpaceID {
 			return errors.New("实例不能迁移到其他空间")
+		}
+		if err := requireLiveDefinition(tx, instance.StrategyID); err != nil {
+			return err
 		}
 		return tx.Exec(`
 			UPDATE t_strategy_instances SET c_strategy_id = ?, c_view_id = ?, c_logical_account_id = ?, c_resolved_json = '{}', c_health = 'ok', c_mtime = ?
@@ -278,29 +287,41 @@ func (s *Store) SetInstanceHealth(ctx context.Context, instanceID, health string
 }
 
 // MarkInstanceDegraded 在求值类问题出现时把健康的实例标记为 degraded；不覆盖 session_unverified。
-func (s *Store) MarkInstanceDegraded(ctx context.Context, instanceID string, at time.Time) error {
+// 只作用于仍以该会话启用的实例：求值期间实例被停用或换了会话时，这一期的结论已不代表实例的当前状态。
+func (s *Store) MarkInstanceDegraded(ctx context.Context, instanceID, sessionID string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_instances SET c_health = 'degraded', c_mtime = ? WHERE c_instance_id = ? AND c_health = 'ok'`, now, instanceID).Error
+	return s.db.WithContext(ctx).Exec(`
+		UPDATE t_strategy_instances SET c_health = 'degraded', c_mtime = ?
+		WHERE c_instance_id = ? AND c_health = 'ok' AND c_enabled = 1 AND c_session_id = ?
+	`, now, instanceID, sessionID).Error
 }
 
 // RecoverInstanceHealth 在 ok 周期把 degraded 恢复为 ok；session_unverified 只能由重新核实会话恢复。
-func (s *Store) RecoverInstanceHealth(ctx context.Context, instanceID string, at time.Time) error {
+// 只作用于仍以该会话启用的实例：对账循环自动停用并标记的 degraded 不能被一个并发提交的 ok 周期抹掉。
+func (s *Store) RecoverInstanceHealth(ctx context.Context, instanceID, sessionID string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_instances SET c_health = 'ok', c_mtime = ? WHERE c_instance_id = ? AND c_health = 'degraded'`, now, instanceID).Error
+	return s.db.WithContext(ctx).Exec(`
+		UPDATE t_strategy_instances SET c_health = 'ok', c_mtime = ?
+		WHERE c_instance_id = ? AND c_health = 'degraded' AND c_enabled = 1 AND c_session_id = ?
+	`, now, instanceID, sessionID).Error
 }
 
 // DisableInstance 在一个事务里停用实例并关闭会话：pending 非空时保留它等待 Trade 释放，否则清空。
-// 停用与关闭会话必须同时成功，否则再次启用时可能沿用一个本应关闭的会话。
-func (s *Store) DisableInstance(ctx context.Context, instanceID string, sessionID, pending *string, at time.Time) error {
+// 停用与关闭会话必须同时成功，否则再次启用时可能沿用一个本应关闭的会话。health 非空时在同一事务里设置健康状态
+// （对账自动停用时标记 degraded，让原因留在实例上）。
+func (s *Store) DisableInstance(ctx context.Context, instanceID string, sessionID, pending *string, health string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
 		return err
+	}
+	if health != "" && health != HealthOK && health != HealthDegraded && health != HealthSessionUnverified {
+		return errors.New("健康状态只能是 ok、degraded 或 session_unverified")
 	}
 	return s.transaction(ctx, func(tx *gorm.DB) error {
 		current, err := readInstance(tx, instanceID)
@@ -317,11 +338,29 @@ func (s *Store) DisableInstance(ctx context.Context, instanceID string, sessionI
 		} else if err := tx.Exec(`UPDATE t_strategy_instances SET c_enabled = 0, c_session_id = NULL, c_mtime = ? WHERE c_instance_id = ?`, now, instanceID).Error; err != nil {
 			return err
 		}
+		if health != "" {
+			if err := tx.Exec(`UPDATE t_strategy_instances SET c_health = ? WHERE c_instance_id = ?`, health, instanceID).Error; err != nil {
+				return err
+			}
+		}
 		if sessionID != nil {
 			return tx.Exec(`UPDATE t_strategy_sessions SET c_closed_at = ? WHERE c_session_id = ? AND c_closed_at IS NULL`, now, *sessionID).Error
 		}
 		return nil
 	})
+}
+
+// requireLiveDefinition 在写实例的事务里确认引用的定义存在且未删除：与软删除定义在同一连接上串行，
+// 改绑或新建实例不会引用一个刚被删除的定义。
+func requireLiveDefinition(tx *gorm.DB, strategyID string) error {
+	var live int64
+	if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_defs WHERE c_strategy_id = ? AND c_deleted_at IS NULL`, strategyID).Scan(&live).Error; err != nil {
+		return err
+	}
+	if live == 0 {
+		return fmt.Errorf("策略定义 %s 不存在", strategyID)
+	}
+	return nil
 }
 
 // SoftDeleteInstance 软删除停用且无会话的实例；会话与结果保留。

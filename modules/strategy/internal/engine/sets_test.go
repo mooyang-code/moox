@@ -102,7 +102,7 @@ portfolio:
   max_missing: 1
 `, "f1", "f2")
 	frame := frameOf(program, map[string]Row{"X": values("f1", 1, "f2", 1), "Y": values("f1", 2, "f2", 2)})
-	frame.FailedColumns = map[string]map[string]struct{}{"f1": {"X": {}}}
+	frame.FailedColumns = map[string]map[string]string{"f1": {"X": FailedFactor}}
 	decision := evaluate(t, program, frame, State{})
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"X": "0.25", "Y": "0.75"})

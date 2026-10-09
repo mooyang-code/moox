@@ -60,8 +60,5 @@ func (s Service) LoadLatest(ctx context.Context, spaceID string, resolved Resolv
 			return Loaded{}, err
 		}
 	}
-	if len(last.Frame.Rows) == 0 {
-		return last, fmt.Errorf("View %s 最近三个周期都没有数据", resolved.ViewID)
-	}
-	return last, nil
+	return last, fmt.Errorf("View %s 最近三个周期都没有数据", resolved.ViewID)
 }

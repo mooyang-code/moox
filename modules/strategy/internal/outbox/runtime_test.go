@@ -133,10 +133,10 @@ func TestRuntimeReconnectsAndCatchesUpPendingOutbox(t *testing.T) {
 	select {
 	case id := <-client.ids:
 		if id != "run-1" {
-			t.Fatalf("message id=%q", id)
+			t.Fatalf("消息 ID 不符：%q", id)
 		}
 	default:
-		t.Fatal("pending row was not published")
+		t.Fatal("待投递的结果没有发布")
 	}
 }
 
@@ -168,7 +168,7 @@ func TestRuntimeDetectsBrokerLossAndReconnects(t *testing.T) {
 		t.Fatal(err)
 	}
 	if second.Ready() {
-		t.Fatal("runtime Close left client connected")
+		t.Fatal("运行时关闭后客户端仍保持连接")
 	}
 }
 
@@ -185,7 +185,7 @@ func TestRuntimeCloseBeforeStartRejectsLateStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := runtime.Start(context.Background()); err == nil {
-		t.Fatal("closed runtime restarted")
+		t.Fatal("已关闭的运行时不应重新启动")
 	}
 }
 
@@ -210,7 +210,7 @@ func TestRuntimeDoesNotReportConnectedUntilPublishProbeSucceeds(t *testing.T) {
 	defer runtime.Close()
 	time.Sleep(10 * time.Millisecond)
 	if runtime.Connected() {
-		t.Fatal("runtime reported ready before publish probe")
+		t.Fatal("发布探针完成前运行时不应报告就绪")
 	}
 	probeAllowed.Store(true)
 	eventually(t, time.Second, runtime.Connected)
@@ -225,5 +225,5 @@ func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("condition was not met")
+	t.Fatal("条件未满足")
 }

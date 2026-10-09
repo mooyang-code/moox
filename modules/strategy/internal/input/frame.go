@@ -67,7 +67,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	activeSubjects := make(map[string]Subject, len(subjects))
 	for _, subject := range subjects {
 		if subject.Active {
-			activeSubjects[subject.InstrumentID] = subject
+			activeSubjects[subject.SubjectID] = subject
 		}
 	}
 	members := func(ctx context.Context, tagID string) ([]string, error) {
@@ -112,20 +112,15 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 	}
 	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Spot: resolved.Spot, Rows: make(map[string]engine.Row, len(current)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, FailedColumns: failedColumns(resolved, program, bar.Readiness)}
-	bySubject := make(map[string]string, len(sets.Subjects))
-	for id, subject := range sets.Subjects {
-		bySubject[subject.SubjectID] = id
-	}
 	for subjectID, row := range current {
-		instrument, ok := bySubject[subjectID]
-		if !ok {
+		if _, ok := sets.Subjects[subjectID]; !ok {
 			continue
 		}
 		engineRow := engine.Row{Values: row.Values}
 		if prev, ok := previous[subjectID]; ok {
 			engineRow.Previous = prev.Values
 		}
-		frame.Rows[instrument] = engineRow
+		frame.Rows[subjectID] = engineRow
 	}
 	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, IndexID: view.ActiveIndexID, Revision: revision}, nil
 }
@@ -166,19 +161,22 @@ func groupRows(rows []Row) (map[string]Row, error) {
 	return grouped, nil
 }
 
-// failedColumns 把就绪判定的失败标的映射到列：因子失败 → 该因子产出的被引用列；View 级失败 → 全部引用列。
-func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Result) map[string]map[string]struct{} {
-	failed := make(map[string]map[string]struct{})
-	add := func(column, subject string) {
+// failedColumns 把就绪判定的失败标的映射到列：因子失败 → 该因子产出的被引用列（factor_failed）；
+// View 级失败（K 线 View 声明的失败标的）→ 全部引用列（source_failed）。
+func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Result) map[string]map[string]string {
+	failed := make(map[string]map[string]string)
+	add := func(column, subject, reason string) {
 		if failed[column] == nil {
-			failed[column] = make(map[string]struct{})
+			failed[column] = make(map[string]string)
 		}
-		failed[column][subject] = struct{}{}
+		if _, exists := failed[column][subject]; !exists {
+			failed[column][subject] = reason
+		}
 	}
 	for factorID, subjects := range result.FailedByFactor {
 		for _, column := range resolved.ColumnsOfFactor(factorID) {
 			for _, subject := range subjects {
-				add(column, subject)
+				add(column, subject, engine.FailedFactor)
 			}
 		}
 	}
@@ -186,10 +184,9 @@ func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Res
 		all := uniqueSorted(append(append([]string(nil), program.Columns...), program.PreviousColumns...))
 		for _, column := range all {
 			for _, subject := range result.FailedSubjects {
-				add(column, subject)
+				add(column, subject, engine.FailedSource)
 			}
 		}
 	}
-	// 失败标的以 subject_id 给出；标的的 instrument_id 与 subject_id 相同，引擎可直接匹配。
 	return failed
 }

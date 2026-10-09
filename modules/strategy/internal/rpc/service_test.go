@@ -546,11 +546,11 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
 	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-30"})
 	requireOK(t, int32(future.GetRetInfo().GetCode()), future.GetRetInfo().GetMsg())
-	// 最新一根的 bar_start 是 09-03 05:00，终点截到它的 bar_end（06:00）：落库往返后仍包含这一根。
-	if end := future.GetReplay().GetEndTime(); end != "2026-09-03T06:00:00Z" {
-		t.Fatalf("终点应截到最新一根的 bar_end：%s", end)
+	// 最新一根的 bar_start 是 09-03 05:00：它可能还没写完，终点截到它的 bar_start，回放到它之前一根为止。
+	if end := future.GetReplay().GetEndTime(); end != "2026-09-03T05:00:00Z" {
+		t.Fatalf("终点应截到最新一根的 bar_start：%s", end)
 	}
-	if future.GetBarCount() != 30 || future.GetFirstBarEnd() != "2026-09-02T01:00:00Z" || future.GetLastBarEnd() != "2026-09-03T06:00:00Z" {
+	if future.GetBarCount() != 29 || future.GetFirstBarEnd() != "2026-09-02T01:00:00Z" || future.GetLastBarEnd() != "2026-09-03T05:00:00Z" {
 		t.Fatalf("应返回实际回放的根数与首末根：%d %s %s", future.GetBarCount(), future.GetFirstBarEnd(), future.GetLastBarEnd())
 	}
 	stored, err := h.service.Store.GetReplay(h.ctx, future.GetReplay().GetReplayId())
@@ -558,8 +558,8 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 		t.Fatal(err)
 	}
 	bars, err := input.ReplayBars(input.DefaultCalendar, "1h", stored.StartTime, stored.EndTime, input.DefaultReplayMaxBars)
-	if err != nil || len(bars) != 30 {
-		t.Fatalf("落库往返后仍应是 30 根：%d err=%v", len(bars), err)
+	if err != nil || len(bars) != 29 {
+		t.Fatalf("落库往返后仍应是 29 根：%d err=%v", len(bars), err)
 	}
 	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-03", FeeBps: 1500})
 	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "fee_bps")

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
@@ -36,6 +37,11 @@ import (
 const (
 	reconcileInterval = 30 * time.Second
 	retentionInterval = 6 * time.Hour
+	// startupReconcileTimeout 限制启动时对账联系 Trade 的总时长：Trade 不可达时不让启动按实例数线性变慢，
+	// 剩下的由对账循环继续。
+	startupReconcileTimeout = 20 * time.Second
+	// outboxStallThreshold 是待投递结果最长允许的等待：投递正常时 1 秒内发出，超过它说明投递已停滞，健康检查报未就绪。
+	outboxStallThreshold = 5 * time.Minute
 )
 
 // Initialize 打开数据库、对账未完成的启停握手、启动投递与事件消费，并在服务监听前注册 StrategyMgr。
@@ -93,16 +99,19 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 
 	// 先尝试完成崩溃或网络中断留下的启停握手，再开始消费事件。Trade 暂不可达或个别实例不一致只告警：
 	// 停用侧由对账循环继续重试；启用侧被 Trade 拒绝的实例自动停用，结果未知的标记 session_unverified，
-	// 进程与接口照常启动以便人工修复。
-	if err := service.ReconcileDisabledInstances(ctx); err != nil {
-		log.Warnf("启动对账：已停用实例的 Trade 释放未完成，稍后自动重试：%v", err)
+	// 进程与接口照常启动以便人工修复。启动对账限时，超时未完成的实例由对账循环继续。
+	reconcileCtx, cancelReconcile := context.WithTimeout(ctx, startupReconcileTimeout)
+	if err := service.ReconcileDisabledInstances(reconcileCtx); err != nil {
+		log.Warnf("启动对账：已停用实例的 Trade 释放未完成，稍后自动重试：%v%s", err, tradeDetail(err))
 	}
 	if err := requireExecutionDependencies(ctx, db, cfg); err != nil {
+		cancelReconcile()
 		return nil, nil, err
 	}
-	if err := service.ReconcileEnabledInstances(ctx); err != nil {
-		log.Warnf("启动对账：%v", err)
+	if err := service.ReconcileEnabledInstances(reconcileCtx); err != nil {
+		log.Warnf("启动对账：%v%s", err, tradeDetail(err))
 	}
+	cancelReconcile()
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -113,23 +122,42 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	var consumer *eventconsumer.Consumer
 	if inputClient != nil {
 		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof}
-		eventClient, err := connectEventBus(ctx, cfg)
-		if err != nil {
-			return nil, nil, err
+		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
+		connect := func(ctx context.Context) (*jetstream.Client, error) {
+			jsConfig, err := eventBusConfig(cfg, "moox-strategy-ready")
+			if err != nil {
+				return nil, err
+			}
+			return jetstream.Connect(ctx, jsConfig)
 		}
-		closers = append(closers, eventClient.Close)
-		consumer = eventconsumer.New(eventconsumer.ConsumerConfig{Client: eventClient, ConsumerName: cfg.EventBus.ConsumerName, Logf: log.Warnf}, handler)
+		consumer = eventconsumer.New(eventconsumer.ConsumerConfig{Connect: connect, ConsumerName: cfg.EventBus.ConsumerName, Logf: log.Warnf}, handler)
 		if err := consumer.Start(ctx); err != nil {
 			return nil, nil, err
 		}
 		closers = append(closers, consumer.Close)
 	}
 
+	// 关闭顺序：先停后台循环并等它们退出，再关消费者（等在途投递）、出站投递，最后关数据库。
 	background, cancel := context.WithCancel(context.Background())
-	closers = append(closers, func() error { cancel(); return nil })
-	go runner.Run(background)
-	go reconcileLoop(background, service)
-	go retentionLoop(background, db, cfg.Retention)
+	var loops sync.WaitGroup
+	closers = append(closers, func() error {
+		cancel()
+		loops.Wait()
+		return nil
+	})
+	loops.Add(3)
+	go func() {
+		defer loops.Done()
+		runner.Run(background)
+	}()
+	go func() {
+		defer loops.Done()
+		reconcileLoop(background, service)
+	}()
+	go func() {
+		defer loops.Done()
+		retentionLoop(background, db, cfg.Retention)
+	}()
 
 	strategypb.RegisterStrategyMgrService(s, service)
 	healthState := health.New("strategy", "strategy", "", "")
@@ -177,10 +205,10 @@ func reconcileLoop(ctx context.Context, service *rpc.Service) {
 		case <-ticker.C:
 		}
 		if err := service.ReconcileDisabledInstances(ctx); err != nil {
-			log.Warnf("已停用实例的 Trade 释放仍未完成：%v", err)
+			log.Warnf("已停用实例的 Trade 释放仍未完成：%v%s", err, tradeDetail(err))
 		}
 		if err := service.ReconcileEnabledInstances(ctx); err != nil {
-			log.Warnf("启用实例的 Trade 会话复核：%v", err)
+			log.Warnf("启用实例的 Trade 会话复核：%v%s", err, tradeDetail(err))
 		}
 	}
 }
@@ -200,6 +228,11 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 		} else if deleted > 0 {
 			log.Infof("已清理 %d 个过期回放", deleted)
 		}
+		if deleted, err := repo.DeleteReplaysBeyond(ctx, cfg.ReplaysMax); err != nil {
+			log.Warnf("清理超出个数的回放失败：%v", err)
+		} else if deleted > 0 {
+			log.Infof("已清理 %d 个超出保留个数的回放", deleted)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -208,15 +241,32 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 	}
 }
 
+// tradeDetail 把 Trade 业务错误附带的原始说明拼到日志后面。
+func tradeDetail(err error) string {
+	if detail := tradeowner.Detail(err); detail != "" {
+		return "；Trade 的说明：" + detail
+	}
+	return ""
+}
+
+// eventBusConfig 是出站投递与事件消费共用的连接配置：环境变量给出的凭据优先，否则用配置的凭据文件。
+func eventBusConfig(cfg Config, name string) (jetstream.Config, error) {
+	jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, name)
+	if jsConfig.Credentials == "" && jsConfig.Username == "" && strings.TrimSpace(cfg.EventBus.CredentialFile) != "" {
+		if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.EventBus.CredentialFile)); err != nil {
+			return jetstream.Config{}, err
+		}
+	}
+	jsConfig.ConnectTimeout = cfg.EventBus.ConnectTimeout
+	return jsConfig, nil
+}
+
 func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime, error) {
 	connector := func(ctx context.Context) (strategyoutbox.JetStreamClient, error) {
-		jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-strategy")
-		if jsConfig.Credentials == "" && jsConfig.Username == "" && strings.TrimSpace(cfg.EventBus.CredentialFile) != "" {
-			if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.EventBus.CredentialFile)); err != nil {
-				return nil, err
-			}
+		jsConfig, err := eventBusConfig(cfg, "moox-strategy")
+		if err != nil {
+			return nil, err
 		}
-		jsConfig.ConnectTimeout = cfg.EventBus.ConnectTimeout
 		client, err := jetstream.Connect(ctx, jsConfig)
 		if err != nil {
 			return nil, err
@@ -229,18 +279,8 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 			return strategyoutbox.ValidateJetStreamPublisher(ctx, client, cfg.InstanceID)
 		},
 		RelayInterval: cfg.EventBus.RelayInterval, ReconnectInterval: cfg.EventBus.ReconnectInterval, BatchSize: cfg.EventBus.RelayBatchSize,
+		PublishTimeout: cfg.EventBus.PublishTimeout,
 	})
-}
-
-func connectEventBus(ctx context.Context, cfg Config) (*jetstream.Client, error) {
-	jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-strategy-ready")
-	if strings.TrimSpace(cfg.EventBus.CredentialFile) != "" {
-		if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.EventBus.CredentialFile)); err != nil {
-			return nil, err
-		}
-	}
-	jsConfig.ConnectTimeout = cfg.EventBus.ConnectTimeout
-	return jetstream.Connect(ctx, jsConfig)
 }
 
 // newInputClient 构造 Storage（Metadata、DataView）与 Factor 的窄适配。
@@ -294,12 +334,14 @@ func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtim
 		if !stats.OldestPending.IsZero() {
 			oldestAge = max(0, time.Since(stats.OldestPending).Seconds())
 		}
-		ready := databaseReady && state.Ready() && eventBusConnected && consumerReady && statsErr == nil
+		// 待投递结果在投递正常时 1 秒内发出：最老一条等待超过阈值说明投递停滞（例如发布一直得不到确认），报未就绪以触发告警。
+		outboxStalled := oldestAge > outboxStallThreshold.Seconds()
+		ready := databaseReady && state.Ready() && eventBusConnected && consumerReady && statsErr == nil && !outboxStalled
 		rsp := healthz.Base("strategy", "strategy", "", "", state.StartedAt, ready)
 		rsp.Details = map[string]any{
 			"database_ready": databaseReady, "eventbus_connected": eventBusConnected,
 			"ready_consumer_connected": consumerReady, "outbox_pending_count": stats.PendingCount,
-			"oldest_outbox_age_seconds": oldestAge,
+			"oldest_outbox_age_seconds": oldestAge, "outbox_stalled": outboxStalled,
 		}
 		return rsp
 	}

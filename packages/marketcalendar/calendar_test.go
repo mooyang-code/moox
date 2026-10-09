@@ -342,3 +342,35 @@ func mustDate(t *testing.T, value string) CivilDate {
 	}
 	return date
 }
+
+// TradingDayIndex 返回交易日在日历中的序号（首个交易日为 0），与 TradingDays 的计数一致；非交易日报错。
+func TestTradingDayIndexMatchesTradingDays(t *testing.T) {
+	t.Parallel()
+
+	calendar, err := Load("cn_stock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day, err := NewCivilDate(2026, time.September, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	days, err := calendar.TradingDays(calendar.FirstDate(), day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := calendar.TradingDayIndex(day)
+	if err != nil || index != len(days)-1 {
+		t.Fatalf("交易日序号 = %d，期望 %d（err=%v）", index, len(days)-1, err)
+	}
+	if first, err := calendar.TradingDayIndex(calendar.FirstDate()); err != nil || first != 0 {
+		t.Fatalf("首个交易日的序号应为 0：%d err=%v", first, err)
+	}
+	weekend, err := NewCivilDate(2026, time.September, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := calendar.TradingDayIndex(weekend); err == nil {
+		t.Fatal("非交易日应报错")
+	}
+}

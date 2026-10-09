@@ -44,7 +44,7 @@ func (p *presence) add(resolved input.Resolved, rows input.RangeRows) error {
 }
 
 // probe 返回本期的年龄探针。
-func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries, instrumentOf map[string]string) input.AgeProbe {
+func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries) input.AgeProbe {
 	return func(_ context.Context, instruments []string) (map[string]struct{}, error) {
 		wanted := make(map[string]struct{}, len(instruments))
 		for _, id := range instruments {
@@ -66,10 +66,8 @@ func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries, in
 				continue
 			}
 			anyRows = true
-			if instrument := instrumentOf[subjectID]; instrument != "" {
-				if _, ok := wanted[instrument]; ok {
-					satisfied[instrument] = struct{}{}
-				}
+			if _, ok := wanted[subjectID]; ok {
+				satisfied[subjectID] = struct{}{}
 			}
 		}
 		if len(instruments) > 0 && !anyRows {

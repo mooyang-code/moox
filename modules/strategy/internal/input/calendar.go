@@ -3,8 +3,10 @@ package input
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/marketcalendar"
@@ -145,11 +147,11 @@ func boundariesForStockDay(calendar marketcalendar.TradingCalendar, location *ti
 	previousStart := time.Date(previous.Year(), previous.Month(), previous.Day(), 0, 0, 0, 0, location).UTC()
 	barEnd := time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, location).UTC()
 	nextEnd := time.Date(next.Year(), next.Month(), next.Day(), 15, 0, 0, 0, location).UTC()
-	tradingDays, err := calendar.TradingDays(calendar.FirstDate(), day)
+	index, err := calendar.TradingDayIndex(day)
 	if err != nil {
 		return PeriodBoundaries{}, err
 	}
-	return PeriodBoundaries{StorageStart: start, PreviousStart: previousStart, BarEnd: barEnd, NextEnd: nextEnd, BarIndex: int64(len(tradingDays) - 1)}, nil
+	return PeriodBoundaries{StorageStart: start, PreviousStart: previousStart, BarEnd: barEnd, NextEnd: nextEnd, BarIndex: int64(index)}, nil
 }
 
 // AdvanceBarEnd 按有效 bar 移动 bar_end：n 为负表示向前回溯，0 原样返回。
@@ -162,7 +164,14 @@ func AdvanceBarEnd(calendarID, frequency string, end time.Time, n int) (time.Tim
 		if durationErr != nil {
 			return time.Time{}, durationErr
 		}
-		return end.UTC().Add(time.Duration(n) * duration), nil
+		shift, err := barsDuration(absInt(n), duration)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if n < 0 {
+			shift = -shift
+		}
+		return end.UTC().Add(shift), nil
 	}
 	calendar, location, err := stockCalendar()
 	if err != nil {
@@ -212,7 +221,11 @@ func HistoryStart(calendarID, frequency string, storageStart time.Time, count in
 		if durationErr != nil {
 			return time.Time{}, durationErr
 		}
-		return storageStart.UTC().Add(-time.Duration(count-1) * duration), nil
+		shift, err := barsDuration(count-1, duration)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return storageStart.UTC().Add(-shift), nil
 	}
 	calendar, location, err := stockCalendar()
 	if err != nil {
@@ -232,17 +245,34 @@ func HistoryStart(calendarID, frequency string, storageStart time.Time, count in
 	return time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location).UTC(), nil
 }
 
-// stockCalendar 加载 A 股交易日历与上海时区。
+var (
+	stockCalendarOnce     sync.Once
+	stockCalendarValue    marketcalendar.TradingCalendar
+	stockCalendarLocation *time.Location
+	stockCalendarErr      error
+)
+
+// stockCalendar 返回 A 股交易日历与上海时区。内嵌日历的解析与校验较重，进程内只做一次；日历本身不可变。
 func stockCalendar() (marketcalendar.TradingCalendar, *time.Location, error) {
-	calendar, err := marketcalendar.Load("cn_stock")
-	if err != nil {
-		return marketcalendar.TradingCalendar{}, nil, err
+	stockCalendarOnce.Do(func() {
+		stockCalendarValue, stockCalendarErr = marketcalendar.Load("cn_stock")
+		if stockCalendarErr != nil {
+			return
+		}
+		stockCalendarLocation, stockCalendarErr = time.LoadLocation("Asia/Shanghai")
+	})
+	if stockCalendarErr != nil {
+		return marketcalendar.TradingCalendar{}, nil, stockCalendarErr
 	}
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		return marketcalendar.TradingCalendar{}, nil, err
+	return stockCalendarValue, stockCalendarLocation, nil
+}
+
+// barsDuration 返回 n 根定长 bar 的总时长；超出可表示范围时报错，而不是溢出成一个错误的时间。
+func barsDuration(n int, duration time.Duration) (time.Duration, error) {
+	if n < 0 || duration <= 0 || int64(n) > math.MaxInt64/int64(duration) {
+		return 0, fmt.Errorf("%d 根 %s 的 bar 超出可表示的时间范围", n, duration)
 	}
-	return calendar, location, nil
+	return time.Duration(n) * duration, nil
 }
 
 func parseBarDuration(bar string) (time.Duration, error) {

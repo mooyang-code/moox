@@ -83,6 +83,8 @@ message Replay {
   string created_at = 13;
   string updated_at = 14;
   string dsl_hash = 15;                  // 被回放的 DSL 版本
+  string instance_id = 16;               // 从实例发起时的来源实例
+  string session_id = 17;                // 从实例发起时固化 DSL 的会话
 }
 
 // ReplayBar 是回放中一个周期的记录。

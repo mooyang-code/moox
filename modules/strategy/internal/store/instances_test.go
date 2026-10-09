@@ -193,17 +193,17 @@ func TestInstanceHealthTransitions(t *testing.T) {
 		}
 		return instance.Health
 	}
-	if err := repo.MarkInstanceDegraded(ctx, "i1", testNow); err != nil || health() != HealthDegraded {
+	if err := repo.MarkInstanceDegraded(ctx, "i1", "session-1", testNow); err != nil || health() != HealthDegraded {
 		t.Fatalf("应标记 degraded：%s err=%v", health(), err)
 	}
-	if err := repo.RecoverInstanceHealth(ctx, "i1", testNow); err != nil || health() != HealthOK {
+	if err := repo.RecoverInstanceHealth(ctx, "i1", "session-1", testNow); err != nil || health() != HealthOK {
 		t.Fatalf("应恢复 ok：%s err=%v", health(), err)
 	}
 	if err := repo.SetInstanceHealth(ctx, "i1", HealthSessionUnverified, testNow); err != nil {
 		t.Fatal(err)
 	}
-	_ = repo.MarkInstanceDegraded(ctx, "i1", testNow)
-	_ = repo.RecoverInstanceHealth(ctx, "i1", testNow)
+	_ = repo.MarkInstanceDegraded(ctx, "i1", "session-1", testNow)
+	_ = repo.RecoverInstanceHealth(ctx, "i1", "session-1", testNow)
 	if health() != HealthSessionUnverified {
 		t.Fatalf("session_unverified 不应被求值类状态改变：%s", health())
 	}
@@ -215,7 +215,7 @@ func TestDisableInstanceClosesSessionAtomically(t *testing.T) {
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
 	session := "session-1"
-	if err := repo.DisableInstance(ctx, "i1", &session, nil, testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", &session, nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	instance, _ := repo.GetInstance(ctx, "i1")

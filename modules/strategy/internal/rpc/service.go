@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -69,6 +71,48 @@ func (s *Service) lockStrategy(strategyID string) func() {
 	return lock.Unlock
 }
 
+// lockStrategies 按 ID 排序依次加锁（去重），避免两个请求以相反顺序加锁而死锁。
+func (s *Service) lockStrategies(strategyIDs ...string) func() {
+	ids := append([]string(nil), strategyIDs...)
+	sort.Strings(ids)
+	unlocks := make([]func(), 0, len(ids))
+	for i, id := range ids {
+		if i > 0 && ids[i-1] == id {
+			continue
+		}
+		unlocks = append(unlocks, s.lockStrategy(id))
+	}
+	return func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}
+}
+
+// lockInstanceStrategy 锁住实例当前引用的定义并返回拿锁后重读的实例；等锁期间实例被改绑时换锁重试。
+func (s *Service) lockInstanceStrategy(ctx context.Context, instanceID string) (store.Instance, func(), error) {
+	instance, err := s.Store.GetInstance(ctx, instanceID)
+	if err != nil {
+		return store.Instance{}, nil, err
+	}
+	for attempt := 0; ; attempt++ {
+		unlock := s.lockStrategy(instance.StrategyID)
+		current, err := s.Store.GetInstance(ctx, instanceID)
+		if err != nil {
+			unlock()
+			return store.Instance{}, nil, err
+		}
+		if current.StrategyID == instance.StrategyID {
+			return current, unlock, nil
+		}
+		unlock()
+		if attempt >= 3 {
+			return store.Instance{}, nil, errors.New("实例正在被并发修改，请稍后重试")
+		}
+		instance = current
+	}
+}
+
 func success() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"}
 }
@@ -89,6 +133,9 @@ func publicMessage(err error) string {
 	message, _ := store.FriendlyMessage(err)
 	if raw := rawCause(err); raw != nil && raw.Error() != message && !strings.Contains(message, raw.Error()) {
 		log.Warnf("策略接口返回错误：%s；原始错误：%v", message, raw)
+	}
+	if detail := tradeowner.Detail(err); detail != "" {
+		log.Warnf("策略接口返回错误：%s；Trade 的说明：%s", message, detail)
 	}
 	return message
 }

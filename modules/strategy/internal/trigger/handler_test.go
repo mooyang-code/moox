@@ -51,11 +51,15 @@ func barStart(n int) time.Time { return bar0.Add(time.Duration(n) * time.Hour) }
 
 // fakeLoader 按 bar_start 返回帧；errs 是依次返回的错误序列。
 type fakeLoader struct {
-	frames map[int64]map[string]map[string]float64
-	errs   []error
-	calls  int
-	onLoad func()
+	frames      map[int64]map[string]map[string]float64
+	errs        []error
+	calls       int
+	invalidated int
+	onLoad      func()
 }
+
+// Invalidate 记录处理器在 ErrStale 后丢弃事件内缓存的次数。
+func (l *fakeLoader) Invalidate() { l.invalidated++ }
 
 func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.Resolved, _ *dsl.Program, bar input.Bar) (input.Loaded, error) {
 	if spaceID != "space" {
@@ -94,7 +98,7 @@ func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.R
 			row.Previous = nil
 		}
 		frame.Rows[id] = row
-		sets.Subjects[id] = input.Subject{SubjectID: id, InstrumentID: id, Active: true}
+		sets.Subjects[id] = input.Subject{SubjectID: id, Active: true}
 	}
 	frame.Universe = ids
 	frame.Expected["r"] = ids
@@ -365,6 +369,23 @@ func TestHandleRereadsOnStaleSnapshot(t *testing.T) {
 	expectAck(t, h.deliver(1))
 	if h.loader.calls != 2 || h.resultAt(1).Status != store.StatusOK {
 		t.Fatalf("应重读一次后成功：calls=%d", h.loader.calls)
+	}
+	if h.loader.invalidated != 1 {
+		t.Fatalf("重读前应丢弃事件内缓存的 View 元数据：%d", h.loader.invalidated)
+	}
+}
+
+// 绑定的因子定义变了：每期 skipped(factor_changed)，只有重新启用才能恢复，实例标记 degraded。
+func TestHandleFactorChangedDegradesInstance(t *testing.T) {
+	h := newHarness(t, rankDSL, nil, false)
+	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
+	message, payload := h.event(1, map[string]string{"f": "h2"})
+	expectAck(t, h.handler.Handle(context.Background(), message, payload))
+	if result := h.resultAt(1); result.Status != store.StatusSkipped || result.SkipReason != "factor_changed" {
+		t.Fatalf("因子指纹变化应记 factor_changed：%+v", result)
+	}
+	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {
+		t.Fatalf("factor_changed 应标记 degraded：%+v", instance)
 	}
 }
 

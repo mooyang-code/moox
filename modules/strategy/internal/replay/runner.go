@@ -126,7 +126,17 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 		status, message = store.ReplayFailed, err.Error()
 		r.logf("回放 %s 失败：%v；原始错误：%v", job.ReplayID, err, input.RawCause(err))
 	}
-	if finishErr := r.Store.FinishReplay(ctx, job.ReplayID, status, raw, message, r.now()); finishErr != nil && !errors.Is(finishErr, store.ErrNotFound) {
+	finishErr := r.Store.FinishReplay(ctx, job.ReplayID, status, raw, message, r.now())
+	if errors.Is(finishErr, store.ErrNotFound) {
+		// 结束前任务已被取消（取消落在最后一次状态检查之后，或取消后读取又失败）：保留已算出的部分指标。
+		if current, err := r.Store.ReplayStatus(ctx, job.ReplayID); err == nil && current == store.ReplayCancelled && metrics.Bars > 0 {
+			if recordErr := r.Store.RecordCancelledReplayMetrics(ctx, job.ReplayID, raw, r.now()); recordErr != nil {
+				r.logf("写入回放 %s 取消前的指标失败：%v", job.ReplayID, recordErr)
+			}
+		}
+		return
+	}
+	if finishErr != nil {
 		r.logf("写入回放 %s 的终态失败：%v", job.ReplayID, finishErr)
 	}
 }
@@ -168,18 +178,19 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	}
 	sort.Slice(bindings, func(i, j int) bool { return bindings[i].SubjectID < bindings[j].SubjectID })
 	subjects := make([]input.Subject, 0, len(bindings))
-	instrumentOf := make(map[string]string, len(bindings))
 	for _, subject := range bindings {
 		subject.Active = true
 		subjects = append(subjects, subject)
-		instrumentOf[subject.SubjectID] = subject.InstrumentID
 	}
 	if len(subjects) == 0 {
 		return Metrics{}, fmt.Errorf("View %s 的数据集没有标的绑定", job.ViewID)
 	}
-	// 排队期间 View 可能已推进或重建：执行时复查起点并重新截断终点。
-	end, err := input.ReplayWindow(resolved, program, view, job.StartTime, job.EndTime)
-	if err != nil {
+	// 排队期间 View 可能已推进或重建：执行时复查起点并重新截断终点。索引统计暂时未知（Storage 刚重启、索引
+	// 刚切换且还没有统计）时沿用提交时校验过的区间，不让排队的任务因此失败。
+	end := job.EndTime
+	if input.CoverageStart(view, resolved).IsZero() {
+		r.logf("回放 %s：View %s 的覆盖范围暂时未知，按提交时校验过的区间执行", job.ReplayID, job.ViewID)
+	} else if end, err = input.ReplayWindow(resolved, program, view, job.StartTime, job.EndTime); err != nil {
 		return Metrics{}, err
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, end, r.maxBars())
@@ -225,7 +236,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			} else if status == store.ReplayCancelled {
 				return acc.finish(), errCancelled
 			}
-			decision, err := r.evaluate(ctx, program, resolved, subjects, instrumentOf, members, presence, rows, bar, state)
+			decision, err := r.evaluate(ctx, program, resolved, subjects, members, presence, rows, bar, state)
 			if err != nil {
 				return acc.finish(), err
 			}
@@ -233,11 +244,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			key := bar.StorageStart.Unix()
 			prices := make(map[string]float64)
 			for subjectID, row := range rows.Bars[key] {
-				if _, ambiguous := rows.AmbiguousSubjects[key][subjectID]; ambiguous {
+				if _, ambiguous := rows.Ambiguous[key][subjectID]; ambiguous {
 					continue
 				}
 				if price, ok := row.Values["close"]; ok && price > 0 {
-					prices[instrumentOf[subjectID]] = price
+					prices[subjectID] = price
 				}
 			}
 			ok := decision.Status == engine.StatusOK
@@ -267,31 +278,32 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	return acc.finish(), nil
 }
 
-// evaluate 装配一期的帧并求值；同一标的同一周期有多个序列时整期跳过。
-func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved input.Resolved, subjects []input.Subject, instrumentOf map[string]string, members input.Membership, presence *presence, rows input.RangeRows, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
+// evaluate 装配一期的帧并求值。与实时一致：只有策略涉及的标的（∪E(r)，年龄剔除之前）在本期（用到 bars[-1]
+// 时还有上一根）出现多个序列才整期跳过；无关标的的歧义不影响本期，只是它们的价格不用于估值。
+func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved input.Resolved, subjects []input.Subject, members input.Membership, presence *presence, rows input.RangeRows, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
 	key := bar.StorageStart.Unix()
-	if detail, ambiguous := rows.Ambiguous[key]; ambiguous {
-		return skippedDecision(state, input.SkipAmbiguousSeries, detail), nil
-	}
-	// 与实时一致：用到 bars[-1] 时，上一根的歧义同样让本期跳过。
-	if program.UsesPreviousBar {
-		if detail, ambiguous := rows.Ambiguous[bar.PreviousStart.Unix()]; ambiguous {
-			return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+detail), nil
-		}
-	}
 	current := rows.Bars[key]
 	universe := make([]string, 0, len(current))
 	for subjectID := range current {
 		universe = append(universe, subjectID)
 	}
 	sort.Strings(universe)
-	var probe input.AgeProbe
-	if resolved.MinAgeBars > 0 {
-		probe = presence.probe(resolved, bar, instrumentOf)
-	}
 	sets, err := input.BuildSets(ctx, members, program.Strategy, subjects, universe)
 	if err != nil {
 		return engine.Decision{}, err
+	}
+	involved := sets.Instruments()
+	if detail := firstAmbiguous(involved, rows.Ambiguous[key]); detail != "" {
+		return skippedDecision(state, input.SkipAmbiguousSeries, detail), nil
+	}
+	if program.UsesPreviousBar {
+		if detail := firstAmbiguous(involved, rows.Ambiguous[bar.PreviousStart.Unix()]); detail != "" {
+			return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+detail), nil
+		}
+	}
+	var probe input.AgeProbe
+	if resolved.MinAgeBars > 0 {
+		probe = presence.probe(resolved, bar)
 	}
 	if err := sets.ApplyAge(ctx, resolved.MinAgeBars, probe); err != nil {
 		var skip *input.SkipError
@@ -309,9 +321,19 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 				engineRow.Previous = prev.Values
 			}
 		}
-		frame.Rows[instrumentOf[subjectID]] = engineRow
+		frame.Rows[subjectID] = engineRow
 	}
 	return engine.Evaluate(program, frame, state)
+}
+
+// firstAmbiguous 返回 involved 中第一个出现多个序列的标的的说明；没有时返回空串。
+func firstAmbiguous(involved []string, ambiguous map[string]string) string {
+	for _, id := range involved {
+		if detail, ok := ambiguous[id]; ok {
+			return detail
+		}
+	}
+	return ""
 }
 
 // skippedDecision 构造一个跳过的决策：没有目标，规则状态沿用前序。
@@ -319,11 +341,8 @@ func skippedDecision(state engine.State, reason, detail string) engine.Decision 
 	return engine.Decision{Status: engine.StatusSkipped, SkipReason: reason, State: state, Summary: engine.Summary{Notes: []string{detail}}}
 }
 
-// factorDrift 比对发起回放时固化的因子指纹与执行时的定义，返回第一处差异；没有固化指纹时不比对。
+// factorDrift 比对发起回放时固化的因子指纹与执行时的定义，返回第一处差异（包括排队期间新引用或不再引用的因子）。
 func factorDrift(pinned, current map[string]string) string {
-	if len(pinned) == 0 {
-		return ""
-	}
 	ids := make([]string, 0, len(pinned)+len(current))
 	for id := range pinned {
 		ids = append(ids, id)

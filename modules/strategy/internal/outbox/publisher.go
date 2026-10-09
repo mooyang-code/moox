@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
@@ -52,7 +53,13 @@ func (c *managedClient) EventPublisher() EventPublisher { return c.publisher }
 type JetStreamPublisher struct {
 	Publisher  EventPublisher
 	InstanceID string
+	// Timeout 限制单次发布等待确认的时长：确认丢失（EventBus 重启、断网）时不设截止时间的发布会一直挂起，
+	// 投递循环卡住后所有结果都停在 pending。超时按发布失败处理并重连，result_id 作为 Msg-Id，重发会被去重。
+	Timeout time.Duration
 }
+
+// DefaultPublishTimeout 是未配置时的单次发布超时。
+const DefaultPublishTimeout = 10 * time.Second
 
 type EventPublisher interface {
 	PublishMessage(context.Context, *eventpb.EventMessage) (*jetstream.PublishAck, error)
@@ -97,7 +104,13 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, messageID string, even
 	if message.GetEventId() != messageID {
 		return &PermanentPublishError{Err: errors.New("待投递事件的 event_id 与结果 ID 不一致")}
 	}
-	_, err = p.Publisher.PublishMessage(ctx, message)
+	timeout := p.Timeout
+	if timeout <= 0 {
+		timeout = DefaultPublishTimeout
+	}
+	publishCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_, err = p.Publisher.PublishMessage(publishCtx, message)
 	if err != nil {
 		// NATS rejects an over-sized payload locally/server-side and retrying it
 		// cannot succeed without changing the event. Keep ordinary transport

@@ -9,7 +9,7 @@ import (
 )
 
 // evaluateSignal 执行固定池择时：先对旧理论持仓判 exit，再对候选判 entry，退出优先；
-// 持有标的缺数视为退出；本期持有的标的平分规则预算。
+// 持有标的的 exit 输入缺失视为退出；本期持有的标的平分规则预算。
 func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState) (ruleResult, error) {
 	result := ruleResult{weights: map[string]quant.Decimal{}}
 	ruleID := rule.Rule.ID
@@ -22,7 +22,7 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 	for _, id := range previous.Held {
 		heldBefore[id] = struct{}{}
 		if _, ok := availableSet[id]; !ok {
-			// 缺数的持仓按清仓处理；明细已由集合划分记录为 missing / aged_out。
+			// exit 输入缺失的持仓按清仓处理；明细已由集合划分记录为 missing。
 			continue
 		}
 		exit, err := runBool(rule.Exit, id, frame.Rows[id], 0)

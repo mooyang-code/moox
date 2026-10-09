@@ -114,18 +114,22 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id 不能为空"))}, nil
 	}
 	v := req.GetInstance()
+	// 可编辑字段整体替换：策略定义与 View 必填，组合账户留空表示观察实例。
+	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetViewId()) == "" {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 view_id 不能为空"))}, nil
+	}
 	current, err := s.Store.GetInstance(ctx, v.GetInstanceId())
 	if err != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(err)}, nil
 	}
+	// 改绑同时锁住旧定义与新定义：启用新定义的实例、修改或删除新定义都不能与改绑交错。拿锁后重读确认没被并发改绑。
+	unlock := s.lockStrategies(current.StrategyID, strings.TrimSpace(v.GetStrategyId()))
+	defer unlock()
+	if current, err = s.Store.GetInstance(ctx, v.GetInstanceId()); err != nil {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(err)}, nil
+	}
 	if current.SpaceID != scoped || current.DeletedAt != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
-	}
-	unlock := s.lockStrategy(current.StrategyID)
-	defer unlock()
-	// 可编辑字段整体替换：策略定义与 View 必填，组合账户留空表示观察实例。
-	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetViewId()) == "" {
-		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 view_id 不能为空"))}, nil
 	}
 	updated := current
 	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
@@ -239,19 +243,14 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 	if req == nil || strings.TrimSpace(req.GetInstanceId()) == "" {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("instance_id 不能为空"))}, nil
 	}
-	instance, err := s.Store.GetInstance(ctx, req.GetInstanceId())
+	// 拿锁后重读，避免并发启停作用在过期快照上；等锁期间实例被改绑时换成新定义的锁。
+	instance, unlock, err := s.lockInstanceStrategy(ctx, req.GetInstanceId())
 	if err != nil {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: failure(err)}, nil
 	}
+	defer unlock()
 	if instance.SpaceID != scoped {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
-	}
-	unlock := s.lockStrategy(instance.StrategyID)
-	defer unlock()
-	// 第一次读取只用来选锁；拿锁后重读，避免并发启停作用在过期快照上。
-	instance, err = s.Store.GetInstance(ctx, req.GetInstanceId())
-	if err != nil {
-		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: failure(err)}, nil
 	}
 	if instance.DeletedAt != nil {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("实例已删除"))}, nil
@@ -291,6 +290,14 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 	}
 	if instance.LogicalAccountID != nil && s.Owner == nil {
 		return instance, errors.New("未接线 Trade，不能启用绑定账户的实例")
+	}
+	if instance.LogicalAccountID != nil {
+		// 同一空间的组合账户只能由一个启用实例持有：在写会话、联系 Trade 之前检查，被拒绝时不留下待定会话。
+		if holder, err := s.accountHolder(ctx, instance); err != nil {
+			return instance, err
+		} else if holder != "" {
+			return instance, fmt.Errorf("组合账户 %s 已被启用实例 %s 绑定，请先停用该实例", *instance.LogicalAccountID, holder)
+		}
 	}
 	definition, err := s.Store.GetDefinition(ctx, instance.StrategyID)
 	if err != nil || definition.DeletedAt != nil {
@@ -344,12 +351,6 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 	}
 	if instance.LogicalAccountID != nil {
-		// 同一空间的组合账户只能由一个启用实例持有：认领之前先检查，避免认领成功后才撞上唯一约束。
-		if holder, err := s.accountHolder(ctx, instance); err != nil {
-			return reload(), err
-		} else if holder != "" {
-			return reload(), fmt.Errorf("组合账户 %s 已被启用实例 %s 绑定，请先停用该实例", *instance.LogicalAccountID, holder)
-		}
 		if err := s.Owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID); err != nil {
 			if tradeowner.IsPermanentClaimError(err) {
 				_ = s.Store.CloseSession(ctx, sessionID, s.nowTime())
@@ -382,7 +383,7 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 	if releaseNeeded {
 		pending = instance.SessionID
 	}
-	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, s.nowTime()); err != nil {
+	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, "", s.nowTime()); err != nil {
 		return reload(), err
 	}
 	if releaseNeeded {
@@ -490,10 +491,10 @@ func (s *Service) reconcileEnabled(ctx context.Context, listed store.Instance) e
 		}
 		return nil
 	case tradeowner.IsSessionRejected(err):
-		if disableErr := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, nil, s.nowTime()); disableErr != nil {
+		// 停用与标记 degraded 在同一事务：自动停用的原因留在实例上。
+		if disableErr := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, nil, store.HealthDegraded, s.nowTime()); disableErr != nil {
 			return fmt.Errorf("启用实例 %s 的会话已被 Trade 拒绝，自动停用失败：%w", instance.InstanceID, disableErr)
 		}
-		_ = s.Store.SetInstanceHealth(ctx, instance.InstanceID, store.HealthDegraded, s.nowTime())
 		if s.Alerts != nil {
 			s.Alerts.Alert(instance, "Trade 不再授权该实例的会话，已自动停用")
 		}

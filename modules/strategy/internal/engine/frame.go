@@ -28,9 +28,16 @@ type Frame struct {
 	Universe []string
 	Expected map[string][]string
 	AgedOut  map[string][]string
-	// FailedColumns 记录上游因子失败的标的：列名 → 标的集合。引用该列的规则把这些标的视为缺数。
-	FailedColumns map[string]map[string]struct{}
+	// FailedColumns 记录上游失败的标的：列名 → 标的 → 原因（FailedFactor 或 FailedSource）。引用该列的规则把这些
+	// 标的视为缺数，明细原因为“<原因>:<列>”。
+	FailedColumns map[string]map[string]string
 }
+
+// 上游失败的原因：因子对该标的计算失败，或 View 本身（例如 K 线采集）声明该标的本期失败。
+const (
+	FailedFactor = "factor_failed"
+	FailedSource = "source_failed"
+)
 
 // HoldingBatch 是 holding 规则在某个偏移建立的一个批次；BaseWeights 之和不超过 1，
 // filter_after 剔除与缺数移除的份额留作现金。

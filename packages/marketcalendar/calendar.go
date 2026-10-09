@@ -339,6 +339,19 @@ func (c TradingCalendar) NextTradingDay(date CivilDate) (CivilDate, error) {
 	}
 }
 
+// TradingDayIndex returns the zero-based position of a trading day in the
+// calendar (the first covered trading day is 0) without copying the days.
+func (c TradingCalendar) TradingDayIndex(date CivilDate) (int, error) {
+	if err := c.checkCovered(date); err != nil {
+		return 0, err
+	}
+	index := lowerBound(c.data.tradingDays, date)
+	if index >= len(c.data.tradingDays) || c.data.tradingDays[index] != date {
+		return 0, fmt.Errorf("%w: %s is not a trading day", ErrInvalidRange, date)
+	}
+	return index, nil
+}
+
 // TradingDays returns all trading days in the inclusive [start, end] range.
 func (c TradingCalendar) TradingDays(start, end CivilDate) ([]CivilDate, error) {
 	if err := c.checkCovered(start); err != nil {

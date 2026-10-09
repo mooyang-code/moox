@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -44,23 +45,56 @@ func (s *Store) DeleteReplaysBefore(ctx context.Context, cutoff time.Time) (int6
 			return deleted, nil
 		}
 		for _, id := range ids {
-			for {
-				result := s.db.WithContext(ctx).Exec(`
-					DELETE FROM t_strategy_replay_bars
-					WHERE rowid IN (SELECT rowid FROM t_strategy_replay_bars WHERE c_replay_id = ? LIMIT ?)
-				`, id, retentionBatch)
-				if result.Error != nil {
-					return deleted, result.Error
-				}
-				if result.RowsAffected < retentionBatch {
-					break
-				}
+			removed, err := s.deleteReplay(ctx, id)
+			if err != nil {
+				return deleted, err
 			}
-			result := s.db.WithContext(ctx).Exec(`DELETE FROM t_strategy_replays WHERE c_replay_id = ?`, id)
-			if result.Error != nil {
-				return deleted, result.Error
-			}
-			deleted += result.RowsAffected
+			deleted += removed
 		}
 	}
+}
+
+// DeleteReplaysBeyond 让每个空间只保留最近 keep 个已结束的回放：每期都记录持仓账本，一个长回放可达数十 MB，
+// 只按天数清理挡不住频繁回放把数据库撑大。运行中与排队中的回放不删。
+func (s *Store) DeleteReplaysBeyond(ctx context.Context, keep int) (int64, error) {
+	if keep <= 0 {
+		return 0, errors.New("每个空间保留的回放数必须大于 0")
+	}
+	var ids []string
+	if err := s.db.WithContext(ctx).Raw(`
+		SELECT c_replay_id FROM (
+			SELECT c_replay_id, c_status, ROW_NUMBER() OVER (PARTITION BY c_space_id ORDER BY c_ctime DESC, c_replay_id DESC) AS c_rank
+			FROM t_strategy_replays
+		)
+		WHERE c_rank > ? AND c_status IN ('done', 'failed', 'cancelled')
+	`, keep).Scan(&ids).Error; err != nil {
+		return 0, err
+	}
+	var deleted int64
+	for _, id := range ids {
+		removed, err := s.deleteReplay(ctx, id)
+		if err != nil {
+			return deleted, err
+		}
+		deleted += removed
+	}
+	return deleted, nil
+}
+
+// deleteReplay 先分批删除回放的周期记录，再删除任务本身，单条语句不会长时间占住唯一的数据库连接。
+func (s *Store) deleteReplay(ctx context.Context, replayID string) (int64, error) {
+	for {
+		result := s.db.WithContext(ctx).Exec(`
+			DELETE FROM t_strategy_replay_bars
+			WHERE rowid IN (SELECT rowid FROM t_strategy_replay_bars WHERE c_replay_id = ? LIMIT ?)
+		`, replayID, retentionBatch)
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		if result.RowsAffected < retentionBatch {
+			break
+		}
+	}
+	result := s.db.WithContext(ctx).Exec(`DELETE FROM t_strategy_replays WHERE c_replay_id = ?`, replayID)
+	return result.RowsAffected, result.Error
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,11 @@ import (
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func openStore(t *testing.T) *store.Store {
@@ -97,5 +103,66 @@ func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 		if _, ok := response.Details[key]; !ok {
 			t.Fatalf("健康详情缺少 %q：%+v", key, response.Details)
 		}
+	}
+}
+
+// fakeJetStream 是一直在线、但发布得不到确认的 EventBus 客户端。
+type fakeJetStream struct{}
+
+func (fakeJetStream) Ready() bool                                   { return true }
+func (fakeJetStream) Close() error                                  { return nil }
+func (fakeJetStream) EventPublisher() strategyoutbox.EventPublisher { return hangingPublisher{} }
+
+type hangingPublisher struct{}
+
+func (hangingPublisher) PublishMessage(ctx context.Context, _ *eventpb.EventMessage) (*jetstream.PublishAck, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// EventBus 在线但投递停滞（最老的待投递结果超过阈值仍未发出）时，健康检查报未就绪，Monitor 据此告警。
+func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	bar := timestamppb.New(now)
+	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", LogicalAccountId: "acct", BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", TargetWeight: "1"}},
+	}, events.PublishOptions{EventID: "r1", OccurredAt: now, SpaceID: "crypto", SubjectID: "acct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := now.Add(-10 * time.Minute)
+	insert := fmt.Sprintf(`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime)
+		VALUES ('r1', 'i1', 'i1-session', %d, %d, 'ok', 'sha256:demo', '{}', '[]', '{}', '{}', X'%x', 'pending', '%s');`, now.UnixMilli(), now.Add(time.Hour).UnixMilli(), data, stale.Format("2006-01-02 15:04:05.999999999-07:00"))
+	if err := repo.ApplySchema(insert); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := strategyoutbox.NewRuntime(strategyoutbox.RuntimeConfig{
+		Store: repo, RelayInterval: 10 * time.Millisecond, ReconnectInterval: 10 * time.Millisecond, BatchSize: 1, PublishTimeout: time.Hour,
+		Probe:     func(context.Context, strategyoutbox.JetStreamClient) error { return nil },
+		Connector: func(context.Context) (strategyoutbox.JetStreamClient, error) { return fakeJetStream{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for !runtime.Connected() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	state := strategyhealth.New("strategy", "strategy", "", "")
+	state.SetReady(true)
+	response := strategyHealthSnapshot(repo, runtime, state, nil)(context.Background())
+	if response.Ready || response.Details["outbox_stalled"] != true || response.Details["eventbus_connected"] != true {
+		t.Fatalf("投递停滞时应报未就绪：%+v", response.Details)
 	}
 }

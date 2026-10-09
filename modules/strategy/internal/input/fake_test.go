@@ -67,7 +67,7 @@ func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (TagInfo, error)
 	if _, ok := f.tags[tagID]; ok {
 		return TagInfo{TagID: tagID}, nil
 	}
-	return TagInfo{}, fmt.Errorf("标签 %s 不存在", tagID)
+	return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
 }
 
 func (f *fakeClient) QueryRows(_ context.Context, _ string, query Query) ([]Row, uint64, error) {
@@ -95,14 +95,14 @@ func plainColumn(name string) ViewColumn {
 }
 
 func subject(id string, active bool) Subject {
-	return Subject{SubjectID: id, InstrumentID: id, SeriesTag: "venue:binance", Active: active, Attributes: map[string]string{}}
+	return Subject{SubjectID: id, SeriesTag: "venue:binance", Active: active, Attributes: map[string]string{}}
 }
 
 // newFakeClient 构造一个现货因子 View：K 线列 + ma_20、bias_q_20、quote_volume_mean_20、quote_volume_mean_q_20 因子列。
 func newFakeClient(marketType string) *fakeClient {
 	return &fakeClient{
 		views: map[string]ViewInfo{
-			"view_factor_1h": {ViewID: "view_factor_1h", DatasetID: "ds_factor", Frequency: "1h", Status: "active", ActiveIndexID: "idx_a", Columns: []ViewColumn{
+			"view_factor_1h": {ViewID: "view_factor_1h", DatasetID: "ds_factor", Frequency: "1h", Status: "active", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, Columns: []ViewColumn{
 				plainColumn("open"), plainColumn("high"), plainColumn("low"), plainColumn("close"), plainColumn("volume"), plainColumn("quote_volume"), plainColumn("trade_num"),
 				factorColumn("ma_20", "ma"), factorColumn("bias_q_20", "bias"), factorColumn("quote_volume_mean_20", "qv"), factorColumn("quote_volume_mean_q_20", "qv"),
 			}},

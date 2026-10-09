@@ -20,7 +20,8 @@ func parseTime(raw, field string) (time.Time, error) {
 	}
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04", "2006-01-02 15:04:05", "2006-01-02"} {
 		if at, err := time.Parse(layout, raw); err == nil {
-			return at.UTC(), nil
+			// 回放区间按毫秒落库：先截到毫秒，返回的根数与首末根才与执行时一致。
+			return at.UTC().Truncate(time.Millisecond), nil
 		}
 	}
 	return time.Time{}, fmt.Errorf("%s 的格式无法识别：%s", field, raw)
@@ -37,11 +38,11 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if req == nil || strings.TrimSpace(req.GetViewId()) == "" {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("view_id 不能为空"))}, nil
 	}
-	dslYaml, strategyID, err := s.replaySource(ctx, scoped, req)
+	source, err := s.replaySource(ctx, scoped, req)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	strategy, _, err := parseDefinition(dslYaml)
+	strategy, _, err := parseDefinition(source.dslYaml)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -84,7 +85,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: strategyID, DSLYaml: dslYaml, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -98,9 +99,17 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	return &strategypb.StartReplayRsp{RetInfo: success(), Replay: replayProto(created), BarCount: int32(len(bars)), FirstBarEnd: formatTime(bars[0].BarEnd), LastBarEnd: formatTime(bars[len(bars)-1].BarEnd)}, nil
 }
 
+// replayInput 是被回放的 DSL 文本及其来源。
+type replayInput struct {
+	dslYaml    string
+	strategyID *string
+	instanceID *string
+	sessionID  *string
+}
+
 // replaySource 按 strategy_id、dsl_yaml、instance_id 三选一确定被回放的 DSL 文本：定义当前的版本、给定文本，
-// 或实例当前（停用时为最近一次）会话固化的版本——后者与实例实际在跑的策略一致。
-func (s *Service) replaySource(ctx context.Context, scoped string, req *strategypb.StartReplayReq) (string, *string, error) {
+// 或实例当前会话（停用时为最近一次会话）固化的版本——后者与实例在跑或最后在跑的策略一致。
+func (s *Service) replaySource(ctx context.Context, scoped string, req *strategypb.StartReplayReq) (replayInput, error) {
 	strategyID := strings.TrimSpace(req.GetStrategyId())
 	instanceID := strings.TrimSpace(req.GetInstanceId())
 	text := req.GetDslYaml()
@@ -111,19 +120,19 @@ func (s *Service) replaySource(ctx context.Context, scoped string, req *strategy
 		}
 	}
 	if given != 1 {
-		return "", nil, errors.New("strategy_id、dsl_yaml、instance_id 必须且只能给出其一")
+		return replayInput{}, errors.New("strategy_id、dsl_yaml、instance_id 必须且只能给出其一")
 	}
 	switch {
 	case strategyID != "":
 		def, err := s.Store.GetDefinition(ctx, strategyID)
 		if err != nil || def.DeletedAt != nil {
-			return "", nil, fmt.Errorf("策略定义 %s 不存在", strategyID)
+			return replayInput{}, fmt.Errorf("策略定义 %s 不存在", strategyID)
 		}
-		return def.DSLYaml, &def.StrategyID, nil
+		return replayInput{dslYaml: def.DSLYaml, strategyID: &def.StrategyID}, nil
 	case instanceID != "":
 		instance, err := s.Store.GetInstance(ctx, instanceID)
 		if err != nil || instance.SpaceID != scoped || instance.DeletedAt != nil {
-			return "", nil, fmt.Errorf("实例 %s 不存在或不在当前空间", instanceID)
+			return replayInput{}, fmt.Errorf("实例 %s 不存在或不在当前空间", instanceID)
 		}
 		sessionID := ""
 		if instance.SessionID != nil {
@@ -132,19 +141,19 @@ func (s *Service) replaySource(ctx context.Context, scoped string, req *strategy
 			sessionID = sessions[0].SessionID
 		}
 		if sessionID == "" {
-			return "", nil, fmt.Errorf("实例 %s 还没有启用过，没有可回放的会话版本", instanceID)
+			return replayInput{}, fmt.Errorf("实例 %s 还没有启用过，没有可回放的会话版本", instanceID)
 		}
 		session, err := s.Store.GetSession(ctx, sessionID)
 		if err != nil {
-			return "", nil, err
+			return replayInput{}, err
 		}
 		version, err := s.Store.GetDefinitionVersion(ctx, session.DSLHash)
 		if err != nil {
-			return "", nil, err
+			return replayInput{}, err
 		}
-		return version.DSLYaml, &instance.StrategyID, nil
+		return replayInput{dslYaml: version.DSLYaml, strategyID: &instance.StrategyID, instanceID: &instance.InstanceID, sessionID: &sessionID}, nil
 	default:
-		return text, nil, nil
+		return replayInput{dslYaml: text}, nil
 	}
 }
 
@@ -195,7 +204,10 @@ func (s *Service) ListReplays(ctx context.Context, req *strategypb.ListReplaysRe
 	}
 	items := make([]*strategypb.Replay, 0, len(replays))
 	for _, replay := range replays {
-		items = append(items, replayProto(replay))
+		item := replayProto(replay)
+		// 列表每 5 秒轮询一次：不带 DSL 全文，详情用 GetReplay 读取。
+		item.DslYaml = ""
+		items = append(items, item)
 	}
 	return &strategypb.ListReplaysRsp{RetInfo: success(), Replays: items, Total: total, Page: int32(page), PageSize: int32(size)}, nil
 }

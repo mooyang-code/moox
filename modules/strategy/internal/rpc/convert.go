@@ -71,7 +71,7 @@ func replayProto(value store.Replay) *strategypb.Replay {
 		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID, ViewId: value.ViewID,
 		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), FeeBps: value.FeeBps, Status: value.Status,
 		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
-		DslHash: dsl.Hash([]byte(value.DSLYaml)),
+		DslHash: dsl.Hash([]byte(value.DSLYaml)), InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID),
 	}
 	if value.ProgressTime != nil {
 		replay.ProgressTime = formatTime(*value.ProgressTime)

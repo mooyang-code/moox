@@ -35,8 +35,10 @@ func retryDelay(deliveryCount uint64) time.Duration {
 
 // ConsumerConfig 是消费者配置。BatchSize 默认 1：顺序批次里一条消息 RETRY 会让同批后面的消息一起退避，
 // 事件量很小，逐条拉取既保持同一 View 的周期顺序，又不会让一个 View 的故障拖住其他 View。
+//
+// Connect 建立 EventBus 连接；EventBus 暂不可用时监督循环按退避重试，进程照常启动，消费者在连上之前不就绪。
 type ConsumerConfig struct {
-	Client        *jetstream.Client
+	Connect       func(context.Context) (*jetstream.Client, error)
 	ConsumerName  string
 	AckWait       time.Duration
 	MaxAckPending int
@@ -51,8 +53,10 @@ type Consumer struct {
 	handler *trigger.Handler
 
 	mu       sync.Mutex
+	client   *jetstream.Client
 	consumer *jetstream.Consumer
 	cancel   context.CancelFunc
+	done     chan struct{}
 	ready    bool
 }
 
@@ -98,32 +102,44 @@ func (c *Consumer) consumerConfig() (jetstream.ConsumerConfig, error) {
 	}, nil
 }
 
-// Start 创建 durable 消费者并启动监督循环；首次创建失败直接返回错误。
+// Start 启动监督循环：连接 EventBus、创建 durable 消费者并消费；连接或创建失败都按退避重试，不阻塞进程启动。
 func (c *Consumer) Start(ctx context.Context) error {
-	if c == nil || c.cfg.Client == nil || c.handler == nil {
+	if c == nil || c.cfg.Connect == nil || c.handler == nil {
 		return errors.New("策略 ViewDataReady 消费者未配置")
 	}
 	config, err := c.consumerConfig()
 	if err != nil {
 		return err
 	}
-	consumer, err := c.cfg.Client.NewConsumer(ctx, config)
-	if err != nil {
-		return err
-	}
 	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	c.mu.Lock()
-	c.cancel = cancel
+	c.cancel, c.done = cancel, done
 	c.mu.Unlock()
-	go c.supervise(runCtx, config, consumer)
+	go func() {
+		defer close(done)
+		c.supervise(runCtx, config)
+	}()
 	return nil
 }
 
 // supervise 运行消费循环；循环退出（例如 EventBus 重启时拉取请求收到 Server Shutdown）后记录原因，
 // 按退避重新创建消费者，直到 ctx 结束。
-func (c *Consumer) supervise(ctx context.Context, config jetstream.ConsumerConfig, consumer *jetstream.Consumer) {
+func (c *Consumer) supervise(ctx context.Context, config jetstream.ConsumerConfig) {
 	delay := minRestartDelay
 	for {
+		consumer, err := c.open(ctx, config)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			c.logf("创建 ViewDataReady 消费者失败，%s 后重试：%v", delay, err)
+			if !sleepContext(ctx, delay) {
+				return
+			}
+			delay = min(delay*2, maxRestartDelay)
+			continue
+		}
 		c.setCurrent(consumer, true)
 		runner := jetstream.NewRunner(consumer, jetstream.DeliveryHandlerFunc(func(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 			return HandleDelivery(ctx, delivery, c.handler)
@@ -131,7 +147,7 @@ func (c *Consumer) supervise(ctx context.Context, config jetstream.ConsumerConfi
 			c.logf("ViewDataReady 投递处理失败：%v", err)
 		})})
 		started := time.Now()
-		err := runner.Run(ctx)
+		err = runner.Run(ctx)
 		c.setCurrent(nil, false)
 		_ = consumer.Close()
 		if ctx.Err() != nil {
@@ -141,19 +157,29 @@ func (c *Consumer) supervise(ctx context.Context, config jetstream.ConsumerConfi
 		if time.Since(started) > maxRestartDelay {
 			delay = minRestartDelay
 		}
-		for {
-			if !sleepContext(ctx, delay) {
-				return
-			}
-			delay = min(delay*2, maxRestartDelay)
-			next, openErr := c.cfg.Client.NewConsumer(ctx, config)
-			if openErr == nil {
-				consumer = next
-				break
-			}
-			c.logf("重建 ViewDataReady 消费者失败：%v", openErr)
+		if !sleepContext(ctx, delay) {
+			return
 		}
+		delay = min(delay*2, maxRestartDelay)
 	}
+}
+
+// open 在需要时建立连接（只建立一次，之后由 nats.go 自动重连），再创建 durable 消费者。
+func (c *Consumer) open(ctx context.Context, config jetstream.ConsumerConfig) (*jetstream.Consumer, error) {
+	c.mu.Lock()
+	client := c.client
+	c.mu.Unlock()
+	if client == nil {
+		connected, err := c.cfg.Connect(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		c.client = connected
+		c.mu.Unlock()
+		client = connected
+	}
+	return client.NewConsumer(ctx, config)
 }
 
 func (c *Consumer) setCurrent(consumer *jetstream.Consumer, ready bool) {
@@ -180,19 +206,31 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-// Close 停止监督循环并关闭当前消费者。
+// Close 停止监督循环，等它退出（在途投递处理完毕、消费者已关闭）后关闭连接。
 func (c *Consumer) Close() error {
 	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cancel != nil {
-		c.cancel()
+	cancel, done, consumer := c.cancel, c.done, c.consumer
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
+	if consumer != nil {
+		// 关闭当前消费者以打断正在等待的拉取，让循环尽快退出。
+		_ = consumer.Close()
+	}
+	if done != nil {
+		<-done
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.ready = false
-	if c.consumer != nil {
-		return c.consumer.Close()
+	if c.client != nil {
+		err := c.client.Close()
+		c.client = nil
+		return err
 	}
 	return nil
 }

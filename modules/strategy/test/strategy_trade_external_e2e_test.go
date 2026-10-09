@@ -169,6 +169,6 @@ func (externalInput) LoadBar(_ context.Context, _ string, resolved input.Resolve
 		"BTC-USDT": {Values: map[string]float64{"bias": 2, "close": 100}},
 		"ETH-USDT": {Values: map[string]float64{"bias": 1, "close": 10}},
 	}}
-	subjects := map[string]input.Subject{"BTC-USDT": {SubjectID: "BTC-USDT", InstrumentID: "BTC-USDT", Active: true}, "ETH-USDT": {SubjectID: "ETH-USDT", InstrumentID: "ETH-USDT", Active: true}}
+	subjects := map[string]input.Subject{"BTC-USDT": {SubjectID: "BTC-USDT", Active: true}, "ETH-USDT": {SubjectID: "ETH-USDT", Active: true}}
 	return input.Loaded{Frame: frame, Sets: input.Sets{Universe: ids, Expected: frame.Expected, AgedOut: frame.AgedOut, Subjects: subjects}, Boundary: boundary, IndexID: "idx", Revision: 1}, nil
 }

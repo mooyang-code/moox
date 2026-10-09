@@ -9,30 +9,30 @@ func TestParseExample(t *testing.T) {
 	t.Parallel()
 	strategy, err := Parse([]byte(exampleDSL))
 	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
+		t.Fatalf("Parse() 出错：%v", err)
 	}
 	if strategy.Name != "binance_spot_momentum_1h" || strategy.Bar != "1h" {
-		t.Fatalf("name/bar = %q/%q", strategy.Name, strategy.Bar)
+		t.Fatalf("name/bar 不符：%q/%q", strategy.Name, strategy.Bar)
 	}
 	if strategy.Universe.MinAgeBars != 240 || len(strategy.Universe.ExcludeTags) != 1 || len(strategy.Universe.Exclude) != 1 {
-		t.Fatalf("universe = %+v", strategy.Universe)
+		t.Fatalf("universe 不符：%+v", strategy.Universe)
 	}
 	if len(strategy.Rules) != 2 {
-		t.Fatalf("rules = %d", len(strategy.Rules))
+		t.Fatalf("规则数不符：%d", len(strategy.Rules))
 	}
 	rank := strategy.Rules[0]
 	if rank.ID != "long_momentum" || rank.Type != RuleTypeRank || rank.Name != "多头动量选币" {
-		t.Fatalf("rank rule = %+v", rank)
+		t.Fatalf("rank 规则不符：%+v", rank)
 	}
 	if rank.Select.Top != 5 || rank.Select.Buffer != 2 || rank.Weight.Total.String() != "0.8" || !rank.Weight.HasCap || rank.Weight.Cap.String() != "0.3" || rank.Weight.Method != WeightMethodEqual {
-		t.Fatalf("rank select/weight = %+v / %+v", rank.Select, rank.Weight)
+		t.Fatalf("rank 规则的 select/weight 不符：%+v / %+v", rank.Select, rank.Weight)
 	}
 	signal := strategy.Rules[1]
 	if signal.Type != RuleTypeSignal || !signal.Pool.Explicit || len(signal.Pool.Fixed) != 1 || signal.Weight.Total.String() != "0.2" || signal.Side != SideLong {
-		t.Fatalf("signal rule = %+v", signal)
+		t.Fatalf("signal 规则不符：%+v", signal)
 	}
 	if strategy.Portfolio.Leverage.String() != "1" || !strategy.Portfolio.HasMaxWeight || strategy.Portfolio.MaxWeight.String() != "0.3" || strategy.Portfolio.MinUniverse != 20 || strategy.Portfolio.MaxMissing.String() != "0.2" {
-		t.Fatalf("portfolio = %+v", strategy.Portfolio)
+		t.Fatalf("portfolio 不符：%+v", strategy.Portfolio)
 	}
 }
 
@@ -47,14 +47,14 @@ rules:
     weight: 1
 `))
 	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
+		t.Fatalf("Parse() 出错：%v", err)
 	}
 	if strategy.Portfolio.Leverage.String() != "1" || strategy.Portfolio.MaxMissing.String() != "0.2" || strategy.Portfolio.HasMaxWeight {
-		t.Fatalf("portfolio defaults = %+v", strategy.Portfolio)
+		t.Fatalf("portfolio 默认值不符：%+v", strategy.Portfolio)
 	}
 	rule := strategy.Rules[0]
 	if rule.Weight.Total.String() != "1" || rule.Weight.Method != WeightMethodEqual || rule.Side != SideLong || rule.Pool.Explicit {
-		t.Fatalf("rule defaults = %+v", rule)
+		t.Fatalf("规则默认值不符：%+v", rule)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestParseRejectsMalformedDocuments(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := Parse([]byte(raw)); err == nil {
-				t.Fatalf("Parse() accepted malformed document")
+				t.Fatalf("Parse() 不应接受格式错误的文档")
 			}
 		})
 	}
@@ -84,9 +84,9 @@ func TestParseRejectsMalformedDocuments(t *testing.T) {
 func TestHashIsStable(t *testing.T) {
 	t.Parallel()
 	if Hash([]byte(exampleDSL)) != Hash([]byte(exampleDSL)) || !strings.HasPrefix(Hash([]byte(exampleDSL)), "sha256:") {
-		t.Fatal("Hash() is not stable")
+		t.Fatal("Hash() 不稳定")
 	}
 	if Hash([]byte(exampleDSL)) == Hash([]byte(exampleDSL+"\n# x")) {
-		t.Fatal("Hash() ignores content changes")
+		t.Fatal("Hash() 没有随内容变化")
 	}
 }

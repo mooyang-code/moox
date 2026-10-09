@@ -78,9 +78,14 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 	if err != nil {
 		return fmt.Errorf("读取 View %s 的启用实例：%w", payload.GetViewId(), err)
 	}
+	// 同一事件内多个实例绑定同一 View：元数据（View、标的绑定、标签成员）只读一次。
+	loader := h.Loader
+	if scoped, ok := loader.(interface{ ForEvent() input.Loader }); ok {
+		loader = scoped.ForEvent()
+	}
 	var retry []error
 	for _, instance := range instances {
-		if err := h.process(ctx, instance, message, payload); err != nil {
+		if err := h.process(ctx, loader, instance, message, payload); err != nil {
 			retry = append(retry, fmt.Errorf("实例 %s：%w", instance.InstanceID, err))
 		}
 	}
@@ -97,6 +102,7 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 
 // period 是一个实例处理一期时的上下文。
 type period struct {
+	loader     Loader
 	instance   store.Instance
 	runtime    *runtime
 	eventID    string
@@ -106,7 +112,7 @@ type period struct {
 	input      store.InputRecord
 }
 
-func (h *Handler) process(ctx context.Context, instance store.Instance, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {
+func (h *Handler) process(ctx context.Context, loader Loader, instance store.Instance, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {
 	periodTime := time.Unix(payload.GetPeriodTime(), 0).UTC()
 	rt, rtErr := h.runtimeFor(ctx, instance)
 	var skip *input.SkipError
@@ -126,7 +132,7 @@ func (h *Handler) process(ctx context.Context, instance store.Instance, message 
 	if err != nil {
 		return nil
 	}
-	p := &period{instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
+	p := &period{loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
 	p.input = store.InputRecord{ViewID: payload.GetViewId(), Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, EventID: message.GetEventId()}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
@@ -193,7 +199,7 @@ func (h *Handler) process(ctx context.Context, instance store.Instance, message 
 		case err == nil:
 			if created {
 				h.observe(instance, bar, boundary.BarEnd, decision.Status, decision.SkipReason)
-				h.updateHealth(ctx, instance.InstanceID, decision.Status, decision.SkipReason)
+				h.updateHealth(ctx, instance.InstanceID, rt.sessionID, decision.Status, decision.SkipReason)
 			}
 			return nil
 		case errors.Is(err, store.ErrResultCASConflict):
@@ -239,11 +245,15 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	var loaded input.Loaded
 	for reread := 0; ; reread++ {
 		var err error
-		loaded, err = h.Loader.LoadBar(ctx, p.instance.SpaceID, rt.resolved, rt.program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: eventUniverse(payload), Readiness: ready})
+		loaded, err = p.loader.LoadBar(ctx, p.instance.SpaceID, rt.resolved, rt.program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: eventUniverse(payload), Readiness: ready})
 		if err == nil {
 			break
 		}
 		if errors.Is(err, input.ErrStale) && reread < maxStaleRereads {
+			// 索引已切换：丢弃事件内缓存的 View 元数据后整体重读。
+			if cache, ok := p.loader.(interface{ Invalidate() }); ok {
+				cache.Invalidate()
+			}
 			continue
 		}
 		var skip *input.SkipError
@@ -355,26 +365,29 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 	}
 	if created {
 		h.observe(p.instance, p.input.Bar, p.boundary.BarEnd, store.StatusSkipped, reason)
-		h.updateHealth(ctx, p.instance.InstanceID, store.StatusSkipped, reason)
+		h.updateHealth(ctx, p.instance.InstanceID, p.runtime.sessionID, store.StatusSkipped, reason)
 		h.logf("实例 %s 周期 %s 跳过（%s）：%s", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, detail)
 	}
 	return nil
 }
 
 // degradingReasons 是需要人工处理的跳过原因（重新启用、修复 View 或补数据）：实例标记 degraded，下一个 ok 周期恢复。
+// factor_changed 表示绑定的因子定义已变，只有重新启用才能恢复。
 var degradingReasons = map[string]bool{
 	input.SkipConfigError:         true,
 	input.SkipHistoryInsufficient: true,
 	input.SkipAmbiguousSeries:     true,
+	readiness.ReasonFactorChanged: true,
 }
 
 // updateHealth 按本期结果更新实例健康：ok 恢复 degraded，需要人工处理的跳过原因标记 degraded。
-func (h *Handler) updateHealth(ctx context.Context, instanceID, status, reason string) {
+// 只作用于仍以该会话启用的实例。
+func (h *Handler) updateHealth(ctx context.Context, instanceID, sessionID, status, reason string) {
 	switch {
 	case status == engine.StatusOK:
-		_ = h.Store.RecoverInstanceHealth(ctx, instanceID, h.now())
+		_ = h.Store.RecoverInstanceHealth(ctx, instanceID, sessionID, h.now())
 	case degradingReasons[reason]:
-		_ = h.Store.MarkInstanceDegraded(ctx, instanceID, h.now())
+		_ = h.Store.MarkInstanceDegraded(ctx, instanceID, sessionID, h.now())
 	}
 }
 

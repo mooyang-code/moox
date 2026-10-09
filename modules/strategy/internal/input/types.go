@@ -17,11 +17,15 @@ type SkipError struct {
 	Detail string
 }
 
+// Error 只返回说明：同一个错误也会出现在启用与回放的报错里，那里没有“本期”的语境。
 func (e *SkipError) Error() string {
 	if e == nil {
 		return "本期跳过"
 	}
-	return fmt.Sprintf("本期跳过（%s）：%s", e.Reason, e.Detail)
+	if e.Detail == "" {
+		return fmt.Sprintf("本期跳过（%s）", e.Reason)
+	}
+	return e.Detail
 }
 
 // 跳过原因。
@@ -39,10 +43,13 @@ type ViewInfo struct {
 	Frequency     string
 	Status        string
 	ActiveIndexID string
-	// IndexedFrom 与 IndexedTo 是当前索引覆盖的最早与最晚业务时间（bar_start），零值表示未知。
+	// IndexedFrom 与 IndexedTo 是活动索引全部行的最早与最晚 bar_start（取自 DataView 的索引统计，至多每 5 分钟
+	// 刷新，最晚一根可能略滞后；最早时间只会提前，可能来自已停更的序列）；零值表示未知。
 	IndexedFrom time.Time
 	IndexedTo   time.Time
-	Columns     []ViewColumn
+	// SeriesBars 是 View 每个序列至少保留的最近根数；0 表示未知。活跃序列可回溯的起点见 CoverageStart。
+	SeriesBars int
+	Columns    []ViewColumn
 }
 
 // ViewColumn 是 View 的一列及其属性（因子列带 origin_factor_id 与 factor_output）。
@@ -67,13 +74,12 @@ type TagInfo struct {
 	MarketType string
 }
 
-// Subject 是数据集绑定的一个标的。
+// Subject 是数据集绑定的一个标的；策略的标的 ID 就是 subject_id。
 type Subject struct {
-	SubjectID    string
-	InstrumentID string
-	SeriesTag    string
-	Active       bool
-	Attributes   map[string]string
+	SubjectID  string
+	SeriesTag  string
+	Active     bool
+	Attributes map[string]string
 }
 
 // FactorInfo 是因子定义中策略关心的部分。

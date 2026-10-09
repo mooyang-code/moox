@@ -96,6 +96,15 @@ func (e *ResponseError) Error() string {
 	}
 }
 
+// Detail 返回错误链里 Trade 业务错误附带的原始说明（只写日志，不返回给接口调用方）；没有时返回空串。
+func Detail(err error) string {
+	var response *ResponseError
+	if errors.As(err, &response) && response != nil {
+		return strings.TrimSpace(response.Message)
+	}
+	return ""
+}
+
 // StatusCode 返回 Trade 的错误码。
 func (e *ResponseError) StatusCode() int32 {
 	if e == nil {

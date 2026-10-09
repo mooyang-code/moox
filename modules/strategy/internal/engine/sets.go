@@ -14,9 +14,10 @@ type ruleSets struct {
 	missing   map[string]string
 }
 
-// partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列所属因子对该标的失败，都算缺数。
+// partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列上游对该标的失败，都算缺数。
 // 年龄剔除只拦住新进入的标的：规则上期已持有的标的在建仓时已经满足 min_age_bars，不会因为探针窗口内恰好
-// 缺数（历史数据缺口）被当作新上市剔除。
+// 缺数（历史数据缺口）被当作新上市剔除。signal 规则的持仓只判 exit，只需要 exit 引用的列（含 bars[-1]）：
+// 只缺 entry 用到的输入（例如交叉入场的上一根）不能触发清仓；未持有的候选同时判 entry 与 exit，需要全部列。
 func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string)}
 	heldSet := make(map[string]struct{}, len(held))
@@ -34,6 +35,10 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets 
 	sets.expected = expected
 	columns := rule.Columns()
 	previousColumns := rule.PreviousColumns()
+	heldColumns, heldPrevious := columns, previousColumns
+	if rule.Rule.Type == dsl.RuleTypeSignal && rule.Exit != nil {
+		heldColumns, heldPrevious = rule.Exit.AllColumns(), rule.Exit.AllPreviousColumns()
+	}
 	for _, id := range expected {
 		if _, aged := sets.agedOut[id]; aged {
 			continue
@@ -43,7 +48,11 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets 
 			sets.missing[id] = "no_row"
 			continue
 		}
-		if reason := missingReason(id, row, columns, previousColumns, frame.FailedColumns); reason != "" {
+		current, previous := columns, previousColumns
+		if _, isHeld := heldSet[id]; isHeld {
+			current, previous = heldColumns, heldPrevious
+		}
+		if reason := missingReason(id, row, current, previous, frame.FailedColumns); reason != "" {
 			sets.missing[id] = reason
 			continue
 		}
@@ -52,12 +61,10 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets 
 	return sets
 }
 
-func missingReason(id string, row Row, columns, previousColumns []string, failed map[string]map[string]struct{}) string {
+func missingReason(id string, row Row, columns, previousColumns []string, failed map[string]map[string]string) string {
 	for _, column := range columns {
-		if subjects, ok := failed[column]; ok {
-			if _, failedSubject := subjects[id]; failedSubject {
-				return "factor_failed:" + column
-			}
+		if reason, failedSubject := failed[column][id]; failedSubject {
+			return reason + ":" + column
 		}
 		if _, ok := row.Values[column]; !ok {
 			return "missing:" + column

@@ -19,34 +19,28 @@ type Membership func(ctx context.Context, tagID string) ([]string, error)
 // 以便实时装配先读当期行、再用同一修订号执行年龄探针。
 func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, subjects []Subject, eventUniverse []string) (Sets, error) {
 	sets := Sets{Expected: map[string][]string{}, AgedOut: map[string][]string{}, Subjects: map[string]Subject{}}
-	bySubject := make(map[string]Subject, len(subjects))
-	byInstrument := make(map[string]Subject, len(subjects))
+	active := make(map[string]Subject, len(subjects))
 	for _, subject := range subjects {
 		if !subject.Active || subject.SubjectID == "" {
 			continue
 		}
-		bySubject[subject.SubjectID] = subject
-		byInstrument[subject.InstrumentID] = subject
+		active[subject.SubjectID] = subject
 	}
 	universe := make(map[string]Subject)
 	// nil 表示事件没有携带名单；非 nil 的空名单表示本期没有标的（回放中没有任何行的周期）。
 	if eventUniverse == nil {
 		sets.Notes = append(sets.Notes, "事件未携带标的名单，基础集合取数据集全部活跃标的")
-		for id, subject := range bySubject {
-			universe[id] = subject
-		}
+		universe = active
 	} else {
 		for _, id := range eventUniverse {
-			if subject, ok := bySubject[id]; ok {
+			if subject, ok := active[id]; ok {
 				universe[id] = subject
-			} else if subject, ok := byInstrument[id]; ok {
-				universe[subject.SubjectID] = subject
 			}
 		}
 	}
-	for _, subject := range universe {
-		sets.Universe = append(sets.Universe, subject.InstrumentID)
-		sets.Subjects[subject.InstrumentID] = subject
+	for id, subject := range universe {
+		sets.Universe = append(sets.Universe, id)
+		sets.Subjects[id] = subject
 	}
 	sort.Strings(sets.Universe)
 	tagCache := make(map[string]map[string]struct{})
@@ -74,10 +68,7 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 		return union, nil
 	}
 	inSet := func(subject Subject, set map[string]struct{}) bool {
-		if _, ok := set[subject.SubjectID]; ok {
-			return true
-		}
-		_, ok := set[subject.InstrumentID]
+		_, ok := set[subject.SubjectID]
 		return ok
 	}
 	listed := func(ids []string) map[string]struct{} {
@@ -119,7 +110,7 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 			if inSet(subject, excludedTags) || inSet(subject, exclude) {
 				continue
 			}
-			defaultExpected = append(defaultExpected, subject.InstrumentID)
+			defaultExpected = append(defaultExpected, subject.SubjectID)
 		}
 		sort.Strings(defaultExpected)
 		return defaultExpected, nil
@@ -131,7 +122,7 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 			fixed := listed(rule.Pool.Fixed)
 			for _, subject := range universe {
 				if inSet(subject, fixed) {
-					expected = append(expected, subject.InstrumentID)
+					expected = append(expected, subject.SubjectID)
 				}
 			}
 		case rule.Pool.Explicit && len(rule.Pool.Tags) > 0:
@@ -141,7 +132,7 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 			}
 			for _, subject := range universe {
 				if inSet(subject, tagged) {
-					expected = append(expected, subject.InstrumentID)
+					expected = append(expected, subject.SubjectID)
 				}
 			}
 		default:
@@ -200,7 +191,7 @@ func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.T
 }
 
 // NewAgeProbe 构造每期一次的探针查询：读取年龄窗口内的 close 列，有行即满足。
-// revision 应与当期主查询一致；View 当前覆盖的最早时间晚于目标根时无法判断年龄，返回 history_insufficient。
+// revision 应与当期主查询一致；活跃序列的覆盖起点（CoverageStart）晚于目标根时无法判断年龄，返回 history_insufficient。
 func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, subjects map[string]Subject, barStart time.Time, revision uint64) AgeProbe {
 	return func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
 		if resolved.MinAgeBars <= 0 || len(instruments) == 0 {
@@ -214,8 +205,8 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		if err != nil {
 			return nil, err
 		}
-		if target := to.Add(-time.Nanosecond); !view.IndexedFrom.IsZero() && target.Before(view.IndexedFrom) {
-			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 当前最早只覆盖到 %s", resolved.MinAgeBars, target.Format(time.RFC3339), resolved.ViewID, view.IndexedFrom.Format(time.RFC3339))}
+		if target, start := to.Add(-time.Nanosecond), CoverageStart(view, resolved); !start.IsZero() && target.Before(start) {
+			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339))}
 		}
 		selected := make([]Subject, 0, len(instruments))
 		for _, id := range instruments {
@@ -227,14 +218,10 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		if err != nil {
 			return nil, fmt.Errorf("年龄探针查询：%w", err)
 		}
-		bySubject := make(map[string]string, len(subjects))
-		for id, subject := range subjects {
-			bySubject[subject.SubjectID] = id
-		}
 		satisfied := make(map[string]struct{}, len(rows))
 		for _, row := range rows {
-			if id, ok := bySubject[row.SubjectID]; ok {
-				satisfied[id] = struct{}{}
+			if _, ok := subjects[row.SubjectID]; ok {
+				satisfied[row.SubjectID] = struct{}{}
 			}
 		}
 		if len(satisfied) == 0 {

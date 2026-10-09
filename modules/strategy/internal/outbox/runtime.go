@@ -17,6 +17,8 @@ type RuntimeConfig struct {
 	RelayInterval     time.Duration
 	ReconnectInterval time.Duration
 	BatchSize         int
+	// PublishTimeout 是单次发布等待确认的上限；0 表示 DefaultPublishTimeout。
+	PublishTimeout time.Duration
 }
 
 type Runtime struct {
@@ -95,7 +97,7 @@ func (r *Runtime) run(ctx context.Context) {
 			}
 			continue
 		}
-		relay := &Relay{Store: r.cfg.Store, Publisher: &JetStreamPublisher{Publisher: eventPublisher, InstanceID: r.cfg.InstanceID}}
+		relay := &Relay{Store: r.cfg.Store, Publisher: &JetStreamPublisher{Publisher: eventPublisher, InstanceID: r.cfg.InstanceID, Timeout: r.cfg.PublishTimeout}}
 		if err := relay.PublishPending(ctx, r.cfg.BatchSize); err != nil {
 			var publishFailure *PublishFailure
 			if errors.As(err, &publishFailure) {

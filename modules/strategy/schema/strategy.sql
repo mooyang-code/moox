@@ -108,6 +108,8 @@ CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_resul
 CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_replay_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT,
+    c_instance_id TEXT,
+    c_session_id TEXT,
     c_dsl_yaml TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL,

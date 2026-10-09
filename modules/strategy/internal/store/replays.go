@@ -26,6 +26,9 @@ const (
 type Replay struct {
 	ReplayID   string
 	StrategyID *string
+	// InstanceID 与 SessionID 记录从实例发起的回放来自哪个实例、回放的是哪个会话固化的 DSL。
+	InstanceID *string
+	SessionID  *string
 	DSLYaml    string
 	SpaceID    string
 	ViewID     string
@@ -67,6 +70,8 @@ type ReplayBar struct {
 type replayRow struct {
 	ReplayID     string         `gorm:"column:c_replay_id"`
 	StrategyID   sql.NullString `gorm:"column:c_strategy_id"`
+	InstanceID   sql.NullString `gorm:"column:c_instance_id"`
+	SessionID    sql.NullString `gorm:"column:c_session_id"`
 	DSLYaml      string         `gorm:"column:c_dsl_yaml"`
 	SpaceID      string         `gorm:"column:c_space_id"`
 	ViewID       string         `gorm:"column:c_view_id"`
@@ -84,7 +89,7 @@ type replayRow struct {
 
 func (r replayRow) replay() Replay {
 	replay := Replay{
-		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), DSLYaml: r.DSLYaml, SpaceID: r.SpaceID, ViewID: r.ViewID,
+		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, SpaceID: r.SpaceID, ViewID: r.ViewID,
 		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), FeeBps: r.FeeBps, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
@@ -98,7 +103,7 @@ func (r replayRow) replay() Replay {
 	return replay
 }
 
-const replayColumns = "c_replay_id, c_strategy_id, c_dsl_yaml, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
+const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
 
 // CreateReplay 登记一个 pending 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
@@ -125,8 +130,8 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	}
 	return s.db.WithContext(ctx).Exec(`
 		INSERT INTO t_strategy_replays (`+replayColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-	`, replay.ReplayID, stringValue(replay.StrategyID), replay.DSLYaml, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
+	`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
 }
 
 // GetReplay 读取回放任务。

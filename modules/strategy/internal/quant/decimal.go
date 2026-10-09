@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -20,18 +21,33 @@ type Decimal struct {
 	units *big.Int
 }
 
-// literalPattern 是 DSL 数字字面量允许的写法：可选符号、整数或小数（可省略整数部分）、可选指数。
-var literalPattern = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$`)
+// literalPattern 是 DSL 数字字面量允许的写法：可选符号、整数或小数（可省略整数部分）、可选指数（第 3 组）。
+var literalPattern = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE]([+-]?\d+))?$`)
+
+// DSL 数字字面量的量级限制：权重、杠杆等取值远小于这个范围；不加限制时 1e999999 会展开成百万位整数拖垮进程。
+const (
+	maxLiteralLength        = 64
+	maxLiteralExponent      = 30
+	maxLiteralIntegerDigits = 9
+)
+
+var maxLiteralUnits = new(big.Int).Mul(new(big.Int).Exp(big.NewInt(10), big.NewInt(maxLiteralIntegerDigits), nil), scale)
 
 // ParseLiteral 解析 DSL 中的数字字面量：除 Parse 接受的写法外，还接受 YAML 合法的 .5、+0.5、2e-1 等；
-// 精度不能超过定点小数位数。
+// 精度不能超过定点小数位数，绝对值必须小于 10^9。
 func ParseLiteral(raw string) (Decimal, error) {
 	raw = strings.TrimSpace(raw)
-	if decimalPattern.MatchString(raw) {
-		return Parse(raw)
+	if len(raw) > maxLiteralLength {
+		return Decimal{}, fmt.Errorf("%w：数字写法不能超过 %d 个字符", ErrInvalidDecimal, maxLiteralLength)
 	}
-	if !literalPattern.MatchString(raw) {
+	match := literalPattern.FindStringSubmatch(raw)
+	if match == nil {
 		return Decimal{}, ErrInvalidDecimal
+	}
+	if exponent := match[3]; exponent != "" {
+		if value, err := strconv.Atoi(exponent); err != nil || value > maxLiteralExponent || value < -maxLiteralExponent {
+			return Decimal{}, fmt.Errorf("%w：指数的绝对值不能超过 %d", ErrInvalidDecimal, maxLiteralExponent)
+		}
 	}
 	value, ok := new(big.Rat).SetString(raw)
 	if !ok {
@@ -40,6 +56,9 @@ func ParseLiteral(raw string) (Decimal, error) {
 	units := value.Mul(value, new(big.Rat).SetInt(scale))
 	if !units.IsInt() {
 		return Decimal{}, fmt.Errorf("%w：小数位数不能超过 %d 位", ErrInvalidDecimal, scaleDigits)
+	}
+	if new(big.Int).Abs(units.Num()).Cmp(maxLiteralUnits) >= 0 {
+		return Decimal{}, fmt.Errorf("%w：绝对值必须小于 10^%d", ErrInvalidDecimal, maxLiteralIntegerDigits)
 	}
 	return Decimal{units: new(big.Int).Set(units.Num())}, nil
 }
@@ -102,16 +121,14 @@ func (d Decimal) Sub(other Decimal) Decimal {
 	return Decimal{units: new(big.Int).Sub(d.normalized(), other.normalized())}
 }
 
-// Mul multiplies two fixed-scale decimals and truncates the result back to the
-// strategy scale. All operands are copied, so callers can safely reuse them.
+// Mul 计算两个定点数的乘积并截断回策略的小数位数；操作数都会被复制，调用方可以安全复用。
 func (d Decimal) Mul(other Decimal) Decimal {
 	product := new(big.Int).Mul(d.normalized(), other.normalized())
 	product.Quo(product, scale)
 	return Decimal{units: product}
 }
 
-// Div divides two fixed-scale decimals and truncates toward zero. A zero
-// divisor returns zero; callers that need to reject it should check first.
+// Div 计算两个定点数的商并向零截断；除数为 0 时返回 0，需要拒绝时由调用方先检查。
 func (d Decimal) Div(other Decimal) Decimal {
 	divisor := other.normalized()
 	if divisor.Sign() == 0 {

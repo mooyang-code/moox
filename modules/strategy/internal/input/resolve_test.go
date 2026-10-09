@@ -174,7 +174,7 @@ func TestRetentionBars(t *testing.T) {
 	} {
 		bars, ok := retentionBars(tc.retention, tc.bar)
 		if bars != tc.bars || ok != tc.ok {
-			t.Fatalf("retentionBars(%s, %s) = %d, %v", tc.retention, tc.bar, bars, ok)
+			t.Fatalf("retentionBars(%s, %s) = %d、%v，不符", tc.retention, tc.bar, bars, ok)
 		}
 	}
 }

@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	sqlitedriver "github.com/glebarez/go-sqlite"
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"gorm.io/gorm"
 )
 
@@ -25,6 +28,14 @@ const sqliteConstraint = 19
 // FriendlyMessage 把错误链中的 SQLite 驱动错误替换为中文概述，避免把表名、列名等内部细节返回给接口调用方；
 // replaced 为 true 时调用方应把原始错误写入日志。
 func FriendlyMessage(err error) (message string, replaced bool) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "请求已取消", true
+	case errors.Is(err, context.DeadlineExceeded):
+		return "请求超时，请稍后重试", true
+	case errors.Is(err, sql.ErrConnDone) || strings.Contains(err.Error(), "sql: database is closed"):
+		return "策略数据库不可用（进程正在关闭），请稍后重试", true
+	}
 	if errors.Is(err, ErrNotFound) {
 		full := err.Error()
 		if raw := ErrNotFound.Error(); strings.Contains(full, raw) {
@@ -132,110 +143,118 @@ func (s *Store) transaction(ctx context.Context, fn func(tx *gorm.DB) error) err
 	return s.db.WithContext(ctx).Transaction(fn)
 }
 
-var schemaColumns = map[string][]string{
-	"t_strategy_defs":         {"c_strategy_id", "c_name", "c_dsl_yaml", "c_dsl_hash", "c_deleted_at", "c_ctime", "c_mtime"},
-	"t_strategy_def_versions": {"c_dsl_hash", "c_dsl_yaml", "c_ctime"},
-	"t_strategy_instances":    {"c_instance_id", "c_strategy_id", "c_space_id", "c_view_id", "c_logical_account_id", "c_enabled", "c_session_id", "c_resolved_json", "c_health", "c_deleted_at", "c_ctime", "c_mtime"},
-	"t_strategy_sessions":     {"c_session_id", "c_instance_id", "c_dsl_hash", "c_resolved_json", "c_ctime", "c_closed_at"},
-	"t_strategy_results":      {"c_result_id", "c_instance_id", "c_session_id", "c_bar_end_time", "c_valid_until", "c_status", "c_skip_reason", "c_dsl_hash", "c_input_json", "c_targets_json", "c_rule_states_json", "c_summary_json", "c_event_data", "c_publish_status", "c_ctime"},
-	"t_strategy_result_items": {"c_result_id", "c_rule_id", "c_instrument_id", "c_stage", "c_score", "c_rank", "c_weight", "c_reason", "c_ctime"},
-	"t_strategy_replays":      {"c_replay_id", "c_strategy_id", "c_dsl_yaml", "c_space_id", "c_view_id", "c_start_time", "c_end_time", "c_fee_bps", "c_factors_json", "c_status", "c_progress_time", "c_metrics_json", "c_error", "c_ctime", "c_mtime"},
-	"t_strategy_replay_bars":  {"c_replay_id", "c_bar_end_time", "c_status", "c_targets_json", "c_positions_json", "c_summary_json", "c_return", "c_equity", "c_turnover", "c_fee", "c_holdings", "c_frozen", "c_skip_reason", "c_unfilled", "c_liquidated"},
+// schemaObject 是 sqlite_master 里的一个表或索引；SQL 已规范化。
+type schemaObject struct {
+	Type  string `gorm:"column:type"`
+	Name  string `gorm:"column:name"`
+	Table string `gorm:"column:tbl_name"`
+	SQL   string `gorm:"column:sql"`
 }
 
-// requiredIndexes 是必须存在的索引及其列；校验时还比对唯一性与是否为部分索引。
-var requiredIndexes = []struct {
-	table   string
-	name    string
-	columns string
-	unique  bool
-	partial bool
-}{
-	{"t_strategy_instances", "ux_t_strategy_instances_account", "c_space_id\x00c_logical_account_id", true, true},
-	{"t_strategy_instances", "idx_t_strategy_instances_view", "c_space_id\x00c_view_id\x00c_enabled", false, false},
-	{"t_strategy_sessions", "idx_t_strategy_sessions_instance", "c_instance_id\x00c_ctime", false, false},
-	{"t_strategy_results", "idx_t_strategy_results_instance_bar", "c_instance_id\x00c_bar_end_time", false, false},
-	{"t_strategy_results", "idx_t_strategy_results_latest_ok", "c_instance_id\x00c_session_id\x00c_status\x00c_bar_end_time", false, false},
-	{"t_strategy_results", "idx_t_strategy_results_pending", "c_ctime\x00c_result_id", false, true},
-	{"t_strategy_result_items", "idx_t_strategy_result_items_ctime", "c_ctime", false, false},
-	{"t_strategy_replays", "idx_t_strategy_replays_space", "c_space_id\x00c_ctime", false, false},
+var expectedSchema struct {
+	once    sync.Once
+	objects map[string]schemaObject
+	err     error
 }
 
-func (s *Store) validateExistingSchema() error {
-	tables, err := s.strategyTables()
-	if err != nil {
-		return err
-	}
-	if len(tables) == 0 {
-		return nil
-	}
-	return s.validateSchemaTables(tables)
+// expectedSchemaObjects 把当前 schema 载入一个内存库，读出它在 sqlite_master 里的表与索引，作为比对基准。
+func expectedSchemaObjects() (map[string]schemaObject, error) {
+	expectedSchema.once.Do(func() {
+		db, err := gorm.Open(sqlite.Open("file:strategy-schema?mode=memory"), &gorm.Config{})
+		if err != nil {
+			expectedSchema.err = err
+			return
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			expectedSchema.err = err
+			return
+		}
+		// 私有内存库只在建立它的连接上可见：固定单连接，建表与读取用的是同一个库。
+		sqlDB.SetMaxOpenConns(1)
+		defer func() { _ = sqlDB.Close() }()
+		if err := db.Exec(schema.AllSQL()).Error; err != nil {
+			expectedSchema.err = fmt.Errorf("载入策略 schema 失败：%w", err)
+			return
+		}
+		expectedSchema.objects, expectedSchema.err = readSchemaObjects(db)
+	})
+	return expectedSchema.objects, expectedSchema.err
 }
 
-func (s *Store) validateCurrentSchema() error {
-	tables, err := s.strategyTables()
-	if err != nil {
-		return err
-	}
-	return s.validateSchemaTables(tables)
-}
-
-func (s *Store) strategyTables() ([]string, error) {
-	var tables []string
-	if err := s.db.Raw(`
-		SELECT name FROM sqlite_master
-		WHERE type = 'table' AND (name = 't_strategies' OR name LIKE 't_strategy_%')
-		ORDER BY name
-	`).Scan(&tables).Error; err != nil {
+// readSchemaObjects 读出策略表及其显式索引（自动索引没有 SQL，随表定义一起比较）。
+func readSchemaObjects(db *gorm.DB) (map[string]schemaObject, error) {
+	var objects []schemaObject
+	if err := db.Raw(`
+		SELECT type, name, tbl_name, sql FROM sqlite_master
+		WHERE type IN ('table', 'index') AND sql IS NOT NULL AND (tbl_name = 't_strategies' OR tbl_name LIKE 't_strategy_%')
+	`).Scan(&objects).Error; err != nil {
 		return nil, fmt.Errorf("读取策略数据库表失败：%w", err)
 	}
-	return tables, nil
+	byKey := make(map[string]schemaObject, len(objects))
+	for _, object := range objects {
+		object.SQL = normalizeSchemaSQL(object.SQL)
+		byKey[object.Type+"\x00"+object.Name] = object
+	}
+	return byKey, nil
 }
 
-func (s *Store) validateSchemaTables(tables []string) error {
-	for _, table := range tables {
-		if _, ok := schemaColumns[table]; !ok {
-			return obsoleteSchemaError(table)
+// normalizeSchemaSQL 去掉 -- 注释并统一空白，纯格式调整（换行、缩进、注释）不影响比较。
+func normalizeSchemaSQL(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if index := strings.Index(line, "--"); index >= 0 && strings.Count(line[:index], "'")%2 == 0 {
+			lines[i] = line[:index]
 		}
 	}
-	if len(tables) != len(schemaColumns) {
-		table := "Strategy"
-		if len(tables) > 0 {
-			table = tables[0]
-		}
-		return obsoleteSchemaError(table)
+	normalized := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
+	for _, pair := range [][2]string{{"( ", "("}, {" )", ")"}, {" ,", ","}} {
+		normalized = strings.ReplaceAll(normalized, pair[0], pair[1])
 	}
-	for _, table := range tables {
-		var columns []string
-		if err := s.db.Raw(`SELECT name FROM pragma_table_info(?) ORDER BY cid`, table).Scan(&columns).Error; err != nil {
-			return fmt.Errorf("读取表 %s 的列失败：%w", table, err)
+	return normalized
+}
+
+// validateSchema 校验策略表与当前 schema 一致：表的集合相同，每个表与索引的定义（列、约束、索引列与条件）逐字等价。
+// 没有任何策略表的新库在 allowEmpty 时直接通过（随后由 ApplySchema 建表）。额外的触发器与索引不影响判断。
+func (s *Store) validateSchema(allowEmpty bool) error {
+	expected, err := expectedSchemaObjects()
+	if err != nil {
+		return err
+	}
+	actual, err := readSchemaObjects(s.db)
+	if err != nil {
+		return err
+	}
+	tables := 0
+	for _, object := range actual {
+		if object.Type != "table" {
+			continue
 		}
-		if strings.Join(columns, "\x00") != strings.Join(schemaColumns[table], "\x00") {
-			return obsoleteSchemaError(table)
+		tables++
+		if _, ok := expected["table\x00"+object.Name]; !ok {
+			return obsoleteSchemaError(object.Name)
 		}
 	}
-	for _, index := range requiredIndexes {
-		var info struct {
-			Name    string `gorm:"column:name"`
-			Unique  int    `gorm:"column:unique"`
-			Partial int    `gorm:"column:partial"`
-		}
-		if err := s.db.Raw(`SELECT name, [unique], partial FROM pragma_index_list(?) WHERE name = ?`, index.table, index.name).Scan(&info).Error; err != nil {
-			return fmt.Errorf("读取索引 %s 失败：%w", index.name, err)
-		}
-		if info.Name != index.name || (info.Unique == 1) != index.unique || (info.Partial == 1) != index.partial {
-			return obsoleteSchemaError(index.table)
-		}
-		var columns []string
-		if err := s.db.Raw(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, index.name).Scan(&columns).Error; err != nil {
-			return fmt.Errorf("读取索引 %s 的列失败：%w", index.name, err)
-		}
-		if strings.Join(columns, "\x00") != index.columns {
-			return obsoleteSchemaError(index.table)
+	if tables == 0 && allowEmpty {
+		return nil
+	}
+	keys := make([]string, 0, len(expected))
+	for key := range expected {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		want := expected[key]
+		if got, ok := actual[key]; !ok || got.SQL != want.SQL {
+			return obsoleteSchemaError(want.Table)
 		}
 	}
 	return nil
 }
+
+func (s *Store) validateExistingSchema() error { return s.validateSchema(true) }
+
+func (s *Store) validateCurrentSchema() error { return s.validateSchema(false) }
 
 func obsoleteSchemaError(table string) error {
 	return fmt.Errorf("Strategy 数据库表 %s 使用旧 schema；请先停止消费者并备份数据库，再人工选择归档旧库或重建当前 schema", table)

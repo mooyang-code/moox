@@ -49,33 +49,34 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 }
 
 // ReplayWindow 校验并截断回放区间 [start, end)：
-// 起点不能早于 View 覆盖起点加上 min_age_bars 与 bars[-1] 所需的历史，否则报错并给出可用起点；
-// 终点截到 View 最新一根（IndexedTo）之后——更晚的 bar 还没有数据，不能当作空 bar 回放。
+// 起点不能早于活跃序列的覆盖起点（CoverageStart）加上 min_age_bars 与 bars[-1] 所需的历史，否则报错并给出可用起点；
+// 终点截到最新一根（IndexedTo）之前：更晚的 bar 还没有数据，最新一根也可能还没写完，都不能当作完整的 bar 回放。
 func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start, end time.Time) (time.Time, error) {
 	if !end.After(start) {
 		return time.Time{}, errors.New("回放区间必须满足 start < end")
 	}
-	if view.IndexedFrom.IsZero() || view.IndexedTo.IsZero() {
-		return time.Time{}, fmt.Errorf("View %s 的数据覆盖范围未知（索引尚未统计完成），暂不能回放", resolved.ViewID)
+	coverage := CoverageStart(view, resolved)
+	if coverage.IsZero() {
+		return time.Time{}, fmt.Errorf("View %s 还没有数据（覆盖范围未知），暂不能回放", resolved.ViewID)
 	}
-	// 终点截到最新一根的 bar_end：它是整秒，落库按毫秒保存不会丢掉最新一根；两种日历下都满足左闭右开。
+	// 终点截到最新一根的 bar_start（整秒，落库按毫秒保存不会多出或丢掉一根）：回放到最新一根之前为止。
 	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, view.IndexedTo)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if end.After(latest.BarEnd) {
-		end = latest.BarEnd
+	if end.After(latest.StorageStart) {
+		end = latest.StorageStart
 	}
 	if !end.After(start) {
-		return time.Time{}, fmt.Errorf("回放区间内没有数据：View %s 最新一根的 bar_start 为 %s", resolved.ViewID, view.IndexedTo.Format(time.RFC3339))
+		return time.Time{}, fmt.Errorf("回放区间内没有完整的数据：View %s 最新一根的 bar_start 为 %s，回放只到它之前", resolved.ViewID, view.IndexedTo.Format(time.RFC3339))
 	}
 	need := resolved.MinAgeBars
 	if program != nil && program.UsesPreviousBar && need < 2 {
 		need = 2
 	}
-	earliest := view.IndexedFrom
+	earliest := coverage
 	if need > 1 {
-		period, err := FromStorageStart(resolved.Calendar, resolved.Bar, view.IndexedFrom)
+		period, err := FromStorageStart(resolved.Calendar, resolved.Bar, coverage)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -94,7 +95,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		return time.Time{}, err
 	}
 	if first.StorageStart.Before(earliest) {
-		return time.Time{}, fmt.Errorf("回放起点 %s 早于 View 保留起点 %s 加上所需的 %d 根历史；可用起点为 %s", first.StorageStart.Format(time.RFC3339), view.IndexedFrom.Format(time.RFC3339), need, earliest.Format(time.RFC3339))
+		return time.Time{}, fmt.Errorf("回放起点 %s 早于 View 活跃序列的覆盖起点 %s 加上所需的 %d 根历史；可用起点为 %s", first.StorageStart.Format(time.RFC3339), coverage.Format(time.RFC3339), need, earliest.Format(time.RFC3339))
 	}
 	return end, nil
 }
@@ -108,21 +109,33 @@ type RangeLoader struct {
 	Columns  []string
 }
 
-// RangeRows 是一段读取的结果：bar_start（Unix 秒）→ subject_id → 行；Ambiguous 记录同一标的同一周期出现多个序列的 bar，
-// AmbiguousSubjects 记录这些 bar 上有歧义的标的（它们的行不能用于估值）。
+// RangeRows 是一段读取的结果：bar_start（Unix 秒）→ subject_id → 行；Ambiguous 记录同一标的同一周期出现多个序列的
+// bar 与标的（bar_start → subject_id → 说明），这些标的在该 bar 上的行不能用于估值。
 type RangeRows struct {
-	Bars              map[int64]map[string]Row
-	Ambiguous         map[int64]string
-	AmbiguousSubjects map[int64]map[string]struct{}
+	Bars      map[int64]map[string]Row
+	Ambiguous map[int64]map[string]string
 }
 
 // Load 读取 [start, end) 内全部标的的行。
 func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows, error) {
 	var lastErr error
+	transportRetries := 0
 	for attempt := 0; attempt < maxRangeRereads; attempt++ {
 		rows, _, err := l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID})
 		if err == nil {
 			return groupRange(rows), nil
+		}
+		// 长回放有数百次分段读取：一次传输失败不应让整个回放失败，退避后重读同一段。
+		var transportErr *TransportError
+		if errors.As(err, &transportErr) && transportRetries < maxRangeTransportRetries {
+			transportRetries++
+			attempt--
+			select {
+			case <-ctx.Done():
+				return RangeRows{}, err
+			case <-time.After(time.Duration(transportRetries) * rangeRetryBackoff):
+			}
+			continue
 		}
 		if !errors.Is(err, ErrStale) {
 			return RangeRows{}, err
@@ -137,10 +150,16 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 	return RangeRows{}, fmt.Errorf("View %s 的索引持续变化，读取放弃：%w", l.View.ViewID, lastErr)
 }
 
-const maxRangeRereads = 3
+const (
+	maxRangeRereads          = 3
+	maxRangeTransportRetries = 3
+)
+
+// rangeRetryBackoff 是分段读取传输失败后的退避基数（第 n 次重试等待 n 倍）。
+var rangeRetryBackoff = time.Second
 
 func groupRange(rows []Row) RangeRows {
-	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]string), AmbiguousSubjects: make(map[int64]map[string]struct{})}
+	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]map[string]string)}
 	tags := make(map[int64]map[string]string)
 	for _, row := range rows {
 		if row.SubjectID == "" {
@@ -152,11 +171,10 @@ func groupRange(rows []Row) RangeRows {
 			tags[key] = make(map[string]string)
 		}
 		if tag, seen := tags[key][row.SubjectID]; seen && tag != row.SeriesTag {
-			result.Ambiguous[key] = fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
-			if result.AmbiguousSubjects[key] == nil {
-				result.AmbiguousSubjects[key] = make(map[string]struct{})
+			if result.Ambiguous[key] == nil {
+				result.Ambiguous[key] = make(map[string]string)
 			}
-			result.AmbiguousSubjects[key][row.SubjectID] = struct{}{}
+			result.Ambiguous[key][row.SubjectID] = fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
 			continue
 		}
 		tags[key][row.SubjectID] = row.SeriesTag

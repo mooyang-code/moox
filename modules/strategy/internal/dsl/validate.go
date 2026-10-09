@@ -12,6 +12,15 @@ import (
 
 var ruleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
+// 取值上限：超出这些量级的写法没有实际意义，却会让时间换算溢出、权重变成天文数字。
+const (
+	// MaxCount 是 min_age_bars、min_universe、select.top / bottom / buffer 与 holding.bars 的上限。
+	MaxCount = 10000
+)
+
+// MaxLeverage 是 portfolio.leverage 的上限（各规则 weight.total 之和不超过 leverage，因此也限住了权重）。
+var MaxLeverage = quant.Must("10")
+
 // Validate 校验结构、字段取值和表达式语法；不需要知道 View 的列，列的存在性在 Compile 时检查。
 // 校验会就地规范化 side 与 method 的默认值；portfolio 的默认值在解析时填入，显式写出的 0 按原值校验。
 func Validate(s *Strategy) error {
@@ -35,6 +44,9 @@ func Validate(s *Strategy) error {
 	if s.Universe.MinAgeBars < 0 {
 		return errors.New("universe.min_age_bars 不能为负数")
 	}
+	if s.Universe.MinAgeBars > MaxCount {
+		return fmt.Errorf("universe.min_age_bars 不能超过 %d", MaxCount)
+	}
 	if err := validatePortfolio(&s.Portfolio); err != nil {
 		return err
 	}
@@ -51,6 +63,10 @@ func Validate(s *Strategy) error {
 		if _, exists := ids[rule.ID]; exists {
 			return fmt.Errorf("规则 id %q 重复", rule.ID)
 		}
+		// rank 规则的可用标的数达不到 min_universe 时整期跳过：固定写出的 pool 比它还小就永远无法运行。
+		if rule.Type == RuleTypeRank && rule.Pool.Explicit && len(rule.Pool.Fixed) > 0 && len(rule.Pool.Fixed) < s.Portfolio.MinUniverse {
+			return fmt.Errorf("规则 %s 的 pool 只有 %d 个标的，少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, len(rule.Pool.Fixed), s.Portfolio.MinUniverse)
+		}
 		ids[rule.ID] = struct{}{}
 		totalBudget = totalBudget.Add(rule.Weight.Total)
 	}
@@ -64,6 +80,9 @@ func validatePortfolio(p *Portfolio) error {
 	if p.Leverage.IsZero() || p.Leverage.IsNegative() {
 		return errors.New("portfolio.leverage 必须大于 0")
 	}
+	if p.Leverage.Cmp(MaxLeverage) > 0 {
+		return fmt.Errorf("portfolio.leverage 不能超过 %s", MaxLeverage.String())
+	}
 	if p.HasMaxWeight {
 		if p.MaxWeight.IsZero() || p.MaxWeight.IsNegative() {
 			return errors.New("portfolio.max_weight 必须大于 0")
@@ -74,6 +93,9 @@ func validatePortfolio(p *Portfolio) error {
 	}
 	if p.MinUniverse < 0 {
 		return errors.New("portfolio.min_universe 不能为负数")
+	}
+	if p.MinUniverse > MaxCount {
+		return fmt.Errorf("portfolio.min_universe 不能超过 %d", MaxCount)
 	}
 	if p.MaxMissing.IsNegative() || p.MaxMissing.Cmp(quant.One()) > 0 {
 		return errors.New("portfolio.max_missing 必须在 0 到 1 之间")
@@ -149,6 +171,9 @@ func validateRankRule(prefix string, rule *Rule) error {
 	if sel.Top < 0 || sel.Bottom < 0 || sel.Buffer < 0 {
 		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能为负数", prefix)
 	}
+	if sel.Top > MaxCount || sel.Bottom > MaxCount || sel.Buffer > MaxCount {
+		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能超过 %d", prefix, MaxCount)
+	}
 	if (sel.Top > 0) == (sel.Bottom > 0) {
 		return fmt.Errorf("%s 的 select 必须且只能设置 top 或 bottom 之一", prefix)
 	}
@@ -207,6 +232,9 @@ func analyzeStages(prefix string, sources []stageSource) error {
 func validateHolding(prefix string, holding *Holding) error {
 	if holding.Bars <= 0 {
 		return fmt.Errorf("%s 的 holding.bars 必须大于 0", prefix)
+	}
+	if holding.Bars > MaxCount {
+		return fmt.Errorf("%s 的 holding.bars 不能超过 %d", prefix, MaxCount)
 	}
 	if len(holding.Offsets) == 0 {
 		return fmt.Errorf("%s 的 holding.offsets 不能为空", prefix)

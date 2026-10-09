@@ -24,6 +24,8 @@ type EventBusConfig struct {
 	RelayBatchSize    int           `yaml:"relay_batch_size"`
 	ReconnectInterval time.Duration `yaml:"reconnect_interval"`
 	ConnectTimeout    time.Duration `yaml:"connect_timeout"`
+	// PublishTimeout 是单次发布目标事件等待确认的上限。
+	PublishTimeout time.Duration `yaml:"publish_timeout"`
 }
 
 // RPCConfig 是经节点网关访问的依赖服务。Target 为空表示未接线，此时只能管理定义，不能启用实例。
@@ -43,10 +45,12 @@ type EvaluationConfig struct {
 	AttemptBudget int `yaml:"attempt_budget"`
 }
 
-// RetentionConfig 是解释明细与回放的保留天数；结果主表、DSL 版本与会话永久保留。
+// RetentionConfig 是解释明细与回放的保留期；结果主表、DSL 版本与会话永久保留。
+// 回放同时按天数与每个空间的个数清理（ReplaysMax 是每个空间保留的最近已结束回放数）。
 type RetentionConfig struct {
 	ResultItemsDays int `yaml:"result_items_days"`
 	ReplaysDays     int `yaml:"replays_days"`
+	ReplaysMax      int `yaml:"replays_max"`
 }
 
 // ReplayConfig 是回放的读取与账本参数。
@@ -123,6 +127,9 @@ func Load(path string) (Config, error) {
 	if c.EventBus.ConnectTimeout == 0 {
 		c.EventBus.ConnectTimeout = 3 * time.Second
 	}
+	if c.EventBus.PublishTimeout == 0 {
+		c.EventBus.PublishTimeout = 10 * time.Second
+	}
 	if c.EventBus.ConsumerName == "" {
 		c.EventBus.ConsumerName = trigger.ViewDataReadyConsumerName
 	}
@@ -166,6 +173,9 @@ func Load(path string) (Config, error) {
 	if c.Retention.ReplaysDays == 0 {
 		c.Retention.ReplaysDays = 90
 	}
+	if c.Retention.ReplaysMax == 0 {
+		c.Retention.ReplaysMax = 50
+	}
 	if c.Replay.ChunkBars == 0 {
 		c.Replay.ChunkBars = 50
 	}
@@ -180,7 +190,7 @@ func Load(path string) (Config, error) {
 			return Config{}, errors.New("eventbus.urls 不能包含空地址")
 		}
 	}
-	if c.EventBus.RelayInterval <= 0 || c.EventBus.RelayBatchSize <= 0 || c.EventBus.ReconnectInterval <= 0 || c.EventBus.ConnectTimeout <= 0 {
+	if c.EventBus.RelayInterval <= 0 || c.EventBus.RelayBatchSize <= 0 || c.EventBus.ReconnectInterval <= 0 || c.EventBus.ConnectTimeout <= 0 || c.EventBus.PublishTimeout <= 0 {
 		return Config{}, errors.New("eventbus 的间隔、批量与超时必须大于 0")
 	}
 	if c.Factor.Timeout <= 0 || c.Storage.Timeout <= 0 {
@@ -189,7 +199,7 @@ func Load(path string) (Config, error) {
 	if c.Evaluation.AttemptBudget <= 0 {
 		return Config{}, errors.New("evaluation.attempt_budget 必须大于 0")
 	}
-	if c.Retention.ResultItemsDays <= 0 || c.Retention.ReplaysDays <= 0 {
+	if c.Retention.ResultItemsDays <= 0 || c.Retention.ReplaysDays <= 0 || c.Retention.ReplaysMax <= 0 {
 		return Config{}, errors.New("retention 的保留天数必须大于 0")
 	}
 	if c.Replay.ChunkBars <= 0 || c.Replay.PageSize <= 0 || c.Replay.MissingPriceLiquidateBars <= 0 {

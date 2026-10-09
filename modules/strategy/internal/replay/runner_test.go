@@ -3,12 +3,14 @@ package replay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
@@ -26,6 +28,9 @@ type fakeClient struct {
 	panicOnRows bool
 	queries     int
 	onQuery     func(query input.Query)
+	// failQuery 返回非空错误时本次读取失败；unknownCoverage 模拟索引统计暂时未知。
+	failQuery       func(query input.Query) error
+	unknownCoverage bool
 }
 
 func price(id string, hour int) float64 {
@@ -40,6 +45,9 @@ func price(id string, hour int) float64 {
 }
 
 func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
+	if f.unknownCoverage {
+		return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
+	}
 	indexedFrom, indexedTo := f.indexedFrom, f.indexedTo
 	if indexedFrom.IsZero() {
 		indexedFrom = origin
@@ -59,7 +67,7 @@ func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (input.TagInfo, 
 }
 
 func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {
-	return []input.Subject{{SubjectID: "A", InstrumentID: "A", Active: true}, {SubjectID: "B", InstrumentID: "B", Active: true}, {SubjectID: "C", InstrumentID: "C", Active: false}}, nil
+	return []input.Subject{{SubjectID: "A", Active: true}, {SubjectID: "B", Active: true}, {SubjectID: "C", Active: false}}, nil
 }
 
 func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]string, error) {
@@ -73,6 +81,11 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 	}
 	if f.onQuery != nil {
 		f.onQuery(query)
+	}
+	if f.failQuery != nil {
+		if err := f.failQuery(query); err != nil {
+			return nil, 0, err
+		}
 	}
 	rows := make([]input.Row, 0)
 	for at := query.Start.Truncate(time.Hour); at.Before(query.End); at = at.Add(time.Hour) {
@@ -133,9 +146,23 @@ func openStore(t *testing.T) *store.Store {
 	return repo
 }
 
+// pinnedFactors 按 StartReplay 的做法解析 DSL，得到发起回放时固化的因子指纹。
+func pinnedFactors(t *testing.T, dslYaml string) map[string]string {
+	t.Helper()
+	strategy, err := dsl.Parse([]byte(dslYaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, _, err := input.Resolve(context.Background(), &fakeClient{marketType: "spot"}, "crypto", "view_a", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved.Factors
+}
+
 func startReplay(t *testing.T, repo *store.Store, id, dslYaml string, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, CreatedAt: origin}
+	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +349,7 @@ func TestReplayRejectsSwapAndEarlyStart(t *testing.T) {
 func TestRunnerDrainsQueueAndWakes(t *testing.T) {
 	repo := openStore(t)
 	for _, id := range []string{"p1", "p2"} {
-		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), CreatedAt: origin}); err != nil {
+		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -368,7 +395,7 @@ func TestReplayEmptyBarsAreSkippedWithoutLiquidation(t *testing.T) {
 	}
 }
 
-// 回放终点截到 View 最新一根：更晚的 bar 没有数据，不能当作空 bar 回放。
+// 回放终点截到 View 最新一根之前：更晚的 bar 没有数据，最新一根也可能还没写完，都不能当作完整的 bar 回放。
 func TestReplayClampsEndToLatestData(t *testing.T) {
 	repo := openStore(t)
 	client := &fakeClient{marketType: "spot", indexedTo: origin.Add(6 * time.Hour)}
@@ -376,8 +403,8 @@ func TestReplayClampsEndToLatestData(t *testing.T) {
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	bars := barsOf(t, repo, "p1")
-	if done.Status != store.ReplayDone || len(bars) != 5 || !bars[len(bars)-1].BarEndTime.Equal(origin.Add(7*time.Hour)) {
-		t.Fatalf("应只回放到最新一根（bar_start 06:00）：status=%s bars=%d", done.Status, len(bars))
+	if done.Status != store.ReplayDone || len(bars) != 4 || !bars[len(bars)-1].BarEndTime.Equal(origin.Add(6*time.Hour)) {
+		t.Fatalf("应只回放到最新一根（bar_start 06:00）之前：status=%s bars=%d", done.Status, len(bars))
 	}
 }
 
@@ -463,5 +490,82 @@ func TestReplayAgeGapSkipsInsteadOfAgingOut(t *testing.T) {
 	}
 	if metrics.SkipReasons["history_insufficient"] == 0 || metrics.Liquidations != 0 {
 		t.Fatalf("历史缺口应记 history_insufficient 且不清算：%+v", metrics)
+	}
+}
+
+const poolDSL = `name: replay_pool
+rules:
+  - id: r
+    type: rank
+    pool: [B]
+    score: "mom"
+    select: {top: 1}
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`
+
+// 与实时一致：只有策略涉及的标的出现多个序列才整期跳过；无关标的 A 的歧义不影响只看 B 的策略。
+func TestReplayIgnoresAmbiguityOfUninvolvedSubjects(t *testing.T) {
+	repo := openStore(t)
+	client := &fakeClient{marketType: "spot", ambiguous: map[int]bool{4: true}}
+	job := startReplay(t, repo, "p1", poolDSL, 6)
+	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v", done)
+	}
+	for _, bar := range barsOf(t, repo, "p1") {
+		if bar.Status != "ok" {
+			t.Fatalf("无关标的的歧义不应让本期跳过：%+v", bar)
+		}
+	}
+}
+
+// 取消后读取又失败：任务保持 cancelled，并保留截至取消时已算出的部分指标。
+func TestReplayKeepsPartialMetricsWhenReadFailsAfterCancel(t *testing.T) {
+	repo := openStore(t)
+	client := &fakeClient{marketType: "spot"}
+	calls := 0
+	client.failQuery = func(input.Query) error {
+		calls++
+		if calls == 3 {
+			if err := repo.CancelReplay(context.Background(), "p1", origin); err != nil {
+				t.Fatal(err)
+			}
+			return errors.New("连接中断")
+		}
+		return nil
+	}
+	job := startReplay(t, repo, "p1", replayDSL, 9)
+	(&Runner{Store: repo, Client: client, ChunkBars: 3}).Execute(context.Background(), job)
+	cancelled, _ := repo.GetReplay(context.Background(), "p1")
+	if cancelled.Status != store.ReplayCancelled {
+		t.Fatalf("取消后状态应为 cancelled：%+v", cancelled)
+	}
+	var metrics Metrics
+	written := len(barsOf(t, repo, "p1"))
+	if err := json.Unmarshal(cancelled.MetricsJSON, &metrics); err != nil || written == 0 || metrics.Bars != written {
+		t.Fatalf("应保留取消前的部分指标：bars=%d written=%d err=%v", metrics.Bars, written, err)
+	}
+}
+
+// 发起时没有引用因子、排队期间引用的列变成了因子列，也算定义变化。
+func TestFactorDriftComparesEmptyPin(t *testing.T) {
+	if drift := factorDrift(map[string]string{}, map[string]string{"mom": "sha256:mom"}); drift == "" {
+		t.Fatal("排队期间新引用的因子应视为变化")
+	}
+	if drift := factorDrift(map[string]string{}, map[string]string{}); drift != "" {
+		t.Fatalf("都没有因子时不应报告变化：%s", drift)
+	}
+}
+
+// 执行时索引统计暂时未知（Storage 刚重启或索引刚切换）：沿用提交时校验过的区间执行，不让排队的任务失败。
+func TestReplayRunsWithUnknownCoverageAtExecution(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot", unknownCoverage: true}, ChunkBars: 10}).Execute(context.Background(), job)
+	done, _ := repo.GetReplay(context.Background(), "p1")
+	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 4 {
+		t.Fatalf("覆盖范围暂时未知时应按保存的区间执行：%+v", done)
 	}
 }

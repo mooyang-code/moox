@@ -18,6 +18,10 @@ import (
 // DefaultCalendar 是没有声明日历的数据集使用的日历。
 const DefaultCalendar = "crypto_24x7"
 
+// datasetRoleFactorResult 是 Factor 写入的结果数据集角色：它的周期完成由 factor_period.computed 宣布。
+// 其余带 source_dataset_id 的数据集（例如 Collector 的重采样 K 线）仍由 collector.period.completed 宣布。
+const datasetRoleFactorResult = "factor_result"
+
 // Resolve 在启用时解析绑定：View → 数据集 → 源数据集市场类型 → 列与因子指纹，并编译策略。
 func Resolve(ctx context.Context, client Client, spaceID, viewID string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if client == nil {
@@ -142,7 +146,7 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	}
 	resolved.UsesPreviousBar = program.UsesPreviousBar
 	resolved.CompletionKind = events.CollectorPeriodCompleted.Name()
-	if resolved.SourceDatasetID != "" {
+	if strings.TrimSpace(dataset.Attributes["dataset_role"]) == datasetRoleFactorResult {
 		resolved.CompletionKind = events.FactorPeriodComputed.Name()
 	}
 	return resolved, program, nil
@@ -163,7 +167,10 @@ func checkReferences(ctx context.Context, client Client, spaceID string, view Vi
 	}
 	for _, tag := range uniqueSorted(tags) {
 		if _, err := client.GetTag(ctx, spaceID, tag); err != nil {
-			return fmt.Errorf("DSL 引用的标签 %s 无法读取（不存在或拼写错误）：%w", tag, err)
+			if errors.Is(err, ErrTagNotFound) {
+				return fmt.Errorf("DSL 引用的标签 %s 不存在（ID 区分大小写）", tag)
+			}
+			return err
 		}
 	}
 	if len(instruments) == 0 {
@@ -175,7 +182,7 @@ func checkReferences(ctx context.Context, client Client, spaceID string, view Vi
 	}
 	known := make(map[string]struct{}, len(subjects))
 	for _, subject := range subjects {
-		known[subject.InstrumentID] = struct{}{}
+		known[subject.SubjectID] = struct{}{}
 	}
 	var unknown []string
 	for _, id := range uniqueSorted(instruments) {
@@ -189,19 +196,23 @@ func checkReferences(ctx context.Context, client Client, spaceID string, view Vi
 	return nil
 }
 
-// checkAgeCoverage 校验 View 当前覆盖的历史足以判断 min_age_bars：以最新一根为 T，T − (N−1) 根不能早于覆盖起点。
-// 数据集的保留期可能长于 View 每个序列保留的根数，只按数据集校验会让全部标的被当作新上市剔除。
+// checkAgeCoverage 校验 View 能追溯 min_age_bars：N 不超过每个序列保留的根数，且以最新一根为 T，
+// T − (N−1) 根不早于活跃序列的覆盖起点。覆盖范围未知（索引还没有任何行）时无法确认，拒绝启用。
 func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int) error {
-	if view.IndexedFrom.IsZero() || view.IndexedTo.IsZero() {
-		return nil
+	if view.SeriesBars > 0 && minAgeBars > view.SeriesBars {
+		return fmt.Errorf("universe.min_age_bars=%d 超过 View %s 每个序列保留的 %d 根，永远无法满足", minAgeBars, resolved.ViewID, view.SeriesBars)
+	}
+	start := CoverageStart(view, resolved)
+	if start.IsZero() {
+		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认 universe.min_age_bars=%d 所需的历史，请等数据写入后再启用", resolved.ViewID, minAgeBars)
 	}
 	target, err := HistoryStart(resolved.Calendar, resolved.Bar, view.IndexedTo, minAgeBars)
 	if err != nil {
 		return err
 	}
-	if target.Before(view.IndexedFrom) {
-		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 %s，但 View %s 当前只覆盖 %s 至 %s；请减小 min_age_bars 或等待 View 积累更多历史",
-			minAgeBars, target.Format(time.RFC3339), resolved.ViewID, view.IndexedFrom.Format(time.RFC3339), view.IndexedTo.Format(time.RFC3339))
+	if target.Before(start) {
+		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 %s，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars 或等待 View 积累更多历史",
+			minAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339), view.IndexedTo.Format(time.RFC3339))
 	}
 	return nil
 }

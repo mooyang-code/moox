@@ -78,7 +78,7 @@ func TestRelayHonorsResultBatchLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resultStore.limit != 2 || len(publisher.rows) != 2 {
-		t.Fatalf("result batch limit=%d published=%d", resultStore.limit, len(publisher.rows))
+		t.Fatalf("结果批量上限 = %d，已发布 %d", resultStore.limit, len(publisher.rows))
 	}
 }
 
@@ -90,17 +90,17 @@ func TestRelayQuarantinesPermanentResultAndAdvancesPrefix(t *testing.T) {
 	publisher := &recordingResultPublisher{failID: "bad"}
 	relay := &Relay{Store: resultStore, Publisher: publisher}
 	if err := relay.PublishPending(context.Background(), 1); err == nil {
-		t.Fatal("permanent publish error was swallowed")
+		t.Fatal("永久发布错误被吞掉了")
 	}
 	if resultStore.rows[0].PublishStatus != store.PublishCancelled {
-		t.Fatalf("permanent row status=%q, want cancelled", resultStore.rows[0].PublishStatus)
+		t.Fatalf("永久失败的结果状态 = %q，期望 cancelled", resultStore.rows[0].PublishStatus)
 	}
 	publisher.failID = ""
 	if err := relay.PublishPending(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.rows) != 1 || publisher.rows[0].ResultID != "good" {
-		t.Fatalf("published rows=%+v", publisher.rows)
+		t.Fatalf("已发布的结果不符：%+v", publisher.rows)
 	}
 }
 
