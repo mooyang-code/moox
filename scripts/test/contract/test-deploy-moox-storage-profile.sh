@@ -25,6 +25,7 @@ ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
 ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
+ln -s "${ROOT}/packages/servicecatalog" "${FIXTURE_ROOT}/packages/servicecatalog"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/scripts/runtime/reset-storage-view-indexes.sh" "${FIXTURE_ROOT}/scripts/runtime/reset-storage-view-indexes.sh"
 

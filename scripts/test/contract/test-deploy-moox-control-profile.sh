@@ -71,6 +71,7 @@ ln -s "${ROOT}/modules/hostagent" "${FIXTURE_ROOT}/modules/hostagent"
 ln -s "${ROOT}/modules/strategy" "${FIXTURE_ROOT}/modules/strategy"
 ln -s "${ROOT}/modules/trade" "${FIXTURE_ROOT}/modules/trade"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
+ln -s "${ROOT}/packages/servicecatalog" "${FIXTURE_ROOT}/packages/servicecatalog"
 ln -s "${ROOT}/packages/pyruntime" "${FIXTURE_ROOT}/packages/pyruntime"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 

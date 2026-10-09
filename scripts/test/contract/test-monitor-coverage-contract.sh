@@ -8,58 +8,30 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 python3 - "${ROOT}" <<'PY'
 import pathlib
-import re
 import sys
 
 import yaml
 
 root = pathlib.Path(sys.argv[1])
-manifest = yaml.safe_load((root / "packages/doctor/components.yaml").read_text())
-seed = yaml.safe_load((root / "config/setup/service-deployments.yaml").read_text())
-defaults = (root / "modules/admin/internal/service/sysdeploy/defaults.go").read_text()
+catalog = yaml.safe_load((root / "packages/servicecatalog/catalog.yaml").read_text())
 policy_path = root / "config/setup/dataset-health-policy.yaml"
 policy_text = policy_path.read_text()
 policy = yaml.safe_load(policy_text)
-
-all_components = {
-    item["service_name"]: item
-    for item in manifest["components"]
-}
-components = {
-    item["service_name"]: item
-    for item in manifest["components"]
-    if item.get("required_in_default_profile")
-}
-seed_processes = {
-    item["name"]: item
-    for item in seed["services"]
-    if item.get("deployment_mode") == "process" and item.get("status") == "active"
-}
-default_names = set(re.findall(r'deployment\("([^"]+)"', defaults))
-
-if not set(components).issubset(seed_processes):
-    missing = sorted(set(components) - set(seed_processes))
-    raise SystemExit(f"manifest/seed process mismatch: missing={missing}")
-unknown = sorted(set(seed_processes) - set(all_components))
-if unknown:
-    raise SystemExit(f"seed contains active process absent from manifest: {unknown}")
-
-missing_defaults = sorted(set(components) - default_names)
-if missing_defaults:
-    raise SystemExit(f"SysDeploy defaults missing manifest services: {missing_defaults}")
-
+components = {item["id"]: item for item in catalog["components"]}
+if (root / "packages/doctor/components.yaml").exists():
+    raise SystemExit("Doctor must use the shared component catalog")
 for name, component in components.items():
-    service = seed_processes[name]
-    extra = service.get("extra_config") or {}
-    health_url = extra.get("health_url", "")
-    if not health_url.endswith(component["health_path"]):
-        raise SystemExit(
-            f"{name}: seed health_url {health_url!r} does not match {component['health_path']!r}"
-        )
-    if extra.get("monitor_enabled") is not True:
-        raise SystemExit(f"{name}: seed monitoring must be enabled")
-    if component["transport"] not in {"reporter", "host_snapshot", "health_only"}:
-        raise SystemExit(f"{name}: unsupported transport {component['transport']!r}")
+    doctor = component["doctor"]
+    if doctor["transport"] not in {"reporter", "host_snapshot", "health_only"}:
+        raise SystemExit(f"{name}: unsupported transport")
+    if not set(doctor.get("dependencies", [])).issubset(components):
+        raise SystemExit(f"{name}: unknown component dependency")
+    if component["health"]["kind"] not in {"readyz", "https", "none"}:
+        raise SystemExit(f"{name}: unsupported health kind")
+proxy = components["console-proxy"]
+health = proxy["health"]
+if proxy["doctor"]["transport"] != "health_only" or health["kind"] != "readyz" or health["port"] != 19528 or health.get("loopback") is not True:
+    raise SystemExit("console-proxy diagnostics contract changed")
 
 if policy.get("version") != 2:
     raise SystemExit("monitor policy must use version 2")
@@ -80,10 +52,13 @@ if set(defaults_policy) != required_defaults:
         f"monitor policy defaults mismatch: got={sorted(defaults_policy)}"
     )
 
-for module in ("collector", "factor"):
-    bootstrap = (root / "modules" / module / "internal/bootstrap/bootstrap.go").read_text()
-    inventory = (root / "modules" / module / "internal/observability/realtime_inventory.go").read_text()
-    if "NewDatasetMetrics" not in bootstrap or "NewRealtimeInventory" not in bootstrap:
+for module, registration, inventory_path, constructor in (
+    ("collector", "internal/bootstrap/bootstrap.go", "internal/observability/realtime_inventory.go", "NewRealtimeInventory"),
+    ("factor", "internal/bootstrap/metrics_reporter.go", "internal/bootstrap/dataset_observer.go", "newFactorDatasetObserver"),
+):
+    bootstrap = (root / "modules" / module / registration).read_text()
+    inventory = (root / "modules" / module / inventory_path).read_text()
+    if "NewDatasetMetrics" not in bootstrap or constructor not in bootstrap:
         raise SystemExit(f"{module}: DatasetMetrics inventory is not registered")
     if "ReplaceExpected" not in inventory:
         raise SystemExit(f"{module}: realtime inventory does not replace expected datasets")

@@ -9,7 +9,7 @@ bash "${ROOT}/scripts/test/contract/test-build-factor-linux-contract.sh"
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
 grep -q 'moox_gateway' "${ROOT}/config/setup/service-deployments.yaml"
 for contract in \
-  'packages/doctor/components.yaml' \
+  'packages/servicecatalog/catalog.yaml' \
   'packages/doctor/report.schema.json' \
   'modules/cli/config/cli.yaml'; do
   grep -q "${contract}" "${ROOT}/scripts/release/release.sh" || {

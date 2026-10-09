@@ -3,7 +3,6 @@ package doctor
 import (
 	"bytes"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,7 +10,7 @@ import (
 	"path"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 const MaxManifestComponents = 64
@@ -68,11 +67,8 @@ var allowedRecoveryActions = map[string]bool{
 	"run_bootstrap":                  true,
 }
 
-//go:embed components.yaml
-var embeddedManifest []byte
-
 func LoadEmbeddedManifest() (Manifest, error) {
-	return loadManifest(embeddedManifest, "embedded doctor manifest")
+	return loadManifest(servicecatalog.EmbeddedYAML(), "embedded component catalog")
 }
 
 // LoadManifestFile validates the release copy of the manifest and computes its
@@ -89,11 +85,29 @@ func LoadManifestFile(filename string) (Manifest, error) {
 }
 
 func loadManifest(raw []byte, source string) (Manifest, error) {
-	decoder := yaml.NewDecoder(bytes.NewReader(raw))
-	decoder.KnownFields(true)
-	var manifest Manifest
-	if err := decoder.Decode(&manifest); err != nil {
+	catalog, err := servicecatalog.Decode(bytes.NewReader(raw))
+	if err != nil {
 		return Manifest{}, fmt.Errorf("decode %s: %w", source, err)
+	}
+	manifest := Manifest{Version: catalog.Version, Components: make([]Component, 0, len(catalog.Components))}
+	for _, component := range catalog.Components {
+		metadata := component.Doctor
+		healthPath := ""
+		switch component.Health.Kind {
+		case "readyz":
+			healthPath = "/readyz"
+		case "https":
+			healthPath = "/"
+		}
+		manifest.Components = append(manifest.Components, Component{
+			ComponentID: component.ID, ServiceName: component.ID,
+			Role: metadata.Role, Description: metadata.Description,
+			Duties: metadata.Duties, Inputs: metadata.Inputs, Outputs: metadata.Outputs,
+			Dependencies: metadata.Dependencies, Transport: Transport(metadata.Transport),
+			FunctionalObservability: FunctionalObservability(metadata.FunctionalObservability),
+			HealthPath:              healthPath, ConfigPaths: metadata.ConfigPaths, WritablePaths: metadata.WritablePaths,
+			RecoveryActionIDs: metadata.RecoveryActionIDs, RequiredInDefaultProfile: metadata.RequiredInDefaultProfile,
+		})
 	}
 	sum := sha256.Sum256(raw)
 	manifest.Checksum = "sha256:" + hex.EncodeToString(sum[:])
@@ -164,7 +178,7 @@ func (c Component) validate() error {
 	if strings.HasPrefix(c.ServiceName, "storage-") && c.FunctionalObservability != FunctionalObservabilityDeferred {
 		return fmt.Errorf("storage service %q must remain deferred", c.ServiceName)
 	}
-	if c.HealthPath != "/readyz" && c.HealthPath != "/healthz" {
+	if c.HealthPath != "/readyz" && c.HealthPath != "/healthz" && c.HealthPath != "/" && c.HealthPath != "" {
 		return fmt.Errorf("unsupported health_path %q", c.HealthPath)
 	}
 	for _, candidate := range append(append([]string{}, c.ConfigPaths...), c.WritablePaths...) {

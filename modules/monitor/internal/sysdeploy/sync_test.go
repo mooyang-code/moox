@@ -24,7 +24,7 @@ func TestCheckFromDeploymentProbesRemoteLoopbackOnNodeHost(t *testing.T) {
 	require.ErrorContains(t, err, "host is unknown")
 
 	control := &adminpb.ServiceDeployment{
-		ServiceName: "moox_monitor", NodeId: "control", Status: "active",
+		ServiceName: "monitor", NodeId: "control", Status: "active",
 		ExtraConfig: `{"health_url":"http://127.0.0.1:11409/readyz"}`,
 	}
 	check, err = checkFromDeployment(control, hosts)

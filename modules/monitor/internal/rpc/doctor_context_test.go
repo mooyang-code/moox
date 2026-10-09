@@ -20,9 +20,9 @@ func (s doctorDeploymentSource) DesiredDeployments(context.Context) ([]*adminpb.
 }
 
 func TestGetDoctorContextReturnsBoundedFacts(t *testing.T) {
-	builder := &monitordoctor.Builder{Deployments: doctorDeploymentSource{rows: []*adminpb.ServiceDeployment{{ServiceName: "moox_monitor", NodeId: "node-a", Status: "active"}}}}
+	builder := &monitordoctor.Builder{Deployments: doctorDeploymentSource{rows: []*adminpb.ServiceDeployment{{ServiceName: "monitor", NodeId: "node-a", Status: "active"}}}}
 	service := &Service{doctorContext: builder}
-	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{NodeId: "node-a", ComponentIds: []string{"moox_monitor"}})
+	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{NodeId: "node-a", ComponentIds: []string{"monitor"}})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetExpectedComponents(), 1)

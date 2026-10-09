@@ -19,7 +19,7 @@
 | P0 | 已通过 CLI 只读检查 control、storage、compute-1 的监听与进程，核对 control 旧 CA；compute-1 确认仍有 storage 与 trade-move 两套网关进程；CLI 已支持本机 SSH agent/默认私钥，compile_host 认证成功，并单独完成 Go 1.26.9 预置及 GCC/G++ 检查；配置凭据未输出 | compute-1 配置目录与实际运行目录不一致，需核对切换归档范围及旧监听归属；完整迁移表待补齐 |
 | P1 | 已新增模块、版本/配置命令和构建 target；固定 Caddy `v2.11.4`，工作区与 CI/CNB 配置使用 Go `1.26.9`，构建入口拒绝未预置的工具链；远程编译机已完成预置；完整模块图已解析并加入最低 Go 版本门禁 | 自建 runner 未完成预置；全工作区统一回归尚未通过 |
 | P2 | 真实 internal HTTPS、路由、CA 连续性、流式/WS 完整排空、启动端口冲突清理已测；public-only 配置不创建 internal CA；本机交叉编译的四个测试包已在 Linux amd64 及 Linux arm64（QEMU 10.2.1 用户态模拟）运行通过 | public 本地 ACME 签发/续期及完整模式切换、HTTP/3、真实 SSH/SFTP 和实际启停脚本仍需验证；arm64 证据为模拟执行，未声称原生机验证 |
-| P3 | 内部鉴权诊断已实现；匿名、错误 HMAC、重放被拒绝；上游失败与 readiness 分离，排空时 not-ready 且保持 live；`servicecatalog` 已登记 control / single / protected 的代理与 `127.0.0.1:19528` | Doctor、Monitor 和新部署登记尚未接入 |
+| P3 | 内部鉴权诊断已实现；匿名、错误 HMAC、重放被拒绝；上游失败与 readiness 分离，排空时 not-ready 且保持 live；`servicecatalog` 已登记 control / single / protected 的代理与 `127.0.0.1:19528`，Doctor 已改读该目录 | Monitor 的新部署/探针与完整新部署登记尚未接入 |
 | P4～P7 | 尚未完成 | 三类最终包、双部署路径、网关主计划依赖、旧源码清理、最终全链路验证及独立 Agent 审查均保留 |
 | 正式切换 | 未执行 | 必须先通过 P7，再执行主计划第 13 节并验证真实业务及 SCF |
 
@@ -32,6 +32,8 @@
 `make test-go` 在 Admin 的 `TestSysDeployService_GoomMock_DelegatesList` 因 macOS ARM64 的 goom 运行时内存权限错误失败。原分支 Go `1.25.0` 下也已复现同一错误，不能将其算作通过或直接跳过。该 `sysdeploy/rpc` 测试包已在本机以固定 Go、禁用内联的原有测试选项交叉编译，并在 Linux amd64 全包运行通过。另逐模块运行了当时工作区的 52 个模块；Factor 首次因系统 Python 缺少 pandas 失败，使用已安装的 Python `3.12.14`、pandas `2.2.3`、numpy `2.3.5` 后测试通过。新增的第 53 个模块 `servicecatalog` 已通过 race 测试和 vet；其余模块测试通过。第 54 个模块为本机 Directory 的协议生成代码，已与 GatewayControl 协议一起生成并通过受影响包的测试和 vet，运行服务尚未接入。固定 CI runner 和最终统一回归仍是未通过门禁。
 
 后续已解决完整依赖解析阻塞：旧 Slime 重试库间接引用了无法下载的 `go_reuseport`，现已改为项目内的两次只读重试，保留退避、上下文取消、服务端 pushback 与每次尝试的输出隔离，并补齐元数据字节复制。重试包、Gateway 转发及 Archive/Monitor 调用方的 race 回归和 vet 通过。当前完整模块图为 849 项；与 `503f5a37` 可解析的 417 项元数据比较，61 项已有模块版本升级、435 项新增、3 项移除（包括共享路由包改名）。基线仍有上述失效模块的元数据缺失，差异清单不推断其未知依赖。当前依赖最低 Go 最高为 `1.25.1`，固定的 `1.26.9` 满足要求。[完整版本差异清单](计划/console-proxy-dependency-audit.json)记录了全部条目；这是模块元数据审计，不代表所有依赖均进入最终二进制。Zap 升至 `1.28.0`、x/net 升至 `0.55.0`、x/crypto 升至 `0.52.0`；Prometheus client_golang 保持 `1.23.2`。`make check-go-module-graph` 已在禁止网络代理的条件下通过，已接入 `make verify-pr` 和 CNB；上述完整依赖解析门禁已通过，自建 runner 和最终统一回归仍待完成。
+
+A8 已让 Doctor 使用共享目录，删除 `components.yaml`，发布与 shell 部署改为复制 `config/servicecatalog/catalog.yaml` 及其字节校验值。Doctor/目录/相关诊断调用方的 race 测试、CLI 全量测试、Monitor 各包测试及 vet 通过；CLI 回归使用 Python `3.12`，避免系统 Python `3.9` 在临时 HOME 下生成缓存引发的清理竞态。Doctor 聚焦 E2E、监控覆盖契约和发布契约通过；旧 Factor 构建包装脚本的 target 已修正为 `factor-mgr`。这些契约检查不等于三类最终发布包验收，部署种子与实际探针仍须随 B/F/G 迁移。
 
 control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
 
@@ -115,7 +117,7 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 - [远程 HTTP 安全约束](../packages/gatewayauth/client.go)。
 - [Caddy 管理脚本](../scripts/lib/caddy-managed.sh)。
 - [shell 部署](../scripts/deploy/deploy-moox.sh) 与 [CLI 部署](../modules/cli/internal/setup/deploy/deploy.go)。
-- [Doctor 组件目录](../packages/doctor/components.yaml)。
+- [共享组件目录](../packages/servicecatalog/catalog.yaml)（复审时 Doctor 的独立清单现已在 A8 并入此处）。
 
 ## 4. 目标架构与路由契约
 

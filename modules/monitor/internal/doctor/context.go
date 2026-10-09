@@ -206,7 +206,7 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 				identity.InstanceID != wantInstance ||
 				identity.NodeID != expected.NodeID ||
 				identity.BootID == ""
-			policyMismatch := expected.ServiceName == "moox_monitor" &&
+			policyMismatch := expected.ServiceName == "monitor" &&
 				b.DatasetHealthPolicy.Checksum != "" &&
 				identity.DatasetHealthPolicyHash != b.DatasetHealthPolicy.Checksum
 			if component.Transport == doctor.TransportReporter &&
@@ -498,7 +498,10 @@ func enforceBounds(context Context) error {
 }
 
 // componentModule maps a component id to the module name used in module
-// metrics; moox_factor_mgr reports its metrics as module "factor".
+// metrics; factor-mgr reports its metrics as module "factor".
 func componentModule(componentID string) string {
-	return strings.TrimSuffix(strings.TrimPrefix(componentID, "moox_"), "_mgr")
+	if componentID == "factor-mgr" {
+		return "factor"
+	}
+	return componentID
 }

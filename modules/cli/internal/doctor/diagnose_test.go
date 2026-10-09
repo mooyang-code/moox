@@ -40,8 +40,12 @@ func TestDiagnoseSpecsOnlyCreateChecksSupportedByBuiltInSignals(t *testing.T) {
 			continue
 		}
 		seenModules[healthCheck.Module] = true
+		componentID := healthCheck.Module
+		if componentID == "factor" {
+			componentID = "factor-mgr"
+		}
 		components = append(components, &monitorpb.DoctorExpectedComponent{
-			ComponentId: "moox_" + healthCheck.Module, NodeId: "node-a", Expected: true,
+			ComponentId: componentID, NodeId: "node-a", Expected: true,
 			Transport: "reporter", FunctionalObservability: "active",
 		})
 	}
@@ -53,9 +57,9 @@ func TestDiagnoseSpecsOnlyCreateChecksSupportedByBuiltInSignals(t *testing.T) {
 	for _, spec := range specs {
 		ids[spec.ID] = true
 	}
-	require.True(t, ids["module.freshness:moox_monitor@node-a"])
-	require.False(t, ids["module.freshness:moox_collector@node-a"])
-	require.False(t, ids["module.freshness:moox_factor_mgr@node-a"])
+	require.True(t, ids["module.freshness:monitor@node-a"])
+	require.False(t, ids["module.freshness:collector@node-a"])
+	require.False(t, ids["module.freshness:factor-mgr@node-a"])
 	for _, id := range []string{
 		"module.health_check:monitor:monitor-metrics",
 	} {
@@ -88,20 +92,20 @@ func TestRunDiagnoseRejectsManifestMismatch(t *testing.T) {
 func TestRunDiagnoseReporterConflictFailsClosed(t *testing.T) {
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:     embeddedManifestChecksum(t),
-		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_factor_mgr", ServiceName: "moox-factor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
-		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor_mgr", Status: "FRESH"}},
-		MissingObservations:  []*monitorpb.DoctorObservation{{Kind: "identity", ComponentId: "moox_factor_mgr", Status: "CONFLICT", Conflict: true}},
+		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", ServiceName: "moox-factor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
+		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FRESH"}},
+		MissingObservations:  []*monitorpb.DoctorObservation{{Kind: "identity", ComponentId: "factor-mgr", Status: "CONFLICT", Conflict: true}},
 	}
-	reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{"monitor.reporter_coverage:moox_factor_mgr@node-a"}, Client: contextClientStub{rsp: snapshot}})
+	reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: contextClientStub{rsp: snapshot}})
 	require.NoError(t, err)
-	require.Equal(t, core.StatusFail, reportValue.CheckByID("monitor.reporter_coverage:moox_factor_mgr@node-a").Status)
+	require.Equal(t, core.StatusFail, reportValue.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
 }
 
 func TestRunDiagnoseSingleHealthFailureWarns(t *testing.T) {
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_factor_mgr", NodeId: "node-a", Expected: true}}, HealthObservations: []*monitorpb.DoctorObservation{{ComponentId: "moox_factor_mgr", Status: "DEGRADED"}}}
-	reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{"service.health:moox_factor_mgr@node-a"}, Client: contextClientStub{rsp: snapshot}})
+	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", NodeId: "node-a", Expected: true}}, HealthObservations: []*monitorpb.DoctorObservation{{ComponentId: "factor-mgr", Status: "DEGRADED"}}}
+	reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{"service.health:factor-mgr@node-a"}, Client: contextClientStub{rsp: snapshot}})
 	require.NoError(t, err)
-	require.Equal(t, core.StatusWarn, reportValue.CheckByID("service.health:moox_factor_mgr@node-a").Status)
+	require.Equal(t, core.StatusWarn, reportValue.CheckByID("service.health:factor-mgr@node-a").Status)
 }
 
 func TestRunDiagnoseStaleHealthCheckFactsNeverPass(t *testing.T) {
@@ -116,18 +120,18 @@ func TestRunDiagnoseFreshScrapeDoesNotMaskStaleLastSuccess(t *testing.T) {
 	now := time.Unix(10_000, 0).UTC()
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:     embeddedManifestChecksum(t),
-		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_factor_mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
-		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor_mgr", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano)}},
+		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
+		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano)}},
 		ModuleObservations: []*monitorpb.DoctorObservation{
-			{Kind: "module", ComponentId: "moox_factor_mgr", Summary: "moox_factor_last_success_timestamp_seconds", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano), Value: float64(now.Add(-2 * time.Hour).Unix()), DetailsJson: `{"stage":"calculate","health_check":"factor-calc"}`},
+			{Kind: "module", ComponentId: "factor-mgr", Summary: "moox_factor_last_success_timestamp_seconds", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano), Value: float64(now.Add(-2 * time.Hour).Unix()), DetailsJson: `{"stage":"calculate","health_check":"factor-calc"}`},
 		},
 	}
 	healthChecks := []report.ModuleHealthCheck{{
 		ID: "factor-calc", Module: "factor", Enabled: true, CheckFreshness: true,
 	}}
-	result, err := RunDiagnose(context.Background(), DiagnoseOptions{Now: func() time.Time { return now }, CheckIDs: []string{"module.freshness:moox_factor_mgr@node-a"}, Client: contextClientStub{rsp: snapshot}, HealthChecks: healthChecks})
+	result, err := RunDiagnose(context.Background(), DiagnoseOptions{Now: func() time.Time { return now }, CheckIDs: []string{"module.freshness:factor-mgr@node-a"}, Client: contextClientStub{rsp: snapshot}, HealthChecks: healthChecks})
 	require.NoError(t, err)
-	require.NotEqual(t, core.StatusPass, result.CheckByID("module.freshness:moox_factor_mgr@node-a").Status)
+	require.NotEqual(t, core.StatusPass, result.CheckByID("module.freshness:factor-mgr@node-a").Status)
 }
 
 func TestRunDiagnoseHealthCheckDoesNotTreatOldEqualWatermarksAsIdle(t *testing.T) {
@@ -155,10 +159,10 @@ func TestRunDiagnoseDoesNotFallbackWhenMonitorUnavailable(t *testing.T) {
 }
 
 func TestRunDiagnoseStorageChecksAreDeferred(t *testing.T) {
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "storage_primary", ServiceName: "storage-primary", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "deferred"}}}
-	report, err := RunDiagnose(context.Background(), DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"module.freshness:storage_primary@node-a"}, Client: contextClientStub{rsp: snapshot}})
+	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "storage-primary", ServiceName: "storage-primary", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "deferred"}}}
+	report, err := RunDiagnose(context.Background(), DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"module.freshness:storage-primary@node-a"}, Client: contextClientStub{rsp: snapshot}})
 	require.NoError(t, err)
-	check := report.CheckByID("module.freshness:storage_primary@node-a")
+	check := report.CheckByID("module.freshness:storage-primary@node-a")
 	require.NotNil(t, check)
 	require.Equal(t, core.StatusSkipped, check.Status)
 }
@@ -167,7 +171,7 @@ func TestRunDiagnoseDisabledModuleDoesNotFailHealthCheck(t *testing.T) {
 	healthCheck := report.ModuleHealthCheck{ID: "trade-rebalance", Module: "trade", MaxLag: time.Minute, Enabled: true, CheckWatermark: true}
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:   embeddedManifestChecksum(t),
-		ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_trade", NodeId: "node-a", Expected: false}},
+		ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "trade", NodeId: "node-a", Expected: false}},
 	}
 	result, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{"module.health_check:trade:trade-rebalance"}, Client: contextClientStub{rsp: snapshot}, HealthChecks: []report.ModuleHealthCheck{healthCheck}})
 	require.NoError(t, err)

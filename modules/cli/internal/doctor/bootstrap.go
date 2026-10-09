@@ -70,13 +70,13 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if options.ReleaseRoot == "" {
 		runner.manifestErr = fmt.Errorf("release root is required")
 	} else {
-		releaseManifest, manifestErr := core.LoadManifestFile(filepath.Join(options.ReleaseRoot, "config", "doctor", "components.yaml"))
+		releaseManifest, manifestErr := core.LoadManifestFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml"))
 		runner.manifestErr = manifestErr
 		if manifestErr == nil && releaseManifest.Checksum != manifest.Checksum {
 			runner.manifestErr = fmt.Errorf("release manifest checksum %s does not match embedded checksum %s", releaseManifest.Checksum, manifest.Checksum)
 		}
 		if runner.manifestErr == nil {
-			runner.manifestErr = validateManifestChecksumFile(filepath.Join(options.ReleaseRoot, "config", "doctor", "components.yaml.sha256"), manifest.Checksum)
+			runner.manifestErr = validateManifestChecksumFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml.sha256"), manifest.Checksum)
 		}
 	}
 	if options.Client == nil {
@@ -139,7 +139,7 @@ func bootstrapSpecs(manifest core.Manifest, nodeID string) []core.CheckSpec {
 		healthChecks[component.ComponentID] = "service.health:" + scope
 	}
 	metricsDeps := []string{}
-	for _, id := range []string{"eventbus", "moox_monitor"} {
+	for _, id := range []string{"eventbus", "monitor"} {
 		if healthChecks[id] != "" {
 			metricsDeps = append(metricsDeps, healthChecks[id])
 		}
@@ -194,12 +194,12 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			return checkResult(spec.ID, core.StatusUnknown, "Reporter delivery cannot be confirmed without a bounded Monitor context", err, "run_bootstrap")
 		}
 		for _, observation := range append(append([]*monitorpb.DoctorObservation{}, r.delivery.GetReporterObservations()...), r.delivery.GetMissingObservations()...) {
-			if observation.GetComponentId() == "moox_monitor" && (observation.GetConflict() || observation.GetStatus() == "FAIL" || observation.GetStale()) {
+			if observation.GetComponentId() == "monitor" && (observation.GetConflict() || observation.GetStatus() == "FAIL" || observation.GetStale()) {
 				return checkResult(spec.ID, core.StatusFail, "Monitor Reporter delivery fact is stale or conflicting", nil, "verify_eventbus_credentials")
 			}
 		}
 		for _, observation := range r.delivery.GetReporterObservations() {
-			if observation.GetComponentId() == "moox_monitor" && observation.GetStatus() == "FRESH" && !observation.GetStale() {
+			if observation.GetComponentId() == "monitor" && observation.GetStatus() == "FRESH" && !observation.GetStale() {
 				return checkResult(spec.ID, core.StatusPass, "Monitor Reporter delivery fact is current", nil)
 			}
 		}
@@ -240,7 +240,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			identity.InstanceID != want ||
 			identity.NodeID != r.options.NodeID ||
 			identity.BootID == ""
-		policyMismatch := component.ServiceName == "moox_monitor" &&
+		policyMismatch := component.ServiceName == "monitor" &&
 			r.datasetHealthPolicy.Checksum != "" &&
 			identity.DatasetHealthPolicyHash != r.datasetHealthPolicy.Checksum
 		if identityMismatch || policyMismatch {
@@ -272,7 +272,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		}
 		return checkResult(spec.ID, core.StatusPass, "declared writable paths accept bounded temporary probes", nil)
 	case "service_autostart":
-		pidPath := filepath.Join(r.options.ReleaseRoot, "run", processPIDName(component.ServiceName)+".pid")
+		pidPath := filepath.Join(r.options.ReleaseRoot, "run", component.ComponentID+".pid")
 		isAlive := r.options.ProcessAlive
 		if isAlive == nil {
 			isAlive = processAlive
@@ -445,10 +445,6 @@ func checkResult(id string, status core.CheckStatus, summary string, err error, 
 		result.Error = err.Error()
 	}
 	return result
-}
-
-func processPIDName(service string) string {
-	return map[string]string{"admin_gateway": "admin", "web_host": "web-host", "storage-primary": "storage-primary", "storage-view": "storage-view", "eventbus": "eventbus", "moox_gateway": "gateway", "moox_monitor": "monitor", "moox_collector": "collector", "moox_cloudnode": "cloudnode", "moox_factor_mgr": "factor-mgr", "moox_strategy": "strategy", "moox_trade": "trade", "moox_archive": "archive", "moox_hostagent": "host-agent"}[service]
 }
 
 func processAlive(path string) bool {

@@ -34,26 +34,26 @@ func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing
 	defer server.Close()
 	components := []*monitorpb.DoctorExpectedComponent{
 		{ComponentId: "eventbus", ServiceName: "eventbus", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
-		{ComponentId: "moox_monitor", ServiceName: "moox_monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
-		{ComponentId: "moox_factor_mgr", ServiceName: "moox_factor_mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
+		{ComponentId: "monitor", ServiceName: "monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
+		{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"},
 	}
 	health := []*monitorpb.DoctorObservation{}
 	reporters := []*monitorpb.DoctorObservation{}
 	for _, component := range components {
 		health = append(health, &monitorpb.DoctorObservation{Kind: "health", ComponentId: component.GetComponentId(), Status: "OK"})
-		if component.GetComponentId() != "moox_factor_mgr" {
+		if component.GetComponentId() != "factor-mgr" {
 			reporters = append(reporters, &monitorpb.DoctorObservation{Kind: "reporter", ComponentId: component.GetComponentId(), Status: "FRESH"})
 		}
 	}
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: components, HealthObservations: health, ReporterObservations: reporters, MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor_mgr", Status: "MISSING"}}}
+	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: components, HealthObservations: health, ReporterObservations: reporters, MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "MISSING"}}}
 	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{
-		NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:moox_factor_mgr@node-a"}, Client: e2eContextClient{rsp: snapshot},
+		NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot},
 		Prober: doctorcli.HTTPProber{Auth: doctorcli.HealthAuth{AccessKey: "monitor", SecretKey: "secret"}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionDegraded, report.Conclusion)
-	require.Equal(t, core.StatusPass, report.CheckByID("service.health:moox_factor_mgr@node-a").Status)
-	require.Equal(t, core.StatusWarn, report.CheckByID("monitor.reporter_coverage:moox_factor_mgr@node-a").Status)
+	require.Equal(t, core.StatusPass, report.CheckByID("service.health:factor-mgr@node-a").Status)
+	require.Equal(t, core.StatusWarn, report.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
 	raw, err := doctorcli.Render(report, "json")
 	require.NoError(t, err)
 	require.Contains(t, string(raw), `"schema_version": "doctor.moox.dev/v1"`)
@@ -62,17 +62,17 @@ func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing
 func TestDoctorDiagnoseFailsClosedOnIdentityConflict(t *testing.T) {
 	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{
 		{ComponentId: "eventbus", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
-		{ComponentId: "moox_monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
-		{ComponentId: "moox_factor_mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
+		{ComponentId: "monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
+		{ComponentId: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
 	}, HealthObservations: []*monitorpb.DoctorObservation{
-		{ComponentId: "eventbus", Status: "OK"}, {ComponentId: "moox_monitor", Status: "OK"}, {ComponentId: "moox_factor_mgr", Status: "OK"},
+		{ComponentId: "eventbus", Status: "OK"}, {ComponentId: "monitor", Status: "OK"}, {ComponentId: "factor-mgr", Status: "OK"},
 	}, ReporterObservations: []*monitorpb.DoctorObservation{
-		{ComponentId: "eventbus", Status: "FRESH"}, {ComponentId: "moox_monitor", Status: "FRESH"}, {ComponentId: "moox_factor_mgr", Status: "CONFLICT", Conflict: true},
+		{ComponentId: "eventbus", Status: "FRESH"}, {ComponentId: "monitor", Status: "FRESH"}, {ComponentId: "factor-mgr", Status: "CONFLICT", Conflict: true},
 	}}
-	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:moox_factor_mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}})
+	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionUnhealthy, report.Conclusion)
-	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:moox_factor_mgr@node-a").Status)
+	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
 }
 
 func TestDoctorDiagnoseEscalatesReporterThatNeverAppeared(t *testing.T) {
@@ -82,10 +82,10 @@ func TestDoctorDiagnoseEscalatesReporterThatNeverAppeared(t *testing.T) {
 	defer server.Close()
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:    embeddedManifestChecksum(t),
-		ExpectedComponents:  []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_factor_mgr", ServiceName: "moox_factor_mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"}},
-		MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor_mgr", Status: "FAIL", Stale: true, AgeSeconds: 121, IntervalSeconds: 30}},
+		ExpectedComponents:  []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active", HealthUrl: server.URL + "/readyz"}},
+		MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FAIL", Stale: true, AgeSeconds: 121, IntervalSeconds: 30}},
 	}
-	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:moox_factor_mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}, Prober: doctorcli.HTTPProber{Auth: doctorcli.HealthAuth{AccessKey: "monitor", SecretKey: "secret"}}})
+	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}, Prober: doctorcli.HTTPProber{Auth: doctorcli.HealthAuth{AccessKey: "monitor", SecretKey: "secret"}}})
 	require.NoError(t, err)
-	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:moox_factor_mgr@node-a").Status)
+	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
 }

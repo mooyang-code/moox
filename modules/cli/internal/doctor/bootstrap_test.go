@@ -30,14 +30,14 @@ func TestRunBootstrapInventory(t *testing.T) {
 	}
 	seedPath := filepath.Join(root, "seed.yaml")
 	datasetHealthPolicyPath := filepath.Join(root, "dataset-health-policy.yaml")
-	manifestDir := filepath.Join(root, "config", "doctor")
+	manifestDir := filepath.Join(root, "config", "servicecatalog")
 	require.NoError(t, os.MkdirAll(manifestDir, 0o700))
-	manifestRaw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "doctor", "components.yaml"))
+	manifestRaw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "servicecatalog", "catalog.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "components.yaml"), manifestRaw, 0o600))
-	releaseManifest, err := core.LoadManifestFile(filepath.Join(manifestDir, "components.yaml"))
+	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "catalog.yaml"), manifestRaw, 0o600))
+	releaseManifest, err := core.LoadManifestFile(filepath.Join(manifestDir, "catalog.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "components.yaml.sha256"), []byte(releaseManifest.Checksum), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "catalog.yaml.sha256"), []byte(releaseManifest.Checksum), 0o600))
 	require.NoError(t, os.WriteFile(seedPath, []byte(seed), 0o600))
 	require.NoError(t, os.WriteFile(datasetHealthPolicyPath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides: []\n"), 0o600))
 	report, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, SeedPath: seedPath, DatasetHealthPolicyPath: datasetHealthPolicyPath, CheckIDs: []string{"bootstrap.inventory"}, Client: deploymentClientStub{rows: rows}})
@@ -57,7 +57,7 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	pathCalls, processCalls := 0, 0
 	runner := &bootstrapRunner{
 		manifest:    manifest,
-		deployments: map[string]*adminpb.ServiceDeployment{"moox_factor_mgr": {ServiceName: "moox_factor_mgr", Status: "active"}},
+		deployments: map[string]*adminpb.ServiceDeployment{"factor-mgr": {ServiceName: "factor-mgr", Status: "active"}},
 		options: BootstrapOptions{
 			NodeID:        "node-a",
 			ReleaseRoot:   t.TempDir(),
@@ -65,8 +65,8 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 			ProcessAlive:  func(string) bool { processCalls++; return true },
 		},
 	}
-	pathResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:moox_factor_mgr@node-a"}, nil)
-	processResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.service_autostart:moox_factor_mgr@node-a"}, nil)
+	pathResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:factor-mgr@node-a"}, nil)
+	processResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.service_autostart:factor-mgr@node-a"}, nil)
 	require.Equal(t, core.StatusPass, pathResult.Status)
 	require.Equal(t, core.StatusPass, processResult.Status)
 	require.Positive(t, pathCalls)

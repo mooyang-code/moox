@@ -4319,9 +4319,9 @@ EOF
 
   cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"
   cp "${ROOT}/modules/cli/config/cli.yaml" "${STAGE_DIR}/config/cli.yaml"
-  mkdir -p "${STAGE_DIR}/config/doctor"
-  cp "${ROOT}/packages/doctor/components.yaml" "${STAGE_DIR}/config/doctor/components.yaml"
-  shasum -a 256 "${STAGE_DIR}/config/doctor/components.yaml" | awk '{print "sha256:" $1}' > "${STAGE_DIR}/config/doctor/components.yaml.sha256"
+  mkdir -p "${STAGE_DIR}/config/doctor" "${STAGE_DIR}/config/servicecatalog"
+  cp "${ROOT}/packages/servicecatalog/catalog.yaml" "${STAGE_DIR}/config/servicecatalog/catalog.yaml"
+  shasum -a 256 "${STAGE_DIR}/config/servicecatalog/catalog.yaml" | awk '{print "sha256:" $1}' > "${STAGE_DIR}/config/servicecatalog/catalog.yaml.sha256"
 	cp "${ROOT}/packages/doctor/report.schema.json" "${STAGE_DIR}/config/doctor/report.schema.json"
   perl -0pi -e 's#hmac_key_file:\s*\./secrets/gateway-service\.key#credentials_file: ../../secrets/gateway-credentials.json#' "${STAGE_DIR}/gateway/config/app.yaml"
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then

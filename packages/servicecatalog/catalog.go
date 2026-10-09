@@ -100,6 +100,10 @@ var embedded []byte
 
 func LoadEmbedded() (Catalog, error) { return Decode(bytes.NewReader(embedded)) }
 
+// EmbeddedYAML returns an owned copy for release identity checks. Mutating it
+// does not change the catalog loaded by this package.
+func EmbeddedYAML() []byte { return bytes.Clone(embedded) }
+
 func Decode(r io.Reader) (Catalog, error) {
 	raw, err := io.ReadAll(io.LimitReader(r, (2<<20)+1))
 	if err != nil {

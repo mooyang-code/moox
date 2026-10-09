@@ -18,19 +18,12 @@ fi
 
 bash -n "${ROOT}/scripts/deploy/deploy-moox.sh"
 grep -q 'MOOX_SERVICE_NAME=${service_name}' "${ROOT}/scripts/deploy/deploy-moox.sh"
-python3 - "${ROOT}/packages/doctor/components.yaml" "${ROOT}/config/setup/service-deployments.yaml" <<'PY'
-import sys
-import yaml
-
-manifest = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-seed = yaml.safe_load(open(sys.argv[2], encoding="utf-8"))
-services = {item["name"]: item for item in seed["services"]}
-for component in manifest["components"]:
-    service = services[component["service_name"]]
-    if component.get("required_in_default_profile", False):
-        assert service["status"] == "active", component["component_id"]
-        assert service["deployment_mode"] == "process", component["component_id"]
-PY
+# Catalog/Doctor and release-byte identity are checked by packages/doctor.
+# The deployment inventory migrates to HostPlacements in the gateway plan.
+if [[ -e "${ROOT}/packages/doctor/components.yaml" ]]; then
+  echo "Doctor must not retain a duplicate component catalog" >&2
+  exit 1
+fi
 
 storage_worktree_after="$(git -C "${ROOT}" status --short -- modules/storage)"
 if [[ "${storage_worktree_after}" != "${storage_worktree_before}" ]]; then
