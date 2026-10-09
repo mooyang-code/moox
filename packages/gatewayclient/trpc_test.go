@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -76,7 +77,8 @@ func startWireServer(t *testing.T, listener net.Listener, credentials gatewayaut
 				}
 			}
 			body := input.(*codec.Body).Data
-			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: target, Callee: secretService, Func: "GetSecret", Body: body}, headers, time.Now())
+			service, method, _ := strings.Cut(strings.TrimPrefix(message.ServerRPCName(), "/"), "/")
+			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: target, Callee: service, Func: method, Body: body}, headers, time.Now())
 			if err != nil {
 				return nil, err
 			}

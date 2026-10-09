@@ -176,6 +176,51 @@ func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestExternalReadsResignRetriesAndPeriodWritesRunOnce(t *testing.T) {
+	for _, call := range []struct {
+		service, method string
+		attempts        int
+	}{
+		{"trpc.moox.storage.PrimaryStore", "GetDatasetPeriodStatus", 2},
+		{"trpc.moox.storage.PrimaryStore", "EnsureDatasetPeriod", 1},
+		{"trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 1},
+		{"trpc.moox.storage.PrimaryStore", "RecordDatasetPeriodFailures", 1},
+		{"trpc.moox.collector.MarketFetchRuntime", "ClaimTimerBatch", 1},
+	} {
+		t.Run(call.method, func(t *testing.T) {
+			config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: "assigned-scf-key-71", Secret: "fixture-key"},
+				AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
+			client := newTestClient(t, config)
+			body := []byte{0x0a, 1, 'a', 0x0a, 1, 'b'}
+			attempts := 0
+			nonces := map[string]bool{}
+			client.invoke = func(_ context.Context, ep endpoint, service, method string, serialization int, raw []byte, headers http.Header) ([]byte, error) {
+				attempts++
+				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID}, ep)
+				require.Equal(t, codec.SerializationTypePB, serialization)
+				require.Equal(t, body, raw)
+				claims, err := gatewayauth.Verify(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
+					TargetNode: config.AccessInstanceID, Callee: service, Func: method, Body: raw}, headers, time.Now())
+				require.NoError(t, err)
+				require.False(t, nonces[claims.Nonce], "every send must use a fresh nonce")
+				nonces[claims.Nonce] = true
+				if attempts == 1 {
+					return nil, errs.NewFrameError(errs.RetClientNetErr, "unknown remote outcome")
+				}
+				return raw, nil
+			}
+			response, err := client.Forward(context.Background(), call.service, call.method, codec.SerializationTypePB, body)
+			if call.attempts == 1 {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, body, response)
+			}
+			require.Equal(t, call.attempts, attempts)
+		})
+	}
+}
+
 type sourceFunc func(context.Context, string) (DirectoryUpdate, error)
 
 func (f sourceFunc) Fetch(ctx context.Context, version string) (DirectoryUpdate, error) {

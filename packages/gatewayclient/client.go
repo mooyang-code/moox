@@ -138,18 +138,11 @@ func New(config Config) (*Client, error) {
 			return nil, fmt.Errorf("tunnel client requires moox-cli identity, directory source and tunnel resolver")
 		}
 	case External:
-		if !validAddress(config.AccessAddress) || !strings.HasPrefix(config.AccessInstanceID, "access@") || !hostID.MatchString(strings.TrimPrefix(config.AccessInstanceID, "access@")) {
-			return nil, fmt.Errorf("external client requires an access address and access@host instance ID")
+		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.AccessAddress, config.AccessInstanceID); err != nil {
+			return nil, err
 		}
 		if config.Source != nil || config.CachePath != "" || config.Tunnels != nil {
 			return nil, fmt.Errorf("external client does not use directory discovery")
-		}
-		known := false
-		for _, principal := range catalog.Principals {
-			known = known || principal.ID == config.Credentials.Caller
-		}
-		if !known {
-			return nil, fmt.Errorf("unknown external principal")
 		}
 	default:
 		return nil, fmt.Errorf("unknown gateway client mode")

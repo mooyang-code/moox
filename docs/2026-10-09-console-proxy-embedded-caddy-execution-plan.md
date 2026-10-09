@@ -102,6 +102,8 @@ D3 首批清理删除已无生产调用方的 CLI Admin HTTP 客户端、旧认�
 
 主计划 E1 的模块拆分已完成：外部代理迁入 `modules/access`，二进制为 `moox-access`，运行目录/profile 为 `access`，环境统一使用 `MOOX_ACCESS_`；构建、发布、部署、测试夹具和因子引擎密钥路径同步。健康检查使用共享包，Access 不依赖 Storage 内部实现或 CGO。模块图增加到 852 项，已审计的外部依赖版本不变。相关全包 race/vet、独立构建、852 模块图及质量门禁通过。实际构建入口在本机关闭 CGO 生成五平台代理制品并核对架构，本机编译的代理测试包在 Linux amd64 全包通过；Storage 远端构建、Storage profile、Factor Engine 部署改名和发布/服务包契约均通过，15 份 schema 检查通过。E2 的权限/外部调用方切换、旧部署体系替换、后续阶段与正式验收继续保留。
 
+主计划 E2 的共享依赖已补齐：`ExternalFileConfig.OpenExternal` 从明确的配置路径加载外部身份私密文件，固定 Access 地址与实例 ID，不查目录或环境凭据，不推导 KeyID。三个外部身份的真实 tRPC 回归验证 PB/JSON 字节、签名、元数据、权限和连接释放；查询重新签名重试，领批次及周期写入单发。相关全包及独立模块 race/vet 通过；17 个测试包与主机网关在本机关闭 CGO 编译，17 包在 Linux 全量运行通过，852 模块图及质量门禁、15 份 schema 检查通过。审计补充覆盖 Factor Engine `run-once`、SCF 领批次与 Storage 共用连接，以及由 CLI 生成的 Skill 私密配置；Access 和全部外部调用方仍待同一提交整体切换，正式验收尚未开始。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。

@@ -6,6 +6,19 @@
 
 内部组件配置固定放在 `<部署目录>/<模块>/config/app.yaml`。客户端从同级组件 `hostgateway/config/app.yaml` 读取主机 ID、loopback 地址和私有 CA，避免各模块重复配置目标主机、网关地址与 CA；`key_file` 相对模块配置文件解析。目录缓存写入调用方提供的数据目录下的 `gatewayclient/directory.json`。读取公开配置时允许 KeyID 留空，便于离线检查；实际连接 Storage 等服务时必须有完整身份。客户端由进程或命令持有并在退出时关闭。
 
+外部进程使用 `ExternalFileConfig` 承载以下配置，再调用 `OpenExternal(配置文件路径)`。外部方式由构造入口确定，不需要重复配置 `mode`；`key_file` 相对配置文件解析，也支持绝对路径。三个身份 `scf-collector`、`factor-engine`、`moox-skill` 及其逐方法权限取自组件目录，外部配置必须提供 Admin 分配的 KeyID。
+
+```yaml
+gateway_client:
+  access_address: access.example.test:11004
+  access_id: access@storage
+  caller: factor-engine
+  key_id: <Admin 分配的公开 KeyID>
+  key_file: ../secrets/access-factor-engine.key
+```
+
+此入口复用内部客户端的私密文件校验，但不读取主机配置、目录缓存、SSH 或环境凭据；密钥文件缺失或无效即失败。客户端由外部进程持有并关闭。SCF 无需配置文件，由函数入口显式读取部署环境，再通过 `New(Config{Mode: External, ...})` 传入固定 Access 与签名身份；共享包不会查找环境变量或推导 KeyID。外部请求的签名目标始终是 `access@<主机>`，禁止的方法在发送前拒绝，重试仍遵循目录中的只读分类。
+
 调用方完成身份认证及空间授权后，可用 `WithCallMetadata` 传入可信的用户 ID、角色、空间 ID 和 trace ID，客户端将其作为固定的四个 tRPC 元数据字段发送。此接口不能修改网关签名身份，也不加工请求 JSON。Admin 控制台使用数据库中的 `console` 身份，目录来源直接读取 Admin 拓扑表，避免首次启动依赖尚未启动的本机网关。
 
 `Config.Mode` 支持三种方式：
