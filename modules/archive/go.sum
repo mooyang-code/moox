@@ -268,8 +268,6 @@ trpc.group/trpc-go/trpc-database/timer v1.0.0 h1:DdzhsEhZ8uNLDHrPWolCPXxgdwln/hS
 trpc.group/trpc-go/trpc-database/timer v1.0.0/go.mod h1:ffT3RQEbEQZZhAgJvL3s9ZnezzTYV3FI48Cr/HS5NIM=
 trpc.group/trpc-go/trpc-filter/recovery v1.0.0 h1:Mn3eaKxrtDt1Jqdmg6XsA4QMu5OkDTF63g3bNnGZkbM=
 trpc.group/trpc-go/trpc-filter/recovery v1.0.0/go.mod h1:+G5aViMmmYLZ6mrqLAQnX4lqKFroNlu9Eb58l9DJAaA=
-trpc.group/trpc-go/trpc-filter/slime v1.0.0 h1:4rHK0klhL7nQTOwe/UmGniyrtPwp4tR8lAGB29mQFec=
-trpc.group/trpc-go/trpc-filter/slime v1.0.0/go.mod h1:P5YHG+MhhoDiG/0k60EaEven1rbUfKgPLoPd+eMIaqs=
 trpc.group/trpc-go/trpc-go v1.0.4 h1:DaTTeaSf5Ah/dtQ8nAKKV2zaO7b7EB6qWLNWlMwLSsc=
 trpc.group/trpc-go/trpc-go v1.0.4/go.mod h1:lZOyo/G6nv2eBEPeDmbEfRhQDCOB65WsTqKqsgC2paA=
 trpc.group/trpc-go/trpc-log-cls v1.0.0 h1:zJ7NnE7khFmxN+jxkZkJd5qTUj4ERJ+2DJXAWyP/akc=

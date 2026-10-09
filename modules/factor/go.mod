@@ -51,7 +51,6 @@ require (
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	trpc.group/trpc-go/trpc-filter/slime v1.0.0 // indirect
 	trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f // indirect
 )
 

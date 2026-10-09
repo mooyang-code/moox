@@ -26,6 +26,7 @@ $:
         - name: Verify release contract
           script: |
             bash scripts/ci/check-go-version.sh
+            bash scripts/ci/check-go-module-graph.sh
             bash scripts/test/contract/test-release-contract.sh
         - name: Build release matrix
           script: |

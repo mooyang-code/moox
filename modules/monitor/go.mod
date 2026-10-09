@@ -53,7 +53,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
-	trpc.group/trpc-go/trpc-filter/slime v1.0.0 // indirect
 	trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f // indirect
 )
 

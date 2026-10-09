@@ -35,7 +35,6 @@ require (
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
-	trpc.group/trpc-go/trpc-filter/slime v1.0.0 // indirect
 	trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f // indirect
 )
 
