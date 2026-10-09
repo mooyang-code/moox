@@ -46,6 +46,9 @@ type ViewMetrics struct {
 	viewOutputWatermark              *prometheus.GaugeVec
 	viewSubjects                     *viewSubjectTracker
 	readyPublishRetry                *prometheus.CounterVec
+	readyQueuePending                prometheus.Gauge
+	readyQueueOldestAge              prometheus.GaugeFunc
+	readyPublishBackoff              prometheus.Gauge
 	restoreDuration                  prometheus.Gauge
 	restoreReady                     prometheus.Gauge
 	restoreFailures                  prometheus.Counter
@@ -90,6 +93,9 @@ type ViewMetrics struct {
 	capacityScanOldestOverdueSince   atomic.Int64
 	pendingMu                        sync.Mutex
 	pendingDeliveries                map[*jetstream.Delivery]time.Time
+	readyQueuePendingSnapshot        atomic.Int64
+	readyQueueOldestAtSnapshot       atomic.Int64
+	readyPublishBackoffSnapshot      atomic.Bool
 }
 
 // ViewMetricsSnapshot is the aggregate runtime state exported by the view and
@@ -122,6 +128,9 @@ type ViewMetricsSnapshot struct {
 	RebuildAuditPending           int64
 	RebuildAuditFailures          int64
 	RebuildAuditDropped           int64
+	ReadyQueuePending             int64
+	ReadyQueueOldestAge           time.Duration
+	ReadyPublishBackoff           bool
 }
 
 // ConsumerPartitionSnapshot is a low-cardinality status projection for one
@@ -245,6 +254,14 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
 			Help: "View source/result ready event publishes that need retry.",
 		}, []string{"view", "event"}),
+		readyQueuePending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "ready_queue_pending",
+			Help: "View ready events waiting to be published.",
+		}),
+		readyPublishBackoff: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_backoff",
+			Help: "Whether View ready event publishing is backing off after a connection failure (1) or not (0).",
+		}),
 		restoreDuration: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "restore_duration_seconds",
 			Help: "Duration of the latest active View restore pass.",
@@ -290,6 +307,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		Namespace: "moox", Subsystem: "storage_outbox", Name: "publisher_unavailable_age_seconds",
 		Help: "Continuous time the Storage outbox EventBus publisher has been unavailable.",
 	}, func() float64 { return metrics.currentOutboxPublisherUnavailableAge(time.Now().UTC()).Seconds() })
+	metrics.readyQueueOldestAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: "moox", Subsystem: "storage_view", Name: "ready_queue_oldest_age_seconds",
+		Help: "Age of the oldest View ready event waiting to be published.",
+	}, func() float64 { return metrics.currentReadyQueueOldestAge(time.Now()).Seconds() })
 	metrics.capacityScanOldestOverdue = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: "moox", Subsystem: "storage_view", Name: "capacity_scan_oldest_overdue_seconds",
 		Help: "Age of the oldest due Storage View capacity scan waiting in the serial maintenance loop.",
@@ -401,6 +422,15 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
 		return nil, err
 	}
+	if metrics.readyQueuePending, err = registerOrReuse(registerer, metrics.readyQueuePending); err != nil {
+		return nil, err
+	}
+	if metrics.readyQueueOldestAge, err = registerOrReuse(registerer, metrics.readyQueueOldestAge); err != nil {
+		return nil, err
+	}
+	if metrics.readyPublishBackoff, err = registerOrReuse(registerer, metrics.readyPublishBackoff); err != nil {
+		return nil, err
+	}
 	if metrics.restoreDuration, err = registerOrReuse(registerer, metrics.restoreDuration); err != nil {
 		return nil, err
 	}
@@ -506,6 +536,47 @@ func (m *ViewMetrics) ObserveReadyPublishRetry(view, event string) {
 		return
 	}
 	m.readyPublishRetry.WithLabelValues(view, event).Inc()
+}
+
+// SetReadyQueue 记录就绪队列的深度与最老事件的时间（队列为空时 oldest 为零值）。
+func (m *ViewMetrics) SetReadyQueue(pending int, oldest time.Time) {
+	if m == nil {
+		return
+	}
+	m.readyQueuePending.Set(float64(pending))
+	m.readyQueuePendingSnapshot.Store(int64(pending))
+	if pending == 0 || oldest.IsZero() {
+		m.readyQueueOldestAtSnapshot.Store(0)
+		return
+	}
+	m.readyQueueOldestAtSnapshot.Store(oldest.UnixNano())
+}
+
+// SetReadyPublishBackoff 记录就绪事件发布是否处于连接失败后的退避期。
+func (m *ViewMetrics) SetReadyPublishBackoff(backoff bool) {
+	if m == nil {
+		return
+	}
+	if backoff {
+		m.readyPublishBackoff.Set(1)
+	} else {
+		m.readyPublishBackoff.Set(0)
+	}
+	m.readyPublishBackoffSnapshot.Store(backoff)
+}
+
+func (m *ViewMetrics) currentReadyQueueOldestAge(now time.Time) time.Duration {
+	if m == nil {
+		return 0
+	}
+	at := m.readyQueueOldestAtSnapshot.Load()
+	if at == 0 {
+		return 0
+	}
+	if age := now.Sub(time.Unix(0, at)); age > 0 {
+		return age
+	}
+	return 0
 }
 
 // ObserveRestore records the latest startup restore result without adding
@@ -1013,6 +1084,9 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 		RebuildAuditPending:           m.rebuildAuditPendingSnapshot.Load(),
 		RebuildAuditFailures:          m.rebuildAuditFailuresSnapshot.Load(),
 		RebuildAuditDropped:           m.rebuildAuditDroppedSnapshot.Load(),
+		ReadyQueuePending:             m.readyQueuePendingSnapshot.Load(),
+		ReadyQueueOldestAge:           m.currentReadyQueueOldestAge(now),
+		ReadyPublishBackoff:           m.readyPublishBackoffSnapshot.Load(),
 	}
 }
 

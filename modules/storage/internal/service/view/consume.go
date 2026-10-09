@@ -141,7 +141,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		partitionClient, err := client.Fork(ctx, "storage-view-"+partitionID)
 		if err != nil {
 			stopAll()
-			return nil, fmt.Errorf("fork eventbus client for storage view partition %q: %w", partitionID, err)
+			return nil, fmt.Errorf("为 View 消费分区 %q 建立 EventBus 连接失败：%w", partitionID, err)
 		}
 		partitionClients = append(partitionClients, partitionClient)
 		consumer, err := eventconsumer.New(partitionClient, s, partition)
@@ -152,7 +152,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		stop, err := consumer.Start(ctx)
 		if err != nil {
 			stopAll()
-			return nil, fmt.Errorf("start storage view consumer partition %q: %w", partitionID, err)
+			return nil, fmt.Errorf("启动 View 消费分区 %q 失败：%w", partitionID, err)
 		}
 		stops = append(stops, stop)
 		durable := strings.TrimSpace(partition.Consumer)
@@ -292,11 +292,12 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	// emit subject-ready from this directory.
 	if err := s.ReplayPendingSubjects(ctx); err != nil {
 		stop()
-		return nil, fmt.Errorf("discard leftover View subject journals: %w", err)
+		return nil, fmt.Errorf("清理遗留的 View 标的日志失败：%w", err)
 	}
-	if err := s.FlushViewDataReady(ctx, "", ""); err != nil && !errors.Is(err, ErrViewDataReadyPending) {
-		stop()
-		return nil, fmt.Errorf("replay persisted ViewDataReady: %w", err)
+	// 补发落盘的就绪事件：失败（EventBus 尚未恢复、发布超时）只记日志，交给退避与后台重试，不能让 View 角色退出、
+	// 行事件因此完全停止消费。
+	if err := s.FlushViewDataReady(ctx, "", ""); err != nil {
+		log.Printf("启动时补发落盘的 View 就绪事件失败，稍后由后台重试：%v", err)
 	}
 	return stop, nil
 }
@@ -313,7 +314,7 @@ func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstr
 	}
 	partitionClient, err := client.Fork(ctx, "storage-view-"+spec.partitionID)
 	if err != nil {
-		return nil, fmt.Errorf("fork dynamic View consumer %q: %w", spec.partitionID, err)
+		return nil, fmt.Errorf("为动态 View 消费者 %q 建立 EventBus 连接失败：%w", spec.partitionID, err)
 	}
 	state := &dynamicConsumerBoundState{}
 	config := spec.config
@@ -333,7 +334,7 @@ func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstr
 	stopConsumer, err := consumer.Start(ctx)
 	if err != nil {
 		_ = partitionClient.Close()
-		return nil, fmt.Errorf("start dynamic View consumer %q: %w", spec.partitionID, err)
+		return nil, fmt.Errorf("启动动态 View 消费者 %q 失败：%w", spec.partitionID, err)
 	}
 	binding := &dynamicDatasetConsumerBinding{
 		partitionID:     spec.partitionID,

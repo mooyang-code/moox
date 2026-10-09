@@ -79,6 +79,10 @@ type Service struct {
 	// readyBackoffUntil 之前不再尝试发布就绪事件（上一次发布因连接问题失败）；readyReconnecting 保证同一时刻只有一个重连。
 	readyBackoffUntil time.Time
 	readyReconnecting atomic.Bool
+	// readyLastIssue 是就绪队列最近一条异常日志，用于去重；appliedPersistMu 串行化写入围栏的落盘。
+	readyLogMu       sync.Mutex
+	readyLastIssue   string
+	appliedPersistMu sync.Mutex
 	// seriesBars 是时序 View 每个序列保留的根数，随查询响应告知调用方。
 	seriesBars uint64
 }

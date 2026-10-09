@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -42,7 +44,9 @@ func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID 
 		s.appliedFence[key] = sequence
 	}
 	s.appliedFenceMu.Unlock()
-	_ = s.persistAppliedFence()
+	if err := s.persistAppliedFence(); err != nil {
+		s.readyIssue("View 写入围栏落盘失败：%v", err)
+	}
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -66,6 +70,15 @@ var readyPublishTimeout = 10 * time.Second
 
 // readyRetryBackoff 是发布因连接问题失败后的退避：期间刷新直接跳过，不再每次都付出一次超时；重连在后台进行。
 var readyRetryBackoff = 5 * time.Second
+
+// orphanReadyAge 是就绪事件所属 View 已不在目录中（被删除或停用）时的保留时长：超过后隔离，不永久占着队列。
+const orphanReadyAge = 24 * time.Hour
+
+// permanentReadyPublishError 报告发布错误是否是确定性的：消息无法通过发布前校验或超过 EventBus 的最大消息长度，
+// 原样重试不会成功，只能隔离。
+func permanentReadyPublishError(err error) bool {
+	return errors.Is(err, jetstream.ErrInvalidMessage) || errors.Is(err, nats.ErrMaxPayload)
+}
 
 // FlushViewDataReady 按入队顺序发布已满足写入围栏的就绪事件。刷新串行执行：并发刷新会互相越过，
 // 打乱同一 View 的周期顺序（下游会把较早的周期记为乱序）。事件只在发布成功（或因无法通过契约校验而隔离）
@@ -104,7 +117,15 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 			continue
 		}
 		view := s.viewSnapshot(item.spaceID, item.viewID)
-		if view == nil || !s.positionsApplied(view, item.required) {
+		if view == nil {
+			if !item.opts.OccurredAt.IsZero() && time.Since(item.opts.OccurredAt) > orphanReadyAge {
+				log.Printf("View 就绪队列隔离所属 View 已不存在的事件 %s（%s/%s）", item.opts.EventID, item.spaceID, item.viewID)
+				s.removePending(item.opts.EventID)
+				removed = true
+			}
+			continue
+		}
+		if !s.positionsApplied(view, item.required) {
 			continue
 		}
 		if _, err := registry.Encode(events.ViewDataReady, item.payload, item.opts); err != nil {
@@ -117,8 +138,18 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 		_, err := publisher.Publish(publishCtx, events.ViewDataReady, item.payload, item.opts)
 		cancel()
 		if err != nil {
+			// 调用方已结束（进程关闭、消费者重启）不是连接故障：不退避，也不重连一条健康的连接。
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if s.metrics != nil {
 				s.metrics.ObserveReadyPublishRetry(item.viewID, "view_data_ready")
+			}
+			if permanentReadyPublishError(err) {
+				log.Printf("View 就绪队列隔离无法发布的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
+				s.removePending(item.opts.EventID)
+				removed = true
+				continue
 			}
 			if errors.Is(err, jetstream.ErrPublishTimeout) || errors.Is(err, jetstream.ErrConnection) || errors.Is(err, jetstream.ErrClosed) {
 				s.startReadyBackoff(err)
@@ -128,13 +159,42 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 		s.removePending(item.opts.EventID)
 		removed = true
 	}
+	s.readyRecovered()
 	return nil
+}
+
+// readyIssue 记录就绪队列的一条异常；与上一条相同则不重复记录，避免持续故障时每 5 秒一行。
+func (s *Service) readyIssue(format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	s.readyLogMu.Lock()
+	repeated := message == s.readyLastIssue
+	s.readyLastIssue = message
+	s.readyLogMu.Unlock()
+	if !repeated {
+		log.Print(message)
+	}
+}
+
+// readyRecovered 在一次刷新正常完成后记录恢复。
+func (s *Service) readyRecovered() {
+	s.readyLogMu.Lock()
+	had := s.readyLastIssue != ""
+	s.readyLastIssue = ""
+	s.readyLogMu.Unlock()
+	if had {
+		log.Print("View 就绪事件发布已恢复")
+	}
 }
 
 func (s *Service) inReadyBackoff() bool {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return time.Now().Before(s.readyBackoffUntil)
+	until := s.readyBackoffUntil
+	s.mu.RUnlock()
+	backoff := time.Now().Before(until)
+	if !backoff && s.metrics != nil {
+		s.metrics.SetReadyPublishBackoff(false)
+	}
+	return backoff
 }
 
 // startReadyBackoff 进入退避，并在刷新锁之外重连就绪发布器的专用连接：连接可能已静默断开或已被关闭，
@@ -144,6 +204,10 @@ func (s *Service) startReadyBackoff(cause error) {
 	s.readyBackoffUntil = time.Now().Add(readyRetryBackoff)
 	reconnect := s.readyReconnect
 	s.mu.Unlock()
+	if s.metrics != nil {
+		s.metrics.SetReadyPublishBackoff(true)
+	}
+	s.readyIssue("View 就绪事件发布失败，进入 %s 退避：%v", readyRetryBackoff, cause)
 	if reconnect == nil || !s.readyReconnecting.CompareAndSwap(false, true) {
 		return
 	}
@@ -152,10 +216,8 @@ func (s *Service) startReadyBackoff(cause error) {
 		ctx, cancel := context.WithTimeout(context.Background(), readyPublishTimeout)
 		defer cancel()
 		if err := reconnect(ctx); err != nil {
-			log.Printf("View 就绪事件发布失败（%v），重连 EventBus 失败：%v", cause, err)
-			return
+			s.readyIssue("View 就绪事件发布器重连 EventBus 失败：%v", err)
 		}
-		log.Printf("View 就绪事件发布失败（%v），已重连 EventBus", cause)
 	}()
 }
 
@@ -166,9 +228,24 @@ func (s *Service) removePending(eventID string) {
 	for i, item := range s.pendingReady {
 		if item.opts.EventID == eventID {
 			s.pendingReady = append(s.pendingReady[:i], s.pendingReady[i+1:]...)
+			s.observeReadyQueueLocked()
 			return
 		}
 	}
+}
+
+// observeReadyQueueLocked 上报就绪队列的深度与最老事件的时间；调用方持有 pendingReadyMu。
+func (s *Service) observeReadyQueueLocked() {
+	if s.metrics == nil {
+		return
+	}
+	var oldest time.Time
+	for _, item := range s.pendingReady {
+		if at := item.opts.OccurredAt; !at.IsZero() && (oldest.IsZero() || at.Before(oldest)) {
+			oldest = at
+		}
+	}
+	s.metrics.SetReadyQueue(len(s.pendingReady), oldest)
 }
 
 // hasPendingReady 报告就绪队列里是否还有待发布的事件。
@@ -188,9 +265,10 @@ func (s *Service) SetSeriesBars(bars uint64) {
 	s.mu.Unlock()
 }
 
-func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.CommittedPosition, payload *storagepb.ViewDataReady, message *eventpb.EventMessage, eventID string) {
+// enqueueViewDataReady 把就绪事件放入队列并落盘；落盘失败时返回错误，调用方不 ACK 周期事件，由重投再次入队。
+func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.CommittedPosition, payload *storagepb.ViewDataReady, message *eventpb.EventMessage, eventID string) error {
 	if view == nil || payload == nil || message == nil || strings.TrimSpace(eventID) == "" {
-		return
+		return nil
 	}
 	occurredAt := message.GetOccurredAt()
 	if payload.GetReadyAt() != nil {
@@ -207,11 +285,15 @@ func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.Comm
 	defer s.pendingReadyMu.Unlock()
 	for _, existing := range s.pendingReady {
 		if existing.opts.EventID == eventID {
-			return
+			return nil
 		}
 	}
 	s.pendingReady = append(s.pendingReady, item)
-	_ = s.persistPendingReadyLocked()
+	s.observeReadyQueueLocked()
+	if err := s.persistPendingReadyLocked(); err != nil {
+		return fmt.Errorf("View 就绪队列落盘失败：%w", err)
+	}
+	return nil
 }
 
 func (s *Service) persistPendingReady() error {

@@ -120,6 +120,10 @@ type ViewRebuildLogReader interface {
 // being active automatically once that revision is activated.
 const ManualRebuildRevisionAttribute = "moox.manual_rebuild_revision"
 
+// ActiveBuildIDAttribute 记录激活当前活动索引的构建 ID。A/B 槽位名在每次重建时交替复用，不能区分索引代次；
+// 构建 ID 每次重建都不同，调用方（例如策略回放）据此判断活动索引是否换过一代、旧的行是否可能已被裁掉。
+const ActiveBuildIDAttribute = "moox.active_build_id"
+
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)

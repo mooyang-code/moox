@@ -107,6 +107,9 @@ func SnapshotForRoleWithOptions(instance string, metrics *observability.ViewMetr
 			"rebuild_audit_write_failures":                   snapshot.RebuildAuditFailures,
 			"rebuild_audit_dropped":                          snapshot.RebuildAuditDropped,
 			"consumer_partitions":                            metrics.ConsumerPartitionsSnapshot(),
+			"ready_queue_pending":                            snapshot.ReadyQueuePending,
+			"ready_queue_oldest_age_seconds":                 snapshot.ReadyQueueOldestAge.Seconds(),
+			"ready_publish_backoff":                          snapshot.ReadyPublishBackoff,
 		}
 		return rsp
 	}

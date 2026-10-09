@@ -122,7 +122,9 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			continue
 		}
 		eventID := stableViewEventID("data-ready", message.GetSpaceId(), view.GetViewId(), completion.frequency, strconv.FormatInt(completion.periodTime, 10))
-		s.enqueueViewDataReady(view, completion.committedPositions, ready, message, eventID)
+		if err := s.enqueueViewDataReady(view, completion.committedPositions, ready, message, eventID); err != nil {
+			return err
+		}
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
@@ -170,7 +172,9 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			Factors:            cloneFactorStates(payload.GetFactors()),
 		}
 		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
-		s.enqueueViewDataReady(view, nil, ready, message, eventID)
+		if err := s.enqueueViewDataReady(view, nil, ready, message, eventID); err != nil {
+			return err
+		}
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
