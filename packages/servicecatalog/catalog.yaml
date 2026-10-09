@@ -5,6 +5,8 @@
 # - rpcs 必须与 proto 中的方法完全一致（单测校验）；没有任何 ACL 放行的方法不经主机网关路由。
 # - ACL 的调用方 host-gateway 表示每台主机的 host-gateway@<主机>；外部调用方白名单里的方法自动放行 access。
 # - read_only 是幂等读方法，只有它们允许失败后重试。
+# - observability 说明 Monitor 怎样观测组件：transport 为 reporter（经 EventBus 上报指标）、host_snapshot（上报主机快照）
+#   或 health_only（只做健康探测）；functional 为 active（上报业务进度）、deferred（暂未接入）或 not_applicable。
 version: 1
 
 callers:
@@ -21,6 +23,7 @@ components:
     replicas: per_host
     protected: true
     health: {kind: readyz, port: 11012}
+    observability: {transport: reporter, functional: not_applicable}
     ports:
       - {name: 本机入口, port: 11002}
       - {name: 跨主机入口, port: 11003}
@@ -32,6 +35,7 @@ components:
     replicas: per_host
     protected: false
     health: {kind: readyz, port: 11425}
+    observability: {transport: host_snapshot, functional: not_applicable}
     services:
       - path: trpc.moox.hostagent.HostAgentMgr
         port: 11426
@@ -52,6 +56,7 @@ components:
     replicas: single
     protected: true
     health: {kind: https, port: 9527}
+    observability: {transport: health_only, functional: not_applicable}
 
   - id: web-host
     name: 控制台前端
@@ -60,6 +65,7 @@ components:
     replicas: single
     protected: true
     health: {kind: readyz, port: 19527}
+    observability: {transport: health_only, functional: not_applicable}
     ports:
       - {name: 静态资源, port: 9528}
 
@@ -70,6 +76,7 @@ components:
     replicas: single
     protected: true
     health: {kind: readyz, port: 11010}
+    observability: {transport: reporter, functional: not_applicable}
     ports:
       - {name: 控制台 API, port: 11000}
     services:
@@ -127,8 +134,6 @@ components:
             callers: [console, moox-cli]
           - methods: [SyncHostPlacements, DeleteHost]
             callers: [moox-cli]
-          - methods: [ListServiceDeployments, ListActiveServiceDeployments, ListGatewayNodes]
-            callers: [collector, monitor]
           - methods: [GetCatalog, ListHosts, ListPlacements, GetHostRoutes]
             callers: [monitor]
       - path: trpc.moox.admin.Setup
@@ -167,6 +172,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11419}
+    observability: {transport: reporter, functional: not_applicable}
     ports:
       - {name: NATS, port: 4222}
     services:
@@ -186,6 +192,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11409}
+    observability: {transport: reporter, functional: active}
     services:
       - path: trpc.moox.monitor.MonitorMgr
         port: 11410
@@ -208,6 +215,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11412}
+    observability: {transport: reporter, functional: active}
     services:
       - path: trpc.moox.collector.CollectMgr
         port: 11402
@@ -234,6 +242,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11411}
+    observability: {transport: reporter, functional: active}
     services:
       - path: trpc.moox.cloudnode.CloudNodeMgr
         port: 11401
@@ -264,6 +273,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11414}
+    observability: {transport: reporter, functional: active}
     services:
       - path: trpc.moox.factor.FactorMgr
         port: 11403
@@ -292,6 +302,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11431}
+    observability: {transport: reporter, functional: active}
     services:
       - path: trpc.moox.strategy.StrategyMgr
         port: 11430
@@ -312,6 +323,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11416}
+    observability: {transport: reporter, functional: active}
 
   - id: storage-primary
     name: 存储主服务
@@ -320,6 +332,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 20210}
+    observability: {transport: reporter, functional: deferred}
     ports:
       - {name: PrimaryStore 内部端口, port: 20101}
       - {name: DataNode 内部端口, port: 20106}
@@ -410,6 +423,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 20212}
+    observability: {transport: reporter, functional: deferred}
     ports:
       - {name: DataNode 运行时端口, port: 20107}
 
@@ -420,6 +434,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 20211}
+    observability: {transport: reporter, functional: deferred}
     ports:
       - {name: ViewIndex 内部端口, port: 20104}
     services:
@@ -440,6 +455,7 @@ components:
     replicas: multi
     protected: false
     health: {kind: readyz, port: 11014}
+    observability: {transport: health_only, functional: not_applicable}
     ports:
       - {name: 外部入口, port: 11004}
 
@@ -450,6 +466,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11441}
+    observability: {transport: health_only, functional: not_applicable}
     services:
       - path: trpc.moox.egress.Proxy
         port: 11440
@@ -468,6 +485,7 @@ components:
     replicas: single
     protected: false
     health: {kind: readyz, port: 11210}
+    observability: {transport: reporter, functional: active}
     services:
       - path: trpc.moox.trade.TradeConsoleService
         port: 11200

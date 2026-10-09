@@ -3,6 +3,7 @@ package probe
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,16 @@ import (
 )
 
 const maxBodyExcerptBytes = 2048
+
+// placementHTTPSTransport 探测部署的 https 健康地址（例如控制台代理）：只判断它是否在服务，不发送任何凭据，所以不校验
+// 证书（control 通常用 Caddy 内部 CA 签发的证书）；不复用连接，避免探测之间互相影响。
+var placementHTTPSTransport = &http.Transport{
+	TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 只探测存活，不传输凭据
+	DisableKeepAlives: true,
+}
+
+// keepRedirect 不跟随重定向：https 探测把 3xx 也算正常。
+func keepRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 type HTTPRunner struct {
 	HealthSigner *HealthSigner
@@ -50,7 +61,7 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	for k, v := range parseHeaders(check.Headers) {
 		req.Header.Set(k, v)
 	}
-	if r.HealthSigner != nil && check.Source == domain.CheckSourceSysDeploy && isHealthPath(req.URL) {
+	if r.HealthSigner != nil && check.Source == domain.CheckSourcePlacement && isHealthPath(req.URL) {
 		now := time.Now
 		if r.Now != nil {
 			now = r.Now
@@ -71,6 +82,9 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	client := r.Client
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
+	}
+	if check.Source == domain.CheckSourcePlacement && req.URL.Scheme == "https" {
+		client = &http.Client{Timeout: timeout, Transport: placementHTTPSTransport, CheckRedirect: keepRedirect}
 	}
 	resp, err := client.Do(req)
 	latency := time.Since(start)

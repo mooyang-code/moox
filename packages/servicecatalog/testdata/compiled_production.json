@@ -503,6 +503,9 @@
             "GetDirectory",
             "GetGatewayNodeRoutes",
             "GetServiceDeployment",
+            "ListActiveServiceDeployments",
+            "ListGatewayNodes",
+            "ListServiceDeployments",
             "SetHostStatus",
             "SetPlacementStatus",
             "UpdateGatewayNode",
@@ -536,22 +539,6 @@
             "ListPlacements"
           ],
           "allowed_callers": [
-            "console",
-            "monitor",
-            "moox-cli"
-          ]
-        },
-        {
-          "service_id": "admin",
-          "address": "127.0.0.1:11109",
-          "service_path": "trpc.moox.ops.SysDeploy",
-          "allowed_methods": [
-            "ListActiveServiceDeployments",
-            "ListGatewayNodes",
-            "ListServiceDeployments"
-          ],
-          "allowed_callers": [
-            "collector",
             "console",
             "monitor",
             "moox-cli"

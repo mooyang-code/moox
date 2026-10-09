@@ -110,6 +110,21 @@ func (component *Component) validate() error {
 	default:
 		return fmt.Errorf("探测方式 %q 无效", component.Health.Kind)
 	}
+	switch component.Observability.Transport {
+	case TransportReporter, TransportHostSnapshot, TransportHealthOnly:
+	default:
+		return fmt.Errorf("观测方式 %q 无效", component.Observability.Transport)
+	}
+	switch component.Observability.Functional {
+	case FunctionalActive, FunctionalDeferred:
+		// 业务进度经指标上报，不上报指标的组件没有业务进度。
+		if component.Observability.Transport != TransportReporter {
+			return fmt.Errorf("观测方式为 %s 的组件不能声明业务进度 %s", component.Observability.Transport, component.Observability.Functional)
+		}
+	case FunctionalNotApplicable:
+	default:
+		return fmt.Errorf("业务进度 %q 无效", component.Observability.Functional)
+	}
 	for _, port := range component.Ports {
 		if port.Name == "" || !validPort(port.Port) {
 			return fmt.Errorf("端口 %q:%d 无效", port.Name, port.Port)

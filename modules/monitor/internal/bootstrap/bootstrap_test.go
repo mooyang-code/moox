@@ -149,7 +149,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	startObservabilityConsumer(ctx, cfg, nil, nil, nil, nil)
 	startObservabilityConsumer(ctx, cfg, &Runtime{}, nil, hostmetrics.NewStore(nil, nil), nil)
 
-	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
+	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{PlacementChecks: config.PlacementChecksConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	registerMetricsReporter(nil, nil)
@@ -191,7 +191,7 @@ func TestSerializedMonitorSyncPreventsOverlappingRuns(t *testing.T) {
 	require.NoError(t, <-firstDone)
 }
 
-func TestMonitorTRPCConfigDeclaresSysDeployTimer(t *testing.T) {
+func TestMonitorTRPCConfigDeclaresPlacementTimer(t *testing.T) {
 	raw, err := os.ReadFile("../../config/trpc_go.yaml")
 	require.NoError(t, err)
 	var trpcConfig struct {
@@ -206,7 +206,7 @@ func TestMonitorTRPCConfigDeclaresSysDeployTimer(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &trpcConfig))
 	for _, service := range trpcConfig.Server.Services {
-		if service.Name != "trpc.moox.monitor.sysdeploy.timer" {
+		if service.Name != "trpc.moox.monitor.placement.timer" {
 			continue
 		}
 		assert.Equal(t, "0 * * * * *", service.Network)
@@ -214,7 +214,7 @@ func TestMonitorTRPCConfigDeclaresSysDeployTimer(t *testing.T) {
 		assert.Equal(t, 30000, service.Timeout)
 		return
 	}
-	t.Fatal("missing trpc.moox.monitor.sysdeploy.timer service")
+	t.Fatal("missing trpc.moox.monitor.placement.timer service")
 }
 
 func TestWaitObservabilityRespectsCancel(t *testing.T) {

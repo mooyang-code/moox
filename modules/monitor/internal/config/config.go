@@ -13,19 +13,19 @@ import (
 
 type Config struct {
 	// GatewayClient 是 Monitor 访问 Storage 等组件的 gatewayclient 配置（monitor 身份）。
-	GatewayClient  gatewayclient.Config `yaml:"gateway_client"`
-	Database       DatabaseConfig       `yaml:"database"`
-	Health         HealthConfig         `yaml:"health"`
-	HealthAuth     HealthAuthConfig     `yaml:"health_auth"`
-	Instance       InstanceConfig       `yaml:"instance"`
-	Scheduler      SchedulerConfig      `yaml:"scheduler"`
-	SysDeploy      SysDeployConfig      `yaml:"sysdeploy"`
-	Alert          AlertConfig          `yaml:"alert"`
-	Observability  ObservabilityConfig  `yaml:"observability"`
-	Metrics        MetricsConfig        `yaml:"metrics"`
-	MarketCanary   MarketCanaryConfig   `yaml:"market_canary"`
-	MarketHealth   MarketHealthConfig   `yaml:"market_health"`
-	KlineFreshness KlineFreshnessConfig `yaml:"kline_freshness"`
+	GatewayClient   gatewayclient.Config  `yaml:"gateway_client"`
+	Database        DatabaseConfig        `yaml:"database"`
+	Health          HealthConfig          `yaml:"health"`
+	HealthAuth      HealthAuthConfig      `yaml:"health_auth"`
+	Instance        InstanceConfig        `yaml:"instance"`
+	Scheduler       SchedulerConfig       `yaml:"scheduler"`
+	PlacementChecks PlacementChecksConfig `yaml:"placement_checks"`
+	Alert           AlertConfig           `yaml:"alert"`
+	Observability   ObservabilityConfig   `yaml:"observability"`
+	Metrics         MetricsConfig         `yaml:"metrics"`
+	MarketCanary    MarketCanaryConfig    `yaml:"market_canary"`
+	MarketHealth    MarketHealthConfig    `yaml:"market_health"`
+	KlineFreshness  KlineFreshnessConfig  `yaml:"kline_freshness"`
 }
 
 type DatabaseConfig struct {
@@ -56,8 +56,8 @@ type SchedulerConfig struct {
 	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
-// SysDeployConfig 控制是否按 SysDeploy 的部署记录同步探活检查；SysDeploy 经 gateway_client 访问。
-type SysDeployConfig struct {
+// PlacementChecksConfig 控制是否按 SysDeploy 的部署生成健康检查；SysDeploy 经 gateway_client 访问。
+type PlacementChecksConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
@@ -198,7 +198,7 @@ func Default() *Config {
 			ResultRetentionDays: 14,
 			MaxConcurrency:      16,
 		},
-		SysDeploy: SysDeployConfig{Enabled: true},
+		PlacementChecks: PlacementChecksConfig{Enabled: true},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
@@ -484,8 +484,8 @@ func (c *Config) Validate() error {
 	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
 		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
 	}
-	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
-		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")
+	if c.PlacementChecks.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
+		return fmt.Errorf("启用部署健康检查时 health_auth 的 version、access_key、secret_key 不能为空")
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage

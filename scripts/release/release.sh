@@ -176,8 +176,6 @@ cp -R "${ROOT}/examples/." "${RELEASE_ROOT}/examples/"
 cp -R "${ROOT}/config/setup/." "${RELEASE_ROOT}/config/setup/"
 cp "${ROOT}/moox.toml.example" "${RELEASE_ROOT}/config/moox.toml.example"
 cp "${ROOT}/modules/cli/config/cli.yaml" "${RELEASE_ROOT}/config/cli.yaml"
-cp "${ROOT}/packages/doctor/components.yaml" "${RELEASE_ROOT}/config/doctor/components.yaml"
-shasum -a 256 "${RELEASE_ROOT}/config/doctor/components.yaml" | awk '{print "sha256:" $1}' > "${RELEASE_ROOT}/config/doctor/components.yaml.sha256"
 cp "${ROOT}/packages/doctor/report.schema.json" "${RELEASE_ROOT}/config/doctor/report.schema.json"
 cp -R "${ROOT}/docs/." "${RELEASE_ROOT}/docs/" 2>/dev/null || true
 chmod +x "${RELEASE_ROOT}/modules/storage-primary/start.sh" "${RELEASE_ROOT}/modules/storage-primary/stop.sh" "${RELEASE_ROOT}/modules/storage-view/start.sh" "${RELEASE_ROOT}/modules/storage-view/stop.sh"

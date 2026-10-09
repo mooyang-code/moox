@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -79,12 +78,11 @@ func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error
 		}).Error
 }
 
-// UpdateSysDeployDefinition refreshes the complete system-owned definition.
-// System checks have no user enable/disable override in the greenfield model.
-func (r *CheckRepository) UpdateSysDeployDefinition(ctx context.Context, check *domain.Check) error {
+// UpdatePlacementDefinition 用部署生成的定义整体覆盖部署检查；部署检查没有手工启停。
+func (r *CheckRepository) UpdatePlacementDefinition(ctx context.Context, check *domain.Check) error {
 	return r.db.WithContext(ctx).
 		Model(&domain.Check{}).
-		Where("c_space_id = ? AND c_check_id = ? AND c_source = ?", check.SpaceID, check.CheckID, domain.CheckSourceSysDeploy).
+		Where("c_space_id = ? AND c_check_id = ? AND c_source = ?", check.SpaceID, check.CheckID, domain.CheckSourcePlacement).
 		Updates(map[string]any{
 			"c_name":             check.Name,
 			"c_group_name":       check.GroupName,
@@ -102,8 +100,29 @@ func (r *CheckRepository) UpdateSysDeployDefinition(ctx context.Context, check *
 			"c_body_contains":    check.BodyContains,
 			"c_enabled":          check.Enabled,
 			"c_source":           check.Source,
+			"c_labels":           check.Labels,
 			"c_description":      check.Description,
 		}).Error
+}
+
+// DeleteWithRules 删除检查及其结果、告警规则和告警状态；告警事件作为历史保留，按保留期清理。
+func (r *CheckRepository) DeleteWithRules(ctx context.Context, spaceID, checkID string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		where := "c_space_id = ? AND c_check_id = ?"
+		for _, model := range []any{&domain.AlertState{}, &domain.AlertRule{}, &domain.CheckResult{}, &domain.Check{}} {
+			if err := tx.Where(where, spaceID, checkID).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ListBySource 返回某个来源的全部检查（所有空间）。
+func (r *CheckRepository) ListBySource(ctx context.Context, source string) ([]domain.Check, error) {
+	var checks []domain.Check
+	err := r.db.WithContext(ctx).Where("c_source = ?", source).Order("c_check_id ASC").Find(&checks).Error
+	return checks, err
 }
 
 func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) error {
@@ -133,36 +152,6 @@ func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) e
 	})
 }
 
-func (r *CheckRepository) DisableSysDeployChecksExcept(ctx context.Context, spaceID string, keepIDs map[string]struct{}) (int64, error) {
-	var disabled int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		q := tx.Model(&domain.Check{}).
-			Where("c_space_id = ? AND c_source = ?", spaceID, domain.CheckSourceSysDeploy)
-		if len(keepIDs) > 0 {
-			ids := make([]string, 0, len(keepIDs))
-			for id := range keepIDs {
-				ids = append(ids, id)
-			}
-			slices.Sort(ids)
-			q = q.Where("c_check_id NOT IN ?", ids)
-		}
-		var checks []domain.Check
-		if err := q.Find(&checks).Error; err != nil {
-			return err
-		}
-		for _, check := range checks {
-			disabled++
-			if err := tx.Model(&domain.Check{}).
-				Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).
-				Updates(map[string]any{"c_enabled": false}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	return disabled, err
-}
-
 func (r *CheckRepository) List(ctx context.Context, opts ListChecksOptions) ([]domain.Check, error) {
 	q := r.applyFilters(r.db.WithContext(ctx), opts)
 	var checks []domain.Check
@@ -186,16 +175,15 @@ func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
 	return total, err
 }
 
-// IsSysDeployRegistered reports whether a service instance on a specific node
-// has an enabled check managed by the system deployment controller.
-func (r *CheckRepository) IsSysDeployRegistered(ctx context.Context, serviceName, nodeID string) (bool, error) {
+// IsPlacementRegistered 判断组件在这台主机上是否有启用的部署检查，即是否已在 SysDeploy 登记并启用。
+func (r *CheckRepository) IsPlacementRegistered(ctx context.Context, componentID, hostID string) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, gorm.ErrInvalidDB
 	}
 	var count int64
-	checkID := "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
+	checkID := "placement:" + strings.TrimSpace(hostID) + ":" + strings.TrimSpace(componentID)
 	err := r.db.WithContext(ctx).Model(&domain.Check{}).
-		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1", checkID, domain.CheckSourceSysDeploy).
+		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1", checkID, domain.CheckSourcePlacement).
 		Count(&count).Error
 	return count > 0, err
 }
@@ -222,7 +210,7 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 	}
 	var candidates []domain.Check
 	err := r.db.WithContext(ctx).
-		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourceSysDeploy, domain.CheckSourceObservability}).
+		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourcePlacement, domain.CheckSourceObservability}).
 		Order("c_next_check_at ASC, c_id ASC").
 		Find(&candidates).Error
 	if err != nil {

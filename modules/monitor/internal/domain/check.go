@@ -7,7 +7,8 @@ const (
 	CheckKindTCP      = "tcp"
 	CheckKindExternal = "external"
 
-	CheckSourceSysDeploy     = "sysdeploy"
+	// CheckSourcePlacement 是按 SysDeploy 的部署生成的健康检查，ID 为 placement:<主机>:<组件>。
+	CheckSourcePlacement     = "placement"
 	CheckSourceObservability = "observability"
 )
 

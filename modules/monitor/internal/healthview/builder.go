@@ -9,7 +9,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 type Builder struct {
@@ -340,12 +342,12 @@ func alertTitle(checkID string) string {
 		}
 		return "主机 " + parts[1] + " · " + metric
 	}
-	if len(parts) >= 2 && parts[0] == "sysdeploy" {
-		name, _ := serviceName(parts[len(parts)-1])
-		if name == "因子计算" {
-			return "因子计算服务"
+	if host, componentID, ok := placement.ParseCheckID(checkID); ok {
+		name := componentID
+		if component, found := servicecatalog.Default().Component(componentID); found {
+			name = component.Name
 		}
-		return name
+		return name + "（" + host + "）"
 	}
 	name, _ := ChineseName(checkID)
 	return name

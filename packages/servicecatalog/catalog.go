@@ -68,6 +68,30 @@ const (
 	HealthNone HealthKind = "none"
 )
 
+// Transport 是组件向 Monitor 提供运行事实的方式。
+type Transport string
+
+const (
+	// TransportReporter 表示组件经 EventBus 定时上报运行指标。
+	TransportReporter Transport = "reporter"
+	// TransportHostSnapshot 表示组件上报主机快照（主机采集器）。
+	TransportHostSnapshot Transport = "host_snapshot"
+	// TransportHealthOnly 表示组件不上报，只做健康探测。
+	TransportHealthOnly Transport = "health_only"
+)
+
+// Functional 说明组件是否上报业务进度（最近成功、最近错误、水位）。
+type Functional string
+
+const (
+	// FunctionalActive 表示组件上报业务进度，Monitor 据此判断业务是否正常。
+	FunctionalActive Functional = "active"
+	// FunctionalDeferred 表示业务进度暂未接入，只看健康探测和上报。
+	FunctionalDeferred Functional = "deferred"
+	// FunctionalNotApplicable 表示组件没有业务进度可言，例如网关、消息总线。
+	FunctionalNotApplicable Functional = "not_applicable"
+)
+
 // Catalog 是解析并校验过的组件目录。字段只读，调用方不要修改。
 type Catalog struct {
 	Version    int         `yaml:"version"`
@@ -94,15 +118,23 @@ type Caller struct {
 
 // Component 是一种 MooX 进程。
 type Component struct {
-	ID        string    `yaml:"id"`
-	Name      string    `yaml:"name"`
-	Binary    string    `yaml:"binary"`
-	Scope     Scope     `yaml:"scope"`
-	Replicas  Replicas  `yaml:"replicas"`
-	Protected bool      `yaml:"protected"`
-	Health    Health    `yaml:"health"`
-	Ports     []Port    `yaml:"ports"`
-	Services  []Service `yaml:"services"`
+	ID        string   `yaml:"id"`
+	Name      string   `yaml:"name"`
+	Binary    string   `yaml:"binary"`
+	Scope     Scope    `yaml:"scope"`
+	Replicas  Replicas `yaml:"replicas"`
+	Protected bool     `yaml:"protected"`
+	Health    Health   `yaml:"health"`
+	// Observability 是 Monitor 观测组件的方式。
+	Observability Observability `yaml:"observability"`
+	Ports         []Port        `yaml:"ports"`
+	Services      []Service     `yaml:"services"`
+}
+
+// Observability 是 Monitor 观测组件的方式。
+type Observability struct {
+	Transport  Transport  `yaml:"transport"`
+	Functional Functional `yaml:"functional"`
 }
 
 // Health 是组件的健康探测定义。

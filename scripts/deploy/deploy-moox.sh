@@ -1887,7 +1887,7 @@ runtime_identity_env() {
   if [[ -n "${config_file}" && -f "${config_file}" ]]; then
     RUNTIME_IDENTITY_ENV+=("MOOX_CONFIG_HASH=sha256:$(shasum -a 256 "${config_file}" | awk '{print $1}')")
   fi
-  if [[ "${service_name}" == "moox_monitor" && -f "${ROOT}/config/setup/dataset-health-policy.yaml" ]]; then
+  if [[ "${service_name}" == "monitor" && -f "${ROOT}/config/setup/dataset-health-policy.yaml" ]]; then
     RUNTIME_IDENTITY_ENV+=(
       "MOOX_DATASET_HEALTH_POLICY=${ROOT}/config/setup/dataset-health-policy.yaml"
       "MOOX_DATASET_HEALTH_POLICY_HASH=sha256:$(shasum -a 256 "${ROOT}/config/setup/dataset-health-policy.yaml" | awk '{print $1}')"
@@ -2272,7 +2272,7 @@ ca_file: ""
 HOSTAGENT_CONFIG_EOF
     chmod 0600 "${credential_dir}/hostagent-publisher.yaml"
   fi
-  runtime_identity_env moox_hostagent "${ROOT}/hostagent/config/app.yaml"
+  runtime_identity_env host-agent "${ROOT}/hostagent/config/app.yaml"
   start_service "hostagent" "${ROOT}/hostagent" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_HOST_AGENT_HEALTH_ADDR=127.0.0.1:11425" \
       "${ROOT}/bin/moox-host-agent" -conf=config/trpc_go.yaml
@@ -2295,7 +2295,7 @@ start_archive() {
     [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]] && archive_eventbus_url="tls://127.0.0.1:4222"
   fi
   gateway_service_env_for archive
-  runtime_identity_env moox_archive "${ROOT}/archive/config/app.yaml"
+  runtime_identity_env archive "${ROOT}/archive/config/app.yaml"
   start_service "archive" "${ROOT}/archive" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_EVENTBUS_NATS_URL=${archive_eventbus_url}" \
@@ -2611,7 +2611,7 @@ PY
   if [[ -r "${ROOT}/certs/caddy/trade-gateway-root.crt" ]]; then
     trade_gateway_ca_env=("MOOX_TRADE_GATEWAY_CA_FILE=${ROOT}/certs/caddy/trade-gateway-root.crt")
   fi
-  runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
+  runtime_identity_env admin "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "${trade_gateway_ca_env[@]+"${trade_gateway_ca_env[@]}"}" \
@@ -2658,7 +2658,7 @@ start_gateway() {
 			exit 1
 		fi
 	fi
-	runtime_identity_env moox_gateway "${ROOT}/gateway/config/app.yaml"
+	runtime_identity_env host-gateway "${ROOT}/gateway/config/app.yaml"
 	start_service "gateway" "${ROOT}/gateway" \
 		env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-host-gateway" \
 			"${ROOT}/bin/moox-host-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml
@@ -2671,7 +2671,7 @@ start_cloudnode() {
   fi
   init_cloudnode_schema
   gateway_service_env_for cloudnode
-  runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
+  runtime_identity_env cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" \
@@ -2690,7 +2690,7 @@ start_collector() {
   fi
   init_collector_schema
   gateway_service_env_for collector
-  runtime_identity_env moox_collector "${ROOT}/collector/config/app.yaml"
+  runtime_identity_env collector "${ROOT}/collector/config/app.yaml"
   STARTUP_WAIT_SECONDS="${MOOX_COLLECTOR_STARTUP_WAIT_SECONDS:-25}"
   start_service "collector" "${ROOT}/collector" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
@@ -2719,7 +2719,7 @@ start_factor_mgr() {
     exit 1
   }
   gateway_service_env_for factor
-  runtime_identity_env moox_factor_mgr "${ROOT}/factor-mgr/config/app.yaml"
+  runtime_identity_env factor-mgr "${ROOT}/factor-mgr/config/app.yaml"
   start_service "factor-mgr" "${ROOT}/factor-mgr" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${FACTOR_ENV[@]}" "${ROOT}/bin/moox-factor-mgr" -conf=config/trpc_go.yaml
 }
@@ -2782,7 +2782,7 @@ PY
     fi
   fi
   gateway_service_env_for strategy
-  runtime_identity_env moox_strategy "${ROOT}/strategy/config/app.yaml"
+  runtime_identity_env strategy "${ROOT}/strategy/config/app.yaml"
   start_service "strategy" "${ROOT}/strategy" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${trade_gateway_env[@]+"${trade_gateway_env[@]}"}" "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" \
@@ -2818,7 +2818,7 @@ start_trade() {
   init_trade_schema
   wait_nats trade "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_TRADE_NATS_SECONDS:-60}"
   gateway_service_env_for trade
-  runtime_identity_env moox_trade "${ROOT}/trade/config/app.yaml"
+  runtime_identity_env trade "${ROOT}/trade/config/app.yaml"
   start_service "trade" "${ROOT}/trade" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
@@ -2834,7 +2834,7 @@ start_monitor() {
   fi
   init_monitor_schema
   gateway_service_env_for monitor
-  runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
+  runtime_identity_env monitor "${ROOT}/monitor/config/app.yaml"
   start_service "monitor" "${ROOT}/monitor" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
@@ -2851,7 +2851,7 @@ start_web_host() {
     echo "web-host binary missing; skip" >&2
     return 1
   fi
-  runtime_identity_env web_host
+  runtime_identity_env web-host
   start_service "web-host" "${ROOT}" \
     env "${RUNTIME_IDENTITY_ENV[@]}" \
       "MOOX_WEB_HOST_ADDR=${MOOX_WEB_HOST_ADDR:-127.0.0.1:9528}" \
@@ -4253,8 +4253,6 @@ EOF
   cp -R "${ROOT}/modules/hostgateway/config/." "${STAGE_DIR}/gateway/config/"
   cp "${ROOT}/modules/cli/config/cli.yaml" "${STAGE_DIR}/config/cli.yaml"
   mkdir -p "${STAGE_DIR}/config/doctor"
-  cp "${ROOT}/packages/doctor/components.yaml" "${STAGE_DIR}/config/doctor/components.yaml"
-  shasum -a 256 "${STAGE_DIR}/config/doctor/components.yaml" | awk '{print "sha256:" $1}' > "${STAGE_DIR}/config/doctor/components.yaml.sha256"
 	cp "${ROOT}/packages/doctor/report.schema.json" "${STAGE_DIR}/config/doctor/report.schema.json"
   perl -0pi -e 's#hmac_key_file:\s*\./secrets/gateway-service\.key#credentials_file: ../../secrets/gateway-credentials.json#' "${STAGE_DIR}/gateway/config/app.yaml"
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then

@@ -50,22 +50,22 @@ func TestCurrentBootIDsPrefersNewestCtimeAmongFreshBoots(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 30, 0, 0, time.UTC)
 	require.NoError(t, messageStore.db.Create([]MetricService{
 		{
-			ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control", NodeID: "control",
+			ServiceName: "factor-mgr", InstanceID: "factor-mgr@control", NodeID: "control",
 			BootID: "old-boot", Version: "old", LastSeenAt: now, CreatedAt: now.Add(-72 * time.Hour),
 		},
 		{
-			ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control", NodeID: "control",
+			ServiceName: "factor-mgr", InstanceID: "factor-mgr@control", NodeID: "control",
 			BootID: "new-boot", Version: "new", LastSeenAt: now.Add(-time.Second), CreatedAt: now.Add(-time.Minute),
 		},
 		{
-			ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control", NodeID: "control",
+			ServiceName: "factor-mgr", InstanceID: "factor-mgr@control", NodeID: "control",
 			BootID: "stale-boot", Version: "stale", LastSeenAt: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour),
 		},
 	}).Error)
 
 	got, err := NewCatalog(messageStore).CurrentBootIDs(context.Background(), now)
 	require.NoError(t, err)
-	require.Equal(t, "new-boot", got[ReporterInstanceKey("moox_factor_mgr", "moox_factor_mgr@control")])
+	require.Equal(t, "new-boot", got[ReporterInstanceKey("factor-mgr", "factor-mgr@control")])
 }
 
 func TestListServicesCountsLogicalInstancesInsteadOfBootHistory(t *testing.T) {
@@ -78,7 +78,7 @@ func TestListServicesCountsLogicalInstancesInsteadOfBootHistory(t *testing.T) {
 	boots := make([]MetricService, 1001)
 	for i := range boots {
 		boots[i] = MetricService{
-			ServiceName: "moox_monitor", InstanceID: "monitor@node-a", NodeID: "node-a",
+			ServiceName: "monitor", InstanceID: "monitor@node-a", NodeID: "node-a",
 			BootID: fmt.Sprintf("boot-%04d", i), LastSeenAt: now.Add(time.Duration(i) * time.Second),
 		}
 	}
@@ -91,7 +91,7 @@ func TestListServicesCountsLogicalInstancesInsteadOfBootHistory(t *testing.T) {
 	require.Equal(t, "boot-1000", rows[0].BootID)
 
 	selected, err := NewCatalog(messageStore).ListServicesForAt(
-		context.Background(), []string{"moox_monitor"}, "node-a", 1, now.Add(1001*time.Second),
+		context.Background(), []string{"monitor"}, "node-a", 1, now.Add(1001*time.Second),
 	)
 	require.NoError(t, err)
 	require.Len(t, selected, 1)
@@ -120,18 +120,18 @@ func TestListFreshSeriesForInstanceFiltersHistoricalLabelsBeforeLimit(t *testing
 	rows := make([]MetricSeries, 0, 503)
 	for i := 0; i < 501; i++ {
 		rows = append(rows, MetricSeries{
-			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			ServiceName: "cloudnode", InstanceID: "cloudnode@control",
 			SeriesID: fmt.Sprintf("stale-%03d", i), MetricName: "heartbeat",
 			LabelsJSON: `{}`, LastSeenAt: now.Add(-3 * time.Minute),
 		})
 	}
 	rows = append(rows,
 		MetricSeries{
-			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			ServiceName: "cloudnode", InstanceID: "cloudnode@control",
 			SeriesID: "fresh-a", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
 		},
 		MetricSeries{
-			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			ServiceName: "cloudnode", InstanceID: "cloudnode@control",
 			SeriesID: "fresh-b", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
 		},
 	)

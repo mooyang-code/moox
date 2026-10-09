@@ -17,7 +17,7 @@ func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
 	if err != nil {
 		return nil, err
 	}
-	h, err := report.NewHandler(report.DefaultConfig("archive", "moox_archive"))
+	h, err := report.NewHandler(report.DefaultConfig("archive", "archive"))
 	if err != nil {
 		return nil, err
 	}

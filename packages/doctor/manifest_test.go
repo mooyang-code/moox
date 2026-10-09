@@ -1,111 +1,45 @@
 package doctor
 
 import (
-	"os"
-	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-func TestEmbeddedManifestIsValid(t *testing.T) {
-	t.Parallel()
-
-	manifest, err := LoadEmbeddedManifest()
-	if err != nil {
-		t.Fatalf("load embedded manifest: %v", err)
-	}
-	if len(manifest.Components) == 0 {
-		t.Fatal("embedded manifest is empty")
-	}
-	for _, component := range manifest.Components {
-		if strings.HasPrefix(component.ServiceName, "storage-") && component.FunctionalObservability != FunctionalObservabilityDeferred {
-			t.Fatalf("storage component %q observability = %q", component.ComponentID, component.FunctionalObservability)
-		}
-	}
-}
-
-func TestEmbeddedManifestMatchesDefaultSeed(t *testing.T) {
+func TestEmbeddedManifestFollowsCatalog(t *testing.T) {
 	t.Parallel()
 
 	manifest, err := LoadEmbeddedManifest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile("../../config/setup/service-deployments.yaml")
-	if err != nil {
-		t.Fatal(err)
+	catalog := servicecatalog.Default()
+	if manifest.Checksum == "" || manifest.Checksum != catalog.Checksum() {
+		t.Fatalf("清单校验和 %q 应当等于组件目录的 %q", manifest.Checksum, catalog.Checksum())
 	}
-	var seed struct {
-		Services []struct {
-			Name           string `yaml:"name"`
-			DeploymentMode string `yaml:"deployment_mode"`
-		} `yaml:"services"`
+	if len(manifest.Components) != len(catalog.Components) {
+		t.Fatalf("清单有 %d 个组件，组件目录有 %d 个", len(manifest.Components), len(catalog.Components))
 	}
-	if err := yaml.Unmarshal(data, &seed); err != nil {
-		t.Fatal(err)
+	collector, ok := manifest.Component("collector")
+	if !ok {
+		t.Fatal("清单缺少 collector")
 	}
-	manifestServices := make(map[string]Component, len(manifest.Components))
-	for _, component := range manifest.Components {
-		manifestServices[component.ServiceName] = component
+	if collector.Name != "行情采集服务" {
+		t.Fatalf("组件名称应当取自组件目录: %+v", collector)
 	}
-	seedProcesses := map[string]bool{}
-	for _, service := range seed.Services {
-		if service.DeploymentMode != "process" {
-			continue
-		}
-		seedProcesses[service.Name] = true
-		if _, ok := manifestServices[service.Name]; !ok {
-			t.Errorf("seed process %q has no manifest component", service.Name)
-		}
+	if collector.Transport != servicecatalog.TransportReporter || collector.Functional != servicecatalog.FunctionalActive ||
+		collector.HealthPath != "/readyz" || collector.HealthPort != 11412 {
+		t.Fatalf("collector = %+v", collector)
+	}
+	proxy, ok := manifest.Component("console-proxy")
+	if !ok || proxy.HealthKind != servicecatalog.HealthHTTPS || proxy.HealthPath != "" {
+		t.Fatalf("控制台代理用 https 探测，没有 /readyz: %+v", proxy)
 	}
 	for _, component := range manifest.Components {
-		if component.RequiredInDefaultProfile && !seedProcesses[component.ServiceName] {
-			t.Errorf("required manifest service %q is missing from seed", component.ServiceName)
+		if (component.ComponentID == "storage-primary" || component.ComponentID == "storage-view" || component.ComponentID == "storage-node") &&
+			component.Functional != servicecatalog.FunctionalDeferred {
+			t.Fatalf("Storage 的业务进度暂未接入: %+v", component)
 		}
-	}
-}
-
-func TestManifestValidation(t *testing.T) {
-	t.Parallel()
-
-	base := Component{
-		ComponentID:             "moox_monitor",
-		ServiceName:             "moox_monitor",
-		Role:                    "monitor",
-		Description:             "monitor",
-		Transport:               TransportReporter,
-		FunctionalObservability: FunctionalObservabilityActive,
-		HealthPath:              "/readyz",
-		RecoveryActionIDs:       []string{"restart_service_manually"},
-	}
-	tests := []struct {
-		name   string
-		mutate func(*Manifest)
-	}{
-		{name: "duplicate component", mutate: func(m *Manifest) { m.Components = append(m.Components, m.Components[0]) }},
-		{name: "endpoint service", mutate: func(m *Manifest) { m.Components[0].ServiceName = "trade_order" }},
-		{name: "storage internal endpoint", mutate: func(m *Manifest) { m.Components[0].ServiceName = "storage-primary-rpc" }},
-		{name: "timer service", mutate: func(m *Manifest) { m.Components[0].ServiceName = "collector_timer" }},
-		{name: "unsafe path", mutate: func(m *Manifest) { m.Components[0].ConfigPaths = []string{"../secret"} }},
-		{name: "unknown dependency", mutate: func(m *Manifest) { m.Components[0].Dependencies = []string{"missing"} }},
-		{name: "unknown recovery", mutate: func(m *Manifest) { m.Components[0].RecoveryActionIDs = []string{"shell_anything"} }},
-		{name: "storage active", mutate: func(m *Manifest) {
-			m.Components[0].ServiceName = "storage-primary"
-			m.Components[0].FunctionalObservability = FunctionalObservabilityActive
-		}},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			manifest := Manifest{Version: 1, Components: []Component{base}}
-			tt.mutate(&manifest)
-			if err := manifest.Validate(); err == nil {
-				t.Fatal("invalid manifest accepted")
-			}
-		})
 	}
 }
 

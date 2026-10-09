@@ -13,16 +13,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type doctorDeploymentSource struct{ rows []*adminpb.ServiceDeployment }
+type doctorPlacementSource struct{ rows []*adminpb.DeployPlacement }
 
-func (s doctorDeploymentSource) DesiredDeployments(context.Context) ([]*adminpb.ServiceDeployment, error) {
+func (s doctorPlacementSource) Hosts(context.Context) ([]*adminpb.DeployHost, error) {
+	return []*adminpb.DeployHost{{HostId: "node-a", Address: "203.0.113.10", Status: "enabled"}}, nil
+}
+
+func (s doctorPlacementSource) Placements(context.Context) ([]*adminpb.DeployPlacement, error) {
 	return s.rows, nil
 }
 
 func TestGetDoctorContextReturnsBoundedFacts(t *testing.T) {
-	builder := &monitordoctor.Builder{Deployments: doctorDeploymentSource{rows: []*adminpb.ServiceDeployment{{ServiceName: "moox_monitor", NodeId: "node-a", Status: "active"}}}}
+	builder := &monitordoctor.Builder{Placements: doctorPlacementSource{rows: []*adminpb.DeployPlacement{{HostId: "node-a", ComponentId: "monitor", Status: "enabled"}}}}
 	service := &Service{doctorContext: builder}
-	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{NodeId: "node-a", ComponentIds: []string{"moox_monitor"}})
+	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{NodeId: "node-a", ComponentIds: []string{"monitor"}})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetExpectedComponents(), 1)

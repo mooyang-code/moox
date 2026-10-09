@@ -14,9 +14,10 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 const (
@@ -25,6 +26,7 @@ const (
 	maxOverviewMetricNames      = 2000
 )
 
+// ServiceStatus 是一个组件实例的状态：NodeID 是主机 ID，ServiceName 是组件 ID。
 type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
@@ -185,10 +187,7 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 
 func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {
 	services := make(map[string]ServiceStatus)
-	reporterServices, err := expectedReporterServices()
-	if err != nil {
-		return nil, err
-	}
+	reporterServices := expectedReporterServices()
 	if b.Metrics != nil && b.Metrics.Catalog() != nil {
 		rows, total, err := b.Metrics.Catalog().ListServices(ctx, spaceID, 0, 500)
 		if err != nil {
@@ -222,16 +221,16 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 		}
 	}
 
-	checks, err := b.listEnabledSysDeployChecks(ctx, spaceID)
+	checks, err := b.listEnabledPlacementChecks(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
 	for _, check := range checks {
-		labels, err := serviceCheckLabels(check.Labels)
+		labels, err := placement.ParseLabels(check.Labels)
 		if err != nil {
-			return nil, fmt.Errorf("sysdeploy check %q labels: %w", check.CheckID, err)
+			return nil, fmt.Errorf("部署检查 %q 的标签无效: %w", check.CheckID, err)
 		}
-		nodeID, serviceName := labels["node_id"], labels["service_name"]
+		nodeID, serviceName := labels.HostID, labels.ComponentID
 		matched := make([]string, 0, 1)
 		for key, item := range services {
 			if item.NodeID == nodeID && item.ServiceName == serviceName {
@@ -270,25 +269,23 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 	return out, nil
 }
 
-func expectedReporterServices() (map[string]bool, error) {
-	manifest, err := doctor.LoadEmbeddedManifest()
-	if err != nil {
-		return nil, fmt.Errorf("load observability component manifest: %w", err)
-	}
-	out := make(map[string]bool, len(manifest.Components))
-	for _, component := range manifest.Components {
-		if component.Transport == doctor.TransportReporter {
-			out[component.ServiceName] = true
+// expectedReporterServices 返回应当经 EventBus 上报指标的组件。
+func expectedReporterServices() map[string]bool {
+	catalog := servicecatalog.Default()
+	out := make(map[string]bool, len(catalog.Components))
+	for _, component := range catalog.Components {
+		if component.Observability.Transport == servicecatalog.TransportReporter {
+			out[component.ID] = true
 		}
 	}
-	return out, nil
+	return out
 }
 
 func serviceInstanceKey(nodeID, serviceName, instanceID string) string {
 	return strings.Join([]string{nodeID, serviceName, instanceID}, "\x00")
 }
 
-func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
+func (b Builder) listEnabledPlacementChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
 	if b.Checks == nil {
 		return []domain.Check{}, nil
 	}
@@ -296,7 +293,7 @@ func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string)
 	out := make([]domain.Check, 0, 500)
 	for page := 1; len(out) < maxOverviewServices; page++ {
 		rows, err := b.Checks.List(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
+			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
 			Page: store.Page{Page: page, PageSize: 500},
 		})
 		if err != nil {
@@ -309,30 +306,16 @@ func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string)
 	}
 	if len(out) >= maxOverviewServices {
 		total, err := b.Checks.Count(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
+			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
 		})
 		if err != nil {
 			return nil, err
 		}
 		if total > maxOverviewServices {
-			return nil, fmt.Errorf("sysdeploy checks exceed limit %d", maxOverviewServices)
+			return nil, fmt.Errorf("部署检查超过上限 %d", maxOverviewServices)
 		}
 	}
 	return out, nil
-}
-
-func serviceCheckLabels(raw string) (map[string]string, error) {
-	labels := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
-		return nil, err
-	}
-	for _, key := range []string{"node_id", "service_name"} {
-		labels[key] = strings.TrimSpace(labels[key])
-		if labels[key] == "" {
-			return nil, fmt.Errorf("%s is required", key)
-		}
-	}
-	return labels, nil
 }
 
 func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) ServiceStatus {
@@ -1298,7 +1281,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		return nil, err
 	} else {
 		for _, service := range services {
-			if service.ServiceName == "moox_collector" && !service.IsStale {
+			if service.ServiceName == "collector" && !service.IsStale {
 				collectorReporterFresh = true
 				break
 			}

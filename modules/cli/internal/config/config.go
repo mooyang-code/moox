@@ -18,13 +18,12 @@ type Config struct {
 type DoctorConfig struct {
 	NodeID                  string `yaml:"node_id"`
 	ReleaseRoot             string `yaml:"release_root"`
-	SeedPath                string `yaml:"seed_path"`
 	DatasetHealthPolicyPath string `yaml:"dataset_health_policy_path"`
 }
 
 func (c *Config) EffectiveDoctor() DoctorConfig {
 	value := DoctorConfig{
-		ReleaseRoot: ".", SeedPath: "config/setup/service-deployments.yaml",
+		ReleaseRoot:             ".",
 		DatasetHealthPolicyPath: "config/setup/dataset-health-policy.yaml",
 	}
 	if c != nil {
@@ -44,9 +43,6 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 	if source.ReleaseRoot != "" {
 		target.ReleaseRoot = source.ReleaseRoot
 	}
-	if source.SeedPath != "" {
-		target.SeedPath = source.SeedPath
-	}
 	if source.DatasetHealthPolicyPath != "" {
 		target.DatasetHealthPolicyPath = source.DatasetHealthPolicyPath
 	}
@@ -55,8 +51,7 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 func overrideDoctorFromEnv(value *DoctorConfig) {
 	for name, target := range map[string]*string{
 		"MOOX_NODE_ID": &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
-		"MOOX_SERVICE_DEPLOYMENTS_SEED": &value.SeedPath,
-		"MOOX_DATASET_HEALTH_POLICY":    &value.DatasetHealthPolicyPath,
+		"MOOX_DATASET_HEALTH_POLICY": &value.DatasetHealthPolicyPath,
 	} {
 		if raw := os.Getenv(name); raw != "" {
 			*target = raw

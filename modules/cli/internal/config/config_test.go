@@ -53,6 +53,5 @@ func TestEffectiveDoctorUsesEnvironmentOverrides(t *testing.T) {
 	got := (&Config{}).EffectiveDoctor()
 	assert.Equal(t, "node-a", got.NodeID)
 	assert.Equal(t, "/opt/moox", got.ReleaseRoot)
-	assert.Equal(t, "config/setup/service-deployments.yaml", got.SeedPath)
 	assert.Equal(t, "config/setup/dataset-health-policy.yaml", got.DatasetHealthPolicyPath)
 }

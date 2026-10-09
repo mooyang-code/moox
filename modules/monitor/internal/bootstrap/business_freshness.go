@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
@@ -152,7 +153,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			if dataset.Producer == "factor" {
 				if !factorExpectedKnown {
-					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor_mgr")
+					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "factor-mgr")
 					if err != nil {
 						return err
 					}
@@ -384,43 +385,27 @@ func storageViewDatasetIDs(spaceID, viewID, primaryDatasetID string) []string {
 	return ids
 }
 
+// serviceDeploymentExpected 判断组件是否仍有启用的部署：有部署但全部停用时返回 false；完全没有部署检查时返回
+// true（还没同步过部署时不压制告警）。
 func serviceDeploymentExpected(
 	ctx context.Context,
 	checks *store.CheckRepository,
-	serviceName string,
+	componentID string,
 ) (bool, error) {
-	if checks == nil || strings.TrimSpace(serviceName) == "" {
+	if checks == nil || strings.TrimSpace(componentID) == "" {
 		return true, nil
 	}
-	const (
-		pageSize  = 500
-		maxChecks = 1500
-	)
-	opts := store.ListChecksOptions{Source: domain.CheckSourceSysDeploy}
-	total, err := checks.Count(ctx, opts)
+	rows, err := checks.ListBySource(ctx, domain.CheckSourcePlacement)
 	if err != nil {
 		return false, err
 	}
-	if total > maxChecks {
-		return false, fmt.Errorf("sysdeploy checks exceed limit %d", maxChecks)
-	}
 	found := false
-	for page := 1; int64((page-1)*pageSize) < total; page++ {
-		opts.Page = store.Page{Page: page, PageSize: pageSize}
-		rows, err := checks.List(ctx, opts)
-		if err != nil {
-			return false, err
-		}
-		for _, check := range rows {
-			if strings.HasSuffix(check.CheckID, ":"+serviceName) {
-				found = true
-				if check.Enabled {
-					return true, nil
-				}
+	for _, check := range rows {
+		if _, component, ok := placement.ParseCheckID(check.CheckID); ok && component == componentID {
+			found = true
+			if check.Enabled {
+				return true, nil
 			}
-		}
-		if len(rows) < pageSize {
-			return !found, nil
 		}
 	}
 	return !found, nil
@@ -434,13 +419,12 @@ func reporterDeploymentExpected(
 	if checks == nil || strings.TrimSpace(service.NodeID) == "" || strings.TrimSpace(service.ServiceName) == "" {
 		return true, nil
 	}
-	checkID := strings.Join([]string{"sysdeploy", service.NodeID, service.ServiceName}, ":")
-	check, err := checks.Get(ctx, "", checkID)
+	check, err := checks.Get(ctx, "", placement.CheckID(service.NodeID, service.ServiceName))
 	switch {
 	case err == nil:
 		return check.Enabled, nil
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		// External reporters, such as SCF nodes, do not have SysDeploy checks.
+		// 外部上报方（例如 SCF 采集函数）没有部署检查。
 		return true, nil
 	default:
 		return false, err

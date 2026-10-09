@@ -29,8 +29,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Scheduler.MaxConcurrency != 16 {
 		t.Fatalf("max concurrency = %d", cfg.Scheduler.MaxConcurrency)
 	}
-	if !cfg.SysDeploy.Enabled {
-		t.Fatalf("sysdeploy = %+v", cfg.SysDeploy)
+	if !cfg.PlacementChecks.Enabled {
+		t.Fatalf("placement_checks = %+v", cfg.PlacementChecks)
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
@@ -85,8 +85,8 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if cfg.Server.Service[2].Name != "trpc.moox.monitor.metrics.timer" || cfg.Server.Service[2].Port != 11415 {
 		t.Fatalf("metrics timer service = %+v", cfg.Server.Service[2])
 	}
-	if cfg.Server.Service[3].Name != "trpc.moox.monitor.sysdeploy.timer" || cfg.Server.Service[3].Port != 11416 {
-		t.Fatalf("sysdeploy timer service = %+v", cfg.Server.Service[3])
+	if cfg.Server.Service[3].Name != "trpc.moox.monitor.placement.timer" || cfg.Server.Service[3].Port != 11416 {
+		t.Fatalf("placement timer service = %+v", cfg.Server.Service[3])
 	}
 }
 
@@ -142,14 +142,14 @@ func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigRequiresHealthCredentialsWhenSysDeployEnabled(t *testing.T) {
+func TestMonitorConfigRequiresHealthCredentialsWhenPlacementChecksEnabled(t *testing.T) {
 	cfg := Default()
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want health credential error")
 	}
-	cfg.SysDeploy.Enabled = false
+	cfg.PlacementChecks.Enabled = false
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() with SysDeploy disabled = %v", err)
+		t.Fatalf("Validate() with placement checks disabled = %v", err)
 	}
 }
 
@@ -282,7 +282,7 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 
 func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg := Default()
-	cfg.SysDeploy.Enabled = false
+	cfg.PlacementChecks.Enabled = false
 	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.Subjects = []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_task", Symbol: "BTC-USDT", Frequency: "1m"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires series_tag") {
@@ -304,7 +304,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
-	cfg.SysDeploy.Enabled = false
+	cfg.PlacementChecks.Enabled = false
 	cfg.KlineFreshness.Enabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
@@ -345,7 +345,7 @@ func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
 
 func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	cfg := Default()
-	cfg.SysDeploy.Enabled = false
+	cfg.PlacementChecks.Enabled = false
 	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.ClosedBarMinCoverage = 1.01
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
@@ -353,14 +353,14 @@ func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	}
 
 	cfg = Default()
-	cfg.SysDeploy.Enabled = false
+	cfg.PlacementChecks.Enabled = false
 	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
 		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
 	}
 
 	cfg = Default()
-	cfg.SysDeploy.Enabled = false
+	cfg.PlacementChecks.Enabled = false
 	cfg.MarketHealth.LowCapacityHeadroom = -1
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "low_capacity_headroom") {
 		t.Fatalf("Validate() error = %v, want low capacity headroom error", err)

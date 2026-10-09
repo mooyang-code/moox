@@ -96,7 +96,7 @@ func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, healthChecks []repor
 		specs = append(specs, core.CheckSpec{ID: health[component.GetComponentId()], OptionalDependencies: []string{"diagnose.context"}})
 	}
 	deps := []string{}
-	for _, id := range []string{"eventbus", "moox_monitor"} {
+	for _, id := range []string{"eventbus", "monitor"} {
 		if health[id] != "" {
 			deps = append(deps, health[id])
 		}
@@ -174,13 +174,13 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		missing := false
 		stale := false
 		for _, observation := range r.context.GetReporterObservations() {
-			criticalComponent := observation.GetComponentId() == "eventbus" || observation.GetComponentId() == "moox_monitor"
+			criticalComponent := observation.GetComponentId() == "eventbus" || observation.GetComponentId() == "monitor"
 			if criticalComponent && (observation.GetStatus() == "FAIL" || observation.GetStale() || observation.GetConflict()) {
 				stale = true
 			}
 		}
 		for _, observation := range r.context.GetMissingObservations() {
-			criticalComponent := observation.GetComponentId() == "eventbus" || observation.GetComponentId() == "moox_monitor"
+			criticalComponent := observation.GetComponentId() == "eventbus" || observation.GetComponentId() == "monitor"
 			if criticalComponent && (observation.GetKind() == "reporter" || observation.GetKind() == "identity") {
 				missing = true
 			}
@@ -529,8 +529,9 @@ func healthCheckIDs(config []report.ModuleHealthCheck) []string {
 
 // componentModule maps a component id to the module name used by module
 // health checks; moox_factor_mgr reports its metrics as module "factor".
+// componentModule 是组件上报模块指标时使用的模块名：factor-mgr 的模块名是 factor，其余与组件 ID 相同。
 func componentModule(componentID string) string {
-	return strings.TrimSuffix(strings.TrimPrefix(componentID, "moox_"), "_mgr")
+	return strings.TrimSuffix(componentID, "-mgr")
 }
 
 func moduleFreshnessEnabled(config []report.ModuleHealthCheck, module string) bool {

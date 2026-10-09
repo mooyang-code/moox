@@ -203,7 +203,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, policyErr
 	}
 	doctorContext := &monitordoctor.Builder{
-		Deployments: newSysDeploySource(runtime), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Placements: newPlacementSource(runtime), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}

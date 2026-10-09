@@ -21,19 +21,19 @@ func TestCheckProducerAuthorizerRequiresMatchingNode(t *testing.T) {
 	}
 	checks := manager.Repositories().Checks
 	if err := checks.Create(context.Background(), &domain.Check{
-		CheckID: "sysdeploy:node-a:moox_collector",
+		CheckID: "placement:control:collector",
 		Enabled: true,
-		Source:  domain.CheckSourceSysDeploy,
+		Source:  domain.CheckSourcePlacement,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	authorizer := CheckProducerAuthorizer{Checks: checks}
-	registered, err := authorizer.IsRegistered(context.Background(), "moox_collector", "node-a")
+	registered, err := authorizer.IsRegistered(context.Background(), "collector", "control")
 	if err != nil || !registered {
 		t.Fatalf("matching producer registered=%v err=%v", registered, err)
 	}
-	registered, err = authorizer.IsRegistered(context.Background(), "moox_collector", "node-b")
+	registered, err = authorizer.IsRegistered(context.Background(), "collector", "storage")
 	if err != nil || registered {
 		t.Fatalf("wrong-node producer registered=%v err=%v", registered, err)
 	}
@@ -51,14 +51,14 @@ func TestCheckProducerAuthorizerAllowsOnlyConfiguredExternalProducerWithNodeIden
 	authorizer := CheckProducerAuthorizer{
 		Checks: manager.Repositories().Checks,
 		ExternalProducers: map[string]struct{}{
-			"moox_collector_scf": {},
+			"scf-collector": {},
 		},
 	}
-	registered, err := authorizer.IsRegistered(context.Background(), "moox_collector_scf", "scf-node-a")
+	registered, err := authorizer.IsRegistered(context.Background(), "scf-collector", "scf-node-a")
 	if err != nil || !registered {
 		t.Fatalf("SCF producer registered=%v err=%v", registered, err)
 	}
-	registered, err = authorizer.IsRegistered(context.Background(), "moox_collector_scf", "")
+	registered, err = authorizer.IsRegistered(context.Background(), "scf-collector", "")
 	if err != nil || registered {
 		t.Fatalf("empty-node SCF producer registered=%v err=%v", registered, err)
 	}

@@ -29,7 +29,8 @@ scheduler:
   result_retention_days: 14
   max_concurrency: 16
 
-sysdeploy:
+# 按 SysDeploy 的部署（placement:<主机>:<组件>）生成健康检查，探测方式取自组件目录。
+placement_checks:
   enabled: true
 
 alert:

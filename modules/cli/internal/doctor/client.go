@@ -10,7 +10,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-// Client 读取 Monitor 的诊断上下文和 SysDeploy 的部署记录。
+// Client 读取 Monitor 的诊断上下文和 SysDeploy 的部署。
 type Client struct {
 	monitor   monitorpb.MonitorMgrClientProxy
 	sysdeploy adminpb.SysDeployClientProxy
@@ -41,28 +41,17 @@ func (c *Client) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctorC
 	return rsp, nil
 }
 
-func (c *Client) ListDeployments(ctx context.Context, nodeID string) ([]*adminpb.ServiceDeployment, error) {
+// ListPlacements 返回一台主机上的全部部署。
+func (c *Client) ListPlacements(ctx context.Context, hostID string) ([]*adminpb.DeployPlacement, error) {
 	if c == nil || c.sysdeploy == nil {
-		return nil, fmt.Errorf("SysDeploy client is unavailable")
+		return nil, fmt.Errorf("SysDeploy 客户端不可用")
 	}
-	const pageSize = 100
-	const maxRows = 500
-	rows := make([]*adminpb.ServiceDeployment, 0, pageSize)
-	for page := uint32(1); page <= maxRows/pageSize; page++ {
-		rsp, err := c.sysdeploy.ListServiceDeployments(ctx, &adminpb.ListServiceDeploymentsReq{NodeId: nodeID, Page: &commonpb.Page{Page: page, Size: pageSize}})
-		if err != nil {
-			return nil, err
-		}
-		if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-			return nil, fmt.Errorf("SysDeploy list failed: %s", rsp.GetRetInfo().GetMsg())
-		}
-		if len(rows)+len(rsp.GetDeployments()) > maxRows {
-			return nil, fmt.Errorf("SysDeploy response exceeds %d rows", maxRows)
-		}
-		rows = append(rows, rsp.GetDeployments()...)
-		if !rsp.GetPageResult().GetHasMore() {
-			return rows, nil
-		}
+	rsp, err := c.sysdeploy.ListPlacements(ctx, &adminpb.ListPlacementsReq{HostId: hostID})
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("SysDeploy response exceeds %d rows", maxRows)
+	if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
+		return nil, fmt.Errorf("读取主机 %s 的部署失败（%s）: %s", hostID, code, rsp.GetRetInfo().GetMsg())
+	}
+	return rsp.GetPlacements(), nil
 }

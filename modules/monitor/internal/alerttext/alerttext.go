@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 // Zone renders alert times in Beijing time, which operators read.
@@ -38,43 +40,26 @@ func Duration(d time.Duration) string {
 	}
 }
 
-// serviceNames names deployed services for people reading alerts.
-var serviceNames = map[string]string{
-	"admin_gateway":            "管理后台网关",
-	"web_host":                 "管理后台前端",
-	"service_gateway":          "服务网关",
-	"service_gateway_native":   "公网服务网关",
-	"moox_gateway":             "节点服务网关",
-	"storage-primary":          "存储主服务",
-	"storage-view":             "存储视图服务",
-	"storage-node":             "存储数据节点",
-	"eventbus":                 "消息总线",
-	"moox_monitor":             "监控服务",
-	"moox_collector":           "行情采集服务",
-	"collector_market_runtime": "行情采集运行环境",
-	"moox_cloudnode":           "云节点服务",
-	"moox_factor_mgr":          "因子管理服务",
-	"moox_strategy":            "策略服务",
-	"moox_archive":             "归档服务",
-	"moox_hostagent":           "主机采集代理",
-	"moox_trade":               "交易服务",
+// Service 返回组件的中文名称，取自组件目录；外部调用方（例如 SCF 采集函数）取它的说明；都找不到时返回 ID。
+func Service(componentID string) string {
+	componentID = strings.TrimSpace(componentID)
+	catalog := servicecatalog.Default()
+	if component, ok := catalog.Component(componentID); ok {
+		return component.Name
+	}
+	if principal, ok := catalog.Principal(componentID); ok && principal.Description != "" {
+		return principal.Description
+	}
+	return componentID
 }
 
-// Service is a deployed service's human name, falling back to its ID.
-func Service(service string) string {
-	if name := serviceNames[strings.TrimSpace(service)]; name != "" {
-		return name
+// Node 渲染告警中的主机，例如 "storage 主机"。
+func Node(hostID string) string {
+	hostID = strings.TrimSpace(hostID)
+	if hostID == "" {
+		return "未知主机"
 	}
-	return service
-}
-
-// Node renders a node for alert text, such as "storage 节点".
-func Node(node string) string {
-	node = strings.TrimSpace(node)
-	if node == "" {
-		return "未知节点"
-	}
-	return node + " 节点"
+	return hostID + " 主机"
 }
 
 // Frequency renders a frequency for alert text, such as "1小时".

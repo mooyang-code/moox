@@ -9,8 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -111,57 +109,6 @@ func (p HTTPProber) Get(ctx context.Context, rawURL string) (ProbeResult, error)
 	return result, nil
 }
 
-func ProbeWritablePath(ctx context.Context, releaseRoot, relativePath string) (err error) {
-	if filepath.IsAbs(relativePath) || relativePath == "" || filepath.Clean(relativePath) != relativePath || strings.HasPrefix(relativePath, "..") {
-		return fmt.Errorf("probe path must be a clean release-relative path")
-	}
-	root, err := filepath.Abs(releaseRoot)
-	if err != nil {
-		return err
-	}
-	if err := rejectSymlinkComponents(root, relativePath); err != nil {
-		return err
-	}
-	target, err := filepath.Abs(filepath.Join(root, relativePath))
-	if err != nil {
-		return err
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return fmt.Errorf("resolve release root: %w", err)
-	}
-	resolvedTarget, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return fmt.Errorf("resolve probe path: %w", err)
-	}
-	rel, err := filepath.Rel(resolvedRoot, resolvedTarget)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("probe path escapes release root")
-	}
-	file, err := os.CreateTemp(resolvedTarget, probePrefix)
-	if err != nil {
-		return err
-	}
-	name := file.Name()
-	defer func() {
-		closeErr := file.Close()
-		removeErr := os.Remove(name)
-		if err == nil && closeErr != nil {
-			err = closeErr
-		}
-		if err == nil && removeErr != nil && !os.IsNotExist(removeErr) {
-			err = removeErr
-		}
-	}()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if _, err = file.WriteString("moox doctor permission probe\n"); err != nil {
-		return err
-	}
-	return file.Sync()
-}
-
 func localProbeHost(host string) bool {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "localhost" || host == "localhost.localdomain" {
@@ -171,22 +118,4 @@ func localProbeHost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return false
-}
-
-func rejectSymlinkComponents(root, relative string) error {
-	current := root
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("probe path escapes release root: symlink component")
-		}
-	}
-	return nil
 }

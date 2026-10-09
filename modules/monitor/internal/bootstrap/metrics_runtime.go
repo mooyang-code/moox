@@ -38,7 +38,7 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 		}
 		return nil
 	}
-	h, err := report.NewHandler(report.DefaultConfig("monitor", "moox_monitor"))
+	h, err := report.NewHandler(report.DefaultConfig("monitor", "monitor"))
 	if err != nil {
 		if runtime != nil {
 			runtime.setMetricsReporterState(false, err)
@@ -136,15 +136,9 @@ func startObservabilityConsumer(
 	routes := observabilityconsumer.Routes{
 		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{
 			Checks: runtime.Repositories.Checks,
+			// SCF 采集函数（组件目录中的外部调用方 scf-collector）没有部署记录；其余上报方都必须是已登记的部署。
 			ExternalProducers: map[string]struct{}{
-				"moox_collector_scf": {},
-				// No sysdeploy check registers these producers on every node they
-				// run on: storage-node has no deployment, and moox_gateway also
-				// runs on nodes (such as Storage) without a deployment row of its
-				// own. Their EventBus credentials are still scoped to this control
-				// plane.
-				"storage-node": {},
-				"moox_gateway": {},
+				"scf-collector": {},
 			},
 		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
 		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),

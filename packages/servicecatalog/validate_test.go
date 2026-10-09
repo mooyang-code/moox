@@ -20,12 +20,14 @@ components:
     replicas: per_host
     protected: true
     health: {kind: readyz, port: 11012}
+    observability: {transport: reporter, functional: not_applicable}
   - id: access
     name: 外部接入
     binary: moox-access
     scope: any
     replicas: multi
     health: {kind: readyz, port: 11014}
+    observability: {transport: reporter, functional: not_applicable}
   - id: admin
     name: 管理后台
     binary: moox-admin
@@ -33,6 +35,7 @@ components:
     replicas: single
     protected: true
     health: {kind: readyz, port: 11010}
+    observability: {transport: reporter, functional: not_applicable}
     services:
       - path: trpc.moox.admin.SpaceMgr
         port: 11107
@@ -48,6 +51,7 @@ components:
     scope: any
     replicas: single
     health: {kind: readyz, port: 11412}
+    observability: {transport: reporter, functional: not_applicable}
     services:
       - path: trpc.moox.collector.CollectMgr
         port: 11402
@@ -117,6 +121,11 @@ func TestCatalogValidationRejects(t *testing.T) {
 		}, "except 只能与 all"},
 		{"read_only 引用未声明的方法", func(c *Catalog) { c.Components[2].Services[0].ReadOnly = []string{"Nope"} }, "read_only"},
 		{"缺少 console 调用方", func(c *Catalog) { c.Callers = nil }, "console"},
+		{"缺少观测方式", func(c *Catalog) { c.Components[3].Observability = Observability{} }, "观测方式"},
+		{"业务进度无效", func(c *Catalog) { c.Components[3].Observability.Functional = "later" }, "业务进度"},
+		{"只探测的组件没有业务进度", func(c *Catalog) {
+			c.Components[3].Observability = Observability{Transport: TransportHealthOnly, Functional: FunctionalActive}
+		}, "不能声明业务进度"},
 		{"服务重复声明", func(c *Catalog) {
 			c.Components[3].Services[0].Path = "trpc.moox.admin.SpaceMgr"
 		}, "重复声明"},
