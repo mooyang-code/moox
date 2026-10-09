@@ -3,8 +3,11 @@ package view
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -454,6 +457,7 @@ func TestViewDataReadyPublishFailureKeepsLaterPendingEvents(t *testing.T) {
 }
 
 // enqueuingFailPublisher 在第一次发布时让另一个协程入队下一根（它的刷新会等当前刷新结束），然后发布失败。
+// 失败项与其后的项一直留在队列里，新入队的一根排在它们之后。
 type enqueuingFailPublisher struct {
 	inner   *readyPublisherFake
 	enqueue func()
@@ -499,10 +503,7 @@ func TestViewDataReadyRestoresFailedEventsBeforeNewOnes(t *testing.T) {
 		}()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			service.pendingReadyMu.Lock()
-			queued := len(service.pendingReady)
-			service.pendingReadyMu.Unlock()
-			if queued > 0 {
+			if service.pendingReadyContains("prices-ready-3") {
 				return
 			}
 			time.Sleep(time.Millisecond)
@@ -522,5 +523,118 @@ func TestViewDataReadyRestoresFailedEventsBeforeNewOnes(t *testing.T) {
 	}
 	if len(order) != 3 || !(order[0] < order[1] && order[1] < order[2]) {
 		t.Fatalf("重试后应按周期顺序发布：%v", order)
+	}
+}
+
+// readyHangingPublisher 模拟确认丢失：发布一直挂起，直到调用方的截止时间到达（与 PublishRaw 的超时语义一致）。
+type readyHangingPublisher struct {
+	started chan string
+	release chan struct{}
+}
+
+func (p *readyHangingPublisher) Publish(ctx context.Context, _ events.Event, _ proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	p.started <- opts.EventID
+	select {
+	case <-ctx.Done():
+		return nil, errors.Join(jetstream.ErrPublishTimeout, ctx.Err())
+	case <-p.release:
+		return &jetstream.PublishAck{Sequence: 1}, nil
+	}
+}
+
+func readyTestPeriod(t *testing.T, service *Service, id string, minute int) {
+	t.Helper()
+	at := time.Date(2026, 9, 13, 16, minute, 0, 0, time.UTC)
+	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
+	payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+		t.Fatalf("%s 应等待行写入：%v", id, err)
+	}
+}
+
+// 发布途中进程退出不能丢事件：发布成功之前，正在发布的事件仍在落盘的队列里，成功后才移除。
+func TestViewDataReadyKeepsInFlightEventPersisted(t *testing.T) {
+	publisher := &readyHangingPublisher{started: make(chan string, 1), release: make(chan struct{})}
+	service := newPeriodTestService(newPeriodMetadataFake(), publisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	service.readyFenceDir = t.TempDir()
+	readyTestPeriod(t, service, "prices-ready-1", 0)
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)
+	done := make(chan error, 1)
+	go func() { done <- service.FlushViewDataReady(context.Background(), "quant", "source-view") }()
+	eventID := <-publisher.started
+	// 刷新途中另一根入队会用内存队列覆盖落盘文件：正在发布的事件不能因此从文件里消失。
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		at := time.Date(2026, 9, 13, 16, 1, 0, 0, time.UTC)
+		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
+		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 99}}
+		_ = service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-2", at), payload)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		service.pendingReadyMu.Lock()
+		queued := len(service.pendingReady)
+		service.pendingReadyMu.Unlock()
+		if queued >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("第二根没有入队")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	persisted := func() string {
+		raw, err := os.ReadFile(filepath.Join(service.readyFenceDir, "pending.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if !strings.Contains(persisted(), eventID) {
+		t.Fatalf("正在发布的事件 %s 应仍在落盘队列中：%s", eventID, persisted())
+	}
+	close(publisher.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	if strings.Contains(persisted(), eventID) || service.pendingReadyContains(eventID) {
+		t.Fatalf("发布成功后应移出队列：%s", persisted())
+	}
+}
+
+// 确认丢失时发布不能一直挂起：超时后返回错误，事件留在队列里，并重连发布器的专用连接。
+func TestViewDataReadyPublishTimesOutAndReconnects(t *testing.T) {
+	previous := readyPublishTimeout
+	readyPublishTimeout = 50 * time.Millisecond
+	defer func() { readyPublishTimeout = previous }()
+	publisher := &readyHangingPublisher{started: make(chan string, 4), release: make(chan struct{})}
+	service := newPeriodTestService(newPeriodMetadataFake(), publisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	reconnects := 0
+	service.readyReconnect = func(context.Context) error {
+		reconnects++
+		return nil
+	}
+	readyTestPeriod(t, service, "prices-ready-1", 0)
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)
+	started := time.Now()
+	err := service.FlushViewDataReady(context.Background(), "quant", "source-view")
+	if !errors.Is(err, jetstream.ErrPublishTimeout) {
+		t.Fatalf("应返回发布超时：%v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("发布超时后应尽快返回：%s", elapsed)
+	}
+	if reconnects != 1 {
+		t.Fatalf("发布超时后应重连一次：%d", reconnects)
+	}
+	if eventID := <-publisher.started; !service.pendingReadyContains(eventID) {
+		t.Fatalf("超时的事件 %s 应留在队列中等待重试", eventID)
 	}
 }

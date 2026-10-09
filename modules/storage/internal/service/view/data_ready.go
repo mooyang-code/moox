@@ -2,12 +2,15 @@ package view
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -57,9 +60,13 @@ func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID 
 	}
 }
 
+// readyPublishTimeout 限制单条就绪事件的发布等待。不设截止时间的 JetStream 发布在确认丢失（EventBus 重启、
+// 断网）时会一直挂起；刷新持有串行锁，挂起会让所有 View 的行写入投递排在后面。
+var readyPublishTimeout = 10 * time.Second
+
 // FlushViewDataReady 按入队顺序发布已满足写入围栏的就绪事件。刷新串行执行：并发刷新会互相越过，
-// 打乱同一 View 的周期顺序（下游会把较早的周期记为乱序）。发布失败时，失败项与其后尚未尝试的项按原顺序
-// 放回队首；无法通过契约校验的事件永远发不出去，隔离并记日志，不能堵住其后所有 View 的就绪事件。
+// 打乱同一 View 的周期顺序（下游会把较早的周期记为乱序）。事件只在发布成功（或因无法通过契约校验而隔离）
+// 后才移出队列并落盘，进程在发布途中退出也不会丢失；发布失败时失败项与其后的项按原顺序留在队首。
 func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string) error {
 	if s == nil {
 		return nil
@@ -76,37 +83,69 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 	}
 	s.pendingReadyMu.Lock()
 	pending := append([]pendingViewReady(nil), s.pendingReady...)
-	s.pendingReady = s.pendingReady[:0]
 	s.pendingReadyMu.Unlock()
-	remaining := make([]pendingViewReady, 0, len(pending))
-	for index, item := range pending {
+	for _, item := range pending {
 		if spaceID != "" && (item.spaceID != spaceID || (viewID != "" && item.viewID != viewID)) {
-			remaining = append(remaining, item)
 			continue
 		}
 		view := s.viewSnapshot(item.spaceID, item.viewID)
 		if view == nil || !s.positionsApplied(view, item.required) {
-			remaining = append(remaining, item)
 			continue
 		}
 		if _, err := registry.Encode(events.ViewDataReady, item.payload, item.opts); err != nil {
 			log.Printf("View 就绪队列隔离无法通过契约校验的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
+			if err := s.removePending(item.opts.EventID); err != nil {
+				return err
+			}
 			continue
 		}
-		if _, err := publisher.Publish(ctx, events.ViewDataReady, item.payload, item.opts); err != nil {
+		publishCtx, cancel := context.WithTimeout(ctx, readyPublishTimeout)
+		_, err := publisher.Publish(publishCtx, events.ViewDataReady, item.payload, item.opts)
+		cancel()
+		if err != nil {
 			if s.metrics != nil {
 				s.metrics.ObserveReadyPublishRetry(item.viewID, "view_data_ready")
 			}
-			remaining = append(remaining, pending[index:]...)
-			s.restorePending(remaining)
-			if persistErr := s.persistPendingReady(); persistErr != nil {
-				return persistErr
+			if errors.Is(err, jetstream.ErrPublishTimeout) {
+				s.reconnectReadyPublisher(ctx, err)
 			}
 			return err
 		}
+		if err := s.removePending(item.opts.EventID); err != nil {
+			return err
+		}
 	}
-	s.restorePending(remaining)
-	return s.persistPendingReady()
+	return nil
+}
+
+// reconnectReadyPublisher 在发布超时后替换就绪发布器的连接：连接可能已静默断开，等心跳发现要几分钟。
+func (s *Service) reconnectReadyPublisher(ctx context.Context, cause error) {
+	s.mu.RLock()
+	reconnect := s.readyReconnect
+	s.mu.RUnlock()
+	if reconnect == nil {
+		return
+	}
+	reconnectCtx, cancel := context.WithTimeout(ctx, readyPublishTimeout)
+	defer cancel()
+	if err := reconnect(reconnectCtx); err != nil {
+		log.Printf("View 就绪事件发布超时（%v），重连 EventBus 失败：%v", cause, err)
+		return
+	}
+	log.Printf("View 就绪事件发布超时（%v），已重连 EventBus", cause)
+}
+
+// removePending 把已发布或已隔离的事件移出队列并落盘。
+func (s *Service) removePending(eventID string) error {
+	s.pendingReadyMu.Lock()
+	defer s.pendingReadyMu.Unlock()
+	for i, item := range s.pendingReady {
+		if item.opts.EventID == eventID {
+			s.pendingReady = append(s.pendingReady[:i], s.pendingReady[i+1:]...)
+			break
+		}
+	}
+	return s.persistPendingReadyLocked()
 }
 
 func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.CommittedPosition, payload *storagepb.ViewDataReady, message *eventpb.EventMessage, eventID string) {
@@ -132,28 +171,6 @@ func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.Comm
 		}
 	}
 	s.pendingReady = append(s.pendingReady, item)
-	_ = s.persistPendingReadyLocked()
-}
-
-// restorePending 把未发布的事件按原顺序放回队首，刷新期间新入队的事件排在它们之后。
-func (s *Service) restorePending(items []pendingViewReady) {
-	if len(items) == 0 {
-		return
-	}
-	s.pendingReadyMu.Lock()
-	defer s.pendingReadyMu.Unlock()
-	merged := make([]pendingViewReady, 0, len(items)+len(s.pendingReady))
-	seen := make(map[string]struct{}, len(items)+len(s.pendingReady))
-	for _, group := range [][]pendingViewReady{items, s.pendingReady} {
-		for _, item := range group {
-			if _, dup := seen[item.opts.EventID]; dup {
-				continue
-			}
-			seen[item.opts.EventID] = struct{}{}
-			merged = append(merged, item)
-		}
-	}
-	s.pendingReady = merged
 	_ = s.persistPendingReadyLocked()
 }
 

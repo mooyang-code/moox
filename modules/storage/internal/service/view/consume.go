@@ -67,8 +67,14 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if err != nil {
 		return nil, err
 	}
-	publisher, err := events.NewPublisher(client, registry)
+	// 就绪事件用专用连接发布：发布超时（确认丢失）后只重连这条连接，不影响主连接上的其它用途。
+	readyClient, err := client.Fork(ctx, "storage-view-ready")
 	if err != nil {
+		return nil, fmt.Errorf("fork eventbus client for storage view ready publisher: %w", err)
+	}
+	publisher, err := events.NewPublisher(readyClient, registry)
+	if err != nil {
+		_ = readyClient.Close()
 		return nil, err
 	}
 	partitionConfigs := opts.PartitionConfigs
@@ -106,6 +112,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		for i := len(partitionClients) - 1; i >= 0; i-- {
 			_ = partitionClients[i].Close()
 		}
+		_ = readyClient.Close()
 	}
 	for _, partition := range partitionConfigs {
 		partition := partition
@@ -211,6 +218,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	boundReaderMu.Unlock()
 	s.mu.Lock()
 	s.readyPublisher = publisher
+	s.readyReconnect = readyClient.Reconnect
 	s.consumerStates = states
 	s.consumerBounds = make(map[string]func() bool, len(bounds))
 	s.consumerPartitionByDataset = make(map[datasetRef]string)
@@ -247,6 +255,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		}
 		s.mu.Lock()
 		s.readyPublisher = nil
+		s.readyReconnect = nil
 		s.consumerState = nil
 		s.consumerBound = nil
 		s.consumerStates = make(map[string]func(context.Context) (jetstream.ConsumerState, error))

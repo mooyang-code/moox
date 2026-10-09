@@ -131,7 +131,7 @@ func (s *Service) querySeriesWindow(ctx context.Context, req *pb.QueryTimeSeries
 		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields(), Attributes: rowAttributesToStrings(row.GetAttributes())})
 	}
 	// Complete remains unset: bounded query success is not universe coverage.
-	rsp := &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, ServedActiveIndexId: index, ServedInputContractVersion: contract}
+	rsp := &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, ServedActiveIndexId: index, ServedInputContractVersion: contract, ServedSeriesBars: s.servedSeriesBars()}
 	if len(req.GetColumnNames()) == 0 {
 		// Full-window cache reads need schema even when every row is absent or
 		// a business column is entirely NULL. This is the locked physical schema,

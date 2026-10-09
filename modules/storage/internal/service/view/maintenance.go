@@ -264,6 +264,13 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 	if opts.BackfillPageSize == 0 {
 		opts.BackfillPageSize = viewBackfillBatchSize
 	}
+	bars := opts.Bars
+	if bars == 0 {
+		bars = defaultViewBars
+	}
+	s.mu.Lock()
+	s.seriesBars = bars
+	s.mu.Unlock()
 	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
 		s.mu.Lock()
 		s.periodMetadata = periodMetadata
