@@ -20,7 +20,7 @@ func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, seed.Version)
 	require.Equal(t, "control", seed.Node.ID)
-	require.Len(t, seed.Services, 27)
+	require.Len(t, seed.Services, 26)
 	processes := 0
 	for _, service := range seed.Services {
 		if service.DeploymentMode == "process" {
@@ -64,7 +64,7 @@ func TestLoadServiceDeploymentSeed_MatchesDefaultDeploymentContract(t *testing.T
 func TestServiceDeploymentsHaveNoMergeOrFactorEngine(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
-	require.Len(t, seed.Services, 27)
+	require.Len(t, seed.Services, 26)
 	allowedKinds := map[string]struct{}{
 		"admin_rpc": {}, "archive": {}, "cloudnode": {}, "collector": {}, "collector_runtime": {},
 		"collector_subject": {}, "eventbus": {}, "factor": {}, "frontend": {}, "gateway": {},
@@ -75,7 +75,7 @@ func TestServiceDeploymentsHaveNoMergeOrFactorEngine(t *testing.T) {
 		require.Truef(t, ok, "unexpected service kind %q for %q", service.Kind, service.Name)
 	}
 	defaults := sysdeploy.DefaultDeployments(seed.Node.ID)
-	require.Len(t, defaults, 27)
+	require.Len(t, defaults, 26)
 	for _, deployment := range defaults {
 		_, ok := allowedKinds[deployment.ServiceKind]
 		require.Truef(t, ok, "unexpected default service kind %q for %q", deployment.ServiceKind, deployment.ServiceName)
@@ -95,13 +95,13 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(second.Bytes(), &result))
 	require.Equal(t, 0, result.Created)
-	require.Equal(t, 27, result.Updated)
+	require.Equal(t, 26, result.Updated)
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_service_deployments").Count(&count).Error)
-	require.Equal(t, int64(27), count)
+	require.Equal(t, int64(26), count)
 }
 
 func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
@@ -110,7 +110,7 @@ func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
 	require.NoError(t, runServiceDeploymentsCommand([]string{
 		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
 		"--node-id", "control", "--public-host", "control.example.test",
-		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--disabled-services", "moox_trade,trade_owner,trade_dns_resolver",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--disabled-services", "moox_trade,trade_owner",
 	}, &bytes.Buffer{}, &bytes.Buffer{}))
 	// A scoped execution node exposes both surfaces with distinct native paths:
 	// ownership stays canonical while the browser route uses the admin alias.
@@ -208,7 +208,7 @@ func TestTradeGatewayPlacementPersistsAcrossSeedImport(t *testing.T) {
 	require.Equal(t, "trade-node", extra["gateway_node"])
 }
 
-func TestRunServiceDeploymentsCommand_AllowsScopedResolverImport(t *testing.T) {
+func TestRunServiceDeploymentsCommand_AllowsScopedTradeOwnerImport(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "admin.db")
 	seedPath := filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml")
@@ -216,7 +216,7 @@ func TestRunServiceDeploymentsCommand_AllowsScopedResolverImport(t *testing.T) {
 	require.NoError(t, runServiceDeploymentsCommand([]string{
 		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
 		"--node-id", "compute-1", "--public-host", "43.132.204.177",
-		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_dns_resolver",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_owner",
 	}, &output, &bytes.Buffer{}))
 	var result struct {
 		Services int `json:"services"`
@@ -228,7 +228,7 @@ func TestRunServiceDeploymentsCommand_AllowsScopedResolverImport(t *testing.T) {
 	var rows []sysdeploy.Deployment
 	require.NoError(t, db.Where("c_node_id = ?", "compute-1").Find(&rows).Error)
 	require.Len(t, rows, 1)
-	require.Equal(t, "trade_dns_resolver", rows[0].ServiceName)
+	require.Equal(t, "trade_owner", rows[0].ServiceName)
 	require.True(t, rows[0].GatewayEnabled)
 	var node sysdeploy.GatewayNode
 	require.NoError(t, db.Where("c_node_id = ?", "compute-1").First(&node).Error)
@@ -236,7 +236,7 @@ func TestRunServiceDeploymentsCommand_AllowsScopedResolverImport(t *testing.T) {
 	require.Equal(t, "enabled", node.Status)
 }
 
-func TestScopedResolverImportPreservesExistingNodeMetadata(t *testing.T) {
+func TestScopedTradeOwnerImportPreservesExistingNodeMetadata(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "admin.db")
 	require.NoError(t, ensureAdminSchema(dbPath))
@@ -249,13 +249,13 @@ func TestScopedResolverImportPreservesExistingNodeMetadata(t *testing.T) {
 	require.NoError(t, runServiceDeploymentsCommand([]string{
 		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
 		"--node-id", "compute-1", "--public-host", "43.132.204.177",
-		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_dns_resolver",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_owner",
 	}, &output, &bytes.Buffer{}))
 	output.Reset()
 	require.NoError(t, runServiceDeploymentsCommand([]string{
 		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
 		"--node-id", "compute-1", "--public-host", "43.132.204.177",
-		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_dns_resolver",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_owner",
 	}, &output, &bytes.Buffer{}))
 	require.NoError(t, db.Where("c_node_id = ?", "compute-1").First(&node).Error)
 	require.Equal(t, "operator-name", node.Name)
@@ -362,7 +362,7 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, enableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 28)
+	require.Len(t, seed.Services, 27)
 
 	var primary, shard serviceDeploymentEntry
 	for _, item := range seed.Services {
@@ -469,7 +469,7 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 		require.Equal(t, "trpc.moox.factor.FactorEngine", engineRoute["service_path"])
 		require.EqualValues(t, 11405, engineRoute["port"])
 		require.Equal(t, []any{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}, engineRoute["gateway_methods"])
-		require.Equal(t, []any{"factor-engine"}, engineRoute["gateway_callers"])
+		require.Equal(t, []any{"access"}, engineRoute["gateway_callers"])
 		return
 	}
 	t.Fatal("moox_factor_mgr deployment is missing")
@@ -479,7 +479,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 28)
+	require.Len(t, seed.Services, 27)
 	shard := seed.Services[len(seed.Services)-1]
 	require.Equal(t, "storage-shard", shard.Name)
 	require.False(t, shard.GatewayEnabled)

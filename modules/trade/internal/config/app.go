@@ -8,11 +8,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
@@ -25,19 +23,6 @@ type AppConfig struct {
 	sourcePath    string                   `yaml:"-"`
 	EventBus      EventBusConfig           `yaml:"eventbus"`
 	Runtime       RuntimeConfig            `yaml:"runtime"`
-	DNSResolver   DNSResolverConfig        `yaml:"dns_resolver"`
-}
-
-// DNSResolverConfig is rendered from the sanitized dns_resolver section in
-// moox.toml by moox-cli. Trade never reads moox.toml directly.
-type DNSResolverConfig struct {
-	Enabled         bool     `yaml:"enabled"`
-	Domains         []string `yaml:"domains"`
-	LookupTimeoutMS int      `yaml:"lookup_timeout_ms"`
-	ProbeTimeoutMS  int      `yaml:"probe_timeout_ms"`
-	ProbePort       int      `yaml:"probe_port"`
-	CacheTTLSeconds int      `yaml:"cache_ttl_seconds"`
-	MaxIPsPerDomain int      `yaml:"max_ips_per_domain"`
 }
 
 // DatabaseConfig 数据库配置（当前仅支持 sqlite）。
@@ -68,13 +53,6 @@ func DefaultConfig() *AppConfig {
 		Runtime:       RuntimeConfig{},
 		GatewayClient: gatewayclient.FileConfig{Caller: "trade", KeyFile: "../../secrets/caller-trade.key"},
 		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
-		DNSResolver: DNSResolverConfig{
-			LookupTimeoutMS: 1500,
-			ProbeTimeoutMS:  500,
-			ProbePort:       443,
-			CacheTTLSeconds: 300,
-			MaxIPsPerDomain: 4,
-		},
 	}
 }
 
@@ -147,70 +125,7 @@ func (c *AppConfig) Validate() error {
 			return fmt.Errorf("eventbus target consumer is required")
 		}
 	}
-	if err := c.DNSResolver.Validate(); err != nil {
-		return err
-	}
 	return nil
-}
-
-func (c DNSResolverConfig) Validate() error {
-	if !c.Enabled {
-		return nil
-	}
-	if len(c.Domains) == 0 {
-		return fmt.Errorf("dns_resolver domains are required when enabled")
-	}
-	if len(c.Domains) > 16 {
-		return fmt.Errorf("dns_resolver supports at most 16 domains")
-	}
-	seen := make(map[string]struct{}, len(c.Domains))
-	for _, raw := range c.Domains {
-		domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
-		if !validDNSResolverDomain(domain) {
-			return fmt.Errorf("dns_resolver domain %q is invalid", raw)
-		}
-		if _, exists := seen[domain]; exists {
-			return fmt.Errorf("dns_resolver domain %q is duplicated", raw)
-		}
-		seen[domain] = struct{}{}
-	}
-	if c.LookupTimeoutMS <= 0 {
-		return fmt.Errorf("dns_resolver lookup_timeout_ms must be positive")
-	}
-	if c.ProbeTimeoutMS <= 0 {
-		return fmt.Errorf("dns_resolver probe_timeout_ms must be positive")
-	}
-	if c.ProbePort < 1 || c.ProbePort > 65535 {
-		return fmt.Errorf("dns_resolver probe_port must be between 1 and 65535")
-	}
-	if c.CacheTTLSeconds <= 0 {
-		return fmt.Errorf("dns_resolver cache_ttl_seconds must be positive")
-	}
-	if c.MaxIPsPerDomain < 1 || c.MaxIPsPerDomain > 4 {
-		return fmt.Errorf("dns_resolver max_ips_per_domain must be between 1 and 4")
-	}
-	return nil
-}
-
-func validDNSResolverDomain(domain string) bool {
-	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
-		return false
-	}
-	labels := strings.Split(domain, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	for _, label := range labels {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, r := range label {
-			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // OpenGateway creates the process client used by Admin secret reads.

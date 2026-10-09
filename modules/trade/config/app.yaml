@@ -18,12 +18,3 @@ runtime:
   # Production order submission is disabled unless explicitly enabled.
   # TESTNET and account synchronization are unaffected.
   live_trading_enabled: false
-
-dns_resolver:
-  enabled: false
-  domains: []
-  lookup_timeout_ms: 1500
-  probe_timeout_ms: 500
-  probe_port: 443
-  cache_ttl_seconds: 300
-  max_ips_per_domain: 4

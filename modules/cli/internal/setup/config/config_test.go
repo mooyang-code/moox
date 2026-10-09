@@ -1256,59 +1256,44 @@ host = "192.0.2.11"
 	assert.Equal(t, 22, snapshot.Manifest.OtherHosts[0].Port)
 }
 
-func TestLoadDNSResolverConfiguration(t *testing.T) {
-	valid := validManifest + `
-[hosts."43.132.204.177"]
-username = "ubuntu"
-password = "compute-password"
-
-[[other_hosts]]
-name = "compute-1"
-host = "43.132.204.177"
-
-[dns_resolver]
-enabled = true
-trade_node = "compute-1"
-refresh_interval_seconds = 300
-request_timeout_ms = 3000
-lookup_timeout_ms = 1500
-probe_timeout_ms = 500
-probe_port = 443
-cache_ttl_seconds = 300
-max_ips_per_domain = 4
-domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
-`
+func TestLoadEgressProxyConfiguration(t *testing.T) {
 	root := t.TempDir()
-	snapshot, err := Load(writeManifest(t, root, valid, 0o600), root)
+	snapshot, err := Load(writeManifest(t, root, validManifest+`
+[egress_proxy]
+http_domains = ["*.binance.com", "data-api.binance.vision"]
+[egress_proxy.dns]
+domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
+`, 0o600), root)
 	require.NoError(t, err)
-	require.True(t, snapshot.Manifest.DNSResolver.Enabled)
-	require.Equal(t, "compute-1", snapshot.Manifest.DNSResolver.TradeNode)
-	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, snapshot.Manifest.DNSResolver.Domains)
-
-	for name, mutate := range map[string]func(*DNSResolver){
-		"missing trade node": func(cfg *DNSResolver) { cfg.TradeNode = "missing" },
-		"duplicate domain":   func(cfg *DNSResolver) { cfg.Domains = []string{"api.binance.com", "API.BINANCE.COM."} },
-		"invalid interval":   func(cfg *DNSResolver) { cfg.RequestTimeoutMS = 0 },
-		"invalid port":       func(cfg *DNSResolver) { cfg.ProbePort = 70000 },
-		"invalid cap":        func(cfg *DNSResolver) { cfg.MaxIPsPerDomain = 5 },
-		"too many domains":   func(cfg *DNSResolver) { cfg.Domains = make([]string, 17) },
+	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, snapshot.Manifest.EgressProxy.DNS.Domains)
+	for name, mutate := range map[string]func(*EgressProxy){
+		"duplicate domain": func(c *EgressProxy) { c.DNS.Domains = []string{"api.binance.com", "API.BINANCE.COM."} },
+		"wildcard DNS":     func(c *EgressProxy) { c.DNS.Domains = []string{"*.binance.com"} },
+		"invalid interval": func(c *EgressProxy) { c.DNS.RequestTimeoutMS = 0 },
+		"invalid port":     func(c *EgressProxy) { c.DNS.ProbePort = 70000 },
+		"invalid cap":      func(c *EgressProxy) { c.DNS.MaxIPsPerDomain = 5 },
+		"too many domains": func(c *EgressProxy) { c.DNS.Domains = make([]string, 17) },
+		"invalid HTTP":     func(c *EgressProxy) { c.HTTPDomains = []string{"https://binance.com"} },
 	} {
 		t.Run(name, func(t *testing.T) {
-			manifest := snapshot.Manifest
-			mutate(&manifest.DNSResolver)
-			err := validateDNSResolver(&manifest.DNSResolver, &manifest)
-			require.Error(t, err)
+			cfg := snapshot.Manifest.EgressProxy
+			mutate(&cfg)
+			require.Error(t, validateEgressProxy(&cfg))
 		})
 	}
-	unsafe := snapshot.Manifest
-	unsafe.OtherHosts[0].Address = "127.0.0.1"
-	require.ErrorContains(t, validateDNSResolver(&unsafe.DNSResolver, &unsafe), "public address")
-
-	disabled := snapshot.Manifest
-	disabled.DNSResolver = DNSResolver{Enabled: false, TradeNode: "missing"}
-	require.Error(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
-	disabled.DNSResolver.TradeNode = ""
-	require.NoError(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
+}
+func TestPlacementsRejectAmbiguousOrInvalidComponents(t *testing.T) {
+	m := Manifest{ControlHost: Host{Name: "control"}, OtherHosts: []Host{{Name: "compute"}}}
+	for _, placements := range []map[string][]string{
+		{"missing": {"trade"}}, {"compute": {"missing"}}, {"compute": {"trade", "trade"}},
+		{"control": {"trade"}, "compute": {"trade"}}, {"compute": {"hostgateway"}}, {"compute": {"admin"}},
+	} {
+		m.Placements = placements
+		require.Error(t, validatePlacements(&m))
+	}
+	m.Placements = map[string][]string{"compute": {"trade", "egress-proxy"}}
+	require.NoError(t, validatePlacements(&m))
+	require.Equal(t, "compute", m.PlacementHost("trade"))
 }
 
 func TestLoadOptionalCompileHost(t *testing.T) {

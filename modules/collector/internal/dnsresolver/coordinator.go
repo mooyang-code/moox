@@ -20,11 +20,12 @@ import (
 )
 
 type Coordinator struct {
-	Local    *dnscache.Cache
-	Remote   DomainResolver
-	Domains  []string
-	Interval time.Duration
-	CacheTTL time.Duration
+	Local         *dnscache.Cache
+	Remote        DomainResolver
+	Domains       []string
+	RemoteDomains []string
+	Interval      time.Duration
+	CacheTTL      time.Duration
 
 	mu              sync.RWMutex
 	refreshMu       sync.Mutex
@@ -61,6 +62,7 @@ type CoordinatorConfig struct {
 	Local           *dnscache.Cache
 	Remote          DomainResolver
 	Domains         []string
+	RemoteDomains   []string
 	Interval        time.Duration
 	CacheTTL        time.Duration
 	Metrics         *Metrics
@@ -72,13 +74,13 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		cfg.Interval = 5 * time.Minute
 	}
 	return &Coordinator{
-		Local: cfg.Local, Remote: cfg.Remote, Domains: normalizeDomains(cfg.Domains),
+		Local: cfg.Local, Remote: cfg.Remote, Domains: normalizeDomains(cfg.Domains), RemoteDomains: normalizeDomains(cfg.RemoteDomains),
 		Interval: cfg.Interval, CacheTTL: cfg.CacheTTL, routes: make(map[string]sources.DNSResolution), routeSource: make(map[string]string),
 		metrics: cfg.Metrics, persistencePath: strings.TrimSpace(cfg.PersistencePath),
 	}
 }
 
-// RestoreLastGoodSnapshot loads the last successful Trade snapshot, if one is
+// RestoreLastGoodSnapshot loads the last successful Egress snapshot, if one is
 // present. A restored route has no local receipt time so a restart does not
 // discard the route before the first bounded remote refresh can complete.
 func (c *Coordinator) RestoreLastGoodSnapshot() error {
@@ -97,8 +99,12 @@ func (c *Coordinator) RestoreLastGoodSnapshot() error {
 		return fmt.Errorf("decode DNS snapshot %s: %w", c.persistencePath, err)
 	}
 	now := time.Now().UTC()
-	allowed := make(map[string]struct{}, len(c.Domains))
-	for _, domain := range c.Domains {
+	allowedDomains := c.Domains
+	if c.Remote != nil {
+		allowedDomains = c.RemoteDomains
+	}
+	allowed := make(map[string]struct{}, len(allowedDomains))
+	for _, domain := range allowedDomains {
 		allowed[normalizeDomain(domain)] = struct{}{}
 	}
 	routes := make(map[string]sources.DNSResolution, len(persisted.Routes))
@@ -147,7 +153,7 @@ func (c *Coordinator) RestoreLastGoodSnapshot() error {
 	c.routes = routes
 	c.routeSource = make(map[string]string, len(routes))
 	for host := range routes {
-		c.routeSource[host] = "trade"
+		c.routeSource[host] = "egress"
 	}
 	c.status = buildStatus(now, routes, c.routeSource, c.status, nil, nil, false)
 	c.mu.Unlock()
@@ -187,8 +193,8 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	}
 	var remoteRoutes map[string]sources.DNSResolution
 	var remoteErr error
-	if c.Remote != nil && len(domains) > 0 {
-		remoteRoutes, remoteErr = c.Remote.ResolveDomains(ctx, domains)
+	if c.Remote != nil && len(c.RemoteDomains) > 0 {
+		remoteRoutes, remoteErr = c.Remote.ResolveDomains(ctx, append([]string(nil), c.RemoteDomains...))
 		receiptAt := time.Now().UTC()
 		for host, route := range remoteRoutes {
 			route.ResolvedAt = receiptAt
@@ -224,7 +230,7 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	}
 	for host, route := range remoteRoutes {
 		merged[host] = route
-		mergedSources[host] = "trade"
+		mergedSources[host] = "egress"
 	}
 	status := buildStatus(now, merged, mergedSources, previousStatus, remoteErr, localErr, len(remoteRoutes) > 0 || len(localRoutes) > 0)
 	c.mu.Lock()
@@ -234,7 +240,7 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	c.status = status
 	c.mu.Unlock()
 	if len(remoteRoutes) > 0 && c.persistencePath != "" {
-		if err := c.persistTradeSnapshot(merged, mergedSources); err != nil {
+		if err := c.persistEgressSnapshot(merged, mergedSources); err != nil {
 			// The in-memory/SCF update is still valid. Surface persistence failure
 			// to the caller so health logs expose that restart protection is at risk.
 			status.LastErrorCategory = "snapshot_persist"
@@ -268,18 +274,18 @@ type persistedSnapshot struct {
 	SavedAt time.Time                        `json:"saved_at"`
 }
 
-func (c *Coordinator) persistTradeSnapshot(routes map[string]sources.DNSResolution, routeSource map[string]string) error {
-	tradeRoutes := make(map[string]sources.DNSResolution)
+func (c *Coordinator) persistEgressSnapshot(routes map[string]sources.DNSResolution, routeSource map[string]string) error {
+	egressRoutes := make(map[string]sources.DNSResolution)
 	for host, route := range routes {
-		if routeSource[host] != "trade" || len(route.IPs) == 0 {
+		if routeSource[host] != "egress" || len(route.IPs) == 0 {
 			continue
 		}
-		tradeRoutes[normalizeDomain(host)] = route
+		egressRoutes[normalizeDomain(host)] = route
 	}
-	if len(tradeRoutes) == 0 {
+	if len(egressRoutes) == 0 {
 		return nil
 	}
-	raw, err := json.Marshal(persistedSnapshot{Routes: tradeRoutes, SavedAt: time.Now().UTC()})
+	raw, err := json.Marshal(persistedSnapshot{Routes: egressRoutes, SavedAt: time.Now().UTC()})
 	if err != nil {
 		return fmt.Errorf("encode DNS snapshot: %w", err)
 	}
@@ -402,9 +408,9 @@ func buildStatus(now time.Time, routes map[string]sources.DNSResolution, routeSo
 	}
 	switch {
 	case remoteErr != nil && localErr != nil:
-		status.LastErrorCategory = "trade_and_local_dns"
+		status.LastErrorCategory = "egress_and_local_dns"
 	case remoteErr != nil:
-		status.LastErrorCategory = "trade_rpc"
+		status.LastErrorCategory = "egress_rpc"
 	case localErr != nil:
 		status.LastErrorCategory = "local_dns"
 	}

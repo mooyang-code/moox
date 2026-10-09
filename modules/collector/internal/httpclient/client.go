@@ -96,7 +96,8 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		ctx = context.Background()
 	}
 	candidates := uniqueIPs(ips)
-	if skipControlPlaneIPs(domain) {
+	proxy, proxied := c.httpClient.Transport.(*EgressTransport)
+	if skipControlPlaneIPs(domain) || proxied && proxy.domains.Allows(domain) {
 		candidates = nil
 	}
 	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
@@ -202,7 +203,11 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 	if c == nil || c.httpClient == nil {
 		return nil
 	}
-	base, ok := c.httpClient.Transport.(*http.Transport)
+	roundTripper := c.httpClient.Transport
+	if proxy, ok := roundTripper.(*EgressTransport); ok {
+		roundTripper = proxy.direct
+	}
+	base, ok := roundTripper.(*http.Transport)
 	if !ok || base == nil {
 		return nil
 	}

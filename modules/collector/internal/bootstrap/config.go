@@ -5,17 +5,15 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,7 +32,7 @@ type Config struct {
 	KlineResample       KlineResampleConfig              `yaml:"kline_resample"`
 	Health              HealthConfig                     `yaml:"health"`
 	DNS                 DNSConfig                        `yaml:"dns"`
-	DNSResolver         DNSResolverConfig                `yaml:"dns_resolver"`
+	EgressProxy         EgressProxyConfig                `yaml:"egress_proxy"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -142,17 +140,19 @@ type DNSConfig struct {
 	Nameservers     []string      `yaml:"nameservers"`
 }
 
-// DNSResolverConfig selects the optional Trade-side resolver. The native
-// Gateway target and node are rendered from moox.toml by moox-cli.
-type DNSResolverConfig struct {
-	Enabled         bool          `yaml:"enabled"`
-	Target          string        `yaml:"target"`
-	NodeID          string        `yaml:"node_id"`
+// EgressProxyConfig selects HTTP domains and DNS snapshots through the shared gateway.
+type EgressProxyConfig struct {
+	Domains []string        `yaml:"domains"`
+	DNS     EgressDNSConfig `yaml:"dns"`
+}
+type EgressDNSConfig struct {
 	Domains         []string      `yaml:"domains"`
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
 	CacheTTL        time.Duration `yaml:"cache_ttl"`
 }
+
+func (c EgressDNSConfig) Enabled() bool { return len(c.Domains) > 0 }
 
 // Load reads YAML config from path.
 func Load(path string) (*Config, error) {
@@ -181,7 +181,7 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.applyEnv()
-	if err := cfg.validateDNSResolver(); err != nil {
+	if err := cfg.validateEgressProxy(); err != nil {
 		return nil, err
 	}
 	if err := cfg.validateSCFAccess(); err != nil {
@@ -225,33 +225,6 @@ func (c *Config) applyEnv() {
 			c.DNS.ResolveTimeout = parsed
 		}
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_ENABLED"); v != "" {
-		c.DNSResolver.Enabled = strings.EqualFold(strings.TrimSpace(v), "1") || strings.EqualFold(strings.TrimSpace(v), "true")
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_TARGET"); v != "" {
-		c.DNSResolver.Target = strings.TrimSpace(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_NODE_ID"); v != "" {
-		c.DNSResolver.NodeID = strings.TrimSpace(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_DOMAINS"); v != "" {
-		c.DNSResolver.Domains = splitCSV(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_REFRESH_INTERVAL"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNSResolver.RefreshInterval = parsed
-		}
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_TIMEOUT"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNSResolver.RequestTimeout = parsed
-		}
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_CACHE_TTL"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNSResolver.CacheTTL = parsed
-		}
-	}
 }
 
 func (c *Config) validateSCFAccess() error {
@@ -278,35 +251,25 @@ func (c *Config) validateSCFAccess() error {
 	return nil
 }
 
-func (c *Config) validateDNSResolver() error {
-	if !c.DNSResolver.Enabled {
-		return nil
+func (c *Config) validateEgressProxy() error {
+	if _, err := domainpolicy.New(c.EgressProxy.Domains); err != nil {
+		return fmt.Errorf("egress_proxy.domains: %w", err)
 	}
-	if !isPublicDNSResolverTarget(c.DNSResolver.Target) {
-		return fmt.Errorf("dns_resolver.target must be an ip://public-ip:port tRPC target, got %q", c.DNSResolver.Target)
+	dns := &c.EgressProxy.DNS
+	if len(dns.Domains) > 16 {
+		return fmt.Errorf("egress_proxy.dns supports at most 16 domains")
 	}
-	if strings.TrimSpace(c.DNSResolver.NodeID) == "" {
-		return fmt.Errorf("dns_resolver.node_id is required when enabled")
-	}
-	if len(c.DNSResolver.Domains) == 0 {
-		return fmt.Errorf("dns_resolver.domains must not be empty when enabled")
-	}
-	if len(c.DNSResolver.Domains) > 16 {
-		return fmt.Errorf("dns_resolver supports at most 16 domains")
-	}
-	seen := make(map[string]struct{}, len(c.DNSResolver.Domains))
-	for _, raw := range c.DNSResolver.Domains {
-		domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
-		if !validDNSResolverDomain(domain) {
-			return fmt.Errorf("dns_resolver domain %q is invalid", raw)
+	seen := map[string]bool{}
+	for i, raw := range dns.Domains {
+		domain, ok := domainpolicy.Host(strings.TrimSpace(raw))
+		if !ok || seen[domain] {
+			return fmt.Errorf("egress_proxy.dns domain %q is invalid or duplicated", raw)
 		}
-		if _, exists := seen[domain]; exists {
-			return fmt.Errorf("dns_resolver domain %q is duplicated", raw)
-		}
-		seen[domain] = struct{}{}
+		seen[domain] = true
+		dns.Domains[i] = domain
 	}
-	if c.DNSResolver.RefreshInterval <= 0 || c.DNSResolver.RequestTimeout <= 0 || c.DNSResolver.CacheTTL <= 0 {
-		return fmt.Errorf("dns_resolver intervals must be positive")
+	if dns.RefreshInterval <= 0 || dns.RequestTimeout <= 0 || dns.RequestTimeout > 60*time.Second || dns.CacheTTL <= 0 {
+		return fmt.Errorf("egress_proxy.dns intervals must be positive and request_timeout at most 60s")
 	}
 	return nil
 }
@@ -362,53 +325,6 @@ func (c *Config) validatePeriodReadiness() error {
 	return nil
 }
 
-func isPublicDNSResolverTarget(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Hostname() == "" || parsed.Port() == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil || port < 1 || port > 65535 {
-		return false
-	}
-	ip := net.ParseIP(parsed.Hostname())
-	return isPublicResolverIP(ip)
-}
-
-func isPublicResolverIP(ip net.IP) bool {
-	ip = ip.To4()
-	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return false
-	}
-	first, second, third := ip[0], ip[1], ip[2]
-	return first != 0 && first < 224 &&
-		!(first == 100 && second >= 64 && second <= 127) &&
-		!(first == 192 && second == 0 && (third == 0 || third == 2)) &&
-		!(first == 198 && (second == 18 || second == 19 || (second == 51 && third == 100))) &&
-		!(first == 203 && second == 0 && third == 113)
-}
-
-func validDNSResolverDomain(domain string) bool {
-	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
-		return false
-	}
-	labels := strings.Split(domain, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	for _, label := range labels {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, r := range label {
-			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
@@ -447,11 +363,11 @@ func Default() *Config {
 			RefreshInterval: 5 * time.Minute,
 			ResolveTimeout:  5 * time.Second,
 		},
-		DNSResolver: DNSResolverConfig{
+		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision"}, DNS: EgressDNSConfig{
 			RefreshInterval: 5 * time.Minute,
 			RequestTimeout:  3 * time.Second,
 			CacheTTL:        5 * time.Minute,
-		},
+		}},
 	}
 }
 

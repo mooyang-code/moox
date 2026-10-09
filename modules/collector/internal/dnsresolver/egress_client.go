@@ -8,36 +8,31 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 )
 
 type DomainResolver interface {
 	ResolveDomains(context.Context, []string) (map[string]sources.DNSResolution, error)
 }
 
-type TradeClient struct {
-	client  tradepb.TradeDNSResolverServiceClientProxy
+type EgressClient struct {
+	client  gatewayclient.Invoker
 	timeout time.Duration
 }
 
-func NewTradeClient(target, nodeID string, credentials gatewayauth.Credentials, timeout time.Duration) *TradeClient {
+func NewEgressClient(gateway gatewayclient.Invoker, timeout time.Duration) *EgressClient {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	credentials.KeyID = strings.TrimSpace(credentials.KeyID)
-	credentials.Caller = strings.TrimSpace(credentials.Caller)
-	credentials.Secret = strings.TrimSpace(credentials.Secret)
-	options := gatewayauth.NewTRPCClientOptions(normalizeTarget(target), strings.TrimSpace(nodeID), credentials)
-	return &TradeClient{
-		client:  tradepb.NewTradeDNSResolverServiceClientProxy(options...),
-		timeout: timeout,
-	}
+	return &EgressClient{client: gateway, timeout: timeout}
 }
 
-func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map[string]sources.DNSResolution, error) {
+func (c *EgressClient) ResolveDomains(ctx context.Context, domains []string) (map[string]sources.DNSResolution, error) {
 	if c == nil || c.client == nil {
-		return nil, fmt.Errorf("trade DNS client is not configured")
+		return nil, fmt.Errorf("egress DNS client is not configured")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -47,9 +42,9 @@ func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map
 	expected := make(map[string]struct{}, len(domains))
 	requested := make([]string, 0, len(domains))
 	for _, raw := range domains {
-		host := normalizeDomain(raw)
-		if host == "" {
-			continue
+		host, valid := domainpolicy.Host(strings.TrimSpace(raw))
+		if !valid {
+			return nil, fmt.Errorf("invalid DNS domain %q", raw)
 		}
 		if _, exists := expected[host]; exists {
 			continue
@@ -57,14 +52,18 @@ func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map
 		expected[host] = struct{}{}
 		requested = append(requested, host)
 	}
-	rsp, err := c.client.ResolveDomains(callCtx, &tradepb.ResolveDomainsReq{Domains: requested, MaxIpsPerDomain: 4})
+	if len(requested) == 0 || len(requested) > 16 {
+		return nil, fmt.Errorf("DNS requires 1 to 16 unique domains")
+	}
+	var rsp egresspb.ResolveDomainsRsp
+	err := c.client.Invoke(callCtx, "trpc.moox.egress.Proxy", "ResolveDomains", &egresspb.ResolveDomainsReq{Domains: requested, MaxIpsPerDomain: 4}, &rsp)
 	if err != nil {
 		return nil, fmt.Errorf("resolve domains RPC: %w", err)
 	}
-	if rsp == nil || rsp.GetRetInfo() == nil {
+	if rsp.GetRetInfo() == nil {
 		return nil, fmt.Errorf("resolve domains RPC returned empty response")
 	}
-	if rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS {
+	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		return nil, fmt.Errorf("resolve domains RPC failed: code=%d msg=%s", rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	}
 	result := make(map[string]sources.DNSResolution, len(rsp.GetResolutions()))
@@ -83,6 +82,7 @@ func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map
 			continue
 		}
 		item := sources.DNSResolution{}
+		seen := map[string]bool{}
 		for _, resolved := range resolution.GetIps() {
 			if resolved == nil {
 				continue
@@ -92,6 +92,10 @@ func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map
 				continue
 			}
 			value := ip.To4().String()
+			if seen[value] || len(item.IPs) == 4 {
+				continue
+			}
+			seen[value] = true
 			item.IPs = append(item.IPs, value)
 			if item.LatencyMS == nil {
 				item.LatencyMS = make(map[string]uint32)
@@ -121,17 +125,6 @@ func isPublicIPv4(ip net.IP) bool {
 		!(first == 203 && second == 0 && third == 113)
 }
 
-func normalizeTarget(target string) string {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return "ip://127.0.0.1:11003"
-	}
-	if strings.Contains(target, "://") {
-		return target
-	}
-	return "ip://" + target
-}
-
 func normalizeDomain(raw string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
 }
@@ -154,4 +147,4 @@ func validDomain(host string) bool {
 	return true
 }
 
-var _ DomainResolver = (*TradeClient)(nil)
+var _ DomainResolver = (*EgressClient)(nil)

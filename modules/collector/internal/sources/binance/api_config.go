@@ -1,12 +1,13 @@
 package binance
 
 import (
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func newConfiguredClient() *binanceapi.Client {
-	client := binanceapi.NewClient()
+func newConfiguredClient(clients ...*httpclient.HTTPClient) *binanceapi.Client {
+	client := binanceapi.NewClient(clients...)
 
 	cfg, err := ResolveAPIConfig()
 	if err != nil {

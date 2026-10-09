@@ -19,8 +19,14 @@ type SymbolCollector struct {
 }
 
 // NewSymbolCollector returns a configured Binance symbol protocol client.
-func NewSymbolCollector() *SymbolCollector {
-	client := newConfiguredClient()
+func NewSymbolCollector(clients ...*binanceapi.Client) *SymbolCollector {
+	client := (*binanceapi.Client)(nil)
+	if len(clients) > 0 {
+		client = clients[0]
+	}
+	if client == nil {
+		client = newConfiguredClient()
+	}
 	return &SymbolCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client)}
 }
 

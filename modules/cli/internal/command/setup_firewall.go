@@ -203,7 +203,7 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 	if setupconfigHostConfigured(manifest.ViewHost) {
 		add(manifest.ViewHost, []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
-	tradeNode := strings.TrimSpace(manifest.DNSResolver.TradeNode)
+	tradeNode := strings.TrimSpace(manifest.PlacementHost("trade"))
 	for _, host := range manifest.Hosts() {
 		if strings.EqualFold(strings.TrimSpace(host.Name), tradeNode) {
 			add(host, []cloudtencent.CreateFirewallRulesOptions{

@@ -24,6 +24,7 @@ const (
 )
 
 var (
+	methodPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	serviceIDPattern   = regexp.MustCompile(`^[a-z0-9_-]+$`)
 	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 )

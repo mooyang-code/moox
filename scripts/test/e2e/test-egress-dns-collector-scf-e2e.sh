@@ -3,24 +3,21 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 
-if [[ "${MOOX_RUN_REAL_TRADE_DNS_E2E:-0}" != "1" ]]; then
-  printf 'trade DNS/Collector E2E: set MOOX_RUN_REAL_TRADE_DNS_E2E=1 to run against production\n'
+if [[ "${MOOX_RUN_REAL_EGRESS_DNS_E2E:-0}" != "1" ]]; then
+  printf 'egress DNS/Collector E2E: set MOOX_RUN_REAL_EGRESS_DNS_E2E=1 to run against production\n'
   exit 0
 fi
 
-: "${MOOX_GATEWAY_SERVICE_KEY_ID:?MOOX_GATEWAY_SERVICE_KEY_ID is required}"
-: "${MOOX_GATEWAY_CALLER:?MOOX_GATEWAY_CALLER is required}"
-: "${MOOX_GATEWAY_SERVICE_SECRET_KEY:?MOOX_GATEWAY_SERVICE_SECRET_KEY is required}"
+: "${MOOX_COLLECTOR_APP_CONFIG:?deployed Collector app.yaml path is required}"
 : "${MOOX_COLLECTOR_SSH:?MOOX_COLLECTOR_SSH is required for live Collector refresh/readback}"
 : "${MOOX_CLOUDNODE_SSH:?MOOX_CLOUDNODE_SSH is required for CloudNode readback}"
 
 cd "${REPO_ROOT}"
-go test ./modules/trade/test -run '^TestResolveDomainsProductionE2E$' -count=1 -v
 
-expected_hash_file="$(mktemp "${TMPDIR:-/tmp}/moox-trade-dns-hash.XXXXXX")"
+expected_hash_file="$(mktemp "${TMPDIR:-/tmp}/moox-egress-dns-hash.XXXXXX")"
 trap 'rm -f "${expected_hash_file}"' EXIT
 MOOX_EXPECTED_DNS_HASH_FILE="${expected_hash_file}" \
-  go test ./modules/collector/test -run '^TestTradeDNSCollectorEnvironmentProductionE2E$' -count=1 -v
+  go test ./modules/collector/test -run '^TestEgressDNSCollectorEnvironmentProductionE2E$' -count=1 -v
 read -r expected_hash expected_domain_count <"${expected_hash_file}"
 if [[ ! "${expected_hash}" =~ ^[0-9a-f]{16}$ || ! "${expected_domain_count}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Collector E2E did not produce a valid expected DNS hash" >&2
@@ -28,7 +25,7 @@ if [[ ! "${expected_hash}" =~ ^[0-9a-f]{16}$ || ! "${expected_domain_count}" =~ 
 fi
 
 # Restarting the live Collector is the explicit refresh/reconcile trigger for
-# this opt-in production check. It makes the readback prove the current Trade
+# this opt-in production check. It makes the readback prove the current Egress
 # snapshot was submitted, instead of accepting an old uniformly stale hash.
 if [[ -n "${MOOX_COLLECTOR_SSH:-}" ]]; then
   collector_dir="${MOOX_COLLECTOR_DEPLOY_DIR:-/home/ubuntu/moox/prod}"
@@ -49,13 +46,13 @@ if [[ -n "${MOOX_COLLECTOR_SSH:-}" ]]; then
     if health_json=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 "${MOOX_COLLECTOR_SSH}" "${health_command}" 2>/dev/null) &&
       health_fields=$(printf '%s' "${health_json}" | python3 -c 'import json,sys; x=json.load(sys.stdin).get("details", {}).get("dns_resolver", {}); print("|".join([str(x.get("managed_hash", "")), str(x.get("source", "")), str(x.get("route_count", "")), str(x.get("last_error_category", ""))]))' 2>/dev/null) &&
       IFS='|' read -r live_hash live_source live_route_count live_error_category <<<"${health_fields}" &&
-      [[ "${live_hash}" =~ ^[0-9a-f]{16}$ && "${live_source}" == "trade" && "${live_route_count}" == "${expected_domain_count}" && -z "${live_error_category}" ]]; then
+      [[ "${live_hash}" =~ ^[0-9a-f]{16}$ && ("${live_source}" == "egress" || "${live_source}" == "hybrid") && "${live_route_count}" == "${expected_domain_count}" && -z "${live_error_category}" ]]; then
       break
     fi
     live_hash=""
     [[ "${health_attempt}" == "12" ]] || sleep 2
   done
-  [[ -n "${live_hash}" ]] || { echo "Collector health did not expose a Trade-sourced DNS snapshot with the expected domain count after restart" >&2; exit 1; }
+  [[ -n "${live_hash}" ]] || { echo "Collector health did not expose a Egress-sourced DNS snapshot with the expected domain count after restart" >&2; exit 1; }
   if [[ "${live_hash}" != "${expected_hash}" ]]; then
     printf 'Collector live hash differs from local RPC sample (local=%s live=%s); using live snapshot for propagation check\n' "${expected_hash}" "${live_hash}"
   fi
@@ -79,7 +76,7 @@ if [[ -n "${MOOX_CLOUDNODE_SSH:-}" ]]; then
 			if health_json=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 "${MOOX_COLLECTOR_SSH}" "${health_command}" 2>/dev/null) &&
         health_fields=$(printf '%s' "${health_json}" | python3 -c 'import json,sys; x=json.load(sys.stdin).get("details", {}).get("dns_resolver", {}); print("|".join([str(x.get("managed_hash", "")), str(x.get("source", "")), str(x.get("route_count", "")), str(x.get("last_error_category", ""))]))' 2>/dev/null) &&
 				IFS='|' read -r current_live_hash current_live_source current_live_route_count current_live_error_category <<<"${health_fields}" &&
-				[[ "${current_live_hash}" =~ ^[0-9a-f]{16}$ && "${current_live_source}" == "trade" && "${current_live_route_count}" == "${expected_domain_count}" && -z "${current_live_error_category}" ]]; then
+				[[ "${current_live_hash}" =~ ^[0-9a-f]{16}$ && ("${current_live_source}" == "egress" || "${current_live_source}" == "hybrid") && "${current_live_route_count}" == "${expected_domain_count}" && -z "${current_live_error_category}" ]]; then
 				health_ok=1
 				if [[ "${current_live_hash}" != "${live_hash}" ]]; then
           printf 'Collector live DNS hash advanced from %s to %s while CloudNode propagation was pending\n' "${live_hash:-<empty>}" "${current_live_hash}"
@@ -88,7 +85,7 @@ if [[ -n "${MOOX_CLOUDNODE_SSH:-}" ]]; then
 			fi
 		fi
 		if [[ "${health_ok}" != "1" || -z "${live_hash}" ]]; then
-			printf 'Collector health is not a valid Trade snapshot (attempt %s/36), retrying\n' "${attempt}"
+			printf 'Collector health is not a valid Egress snapshot (attempt %s/36), retrying\n' "${attempt}"
 			[[ "${attempt}" == "36" ]] || sleep 10
 			continue
 		fi
@@ -118,4 +115,4 @@ if [[ -n "${MOOX_CLOUDNODE_SSH:-}" ]]; then
   [[ "${converged}" == "1" ]] || { echo "CloudNode readback did not converge to the live Collector DNS hash ${propagation_hash}" >&2; exit 1; }
 fi
 
-printf 'PASS: Trade ResolveDomains and Collector managed SCF environment E2E\n'
+printf 'PASS: Egress ResolveDomains and Collector managed SCF environment E2E\n'

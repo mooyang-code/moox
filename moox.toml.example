@@ -500,17 +500,14 @@ function_count = 0
   name = "compute-1"
   host = "203.0.113.12"
 
-# moox-cli renders the non-sensitive resolver fields below into Trade's
-# config/app.yaml. When enabled, trade_node is also the dedicated Trade
-# execution host; deploy-control records its TradeConsole endpoint in the
-# control-plane route so the browser does not fall back to 127.0.0.1:11200.
-# setup deploy-service binds the dedicated Trade listener on all interfaces
-# because the SSH/public address may be NAT'ed; restrict TCP 11200 in the
-# cloud firewall to control_host before enabling real order operations.
-# Trade does not read this full moox.toml directly.
-[dns_resolver]
-enabled = false
-trade_node = "compute-1"
+# 服务放置与出口策略分别声明；主机目录将在统一部署阶段收敛。
+[placements]
+compute-1 = ["trade", "egress-proxy"]
+
+[egress_proxy]
+http_domains = ["*.binance.com", "data-api.binance.vision"]
+
+[egress_proxy.dns]
 refresh_interval_seconds = 300
 request_timeout_ms = 3000
 lookup_timeout_ms = 1500

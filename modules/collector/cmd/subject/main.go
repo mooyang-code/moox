@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/bootstrap"
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -29,10 +30,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("moox-collector-subject config error: %v", err)
 	}
-	listers, err := marketwiring.NewSubjectListers()
-	if err != nil {
-		return fmt.Errorf("moox-collector-subject source initialization failed: %v", err)
-	}
 	appConfig, err := bootstrap.Load(filepath.Join(filepath.Dir(*configPath), "app.yaml"))
 	if err != nil {
 		return fmt.Errorf("collector module config: %w", err)
@@ -42,6 +39,15 @@ func run() error {
 		return fmt.Errorf("collector subject gateway: %w", err)
 	}
 	defer gateway.Close()
+	httpClient, err := httpclient.NewEgressHTTPClient(gateway, appConfig.EgressProxy.Domains)
+	if err != nil {
+		return fmt.Errorf("collector subject HTTP client: %w", err)
+	}
+	defer httpClient.Close()
+	listers, err := marketwiring.NewSubjectListers(httpClient)
+	if err != nil {
+		return fmt.Errorf("collector subject sources: %w", err)
+	}
 	storage, err := subjectsync.NewStorageClient(gateway)
 	if err != nil {
 		return fmt.Errorf("moox-collector-subject storage initialization failed: %v", err)

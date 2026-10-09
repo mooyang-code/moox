@@ -519,18 +519,18 @@ df -h "$root" | tail -1
 }
 
 func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
-	var file, tradeOutput, collectorOutput, nodeID string
+	var file, egressOutput, collectorOutput string
 	cmd := &cobra.Command{
 		Use:   "render-runtime-config",
-		Short: "从 moox.toml 渲染 Trade/Collector 运行配置",
+		Short: "从 moox.toml 渲染 Egress/Collector 运行配置",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			tradeOutput = strings.TrimSpace(tradeOutput)
+			egressOutput = strings.TrimSpace(egressOutput)
 			collectorOutput = strings.TrimSpace(collectorOutput)
-			if tradeOutput == "" && collectorOutput == "" {
+			if egressOutput == "" && collectorOutput == "" {
 				return fmt.Errorf("runtime_config: at least one output path is required")
 			}
-			if tradeOutput != "" && collectorOutput != "" {
-				tradeCanonical, err := canonicalRuntimeOutputPath(tradeOutput)
+			if egressOutput != "" && collectorOutput != "" {
+				egressCanonical, err := canonicalRuntimeOutputPath(egressOutput)
 				if err != nil {
 					return err
 				}
@@ -538,8 +538,8 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if tradeCanonical == collectorCanonical {
-					return fmt.Errorf("runtime_config: trade and collector outputs must be different")
+				if egressCanonical == collectorCanonical {
+					return fmt.Errorf("runtime_config: egress and collector outputs must be different")
 				}
 			}
 			snapshot, err := deps.load(file)
@@ -551,13 +551,13 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 			// Render both files before mutating either one. The deployment script
 			// can therefore fail before a service restart if moox.toml or YAML
 			// validation is invalid.
-			var tradeRaw, collectorRaw []byte
-			if tradeOutput != "" {
-				tradeRaw, err = readRuntimeConfigFile(tradeOutput)
+			var egressRaw, collectorRaw []byte
+			if egressOutput != "" {
+				egressRaw, err = readRuntimeConfigFile(egressOutput)
 				if err != nil {
 					return err
 				}
-				tradeRaw, err = setupconfig.RenderTradeDNSResolverConfigForNode(snapshot, nodeID, tradeRaw)
+				egressRaw, err = setupconfig.RenderEgressConfig(snapshot, egressRaw)
 				if err != nil {
 					return err
 				}
@@ -567,7 +567,7 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				collectorRaw, err = setupconfig.RenderCollectorDNSResolverConfig(snapshot, collectorRaw)
+				collectorRaw, err = setupconfig.RenderCollectorRuntimeConfig(snapshot, collectorRaw)
 				if err != nil {
 					return err
 				}
@@ -575,8 +575,8 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
 			}
-			if tradeOutput != "" {
-				if err := setupconfig.WriteRenderedRuntimeConfig(tradeOutput, tradeRaw); err != nil {
+			if egressOutput != "" {
+				if err := setupconfig.WriteRenderedRuntimeConfig(egressOutput, egressRaw); err != nil {
 					return err
 				}
 			}
@@ -585,14 +585,10 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 					return err
 				}
 			}
-			resolverNodeID, resolverTarget, resolverErr := setupconfig.DNSResolverRuntimeTarget(snapshot)
-			if resolverErr != nil {
-				return resolverErr
-			}
 			tradeConsoleHost := ""
 			tradeConsolePort := 0
-			if snapshot.Manifest.DNSResolver.Enabled {
-				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, snapshot.Manifest.DNSResolver.TradeNode)
+			if tradeNode := snapshot.Manifest.PlacementHost("trade"); tradeNode != "" {
+				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, tradeNode)
 				if tradeErr != nil {
 					return tradeErr
 				}
@@ -600,21 +596,17 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 				tradeConsolePort = 11200
 			}
 			return writeSetupJSON(cmd, map[string]any{
-				"status":               "rendered",
-				"trade_output":         tradeOutput,
-				"collector_output":     collectorOutput,
-				"dns_resolver_enabled": snapshot.Manifest.DNSResolver.Enabled,
-				"dns_resolver_node_id": resolverNodeID,
-				"dns_resolver_target":  resolverTarget,
-				"trade_console_host":   tradeConsoleHost,
-				"trade_console_port":   tradeConsolePort,
+				"status":             "rendered",
+				"egress_output":      egressOutput,
+				"collector_output":   collectorOutput,
+				"trade_console_host": tradeConsoleHost,
+				"trade_console_port": tradeConsolePort,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&tradeOutput, "trade-output", "", "Trade app.yaml 输出路径")
+	cmd.Flags().StringVar(&egressOutput, "egress-output", "", "Egress app.yaml 输出路径")
 	cmd.Flags().StringVar(&collectorOutput, "collector-output", "", "Collector app.yaml 输出路径")
-	cmd.Flags().StringVar(&nodeID, "node-id", "", "当前部署节点 ID；非 Resolver 节点上的 Trade 会禁用 Resolver")
 	return cmd
 }
 
@@ -765,12 +757,18 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 		}
 		defer clearSetupSecrets(snapshot)
 		deploymentHosts := []setupconfig.Host{snapshot.Manifest.ControlHost}
-		if tradeNode := strings.TrimSpace(snapshot.Manifest.DNSResolver.TradeNode); tradeNode != "" {
-			resolverHost, resolveErr := findSetupHost(snapshot.Manifest, tradeNode)
-			if resolveErr != nil {
-				return resolveErr
+		selected := map[string]bool{snapshot.Manifest.ControlHost.Name: true}
+		for _, component := range []string{"trade", "egress-proxy"} {
+			hostID := snapshot.Manifest.PlacementHost(component)
+			if hostID == "" || selected[hostID] {
+				continue
 			}
-			deploymentHosts = append(deploymentHosts, resolverHost)
+			host, err := findSetupHost(snapshot.Manifest, hostID)
+			if err != nil {
+				return err
+			}
+			deploymentHosts = append(deploymentHosts, host)
+			selected[hostID] = true
 		}
 		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, deploymentHosts)
 		if validationErr != nil {
@@ -1695,7 +1693,7 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 	// browser-facing control route after Admin has seeded its defaults; doing
 	// this here makes a reset/redeploy deterministic instead of restoring the
 	// unusable loopback 127.0.0.1:11200 endpoint.
-	if tradeNode := strings.TrimSpace(snapshot.Manifest.DNSResolver.TradeNode); tradeNode != "" {
+	if tradeNode := strings.TrimSpace(snapshot.Manifest.PlacementHost("trade")); tradeNode != "" {
 		tradeHost, resolveErr := findSetupHost(snapshot.Manifest, tradeNode)
 		if resolveErr != nil {
 			return resolveErr
@@ -1928,9 +1926,9 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		options.StorageBuildHostRole = "compile"
 	}
 	// The Trade execution host is an explicit placement, independent of the
-	// optional DNS resolver workload. A deployment may disable market-domain
+	// upstream HTTP/DNS policy. A deployment may disable market-domain
 	// probing while Strategy still needs the authenticated ownership Gateway.
-	if tradeHostName := strings.TrimSpace(snapshot.Manifest.DNSResolver.TradeNode); tradeHostName != "" {
+	if tradeHostName := strings.TrimSpace(snapshot.Manifest.PlacementHost("trade")); tradeHostName != "" {
 		if tradeHost, err := findSetupHost(snapshot.Manifest, tradeHostName); err == nil {
 			options.TradeGatewayURL = "https://" + net.JoinHostPort(strings.Trim(tradeHost.Address, "[]"), strconv.Itoa(setupclient.TradeGatewayHTTPSPort))
 			options.TradeGatewayNode = tradeHost.Name

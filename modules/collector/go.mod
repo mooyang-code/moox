@@ -6,8 +6,8 @@ require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
@@ -59,8 +59,6 @@ replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ../
 replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ./proto/collectorgen
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
-
-replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/proto/tradegen
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
@@ -182,3 +180,5 @@ replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/s
 replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
 
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
+
+replace github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen => ../egressproxy/proto/egressgen

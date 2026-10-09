@@ -14,23 +14,6 @@ func TestDefaultConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
 	assert.Equal(t, "trade", cfg.GatewayClient.Caller)
 	assert.True(t, cfg.EventBus.Enabled)
-	assert.False(t, cfg.DNSResolver.Enabled)
-	assert.Equal(t, 4, cfg.DNSResolver.MaxIPsPerDomain)
-}
-
-func TestValidateDNSResolver(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.EventBus.Enabled = false
-	cfg.DNSResolver = DNSResolverConfig{
-		Enabled: true, Domains: []string{"fapi.binance.com"}, LookupTimeoutMS: 1500,
-		ProbeTimeoutMS: 500, ProbePort: 443, CacheTTLSeconds: 300, MaxIPsPerDomain: 4,
-	}
-	require.NoError(t, cfg.Validate())
-
-	cfg.DNSResolver.ProbePort = 0
-	err := cfg.Validate()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "probe_port")
 }
 
 func TestLoad_FromValidYAML_ShouldApplyAndValidate(t *testing.T) {
@@ -154,4 +137,11 @@ func TestGatewayIdentityAndStrictConfiguration(t *testing.T) {
 	cfg := DefaultConfig()
 	_, err := cfg.OpenGateway(nil)
 	require.Error(t, err)
+}
+
+func TestLoadRejectsRetiredDNSResolverConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("dns_resolver: {enabled: true}\n"), 0600))
+	_, err := Load(path)
+	require.ErrorContains(t, err, "dns_resolver")
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -75,10 +74,4 @@ func NewTRPCClientOptions(target, targetNode string, credentials Credentials) []
 		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
 		client.WithFilter(NewTRPCClientFilter(credentials, strings.TrimSpace(targetNode), nil)),
 	}
-}
-
-// CredentialsFromEnv reads the per-process service credential material used by
-// the native gateway. Missing credentials intentionally fail on the first RPC.
-func CredentialsFromEnv() Credentials {
-	return Credentials{KeyID: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")), Caller: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CALLER")), Secret: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))}
 }

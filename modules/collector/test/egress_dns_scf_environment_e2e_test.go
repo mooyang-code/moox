@@ -9,46 +9,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/require"
 )
 
-// TestTradeDNSCollectorEnvironmentProductionE2E proves the deployed
-// Trade -> Collector snapshot boundary and the exact environment payload that
+// TestEgressDNSCollectorEnvironmentProductionE2E proves the deployed
+// Egress -> Collector snapshot boundary and the exact environment payload that
 // the existing CloudNode reconciler submits to SCF. It is opt-in because it
-// requires the production Gateway caller credential.
-func TestTradeDNSCollectorEnvironmentProductionE2E(t *testing.T) {
-	if os.Getenv("MOOX_RUN_REAL_TRADE_DNS_E2E") != "1" {
-		t.Skip("set MOOX_RUN_REAL_TRADE_DNS_E2E=1 to run against a deployed Trade Gateway")
+// requires the deployed Collector configuration and signing file.
+func TestEgressDNSCollectorEnvironmentProductionE2E(t *testing.T) {
+	if os.Getenv("MOOX_RUN_REAL_EGRESS_DNS_E2E") != "1" {
+		t.Skip("set MOOX_RUN_REAL_EGRESS_DNS_E2E=1 to run against a deployed gateway")
 	}
-	target := strings.TrimSpace(os.Getenv("MOOX_TRADE_DNS_TARGET"))
-	if target == "" {
-		target = "ip://43.132.204.177:11003"
-	}
-	nodeID := strings.TrimSpace(os.Getenv("MOOX_TRADE_DNS_NODE_ID"))
-	if nodeID == "" {
-		nodeID = "compute-1"
-	}
-	// The live Collector hashes the union of the legacy local-DNS list and
-	// the Trade resolver list. Keep the opt-in test's expected snapshot aligned
-	// with both config blocks instead of silently selecting one of them.
-	domains := appendUniqueDomains(nil, splitEnvList(os.Getenv("MOOX_TRADE_DNS_DOMAINS"))...)
-	domains = appendUniqueDomains(domains, splitEnvList(os.Getenv("MOOX_COLLECTOR_DNS_DOMAINS"))...)
-	domains = appendUniqueDomains(domains, splitEnvList(os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_DOMAINS"))...)
-	if len(domains) == 0 {
-		// Match production Collector app.yaml. The live coordinator hashes
-		// the legacy DNS and Trade resolver domain sets together.
-		domains = []string{"data-api.binance.vision", "api.binance.com", "fapi.binance.com"}
-	}
-	credentials := gatewayauth.CredentialsFromEnv()
-	require.NotEmpty(t, credentials.KeyID)
-	require.NotEmpty(t, credentials.Caller)
-	require.NotEmpty(t, credentials.Secret)
-
-	remote := dnsresolver.NewTradeClient(target, nodeID, credentials, 15*time.Second)
-	coordinator := dnsresolver.NewCoordinator(dnsresolver.CoordinatorConfig{Remote: remote, Domains: domains, Interval: time.Nanosecond})
+	configPath := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_APP_CONFIG"))
+	require.NotEmpty(t, configPath, "provide the deployed Collector app.yaml path")
+	cfg, err := bootstrap.Load(configPath)
+	require.NoError(t, err)
+	gateway, err := cfg.OpenGateway(nil)
+	require.NoError(t, err)
+	defer gateway.Close()
+	domains := appendUniqueDomains(appendUniqueDomains(nil, cfg.DNS.Domains...), cfg.EgressProxy.DNS.Domains...)
+	remote := dnsresolver.NewEgressClient(gateway, 15*time.Second)
+	coordinator := dnsresolver.NewCoordinator(dnsresolver.CoordinatorConfig{Remote: remote, RemoteDomains: cfg.EgressProxy.DNS.Domains, Domains: domains, Interval: time.Nanosecond})
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	snapshot := coordinator.Snapshot()
 	require.NotEmpty(t, snapshot)

@@ -26,6 +26,7 @@ var (
 )
 
 type AdapterConfig struct {
+	HTTPClient      *httpclient.HTTPClient
 	InstrumentType  marketdata.InstrumentType
 	KlineCollector  *KlineCollector
 	SymbolCollector *SymbolCollector
@@ -47,10 +48,10 @@ func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
 		cfg.InstrumentType = marketdata.InstrumentSpot
 	}
 	if cfg.KlineCollector == nil {
-		cfg.KlineCollector = NewKlineCollector()
+		cfg.KlineCollector = NewKlineCollector(newConfiguredClient(cfg.HTTPClient))
 	}
 	if cfg.SymbolCollector == nil {
-		cfg.SymbolCollector = NewSymbolCollector()
+		cfg.SymbolCollector = NewSymbolCollector(newConfiguredClient(cfg.HTTPClient))
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

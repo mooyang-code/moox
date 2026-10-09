@@ -275,41 +275,31 @@ func TestLoadRejectsMissingFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "read config")
 }
 
-func TestLoadDNSResolverConfigAndEnvironment(t *testing.T) {
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_ENABLED", "true")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_TARGET", "ip://43.132.204.177:11003")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_NODE_ID", "compute-1")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_DOMAINS", "fapi.binance.com,api.binance.com")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_REFRESH_INTERVAL", "5m")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_TIMEOUT", "3s")
-
-	cfg, err := Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
-	require.NoError(t, err)
-	assert.True(t, cfg.DNSResolver.Enabled)
-	assert.Equal(t, "compute-1", cfg.DNSResolver.NodeID)
-	assert.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.DNSResolver.Domains)
-}
-
-func TestLoadRejectsEnabledDNSResolverWithoutNode(t *testing.T) {
-	_, err := Load(writeCollectorConfig(t, `dns_resolver:
-  enabled: true
-  target: ip://43.132.204.177:11003
-  domains: [fapi.binance.com]
-  refresh_interval: 5m
-  request_timeout: 3s
-  cache_ttl: 5m
+func TestLoadEgressProxyUsesSharedGateway(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `egress_proxy:
+  domains: ["*.binance.com", "data-api.binance.vision"]
+  dns:
+    domains: [FAPI.BINANCE.COM., api.binance.com]
+    request_timeout: 2s
 `))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "dns_resolver.node_id")
+	require.NoError(t, err)
+	require.True(t, cfg.EgressProxy.DNS.Enabled())
+	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.EgressProxy.DNS.Domains)
+	require.Equal(t, 2*time.Second, cfg.EgressProxy.DNS.RequestTimeout)
 }
-
-func TestLoadRejectsNonPublicDNSResolverTargets(t *testing.T) {
-	for _, target := range []string{"ip://127.0.0.1:11003", "ip://10.0.0.5:11003", "ip://localhost:11003", "ip://not-a-public-host:11003", "http://43.132.204.177:11003"} {
-		t.Run(target, func(t *testing.T) {
-			_, err := Load(writeCollectorConfig(t, "dns_resolver:\n  enabled: true\n  target: "+target+"\n  node_id: compute-1\n  domains: [fapi.binance.com]\n  refresh_interval: 5m\n  request_timeout: 3s\n  cache_ttl: 5m\n"))
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "dns_resolver.target")
-		})
+func TestLoadRejectsInvalidEgressProxy(t *testing.T) {
+	for _, raw := range []string{
+		"dns_resolver: {enabled: true}",
+		"egress_proxy: {target: 'ip://old.example:11003'}",
+		"egress_proxy: {domains: [binance.com.evil/path]}",
+		"egress_proxy: {dns: {domains: ['*.binance.com']}}",
+		"egress_proxy: {dns: {domains: [api.binance.com, API.BINANCE.COM.]}}",
+		"egress_proxy: {dns: {request_timeout: 0s}}",
+		"egress_proxy: {dns: {request_timeout: 61s}}",
+		"egress_proxy: {dns: {node_id: old}}",
+	} {
+		_, err := Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
 	}
 }
 

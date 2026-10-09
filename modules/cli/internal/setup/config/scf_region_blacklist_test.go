@@ -43,7 +43,7 @@ func TestSCFRegionBlacklistPreservesExplicitCapacityAndSpaceIsolation(t *testing
 
 func TestRenderCollectorRegionBlacklists(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}}, {SpaceID: "stockcn"}}}}}
-	raw, err := RenderCollectorDNSResolverConfig(snapshot, []byte("database:\n  path: ../data/collector/moox_collector.db\nscf_region_blacklists:\n  old: [ap-beijing]\n"))
+	raw, err := RenderCollectorRuntimeConfig(snapshot, []byte("database:\n  path: ../data/collector/moox_collector.db\nscf_region_blacklists:\n  old: [ap-beijing]\n"))
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(raw, &got))

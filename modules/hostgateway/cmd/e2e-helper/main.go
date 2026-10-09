@@ -59,6 +59,8 @@ func main() {
 		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "storage-native":
 		err = runComponentsNative([]string{"storage-primary", "storage-view"}, *nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+	case "egress-native":
+		err = runComponentsNative([]string{"egress-proxy"}, *nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "doctor-native":
 		err = runComponentsNative([]string{"admin", "monitor"}, *nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "admin-native":
@@ -461,6 +463,10 @@ func runAdminNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDire
 }
 
 func runComponentsNative(components []string, nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	caller := "moox-cli"
+	if slices.Contains(components, "egress-proxy") {
+		caller = "collector"
+	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
@@ -473,14 +479,14 @@ func runComponentsNative(components []string, nodeID, upstreamAddress, listenAdd
 		for _, spec := range component.Services {
 			var methods []string
 			for _, method := range spec.Methods {
-				if catalog.Allowed("moox-cli", spec.Path, method) {
+				if catalog.Allowed(caller, spec.Path, method) {
 					methods = append(methods, method)
 				}
 			}
 			if len(methods) > 0 {
-				routes = append(routes, gatewayroute.Route{ServiceID: component.ID, Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{"moox-cli"}})
+				routes = append(routes, gatewayroute.Route{ServiceID: component.ID, Address: upstreamAddress, ServicePath: spec.Path, AllowedMethods: methods, AllowedCallers: []string{caller}})
 			}
 		}
 	}
-	return runNativeRoutes(nodeID, routes, "moox-cli", listenAddress, readyFile, nonceDirectory, keyID, secret)
+	return runNativeRoutes(nodeID, routes, caller, listenAddress, readyFile, nonceDirectory, keyID, secret)
 }

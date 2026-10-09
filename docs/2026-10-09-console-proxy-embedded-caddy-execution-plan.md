@@ -108,6 +108,8 @@ D3 首批清理删除已无生产调用方的 CLI Admin HTTP 客户端、旧认�
 
 主计划 E3 已完成：新增独立出口代理及协议模块，提供受限 HTTPS 请求与迁入的 DNS 解析；原生 11440、鉴权健康 11441 均为 loopback。白名单、固定 HTTPS、公网地址检查、证书验证、取消、重定向隔离、原样 HTTP 错误状态及 32 MiB 解压上限有回归，真实 PB/JSON 均传输完整 32 MiB 正文。同步修复共享原生帧预算与健康 HTTP 监听退出行为，相关全包 race/vet、生产运行入口的鉴权/重放/关闭检查通过。五平台程序与 12 个 Linux 测试包均在本机关闭 CGO 编译，12 包在 Linux 全量运行通过；独立构建、协议再生成、854 模块图和质量门禁、15 份 schema 检查通过，既有依赖选择版本不变。Collector HTTP/DNS 调用与 Trade 旧入口删除仍须在 E4 同批完成，后续阶段、独立审查及正式部署继续保留。
 
+主计划 E4 已完成：Collector 增加受控 HTTP 出口传输并以共享网关请求 DNS，Binance 标的客户端支持注入；保留 HTTP 状态、取消、路径/查询和解压正文，过滤认证头，失败与快照 IP 都不能绕过代理。远端仅解析明确的出口域名，本地 DNS 补齐其余域名。Trade 的 DNS 协议、运行时、监听、配置和部署登记在同一提交删除，Collector 对 Trade 协议的依赖同步移除。上游配置改为 `egress_proxy`，服务位置单独用 `placements` 声明；CLI 渲染/配置发布及契约同步。删除最后调用方已迁走的旧 HTTP SDK、环境凭据回退和 HTTP 转发。Collector、CLI、Trade、HostGateway 及相关认证/路由/部署回归和 vet 通过，真实 PB/JSON 网关链路验证 HTTP/DNS 共用客户端及完整 32 MiB 响应。18 个测试包和纯 Go Linux 程序均在本机编译，18 包在 Linux 通过；DNS 范围修正后相关包复验通过，真实 Access/网关/CGO Storage 的 30 个必需周期场景全部通过。协议再生成、独立构建、854 模块图与质量门禁、15 份空库 schema 检查通过。E5～J、完整安装体系、最终独立审查及正式部署继续推进。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。
@@ -179,7 +181,7 @@ D3 首批清理删除已无生产调用方的 CLI Admin HTTP 客户端、旧认�
 
 - [当前 Caddy 路由](../deploy/caddy/Caddyfile)。
 - [Gateway 配置约束](../modules/hostgateway/internal/config/config.go) 与 [启动实现](../modules/hostgateway/internal/bootstrap/bootstrap.go)。
-- [远程 HTTP 安全约束](../packages/gatewayauth/client.go)。
+- [原生共享客户端与连接约束](../packages/gatewayclient/client.go)。
 - [Caddy 管理脚本](../scripts/lib/caddy-managed.sh)。
 - [shell 部署](../scripts/deploy/deploy-moox.sh) 与 [CLI 部署](../modules/cli/internal/setup/deploy/deploy.go)。
 - [共享组件目录](../packages/servicecatalog/catalog.yaml)（复审时 Doctor 的独立清单现已在 A8 并入此处）。

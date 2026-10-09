@@ -6,18 +6,13 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const (
-	TradeConsoleServiceName     = "trpc.moox.trade.TradeConsoleService"
-	TradeDNSResolverServiceName = "trpc.moox.trade.TradeDNSResolverService"
-	TradeDNSResolverTRPCName    = TradeDNSResolverServiceName + ".trpc"
-)
+const TradeConsoleServiceName = "trpc.moox.trade.TradeConsoleService"
 
 func RegisterAll(
 	s *server.Server,
 	accounts *AccountServer,
 	logicalAccounts *LogicalAccountServer,
 	execution *ExecutionServer,
-	dnsResolver *DNSResolverServer,
 	options ...ConsoleOptions,
 ) {
 	consoleService := s.Service(TradeConsoleServiceName)
@@ -35,16 +30,6 @@ func RegisterAll(
 		console.Holdings = options[0].Holdings
 	}
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
-	dnsRegistered := false
-	for _, name := range []string{TradeDNSResolverTRPCName, TradeDNSResolverServiceName} {
-		if service := s.Service(name); service != nil {
-			tradepb.RegisterTradeDNSResolverServiceService(service, dnsResolver)
-			dnsRegistered = true
-		}
-	}
-	if !dnsRegistered {
-		panic("TradeDNSResolverService is not configured")
-	}
 }
 
 type ConsoleOptions struct {

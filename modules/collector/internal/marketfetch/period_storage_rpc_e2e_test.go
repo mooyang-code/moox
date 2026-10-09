@@ -57,6 +57,7 @@ const (
 	periodE2EGatewayBinaryEnv = "MOOX_PERIOD_E2E_GATEWAY_HELPER_BINARY"
 	periodE2EGatewayNodeID    = "period-e2e-gateway"
 	periodE2EGatewayKeyID     = "period-e2e-collector"
+	periodE2EGatewaySecret    = "fixture-period-gateway-signing-key-at-least-32-bytes"
 	periodE2ESpotTagID        = "period_e2e"
 	periodE2EWriteSource      = "collector-period-e2e"
 	periodE2ESeriesTag        = "venue:binance|market:spot|source:spot_http"
@@ -129,7 +130,7 @@ func TestPeriodStorageRPCE2E(t *testing.T) {
 	root := t.TempDir()
 	ready := startPeriodStorageHelper(t, ctx, root, storageBinary)
 
-	secret := periodE2ERandomHex(t, 32)
+	secret := periodE2EGatewaySecret
 	gatewayTarget := startPeriodStorageGateway(t, ctx, root, gatewayBinary, ready, secret)
 	configurePeriodAccess(t, gatewayBinary, stripPeriodE2EURL(t, ready.PrimaryTarget), "", secret)
 	configurePeriodE2EClients(t, root, ready, secret)
@@ -458,11 +459,7 @@ func configurePeriodE2EClients(t *testing.T, root string, ready periodE2EStorage
 	require.NoError(t, err)
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", string(appKeys))
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", periodE2EGatewayKeyID)
-	t.Setenv("MOOX_GATEWAY_CALLER", "collector")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", secret)
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", periodE2EGatewayNodeID)
-	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID", periodE2EGatewayNodeID)
+
 }
 
 func applyPeriodE2ETagSnapshot(t *testing.T, ctx context.Context, metadata *marketstorage.ResampleMetadataClient, ready periodE2EStorageReady, items []*storagegen.TagSnapshotItem, at time.Time) {
@@ -1541,7 +1538,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	case <-ctx.Done():
 		t.Fatal("short unclaimed Timer lease did not expire before the harness deadline")
 	}
-	expiredProxy := collectorpb.NewMarketFetchRuntimeClientProxy(gatewayauth.NewTRPCClientOptions(collectorGatewayTarget, periodE2EGatewayNodeID+"-runtime", gatewayauth.CredentialsFromEnv())...)
+	expiredProxy := collectorpb.NewMarketFetchRuntimeClientProxy(gatewayauth.NewTRPCClientOptions(collectorGatewayTarget, periodE2EGatewayNodeID+"-runtime", gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})...)
 	expiredClaim, err := expiredProxy.ClaimTimerBatch(ctx, &collectorpb.ClaimTimerBatchReq{
 		SpaceId: ready.StockSpaceID, FunctionName: function, RequestId: "expired-unclaimed-request",
 		GroupId: 0, GroupCount: 1, BindingHash: expiredManifest.BindingHash, TickTime: clockNow.Unix(),
@@ -1813,7 +1810,7 @@ func claimPeriodE2EStockBatchConcurrently(t *testing.T, ctx context.Context, tar
 	runtimeNodeID := periodE2EGatewayNodeID + "-runtime"
 	for range 2 {
 		go func() {
-			proxy := collectorpb.NewMarketFetchRuntimeClientProxy(gatewayauth.NewTRPCClientOptions(target, runtimeNodeID, gatewayauth.CredentialsFromEnv())...)
+			proxy := collectorpb.NewMarketFetchRuntimeClientProxy(gatewayauth.NewTRPCClientOptions(target, runtimeNodeID, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})...)
 			claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			response, err := proxy.ClaimTimerBatch(claimCtx, &collectorpb.ClaimTimerBatchReq{
@@ -1985,12 +1982,12 @@ func periodMetadataClient(target, instType string) (*marketstorage.ResampleMetad
 	if err != nil {
 		return nil, err
 	}
-	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.CredentialsFromEnv())
+	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})
 	return &marketstorage.ResampleMetadataClient{Client: storagegen.NewMetadataClientProxy(options...), Primary: storagegen.NewPrimaryStoreClientProxy(options...), Auth: auth}, nil
 }
 
 func periodDatasetSource(target string) *storagesource.DatasetSource {
-	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.CredentialsFromEnv())
+	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})
 	return storagesource.NewDatasetSource(storagegen.NewMetadataClientProxy(options...))
 }
 
@@ -2004,7 +2001,7 @@ func (g periodNativeGateway) Invoke(ctx context.Context, service, method string,
 	message.WithClientRPCName("/" + service + "/" + method)
 	message.WithCalleeServiceName(service)
 	message.WithCalleeMethod(method)
-	options := gatewayauth.NewTRPCClientOptions(g.target, g.host, gatewayauth.CredentialsFromEnv())
+	options := gatewayauth.NewTRPCClientOptions(g.target, g.host, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})
 	options = append(options, client.WithServiceName(service), client.WithCalleeMethod(method))
 	return client.DefaultClient.Invoke(ctx, req, rsp, options...)
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
@@ -136,12 +137,12 @@ type Observability struct {
 	DeliverPolicyExplicit bool   `toml:"-"`
 }
 
-// DNSResolver configures the single Trade node that resolves and probes
-// market API domains for Collector. moox.toml is the source of truth; the
-// CLI renders the Trade-owned subset into Trade's app.yaml at deployment time.
-type DNSResolver struct {
-	Enabled                bool     `toml:"enabled"`
-	TradeNode              string   `toml:"trade_node"`
+// EgressProxy separates upstream policy from service placement.
+type EgressProxy struct {
+	HTTPDomains []string  `toml:"http_domains"`
+	DNS         EgressDNS `toml:"dns"`
+}
+type EgressDNS struct {
 	RefreshIntervalSeconds int      `toml:"refresh_interval_seconds"`
 	RequestTimeoutMS       int      `toml:"request_timeout_ms"`
 	LookupTimeoutMS        int      `toml:"lookup_timeout_ms"`
@@ -786,7 +787,8 @@ type Manifest struct {
 	TencentCloud       TencentCloud              `toml:"tencent_cloud"`
 	EventBus           EventBus                  `toml:"eventbus"`
 	Paths              Paths                     `toml:"paths"`
-	DNSResolver        DNSResolver               `toml:"dns_resolver"`
+	EgressProxy        EgressProxy               `toml:"egress_proxy"`
+	Placements         map[string][]string       `toml:"placements"`
 	StorageRetention   StorageRetention          `toml:"storage_retention"`
 	StorageView        StorageView               `toml:"storage_view"`
 	CollectorRetention CollectorRetention        `toml:"collector_retention"`
@@ -1012,6 +1014,30 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	}
 	if !md.IsDefined("factors", "source_dir") || strings.TrimSpace(out.Factors.SourceDir) == "" {
 		out.Factors.SourceDir = "./modules/factor/factors"
+	}
+	if !md.IsDefined("egress_proxy", "http_domains") {
+		out.EgressProxy.HTTPDomains = []string{"*.binance.com", "data-api.binance.vision"}
+	}
+	if !md.IsDefined("egress_proxy", "dns", "refresh_interval_seconds") {
+		out.EgressProxy.DNS.RefreshIntervalSeconds = 300
+	}
+	if !md.IsDefined("egress_proxy", "dns", "request_timeout_ms") {
+		out.EgressProxy.DNS.RequestTimeoutMS = 3000
+	}
+	if !md.IsDefined("egress_proxy", "dns", "lookup_timeout_ms") {
+		out.EgressProxy.DNS.LookupTimeoutMS = 1500
+	}
+	if !md.IsDefined("egress_proxy", "dns", "probe_timeout_ms") {
+		out.EgressProxy.DNS.ProbeTimeoutMS = 500
+	}
+	if !md.IsDefined("egress_proxy", "dns", "probe_port") {
+		out.EgressProxy.DNS.ProbePort = 443
+	}
+	if !md.IsDefined("egress_proxy", "dns", "cache_ttl_seconds") {
+		out.EgressProxy.DNS.CacheTTLSeconds = 300
+	}
+	if !md.IsDefined("egress_proxy", "dns", "max_ips_per_domain") {
+		out.EgressProxy.DNS.MaxIPsPerDomain = 4
 	}
 	if err := resolveManifestReferences(out); err != nil {
 		return err
@@ -1285,10 +1311,10 @@ func validate(manifest *Manifest) error {
 			return err
 		}
 	}
-	if err := validateDNSResolver(&manifest.DNSResolver, manifest); err != nil {
+	if err := validateEgressProxy(&manifest.EgressProxy); err != nil {
 		return err
 	}
-	return nil
+	return validatePlacements(manifest)
 }
 
 func validatePaths(paths *Paths) error {
@@ -1370,88 +1396,77 @@ func validateCollectorRetention(cfg *CollectorRetention) error {
 	return nil
 }
 
-func validateDNSResolver(cfg *DNSResolver, manifest *Manifest) error {
-	if cfg == nil {
-		return nil
+func validateEgressProxy(cfg *EgressProxy) error {
+	if _, err := domainpolicy.New(cfg.HTTPDomains); err != nil {
+		return fmt.Errorf("config_invalid: egress_proxy.http_domains: %w", err)
 	}
-	cfg.TradeNode = strings.TrimSpace(cfg.TradeNode)
-	if cfg.TradeNode != "" {
-		if strings.EqualFold(cfg.TradeNode, manifest.ControlHost.Name) {
-			return fmt.Errorf("config_invalid: dns_resolver.trade_node must not be control_host")
+	dns := &cfg.DNS
+	if dns.RefreshIntervalSeconds <= 0 || dns.RequestTimeoutMS <= 0 || dns.RequestTimeoutMS > 60000 || dns.LookupTimeoutMS <= 0 || dns.LookupTimeoutMS > 60000 || dns.ProbeTimeoutMS <= 0 || dns.ProbeTimeoutMS > 60000 || dns.CacheTTLSeconds <= 0 {
+		return fmt.Errorf("config_invalid: egress_proxy.dns intervals must be positive and request/lookup/probe timeout at most 60000ms")
+	}
+	if dns.ProbePort < 1 || dns.ProbePort > 65535 || dns.MaxIPsPerDomain < 1 || dns.MaxIPsPerDomain > 4 {
+		return fmt.Errorf("config_invalid: egress_proxy.dns invalid probe port or IP cap")
+	}
+	if len(dns.Domains) > 16 {
+		return fmt.Errorf("config_invalid: egress_proxy.dns supports at most 16 domains")
+	}
+	seen := map[string]bool{}
+	for i, raw := range dns.Domains {
+		domain, ok := domainpolicy.Host(strings.TrimSpace(raw))
+		if !ok || seen[domain] {
+			return fmt.Errorf("config_invalid: egress_proxy.dns domain %q is invalid or duplicated", raw)
 		}
-		var selected *Host
-		for i := range manifest.OtherHosts {
-			if strings.EqualFold(strings.TrimSpace(manifest.OtherHosts[i].Name), cfg.TradeNode) {
-				selected = &manifest.OtherHosts[i]
-				break
-			}
-		}
-		if selected == nil || strings.TrimSpace(selected.Address) == "" {
-			return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must match an other_hosts entry with an address", cfg.TradeNode)
-		}
-		if ip := net.ParseIP(strings.TrimSpace(selected.Address)); ip == nil || !isPublicResolverIP(ip) {
-			return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must use a public address", cfg.TradeNode)
-		}
-	}
-	if !cfg.Enabled {
-		return nil
-	}
-	if cfg.TradeNode == "" {
-		return fmt.Errorf("config_invalid: dns_resolver.trade_node is required when enabled")
-	}
-	if cfg.RefreshIntervalSeconds <= 0 {
-		return fmt.Errorf("config_invalid: dns_resolver.refresh_interval_seconds must be positive")
-	}
-	if cfg.RequestTimeoutMS <= 0 {
-		return fmt.Errorf("config_invalid: dns_resolver.request_timeout_ms must be positive")
-	}
-	if cfg.LookupTimeoutMS <= 0 {
-		return fmt.Errorf("config_invalid: dns_resolver.lookup_timeout_ms must be positive")
-	}
-	if cfg.ProbeTimeoutMS <= 0 {
-		return fmt.Errorf("config_invalid: dns_resolver.probe_timeout_ms must be positive")
-	}
-	if cfg.ProbePort < 1 || cfg.ProbePort > 65535 {
-		return fmt.Errorf("config_invalid: dns_resolver.probe_port must be between 1 and 65535")
-	}
-	if cfg.CacheTTLSeconds <= 0 {
-		return fmt.Errorf("config_invalid: dns_resolver.cache_ttl_seconds must be positive")
-	}
-	if cfg.MaxIPsPerDomain < 1 || cfg.MaxIPsPerDomain > 4 {
-		return fmt.Errorf("config_invalid: dns_resolver.max_ips_per_domain must be between 1 and 4")
-	}
-	seen := make(map[string]struct{}, len(cfg.Domains))
-	for i := range cfg.Domains {
-		domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(cfg.Domains[i]), "."))
-		if !validDNSResolverDomain(domain) {
-			return fmt.Errorf("config_invalid: dns_resolver.domains[%d] must be a public DNS hostname", i)
-		}
-		if _, ok := seen[domain]; ok {
-			return fmt.Errorf("config_invalid: dns_resolver domain %q is duplicated", domain)
-		}
-		seen[domain] = struct{}{}
-		cfg.Domains[i] = domain
-	}
-	if len(cfg.Domains) == 0 {
-		return fmt.Errorf("config_invalid: dns_resolver.domains must not be empty when enabled")
-	}
-	if len(cfg.Domains) > 16 {
-		return fmt.Errorf("config_invalid: dns_resolver.domains must contain at most 16 entries")
+		seen[domain] = true
+		dns.Domains[i] = domain
 	}
 	return nil
 }
 
-func isPublicResolverIP(ip net.IP) bool {
-	ip = ip.To4()
-	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return false
+// PlacementHost returns the selected host for a single component. Multi-copy
+// components are addressed through the compiled Directory instead.
+func (m Manifest) PlacementHost(component string) string {
+	for host, components := range m.Placements {
+		for _, id := range components {
+			if id == component {
+				return host
+			}
+		}
 	}
-	first, second, third := ip[0], ip[1], ip[2]
-	return first != 0 && first < 224 &&
-		!(first == 100 && second >= 64 && second <= 127) &&
-		!(first == 192 && second == 0 && (third == 0 || third == 2)) &&
-		!(first == 198 && (second == 18 || second == 19 || (second == 51 && third == 100))) &&
-		!(first == 203 && second == 0 && third == 113)
+	return ""
+}
+func validatePlacements(m *Manifest) error {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	hosts := map[string]bool{}
+	for _, host := range m.Hosts() {
+		hosts[host.Name] = true
+	}
+	singles := map[string]string{}
+	for host, components := range m.Placements {
+		if !hosts[host] {
+			return fmt.Errorf("config_invalid: placements host %q is unknown", host)
+		}
+		seen := map[string]bool{}
+		for _, id := range components {
+			component, ok := catalog.Component(id)
+			if !ok || component.Scope == servicecatalog.ScopeHost || seen[id] {
+				return fmt.Errorf("config_invalid: placements component %q is unknown, automatic or duplicated", id)
+			}
+			seen[id] = true
+			if component.Scope == servicecatalog.ScopeControl && host != m.ControlHost.Name {
+				return fmt.Errorf("config_invalid: component %q requires control host", id)
+			}
+			if component.Replicas == servicecatalog.Single {
+				if previous := singles[id]; previous != "" {
+					return fmt.Errorf("config_invalid: single component %q placed on %s and %s", id, previous, host)
+				}
+				singles[id] = host
+			}
+		}
+	}
+	return nil
 }
 
 func validateFactorSetup(cfg *FactorSetup) error {
@@ -2406,22 +2421,6 @@ func validEventBusAddress(address string) bool {
 		return false
 	}
 	labels := strings.Split(address, ".")
-	for _, label := range labels {
-		if !dnsLabelPattern.MatchString(label) {
-			return false
-		}
-	}
-	return true
-}
-
-func validDNSResolverDomain(domain string) bool {
-	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
-		return false
-	}
-	labels := strings.Split(domain, ".")
-	if len(labels) < 2 {
-		return false
-	}
 	for _, label := range labels {
 		if !dnsLabelPattern.MatchString(label) {
 			return false

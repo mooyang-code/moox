@@ -31,7 +31,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -141,23 +140,17 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
 	dnsDomains := append([]string(nil), cfg.DNS.Domains...)
-	if cfg.DNSResolver.Enabled {
-		dnsDomains = append(dnsDomains, cfg.DNSResolver.Domains...)
+	if cfg.EgressProxy.DNS.Enabled() {
+		dnsDomains = append(dnsDomains, cfg.EgressProxy.DNS.Domains...)
 	}
 	localDNS := dnscache.New(dnscache.Config{Domains: dnsDomains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
 	var remoteDNS collectordns.DomainResolver
-	if cfg.DNSResolver.Enabled {
-		// Trade DNS retains its existing external credentials until E4.
-		remoteDNS = collectordns.NewTradeClient(
-			cfg.DNSResolver.Target,
-			cfg.DNSResolver.NodeID,
-			gatewayauth.CredentialsFromEnv(),
-			cfg.DNSResolver.RequestTimeout,
-		)
+	if cfg.EgressProxy.DNS.Enabled() {
+		remoteDNS = collectordns.NewEgressClient(process.gateway, cfg.EgressProxy.DNS.RequestTimeout)
 	}
 	refreshInterval, cacheTTL := cfg.DNS.RefreshInterval, cfg.DNS.RefreshInterval
-	if cfg.DNSResolver.Enabled {
-		refreshInterval, cacheTTL = cfg.DNSResolver.RefreshInterval, cfg.DNSResolver.CacheTTL
+	if cfg.EgressProxy.DNS.Enabled() {
+		refreshInterval, cacheTTL = cfg.EgressProxy.DNS.RefreshInterval, cfg.EgressProxy.DNS.CacheTTL
 	} else {
 		cacheTTL = 0 // preserve dnscache's last-good local snapshot semantics
 	}
@@ -168,10 +161,10 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		dnsMetrics = metrics
 	}
 	dnsPersistencePath := ""
-	if cfg.DNSResolver.Enabled {
+	if cfg.EgressProxy.DNS.Enabled() {
 		dnsPersistencePath = filepath.Join(filepath.Dir(cfg.Database.Path), "dns_resolver_snapshot.json")
 	}
-	dnsSnapshot := collectordns.NewCoordinator(collectordns.CoordinatorConfig{Local: localDNS, Remote: remoteDNS, Domains: dnsDomains, Interval: refreshInterval, CacheTTL: cacheTTL, Metrics: dnsMetrics, PersistencePath: dnsPersistencePath})
+	dnsSnapshot := collectordns.NewCoordinator(collectordns.CoordinatorConfig{Local: localDNS, Remote: remoteDNS, RemoteDomains: cfg.EgressProxy.DNS.Domains, Domains: dnsDomains, Interval: refreshInterval, CacheTTL: cacheTTL, Metrics: dnsMetrics, PersistencePath: dnsPersistencePath})
 	if err := dnsSnapshot.RestoreLastGoodSnapshot(); err != nil {
 		log.WarnContextf(ctx, "restore collector DNS last-good snapshot failed: %v", err)
 	}
@@ -374,7 +367,7 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State,
 			"database":       databaseReady,
 			"gateway_caller": cfg.GatewayClient.Caller,
 		}
-		if cfg.DNSResolver.Enabled {
+		if cfg.EgressProxy.DNS.Enabled() {
 			if len(dns) > 0 && dns[0] != nil {
 				status := dns[0].Status()
 				rsp.Details["dns_resolver"] = map[string]any{

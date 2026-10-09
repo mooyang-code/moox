@@ -139,24 +139,24 @@ func TestBrowserServiceNames(t *testing.T) {
 
 func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	tradePath := filepath.Join(t.TempDir(), "trade", "app.yaml")
+	egressPath := filepath.Join(t.TempDir(), "egress-proxy", "app.yaml")
 	collectorPath := filepath.Join(t.TempDir(), "collector", "app.yaml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(tradePath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(egressPath), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(collectorPath), 0o755))
-	require.NoError(t, os.WriteFile(tradePath, []byte("database:\n  path: ./trade.db\n"), 0o644))
+	require.NoError(t, os.WriteFile(egressPath, []byte("database:\n  path: ./egress.db\n"), 0o644))
 	require.NoError(t, os.WriteFile(collectorPath, []byte("database:\n  path: ./collector.db\n"), 0o644))
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"render-runtime-config", "--file", "moox.toml", "--trade-output", tradePath, "--collector-output", collectorPath})
+	cmd.SetArgs([]string{"render-runtime-config", "--file", "moox.toml", "--egress-output", egressPath, "--collector-output", collectorPath})
 	require.NoError(t, cmd.Execute())
-	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","trade_output":%q,"collector_output":%q,"dns_resolver_enabled":false,"dns_resolver_node_id":"","dns_resolver_target":"ip://127.0.0.1:11003","trade_console_host":"","trade_console_port":0}`, tradePath, collectorPath), output.String())
-	tradeRaw, err := os.ReadFile(tradePath)
+	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","egress_output":%q,"collector_output":%q,"trade_console_host":"","trade_console_port":0}`, egressPath, collectorPath), output.String())
+	egressRaw, err := os.ReadFile(egressPath)
 	require.NoError(t, err)
-	require.Contains(t, string(tradeRaw), "dns_resolver:")
+	require.Contains(t, string(egressRaw), "domains:")
 	collectorRaw, err := os.ReadFile(collectorPath)
 	require.NoError(t, err)
-	require.Contains(t, string(collectorRaw), "dns_resolver:")
+	require.Contains(t, string(collectorRaw), "egress_proxy:")
 }
 
 func TestSetupInstallStorageWatchdogCommand(t *testing.T) {
@@ -364,12 +364,11 @@ func TestSetupDeployControlAcceptsExplicitResetFlag(t *testing.T) {
 	require.JSONEq(t, `{"host":"control","status":"ready","reset_data":true,"certificate":{"mode":"public","issuer":"letsencrypt","automatic_renewal":true,"renewal":"caddy_acme_ari"}}`, output.String())
 }
 
-func TestSetupDeployControlValidatesConfiguredResolverHost(t *testing.T) {
+func TestSetupDeployControlValidatesConfiguredTradeAndEgressHost(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.OtherHosts[0].Name = "compute-1"
-	snapshot.Manifest.DNSResolver = setupconfig.DNSResolver{
-		Enabled: true, TradeNode: "compute-1", Domains: []string{"fapi.binance.com"},
-	}
+	snapshot.Manifest.OtherHosts = append(snapshot.Manifest.OtherHosts, setupconfig.Host{Name: "egress-host", Address: "203.0.113.11"})
+	snapshot.Manifest.Placements = map[string][]string{"compute-1": {"trade"}, "egress-host": {"egress-proxy"}}
 	var hosts []setupconfig.Host
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -383,15 +382,16 @@ func TestSetupDeployControlValidatesConfiguredResolverHost(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
-	require.Len(t, hosts, 2)
+	require.Len(t, hosts, 3)
 	require.Equal(t, "control", hosts[0].Name)
 	require.Equal(t, "compute-1", hosts[1].Name)
+	require.Equal(t, "egress-host", hosts[2].Name)
 }
 
-func TestSetupDeployControlValidatesConfiguredTradeHostWhenResolverDisabled(t *testing.T) {
+func TestSetupDeployControlValidatesConfiguredTradeHostWithoutDNS(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.OtherHosts[0].Name = "compute-1"
-	snapshot.Manifest.DNSResolver = setupconfig.DNSResolver{TradeNode: "compute-1"}
+	snapshot.Manifest.Placements = map[string][]string{"compute-1": {"trade"}}
 	var hosts []setupconfig.Host
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -421,7 +421,7 @@ func TestSetupCertificateSummarySelectsTrustModel(t *testing.T) {
 
 func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.DNSResolver.TradeNode = "compute"
+	snapshot.Manifest.Placements = map[string][]string{"compute": {"trade"}}
 	opts := controlDeployOptions(snapshot, "/repo")
 	require.Equal(t, "/repo", opts.RepositoryRoot)
 	require.Equal(t, "203.0.113.8", opts.PublicHost)
@@ -564,7 +564,7 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 		ControlHost: setupconfig.Host{Name: "control", Address: "203.0.113.8"},
 		StorageHost: setupconfig.Host{Name: "storage", Address: "203.0.113.10"},
 		EventBus:    setupconfig.EventBus{PublicAddress: "203.0.113.8", Port: 4222},
-		DNSResolver: setupconfig.DNSResolver{TradeNode: "compute"},
+		Placements:  map[string][]string{"compute": {"trade"}},
 		OtherHosts:  []setupconfig.Host{{Name: "compute", Address: "203.0.113.9"}},
 	}
 	targets := setupFirewallTargets(manifest)

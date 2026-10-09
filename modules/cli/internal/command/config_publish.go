@@ -201,23 +201,23 @@ func configTargets(snapshot *setupconfig.Snapshot) ([]configTarget, error) {
 			if current == nil {
 				return nil, errConfigNotDeployed
 			}
-			return setupconfig.RenderCollectorDNSResolverConfig(snapshot, current)
+			return setupconfig.RenderCollectorRuntimeConfig(snapshot, current)
 		},
 	}}
-	if tradeNode := strings.TrimSpace(manifest.DNSResolver.TradeNode); tradeNode != "" {
-		tradeHost, err := findSetupHost(manifest, tradeNode)
+	if hostID := manifest.PlacementHost("egress-proxy"); hostID != "" {
+		host, err := findSetupHost(manifest, hostID)
 		if err != nil {
-			return nil, fmt.Errorf("resolve Trade DNS resolver host %q: %w", tradeNode, err)
+			return nil, err
 		}
 		targets = append(targets, configTarget{
-			ID: "trade-dns", Host: tradeHost, Root: paths.ControlRoot,
-			Path: path.Join(paths.ControlRoot, "trade", "config", "app.yaml"), Format: "yaml",
-			Services: []string{"trade"},
+			ID: "egress-policy", Host: host, Root: paths.ControlRoot,
+			Path: path.Join(paths.ControlRoot, "egress-proxy", "config", "app.yaml"), Format: "yaml",
+			Services: []string{"egress-proxy"},
 			render: func(current []byte) ([]byte, error) {
 				if current == nil {
 					return nil, errConfigNotDeployed
 				}
-				return setupconfig.RenderTradeDNSResolverConfigForNode(snapshot, tradeHost.Name, current)
+				return setupconfig.RenderEgressConfig(snapshot, current)
 			},
 		})
 	}
