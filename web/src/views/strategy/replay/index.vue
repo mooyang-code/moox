@@ -82,7 +82,7 @@
                 <button
                   type="button"
                   class="replay-row"
-                  :aria-pressed="item.replay_id === selectedId"
+                  :aria-current="item.replay_id === selectedId ? 'true' : undefined"
                   @click="select(item.replay_id)"
                 >
                   <span class="replay-line">
@@ -397,10 +397,11 @@ let poll: ReturnType<typeof setInterval> | null = null;
 let polling = false;
 // generation 随空间切换递增：旧空间发出的请求返回后一律丢弃；selectRequest 让被新选择取代的详情请求作废。
 // listSeq 是列表请求的发出序号，listApplied 是已应用的最新序号：晚返回的旧请求（或旧页）不能覆盖新结果；
-// listLoadingSeq 只跟踪手动加载，决定加载状态何时结束。
+// listLoadingSeq 只跟踪手动加载，决定加载状态何时结束；tableLoadingRequest 同样只跟踪表格的手动加载。
 let generation = 0;
 let selectRequest = 0;
 let tableRequest = 0;
+let tableLoadingRequest = 0;
 let listSeq = 0;
 let listApplied = 0;
 let listLoadingSeq = 0;
@@ -458,13 +459,17 @@ async function loadStrategies() {
   }
 }
 
-/** 应用一次列表响应：已有更新的响应、页码已变或空间已切换时丢弃，返回是否应用。 */
+/**
+ * 应用一次列表响应：已有更新的响应、页码已变或空间已切换时丢弃，返回是否应用。
+ * 还没有选中回放时选中第一条：手动加载与轮询哪个先应用都会触发，选择在后台进行，不拖住列表的加载态。
+ */
 function applyReplayList(gen: number, seq: number, page: number, result: PageResult<Replay>): boolean {
   if (gen !== generation || seq <= listApplied || page !== replayPage.value) return false;
   listApplied = seq;
   replays.value = result.items;
   replayTotal.value = result.page.total;
   errors.list = "";
+  if (!selectedId.value && result.items.length) void select(result.items[0].replay_id);
   return true;
 }
 
@@ -476,9 +481,7 @@ async function loadReplays() {
   listLoading.value = true;
   try {
     const result = await listReplays({ page, page_size: replayPageSize });
-    if (!applyReplayList(gen, seq, page, result)) return;
-    pollFailures.value = 0;
-    if (!selectedId.value && result.items.length) await select(result.items[0].replay_id);
+    if (applyReplayList(gen, seq, page, result)) pollFailures.value = 0;
   } catch (err) {
     if (gen === generation && seq > listApplied)
       errors.list = `回放列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
@@ -536,8 +539,10 @@ async function fetchSeries(
  */
 async function loadTablePage(replayId: string, isCurrent: () => boolean, silent = false) {
   const requestId = ++tableRequest;
+  // 轮询刷新不显示加载遮罩：运行中的回放停在末页时，每 5 秒闪一次会很干扰。
+  const loadingId = silent ? 0 : ++tableLoadingRequest;
   const live = () => isCurrent() && requestId === tableRequest;
-  tableLoading.value = true;
+  if (!silent) tableLoading.value = true;
   try {
     const result = await listReplayBars(replayId, { page: tablePage.value, page_size: tablePageSize }, { silent });
     if (!live()) return;
@@ -549,17 +554,31 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
     if (silent) throw err;
     errors.table = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
-    if (requestId === tableRequest) tableLoading.value = false;
+    if (!silent && loadingId === tableLoadingRequest) tableLoading.value = false;
   }
+}
+
+/**
+ * 按观察到的状态决定是否等待部分指标：已取消、已经有周期、还没有指标、并且是刚取消的（2 分钟内）回放，
+ * 执行器读完当前分段才写入指标，继续轮询等它。无论是本页、别的标签页还是 CLI 取消的都一样。
+ */
+function maybeAwaitMetrics(replay: Replay) {
+  if (replay.status !== "cancelled" || parseMetrics(replay.metrics_json) || !series.value.length) return;
+  if (awaitingMetrics.value?.replayId === replay.replay_id) return;
+  const updated = Date.parse(replay.updated_at);
+  if (!Number.isFinite(updated) || Date.now() - updated > 120_000) return;
+  clock.value = Date.now();
+  awaitingMetrics.value = { replayId: replay.replay_id, until: clock.value + 120_000 };
 }
 
 async function select(replayId: string) {
   const requestId = ++selectRequest;
   const gen = generation;
   const isCurrent = () => requestId === selectRequest && gen === generation;
-  // 立即清掉上一个回放的详情：加载期间不能显示旧回放，取消等操作也不能作用在旧回放上。
+  // 立即清掉上一个回放的详情与错误：加载期间不能显示旧回放，取消等操作也不能作用在旧回放上。
   selectedId.value = replayId;
   selected.value = null;
+  errors.detail = "";
   series.value = [];
   tableRows.value = [];
   tableTotal.value = 0;
@@ -577,6 +596,7 @@ async function select(replayId: string) {
     series.value = all;
     errors.detail = "";
     pollFailures.value = 0;
+    maybeAwaitMetrics(replay);
     detailLoading.value = false;
     await Promise.all([renderChart(true), loadTablePage(replayId, isCurrent)]);
   } catch (err) {
@@ -618,6 +638,7 @@ async function refreshSelected() {
     series.value = all;
     await renderChart(false);
   }
+  maybeAwaitMetrics(replay);
   const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
   if (tablePage.value >= lastPage - 1 || replay.status !== current.status) await loadTablePage(replayId, isCurrent, true);
 }
@@ -716,17 +737,12 @@ async function cancel() {
   if (!selected.value || selected.value.replay_id !== selectedId.value) return;
   const gen = generation;
   const replayId = selected.value.replay_id;
-  // 执行器只在已经算出周期时才写部分指标：取消前正在运行、且已经有周期或进度的回放才值得等待。
-  const expectMetrics = selected.value.status === "running" && (series.value.length > 0 || Boolean(selected.value.progress_time));
   cancelling.value = true;
   try {
     await cancelReplay(replayId);
     if (gen !== generation) return;
-    // 执行器读完当前分段才写入部分指标：继续轮询这个回放，直到指标出现或超时。
-    clock.value = Date.now();
-    awaitingMetrics.value = expectMetrics ? { replayId, until: clock.value + 120_000 } : null;
     await loadReplays();
-    // 取消后整体重读：补上取消前写入的最后几根与部分指标。
+    // 取消后整体重读：补上取消前写入的最后几根；重读后按观察到的状态决定是否等待部分指标。
     if (gen === generation && selectedId.value === replayId) await select(replayId);
   } catch (err) {
     Message.error(err instanceof Error ? err.message : "取消失败");
@@ -778,7 +794,10 @@ watch(
     selected.value = null;
     detailLoading.value = false;
     awaitingMetrics.value = null;
-    for (const key of Object.keys(errors) as (keyof typeof errors)[]) errors[key] = "";
+    // 定义列表与空间无关、只在挂载时加载：它的错误保留，其余来源的错误随空间切换清空。
+    for (const key of Object.keys(errors) as (keyof typeof errors)[]) if (key !== "strategies") errors[key] = "";
+    replays.value = [];
+    replayTotal.value = 0;
     series.value = [];
     tableRows.value = [];
     tableTotal.value = 0;

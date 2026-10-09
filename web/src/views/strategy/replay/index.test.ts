@@ -82,6 +82,11 @@ function bar(summary = "{}") {
 }
 
 const bars = { items: [bar()], page: { total: 1 } };
+
+/** 刚被取消的回放：updated_at 是当前时间（假时钟）。 */
+function justCancelled(id: string, metrics = "{}") {
+  return replay(id, "cancelled", metrics, { updated_at: new Date().toISOString() });
+}
 const noBars = { items: [], page: { total: 0 } };
 
 function deferred<T>() {
@@ -179,7 +184,8 @@ describe("strategy replay page", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("取消回放");
     const rows = wrapper.findAll("button.replay-row");
-    expect(rows[0].attributes("aria-pressed")).toBe("true");
+    expect(rows[0].attributes("aria-current")).toBe("true");
+    expect(rows[1].attributes("aria-current")).toBeUndefined();
     await rows[1].trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("正在加载回放详情");
@@ -187,7 +193,7 @@ describe("strategy replay page", () => {
     release(replay("r2", "done"));
     await flushPromises();
     expect(wrapper.text()).not.toContain("正在加载回放详情");
-    expect(wrapper.findAll("button.replay-row")[1].attributes("aria-pressed")).toBe("true");
+    expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
   });
 
   it("keeps polling the selected running replay across cycles when the list page has none", async () => {
@@ -217,7 +223,7 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     api.getReplay.mockImplementation((id: string) =>
-      Promise.resolve(id === "r1" ? replay("r1", "cancelled") : replay("r2", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'))
+      Promise.resolve(id === "r1" ? justCancelled("r1") : replay("r2", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'))
     );
     api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled"), replay("r2", "done")], page: { total: 2 } });
     await wrapper.find(".confirm").trigger("click");
@@ -229,9 +235,7 @@ describe("strategy replay page", () => {
     // 回到被取消的回放，指标写入后显示部分指标。
     api.getReplay.mockImplementation((id: string) =>
       Promise.resolve(
-        id === "r1"
-          ? replay("r1", "cancelled", '{"bars":3,"ok_bars":3,"total_return":0.01,"limitations":[]}')
-          : replay("r2", "done")
+        id === "r1" ? justCancelled("r1", '{"bars":3,"ok_bars":3,"total_return":0.01,"limitations":[]}') : replay("r2", "done")
       )
     );
     await wrapper.findAll("button.replay-row")[0].trigger("click");
@@ -246,8 +250,8 @@ describe("strategy replay page", () => {
     api.cancelReplay.mockResolvedValue({});
     const wrapper = mountPage();
     await flushPromises();
-    api.getReplay.mockResolvedValue(replay("r1", "cancelled"));
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(justCancelled("r1"));
+    api.listReplays.mockResolvedValue({ items: [justCancelled("r1")], page: { total: 1 } });
     await wrapper.find(".confirm").trigger("click");
     await flushPromises();
     expect(wrapper.text()).not.toContain("正在等待写入");
@@ -262,8 +266,8 @@ describe("strategy replay page", () => {
     api.cancelReplay.mockResolvedValue({});
     const wrapper = mountPage();
     await flushPromises();
-    api.getReplay.mockResolvedValue(replay("r1", "cancelled"));
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(justCancelled("r1"));
+    api.listReplays.mockResolvedValue({ items: [justCancelled("r1")], page: { total: 1 } });
     await wrapper.find(".confirm").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("正在等待写入");
@@ -383,5 +387,177 @@ describe("strategy replay page", () => {
     const spec = api.chartSpecs[api.chartSpecs.length - 1];
     expect(spec.axes[0].layers[0]).toMatchObject({ timeFormatMode: "utc" });
     expect(spec.tooltip.mark.title.value({ time: Date.parse("2026-09-01T01:00:00Z") })).toBe("2026-09-01 01:00 UTC");
+  });
+
+  it("scopes the waiting hint to the replay being waited on", async () => {
+    const stale = replay("r2", "cancelled", "{}", { updated_at: "2026-01-01T00:00:00Z" });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), stale], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(id === "r1" ? replay("r1", "running") : stale));
+    api.cancelReplay.mockResolvedValue({});
+    const wrapper = mountPage();
+    await flushPromises();
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(id === "r1" ? justCancelled("r1") : stale));
+    await wrapper.find(".confirm").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("正在等待写入");
+    // r2 早就取消、没有指标：r1 还在等待，r2 不应显示等待提示。
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("正在等待写入");
+  });
+
+  it("does not wait when a running replay is cancelled before producing bars", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    api.listReplayBars.mockResolvedValue(noBars);
+    api.cancelReplay.mockResolvedValue({});
+    const wrapper = mountPage();
+    await flushPromises();
+    api.getReplay.mockResolvedValue(justCancelled("r1"));
+    api.listReplays.mockResolvedValue({ items: [justCancelled("r1")], page: { total: 1 } });
+    await wrapper.find(".confirm").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("正在等待写入");
+  });
+
+  it("starts waiting when a replay is observed cancelled elsewhere", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    // 在别的标签页或 CLI 取消：轮询看到 cancelled、已有周期、还没有指标，开始等待并继续轮询。
+    api.getReplay.mockResolvedValue(justCancelled("r1"));
+    await pollOnce();
+    expect(wrapper.text()).toContain("正在等待写入");
+    const before = api.getReplay.mock.calls.length;
+    await pollOnce();
+    expect(api.getReplay.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it("discards an older list response even for the same page", async () => {
+    api.listReplays.mockResolvedValueOnce({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const slow = deferred<unknown>();
+    api.listReplays.mockImplementationOnce(() => slow.promise);
+    await wrapper.find('[aria-label="刷新回放"]').trigger("click");
+    api.listReplays.mockResolvedValueOnce({
+      items: [replay("r1", "running", "{}", { view_id: "view_newer" })],
+      page: { total: 1 }
+    });
+    await pollOnce();
+    expect(listText(wrapper)).toContain("view_newer");
+    // 手动加载仍在进行：加载态只跟踪手动加载，轮询应用了更新的结果也不结束它。
+    expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).toBe("true");
+    slow.resolve({ items: [replay("r1", "running", "{}", { view_id: "view_older" })], page: { total: 1 } });
+    await flushPromises();
+    expect(listText(wrapper)).toContain("view_newer");
+    expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).not.toBe("true");
+  });
+
+  it("keeps the loading state until the latest manual load finishes", async () => {
+    api.listReplays.mockResolvedValueOnce({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    api.listReplays.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    const refresh = () => wrapper.find('[aria-label="刷新回放"]');
+    await refresh().trigger("click");
+    await refresh().trigger("click");
+    first.resolve({ items: [replay("r1", "done")], page: { total: 1 } });
+    await flushPromises();
+    // 较早的一次手动加载结束时，较晚的一次还在进行：加载态保持。
+    expect(refresh().attributes("loading")).toBe("true");
+    second.resolve({ items: [replay("r1", "done")], page: { total: 1 } });
+    await flushPromises();
+    expect(refresh().attributes("loading")).not.toBe("true");
+  });
+
+  it("ignores errors of superseded list and table requests", async () => {
+    api.listReplays.mockResolvedValueOnce({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const slowList = deferred<unknown>();
+    api.listReplays.mockImplementationOnce(() => slowList.promise);
+    await wrapper.find('[aria-label="刷新回放"]').trigger("click");
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    await pollOnce();
+    slowList.reject(new Error("旧请求失败"));
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("回放列表加载失败");
+    const slowTable = deferred<unknown>();
+    api.listReplayBars.mockImplementationOnce(() => slowTable.promise);
+    (wrapper.vm as any).changeTablePage(2);
+    api.listReplayBars.mockResolvedValue(bars);
+    (wrapper.vm as any).changeTablePage(1);
+    await flushPromises();
+    slowTable.reject(new Error("旧页失败"));
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("周期记录加载失败");
+  });
+
+  it("clears the polling warning after a successful selection", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    api.listReplays.mockRejectedValue(new Error("断网"));
+    await pollOnce();
+    await pollOnce();
+    await pollOnce();
+    expect(wrapper.text()).toContain("后台暂时无法访问");
+    api.getReplay.mockResolvedValue(replay("r2", "done"));
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("后台暂时无法访问");
+  });
+
+  it("silences every polling request and keeps the table steady", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    mountPage();
+    await flushPromises();
+    api.listReplayBars.mockClear();
+    await pollOnce();
+    const calls = api.listReplayBars.mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of calls) expect(call[2]).toEqual({ silent: true });
+    expect(calls.some(call => call[1]?.brief)).toBe(true);
+    expect(calls.some(call => !call[1]?.brief)).toBe(true);
+  });
+
+  it("drops the previous space state when the space changes", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    api.cancelReplay.mockReset();
+    const wrapper = mountPage();
+    await flushPromises();
+    const pendingPoll = deferred<unknown>();
+    api.listReplays.mockImplementationOnce(() => pendingPoll.promise);
+    await vi.advanceTimersByTimeAsync(5000);
+    const pendingCancel = deferred<unknown>();
+    api.cancelReplay.mockImplementationOnce(() => pendingCancel.promise);
+    await wrapper.find(".confirm").trigger("click");
+    const nextList = deferred<unknown>();
+    api.listReplays.mockImplementationOnce(() => nextList.promise);
+    api.space!.selectedSpaceId = "stock";
+    await nextTick();
+    // 新空间的列表返回之前不显示旧空间的回放。
+    expect(listText(wrapper)).toBe("");
+    // 旧空间的轮询失败不计数，取消返回也不再动新空间的状态。
+    pendingPoll.reject(new Error("断网"));
+    pendingCancel.resolve({});
+    await flushPromises();
+    expect((wrapper.vm as any).pollFailures).toBe(0);
+    expect((wrapper.vm as any).awaitingMetrics).toBeNull();
+    nextList.resolve({ items: [replay("s1", "done", "{}", { view_id: "view_stock" })], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("s1", "done", "{}", { view_id: "view_stock" }));
+    await flushPromises();
+    expect(listText(wrapper)).toContain("view_stock");
+    expect(api.getReplay.mock.calls.at(-1)?.[0]).toBe("s1");
   });
 });
