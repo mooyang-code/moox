@@ -18,6 +18,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type cliResult struct {
@@ -90,6 +91,7 @@ var newMetadataDeploymentClient = func(target string) metadataDeploymentClient {
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 	}
 	return &metadataDeploymentProxy{
 		proxy:   storagepb.NewMetadataClientProxy(options...),
@@ -102,6 +104,7 @@ var newDataNodeRuntimeClient = func(target string) dataNodeRuntimeClient {
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 	}
 	return &dataNodeRuntimeProxy{
 		proxy:   storagepb.NewDataNodeRuntimeClientProxy(options...),

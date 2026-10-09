@@ -65,6 +65,8 @@ B8 的 Admin/共享客户端/目录/主机网关全量 race、相关 vet、原�
 
 Archive/共享客户端/签名包/主机网关全量 race 与 vet、边界、848 模块图、架构文档、Go 格式及 15 份 schema 检查通过。Archive 原启动用例只检查 ACK，现修正空间订阅配置并要求实际 Journal、ACK、Parquet 物化及 tRPC Metadata 注册，关闭阶段不得豁免错误；实际目录查询和缓存回退也有验证。Archive 服务与 CLI 的 Linux amd64 静态程序及测试包均在本机关闭 CGO 构建；bootstrap、CLI 与共享客户端测试包在 Linux 全包运行通过。D1 其他模块、D2～J、Collector 配额问题、最终独立审查与正式切换仍未完成，G 阶段须渲染新的身份与配置。
 
+主计划 D1 的 Storage View 迁移已完成：Metadata 的 17 个能力经共享客户端调用，角色认证保留；PrimaryStore 内部直连改用 tRPC 20102，保留历史读取的五分钟超时。配置使用 caller、Admin 分配的 KeyID 和密钥文件，移除旧 `storage_rpc`、无用服务名字段及目标/协议/网络回退；严格拒绝旧字段、未知字段和重复键。真实 tRPC 回归验证签名、只读刷新重试、写调用单发、独立 nonce 和禁止 SDK 选项覆盖目标。本机无 CGO 的全包测试/vet、Linux 全量 CGO race 与 vet 通过；实际 `storage-cgo` 入口在编译机生成并核对四个 Linux amd64 动态链接程序。Linux SDK 自动选择 tNET 引发的 checkptr 问题已通过显式 go-net 修复，没有禁用检查。持续检查同时修复主机网关关闭监听时未取消 TLS 握手的问题，本机 race 和本机交叉编译后的 Linux 监听器全包回归通过。D2f 旧 HTTP 监听、G 身份分发、其他 D1 模块与后续正式验收继续保留。
+
 control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
 
 ```text

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v2"
 )
 
@@ -19,7 +20,8 @@ type ConfigLoader struct {
 
 // RuntimeConfig 保存运行时加载出的完整业务配置。
 type RuntimeConfig struct {
-	Storage StorageConfig `yaml:"storage"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	Storage       StorageConfig            `yaml:"storage"`
 }
 
 // StorageConfig 保存 storage.yaml 中的业务配置。
@@ -67,14 +69,11 @@ const (
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName     string `yaml:"metadata_service_name"`
-	PrimaryStoreServiceName string `yaml:"primary_store_service_name"`
-	IndexServiceName        string `yaml:"index_service_name"`
-	BatchSize               int    `yaml:"batch_size"`
-	BatchWaitMS             int    `yaml:"batch_wait_ms"`
-	FetchBatch              int    `yaml:"fetch_batch"`
-	MaxWorkers              int    `yaml:"max_workers"`
-	Ordering                string `yaml:"ordering"`
+	BatchSize   int    `yaml:"batch_size"`
+	BatchWaitMS int    `yaml:"batch_wait_ms"`
+	FetchBatch  int    `yaml:"fetch_batch"`
+	MaxWorkers  int    `yaml:"max_workers"`
+	Ordering    string `yaml:"ordering"`
 	// BackfillPageSize bounds each Primary history page during a View rebuild.
 	// Smaller pages reduce the instantaneous point-read and index-write burst.
 	BackfillPageSize        uint32                         `yaml:"backfill_page_size"`
@@ -82,7 +81,6 @@ type StorageView struct {
 	RebuildMaxPending       uint64                         `yaml:"rebuild_max_pending"`
 	RebuildIdleChecks       uint32                         `yaml:"rebuild_idle_checks"`
 	ConsumerPartitions      []StorageViewConsumerPartition `yaml:"consumer_partitions"`
-	StorageRPC              StorageRPCConfig               `yaml:"storage_rpc"`
 	rebuildMaxPendingSet    bool
 	rebuildIdleChecksSet    bool
 }
@@ -316,10 +314,7 @@ func validConsumerName(value string) bool {
 func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
 func (v StorageView) HasRebuildIdleChecksSetting() bool { return v.rebuildIdleChecksSet }
 
-// UnmarshalYAML remembers whether max_view_file_bytes was explicitly present.
-// This lets defaults preserve omitted legacy configuration while allowing the
-// server to reject an explicit zero/negative value instead of silently
-// replacing it with the default watermark.
+// UnmarshalYAML distinguishes omitted rebuild limits from explicit zero values.
 func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	type plain StorageView
 	var decoded plain
@@ -334,13 +329,6 @@ func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	_, v.rebuildMaxPendingSet = raw["rebuild_max_pending"]
 	_, v.rebuildIdleChecksSet = raw["rebuild_idle_checks"]
 	return nil
-}
-
-type StorageRPCConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	GatewayNodeID string `yaml:"gateway_node_id"`
-	KeyID         string `yaml:"key_id"`
-	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
 // StoragePrimary 保存主存服务访问配置。
@@ -367,6 +355,12 @@ type StorageHealth struct {
 }
 
 func (c *RuntimeConfig) ApplyDefaults() {
+	if c.GatewayClient.Caller == "" {
+		c.GatewayClient.Caller = "storage-view"
+	}
+	if c.GatewayClient.KeyFile == "" {
+		c.GatewayClient.KeyFile = "../../secrets/caller-storage-view.key"
+	}
 	c.Storage.ApplyDefaults()
 }
 
@@ -379,12 +373,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Primary.NodeID == "" {
 		c.Primary.NodeID = "storage-node-0"
-	}
-	if c.View.StorageRPC.GatewayTarget == "" {
-		c.View.StorageRPC.GatewayTarget = "ip://127.0.0.1:11003"
-	}
-	if c.View.StorageRPC.KeyID == "" {
-		c.View.StorageRPC.KeyID = "storage-view"
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")
@@ -427,15 +415,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Primary.Outbox.BackoffMaxMS <= 0 {
 		c.Primary.Outbox.BackoffMaxMS = 30000
-	}
-	if c.View.MetadataServiceName == "" {
-		c.View.MetadataServiceName = "trpc.moox.storage.Metadata"
-	}
-	if c.View.PrimaryStoreServiceName == "" {
-		c.View.PrimaryStoreServiceName = "trpc.moox.storage.PrimaryStore"
-	}
-	if c.View.IndexServiceName == "" {
-		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"
 	}
 	if c.View.BatchSize <= 0 {
 		c.View.BatchSize = 500
@@ -567,14 +546,19 @@ func (c *ConfigLoader) LoadConfig(filename string, config interface{}) error {
 
 func validateStorageSubtreeStrict(raw []byte, config interface{}) error {
 	var document map[interface{}]interface{}
-	if err := yaml.Unmarshal(raw, &document); err != nil {
+	if err := yaml.UnmarshalStrict(raw, &document); err != nil {
 		return err
 	}
-	storage, exists := document["storage"]
-	if !exists {
+	public := map[interface{}]interface{}{}
+	for _, key := range []string{"storage", "gateway_client"} {
+		if value, exists := document[key]; exists {
+			public[key] = value
+		}
+	}
+	if len(public) == 0 {
 		return nil
 	}
-	subtree, err := yaml.Marshal(map[interface{}]interface{}{"storage": storage})
+	subtree, err := yaml.Marshal(public)
 	if err != nil {
 		return err
 	}

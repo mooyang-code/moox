@@ -31,6 +31,7 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -44,6 +45,7 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
@@ -101,7 +103,7 @@ func runPrimaryRole() error {
 		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for primary role")
 	}
 	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
-		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport)}
 		return newDataNodeProxyAdapter(opts...)
 	})
 	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
@@ -109,7 +111,7 @@ func runPrimaryRole() error {
 		viewTarget = "ip://127.0.0.1:20103"
 	}
 	viewProxy := &dataViewProxyAdapter{
-		proxy: pb.NewDataViewClientProxy(client.WithTarget(viewTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc")),
+		proxy: pb.NewDataViewClientProxy(client.WithTarget(viewTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport)),
 		auth:  &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(viewSecret, "storage-primary")},
 	}
 	viewResolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
@@ -362,13 +364,13 @@ func runViewRole() error {
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
 	}
-	metadataTarget := envOrDefault("MOOX_STORAGE_METADATA_TARGET", "ip://127.0.0.1:20200")
-	metadataNetwork := envOrDefault("MOOX_STORAGE_METADATA_NETWORK", "tcp")
-	metadataProtocol := envOrDefault("MOOX_STORAGE_METADATA_PROTOCOL", "http")
-	metadataProxy := pb.NewMetadataClientProxy(client.WithTarget(metadataTarget), client.WithNetwork(metadataNetwork), client.WithProtocol(metadataProtocol))
-	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20201")
-	primaryNetwork := envOrDefault("MOOX_STORAGE_PRIMARY_NETWORK", "tcp")
-	primaryProtocol := envOrDefault("MOOX_STORAGE_PRIMARY_PROTOCOL", "http")
+	gateway, err := openStorageViewGateway(root)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+	metadataProxy := viewservice.NewGatewayMetadataClient(gateway)
+	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20102")
 	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for view role")
@@ -380,8 +382,9 @@ func runViewRole() error {
 	// service timeout.
 	primaryProxy := pb.NewPrimaryStoreClientProxy(
 		client.WithTarget(primaryTarget),
-		client.WithNetwork(primaryNetwork),
-		client.WithProtocol(primaryProtocol),
+		client.WithNetwork("tcp"),
+		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 		client.WithTimeout(5*time.Minute),
 	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
@@ -523,6 +526,24 @@ func runViewRole() error {
 	return <-serveErr
 }
 
+// openStorageViewGateway uses the module's public signing identity and canonical
+// host gateway configuration. Storage-internal data-plane calls remain direct.
+func openStorageViewGateway(dataDirectory string) (*gatewayclient.Client, error) {
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return nil, errors.New("MOOX_STORAGE_CONFIG is required for the storage-view gateway client")
+	}
+	var config storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &config, config.ApplyDefaults); err != nil {
+		return nil, err
+	}
+	if config.GatewayClient.Caller != "storage-view" {
+		return nil, errors.New("storage-view gateway_client.caller must be storage-view")
+	}
+	return config.GatewayClient.OpenInternal(path, dataDirectory, func(err error) { log.Printf("storage-view gateway directory refresh: %v", err) })
+}
+
 // connectStorageViewEventBus keeps the process alive across a transient
 // control-plane/NATS outage. The watchdog should recover a crashed binary,
 // not repeatedly restart a healthy View while the public EventBus path is
@@ -643,7 +664,7 @@ func loadStoragePolicy() (storagepolicy.Policy, error) {
 	return storagepolicy.Load(policyPath)
 }
 
-func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb.MetadataClientProxy, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
+func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy viewservice.ViewInventoryClient, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
 	if options == nil {
 		return errors.New("storage view consumer options are required")
 	}
@@ -922,7 +943,7 @@ type dataNodeProxyKey struct {
 func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) primarystore.NodeResolver {
 	if newProxy == nil {
 		newProxy = func(target string) pb.DataNodeRuntimeService {
-			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(dataNodeClientTimeout)}
+			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport), client.WithTimeout(dataNodeClientTimeout)}
 			return newDataNodeProxyAdapter(opts...)
 		}
 	}

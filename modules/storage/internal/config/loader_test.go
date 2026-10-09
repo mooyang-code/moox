@@ -362,9 +362,7 @@ func TestStorageViewRebuildConfigDefaults(t *testing.T) {
 	if cfg.Devices.ViewIndexRoot != "var/storage/view-indexes" {
 		t.Fatalf("view index root = %q, want var/storage/view-indexes", cfg.Devices.ViewIndexRoot)
 	}
-	if cfg.View.IndexServiceName != "trpc.moox.storage.ViewIndex" {
-		t.Fatalf("index service name = %q", cfg.View.IndexServiceName)
-	}
+
 }
 
 func TestStorageViewRebuildYAMLOverrides(t *testing.T) {
@@ -373,7 +371,6 @@ storage:
   devices:
     view_index_root: /indexes
   view:
-    index_service_name: custom.ViewIndex
     rebuild_max_pending: 7
 `)
 	var cfg RuntimeConfig
@@ -382,8 +379,8 @@ storage:
 	}
 	cfg.ApplyDefaults()
 
-	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" || cfg.Storage.View.IndexServiceName != "custom.ViewIndex" {
-		t.Fatalf("owner config = %q/%q", cfg.Storage.Devices.ViewIndexRoot, cfg.Storage.View.IndexServiceName)
+	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" {
+		t.Fatalf("view index root = %q", cfg.Storage.Devices.ViewIndexRoot)
 	}
 	if cfg.Storage.View.RebuildMaxPending != 7 || cfg.Storage.View.RebuildIdleChecks != 3 {
 		t.Fatalf("rebuild config = %d/%d", cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks)
@@ -398,5 +395,30 @@ func TestStorageViewExplicitZeroWatermarkIsNotDefaulted(t *testing.T) {
 	cfg.ApplyDefaults()
 	if cfg.Storage.View.RebuildMaxPending != 0 || cfg.Storage.View.RebuildIdleChecks != 0 {
 		t.Fatalf("explicit zero gate values were defaulted to %d/%d", cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks)
+	}
+}
+
+func TestRuntimeGatewayDefaultsAndRemovedStorageRPC(t *testing.T) {
+	var cfg RuntimeConfig
+	cfg.ApplyDefaults()
+	if cfg.GatewayClient.Caller != "storage-view" || cfg.GatewayClient.KeyFile != "../../secrets/caller-storage-view.key" {
+		t.Fatal("invalid storage-view gateway defaults")
+	}
+	for _, raw := range []string{
+		"storage:\n  view:\n    storage_rpc:\n      gateway_target: legacy\n",
+		"gateway_client:\n  caller: storage-view\n  target: legacy\n",
+		"gateway_client:\n  caller: storage-view\n  key_id: first\n  key_id: second\n",
+		"storage:\n  view:\n    metadata_service_name: legacy\n",
+		"storage:\n  view:\n    primary_store_service_name: legacy\n",
+		"storage:\n  view:\n    index_service_name: legacy\n",
+	} {
+		path := filepath.Join(t.TempDir(), "app.yaml")
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var loaded RuntimeConfig
+		if err := NewConfigLoader(filepath.Dir(path)).LoadConfig(filepath.Base(path), &loaded); err == nil {
+			t.Fatal("accepted removed gateway configuration")
+		}
 	}
 }

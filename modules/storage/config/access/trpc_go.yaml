@@ -16,6 +16,7 @@ server:
       port: 11004
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.storage.Health
       ip: 127.0.0.1

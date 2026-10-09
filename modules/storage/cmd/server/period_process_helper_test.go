@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type periodProcessReady struct {
@@ -277,7 +278,7 @@ func periodHelperListener(t *testing.T, name string) (server.Service, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := server.New(server.WithServiceName(name), server.WithProtocol("trpc"), server.WithNetwork("tcp"), server.WithListener(listener), server.WithServerAsync(false))
+	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithServiceName(name), server.WithProtocol("trpc"), server.WithNetwork("tcp"), server.WithListener(listener), server.WithServerAsync(false))
 	return service, "ip://" + listener.Addr().String()
 }
 
@@ -483,7 +484,7 @@ func periodHelperSeedStockCN(t *testing.T, ctx context.Context, meta *metasqlite
 
 func periodHelperProbe(ctx context.Context, ready periodProcessReady) error {
 	opts := func(target string) []client.Option {
-		return []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(time.Second)}
+		return []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport), client.WithTimeout(time.Second)}
 	}
 	expectation := &pb.DatasetPeriodExpectation{SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, Frequency: ready.Frequency, PeriodTime: 1, SeriesHash: "readiness", ExpectedCount: 1, DeadlineAt: time.Now().Add(time.Hour).Unix()}
 	node := pb.NewDataNodePeriodRuntimeClientProxy(opts(ready.DataNodeTarget)...)
@@ -620,7 +621,7 @@ func periodHelperProbeClock(t *testing.T, ctx context.Context, ready periodProce
 		DeadlineAt:     now.Add(time.Minute).Unix(),
 		SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "BTC", SeriesTag: "source:e2e"}},
 	}
-	proxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(ready.PrimaryTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(time.Second))
+	proxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(ready.PrimaryTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport), client.WithTimeout(time.Second))
 	auth := &pb.AuthInfo{AppId: ready.AppID, AppKey: ready.PrimaryAppKey}
 	ensured, err := proxy.EnsureDatasetPeriod(ctx, &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: exp})
 	if err != nil || ensured.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || ensured.GetStatus() != "waiting" {
