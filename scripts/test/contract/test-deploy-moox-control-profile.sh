@@ -74,7 +74,7 @@ ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/l
 ln -s "${TMP_ROOT}/caddy-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
-ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
+ln -s "${ROOT}/modules/hostgateway" "${FIXTURE_ROOT}/modules/hostgateway"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/eventbus" "${FIXTURE_ROOT}/modules/eventbus"
 ln -s "${ROOT}/modules/cloudnode" "${FIXTURE_ROOT}/modules/cloudnode"
@@ -90,7 +90,7 @@ ln -s "${ROOT}/packages/pyruntime" "${FIXTURE_ROOT}/packages/pyruntime"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 
 for binary in \
-  moox-admin moox-cli moox-gateway moox-gateway-cli moox-web-host \
+  moox-admin moox-cli moox-host-gateway moox-host-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
   moox-collector moox-collector-cli moox-collector-subject \
   moox-factor-mgr moox-factor-mgr-cli \
@@ -130,7 +130,7 @@ mode=$(file_mode "${ARCHIVE}")
 mkdir "${TMP_ROOT}/unpacked"
 tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in \
-  moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli moox-web-host \
+  moox-admin moox-admin-cli moox-cli moox-host-gateway moox-host-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
   moox-collector moox-collector-cli moox-collector-subject \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \

@@ -131,7 +131,7 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 主要依据：
 
 - [当前 Caddy 路由](../deploy/caddy/Caddyfile)。
-- [Gateway 配置约束](../modules/gateway/internal/config/config.go) 与 [启动实现](../modules/gateway/internal/bootstrap/bootstrap.go)。
+- [Gateway 配置约束](../modules/hostgateway/internal/config/config.go) 与 [启动实现](../modules/hostgateway/internal/bootstrap/bootstrap.go)。
 - [远程 HTTP 安全约束](../packages/gatewayauth/client.go)。
 - [Caddy 管理脚本](../scripts/lib/caddy-managed.sh)。
 - [shell 部署](../scripts/deploy/deploy-moox.sh) 与 [CLI 部署](../modules/cli/internal/setup/deploy/deploy.go)。
@@ -198,7 +198,7 @@ SCF / factor-engine / moox-skill -- signed tRPC :11004 --> access -- TLS tRPC :1
 
 当前调用链的检查入口：
 
-- `modules/gateway/internal/controlplane/client.go`：Pull/Report。
+- `modules/hostgateway/internal/controlplane/client.go`：Pull/Report。
 - `modules/trade/internal/secretclient/client.go`：Trade Secret。
 - `modules/strategy/internal/bootstrap/logical_account_gateway.go`：Strategy TradeOwner。
 - `modules/admin/internal/console/forward.go`：Admin TradeConsole（B7 已完成包改名）。

@@ -11,7 +11,7 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 | 模块 | 进程 | 职责 |
 | --- | --- | --- |
 | [Admin](docs/模块/管理后台.md) | `moox-admin` | 认证、空间、服务目录、密钥、SSH、初始化；管理台 API 唯一入口 |
-| [Gateway](docs/模块/节点网关.md) | `moox-gateway` | 每台机器一个，把签名的服务请求转发到本机服务 |
+| [Gateway](docs/模块/节点网关.md) | `moox-host-gateway` | 每台机器一个，把签名的服务请求转发到本机服务 |
 | [EventBus](docs/模块/事件总线.md) | `moox-eventbus` | 内嵌 NATS JetStream，模块间的异步事件 |
 | [Storage](docs/模块/存储.md) | `moox-storage-{primary,node,view,access}` | 元数据、字段级事实存储、可重建 View、外部访问代理 |
 | [Collector](docs/模块/采集.md) | `moox-collector`、`moox-collector-subject`、SCF 函数 | 采集任务、周期批次、云函数调度与对账、标的同步 |

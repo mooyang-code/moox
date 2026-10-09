@@ -1,0 +1,818 @@
+package router
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go/server"
+)
+
+const (
+	testNode   = "gateway-test"
+	testKeyID  = "moox-gateway-service"
+	testSecret = "service-secret"
+)
+
+func TestServiceRouterProxiesAuthenticatedRequestAndPreservesHeaders(t *testing.T) {
+	upstream := newUpstream(t)
+	handler, closeHandler := newHandler(t, upstream, false, 1024)
+	defer closeHandler()
+
+	req := signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", []byte(`{"ok":true}`), testNode, testSecret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Trace-Id", "trace-123")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusCreated || recorder.Header().Get("trpc-ret") != "0" || recorder.Header().Get("X-Trace-Id") != "trace-123" {
+		t.Fatalf("response = %d headers=%v body=%q", recorder.Code, recorder.Header(), recorder.Body.String())
+	}
+}
+
+func TestNativeServiceDescUsesWildcardMethod(t *testing.T) {
+	desc, implementation := NativeServiceDesc(NativeOptions{Table: &gatewayroute.Table{}})
+	if implementation == nil || desc == nil || len(desc.Methods) != 1 || desc.Methods[0].Name != "*" {
+		t.Fatalf("native descriptor = %+v implementation=%T", desc, implementation)
+	}
+}
+
+func TestNativeReadOnlyMethodAllowlist(t *testing.T) {
+	for _, test := range []struct {
+		method string
+		read   bool
+	}{
+		{method: "ListViews", read: true},
+		{method: "QueryTimeSeriesRows", read: true},
+		{method: "GetSpace", read: true},
+		{method: "GetFactor", read: false},
+		{method: "ListFactors", read: false},
+		{method: "UpdateView", read: false},
+		{method: "ActivateViewIndex", read: false},
+	} {
+		if got := nativeReadOnlyMethod(test.method); got != test.read {
+			t.Fatalf("nativeReadOnlyMethod(%q) = %v, want %v", test.method, got, test.read)
+		}
+	}
+}
+
+func TestNativeCallerPolicyRestrictsMooxSkillToTimeSeriesRead(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		caller      string
+		servicePath string
+		method      string
+		allowed     bool
+	}{
+		{name: "skill read", caller: "moox-skill", servicePath: "trpc.moox.storage.PrimaryStore", method: "ReadTimeSeriesRows", allowed: true},
+		{name: "skill storage write", caller: "moox-skill", servicePath: "trpc.moox.storage.PrimaryStore", method: "UpsertFields"},
+		{name: "skill wildcard collector write", caller: "moox-skill", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTask"},
+		{name: "ordinary caller unchanged", caller: "admin-gateway", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTask", allowed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.allowed, nativeCallerPolicyAllows(test.caller, test.servicePath, test.method))
+		})
+	}
+}
+
+func TestServiceCallerPolicyRejectsMooxSkill(t *testing.T) {
+	require.False(t, serviceCallerPolicyAllows("moox-skill"))
+	require.True(t, serviceCallerPolicyAllows("admin-gateway"))
+}
+
+func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	upstream := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.storage.Metadata"), server.WithListener(listener))
+	storagepb.RegisterMetadataService(upstream, &nativeMetadataStub{})
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- upstream.Serve() }()
+	t.Cleanup(func() {
+		upstream.Close(nil)
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
+		ServiceID: "storage-primary", Address: listener.Addr().String(), ServicePath: "trpc.moox.storage.Metadata",
+		AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"admin-gateway"}, MaxBodyBytes: 1 << 20,
+	}})
+	require.NoError(t, err)
+	var table gatewayroute.Table
+	require.NoError(t, table.Replace(snapshot))
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	require.NoError(t, err)
+	defer nonces.Close()
+	desc, implementation := NativeServiceDesc(NativeOptions{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, Table: &table, Nonces: nonces})
+	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	require.NoError(t, gatewayServer.Register(desc, implementation))
+	gatewayServeErr := make(chan error, 1)
+	go func() { gatewayServeErr <- gatewayServer.Serve() }()
+	t.Cleanup(func() {
+		gatewayServer.Close(nil)
+		select {
+		case <-gatewayServeErr:
+		case <-time.After(time.Second):
+		}
+	})
+	body, err := codec.Marshal(codec.SerializationTypePB, &storagepb.GetSpaceReq{SpaceId: "space-1"})
+	require.NoError(t, err)
+	headers, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
+		Method: "POST", Path: "/trpc.moox.storage.Metadata/GetSpace", TargetNode: testNode,
+		Caller: "admin-gateway", Callee: "trpc.moox.storage.Metadata", Func: "GetSpace", Body: body,
+	}, time.Now())
+	require.NoError(t, err)
+	ctx, message := codec.EnsureMessage(context.Background())
+	message.WithClientRPCName("/trpc.moox.storage.Metadata/GetSpace")
+	metadata := codec.MetaData{}
+	for key, values := range headers {
+		metadata[key] = []byte(values[0])
+	}
+	invokeOptions := []client.Option{
+		client.WithTarget("ip://" + gatewayListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
+	}
+	for key, value := range metadata {
+		invokeOptions = append(invokeOptions, client.WithMetaData(key, value))
+	}
+	storageProxy := storagepb.NewMetadataClientProxy(invokeOptions...)
+	decoded, err := storageProxy.GetSpace(ctx, &storagepb.GetSpaceReq{SpaceId: "space-1"})
+	require.NoError(t, err)
+	require.Equal(t, "space-1", decoded.GetSpace().GetSpaceId())
+	require.Equal(t, int32(0), int32(decoded.GetRetInfo().GetCode()))
+}
+
+func TestNativeGatewayRoutesSkillReadToCanonicalPrimaryStoreEndpoint(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "canonical PrimaryStore tRPC endpoint must be available")
+	upstreamStub := &nativePrimaryStoreStub{token: fmt.Sprintf("upstream-%d", time.Now().UnixNano())}
+	upstream := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.storage.PrimaryStore"), server.WithListener(listener))
+	storagepb.RegisterPrimaryStoreService(upstream, upstreamStub)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- upstream.Serve() }()
+	t.Cleanup(func() {
+		upstream.Close(nil)
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
+		ServiceID: "storage-primary", Address: listener.Addr().String(), ServicePath: "trpc.moox.storage.PrimaryStore",
+		AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"moox-skill"}, MaxBodyBytes: 1 << 20,
+	}})
+	require.NoError(t, err)
+	var table gatewayroute.Table
+	require.NoError(t, table.Replace(snapshot))
+	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
+	desc, implementation := NativeServiceDesc(NativeOptions{
+		NodeID: testNode, Credentials: credentials, Table: &table,
+		upstreamOptions: []client.Option{client.WithDisableConnectionPool()},
+	})
+	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	require.NoError(t, gatewayServer.Register(desc, implementation))
+	gatewayServeErr := make(chan error, 1)
+	go func() { gatewayServeErr <- gatewayServer.Serve() }()
+	t.Cleanup(func() {
+		gatewayServer.Close(nil)
+		select {
+		case <-gatewayServeErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	clientOptions := gatewayauth.NewTRPCClientOptions("ip://"+gatewayListener.Addr().String(), testNode, credentials)
+	clientOptions = append(clientOptions, client.WithDisableConnectionPool())
+	proxy := storagepb.NewPrimaryStoreClientProxy(clientOptions...)
+	rsp, err := proxy.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{SpaceId: "market", DatasetId: "binance_spot_kline"})
+	require.NoError(t, err)
+	require.True(t, rsp.GetComplete())
+	require.Equal(t, upstreamStub.token, rsp.GetServedIndexedFrom())
+}
+
+func TestNativeGatewayUsesSeededCollectorPeriodRoutesForGeneratedPrimaryStoreClient(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	upstreamStub := &nativePrimaryStoreStub{}
+	upstream := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.storage.PrimaryStore"), server.WithListener(listener))
+	storagepb.RegisterPrimaryStoreService(upstream, upstreamStub)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- upstream.Serve() }()
+	t.Cleanup(func() {
+		upstream.Close(nil)
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	snapshot, nonCollectorCallers := seededPrimaryStoreSnapshot(t, listener.Addr().String())
+	var table gatewayroute.Table
+	require.NoError(t, table.Replace(snapshot))
+	credentials := gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}
+	desc, implementation := NativeServiceDesc(NativeOptions{
+		NodeID: testNode, Credentials: credentials, Table: &table,
+		upstreamOptions: []client.Option{client.WithDisableConnectionPool()},
+	})
+	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	require.NoError(t, gatewayServer.Register(desc, implementation))
+	gatewayServeErr := make(chan error, 1)
+	go func() { gatewayServeErr <- gatewayServer.Serve() }()
+	t.Cleanup(func() {
+		gatewayServer.Close(nil)
+		select {
+		case <-gatewayServeErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	periodRPCs := []struct {
+		name   string
+		invoke func(context.Context, storagepb.PrimaryStoreClientProxy) error
+	}{
+		{name: "EnsureDatasetPeriod", invoke: func(ctx context.Context, proxy storagepb.PrimaryStoreClientProxy) error {
+			_, callErr := proxy.EnsureDatasetPeriod(ctx, &storagepb.PrimaryEnsureDatasetPeriodReq{})
+			return callErr
+		}},
+		{name: "CommitTimeSeriesBatch", invoke: func(ctx context.Context, proxy storagepb.PrimaryStoreClientProxy) error {
+			_, callErr := proxy.CommitTimeSeriesBatch(ctx, &storagepb.PrimaryCommitTimeSeriesBatchReq{})
+			return callErr
+		}},
+		{name: "RecordDatasetPeriodFailures", invoke: func(ctx context.Context, proxy storagepb.PrimaryStoreClientProxy) error {
+			_, callErr := proxy.RecordDatasetPeriodFailures(ctx, &storagepb.PrimaryRecordDatasetPeriodFailuresReq{})
+			return callErr
+		}},
+		{name: "GetDatasetPeriodStatus", invoke: func(ctx context.Context, proxy storagepb.PrimaryStoreClientProxy) error {
+			_, callErr := proxy.GetDatasetPeriodStatus(ctx, &storagepb.PrimaryGetDatasetPeriodStatusReq{})
+			return callErr
+		}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, caller := range nonCollectorCallers {
+		caller := caller
+		t.Run("rejects_"+caller, func(t *testing.T) {
+			clientCredentials := credentials
+			clientCredentials.Caller = caller
+			proxy := storagepb.NewPrimaryStoreClientProxy(append(
+				gatewayauth.NewTRPCClientOptions("ip://"+gatewayListener.Addr().String(), testNode, clientCredentials),
+				client.WithDisableConnectionPool(),
+			)...)
+			for _, rpc := range periodRPCs {
+				t.Run(rpc.name, func(t *testing.T) {
+					err := rpc.invoke(ctx, proxy)
+					require.ErrorContains(t, err, "native gateway route not found")
+					require.Zero(t, upstreamStub.periodRPCCalls.Load(), "%s reached PrimaryStore upstream for caller %q", rpc.name, caller)
+				})
+			}
+		})
+	}
+
+	collectorCredentials := credentials
+	collectorCredentials.Caller = "collector"
+	collectorProxy := storagepb.NewPrimaryStoreClientProxy(append(
+		gatewayauth.NewTRPCClientOptions("ip://"+gatewayListener.Addr().String(), testNode, collectorCredentials),
+		client.WithDisableConnectionPool(),
+	)...)
+	for _, rpc := range periodRPCs {
+		t.Run("collector_"+rpc.name, func(t *testing.T) {
+			require.NoError(t, rpc.invoke(ctx, collectorProxy))
+		})
+	}
+	require.EqualValues(t, len(periodRPCs), upstreamStub.periodRPCCalls.Load(), "Collector period RPCs must reach PrimaryStore exactly once each")
+}
+
+func seededPrimaryStoreSnapshot(t *testing.T, upstreamAddress string) (gatewayroute.Snapshot, []string) {
+	t.Helper()
+	var seed struct {
+		Services []struct {
+			Name             string `yaml:"name"`
+			GatewayPath      string `yaml:"gateway_path"`
+			GatewayServiceID string `yaml:"gateway_service_id"`
+			ExtraConfig      struct {
+				GatewayMethods []string `yaml:"gateway_methods"`
+				GatewayCallers []string `yaml:"gateway_callers"`
+				GatewayRoutes  []struct {
+					ServicePath    string   `yaml:"service_path"`
+					TimeoutMS      int64    `yaml:"timeout_ms"`
+					MaxBodyBytes   int64    `yaml:"max_body_bytes"`
+					GatewayMethods []string `yaml:"gateway_methods"`
+					GatewayCallers []string `yaml:"gateway_callers"`
+				} `yaml:"gateway_routes"`
+			} `yaml:"extra_config"`
+		} `yaml:"services"`
+	}
+	path := filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, yaml.Unmarshal(raw, &seed))
+
+	var routes []gatewayroute.Route
+	callers := make(map[string]struct{})
+	for _, service := range seed.Services {
+		for _, caller := range service.ExtraConfig.GatewayCallers {
+			callers[caller] = struct{}{}
+		}
+		for _, route := range service.ExtraConfig.GatewayRoutes {
+			for _, caller := range route.GatewayCallers {
+				callers[caller] = struct{}{}
+			}
+		}
+		if service.Name != "storage-primary" {
+			continue
+		}
+		serviceID := service.GatewayServiceID
+		if serviceID == "" {
+			serviceID = service.Name
+		}
+		routes = append(routes, gatewayroute.Route{
+			ServiceID: serviceID, Address: upstreamAddress, ServicePath: service.GatewayPath,
+			AllowedMethods: service.ExtraConfig.GatewayMethods, AllowedCallers: service.ExtraConfig.GatewayCallers,
+		})
+		for _, route := range service.ExtraConfig.GatewayRoutes {
+			routes = append(routes, gatewayroute.Route{
+				ServiceID: serviceID, Address: upstreamAddress, ServicePath: route.ServicePath,
+				TimeoutMS: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes,
+				AllowedMethods: route.GatewayMethods, AllowedCallers: route.GatewayCallers,
+			})
+		}
+	}
+	require.NotEmpty(t, routes, "production storage-primary routes must be present")
+	callers["unknown-caller"] = struct{}{}
+	delete(callers, "collector")
+	delete(callers, "*")
+	nonCollectorCallers := make([]string, 0, len(callers))
+	for caller := range callers {
+		if caller != "" {
+			nonCollectorCallers = append(nonCollectorCallers, caller)
+		}
+	}
+	sort.Strings(nonCollectorCallers)
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, routes)
+	require.NoError(t, err)
+	return snapshot, nonCollectorCallers
+}
+
+func TestNativeGatewayRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	upstreamStub := &nativeCollectorStub{}
+	upstream := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.collector.CollectMgr"), server.WithListener(listener))
+	collectorpb.RegisterCollectMgrService(upstream, upstreamStub)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- upstream.Serve() }()
+	t.Cleanup(func() {
+		upstream.Close(nil)
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
+		ServiceID: "collectmgr", Address: listener.Addr().String(), ServicePath: "trpc.moox.collector.CollectMgr",
+		AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}, MaxBodyBytes: 1 << 20,
+	}})
+	require.NoError(t, err)
+	var table gatewayroute.Table
+	require.NoError(t, table.Replace(snapshot))
+	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
+	desc, implementation := NativeServiceDesc(NativeOptions{NodeID: testNode, Credentials: credentials, Table: &table})
+	gatewayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	gatewayServer := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.hostgateway.ServiceGateway"), server.WithListener(gatewayListener), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	require.NoError(t, gatewayServer.Register(desc, implementation))
+	gatewayServeErr := make(chan error, 1)
+	go func() { gatewayServeErr <- gatewayServer.Serve() }()
+	t.Cleanup(func() {
+		gatewayServer.Close(nil)
+		select {
+		case <-gatewayServeErr:
+		case <-time.After(time.Second):
+		}
+	})
+
+	proxy := collectorpb.NewCollectMgrClientProxy(gatewayauth.NewTRPCClientOptions("ip://"+gatewayListener.Addr().String(), testNode, credentials)...)
+	_, err = proxy.CreateTask(context.Background(), &collectorpb.CreateTaskReq{})
+	require.ErrorContains(t, err, "caller is not allowed")
+	require.Zero(t, upstreamStub.createTaskCalls.Load(), "wildcard write reached Collector upstream")
+}
+
+type nativeMetadataStub struct {
+	storagepb.UnimplementedMetadata
+}
+
+type nativeCollectorStub struct {
+	collectorpb.UnimplementedCollectMgr
+	createTaskCalls atomic.Int32
+}
+
+type nativePrimaryStoreStub struct {
+	storagepb.UnimplementedPrimaryStore
+	token          string
+	periodRPCCalls atomic.Int32
+}
+
+func (stub *nativePrimaryStoreStub) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	return &storagepb.ReadTimeSeriesRowsRsp{
+		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Complete: true, ServedIndexedFrom: stub.token,
+	}, nil
+}
+
+func (stub *nativePrimaryStoreStub) EnsureDatasetPeriod(context.Context, *storagepb.PrimaryEnsureDatasetPeriodReq) (*storagepb.PrimaryEnsureDatasetPeriodRsp, error) {
+	stub.periodRPCCalls.Add(1)
+	return &storagepb.PrimaryEnsureDatasetPeriodRsp{}, nil
+}
+
+func (stub *nativePrimaryStoreStub) CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error) {
+	stub.periodRPCCalls.Add(1)
+	return &storagepb.PrimaryCommitTimeSeriesBatchRsp{}, nil
+}
+
+func (stub *nativePrimaryStoreStub) RecordDatasetPeriodFailures(context.Context, *storagepb.PrimaryRecordDatasetPeriodFailuresReq) (*storagepb.PrimaryRecordDatasetPeriodFailuresRsp, error) {
+	stub.periodRPCCalls.Add(1)
+	return &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{}, nil
+}
+
+func (stub *nativePrimaryStoreStub) GetDatasetPeriodStatus(context.Context, *storagepb.PrimaryGetDatasetPeriodStatusReq) (*storagepb.PrimaryGetDatasetPeriodStatusRsp, error) {
+	stub.periodRPCCalls.Add(1)
+	return &storagepb.PrimaryGetDatasetPeriodStatusRsp{}, nil
+}
+
+func (stub *nativeCollectorStub) CreateTask(context.Context, *collectorpb.CreateTaskReq) (*collectorpb.CreateTaskRsp, error) {
+	stub.createTaskCalls.Add(1)
+	return &collectorpb.CreateTaskRsp{}, nil
+}
+
+func (*nativeMetadataStub) GetSpace(context.Context, *storagepb.GetSpaceReq) (*storagepb.GetSpaceRsp, error) {
+	return &storagepb.GetSpaceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Space: &storagepb.Space{SpaceId: "space-1"}}, nil
+}
+
+func TestNativeGatewayAuthenticatesReplaysAndEnforcesRouteBodyLimit(t *testing.T) {
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
+		ServiceID: "echo", Address: "127.0.0.1:1", ServicePath: "trpc.test.Echo", AllowedMethods: []string{"Echo"}, AllowedCallers: []string{"*"}, MaxBodyBytes: 1,
+	}})
+	require.NoError(t, err)
+	var table gatewayroute.Table
+	require.NoError(t, table.Replace(snapshot))
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	require.NoError(t, err)
+	defer nonces.Close()
+	desc, _ := NativeServiceDesc(NativeOptions{
+		NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, Table: &table, Nonces: nonces,
+	})
+	call := func(body []byte, headers http.Header) error {
+		ctx, message := codec.EnsureMessage(context.Background())
+		message.WithServerRPCName("/trpc.test.Echo/Echo")
+		metadata := codec.MetaData{}
+		for key, values := range headers {
+			if len(values) > 0 {
+				metadata[key] = []byte(values[0])
+			}
+		}
+		message.WithServerMetaData(metadata)
+		_, callErr := desc.Methods[0].Func(nil, ctx, func(request interface{}) (filter.ServerChain, error) {
+			request.(*codec.Body).Data = body
+			return filter.ServerChain{}, nil
+		})
+		return callErr
+	}
+	overSizedHeaders, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
+		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Callee: "trpc.test.Echo", Func: "Echo", Body: []byte("too large"),
+	}, time.Now())
+	require.NoError(t, err)
+	if err := call([]byte("too large"), overSizedHeaders); err == nil || !strings.Contains(err.Error(), "body exceeds route limit") {
+		t.Fatalf("oversized native request error = %v", err)
+	}
+
+	// Use a fresh one-byte body so authentication reaches the upstream call;
+	// the unavailable upstream is expected, while the second delivery must be
+	// rejected by the persistent nonce store before dialing it again.
+	body := []byte("x")
+	signedHeaders, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, gatewayauth.Request{
+		Method: http.MethodPost, Path: "/trpc.test.Echo/Echo", TargetNode: testNode, Callee: "trpc.test.Echo", Func: "Echo", Body: body,
+	}, time.Now())
+	require.NoError(t, err)
+	first := call(body, signedHeaders)
+	if first == nil || strings.Contains(first.Error(), "replayed") {
+		t.Fatalf("first native request error = %v, want upstream error", first)
+	}
+	second := call(body, signedHeaders)
+	if second == nil || !strings.Contains(second.Error(), "replayed") {
+		t.Fatalf("replayed native request error = %v", second)
+	}
+}
+
+func TestServiceRouterAllowsAuthenticatedGetSecretValue(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/trpc.moox.ops.SecretMgr/GetSecretValue" {
+			t.Fatalf("upstream path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_value":"plain"}}`))
+	}))
+	defer upstream.Close()
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{ServiceID: "secret", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.ops.SecretMgr", MaxBodyBytes: 1024, AllowedMethods: []string{"GetSecretValue"}, AllowedCallers: []string{"*"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table gatewayroute.Table
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonces.Close()
+	handler := New(Options{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, MaxBodyBytes: 1024, Table: &table, Nonces: nonces})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, signedRequest(t, http.MethodPost, "/api/service/secret/GetSecretValue", []byte(`{"secret_id":"s1"}`), testNode, testSecret))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "plain") {
+		t.Fatalf("response=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestServiceRouterRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		upstreamCalls.Add(1)
+	}))
+	defer upstream.Close()
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, false, []gatewayroute.Route{{
+		ServiceID: "collectmgr", Address: upstream.Listener.Addr().String(), ServicePath: "trpc.moox.collector.CollectMgr",
+		MaxBodyBytes: 1024, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"},
+	}})
+	require.NoError(t, err)
+	var table gatewayroute.Table
+	require.NoError(t, table.Replace(snapshot))
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	require.NoError(t, err)
+	defer nonces.Close()
+	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
+	handler := New(Options{NodeID: testNode, Credentials: credentials, MaxBodyBytes: 1024, Table: &table, Nonces: nonces})
+	path := "/api/service/collectmgr/CreateTask"
+	request := httptest.NewRequest(http.MethodPost, path, nil)
+	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: http.MethodPost, Path: path, TargetNode: testNode}, time.Now())
+	require.NoError(t, err)
+	request.Header = headers
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Zero(t, upstreamCalls.Load(), "wildcard write reached HTTP upstream")
+}
+
+func TestServiceRouterRejectsInvalidMethodAndPath(t *testing.T) {
+	handler, closeHandler := newHandler(t, nil, false, 1024)
+	defer closeHandler()
+	for name, req := range map[string]*http.Request{
+		"HTTP method":  signedRequest(t, http.MethodGet, "/api/service/monitor/GetSnapshot", nil, testNode, testSecret),
+		"extra path":   signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot/extra", nil, testNode, testSecret),
+		"empty method": signedRequest(t, http.MethodPost, "/api/service/monitor/", nil, testNode, testSecret),
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusMethodNotAllowed && recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d", recorder.Code)
+			}
+		})
+	}
+}
+
+func TestServiceRouterAuthenticationAndReplay(t *testing.T) {
+	handler, closeHandler := newHandler(t, nil, false, 1024)
+	defer closeHandler()
+	valid := signedRequest(t, http.MethodPost, "/api/service/missing/Call", nil, testNode, testSecret)
+	for name, mutate := range map[string]func(*http.Request){
+		"bad HMAC":   func(req *http.Request) { req.Header.Set("X-Moox-Signature", strings.Repeat("0", 64)) },
+		"wrong node": func(req *http.Request) { req.Header.Set("X-Moox-Target-Node", "other-node") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := valid.Clone(context.Background())
+			req.Header = valid.Header.Clone()
+			mutate(req)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d", recorder.Code)
+			}
+		})
+	}
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, valid)
+	if first.Code != http.StatusNotFound {
+		t.Fatalf("first status = %d", first.Code)
+	}
+	second := httptest.NewRecorder()
+	handler.ServeHTTP(second, valid.Clone(context.Background()))
+	if second.Code != http.StatusUnauthorized {
+		t.Fatalf("replay status = %d", second.Code)
+	}
+}
+
+func TestServiceRouterStatusMapping(t *testing.T) {
+	for name, tc := range map[string]struct {
+		upstream *httptest.Server
+		disabled bool
+		maxBody  int64
+		path     string
+		body     []byte
+		want     int
+	}{
+		"body too large":       {maxBody: 3, path: "/api/service/monitor/GetSnapshot", body: []byte("four"), want: http.StatusRequestEntityTooLarge},
+		"missing route":        {maxBody: 1024, path: "/api/service/missing/Call", want: http.StatusNotFound},
+		"disabled node":        {maxBody: 1024, path: "/api/service/monitor/GetSnapshot", disabled: true, want: http.StatusServiceUnavailable},
+		"unavailable upstream": {maxBody: 1024, path: "/api/service/monitor/GetSnapshot", want: http.StatusBadGateway},
+	} {
+		t.Run(name, func(t *testing.T) {
+			handler, closeHandler := newHandler(t, tc.upstream, tc.disabled, tc.maxBody)
+			defer closeHandler()
+			req := signedRequest(t, http.MethodPost, tc.path, tc.body, testNode, testSecret)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != tc.want {
+				t.Fatalf("status = %d body=%q", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestServiceRouterRecordsRequestAuthReplayAndUpstreamMetrics(t *testing.T) {
+	metrics := &metricRecorder{}
+	handler, closeHandler := newHandlerWithMetrics(t, nil, false, 1024, metrics)
+	defer closeHandler()
+	bad := signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", nil, testNode, "wrong-secret")
+	handler.ServeHTTP(httptest.NewRecorder(), bad)
+	valid := signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", nil, testNode, testSecret)
+	handler.ServeHTTP(httptest.NewRecorder(), valid)
+	handler.ServeHTTP(httptest.NewRecorder(), valid.Clone(context.Background()))
+	if metrics.auth != 1 || metrics.replay != 1 || metrics.upstream["connection"] != 1 {
+		t.Fatalf("metrics = %+v", metrics)
+	}
+	if metrics.status[http.StatusUnauthorized] != 2 || metrics.status[http.StatusBadGateway] != 1 {
+		t.Fatalf("request statuses = %+v", metrics.status)
+	}
+}
+
+func TestServiceRouterRecordsUpstreamTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { time.Sleep(50 * time.Millisecond) }))
+	upstream.Listener = listener
+	upstream.Start()
+	defer upstream.Close()
+	metrics := &metricRecorder{}
+	handler, closeHandler := newHandlerWithRouteTimeout(t, upstream, 1, metrics)
+	defer closeHandler()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, signedRequest(t, http.MethodPost, "/api/service/monitor/GetSnapshot", nil, testNode, testSecret))
+	if recorder.Code != http.StatusBadGateway || metrics.upstream["timeout"] != 1 {
+		t.Fatalf("response=%d metrics=%+v", recorder.Code, metrics)
+	}
+}
+
+func TestUnauthenticatedRequestsUseBoundedMetricLabels(t *testing.T) {
+	state := health.NewState()
+	handler, closeHandler := newHandlerWithMetrics(t, nil, false, 1024, state)
+	defer closeHandler()
+	for index := 0; index < 50; index++ {
+		path := fmt.Sprintf("/api/service/random-%d/Method%d", index, index)
+		req := signedRequest(t, http.MethodPost, path, nil, testNode, "wrong-secret")
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	recorder := httptest.NewRecorder()
+	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metrics := recorder.Body.String()
+	if strings.Count(metrics, "host_gateway_requests_total{") != 1 || strings.Count(metrics, "host_gateway_request_duration_seconds_sum{") != 1 {
+		t.Fatalf("unauthenticated requests created unbounded series:\n%s", metrics)
+	}
+	if strings.Contains(metrics, "random-") || !strings.Contains(metrics, "host_gateway_auth_failures_total 50") {
+		t.Fatalf("unsafe labels or missing auth count:\n%s", metrics)
+	}
+}
+
+func newHandler(t *testing.T, upstream *httptest.Server, disabled bool, maxBody int64) (http.Handler, func()) {
+	return newHandlerWithMetrics(t, upstream, disabled, maxBody, nil)
+}
+
+func newHandlerWithMetrics(t *testing.T, upstream *httptest.Server, disabled bool, maxBody int64, metrics Metrics) (http.Handler, func()) {
+	return newHandlerWithOptions(t, upstream, disabled, maxBody, 0, metrics)
+}
+
+func newHandlerWithRouteTimeout(t *testing.T, upstream *httptest.Server, timeoutMS int64, metrics Metrics) (http.Handler, func()) {
+	return newHandlerWithOptions(t, upstream, false, 1024, timeoutMS, metrics)
+}
+
+func newHandlerWithOptions(t *testing.T, upstream *httptest.Server, disabled bool, maxBody, timeoutMS int64, metrics Metrics) (http.Handler, func()) {
+	t.Helper()
+	address := "127.0.0.1:1"
+	if upstream != nil {
+		address = upstream.Listener.Addr().String()
+	}
+	snapshot, err := gatewayroute.NormalizeAndHashState(testNode, disabled, []gatewayroute.Route{{ServiceID: "monitor", Address: address, ServicePath: "trpc.moox.monitor.MonitorMgr", MaxBodyBytes: 1024, TimeoutMS: timeoutMS, AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table gatewayroute.Table
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(Options{NodeID: testNode, Credentials: gatewayauth.Credentials{KeyID: testKeyID, Secret: testSecret}, MaxBodyBytes: maxBody, Table: &table, Nonces: nonces, Disabled: func() bool { return disabled }, Metrics: metrics})
+	return handler, func() { _ = nonces.Close() }
+}
+
+type metricRecorder struct {
+	auth, replay int
+	upstream     map[string]int
+	status       map[int]int
+}
+
+func (metrics *metricRecorder) AuthFailed()   { metrics.auth++ }
+func (metrics *metricRecorder) ReplayFailed() { metrics.replay++ }
+func (metrics *metricRecorder) UpstreamFailed(kind string) {
+	if metrics.upstream == nil {
+		metrics.upstream = map[string]int{}
+	}
+	metrics.upstream[kind]++
+}
+func (metrics *metricRecorder) ObserveRequest(_ string, _ string, status int, _ time.Duration) {
+	if metrics.status == nil {
+		metrics.status = map[int]int{}
+	}
+	metrics.status[status]++
+}
+
+func signedRequest(t *testing.T, method, path string, body []byte, nodeID, secret string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	headers, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: testKeyID, Secret: secret}, gatewayauth.Request{Method: method, Path: path, TargetNode: nodeID, Body: body}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	return req
+}
+
+func newUpstream(t *testing.T) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/trpc.moox.monitor.MonitorMgr/GetSnapshot" || r.Header.Get("X-Trace-Id") != "trace-123" {
+			t.Errorf("upstream request = %s headers=%v", r.URL.Path, r.Header)
+		}
+		w.Header().Set("trpc-ret", "0")
+		w.Header().Set("X-Trace-Id", r.Header.Get("X-Trace-Id"))
+		w.WriteHeader(http.StatusCreated)
+	}))
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+	return server
+}

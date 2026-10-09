@@ -11,7 +11,7 @@ trap cleanup EXIT INT TERM
 
 cd "${REPO_ROOT}"
 go -C modules/storage test -c -o "${TMP_DIR}/storage-period-helper" ./cmd/server
-go -C modules/gateway build -o "${TMP_DIR}/gateway-period-helper" ./cmd/e2e-helper
+go -C modules/hostgateway build -o "${TMP_DIR}/gateway-period-helper" ./cmd/e2e-helper
 
 MOOX_PERIOD_E2E_RUN=1 \
 MOOX_PERIOD_E2E_STORAGE_HELPER_BINARY="${TMP_DIR}/storage-period-helper" \

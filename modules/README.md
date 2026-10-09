@@ -6,7 +6,7 @@ MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `
 | 模块 | 二进制 | 说明 | 设计文档 |
 | --- | --- | --- | --- |
 | [admin](./admin/) | `moox-admin`、`moox-admin-cli` | 控制面与管理台 API 入口 | [管理后台](../docs/模块/管理后台.md) |
-| [gateway](./gateway/) | `moox-gateway`、`moox-gateway-cli` | 每台机器的节点服务网关 | [节点网关](../docs/模块/节点网关.md) |
+| [hostgateway](./hostgateway/) | `moox-host-gateway`、`moox-host-gateway-cli` | 每台机器的主机网关 | [节点网关](../docs/模块/节点网关.md) |
 | [eventbus](./eventbus/) | `moox-eventbus` | NATS JetStream 事件总线 | [事件总线](../docs/模块/事件总线.md) |
 | [storage](./storage/) | `moox-storage-{primary,node,view,access}`、`moox-storage-cli` | 元数据、事实存储、View、外部访问代理 | [存储](../docs/模块/存储.md) |
 | [collector](./collector/) | `moox-collector`、`moox-collector-subject`、`moox-collector-scf`、`moox-collector-cli` | 采集控制面与 SCF 运行时 | [采集](../docs/模块/采集.md) |

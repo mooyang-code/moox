@@ -19,7 +19,7 @@ ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
 ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
-ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
+ln -s "${ROOT}/modules/hostgateway" "${FIXTURE_ROOT}/modules/hostgateway"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/factor" "${FIXTURE_ROOT}/modules/factor"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
@@ -30,7 +30,7 @@ ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 mkdir -p "${FIXTURE_ROOT}/config"
 ln -s "${ROOT}/config/setup" "${FIXTURE_ROOT}/config/setup"
 
-for binary in moox-gateway moox-gateway-cli moox-factor-mgr moox-factor-mgr-cli; do
+for binary in moox-host-gateway moox-host-gateway-cli moox-factor-mgr moox-factor-mgr-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done

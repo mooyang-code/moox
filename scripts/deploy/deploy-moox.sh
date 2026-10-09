@@ -150,7 +150,7 @@ Options:
   --no-trade                      Do not package/start moox-trade.
   --no-monitor                    Do not package/start moox-monitor.
   --no-hostagent                  Do not package/start moox-host-agent.
-  --no-gateway                    Do not package/start moox-gateway; use an existing same-host gateway.
+  --no-gateway                    Do not package/start moox-host-gateway; use an existing same-host gateway.
   --no-admin                      Build a data-plane node without Admin, browser assets, schema, or credentials.
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
@@ -728,8 +728,8 @@ prepare_local_gateway_rollback() {
   GATEWAY_ROLLBACK_ARCHIVE="${deploy_dir}.gateway-rollback.$$"
   rm -f "${GATEWAY_ROLLBACK_ARCHIVE}"
   local entries=(gateway)
-  [[ -f "${deploy_dir}/bin/moox-gateway" ]] && entries+=(bin/moox-gateway)
-  [[ -f "${deploy_dir}/bin/moox-gateway-cli" ]] && entries+=(bin/moox-gateway-cli)
+  [[ -f "${deploy_dir}/bin/moox-host-gateway" ]] && entries+=(bin/moox-host-gateway)
+  [[ -f "${deploy_dir}/bin/moox-host-gateway-cli" ]] && entries+=(bin/moox-host-gateway-cli)
   [[ -f "${deploy_dir}/data/gateway/routes.json" ]] && entries+=(data/gateway/routes.json)
   tar -C "${deploy_dir}" -czf "${GATEWAY_ROLLBACK_ARCHIVE}" "${entries[@]}"
   chmod 0600 "${GATEWAY_ROLLBACK_ARCHIVE}"
@@ -744,7 +744,7 @@ rollback_local_gateway() {
     MOOX_WITH_GATEWAY=1 "${deploy_dir}/stop.sh" gateway >/dev/null 2>&1 || true
   fi
   rm -rf "${deploy_dir}/gateway"
-  rm -f "${deploy_dir}/bin/moox-gateway" "${deploy_dir}/bin/moox-gateway-cli"
+  rm -f "${deploy_dir}/bin/moox-host-gateway" "${deploy_dir}/bin/moox-host-gateway-cli"
   tar -C "${deploy_dir}" -xzf "${GATEWAY_ROLLBACK_ARCHIVE}" || status=$?
   if [[ "${status}" -eq 0 && -x "${deploy_dir}/start.sh" ]]; then
     MOOX_WITH_GATEWAY=1 "${deploy_dir}/start.sh" gateway >/dev/null 2>&1 || status=$?
@@ -785,7 +785,7 @@ archive="$root/.gateway-rollback.tgz"
 [[ -s "$archive" ]] || exit 1
 if [[ -x "$root/stop.sh" ]]; then MOOX_WITH_GATEWAY=1 "$root/stop.sh" gateway >/dev/null 2>&1 || true; fi
 rm -rf "$root/gateway"
-rm -f "$root/bin/moox-gateway" "$root/bin/moox-gateway-cli"
+rm -f "$root/bin/moox-host-gateway" "$root/bin/moox-host-gateway-cli"
 tar -C "$root" -xzf "$archive" || exit 1
 if [[ -x "$root/start.sh" ]]; then MOOX_WITH_GATEWAY=1 "$root/start.sh" gateway >/dev/null 2>&1 || exit 1; fi
 set -a
@@ -1760,6 +1760,7 @@ validate_moox_loopback_listeners
 stop_processes_by_binary() {
   local name="$1" expected="${ROOT}/bin/moox-${name}" proc pid exe
   [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
+  [[ "${name}" == "gateway" ]] && expected="${ROOT}/bin/moox-host-gateway"
   for proc in /proc/[0-9]*; do
     [[ -d "${proc}" ]] || continue
     pid="${proc##*/}"
@@ -1783,6 +1784,7 @@ process_matches_service() {
   local pid="$1" name="$2" command expected
   expected="${ROOT}/bin/moox-${name}"
   [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
+  [[ "${name}" == "gateway" ]] && expected="${ROOT}/bin/moox-host-gateway"
   command=$(ps -p "${pid}" -o command= 2>/dev/null || true)
   [[ "${command}" == "${expected}" || "${command}" == "${expected} "* ]]
 }
@@ -1790,6 +1792,7 @@ stop_if_running() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
   local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
+  [[ "${name}" == "gateway" ]] && pattern="${ROOT}/bin/moox-host-gateway([[:space:]]|$)"
   [[ "${name}" == "hostagent" ]] && pattern="${ROOT}/bin/moox-host-agent([[:space:]]|$)"
   if [[ ! -f "${pid_file}" ]]; then
     stop_processes_by_binary "${name}"
@@ -2692,8 +2695,8 @@ start_gateway() {
 	fi
 	runtime_identity_env moox_gateway "${ROOT}/gateway/config/app.yaml"
 	start_service "gateway" "${ROOT}/gateway" \
-		env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-gateway" \
-			"${ROOT}/bin/moox-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml
+		env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" "MOOX_OTEL_SERVICE_NAME=moox-host-gateway" \
+			"${ROOT}/bin/moox-host-gateway" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
 
 start_cloudnode() {
@@ -3078,6 +3081,7 @@ process_matches_service() {
   local pid="$1" name="$2" command expected
   expected="${ROOT}/bin/moox-${name}"
   [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
+  [[ "${name}" == "gateway" ]] && expected="${ROOT}/bin/moox-host-gateway"
   command=$(ps -p "${pid}" -o command= 2>/dev/null || true)
   [[ "${command}" == "${expected}" || "${command}" == "${expected} "* ]]
 }
@@ -3109,6 +3113,7 @@ disable_conflicting_eventbus_supervisor() {
 stop_processes_by_binary() {
   local name="$1" expected="${ROOT}/bin/moox-${name}" proc pid exe
   [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
+  [[ "${name}" == "gateway" ]] && expected="${ROOT}/bin/moox-host-gateway"
   for proc in /proc/[0-9]*; do
     [[ -d "${proc}" ]] || continue
     pid="${proc##*/}"
@@ -3132,6 +3137,7 @@ stop_service() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
   local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
+  [[ "${name}" == "gateway" ]] && pattern="${ROOT}/bin/moox-host-gateway([[:space:]]|$)"
   if [[ "${name}" == "eventbus" ]]; then
     disable_conflicting_eventbus_supervisor
   fi
@@ -4254,8 +4260,8 @@ EOF
   fi
 
   if [[ "${WITH_GATEWAY}" -eq 1 ]]; then
-    copy_required_binary "moox-gateway"
-    copy_required_binary "moox-gateway-cli"
+    copy_required_binary "moox-host-gateway"
+    copy_required_binary "moox-host-gateway-cli"
   fi
   if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_STORAGE}" -eq 1 || \
         "${WITH_COLLECTOR}" -eq 1 || "${WITH_TRADE}" -eq 1 ]]; then
@@ -4317,7 +4323,7 @@ EOF
   write_storage_build_provenance
   copy_optional_web_host
 
-  cp -R "${ROOT}/modules/gateway/config/." "${STAGE_DIR}/gateway/config/"
+  cp -R "${ROOT}/modules/hostgateway/config/." "${STAGE_DIR}/gateway/config/"
   cp "${ROOT}/modules/cli/config/cli.yaml" "${STAGE_DIR}/config/cli.yaml"
   mkdir -p "${STAGE_DIR}/config/doctor" "${STAGE_DIR}/config/servicecatalog"
   cp "${ROOT}/packages/servicecatalog/catalog.yaml" "${STAGE_DIR}/config/servicecatalog/catalog.yaml"
@@ -4529,8 +4535,8 @@ stop_foreign_gateway() {
     pid="${proc##*/}"
     [[ "${pid}" != "$$" ]] || continue
     exe="$(readlink "${proc}/exe" 2>/dev/null || true)"
-    [[ "${exe}" == *"/moox-gateway" || "${exe}" == *"/moox-gateway (deleted)" ]] || continue
-    [[ "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway" || "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway (deleted)" ]] && continue
+    [[ "${exe}" == *"/moox-host-gateway" || "${exe}" == *"/moox-host-gateway (deleted)" ]] || continue
+    [[ "${exe}" == "${DEPLOY_DIR}/bin/moox-host-gateway" || "${exe}" == "${DEPLOY_DIR}/bin/moox-host-gateway (deleted)" ]] && continue
     cwd="$(readlink "${proc}/cwd" 2>/dev/null || true)"
     if [[ -r "${cwd}/config/app.yaml" ]] && ! grep -Eq "^  id: ${NODE_ID}$" "${cwd}/config/app.yaml"; then
       continue
@@ -4747,7 +4753,7 @@ sync_local_stage() {
         rsync_excludes+=(--exclude '/config/resources.env')
       fi
       if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
-        rsync_excludes+=(--exclude '/gateway/' --exclude '/bin/moox-gateway' --exclude '/bin/moox-gateway-cli')
+        rsync_excludes+=(--exclude '/gateway/' --exclude '/bin/moox-host-gateway' --exclude '/bin/moox-host-gateway-cli')
       fi
     fi
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
@@ -4846,7 +4852,7 @@ sync_local_stage() {
     fi
     if [[ "${component_overlay}" -eq 1 && "${WITH_GATEWAY}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/gateway"
-      rm -f "${deploy_dir}/bin/moox-gateway" "${deploy_dir}/bin/moox-gateway-cli"
+      rm -f "${deploy_dir}/bin/moox-host-gateway" "${deploy_dir}/bin/moox-host-gateway-cli"
     fi
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/storage" "${deploy_dir}/storage-view" "${deploy_dir}/storage-node"
@@ -4862,7 +4868,7 @@ sync_local_stage() {
         --exclude='./secrets' --exclude='./certs' --exclude='./config/caddy' --exclude='./config/components.env'
       )
       if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
-        overlay_excludes+=(--exclude='./gateway' --exclude='./bin/moox-gateway' --exclude='./bin/moox-gateway-cli')
+        overlay_excludes+=(--exclude='./gateway' --exclude='./bin/moox-host-gateway' --exclude='./bin/moox-host-gateway-cli')
       fi
       if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
         overlay_excludes+=(--exclude='./config/runtime.env')
@@ -5197,8 +5203,8 @@ stop_foreign_gateway() {
     pid="${proc##*/}"
     [[ "${pid}" != "$$" ]] || continue
     exe="$(readlink "${proc}/exe" 2>/dev/null || true)"
-    [[ "${exe}" == *"/moox-gateway" || "${exe}" == *"/moox-gateway (deleted)" ]] || continue
-    [[ "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway" || "${exe}" == "${DEPLOY_DIR}/bin/moox-gateway (deleted)" ]] && continue
+    [[ "${exe}" == *"/moox-host-gateway" || "${exe}" == *"/moox-host-gateway (deleted)" ]] || continue
+    [[ "${exe}" == "${DEPLOY_DIR}/bin/moox-host-gateway" || "${exe}" == "${DEPLOY_DIR}/bin/moox-host-gateway (deleted)" ]] && continue
     cwd="$(readlink "${proc}/cwd" 2>/dev/null || true)"
     if [[ -r "${cwd}/config/app.yaml" ]] && ! grep -Eq "^  id: ${NODE_ID}$" "${cwd}/config/app.yaml"; then
       continue
@@ -5226,8 +5232,8 @@ prepare_gateway_rollback() {
   [[ -d "${DEPLOY_DIR}/gateway" ]] || return 0
   rm -f "${GATEWAY_ROLLBACK_ARCHIVE}"
   local entries=(gateway)
-  [[ -f "${DEPLOY_DIR}/bin/moox-gateway" ]] && entries+=(bin/moox-gateway)
-  [[ -f "${DEPLOY_DIR}/bin/moox-gateway-cli" ]] && entries+=(bin/moox-gateway-cli)
+  [[ -f "${DEPLOY_DIR}/bin/moox-host-gateway" ]] && entries+=(bin/moox-host-gateway)
+  [[ -f "${DEPLOY_DIR}/bin/moox-host-gateway-cli" ]] && entries+=(bin/moox-host-gateway-cli)
   # Restore the route snapshot with an older binary so rollback cannot leave
   # it reading a snapshot whose schema/validation has changed.
   [[ -f "${DEPLOY_DIR}/data/gateway/routes.json" ]] && entries+=(data/gateway/routes.json)
@@ -5260,7 +5266,7 @@ rollback_gateway() {
   set +e
   if [[ -x "${DEPLOY_DIR}/stop.sh" ]]; then MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/stop.sh" gateway >/dev/null 2>&1 || true; fi
   rm -rf "${DEPLOY_DIR}/gateway"
-  rm -f "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
+  rm -f "${DEPLOY_DIR}/bin/moox-host-gateway" "${DEPLOY_DIR}/bin/moox-host-gateway-cli"
   tar -C "${DEPLOY_DIR}" -xzf "${GATEWAY_ROLLBACK_ARCHIVE}" || status=$?
   if [[ "${status}" -eq 0 && -x "${DEPLOY_DIR}/start.sh" ]]; then
     MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/start.sh" gateway >/dev/null 2>&1 || status=$?
@@ -5487,11 +5493,11 @@ if [[ "${COMPONENT_OVERLAY}" == "0" ]]; then
   rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/gateway" "${DEPLOY_DIR}/examples" \
     "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
   rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
-    "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
+    "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-host-gateway" "${DEPLOY_DIR}/bin/moox-host-gateway-cli"
 fi
 if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/gateway"
-  rm -f "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
+  rm -f "${DEPLOY_DIR}/bin/moox-host-gateway" "${DEPLOY_DIR}/bin/moox-host-gateway-cli"
 fi
 if [[ "${WITH_ARCHIVE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/archive"
@@ -5551,7 +5557,7 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
   )
   if [[ "${WITH_GATEWAY}" == "0" ]]; then
     TAR_EXCLUDES+=(
-      --exclude='./gateway' --exclude='./bin/moox-gateway' --exclude='./bin/moox-gateway-cli'
+      --exclude='./gateway' --exclude='./bin/moox-host-gateway' --exclude='./bin/moox-host-gateway-cli'
     )
   fi
   if [[ "${WITH_EVENTBUS}" == "0" ]]; then

@@ -53,8 +53,8 @@ mkdir -p \
   "${RELEASE_ROOT}/modules/cli/bin" \
   "${RELEASE_ROOT}/modules/admin/bin" \
   "${RELEASE_ROOT}/modules/admin/config" \
-  "${RELEASE_ROOT}/modules/gateway/bin" \
-  "${RELEASE_ROOT}/modules/gateway/config" \
+  "${RELEASE_ROOT}/modules/hostgateway/bin" \
+  "${RELEASE_ROOT}/modules/hostgateway/config" \
   "${RELEASE_ROOT}/modules/eventbus/bin" \
   "${RELEASE_ROOT}/modules/eventbus/config" \
   "${RELEASE_ROOT}/modules/web-host/bin" \
@@ -100,8 +100,8 @@ copy_binary() {
 copy_binary moox-cli "${RELEASE_ROOT}/modules/cli/bin"
 copy_binary moox-admin "${RELEASE_ROOT}/modules/admin/bin"
 copy_binary moox-admin-cli "${RELEASE_ROOT}/modules/admin/bin"
-copy_binary moox-gateway "${RELEASE_ROOT}/modules/gateway/bin"
-copy_binary moox-gateway-cli "${RELEASE_ROOT}/modules/gateway/bin"
+copy_binary moox-host-gateway "${RELEASE_ROOT}/modules/hostgateway/bin"
+copy_binary moox-host-gateway-cli "${RELEASE_ROOT}/modules/hostgateway/bin"
 copy_binary moox-eventbus "${RELEASE_ROOT}/modules/eventbus/bin"
 copy_binary moox-web-host "${RELEASE_ROOT}/modules/web-host/bin"
 copy_binary moox-cloudnode "${RELEASE_ROOT}/modules/cloudnode/bin"
@@ -140,9 +140,9 @@ if [[ -d "${RELEASE_ROOT}/modules/hostagent" ]]; then
 fi
 
 cp -R "${ROOT}/modules/admin/config/." "${RELEASE_ROOT}/modules/admin/config/"
-cp -R "${ROOT}/modules/gateway/config/." "${RELEASE_ROOT}/modules/gateway/config/"
-[[ -f "${RELEASE_ROOT}/modules/gateway/config/trpc_go.yaml" ]] || { echo "missing Gateway tRPC Timer config" >&2; exit 1; }
-if grep -q 'refresh_interval' "${RELEASE_ROOT}/modules/gateway/config/app.yaml"; then
+cp -R "${ROOT}/modules/hostgateway/config/." "${RELEASE_ROOT}/modules/hostgateway/config/"
+[[ -f "${RELEASE_ROOT}/modules/hostgateway/config/trpc_go.yaml" ]] || { echo "missing Gateway tRPC Timer config" >&2; exit 1; }
+if grep -q 'refresh_interval' "${RELEASE_ROOT}/modules/hostgateway/config/app.yaml"; then
   echo "obsolete Gateway refresh_interval remains in release config" >&2
   exit 1
 fi

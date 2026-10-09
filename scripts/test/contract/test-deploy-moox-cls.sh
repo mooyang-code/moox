@@ -73,7 +73,7 @@ ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/script
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
 ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
-ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
+ln -s "${ROOT}/modules/hostgateway" "${FIXTURE_ROOT}/modules/hostgateway"
 ln -s "${ROOT}/packages" "${FIXTURE_ROOT}/packages"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 cat >"${FIXTURE_ROOT}/skills/moox/scripts/cls-bootstrap.sh" <<'EOF'
@@ -89,7 +89,7 @@ echo 'fake CLS preflight failure' >&2
 exit 1
 EOF
 chmod +x "${FIXTURE_ROOT}/skills/moox/scripts/cls-bootstrap.sh"
-for binary in moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli; do
+for binary in moox-admin moox-admin-cli moox-cli moox-host-gateway moox-host-gateway-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done

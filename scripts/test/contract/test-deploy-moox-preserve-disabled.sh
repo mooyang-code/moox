@@ -48,8 +48,8 @@ ensure_required_binary moox-cli
 ensure_required_binary moox-eventbus
 ensure_required_binary moox-archive
 ensure_required_binary moox-archive-cli
-ensure_required_binary moox-gateway
-ensure_required_binary moox-gateway-cli
+ensure_required_binary moox-host-gateway
+ensure_required_binary moox-host-gateway-cli
 ensure_required_binary moox-factor-mgr
 ensure_required_binary moox-factor-mgr-cli
 
@@ -192,7 +192,7 @@ MOOX_STORAGE_VIEW_AUTH_SECRET=view-secret \
   --gateway-control-key-file "${TMP_ROOT}/control.key" \
   --gateway-service-key-file "${TMP_ROOT}/service.key" >/dev/null
 
-for path in admin gateway bin/moox-admin bin/moox-admin-cli bin/moox-gateway bin/moox-gateway-cli; do
+for path in admin gateway bin/moox-admin bin/moox-admin-cli bin/moox-host-gateway bin/moox-host-gateway-cli; do
   [[ -e "${DEPLOY_DIR}/${path}" ]] || {
     echo "component-only update removed control artifact: ${path}" >&2
     exit 1

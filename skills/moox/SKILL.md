@@ -32,7 +32,7 @@ Host Agent deployment:
 
 - `modules/cli`: `moox-cli` (setup, deploy, SCF publish, data import, doctor).
 - `modules/admin`: control plane (auth, spaces, service catalog, secrets, SSH, setup) and the browser API gateway.
-- `modules/gateway`: per-node service gateway.
+- `modules/hostgateway`: per-node service gateway.
 - `modules/eventbus`: embedded NATS JetStream broker.
 - `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view), external access proxy (access).
 - `modules/collector`: collection tasks, period batch planning, SCF Timer runtime and reconciliation.
