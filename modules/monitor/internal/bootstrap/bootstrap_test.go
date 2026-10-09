@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -64,31 +63,20 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	}
 }
 
-func TestNormalizeHostStorageTarget(t *testing.T) {
-	if got := normalizeHostStorageTarget(""); got != "ip://127.0.0.1:20102" {
-		t.Fatalf("empty target = %q", got)
-	}
-	if got := normalizeHostStorageTarget("127.0.0.1:20102/"); got != "ip://127.0.0.1:20102" {
-		t.Fatalf("host target = %q", got)
-	}
-	if got := normalizeHostStorageTarget("http://storage:20102"); got != "http://storage:20102" {
-		t.Fatalf("scheme target = %q", got)
-	}
-}
-
 func TestBuildKlineFreshnessInventoryUsesCollectorGatewayHTTPEntry(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
 	cfg := config.Default()
 	cfg.KlineFreshness.Enabled = true
 	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
-	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:19091"
-	cfg.Metrics.Storage.GatewayNodeID = "gateway-test-node"
-	cfg.Metrics.Storage.KeyID = "monitor"
-	cfg.Metrics.Storage.HMACKeyFile = filepath.Join(t.TempDir(), "gateway.key")
-	require.NoError(t, os.WriteFile(cfg.Metrics.Storage.HMACKeyFile, []byte("test-gateway-secret\n"), 0o600))
-	if _, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile); err != nil {
-		t.Fatalf("test credentials invalid: %v", err)
-	}
+
+	keyPath := filepath.Join(t.TempDir(), "caller-monitor.key")
+	require.NoError(t, os.WriteFile(keyPath, []byte("monitor-fixture-signing-key-at-least-32-bytes\n"), 0o600))
+	configPath := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("sysdeploy:\n  enabled: false\ngateway_client:\n  caller: monitor\n  key_id: fixture-monitor-key\n  key_file: "+keyPath+"\n"), 0o600))
+	loaded, err := config.Load(configPath)
+	require.NoError(t, err)
+	loaded.KlineFreshness = cfg.KlineFreshness
+	cfg = loaded
 
 	cache, err := buildKlineFreshnessInventory(cfg)
 	require.NoError(t, err)
@@ -116,8 +104,6 @@ func TestKlineFreshnessCollectorRouteDoesNotReuseMetricsStorageRoute(t *testing.
 	cfg := config.Default()
 	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
 	cfg.KlineFreshness.CollectorGatewayNodeID = "collector-node"
-	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:11003"
-	cfg.Metrics.Storage.GatewayNodeID = "storage-node"
 
 	target, nodeID := klineFreshnessCollectorRoute(cfg)
 	require.Equal(t, "http://collector-gateway:11002", target)
@@ -351,15 +337,6 @@ func TestMonitorHealthSnapshotRequiresHostStorageSchema(t *testing.T) {
 	rsp := monitorHealthSnapshot(cfg, rt, nil, hostStore)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, false, rsp.Details["host_storage_schema_ready"])
-}
-
-func TestRegisterMonitorServiceSkipsMissingService(t *testing.T) {
-	// s is nil would panic on s.Service; pass a zero-value path via early warn when Service returns nil.
-	// Covered by calling with a fake that we cannot easily construct; instead exercise normalize + maxInt already covered.
-	cfg := config.Default()
-	assert.Equal(t, "ip://127.0.0.1:20102", normalizeHostStorageTarget("  "))
-	assert.Equal(t, 5, maxInt(5, 5))
-	_ = cfg
 }
 
 func TestFailureReasonNamesTheFailingStepWithoutTheRawError(t *testing.T) {

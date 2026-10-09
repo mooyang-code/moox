@@ -161,12 +161,6 @@ func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
 	assert.Equal(t, 1, f.nodeCalls)
 }
 
-func TestNormalizeTarget(t *testing.T) {
-	assert.Equal(t, "ip://127.0.0.1:20102", normalizeTarget("", "20102"))
-	assert.Equal(t, "ip://127.0.0.1:20102", normalizeTarget("127.0.0.1:20102", "20102"))
-	assert.Equal(t, "http://storage:20102", normalizeTarget("http://storage:20102", "20102"))
-}
-
 func TestStorageHelpers(t *testing.T) {
 	assert.True(t, isActive(" active "))
 	assert.False(t, isActive("deleted"))

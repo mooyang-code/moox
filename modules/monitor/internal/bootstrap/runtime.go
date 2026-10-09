@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,13 +10,17 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Runtime owns monitor's process-scoped resources and shutdown ordering.
 type Runtime struct {
+	Gateway                  *gatewayclient.Client
+	StorageGateway           *storagegateway.Client
 	StartedAt                time.Time
 	cancel                   context.CancelFunc
 	workers                  sync.WaitGroup
@@ -152,8 +157,11 @@ func (r *Runtime) Close() error {
 			_ = r.HostRuleCache.Stop(trpc.BackgroundContext())
 		}
 		r.workers.Wait()
+		if r.Gateway != nil {
+			r.closeErr = r.Gateway.Close()
+		}
 		if r.Store != nil {
-			r.closeErr = r.Store.Close()
+			r.closeErr = errors.Join(r.closeErr, r.Store.Close())
 		}
 	})
 	return r.closeErr

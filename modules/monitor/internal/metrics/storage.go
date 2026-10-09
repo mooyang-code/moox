@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -14,8 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -64,42 +61,7 @@ type cachedSubjectCatalog struct {
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName)}
-}
-func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	// Monitor's Storage target is a dedicated dependency setting. Do not let the
-	// process-local gateway default redirect it back to the control node.
-	target := cfg.GatewayTarget
-	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
-	if err != nil {
-		return NewStorageAdapter(nil, nil, cfg)
-	}
-	nodeID := cfg.GatewayNodeID
-	if strings.TrimSpace(nodeID) == "" {
-		nodeID = gatewayauth.ServiceGatewayNodeID()
-	}
-	options := gatewayauth.NewTRPCClientOptions(normalizeTarget(target, "11003"), nodeID, credentials)
-	return NewStorageAdapter(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), cfg)
-}
-
-func normalizeTarget(raw, port string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:" + port
-	}
-	if strings.HasPrefix(raw, "ip://") {
-		return raw
-	}
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
-		if u.Scheme == "http" || u.Scheme == "https" {
-			return raw
-		}
-		return raw
-	}
-	if !strings.Contains(raw, ":") {
-		return raw
-	}
-	return "ip://" + raw
+	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary("monitor"), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName)}
 }
 
 type SchemaStatus struct {
@@ -328,7 +290,7 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		Selectors: keys, TimeRange: tr, Order: order,
 		ColumnNames: []string{"value", "labels_json", "message_id"},
 		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
-	}, client.WithFilter(trpcretry.ReadOnly()))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("read metrics history: %w", err)
 	}
@@ -392,7 +354,7 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 		rsp, err := a.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
 			AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID,
 			Page: &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
-		}, client.WithFilter(trpcretry.ReadOnly()))
+		})
 		if err != nil {
 			return nil, fmt.Errorf("list monitored dataset subjects: %w", err)
 		}
@@ -441,7 +403,7 @@ func (a *StorageAdapter) DatasetDisplayName(ctx context.Context, spaceID, datase
 	if ok && now.Sub(cached.loadedAt) < datasetNameTTL {
 		return cached.name
 	}
-	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID}, client.WithFilter(trpcretry.ReadOnly()))
+	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil || storageOK("get dataset name", rsp.GetRetInfo()) != nil {
 		return cached.name
 	}
@@ -466,7 +428,7 @@ func (a *StorageAdapter) ListTags(ctx context.Context, spaceID string) ([]*stora
 			AuthInfo: a.auth,
 			SpaceId:  strings.TrimSpace(spaceID),
 			Page:     &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
-		}, client.WithFilter(trpcretry.ReadOnly()))
+		})
 		if err != nil {
 			return nil, fmt.Errorf("list monitored tags: %w", err)
 		}

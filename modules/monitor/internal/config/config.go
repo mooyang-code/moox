@@ -3,27 +3,32 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Database       DatabaseConfig       `yaml:"database"`
-	Health         HealthConfig         `yaml:"health"`
-	HealthAuth     HealthAuthConfig     `yaml:"health_auth"`
-	Instance       InstanceConfig       `yaml:"instance"`
-	Scheduler      SchedulerConfig      `yaml:"scheduler"`
-	SysDeploy      SysDeployConfig      `yaml:"sysdeploy"`
-	Alert          AlertConfig          `yaml:"alert"`
-	Observability  ObservabilityConfig  `yaml:"observability"`
-	Metrics        MetricsConfig        `yaml:"metrics"`
-	MarketCanary   MarketCanaryConfig   `yaml:"market_canary"`
-	MarketHealth   MarketHealthConfig   `yaml:"market_health"`
-	KlineFreshness KlineFreshnessConfig `yaml:"kline_freshness"`
+	GatewayClient  gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath     string                   `yaml:"-"`
+	Database       DatabaseConfig           `yaml:"database"`
+	Health         HealthConfig             `yaml:"health"`
+	HealthAuth     HealthAuthConfig         `yaml:"health_auth"`
+	Instance       InstanceConfig           `yaml:"instance"`
+	Scheduler      SchedulerConfig          `yaml:"scheduler"`
+	SysDeploy      SysDeployConfig          `yaml:"sysdeploy"`
+	Alert          AlertConfig              `yaml:"alert"`
+	Observability  ObservabilityConfig      `yaml:"observability"`
+	Metrics        MetricsConfig            `yaml:"metrics"`
+	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
+	MarketHealth   MarketHealthConfig       `yaml:"market_health"`
+	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
 }
 
 type DatabaseConfig struct {
@@ -137,10 +142,6 @@ type MarketCanarySubject struct {
 }
 
 type MetricsStorageConfig struct {
-	GatewayTarget              string        `yaml:"gateway_target"`
-	GatewayNodeID              string        `yaml:"gateway_node_id"`
-	KeyID                      string        `yaml:"key_id"`
-	HMACKeyFile                string        `yaml:"hmac_key_file"`
 	SpaceID                    string        `yaml:"space_id"`
 	DatasetID                  string        `yaml:"dataset_id"`
 	Frequency                  string        `yaml:"frequency"`
@@ -148,13 +149,9 @@ type MetricsStorageConfig struct {
 	WriteBatchSize             int           `yaml:"write_batch_size"`
 }
 
-// HostStorageConfig controls the direct Storage path for host snapshots.
+// HostStorageConfig controls the Storage datasets for host snapshots.
 type HostStorageConfig struct {
 	Enabled                 bool          `yaml:"enabled"`
-	GatewayTarget           string        `yaml:"gateway_target"`
-	GatewayNodeID           string        `yaml:"gateway_node_id"`
-	KeyID                   string        `yaml:"key_id"`
-	HMACKeyFile             string        `yaml:"hmac_key_file"`
 	SpaceID                 string        `yaml:"space_id"`
 	Frequency               string        `yaml:"frequency"`
 	WriteTimeout            time.Duration `yaml:"write_timeout"`
@@ -172,11 +169,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve monitor config: %w", err)
+	}
 	cfg := Default()
+	cfg.sourcePath = absolutePath
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("monitor config must contain exactly one YAML document")
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
@@ -188,6 +194,7 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
+		GatewayClient: gatewayclient.FileConfig{Caller: "monitor", KeyFile: "../../secrets/caller-monitor.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/monitor/monitor.db",
@@ -224,7 +231,7 @@ func Default() *Config {
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, CollectorGatewayURL: "http://127.0.0.1:11002", EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -350,12 +357,6 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
 	}
-	if c.Metrics.Storage.GatewayTarget == "" {
-		c.Metrics.Storage.GatewayTarget = metricsDefaults.Storage.GatewayTarget
-	}
-	if c.Metrics.Storage.KeyID == "" {
-		c.Metrics.Storage.KeyID = metricsDefaults.Storage.KeyID
-	}
 	if c.Metrics.Storage.SpaceID == "" {
 		c.Metrics.Storage.SpaceID = metricsDefaults.Storage.SpaceID
 	}
@@ -370,12 +371,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.Storage.WriteBatchSize == 0 {
 		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
-	}
-	if c.Metrics.HostStorage.GatewayTarget == "" {
-		c.Metrics.HostStorage.GatewayTarget = metricsDefaults.HostStorage.GatewayTarget
-	}
-	if c.Metrics.HostStorage.KeyID == "" {
-		c.Metrics.HostStorage.KeyID = metricsDefaults.HostStorage.KeyID
 	}
 	if c.Metrics.HostStorage.SpaceID == "" {
 		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID
@@ -445,18 +440,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.TargetNode = v
-		c.Metrics.Storage.GatewayNodeID = v
-		c.Metrics.HostStorage.GatewayNodeID = v
-	}
-	// SysDeploy authenticates through the local control gateway, while Storage
-	// may live behind a different gateway node. Keep these overrides separate.
-	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET")); v != "" {
-		c.Metrics.Storage.GatewayTarget = v
-		c.Metrics.HostStorage.GatewayTarget = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID")); v != "" {
-		c.Metrics.Storage.GatewayNodeID = v
-		c.Metrics.HostStorage.GatewayNodeID = v
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_COLLECTOR_GATEWAY_URL")); v != "" {
 		c.KlineFreshness.CollectorGatewayURL = v
@@ -562,16 +545,13 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	for name, values := range map[string][2]string{
-		"metrics.storage":      {c.Metrics.Storage.KeyID, c.Metrics.Storage.HMACKeyFile},
-		"metrics.host_storage": {c.Metrics.HostStorage.KeyID, c.Metrics.HostStorage.HMACKeyFile},
-	} {
-		if strings.TrimSpace(values[1]) != "" {
-			if _, err := gatewayauth.CredentialsFromKeyFile(values[0], values[1]); err != nil {
-				return fmt.Errorf("%s hmac credentials: %w", name, err)
-			}
-		}
+	if c.GatewayClient.Caller != "monitor" {
+		return fmt.Errorf("gateway_client.caller must be monitor")
 	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -627,4 +607,41 @@ func firstEnv(names ...string) string {
 		}
 	}
 	return ""
+}
+
+// OpenGateway owns one process-scoped client shared by all Storage consumers.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("monitor gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "monitor" {
+		return nil, fmt.Errorf("gateway_client.caller must be monitor")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
+}
+
+// CollectorInventoryCredentials serves the remaining HTTP CollectMgr caller.
+// D2a removes this reader with that caller when CollectMgr switches to tRPC.
+func (c *Config) CollectorInventoryCredentials() (gatewayauth.Credentials, error) {
+	if c == nil || c.sourcePath == "" {
+		return gatewayauth.Credentials{}, fmt.Errorf("collector inventory credentials require a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "monitor" {
+		return gatewayauth.Credentials{}, fmt.Errorf("gateway_client.caller must be monitor")
+	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return gatewayauth.Credentials{}, err
+	}
+	if c.GatewayClient.KeyID == "" {
+		return gatewayauth.Credentials{}, fmt.Errorf("gateway_client.key_id is required")
+	}
+	path := c.GatewayClient.KeyFile
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(c.sourcePath), path)
+	}
+	secret, err := gatewayauth.ReadSigningSecret(path)
+	if err != nil {
+		return gatewayauth.Credentials{}, err
+	}
+	return gatewayauth.Credentials{Caller: "monitor", KeyID: c.GatewayClient.KeyID, Secret: secret}, nil
 }

@@ -12,7 +12,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
-	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -36,7 +35,7 @@ const ForecastHistoryLimit = 7*24*60 + 8
 const maxHistoryPageSize = 500
 
 func NewStorageReader(access hostStorageRead, cfg monconfig.HostStorageConfig) *StorageReader {
-	return &StorageReader{access: access, auth: storageauth.Primary(cfg.KeyID), cfg: cfg}
+	return &StorageReader{access: access, auth: storageauth.Primary("monitor"), cfg: cfg}
 }
 
 func (r *StorageReader) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
@@ -134,7 +133,7 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
 			Order:     storagepb.SortOrder_SORT_ORDER_DESC,
 			Page:      &commonpb.Page{Page: pageNo, Size: uint32(pageSize)},
-		}, client.WithFilter(trpcretry.ReadOnly()))
+		})
 		if err != nil {
 			return nil, fmt.Errorf("read host dataset %q: %w", dataset, err)
 		}

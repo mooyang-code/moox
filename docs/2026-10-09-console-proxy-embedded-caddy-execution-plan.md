@@ -67,6 +67,8 @@ Archive/共享客户端/签名包/主机网关全量 race 与 vet、边界、848
 
 主计划 D1 的 Storage View 迁移已完成：Metadata 的 17 个能力经共享客户端调用，角色认证保留；PrimaryStore 内部直连改用 tRPC 20102，保留历史读取的五分钟超时。配置使用 caller、Admin 分配的 KeyID 和密钥文件，移除旧 `storage_rpc`、无用服务名字段及目标/协议/网络回退；严格拒绝旧字段、未知字段和重复键。真实 tRPC 回归验证签名、只读刷新重试、写调用单发、独立 nonce 和禁止 SDK 选项覆盖目标。本机无 CGO 的全包测试/vet、Linux 全量 CGO race 与 vet 通过；实际 `storage-cgo` 入口在编译机生成并核对四个 Linux amd64 动态链接程序。Linux SDK 自动选择 tNET 引发的 checkptr 问题已通过显式 go-net 修复，没有禁用检查。持续检查同时修复主机网关关闭监听时未取消 TLS 握手的问题，本机 race 和本机交叉编译后的 Linux 监听器全包回归通过。D2f 旧 HTTP 监听、G 身份分发、其他 D1 模块与后续正式验收继续保留。
 
+主计划 D1 的 Monitor 迁移已完成：服务指标、主机快照/历史/元数据检查、行情金丝雀及标签巡检共享进程级客户端并统一关闭，删除旧 Storage 配置与重复重试。网关 KeyID 与原请求的角色认证分开；补齐目录漏列的 Monitor `PrimaryStore.UpsertFields` 权限，并验证其他写操作仍拒绝。真实 tRPC 验证部署身份、私有 CA、读重试/写单发、nonce、目录缓存及关闭；Monitor、目录、共享客户端、主机网关和 Admin 全量 race 与相关 vet 通过。服务与 CLI 的 Linux amd64 静态程序及五个测试包均在本机关闭 CGO 编译，五包在 Linux 全包运行通过。格式、边界、848 模块图和 Storage 边界通过；Collector 清单 HTTP 调用留到 D2a，SysDeploy 留到 D2c，完整已部署 Storage 回环与身份分发仍待最终门禁及 G 阶段完成。
+
 control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
 
 ```text

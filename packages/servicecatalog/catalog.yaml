@@ -1316,6 +1316,10 @@ components:
               - archive
               - storage-view
           - methods:
+              - UpsertFields
+            callers:
+              - monitor
+          - methods:
               - WriteFactorRows
               - ReportFactorPeriodComputed
             callers:

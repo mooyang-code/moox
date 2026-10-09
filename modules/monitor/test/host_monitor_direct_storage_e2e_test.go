@@ -12,29 +12,33 @@ import (
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
 func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	if os.Getenv("MOOX_SERIES_TAG_E2E") != "1" {
-		t.Fatal("integration test must be started through scripts/test/e2e/test-series-tag-e2e.sh")
+		t.Fatal("integration test requires MOOX_SERIES_TAG_E2E=1 and MOOX_MONITOR_E2E_CONFIG for an isolated Storage deployment")
 	}
-	credentials := gatewayauth.CredentialsFromEnv()
-	if credentials.KeyID == "" || credentials.Caller == "" || credentials.Secret == "" {
-		t.Fatal("gateway credentials are required")
+	loaded, err := monconfig.Load(requiredMonitorEnv(t, "MOOX_MONITOR_E2E_CONFIG"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	target := normalizeGatewayTarget(requiredMonitorEnv(t, "MOOX_STORAGE_RPC_GATEWAY_TARGET"))
-	nodeID := requiredMonitorEnv(t, "MOOX_STORAGE_RPC_GATEWAY_NODE_ID")
-	options := gatewayauth.NewTRPCClientOptions(target, nodeID, credentials)
-	primary := storagepb.NewPrimaryStoreClientProxy(options...)
+	gateway, err := loaded.OpenGateway(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := gateway.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	primary := storagegateway.New(gateway)
 	_ = requiredMonitorEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-
-	cfg := monconfig.Default().Metrics.HostStorage
-	cfg.KeyID = credentials.Caller
+	cfg := loaded.Metrics.HostStorage
 	writer := hostmetrics.NewStorageWriter(primary, cfg)
 	observed := time.Now().UTC().Add(-time.Hour).Truncate(time.Minute)
 	agentID := fmt.Sprintf("series-tag-e2e-%x", time.Now().UnixNano())
@@ -75,7 +79,7 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	if err := writer.WriteSnapshot(ctx, snapshot, agentID, observed, "monitor-series-tag-e2e"); err != nil {
 		t.Fatal(err)
 	}
-	auth := &commonpb.AuthInfo{AppId: cfg.KeyID}
+	auth := &commonpb.AuthInfo{AppId: "monitor"}
 	auth.AppKey = mooxsecurity.HMACSHA256Hex(
 		requiredMonitorEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"),
 		[]byte(auth.AppId),
@@ -229,12 +233,4 @@ func requiredMonitorEnv(t *testing.T, name string) string {
 		t.Fatalf("%s is required", name)
 	}
 	return value
-}
-
-func normalizeGatewayTarget(raw string) string {
-	raw = strings.TrimSpace(strings.TrimRight(raw, "/"))
-	if strings.Contains(raw, "://") {
-		return raw
-	}
-	return "ip://" + raw
 }
