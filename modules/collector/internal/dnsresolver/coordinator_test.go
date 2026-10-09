@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCoordinatorPrefersTradeAndRetainsLastGoodSnapshot(t *testing.T) {
+func TestCoordinatorPrefersEgressAndRetainsLastGoodSnapshot(t *testing.T) {
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"203.0.113.2", "203.0.113.3"}, LatencyMS: map[string]uint32{"203.0.113.2": 8, "203.0.113.3": 12}},
 	}}
@@ -24,7 +24,7 @@ func TestCoordinatorPrefersTradeAndRetainsLastGoodSnapshot(t *testing.T) {
 	require.Equal(t, []string{"203.0.113.2", "203.0.113.3"}, snapshot["fapi.binance.com"].IPs)
 	require.False(t, snapshot["fapi.binance.com"].ResolvedAt.IsZero())
 
-	remote.err = errors.New("trade unavailable")
+	remote.err = errors.New("egress proxy unavailable")
 	coordinator.Interval = -time.Second
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	require.Equal(t, []string{"203.0.113.2", "203.0.113.3"}, coordinator.Snapshot()["fapi.binance.com"].IPs)
@@ -112,7 +112,7 @@ func TestCoordinatorStatusIncludesSourceHashAgeAndErrorCategory(t *testing.T) {
 	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond})
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	status := coordinator.Status()
-	require.Equal(t, "trade", status.Source)
+	require.Equal(t, "egress", status.Source)
 	require.NotEmpty(t, status.Hash)
 	require.NotEmpty(t, status.ManagedHash)
 	require.Equal(t, 1, status.RouteCount)
@@ -124,13 +124,13 @@ func TestCoordinatorStatusIncludesSourceHashAgeAndErrorCategory(t *testing.T) {
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	status = coordinator.Status()
 	require.Equal(t, "retained", status.Source)
-	require.Equal(t, "trade_rpc", status.LastErrorCategory)
+	require.Equal(t, "egress_rpc", status.LastErrorCategory)
 	require.Equal(t, 1, status.RouteCount)
 	require.NotEmpty(t, status.Hash)
 	require.NotEmpty(t, status.ManagedHash)
 }
 
-func TestCoordinatorRestoresLastGoodTradeSnapshotAcrossRestart(t *testing.T) {
+func TestCoordinatorRestoresLastGoodEgressSnapshotAcrossRestart(t *testing.T) {
 	path := t.TempDir() + "/dns_resolver_snapshot.json"
 	firstRemote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"1.1.1.1"}},
@@ -139,13 +139,13 @@ func TestCoordinatorRestoresLastGoodTradeSnapshotAcrossRestart(t *testing.T) {
 	require.NoError(t, first.Refresh(context.Background()))
 	require.FileExists(t, path)
 
-	secondRemote := &fakeDomainResolver{err: errors.New("trade unavailable")}
+	secondRemote := &fakeDomainResolver{err: errors.New("egress proxy unavailable")}
 	second := NewCoordinator(CoordinatorConfig{Remote: secondRemote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond, CacheTTL: time.Minute, PersistencePath: path})
 	require.NoError(t, second.RestoreLastGoodSnapshot())
 	require.NoError(t, second.Refresh(context.Background()))
 	require.Equal(t, []string{"1.1.1.1"}, second.Snapshot()["fapi.binance.com"].IPs)
 	require.Equal(t, "retained", second.Status().Source)
-	require.Equal(t, "trade_rpc", second.Status().LastErrorCategory)
+	require.Equal(t, "egress_rpc", second.Status().LastErrorCategory)
 }
 
 func TestCoordinatorRestoreFiltersExpiredAndRemovedDomains(t *testing.T) {

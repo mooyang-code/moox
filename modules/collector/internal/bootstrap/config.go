@@ -4,19 +4,19 @@ package bootstrap
 import (
 	"bytes"
 	"fmt"
-	"net"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	// GatewayClient 是 Collector 调用其他组件（Storage、交易服务等）使用的 gatewayclient 配置。
+	// GatewayClient 是 Collector 调用其他组件（Storage、CloudNode、出口代理等）使用的 gatewayclient 配置。
 	GatewayClient       gatewayclient.Config     `yaml:"gateway_client"`
 	SCFRegionBlacklists map[string][]string      `yaml:"scf_region_blacklists"`
 	Database            DatabaseConfig           `yaml:"database"`
@@ -28,7 +28,7 @@ type Config struct {
 	KlineResample       KlineResampleConfig      `yaml:"kline_resample"`
 	Health              HealthConfig             `yaml:"health"`
 	DNS                 DNSConfig                `yaml:"dns"`
-	DNSResolver         DNSResolverConfig        `yaml:"dns_resolver"`
+	EgressProxy         EgressProxyConfig        `yaml:"egress_proxy"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -135,13 +135,43 @@ type DNSConfig struct {
 	Nameservers     []string      `yaml:"nameservers"`
 }
 
-// DNSResolverConfig 选择可选的交易服务侧 DNS 解析，经 gateway_client 调用交易服务。
-type DNSResolverConfig struct {
-	Enabled         bool          `yaml:"enabled"`
+// EgressProxyConfig 是 Collector 使用出口代理的设置。出口代理部署在香港，经主机网关调用；由 CLI 按
+// moox.toml 渲染。
+type EgressProxyConfig struct {
+	// Domains 是 HTTP 请求走出口代理的域名，支持 "*." 前缀；为空时所有请求直连。
+	Domains []string `yaml:"domains"`
+	// DNS 是由出口代理解析的域名，结果写入 SCF 的 DNS 快照。
+	DNS EgressDNSConfig `yaml:"dns"`
+}
+
+// EgressDNSConfig 是向出口代理请求解析结果的设置；Domains 为空时只用本机解析（dns 段）。
+type EgressDNSConfig struct {
 	Domains         []string      `yaml:"domains"`
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
 	CacheTTL        time.Duration `yaml:"cache_ttl"`
+}
+
+// Enabled 判断是否向出口代理请求解析结果。
+func (c EgressDNSConfig) Enabled() bool { return len(c.Domains) > 0 }
+
+// maxEgressDNSDomains 是出口代理一次解析的域名上限。
+const maxEgressDNSDomains = 16
+
+// SnapshotDomains 返回写入 SCF DNS 快照的全部域名：本机解析的域名加上出口代理解析的域名，规范化并去重。
+func (c *Config) SnapshotDomains() []string {
+	all := append(append([]string(nil), c.DNS.Domains...), c.EgressProxy.DNS.Domains...)
+	seen := make(map[string]struct{}, len(all))
+	domains := make([]string, 0, len(all))
+	for _, raw := range all {
+		domain := egresspb.NormalizeHost(raw)
+		if _, exists := seen[domain]; exists || domain == "" {
+			continue
+		}
+		seen[domain] = struct{}{}
+		domains = append(domains, domain)
+	}
+	return domains
 }
 
 // Load reads YAML config from path.
@@ -160,7 +190,7 @@ func Load(path string) (*Config, error) {
 	if err := cfg.GatewayClient.Validate(); err != nil {
 		return nil, err
 	}
-	if err := cfg.validateDNSResolver(); err != nil {
+	if err := cfg.validateEgressProxy(); err != nil {
 		return nil, err
 	}
 	if err := cfg.validateKlineResample(); err != nil {
@@ -185,68 +215,33 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_DOMAINS"); v != "" {
-		c.DNS.Domains = splitCSV(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_NAMESERVERS"); v != "" {
-		c.DNS.Nameservers = splitCSV(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_REFRESH_INTERVAL"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNS.RefreshInterval = parsed
-		}
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVE_TIMEOUT"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNS.ResolveTimeout = parsed
-		}
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_ENABLED"); v != "" {
-		c.DNSResolver.Enabled = strings.EqualFold(strings.TrimSpace(v), "1") || strings.EqualFold(strings.TrimSpace(v), "true")
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_DOMAINS"); v != "" {
-		c.DNSResolver.Domains = splitCSV(v)
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_REFRESH_INTERVAL"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNSResolver.RefreshInterval = parsed
-		}
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_TIMEOUT"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNSResolver.RequestTimeout = parsed
-		}
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVER_CACHE_TTL"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
-			c.DNSResolver.CacheTTL = parsed
-		}
-	}
 }
 
-func (c *Config) validateDNSResolver() error {
-	if !c.DNSResolver.Enabled {
-		return nil
+func (c *Config) validateEgressProxy() error {
+	if _, err := egresspb.ParseDomainList(c.EgressProxy.Domains); err != nil {
+		return fmt.Errorf("egress_proxy.domains: %w", err)
 	}
-	if len(c.DNSResolver.Domains) == 0 {
-		return fmt.Errorf("dns_resolver.domains must not be empty when enabled")
-	}
-	if len(c.DNSResolver.Domains) > 16 {
-		return fmt.Errorf("dns_resolver supports at most 16 domains")
-	}
-	seen := make(map[string]struct{}, len(c.DNSResolver.Domains))
-	for _, raw := range c.DNSResolver.Domains {
-		domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
-		if !validDNSResolverDomain(domain) {
-			return fmt.Errorf("dns_resolver domain %q is invalid", raw)
+	dns := c.EgressProxy.DNS
+	seen := make(map[string]struct{}, len(dns.Domains))
+	for _, raw := range dns.Domains {
+		domain := egresspb.NormalizeHost(raw)
+		if !egresspb.ValidDomain(domain) {
+			return fmt.Errorf("egress_proxy.dns.domains 中的 %q 不是合法域名", raw)
 		}
 		if _, exists := seen[domain]; exists {
-			return fmt.Errorf("dns_resolver domain %q is duplicated", raw)
+			return fmt.Errorf("egress_proxy.dns.domains 中的 %q 重复", raw)
 		}
 		seen[domain] = struct{}{}
 	}
-	if c.DNSResolver.RefreshInterval <= 0 || c.DNSResolver.RequestTimeout <= 0 || c.DNSResolver.CacheTTL <= 0 {
-		return fmt.Errorf("dns_resolver intervals must be positive")
+	if !dns.Enabled() {
+		return nil
+	}
+	// 出口代理一次请求解析快照里的全部域名，超过上限时整个请求都会被拒绝。
+	if count := len(c.SnapshotDomains()); count > maxEgressDNSDomains {
+		return fmt.Errorf("dns.domains 与 egress_proxy.dns.domains 合计 %d 个域名，出口代理一次最多解析 %d 个", count, maxEgressDNSDomains)
+	}
+	if dns.RefreshInterval <= 0 || dns.RequestTimeout <= 0 || dns.CacheTTL <= 0 {
+		return fmt.Errorf("egress_proxy.dns 的 refresh_interval、request_timeout、cache_ttl 必须大于 0")
 	}
 	return nil
 }
@@ -302,27 +297,6 @@ func (c *Config) validatePeriodReadiness() error {
 	return nil
 }
 
-func validDNSResolverDomain(domain string) bool {
-	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
-		return false
-	}
-	labels := strings.Split(domain, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	for _, label := range labels {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, r := range label {
-			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
@@ -363,21 +337,10 @@ func Default() *Config {
 			RefreshInterval: 5 * time.Minute,
 			ResolveTimeout:  5 * time.Second,
 		},
-		DNSResolver: DNSResolverConfig{
+		EgressProxy: EgressProxyConfig{DNS: EgressDNSConfig{
 			RefreshInterval: 5 * time.Minute,
 			RequestTimeout:  3 * time.Second,
 			CacheTTL:        5 * time.Minute,
-		},
+		}},
 	}
-}
-
-func splitCSV(raw string) []string {
-	parts := strings.Split(raw, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if value := strings.TrimSpace(part); value != "" {
-			result = append(result, value)
-		}
-	}
-	return result
 }

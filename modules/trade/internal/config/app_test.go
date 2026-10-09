@@ -16,23 +16,13 @@ func TestDefaultConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	assert.Equal(t, "../secrets/caller-trade.key", cfg.GatewayClient.KeyFile)
 	require.NoError(t, cfg.GatewayClient.Validate())
 	assert.True(t, cfg.EventBus.Enabled)
-	assert.False(t, cfg.DNSResolver.Enabled)
-	assert.Equal(t, 4, cfg.DNSResolver.MaxIPsPerDomain)
 }
 
-func TestValidateDNSResolver(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.EventBus.Enabled = false
-	cfg.DNSResolver = DNSResolverConfig{
-		Enabled: true, Domains: []string{"fapi.binance.com"}, LookupTimeoutMS: 1500,
-		ProbeTimeoutMS: 500, ProbePort: 443, CacheTTLSeconds: 300, MaxIPsPerDomain: 4,
-	}
-	require.NoError(t, cfg.Validate())
-
-	cfg.DNSResolver.ProbePort = 0
-	err := cfg.Validate()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "probe_port")
+func TestLoadRejectsRemovedDNSResolverSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("dns_resolver:\n  enabled: false\n"), 0o644))
+	_, err := Load(path)
+	require.Error(t, err, "DNS 解析已移到出口代理，交易服务不再接受 dns_resolver 段")
 }
 
 func TestLoad_FromValidYAML_ShouldApplyAndValidate(t *testing.T) {

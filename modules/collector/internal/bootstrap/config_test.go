@@ -1,8 +1,10 @@
 package bootstrap
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,16 +238,56 @@ func TestLoadRejectsMissingFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "read config")
 }
 
-func TestLoadDNSResolverConfigAndEnvironment(t *testing.T) {
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_ENABLED", "true")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_DOMAINS", "fapi.binance.com,api.binance.com")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_REFRESH_INTERVAL", "5m")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_TIMEOUT", "3s")
+func TestLoadEgressProxyConfig(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `
+dns:
+  domains: [api.binance.com, data-api.binance.vision]
+egress_proxy:
+  domains: ["*.binance.com", data-api.binance.vision]
+  dns:
+    domains: [FAPI.binance.com., api.binance.com]
+    refresh_interval: 2m
+    request_timeout: 2s
+    cache_ttl: 4m
+`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"*.binance.com", "data-api.binance.vision"}, cfg.EgressProxy.Domains)
+	assert.True(t, cfg.EgressProxy.DNS.Enabled())
+	assert.Equal(t, 2*time.Minute, cfg.EgressProxy.DNS.RefreshInterval)
+	assert.Equal(t, []string{"api.binance.com", "data-api.binance.vision", "fapi.binance.com"}, cfg.SnapshotDomains())
+}
 
+func TestLoadDefaultsToDirectHTTPAndLocalDNS(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
 	require.NoError(t, err)
-	assert.True(t, cfg.DNSResolver.Enabled)
-	assert.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.DNSResolver.Domains)
+	assert.Empty(t, cfg.EgressProxy.Domains)
+	assert.False(t, cfg.EgressProxy.DNS.Enabled())
+}
+
+func TestLoadShippedConfig(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "config", "app.yaml"))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.EgressProxy.Domains, "仓库里的配置默认直连，生产的白名单由 CLI 渲染")
+	assert.Len(t, cfg.SnapshotDomains(), 4)
+}
+
+func TestLoadRejectsInvalidEgressProxyConfig(t *testing.T) {
+	tooMany := make([]string, 0, 17)
+	for i := 0; i < 17; i++ {
+		tooMany = append(tooMany, fmt.Sprintf("d%d.binance.com", i))
+	}
+	for name, body := range map[string]string{
+		"白名单带协议":    "egress_proxy:\n  domains: [https://api.binance.com]\n",
+		"白名单重复":     "egress_proxy:\n  domains: [api.binance.com, API.binance.com]\n",
+		"解析域名无效":    "egress_proxy:\n  dns:\n    domains: [1.2.3.4]\n",
+		"解析域名重复":    "egress_proxy:\n  dns:\n    domains: [api.binance.com, api.binance.com.]\n",
+		"超时为 0":     "egress_proxy:\n  dns:\n    domains: [api.binance.com]\n    request_timeout: 0s\n",
+		"合计超过 16 个": "egress_proxy:\n  dns:\n    domains: [" + strings.Join(tooMany, ", ") + "]\n",
+		"旧的交易服务解析":  "dns_resolver:\n  enabled: true\n",
+	} {
+		_, err := Load(writeCollectorConfig(t, body))
+		require.Error(t, err, name)
+	}
 }
 
 func TestLoadRequiresGatewayClient(t *testing.T) {

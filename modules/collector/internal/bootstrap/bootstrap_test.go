@@ -125,7 +125,7 @@ func (s dnsStatusStub) Status() collectordns.Status { return s.status }
 
 func TestCollectorHealthSnapshotIncludesDNSDiagnostics(t *testing.T) {
 	cfg := Default()
-	cfg.DNSResolver.Enabled = true
+	cfg.EgressProxy.DNS.Domains = []string{"api.binance.com"}
 	dbm, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -134,17 +134,17 @@ func TestCollectorHealthSnapshotIncludesDNSDiagnostics(t *testing.T) {
 	state := health.New("collector", "collector", "", "")
 	when := time.Date(2026, 8, 11, 1, 2, 3, 4e6, time.UTC)
 	rsp := collectorHealthSnapshot(cfg, dbm, state, dnsStatusStub{status: collectordns.Status{
-		Source: "trade", Hash: "abc", RouteCount: 3, RouteAgeSeconds: 4.5,
-		LastRefreshAt: when, LastSuccessAt: when, LastErrorCategory: "trade_rpc",
+		Source: "egress", Hash: "abc", RouteCount: 3, RouteAgeSeconds: 4.5,
+		LastRefreshAt: when, LastSuccessAt: when, LastErrorCategory: "egress_rpc",
 	}})(context.Background())
 	details, ok := rsp.Details["dns_resolver"].(map[string]any)
 	if !ok {
 		t.Fatalf("dns details missing: %#v", rsp.Details)
 	}
-	if details["source"] != "trade" || details["hash"] != "abc" || details["route_count"] != 3 {
+	if details["source"] != "egress" || details["hash"] != "abc" || details["route_count"] != 3 {
 		t.Fatalf("dns details = %#v", details)
 	}
-	if details["last_error_category"] != "trade_rpc" || details["last_refresh_at"] != when.Format(time.RFC3339Nano) {
+	if details["last_error_category"] != "egress_rpc" || details["last_refresh_at"] != when.Format(time.RFC3339Nano) {
 		t.Fatalf("dns timing/error details = %#v", details)
 	}
 }

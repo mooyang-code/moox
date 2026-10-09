@@ -8,33 +8,40 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+// DomainResolver 批量解析域名，返回每个域名可用的公网 IPv4 地址。
 type DomainResolver interface {
 	ResolveDomains(context.Context, []string) (map[string]sources.DNSResolution, error)
 }
 
-type TradeClient struct {
-	client  tradepb.TradeDNSResolverServiceClientProxy
+// EgressResolver 是出口代理 ResolveDomains 调用的最小接口，生产中是 egresspb.ProxyClientProxy。
+type EgressResolver interface {
+	ResolveDomains(ctx context.Context, req *egresspb.ResolveDomainsReq, opts ...client.Option) (*egresspb.ResolveDomainsRsp, error)
+}
+
+// EgressClient 向出口代理请求域名解析结果。出口代理在香港，与 SCF 的网络相近，它解析并探测过的地址
+// 更适合写入 SCF 的 DNS 快照。
+type EgressClient struct {
+	proxy   EgressResolver
 	timeout time.Duration
 }
 
-// NewTradeClient 创建经给定 tRPC 客户端选项（gatewayclient）调用交易服务 DNS 解析的客户端。
-func NewTradeClient(options []client.Option, timeout time.Duration) *TradeClient {
+// NewEgressClient 创建经出口代理解析域名的客户端；timeout 不大于 0 时使用 3 秒。
+func NewEgressClient(proxy EgressResolver, timeout time.Duration) *EgressClient {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	return &TradeClient{
-		client:  tradepb.NewTradeDNSResolverServiceClientProxy(options...),
-		timeout: timeout,
-	}
+	return &EgressClient{proxy: proxy, timeout: timeout}
 }
 
-func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map[string]sources.DNSResolution, error) {
-	if c == nil || c.client == nil {
-		return nil, fmt.Errorf("trade DNS client is not configured")
+// ResolveDomains 实现 DomainResolver。只保留请求过的域名和公网 IPv4 地址；没有解析结果的域名不出现在返回值里。
+func (c *EgressClient) ResolveDomains(ctx context.Context, domains []string) (map[string]sources.DNSResolution, error) {
+	if c == nil || c.proxy == nil {
+		return nil, fmt.Errorf("出口代理的 DNS 客户端未初始化")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -54,23 +61,20 @@ func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map
 		expected[host] = struct{}{}
 		requested = append(requested, host)
 	}
-	rsp, err := c.client.ResolveDomains(callCtx, &tradepb.ResolveDomainsReq{Domains: requested, MaxIpsPerDomain: 4})
+	rsp, err := c.proxy.ResolveDomains(callCtx, &egresspb.ResolveDomainsReq{Domains: requested, MaxIpsPerDomain: 4})
 	if err != nil {
-		return nil, fmt.Errorf("resolve domains RPC: %w", err)
+		return nil, fmt.Errorf("调用出口代理解析域名失败: %w", err)
 	}
-	if rsp == nil || rsp.GetRetInfo() == nil {
-		return nil, fmt.Errorf("resolve domains RPC returned empty response")
+	if rsp.GetRetInfo() == nil {
+		return nil, fmt.Errorf("出口代理解析域名返回了空响应")
 	}
-	if rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS {
-		return nil, fmt.Errorf("resolve domains RPC failed: code=%d msg=%s", rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
+		return nil, fmt.Errorf("出口代理解析域名失败（%s）: %s", code, rsp.GetRetInfo().GetMsg())
 	}
 	result := make(map[string]sources.DNSResolution, len(rsp.GetResolutions()))
 	for _, resolution := range rsp.GetResolutions() {
-		if resolution == nil {
-			continue
-		}
-		host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(resolution.GetDomain()), "."))
-		if host == "" || !validDomain(host) {
+		host := normalizeDomain(resolution.GetDomain())
+		if !egresspb.ValidDomain(host) {
 			continue
 		}
 		if _, ok := expected[host]; !ok {
@@ -81,9 +85,6 @@ func (c *TradeClient) ResolveDomains(ctx context.Context, domains []string) (map
 		}
 		item := sources.DNSResolution{}
 		for _, resolved := range resolution.GetIps() {
-			if resolved == nil {
-				continue
-			}
 			ip := net.ParseIP(strings.TrimSpace(resolved.GetIp()))
 			if !isPublicIPv4(ip) {
 				continue
@@ -119,25 +120,7 @@ func isPublicIPv4(ip net.IP) bool {
 }
 
 func normalizeDomain(raw string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+	return egresspb.NormalizeHost(raw)
 }
 
-func validDomain(host string) bool {
-	if host == "" || len(host) > 253 || strings.Contains(host, "://") || net.ParseIP(host) != nil {
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, r := range label {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-				continue
-			}
-			return false
-		}
-	}
-	return true
-}
-
-var _ DomainResolver = (*TradeClient)(nil)
+var _ DomainResolver = (*EgressClient)(nil)

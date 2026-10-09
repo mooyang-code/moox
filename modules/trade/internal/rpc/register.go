@@ -15,8 +15,6 @@ const (
 	// strategy-owned canonical service path lets old gateways roll back without
 	// ambiguous native route selection.
 	TradeConsoleAdminServiceName = "trpc.moox.trade.TradeConsoleAdminService"
-	TradeDNSResolverServiceName  = "trpc.moox.trade.TradeDNSResolverService"
-	TradeDNSResolverTRPCName     = TradeDNSResolverServiceName + ".trpc"
 )
 
 func RegisterAll(
@@ -24,7 +22,6 @@ func RegisterAll(
 	accounts *AccountServer,
 	logicalAccounts *LogicalAccountServer,
 	execution *ExecutionServer,
-	dnsResolver *DNSResolverServer,
 	options ...ConsoleOptions,
 ) {
 	consoleService := s.Service(TradeConsoleServiceName)
@@ -43,16 +40,6 @@ func RegisterAll(
 	}
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 	registerTradeConsoleAdminAlias(consoleService, console)
-	dnsRegistered := false
-	for _, name := range []string{TradeDNSResolverTRPCName, TradeDNSResolverServiceName} {
-		if service := s.Service(name); service != nil {
-			tradepb.RegisterTradeDNSResolverServiceService(service, dnsResolver)
-			dnsRegistered = true
-		}
-	}
-	if !dnsRegistered {
-		panic("TradeDNSResolverService is not configured")
-	}
 }
 
 func registerTradeConsoleAdminAlias(service server.Service, console tradepb.TradeConsoleServiceService) {

@@ -52,7 +52,7 @@ type Config struct {
 
 // Server 实现 egresspb.ProxyService。
 type Server struct {
-	domains        DomainList
+	domains        egresspb.DomainList
 	headers        map[string]struct{}
 	client         *http.Client
 	maxBody        int64
@@ -63,9 +63,12 @@ type Server struct {
 
 // New 创建出口代理。dns 为空时 ResolveDomains 返回错误；metrics 可以为空。
 func New(cfg Config, dns *resolver.Resolver, metrics *Metrics) (*Server, error) {
-	domains, err := NewDomainList(cfg.Domains)
+	domains, err := egresspb.ParseDomainList(cfg.Domains)
 	if err != nil {
 		return nil, err
+	}
+	if domains.Empty() {
+		return nil, errors.New("域名白名单不能为空")
 	}
 	headerNames := cfg.Headers
 	if len(headerNames) == 0 {
@@ -170,7 +173,7 @@ func (s *Server) buildRequest(ctx context.Context, req *egresspb.DoReq) (*http.R
 		return nil, 0, reject("invalid", commonpb.ErrorCode_INVALID_PARAM, "method 只支持 GET 和 POST")
 	}
 	host := strings.ToLower(strings.TrimSpace(req.GetHost()))
-	if !ValidDomain(host) {
+	if !egresspb.ValidDomain(host) {
 		return nil, 0, reject("invalid", commonpb.ErrorCode_INVALID_PARAM, "host %q 必须是不带端口的域名", req.GetHost())
 	}
 	if !s.domains.Allows(host) {

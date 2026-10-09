@@ -177,6 +177,7 @@ proto:
 	$(MAKE) -C modules/eventbus/proto all
 	$(MAKE) -C modules/hostagent/proto all
 	$(MAKE) -C modules/strategy/proto all
+	$(MAKE) -C modules/egressproxy/proto all
 
 clean:
 	rm -rf bin release dist

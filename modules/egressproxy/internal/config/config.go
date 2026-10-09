@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/egressproxy/internal/proxy"
+	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"gopkg.in/yaml.v3"
 )
 
@@ -71,8 +72,10 @@ func Load(path string) (*Config, error) {
 
 // Validate 检查配置。
 func (c Config) Validate() error {
-	if _, err := proxy.NewDomainList(c.HTTP.Domains); err != nil {
+	if domains, err := egresspb.ParseDomainList(c.HTTP.Domains); err != nil {
 		return fmt.Errorf("http.domains: %w", err)
+	} else if domains.Empty() {
+		return errors.New("http.domains 不能为空")
 	}
 	if c.HTTP.MaxResponseBytes <= 0 {
 		return errors.New("http.max_response_bytes 必须大于 0")
@@ -84,7 +87,7 @@ func (c Config) Validate() error {
 		return errors.New("dns.domains 最多 16 个")
 	}
 	for _, domain := range c.DNS.Domains {
-		if !proxy.ValidDomain(domain) {
+		if !egresspb.ValidDomain(domain) {
 			return fmt.Errorf("dns.domains 中的 %q 不是合法域名", domain)
 		}
 	}

@@ -3,23 +3,23 @@ module github.com/mooyang-code/moox/modules/collector
 go 1.25.0
 
 require (
-	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayroute v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/tdx v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
@@ -60,12 +60,7 @@ replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ./p
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
 
-replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/proto/tradegen
-
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
-
-
-
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 
@@ -83,11 +78,9 @@ replace github.com/mooyang-code/moox/packages/frequency => ../../packages/freque
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
-
 replace github.com/mooyang-code/moox/packages/routeprobe => ../../packages/routeprobe
 
 replace github.com/mooyang-code/moox/packages/tdx => ../../packages/tdx
-
 
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 
@@ -178,3 +171,5 @@ replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/s
 replace github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb => ../../packages/gatewayroute/proto/directorypb
 
 replace github.com/mooyang-code/moox/packages/gatewayroute => ../../packages/gatewayroute
+
+replace github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen => ../egressproxy/proto/egressgen

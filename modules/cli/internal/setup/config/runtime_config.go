@@ -3,7 +3,6 @@ package config
 import (
 	"bytes"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,52 +10,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RenderTradeDNSResolverConfigForNode disables the resolver on Trade nodes
-// other than the single node selected by moox.toml. This prevents a
-// control profile from advertising a second resolver endpoint.
-func RenderTradeDNSResolverConfigForNode(snapshot *Snapshot, nodeID string, existing []byte) ([]byte, error) {
+// RenderCollectorRuntimeConfig 用 moox.toml 渲染 Collector app.yaml 中由部署决定的段落：出口代理、SCF 地域
+// 黑名单、运行数据保留和 stockcn 容量，其余设置保持原样。
+func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	if snapshot == nil {
-		return nil, fmt.Errorf("runtime_config: snapshot is required")
+		return nil, fmt.Errorf("runtime_config: 缺少 moox.toml 快照")
 	}
 	resolver := snapshot.Manifest.DNSResolver
-	if nodeID = strings.TrimSpace(nodeID); nodeID != "" && resolver.Enabled && !strings.EqualFold(nodeID, resolver.TradeNode) {
-		resolver.Enabled = false
-		resolver.Domains = nil
+	dnsDomains := []string{}
+	if resolver.Enabled {
+		dnsDomains = normalizedDomains(resolver.Domains)
 	}
-	fields := orderedMapping(
-		mappingField{"enabled", resolver.Enabled},
-		mappingField{"domains", normalizedDomains(resolver.Domains)},
-		mappingField{"lookup_timeout_ms", resolver.LookupTimeoutMS},
-		mappingField{"probe_timeout_ms", resolver.ProbeTimeoutMS},
-		mappingField{"probe_port", resolver.ProbePort},
-		mappingField{"cache_ttl_seconds", resolver.CacheTTLSeconds},
-		mappingField{"max_ips_per_domain", resolver.MaxIPsPerDomain},
-	)
-	return replaceYAMLMapping(existing, "dns_resolver", fields)
-}
-
-// RenderCollectorDNSResolverConfig replaces only the Collector-owned
-// dns_resolver mapping. The target is derived from the selected other_hosts
-// entry, whose endpoint itself comes from the shared hosts catalog.
-func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
-	if snapshot == nil {
-		return nil, fmt.Errorf("runtime_config: snapshot is required")
-	}
-	resolver := snapshot.Manifest.DNSResolver
-	nodeID, target, err := DNSResolverRuntimeTarget(snapshot)
-	if err != nil {
-		return nil, err
-	}
-	fields := orderedMapping(
-		mappingField{"enabled", resolver.Enabled},
-		mappingField{"target", target},
-		mappingField{"node_id", nodeID},
-		mappingField{"domains", normalizedDomains(resolver.Domains)},
-		mappingField{"refresh_interval", durationSeconds(resolver.RefreshIntervalSeconds)},
-		mappingField{"request_timeout", durationMilliseconds(resolver.RequestTimeoutMS)},
-		mappingField{"cache_ttl", durationSeconds(resolver.CacheTTLSeconds)},
-	)
-	rendered, err := replaceYAMLMapping(existing, "dns_resolver", fields)
+	// moox.toml 目前没有 HTTP 白名单，Collector 的 HTTP 请求全部直连；DNS 快照的域名由出口代理解析。
+	rendered, err := replaceYAMLMapping(existing, "egress_proxy", orderedMapping(
+		mappingField{"domains", []string{}},
+		mappingField{"dns", orderedMapping(
+			mappingField{"domains", dnsDomains},
+			mappingField{"refresh_interval", durationSeconds(resolver.RefreshIntervalSeconds)},
+			mappingField{"request_timeout", durationMilliseconds(resolver.RequestTimeoutMS)},
+			mappingField{"cache_ttl", durationSeconds(resolver.CacheTTLSeconds)},
+		)},
+	))
 	if err != nil {
 		return nil, err
 	}
@@ -98,41 +72,9 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 	return rendered, nil
 }
 
-// DNSResolverRuntimeTarget returns the non-secret node identity and native
-// Gateway target used by Collector. It is also emitted by the CLI so deploy
-// can register a route for a resolver hosted on a different node.
-func DNSResolverRuntimeTarget(snapshot *Snapshot) (string, string, error) {
-	if snapshot == nil {
-		return "", "", fmt.Errorf("runtime_config: snapshot is required")
-	}
-	if !snapshot.Manifest.DNSResolver.Enabled {
-		return "", "ip://127.0.0.1:11003", nil
-	}
-	host, err := findDNSResolverHost(snapshot.Manifest)
-	if err != nil {
-		return "", "", err
-	}
-	return strings.TrimSpace(host.Name), "ip://" + net.JoinHostPort(strings.TrimSpace(host.Address), "11003"), nil
-}
-
-// WriteRenderedRuntimeConfig atomically writes already-rendered YAML. It is
-// used by the CLI after both Trade and Collector render operations have
-// succeeded, so neither service is restarted with a half-rendered snapshot.
+// WriteRenderedRuntimeConfig 原子地写入已渲染好的 YAML，并保留原文件的权限。
 func WriteRenderedRuntimeConfig(path string, rendered []byte) error {
 	return writeRenderedBytes(path, rendered)
-}
-
-func findDNSResolverHost(manifest Manifest) (Host, error) {
-	name := strings.TrimSpace(manifest.DNSResolver.TradeNode)
-	for _, host := range manifest.OtherHosts {
-		if strings.EqualFold(strings.TrimSpace(host.Name), name) {
-			if strings.TrimSpace(host.Address) == "" {
-				return Host{}, fmt.Errorf("runtime_config: dns_resolver host %q has no address", name)
-			}
-			return host, nil
-		}
-	}
-	return Host{}, fmt.Errorf("runtime_config: dns_resolver host %q was not found", name)
 }
 
 func normalizedDomains(domains []string) []string {
@@ -203,6 +145,9 @@ func scalarNode(value string) *yaml.Node {
 }
 
 func valueNode(value any) *yaml.Node {
+	if node, ok := value.(*yaml.Node); ok {
+		return node
+	}
 	data, err := yaml.Marshal(value)
 	if err != nil {
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}

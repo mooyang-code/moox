@@ -1,6 +1,6 @@
 # MooX Collector control-plane service configuration.
 
-# Collector 调用 Storage、交易服务等组件统一经 gatewayclient（本机主机网关 + 服务目录）。
+# Collector 调用 Storage、CloudNode、出口代理等组件统一经 gatewayclient（本机主机网关 + 服务目录）。
 gateway_client:
   mode: local
   caller: collector
@@ -71,9 +71,13 @@ dns:
   resolve_timeout: 5s
   # nameservers: ["119.29.29.29", "1.1.1.1"]
 
-dns_resolver:
-  enabled: false
+# 出口代理部署在香港，经主机网关调用；部署时由 CLI 按 moox.toml 渲染。
+egress_proxy:
+  # 走出口代理的 HTTP 域名，支持 "*." 前缀；为空时所有请求直连。
   domains: []
-  refresh_interval: 5m
-  request_timeout: 3s
-  cache_ttl: 5m
+  dns:
+    # 由出口代理解析的域名，结果写入 SCF 的 DNS 快照；为空时只用上面的本机解析。
+    domains: []
+    refresh_interval: 5m
+    request_timeout: 3s
+    cache_ttl: 5m

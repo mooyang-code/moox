@@ -30,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
@@ -45,6 +46,7 @@ var collectorStartedAt = time.Now()
 const (
 	marketFetchScheduleTimeout  = 30 * time.Second
 	marketFetchReconcileTimeout = 30 * time.Second
+	egressProxyTimeout          = 65 * time.Second
 )
 
 // Initialize loads config, initializes persistence, and registers RPC services.
@@ -142,32 +144,23 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
-	dnsDomains := append([]string(nil), cfg.DNS.Domains...)
-	if cfg.DNSResolver.Enabled {
-		dnsDomains = append(dnsDomains, cfg.DNSResolver.Domains...)
-	}
+	// 出口代理在香港，经主机网关调用；单次 Do 最长 60 秒，再留出往返的余量。
+	egressProxy := egresspb.NewProxyClientProxy(gateway.ClientOptions(gatewayclient.WithTimeout(egressProxyTimeout))...)
+	dnsDomains := cfg.SnapshotDomains()
 	localDNS := dnscache.New(dnscache.Config{Domains: dnsDomains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
-	var remoteDNS collectordns.DomainResolver
-	if cfg.DNSResolver.Enabled {
-		remoteDNS = collectordns.NewTradeClient(gatewayOptions, cfg.DNSResolver.RequestTimeout)
+	// 只用本机解析时 CacheTTL 为 0：沿用 dnscache 最近一次成功的结果，不让它过期。
+	dnsCoordinator := collectordns.CoordinatorConfig{Local: localDNS, Domains: dnsDomains, Interval: cfg.DNS.RefreshInterval}
+	if egressDNS := cfg.EgressProxy.DNS; egressDNS.Enabled() {
+		dnsCoordinator.Remote = collectordns.NewEgressClient(egressProxy, egressDNS.RequestTimeout)
+		dnsCoordinator.Interval, dnsCoordinator.CacheTTL = egressDNS.RefreshInterval, egressDNS.CacheTTL
+		dnsCoordinator.PersistencePath = filepath.Join(filepath.Dir(cfg.Database.Path), "dns_resolver_snapshot.json")
 	}
-	refreshInterval, cacheTTL := cfg.DNS.RefreshInterval, cfg.DNS.RefreshInterval
-	if cfg.DNSResolver.Enabled {
-		refreshInterval, cacheTTL = cfg.DNSResolver.RefreshInterval, cfg.DNSResolver.CacheTTL
-	} else {
-		cacheTTL = 0 // preserve dnscache's last-good local snapshot semantics
-	}
-	var dnsMetrics *collectordns.Metrics
 	if metrics, metricsErr := collectordns.NewMetrics(prometheus.DefaultRegisterer); metricsErr != nil {
 		log.WarnContextf(ctx, "collector DNS resolver metrics disabled: %v", metricsErr)
 	} else {
-		dnsMetrics = metrics
+		dnsCoordinator.Metrics = metrics
 	}
-	dnsPersistencePath := ""
-	if cfg.DNSResolver.Enabled {
-		dnsPersistencePath = filepath.Join(filepath.Dir(cfg.Database.Path), "dns_resolver_snapshot.json")
-	}
-	dnsSnapshot := collectordns.NewCoordinator(collectordns.CoordinatorConfig{Local: localDNS, Remote: remoteDNS, Domains: dnsDomains, Interval: refreshInterval, CacheTTL: cacheTTL, Metrics: dnsMetrics, PersistencePath: dnsPersistencePath})
+	dnsSnapshot := collectordns.NewCoordinator(dnsCoordinator)
 	if err := dnsSnapshot.RestoreLastGoodSnapshot(); err != nil {
 		log.WarnContextf(ctx, "restore collector DNS last-good snapshot failed: %v", err)
 	}
@@ -378,7 +371,7 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State,
 			"database":          databaseReady,
 			"cloudnode_address": cfg.CloudNode.Address,
 		}
-		if cfg.DNSResolver.Enabled {
+		if cfg.EgressProxy.DNS.Enabled() {
 			if len(dns) > 0 && dns[0] != nil {
 				status := dns[0].Status()
 				rsp.Details["dns_resolver"] = map[string]any{

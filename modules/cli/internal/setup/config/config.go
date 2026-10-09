@@ -134,9 +134,8 @@ type Observability struct {
 	DeliverPolicyExplicit bool   `toml:"-"`
 }
 
-// DNSResolver configures the single Trade node that resolves and probes
-// market API domains for Collector. moox.toml is the source of truth; the
-// CLI renders the Trade-owned subset into Trade's app.yaml at deployment time.
+// DNSResolver 是 [dns_resolver] 段。Domains 和刷新设置是写入 SCF DNS 快照、由出口代理解析的域名，渲染进
+// Collector 的 egress_proxy.dns；TradeNode 是交易服务所在的主机（other_hosts 中的名称）。
 type DNSResolver struct {
 	Enabled                bool     `toml:"enabled"`
 	TradeNode              string   `toml:"trade_node"`

@@ -2464,7 +2464,6 @@ start_admin() {
     else
       service_seed_args+=(--disable-storage-shard)
     fi
-    local resolver_enabled=0 resolver_node="" resolver_target=""
     local trade_gateway_url="${MOOX_TRADE_GATEWAY_URL:-}" trade_gateway_node="${MOOX_TRADE_GATEWAY_NODE_ID:-}"
     if [[ -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && -r "${ROOT}/config/trade-gateway.json" ]]; then
       local persisted_trade_gateway
@@ -2497,17 +2496,14 @@ PY
         IFS=$'\t' read -r trade_gateway_url trade_gateway_node <<<"${persisted_trade_gateway}"
       fi
     fi
-    local resolver_json="${ROOT}/config/render-runtime-config.json"
+    local runtime_config_json="${ROOT}/config/render-runtime-config.json"
     local trade_console_host="" trade_console_port=""
-    if [[ -r "${resolver_json}" ]]; then
-      IFS=$'\t' read -r resolver_enabled resolver_node resolver_target trade_console_host trade_console_port < <(python3 - "${resolver_json}" <<'PY'
+    if [[ -r "${runtime_config_json}" ]]; then
+      IFS=$'\t' read -r trade_console_host trade_console_port < <(python3 - "${runtime_config_json}" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     value = json.load(handle)
 print("\t".join([
-    "1" if value.get("dns_resolver_enabled") else "0",
-    value.get("dns_resolver_node_id", ""),
-    value.get("dns_resolver_target", ""),
     value.get("trade_console_host", ""),
     str(value.get("trade_console_port", "")),
 ]))
@@ -2528,9 +2524,6 @@ PY
     [[ "${WITH_HOSTAGENT}" == "1" ]] || disabled_services+=(moox_hostagent)
     [[ "${WITH_STRATEGY}" == "1" ]] || disabled_services+=(moox_strategy)
     [[ "${WITH_TRADE}" == "1" ]] || disabled_services+=(moox_trade trade_owner)
-    if [[ "${resolver_enabled}" != "1" || -z "${resolver_node}" || "${resolver_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
-      disabled_services+=(trade_dns_resolver)
-    fi
     [[ "${WITH_WEB_HOST}" == "1" ]] || disabled_services+=(web_host)
     if [[ -n "${trade_console_host}" ]]; then
       service_seed_args+=(--trade-console-host "${trade_console_host}" --trade-console-port "${trade_console_port:-11200}")
@@ -2551,24 +2544,6 @@ PY
         echo "Storage shard service deployment import failed" >&2
         exit 1
     }
-    # A DNS resolver may live on a separate Trade node. Import only its route
-    # for that node so the native Gateway does not advertise unrelated local
-    # loopback services there.
-    if [[ "${resolver_enabled}" == "1" && -n "${resolver_node}" && "${resolver_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
-        local resolver_public_host="${resolver_target#ip://}"
-        resolver_public_host="${resolver_public_host%:*}"
-        "${ROOT}/bin/moox-admin-cli" service-deployments import \
-          --db-path "${ROOT}/data/admin.db" \
-          --file "${ROOT}/config/setup/service-deployments.yaml" \
-          --node-id "${resolver_node}" \
-          --public-host "${resolver_public_host}" \
-          --eventbus-nats-url "${EVENTBUS_PUBLIC_URL_ENV}" \
-          --only-services trade_dns_resolver \
-          >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
-            echo "Trade DNS resolver service deployment import failed" >&2
-            exit 1
-          }
-    fi
     import_trade_owner_route || { echo "Trade owner service deployment import failed" >&2; exit 1; }
   fi
   if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
@@ -4349,17 +4324,9 @@ EOF
     cp -R "${ROOT}/modules/trade/config/." "${STAGE_DIR}/trade/config/"
   fi
   local runtime_config_file="${MOOX_RUNTIME_CONFIG_FILE:-${ROOT}/moox.toml}"
-  if [[ -f "${runtime_config_file}" && -x "${STAGE_DIR}/bin/moox-cli" && \
-        ("${WITH_TRADE}" -eq 1 || "${WITH_COLLECTOR}" -eq 1) ]]; then
-    render_args=(--file "${runtime_config_file}")
-    if [[ "${WITH_TRADE}" -eq 1 ]]; then
-      render_args+=(--trade-output "${STAGE_DIR}/trade/config/app.yaml")
-    fi
-    if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
-      render_args+=(--collector-output "${STAGE_DIR}/collector/config/app.yaml")
-    fi
-    render_args+=(--node-id "${NODE_ID}")
-    log "render Trade/Collector DNS resolver runtime config from ${runtime_config_file}"
+  if [[ -f "${runtime_config_file}" && -x "${STAGE_DIR}/bin/moox-cli" && "${WITH_COLLECTOR}" -eq 1 ]]; then
+    render_args=(--file "${runtime_config_file}" --collector-output "${STAGE_DIR}/collector/config/app.yaml")
+    log "render Collector runtime config from ${runtime_config_file}"
     # The staged CLI is built for the deployment target. When packaging a
     # Linux bundle on macOS, execute the host tool instead of trying to run
     # the staged ELF binary locally; the staged target CLI remains in the

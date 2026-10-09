@@ -42,19 +42,9 @@ func testProxy(t *testing.T, maxBody int64, handler http.HandlerFunc) (*Server, 
 	return server, &calls
 }
 
-func TestDomainListMatchesExactAndWildcard(t *testing.T) {
-	list, err := NewDomainList([]string{"*.binance.com", "Data-API.binance.vision"})
-	require.NoError(t, err)
-	for host, want := range map[string]bool{
-		"fapi.binance.com": true, "a.b.binance.com": true, "data-api.binance.vision": true,
-		"binance.com": false, "evilbinance.com": false, "binance.com.evil.io": false, "api.binance.vision": false,
-	} {
-		require.Equal(t, want, list.Allows(host), host)
-	}
-	for _, entries := range [][]string{nil, {"*."}, {"1.2.3.4"}, {"https://fapi.binance.com"}, {"fapi.binance.com:443"}} {
-		_, err := NewDomainList(entries)
-		require.Error(t, err, "%v", entries)
-	}
+func TestNewRejectsEmptyWhitelist(t *testing.T) {
+	_, err := New(Config{}, nil, nil)
+	require.ErrorContains(t, err, "白名单不能为空")
 }
 
 func TestDoForwardsAllowedRequestAndFiltersHeaders(t *testing.T) {

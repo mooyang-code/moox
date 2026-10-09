@@ -19,6 +19,10 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 )
 
+// sourceEgress 标记来自出口代理的解析结果；只有这类结果会持久化，供重启后兜底。
+const sourceEgress = "egress"
+
+// Coordinator 生成写入 SCF 的 DNS 快照：优先使用出口代理的解析结果，出口代理没有给出的域名用本机解析补齐。
 type Coordinator struct {
 	Local    *dnscache.Cache
 	Remote   DomainResolver
@@ -78,8 +82,8 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 	}
 }
 
-// RestoreLastGoodSnapshot loads the last successful Trade snapshot, if one is
-// present. A restored route has no local receipt time so a restart does not
+// RestoreLastGoodSnapshot loads the last successful egress proxy snapshot, if
+// one is present. A restored route has no local receipt time so a restart does not
 // discard the route before the first bounded remote refresh can complete.
 func (c *Coordinator) RestoreLastGoodSnapshot() error {
 	if c == nil || c.persistencePath == "" {
@@ -147,7 +151,7 @@ func (c *Coordinator) RestoreLastGoodSnapshot() error {
 	c.routes = routes
 	c.routeSource = make(map[string]string, len(routes))
 	for host := range routes {
-		c.routeSource[host] = "trade"
+		c.routeSource[host] = sourceEgress
 	}
 	c.status = buildStatus(now, routes, c.routeSource, c.status, nil, nil, false)
 	c.mu.Unlock()
@@ -224,7 +228,7 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	}
 	for host, route := range remoteRoutes {
 		merged[host] = route
-		mergedSources[host] = "trade"
+		mergedSources[host] = sourceEgress
 	}
 	status := buildStatus(now, merged, mergedSources, previousStatus, remoteErr, localErr, len(remoteRoutes) > 0 || len(localRoutes) > 0)
 	c.mu.Lock()
@@ -234,7 +238,7 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	c.status = status
 	c.mu.Unlock()
 	if len(remoteRoutes) > 0 && c.persistencePath != "" {
-		if err := c.persistTradeSnapshot(merged, mergedSources); err != nil {
+		if err := c.persistEgressSnapshot(merged, mergedSources); err != nil {
 			// The in-memory/SCF update is still valid. Surface persistence failure
 			// to the caller so health logs expose that restart protection is at risk.
 			status.LastErrorCategory = "snapshot_persist"
@@ -268,18 +272,18 @@ type persistedSnapshot struct {
 	SavedAt time.Time                        `json:"saved_at"`
 }
 
-func (c *Coordinator) persistTradeSnapshot(routes map[string]sources.DNSResolution, routeSource map[string]string) error {
-	tradeRoutes := make(map[string]sources.DNSResolution)
+func (c *Coordinator) persistEgressSnapshot(routes map[string]sources.DNSResolution, routeSource map[string]string) error {
+	egressRoutes := make(map[string]sources.DNSResolution)
 	for host, route := range routes {
-		if routeSource[host] != "trade" || len(route.IPs) == 0 {
+		if routeSource[host] != sourceEgress || len(route.IPs) == 0 {
 			continue
 		}
-		tradeRoutes[normalizeDomain(host)] = route
+		egressRoutes[normalizeDomain(host)] = route
 	}
-	if len(tradeRoutes) == 0 {
+	if len(egressRoutes) == 0 {
 		return nil
 	}
-	raw, err := json.Marshal(persistedSnapshot{Routes: tradeRoutes, SavedAt: time.Now().UTC()})
+	raw, err := json.Marshal(persistedSnapshot{Routes: egressRoutes, SavedAt: time.Now().UTC()})
 	if err != nil {
 		return fmt.Errorf("encode DNS snapshot: %w", err)
 	}
@@ -402,9 +406,9 @@ func buildStatus(now time.Time, routes map[string]sources.DNSResolution, routeSo
 	}
 	switch {
 	case remoteErr != nil && localErr != nil:
-		status.LastErrorCategory = "trade_and_local_dns"
+		status.LastErrorCategory = "egress_and_local_dns"
 	case remoteErr != nil:
-		status.LastErrorCategory = "trade_rpc"
+		status.LastErrorCategory = "egress_rpc"
 	case localErr != nil:
 		status.LastErrorCategory = "local_dns"
 	}

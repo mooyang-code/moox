@@ -9,56 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestRenderTradeDNSResolverConfigKeepsUnrelatedSettings(t *testing.T) {
-	snapshot := &Snapshot{Manifest: Manifest{
-		DNSResolver: DNSResolver{
-			Enabled:         true,
-			Domains:         []string{"FAPI.BINANCE.COM."},
-			LookupTimeoutMS: 1500,
-			ProbeTimeoutMS:  500,
-			ProbePort:       443,
-			CacheTTLSeconds: 300,
-			MaxIPsPerDomain: 4,
-		},
-	}}
-	rendered, err := RenderTradeDNSResolverConfig(snapshot, []byte(`database:
-  path: ./trade.db
-admin:
-  service_auth:
-    secret_key: do-not-copy
-eventbus:
-  enabled: true
-dns_resolver:
-  enabled: true
-  domains: [old.example]
-`))
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, yaml.Unmarshal(rendered, &got))
-	require.Equal(t, "./trade.db", got["database"].(map[string]any)["path"])
-	require.Equal(t, "do-not-copy", got["admin"].(map[string]any)["service_auth"].(map[string]any)["secret_key"])
-	resolver := got["dns_resolver"].(map[string]any)
-	require.Equal(t, true, resolver["enabled"])
-	require.Equal(t, []any{"fapi.binance.com"}, resolver["domains"])
-	require.NotContains(t, string(rendered), "trade_node")
-}
-
-func TestRenderTradeDNSResolverConfigDisablesNonResolverNode(t *testing.T) {
-	snapshot := &Snapshot{Manifest: Manifest{DNSResolver: DNSResolver{
-		Enabled:   true,
-		TradeNode: "compute-1",
-		Domains:   []string{"fapi.binance.com"},
-	}}}
-	rendered, err := RenderTradeDNSResolverConfigForNode(snapshot, "control", nil)
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, yaml.Unmarshal(rendered, &got))
-	resolver := got["dns_resolver"].(map[string]any)
-	require.Equal(t, false, resolver["enabled"])
-	require.Equal(t, []any{}, resolver["domains"])
-}
-
-func TestRenderCollectorDNSResolverConfigDerivesTradeTarget(t *testing.T) {
+func TestRenderCollectorRuntimeConfigRendersEgressDNS(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{
 		DNSResolver: DNSResolver{
 			Enabled:                true,
@@ -66,30 +17,48 @@ func TestRenderCollectorDNSResolverConfigDerivesTradeTarget(t *testing.T) {
 			RefreshIntervalSeconds: 300,
 			RequestTimeoutMS:       3000,
 			CacheTTLSeconds:        300,
-			Domains:                []string{"fapi.binance.com"},
+			Domains:                []string{"FAPI.binance.com.", "api.binance.com"},
 		},
-		OtherHosts: []Host{{Name: "compute-1", Address: "43.132.204.177"}},
+		OtherHosts: []Host{{Name: "compute-1", Address: "43.132.204.177", Password: "do-not-copy"}},
 	}}
-	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
+	rendered, err := RenderCollectorRuntimeConfig(snapshot, []byte(`database:
+  path: ./collector.db
+egress_proxy:
+  domains: [stale.example.com]
+`))
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(rendered, &got))
-	resolver := got["dns_resolver"].(map[string]any)
-	require.Equal(t, "ip://43.132.204.177:11003", resolver["target"])
-	require.Equal(t, "compute-1", resolver["node_id"])
-	require.Equal(t, "300s", resolver["refresh_interval"])
-	require.Equal(t, "3000ms", resolver["request_timeout"])
-	require.NotContains(t, string(rendered), "secret")
+	require.Equal(t, "./collector.db", got["database"].(map[string]any)["path"])
+	egress := got["egress_proxy"].(map[string]any)
+	require.Equal(t, []any{}, egress["domains"], "moox.toml 没有 HTTP 白名单时全部直连")
+	dns := egress["dns"].(map[string]any)
+	require.Equal(t, []any{"fapi.binance.com", "api.binance.com"}, dns["domains"])
+	require.Equal(t, "300s", dns["refresh_interval"])
+	require.Equal(t, "3000ms", dns["request_timeout"])
+	require.Equal(t, "300s", dns["cache_ttl"])
+	require.NotContains(t, string(rendered), "do-not-copy")
+	require.NotContains(t, string(rendered), "43.132.204.177", "出口代理经服务目录寻址，Collector 配置里不写主机地址")
 }
 
-func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
+func TestRenderCollectorRuntimeConfigDisabledResolverUsesLocalDNS(t *testing.T) {
+	snapshot := &Snapshot{Manifest: Manifest{DNSResolver: DNSResolver{Enabled: false, Domains: []string{"fapi.binance.com"}}}}
+	rendered, err := RenderCollectorRuntimeConfig(snapshot, []byte("egress_proxy:\n  dns:\n    domains: [fapi.binance.com]\n"))
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &got))
+	dns := got["egress_proxy"].(map[string]any)["dns"].(map[string]any)
+	require.Equal(t, []any{}, dns["domains"])
+}
+
+func TestRenderCollectorRuntimeConfigIncludesStockCapacity(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{
 		SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{
 			SpaceID: "stockcn", TimerFunctionCount: 200, MeasuredSafeGroupSize: 30,
 			StaggerStartSecond: DefaultStockCNStaggerStartSecond, StaggerWindowSeconds: DefaultStockCNStaggerWindowSeconds, StaggerMaxStartsPerSecond: DefaultStockCNStaggerMaxStartsPerSecond,
 		}}},
 	}}
-	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
+	rendered, err := RenderCollectorRuntimeConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(rendered, &got))
@@ -101,13 +70,13 @@ func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
 	require.Equal(t, 6, stock["stagger_max_starts_per_second"])
 }
 
-func TestRenderCollectorDNSResolverConfigIncludesRetentionPolicy(t *testing.T) {
+func TestRenderCollectorRuntimeConfigIncludesRetentionPolicy(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{CollectorRetention: CollectorRetention{
 		MaintenanceInterval: "2m", MaintenanceOffset: "10s", MaintenanceTimeout: "30s", MaxRowsPerPass: 25000,
 		ExecutionDetailRetention: "24h", ScheduledRunSummaryRetention: "720h",
 		TerminalRetryRetention: "336h", PeriodSnapshotRetention: "720h",
 	}}}
-	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
+	rendered, err := RenderCollectorRuntimeConfig(snapshot, []byte("database:\n  path: ./collector.db\n"))
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(rendered, &got))
@@ -122,19 +91,8 @@ func TestRenderCollectorDNSResolverConfigIncludesRetentionPolicy(t *testing.T) {
 	require.Equal(t, "720h", retention["period_snapshot_retention"])
 }
 
-func TestRenderDisabledResolverReplacesStaleSettings(t *testing.T) {
-	snapshot := &Snapshot{Manifest: Manifest{DNSResolver: DNSResolver{Enabled: false}}}
-	rendered, err := RenderTradeDNSResolverConfig(snapshot, []byte("dns_resolver:\n  enabled: true\n  domains: [fapi.binance.com]\n"))
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, yaml.Unmarshal(rendered, &got))
-	resolver := got["dns_resolver"].(map[string]any)
-	require.Equal(t, false, resolver["enabled"])
-	require.Equal(t, []any{}, resolver["domains"])
-}
-
 func TestWriteRenderedRuntimeConfigPreservesModeAndReplacesAtomically(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trade", "app.yaml")
+	path := filepath.Join(t.TempDir(), "collector", "app.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("old\n"), 0o600))
 	require.NoError(t, WriteRenderedRuntimeConfig(path, []byte("new\n")))
@@ -144,11 +102,4 @@ func TestWriteRenderedRuntimeConfigPreservesModeAndReplacesAtomically(t *testing
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-}
-
-// RenderTradeDNSResolverConfig replaces only the Trade-owned dns_resolver
-// mapping. The caller supplies the existing app.yaml bytes so unrelated
-// runtime configuration remains untouched.
-func RenderTradeDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
-	return RenderTradeDNSResolverConfigForNode(snapshot, "", existing)
 }

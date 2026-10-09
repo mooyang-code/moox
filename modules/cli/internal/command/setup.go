@@ -512,28 +512,14 @@ df -h "$root" | tail -1
 }
 
 func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
-	var file, tradeOutput, collectorOutput, nodeID string
+	var file, collectorOutput string
 	cmd := &cobra.Command{
 		Use:   "render-runtime-config",
-		Short: "从 moox.toml 渲染 Trade/Collector 运行配置",
+		Short: "从 moox.toml 渲染 Collector 运行配置",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			tradeOutput = strings.TrimSpace(tradeOutput)
 			collectorOutput = strings.TrimSpace(collectorOutput)
-			if tradeOutput == "" && collectorOutput == "" {
-				return fmt.Errorf("runtime_config: at least one output path is required")
-			}
-			if tradeOutput != "" && collectorOutput != "" {
-				tradeCanonical, err := canonicalRuntimeOutputPath(tradeOutput)
-				if err != nil {
-					return err
-				}
-				collectorCanonical, err := canonicalRuntimeOutputPath(collectorOutput)
-				if err != nil {
-					return err
-				}
-				if tradeCanonical == collectorCanonical {
-					return fmt.Errorf("runtime_config: trade and collector outputs must be different")
-				}
+			if collectorOutput == "" {
+				return fmt.Errorf("runtime_config: 必须指定 --collector-output")
 			}
 			snapshot, err := deps.load(file)
 			if err != nil {
@@ -541,51 +527,25 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 			}
 			defer clearSetupSecrets(snapshot)
 
-			// Render both files before mutating either one. The deployment script
-			// can therefore fail before a service restart if moox.toml or YAML
-			// validation is invalid.
-			var tradeRaw, collectorRaw []byte
-			if tradeOutput != "" {
-				tradeRaw, err = readRuntimeConfigFile(tradeOutput)
-				if err != nil {
-					return err
-				}
-				tradeRaw, err = setupconfig.RenderTradeDNSResolverConfigForNode(snapshot, nodeID, tradeRaw)
-				if err != nil {
-					return err
-				}
+			// 先渲染再写入：moox.toml 或 YAML 无效时，部署脚本在重启服务之前就会失败。
+			collectorRaw, err := readRuntimeConfigFile(collectorOutput)
+			if err != nil {
+				return err
 			}
-			if collectorOutput != "" {
-				collectorRaw, err = readRuntimeConfigFile(collectorOutput)
-				if err != nil {
-					return err
-				}
-				collectorRaw, err = setupconfig.RenderCollectorDNSResolverConfig(snapshot, collectorRaw)
-				if err != nil {
-					return err
-				}
+			collectorRaw, err = setupconfig.RenderCollectorRuntimeConfig(snapshot, collectorRaw)
+			if err != nil {
+				return err
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
 			}
-			if tradeOutput != "" {
-				if err := setupconfig.WriteRenderedRuntimeConfig(tradeOutput, tradeRaw); err != nil {
-					return err
-				}
-			}
-			if collectorOutput != "" {
-				if err := setupconfig.WriteRenderedRuntimeConfig(collectorOutput, collectorRaw); err != nil {
-					return err
-				}
-			}
-			resolverNodeID, resolverTarget, resolverErr := setupconfig.DNSResolverRuntimeTarget(snapshot)
-			if resolverErr != nil {
-				return resolverErr
+			if err := setupconfig.WriteRenderedRuntimeConfig(collectorOutput, collectorRaw); err != nil {
+				return err
 			}
 			tradeConsoleHost := ""
 			tradeConsolePort := 0
-			if snapshot.Manifest.DNSResolver.Enabled {
-				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, snapshot.Manifest.DNSResolver.TradeNode)
+			if tradeNode := strings.TrimSpace(snapshot.Manifest.DNSResolver.TradeNode); tradeNode != "" {
+				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, tradeNode)
 				if tradeErr != nil {
 					return tradeErr
 				}
@@ -593,33 +553,16 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 				tradeConsolePort = 11200
 			}
 			return writeSetupJSON(cmd, map[string]any{
-				"status":               "rendered",
-				"trade_output":         tradeOutput,
-				"collector_output":     collectorOutput,
-				"dns_resolver_enabled": snapshot.Manifest.DNSResolver.Enabled,
-				"dns_resolver_node_id": resolverNodeID,
-				"dns_resolver_target":  resolverTarget,
-				"trade_console_host":   tradeConsoleHost,
-				"trade_console_port":   tradeConsolePort,
+				"status":             "rendered",
+				"collector_output":   collectorOutput,
+				"trade_console_host": tradeConsoleHost,
+				"trade_console_port": tradeConsolePort,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&tradeOutput, "trade-output", "", "Trade app.yaml 输出路径")
 	cmd.Flags().StringVar(&collectorOutput, "collector-output", "", "Collector app.yaml 输出路径")
-	cmd.Flags().StringVar(&nodeID, "node-id", "", "当前部署节点 ID；非 Resolver 节点上的 Trade 会禁用 Resolver")
 	return cmd
-}
-
-func canonicalRuntimeOutputPath(path string) (string, error) {
-	abs, err := filepath.Abs(filepath.Clean(path))
-	if err != nil {
-		return "", fmt.Errorf("runtime_config: resolve output %q: %w", path, err)
-	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
-	}
-	return abs, nil
 }
 
 func readRuntimeConfigFile(path string) ([]byte, error) {

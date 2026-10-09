@@ -154,7 +154,7 @@ func newConfigPublishCommand(deps configDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 路径")
-	cmd.Flags().StringSliceVar(&only, "only", nil, "只发布指定目标（storage-policy、collector-runtime、trade-dns）")
+	cmd.Flags().StringSliceVar(&only, "only", nil, "只发布指定目标（storage-policy、collector-runtime）")
 	cmd.Flags().BoolVar(&yes, "yes", false, "确认写入并重启受影响的服务")
 	cmd.Flags().BoolVar(&allowShrink, "allow-retention-shrink", false, "允许缩短保留期（会删除超出新保留期的数据）")
 	return cmd
@@ -201,26 +201,9 @@ func configTargets(snapshot *setupconfig.Snapshot) ([]configTarget, error) {
 			if current == nil {
 				return nil, errConfigNotDeployed
 			}
-			return setupconfig.RenderCollectorDNSResolverConfig(snapshot, current)
+			return setupconfig.RenderCollectorRuntimeConfig(snapshot, current)
 		},
 	}}
-	if tradeNode := strings.TrimSpace(manifest.DNSResolver.TradeNode); tradeNode != "" {
-		tradeHost, err := findSetupHost(manifest, tradeNode)
-		if err != nil {
-			return nil, fmt.Errorf("resolve Trade DNS resolver host %q: %w", tradeNode, err)
-		}
-		targets = append(targets, configTarget{
-			ID: "trade-dns", Host: tradeHost, Root: paths.ControlRoot,
-			Path: path.Join(paths.ControlRoot, "trade", "config", "app.yaml"), Format: "yaml",
-			Services: []string{"trade"},
-			render: func(current []byte) ([]byte, error) {
-				if current == nil {
-					return nil, errConfigNotDeployed
-				}
-				return setupconfig.RenderTradeDNSResolverConfigForNode(snapshot, tradeHost.Name, current)
-			},
-		})
-	}
 	return targets, nil
 }
 
