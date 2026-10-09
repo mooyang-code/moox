@@ -31,9 +31,11 @@
 
 `make test-go` 在 Admin 的 `TestSysDeployService_GoomMock_DelegatesList` 因 macOS ARM64 的 goom 运行时内存权限错误失败。原分支 Go `1.25.0` 下也已复现同一错误，不能将其算作通过或直接跳过。该 `sysdeploy/rpc` 测试包已在本机以固定 Go、禁用内联的原有测试选项交叉编译，并在 Linux amd64 全包运行通过。另逐模块运行了当时工作区的 52 个模块；Factor 首次因系统 Python 缺少 pandas 失败，使用已安装的 Python `3.12.14`、pandas `2.2.3`、numpy `2.3.5` 后测试通过。新增的第 53 个模块 `servicecatalog` 已通过 race 测试和 vet；其余模块测试通过。第 54 个模块为本机 Directory 的协议生成代码，已与 GatewayControl 协议一起生成并通过受影响包的测试和 vet，运行服务尚未接入。固定 CI runner 和最终统一回归仍是未通过门禁。
 
-后续已解决完整依赖解析阻塞：旧 Slime 重试库间接引用了无法下载的 `go_reuseport`，现已改为项目内的两次只读重试，保留退避、上下文取消、服务端 pushback 与每次尝试的输出隔离，并补齐元数据字节复制。重试包、Gateway 转发及 Archive/Monitor 调用方的 race 回归和 vet 通过。当前完整模块图为 849 项；与 `503f5a37` 可解析的 417 项元数据比较，61 项已有模块版本升级、435 项新增、3 项移除（包括共享路由包改名）。基线仍有上述失效模块的元数据缺失，差异清单不推断其未知依赖。当前依赖最低 Go 最高为 `1.25.1`，固定的 `1.26.9` 满足要求。[完整版本差异清单](计划/console-proxy-dependency-audit.json)记录了全部条目；这是模块元数据审计，不代表所有依赖均进入最终二进制。Zap 升至 `1.28.0`、x/net 升至 `0.55.0`、x/crypto 升至 `0.52.0`；Prometheus client_golang 保持 `1.23.2`。`make check-go-module-graph` 已在禁止网络代理的条件下通过，已接入 `make verify-pr` 和 CNB；上述完整依赖解析门禁已通过，自建 runner 和最终统一回归仍待完成。
+后续已解决完整依赖解析阻塞：旧 Slime 重试库间接引用了无法下载的 `go_reuseport`，现已改为项目内的两次只读重试，保留退避、上下文取消、服务端 pushback 与每次尝试的输出隔离，并补齐元数据字节复制。重试包、Gateway 转发及 Archive/Monitor 调用方的 race 回归和 vet 通过。当前完整模块图为 850 项；与 `503f5a37` 可解析的 417 项元数据比较，61 项已有模块版本升级、436 项新增、3 项移除（包括共享路由包改名）。基线仍有上述失效模块的元数据缺失，差异清单不推断其未知依赖。当前依赖最低 Go 最高为 `1.25.1`，固定的 `1.26.9` 满足要求。[完整版本差异清单](计划/console-proxy-dependency-audit.json)记录了全部条目；这是模块元数据审计，不代表所有依赖均进入最终二进制。Zap 升至 `1.28.0`、x/net 升至 `0.55.0`、x/crypto 升至 `0.52.0`；Prometheus client_golang 保持 `1.23.2`。`make check-go-module-graph` 已在禁止网络代理的条件下通过，已接入 `make verify-pr` 和 CNB；上述完整依赖解析门禁已通过，自建 runner 和最终统一回归仍待完成。
 
 A8 已让 Doctor 使用共享目录，删除 `components.yaml`，发布与 shell 部署改为复制 `config/servicecatalog/catalog.yaml` 及其字节校验值。Doctor/目录/相关诊断调用方的 race 测试、CLI 全量测试、Monitor 各包测试及 vet 通过；CLI 回归使用 Python `3.12`，避免系统 Python `3.9` 在临时 HOME 下生成缓存引发的清理竞态。Doctor 聚焦 E2E、监控覆盖契约和发布契约通过；旧 Factor 构建包装脚本的 target 已修正为 `factor-mgr`。这些契约检查不等于三类最终发布包验收，部署种子与实际探针仍须随 B/F/G 迁移。
+
+A5 已新增第 55 个工作区模块 `gatewayclient`，本机完成实际 tRPC 对象调用、原始 PB/JSON 转发、目录协议和 TLS 校验测试；本机交叉编译的测试包已在 Linux amd64 全包运行通过。为避免 SDK 在 Linux amd64 自动切换 tnet 与自有池不匹配，客户端显式使用 go-net。共享包的 race 回归与 vet 通过。客户端按 TLS 身份隔离连接池，同时验证相同身份连接复用、错误 CA/SNI 拒绝、缓存写入失败时目录撤回仍生效，以及写方法与业务错误不重试。运行网关和业务调用方尚未接入，仍不满足 P4～P7 或正式切换条件。
 
 control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/caddy/caddy`；持久 root、发布 root 和发布指纹一致，root 私钥匹配且权限正确，持久指纹基线尚不存在。现场 SHA-256 为：
 

@@ -32,6 +32,7 @@ use (
 	./packages/events
 	./packages/frequency
 	./packages/gatewayauth
+	./packages/gatewayclient
 	./packages/gatewayroute
 	./packages/gatewayroute/proto/gatewayroutegen
 	./packages/healthz
