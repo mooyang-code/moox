@@ -128,6 +128,7 @@ case "${TARGET_MODULE}" in
     build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
     build_go modules/eventbus ./cmd/server moox-eventbus 0
     build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     build_web_host
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
     build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
@@ -164,6 +165,9 @@ case "${TARGET_MODULE}" in
     ;;
   eventbus)
     build_go modules/eventbus ./cmd/server moox-eventbus 0
+    ;;
+  egress-proxy)
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     ;;
   console-proxy)
     build_go modules/consoleproxy ./cmd/server moox-console-proxy 0

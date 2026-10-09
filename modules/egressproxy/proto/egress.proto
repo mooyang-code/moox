@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package trpc.moox.egress;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen;egresspb";
+
+service Proxy {
+  rpc Do(DoReq) returns (DoRsp);
+  rpc ResolveDomains(ResolveDomainsReq) returns (ResolveDomainsRsp);
+}
+
+message DoReq {
+  string method = 1;
+  string host = 2;
+  string path = 3;
+  string query = 4;
+  map<string, string> headers = 5;
+  bytes body = 6;
+  int32 timeout_ms = 7;
+}
+
+message DoRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  int32 status = 2;
+  map<string, string> headers = 3;
+  // 已解压，最多 32 MiB；HTTP 错误状态仍是代理成功响应。
+  bytes body = 4;
+}
+
+message ResolveDomainsReq {
+  repeated string domains = 1;
+  uint32 max_ips_per_domain = 2;
+}
+
+message ResolvedIP {
+  string ip = 1;
+  uint32 tcp_connect_latency_ms = 2;
+}
+
+message DomainResolution {
+  string domain = 1;
+  repeated ResolvedIP ips = 2;
+}
+
+message ResolveDomainsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated DomainResolution resolutions = 2;
+  repeated string unresolved_domains = 3;
+}

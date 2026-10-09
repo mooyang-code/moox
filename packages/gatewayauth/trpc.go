@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
+
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"

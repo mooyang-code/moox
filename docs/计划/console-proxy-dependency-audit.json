@@ -3,7 +3,7 @@
   "date": "2026-10-09",
   "scope": "Go workspace selected module metadata; not runtime binary dependency coverage",
   "baseline_modules": 417,
-  "current_modules": 852,
+  "current_modules": 854,
   "baseline_unresolved": [
     "trpc.group/trpc-go/go_reuseport@v1.7.1-0.20230423021710-f5eeff5d87a3"
   ],
@@ -1383,6 +1383,14 @@
     ],
     [
       "github.com/mooyang-code/moox/modules/consoleproxy",
+      "workspace"
+    ],
+    [
+      "github.com/mooyang-code/moox/modules/egressproxy",
+      "workspace"
+    ],
+    [
+      "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen",
       "workspace"
     ],
     [

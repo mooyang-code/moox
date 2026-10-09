@@ -11,6 +11,8 @@ use (
 	./modules/collector
 	./modules/collector/proto/collectorgen
 	./modules/consoleproxy
+	./modules/egressproxy
+	./modules/egressproxy/proto/egressgen
 	./modules/eventbus
 	./modules/eventbus/proto/eventbusgen
 	./modules/factor

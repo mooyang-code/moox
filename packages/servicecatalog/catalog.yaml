@@ -1526,7 +1526,8 @@ components:
       - path: trpc.moox.egress.Proxy
         port: 11440
         timeout_ms: 120000
-        max_body_bytes: 33554432
+        # 32 MiB decoded HTTP body plus PB/JSON framing and bounded headers.
+        max_body_bytes: 50331648
         methods:
           - Do
           - ResolveDomains

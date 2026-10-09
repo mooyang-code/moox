@@ -132,7 +132,7 @@ func (s *State) enrich(rsp *Response) {
 
 // Mux is the exact-path router used by MooX standard HTTP services.
 // tRPC's http_no_protocol registration accepts a net/http.Handler, while the
-// service lifecycle remains owned by thttp.RegisterNoProtocolServiceMux.
+// service lifecycle uses the shared transport and framework registration.
 type Mux struct {
 	routes   map[string]http.Handler
 	prefixes []muxPrefix
