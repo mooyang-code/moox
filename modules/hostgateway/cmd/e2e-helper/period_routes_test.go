@@ -77,7 +77,7 @@ func TestCollectorPeriodRoutesCombineStorageAndMetadata(t *testing.T) {
 const runtimeSeed = `services:
   - name: collector_market_runtime
     host: 127.0.0.1
-    port: 11418
+    port: 11422
     gateway_path: trpc.moox.collector.MarketFetchRuntime
     gateway_service_id: collector-market-runtime
     gateway_enabled: true

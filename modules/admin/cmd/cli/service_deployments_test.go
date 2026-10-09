@@ -351,7 +351,7 @@ func TestValidateServiceDeploymentSeed_RejectsDuplicateAndInvalidGateway(t *test
 	base.Services[0].GatewayEnabled = true
 	require.ErrorContains(t, validateServiceDeploymentSeed(base), "gateway_service_id")
 	base.Services[0].GatewayService = "same"
-	base.Services[0].Protocol = "trpc"
+	base.Services[0].Protocol = "https"
 	require.ErrorContains(t, validateServiceDeploymentSeed(base), "gateway-enabled protocol")
 	base.Node.ID = "bad/id"
 	base.Services[0].Protocol = "http"

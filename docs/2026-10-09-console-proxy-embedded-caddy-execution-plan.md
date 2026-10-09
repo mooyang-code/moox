@@ -85,6 +85,8 @@ control 的只读核验确认：旧 manager 实际使用 `<部署目录>/data/ca
 
 主计划 D1 的 CLI K 线与金丝雀 Storage 调用迁移已完成：独立的操作员 caller/KeyID/密钥配置通过真实 SSH 隧道读取 control Directory，按可信 manifest 主机转发 loopback 11002；Directory 公网地址不能覆盖 SSH 目标。保留 Storage 请求角色认证，删除数据配置中的旧网关密钥与导出逻辑，Admin bootstrap bundle 生成对应配置。连接复用、断连重建、目录切换及关闭有实际回归；CLI 日志写 stderr，JSON 输出可独立解析。CLI 全包 race、Admin CLI/辅助程序 race、vet、Skill 查询契约及实际 K 线全链路通过；两个静态程序和五个 Linux 测试包均在本机关闭 CGO 构建，五包在 Linux 全量执行通过。独立模块构建、851 模块图、边界、架构文档、格式及 15 份 schema 检查通过。依赖图新增三个间接元数据模块，已有选择版本不变，差异清单已更新。CLI 的其他 HTTP 入口与对应服务在 D2 同批迁移，D2f 已补齐运维入口清单；身份安装、独立审查与正式部署仍待 G/J。
 
+主计划 D2a 的 CollectMgr 与全部调用方迁移已完成：11402 改为原生 tRPC，删除 11418，MarketFetchRuntime 保留 11422；部署登记与监听契约同步。Monitor 清单复用进程级客户端，删除旧 HTTP 配置及凭据读取，只增加清单读取 ACL；CLI 任务 CRUD 与金丝雀清单共用已有 SSH 客户端，分别使用 JSON 与 PB，旧 HTTP 路径拒绝回退。全包 race、相关 vet、真实 SSH/原生 RPC 和 Monitor HMAC 清单回归通过；四个静态程序及 11 个 Linux 测试包均在本机关闭 CGO 构建，11 包在 Linux 全量运行通过。边界、851 模块图、架构文档、格式及 15 份 schema 检查通过。CloudNode Timer 盘点留到 D2b，其他 D2～J、最终独立审查与正式切换仍待完成。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。

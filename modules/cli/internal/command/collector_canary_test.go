@@ -83,7 +83,7 @@ func TestCollectorSCFCanaryEnsuresPeriodBeforeInvoke(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := runCollectorSCFCanary(context.Background(), adminclient.New(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
+	err := runCollectorSCFCanary(context.Background(), collectorTestClient(server), collectorPublishOptions{canaryProof: proof}, "canary-node")
 	require.NoError(t, err)
 	require.EqualValues(t, 1, ensureCallsAtInvoke.Load(), "Storage must have persisted the period contract before SCF writes it")
 	require.NotNil(t, primary.ensuredExpectation)
@@ -111,7 +111,7 @@ func TestCollectorSCFCanaryDoesNotInvokeWhenEnsureFails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := runCollectorSCFCanary(context.Background(), adminclient.New(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
+	err := runCollectorSCFCanary(context.Background(), collectorTestClient(server), collectorPublishOptions{canaryProof: proof}, "canary-node")
 	require.ErrorContains(t, err, "ensure Storage period")
 	require.Zero(t, invokeCalls.Load())
 }
@@ -476,7 +476,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 				EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON,
 				canaryProof: proof,
 			}
-			summary, canaryNode, err := publishCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), opts, "candidate-package")
+			summary, canaryNode, err := publishCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), opts, "candidate-package")
 			if tc.wantError {
 				require.Error(t, err)
 			} else {
@@ -537,7 +537,7 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", FunctionNamePrefix: prefix,
 	}, "", true, false)
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown, "without the caller context, an accepted async delete cannot be reported as complete")
@@ -568,7 +568,7 @@ func TestCleanupWaitsForKnownCanaryDeploymentBatchBeforeInventory(t *testing.T) 
 	}))
 	defer server.Close()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
 	}, "create-job", false, false)
@@ -613,7 +613,7 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 	}))
 	defer server.Close()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: prefix,
 	}, "", false, true)
@@ -634,7 +634,7 @@ func TestCleanupCanceledKnownCanaryBatchFailsClosedBeforeInventory(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
 	}, "create-job", false, false)
@@ -672,7 +672,7 @@ func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: prefix,
 	}, "", true, false)
@@ -896,7 +896,7 @@ func canaryResponseClient(t *testing.T, result map[string]any) *adminclient.Clie
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	return adminclient.New(server.URL)
+	return collectorTestClient(server)
 }
 
 func mustCanaryJSON(t *testing.T, value any) []byte {
@@ -1066,27 +1066,20 @@ func TestCollectorCanaryRejectsAViewRowWithoutTheRequestedField(t *testing.T) {
 	require.ErrorContains(t, err, `missing requested field "close"`)
 }
 
-func TestCollectorHTTPInventoryReaderUsesTheServiceGatewayRoute(t *testing.T) {
-	var gotPath string
-	var gotBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"snapshot_id":"snap-1","entries":[{"task_id":"canary","enabled":false,"expected_count":1}],"page":{"page":1,"size":100,"total":1}}`))
-	}))
-	defer server.Close()
-
-	reader := collectorHTTPInventoryReader{control: adminclient.New(server.URL)}
-	rsp, err := reader.GetTaskResultInventory(context.Background(), &collectorpb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 100},
-	})
+func TestCollectorGatewayInventoryReaderUsesTheTaskInventoryMethod(t *testing.T) {
+	var got *collectorpb.GetTaskResultInventoryReq
+	reader := collectorGatewayInventoryReader{gateway: storageGatewayCall(func(_ context.Context, service, method string, request, response any) error {
+		require.Equal(t, "trpc.moox.collector.CollectMgr", service)
+		require.Equal(t, "GetTaskResultInventory", method)
+		got = request.(*collectorpb.GetTaskResultInventoryReq)
+		*response.(*collectorpb.GetTaskResultInventoryRsp) = collectorpb.GetTaskResultInventoryRsp{SnapshotId: "snap-1"}
+		return nil
+	})}
+	rsp, err := reader.GetTaskResultInventory(context.Background(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 100}})
 	require.NoError(t, err)
-	assert.Equal(t, "/api/admin/collectmgr/GetTaskResultInventory", gotPath)
-	assert.Equal(t, "crypto", gotBody["space_id"])
-	assert.Equal(t, "snap-1", rsp.GetSnapshotId())
-	require.Len(t, rsp.GetEntries(), 1)
-	assert.Equal(t, "canary", rsp.GetEntries()[0].GetTaskId())
-	assert.EqualValues(t, 1, rsp.GetEntries()[0].GetExpectedCount())
-	assert.EqualValues(t, 1, rsp.GetPage().GetTotal())
+	require.Equal(t, "crypto", got.GetSpaceId())
+	require.Equal(t, uint32(100), got.GetPage().GetSize())
+	require.Equal(t, "snap-1", rsp.GetSnapshotId())
+	_, err = reader.GetTaskResultInventory(context.Background(), got, client.WithTarget("ip://127.0.0.1:1"))
+	require.ErrorContains(t, err, "overrides")
 }

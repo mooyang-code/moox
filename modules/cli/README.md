@@ -26,4 +26,4 @@ key_id: <Admin 分配的公开 KeyID>
 key_file: caller-moox-cli.key
 ```
 
-`data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者只包含原 Storage 读取角色凭据与数据集目录。`setup export-skill-config` 不再读取或导出网关签名密钥；旧配置中的 `gateway` 字段必须通过重新导出移除。Collector 清单当前仍走 HTTP，在 D2a 与 CollectMgr 服务端同批迁移；其他 CLI 路径按相应 D2/G 阶段迁移。
+`data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者只包含原 Storage 读取角色凭据与数据集目录。`setup export-skill-config` 不再读取或导出网关签名密钥；旧配置中的 `gateway` 字段必须通过重新导出移除。Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发；两者复用金丝雀命令持有的同一 SSH 网关客户端，不再访问旧 CollectMgr HTTP 路由。其他 CLI 路径按相应 D2/G 阶段迁移。

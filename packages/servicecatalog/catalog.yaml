@@ -602,6 +602,10 @@ components:
             callers:
               - console
               - moox-cli
+          - methods:
+              - GetTaskResultInventory
+            callers:
+              - monitor
       - path: trpc.moox.collector.MarketFetchRuntime
         port: 11422
         timeout_ms: 5000

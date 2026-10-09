@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +49,7 @@ func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	nodes, err := client.ListCloudNodes(context.Background(), CloudNodeListFilter{
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
@@ -77,7 +78,7 @@ func TestListCloudNodesPassesScopedTimerReadbackFilters(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL).ListCloudNodes(context.Background(), CloudNodeListFilter{
+	_, err := collectorTestClient(server).ListCloudNodes(context.Background(), CloudNodeListFilter{
 		CloudAccountID: "account-a",
 		Namespace:      "default",
 		Region:         "ap-singapore",
@@ -96,7 +97,7 @@ func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	accounts, err := client.ListCloudAccounts(context.Background(), "tencent")
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
@@ -117,7 +118,7 @@ func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
 	}))
 	defer server.Close()
 
-	account, err := New(server.URL).CreateCloudAccount(context.Background(), CloudAccountInput{
+	account, err := collectorTestClient(server).CreateCloudAccount(context.Background(), CloudAccountInput{
 		AccountID: "tencent-scf-singapore", AccountName: "Tencent SCF Singapore", Provider: "tencent",
 		CredentialSecretID: "tencent-default", AppID: "1255382561", COSRegion: "ap-singapore", COSBucket: "moox-scf-singapore-1255382561",
 	})
@@ -146,7 +147,7 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, New(server.URL).EnableCollectionTask(context.Background(), "stockcn", "d5v5n3p8r7c9m2k4j6h1"))
+	require.NoError(t, collectorTestClient(server).EnableCollectionTask(context.Background(), "stockcn", "d5v5n3p8r7c9m2k4j6h1"))
 }
 
 func TestCreateTaskStartsDisabled(t *testing.T) {
@@ -172,7 +173,7 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	taskID, err := New(server.URL).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+	taskID, err := collectorTestClient(server).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
 		"frequency": "1m",
 	}, &ResultConfig{DataNodeID: "node-1", Description: "A 股 K 线结果"})
 	require.NoError(t, err)
@@ -216,7 +217,7 @@ func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tasks, err := New(server.URL).ListEnabledTasks(context.Background(), "stockcn")
+	tasks, err := collectorTestClient(server).ListEnabledTasks(context.Background(), "stockcn")
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "A 股 K 线 1m", tasks[0].TaskName)
@@ -235,4 +236,10 @@ func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 	assert.Equal(t, 2, ResolvePackageType("factor"))
 	assert.Equal(t, 3, ResolvePackageType("custom"))
 	assert.Equal(t, 1, ResolvePackageType("unknown"))
+}
+
+func collectorTestClient(server *httptest.Server) *Client {
+	c := New(server.URL)
+	c.CollectorGateway = testfixture.CollectorHandlerGateway{Handler: server.Config.Handler}
+	return c
 }

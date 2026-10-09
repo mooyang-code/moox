@@ -203,7 +203,7 @@ services:
   - name: moox_collector
     kind: collector
     deployment_mode: process
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
     port: 11402
     gateway_path: trpc.moox.collector.CollectMgr
@@ -221,9 +221,9 @@ services:
   - name: collector_market_runtime
     kind: collector_runtime
     deployment_mode: endpoint
-    protocol: http
+    protocol: trpc
     host: 127.0.0.1
-    port: 11418
+    port: 11422
     gateway_path: trpc.moox.collector.MarketFetchRuntime
     gateway_service_id: collector-market-runtime
     gateway_enabled: true

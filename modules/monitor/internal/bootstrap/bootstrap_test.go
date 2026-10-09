@@ -63,55 +63,30 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	}
 }
 
-func TestBuildKlineFreshnessInventoryUsesCollectorGatewayHTTPEntry(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
-	cfg := config.Default()
-	cfg.KlineFreshness.Enabled = true
-	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
+type collectorInventoryTestInvoke func(context.Context, string, string, any, any) error
 
-	keyPath := filepath.Join(t.TempDir(), "caller-monitor.key")
-	require.NoError(t, os.WriteFile(keyPath, []byte("monitor-fixture-signing-key-at-least-32-bytes\n"), 0o600))
-	configPath := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(configPath, []byte("sysdeploy:\n  enabled: false\ngateway_client:\n  caller: monitor\n  key_id: fixture-monitor-key\n  key_file: "+keyPath+"\n"), 0o600))
-	loaded, err := config.Load(configPath)
-	require.NoError(t, err)
-	loaded.KlineFreshness = cfg.KlineFreshness
-	cfg = loaded
-
-	cache, err := buildKlineFreshnessInventory(cfg)
-	require.NoError(t, err)
-	require.NotNil(t, cache)
-
-	missingURL := *cfg
-	missingURL.KlineFreshness.CollectorGatewayURL = ""
-	_, err = buildKlineFreshnessInventory(&missingURL)
-	require.ErrorContains(t, err, "gateway URL")
-
-	disabled := *cfg
-	disabled.KlineFreshness.Enabled = false
-	cache, err = buildKlineFreshnessInventory(&disabled)
-	require.NoError(t, err)
-	require.Nil(t, cache)
-
-	invalid := *cfg
-	invalid.KlineFreshness.InventoryPageSize = 101
-	_, err = buildKlineFreshnessInventory(&invalid)
-	require.ErrorContains(t, err, "page size")
+func (f collectorInventoryTestInvoke) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return f(ctx, service, method, req, rsp)
 }
 
-func TestKlineFreshnessCollectorRouteDoesNotReuseMetricsStorageRoute(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "gateway-default")
+func TestBuildKlineFreshnessInventoryBorrowsGateway(t *testing.T) {
 	cfg := config.Default()
-	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
-	cfg.KlineFreshness.CollectorGatewayNodeID = "collector-node"
-
-	target, nodeID := klineFreshnessCollectorRoute(cfg)
-	require.Equal(t, "http://collector-gateway:11002", target)
-	require.Equal(t, "collector-node", nodeID)
-
-	cfg.KlineFreshness.CollectorGatewayNodeID = ""
-	_, nodeID = klineFreshnessCollectorRoute(cfg)
-	require.Equal(t, "gateway-default", nodeID)
+	cfg.KlineFreshness.Enabled = true
+	gateway := collectorInventoryTestInvoke(func(context.Context, string, string, any, any) error { return nil })
+	cache, err := buildKlineFreshnessInventory(cfg, gateway)
+	require.NoError(t, err)
+	require.NotNil(t, cache)
+	_, err = buildKlineFreshnessInventory(cfg, nil)
+	require.ErrorContains(t, err, "gateway client")
+	disabled := *cfg
+	disabled.KlineFreshness.Enabled = false
+	cache, err = buildKlineFreshnessInventory(&disabled, nil)
+	require.NoError(t, err)
+	require.Nil(t, cache)
+	invalid := *cfg
+	invalid.KlineFreshness.InventoryPageSize = 101
+	_, err = buildKlineFreshnessInventory(&invalid, gateway)
+	require.ErrorContains(t, err, "page size")
 }
 
 func TestMaxInt(t *testing.T) {

@@ -319,8 +319,8 @@ func validateDeployment(item *Deployment) error {
 		return fmt.Errorf("extra_config must be a valid JSON object")
 	}
 	if item.GatewayEnabled {
-		if item.Protocol != "http" {
-			return fmt.Errorf("gateway-enabled protocol must be http")
+		if item.Protocol != "http" && item.Protocol != "trpc" {
+			return fmt.Errorf("gateway-enabled protocol must be http or trpc")
 		}
 		extra, err := parseRouteExtraConfig(item.ExtraConfig)
 		if err != nil {

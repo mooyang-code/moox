@@ -901,7 +901,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, gatewayErr
 		}
 		defer proofGateway.Close()
-		canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorHTTPInventoryReader{control: client}, proofGateway, collectorCanaryTrust)
+		client.CollectorGateway = proofGateway
+		canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorGatewayInventoryReader{gateway: proofGateway}, proofGateway, collectorCanaryTrust)
 		if accessErr != nil {
 			return collectorPublishSummary{}, accessErr
 		}
@@ -1527,7 +1528,8 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		return summary, gatewayErr
 	}
 	defer proofGateway.Close()
-	canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorHTTPInventoryReader{control: client}, proofGateway, trustMaterial)
+	client.CollectorGateway = proofGateway
+	canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorGatewayInventoryReader{gateway: proofGateway}, proofGateway, trustMaterial)
 	if accessErr != nil {
 		return summary, accessErr
 	}

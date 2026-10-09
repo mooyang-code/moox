@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,7 +54,7 @@ func TestEnsureStockCNKlineTaskCreatesGeneratedTaskFromTagDefinition(t *testing.
 	}))
 	defer server.Close()
 
-	taskID, err := ensureStockCNKlineTask(context.Background(), adminclient.New(server.URL), "stockcn")
+	taskID, err := ensureStockCNKlineTask(context.Background(), collectorTestClient(server), "stockcn")
 	require.NoError(t, err)
 	assert.Equal(t, generatedID, taskID)
 }
@@ -63,4 +64,10 @@ func TestCollectorTaskWorkflowHelpUsesTaskTerminology(t *testing.T) {
 	flag := collectorFunctionPublishSubmitCmd.Flags().Lookup("enable-stockcn")
 	require.NotNil(t, flag)
 	assert.NotContains(t, flag.Usage, "规则")
+}
+
+func collectorTestClient(server *httptest.Server) *adminclient.Client {
+	c := adminclient.New(server.URL)
+	c.CollectorGateway = testfixture.CollectorHandlerGateway{Handler: server.Config.Handler}
+	return c
 }

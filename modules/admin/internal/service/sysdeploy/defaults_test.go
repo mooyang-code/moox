@@ -122,7 +122,7 @@ func TestDefaultDeploymentsDefineCanonicalGatewayEndpoints(t *testing.T) {
 		}
 	}
 	runtime, ok := byName["collector_market_runtime"]
-	if !ok || runtime.ServiceKind != "collector_runtime" || runtime.Protocol != "http" || runtime.Host != "127.0.0.1" || runtime.Port != 11418 || runtime.GatewayPath != "trpc.moox.collector.MarketFetchRuntime" || runtime.GatewayServiceID != "collector-market-runtime" || !runtime.GatewayEnabled || runtime.Scope != "internal" || runtime.Status != "active" {
+	if !ok || runtime.ServiceKind != "collector_runtime" || runtime.Protocol != "trpc" || runtime.Host != "127.0.0.1" || runtime.Port != 11422 || runtime.GatewayPath != "trpc.moox.collector.MarketFetchRuntime" || runtime.GatewayServiceID != "collector-market-runtime" || !runtime.GatewayEnabled || runtime.Scope != "internal" || runtime.Status != "active" {
 		t.Fatalf("collector runtime deployment = %#v", runtime)
 	}
 	runtimeExtra, err := parseRouteExtraConfig(runtime.ExtraConfig)
@@ -137,7 +137,7 @@ func TestDefaultDeploymentsDefineCanonicalGatewayEndpoints(t *testing.T) {
 
 func TestCollectorMarketRuntimeGatewayUsesNativeTRPCListener(t *testing.T) {
 	routes, err := deploymentGatewayRoutes(Deployment{
-		Host: "127.0.0.1", Port: 11418, GatewayPath: "trpc.moox.collector.MarketFetchRuntime", GatewayServiceID: "collector-market-runtime",
+		Host: "127.0.0.1", Port: 11422, GatewayPath: "trpc.moox.collector.MarketFetchRuntime", GatewayServiceID: "collector-market-runtime",
 	}, routeExtraConfig{GatewayMethods: []string{"ClaimTimerBatch"}, GatewayCallers: []string{"collector"}})
 	if err != nil || len(routes) != 1 || routes[0].Address != "127.0.0.1:11422" {
 		t.Fatalf("collector market runtime native route = %#v err=%v", routes, err)

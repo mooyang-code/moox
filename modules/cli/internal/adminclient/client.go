@@ -16,9 +16,10 @@ import (
 
 // Client calls the MooX control HTTP API used by CLI workflows.
 type Client struct {
-	BaseURL     string
-	AccessToken string
-	SpaceID     string
+	CollectorGateway GatewayForwarder
+	BaseURL          string
+	AccessToken      string
+	SpaceID          string
 	// ServiceAuth 后台服务签名鉴权配置。设置后请求走 /api/service/{service}/{method}
 	// 路由并使用 HMAC Auth 头，不再依赖用户登录态 X-Access-Token。
 	ServiceAuth    *ServiceAuthConfig
@@ -51,6 +52,9 @@ func isRetInfoNotFound(info retInfo) bool {
 	return strings.Contains(message, "not found") || strings.Contains(message, "record not found")
 }
 func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([]byte, error) {
+	if strings.HasPrefix(path, "/api/admin/collectmgr/") || strings.HasPrefix(path, "/api/service/collectmgr/") {
+		return nil, fmt.Errorf("Collector HTTP routes have been removed; use the SSH gateway client")
+	}
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("control url is required")
 	}

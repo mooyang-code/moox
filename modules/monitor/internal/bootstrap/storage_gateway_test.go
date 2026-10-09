@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -36,6 +38,7 @@ import (
 
 type monitorGatewayWire struct {
 	storagepb.UnimplementedMetadata
+	collectorpb.UnimplementedCollectMgr
 	storagepb.UnimplementedPrimaryStore
 	directorypb.UnimplementedDirectory
 	credentials gatewayauth.Credentials
@@ -56,6 +59,7 @@ func (w *monitorGatewayWire) GetDirectory(_ context.Context, req *directorypb.Ge
 	}
 	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
 		Services: map[string]*directorypb.ServiceHosts{
+			"trpc.moox.collector.CollectMgr": {HostIds: []string{"control"}},
 			"trpc.moox.storage.Metadata":     {HostIds: []string{"control"}},
 			"trpc.moox.storage.PrimaryStore": {HostIds: []string{"control"}},
 		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
@@ -114,6 +118,16 @@ func (w *monitorGatewayWire) UpsertFields(ctx context.Context, req *storagepb.Pr
 	return nil, errs.NewFrameError(errs.RetServerNoService, "writes must not retry")
 }
 
+func (w *monitorGatewayWire) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq) (*collectorpb.GetTaskResultInventoryRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", req); err != nil {
+		return nil, err
+	}
+	if req.GetSpaceId() != "crypto" || req.GetSnapshotId() != "generation-1" {
+		return nil, errors.New("inventory scope changed")
+	}
+	return &collectorpb.GetTaskResultInventoryRsp{SnapshotId: "generation-1"}, nil
+}
+
 func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "fixture-storage-primary-role-secret")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
@@ -143,12 +157,13 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(hostPath, encoded, 0o600))
 	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"},
+		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.collector.CollectMgr": {"control"},
 	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	wire := &monitorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
+	collectorpb.RegisterCollectMgrService(svc, wire)
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)
@@ -168,12 +183,18 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.Equal(t, "mooxsys", rsp.GetSpace().GetSpaceId())
 	_, err = runtime.StorageGateway.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{AuthInfo: storageauth.Primary("monitor")})
 	require.Equal(t, int(errs.RetServerNoService), int(errs.Code(err)), "%v", err)
+	inventory, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
+	require.NoError(t, err)
+	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "generation-1"})
+	require.NoError(t, err)
+	require.Equal(t, "generation-1", inventoryResponse.GetSnapshotId())
 	wire.mu.Lock()
-	require.Equal(t, 2, wire.reads)
-	require.Equal(t, 1, wire.writes)
-	require.Len(t, wire.nonces, 3)
-	require.GreaterOrEqual(t, wire.refreshes, 2)
+	reads, writes, nonces, refreshes := wire.reads, wire.writes, len(wire.nonces), wire.refreshes
 	wire.mu.Unlock()
+	require.Equal(t, 2, reads)
+	require.Equal(t, 1, writes)
+	require.Equal(t, 4, nonces)
+	require.GreaterOrEqual(t, refreshes, 2)
 	_, err = runtime.StorageGateway.GetSpace(t.Context(), &storagepb.GetSpaceReq{SpaceId: "mooxsys"}, client.WithTarget("ip://192.0.2.99:20200"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
 	cache, err := os.Stat(filepath.Join(data, "gatewayclient", "directory.json"))

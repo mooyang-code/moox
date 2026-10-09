@@ -23,7 +23,7 @@ import (
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -54,7 +54,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
-	if cfg.Metrics.Enabled || cfg.Metrics.HostStorage.Enabled || cfg.MarketCanary.Enabled {
+	if cfg.Metrics.Enabled || cfg.Metrics.HostStorage.Enabled || cfg.MarketCanary.Enabled || cfg.KlineFreshness.Enabled {
 		runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "monitor gateway directory refresh: %v", err) })
 		if err != nil {
 			_ = runtime.Close()
@@ -219,7 +219,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
 	}
-	klineInventory, err := buildKlineFreshnessInventory(cfg)
+	klineInventory, err := buildKlineFreshnessInventory(cfg, runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -277,17 +277,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInventoryCache, error) {
+func buildKlineFreshnessInventory(cfg *config.Config, gateway gatewayclient.Invoker) (*monmetrics.TaskResultInventoryCache, error) {
 	if cfg == nil || !cfg.KlineFreshness.Enabled {
 		return nil, nil
 	}
-	credentials, err := cfg.CollectorInventoryCredentials()
-	if err != nil {
-		return nil, fmt.Errorf("monitor collector inventory credentials: %w", err)
-	}
-	gatewayURL, targetNode := klineFreshnessCollectorRoute(cfg)
-	client, err := monmetrics.NewCollectorInventoryHTTPClient(gatewayURL, targetNode, credentials,
-		os.Getenv("MOOX_SERVICE_GATEWAY_CA_FILE"), 15*time.Second)
+	client, err := monmetrics.NewCollectorInventoryGatewayClient(gateway)
 	if err != nil {
 		return nil, err
 	}
@@ -300,11 +294,6 @@ func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInv
 		return nil, fmt.Errorf("monitor collector inventory cache: %w", err)
 	}
 	return cache, nil
-}
-
-func klineFreshnessCollectorRoute(cfg *config.Config) (string, string) {
-	return cfg.KlineFreshness.CollectorGatewayURL,
-		firstNonEmptyString(cfg.KlineFreshness.CollectorGatewayNodeID, gatewayauth.ServiceGatewayNodeID())
 }
 
 func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache) *monmetrics.KlineFreshnessEvaluator {

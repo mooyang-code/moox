@@ -141,10 +141,6 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayr
 		// native service gateway must speak tRPC to the dedicated 11430 listener.
 		// Deployment.Port remains the HTTP endpoint used by the Admin BFF.
 		basePort = 11430
-	case "collector-market-runtime":
-		// The deployment HTTP endpoint is reachable only by local clients. The
-		// native service gateway must speak tRPC to the dedicated loopback port.
-		basePort = 11422
 	}
 	base := gatewayroute.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {

@@ -626,8 +626,8 @@ func validateServiceDeploymentSeed(seed serviceDeploymentSeed) error {
 		if item.GatewayEnabled && strings.TrimSpace(item.GatewayService) == "" {
 			return fmt.Errorf("gateway_service_id is required for %q", name)
 		}
-		if item.GatewayEnabled && item.Protocol != "http" {
-			return fmt.Errorf("gateway-enabled protocol for %q must be http", name)
+		if item.GatewayEnabled && item.Protocol != "http" && item.Protocol != "trpc" {
+			return fmt.Errorf("gateway-enabled protocol for %q must be http or trpc", name)
 		}
 		if item.GatewayEnabled {
 			if err := validateSeedGatewayConfig(item); err != nil {

@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -22,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
-	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
@@ -118,28 +115,16 @@ func sameCollectorCanaryBinding(left, right *collectorpb.TaskResultInventoryEntr
 		left.GetExpectedCount() == right.GetExpectedCount() && slices.Equal(left.GetOutputFields(), right.GetOutputFields())
 }
 
-// collectorHTTPInventoryReader reads the task-result inventory through the
-// service gateway's HTTP route, the same path Monitor uses. CollectMgr only
-// serves HTTP, so the native tRPC gateway cannot reach it.
-type collectorHTTPInventoryReader struct {
-	control *adminclient.Client
-}
+// collectorGatewayInventoryReader borrows the command-owned gateway client.
+type collectorGatewayInventoryReader struct{ gateway gatewayclient.Invoker }
 
-func (r collectorHTTPInventoryReader) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq, _ ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error) {
-	if r.control == nil {
-		return nil, errors.New("Collector inventory control client is not configured")
-	}
-	body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	var raw json.RawMessage
-	if err := r.control.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskResultInventory", json.RawMessage(body), &raw); err != nil {
-		return nil, err
+func (r collectorGatewayInventoryReader) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq, options ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error) {
+	if r.gateway == nil || len(options) != 0 {
+		return nil, errors.New("Collector inventory requires the SSH gateway without RPC overrides")
 	}
 	rsp := &collectorpb.GetTaskResultInventoryRsp{}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, rsp); err != nil {
-		return nil, fmt.Errorf("decode Collector inventory: %w", err)
+	if err := r.gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", req, rsp); err != nil {
+		return nil, err
 	}
 	return rsp, nil
 }

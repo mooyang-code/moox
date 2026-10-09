@@ -81,7 +81,7 @@ func TestLoadRejectsPartialCollectorRuntimeGatewayConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "collector_runtime.node_id")
 }
 
-func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.T) {
+func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
 	require.NoError(t, err)
 	var config struct {
@@ -100,7 +100,15 @@ func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.
 		port     int
 		protocol string
 	})
+	foundCollectMgr := false
 	for _, service := range config.Server.Service {
+		require.NotEqual(t, 11418, service.Port)
+		if service.Name == "trpc.moox.collector.CollectMgr" {
+			foundCollectMgr = true
+			require.Equal(t, "127.0.0.1", service.IP)
+			require.Equal(t, 11402, service.Port)
+			require.Equal(t, "trpc", service.Protocol)
+		}
 		if strings.Contains(service.Name, "MarketFetchRuntime") {
 			listeners[service.Protocol] = struct {
 				ip       string
@@ -109,11 +117,9 @@ func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.
 			}{service.IP, service.Port, service.Protocol}
 		}
 	}
-	assert.Equal(t, struct {
-		ip       string
-		port     int
-		protocol string
-	}{"127.0.0.1", 11418, "http"}, listeners["http"])
+	require.True(t, foundCollectMgr)
+	assert.NotContains(t, listeners, "http")
+	require.Len(t, listeners, 1)
 	assert.Equal(t, struct {
 		ip       string
 		port     int

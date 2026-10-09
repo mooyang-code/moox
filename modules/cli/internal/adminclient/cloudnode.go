@@ -194,7 +194,7 @@ func (c *Client) CreateTask(ctx context.Context, spaceID, taskName, dataType, cr
 	if resultConfig != nil {
 		request["result_config"] = resultConfig
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTask", request, &response); err != nil {
+	if err := c.callCollectorJSON(ctx, "CreateTask", request, &response); err != nil {
 		return "", fmt.Errorf("CreateTask: %w", err)
 	}
 	if !isRetInfoSuccess(response.RetInfo.Code) {
@@ -215,7 +215,7 @@ func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, taskID strin
 		RetInfo retInfo        `json:"ret_info"`
 		Task    map[string]any `json:"task"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskDetail", map[string]any{
+	if err := c.callCollectorJSON(ctx, "GetTaskDetail", map[string]any{
 		"space_id": spaceID, "task_id": taskID,
 	}, &detail); err != nil {
 		return fmt.Errorf("GetTaskDetail: %w", err)
@@ -232,7 +232,7 @@ func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, taskID strin
 	var updated struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/UpdateTask", map[string]any{
+	if err := c.callCollectorJSON(ctx, "UpdateTask", map[string]any{
 		"space_id": spaceID, "task_id": taskID, "task": detail.Task,
 	}, &updated); err != nil {
 		return fmt.Errorf("UpdateTask: %w", err)
@@ -250,7 +250,7 @@ func (c *Client) DisableTask(ctx context.Context, spaceID, taskID string) error 
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DisableTask", map[string]any{
+	if err := c.callCollectorJSON(ctx, "DisableTask", map[string]any{
 		"space_id": spaceID, "task_id": taskID,
 	}, &response); err != nil {
 		return fmt.Errorf("DisableTask: %w", err)
@@ -268,7 +268,7 @@ func (c *Client) DeleteTask(ctx context.Context, spaceID, taskID string, deleteR
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DeleteTask", map[string]any{
+	if err := c.callCollectorJSON(ctx, "DeleteTask", map[string]any{
 		"space_id": spaceID, "task_id": taskID, "delete_result_data": deleteResultData,
 	}, &response); err != nil {
 		return fmt.Errorf("DeleteTask: %w", err)
@@ -305,7 +305,7 @@ func (c *Client) ListTasks(ctx context.Context, spaceID, dataType string, enable
 		if enabled != nil {
 			request["enabled"] = *enabled
 		}
-		if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskList", request, &response); err != nil {
+		if err := c.callCollectorJSON(ctx, "GetTaskList", request, &response); err != nil {
 			return nil, fmt.Errorf("GetTaskList: %w", err)
 		}
 		if !isRetInfoSuccess(response.RetInfo.Code) {

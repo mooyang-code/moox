@@ -134,7 +134,7 @@ func TestResolveSelectsCollectorRuntimeGatewayOnCollectorNode(t *testing.T) {
 			"ret_info": map[string]any{"code": 0, "msg": "ok"},
 			"deployment_map": map[string]any{
 				"collector-2/collector_market_runtime": map[string]any{
-					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "http", "host": "127.0.0.1", "port": 11418,
+					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "trpc", "host": "127.0.0.1", "port": 11422,
 				},
 				"storage-1/service_gateway_native": map[string]any{
 					"service_name": "service_gateway_native", "protocol": "trpc", "host": "storage-gw.example.com", "port": 11003,
@@ -167,7 +167,7 @@ func TestResolveNeverFallsBackCollectorRuntimeToStorageGateway(t *testing.T) {
 			"ret_info": map[string]any{"code": 0, "msg": "ok"},
 			"deployment_map": map[string]any{
 				"collector-2/collector_market_runtime": map[string]any{
-					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "http", "host": "127.0.0.1", "port": 11418,
+					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "trpc", "host": "127.0.0.1", "port": 11422,
 				},
 				"storage-1/service_gateway_native": map[string]any{
 					"service_name": "service_gateway_native", "protocol": "trpc", "host": "storage-gw.example.com", "port": 11003,
