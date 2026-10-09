@@ -123,6 +123,16 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
+		gatewayEvaluated := overview.GatewayHostsErr == nil
+		if gatewayEvaluated {
+			for _, host := range overview.GatewayHosts {
+				item := businessFreshnessItem{
+					spaceID: monmetrics.InternalMetricSpaceID, checkID: gatewayCheckID(host.HostID),
+					name: "主机网关（" + host.HostID + "）· 心跳与路由同步", success: host.Healthy, reason: host.Reason,
+				}
+				items[item.spaceID+"\x00"+item.checkID] = item
+			}
+		}
 		factorExpected, factorExpectedKnown := false, false
 		storageScopes := make(map[string]struct{})
 		for _, dataset := range overview.Datasets {
@@ -236,6 +246,10 @@ func buildBusinessFreshnessReporterWithInterval(
 			// absent overview item, otherwise a real canary failure is immediately
 			// resolved by a concurrent no_longer_expected result.
 			if strings.HasPrefix(check.CheckID, "market_canary:") {
+				continue
+			}
+			if strings.HasPrefix(check.CheckID, gatewayCheckPrefix) && !gatewayEvaluated {
+				// SysDeploy 暂时读不到时保留主机网关检查上一次的状态，不当作已恢复。
 				continue
 			}
 			if strings.HasPrefix(check.CheckID, "kline_freshness:") {
@@ -433,6 +447,11 @@ func reporterDeploymentExpected(
 
 // noLongerExpected resolves a check whose subject was disabled or removed.
 const noLongerExpected = "已停用或移除，不再检查"
+
+// gatewayCheckPrefix 是主机网关状态检查 ID 的前缀，检查 ID 为 host_gateway:<主机>。
+const gatewayCheckPrefix = "host_gateway:"
+
+func gatewayCheckID(hostID string) string { return gatewayCheckPrefix + hostID }
 
 func hostMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
 	for _, id := range []string{dataset.DatasetID, dataset.PrimaryDatasetID} {

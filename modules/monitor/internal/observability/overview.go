@@ -62,11 +62,15 @@ type Overview struct {
 	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
+	// GatewayHosts 是各主机的主机网关状态；GatewayHostsErr 不为空时表示 SysDeploy 暂时读不到，调用方应保留上一次的判断。
+	GatewayHosts    []GatewayHostStatus
+	GatewayHostsErr error
 }
 
 type Builder struct {
 	Metrics                    *monmetrics.QueryService
 	Hosts                      *hostmetrics.Store
+	GatewayHosts               HostGatewaySource
 	Checks                     *store.CheckRepository
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
@@ -123,6 +127,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, delivery...)
+	out.GatewayHosts, out.GatewayHostsErr = b.buildGatewayHosts(ctx, now)
 	sortOverview(&out)
 	return out, nil
 }

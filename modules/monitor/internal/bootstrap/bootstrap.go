@@ -224,7 +224,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory)
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
-		Metrics: metricsQuery, Hosts: hostStore,
+		Metrics: metricsQuery, Hosts: hostStore, GatewayHosts: newPlacementSource(runtime),
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
