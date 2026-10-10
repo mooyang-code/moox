@@ -171,10 +171,10 @@ export const staticRoutes = [
         meta: { title: "ops-monitor" }
       },
       {
-        path: "/ops/services",
-        name: "ops-services",
-        component: () => import("@/views/ops/service-management/index.vue"),
-        meta: { title: "ops-services" }
+        path: "/ops/deployments",
+        name: "ops-deployments",
+        component: () => import("@/views/ops/deployments/index.vue"),
+        meta: { title: "ops-deployments" }
       },
       {
         path: "/ops/hosts",

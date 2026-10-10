@@ -47,7 +47,7 @@ export default {
     ["trading-orders"]: "orders",
     ["ops"]: "operations",
     ["ops-monitor"]: "monitoring",
-    ["ops-services"]: "service management",
+    ["ops-deployments"]: "deployments",
     ["ops-hosts"]: "host workbench",
     ["ops-storage"]: "storage",
     ["settings"]: "settings",

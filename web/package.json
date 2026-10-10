@@ -28,7 +28,7 @@
     "check:detail-pages": "node scripts/check-detail-page-style.mjs",
     "check:menu": "node scripts/check-menu-structure.mjs",
     "check:host-monitor": "node scripts/check-host-monitor-contract.mjs",
-    "check:service-management": "node scripts/check-service-management-contract.mjs",
+    "check:deployments": "node scripts/check-deployments-contract.mjs",
     "check:monitor": "node scripts/check-monitor.mjs",
     "check:collector-task-style": "node scripts/check-collector-task-style.mjs",
     "preview": "vite preview",

@@ -208,15 +208,16 @@
           <div class="service-lines">
             <button
               v-for="dep in visibleDeployments"
-              :key="dep.name"
+              :key="dep.key"
               class="service-line"
               :class="`tone-${dep.tone}`"
-              @click="go('/ops/services?tab=instances')"
+              @click="go('/ops/deployments')"
             >
               <span>{{ dep.name }}</span>
-              <b>{{ statusLabel(dep.status) }}</b>
-              <em>{{ dep.addr }}</em>
+              <b>{{ dep.label }}</b>
+              <em>{{ dep.host }}</em>
             </button>
+            <span v-if="healthLoaded && !visibleDeployments.length" class="resource-caption">暂无部署的健康数据</span>
           </div>
           <div class="resource-lines">
             <span class="resource-caption">资源负载</span>
@@ -225,12 +226,13 @@
               :key="host.name"
               class="resource-line"
               :class="`tone-${host.tone}`"
-              @click="go('/settings/hosts')"
+              @click="go('/ops/hosts?tab=monitor')"
             >
               <span>{{ host.name }}</span>
               <b>CPU {{ host.cpu }}</b>
               <em>MEM {{ host.memory }}</em>
             </button>
+            <span v-if="hostsLoaded && !visibleHosts.length" class="resource-caption">暂无主机监控数据</span>
           </div>
         </section>
 
@@ -271,8 +273,8 @@ import {
   viewMatchesAttribution
 } from "@/views/data/shared/module-attribution";
 import { callControl } from "@/api/admin/http";
-import { listServiceDeployments } from "@/api/admin/sysdeploy";
-import type { ServiceDeployment } from "@/api/admin/types";
+import { monitorApi, type HealthComponent } from "@/api/monitor";
+import { isAttention, statusLabel as healthStatusLabel } from "@/views/ops/monitor/monitor-display";
 import { listTradingAccounts } from "@/api/trade";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { getNodeList } from "@/api/cloud-node";
@@ -399,9 +401,17 @@ const setupSteps = [
 ];
 
 const nodesTotal = ref<number | null>(null);
-const deployments = ref<ServiceDeployment[]>([]);
-const deploymentsLoaded = ref(false);
+// 服务健康来自 Monitor 的健康概览：每个部署（组件@主机）一条。
+const healthComponents = ref<HealthComponent[]>([]);
+const healthLoaded = ref(false);
 const hosts = ref<HostMetrics[]>([]);
+const hostsLoaded = ref(false);
+const serviceHealth = computed(() => {
+  const enabled = healthComponents.value.filter(item => item.status !== "disabled");
+  const healthy = enabled.filter(item => item.status === "healthy").length;
+  const attention = enabled.filter(item => isAttention(item.status)).length;
+  return { total: enabled.length, healthy, attention };
+});
 
 const nodesNote = computed(() => {
   if (nodesTotal.value === null) return "加载中";
@@ -478,12 +488,16 @@ const dashboardKpis = computed(() => [
   {
     key: "services",
     label: "服务在线",
-    value: String(deploymentsLoaded.value ? deployments.value.length : 28),
-    unit: "",
-    note: "已启用部署",
-    delta: "gateway ok",
-    tone: "ok",
-    path: "/ops/services?tab=instances"
+    value: healthLoaded.value ? String(serviceHealth.value.healthy) : "—",
+    unit: healthLoaded.value ? `/${serviceHealth.value.total}` : "",
+    note: "健康的部署 / 启用的部署",
+    delta: !healthLoaded.value
+      ? "加载中"
+      : serviceHealth.value.attention
+        ? `${serviceHealth.value.attention} 个需关注`
+        : "全部正常",
+    tone: healthLoaded.value && serviceHealth.value.attention ? "warn" : "ok",
+    path: "/ops/deployments"
   }
 ]);
 
@@ -558,37 +572,30 @@ const taskPulse = [
   { label: "20:00", value: 69 }
 ];
 
-const visibleDeployments = computed(() => {
-  const fallback = [
-    { name: "admin-gateway", status: "active", addr: "same-origin", tone: "ok" },
-    { name: "storage-primary", status: "active", addr: ":20201", tone: "ok" },
-    { name: "collector", status: "active", addr: ":11402", tone: "ok" },
-    { name: "cloudnode", status: "active", addr: ":11401", tone: "ok" },
-    { name: "trade", status: "watch", addr: ":11200", tone: "warn" }
-  ];
-  if (!deployments.value.length) return fallback;
-  return deployments.value.slice(0, 5).map(dep => ({
-    name: dep.service_name,
-    status: dep.status,
-    addr: `${dep.host}:${dep.port}`,
-    tone: dep.status === "active" ? "ok" : "warn"
-  }));
-});
+// 需关注的部署排在前面，最多显示 5 个。
+const visibleDeployments = computed(() =>
+  healthComponents.value
+    .filter(item => item.status !== "disabled")
+    .slice()
+    .sort((left, right) => Number(isAttention(right.status)) - Number(isAttention(left.status)))
+    .slice(0, 5)
+    .map(item => ({
+      key: `${item.host_id}:${item.component_id}`,
+      name: item.name || item.component_id || "",
+      label: healthStatusLabel(item.status),
+      host: item.host_id || "",
+      tone: isAttention(item.status) ? "warn" : "ok"
+    }))
+);
 
-const visibleHosts = computed(() => {
-  const fallback = [
-    { name: "prod-main", cpu: "31%", memory: "58%", tone: "ok" },
-    { name: "collector-01", cpu: "64%", memory: "71%", tone: "warn" },
-    { name: "query-node", cpu: "22%", memory: "46%", tone: "ok" }
-  ];
-  if (!hosts.value.length) return fallback;
-  return hosts.value.slice(0, 3).map(host => ({
+const visibleHosts = computed(() =>
+  hosts.value.slice(0, 3).map(host => ({
     name: host.host_name || host.address,
     cpu: formatPercent(host.cpu?.usage),
     memory: formatPercent(host.memory?.percent),
     tone: host.status === "online" && (host.cpu?.usage ?? 0) < 80 && (host.memory?.percent ?? 0) < 85 ? "ok" : "warn"
-  }));
-});
+  }))
+);
 
 function fmt(v: number | string | null | undefined): string {
   return v === null || v === undefined ? "—" : String(v);
@@ -626,7 +633,10 @@ async function loadSpaceScoped() {
       if (!isCurrent()) return;
       const sets = (rsp.factor_sets ?? []).filter(item => item.factor_set.space_id === spaceId);
       counts.factorSets = sets.length;
-      counts.factors = sets.reduce((total, item) => total + (item.members ?? []).filter(member => member.status === "enabled").length, 0);
+      counts.factors = sets.reduce(
+        (total, item) => total + (item.members ?? []).filter(member => member.status === "enabled").length,
+        0
+      );
     }),
     listSubjects({ space_id: spaceId, page }).then(rsp => {
       if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
@@ -646,9 +656,7 @@ async function loadSpaceScoped() {
       const totalState = rsp.page?.total_state;
       const skipped = totalState === 2 || totalState === "SKIPPED" || totalState === "TOTAL_STATE_SKIPPED";
       counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
-      taskCountLabel.value = skipped
-        ? (rsp.page?.has_more ? "2+" : String(rsp.instances?.length ?? 0))
-        : null;
+      taskCountLabel.value = skipped ? (rsp.page?.has_more ? "2+" : String(rsp.instances?.length ?? 0)) : null;
     }),
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
@@ -720,12 +728,16 @@ function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Datase
 
 async function loadGlobal() {
   await Promise.allSettled([
-    listServiceDeployments({ status: "active", page: { page: 1, size: 50 } })
+    monitorApi
+      .getOverview()
       .then(rsp => {
-        deployments.value = rsp.deployments ?? [];
+        healthComponents.value = rsp.overview?.components ?? [];
+      })
+      .catch(() => {
+        healthComponents.value = [];
       })
       .finally(() => {
-        deploymentsLoaded.value = true;
+        healthLoaded.value = true;
       }),
     getCurrentMetrics()
       .then(rsp => {
@@ -733,6 +745,9 @@ async function loadGlobal() {
       })
       .catch(() => {
         hosts.value = [];
+      })
+      .finally(() => {
+        hostsLoaded.value = true;
       })
   ]);
 }

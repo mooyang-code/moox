@@ -8,7 +8,7 @@ const root = path.resolve(scriptDir, "..");
 const pageShellFiles = [
   "src/views/settings/spaces/index.vue",
   "src/views/settings/secrets/index.vue",
-  "src/views/settings/service-deployments/index.vue",
+  "src/views/ops/deployments/index.vue",
   "src/views/data/sources/index.vue",
   "src/views/data/subjects/index.vue",
   "src/views/data/fields/index.vue",
@@ -36,7 +36,10 @@ const pageShellFiles = [
 
 const tableFiles = [
   ...pageShellFiles,
-  "src/views/collector/cloud-account/cloud-account-manage.vue"
+  "src/views/collector/cloud-account/cloud-account-manage.vue",
+  "src/views/ops/deployments/services-tab.vue",
+  "src/views/ops/deployments/routes-tab.vue",
+  "src/views/ops/deployments/component-drawer.vue"
 ];
 
 function read(relativePath) {

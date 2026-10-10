@@ -165,7 +165,10 @@ export function locateRoute(alert: HealthAlert, hosts: HealthHost[] = []): PageT
   const target = alert.target;
   switch (target?.kind) {
     case "component":
-      return { path: "/ops/services", query: { tab: "instances" } };
+      return {
+        path: "/ops/deployments",
+        query: { tab: "services", host: target.host_id || "", component: target.component_id || "" }
+      };
     case "host": {
       const agentId = hosts.find(item => item.host_id === target.host_id)?.agent_id;
       return { path: "/ops/hosts", query: agentId ? { tab: "monitor", agent: agentId } : { tab: "monitor" } };

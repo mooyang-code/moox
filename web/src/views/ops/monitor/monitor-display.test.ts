@@ -57,9 +57,9 @@ describe("monitor display helpers", () => {
       path: "/ops/hosts",
       query: { tab: "monitor", agent: "aB3x" }
     });
-    expect(locateRoute({ target: { kind: "component", host_id: "storage" } })).toEqual({
-      path: "/ops/services",
-      query: { tab: "instances" }
+    expect(locateRoute({ target: { kind: "component", host_id: "storage", component_id: "storage-view" } })).toEqual({
+      path: "/ops/deployments",
+      query: { tab: "services", host: "storage", component: "storage-view" }
     });
     expect(locateRoute({ target: { kind: "dataset" }, stage: "factor" })).toEqual({ path: "/factor/tasks" });
     expect(locateRoute({ target: { kind: "dataset" }, stage: "collect" })).toEqual({

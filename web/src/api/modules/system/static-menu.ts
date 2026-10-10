@@ -85,7 +85,7 @@ export const systemMenu = [
   directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
   menu("0602", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1),
   menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 2),
-  menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 3),
+  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 3),
   menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 4),
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),

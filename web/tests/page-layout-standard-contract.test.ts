@@ -109,8 +109,7 @@ describe("page layout standards", () => {
     const taskInstances = read("collector/task-instances/task-instances.vue");
     const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
     const taskResults = read("collector/task-results/index.vue");
-    const gatewayNodes = read("ops/service-management/gateway-nodes.vue");
-    const serviceInstances = read("settings/service-deployments/index.vue");
+    const deploymentServices = read("ops/deployments/services-tab.vue");
     const storage = read("ops/storage/index.vue");
     const storageNodes = read("ops/storage/nodes.vue");
     const storageArchive = read("ops/storage/archive.vue");
@@ -124,10 +123,8 @@ describe("page layout standards", () => {
     expect(taskResults).toContain('class="moox-page task-results-page"');
     expect(taskResults).toContain('class="moox-inner"');
 
-    expectMargin(gatewayNodes, ".toolbar", "margin-bottom", 8);
-    expect(serviceInstances).not.toContain('class="page-head"');
-    expect(serviceInstances.indexOf("新增实例")).toBeLessThan(serviceInstances.indexOf('placeholder="网关节点"'));
-    expectMargin(serviceInstances, ".filters", "margin-bottom", 8);
+    expectMargin(deploymentServices, ".toolbar", "margin-bottom", 8);
+    expect(deploymentServices).not.toContain('class="page-head"');
 
     expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
