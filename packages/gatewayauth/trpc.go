@@ -11,9 +11,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/filter"
 )
 
-// NewTRPCClientFilter signs the serialized request body before it crosses the
-// native Node Service Gateway. The generated Storage clients remain unchanged;
-// only their target and this filter are supplied by the caller.
+// NewTRPCClientFilter 在请求经过主机网关之前对序列化后的请求体签名；生成的 tRPC 客户端不用改，
+// 调用方只需提供目标和这个过滤器。
 func NewTRPCClientFilter(credentials Credentials, targetNode string, now func() time.Time) filter.ClientFilter {
 	if now == nil {
 		now = time.Now

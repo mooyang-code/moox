@@ -116,14 +116,12 @@ func sameCollectorCanaryBinding(left, right *collectorpb.TaskResultInventoryEntr
 		left.GetExpectedCount() == right.GetExpectedCount() && slices.Equal(left.GetOutputFields(), right.GetOutputFields())
 }
 
-// collectorHTTPInventoryReader reads the task-result inventory through the
-// service gateway's HTTP route, the same path Monitor uses. CollectMgr only
-// serves HTTP, so the native tRPC gateway cannot reach it.
-type collectorHTTPInventoryReader struct {
+// collectorInventoryReader 经 moox-cli 的 gatewayclient 以 JSON 调用 CollectMgr 读取采集结果清单。
+type collectorInventoryReader struct {
 	control *adminclient.Client
 }
 
-func (r collectorHTTPInventoryReader) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq, _ ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error) {
+func (r collectorInventoryReader) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq, _ ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error) {
 	if r.control == nil {
 		return nil, errors.New("Collector inventory control client is not configured")
 	}

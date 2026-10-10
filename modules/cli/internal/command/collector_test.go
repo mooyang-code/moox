@@ -242,8 +242,7 @@ func TestCollectorEnvironmentUsesAccessRouteAndCallerKey(t *testing.T) {
 	assert.Equal(t, "scf-collector", env["MOOX_CALLER"])
 	assert.Equal(t, collectorTestCallerKey, env["MOOX_CALLER_KEY"])
 	for key := range env {
-		assert.False(t, strings.HasPrefix(key, "MOOX_GATEWAY_") || strings.HasPrefix(key, "MOOX_SERVICE_GATEWAY_") ||
-			key == "MOOX_STORAGE_RPC_GATEWAY_TARGET" || strings.HasPrefix(key, "MOOX_COLLECTOR_"), "旧的网关环境变量 %s 不能再写入函数", key)
+		assert.False(t, strings.Contains(key, "GATEWAY") || strings.HasPrefix(key, "MOOX_COLLECTOR_"), "旧的网关环境变量 %s 不能再写入函数", key)
 	}
 }
 

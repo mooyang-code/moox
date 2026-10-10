@@ -605,7 +605,7 @@ func TestConfigValidation(t *testing.T) {
 		{"内部方式本机入口不是回环地址", Config{Mode: ModeLocal, Caller: "collector", CAFile: "ca", CacheDir: "dir", LocalAddress: "10.0.0.1:11002"}, "回环"},
 		{"内部方式不能配外部接入", Config{Mode: ModeLocal, Caller: "collector", CAFile: "ca", CacheDir: "dir", AccessID: "access@storage"}, "access_address"},
 		{"外部方式缺少地址", Config{Mode: ModeAccess, Caller: "factor-engine", AccessID: "access@storage"}, "access_address"},
-		{"外部方式实例 ID 非法", Config{Mode: ModeAccess, Caller: "factor-engine", AccessAddress: "1.2.3.4:11004", AccessID: "storage-access-storage"}, "access@"},
+		{"外部方式实例 ID 非法", Config{Mode: ModeAccess, Caller: "factor-engine", AccessAddress: "1.2.3.4:11004", AccessID: "storage-access"}, "access@"},
 		{"未知方式", Config{Mode: "http", Caller: "collector"}, "mode"},
 	}
 	for _, tc := range cases {

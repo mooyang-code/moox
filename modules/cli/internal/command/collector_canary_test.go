@@ -1049,7 +1049,7 @@ func TestCollectorHTTPInventoryReaderUsesTheServiceGatewayRoute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	reader := collectorHTTPInventoryReader{control: admintest.Client(server.URL)}
+	reader := collectorInventoryReader{control: admintest.Client(server.URL)}
 	rsp, err := reader.GetTaskResultInventory(context.Background(), &collectorpb.GetTaskResultInventoryReq{
 		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 100},
 	})

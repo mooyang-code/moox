@@ -1,7 +1,5 @@
-// moox-factor-engine consumes collector period events, computes factors with
-// a Python worker pool and writes results to Storage. It only dials out: to
-// moox-factor-mgr through the service gateway, to EventBus and to
-// access.
+// moox-factor-engine 消费采集周期事件，用 Python worker 池计算因子并写回 Storage。它只发起出站连接：
+// 经外部接入访问因子管理服务和 Storage，以及连接 EventBus。
 package main
 
 import (

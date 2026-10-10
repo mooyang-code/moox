@@ -148,7 +148,7 @@ func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testi
 
 	public := base
 	public.AllowedMethods = []string{"SearchRecordRows"}
-	public.AllowedCallers = []string{"admin-gateway"}
+	public.AllowedCallers = []string{"console"}
 	if err := ValidateRoute(public); err != nil {
 		t.Fatalf("ValidateRoute rejected public storage method: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestValidateStorageMetadataViewBuilderRoute(t *testing.T) {
 	if err := ValidateRoute(route); err != nil {
 		t.Fatalf("ValidateRoute rejected the storage-view metadata route: %v", err)
 	}
-	route.AllowedCallers = []string{"admin-gateway", "storage-view"}
+	route.AllowedCallers = []string{"console", "storage-view"}
 	if err := ValidateRoute(route); err == nil {
 		t.Fatal("ValidateRoute accepted view-builder metadata methods for a broader caller set")
 	}
@@ -194,7 +194,7 @@ func TestCanonicalSnapshotHashExcludesGeneratedAt(t *testing.T) {
 }
 
 func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
-	route := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"GetStatus"}, AllowedCallers: []string{"admin-gateway"}}
+	route := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"GetStatus"}, AllowedCallers: []string{"console"}}
 	if _, err := NormalizeAndHash("node-1", []Route{route, route}); err == nil {
 		t.Fatal("NormalizeAndHash accepted duplicate service IDs")
 	}
@@ -203,7 +203,7 @@ func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
 func TestNormalizeAndHashRejectsWildcardOverlapForDuplicateServiceIDs(t *testing.T) {
 	_, err := NormalizeAndHash("node-1", []Route{
 		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"*"}, AllowedCallers: []string{"strategy"}},
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
 	})
 	if err == nil {
 		t.Fatal("accepted wildcard and concrete method overlap for duplicate service IDs")
@@ -244,8 +244,8 @@ func TestValidateRouteAcceptsHostGatewayCaller(t *testing.T) {
 
 func TestNormalizeAndHashAllowsDisjointNativeCallerRoutes(t *testing.T) {
 	snapshot, err := NormalizeAndHash("node-1", []Route{
-		{ServiceID: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
-		{ServiceID: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "trade-owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -257,8 +257,8 @@ func TestNormalizeAndHashAllowsDisjointNativeCallerRoutes(t *testing.T) {
 
 func TestNormalizeAndHashRejectsOverlappingNativeCallerRoutes(t *testing.T) {
 	_, err := NormalizeAndHash("node-1", []Route{
-		{ServiceID: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
-		{ServiceID: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "trade-owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
 	})
 	if err == nil {
 		t.Fatal("accepted overlapping native caller routes")
@@ -267,7 +267,7 @@ func TestNormalizeAndHashRejectsOverlappingNativeCallerRoutes(t *testing.T) {
 
 func TestNormalizeAndHashAllowsDisjointMethodsForOneServiceID(t *testing.T) {
 	routes := []Route{
-		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"console"}},
 		{ServiceID: "storage-primary", Address: "127.0.0.1:20201", ServicePath: "trpc.moox.storage.PrimaryStore", AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"storage-view"}},
 	}
 	snapshot, err := NormalizeAndHash("node-1", routes)

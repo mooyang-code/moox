@@ -66,7 +66,7 @@ func TestKnownCaller(t *testing.T) {
 			t.Errorf("%s 应当是已知调用方", caller)
 		}
 	}
-	for _, caller := range []string{"host-gateway", "scf-collector", "admin-gateway", "host-gateway@Compute"} {
+	for _, caller := range []string{"host-gateway", "scf-collector", "unknown-caller", "host-gateway@Compute"} {
 		if catalog.KnownCaller(caller) {
 			t.Errorf("%s 不应当是已知调用方", caller)
 		}

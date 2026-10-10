@@ -18,7 +18,7 @@ import (
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
-const Version = "moox-gateway-auth-v1"
+const Version = "moox-host-gateway-auth-v1"
 
 const (
 	headerKeyID      = "X-Moox-Key-Id"

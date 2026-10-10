@@ -120,6 +120,6 @@ func TestKeysRotateAndExport(t *testing.T) {
 	require.Len(t, loaded, 3)
 
 	var stdout, stderr bytes.Buffer
-	err = runKeysCommand([]string{"keys", "ensure", "--db-path", paths.db, "--encryption-key-file", paths.key, "--caller", "admin-gateway"}, &stdout, &stderr)
+	err = runKeysCommand([]string{"keys", "ensure", "--db-path", paths.db, "--encryption-key-file", paths.key, "--caller", "unknown-caller"}, &stdout, &stderr)
 	require.Error(t, err, "不在组件目录中的身份不能生成密钥")
 }

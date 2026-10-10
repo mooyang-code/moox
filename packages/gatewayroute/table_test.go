@@ -13,7 +13,7 @@ func TestTableReplaceRejectsHashMismatchWithoutChangingCurrentSnapshot(t *testin
 	}
 	bad := good
 	bad.RouteHash = "not-the-hash"
-	bad.Routes = []Route{{ServiceID: "storage", Address: "127.0.0.1:8081", ServicePath: "trpc.moox.Storage", AllowedMethods: []string{"SearchRecordRows"}, AllowedCallers: []string{"admin-gateway"}}}
+	bad.Routes = []Route{{ServiceID: "storage", Address: "127.0.0.1:8081", ServicePath: "trpc.moox.Storage", AllowedMethods: []string{"SearchRecordRows"}, AllowedCallers: []string{"console"}}}
 	if err := table.Replace(bad); err == nil {
 		t.Fatal("Replace accepted a bad hash")
 	}
@@ -145,8 +145,8 @@ func TestTableResolveRPCUsesServicePathAndMethodAllowlist(t *testing.T) {
 
 func TestTableResolveRPCForCallerSelectsDisjointNativeRoute(t *testing.T) {
 	snapshot, err := NormalizeAndHash("node-1", []Route{
-		{ServiceID: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
-		{ServiceID: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "trade-owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestTableResolveRPCForCallerSelectsDisjointNativeRoute(t *testing.T) {
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct{ caller, service string }{{"admin-gateway", "trade_console"}, {"strategy", "trade_owner"}} {
+	for _, test := range []struct{ caller, service string }{{"console", "trade"}, {"strategy", "trade-owner"}} {
 		route, method, ok := table.ResolveRPCForCaller("/trpc.moox.trade.TradeConsoleService/GetLogicalAccount", test.caller)
 		if !ok || method != "GetLogicalAccount" || route.ServiceID != test.service {
 			t.Fatalf("caller %q resolved route=%+v method=%q ok=%v", test.caller, route, method, ok)

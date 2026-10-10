@@ -31,7 +31,7 @@ func TestCaddyfileKeepsConsoleOriginContract(t *testing.T) {
 				require.Contains(t, config, want)
 			}
 			require.Equal(t, 1, strings.Count(config, "https://106.53.107.122:9527 {"), "只有浏览器入口一个站点")
-			for _, unwanted := range []string{"trusted_proxies", "11001", "/api/service/", "/api/gateway-control/", "11002"} {
+			for _, unwanted := range []string{"trusted_proxies", "11001", "/api/service/", "/api/gateway", "11002"} {
 				require.NotContains(t, config, unwanted)
 			}
 			if mode == TLSModePublic {

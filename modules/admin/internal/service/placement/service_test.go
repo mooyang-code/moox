@@ -116,7 +116,7 @@ func TestSyncHostPlacementsRejectsWholeChange(t *testing.T) {
 		{"副本数超限", productionHosts["storage"], append(append([]string{}, productionPlacements["storage"]...), "collector"), "只允许一份"},
 		{"移除受保护组件", productionHosts["control"], []string{"console-proxy", "web-host", "eventbus", "monitor"}, "受保护"},
 		{"control 组件放到其他主机", productionHosts["storage"], append(append([]string{}, productionPlacements["storage"]...), "monitor"), "只能部署在 control"},
-		{"未知组件", productionHosts["storage"], []string{"collector-subject"}, "不在组件目录中"},
+		{"未知组件", productionHosts["storage"], []string{"unknown-component"}, "不在组件目录中"},
 		{"写入主机组件", productionHosts["storage"], []string{"host-gateway"}, "自动部署"},
 		{"主机地址重复", HostSpec{HostID: "compute-2", Address: "146.56.196.204"}, []string{}, "地址相同"},
 	}

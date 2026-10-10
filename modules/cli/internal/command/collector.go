@@ -674,7 +674,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, fmt.Errorf("create moox-cli gatewayclient: %w", gatewayErr)
 		}
 		defer cliGateway.Close()
-		canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorHTTPInventoryReader{control: client}, cliGateway.ClientOptions(gatewayclient.WithTimeout(5*time.Second)), collectorCanaryTrust)
+		canaryAccess, accessErr := newCollectorCanaryAccess(fetcherConfig, collectorInventoryReader{control: client}, cliGateway.ClientOptions(gatewayclient.WithTimeout(5*time.Second)), collectorCanaryTrust)
 		if accessErr != nil {
 			return collectorPublishSummary{}, accessErr
 		}
@@ -1221,7 +1221,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	}
 	defer cliGateway.Close()
 	canaryAccess, accessErr := newCollectorCanaryAccess(
-		fetcherConfig, collectorHTTPInventoryReader{control: client}, cliGateway.ClientOptions(gatewayclient.WithTimeout(5*time.Second)), trustMaterial,
+		fetcherConfig, collectorInventoryReader{control: client}, cliGateway.ClientOptions(gatewayclient.WithTimeout(5*time.Second)), trustMaterial,
 	)
 	if accessErr != nil {
 		return summary, accessErr

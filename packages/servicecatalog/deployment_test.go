@@ -21,7 +21,7 @@ func TestValidateDeploymentRejects(t *testing.T) {
 		{"停用 control 主机", func(d *Deployment) { d.Hosts[0].Enabled = false }, "control 主机受保护"},
 		{"移除受保护组件", func(d *Deployment) { removePlacement(d, "control", "web-host") }, "必须部署在 control"},
 		{"未知组件", func(d *Deployment) {
-			d.Placements = append(d.Placements, Placement{HostID: "storage", ComponentID: "collector-subject", Enabled: true})
+			d.Placements = append(d.Placements, Placement{HostID: "storage", ComponentID: "unknown-component", Enabled: true})
 		}, "不在组件目录中"},
 		{"未登记的主机", func(d *Deployment) {
 			d.Placements = append(d.Placements, Placement{HostID: "compute-2", ComponentID: "access", Enabled: true})

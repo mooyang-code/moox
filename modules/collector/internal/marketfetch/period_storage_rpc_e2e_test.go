@@ -322,7 +322,7 @@ func waitPeriodE2EFinalizerCycles(t *testing.T, ctx context.Context) {
 
 func startPeriodStorageGateway(t *testing.T, ctx context.Context, root, binary string, ready periodE2EStorageReady, secret string) string {
 	t.Helper()
-	readyFile := filepath.Join(root, "storage-gateway-ready")
+	readyFile := filepath.Join(root, "host-gateway-ready")
 	nonceDir := filepath.Join(root, "gateway-nonces")
 	primary := stripPeriodE2EURL(t, ready.PrimaryTarget)
 	metadata := stripPeriodE2EURL(t, ready.MetadataTarget)
