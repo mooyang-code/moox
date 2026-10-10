@@ -409,6 +409,8 @@ let listApplied = 0;
 let listLoadingSeq = 0;
 // userPicks 是用户在列表里手动选择的次数：发起回放等待列表期间用户另选过，就不再切到新回放。
 let userPicks = 0;
+// tableRefreshPending 是手动表格请求在途时被跳过的后台刷新所属的回放：手动请求结束后补一次。
+let tableRefreshPending = "";
 
 const metrics = computed(() => parseMetrics(selected.value?.metrics_json));
 const partialMetrics = computed(() => selected.value?.status === "cancelled" || selected.value?.status === "failed");
@@ -558,7 +560,16 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
     if (silent) throw err;
     errors.table = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
-    if (!silent && loadingId === tableLoadingRequest) tableLoading.value = false;
+    if (!silent && loadingId === tableLoadingRequest) {
+      tableLoading.value = false;
+      // 手动请求在途时跳过了后台刷新：回放可能已经结束、轮询不会再刷新表格，这里补一次，免得表格停在手动请求读到的旧快照上。
+      if (tableRefreshPending === replayId && isCurrent()) {
+        tableRefreshPending = "";
+        void loadTablePage(replayId, isCurrent, true).catch(err => {
+          errors.table = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
+        });
+      }
+    }
   }
 }
 
@@ -663,9 +674,15 @@ async function refreshSelected() {
   }
   maybeAwaitMetrics(replay, current.status === "pending" || current.status === "running");
   const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
+  if (tablePage.value < lastPage - 1 && replay.status === current.status) return;
   // 用户正在手动翻页（遮罩还在）时不做后台刷新：后台请求会把还没返回的手动请求作废，失败时表格就停在旧页的数据上。
-  if (tableLoading.value) return;
-  if (tablePage.value >= lastPage - 1 || replay.status !== current.status) await loadTablePage(replayId, isCurrent, true);
+  // 记下待刷新，由手动请求结束时补上。
+  if (tableLoading.value) {
+    tableRefreshPending = replayId;
+    return;
+  }
+  tableRefreshPending = "";
+  await loadTablePage(replayId, isCurrent, true);
 }
 
 async function renderChart(rebuild: boolean) {
@@ -819,6 +836,7 @@ watch(
     generation += 1;
     selectRequest += 1;
     tableRequest += 1;
+    tableRefreshPending = "";
     selectedId.value = "";
     selected.value = null;
     detailLoading.value = false;

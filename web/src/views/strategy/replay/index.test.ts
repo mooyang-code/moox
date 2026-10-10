@@ -825,6 +825,55 @@ describe("strategy replay page", () => {
     expect((wrapper.vm as any).tableRows).toHaveLength(2);
   });
 
+  it("refreshes the table once a manual page load finishes after the replay ended", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const manual = deferred<unknown>();
+    const stale = { items: Array.from({ length: 10 }, () => bar()), page: { total: 60 } };
+    const fresh = { items: Array.from({ length: 20 }, () => bar()), page: { total: 70 } };
+    api.listReplayBars.mockImplementation((_id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(bars);
+      return params?.page === 2 ? manual.promise : Promise.resolve(bars);
+    });
+    (wrapper.vm as any).changeTablePage(2);
+    await nextTick();
+    // 轮询看到回放结束，但手动翻页还在途：跳过后台刷新；之后回放已是终态，轮询不会再刷新表格。
+    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":70,"ok_bars":70,"limitations":[]}'));
+    await pollOnce();
+    api.listReplayBars.mockClear();
+    api.listReplayBars.mockImplementation((_id: string, params: any) => Promise.resolve(params?.brief ? bars : fresh));
+    manual.resolve(stale);
+    await flushPromises();
+    const tableCalls = api.listReplayBars.mock.calls.filter(call => !call[1]?.brief);
+    expect(tableCalls).toHaveLength(1);
+    expect(tableCalls[0][1]).toMatchObject({ page: 2 });
+    expect(tableCalls[0][2]).toEqual({ silent: true });
+    expect((wrapper.vm as any).tableTotal).toBe(70);
+    expect((wrapper.vm as any).tableRows).toHaveLength(20);
+    expect(wrapper.find(".table").attributes("data-loading")).toBe("false");
+  });
+
+  it("refreshes the table of a selected replay that ended while its first page was loading", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "running")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "done" : "running")));
+    const wrapper = mountPage();
+    await flushPromises();
+    const manual = deferred<unknown>();
+    const fresh = { items: Array.from({ length: 35 }, () => bar()), page: { total: 35 } };
+    api.listReplayBars.mockImplementation((_id: string, params: any) => (params?.brief ? Promise.resolve(bars) : manual.promise));
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    api.getReplay.mockResolvedValue(replay("r2", "done", '{"bars":35,"ok_bars":35,"limitations":[]}'));
+    await pollOnce();
+    api.listReplayBars.mockImplementation((_id: string, params: any) => Promise.resolve(params?.brief ? bars : fresh));
+    manual.resolve({ items: Array.from({ length: 30 }, () => bar()), page: { total: 30 } });
+    await flushPromises();
+    expect((wrapper.vm as any).tableTotal).toBe(35);
+    expect((wrapper.vm as any).tableRows).toHaveLength(35);
+  });
+
   it("counts the wait for a directly opened cancelled replay from the cancel time", async () => {
     const cancelledAt = Date.now() - 100_000;
     const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });
