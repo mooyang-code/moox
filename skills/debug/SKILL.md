@@ -22,7 +22,7 @@ Use this skill for MooX production-like debugging that crosses local code, remot
 - Prefer `moox-cli` commands and bundled MooX scripts over manually repeating fragile Tencent API calls.
 - For destructive operations, confirm the target resource name, region, namespace, account, and package version before acting.
 - Treat old standalone collector repository paths as historical only; current collector code and SCF package build logic live under `modules/collector`.
-- For frontend requests, management APIs must go through `/api/admin`; service-to-service callbacks should use `/api/service` with service auth.
+- For frontend requests, management APIs must go through `/api/admin`; service-to-service calls are signed tRPC through the local host gateway (`packages/gatewayclient`, loopback `11002`, cross-host TLS `11003`), and external callers (SCF, factor engine, Skill) go through Access on `11004` with their own signed identity.
 
 ## Boundary Checklist
 

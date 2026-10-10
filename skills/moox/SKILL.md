@@ -28,13 +28,20 @@ Host Agent deployment:
 - Provision and rotate EventBus credentials only through `skills/moox/scripts/eventbus-credentials.sh`; release archives and checked-in YAML must remain credential-free.
 - After EventBus CA or role-token rotation, fan-out to every client before treating deploy as done. Follow [`references/eventbus-credentials.md`](references/eventbus-credentials.md). Control `export` does not update Host Agents on other machines.
 
+## Deployment Status
+
+The gateway refactor (host gateway, Access, egress proxy, embedded-Caddy console proxy) is merged in code but **not yet cut over in production**. The deploy tooling referenced below (`scripts/deploy/deploy-moox.sh`, external Caddy on `11001`, node-gateway keys) is the pre-cutover tooling and has not been migrated to the new configuration; do not use it to release the current branch. The cutover, pause and rollback procedure is in `docs/计划/网关与服务部署重构执行计划.md` (section 13). Do not deploy or cut over unless the user explicitly asks.
+
 ## Repository Layout
 
 - `modules/cli`: `moox-cli` (setup, deploy, SCF publish, data import, doctor).
-- `modules/admin`: control plane (auth, spaces, service catalog, secrets, SSH, setup) and the browser API gateway.
-- `modules/hostgateway`: per-node service gateway.
+- `modules/admin`: control plane (auth, spaces, component catalog and host placements, gateway control, PKI and keys, SSH, setup) and the browser API gateway.
+- `modules/hostgateway`: per-host service gateway (signed native tRPC: loopback `11002`, cross-host TLS `11003`); the only gateway.
+- `modules/access`: signed entry for external callers (SCF, factor engine, Skill) on `11004`, with per-caller method allowlists from `packages/servicecatalog`.
+- `modules/egressproxy`: restricted HTTPS egress and DNS resolution for Collector.
+- `modules/consoleproxy`: embedded-Caddy HTTPS proxy for the console (`9527`).
 - `modules/eventbus`: embedded NATS JetStream broker.
-- `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view), external access proxy (access).
+- `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view).
 - `modules/collector`: collection tasks, period batch planning, SCF Timer runtime and reconciliation.
 - `modules/cloudnode`: cloud accounts, SCF nodes, code packages and function publishing.
 - `modules/factor`: factor manager and the Python factor engine.

@@ -6,8 +6,8 @@ Use this reference when a MooX collector cloud function does not publish, does n
 
 1. Collector plans one Timer batch per period and function shard (`t_collector_timer_period_batches`).
 2. CloudNode writes each function's shard assignment into its SCF environment and keeps its Timer trigger enabled.
-3. At each Timer tick the function calls `ClaimTimerBatch` through the node gateway's native target (`MOOX_COLLECTOR_RPC_GATEWAY_TARGET`) and receives its batch.
-4. It fetches the providers concurrently and writes through the regional access target (`MOOX_STORAGE_RPC_GATEWAY_TARGET`): `EnsureDatasetPeriod`, `CommitTimeSeriesBatch`, `RecordDatasetPeriodFailures`.
+3. At each Timer tick the function calls `ClaimTimerBatch` through Access (`11004`) as the `scf-collector` external identity (`MOOX_ACCESS_ADDRESS`, `MOOX_ACCESS_ID`, `MOOX_CALLER`, `MOOX_CALLER_KEY_ID`, `MOOX_CALLER_KEY` in the function environment; the address and instance identity are derived from the placement manifest) and receives its batch.
+4. It fetches the providers concurrently and writes through the same Access instance: `EnsureDatasetPeriod`, `CommitTimeSeriesBatch`, `RecordDatasetPeriodFailures`.
 5. It publishes `MarketFetchBatchCompleted` to EventBus; the Collector completion consumer updates the batch and schedules retries.
 6. At the period deadline the Storage DataNode marks the period `complete` or `degraded` and emits `CollectorPeriodCompleted`.
 
