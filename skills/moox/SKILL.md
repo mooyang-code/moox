@@ -1,304 +1,177 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
+description: 在 MooX 仓库里工作、操作 moox-cli，或查询 MooX 采集数据（例如 BTC-USDT 的 crypto market queries、K-line/K线行情）时使用。同时覆盖量化存储、采集云函数、主机网关与外部接入、首次部署与按主机部署（bootstrap、deploy-host、deploy-service、rollback、pause、resume）、Linux amd64/arm64 主机采集器监控、EventBus 凭据同步（EventBus rotate、Authorization Violation、FIN-WAIT-2、certificate signature failure）、View 水位追平与 repair-view、Factor 周期诊断与 Recalc、腾讯云 Lighthouse 防火墙、CCN/云联网、CCN 费用、SCF 公网、SCF VPC、内网组网、private-network、scf-network-plan、MOOX_ACCESS_ADDRESS 和控制面维护。
 ---
 
-# MooX Quant Data System
+# MooX 量化数据系统
 
-Use this skill when working inside the MooX monorepo, especially for quant data storage, protocol changes, collector integration, factor data, release, or deployment.
+在 MooX 仓库里工作时使用本技能，尤其是量化数据存储、协议变更、采集集成、因子数据、发布和部署。
 
-## What MooX Is
+## MooX 是什么
 
-MooX is the unified repository for a personal quant data platform. It groups storage, collection, cloud node execution, factor calculation, trade, and control-plane modules in one Go workspace.
+MooX 是个人量化数据平台的统一仓库，在一个 Go workspace 里包含存储、采集、云节点执行、因子计算、交易和控制面模块。
 
-Core concepts:
+核心概念：
 
-- Space: an isolated user or strategy domain.
-- DataSource: a concrete upstream source, such as BINANCE spot, OKX spot, HKEX, NASDAQ, or a custom feed.
-- Subject: the business object stored in a Space, such as APT-USDT, a stock, a ranking item, or a document subject.
-- DataSet: a source-bound logical kind of data, such as kline, ticker, company profile, ranking, event, or factor values.
-- Field and Factor: Space-scoped reusable column definitions selected by DataSet columns.
-- View: a query-facing, asynchronously built wide view over one primary DataSet and selected columns from related DataSets.
-- DataNode: the Storage node a fact Dataset is bound to at activation; it persists field-level facts in Pebble and publishes row changes through its outbox. DuckDB/Bleve views and Parquet archive are derived asynchronously from those changes.
+- Space：隔离的用户或策略域。
+- DataSource：具体的上游数据源，例如 BINANCE 现货、OKX 现货、HKEX、NASDAQ 或自定义数据源。
+- Subject：Space 里存储的业务对象，例如 APT-USDT、一只股票、一个排名项或一个文档主题。
+- DataSet：绑定数据源的一类逻辑数据，例如 K 线、行情、公司资料、排名、事件或因子值。
+- Field 和 Factor：Space 范围内可复用的列定义，由 DataSet 的列选用。
+- View：面向查询、异步构建的宽视图，覆盖一个主 DataSet 和相关 DataSet 的选定列。
+- DataNode：Dataset 在激活时绑定的 Storage 节点；它把字段级事实持久化到 Pebble，并通过 outbox 发布行变更。DuckDB/Bleve 视图和
+  Parquet 归档都由这些变更异步派生。
 
-Host Agent deployment:
+系统结构（详见 `docs/总体设计.md`）：
 
-- Build `skills/moox/scripts/hostagent-release.sh` for Linux `amd64` or `arm64`.
-- Deploy with `skills/moox/scripts/hostagent-deploy.sh`; it uses a normal user and `systemctl --user`, never sudo.
-- Provision and rotate EventBus credentials only through `skills/moox/scripts/eventbus-credentials.sh`; release archives and checked-in YAML must remain credential-free.
-- After EventBus CA or role-token rotation, fan-out to every client before treating deploy as done. Follow [`references/eventbus-credentials.md`](references/eventbus-credentials.md). Control `export` does not update Host Agents on other machines.
+- **主机与组件**：每台 MooX 主机上恰好运行一个**主机网关**（`moox-host-gateway`），它是系统里唯一的网关，只把已签名的请求转发到本机服务。组件、端口、
+  tRPC 服务、ACL、健康检查和外部调用方白名单都写在代码里的组件目录（`packages/servicecatalog`）；哪个组件部署在哪台主机由 `moox.toml` 的
+  `[placements]` 决定，CLI 部署主机时同步到 Admin。
+- **调用方**：MooX 主机上的组件经本机网关的服务目录找到目标，跨主机走 TLS（MooX 私有 CA）；SCF、因子引擎、moox-skill 这类不在 MooX 主机上的调用方
+  只能经**外部接入**（`moox-access`，端口 11004）访问；moox-cli 经 SSH 隧道访问；浏览器经控制台代理（Caddy，9527）和管理后台的控制台 API。
+- **出口代理**（`moox-egress-proxy`，部署在香港）替 Collector 访问 Binance 等国内连不上的接口，并为 SCF 解析 DNS。
 
-## Repository Layout
+主机采集器部署和 EventBus 凭据的操作规则：
 
-- `modules/cli`: `moox-cli` (setup, deploy, SCF publish, data import, doctor).
-- `modules/admin`: control plane (auth, spaces, service catalog, secrets, SSH, setup) and the browser API gateway.
-- `modules/hostgateway`: per-node service gateway.
-- `modules/eventbus`: embedded NATS JetStream broker.
-- `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view), external access proxy (access).
-- `modules/collector`: collection tasks, period batch planning, SCF Timer runtime and reconciliation.
-- `modules/cloudnode`: cloud accounts, SCF nodes, code packages and function publishing.
-- `modules/factor`: factor manager and the Python factor engine.
-- `modules/strategy`, `modules/trade`, `modules/monitor`, `modules/hostagent`, `modules/archive`.
-- `docs`: 总体设计、部署与运维和 `docs/模块/` 下的模块设计文档.
-- `scripts`: build, release, deploy, quality checks, and contract/E2E test scripts.
+- 主机采集器（`host-agent`）是每台主机自动部署的主机组件，随 `moox-cli setup deploy-host` 部署，只支持 Linux `amd64`/`arm64`，不需要 sudo，细节见
+  [`references/host-agent.md`](references/host-agent.md)。
+- EventBus 凭据只通过 `moox-admin-cli eventbus-credentials` 生成和轮换，发布包和提交进仓库的 YAML 必须保持无凭据。
+- EventBus CA 或 role token 轮换之后，必须 fan-out 到每一个客户端才算部署完成，按
+  [`references/eventbus-credentials.md`](references/eventbus-credentials.md) 执行。control 上的 `export` 不会更新其他主机上的主机采集器和业务组件。
 
-## Common Commands
+## 仓库结构
 
-From the repository root:
+- `modules/cli`：`moox-cli`（部署、初始化、SCF 发布、数据导入、Doctor）。
+- `modules/admin`：控制面（控制台 API、认证、空间、主机与部署、网关控制、调用方密钥与 PKI、密钥、SSH、Setup）。
+- `modules/hostgateway`：每台主机的网关；`modules/access`：外部接入；`modules/egressproxy`：出口代理。
+- `modules/eventbus`：内嵌的 NATS JetStream broker。
+- `modules/storage`：元数据（primary）、字段级事实与 outbox（node）、可重建视图（view）。
+- `modules/collector`：采集任务、周期批次规划、SCF Timer 运行时与对账、标的同步。
+- `modules/cloudnode`：云账号、SCF 节点、代码包和函数发布。
+- `modules/factor`：因子管理端和 Python 因子引擎。
+- `modules/strategy`、`modules/trade`、`modules/monitor`、`modules/hostagent`、`modules/archive`。
+- `packages/servicecatalog`：组件目录；`packages/gatewayclient`：调用方客户端；其余共享包见 `docs/模块/共享包.md`。
+- `deploy/runtime`：主机上的运行脚本（安装、启停、暂停、健康检查）。
+- `docs`：总体设计、部署与运维和 `docs/模块/` 下的模块设计文档。
+- `scripts`：构建、发布、检查和契约/E2E 测试脚本。
+
+## 常用命令
+
+在仓库根目录：
 
 ```bash
 make build
 make check-boundaries
 make release
-make deploy
+make verify
 ```
 
-单独发布或替换已部署的二进制服务时，使用
-[`references/service-release.md`](references/service-release.md) 中的服务包发布流程；先用
-`scripts/build/package-service.sh` 生成 ZIP，再通过通用入口 `moox-cli setup deploy-service` 发布。
-服务包包含二进制、配置和生命周期脚本，由 CLI 通过已核验的 SSH 主机指纹完成上传、解压、
-回滚和健康检查；不要在命令行中拼接密码。
+部署一律用 `moox-cli setup`：`bootstrap`（首次）、`deploy-host`、`deploy-service`、`rollback`、`pause`、`resume`、`service`、`firewall`，细节见
+[`references/release.md`](references/release.md)。发布不再打服务 ZIP 包：CLI 按 `moox.toml` 渲染每台主机的发布，用已核验的 SSH 主机指纹完成上传、安装、
+回滚和健康检查；不要在命令行里拼接密码。
 
-敏感信息扫描已接入 CNB 和 GitHub CI 的 Pull Request 流程：`.cnb.yml` 的 `pull_request`
-流水线和 `.github/workflows/ci.yml` 的 `Secret scan` 任务都会扫描本次 PR 的提交范围，
-命中密码、令牌或密钥时以非零状态失败。要真正阻止合并，还需要在两个平台的 `main` 分支
-保护规则中将 `Secret scan` 和常规验证任务设置为必需状态检查；CNB 同时启用“需要通过状态检查”。
+敏感信息扫描已接入 CNB 和 GitHub CI 的 Pull Request 流程：`.cnb.yml` 的 `pull_request` 流水线和 `.github/workflows/ci.yml` 的 `Secret scan` 任务都会扫描
+本次 PR 的提交范围，命中密码、令牌或密钥时以非零状态失败。要真正阻止合并，还需要在两个平台的 `main` 分支保护规则中把 `Secret scan` 和常规验证任务设置为
+必需状态检查；CNB 同时启用“需要通过状态检查”。
 
-Protocol generation:
+协议生成：
 
 ```bash
 make proto
 ```
 
-## MooX CLI Operations
+## MooX CLI 运维
 
-Prefer bundled scripts in this skill when a workflow needs deterministic parsing or repeated `moox-cli` argument assembly.
+需要确定性解析或反复拼装 `moox-cli` 参数的流程，优先用本技能自带的脚本。
 
-For requests to fetch collected market data, such as “获取 BTC-USDT 的 1m K 线”, read
-[`references/data-query.md`](references/data-query.md). It defines the natural-language mapping,
-catalog constraints, packaged credential handling, and result summary contract for
-`moox-cli data kline get`.
+获取已采集的行情数据，例如“获取 BTC-USDT 的 1m K 线”，读
+[`references/data-query.md`](references/data-query.md)。它定义了自然语言到参数的映射、目录约束、打包凭据的处理方式和
+`moox-cli data kline get` 的结果摘要约定。
 
-For View recovery, read
-[`references/cli-operations.md`](references/cli-operations.md) before operating. It documents
-the safe dry-run-first workflow and Storage `repair-view`; Factor recovery uses durable lag diagnosis and explicit Recalc, not consumer deletion,
-Storage `force-rebuild-view`, durable names, defaults, credential lookup, backups, the
-View bar budget (`[storage_retention] view_bars`), and the high-risk full index reset.
-Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
-operation is available.
+View 恢复前先读 [`references/cli-operations.md`](references/cli-operations.md)。它记录了先 dry-run 的安全流程和 Storage 的 `repair-view`；Factor 的恢复用
+durable 积压诊断和显式的 Recalc，不删除 consumer，也不用 Storage 的 `force-rebuild-view`，同时说明 durable 名称、默认值、凭据查找、备份、View 根数预算
+（`[storage_retention] view_bars`）和高风险的整体索引重置。有对应的 `moox-cli` 操作时，不要手工删除 durable consumer 或 View 索引。
 
-When the user changes `moox.toml` (for example `[storage_retention]` retention periods or
-`[storage_view]`), publish it with `moox-cli config`: run `moox-cli config plan --file ./moox.toml`,
-show the user each target's status, changed keys, restarts, warnings and `retention_shrinks`, and
-only after the user confirms run `moox-cli config publish --file ./moox.toml --yes`. A retention
-shrink deletes rows at the next Storage cleanup; add `--allow-retention-shrink` only when the user
-explicitly accepts that. Do not edit host config files by hand.
+用户修改 `moox.toml`（例如 `[storage_retention]` 的保留期或 `[storage_view]`）时，用 `moox-cli config` 发布：先运行 `moox-cli config plan --file ./moox.toml`，把每个目标的
+状态、变化的键名、要重新部署的组件、告警和 `retention_shrinks` 给用户看，用户确认后才运行 `moox-cli config publish --file ./moox.toml --yes`。缩短保留期会在下一次
+Storage 清理时删除数据，只有用户明确接受时才加 `--allow-retention-shrink`。不要手工编辑主机上的配置文件。
 
-When crypto K-line or Factor periods stall, read
-[`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
-Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
-the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
-distinguish event backlog, Storage failures, and Python saturation.
+crypto K 线或 Factor 周期停滞时，先读 [`references/view-catchup.md`](references/view-catchup.md)。分别测量 Primary、View 和 Factor 的水位。Collector 的完成事件驱动
+Factor 从 Storage PrimaryStore 读取，Factor 的 durable 是 `factor_collector_period_v1`；用带集合标签的周期和 lane 指标区分事件积压、Storage 故障和 Python 饱和。
 
-### Tencent Lighthouse Firewall
+### 腾讯云防火墙
 
-When the user provides a Tencent Cloud Lighthouse instance detail URL, use the bundled script to parse the instance ID and call `moox-cli`:
+各主机的入站规则由 `moox-cli setup firewall` 按部署表统一同步（`--dry-run` 看差异，`--prune` 删除受管端口上多余的旧规则），不要手工逐条开放。只有临时需要开放某个端口、
+并且用户给出了轻量应用服务器的实例详情页 URL 时，才用本技能自带的脚本解析实例 ID 并调用 `moox-cli`：
 
 ```bash
 python3 skills/moox/scripts/tencent_lighthouse_firewall.py add \
   --detail-url 'https://console.cloud.tencent.com/lighthouse/instance/detail?searchParams=rid%3D5&rid=1&id=lhins-a7yikq89' \
-  --ports 20201,20200,20202,11000 \
-  --dry-run
+  --ports 11004 --cidr <来源网段> --dry-run
 ```
 
-After the dry run is correct, remove `--dry-run` to create the firewall rule. The script defaults to the MooX service ports `20201,20200,20202,11000`, `TCP`, `0.0.0.0/0`, and `ap-guangzhou` when the console URL does not provide a region.
+`--ports` 必须显式指定，没有默认值；内部端口要把 `--cidr` 收窄到具体地址，不要对 `0.0.0.0/0` 开放。确认 dry-run 正确后去掉 `--dry-run` 创建规则。没有 URL 中的地域信息时默认
+`ap-guangzhou`。
 
-Useful safe checks:
+安全的检查命令：
 
 ```bash
-python3 skills/moox/scripts/tencent_lighthouse_firewall.py parse --detail-url '<console-detail-url>'
-python3 skills/moox/scripts/tencent_lighthouse_firewall.py add --detail-url '<console-detail-url>' --print-command
+python3 skills/moox/scripts/tencent_lighthouse_firewall.py parse --detail-url '<控制台详情页 URL>'
+python3 skills/moox/scripts/tencent_lighthouse_firewall.py add --detail-url '<控制台详情页 URL>' --ports 11004 --print-command
 ```
 
-The script calls `bin/moox-cli` from the repository when present, or `moox-cli` from `PATH`. Tencent credentials should be supplied through `TENCENTCLOUD_SECRET_ID` and `TENCENTCLOUD_SECRET_KEY`; do not echo secrets in final responses or logs.
+脚本优先调用仓库里的 `bin/moox-cli`，没有时用 `PATH` 里的 `moox-cli`。腾讯云凭据通过 `TENCENTCLOUD_SECRET_ID` 和 `TENCENTCLOUD_SECRET_KEY` 提供；不要在最终回复或日志里回显密钥。
 
-### Tencent Private Network
+### 腾讯云 SCF 与外部接入的网络
 
-Storage routing is regional. Before SCF publication,
-run `moox-cli setup scf-network-plan --file ./moox.toml`: same-region SCF uses
-Storage's discovered VPC/subnet/private IP, while cross-region SCF uses the
-configured public gateway. Do not create CCN. Keep `public_net_status=ENABLE`
-when the function must reach public market providers. Follow
-[`references/private-network.md`](references/private-network.md) for the full
-decision table, canary order and evidence requirements. Do not change Caddy or
-`MOOX_PUBLIC_HOST` to private IPs.
+SCF 只经外部接入访问 MooX，路径按地域选择。发布 SCF 之前先运行 `moox-cli setup scf-network-plan --file ./moox.toml`：与函数同地域的主机上部署了外部接入时，函数绑定该主机的
+VPC，经私网访问；跨地域走 `access@storage` 的公网地址。不要创建 CCN。需要访问公开行情源时保持 `public_net_status=ENABLE`。完整的决策表、canary 顺序和验收证据见
+[`references/private-network.md`](references/private-network.md)。不要把控制台代理或 `MOOX_PUBLIC_HOST` 改成私网地址。
 
-Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
+运行数据可以删除，并从 `examples/` 和服务流程重建。不要重新引入独立的验收 CSV 脚本。
 
-### Tencent CLS Before Deployment
+### 腾讯云 CLS 日志查询
 
-When CLS is enabled, prepare it before syncing the release archive or stopping
-any existing service. On remote targets this may upload a temporary,
-architecture-matched `moox-cli` helper solely for preflight; the helper is
-removed immediately and is not the release archive. The Admin and CloudNode
-control plane must already be running and reachable through the
-service-authenticated gateway, and the selected account must be a Tencent
-cloud account:
+主机上的组件日志不写 CLS，只在 `<部署根目录>/logs/<组件>/stdout.log`。CLS 里是 SCF 采集函数的日志。用户要求查询、验证或排查 CLS 日志时，用自带的
+`skills/moox/scripts/cls_search.py`。查询流程读 [`references/cls-query.md`](references/cls-query.md)，签名 API 的约定读 [`references/cls-api.md`](references/cls-api.md)。
+脚本支持 CQL、相对时间范围、raw/JSON 输出、字段选择和分页，默认使用 `cls.internal.tencentcloudapi.com`，凭据只从命令行参数、`CLS_*` 环境变量或未跟踪的 `.env`
+文件读取。脚本提示缺少 SDK 时，在当前 Python 环境里安装 `tencentcloud-sdk-python-cls`；不要把腾讯云凭据写进仓库。
 
-```bash
-skills/moox/scripts/cls-bootstrap.sh \
-  --target user@host \
-  --deploy-dir /home/user/moox \
-  --stage-dir release/deploy-stage/moox \
-  --admin-url http://127.0.0.1:11002
-```
+检查 MooX 的 CLS 时，先用窄时间范围执行 `--query '*'` 并检查返回的结构化记录。在对 `service_name` 使用 CQL 条件之前，先确认记录里有这个字段；固定的 Topic 可能还没有
+`service_name` 索引，这时 API 会返回明确的 `field ... is not indexed` 错误，需要在客户端过滤。报告 Topic ID、时间范围、结果数、RequestId、service name 取值以及任何
+索引或投递错误，但不要打印 CLS 凭据。
 
-The script selects the first Tencent cloud account unless
-`--cloud-account-id` is set. It queries the fixed `ap-guangzhou` Tencent Cloud
-region for Logset `moox` and Topic `moox-application`. Missing
-resources are created; existing resources are reused. The resolved non-secret
-metadata is written to the generated `config/resources.env`, while staged
-`trpc_go*.yaml` files reference `${MOOX_CLS_TOPIC_ID}`. Writer credentials are
-installed only in the target's `secrets/cls.env`, with mode `0600`.
+## 首次部署
 
-`moox.toml` contains only Tencent Cloud input credentials and region. The
-generated `config/resources.env` is the canonical runtime source for the
-selected cloud account, resolved Logset/Topic IDs, and CLS endpoint; it is non-secret, mode `0644`, and
-is atomically replaced with the release stage. Never add resource IDs or
-credentials to tracked examples, staged YAML, or command output.
+初始化一套全新的 MooX 时，严格按 [`references/custom-setup.md`](references/custom-setup.md) 执行。用户在部署前创建仓库根目录的 `moox.toml`。Agent 只可以检查它是否存在，
+不能在 `moox-cli setup` 之外读取、解析、打印、复制或 `source` 它。
 
-## Development Rules
+顺序是：`validate`、（按需）`trust-host`、`firewall`、`bootstrap`、`apply`、`status`，在 `status` 返回 `completed` 之后再 `setup init --config-dir ./config/setup`。
+`bootstrap` 离线初始化管理后台（建表、MooX 私有 CA、全部主机和部署、调用方密钥），启动 control，再依次部署其他主机；部署表在 `moox.toml` 的 `[placements]` 里，
+不需要再询问用户把 Storage 放在哪台机器，也不要悄悄替用户选择。`setup init` 创建或核对默认的 Admin 空间和 Storage 元数据，激活 Dataset 并验证结果。不要在 Agent 上下文里
+解析生成的过滤后的 seed 文件。腾讯云主机就绪后，按 [`references/private-network.md`](references/private-network.md) 检查 SCF 的地域路由。
 
-- Prefer the new protocol under `modules/storage/proto/*.proto`, `modules/admin/proto/*.proto`, `modules/collector/proto/*.proto`, and `modules/cloudnode/proto/*.proto`; shared response/auth/page types live in `packages/commonpb`.
-- Do not add new compatibility proto packages for deleted call paths; update callers to the current module proto instead.
-- Do not reintroduce `object_id` into public APIs. Use Space, DataSource, Subject, DataSet, View, Field, and Factor.
-- Use `subject_id` for normalized subject identity. Source-specific symbols are derived by each collector adapter from the canonical subject ID; do not persist source symbol mappings in metadata.
-- Use `start_time`, `end_time`, and `snapshot_time`; avoid suffixes such as `_ms`.
-- Keep `series_tag` as one optional scalar user label and part of time-series identity, for example `venue:binance`. Do not reintroduce map-style dimensions.
-- Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. Treat Parquet as cold archive. Treat Bleve as text search.
+控制台代理（Caddy）的安装、证书模式选择、HTTPS 验收和健康检查续期由 `moox-cli setup bootstrap` 和部署命令负责，不要让用户单独运行 Caddy 脚本。证书模式和 internal 根证书的处理见
+[`references/caddy-https.md`](references/caddy-https.md)；internal 模式下，`setup apply` 会检查并安装本机浏览器信任，中断后可以单独执行
+`./bin/moox-cli setup trust-browser --file ./moox.toml`。
 
-See `references/` for more detailed notes.
+组件目录（`packages/servicecatalog`）是服务和端口的唯一来源；Admin 里的 `t_hosts`、`t_placements` 记录部署，`t_host_gateway_status` 记录主机网关的心跳。控制台的「服务部署」页展示它们；
+`/#/ops/storage/nodes` 仍是独立的 PrimaryStore 拓扑，不会被悄悄同步。SCF 的外部接入地址、实例 ID 和 `scf-collector` 凭据由 Collector 经 CloudNode 写进函数环境，不在打包时嵌入。
 
-### moox-storage 远端 CGO 编译（内部）
+## 开发约定
 
-维护者专用，见 [skills/dev-helper/SKILL.md](../dev-helper/SKILL.md)。未配置 SSH 目标时脚本会交互提示；Agent 应在对话中向用户询问后以 `--target` 传入，勿写入仓库。
+- 优先使用 `modules/storage/proto/*.proto`、`modules/admin/proto/*.proto`、`modules/collector/proto/*.proto` 和 `modules/cloudnode/proto/*.proto` 下的新协议；共享的响应、鉴权和分页类型在 `packages/commonpb`。
+- 不要为已删除的调用路径新增兼容用的 proto 包；把调用方改成当前模块的 proto。
+- 不要在公开 API 里重新引入 `object_id`。使用 Space、DataSource、Subject、DataSet、View、Field 和 Factor。
+- 用 `subject_id` 表示规范化的标的身份。与数据源相关的符号由各采集适配器从规范 `subject_id` 派生，不要在元数据里持久化数据源符号映射。
+- 使用 `start_time`、`end_time` 和 `snapshot_time`；避免 `_ms` 之类的后缀。
+- `series_tag` 是一个可选的标量用户标签，属于时序身份的一部分，例如 `venue:binance`。不要重新引入 map 形式的维度。
+- Pebble 支撑的 PrimaryStore 是在线有序事实存储，DuckDB 用于分析查询和带版本的宽视图存储，Parquet 是冷归档，Bleve 用于文本检索。
+- 新增或修改服务、端口、ACL 都在组件目录里做；不要在各模块里写目标地址或端口，调用方只配置 `gateway_client` 的身份和密钥文件。
 
-```bash
-# 先配置 MOOX_DEV_SSH_TARGET（勿提交密码）
-./skills/dev-helper/scripts/storage-remote-build.sh \
-  --deploy-dir /data/moox \
-  --deploy
-```
+更多说明见 `references/`。
 
-## System Initialization Deployment Flow
+### Storage 的 CGO 编译
 
-Use `moox-cli setup deploy-control` for the first control-plane deployment. It
-owns the Caddy prerequisite, certificate selection, HTTPS acceptance, and the
-healthcheck/renewal scheduler; do not ask the user to run a separate Caddy
-script during initialization:
-
-```bash
-./bin/moox-cli setup validate --file ./moox.toml
-./bin/moox-cli setup deploy-control --file ./moox.toml
-```
-
-The command installs and verifies pinned Caddy `v2.11.4`, uploads the
-candidate Caddyfile, rejects non-loopback upstreams, starts or reloads only the
-MooX-owned edge, and performs HTTPS acceptance. Its sanitized JSON includes a
-`certificate` summary (`mode`, `issuer`, and `automatic_renewal`) so the Skill
-can prove which trust model was selected without reading keys.
-
-For internal CA deployments, `moox-cli` also checks and installs the Caddy root
-in the operator machine's browser trust store during control initialization.
-The same check runs before publishing `admin` or `web-host` packages. If a
-previous run was interrupted, repair it with:
-
-```bash
-./bin/moox-cli setup trust-browser --file ./moox.toml
-```
-
-Automatic mode selects Let's Encrypt public certificates for public IP/DNS
-hosts and Caddy internal CA for private, loopback, and `.localhost` hosts.
-Public mode requires TCP 80 to remain reachable for HTTP-01 issuance and
-renewal. Caddy remains running, renews from ACME ARI automatically, and is
-restarted by the generated healthcheck after failure or reboot. Browsers and
-backend clients use their operating-system trust store in public mode; no MooX
-root certificate is installed.
-
-### Internal 模式根证书
-
-Only explicit `--tls-mode internal` creates `certs/caddy/root.crt`. Fetch and install it with the Caddy CA helper, then verify trust by fingerprint:
-
-```bash
-skills/moox/scripts/caddy-ca.sh fetch --target user@host --deploy-dir /home/user/moox \
-  --output ~/.moox/certs/moox-caddy-root-<host>.crt
-skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-caddy-root-<host>.crt
-skills/moox/scripts/caddy-ca.sh status --ca-file "$CA_FILE"
-```
-
-Internal-mode backend processes use `MOOX_SERVICE_GATEWAY_CA_FILE`; SCF uses `MOOX_SERVICE_GATEWAY_CA_PEM_B64`. Public mode must not set either service-edge CA variable. The separate `MOOX_GATEWAY_CA_FILE` peer bundle remains required in both modes. Never disable TLS verification.
-
-For a CLS-enabled release, `scripts/deploy/deploy-moox.sh --enable-cls` runs the CLS
-predeploy check after stage creation and before release archive sync or service
-shutdown.
-That check requires the already-running Admin/CloudNode control plane and at
-least one Tencent cloud account; a failed check must not stop the current
-deployment.
-The managed Factor configuration uses an `info` CLS writer. Diagnose calculation freshness
-with `factor_period_total`, `factor_period_lag_seconds`, `factor_lane_backlog` and structured
-period pipeline logs; other services keep the lower-volume `warn` policy.
-
-### Tencent CLS Log Query And Verification
-
-When the user asks to query, verify, or troubleshoot CLS logs, use the bundled
-`skills/moox/scripts/cls_search.py` script. Read
-[`references/cls-query.md`](references/cls-query.md) for the query workflow and
-[`references/cls-api.md`](references/cls-api.md) for the signed API contract.
-The script supports CQL, relative time ranges, raw/JSON output, field
-selection, and pagination. It uses `cls.internal.tencentcloudapi.com` by
-default and loads credentials only from CLI arguments, `CLS_*` environment
-variables, or an untracked `.env` file.
-If the bundled script reports a missing SDK, install `tencentcloud-sdk-python-cls`
-in the active Python environment; do not add Tencent credentials to the repo.
-
-For a MooX CLS check, first query `--query '*'` with a narrow time range and
-inspect the returned structured records. Verify `service_name` in the record
-before trying a CQL predicate on that field; the fixed Topic may not have a
-`service_name` index yet, in which case the API returns an explicit
-`field ... is not indexed` error and client-side filtering is required. Report
-the Topic ID, time range, result count, RequestId, service name values, and any
-indexing or delivery errors, but never print CLS credentials.
-
-When initializing a fresh MooX system, follow
-[`references/custom-setup.md`](references/custom-setup.md) exactly. The user
-creates repository-root `moox.toml` before deployment. The Agent may test only
-whether it exists and must never read, parse, print, copy, or source it outside
-`moox-cli setup`, except the `storage_gateway_host` confirmation in
-[`references/private-network.md`](references/private-network.md) when checking
-that Storage RPC stays on the public IP.
-
-Run `validate`, `deploy-control`, `apply`, and `status` in that order. Do not
-ask about Storage until setup is complete and the public login API is verified.
-Then use `setup hosts`, ask the user in natural language for exactly one Storage
-host, and run `setup deploy-storage`; the four initial Storage processes stay on
-that machine. After Storage is ready, run `setup init --config-dir
-./config/setup --storage-host <host-name>` to create or verify the
-default Admin spaces and Storage metadata, activate Datasets, and verify the
-result. Keep `moox.toml` secrets unchanged and never parse a generated filtered seed
-in Agent context. After Tencent hosts exist, resolve the Storage placement and
-apply the regional SCF route rules in
-[`references/private-network.md`](references/private-network.md).
-
-`t_service_deployments` remains the source of truth for service addresses.
-`/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never
-silently synchronized. SCF receives active service deployments from the control
-plane rather than embedding addresses at package time.
-Host Agent deployment and server-resource monitoring are supported for Linux
-amd64/arm64. Use `scripts/hostagent-release.sh` and
-`scripts/hostagent-deploy.sh` for rootless user-systemd deployment. EventBus
-credentials are provisioned, exported, and rotated only through Admin using
-`scripts/eventbus-credentials.sh`; do not put tokens or private keys in a
-release archive, command line, or checked-in config. After CA or role-token
-rotation, follow [`references/eventbus-credentials.md`](references/eventbus-credentials.md)
-and fan-out to every EventBus client: control services, Storage, every Host Agent
-host, and SCF. Control `export` does not update Host Agents on other machines.
+`moox-storage-*` 依赖 CGO，**不要在 macOS 上 `GOOS=linux CGO_ENABLED=1` 交叉编译**。在 `moox.toml` 的 `[compile_host]` 配置一台 Linux 编译主机（不是 MooX 主机）后，
+`moox-cli setup deploy-host` 和 `moox-cli setup build-linux` 会自动在那里构建；SSH 目标和凭据都只在 `moox.toml` 里，不要写进仓库或命令行。

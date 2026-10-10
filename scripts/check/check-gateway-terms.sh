@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 旧称扫描：网关重构后，代码、配置、脚本、文档和 skills 中不应再出现旧的网关名称和已删除的组件、配置键。
-# 排除本重构的两份计划文档（记录了历史名称）、本脚本、部署时才重新生成的控制台静态资源（web-host 的 statik.go），
+# 排除 docs/计划/ 下的计划文档（记录的是当时的名称和做法）、本脚本、部署时才重新生成的控制台静态资源（web-host 的 statik.go），
 # 以及专门断言旧名称已删除或会被拒绝的文件（见 exempt）。
 set -euo pipefail
 
@@ -37,6 +37,8 @@ exempt=(
   scripts/test/contract/test-collector-runtime-config-contract.sh
   scripts/test/contract/test-storage-boundary-contract.sh
   scripts/test/contract/test-deploy-factor-engine.sh
+  skills/moox/scripts/test-custom-setup-contract.sh
+  skills/moox/scripts/test-private-network-contract.sh
 )
 
 args=()
@@ -47,8 +49,7 @@ for file in "${exempt[@]}"; do
   args+=(--glob "!${file}")
 done
 matches="$(rg -n -F --no-heading "${args[@]}" \
-  --glob '!docs/计划/网关与服务部署重构设计.md' \
-  --glob '!docs/计划/网关与服务部署重构执行计划.md' \
+  --glob '!docs/计划/**' \
   --glob '!scripts/check/check-gateway-terms.sh' \
   --glob '!web-host/internal/statik.go' \
   --glob '!**/node_modules/**' \

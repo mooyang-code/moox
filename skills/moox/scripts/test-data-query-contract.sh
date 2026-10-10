@@ -32,7 +32,7 @@ meta_assignment="SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'"
 for summary_field in 'data type' 'exchange' 'symbol' 'interval' 'row count' 'returned time range'; do
   grep -Fq "${summary_field}" "${REFERENCE}" || fail "reference summary is missing ${summary_field}"
 done
-grep -Fq 'Never include Gateway secrets' "${REFERENCE}" || fail "reference does not prohibit credential disclosure"
+grep -Fq 'Never include the moox-skill signing key' "${REFERENCE}" || fail "reference does not prohibit credential disclosure"
 
 SKILL_ROOT="${TEST_ROOT}/install/skills/moox"
 mkdir -p "${SKILL_ROOT}/scripts" "${SKILL_ROOT}/config" "${TEST_ROOT}/path-bin"

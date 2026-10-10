@@ -32,7 +32,7 @@ CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]
 `[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺
 不删除；旧的 `[[factors.items]]` 已移除。
 Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
-`run-once` 和 `status`。
+和 `status`；单个周期的诊断用引擎自己的 `moox-factor-engine run-once`。
 
 ## 清理 Storage View 积压并触发 A/B 重建
 
@@ -40,12 +40,12 @@ Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/storage/config/storage.yaml \
+  --storage-conf /data/moox/storage/current/storage-primary/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
+  --credential-file <从 control 复制来的 internal-admin.yaml，mode 0600> \
   --eventbus-url tls://<EventBus公网IP>:4222 \
   --yes
 ```
@@ -66,12 +66,12 @@ moox-cli storage repair-view \
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/storage/config/storage.yaml \
+  --storage-conf /data/moox/storage/current/storage-primary/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
+  --credential-file <从 control 复制来的 internal-admin.yaml，mode 0600> \
   --eventbus-url tls://<EventBus公网IP>:4222 \
   --dry-run
 ```
@@ -83,7 +83,7 @@ moox-cli storage repair-view \
 | `--space-id` | 无，必填 | View 所属 Space |
 | `--view-id` | 无，必填 | 要修复的 View |
 | `--storage-conf` | `MOOX_STORAGE_CONFIG` 或 `config/storage.yaml` | Storage 配置 |
-| `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | `start.sh`/`stop.sh` 所在根目录 |
+| `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | 存储部署根目录，其下 `current/` 是当前发布，内含 `start.sh`/`stop.sh`/`status.sh` |
 | `--stream` | `MOOX_STORAGE` | JetStream stream |
 | `--consumer` | `storage_view_kline` | 分区 durable；kline 三个行情 View 共用，因子 View 用 `storage_view_factor` |
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
@@ -115,10 +115,10 @@ moox-cli storage repair-view ... \
 但业务 Dataset 的历史事件必须保留时，不要删除整个 consumer。先检查精确 subject：
 
 ```bash
-/home/<user>/moox/storage/bin/moox-storage-cli purge-dataset-events \
+/data/moox/storage/current/bin/moox-storage-cli purge-dataset-events \
   --space mooxsys \
   --dataset dataset_mooxsys_service_metrics \
-  --credential-file /home/<user>/.config/moox/eventbus/internal-admin.yaml \
+  --credential-file <从 control 复制来的 internal-admin.yaml，mode 0600> \
   --dry-run
 ```
 
@@ -133,8 +133,8 @@ rows、period、factor-computed 和 sync-point 事件；不会删除 durable con
 
 ```bash
 moox-cli storage force-rebuild-view \
-  --storage-conf /home/<user>/moox/storage/config/storage.yaml \
-  --package-root /home/<user>/moox/storage \
+  --storage-conf /data/moox/storage/current/storage-primary/config/storage.yaml \
+  --package-root /data/moox/storage \
   --space-id crypto \
 	--view-id view_factor_binance_kline_1m \
   --dry-run
@@ -151,9 +151,9 @@ K 线，历史不足时以现有数据激活。
 `storage-view`，再执行一次性元数据收敛命令：
 
 ```bash
-/home/<user>/moox/storage/bin/moox-storage-cli retain-views \
-  --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
-  --package-root /home/<user>/moox/storage \
+/data/moox/storage/current/bin/moox-storage-cli retain-views \
+  --metadata-db /data/moox/storage/data/storage/metadata/storage_metadata.db \
+  --package-root /data/moox/storage \
   --keep-view crypto/view_dasftksvjhj2jom4vhd0_kline_1m \
   --keep-view crypto/view_crypto_swap_kline_1h \
   --keep-view crypto/view_crypto_spot_kline_1h \

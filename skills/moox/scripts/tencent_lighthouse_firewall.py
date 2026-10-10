@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Open Tencent Lighthouse firewall ports through moox-cli."""
+"""通过 moox-cli 为腾讯云轻量应用服务器临时开放防火墙端口。
+
+MooX 各主机的入站规则由 `moox-cli setup firewall` 按部署表统一管理；这个脚本只用于手工临时开放某个端口，
+端口必须显式指定，不再有默认值。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,6 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 
-DEFAULT_MOOX_PORTS = "20201,20200,20202,11000"
 DEFAULT_REGION = "ap-guangzhou"
 
 RID_REGION_MAP = {
@@ -36,7 +39,7 @@ def parse_console_detail_url(url: str, explicit_region: str | None = None) -> di
 
     instance_id = values.get("id") or values.get("instanceId") or values.get("instance_id")
     if not instance_id:
-        raise ValueError("cannot find Lighthouse instance id in detail URL")
+        raise ValueError("在详情页 URL 中找不到轻量应用服务器的实例 ID")
 
     region = explicit_region or values.get("region") or RID_REGION_MAP.get(values.get("rid", ""), DEFAULT_REGION)
     return {
@@ -95,7 +98,7 @@ def build_add_argv(args: argparse.Namespace) -> dict[str, Any]:
     elif args.public_ip:
         argv.extend(["--public-ip", args.public_ip])
     else:
-        raise ValueError("--detail-url, --instance-id, or --public-ip is required")
+        raise ValueError("必须指定 --detail-url、--instance-id 或 --public-ip")
 
     if args.cidr:
         argv.extend(["--cidr", args.cidr])
@@ -147,30 +150,30 @@ def run_add(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Open Tencent Lighthouse firewall ports through moox-cli.")
+    parser = argparse.ArgumentParser(description="通过 moox-cli 为腾讯云轻量应用服务器临时开放防火墙端口。")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    parse_cmd = subcommands.add_parser("parse", help="Parse a Tencent Cloud Lighthouse instance detail URL.")
-    parse_cmd.add_argument("--detail-url", required=True, help="Tencent Cloud Lighthouse instance detail URL.")
-    parse_cmd.add_argument("--region", default="", help="Override Tencent Cloud region.")
+    parse_cmd = subcommands.add_parser("parse", help="解析腾讯云轻量应用服务器的实例详情页 URL。")
+    parse_cmd.add_argument("--detail-url", required=True, help="轻量应用服务器的实例详情页 URL。")
+    parse_cmd.add_argument("--region", default="", help="覆盖地域。")
     parse_cmd.set_defaults(func=run_parse)
 
-    add_cmd = subcommands.add_parser("add", help="Add Lighthouse firewall ports through moox-cli.")
-    add_cmd.add_argument("--detail-url", default="", help="Tencent Cloud Lighthouse instance detail URL.")
-    add_cmd.add_argument("--instance-id", default="", help="Lighthouse instance id.")
-    add_cmd.add_argument("--public-ip", default="", help="Resolve Lighthouse instance by public IP.")
-    add_cmd.add_argument("--region", default="", help=f"Tencent Cloud region, default {DEFAULT_REGION}.")
-    add_cmd.add_argument("--ports", default=DEFAULT_MOOX_PORTS, help="Ports to open.")
-    add_cmd.add_argument("--protocol", default="TCP", help="Protocol: TCP, UDP, ICMP, ICMPv6, or ALL.")
-    add_cmd.add_argument("--cidr", default="0.0.0.0/0", help="IPv4 CIDR.")
-    add_cmd.add_argument("--ipv6-cidr", default="", help="IPv6 CIDR.")
-    add_cmd.add_argument("--action", default="ACCEPT", help="Firewall action.")
-    add_cmd.add_argument("--description", default="moox services", help="Firewall rule description.")
-    add_cmd.add_argument("--endpoint", default="", help="Tencent Cloud Lighthouse API endpoint.")
-    add_cmd.add_argument("--firewall-version", type=int, default=0, help="Optional firewall version.")
-    add_cmd.add_argument("--moox-cli", default=default_moox_cli(), help="Path to moox-cli.")
-    add_cmd.add_argument("--dry-run", action="store_true", help="Pass --dry-run to moox-cli.")
-    add_cmd.add_argument("--print-command", action="store_true", help="Print planned argv without executing.")
+    add_cmd = subcommands.add_parser("add", help="开放轻量应用服务器的防火墙端口。")
+    add_cmd.add_argument("--detail-url", default="", help="轻量应用服务器的实例详情页 URL。")
+    add_cmd.add_argument("--instance-id", default="", help="轻量应用服务器的实例 ID。")
+    add_cmd.add_argument("--public-ip", default="", help="按公网 IP 查找实例。")
+    add_cmd.add_argument("--region", default="", help=f"地域，默认 {DEFAULT_REGION}。")
+    add_cmd.add_argument("--ports", required=True, help="要开放的端口，逗号分隔；没有默认值，必须显式指定。")
+    add_cmd.add_argument("--protocol", default="TCP", help="协议：TCP、UDP、ICMP、ICMPv6 或 ALL。")
+    add_cmd.add_argument("--cidr", default="0.0.0.0/0", help="IPv4 来源网段；内部端口请收窄到具体地址。")
+    add_cmd.add_argument("--ipv6-cidr", default="", help="IPv6 来源网段。")
+    add_cmd.add_argument("--action", default="ACCEPT", help="防火墙动作。")
+    add_cmd.add_argument("--description", default="moox manual", help="规则描述。")
+    add_cmd.add_argument("--endpoint", default="", help="轻量应用服务器 API 的接入点。")
+    add_cmd.add_argument("--firewall-version", type=int, default=0, help="可选的防火墙版本。")
+    add_cmd.add_argument("--moox-cli", default=default_moox_cli(), help="moox-cli 的路径。")
+    add_cmd.add_argument("--dry-run", action="store_true", help="给 moox-cli 传 --dry-run。")
+    add_cmd.add_argument("--print-command", action="store_true", help="只打印将要执行的命令，不执行。")
     add_cmd.set_defaults(func=run_add)
     return parser
 

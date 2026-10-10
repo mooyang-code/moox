@@ -299,6 +299,13 @@ func TestSetupBootstrapUsesCLIKeyFileAndDefersPlacementSync(t *testing.T) {
 	assert.NotNil(t, deployer.bootstrap.NewPlacements)
 	assert.Equal(t, []bool{false}, syncs, "control 就绪前不能经 Admin 同步部署记录")
 	assert.NotContains(t, stdout, "control-ssh-password", "安装器输出不进命令结果")
+	assert.False(t, deployer.bootstrap.ControlOnly)
+	assert.False(t, deployer.bootstrap.MaintenanceLockHeld)
+
+	_, _, err = runSetup(t, setupTestDeps(t, snapshot, deployer, nil), "bootstrap", "--control-only", "--maintenance-lock-held")
+	require.NoError(t, err)
+	assert.True(t, deployer.bootstrap.ControlOnly)
+	assert.True(t, deployer.bootstrap.MaintenanceLockHeld)
 }
 
 func TestSetupRenderWritesPlanFiles(t *testing.T) {

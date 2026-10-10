@@ -38,13 +38,23 @@ if set(defaults_policy) != required_defaults:
         f"monitor policy defaults mismatch: got={sorted(defaults_policy)}"
     )
 
-for module in ("collector", "factor"):
-    bootstrap = (root / "modules" / module / "internal/bootstrap/bootstrap.go").read_text()
-    inventory = (root / "modules" / module / "internal/observability/realtime_inventory.go").read_text()
-    if "NewDatasetMetrics" not in bootstrap or "NewRealtimeInventory" not in bootstrap:
-        raise SystemExit(f"{module}: DatasetMetrics inventory is not registered")
-    if "ReplaceExpected" not in inventory:
-        raise SystemExit(f"{module}: realtime inventory does not replace expected datasets")
+# 两个模块都要登记数据集指标，并把「预期的实时数据集」整体替换进去：
+# Collector 在 internal/observability 里维护清单，Factor 在 internal/bootstrap 的观察者里维护。
+collector = root / "modules/collector/internal"
+collector_bootstrap = (collector / "bootstrap/bootstrap.go").read_text()
+collector_inventory = (collector / "observability/realtime_inventory.go").read_text()
+if "NewDatasetMetrics" not in collector_bootstrap or "NewRealtimeInventory" not in collector_bootstrap:
+    raise SystemExit("collector: DatasetMetrics inventory is not registered")
+if "ReplaceExpected" not in collector_inventory:
+    raise SystemExit("collector: realtime inventory does not replace expected datasets")
+
+factor = root / "modules/factor/internal/bootstrap"
+factor_reporter = (factor / "metrics_reporter.go").read_text()
+factor_observer = (factor / "dataset_observer.go").read_text()
+if "NewDatasetMetrics" not in factor_reporter:
+    raise SystemExit("factor: DatasetMetrics is not registered")
+if "ReplaceExpected" not in factor_observer:
+    raise SystemExit("factor: dataset observer does not replace expected datasets")
 
 print("monitor coverage contract passed")
 PY

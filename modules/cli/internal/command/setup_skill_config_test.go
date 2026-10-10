@@ -225,7 +225,7 @@ func TestBuildSkillDataAccessConfigFailsClosed(t *testing.T) {
 		access    skillAccessEndpoint
 		want      string
 	}{
-		{name: "unsupported space", space: "stockus", want: "unsupported space"},
+		{name: "unsupported space", space: "stockus", want: "不支持空间"},
 		{name: "missing key", callerKey: func(*testing.T) []byte { return nil }, want: "签名密钥"},
 		{name: "other caller key", callerKey: func(t *testing.T) []byte { return testSkillCallerKey(t, "factor-engine") }, want: "factor-engine"},
 		{name: "no storage primary", prepare: func(snapshot *setupconfig.Snapshot) { delete(snapshot.Manifest.Placements, "storage") }, want: "存储主服务"},

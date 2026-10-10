@@ -132,7 +132,7 @@ func cliKeyFile() string {
 
 func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	var file string
-	var skipBuild bool
+	var skipBuild, controlOnly, lockHeld bool
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "空环境首次部署：初始化管理后台并部署全部主机",
@@ -142,8 +142,9 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
      为 control 签发主机网关证书；
   3. 启动 control 上的组件；
   4. 把 moox-cli 的签名密钥取回本机；
-  5. 依次部署其他主机。
-可以重复执行：已有的表、CA 和密钥都会复用。`,
+  5. 依次部署其他主机（--control-only 时跳过，之后用 deploy-host 逐台部署）。
+可以重复执行：已有的表、CA 和密钥都会复用。停机切换时操作员在 control 上持有维护锁，
+用 --control-only --maintenance-lock-held。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {
@@ -157,8 +158,10 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 			defer closeDeployer()
 			manifest := snapshot.Manifest
 			results, err := deployer.Bootstrap(cmd.Context(), setupdeploy.BootstrapOptions{
-				SkipBuild:  skipBuild,
-				CLIKeyFile: cliKeyFile(),
+				SkipBuild:           skipBuild,
+				ControlOnly:         controlOnly,
+				MaintenanceLockHeld: lockHeld,
+				CLIKeyFile:          cliKeyFile(),
 				NewPlacements: func(context.Context) (setupdeploy.PlacementSyncer, func(), error) {
 					placements := &controlPlacements{manifest: manifest}
 					return placements, placements.Close, nil
@@ -175,6 +178,8 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().BoolVar(&skipBuild, "skip-build", false, "复用仓库 bin/ 中已有的二进制")
+	cmd.Flags().BoolVar(&controlOnly, "control-only", false, "只初始化管理后台并部署 control，不部署其他主机")
+	cmd.Flags().BoolVar(&lockHeld, "maintenance-lock-held", false, "操作员已在 control 上持有维护锁（需要同时指定 --control-only）")
 	return cmd
 }
 

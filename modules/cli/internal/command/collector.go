@@ -392,7 +392,6 @@ func init() {
 	submitFlags.BoolVar(&collectorPublishFlags.SameRegionFirst, "same-region-first", true, "先完整占满 access@storage 同地域配置的节点数，再发布其他地域")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; written to the function environment, not the SCF package")
-	submitFlags.StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/market-fetch-publisher.yaml", "0600 market-fetch-publisher EventBus credential YAML")
 	submitFlags.IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
 	submitFlags.StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "", "stable function name prefix used to identify the fleet")
 	submitFlags.StringVar(&collectorPublishFlags.File, "file", "", "moox.toml（必填）：从中读取 scf_fetcher 的地域和函数数量，以及访问控制面的 SSH 连接信息")
@@ -1713,9 +1712,6 @@ func collectorStorageBindingAppKeys(raw []byte, secret string) (string, error) {
 }
 
 func prepareCollectorPublicationTrust(opts *collectorPublishOptions) error {
-	if opts.EventBusCredential == nil && opts.EventBusCredentialFile == "" {
-		opts.EventBusCredentialFile = "~/.config/moox/eventbus/market-fetch-publisher.yaml"
-	}
 	credential, ca, err := collectorEventBusCredentialMaterial(*opts)
 	if err != nil {
 		return err

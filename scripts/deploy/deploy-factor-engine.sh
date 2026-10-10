@@ -34,7 +34,11 @@ usage() {
   --no-start                只安装文件，不（重新）启动服务。
 
 密钥目录中需要的文件（普通文件，权限 0600）：
-  caller-factor-engine.key           factor-engine 外部调用方的签名密钥（control 主机的 secrets/principal-factor-engine.key）
+  caller-factor-engine.key           factor-engine 外部调用方的签名密钥；在 control 的部署根目录下执行
+                                     current/bin/moox-admin-cli keys ensure --db-path data/admin/admin.db \
+                                       --encryption-key-file secrets/admin-encryption-key \
+                                       --caller factor-engine --principal --out <文件>
+                                     导出（已有就复用）
   storage-primary-auth.secret        Storage 部署的 MOOX_STORAGE_PRIMARY_AUTH_SECRET
   factor-eventbus.yaml               因子 EventBus 角色凭据（ca_file 放在同一目录）
 EOF

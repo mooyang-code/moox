@@ -341,6 +341,36 @@ func TestBootstrapRunsFiveStepsInOrder(t *testing.T) {
 	assert.Nil(t, d.Placements, "初始化结束后恢复原来的同步方式")
 }
 
+func TestBootstrapControlOnlyKeepsMaintenanceLock(t *testing.T) {
+	d := newTestDeployer(t)
+	d.hosts["control"].cliKey = `{"caller":"moox-cli"}`
+	opened := 0
+	results, err := d.Bootstrap(context.Background(), BootstrapOptions{
+		ControlOnly: true, MaintenanceLockHeld: true,
+		CLIKeyFile: filepath.Join(t.TempDir(), "caller-moox-cli.key"),
+		NewPlacements: func(context.Context) (PlacementSyncer, func(), error) {
+			opened++
+			return &fakePlacements{}, func() {}, nil
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "control", results[0].Host)
+	assert.Zero(t, opened, "只初始化 control 时不经 Admin 同步其他主机")
+	assert.Empty(t, d.hosts["storage"].commands, "不部署其他主机")
+	installs := 0
+	for _, argv := range d.hosts["control"].commands {
+		if len(argv) > 3 && argv[3] == "moox-install" {
+			installs++
+			assert.Contains(t, argv, "--maintenance-lock-held", "两次安装都不能再加锁")
+		}
+	}
+	assert.Equal(t, 2, installs)
+
+	_, err = d.Bootstrap(context.Background(), BootstrapOptions{MaintenanceLockHeld: true})
+	require.ErrorContains(t, err, "只能初始化 control")
+}
+
 func TestBootstrapSpecListsEveryHost(t *testing.T) {
 	d := newTestDeployer(t)
 	raw, err := d.BootstrapSpec()

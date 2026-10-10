@@ -58,7 +58,7 @@ func runReconcileViewConsumers(args []string, stdout, stderr io.Writer) error {
 		restart:     true,
 	}
 	fs.StringVar(&opts.storageConf, "storage-conf", opts.storageConf, "storage business config path")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
+	fs.StringVar(&opts.packageRoot, "package-root", "", "存储部署根目录（其下 current/ 是当前发布，内含 start.sh、stop.sh）")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream")
 	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
 	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")

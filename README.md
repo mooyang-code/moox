@@ -10,10 +10,12 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 
 | 模块 | 进程 | 职责 |
 | --- | --- | --- |
-| [Admin](docs/模块/管理后台.md) | `moox-admin` | 认证、空间、服务目录、密钥、SSH、初始化；管理台 API 唯一入口 |
-| [Gateway](docs/模块/节点网关.md) | `moox-host-gateway` | 每台机器一个，把签名的服务请求转发到本机服务 |
+| [Admin](docs/模块/管理后台.md) | `moox-admin` | 控制台 API、认证、空间、主机与部署、网关控制、密钥、SSH、初始化 |
+| [HostGateway](docs/模块/主机网关.md) | `moox-host-gateway` | 每台主机一个，系统中唯一的网关，把签名的请求转发到本机服务 |
+| [Access](docs/模块/外部接入.md) | `moox-access` | 外部调用方（SCF、因子引擎、moox-skill）的唯一入口 |
+| [EgressProxy](docs/模块/出口代理.md) | `moox-egress-proxy` | 替 Collector 访问 Binance 等国内连不上的接口 |
 | [EventBus](docs/模块/事件总线.md) | `moox-eventbus` | 内嵌 NATS JetStream，模块间的异步事件 |
-| [Storage](docs/模块/存储.md) | `moox-storage-{primary,node,view,access}` | 元数据、字段级事实存储、可重建 View、外部访问代理 |
+| [Storage](docs/模块/存储.md) | `moox-storage-{primary,node,view}` | 元数据、字段级事实存储、可重建 View |
 | [Collector](docs/模块/采集.md) | `moox-collector`、SCF 函数 | 采集任务、周期批次、云函数调度与对账、标的同步 |
 | [CloudNode](docs/模块/云节点.md) | `moox-cloudnode` | 云账户、SCF 节点、代码包与发布 |
 | [Factor](docs/模块/因子.md) | `moox-factor-mgr`、`moox-factor-engine` | 因子定义与计算任务、Python 因子增量计算与补算 |
@@ -23,27 +25,28 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 | [HostAgent](docs/模块/主机代理.md) | `moox-host-agent` | 主机资源采集 |
 | [Archive](docs/模块/归档.md) | `moox-archive` | 行变更归档为 Parquet |
 | [Web](docs/模块/前端.md) | `moox-web-host` | 管理台前端 |
-| [CLI](docs/模块/命令行工具.md) | `moox-cli` | 初始化、部署、数据导入、诊断 |
+| [CLI](docs/模块/命令行工具.md) | `moox-cli` | 部署、初始化、数据导入、诊断 |
 
-跨模块共享的协议、事件、鉴权和运行时能力在 `packages/`，见[共享包](docs/模块/共享包.md)。
+跨模块共享的组件目录、调用方客户端、协议、事件、鉴权和运行时能力在 `packages/`，见[共享包](docs/模块/共享包.md)。
 
 ## 文档
 
 - [总体设计](docs/总体设计.md)：设计原则、系统全景、部署拓扑、核心数据流、事件与安全
-- [部署与运维](docs/部署与运维.md)：初始化、发布、证书、凭据、数据保留与日常检查
+- [部署与运维](docs/部署与运维.md)：首次部署、发布、暂停与停机切换、证书、凭据、数据保留与日常检查
 - [模块设计](docs/README.md)：各模块的详细设计
 
 ## 快速开始
 
 ```bash
-cp moox.toml.example moox.toml && chmod 600 moox.toml   # 填写主机、云账户等
+cp moox.toml.example moox.toml && chmod 600 moox.toml   # 填写主机、部署表、云账户等
 make build                                              # 构建全部二进制到 bin/
 
 ./bin/moox-cli setup validate --file ./moox.toml
-./bin/moox-cli setup deploy-control --file ./moox.toml
+./bin/moox-cli setup trust-host --file ./moox.toml ...   # 记录每台主机的 SSH 指纹
+./bin/moox-cli setup firewall --file ./moox.toml         # 同步防火墙规则（其他主机要经 control 的 11003 取快照）
+./bin/moox-cli setup bootstrap --file ./moox.toml        # 初始化管理后台并部署全部主机
 ./bin/moox-cli setup apply --file ./moox.toml
-./bin/moox-cli setup deploy-storage --file ./moox.toml --host storage
-./bin/moox-cli setup init --file ./moox.toml --config-dir ./config/setup --storage-host storage
+./bin/moox-cli setup init --file ./moox.toml
 ```
 
 完整流程与注意事项见[部署与运维](docs/部署与运维.md)。

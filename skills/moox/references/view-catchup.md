@@ -22,12 +22,12 @@
 
 独立 Storage 主机（常见）：
 
-- 包根：`/data/moox/storage`
-- `repair-view` 的 `--storage-conf`：`/data/moox/storage/storage/config/storage.yaml`（不要传 `storage-view/config/trpc_go.yaml`，那是 View 进程配置）
+- 部署根目录（`--package-root`）：`/data/moox/storage`，其下 `current/` 是当前发布，运行脚本在里面
+- `repair-view` 的 `--storage-conf`：`/data/moox/storage/current/storage-primary/config/storage.yaml`（不要传 `storage-view/config/trpc_go.yaml`，那是 View 进程配置）
 - 分区 durable 在 **View** 的 `trpc_go.yaml`：`storage_view_kline` / `storage_view_metrics` / `storage_view_factor` / `storage_view_misc*`
 - Primary 的 `storage.yaml` 可以很短、没有 `consumer_partitions`，这不代表 View 没用分区
 
-控制面：`/data/moox/prod`。Trade 可能在 `/home/ubuntu/moox/trade-move`，不要往香港机发 Storage。
+控制面：`/data/moox/prod`；Trade 在 compute-1：`/data/moox/compute-1`。Storage 只部署在 storage 主机，不要往 compute-1 部署 Storage。
 
 ## Storage View 容量检查
 
@@ -61,17 +61,17 @@
 ```bash
 # 先 dry-run 三个行情 View，确认 db_path / active_index / 下一档 desired revision
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/storage/config/storage.yaml \
+  --storage-conf /data/moox/storage/current/storage-primary/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
+  --credential-file <从 control 复制来的 internal-admin.yaml，mode 0600> \
   --eventbus-url tls://<EventBus公网IP>:4222 \
   --dry-run
 ```
 
-执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_bars`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
+执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍执行 `moox-cli setup service start --host storage --components storage-view`（或在主机上 `/data/moox/storage/current/start.sh storage-view`）。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_bars`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
 
 ### EventBus admin 地址
 
@@ -87,7 +87,7 @@ redelivery，再按 `set` 查看 `factor_period_lag_seconds`、`factor_last_peri
 
 | 现象 | 判断 | 动作 |
 |---|---|---|
-| durable pending 持续增长，最旧事件周期远早于当前时间 | 输入周期积压 | 检查 Factor 是否运行、过滤集合是否 enabled、Storage Gateway 可达性和 `AckWait`；不要删除 consumer，恢复后由 JetStream 重投 |
+| durable pending 持续增长，最旧事件周期远早于当前时间 | 输入周期积压 | 检查 Factor 是否运行、过滤集合是否 enabled、经外部接入或主机网关到 Storage 的链路是否可达和 `AckWait`；不要删除 consumer，恢复后由 JetStream 重投 |
 | pending 低但 lag 或 set lane backlog 高 | 单个或多个集合处理较慢 | 对照 `factor_period_duration_seconds{set,stage}` 定位 read、compute、write 或 report 阶段 |
 | `factor_failures_total` 增长 | 因子或标的数据失败 | 检查对应因子错误、输入列和上游缺失 subject；基础设施错误会重试，业务失败会进入周期终态 |
 | 实时已追平但历史值需修正 | 历史补算 | 提交有界 Recalc 范围；已完成分块不会回滚 |

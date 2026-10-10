@@ -151,7 +151,7 @@ func TestLoadRejectsLegacyKeysWithMigrationHint(t *testing.T) {
 		"hosts by address": {
 			strings.Replace(validManifest, "[hosts.control]", "[hosts.\"192.0.2.11\"]\nport = 22\n\n[hosts.control]", 1), "以主机 ID 为键",
 		},
-		"compile_host.host": {validManifest + "\n[compile_host]\nhost = \"192.0.2.99\"\n", "[compile_host] 改为 address"},
+		"compile_host.host":  {validManifest + "\n[compile_host]\nhost = \"192.0.2.99\"\n", "[compile_host] 改为 address"},
 		"scf gateway target": {validManifest + "\n[scf_fetcher]\n[[scf_fetcher.spaces]]\nstorage_gateway_host = \"x\"\n", "自动选择外部接入"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -28,7 +28,7 @@ func healthOverviewToPB(value healthview.Overview) *monitorpb.HealthOverview {
 		},
 		Alerts:         make([]*monitorpb.HealthAlert, 0, len(value.Alerts)),
 		Components:     make([]*monitorpb.HealthComponent, 0, len(value.Components)),
-		DataStages:       make([]*monitorpb.HealthDataStage, 0, len(value.DataStages)),
+		DataStages:     make([]*monitorpb.HealthDataStage, 0, len(value.DataStages)),
 		BusinessChecks: make([]*monitorpb.HealthBusinessCheck, 0, len(value.BusinessChecks)),
 		Hosts:          make([]*monitorpb.HealthHost, 0, len(value.Hosts)),
 		Unregistered:   make([]*monitorpb.HealthUnregistered, 0, len(value.Unregistered)),

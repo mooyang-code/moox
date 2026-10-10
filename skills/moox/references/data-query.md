@@ -64,4 +64,4 @@ The CLI resolves `data-type + exchange + interval` by exact lookup in the packag
 
 On success, parse the protobuf JSON response and summarize the resolved data type, exchange, symbol, interval, row count, and returned time range. Preserve the CLI's descending time order. An empty row set is a successful query with no collected data, not an RPC failure.
 
-Never include Gateway secrets, Storage app keys, request signatures, the config contents, or complete authenticated requests in output or diagnostics.
+Never include the moox-skill signing key, Storage app keys, request signatures, the config contents, or complete authenticated requests in output or diagnostics.

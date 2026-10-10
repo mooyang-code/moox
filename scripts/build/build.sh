@@ -100,15 +100,15 @@ build_archive() {
 }
 
 build_hostagent() {
-  [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-host-agent supports linux only" >&2; exit 1; }
-  case "${TARGET_GOARCH}" in amd64|arm64) ;; *) echo "moox-host-agent supports amd64/arm64 only" >&2; exit 1 ;; esac
+  [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-host-agent 只支持 linux" >&2; exit 1; }
+  case "${TARGET_GOARCH}" in amd64|arm64) ;; *) echo "moox-host-agent 只支持 amd64 和 arm64" >&2; exit 1 ;; esac
   build_go modules/hostagent ./cmd/server moox-host-agent 0
   build_go modules/hostagent ./cmd/cli moox-host-agent-cli 0
 }
 
 build_collector_market_data_scf() {
   [[ "${TARGET_GOOS}" == "linux" && "${TARGET_GOARCH}" == "amd64" ]] || {
-    echo "moox-collector-scf supports linux/amd64 only" >&2
+    echo "moox-collector-scf 只支持 linux/amd64" >&2
     exit 1
   }
   build_go modules/collector ./cmd/scf/market_data moox-collector-scf 0
@@ -234,7 +234,7 @@ case "${TARGET_MODULE}" in
     build_web_host
     ;;
   *)
-    echo "unknown build target: ${TARGET_MODULE}" >&2
+    echo "未知的构建目标：${TARGET_MODULE}" >&2
     exit 1
     ;;
 esac

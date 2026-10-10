@@ -32,10 +32,10 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			space = strings.TrimSpace(space)
 			output = strings.TrimSpace(output)
 			if space == "" {
-				return fmt.Errorf("--space is required")
+				return fmt.Errorf("必须指定 --space")
 			}
 			if output == "" {
-				return fmt.Errorf("--output is required")
+				return fmt.Errorf("必须指定 --output")
 			}
 			snapshot, err := deps.load(file)
 			if err != nil {
@@ -43,7 +43,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			}
 			defer clearSetupSecrets(snapshot)
 			if err := rejectInputOutputCollision(file, output); err != nil {
-				return fmt.Errorf("write skill config: %w", err)
+				return fmt.Errorf("写入 Skill 配置: %w", err)
 			}
 
 			config, err := deps.exportSkillConfig(cmd.Context(), snapshot, space)
@@ -51,17 +51,17 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			if err := config.validate(); err != nil {
-				return fmt.Errorf("skill_config_invalid: %w", err)
+				return fmt.Errorf("Skill 配置无效: %w", err)
 			}
 			raw, err := yaml.Marshal(config)
 			if err != nil {
-				return fmt.Errorf("encode skill config: %w", err)
+				return fmt.Errorf("编码 Skill 配置: %w", err)
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
 			}
 			if err := writeSkillConfigAtomic0600(output, raw, os.Rename); err != nil {
-				return fmt.Errorf("write skill config: %w", err)
+				return fmt.Errorf("写入 Skill 配置: %w", err)
 			}
 			return writeSetupJSON(cmd, map[string]string{"status": "exported", "output": output})
 		},
@@ -76,7 +76,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 
 func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Snapshot, space string) (dataAccessConfig, error) {
 	if snapshot == nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: setup snapshot is required")
+		return dataAccessConfig{}, fmt.Errorf("skill_config: 缺少 moox.toml 快照")
 	}
 	read := func(ctx context.Context) ([]byte, []byte, error) {
 		control := snapshot.Manifest.ControlHost()
@@ -123,10 +123,10 @@ func buildSkillDataAccessConfig(
 	klineDatasets skillKlineDatasets,
 ) (dataAccessConfig, error) {
 	if snapshot == nil || access == nil || read == nil || klineDatasets == nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
+		return dataAccessConfig{}, fmt.Errorf("skill_config: 缺少外部接入或密钥的读取方式")
 	}
 	if spaceID = strings.ToLower(strings.TrimSpace(spaceID)); spaceID != "crypto" {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
+		return dataAccessConfig{}, fmt.Errorf("skill_config: 不支持空间 %q", spaceID)
 	}
 	if len(snapshot.Manifest.HostsOf("storage-primary")) == 0 {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: moox.toml 的部署表中没有存储主服务")
@@ -145,7 +145,7 @@ func buildSkillDataAccessConfig(
 	}
 	primarySecret, err := collectorStoragePrimaryAuthSecret(storageRaw)
 	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth invalid")
+		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage 应用层密钥无效")
 	}
 	storageAppKey := security.HMACSHA256Hex(primarySecret, []byte(skillConfigIdentity))
 	binanceKline, err := klineDatasets("crypto", "binance_spot")
@@ -153,7 +153,7 @@ func buildSkillDataAccessConfig(
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
 	}
 	if len(binanceKline) == 0 {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: no Binance spot kline collection task is configured")
+		return dataAccessConfig{}, fmt.Errorf("skill_config: 没有配置 Binance 现货 K 线采集任务")
 	}
 	stockKline, err := klineDatasets("stockcn", "cn_a_share")
 	if err != nil {
@@ -204,14 +204,14 @@ func skillCallerKeyValue(raw []byte) (string, error) {
 
 func writeSkillConfigAtomic0600(path string, content []byte, rename func(string, string) error) (err error) {
 	if rename == nil {
-		return fmt.Errorf("rename dependency is required")
+		return fmt.Errorf("缺少重命名函数")
 	}
 	if info, statErr := os.Lstat(path); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("output %q must not be a symlink", path)
+			return fmt.Errorf("输出文件 %q 不能是符号链接（symlink）", path)
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("output %q must be a regular file", path)
+			return fmt.Errorf("输出文件 %q 必须是普通文件", path)
 		}
 	} else if !os.IsNotExist(statErr) {
 		return statErr

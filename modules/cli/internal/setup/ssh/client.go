@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/sftp"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/pkg/sftp"
 	xssh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )

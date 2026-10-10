@@ -46,7 +46,7 @@ func main() {
 		}
 	}
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use init, user, random-secret, eventbus-credentials, pki, keys, bootstrap, placement, or host"))
+		printInitError(os.Stderr, fmt.Errorf("未知命令，可用的命令：init、user、random-secret、eventbus-credentials、pki、keys、bootstrap、placement、host"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

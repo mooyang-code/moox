@@ -40,6 +40,11 @@ func (d *Deployer) BootstrapSpec() ([]byte, error) {
 // BootstrapOptions 是首次初始化的选项。
 type BootstrapOptions struct {
 	SkipBuild bool
+	// ControlOnly 只做前 4 步（初始化管理后台并部署 control），其他主机之后用 deploy-host 逐台部署。
+	ControlOnly bool
+	// MaintenanceLockHeld 表示操作员已在 control 上持有维护锁，安装器不再加锁；只能与 ControlOnly 一起使用，
+	// 因为维护锁是按主机持有的。
+	MaintenanceLockHeld bool
 	// NewPlacements 在 control 就绪后创建部署记录的同步方式（经 SSH 隧道调用 Admin），用于部署其他主机。
 	NewPlacements func(ctx context.Context) (PlacementSyncer, func(), error)
 	// CLIKeyFile 是操作员机器上 moox-cli 签名密钥的位置。
@@ -52,13 +57,18 @@ type BootstrapOptions struct {
 //     调用方密钥、为 control 签发主机网关证书；
 //  3. 再次安装 control 的发布（复用二进制，带上签名密钥）并启动：管理后台、主机网关，然后是其余组件；
 //  4. 把 moox-cli 的签名密钥取回操作员机器；
-//  5. 依次部署其他主机，这时经 SSH 隧道调用 Admin 同步部署记录。
+//  5. 依次部署其他主机，这时经 SSH 隧道调用 Admin 同步部署记录（ControlOnly 时跳过）。
 //
 // 可以重复执行：已有的表、CA 和密钥都会复用。
 func (d *Deployer) Bootstrap(ctx context.Context, opts BootstrapOptions) ([]Result, error) {
+	if opts.MaintenanceLockHeld && !opts.ControlOnly {
+		return nil, fmt.Errorf("持有维护锁时只能初始化 control（维护锁按主机持有），其他主机请用 deploy-host 逐台部署")
+	}
 	control := d.Manifest.ControlHost()
 	d.logf("初始化第 1 步：安装 control 的发布（暂不启动）")
-	if _, err := d.Deploy(ctx, control.ID, Options{SkipBuild: opts.SkipBuild, NoStart: true, withoutCredentials: true}); err != nil {
+	if _, err := d.Deploy(ctx, control.ID, Options{
+		SkipBuild: opts.SkipBuild, NoStart: true, MaintenanceLockHeld: opts.MaintenanceLockHeld, withoutCredentials: true,
+	}); err != nil {
 		return nil, err
 	}
 	d.logf("初始化第 2 步：在 control 上离线初始化管理后台")
@@ -67,7 +77,7 @@ func (d *Deployer) Bootstrap(ctx context.Context, opts BootstrapOptions) ([]Resu
 	}
 	d.logf("初始化第 3 步：启动 control")
 	results := []Result{}
-	result, err := d.Deploy(ctx, control.ID, Options{ReuseBinaries: true})
+	result, err := d.Deploy(ctx, control.ID, Options{ReuseBinaries: true, MaintenanceLockHeld: opts.MaintenanceLockHeld})
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +87,7 @@ func (d *Deployer) Bootstrap(ctx context.Context, opts BootstrapOptions) ([]Resu
 		return results, err
 	}
 	others := d.Manifest.HostIDs()[1:]
-	if len(others) == 0 {
+	if len(others) == 0 || opts.ControlOnly {
 		return results, nil
 	}
 	if opts.NewPlacements == nil {

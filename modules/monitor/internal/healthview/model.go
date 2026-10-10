@@ -42,7 +42,7 @@ type Overview struct {
 	Summary        Summary
 	Alerts         []Alert
 	Components     []Component
-	DataStages       []DataStage
+	DataStages     []DataStage
 	BusinessChecks []BusinessCheck
 	Hosts          []Host
 	Unregistered   []Unregistered
