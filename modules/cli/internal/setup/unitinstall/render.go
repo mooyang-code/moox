@@ -147,6 +147,11 @@ func renderConfigurations(root *os.Root, options PrepareOptions, components []st
 			if err != nil {
 				return err
 			}
+			if storageComponent(id) {
+				if err := renderStorageConfiguration(document); err != nil {
+					return err
+				}
+			}
 			if client := member(document, "gateway_client"); client != nil {
 				if keys[id] == "" {
 					return errors.New("gateway configuration lacks its assigned component identity")

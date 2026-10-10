@@ -19,6 +19,7 @@ func newSetupBuildLinuxCommand(deps setupDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build-linux",
 		Short: "在 compile_host 上构建需要 CGO 的 Linux 二进制",
+		Long:  "Storage 服务的 CGO Linux 制品在 compile_host 构建；Storage CLI 和 Access 在本机关闭 CGO 交叉编译。纯 Go 服务和前端不使用编译机。",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {

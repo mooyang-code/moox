@@ -113,3 +113,24 @@ func TestEventBusProjectionRefusesIdentityAndConfigurationBypasses(t *testing.T)
 		})
 	}
 }
+
+func TestStorageEventBusProjectionUsesRoleCredentialWithoutAppConfig(t *testing.T) {
+	source, destination, options := eventBusProjectionFixture(t)
+	raw := "version: 1\nusername: storage-eventbus\ntoken: " + strings.Repeat("s", 32) + "\nurls: [tls://unused.example.test:4222]\nca_file: ca.pem\n"
+	require.NoError(t, os.WriteFile(filepath.Join(source, "storage-eventbus.yaml"), []byte(raw), 0o600))
+	root, err := fsutil.OpenPhysicalRoot(destination, true)
+	require.NoError(t, err)
+	defer root.Close()
+	components := []string{"storage-primary", "storage-node", "storage-view"}
+	require.NoError(t, projectEventBus(root, &options, components, destination))
+	for _, id := range components {
+		values := options.Environment[id]
+		credential, err := jetstream.LoadCredentialFile(values["MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE"])
+		require.NoError(t, err)
+		require.Equal(t, "storage-eventbus", credential.Username)
+		require.Equal(t, []string{options.EventBusURL}, credential.URLs)
+		require.Equal(t, options.EventBusURL, values["MOOX_STORAGE_EVENTBUS_URL"])
+		require.FileExists(t, filepath.Join(destination, id, "secrets/eventbus/metrics-publisher.yaml"))
+		require.NoFileExists(t, filepath.Join(destination, id, "secrets/eventbus/server-key.pem"))
+	}
+}

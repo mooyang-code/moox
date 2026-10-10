@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
@@ -77,12 +78,13 @@ func DeploymentRequestHash(options PrepareOptions, material hostbundle.Metadata,
 	return deploymentHash(raw), nil
 }
 
-// Deploy owns a host unit's prepare/activate/retry sequence. A failed activation
+// Deploy owns a host or business unit's prepare/activate/retry sequence. A failed activation
 // is recovered before preparing a fresh candidate; mutable retired data is
 // never reused. A completed retry repairs missing processes and preserves pause.
 func Deploy(ctx context.Context, options PrepareOptions) (result Deployment, returnErr error) {
-	if options.Profile != "host" || options.MaterialOptions.AllowOperator || options.EventBusDirectory == "" || options.EventBusURL == "" || !validReleaseID(options.ReleaseID) || len(options.ReleaseID) > 40 || filepath.Dir(options.UnitRoot) != options.DeploymentRoot {
-		return result, errors.New("deploy currently requires a client-only host unit and a bounded release prefix")
+	relative, rootErr := filepath.Rel(options.DeploymentRoot, options.UnitRoot)
+	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage"}, options.Profile) || options.MaterialOptions.AllowOperator || options.EventBusDirectory == "" || options.EventBusURL == "" || !validReleaseID(options.ReleaseID) || len(options.ReleaseID) > 40 || rootErr != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return result, errors.New("deploy requires a client-only host or business unit and a bounded release prefix")
 	}
 	digest, err := DeploymentHash(ctx, options)
 	if err != nil {

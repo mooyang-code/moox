@@ -37,6 +37,7 @@ const defaultSetupFile = "./moox.toml"
 type setupDeps struct {
 	bootstrapCore          setupCoreBootstrap
 	deployHost             setupHostDeploy
+	deployUnit             setupUnitDeploy
 	load                   func(string) (*setupconfig.Snapshot, error)
 	loadInitBundle         func(string) (setupInitBundle, error)
 	validate               func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
@@ -89,6 +90,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupBuildLinuxCommand(deps),
 		newSetupBootstrapCommand(deps),
 		newSetupDeployHostCommand(deps),
+		newSetupDeployUnitCommand(deps),
 		newSetupPackageCommand(),
 		newSetupRenderRuntimeConfigCommand(deps),
 		newSetupApplyCommand(deps),

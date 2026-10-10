@@ -47,4 +47,6 @@ Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建
 
 复合初始化使用 `ReadActivation` 检查单元阶段、`Abort` 撤销日志指定的候选，可撤销首次安装但不会删除退役数据；普通 `Rollback` 仍拒绝没有旧快照的首次安装。`CopyOfflineState` 是关闭后状态的独立复制接口，调用者必须持有维护锁并保证所有写入者已退出，不提供在线数据库备份。
 
-`Deploy` / `moox-runtime deploy --request PATH` 当前负责 host 单元。请求摘要绑定软件、实际身份与 EventBus 清单以及配置覆盖字节；`deployment.json` 在准备和激活前持久记录候选。中断激活先恢复旧快照，回滚后以同一原始请求准备新候选，保留退役候选。完成请求修复缺失进程，保留用户暂停；旧完成请求不能重新接管已变更的 current。原生 `setup deploy-host` 已调用此流程，业务单元与整个发布的回滚仍须外层编排。
+`Deploy` / `moox-runtime deploy --request PATH` 负责 host、Access、出口代理、Trade 和 Storage 单元。请求摘要绑定软件、实际身份与 EventBus 清单以及配置覆盖字节；`deployment.json` 在准备和激活前持久记录候选。中断激活先恢复旧快照，回滚后以同一原始请求准备新候选，保留退役候选。完成请求修复缺失进程，保留用户暂停；旧完成请求不能重新接管已变更的 current。原生 `setup deploy-host` 和 `setup deploy-unit` 已调用此流程，整个发布的回滚仍须外层编排。
+
+包含 storage-primary 的候选在旧进程停止、独立复制/导入状态之后执行预构建的 `moox-storage-cli init`，再核验候选并切换 current。子进程只接受私有 MOOX 环境，数据根强制为候选内 `./var/storage`，继承维护锁并设置 Linux 父进程死亡信号；失败输出省略，取消先等待其退出。关闭 SQLite 后同步元数据文件与目录，不遍历全部数据集。初始化失败沿用激活恢复，旧快照不被改写。只有 View 或 Node 的 Storage 放置不初始化主库。

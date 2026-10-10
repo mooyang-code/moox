@@ -1,4 +1,4 @@
-# 原生核心初始化与主机部署入口
+# 原生核心初始化与单元部署入口
 
 `moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir /path/to/worktree`
 由本机 CLI 读取一次私有配置，核验 SSH 主机指纹，按目标 Linux 架构准备 host/control
@@ -27,8 +27,9 @@ Host Agent。输出 `stage=core-ready`，不能据此认定完整部署成功。
 
 本机验证为 `make test-unit-core`。Linux 门禁 `make test-unit-core-linux` 只执行预构建的
 测试与软件，必须提供 `MOOX_CORE_TEST_BINARY`、`MOOX_RUNTIME_BINARY`、
-`MOOX_BOOTSTRAP_HOST_ARCHIVE`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE` 和只含公开模板的
-合成 Git 仓库 `MOOX_CORE_SOURCE_ROOT`。真实 SSH/SFTP 场景从首次制品准备开始，使用
+`MOOX_BOOTSTRAP_HOST_ARCHIVE`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE`、只含公开模板的
+合成 Git 仓库 `MOOX_CORE_SOURCE_ROOT`，以及 `MOOX_BUSINESS_BINARY_DIRECTORY` 中预构建的
+Access、出口代理、Trade/Trade CLI 和四个 Storage 二进制（仅三个服务需要 CGO）。真实 SSH/SFTP 场景从首次制品准备开始，使用
 完整三主机拓扑核验四个核心服务、主机指纹拒绝、操作员身份范围、重复执行 PID 保持、
 本机状态丢失拒绝替换凭据。其余主机只参与拓扑与签发，未在此场景启动。
 
@@ -50,5 +51,25 @@ Linux 场景还在运行中的控制主机验证真实主机部署、按角色�
 PID 保持、暂停保留、缺失进程修复、激活完成窗口接管及回滚后新建候选。其他两台主机仍
 只参与拓扑；这不是三主机实际安装验收。
 
-完整业务单元与外层 bootstrap 编排、生产历史状态迁移、云资源/防火墙、完整系统验收、
+`setup deploy-unit --host HOST --profile access|egress-proxy|trade|storage` 使用同一持久
+状态与操作员身份，只选择该主机在对应软件包内实际放置的组件。出口配置和 Storage
+策略由可信配置快照产生，配置字节及私有环境摘要绑定原始操作；重试拒绝变更后重新接管。
+客户端材料只包含所需签名身份、EventBus 角色和公开 CA，运行时使用发布内的独立副本。
+同架构助手复用原始 core 制品，其他架构只接受原目标 host 包验证过的助手。
+
+Access、出口代理和 Trade 默认在本机关闭 CGO 构建。Storage 必须先执行
+`setup build-linux --module storage --source-dir /path/to/worktree`，再以 `--binary-dir` 提供
+三个 CGO Linux 服务制品和本机关闭 CGO 编译的 Storage CLI。新建 core 的私有运行身份保存独立的 node、primary、view 认证密钥，
+按 Storage 角色分发；旧 core 身份缺少这些密钥时拒绝 Storage 部署，不在重试中补生成。
+当前模板的内部 RPC 只监听 loopback，原生入口要求三个 Storage 角色位于同一主机；跨主机角色路由未接通时，在远端操作前拒绝部署。Storage 主库初始化在旧写入者退出、候选独立复制完成后执行，强制候选内的相对数据根，
+子进程继承维护锁并在父进程死亡时退出；取消后先等待写入者退出，再释放维护锁。
+初始化关闭数据库后只同步元数据树和祖先目录，不扫描全部数据集，也不输出子进程私密日志。
+
+业务单元只有实际就绪才返回 `<profile>-ready`；暂停返回 `<profile>-paused`。Linux 场景在
+隔离网络内启动四类实际业务单元（包括 Storage 三个角色及首次建库），核验重复执行保持
+发布/PID、签名身份范围和核心服务 PID。全部服务集中在合成控制主机，另外两台只参与拓扑；
+独立主机运行、跨架构运行和真实业务读写仍须验收。此入口负责一次部署操作的恢复，通用
+版本升级、整个发布回滚和旧部署命令替换仍由外层流程完成。
+
+完整 control 与外层 bootstrap 编排、生产历史状态迁移、云资源/防火墙、完整系统验收、
 全部编码后的独立 Agent 审查和正式发布仍待接通。

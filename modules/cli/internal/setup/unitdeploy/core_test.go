@@ -17,7 +17,7 @@ func TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget(t *testing.T) {
 	root, err := privateRoot(directory)
 	require.NoError(t, err)
 	defer root.Close()
-	var missing hostOperation
+	var missing unitOperation
 	require.True(t, os.IsNotExist(readJSON(root, "operation.json", 4096, &missing)), "an absent checkpoint must be distinguishable from invalid private material")
 	host := setupconfig.Host{Name: "control", Address: "192.0.2.1"}
 	initial, err := loadIdentity(root, host, "/data/moox")

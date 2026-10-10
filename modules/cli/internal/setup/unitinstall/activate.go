@@ -192,6 +192,9 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 		if err := importState(ctx, seed, candidate); err != nil {
 			return fail(err)
 		}
+		if err := initializeCandidateDatabase(ctx, guard, candidate); err != nil {
+			return fail(err)
+		}
 		if _, err := ReadInstalled(ctx, candidate.Directory); err != nil {
 			return fail(err)
 		}

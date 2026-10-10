@@ -11,9 +11,11 @@ done
 export MOOX_RUNTIME_BINARY MOOX_BOOTSTRAP_HOST_ARCHIVE MOOX_BOOTSTRAP_CONTROL_ARCHIVE
 [[ "${MOOX_CORE_SOURCE_ROOT:-}" == /* && -d "${MOOX_CORE_SOURCE_ROOT}/.git" ]] || { echo 'MOOX_CORE_SOURCE_ROOT must select public configuration templates in a synthetic Git repository' >&2; exit 1; }
 export MOOX_CORE_SOURCE_ROOT
+[[ "${MOOX_BUSINESS_BINARY_DIRECTORY:-}" == /* && -d "${MOOX_BUSINESS_BINARY_DIRECTORY}" ]] || { echo 'MOOX_BUSINESS_BINARY_DIRECTORY must select prebuilt Access, egress, Trade and CGO Storage binaries' >&2; exit 1; }
+export MOOX_BUSINESS_BINARY_DIRECTORY
 task_root="$(mktemp -d "${TMPDIR:-/tmp}/moox-native-core-gate.XXXXXXXX")"
 trap 'rm -rf "${task_root}"' EXIT
-"${MOOX_CORE_TEST_BINARY}" -test.v -test.count=1 -test.timeout=12m | tee "${task_root}/tests.log"
+"${MOOX_CORE_TEST_BINARY}" -test.v -test.count=1 -test.timeout=15m | tee "${task_root}/tests.log"
 python3 - "${task_root}/tests.log" <<'PY'
 from pathlib import Path
 import re,sys
@@ -23,11 +25,13 @@ required=[
     'TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget',
     'TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools',
     'TestHostBuildUsesOnlyLocalPureGoTools',
+    'TestBusinessUnitSelectionAndExportRolesFollowActualPlacements',
+    'TestStorageEnvironmentSharesOnlyRequiredPersistentCredentials',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):
         raise SystemExit('required native core scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('native core Linux gate must not skip or fail a scenario')
-print('native core/host Linux gate passed: verified SSH/SFTP, actual core and host deployment, export recovery, pause and repair, fresh candidate after rollback, local build policy; no compilation')
+print('native core/host/business Linux gate passed: verified SSH/SFTP, actual services including CGO Storage initialization, immutable retries, export recovery, pause and repair, fresh candidate after rollback, local build policy; no compilation')
 PY

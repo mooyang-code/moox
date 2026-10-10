@@ -27,7 +27,7 @@
 
 构建策略按用户确认执行：只有需要 CGO 的 Linux 目标交给编译机；其余目标在本机编译或交叉编译。远程 Storage 构建已拆出 `storage-cgo`，无 CGO 的 Storage Access 留在本机。`setup build-linux --source-dir <worktree>` 从指定 worktree 同步源码，配置仍由原仓库的 CLI 读取；认证优先使用现有 SSH key/agent。`--prepare-only` 独立预置 `.go-version` 指定的 Go 并检查 C/C++ 编译器；实际构建使用 `GOTOOLCHAIN=local`，不会临时下载工具链。
 
-早期原型曾经由远端构建并回传 Linux amd64 的 Factor Manager/CLI、Storage Primary/Node/View/CLI；当时脚本强制打开 CGO，前两类产物均为动态链接。D1 复核已确认 Factor Manager/CLI 不需要 CGO，现已改为本机关闭 CGO 构建并验证 Linux 静态程序，删除 Factor 的远端 CGO 构建入口。Storage 四个 CGO 目标继续在 Linux 编译，Storage Access 在本机交叉编译；均为阶段原型，不是正式候选发布包。
+早期原型曾经由远端构建并回传 Linux amd64 的 Factor Manager/CLI、Storage Primary/Node/View/CLI；当时脚本强制打开 CGO，前两类产物均为动态链接。D1 复核已确认 Factor Manager/CLI 不需要 CGO，现已改为本机关闭 CGO 构建并验证 Linux 静态程序，删除 Factor 的远端 CGO 构建入口。当前 Storage 三个服务的 CGO 目标在 Linux 编译，Storage CLI 与 Access 在本机关闭 CGO 交叉编译；均为阶段原型，不是正式候选发布包。
 
 `make test-go` 已在固定 Go `1.26.9` 下对当前工作区的 55 个模块统一执行测试与 vet，全部通过。验证环境使用 Python `3.12.14`、pandas `2.2.3`、numpy `2.3.5` 和 PyYAML `6.0.2`，覆盖 Factor 的 Python 依赖与 CLI 的脚本测试。早期 Admin 的全局函数补丁测试在 macOS ARM64 下触发 goom 内存权限错误，原分支 Go `1.25.0` 也可复现；B2 已用真实 tRPC 查询 SQLite 的断言替代该重复测试，没有跳过测试。原 RPC 适配器测试包也已由本机交叉编译并在 Linux amd64 全包运行通过。此为当前源码的 Go 回归证据，自建 CI runner 与后续最终候选仍需验证。
 
@@ -744,3 +744,9 @@ G3/G7 代理 CA 初始化实现记录：移除服务配置中的 initialize_ca�
 原生主机入口已接通 `setup deploy-host --host HOST`：使用原始 core 完成收据、运行身份与操作员 CA 绑定，经签名 SSH 隧道同步完整主机放置，控制机按目标主机和 EventBus 客户端角色导出材料，本机逐文件验证后上传并激活。导出检查点复用已签发字节；目标日志绑定原始请求，完成重试修复缺失进程、保留暂停，回滚后准备新候选。只有两项主机组件实际就绪才返回 `host-ready`，暂停返回 `host-paused`。真实 Linux SSH/SFTP 场景验证运行中控制主机的安装、导出恢复、重复执行、暂停/修复与回滚后新建候选；其他主机仅参与拓扑，三主机实际安装仍须 G13/J。纯 Go/前端在本机构建，Linux 编译机只编译需要 CGO 的产物。完整业务部署、代理最终接线、I/J、最终独立 Agent 审查和正式发布继续保留。
 
 原生核心入口本批验证：CLI 21 个测试包全量 race/vet、五个受影响包独立模块 race/vet 及 tidy-diff 通过，七项质量门禁通过。最新 Linux 门禁三组全部通过且无跳过：从首次制品准备开始，经真实 SSH/SFTP 使用完整三主机拓扑启动控制机的四个核心进程，重复执行保持 PID，本机凭据状态丢失时拒绝替换且服务不重启；其余主机仅参与登记/签发，未在此门禁启动。目标编排七组门禁同样无跳过通过，补验完整控制服务不能被核心请求缩减，使用实际 Admin 配置失败保持真实升级回滚覆盖，并继续验证 Admin 启动阶段实际 SIGKILL、离线子进程锁/父进程死亡与代理 CA 的首次授权、历史导入和 public-only 行为。amd64/arm64 助手及纯 Go Linux 测试制品均在 macOS 关闭 CGO 构建，Linux 未执行编译；前端本机构建策略另有边界回归。上述核心验证不替代完整系统、最终审查或正式部署验收。
+
+原生业务单元入口已扩展至 Access、出口代理、Trade 和 Storage：`setup deploy-unit` 根据真实主机放置选择组件，复用核心完成收据、签名拓扑同步、按角色材料导出和持久恢复；原始软件、配置与私有环境摘要绑定同一操作，结果区分 `<profile>-ready` 和 `<profile>-paused`。Storage 补齐角色选择、共享认证密钥的持久化/按需分发、View 签名配置和专用 EventBus 凭据；主库在停止旧写入者并独立复制后离线建库，强制候选相对数据根，子进程继承维护锁，取消先结束写入者。三个 Storage CGO 服务制品通过编译机生成，Storage CLI、Access、出口、Trade、CLI/助手及测试制品在本机关闭 CGO 编译。此入口仍是单次部署操作的恢复；完整 control 与外层编排、通用升级/整组回滚、生产迁移、旧链路清理、三主机完整系统、最终 Agent 审查及正式发布继续保留。
+
+构建边界进一步收紧：Storage CLI 不依赖 DuckDB CGO 实现，关闭 CGO 的命令测试及 Linux 交叉编译通过，`storage-cgo` 现在仅包含三个服务；`setup build-linux` 在下载服务后于本机构建 Storage CLI 和 Access。原生 Storage 按组件重写旧公共策略路径及可变路径，内部 RPC 保持 loopback；三个角色须同机，跨主机角色路由仍待 G13。
+
+本批 Linux 验证已实际启动四个核心/主机服务、Access、出口代理、Trade 以及 Storage 三个角色，覆盖首次建库和重复部署保持发布/PID，核心服务未重启。Storage CLI 与初始化/路径测试共 35 组顶层 Linux 用例无跳过通过；CLI 全量 race/vet、模块 tidy-diff 与七项质量门禁通过。测试使用合成三主机拓扑，实际服务集中于控制主机，尚未替代三主机部署、真实业务读写、最终独立审查或正式验收。

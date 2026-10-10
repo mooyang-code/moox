@@ -63,8 +63,12 @@ def mkdir(name, private=True):
     os.mkdir(name,0o700);syncdir(parent);physical(name,private)
 try:
     if op=='prepare':
+        units=sys.argv[3:]
+        for unit in units:
+            if not os.path.isabs(unit) or os.path.normpath(unit)!=unit or os.path.commonpath([root,unit])!=root or unit==root: raise ValueError('unit')
         mkdir(root,False)
         for child in ('host','control'): mkdir(os.path.join(root,child),False)
+        for unit in units: mkdir(unit,False)
         mkdir(os.path.join(root,'bootstrap-input'))
         print('{}')
     elif op=='inspect':
@@ -97,8 +101,8 @@ except Exception:
     sys.stderr.write('private deployment transfer preflight failed\n');sys.exit(1)
 `
 
-func prepareTarget(ctx context.Context, transport setupssh.Client, root string) error {
-	if _, err := transport.Run(ctx, []string{"python3", "-c", targetFiles, "prepare", root}, nil); err != nil {
+func prepareTarget(ctx context.Context, transport setupssh.Client, root string, units ...string) error {
+	if _, err := transport.Run(ctx, append([]string{"python3", "-c", targetFiles, "prepare", root}, units...), nil); err != nil {
 		return errors.New("target deployment directory preflight failed; private output omitted")
 	}
 	return nil

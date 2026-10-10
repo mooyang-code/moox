@@ -35,7 +35,7 @@ import (
 
 // This server uses real SSH authentication, host keys, SFTP, and target shell
 // execution. Linux gates run it in an isolated network namespace with actual
-// prebuilt Admin, EventBus, Host Gateway, Host Agent and moox-runtime binaries.
+// prebuilt core, host, business and moox-runtime binaries.
 func nativeSSH(t *testing.T) (setupssh.Target, string) {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
@@ -219,9 +219,9 @@ ssh = {username="fixture",password="synthetic-ssh-password"}
 address = "127.0.0.3"
 ssh = {username="fixture",password="synthetic-ssh-password"}
 [placements]
-control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudnode","factor-mgr","strategy"]
-storage = ["storage-primary","storage-node","storage-view"]
-compute1 = ["access","egress-proxy","trade"]
+control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudnode","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-node","storage-view"]
+storage = ["access"]
+compute1 = ["access"]
 `, deployment, filepath.Join(deployment, "control"), filepath.Join(deployment, "storage"), target.Port)
 	configPath := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
@@ -247,9 +247,9 @@ compute1 = ["access","egress-proxy","trade"]
 	require.True(t, os.IsNotExist(err), "an untrusted host must never receive deployment input")
 	require.NoError(t, setupssh.TrustHost(t.Context(), target, fingerprint, options.SSH))
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		for _, name := range []string{"control", "host"} {
+		for _, name := range []string{"trade", "egress-proxy", "access", "storage", "control", "host"} {
 			plan := filepath.Join(deployment, name, "current", "runtime.json")
 			if _, err := os.Stat(plan); err == nil {
 				output, err := exec.CommandContext(ctx, os.Getenv("MOOX_RUNTIME_BINARY"), "stop", "--plan", plan).CombinedOutput()
@@ -329,7 +329,7 @@ compute1 = ["access","egress-proxy","trade"]
 	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 	state, err := privateRoot(filepath.Join(options.StateDirectory, "hosts/control"))
 	require.NoError(t, err)
-	var operation hostOperation
+	var operation unitOperation
 	require.NoError(t, readJSON(state, "operation.json", 2<<20, &operation))
 	state.Close()
 	exported, err := unitbootstrap.ExportHost(t.Context(), operation.Source)
@@ -401,4 +401,33 @@ compute1 = ["access","egress-proxy","trade"]
 	require.NotEqual(t, resumed.Deployment.Directory, fresh.Deployment.Directory)
 	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 	t.Log("activation checkpoint recovery and fresh candidate after rollback passed")
+	if directory := os.Getenv("MOOX_BUSINESS_BINARY_DIRECTORY"); directory != "" {
+		for _, binary := range []string{"moox-access", "moox-egress-proxy", "moox-trade", "moox-trade-cli", "moox-storage-primary", "moox-storage-node", "moox-storage-view", "moox-storage-cli"} {
+			copyArtifact(t, filepath.Join(directory, binary), filepath.Join(root, "bin", binary), 0o700)
+		}
+		options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_CORE_SOURCE_ROOT"), filepath.Join(root, "bin")
+		for _, profile := range []string{"access", "egress-proxy", "trade", "storage"} {
+			deployed, err := DeployUnit(t.Context(), snapshot, UnitOptions{CoreOptions: options, HostID: "control", Profile: profile})
+			require.NoError(t, err, profile)
+			require.Equal(t, profile+"-ready", deployed.Stage)
+			prepared, err := unitinstall.ReadInstalled(t.Context(), deployed.Deployment.Directory)
+			require.NoError(t, err)
+			components, err := unitComponents(snapshot.Manifest, "control", profile)
+			require.NoError(t, err)
+			require.Len(t, prepared.Identity.Credentials, len(components))
+			for _, credential := range prepared.Identity.Credentials {
+				require.Contains(t, components, credential.Caller)
+			}
+			if profile == "storage" {
+				require.FileExists(t, filepath.Join(deployed.Deployment.Directory, "storage-primary/var/storage/metadata/storage_metadata.db"))
+			}
+			repeated, err := DeployUnit(t.Context(), snapshot, UnitOptions{CoreOptions: options, HostID: "control", Profile: profile})
+			require.NoError(t, err)
+			require.Equal(t, deployed, repeated)
+			require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
+			t.Log("actual business unit ready with immutable retry:", profile)
+		}
+	} else {
+		t.Fatal("native business Linux gate requires MOOX_BUSINESS_BINARY_DIRECTORY")
+	}
 }

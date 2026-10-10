@@ -130,7 +130,10 @@ var unitSpecs = map[string]unitComponentSpec{
 		{"modules/storage/config/trpc_go.node.yaml", "storage-node/config/trpc_go.yaml", false},
 		{"modules/storage/config/storage.node.yaml", "storage-node/config/storage.yaml", false},
 	}},
-	"storage-view": {assets: []unitAsset{{"modules/storage/config/storage_view/trpc_go.yaml", "storage-view/config/trpc_go.yaml", false}}},
+	"storage-view": {assets: []unitAsset{
+		{"modules/storage/config/storage_view/trpc_go.yaml", "storage-view/config/trpc_go.yaml", false},
+		{"modules/storage/config/storage.yaml", "storage-view/config/storage.yaml", false},
+	}},
 	"access":       {assets: []unitAsset{configAsset("access", "access")}},
 	"egress-proxy": {assets: []unitAsset{configAsset("egressproxy", "egress-proxy")}},
 	"trade":        {[]string{"moox-trade-cli"}, []unitAsset{configAsset("trade", "trade"), schemaAsset("trade", "trade")}},

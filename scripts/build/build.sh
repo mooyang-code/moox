@@ -82,8 +82,7 @@ build_storage_node() {
 }
 
 build_storage_cli() {
-  local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
-  build_go modules/storage ./cmd/cli moox-storage-cli "${storage_cgo}"
+  build_go modules/storage ./cmd/cli moox-storage-cli 0
 }
 
 build_web_host() {
@@ -219,7 +218,6 @@ case "${TARGET_MODULE}" in
     ;;
   storage-cgo)
     build_storage
-    build_storage_cli
     ;;
   access)
     build_go modules/access ./cmd/server moox-access 0

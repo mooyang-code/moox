@@ -67,6 +67,10 @@ func prepareHostSoftware(ctx context.Context, root, state *os.Root, options Core
 // Both host binaries and their helper are pure Go. This function executes
 // only on the operator's machine and has no SSH/compile_host capability.
 func buildHostLocally(ctx context.Context, repository, bin, arch string, log io.Writer) error {
+	return buildLocalTargets(ctx, repository, bin, arch, log, []string{"host-gateway", "hostagent"})
+}
+
+func buildLocalTargets(ctx context.Context, repository, bin, arch string, log io.Writer, targets []string) error {
 	if log == nil {
 		log = io.Discard
 	}
@@ -77,7 +81,7 @@ func buildHostLocally(ctx context.Context, repository, bin, arch string, log io.
 			environment = append(environment, value)
 		}
 	}
-	for _, target := range []string{"host-gateway", "hostagent"} {
+	for _, target := range targets {
 		command := exec.CommandContext(ctx, "bash", filepath.Join(repository, "scripts/build/build.sh"), target)
 		command.Dir, command.Stdout, command.Stderr = repository, log, log
 		command.Env = append(slices.Clone(environment), "CGO_ENABLED=0", "GOTOOLCHAIN=local", "TARGET_GOOS=linux", "TARGET_GOARCH="+arch, "BIN_DIR="+bin)

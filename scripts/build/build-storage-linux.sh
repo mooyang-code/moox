@@ -17,7 +17,7 @@ die() {
 linux_cgo_target="${MOOX_LINUX_CGO_TARGET:-storage}"
 case "${linux_cgo_target}" in
   storage)
-    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
+    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view)
     ;;
   storage-primary)
     linux_cgo_binaries=(moox-storage-primary)
@@ -212,6 +212,9 @@ for binary in "${linux_cgo_binaries[@]}"; do
 done
 
 if [[ "${linux_cgo_target}" == storage ]]; then
+  echo '==> build non-CGO Storage CLI locally'
+  BIN_DIR="${BIN_DIR}" VERSION="${version}" GIT_COMMIT="${git_commit}" TARGET_GOOS=linux TARGET_GOARCH="${target_goarch}" \
+    bash "${ROOT}/scripts/build/build.sh" storage-cli
   echo '==> build non-CGO Access locally'
   BIN_DIR="${BIN_DIR}" VERSION="${version}" GIT_COMMIT="${git_commit}" TARGET_GOOS=linux TARGET_GOARCH="${target_goarch}" \
     bash "${ROOT}/scripts/build/build.sh" access
@@ -221,4 +224,4 @@ for binary in "${linux_cgo_binaries[@]}"; do
   [[ -s "${BIN_DIR}/${binary}" ]] || die "remote build did not return ${binary}"
 done
 
-echo "==> Linux ${linux_cgo_target} binaries built on ${name} and downloaded to ${BIN_DIR}"
+echo "==> Linux CGO ${linux_cgo_target} service binaries downloaded from ${name} to ${BIN_DIR}; pure Go tools are built locally"

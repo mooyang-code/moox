@@ -191,6 +191,11 @@ func Prepare(ctx context.Context, options PrepareOptions, lockOptions unitruntim
 			environment[id] = maps.Clone(values)
 		}
 		options.Environment = environment
+		for _, id := range components {
+			if err := configureStorageEnvironment(id, options.Environment[id]); err != nil {
+				return err
+			}
+		}
 		if err := projectEventBus(root, &options, components, destination); err != nil {
 			return err
 		}

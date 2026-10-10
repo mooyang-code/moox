@@ -62,6 +62,24 @@ func eventBusUsername(role string) string {
 	}
 }
 
+// EventBusRoles is shared by the native exporter and the target projection.
+func EventBusRoles(components []string) []string {
+	roles := []string{}
+	for _, id := range components {
+		if id == "console-proxy" || id == "web-host" {
+			continue
+		}
+		if role := eventBusRole(id); role != "" {
+			roles = append(roles, role)
+		}
+		if id != "host-agent" {
+			roles = append(roles, "metrics-publisher")
+		}
+	}
+	slices.Sort(roles)
+	return slices.Compact(roles)
+}
+
 // projectEventBus copies only the selected roles. Runtime configs reference
 // the immutable release copies, never the export directory or another unit.
 func projectEventBus(root *os.Root, options *PrepareOptions, components []string, destination string) error {
@@ -166,6 +184,10 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 		}
 		values["MOOX_EVENTBUS_URL"], values["MOOX_EVENTBUS_CREDENTIAL_FILE"] = options.EventBusURL, credential
 		if id == "host-agent" {
+			continue
+		}
+		if slices.Contains([]string{"storage-primary", "storage-node", "storage-view"}, id) {
+			values["MOOX_STORAGE_EVENTBUS_URL"], values["MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE"] = options.EventBusURL, credential
 			continue
 		}
 		if id == "monitor" {

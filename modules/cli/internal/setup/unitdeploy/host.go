@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"net"
 	"os"
 	"path"
@@ -37,14 +36,18 @@ type HostResult struct {
 	Deployment unitinstall.Deployment `json:"deployment"`
 }
 
-type hostOperation struct {
-	Version      int                         `json:"version"`
-	Source       unitbootstrap.ExportRequest `json:"source"`
-	Export       *unitbootstrap.ExportResult `json:"export,omitempty"`
-	Package      unitpackage.Result          `json:"package"`
-	Helper       string                      `json:"helper"`
-	HelperSHA256 string                      `json:"helper_sha256"`
-	Prefix       string                      `json:"prefix"`
+type unitOperation struct {
+	Profile             string                      `json:"profile"`
+	Components          []string                    `json:"components"`
+	ConfigurationSHA256 string                      `json:"configuration_sha256"`
+	EnvironmentSHA256   string                      `json:"environment_sha256"`
+	Version             int                         `json:"version"`
+	Source              unitbootstrap.ExportRequest `json:"source"`
+	Export              *unitbootstrap.ExportResult `json:"export,omitempty"`
+	Package             unitpackage.Result          `json:"package"`
+	Helper              string                      `json:"helper"`
+	HelperSHA256        string                      `json:"helper_sha256"`
+	Prefix              string                      `json:"prefix"`
 }
 
 func readJSON(root *os.Root, name string, max int64, out any) error {
@@ -83,11 +86,34 @@ func runtimeBinding(identity runtimeIdentity) string {
 // DeployHost installs the two host components after core initialization. It
 // reads the operator manifest only through the caller's trusted snapshot.
 func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options HostOptions) (HostResult, error) {
+	return DeployUnit(ctx, snapshot, UnitOptions{CoreOptions: options.CoreOptions, HostID: options.HostID, Profile: "host"})
+}
+
+type UnitOptions struct {
+	CoreOptions
+	HostID  string
+	Profile string
+}
+type UnitResult = HostResult
+
+func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options UnitOptions) (UnitResult, error) {
 	var result HostResult
 	if snapshot == nil || snapshot.VerifyUnchanged() != nil {
-		return result, errors.New("host deployment requires an unchanged setup snapshot")
+		return result, errors.New("unit deployment requires an unchanged setup snapshot")
 	}
 	manifest := snapshot.Manifest
+	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage"}, options.Profile) {
+		return result, errors.New("unsupported native deployment unit")
+	}
+	components, err := unitComponents(manifest, options.HostID, options.Profile)
+	if err != nil {
+		return result, err
+	}
+	configuration, err := unitConfiguration(snapshot, options.Profile)
+	if err != nil {
+		return result, err
+	}
+	configurationSHA := "sha256:" + sha(configuration)
 	if !slices.ContainsFunc(manifest.Hosts(), func(host setupconfig.Host) bool { return host.Name == options.HostID }) {
 		return result, errors.New("unknown deployment host")
 	}
@@ -96,41 +122,54 @@ func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options Hos
 		return result, err
 	}
 	defer root.Close()
-	// Host deployment must never generate replacement fleet credentials when
+	// Unit deployment must never generate replacement fleet credentials when
 	// the operator loses the state created by bootstrap core.
 	if _, err := fsutil.ReadPrivate(root, "runtime-identity.json", 4096); err != nil {
-		return result, errors.New("host deployment requires the original core state directory")
+		return result, errors.New("unit deployment requires the original core state directory")
 	}
 	control := manifest.ControlHost()
 	var ready CoreResult
 	if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.HostID != control.Name || ready.Bootstrap.Phase != "complete" {
-		return result, errors.New("host deployment requires the original core state directory and completed core receipt")
+		return result, errors.New("unit deployment requires the original core state directory and completed core receipt")
 	}
 	identity, err := loadIdentity(root, control, manifest.Paths.DeployRoot)
 	if err != nil {
 		return result, err
 	}
+	environment, err := unitEnvironment(manifest, identity, options.HostID, components)
+	if err != nil {
+		return result, err
+	}
+	environmentRaw, err := json.Marshal(environment)
+	if err != nil {
+		return result, err
+	}
+	environmentSHA := "sha256:" + sha(environmentRaw)
 	pin, err := unitbundle.ReadOperatorPin(options.OperatorDirectory)
 	if err != nil || pin.ControlHostID != control.Name {
-		return result, errors.New("host deployment requires its original operator bootstrap pin")
+		return result, errors.New("unit deployment requires its original operator bootstrap pin")
 	}
 	host := manifest.HostByID(options.HostID)
 	material := unitbundle.Options{HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address, Components: slices.Clone(manifest.Placements[host.Name]), ExpectedCA: pin.CA}
 	slices.Sort(material.Components)
-	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: path.Join(manifest.Paths.DeployRoot, "control"), RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: []string{"hostagent-publisher", "metrics-publisher"}}
-	state, err := privateRoot(filepath.Join(root.Name(), "hosts", host.Name))
+	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: path.Join(manifest.Paths.DeployRoot, "control"), RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: unitinstall.EventBusRoles(components)}
+	stateDirectory := filepath.Join(root.Name(), "units", host.Name, options.Profile)
+	if options.Profile == "host" {
+		stateDirectory = filepath.Join(root.Name(), "hosts", host.Name)
+	}
+	state, err := privateRoot(stateDirectory)
 	if err != nil {
 		return result, err
 	}
 	defer state.Close()
-	var operation hostOperation
+	var operation unitOperation
 	operationErr := readJSON(state, "operation.json", 2<<20, &operation)
 	if operationErr == nil {
 		request.ExportID = operation.Source.ExportID
 		old, _ := json.Marshal(operation.Source)
 		expected, _ := json.Marshal(request)
-		if operation.Version != 1 || !bytes.Equal(old, expected) {
-			return result, errors.New("host retry requires the original topology, control identity and CA")
+		if operation.Version != 1 || operation.Profile != options.Profile || !slices.Equal(operation.Components, components) || operation.ConfigurationSHA256 != configurationSHA || operation.EnvironmentSHA256 != environmentSHA || !bytes.Equal(old, expected) {
+			return result, errors.New("unit retry requires the original topology, configuration, runtime identity and CA")
 		}
 	} else if !os.IsNotExist(operationErr) {
 		return result, operationErr
@@ -162,10 +201,10 @@ func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options Hos
 	}
 	core, exists, err := readCoreSoftware(ctx, root, controlArch)
 	if err != nil || !exists {
-		return result, errors.New("host deployment requires the original verified core software")
+		return result, errors.New("unit deployment requires the original verified core software")
 	}
 	if os.IsNotExist(operationErr) {
-		software, helper, err := prepareHostSoftware(ctx, root, state, options.CoreOptions, arch, core)
+		software, helper, err := prepareUnitSoftware(ctx, root, state, options.CoreOptions, arch, options.Profile, core)
 		if err != nil {
 			return result, err
 		}
@@ -173,21 +212,21 @@ func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options Hos
 		if err != nil {
 			return result, err
 		}
-		request.ExportID = "host-" + rand.Text()
-		operation = hostOperation{Version: 1, Source: request, Package: software, Helper: helper, HelperSHA256: helperSHA, Prefix: "host-" + rand.Text()[:16]}
+		request.ExportID = options.Profile + "-" + rand.Text()
+		operation = unitOperation{Profile: options.Profile, Components: components, ConfigurationSHA256: configurationSHA, EnvironmentSHA256: environmentSHA, Version: 1, Source: request, Package: software, Helper: helper, HelperSHA256: helperSHA, Prefix: options.Profile + "-" + rand.Text()[:16]}
 		if err := saveJSON(state, "operation.json", operation, false); err != nil {
 			return result, err
 		}
 	}
 	verified, err := unitpackage.Inspect(ctx, operation.Package.Archive)
-	if err != nil || verified.SHA256 != operation.Package.SHA256 || verified.Manifest.GOARCH != arch || verified.Manifest.Profile != "host" || !insideState(root.Name(), operation.Package.Archive) || !insideState(root.Name(), operation.Helper) {
-		return result, errors.New("original host software changed or does not match target architecture")
+	if err != nil || verified.SHA256 != operation.Package.SHA256 || verified.Manifest.GOARCH != arch || verified.Manifest.Profile != options.Profile || !insideState(root.Name(), operation.Package.Archive) || !insideState(root.Name(), operation.Helper) {
+		return result, errors.New("original unit software changed or does not match target architecture")
 	}
 	helperSHA, err := fileSHA(operation.Helper)
-	if err != nil || helperSHA != operation.HelperSHA256 || !slices.ContainsFunc(verified.Manifest.Files, func(file unitpackage.File) bool {
+	if err != nil || helperSHA != operation.HelperSHA256 || options.Profile == "host" && !slices.ContainsFunc(verified.Manifest.Files, func(file unitpackage.File) bool {
 		return file.Path == "bin/moox-runtime" && file.SHA256 == "sha256:"+helperSHA
 	}) {
-		return result, errors.New("host runtime helper differs from its verified software")
+		return result, errors.New("unit runtime helper differs from its verified software")
 	}
 	if operation.Export == nil {
 		gateway, err := gatewayio.OpenWithIdentity(ctx, snapshot, filepath.Join(options.OperatorDirectory, "gateway-client.yaml"), options.SSH)
@@ -255,14 +294,43 @@ func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options Hos
 		return result, err
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
-	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
-	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, "host.tar.gz"), SHA256: operation.Package.SHA256, Profile: "host", DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: []string{"host-gateway", "host-agent"}, Environment: map[string]map[string]string{"host-gateway": maps.Clone(health), "host-agent": maps.Clone(health)}, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: "tls://" + net.JoinHostPort(control.Address, "4222")}
+	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: path.Join(manifest.Paths.DeployRoot, options.Profile), HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: "tls://" + net.JoinHostPort(control.Address, "4222")}
+	if options.Profile == "storage" {
+		prepare.UnitRoot = manifest.Paths.StorageRoot
+	}
+	overrideHashes := map[string]string{}
+	if len(configuration) > 0 {
+		local := filepath.Join(state.Name(), "configuration.yaml")
+		if _, err := state.Lstat("configuration.yaml"); os.IsNotExist(err) {
+			if err := fsutil.WritePrivate(state, "configuration.yaml", configuration, false); err != nil {
+				return result, err
+			}
+		} else if err != nil {
+			return result, err
+		}
+		digest, err := fileSHA(local)
+		if err != nil || "sha256:"+digest != configurationSHA {
+			return result, errors.New("original rendered unit configuration changed")
+		}
+		name := options.Profile + "/config/app.yaml"
+		names := []string{name}
+		if options.Profile == "storage" {
+			names = nil
+			for _, id := range components {
+				names = append(names, id+"/config/storage-policy.json")
+			}
+		}
+		for _, name := range names {
+			prepare.Overrides[name] = path.Join(remoteBase, "configuration.yaml")
+			overrideHashes[name] = configurationSHA
+		}
+	}
 	raw, err := json.Marshal(prepare)
 	if err != nil {
 		return result, err
 	}
 	raw = append(raw, '\n')
-	expectedRequest, err := unitinstall.DeploymentRequestHash(prepare, exported.Host, exported.EventBus, map[string]string{})
+	expectedRequest, err := unitinstall.DeploymentRequestHash(prepare, exported.Host, exported.EventBus, overrideHashes)
 	if err != nil {
 		return result, err
 	}
@@ -272,7 +340,7 @@ func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options Hos
 	if err := snapshot.VerifyUnchanged(); err != nil {
 		return result, errors.New("config_changed")
 	}
-	if err := prepareTarget(ctx, target, manifest.Paths.DeployRoot); err != nil {
+	if err := prepareTarget(ctx, target, manifest.Paths.DeployRoot, prepare.UnitRoot); err != nil {
 		return result, err
 	}
 	if err := uploadFile(ctx, target, manifest.Paths.DeployRoot, operation.Package.Archive, prepare.Archive, strings.TrimPrefix(prepare.SHA256, "sha256:"), 0o600); err != nil {
@@ -295,6 +363,11 @@ func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options Hos
 			}
 		}
 	}
+	if len(configuration) > 0 {
+		if err := uploadBytes(ctx, target, manifest.Paths.DeployRoot, configuration, path.Join(remoteBase, "configuration.yaml"), 0o600); err != nil {
+			return result, err
+		}
+	}
 	remoteHelper := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/runtime", operation.HelperSHA256, "moox-runtime")
 	if err := uploadFile(ctx, target, manifest.Paths.DeployRoot, operation.Helper, remoteHelper, operation.HelperSHA256, 0o700); err != nil {
 		return result, err
@@ -308,22 +381,22 @@ func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options Hos
 	}
 	output, err := target.Run(ctx, []string{remoteHelper, "deploy", "--request", remoteRequest}, nil)
 	if err != nil {
-		return result, errors.New("host deployment observation failed; retry original state; target journal retained and private output omitted")
+		return result, errors.New("unit deployment observation failed; retry original state; target journal retained and private output omitted")
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&result.Deployment) != nil || decoder.Decode(new(any)) != io.EOF || result.Deployment.Version != 1 || result.Deployment.HostID != host.Name || result.Deployment.RequestSHA256 != expectedRequest || result.Deployment.Phase != "complete" || path.Dir(result.Deployment.Directory) != path.Join(prepare.UnitRoot, "releases") || len(result.Deployment.Components) != 2 {
-		return HostResult{}, errors.New("target returned invalid public host deployment result")
+	if decoder.Decode(&result.Deployment) != nil || decoder.Decode(new(any)) != io.EOF || result.Deployment.Version != 1 || result.Deployment.HostID != host.Name || result.Deployment.RequestSHA256 != expectedRequest || result.Deployment.Phase != "complete" || path.Dir(result.Deployment.Directory) != path.Join(prepare.UnitRoot, "releases") || len(result.Deployment.Components) != len(prepare.Components) {
+		return HostResult{}, errors.New("target returned invalid public unit deployment result")
 	}
-	result.Stage = "host-ready"
+	result.Stage = options.Profile + "-ready"
 	for i, component := range result.Deployment.Components {
 		if component.ID != prepare.Components[i] {
-			return HostResult{}, errors.New("target returned an unrelated host component")
+			return HostResult{}, errors.New("target returned an unrelated unit component")
 		}
 		if component.State == "paused" {
-			result.Stage = "host-paused"
+			result.Stage = options.Profile + "-paused"
 		} else if component.State != "running" || !component.Ready {
-			return HostResult{}, errors.New("deployed host component is not ready")
+			return HostResult{}, errors.New("deployed unit component is not ready")
 		}
 	}
 	return result, nil
