@@ -33,10 +33,12 @@ const (
 type explanation struct {
 	ruleID string
 	items  map[string]Item
+	// tolerance 是明细里的权重量化时容忍的噪声，与目标量化一致（见 quantizationTolerance）。
+	tolerance quant.Decimal
 }
 
-func newExplanation(ruleID string) *explanation {
-	return &explanation{ruleID: ruleID, items: make(map[string]Item)}
+func newExplanation(ruleID string, tolerance quant.Decimal) *explanation {
+	return &explanation{ruleID: ruleID, items: make(map[string]Item), tolerance: tolerance}
 }
 
 // reject 记录本期在某个阶段被淘汰的标的。
@@ -51,7 +53,7 @@ func (e *explanation) reject(id, stage, reason string, score *float64, rank int)
 // weight 记录进入目标权重的标的。fresh 为 false 表示权重只来自延续批次；
 // 该标的本期若已被淘汰，最终阶段仍是 weighted，原因保留本期的淘汰原因。
 func (e *explanation) weight(id string, weight quant.Decimal, score *float64, rank int, fresh bool) {
-	item := Item{RuleID: e.ruleID, InstrumentID: id, Stage: StageWeighted, Weight: truncateWeight(weight).String(), Rank: rank}
+	item := Item{RuleID: e.ruleID, InstrumentID: id, Stage: StageWeighted, Weight: truncateWeightWith(weight, e.tolerance).String(), Rank: rank}
 	if score != nil {
 		item.Score = formatScore(*score)
 	}
@@ -74,9 +76,9 @@ func (e *explanation) list() []Item {
 }
 
 // evaluateRank 执行截面选股：filter → score → select（buffer 或 holding）→ weight → filter_after。
-func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState) (ruleResult, error) {
+func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, tolerance quant.Decimal) (ruleResult, error) {
 	result := ruleResult{weights: map[string]quant.Decimal{}}
-	explain := newExplanation(rule.Rule.ID)
+	explain := newExplanation(rule.Rule.ID, tolerance)
 	// filter：引用列已由集合划分保证存在。
 	passed := make([]string, 0, len(sets.available))
 	for _, id := range sets.available {

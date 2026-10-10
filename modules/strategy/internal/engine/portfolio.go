@@ -10,13 +10,8 @@ import (
 
 // applyPortfolio 把各规则的权重相加（做空为负）并执行组合级约束：
 // 单标的上限超出留现金、gross 不超过 leverage、现货不允许负权重且 Σw ≤ 1，最后写入目标、现金与换手。
-func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, spot bool, contributions map[string]quant.Decimal, previous State) error {
-	// 先容忍定点噪声量化（本该恰好落在网格上的值不被截低一格）；若这样会突破 max_weight、杠杆或现货上限（配置值离网格点比噪声还近），
-	// 退回精确的向零截断：它只会让绝对值变小，必然满足这些上限。
-	quantized := quantizeTargets(contributions, portfolio, spot, noise)
-	if quantized.violates(portfolio, spot) {
-		quantized = quantizeTargets(contributions, portfolio, spot, quant.Zero())
-	}
+func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, spot bool, contributions map[string]quant.Decimal, previous State, tolerance quant.Decimal) error {
+	quantized := quantizeTargets(contributions, portfolio, spot, tolerance)
 	for _, note := range quantized.notes {
 		decision.Summary.Notes = append(decision.Summary.Notes, note)
 	}
@@ -75,21 +70,6 @@ func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portf
 		result.targets = append(result.targets, Target{InstrumentID: id, Weight: weight})
 	}
 	return result
-}
-
-// violates 报告量化结果是否突破了 max_weight、杠杆或现货权重之和上限。
-func (q quantizedTargets) violates(portfolio dsl.Portfolio, spot bool) bool {
-	if q.gross.Cmp(portfolio.Leverage) > 0 || (spot && q.net.Cmp(quant.One()) > 0) {
-		return true
-	}
-	if portfolio.HasMaxWeight {
-		for _, target := range q.targets {
-			if abs(target.Weight).Cmp(portfolio.MaxWeight) > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // turnover 是与上期理论目标相比的单边换手：Σ|w_new − w_old| / 2。

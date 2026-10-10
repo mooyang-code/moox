@@ -198,3 +198,79 @@ portfolio:
 	}
 	assertDecimal(t, "cash", decision.Summary.Cash, "1")
 }
+
+// 规则预算与 cap 在输出网格之外（18 位小数）时整体精确截断，权重不会被噪声容忍抬过规则的 total 或 cap；
+// 网格内的配置仍容忍噪声。
+func TestPrecisionRespectsRuleBudgetAndCapOffGrid(t *testing.T) {
+	budget := compile(t, `name: budget18
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 0.499999999999999999}
+portfolio:
+  max_missing: 1
+`, "m")
+	decision := evaluate(t, budget, frameOf(budget, map[string]Row{"A": values("m", 1)}), State{})
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"A": "0.4999"})
+	assertDecimal(t, "allocated", decision.Summary.Rules["r"].Allocated, "0.4999")
+
+	for _, tc := range []struct{ name, sideLine, holding string }{
+		{"rank", "", ""},
+		{"short", "    side: short\n", ""},
+		{"holding", "", "    holding: {bars: 10, offsets: [0]}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			program := compile(t, `name: cap18
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 3}
+    weight: {total: 0.9, method: rank, cap: 0.399999999999999999}
+`+tc.sideLine+tc.holding+`portfolio:
+  leverage: 2
+  max_missing: 1
+`, "m")
+			frame := frameOf(program, map[string]Row{"A": values("m", 3), "B": values("m", 2), "C": values("m", 1)})
+			frame.BarIndex = 0
+			decision := evaluate(t, program, frame, State{})
+			assertOK(t, decision)
+			limit := quant.Must("0.3999")
+			for _, target := range decision.Targets {
+				if abs(target.Weight).Cmp(limit) > 0 {
+					t.Fatalf("%s 的权重 %s 超过 cap 0.399999999999999999", target.InstrumentID, target.Weight.String())
+				}
+			}
+			for _, item := range decision.Items {
+				if item.Weight != "" && abs(quant.Must(item.Weight)).Cmp(limit) > 0 {
+					t.Fatalf("明细 %s 的权重 %s 超过 cap", item.InstrumentID, item.Weight)
+				}
+			}
+		})
+	}
+}
+
+func TestQuantizationToleranceRequiresEveryLimitOnGrid(t *testing.T) {
+	onGrid := compile(t, `name: grid
+rules:
+  - {id: a, type: rank, score: m, select: {top: 3}, weight: {total: 0.5, cap: 0.2}}
+portfolio: {max_weight: 0.3, leverage: 1}
+`, "m")
+	if got := quantizationTolerance(onGrid); got.Cmp(noise) != 0 {
+		t.Fatalf("网格内的配置应容忍噪声：%s", got.String())
+	}
+	for name, yaml := range map[string]string{
+		"total":      "  - {id: a, type: rank, score: m, select: {top: 3}, weight: {total: 0.49999, cap: 0.2}}\nportfolio: {leverage: 1}\n",
+		"cap":        "  - {id: a, type: rank, score: m, select: {top: 3}, weight: {total: 0.5, cap: 0.20001}}\nportfolio: {leverage: 1}\n",
+		"max_weight": "  - {id: a, type: rank, score: m, select: {top: 3}, weight: 0.5}\nportfolio: {max_weight: 0.30001}\n",
+		"leverage":   "  - {id: a, type: rank, score: m, select: {top: 3}, weight: 0.5}\nportfolio: {leverage: 1.00001}\n",
+	} {
+		program := compile(t, "name: off\nrules:\n"+yaml, "m")
+		if got := quantizationTolerance(program); !got.IsZero() {
+			t.Errorf("%s 在网格之外应不容忍噪声：%s", name, got.String())
+		}
+	}
+}
