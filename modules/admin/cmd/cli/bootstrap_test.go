@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -53,12 +54,12 @@ func bootstrapArguments(opts bootstrapOptions) []string {
 	return []string{"bootstrap", "--topology-file", opts.topologyFile, "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir}
 }
 
-func runBootstrapFixture(t *testing.T, opts bootstrapOptions) hostBundleResult {
+func runBootstrapFixture(t *testing.T, opts bootstrapOptions) hostbundle.Metadata {
 	t.Helper()
 	var out, stderr bytes.Buffer
 	require.NoError(t, runBootstrapCommand(bootstrapArguments(opts), &out, &stderr), stderr.String())
 	require.NotContains(t, out.String()+stderr.String(), "BEGIN")
-	var result hostBundleResult
+	var result hostbundle.Metadata
 	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
 	return result
 }
@@ -300,7 +301,7 @@ func TestBootstrapFailedOutputCanRetryWithoutRotatingIdentity(t *testing.T) {
 	require.NoError(t, os.Chmod(opts.outputDir, 0o700))
 	result := runBootstrapFixture(t, opts)
 	require.False(t, result.CA.Created)
-	require.True(t, slices.ContainsFunc(result.Credentials, func(c hostBundleCredential) bool { return c.Caller == key.Caller && c.KeyID == key.KeyID }))
+	require.True(t, slices.ContainsFunc(result.Credentials, func(c hostbundle.Credential) bool { return c.Caller == key.Caller && c.KeyID == key.KeyID }))
 }
 
 func TestBootstrapDatabaseFailureRollsBackTopologyAndPartialKeys(t *testing.T) {
@@ -375,10 +376,10 @@ func TestBootstrapConcurrentProcessesReuseAllIdentityMaterial(t *testing.T) {
 	}
 	wait.Wait()
 	created := 0
-	var first hostBundleResult
+	var first hostbundle.Metadata
 	for i, err := range errors {
 		require.NoError(t, err, outputs[i].String())
-		var result hostBundleResult
+		var result hostbundle.Metadata
 		require.NoError(t, json.Unmarshal(outputs[i].Bytes(), &result))
 		if first.CA.SHA256 == "" {
 			first = result

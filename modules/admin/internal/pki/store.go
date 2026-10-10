@@ -23,22 +23,12 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 )
 
 const caCommonName = "MooX Private CA"
 
 var ErrInvalidCA = errors.New("MooX CA is missing, incomplete, invalid, or expired; restore the original CA rather than regenerating it")
-
-type CertificateInfo struct {
-	SHA256   string    `json:"sha256"`
-	Serial   string    `json:"serial"`
-	NotAfter time.Time `json:"not_after"`
-}
-
-type CAInfo struct {
-	CertificateInfo
-	Created bool `json:"created"`
-}
 
 type HostIdentity struct {
 	HostID         string
@@ -47,7 +37,7 @@ type HostIdentity struct {
 }
 
 type IssuedCertificate struct {
-	CertificateInfo
+	hostbundle.CertificateInfo
 	HostID        string `json:"host_id"`
 	CAFingerprint string `json:"ca_sha256"`
 	Certificate   string `json:"certificate_file"`
@@ -78,9 +68,9 @@ func (s *Store) lock() (*os.File, error) {
 	return privatefiles.Lock(s.root, ".pki.lock")
 }
 
-func certificateInfo(cert *x509.Certificate) CertificateInfo {
+func certificateInfo(cert *x509.Certificate) hostbundle.CertificateInfo {
 	digest := sha256.Sum256(cert.Raw)
-	return CertificateInfo{SHA256: hex.EncodeToString(digest[:]), Serial: cert.SerialNumber.Text(16), NotAfter: cert.NotAfter.UTC()}
+	return hostbundle.CertificateInfo{SHA256: hex.EncodeToString(digest[:]), Serial: cert.SerialNumber.Text(16), NotAfter: cert.NotAfter.UTC()}
 }
 
 func serialNumber() (*big.Int, error) {
@@ -137,23 +127,23 @@ func (s *Store) loadCA() (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {
 
 // Info validates an existing CA without creating or repairing trust material.
 // Normal host deployments must use this after the initial offline bootstrap.
-func (s *Store) Info() (CAInfo, error) {
+func (s *Store) Info() (hostbundle.CAInfo, error) {
 	lock, err := s.lock()
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	defer lock.Close()
 	cert, _, _, err := s.loadCA()
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
-	return CAInfo{CertificateInfo: certificateInfo(cert)}, nil
+	return hostbundle.CAInfo{CertificateInfo: certificateInfo(cert)}, nil
 }
 
-func (s *Store) EnsureCA() (CAInfo, error) {
+func (s *Store) EnsureCA() (hostbundle.CAInfo, error) {
 	lock, err := s.lock()
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	defer lock.Close()
 	_, certErr := s.root.Lstat("ca.crt")
@@ -161,29 +151,29 @@ func (s *Store) EnsureCA() (CAInfo, error) {
 	if !os.IsNotExist(certErr) || !os.IsNotExist(keyErr) {
 		cert, _, _, err := s.loadCA()
 		if err != nil {
-			return CAInfo{}, err
+			return hostbundle.CAInfo{}, err
 		}
 		if _, err := s.root.Lstat("ca.sha256"); os.IsNotExist(err) {
 			if err := privatefiles.Write(s.root, "ca.sha256", []byte(certificateInfo(cert).SHA256+"\n")); err != nil {
-				return CAInfo{}, err
+				return hostbundle.CAInfo{}, err
 			}
 		}
-		return CAInfo{CertificateInfo: certificateInfo(cert)}, nil
+		return hostbundle.CAInfo{CertificateInfo: certificateInfo(cert)}, nil
 	}
 	// Public inventory/continuity metadata prove this is not a fresh store even
 	// if both root files were lost. Restore them instead of changing trust.
 	for _, name := range []string{"ca.sha256", "hosts"} {
 		if _, err := s.root.Lstat(name); !os.IsNotExist(err) {
-			return CAInfo{}, ErrInvalidCA
+			return hostbundle.CAInfo{}, ErrInvalidCA
 		}
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	serial, err := serialNumber()
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	now := s.now().UTC().Truncate(time.Second)
 	template := &x509.Certificate{
@@ -194,28 +184,28 @@ func (s *Store) EnsureCA() (CAInfo, error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	encodedKey, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	// If publication is interrupted, the remaining half causes future calls to
 	// fail closed. Never destroy the surviving root or silently change trust.
 	if err := privatefiles.Write(s.root, "ca.key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encodedKey})); err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	if err := privatefiles.Write(s.root, "ca.crt", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})); err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	cert, _, _, err := s.loadCA()
 	if err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
 	if err := privatefiles.Write(s.root, "ca.sha256", []byte(certificateInfo(cert).SHA256+"\n")); err != nil {
-		return CAInfo{}, err
+		return hostbundle.CAInfo{}, err
 	}
-	return CAInfo{CertificateInfo: certificateInfo(cert), Created: true}, nil
+	return hostbundle.CAInfo{CertificateInfo: certificateInfo(cert), Created: true}, nil
 }
 
 func validateHost(host HostIdentity) error {
@@ -345,23 +335,23 @@ func publishBundle(dir, id string, files map[string][]byte) error {
 }
 
 // ExportCA publishes only the public root, after validating the original pair.
-func (s *Store) ExportCA(outputDir string) (CertificateInfo, error) {
+func (s *Store) ExportCA(outputDir string) (hostbundle.CertificateInfo, error) {
 	lock, err := s.lock()
 	if err != nil {
-		return CertificateInfo{}, err
+		return hostbundle.CertificateInfo{}, err
 	}
 	defer lock.Close()
 	ca, _, raw, err := s.loadCA()
 	if err != nil {
-		return CertificateInfo{}, err
+		return hostbundle.CertificateInfo{}, err
 	}
 	output, err := privatefiles.OpenRoot(outputDir)
 	if err != nil {
-		return CertificateInfo{}, err
+		return hostbundle.CertificateInfo{}, err
 	}
 	defer output.Close()
 	if err := privatefiles.Write(output, "moox-ca.crt", raw); err != nil {
-		return CertificateInfo{}, err
+		return hostbundle.CertificateInfo{}, err
 	}
 	return certificateInfo(ca), nil
 }

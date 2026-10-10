@@ -1,6 +1,6 @@
 # 部署运行助手
 
-`moox-runtime` 随 host 软件包安装，供同机所有业务包共用。它只读取部署器生成的 `runtime.json` 和私密环境文件，不读取运维 `moox.toml`，不连接 SSH，不是服务目录中的常驻组件。仅在 Linux 执行进程操作，amd64/arm64 都是纯 Go 制品，可在 macOS 关闭 CGO 编译。
+`moox-runtime` 随 host 软件包安装，供同机所有业务包共用。进程操作读取部署器生成的 `runtime.json` 和私密环境文件，不读取运维 `moox.toml`，不连接 SSH，不是服务目录中的常驻组件。仅在 Linux 执行进程操作，amd64/arm64 都是纯 Go 制品，可在 macOS 关闭 CGO 编译。
 
 每个实际发布目录包含 0600 的 `runtime.json`：
 
@@ -38,7 +38,11 @@ console-proxy 必须在它的 0600 `config/app.yaml` 中明确声明 `drain_time
 
 调用方已经持有维护锁时，传递同一文件描述符到助手（通常为 FD 3），同时使用 `--maintenance-lock-held --maintenance-lock-fd 3`。助手核对文件身份并复用同一个锁，不按标记直接绕过加锁。只有布尔参数、没有正确描述符会失败。
 
+Linux 读取进程的可执行文件时，先打开 `/proc/PID/exe` 固定同一执行镜像，再从该描述符读取路径和 inode，避免 exec 切换瞬间拼出不一致的身份。内核回归持续在同一 PID 上切换两个真实 ELF，要求每次快照中的路径与 inode 一致。
+
 软件准备另提供 `extract --archive PATH --sha256 DIGEST --profile PROFILE --destination NEW_DIR`，只为助手所在 Linux 平台解包已核验软件。它复用独立的[软件包模块](../unitpackage/README.md)，原子发布到新目录且不覆盖已有对象；不写 current、运行计划、身份或持久数据，也不启动服务。准备阶段可以在当前版本运行时执行，后续激活仍须使用共用维护锁。
+
+身份检查提供 `inspect-bundle`，复用独立的[身份消费模块](../unitbundle/README.md)，按调用方提供的拓扑、CA 和快照核对私密目录，仅输出公开清单。
 
 ```bash
 make test-unit-runtime
@@ -54,4 +58,4 @@ MOOX_RUNTIME_PROXY_BINARY=/absolute/path/moox-console-proxy \
 make test-unit-runtime-linux
 ```
 
-门禁要求十组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。实际生成的安装、回滚、start/stop/healthcheck 脚本和 `setup pause/resume` 仍须由 G2/G3/G6/G11 接线；本助手本身不代表软件包已经可安装或正式环境已经发布。
+门禁要求十一组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。实际生成的安装、回滚、start/stop/healthcheck 脚本和 `setup pause/resume` 仍须由 G2/G3/G6/G11 接线；本助手本身不代表软件包已经可安装或正式环境已经发布。

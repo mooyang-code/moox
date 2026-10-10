@@ -21,6 +21,7 @@ import (
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"gorm.io/gorm"
 )
 
@@ -139,7 +140,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology bootstr
 	var exported []keys.SigningKey
 	var access []keys.VerificationKey
 	var expectedHash string
-	var caInfo pki.CAInfo
+	var caInfo hostbundle.CAInfo
 	var ca *pki.Store
 	defer func() {
 		if ca != nil {

@@ -5,6 +5,7 @@ package unitruntime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -65,6 +66,7 @@ func runFixtureProcess() {
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(component.Health.Port)))
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "synthetic health listener:", err)
 		os.Exit(22)
 	}
 	if os.Getenv("MOOX_RUNTIME_TEST_RESET_LIVE_ON_BOOT") == "1" {
@@ -161,6 +163,40 @@ func cleanupRuntime(t *testing.T, path string) {
 		_, err := Execute(ctx, path, "stop", nil, Options{})
 		require.NoError(t, err)
 	})
+}
+
+func TestRuntimeLinuxProcessIdentityRemainsCoherentAcrossExec(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	paths := []string{filepath.Join(root, "exec-first"), filepath.Join(root, "exec-second")}
+	for _, path := range paths {
+		input, err := os.Open("/bin/sh")
+		require.NoError(t, err)
+		output, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+		require.NoError(t, err)
+		_, copyErr := io.Copy(output, input)
+		require.NoError(t, errors.Join(copyErr, input.Close(), output.Close()))
+	}
+	// Continuously exec between two different inodes, keeping PID/start ticks.
+	// Every observation must describe one executable, never a mixed path/inode.
+	script := `exec "$1" -c "$0" "$0" "$2" "$1"`
+	command := exec.Command(paths[0], "-c", script, script, paths[1], paths[0])
+	require.NoError(t, command.Start())
+	t.Cleanup(func() { _ = command.Process.Kill(); _ = command.Wait() })
+	seen := map[string]bool{}
+	for range 2000 {
+		identity, alive, err := readProcess(command.Process.Pid)
+		require.NoError(t, err)
+		require.True(t, alive)
+		require.Contains(t, paths, identity.Executable)
+		info, err := os.Stat(identity.Executable)
+		require.NoError(t, err)
+		stat := info.Sys().(*syscall.Stat_t)
+		require.Equal(t, uint64(stat.Dev), identity.Device)
+		require.Equal(t, stat.Ino, identity.Inode, "path and inode must belong to the same exec image")
+		seen[identity.Executable] = true
+	}
+	require.Len(t, seen, 2)
 }
 
 func TestRuntimeLinuxPausePersistsAcrossReleaseAndAllAutomaticStarts(t *testing.T) {

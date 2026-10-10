@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 )
@@ -37,6 +38,9 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "inspect-bundle" {
+		return inspectBundle(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "extract" {
 		return extract(ctx, args[1:], stdout, stderr)
 	}
@@ -69,6 +73,37 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(result)
+}
+
+func inspectBundle(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime inspect-bundle", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var options unitbundle.Options
+	var directory, components string
+	flags.StringVar(&directory, "directory", "", "physical private identity directory")
+	flags.StringVar(&options.HostID, "host-id", "", "canonical target host")
+	flags.StringVar(&options.ControlHostID, "control-host-id", "", "canonical control host")
+	flags.StringVar(&options.Address, "address", "", "target public address from registered topology")
+	flags.StringVar(&options.PrivateAddress, "private-address", "", "target private address from registered topology")
+	flags.StringVar(&options.ControlAddress, "control-address", "", "registered control address")
+	flags.StringVar(&options.ExpectedCA, "ca-sha256", "", "pinned DER CA fingerprint")
+	flags.StringVar(&options.ExpectedHash, "snapshot-sha256", "", "expected compiled snapshot hash")
+	flags.StringVar(&components, "components", "", "complete target placement, comma-separated")
+	flags.BoolVar(&options.AllowOperator, "bootstrap-operator", false, "expect a control bootstrap operator identity")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || directory == "" {
+		return errors.New("inspect-bundle requires --directory, topology and pinned CA/snapshot, with no positional arguments")
+	}
+	if components != "" {
+		options.Components = strings.Split(components, ",")
+	}
+	material, err := unitbundle.Load(ctx, directory, options)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(material.Metadata())
 }
 
 func extract(ctx context.Context, args []string, stdout, stderr io.Writer) error {

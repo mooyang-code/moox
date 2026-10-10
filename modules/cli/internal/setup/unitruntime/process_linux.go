@@ -54,14 +54,22 @@ func readProcess(pid int) (processIdentity, bool, error) {
 	if ticks, err := strconv.ParseUint(fields[19], 10, 64); err != nil || ticks == 0 {
 		return processIdentity{}, false, errIdentity
 	}
-	executable, err := os.Readlink(base + "/exe")
+	// Pin one exec image before reading either its path or inode. Reading
+	// /proc/PID/exe twice can combine the launcher path with the target inode
+	// when exec happens between Readlink and Stat, falsely rejecting startup.
+	image, err := os.Open(base + "/exe")
 	if os.IsNotExist(err) {
 		return processIdentity{}, false, nil
 	}
 	if err != nil {
 		return processIdentity{}, false, err
 	}
-	info, err := os.Stat(base + "/exe")
+	defer image.Close()
+	executable, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", image.Fd()))
+	if err != nil {
+		return processIdentity{}, false, err
+	}
+	info, err := image.Stat()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return processIdentity{}, false, nil

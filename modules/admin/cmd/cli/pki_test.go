@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +27,7 @@ func TestPKICLIEnsureIssueAndPublicExport(t *testing.T) {
 		return out.String()
 	}
 	first := run("ensure-ca")
-	var firstCA, again pki.CAInfo
+	var firstCA, again hostbundle.CAInfo
 	require.NoError(t, json.Unmarshal([]byte(first), &firstCA))
 	require.True(t, firstCA.Created)
 	require.NoError(t, json.Unmarshal([]byte(run("ensure-ca")), &again))
@@ -92,7 +93,7 @@ func TestPKICLIConcurrentProcessesReuseRoot(t *testing.T) {
 	created, fingerprint := 0, ""
 	for i, err := range errors {
 		require.NoError(t, err, outputs[i].String())
-		var metadata pki.CAInfo
+		var metadata hostbundle.CAInfo
 		require.NoError(t, json.Unmarshal(outputs[i].Bytes(), &metadata))
 		if fingerprint == "" {
 			fingerprint = metadata.SHA256

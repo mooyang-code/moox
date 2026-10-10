@@ -11,6 +11,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 )
 
 type ExtractOptions struct {
@@ -56,7 +58,7 @@ func Extract(ctx context.Context, options ExtractOptions) (result Extraction, re
 		return result, errors.New("extraction parent must be an existing physical directory")
 	}
 	info, err := os.Lstat(parentPath)
-	if err != nil || !info.IsDir() || !ownedByUser(info) || info.Mode().Perm()&0o022 != 0 {
+	if err != nil || !info.IsDir() || !fsutil.Owned(info) || info.Mode().Perm()&0o022 != 0 {
 		return result, errors.New("extraction parent must be owned and not writable by other users")
 	}
 	parent, err := os.OpenRoot(parentPath)
@@ -128,7 +130,7 @@ func Extract(ctx context.Context, options ExtractOptions) (result Extraction, re
 		return result, err
 	}
 	defer directory.Close()
-	if err := renameExclusive(directory, stageName, name); err != nil {
+	if err := fsutil.RenameExclusive(directory, stageName, name); err != nil {
 		return result, fmt.Errorf("publish deployment directory without replacement: %w", err)
 	}
 	result = Extraction{Directory: destination, Package: verified}

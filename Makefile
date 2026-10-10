@@ -207,9 +207,13 @@ test-unit-package-linux:
 test-host-placement-deployment:
 	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostPlacements|TestDoctorPlacements|TestEventBusURL|TestServiceRegistry|TestControlDeployOptions'
 
-.PHONY: test-host-identity-bundles
+.PHONY: test-host-identity-bundles test-unit-bundle-linux
 test-host-identity-bundles:
 	go test ./modules/admin/cmd/cli ./modules/admin/internal/pki ./packages/gatewayclient ./packages/servicecatalog/hostgatewayconfig -run 'TestBootstrap|TestHostBundle|TestInfo|TestPersistentCA|TestFileConfig'
+	go test ./modules/cli/internal/setup/unitbundle
+
+test-unit-bundle-linux:
+	bash scripts/test/gates/test-unit-bundle-linux.sh
 
 .PHONY: test-unit-runtime test-unit-runtime-linux
 test-unit-runtime:

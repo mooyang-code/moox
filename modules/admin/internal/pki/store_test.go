@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,7 +207,7 @@ func TestConcurrentEnsureKeepsOneRootAcrossIndependentStores(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, store.Close()) })
 	}
 	var wait sync.WaitGroup
-	infos, errs := make([]CAInfo, writers), make([]error, writers)
+	infos, errs := make([]hostbundle.CAInfo, writers), make([]error, writers)
 	start := make(chan struct{})
 	for i, store := range stores {
 		wait.Go(func() {

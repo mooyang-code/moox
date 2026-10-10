@@ -21,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 )
@@ -29,15 +30,15 @@ func hostBundleArguments(opts bootstrapOptions, hostID string) []string {
 	return []string{"host-bundle", "--host-id", hostID, "--control-host-id", "control", "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir}
 }
 
-func runHostBundleFixture(t *testing.T, opts bootstrapOptions, hostID string) hostBundleResult {
+func runHostBundleFixture(t *testing.T, opts bootstrapOptions, hostID string) hostbundle.Metadata {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	require.NoError(t, runHostBundleCommand(hostBundleArguments(opts, hostID), &stdout, &stderr), stderr.String())
-	var result hostBundleResult
+	var result hostbundle.Metadata
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
 	metadata, err := os.ReadFile(filepath.Join(result.BundleDir, "bundle.json"))
 	require.NoError(t, err)
-	var saved hostBundleResult
+	var saved hostbundle.Metadata
 	require.NoError(t, json.Unmarshal(metadata, &saved))
 	require.Equal(t, result, saved)
 	for _, name := range []string{opts.masterFile, filepath.Join(opts.pkiDir, "ca.key")} {
@@ -349,11 +350,11 @@ func TestHostBundleConcurrentProcessesReuseKeysAndIssueDistinctLeaves(t *testing
 		wait.Go(func() { errs[i] = command.Run() })
 	}
 	wait.Wait()
-	var first hostBundleResult
+	var first hostbundle.Metadata
 	serials := map[string]bool{}
 	for i, err := range errs {
 		require.NoError(t, err, outputs[i].String())
-		var result hostBundleResult
+		var result hostbundle.Metadata
 		require.NoError(t, json.Unmarshal(outputs[i].Bytes(), &result))
 		if i == 0 {
 			first = result
