@@ -19,6 +19,8 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb"
 	"github.com/mooyang-code/moox/packages/requestauth"
 )
@@ -56,8 +58,22 @@ func checkConfig(arguments []string, output io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("check-config 不接受位置参数")
 	}
-	if _, err := config.Load(*path); err != nil {
+	cfg, err := config.Load(*path)
+	if err != nil {
 		return err
+	}
+	// 上线前的自检要覆盖进程启动时会失败的那些检查：证书必须由 MooX 私有 CA 签发并包含本机主机 ID，
+	// 非 control 主机的调用方密钥必须可读，快照缓存目录的权限必须正确。
+	if _, err := tlsconfig.LoadServer(cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.CAFile, cfg.Host.ID, time.Now()); err != nil {
+		return err
+	}
+	if cfg.Control.KeyFile != "" {
+		if _, err := gatewayauth.LoadCallerKey(cfg.Control.KeyFile); err != nil {
+			return fmt.Errorf("读取调用方密钥 %s: %w", cfg.Control.KeyFile, err)
+		}
+	}
+	if _, err := store.NewSnapshots(cfg.Store.Path).Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("快照缓存目录 %s 不可用: %w", cfg.Store.Path, err)
 	}
 	_, _ = fmt.Fprintln(output, "配置有效")
 	return nil

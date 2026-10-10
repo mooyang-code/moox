@@ -22,10 +22,14 @@ type DialFunc func(ctx context.Context, hostID string) (setupssh.Client, error)
 
 // SSHTunnel 实现 gatewayclient.Tunnel：每台主机复用一条 SSH 连接和一个转发到主机网关本机入口的本地端口。
 type SSHTunnel struct {
-	dial    DialFunc
-	mu      sync.Mutex
-	closed  bool
-	tunnels map[string]*hostTunnel
+	dial DialFunc
+	// lifetime 管隧道监听器的生命周期，随 Close 取消。隧道按主机缓存、被多次调用复用，监听器不能绑在第一次调用
+	// 的 ctx 上：那个 ctx 可能是服务目录后台刷新的临时 ctx，刷新结束监听器就被关掉，后面的调用拿到失效的端口。
+	lifetime context.Context
+	stop     context.CancelFunc
+	mu       sync.Mutex
+	closed   bool
+	tunnels  map[string]*hostTunnel
 }
 
 type hostTunnel struct {
@@ -35,7 +39,8 @@ type hostTunnel struct {
 
 // NewSSHTunnel 创建隧道；dial 负责按主机 ID 建立 SSH 连接。
 func NewSSHTunnel(dial DialFunc) *SSHTunnel {
-	return &SSHTunnel{dial: dial, tunnels: map[string]*hostTunnel{}}
+	lifetime, stop := context.WithCancel(context.Background())
+	return &SSHTunnel{dial: dial, lifetime: lifetime, stop: stop, tunnels: map[string]*hostTunnel{}}
 }
 
 // Address 返回转发到 hostID 主机网关本机入口的本地地址，首次调用时建立隧道。
@@ -56,7 +61,7 @@ func (t *SSHTunnel) Address(ctx context.Context, hostID string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("SSH 连接主机 %s: %w", hostID, err)
 	}
-	listener, err := client.ForwardLocal(ctx, gatewayclient.DefaultLocalAddress)
+	listener, err := client.ForwardLocal(t.lifetime, gatewayclient.DefaultLocalAddress)
 	if err != nil {
 		_ = client.Close()
 		return "", fmt.Errorf("建立到主机 %s 主机网关的隧道: %w", hostID, err)
@@ -70,9 +75,14 @@ func (t *SSHTunnel) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.closed = true
+	t.stop()
 	var errs []error
 	for hostID, tunnel := range t.tunnels {
-		errs = append(errs, tunnel.listener.Close(), tunnel.client.Close())
+		// 取消 lifetime 时监听器可能已经被关掉，重复关闭不算错误。
+		if err := tunnel.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			errs = append(errs, err)
+		}
+		errs = append(errs, tunnel.client.Close())
 		delete(t.tunnels, hostID)
 	}
 	return errors.Join(errs...)

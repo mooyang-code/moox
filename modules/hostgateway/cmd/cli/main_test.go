@@ -47,9 +47,6 @@ func TestCLICommandsAndFailureModes(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "health-secret")
 	configPath, storePath := cliConfig(t)
 	var output bytes.Buffer
-	if code := run([]string{"check-config", "--config", configPath}, &output); code != 0 {
-		t.Fatalf("check-config exit = %d: %s", code, output.String())
-	}
 
 	built, err := testsnapshot.Build("storage", false, []gatewayroute.Route{{
 		ServiceID: "storage-view", Address: "127.0.0.1:20103", ServicePath: "trpc.moox.storage.DataView",

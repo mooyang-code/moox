@@ -58,7 +58,7 @@ type State struct {
 
 func NewState() *State {
 	staleAfter := int64(90)
-	if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS")), 10, 64); err == nil && value > 0 {
+	if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("MOOX_HOST_GATEWAY_SYNC_STALE_AFTER_SECONDS")), 10, 64); err == nil && value > 0 {
 		staleAfter = value
 	}
 	state := &State{requests: make(map[requestKey]uint64), durations: make(map[durationKey]durationValue), clock: time.Now}
@@ -207,10 +207,10 @@ func (state *State) writeMetrics(response http.ResponseWriter) {
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_replay_failures_total counter\nhost_gateway_replay_failures_total %d\n", state.replayFailures.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_upstream_failures_total counter\nhost_gateway_upstream_failures_total{type=\"connection\"} %d\nhost_gateway_upstream_failures_total{type=\"timeout\"} %d\n", state.connectionFailures.Load(), state.timeoutFailures.Load())
 	hash, count := state.Current()
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_routes_current gauge\ngateway_routes_current %d\n", count)
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_info gauge\ngateway_route_info{route_hash=\"%s\"} 1\n", escapeLabel(hash))
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_last_sync_timestamp_seconds gauge\ngateway_route_last_sync_timestamp_seconds %d\n", state.lastSyncUnix.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_last_report_timestamp_seconds gauge\ngateway_route_last_report_timestamp_seconds %d\n", state.lastReportUnix.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_routes_current gauge\nhost_gateway_routes_current %d\n", count)
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_info gauge\nhost_gateway_route_info{route_hash=\"%s\"} 1\n", escapeLabel(hash))
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_last_sync_timestamp_seconds gauge\nhost_gateway_route_last_sync_timestamp_seconds %d\n", state.lastSyncUnix.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_last_report_timestamp_seconds gauge\nhost_gateway_route_last_report_timestamp_seconds %d\n", state.lastReportUnix.Load())
 	stale := 1
 	if state.Ready() {
 		stale = 0

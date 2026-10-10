@@ -2,8 +2,11 @@ global:
   namespace: Production
   env_name: access
 server:
-  filter: []
+  filter:
+    - recovery
   timeout: 30000
+  # 停止时等待进行中的请求完成再断开连接（毫秒），小于运行脚本给组件的停止超时。
+  max_close_wait_time: 10000
   admin:
     ip: 127.0.0.1
     port: 20004

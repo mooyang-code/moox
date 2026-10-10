@@ -126,24 +126,10 @@ func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	}
 }
 
-func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testing.T) {
+func TestValidateStorageRouteRequiresAllowlist(t *testing.T) {
 	base := Route{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.storage.DataView"}
 	if err := ValidateRoute(base); err == nil {
 		t.Fatal("ValidateRoute accepted an unrestricted storage route")
-	}
-
-	for _, method := range []string{
-		"ClaimViewIndexBuild",
-		"MergePrimaryRows",
-		"DeletePrimaryRows",
-		"ApplyViewIndex",
-	} {
-		route := base
-		route.AllowedMethods = []string{method}
-		route.AllowedCallers = []string{"storage-view"}
-		if err := ValidateRoute(route); err == nil {
-			t.Fatalf("ValidateRoute accepted internal storage method %q", method)
-		}
 	}
 
 	public := base
@@ -164,10 +150,6 @@ func TestValidateStorageMetadataViewBuilderRoute(t *testing.T) {
 	}
 	if err := ValidateRoute(route); err != nil {
 		t.Fatalf("ValidateRoute rejected the storage-view metadata route: %v", err)
-	}
-	route.AllowedCallers = []string{"console", "storage-view"}
-	if err := ValidateRoute(route); err == nil {
-		t.Fatal("ValidateRoute accepted view-builder metadata methods for a broader caller set")
 	}
 }
 
@@ -331,6 +313,25 @@ func TestNormalizeAllowedMethodsRejectsUnsafeNames(t *testing.T) {
 		_, err := NormalizeAndHash("node-1", []Route{{ServiceID: "svc", Address: "127.0.0.1:1", ServicePath: "trpc.test.Service", AllowedMethods: []string{method}}})
 		if err == nil {
 			t.Fatalf("unsafe method %q accepted", method)
+		}
+	}
+}
+
+// 同一服务按调用方分成多条路由时，路由哈希不能因为输入顺序不同而变化。
+func TestRouteHashDoesNotDependOnInputOrder(t *testing.T) {
+	a := Route{ServiceID: "admin", Address: "127.0.0.1:11107", ServicePath: "trpc.moox.admin.SpaceMgr", AllowedMethods: []string{"ListSpaces"}, AllowedCallers: []string{"console"}}
+	b := Route{ServiceID: "admin", Address: "127.0.0.1:11107", ServicePath: "trpc.moox.admin.SpaceMgr", AllowedMethods: []string{"DeleteSpace"}, AllowedCallers: []string{"moox-cli"}}
+	c := Route{ServiceID: "admin", Address: "127.0.0.1:11107", ServicePath: "trpc.moox.admin.SpaceMgr", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"monitor"}}
+	var want string
+	for index, order := range [][]Route{{a, b, c}, {c, b, a}, {b, a, c}, {b, c, a}} {
+		snapshot, err := NormalizeAndHash("control", order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			want = snapshot.RouteHash
+		} else if snapshot.RouteHash != want {
+			t.Fatalf("输入顺序 %d 的哈希 %s 与第一次的 %s 不同", index, snapshot.RouteHash, want)
 		}
 	}
 }

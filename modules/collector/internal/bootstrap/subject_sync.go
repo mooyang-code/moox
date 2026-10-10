@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -13,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -53,12 +55,19 @@ func setupSubjectSync(ctx context.Context, s *server.Server, cfg *Config, storag
 }
 
 func registerSubjectSync(ctx context.Context, s *server.Server, cfg SubjectSyncConfig, storage subjectSyncStore, listers subjectsync.Listers, metrics *subjectsync.Metrics) error {
-	if err := storage.RegisterSubjectListing(ctx, listers.Supported()); err != nil {
-		return fmt.Errorf("向 Storage 登记标的同步支持的数据源: %w", err)
+	// 登记只是让 Storage 知道有哪些数据源支持标的同步，不是启动的前提：Storage 暂时不可用或数据源还没有创建时，
+	// 不能让整个 Collector（行情调度也在里面）起不来。启动时尝试一次，失败只记日志，之后每次标签同步前重试。
+	registrar := &listingRegistrar{store: storage, supported: listers.Supported()}
+	if err := registrar.ensure(ctx); err != nil {
+		log.WarnContextf(ctx, "向 Storage 登记标的同步支持的数据源失败，稍后重试：%v", err)
 	}
 	tags := &subjectsync.TagRunner{Store: storage, Listers: listers, FetchTimeout: cfg.FetchTimeout, Metrics: metrics}
 	attributes := &subjectsync.AttributeRunner{Store: storage, Listers: listers, Jobs: cfg.Attributes, FetchTimeout: cfg.FetchTimeout, Metrics: metrics}
-	tagJob, attributeJob, err := subjectSyncJobs(tags, attributes, time.Now)
+	tagJob, attributeJob, err := subjectSyncJobs(tags, attributes, time.Now, func(jobCtx context.Context) {
+		if err := registrar.ensure(jobCtx); err != nil {
+			log.WarnContextf(jobCtx, "向 Storage 登记标的同步支持的数据源失败，下次同步前重试：%v", err)
+		}
+	})
 	if err != nil {
 		return err
 	}
@@ -72,9 +81,34 @@ func registerSubjectSync(ctx context.Context, s *server.Server, cfg SubjectSyncC
 	return nil
 }
 
-// subjectSyncJobs 用 timerjob 包装两个同步，获得超时控制、重叠时跳过和指标上报。
-func subjectSyncJobs(tags *subjectsync.TagRunner, attributes *subjectsync.AttributeRunner, now func() time.Time) (*timerjob.Job, *timerjob.Job, error) {
+// listingRegistrar 把支持标的同步的数据源登记到 Storage，登记成功之后不再重复。
+type listingRegistrar struct {
+	store     subjectSyncStore
+	supported map[string][]string
+	mu        sync.Mutex
+	done      bool
+}
+
+func (r *listingRegistrar) ensure(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return nil
+	}
+	if err := r.store.RegisterSubjectListing(ctx, r.supported); err != nil {
+		return err
+	}
+	r.done = true
+	return nil
+}
+
+// subjectSyncJobs 用 timerjob 包装两个同步，获得超时控制、重叠时跳过和指标上报。beforeTags 在每次标签同步之前调用，
+// 可以为空。
+func subjectSyncJobs(tags *subjectsync.TagRunner, attributes *subjectsync.AttributeRunner, now func() time.Time, beforeTags func(context.Context)) (*timerjob.Job, *timerjob.Job, error) {
 	tagJob, err := timerjob.New("collector_subject_tags", subjectSyncTimeout, func(ctx context.Context) error {
+		if beforeTags != nil {
+			beforeTags(ctx)
+		}
 		return tags.RunDue(ctx, now())
 	})
 	if err != nil {

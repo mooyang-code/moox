@@ -4,7 +4,7 @@ host:
 server:
   remote_addr: 0.0.0.0:11003 # 跨主机入口，TLS
   local_addr: 127.0.0.1:11002 # 本机入口与服务目录，只能监听回环地址
-  health_addr: 0.0.0.0:11012 # 健康检查与指标，经 MOOX_HEALTH_AUTH_* 鉴权
+  health_addr: 127.0.0.1:11012 # 健康检查与指标，经 MOOX_HEALTH_AUTH_* 鉴权
 tls:
   cert_file: /data/moox/prod/certs/host-gateway/server.crt
   key_file: /data/moox/prod/certs/host-gateway/server.key

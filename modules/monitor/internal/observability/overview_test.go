@@ -552,7 +552,8 @@ func TestBuilderIncludesPlacementServiceWithoutReporter(t *testing.T) {
 		SpaceID: "mooxsys", CheckID: "placement:node-b:factor-mgr",
 		Name: "factor-mgr@node-b", Kind: domain.CheckKindHTTP,
 		Source: domain.CheckSourcePlacement, Enabled: true,
-		Labels: `{"host_id":"node-b","component_id":"factor-mgr"}`,
+		Labels:    `{"host_id":"node-b","component_id":"factor-mgr"}`,
+		CreatedAt: time.Now().Add(-time.Hour),
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
 		t.Fatal(err)
@@ -572,6 +573,28 @@ func TestBuilderIncludesPlacementServiceWithoutReporter(t *testing.T) {
 	if len(got.Services) != 1 || got.Services[0].Status != "unknown" ||
 		got.Services[0].ReporterStatus != ReporterNeverReported ||
 		!strings.Contains(got.Services[0].Reason, "从未上报") {
+		t.Fatalf("services = %+v", got.Services)
+	}
+}
+
+// 新登记的部署要等部署同步定时器建出检查、再等第一次上报：宽限期内不判为"从未上报"，免得每次新增部署都告警一次。
+func TestBuilderGivesNewPlacementGraceBeforeNeverReported(t *testing.T) {
+	query, repositories := openOverviewState(t, func(*gorm.DB) {})
+	check := domain.Check{
+		SpaceID: "mooxsys", CheckID: "placement:node-b:factor-mgr",
+		Name: "factor-mgr@node-b", Kind: domain.CheckKindHTTP,
+		Source: domain.CheckSourcePlacement, Enabled: true,
+		Labels:    `{"host_id":"node-b","component_id":"factor-mgr"}`,
+		CreatedAt: time.Now().Add(-time.Minute),
+	}
+	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || got.Services[0].ReporterStatus != "" {
 		t.Fatalf("services = %+v", got.Services)
 	}
 }

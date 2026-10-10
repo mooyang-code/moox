@@ -20,10 +20,11 @@ func writeStatusScript(t *testing.T, root, body string) {
 
 func TestEnsureStorageViewStoppedReadsRuntimeStatus(t *testing.T) {
 	// 没有运行的组件，status.sh 输出「未运行」并以退出码 1 结束，这是正常的已停止状态。
+	// 只停止没有暂停时，健康检查会在整理元数据的过程中把它重新拉起来，必须被拒绝。
 	stopped := t.TempDir()
 	writeStatusScript(t, stopped, `echo "主机 storage，发布 r1（abc）"; echo "storage-view: 未运行"; exit 1`)
-	if err := ensureStorageViewStopped(stopped); err != nil {
-		t.Fatalf("已停止的 storage-view 不应报错：%v", err)
+	if err := ensureStorageViewStopped(stopped); err == nil || !strings.Contains(err.Error(), "先暂停") {
+		t.Fatalf("没有暂停的 storage-view 必须被拒绝，got %v", err)
 	}
 	paused := t.TempDir()
 	writeStatusScript(t, paused, `echo "storage-view: 未运行（已暂停）"; exit 0`)

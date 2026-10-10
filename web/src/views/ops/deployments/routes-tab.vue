@@ -17,6 +17,7 @@
         <a-option v-for="item in callers" :key="item" :value="item">{{ item }}</a-option>
       </a-select>
       <a-input-search v-model="method" class="toolbar__method" placeholder="方法名" allow-clear aria-label="方法名" />
+      <a-button size="small" :loading="routesLoading" aria-label="刷新" @click="loadRoutes">刷新</a-button>
       <InfoTip
         text="主机网关的路由由 Admin 按组件目录和启用的部署生成，这里展示 Admin 期望的快照；主机网关应用后，同步状态变为已同步。"
       />
@@ -37,8 +38,23 @@
         <a-tag size="small" :color="snapshot.gateway?.synced ? 'green' : 'orange'">{{ syncText(snapshot.gateway) }}</a-tag>
       </span>
       <span>主机网关 {{ gatewayStateText(snapshot.gateway?.state) }}</span>
+      <span>
+        已应用版本 <code>{{ shortHash(snapshot.gateway?.applied_hash) }}</code>
+      </span>
+      <span>最近心跳 {{ formatTime(snapshot.gateway?.last_seen_at) }}</span>
+      <span v-if="snapshot.gateway?.instance_id">
+        实例 <code>{{ shortHash(snapshot.gateway.instance_id) }}</code>
+        <template v-if="snapshot.gateway.version">（{{ snapshot.gateway.version }}）</template>
+      </span>
+      <span v-if="snapshot.gateway?.state === 'conflict'" class="snapshot-head__error">
+        另有实例 <code>{{ shortHash(snapshot.gateway.conflict_instance_id) }}</code> 在
+        {{ formatTime(snapshot.gateway.conflict_seen_at) }} 也在上报，这台主机上可能启动了两个主机网关
+      </span>
       <span>{{ visibleRoutes.length }} / {{ routes.length }} 条路由</span>
     </div>
+    <a-alert v-if="snapshot?.gateway?.last_error" type="warning" class="tab-alert">
+      主机网关最近一次错误：{{ snapshot.gateway.last_error }}
+    </a-alert>
 
     <a-table
       :data="visibleRoutes"
@@ -85,7 +101,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onActivated, onMounted, ref } from "vue";
 import { sysdeployApi } from "@/api/admin/sysdeploy";
 import type { DeployHost, HostRoute, HostRoutes } from "@/api/admin/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -165,6 +181,15 @@ async function loadHosts() {
 }
 
 onMounted(() => void loadHosts());
+// 标签页被缓存：在「服务」页启停部署后切回来，路由和同步状态要重新取。
+let activatedOnce = false;
+onActivated(() => {
+  if (!activatedOnce) {
+    activatedOnce = true;
+    return;
+  }
+  void loadRoutes();
+});
 </script>
 
 <style scoped lang="scss">
@@ -186,6 +211,10 @@ onMounted(() => void loadHosts());
 
 .toolbar__method {
   width: 220px;
+}
+
+.snapshot-head__error {
+  color: rgb(var(--danger-6));
 }
 
 .tab-alert {

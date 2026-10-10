@@ -23,7 +23,7 @@ import (
 type setupDeployer interface {
 	Bootstrap(ctx context.Context, opts setupdeploy.BootstrapOptions) ([]setupdeploy.Result, error)
 	Deploy(ctx context.Context, hostID string, opts setupdeploy.Options) (setupdeploy.Result, error)
-	Rollback(ctx context.Context, hostID string) (string, error)
+	Rollback(ctx context.Context, hostID string, lockHeld bool) (string, error)
 	RunScript(ctx context.Context, hostID, script string, lockHeld bool, args ...string) (string, error)
 	Plan(hostID string) (release.Plan, error)
 }
@@ -300,17 +300,19 @@ func newSetupDeployServiceCommand(deps setupDeps) *cobra.Command {
 
 func newSetupRollbackCommand(deps setupDeps) *cobra.Command {
 	var file, hostID string
+	var lockHeld bool
 	cmd := &cobra.Command{
 		Use:   "rollback",
 		Short: "把主机切回上一个发布并重启组件",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runSetupHostAction(cmd, deps, file, hostID, func(ctx context.Context, deployer setupDeployer) (string, error) {
-				return deployer.Rollback(ctx, hostID)
+				return deployer.Rollback(ctx, hostID, lockHeld)
 			})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&hostID, "host", "", "主机 ID")
+	cmd.Flags().BoolVar(&lockHeld, "maintenance-lock-held", false, "操作员已在主机上持有维护锁（停机窗口里回滚），安装器不再加锁")
 	_ = cmd.MarkFlagRequired("host")
 	return cmd
 }

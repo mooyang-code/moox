@@ -193,3 +193,26 @@ func TestCheckIDRoundTrip(t *testing.T) {
 		require.False(t, ok, id)
 	}
 }
+
+// 旧版按服务部署记录生成的检查没有调度方：同步时连同告警规则、状态和结果一并删除。
+func TestSyncerRemovesLegacySysdeployChecks(t *testing.T) {
+	repos := testRepositories(t)
+	ctx := context.Background()
+	legacyID := "sysdeploy:storage-node:storage-view"
+	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{
+		CheckID: legacyID, Name: legacyID, Source: "sysdeploy", Enabled: true, IntervalSeconds: 30, TimeoutMS: 3000,
+	}))
+	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + legacyID, CheckID: legacyID, FailureThreshold: 3, SuccessThreshold: 2, Enabled: true}))
+	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + legacyID, CheckID: legacyID, Status: domain.AlertStatusFiring, DedupeKey: "default:" + legacyID}))
+
+	syncer := NewSyncer(repos.Checks, nil, nil)
+	_, err := syncer.SyncPlacements(ctx, productionHosts(), []*adminpb.DeployPlacement{placementRow("storage", "storage-view", StatusEnabled)})
+	require.NoError(t, err)
+
+	_, err = repos.Checks.Get(ctx, "", legacyID)
+	require.Error(t, err, "旧检查应当被删除")
+	_, err = repos.Alerts.GetState(ctx, "", "default:"+legacyID, legacyID)
+	require.Error(t, err, "旧检查的告警状态也应删除，否则健康概览会一直显示一条不会恢复的告警")
+	_, exists := checkState(t, repos, "storage", "storage-view")
+	require.True(t, exists, "新的部署检查不受影响")
+}

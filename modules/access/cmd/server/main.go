@@ -82,7 +82,8 @@ func run() error {
 		return err
 	}
 
-	s := trpc.NewServer(server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	// 不解压请求：帧头里声明的压缩方式由未认证的调用方决定，tRPC 会在验签之前先解压，压缩炸弹能让进程分配大量内存。
+	s := trpc.NewServer(server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithCurrentCompressType(codec.CompressTypeNoop))
 	if err := accessproxy.RegisterAccessService(s.Service(accessproxy.AccessServiceName), proxy); err != nil {
 		return fmt.Errorf("注册外部接入服务: %w", err)
 	}

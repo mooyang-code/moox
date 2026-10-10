@@ -70,6 +70,8 @@ func run() error {
 		return err
 	}
 
+	// 组件目录里 egress.Proxy 声明的请求体上限是 32 MiB，tRPC 默认单帧只有 10 MiB；与 gatewayclient 的取值一致。
+	trpc.DefaultMaxFrameSize = 40 * 1024 * 1024
 	s := trpc.NewServer()
 	service := s.Service(proxy.ServiceName)
 	if service == nil {

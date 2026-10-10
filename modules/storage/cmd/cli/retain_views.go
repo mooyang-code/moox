@@ -120,6 +120,10 @@ func ensureStorageViewStopped(packageRoot string) error {
 	if !strings.Contains(string(output), "storage-view: 未运行") {
 		return errors.New("无法确定 storage-view 的状态，拒绝执行 retain-views")
 	}
+	// 只停止不够：没有暂停标记时，健康检查会在整理元数据的过程中把 storage-view 重新拉起来。
+	if !strings.Contains(string(output), "已暂停") {
+		return errors.New("retain-views 之前必须先暂停 storage-view（pause.sh storage-view），否则健康检查会把它重新拉起")
+	}
 	return nil
 }
 

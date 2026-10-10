@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/report"
@@ -774,6 +775,13 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 		t.Fatal(err)
 	}
 	repositories := manager.Repositories()
+	// 上报方对应一条启用的部署检查：没有部署记录的上报行（部署已删除）不会告警。
+	if err := repositories.Checks.Create(t.Context(), &domain.Check{
+		CheckID: placement.CheckID("node-a", "collector"), Name: "collector", Source: domain.CheckSourcePlacement,
+		Enabled: true, IntervalSeconds: 30, TimeoutMS: 3000, Labels: `{"host_id":"node-a","component_id":"collector"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
 		Policy: report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{

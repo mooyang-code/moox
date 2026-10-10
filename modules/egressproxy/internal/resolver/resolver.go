@@ -100,6 +100,13 @@ func (r *Resolver) Resolve(ctx context.Context, domains []string, maxIPs int) ([
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// 先看数量再规范化：满帧的唯一域名列表规范化一遍就是上百兆的临时内存。
+	if len(domains) > 16 {
+		if r.cfg.Metrics != nil && r.cfg.Metrics.Failures != nil {
+			r.cfg.Metrics.Failures.Inc()
+		}
+		return nil, ErrInvalidDomain
+	}
 	normalized, err := normalizeDomains(domains)
 	if err != nil {
 		if r.cfg.Metrics != nil && r.cfg.Metrics.Failures != nil {

@@ -144,6 +144,7 @@
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { IconRefresh } from "@arco-design/web-vue/es/icon";
+import { reportControlError } from "@/api/admin/http";
 import { sysdeployApi } from "@/api/admin/sysdeploy";
 import type { CatalogComponent, DeployHost, DeployPlacement } from "@/api/admin/types";
 import { monitorApi, type HealthComponent, type HealthUnregistered } from "@/api/monitor";
@@ -244,7 +245,7 @@ async function togglePlacement(row: DeploymentRow, enabled: boolean) {
     void refresh();
     return true;
   } catch (err) {
-    Message.error(err instanceof Error ? err.message : "操作失败");
+    reportControlError(err);
     return false;
   }
 }
@@ -256,7 +257,7 @@ async function toggleHost(group: HostGroup) {
     Message.success(`主机 ${group.hostId} 已${group.enabled ? "停用" : "启用"}`);
     await refresh();
   } catch (err) {
-    Message.error(err instanceof Error ? err.message : "操作失败");
+    reportControlError(err);
   } finally {
     pendingHost.value = "";
   }

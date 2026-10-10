@@ -46,9 +46,9 @@ func TestStateHealthReadinessAndMetrics(t *testing.T) {
 		`host_gateway_upstream_failures_total{type="timeout"} 1`,
 		`host_gateway_requests_total{service="monitor",method="GetSnapshot",status="200"} 1`,
 		`host_gateway_request_duration_seconds_sum{service="monitor",method="GetSnapshot"} 0.25`,
-		"gateway_routes_current 2",
-		`gateway_route_info{route_hash="hash"} 1`,
-		"gateway_route_last_sync_timestamp_seconds 123",
+		"host_gateway_routes_current 2",
+		`host_gateway_route_info{route_hash="hash"} 1`,
+		"host_gateway_route_last_sync_timestamp_seconds 123",
 	} {
 		if !strings.Contains(metrics, want) {
 			t.Errorf("metrics missing %q:\n%s", want, metrics)

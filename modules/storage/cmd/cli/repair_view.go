@@ -833,6 +833,14 @@ func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, a
 	if packageRoot == "" {
 		return errors.New("存储部署根目录为空，请指定 --package-root")
 	}
+	// 破坏性操作期间组件必须保持停止：stop.sh 不写暂停标记，健康检查会在一分钟内把它重新拉起来，
+	// 所以停止用 pause.sh（写标记并停止），启动用 resume.sh（删标记并启动）。
+	switch action {
+	case "stop":
+		action = "pause"
+	case "start":
+		action = "resume"
+	}
 	script := filepath.Join(packageRoot, lifecycleDir, action+".sh")
 	if info, err := os.Stat(script); err != nil || info.IsDir() {
 		return fmt.Errorf("存储部署根目录 %s 下没有当前发布的 %s.sh", packageRoot, action)

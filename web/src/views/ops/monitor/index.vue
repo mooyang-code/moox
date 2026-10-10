@@ -285,7 +285,7 @@
       </section>
     </div>
 
-    <ComponentDrawer v-model:visible="drawerVisible" :component="selectedComponent" :now="now" />
+    <ComponentDrawer v-model:visible="drawerVisible" :component="drawerComponent" :now="now" />
     <NotificationModal v-model:visible="notificationVisible" @saved="refresh" />
   </div>
 </template>
@@ -338,7 +338,8 @@ const error = ref("");
 const now = ref(new Date());
 const notificationVisible = ref(false);
 const drawerVisible = ref(false);
-const selectedComponent = ref<HealthComponent | null>(null);
+// 只记住选中的部署（主机 + 组件）：抽屉里显示的内容取自最新一次轮询的结果，不会停在打开时的旧对象上。
+const selectedKey = ref<{ host?: string; component?: string } | null>(null);
 const chosenStage = ref("");
 const refreshGuard = createLatestRequestGuard();
 let timer: number | undefined;
@@ -351,7 +352,15 @@ const businessChecks = computed(() => overview.value.business_checks || []);
 const unregistered = computed(() => overview.value.unregistered || []);
 const matrix = computed(() => buildComponentMatrix(components.value));
 const componentAttention = computed(() => components.value.filter(item => isAttention(item.status)).length);
-const sentence = computed(() => (loaded.value ? overallSentence(overview.value) : "正在加载…"));
+const drawerComponent = computed<HealthComponent | null>(() => {
+  const key = selectedKey.value;
+  if (!key) return null;
+  return components.value.find(item => item.host_id === key.host && item.component_id === key.component) || null;
+});
+const sentence = computed(() => {
+  if (loaded.value) return overallSentence(overview.value);
+  return error.value ? "加载失败，请稍后重试" : "正在加载…";
+});
 const overallClass = computed(() => {
   if (!loaded.value) return "";
   if (alerts.value.length || overview.value.summary?.attention) return "overall--attention";
@@ -391,7 +400,7 @@ function businessRowKey(record: HealthBusinessCheck) {
 }
 
 function openComponent(component: HealthComponent) {
-  selectedComponent.value = component;
+  selectedKey.value = { host: component.host_id, component: component.component_id };
   drawerVisible.value = true;
 }
 

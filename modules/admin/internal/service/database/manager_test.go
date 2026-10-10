@@ -15,6 +15,11 @@ func TestMinInt(t *testing.T) {
 	assert.Equal(t, 5, minInt(5, 5))
 }
 
+// 写事务必须一开始就取写锁，否则并发的先读后写事务会在升级写锁时失败（SQLITE_BUSY_SNAPSHOT）。
+func TestBuildSQLiteDSNUsesImmediateTransactions(t *testing.T) {
+	assert.Contains(t, buildSQLiteDSN("/tmp/admin.db"), "_txlock=immediate")
+}
+
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
 	mgr := NewManager()

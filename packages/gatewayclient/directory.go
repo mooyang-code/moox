@@ -177,7 +177,8 @@ func (s *directoryState) refresh(ctx context.Context) error {
 			s.lastErr = errors.New("主机网关报告目录未变化，但本地没有目录")
 			return s.lastErr
 		}
-		if view.LocalHostID != "" {
+		// 隧道方式下操作员机器不是任何一台 MooX 主机，不记录响应里的本机 ID（那是 control 的 ID）。
+		if view.LocalHostID != "" && !s.tunnel {
 			s.view.LocalHostID = view.LocalHostID
 		}
 		return nil

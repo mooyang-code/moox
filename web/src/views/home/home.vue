@@ -404,6 +404,8 @@ const nodesTotal = ref<number | null>(null);
 // 服务健康来自 Monitor 的健康概览：每个部署（组件@主机）一条。
 const healthComponents = ref<HealthComponent[]>([]);
 const healthLoaded = ref(false);
+// Monitor 不可用时不能显示成"全部正常"。
+const healthFailed = ref(false);
 const hosts = ref<HostMetrics[]>([]);
 const hostsLoaded = ref(false);
 const serviceHealth = computed(() => {
@@ -488,15 +490,19 @@ const dashboardKpis = computed(() => [
   {
     key: "services",
     label: "服务在线",
-    value: healthLoaded.value ? String(serviceHealth.value.healthy) : "—",
-    unit: healthLoaded.value ? `/${serviceHealth.value.total}` : "",
+    value: healthLoaded.value && !healthFailed.value ? String(serviceHealth.value.healthy) : "—",
+    unit: healthLoaded.value && !healthFailed.value ? `/${serviceHealth.value.total}` : "",
     note: "健康的部署 / 启用的部署",
     delta: !healthLoaded.value
       ? "加载中"
-      : serviceHealth.value.attention
-        ? `${serviceHealth.value.attention} 个需关注`
-        : "全部正常",
-    tone: healthLoaded.value && serviceHealth.value.attention ? "warn" : "ok",
+      : healthFailed.value
+        ? "暂不可用"
+        : serviceHealth.value.attention
+          ? `${serviceHealth.value.attention} 个需关注`
+          : serviceHealth.value.total
+            ? "全部正常"
+            : "暂无部署",
+    tone: healthFailed.value || (healthLoaded.value && serviceHealth.value.attention) ? "warn" : "ok",
     path: "/ops/deployments"
   }
 ]);
@@ -732,9 +738,11 @@ async function loadGlobal() {
       .getOverview()
       .then(rsp => {
         healthComponents.value = rsp.overview?.components ?? [];
+        healthFailed.value = false;
       })
       .catch(() => {
         healthComponents.value = [];
+        healthFailed.value = true;
       })
       .finally(() => {
         healthLoaded.value = true;

@@ -123,3 +123,24 @@ func TestKeysRotateAndExport(t *testing.T) {
 	err = runKeysCommand([]string{"keys", "ensure", "--db-path", paths.db, "--encryption-key-file", paths.key, "--caller", "unknown-caller"}, &stdout, &stderr)
 	require.Error(t, err, "不在组件目录中的身份不能生成密钥")
 }
+
+// 某台主机违反目录规则时整体失败：前面已经写过的主机也不能留在库里，库不会停在只写了一半的状态。
+func TestBootstrapRollsBackAllHostsWhenOneIsInvalid(t *testing.T) {
+	paths := newBootstrapPaths(t)
+	invalid := `{"hosts":[
+ {"id":"control","address":"106.53.107.122","components":["console-proxy","web-host","admin","eventbus"]},
+ {"id":"storage","address":"146.56.196.204","components":["no-such-component"]}
+]}`
+	require.NoError(t, os.WriteFile(paths.spec, []byte(invalid), 0o600))
+	var stdout, stderr bytes.Buffer
+	err := runBootstrapCommand([]string{"bootstrap", "--db-path", paths.db, "--encryption-key-file", paths.key,
+		"--pki-dir", paths.pki, "--spec", paths.spec, "--out-dir", paths.out}, &stdout, &stderr)
+	require.Error(t, err)
+
+	db, err := openAdminCLIDBWithPragmas(paths.db)
+	require.NoError(t, err)
+	defer closeAdminCLIDB(db)
+	var hosts int64
+	require.NoError(t, db.Table("t_hosts").Count(&hosts).Error)
+	require.Zero(t, hosts, "control 已经写过，也要随失败一起回滚")
+}

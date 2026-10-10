@@ -64,7 +64,11 @@ func coveredBars(retention time.Duration, frequency frequencypkg.Frequency, sess
 		return float64(retention) / float64(bar)
 	}
 	tradingDays := retention.Hours() / 24 * 5 / 7
-	if bar >= 24*time.Hour {
+	if bar == 24*time.Hour {
+		// 日线：每个交易日一根。
+		return tradingDays
+	}
+	if bar > 24*time.Hour {
 		return tradingDays / (bar.Hours() / 24 * 5 / 7)
 	}
 	barsPerDay := float64(sessionMinutes) / bar.Minutes()

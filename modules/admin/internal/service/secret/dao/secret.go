@@ -19,6 +19,10 @@ import (
 // ErrSecretNotFound 秘钥不存在或已删除
 var ErrSecretNotFound = errors.New("secret not found or already deleted")
 
+// SystemSpaceID 是 MooX 自己管理的密钥所在的空间（网关调用方签名密钥、外部接入调用方密钥）。
+// 这些密钥只能通过 keys 服务读写，秘钥管理接口不得看到或修改它们。
+const SystemSpaceID = "mooxsys"
+
 // ErrMaskedValue 秘钥值包含脱敏字符，拒绝加密
 var ErrMaskedValue = errors.New("secret_value is a masked value, refusing to encrypt")
 
@@ -117,6 +121,8 @@ type SecretFilters struct {
 	Category string
 	Provider string
 	Status   string
+	// ExcludeSpaceID 非空时排除该空间的秘钥。
+	ExcludeSpaceID string
 }
 
 // applyFilters 应用查询过滤条件
@@ -135,6 +141,9 @@ func (d *SecretDAO) applyFilters(db *gorm.DB, f *SecretFilters) *gorm.DB {
 	}
 	if f.Status != "" {
 		db = db.Where("c_status = ?", f.Status)
+	}
+	if f.ExcludeSpaceID != "" {
+		db = db.Where("c_space_id <> ?", f.ExcludeSpaceID)
 	}
 	return db
 }

@@ -71,7 +71,8 @@ func TestResolveRepairPackageRootWalksUpFromStorageConfig(t *testing.T) {
 func TestRunStorageComponentLifecycleUsesCurrentRelease(t *testing.T) {
 	root := t.TempDir()
 	record := filepath.Join(root, "calls.txt")
-	writeLifecycleScript(t, root, "stop.sh", `echo "stop $@ $(pwd)" >> `+record)
+	// stop 对应 pause.sh、start 对应 resume.sh：停止时要写暂停标记，健康检查才不会把组件重新拉起来。
+	writeLifecycleScript(t, root, "pause.sh", `echo "pause $@ $(pwd)" >> `+record)
 	var stderr bytes.Buffer
 	if err := runStorageComponentLifecycle(context.Background(), root, "stop", "storage-view", &stderr); err != nil {
 		t.Fatalf("stop: %v", err)
@@ -85,12 +86,12 @@ func TestRunStorageComponentLifecycleUsesCurrentRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "stop storage-view " + realRoot; strings.TrimSpace(string(raw)) != want {
+	if want := "pause storage-view " + realRoot; strings.TrimSpace(string(raw)) != want {
 		t.Fatalf("脚本调用 = %q, want %q", strings.TrimSpace(string(raw)), want)
 	}
 	if err := runStorageComponentLifecycle(context.Background(), root, "start", "storage-view", &stderr); err == nil ||
-		!strings.Contains(err.Error(), "start.sh") {
-		t.Fatalf("没有当前发布的 start.sh 时应报错，got %v", err)
+		!strings.Contains(err.Error(), "resume.sh") {
+		t.Fatalf("没有当前发布的 resume.sh 时应报错，got %v", err)
 	}
 }
 

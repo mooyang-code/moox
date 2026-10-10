@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
+	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -130,7 +131,6 @@ func (p *Proxy) forward(ctx context.Context, request *codec.Body, principal, ser
 	if !ok {
 		return nil, errs.New(gatewayroute.RetServiceNotHere, fmt.Sprintf("无效的 RPC 名 %q", msg.ServerRPCName()))
 	}
-	*servicePath, *method = service, rpc
 	if int64(len(request.Data)) > p.maxBodyBytes {
 		p.rejected(*principal, ReasonTooLarge)
 		return nil, errs.New(gatewayroute.RetBodyTooLarge, fmt.Sprintf("请求体超过 %d 字节", p.maxBodyBytes))
@@ -151,17 +151,22 @@ func (p *Proxy) forward(ctx context.Context, request *codec.Body, principal, ser
 		Callee: service, Func: rpc, Body: request.Data,
 	}, headers, p.now())
 	if err != nil {
+		// 校验失败的原因（未知 KeyID、时间窗、签名不符）不返回给未认证的调用方，免得被用来枚举密钥。
+		log.Warnf("外部接入签名校验失败: %v", err)
 		p.rejected(*principal, ReasonUnauthenticated)
-		return nil, errs.New(gatewayroute.RetUnauthenticated, "外部调用方签名校验失败: "+err.Error())
+		return nil, errs.New(gatewayroute.RetUnauthenticated, "外部调用方签名校验失败")
 	}
 	*principal = claims.Caller
 	if !p.catalog.PrincipalAllowed(claims.Caller, service, rpc) {
 		p.rejected(*principal, ReasonForbidden)
 		return nil, errs.New(gatewayroute.RetForbidden, fmt.Sprintf("外部调用方 %s 不能调用 %s/%s", claims.Caller, service, rpc))
 	}
+	// 指标的服务名和方法名只在通过白名单之后才使用：未认证的请求可以带任意 RPC 名，直接作标签会无限增加序列。
+	*servicePath, *method = service, rpc
 	consumed, err := p.nonces.Consume(ctx, nonceNamespace, claims.Nonce, claims.TTL)
 	if err != nil {
-		return nil, errs.New(errs.RetServerSystemErr, "外部接入无法登记 nonce: "+err.Error())
+		log.Errorf("外部接入无法登记 nonce: %v", err)
+		return nil, errs.New(errs.RetServerSystemErr, "外部接入无法登记 nonce")
 	}
 	if !consumed {
 		p.rejected(*principal, ReasonReplayed)
@@ -185,6 +190,12 @@ func (p *Proxy) forward(ctx context.Context, request *codec.Body, principal, ser
 	}
 	out, err := p.upstream.Forward(ctx, service, rpc, msg.SerializationType(), request.Data, opts...)
 	if err != nil {
+		// 框架层的错误（连接被拒、超时）带着内网地址和端口，不能原样返回给外部调用方；网关与服务自己的错误码照常透传。
+		var frameworkErr *errs.Error
+		if errors.As(err, &frameworkErr) && frameworkErr.Type == errs.ErrorTypeFramework {
+			log.Warnf("外部接入访问 %s/%s 失败: %v", service, rpc, err)
+			return nil, errs.New(errs.RetServerSystemErr, "外部接入访问上游失败")
+		}
 		return nil, err
 	}
 	if int64(len(out)) > p.maxBodyBytes {

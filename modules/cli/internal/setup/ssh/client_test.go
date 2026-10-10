@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	xssh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type sshFixture struct {
@@ -308,4 +309,27 @@ func TestUploadReplacesExistingFile(t *testing.T) {
 	info, err := os.Stat(destination)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+// known_hosts 里已有这台主机的另一把密钥（主机重装或被冒充）：要报密钥变更，信任命令也不能追加第二把密钥。
+func TestChangedHostKeyIsReportedAndNotTrusted(t *testing.T) {
+	fixture := startSSHFixture(t)
+	knownHosts := knownHostsFile(t)
+	otherPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	otherKey, err := xssh.NewPublicKey(otherPublic)
+	require.NoError(t, err)
+	line := knownhosts.Line([]string{knownhosts.Normalize(fixture.target.DialAddress())}, otherKey) + "\n"
+	require.NoError(t, os.WriteFile(knownHosts, []byte(line), 0o600))
+
+	_, err = Dial(context.Background(), fixture.target, fixture.password, Options{KnownHostsPath: knownHosts})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHostKeyChanged)
+	assert.NotErrorIs(t, err, ErrHostKeyUnknown)
+
+	err = TrustHost(context.Background(), fixture.target, xssh.FingerprintSHA256(fixture.publicKey), Options{KnownHostsPath: knownHosts})
+	assert.ErrorIs(t, err, ErrHostKeyChanged)
+	contents, readErr := os.ReadFile(knownHosts)
+	require.NoError(t, readErr)
+	assert.Equal(t, line, string(contents), "拒绝信任时 known_hosts 不能被改动")
 }

@@ -8,9 +8,9 @@ import "google/protobuf/struct.proto";
 option go_package = "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen;cloudnodepb";
 
 // CloudNodeMgr 管理云账号、云函数代码包、云函数节点及其批量变更和调用。
-// 纯 RPC 服务，由统一 HTTP 转发层调度：
-//   - /api/admin/cloudnode/{method}（JWT，面向前端；space_id 由网关 X-Space-Id 注入 ctx）
-//   - /api/service/cloudnode/{method}（HMAC，面向 collector/外部工具；space_id 在 body）
+// 纯 RPC 服务，由主机网关按组件目录路由：
+//   - /api/admin/cloudnode/{method}（JWT，面向前端，经控制台转发；space_id 由 X-Space-Id 注入 ctx）
+//   - 内部调用方（collector、moox-cli 等）经 gatewayclient 签名调用；space_id 在 body
 //
 // 响应设计：每个响应首字段 common.RetInfo（code/msg），code=SUCCESS(0) 表示成功。
 

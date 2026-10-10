@@ -662,14 +662,23 @@ func TestAccessConfigFromEnv(t *testing.T) {
 	}
 }
 
-func TestRemoteAddressPrefersPrivateNetworkInSameRegion(t *testing.T) {
+// 主机之间一律走公网地址：防火墙只放行其他主机的公网地址，地域和私网地址只用来让 SCF 就近访问外部接入。
+func TestRemoteAddressAlwaysUsesPublicAddress(t *testing.T) {
 	storage := servicecatalog.DirectoryHost{ID: "storage", Address: "146.56.196.204", PrivateAddress: "10.206.0.5", Region: "ap-nanjing"}
 	sameRegion := servicecatalog.DirectoryHost{ID: "x", Address: "1.1.1.1", PrivateAddress: "10.206.0.9", Region: "ap-nanjing"}
 	control := servicecatalog.DirectoryHost{ID: "control", Address: "106.53.107.122"}
-	if got := defaultRemoteAddress(sameRegion, storage); got != "10.206.0.5:11003" {
-		t.Fatalf("同地域应当走私网: %s", got)
+	for _, local := range []servicecatalog.DirectoryHost{sameRegion, control} {
+		if got := defaultRemoteAddress(local, storage); got != "146.56.196.204:11003" {
+			t.Fatalf("%s 访问 storage 应当走公网地址: %s", local.ID, got)
+		}
 	}
-	if got := defaultRemoteAddress(control, storage); got != "146.56.196.204:11003" {
-		t.Fatalf("跨地域应当走公网: %s", got)
+}
+
+func TestConfigRejectsCAFileValuesThatDisableVerification(t *testing.T) {
+	for _, value := range []string{"none", "root", "/a/ca.pem:/b/other.pem"} {
+		config := Config{Mode: ModeLocal, Caller: "collector", CAFile: value, CacheDir: t.TempDir()}
+		if err := config.Validate(); err == nil {
+			t.Fatalf("ca_file %q 应当被拒绝", value)
+		}
 	}
 }

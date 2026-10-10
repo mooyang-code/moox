@@ -131,19 +131,25 @@ func bootstrap(ctx context.Context, dbPath, pkiDir, outDir string, spec Bootstra
 	sort.SliceStable(hosts, func(i, j int) bool {
 		return hosts[i].ID == servicecatalog.ControlHostID && hosts[j].ID != servicecatalog.ControlHostID
 	})
-	placements := placement.NewService(db, nil)
 	result := bootstrapResult{Status: "ok", CACreated: caCreated, OutDir: outDir}
 	var control BootstrapHost
-	for _, host := range hosts {
-		if _, err := placements.SyncHostPlacements(ctx, placement.HostSpec{
-			HostID: host.ID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
-		}, host.Components); err != nil {
-			return bootstrapResult{}, fmt.Errorf("写入主机 %s: %w", host.ID, err)
+	// 所有主机在同一个事务里写入：第 3 台主机违反目录规则时，前面的主机不留在库里，库不会停在只写了一半的状态。
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		placements := placement.NewService(tx, nil)
+		for _, host := range hosts {
+			if _, err := placements.SyncHostPlacements(ctx, placement.HostSpec{
+				HostID: host.ID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
+			}, host.Components); err != nil {
+				return fmt.Errorf("写入主机 %s: %w", host.ID, err)
+			}
+			result.HostsSynced = append(result.HostsSynced, host.ID)
+			if host.ID == servicecatalog.ControlHostID {
+				control = host
+			}
 		}
-		result.HostsSynced = append(result.HostsSynced, host.ID)
-		if host.ID == servicecatalog.ControlHostID {
-			control = host
-		}
+		return nil
+	}); err != nil {
+		return bootstrapResult{}, err
 	}
 
 	keyService := keys.NewService(secretdao.NewSecretDAO(db))

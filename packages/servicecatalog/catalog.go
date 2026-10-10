@@ -10,7 +10,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 
@@ -240,12 +239,6 @@ func (c *Catalog) Service(path string) (*Service, *Component, bool) {
 	return service, c.components[c.serviceOwner[path]], true
 }
 
-// HasRPC 判断服务是否声明了这个方法。
-func (c *Catalog) HasRPC(servicePath, method string) bool {
-	_, ok := c.acl[servicePath][method]
-	return ok
-}
-
 // IsReadOnly 判断方法是否为幂等读：只有这类方法允许失败后重试。
 func (s *Service) IsReadOnly(method string) bool {
 	for _, name := range s.ReadOnly {
@@ -262,31 +255,11 @@ func (c *Catalog) IsReadOnly(servicePath, method string) bool {
 	return ok && service.IsReadOnly(method)
 }
 
-// HasRPC 判断服务是否声明了这个方法。
-func (s *Service) HasRPC(method string) bool {
-	for _, name := range s.RPCs {
-		if name == method {
-			return true
-		}
-	}
-	return false
-}
-
 // ConsoleTarget 把浏览器侧的 /api/admin/<console_name>/<方法> 映射到 tRPC 服务。
 // 只返回放行 console 的方法。
 func (c *Catalog) ConsoleTarget(consoleName, method string) (string, bool) {
 	path, ok := c.consoleRoutes[consoleName][method]
 	return path, ok
-}
-
-// ConsoleNames 返回全部浏览器侧服务名，已排序。
-func (c *Catalog) ConsoleNames() []string {
-	names := make([]string, 0, len(c.consoleRoutes))
-	for name := range c.consoleRoutes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // Principal 按 ID 查找外部调用方。

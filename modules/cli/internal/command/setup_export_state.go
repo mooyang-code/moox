@@ -76,6 +76,10 @@ func newSetupExportStateCommand(deps setupDeps) *cobra.Command {
 			if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
 				return err
 			}
+			// 已存在的文件不会被 WriteFile 改权限：先删除再以 0600 新建，保证文件里的密钥不会以宽松权限落盘。
+			if err := os.Remove(out); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 			if err := os.WriteFile(out, append(raw, '\n'), 0o600); err != nil {
 				return err
 			}

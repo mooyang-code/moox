@@ -123,7 +123,7 @@ func (d *Deployer) runAdminBootstrap(ctx context.Context) error {
 		return err
 	}
 	defer transport.Close()
-	remoteSpec := "/tmp/moox-bootstrap-spec-" + d.releaseID() + ".json"
+	remoteSpec := "/tmp/moox-bootstrap-spec-" + d.releaseID() + "-" + randomToken() + ".json"
 	if err := transport.Upload(ctx, bytes.NewReader(spec), int64(len(spec)), remoteSpec, 0o600); err != nil {
 		return fmt.Errorf("上传部署表: %w", err)
 	}

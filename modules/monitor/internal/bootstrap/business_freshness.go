@@ -422,6 +422,11 @@ func serviceDeploymentExpected(
 	return !found, nil
 }
 
+// externalProducers 是没有部署记录、从 MooX 主机之外上报指标的组件（组件目录中的外部调用方）。
+var externalProducers = map[string]struct{}{
+	"scf-collector": {},
+}
+
 func reporterDeploymentExpected(
 	ctx context.Context,
 	checks *store.CheckRepository,
@@ -435,8 +440,10 @@ func reporterDeploymentExpected(
 	case err == nil:
 		return check.Enabled, nil
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		// 外部上报方（例如 SCF 采集函数）没有部署检查。
-		return true, nil
+		// 外部上报方（例如 SCF 采集函数）没有部署检查，上报中断照常告警；其余组件查不到检查说明部署已经删除，
+		// 目录里残留的旧上报行不能再触发告警。
+		_, external := externalProducers[service.ServiceName]
+		return external, nil
 	default:
 		return false, err
 	}

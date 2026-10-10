@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
@@ -65,7 +66,9 @@ func loadState(tx *gorm.DB) (state, error) {
 	return out, nil
 }
 
-func (st state) deployment() servicecatalog.Deployment {
+// deployment 转成目录校验和编译用的部署。库里残留的、组件目录已经没有的组件（例如目录升级时改名）
+// 不参与校验和编译，否则一条残留行会让所有主机的同步、启停和快照编译都失败；对该主机重新同步时它会被清掉。
+func (st state) deployment(known func(componentID string) bool) servicecatalog.Deployment {
 	deployment := servicecatalog.Deployment{}
 	for _, host := range st.hosts {
 		deployment.Hosts = append(deployment.Hosts, servicecatalog.Host{
@@ -74,6 +77,9 @@ func (st state) deployment() servicecatalog.Deployment {
 		})
 	}
 	for _, placement := range st.placements {
+		if !known(placement.ComponentID) {
+			continue
+		}
 		deployment.Placements = append(deployment.Placements, servicecatalog.Placement{
 			HostID: placement.HostID, ComponentID: placement.ComponentID, Enabled: placement.Status == StatusEnabled,
 		})
@@ -99,8 +105,13 @@ func (st state) placement(hostID, componentID string) (Placement, bool) {
 	return Placement{}, false
 }
 
+func (s *Service) knownComponent(componentID string) bool {
+	_, ok := s.catalog.Component(componentID)
+	return ok
+}
+
 func (s *Service) validate(st state) error {
-	if err := s.catalog.ValidateDeployment(st.deployment()); err != nil {
+	if err := s.catalog.ValidateDeployment(st.deployment(s.knownComponent)); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return nil
@@ -112,7 +123,7 @@ func (s *Service) Deployment(ctx context.Context) (servicecatalog.Deployment, er
 	if err != nil {
 		return servicecatalog.Deployment{}, err
 	}
-	return st.deployment(), nil
+	return st.deployment(s.knownComponent), nil
 }
 
 // Compile 按当前部署编译服务目录和每台主机的路由。
@@ -198,7 +209,7 @@ func (s *Service) SetHostStatus(ctx context.Context, hostID, status string) (Hos
 	return updated, err
 }
 
-// SetPlacementStatus 启用或停用一条部署；受保护的组件不能停用。「主机」范围的组件没有记录时自动补上。
+// SetPlacementStatus 启用或停用一条部署；受保护的组件不能停用，「主机」范围的组件（主机网关、主机采集器）随主机部署，不能单独启停。
 func (s *Service) SetPlacementStatus(ctx context.Context, hostID, componentID, status string) (Placement, error) {
 	if !validStatus(status) {
 		return Placement{}, invalid("状态 %q 无效，可选 enabled、disabled", status)
@@ -213,15 +224,14 @@ func (s *Service) SetPlacementStatus(ctx context.Context, hostID, componentID, s
 			return fmt.Errorf("%w: 主机 %s", ErrNotFound, hostID)
 		}
 		component, known := s.catalog.Component(componentID)
+		if known && component.Scope == servicecatalog.ScopeHost {
+			return invalid("组件 %s 是主机组件，随主机自动部署，不能单独启停；要停用整台主机请用主机的状态", componentID)
+		}
 		current, exists := st.placement(hostID, componentID)
-		if !exists && !(known && component.Scope == servicecatalog.ScopeHost) {
+		if !exists {
 			return fmt.Errorf("%w: 主机 %s 上没有组件 %s 的部署", ErrNotFound, hostID, componentID)
 		}
 		now := s.now()
-		if !exists {
-			current = Placement{HostID: hostID, ComponentID: componentID, CreatedAt: now}
-			st.placements = append(st.placements, current)
-		}
 		for i := range st.placements {
 			if st.placements[i].HostID == hostID && st.placements[i].ComponentID == componentID {
 				st.placements[i].Status = status
@@ -231,11 +241,7 @@ func (s *Service) SetPlacementStatus(ctx context.Context, hostID, componentID, s
 			return err
 		}
 		current.Status, current.UpdatedAt = status, now
-		if !exists {
-			if err := tx.Create(&current).Error; err != nil {
-				return fmt.Errorf("写入部署 %s/%s: %w", hostID, componentID, err)
-			}
-		} else if err := tx.Model(&Placement{}).Where("c_host_id = ? AND c_component_id = ?", hostID, componentID).
+		if err := tx.Model(&Placement{}).Where("c_host_id = ? AND c_component_id = ?", hostID, componentID).
 			Updates(map[string]any{"c_status": status, "c_mtime": now}).Error; err != nil {
 			return fmt.Errorf("更新部署 %s/%s: %w", hostID, componentID, err)
 		}
@@ -424,6 +430,10 @@ func (s *Service) RecordGatewayReport(ctx context.Context, report GatewayReport)
 	if strings.TrimSpace(report.InstanceID) == "" {
 		return GatewayStatus{}, invalid("心跳缺少实例 ID")
 	}
+	// 心跳里的字符串来自主机上的进程：限制长度，已认证的网关也不能往库里写超大的内容。
+	report.InstanceID = truncateText(report.InstanceID, 128)
+	report.Version = truncateText(report.Version, 64)
+	report.LastError = truncateText(report.LastError, 1024)
 	var saved GatewayStatus
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row, err := loadGatewayStatus(tx, report.HostID)
@@ -510,4 +520,16 @@ func sortedKeys(set map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// truncateText 把字符串截到最多 limit 个字节，不切断多字节字符。
+func truncateText(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }

@@ -41,12 +41,15 @@ func (c *Client) DeleteFirewallRules(ctx context.Context, instanceID string, rul
 // SecurityGroupIngress 是云服务器安全组中的一条入站规则。
 type SecurityGroupIngress struct {
 	SecurityGroupID string `json:"security_group_id"`
-	PolicyIndex     int64  `json:"policy_index"`
-	Protocol        string `json:"protocol"`
-	Port            string `json:"port"`
-	CidrBlock       string `json:"cidr_block"`
-	Action          string `json:"action"`
-	Description     string `json:"description"`
+	// PolicyVersion 是读取时安全组规则的版本号，删除时带上它：期间规则被别人改过（序号随之变化）则删除被拒绝，
+	// 不会按失效的序号删掉别的规则。
+	PolicyVersion string `json:"policy_version"`
+	PolicyIndex   int64  `json:"policy_index"`
+	Protocol      string `json:"protocol"`
+	Port          string `json:"port"`
+	CidrBlock     string `json:"cidr_block"`
+	Action        string `json:"action"`
+	Description   string `json:"description"`
 }
 
 type vpcIngressPolicy struct {
@@ -70,6 +73,7 @@ func (c *CVMClient) ListSecurityGroupIngress(ctx context.Context, publicIP strin
 			Response struct {
 				Error                  *apiError `json:"Error,omitempty"`
 				SecurityGroupPolicySet struct {
+					Version string             `json:"Version"`
 					Ingress []vpcIngressPolicy `json:"Ingress"`
 				} `json:"SecurityGroupPolicySet"`
 			} `json:"Response"`
@@ -84,7 +88,7 @@ func (c *CVMClient) ListSecurityGroupIngress(ctx context.Context, publicIP strin
 		}
 		for _, policy := range policies.Response.SecurityGroupPolicySet.Ingress {
 			out = append(out, SecurityGroupIngress{
-				SecurityGroupID: groupID, PolicyIndex: policy.PolicyIndex, Protocol: policy.Protocol, Port: policy.Port,
+				SecurityGroupID: groupID, PolicyVersion: policies.Response.SecurityGroupPolicySet.Version, PolicyIndex: policy.PolicyIndex, Protocol: policy.Protocol, Port: policy.Port,
 				CidrBlock: policy.CidrBlock, Action: policy.Action, Description: policy.PolicyDescription,
 			})
 		}
@@ -94,7 +98,7 @@ func (c *CVMClient) ListSecurityGroupIngress(ctx context.Context, publicIP strin
 
 // DeleteSecurityGroupIngress 按序号删除一个安全组中的入站规则。序号取自 ListSecurityGroupIngress，同一个安全组的规则
 // 一次删完，避免删除后序号变化。
-func (c *CVMClient) DeleteSecurityGroupIngress(ctx context.Context, groupID string, indexes []int64) error {
+func (c *CVMClient) DeleteSecurityGroupIngress(ctx context.Context, groupID, version string, indexes []int64) error {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
 		return fmt.Errorf("security group id is required")
@@ -113,7 +117,7 @@ func (c *CVMClient) DeleteSecurityGroupIngress(ctx context.Context, groupID stri
 	}
 	if err := c.do(ctx, "vpc", vpcVersion, "DeleteSecurityGroupPolicies", c.endpointFor("vpc"), map[string]any{
 		"SecurityGroupId":        groupID,
-		"SecurityGroupPolicySet": map[string]any{"Ingress": ingress},
+		"SecurityGroupPolicySet": map[string]any{"Version": version, "Ingress": ingress},
 	}, &response); err != nil {
 		return err
 	}

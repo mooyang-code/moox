@@ -79,7 +79,9 @@ EOF
 
 # make_release <版本> [--bad-beta]：生成发布包 ${WORK}/<版本>.tar.gz，--bad-beta 时发布中没有 beta 的二进制，启动失败。
 make_release() {
-  local id="$1" bad="${2:-}" stage="${WORK}/stage-${id}" script
+  local id="$1" bad="${2:-}"
+  # 分两条 local：同一条语句里 stage 引用 ${id} 时拿到的是调用方的旧值，不是刚赋的值。
+  local stage="${WORK}/stage-${id}" script
   mkdir -p "${stage}/runtime" "${stage}/bin" "${stage}/lib"
   for script in install.sh start.sh stop.sh restart.sh status.sh healthcheck.sh pause.sh resume.sh; do
     cp "${RUNTIME}/${script}" "${stage}/${script}"
@@ -90,6 +92,19 @@ make_release() {
   printf 'alpha\nbeta\n' >"${stage}/runtime/components"
   component_spec alpha >"${stage}/runtime/alpha.env"
   component_spec beta >"${stage}/runtime/beta.env"
+  if [[ "${bad}" == --hooks ]]; then
+    # 启动前、就绪后的钩子要能读到组件的密钥环境变量（register-node 这类命令行工具依赖它），并使用固定的 PATH。
+    cat >>"${stage}/runtime/alpha.env" <<'HOOKS'
+COMPONENT_SECRET_ENV=('hook.env')
+component_prestart() {
+  printf '%s' "${MOOX_HOOK_SECRET:-}" >"${ROOT}/data/alpha/prestart-secret.txt"
+  printf '%s' "${PATH}" >"${ROOT}/data/alpha/prestart-path.txt"
+}
+component_poststart() {
+  printf '%s' "${MOOX_HOOK_SECRET:-}" >"${ROOT}/data/alpha/poststart-secret.txt"
+}
+HOOKS
+  fi
   cp "${FAKE}" "${stage}/bin/moox-test-alpha"
   if [[ "${bad}" == --bad-beta ]]; then
     printf 'moox-test-alpha\n' >"${stage}/runtime/binaries"
@@ -134,6 +149,7 @@ for id in r1 r2 r3 r4 r5 r6; do
   make_release "${id}"
 done
 make_release r7 --bad-beta
+make_release r8 --hooks
 
 # 1. 首次安装：全部组件启动，根目录有转到当前发布的脚本。
 install_release r1 >/dev/null
@@ -241,6 +257,34 @@ bash "${HOST_ROOT}/current/install.sh" --root "${HOST_ROOT}" --rollback >/dev/nu
 running alpha && running beta || fail "回滚后组件应在运行"
 [[ "$(release_of alpha)" == r5 && "$(release_of beta)" == r5 ]] || fail "回滚后组件应运行在 r5"
 pass "回滚切回上一个发布"
+
+# 12. 持锁时回滚不死锁（停机窗口里回滚）。
+exec 7>"${HOST_ROOT}.maintenance.lock"
+flock 7
+timeout 60 bash "${HOST_ROOT}/current/install.sh" --root "${HOST_ROOT}" --rollback --maintenance-lock-held >/dev/null \
+  || fail "持锁时带 --maintenance-lock-held 的回滚没有完成"
+flock -u 7
+exec 7>&-
+[[ "$(current_release)" == r6 ]] || fail "持锁回滚后 current 应指向 r6（上一次回滚离开的发布），当前是 $(current_release)"
+pass "--maintenance-lock-held 时回滚不死锁"
+
+# 13. 钩子：启动前、就绪后的钩子读得到密钥环境变量，PATH 是固定值；密钥文件缺失时组件不启动。
+mkdir -p "${HOST_ROOT}/secrets"
+printf 'MOOX_HOOK_SECRET=hook-secret-value\n' >"${HOST_ROOT}/secrets/hook.env"
+chmod 0600 "${HOST_ROOT}/secrets/hook.env"
+install_release r8 --components alpha >/dev/null
+[[ "$(cat "${HOST_ROOT}/data/alpha/prestart-secret.txt")" == hook-secret-value ]] || fail "启动前的钩子读不到密钥环境变量"
+[[ "$(cat "${HOST_ROOT}/data/alpha/poststart-secret.txt")" == hook-secret-value ]] || fail "就绪后的钩子读不到密钥环境变量"
+[[ "$(cat "${HOST_ROOT}/data/alpha/prestart-path.txt")" == /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ]] \
+  || fail "钩子的 PATH 不是固定值"
+[[ "$(stat -c %a "${HOST_ROOT}/data/alpha")" == 700 ]] || fail "新建的数据目录应只给属主访问"
+rm -f "${HOST_ROOT}/secrets/hook.env"
+"${HOST_ROOT}/stop.sh" alpha >/dev/null
+if "${HOST_ROOT}/start.sh" alpha >/dev/null 2>&1; then
+  fail "密钥文件缺失时组件不应启动"
+fi
+running alpha && fail "密钥文件缺失时 alpha 不应在运行"
+pass "钩子读得到密钥环境变量，密钥文件缺失时拒绝启动"
 
 "${HOST_ROOT}/stop.sh" >/dev/null
 running alpha && fail "stop.sh 后 alpha 仍在运行"

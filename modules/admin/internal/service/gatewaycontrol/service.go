@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 // Service 实现 GatewayControl。
@@ -132,6 +134,14 @@ func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*p
 func authorize(ctx context.Context, hostID string) error {
 	if hostID == "" {
 		return errors.New("缺少主机 ID")
+	}
+	// 网关控制只在本机回环上提供：对端不是回环地址说明监听配置漂移到了外部地址，此时元数据没有任何可信度。
+	if remote := codec.Message(ctx).RemoteAddr(); remote != nil {
+		if host, _, err := net.SplitHostPort(remote.String()); err == nil {
+			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+				return fmt.Errorf("网关控制只接受本机回环地址的调用，对端是 %s", remote)
+			}
+		}
 	}
 	caller := strings.TrimSpace(string(trpc.GetMetaData(ctx, gatewayroute.MetadataVerifiedCaller)))
 	if want := servicecatalog.HostGatewayIdentity(hostID); caller != want {

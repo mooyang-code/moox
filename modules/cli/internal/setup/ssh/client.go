@@ -25,6 +25,7 @@ import (
 
 var (
 	ErrHostKeyUnknown      = errors.New("host_key_unknown")
+	ErrHostKeyChanged      = errors.New("host_key_changed")
 	ErrFingerprintMismatch = errors.New("host_key_fingerprint_mismatch")
 	ErrAuthFailed          = errors.New("ssh_auth_failed")
 	ErrUnreachable         = errors.New("ssh_unreachable")
@@ -91,6 +92,11 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 	}
 	wrappedCallback := func(hostname string, remote net.Addr, key xssh.PublicKey) error {
 		if err := callback(hostname, remote, key); err != nil {
+			// known_hosts 里已有这台主机的另一把密钥：主机被重装，或者连到了冒充者。和"第一次连接"分开报告。
+			var keyErr *knownhosts.KeyError
+			if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+				return fmt.Errorf("%w: %s", ErrHostKeyChanged, xssh.FingerprintSHA256(key))
+			}
 			return fmt.Errorf("%w: %s", ErrHostKeyUnknown, xssh.FingerprintSHA256(key))
 		}
 		return nil
@@ -104,7 +110,7 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 	connection, err := dialContext(ctx, target.DialAddress(), config, timeout(opts))
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrHostKeyUnknown):
+		case errors.Is(err, ErrHostKeyUnknown), errors.Is(err, ErrHostKeyChanged):
 			return nil, err
 		case isAuthenticationError(err):
 			return nil, ErrAuthFailed
@@ -143,6 +149,14 @@ func TrustHost(ctx context.Context, target Target, expectedFingerprint string, o
 	}
 	if !errors.Is(err, errHostKeyCaptured) || captured == nil {
 		return ErrUnreachable
+	}
+	// known_hosts 里已有这台主机的另一把密钥时拒绝追加：追加会让两把密钥都被接受，等于绕过了密钥变更告警。
+	// 主机确实重装过，由操作员核对后手工删除旧条目再信任。
+	if existing, err := knownhosts.New(knownHostsPath); err == nil {
+		var keyErr *knownhosts.KeyError
+		if checkErr := existing(knownhosts.Normalize(target.DialAddress()), &net.TCPAddr{}, captured); errors.As(checkErr, &keyErr) && len(keyErr.Want) > 0 {
+			return ErrHostKeyChanged
+		}
 	}
 	line := knownhosts.Line([]string{knownhosts.Normalize(target.DialAddress())}, captured) + "\n"
 	f, err := os.OpenFile(knownHostsPath, os.O_WRONLY|os.O_APPEND, 0o600)
@@ -312,6 +326,12 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	}
 	fileOpen := true
 	removeTemporary := true
+	// 发布包里有全部密钥：写入任何内容之前先收紧权限，不能等写完再 chmod（服务端按 umask 创建，通常是 0644）。
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		_ = client.Remove(temporary)
+		return fmt.Errorf("ssh_upload_failed: 无法收紧临时文件权限: %w", err)
+	}
 	defer func() {
 		if fileOpen {
 			_ = file.Close()

@@ -403,15 +403,27 @@ func (c *setupFirewallCloud) syncCVM(ctx context.Context, item *setupFirewallHos
 		item.Created = append(item.Created, entry)
 	}
 	if opts.Prune && len(obsolete) > 0 {
-		byGroup := map[string][]int64{}
-		for _, policy := range policies {
+		// 新增规则之后重新读取：规则序号会随新增、别人的修改而变化，按新增之前读到的序号删除可能删错规则。
+		latest, err := client.ListSecurityGroupIngress(ctx, item.Address)
+		if err != nil {
+			return fmt.Errorf("删除前重新读取安全组规则: %w", err)
+		}
+		type group struct {
+			version string
+			indexes []int64
+		}
+		byGroup := map[string]*group{}
+		for _, policy := range latest {
 			entry := setupFirewallEntry{Port: policy.Port, Source: normalizeFirewallSource(policy.CidrBlock)}
 			if strings.EqualFold(policy.Protocol, "TCP") && strings.EqualFold(policy.Action, "ACCEPT") && containsFirewallEntry(obsolete, entry) {
-				byGroup[policy.SecurityGroupID] = append(byGroup[policy.SecurityGroupID], policy.PolicyIndex)
+				if byGroup[policy.SecurityGroupID] == nil {
+					byGroup[policy.SecurityGroupID] = &group{version: policy.PolicyVersion}
+				}
+				byGroup[policy.SecurityGroupID].indexes = append(byGroup[policy.SecurityGroupID].indexes, policy.PolicyIndex)
 			}
 		}
-		for groupID, indexes := range byGroup {
-			if err := client.DeleteSecurityGroupIngress(ctx, groupID, indexes); err != nil {
+		for groupID, target := range byGroup {
+			if err := client.DeleteSecurityGroupIngress(ctx, groupID, target.version, target.indexes); err != nil {
 				return fmt.Errorf("删除安全组规则: %w", err)
 			}
 		}

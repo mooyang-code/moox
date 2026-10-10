@@ -37,7 +37,7 @@ moox-cli setup scf-network-plan --file ./moox.toml --region ap-hongkong
 
 - 不为跨地域的外部接入链路创建或复用 CCN。
 - 不把外部接入的私网 IP 用于跨地域 SCF；私网地址只在同地域且 VPC/子网匹配时使用。
-- 不修改控制台代理、`MOOX_PUBLIC_HOST` 或消息总线地址来“配合”私网。
+- 不修改控制台代理、`[hosts.control] address`/`tls_mode` 或消息总线地址来“配合”私网。
 - 不调用 `ModifyInstancesVpcAttribute`，不把主机 CVM 的 VPC 从 CCN detach。
 - CLI 不修改 `moox.toml`，不在日志或 JSON 中输出密码、SecretKey、签名密钥。
 

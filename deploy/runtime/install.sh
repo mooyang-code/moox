@@ -52,8 +52,17 @@ acquire_lock() {
     sleep 1
     waited=$((waited + 1))
   done
-  trap 'rmdir "${ROOT}.maintenance.lock.d" 2>/dev/null || true' EXIT
+  LOCK_DIR_HELD=1
 }
+
+# 退出时清理：没有 flock 时释放目录锁；安装中途失败时删除暂存目录（里面有这次发布带来的密钥）。
+STAGED=""
+LOCK_DIR_HELD=0
+cleanup() {
+  [[ -z "${STAGED}" ]] || rm -rf "${STAGED}"
+  [[ "${LOCK_DIR_HELD}" != 1 ]] || rmdir "${ROOT}.maintenance.lock.d" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # 运行脚本由安装器调用时已经持有维护锁。
 export MOOX_MAINTENANCE_LOCK_HELD=1
@@ -89,11 +98,20 @@ install_cron() {
     echo "install: 警告：没有 crontab，健康检查不会自动运行" >&2
     return 0
   fi
-  local marker="# moox-healthcheck:${ROOT}" line current
+  local marker="# moox-healthcheck:${ROOT}" line current status=0
   line="* * * * * ${ROOT}/healthcheck.sh >/dev/null 2>&1 ${marker}"
-  current="$(crontab -l 2>/dev/null || true)"
+  current="$(crontab -l 2>&1)" || status=$?
+  if [[ "${status}" != 0 ]]; then
+    # 只有"这个用户还没有 crontab"才当作空表；其它失败不能用空表覆盖用户已有的定时任务。
+    if [[ "${current}" != *"no crontab"* ]]; then
+      echo "install: 警告：读取 crontab 失败（${current}），没有登记健康检查" >&2
+      return 0
+    fi
+    current=""
+  fi
   {
-    printf '%s\n' "${current}" | grep -Fv -- "${marker}" | sed '/^$/d' || true
+    # 标记在行尾，按后缀精确匹配：/data/moox/prod 的标记不能误删 /data/moox/prod2 的行。
+    printf '%s\n' "${current}" | awk -v marker="${marker}" 'NF && substr($0, length($0) - length(marker) + 1) != marker'
     printf '%s\n' "${line}"
   } | crontab -
 }
@@ -101,16 +119,19 @@ install_cron() {
 generate_secret() {
   local name="$1" file="${ROOT}/secrets/$1"
   [[ -s "${file}" ]] && return 0
-  hex() { openssl rand -hex 32; }
+  command -v openssl >/dev/null 2>&1 || fail "生成密钥 ${name} 需要 openssl"
+  local first second
+  first="$(openssl rand -hex 32)" && second="$(openssl rand -hex 32)" || fail "openssl 生成随机数失败"
+  [[ ${#first} -eq 64 && ${#second} -eq 64 ]] || fail "openssl 生成的随机数长度不对"
   case "${name}" in
     health-auth.env)
-      printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$(hex)" >"${file}.next" ;;
+      printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "${first}" >"${file}.next" ;;
     storage-internal-auth.env)
-      printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=%s\nMOOX_STORAGE_VIEW_AUTH_SECRET=%s\n' "$(hex)" "$(hex)" >"${file}.next" ;;
+      printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=%s\nMOOX_STORAGE_VIEW_AUTH_SECRET=%s\n' "${first}" "${second}" >"${file}.next" ;;
     storage-node-auth.env)
-      printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%s\n' "$(hex)" >"${file}.next" ;;
+      printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%s\n' "${first}" >"${file}.next" ;;
     admin-jwt.env)
-      printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$(hex)" >"${file}.next" ;;
+      printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "${first}" >"${file}.next" ;;
     admin-encryption-key)
       # 加密密钥丢失后已有的密钥表无法解密，有数据库时不重新生成。
       [[ ! -e "${ROOT}/data/admin/admin.db" ]] || fail "缺少 ${file}，但 ${ROOT}/data/admin/admin.db 已存在；请先恢复原来的加密密钥"
@@ -206,10 +227,12 @@ main() {
     rollback
     return
   fi
-  install_cron
+  # 只安装不启动时不登记健康检查，否则一分钟内它就会把刚装好的组件拉起来。
+  [[ "${NO_START}" == 1 ]] || install_cron
   local previous staged release
   previous="$(current_release)"
   staged="${ROOT}/releases/.${RELEASE_ID}.tmp"
+  STAGED="${staged}"
   release="${ROOT}/releases/${RELEASE_ID}"
   [[ "${previous}" != "${RELEASE_ID}" ]] || fail "发布 ${RELEASE_ID} 已是当前发布"
   rm -rf "${staged}" "${release}"
@@ -223,6 +246,7 @@ main() {
     generate_secret "${name}"
   done
   mv "${staged}" "${release}"
+  STAGED=""
   chmod 0755 "${release}"/*.sh "${release}"/lib/*.sh
 
   local -a selected=() removed=()

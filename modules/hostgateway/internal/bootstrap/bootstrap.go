@@ -26,8 +26,10 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
 	"github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb"
 	"github.com/mooyang-code/moox/packages/healthz"
+	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/filter"
 	trpcserver "trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -107,14 +109,17 @@ func (r *Runtime) Initialize(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	hasCache := false
-	if cached, err := r.store.Load(); err == nil {
-		if applied, err := snapshot.Validate(r.hostID, cached); err == nil {
-			r.apply(applied)
-			hasCache = true
-		} else {
-			r.health.RouteValidationFailed()
-			r.warn(fmt.Sprintf("主机网关快照缓存无效，忽略: %v", err))
+	if cached, err := r.store.Load(); err != nil {
+		// 缓存不存在是正常的（首次启动）；其它错误（损坏、权限不对）要让运维看到，否则只会看到"没有可用缓存"。
+		if !errors.Is(err, os.ErrNotExist) {
+			r.warn(fmt.Sprintf("读取主机网关快照缓存失败，忽略: %v", err))
 		}
+	} else if applied, err := snapshot.Validate(r.hostID, cached); err == nil {
+		r.apply(applied)
+		hasCache = true
+	} else {
+		r.health.RouteValidationFailed()
+		r.warn(fmt.Sprintf("主机网关快照缓存无效，忽略: %v", err))
 	}
 	if err := r.sync(ctx); err != nil {
 		if hasCache {
@@ -330,7 +335,7 @@ func (g *Gateway) Serve(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
 	defer cancel()
 	shutdownErr := g.healthServer.Shutdown(shutdownCtx)
-	// tRPC 服务关闭时等待进行中的请求，之后断开剩余的连接。
+	// tRPC 服务关闭时等待进行中的请求（上限 gatewayCloseWait），之后断开剩余的连接。
 	_ = g.remote.Close(make(chan struct{}, 1))
 	_ = g.local.Close(make(chan struct{}, 1))
 	g.remoteListener.shutdown()
@@ -388,10 +393,20 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	return err
 }
 
+// gatewayCloseWait 是停止时等待进行中的请求完成的上限，必须小于运行脚本给主机网关的停止超时（30 秒）。
+const gatewayCloseWait = 10 * time.Second
+
 func newGatewayService(address string, listener net.Listener) trpcserver.Service {
 	return trpcserver.New(
 		trpcserver.WithAddress(address), trpcserver.WithListener(listener), trpcserver.WithNetwork("tcp"),
 		trpcserver.WithProtocol("trpc"), trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop),
+		// 不解压请求：帧头里声明的压缩方式由未认证的调用方决定，tRPC 会在验签之前先解压，一个几十 KB 的压缩帧
+		// 就能让进程分配几百 MB 内存。网关本来就只转发原始字节，gatewayclient 也不压缩。
+		trpcserver.WithCurrentCompressType(codec.CompressTypeNoop),
+		// 停止时先等进行中的请求完成再断开连接，否则调用方只看到断连，上游却把请求处理完。
+		trpcserver.WithMaxCloseWaitTime(gatewayCloseWait),
+		// panic 不能带走整台主机唯一的网关。
+		trpcserver.WithFilter(filter.GetServer("recovery")),
 		trpcserver.WithServiceName(router.ServiceName),
 	)
 }

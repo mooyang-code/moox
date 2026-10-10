@@ -126,6 +126,9 @@ func TestCatalogValidationRejects(t *testing.T) {
 		{"只探测的组件没有业务进度", func(c *Catalog) {
 			c.Components[3].Observability = Observability{Transport: TransportHealthOnly, Functional: FunctionalActive}
 		}, "不能声明业务进度"},
+		{"host-gateway 不能出现在非 control 组件的 ACL 里", func(c *Catalog) {
+			c.Components[3].Services[0].ACL[0].Callers = []string{"console", "host-gateway"}
+		}, "只能出现在 control 范围组件的 ACL 里"},
 		{"服务重复声明", func(c *Catalog) {
 			c.Components[3].Services[0].Path = "trpc.moox.admin.SpaceMgr"
 		}, "重复声明"},

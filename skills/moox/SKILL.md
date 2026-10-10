@@ -126,7 +126,7 @@ python3 skills/moox/scripts/tencent_lighthouse_firewall.py add --detail-url '<�
 
 SCF 只经外部接入访问 MooX，路径按地域选择。发布 SCF 之前先运行 `moox-cli setup scf-network-plan --file ./moox.toml`：与函数同地域的主机上部署了外部接入时，函数绑定该主机的
 VPC，经私网访问；跨地域走 `access@storage` 的公网地址。不要创建 CCN。需要访问公开行情源时保持 `public_net_status=ENABLE`。完整的决策表、canary 顺序和验收证据见
-[`references/private-network.md`](references/private-network.md)。不要把控制台代理或 `MOOX_PUBLIC_HOST` 改成私网地址。
+[`references/private-network.md`](references/private-network.md)。不要把控制台代理或 `[hosts.control] address` 改成私网地址。
 
 运行数据可以删除，并从 `examples/` 和服务流程重建。不要重新引入独立的验收 CSV 脚本。
 

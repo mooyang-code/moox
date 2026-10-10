@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"debug/elf"
 	"fmt"
 	"io"
 	"os"
@@ -97,10 +98,34 @@ func (b ScriptBuilder) Build(ctx context.Context, request BuildRequest) (map[str
 			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 				return nil, fmt.Errorf("缺少二进制 %s（去掉 --skip-build 重新构建）", path)
 			}
+			// --skip-build 复用 bin/ 里已有的文件，可能是上一次为另一种架构构建的：架构不对的二进制要到安装器启动组件时
+			// 才报 exec format error，那时已经停掉了旧组件。
+			if request.SkipBuild {
+				if err := verifyLinuxBinary(path, request.GOARCH); err != nil {
+					return nil, err
+				}
+			}
 			out[binary] = path
 		}
 	}
 	return out, nil
+}
+
+// verifyLinuxBinary 确认文件是目标架构的 Linux 可执行文件。
+func verifyLinuxBinary(path, goarch string) error {
+	file, err := elf.Open(path)
+	if err != nil {
+		return fmt.Errorf("%s 不是 Linux 可执行文件（去掉 --skip-build 重新构建）: %w", path, err)
+	}
+	defer file.Close()
+	want := map[string]elf.Machine{"amd64": elf.EM_X86_64, "arm64": elf.EM_AARCH64}[goarch]
+	if want == elf.EM_NONE {
+		return fmt.Errorf("不支持的目标架构 %q", goarch)
+	}
+	if file.Machine != want {
+		return fmt.Errorf("%s 是 %s 架构的二进制，目标主机需要 %s（去掉 --skip-build 重新构建）", path, file.Machine, want)
+	}
+	return nil
 }
 
 func (b ScriptBuilder) run(ctx context.Context, env []string, script string, args ...string) error {

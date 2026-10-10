@@ -163,8 +163,8 @@ func startSCFFlowHostGateway(t *testing.T, accessKey gatewayauth.CallerKey, stor
 		"-ready-file", readyFile, "-nonce-dir", filepath.Join(dir, "nonces"),
 	)
 	command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_KEYS="+fmt.Sprintf("%s:%s:%s", accessKey.Caller, accessKey.KeyID, accessKey.Secret))
-	var logs strings.Builder
-	command.Stdout, command.Stderr = &logs, &logs
+	logs := &lockedBuffer{}
+	command.Stdout, command.Stderr = logs, logs
 	require.NoError(t, command.Start())
 	exited := make(chan error, 1)
 	go func() { exited <- command.Wait() }()

@@ -54,9 +54,18 @@ func newCertificateWatchFromEnvironment(placements *placement.Service) certifica
 			if err != nil {
 				return nil, err
 			}
+			hosts, err := placements.ListHosts(ctx)
+			if err != nil {
+				return nil, err
+			}
+			// 已停用的主机上网关不再运行，证书到期不需要告警；主机被删除后状态行也一并删除。
+			enabled := make(map[string]bool, len(hosts))
+			for _, host := range hosts {
+				enabled[host.HostID] = host.Status == placement.StatusEnabled
+			}
 			out := make(map[string]time.Time, len(statuses))
 			for host, status := range statuses {
-				if status.CertificateNotAfter != nil {
+				if status.CertificateNotAfter != nil && enabled[host] {
 					out[host] = *status.CertificateNotAfter
 				}
 			}

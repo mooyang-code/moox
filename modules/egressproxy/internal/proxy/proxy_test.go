@@ -269,3 +269,45 @@ type fakeAddr string
 
 func (a fakeAddr) Network() string { return "tcp" }
 func (a fakeAddr) String() string  { return string(a) }
+
+// 失败信息里不能带 query：以后若用于带签名的请求，签名会随错误写进日志、返回给调用方。
+func TestDoFailureMessageOmitsQuery(t *testing.T) {
+	server, err := New(Config{Domains: []string{"api.binance.com"}, Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})}, nil, nil)
+	require.NoError(t, err)
+	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/api", Query: "signature=SECRETSIG&timestamp=1"})
+	require.NoError(t, err)
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "connection refused")
+	require.NotContains(t, rsp.GetRetInfo().GetMsg(), "SECRETSIG")
+}
+
+// 并发请求数有上限：超过时直接拒绝，不让重试风暴占满 compute-1。
+func TestDoRejectsWhenTooManyRequestsAreInflight(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, maxInflight)
+	server, err := New(Config{Domains: []string{"api.binance.com"}, Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		started <- struct{}{}
+		<-release
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}, Request: r}, nil
+	})}, nil, nil)
+	require.NoError(t, err)
+	done := make(chan struct{}, maxInflight)
+	for i := 0; i < maxInflight; i++ {
+		go func() {
+			_, _ = server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/"})
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < maxInflight; i++ {
+		<-started
+	}
+	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "繁忙")
+	close(release)
+	for i := 0; i < maxInflight; i++ {
+		<-done
+	}
+}

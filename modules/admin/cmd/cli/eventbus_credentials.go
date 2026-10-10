@@ -170,9 +170,6 @@ func loadCLIKey(dbPath, keyFile string) error {
 	}
 	raw, err := os.ReadFile(keyFile)
 	if os.IsNotExist(err) {
-		if !os.IsNotExist(err) {
-			return err
-		}
 		if info != nil {
 			return errors.New("admin database exists but encryption key is missing")
 		}

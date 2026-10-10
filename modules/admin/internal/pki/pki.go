@@ -69,10 +69,12 @@ func EnsureCA(dir string, now time.Time) (bool, *x509.Certificate, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return false, nil, fmt.Errorf("创建 %s: %w", dir, err)
 	}
-	if err := WriteSecretFile(filepath.Join(dir, CAKeyFile), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})); err != nil {
+	// 先写证书、后写私钥：中途失败时只剩证书、没有私钥，下一次 EnsureCA 会自动重建；反过来会留下"有私钥无证书"，
+	// 需要人工介入。
+	if err := WriteSecretFile(filepath.Join(dir, CACertFile), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})); err != nil {
 		return false, nil, err
 	}
-	if err := WriteSecretFile(filepath.Join(dir, CACertFile), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})); err != nil {
+	if err := WriteSecretFile(filepath.Join(dir, CAKeyFile), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})); err != nil {
 		return false, nil, err
 	}
 	certificate, err = x509.ParseCertificate(der)

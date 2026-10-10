@@ -34,7 +34,7 @@ const (
 )
 
 const (
-	systemSpaceID  = "mooxsys"
+	systemSpaceID  = secretdao.SystemSpaceID
 	statusActive   = "active"
 	statusInactive = "inactive"
 	secretBytes    = 32

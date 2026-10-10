@@ -12,9 +12,8 @@ region = "ap-guangzhou"
 port = 4222
 tls_enabled = true
 
-# Only all/new are supported. Omit deliver_policy on redeploy to keep the
-# installed policy; a fresh deployment defaults to all. Existing JetStream
-# durable consumers must be migrated explicitly before changing this value.
+# 消息总线订阅的起点策略只支持 all 和 new。重新部署时省略 deliver_policy 会保留已安装的策略，全新部署默认 all；
+# 已有的 JetStream 持久消费者必须先显式迁移，才能修改这个值。
 [observability]
 # deliver_policy = "all"
 
@@ -167,9 +166,6 @@ outputs = ["quote_volume_mean_20"]
 params_json = '{"window":20}'
 lookback_periods = 20
 
-# 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用
-# market_data 包目录，但每个 Space 必须声明自己的 Market/Instrument/Source 身份。
-
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
@@ -314,6 +310,8 @@ app_id = "<tencent-app-id>"
 cos_region = "ap-guangzhou"
 cos_bucket = "moox-scf-<tencent-app-id>"
 
+# 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用 market_data 包目录，
+# 但每个 Space 必须声明自己的 Market、Instrument、Source 身份。
 [[scf_fetcher.spaces]]
 space_id = "crypto"
 # 发布前必须绑定一个专用、禁用且只含一个标的的 Collector task，避免与实时 Scheduler 争抢同一 period。
@@ -341,7 +339,7 @@ timer_function_count = 80
 # 走私网，否则走 access@storage 的公网地址（moox-cli setup scf-network-plan 可查看路由）。
 memory_size = 64
 timeout_seconds = 60
-# Timer and Invoke both reserve time for Storage and durable Completion.
+# Timer 与 Invoke 都要为 Storage 写入和持久化完成回执预留时间。
 invoke_timeout_seconds = 60
 realtime_batch_size = 10
 realtime_bar_limit = 10
@@ -364,13 +362,13 @@ display_name = "华东地区（南京）"
 enabled = true
 function_count = 60
 
-    [[scf_fetcher.spaces.regions]]
+[[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 display_name = "华南地区（广州，已禁用）"
 enabled = false
 function_count = 0
 
-    [[scf_fetcher.spaces.regions]]
+[[scf_fetcher.spaces.regions]]
 region = "ap-hongkong"
 display_name = "Hong Kong"
 enabled = true

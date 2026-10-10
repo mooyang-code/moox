@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -131,25 +132,31 @@ func (proxy *nativeProxy) forward(ctx context.Context, req *codec.Body) (*codec.
 	}, headers, proxy.options.Now())
 	if err != nil {
 		proxy.authFailed()
-		return nil, "", "", errs.New(gatewayroute.RetUnauthenticated, "服务签名校验失败: "+err.Error())
+		// 失败的具体原因（未知 KeyID、时间窗、签名不符）只写日志，不返回给调用方。
+		log.Printf("主机网关签名校验失败: %v", err)
+		return nil, "", "", errs.New(gatewayroute.RetUnauthenticated, "服务签名校验失败")
 	}
-	route, method, ok := applied.Table.ResolveRPCForCaller(rpcName, claims.Caller)
+	route, resolvedMethod, ok := applied.Table.ResolveRPCForCaller(rpcName, claims.Caller)
 	if !ok {
+		// 被拒绝的请求不用请求里的服务名和方法名作指标标签：已验签的调用方也可以请求任意的名字，
+		// 直接作标签会让序列数无限增长。
 		if _, _, served := applied.Table.ResolveRPC(rpcName); served {
-			return nil, servicePath, method, errs.New(gatewayroute.RetForbidden, fmt.Sprintf("调用方 %s 不能调用 %s/%s", claims.Caller, servicePath, method))
+			return nil, rejectedMetricLabel, rejectedMetricLabel, errs.New(gatewayroute.RetForbidden, fmt.Sprintf("调用方 %s 不能调用 %s/%s", claims.Caller, servicePath, method))
 		}
 		if applied.Table.HasService(servicePath) {
-			return nil, servicePath, method, errs.New(gatewayroute.RetForbidden, fmt.Sprintf("方法 %s/%s 不经主机网关开放", servicePath, method))
+			return nil, rejectedMetricLabel, rejectedMetricLabel, errs.New(gatewayroute.RetForbidden, fmt.Sprintf("方法 %s/%s 不经主机网关开放", servicePath, method))
 		}
-		return nil, servicePath, method, errs.New(gatewayroute.RetServiceNotHere, fmt.Sprintf("服务 %s 不在主机 %s 上", servicePath, proxy.options.HostID))
+		return nil, rejectedMetricLabel, rejectedMetricLabel, errs.New(gatewayroute.RetServiceNotHere, fmt.Sprintf("服务 %s 不在主机 %s 上", servicePath, proxy.options.HostID))
 	}
+	method = resolvedMethod
 	if route.MaxBodyBytes > 0 && int64(len(req.Data)) > route.MaxBodyBytes {
 		return nil, servicePath, method, errs.New(gatewayroute.RetBodyTooLarge, "请求体超过路由的包体上限")
 	}
 	if proxy.options.Nonces != nil {
 		consumed, err := proxy.options.Nonces.Consume(ctx, serviceNonceNamespace, claims.Nonce, claims.TTL)
 		if err != nil {
-			return nil, servicePath, method, errs.New(errs.RetServerSystemErr, "主机网关无法登记 nonce: "+err.Error())
+			log.Printf("主机网关无法登记 nonce: %v", err)
+			return nil, servicePath, method, errs.New(errs.RetServerSystemErr, "主机网关无法登记 nonce")
 		}
 		if !consumed {
 			if proxy.options.Metrics != nil {
@@ -190,6 +197,9 @@ func (proxy *nativeProxy) forward(ctx context.Context, req *codec.Body) (*codec.
 	}
 	return response, servicePath, method, nil
 }
+
+// rejectedMetricLabel 是被拒绝请求（调用方无权、方法不开放、服务不在本机）的指标标签。
+const rejectedMetricLabel = "rejected"
 
 func (proxy *nativeProxy) authFailed() {
 	if proxy.options.Metrics != nil {

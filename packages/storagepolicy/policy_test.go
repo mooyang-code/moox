@@ -143,3 +143,19 @@ func TestCoverageRejectsShort7x24RetentionAndWarnsForSessionMarkets(t *testing.T
 		t.Fatalf("warnings = %v", warnings)
 	}
 }
+
+// 日线每个交易日一根：stockcn 保留 300 天约 214 个交易日，少于 view.bars=300 时应当告警。
+func TestCoverageCountsOneDailyBarPerTradingDay(t *testing.T) {
+	policy := Default()
+	policy.Retention.Spaces = map[string]map[string]string{"stockcn": {"1d": "7200h"}}
+	_, warnings := policy.Coverage()
+	found := false
+	for _, warning := range warnings {
+		if strings.Contains(warning, "retention.spaces.stockcn.1d") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("300 天的日线保留应当告警，warnings = %v", warnings)
+	}
+}

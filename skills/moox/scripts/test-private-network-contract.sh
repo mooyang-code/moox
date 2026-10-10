@@ -44,7 +44,7 @@ for required in \
   '--probe-regions' \
   'ModifyInstancesVpcAttribute' \
   '消息总线' \
-  'MOOX_PUBLIC_HOST' \
+  '[hosts.control] address' \
   'MOOX_EVENTBUS_NATS_URL' \
   'MOOX_ACCESS_ADDRESS' \
   'public_net_status' \

@@ -23,11 +23,12 @@ var setupTestSecrets = []string{"admin-test-password", "control-ssh-password", "
 
 // fakeSetupDeployer 记录部署命令的调用。
 type fakeSetupDeployer struct {
-	deploys   []fakeDeployCall
-	scripts   []fakeScriptCall
-	rollbacks []string
-	bootstrap *setupdeploy.BootstrapOptions
-	plan      release.Plan
+	deploys          []fakeDeployCall
+	scripts          []fakeScriptCall
+	rollbacks        []string
+	rollbackLockHeld []bool
+	bootstrap        *setupdeploy.BootstrapOptions
+	plan             release.Plan
 }
 
 type fakeDeployCall struct {
@@ -51,8 +52,9 @@ func (f *fakeSetupDeployer) Deploy(_ context.Context, hostID string, opts setupd
 	return setupdeploy.Result{Host: hostID, Release: "r1", Components: opts.Components, Output: "installer output"}, nil
 }
 
-func (f *fakeSetupDeployer) Rollback(_ context.Context, hostID string) (string, error) {
+func (f *fakeSetupDeployer) Rollback(_ context.Context, hostID string, lockHeld bool) (string, error) {
 	f.rollbacks = append(f.rollbacks, hostID)
+	f.rollbackLockHeld = append(f.rollbackLockHeld, lockHeld)
 	return "已切换到发布 r0\n", nil
 }
 
@@ -270,13 +272,16 @@ func TestSetupPauseResumeAndServiceRunHostScripts(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = runSetup(t, deps, "rollback", "--host", "storage")
 	require.NoError(t, err)
+	_, _, err = runSetup(t, deps, "rollback", "--host", "control", "--maintenance-lock-held")
+	require.NoError(t, err)
 	require.Equal(t, []fakeScriptCall{
 		{host: "control", script: "pause", lockHeld: true, args: []string{"collector", "strategy"}},
 		{host: "control", script: "resume", args: []string{"collector"}},
 		{host: "storage", script: "restart", args: []string{"--force", "storage-view"}},
 		{host: "control", script: "status"},
 	}, deployer.scripts)
-	require.Equal(t, []string{"storage"}, deployer.rollbacks)
+	require.Equal(t, []string{"storage", "control"}, deployer.rollbacks)
+	require.Equal(t, []bool{false, true}, deployer.rollbackLockHeld)
 
 	_, _, err = runSetup(t, deps, "pause", "--host", "control")
 	require.ErrorContains(t, err, "--components")

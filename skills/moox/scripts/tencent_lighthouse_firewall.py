@@ -64,6 +64,24 @@ def default_moox_cli() -> str:
     return "moox-cli"
 
 
+# 允许对任意来源开放的端口：控制台、外部接入、消息总线、HTTP/HTTPS（证书申请）。其余端口（11003 跨主机入口、
+# 11012 健康检查等）只能对具体的 MooX 主机地址开放。
+PUBLIC_PORTS = {"9527", "11004", "4222", "80", "443"}
+
+
+def reject_open_internal_ports(ports: str, cidr: str, ipv6_cidr: str) -> None:
+    """来源是任意地址时，拒绝开放内部端口和 ALL。"""
+    open_to_all = cidr in ("", "0.0.0.0/0") or ipv6_cidr in ("::/0",)
+    if not open_to_all:
+        return
+    requested = {item.strip() for item in ports.split(",") if item.strip()}
+    internal = sorted(item for item in requested if item not in PUBLIC_PORTS)
+    if internal:
+        raise ValueError(
+            "端口 %s 不是对外端口，不能对任意来源（0.0.0.0/0）开放；请用 --cidr 收窄到具体的主机地址" % ",".join(internal)
+        )
+
+
 def build_add_argv(args: argparse.Namespace) -> dict[str, Any]:
     region = args.region
     instance_id = args.instance_id
@@ -74,6 +92,7 @@ def build_add_argv(args: argparse.Namespace) -> dict[str, Any]:
         region = region or parsed["region"]
 
     region = region or DEFAULT_REGION
+    reject_open_internal_ports(args.ports, args.cidr, args.ipv6_cidr)
     argv = [
         args.moox_cli,
         "ops",

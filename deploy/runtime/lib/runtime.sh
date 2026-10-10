@@ -15,6 +15,9 @@ source "${RELEASE}/runtime/host.env"
 ROOT="${HOST_ROOT}"
 MAINTENANCE_LOCK="${ROOT}.maintenance.lock"
 HEALTH_FAILURE_THRESHOLD="${MOOX_HEALTHCHECK_FAILURE_THRESHOLD:-3}"
+# 组件进程、启动前后的钩子都用这个固定的 PATH：cron 与 SSH 的默认 PATH 不同，不固定的话钩子的行为会随触发方式变化。
+RUNTIME_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${RUNTIME_PATH}"
 
 runtime_log() {
   printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"
@@ -252,6 +255,35 @@ stop_component() {
 }
 
 # start_component 启动一个组件并等待就绪；force 为 1 时忽略暂停标记。
+# 把组件的环境变量和密钥环境变量收集到 COMPONENT_RUNTIME_ENV；任何一个密钥文件缺失或无效都直接失败，
+# 不能在缺密钥的状态下启动组件。
+build_component_env() {
+  COMPONENT_RUNTIME_ENV=("${COMPONENT_ENV[@]+"${COMPONENT_ENV[@]}"}")
+  local file out
+  local -a values
+  for file in "${COMPONENT_SECRET_ENV[@]+"${COMPONENT_SECRET_ENV[@]}"}"; do
+    out="$(secret_env_values "${file}")" || return 1
+    values=()
+    if [[ -n "${out}" ]]; then
+      mapfile -t values <<<"${out}"
+    fi
+    COMPONENT_RUNTIME_ENV+=("${values[@]+"${values[@]}"}")
+  done
+}
+
+# 在发布目录里执行启动前、就绪后的钩子，环境与组件进程一致（固定 PATH 加 COMPONENT_RUNTIME_ENV）。
+run_component_hook() {
+  local hook="$1"
+  (
+    cd "${RELEASE}" || exit 1
+    local entry
+    for entry in "${COMPONENT_RUNTIME_ENV[@]+"${COMPONENT_RUNTIME_ENV[@]}"}"; do
+      export "${entry}"
+    done
+    "${hook}"
+  )
+}
+
 start_component() {
   local name="$1" force="${2:-0}"
   load_component "${name}"
@@ -266,11 +298,14 @@ start_component() {
   local log_dir="${ROOT}/logs/${name}" dir
   mkdir -p "${log_dir}" "${ROOT}/run"
   for dir in "${COMPONENT_DATA_DIRS[@]+"${COMPONENT_DATA_DIRS[@]}"}"; do
-    mkdir -p "${ROOT}/${dir}"
+    # 数据目录只给属主访问：主机网关的快照缓存等目录会校验权限，默认 umask 建出的 0775 会被拒绝。
+    mkdir -p -m 0700 "${ROOT}/${dir}"
   done
+  # 业务环境变量与密钥环境变量：钩子和组件进程用同一份，钩子里的命令行工具（例如 register-node）才能读到密钥。
+  build_component_env || return 1
   if declare -F component_prestart >/dev/null; then
     echo "${name}: 启动前准备"
-    if ! (cd "${RELEASE}" && component_prestart) >>"${log_dir}/stdout.log" 2>&1; then
+    if ! run_component_hook component_prestart >>"${log_dir}/stdout.log" 2>&1; then
       echo "${name}: 启动前准备失败，见 ${log_dir}/stdout.log" >&2
       tail -20 "${log_dir}/stdout.log" >&2 || true
       return 1
@@ -282,27 +317,24 @@ start_component() {
   boot_id="$(printf '%s' "${boot_id}" | tr '[:upper:]' '[:lower:]')"
   local -a env=(
     "HOME=${HOME}" "USER=${USER:-$(id -un)}" "LOGNAME=${LOGNAME:-$(id -un)}"
-    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "LANG=${LANG:-C.UTF-8}"
+    "PATH=${RUNTIME_PATH}" "LANG=${LANG:-C.UTF-8}"
     "MOOX_BOOT_ID=${boot_id}"
     "MOOX_BINARY_SHA256=sha256:$(sha256_of "${binary}")"
   )
-  env+=("${COMPONENT_ENV[@]+"${COMPONENT_ENV[@]}"}")
-  local file
-  for file in "${COMPONENT_SECRET_ENV[@]+"${COMPONENT_SECRET_ENV[@]}"}"; do
-    local -a values=()
-    mapfile -t values < <(secret_env_values "${file}") || return 1
-    env+=("${values[@]+"${values[@]}"}")
-  done
+  env+=("${COMPONENT_RUNTIME_ENV[@]+"${COMPONENT_RUNTIME_ENV[@]}"}")
+  # 运维命令（moox-storage-cli repair-view 等）给这一次启动的一次性开关：组件用 env -i 启动，不显式放行就收不到。
+  [[ -z "${MOOX_STORAGE_VIEW_REPLAY_PENDING:-}" ]] || env+=("MOOX_STORAGE_VIEW_REPLAY_PENDING=${MOOX_STORAGE_VIEW_REPLAY_PENDING}")
   echo "${name}: 启动"
   local detach=()
   command -v setsid >/dev/null 2>&1 && detach=(setsid)
   # 组件进程不能继承维护锁的文件描述符（9），否则安装器退出后锁仍被组件持有，健康检查会一直跳过。
   (
-    cd "${RELEASE}/${COMPONENT_WORKDIR}"
+    # cron 的健康检查在 || 上下文里运行，set -e 不生效；工作目录进不去时必须显式失败，不能在别的目录里启动组件。
+    cd "${RELEASE}/${COMPONENT_WORKDIR}" || exit 1
     nohup "${detach[@]+"${detach[@]}"}" env -i "${env[@]}" "${binary}" "${COMPONENT_ARGS[@]+"${COMPONENT_ARGS[@]}"}" \
       </dev/null >>"${log_dir}/stdout.log" 2>&1 9>&- &
     echo $! >"$(pid_file "${name}")"
-  )
+  ) || { echo "${name}: 无法进入工作目录 ${RELEASE}/${COMPONENT_WORKDIR}" >&2; return 1; }
   local pid waited=0 timeout="${COMPONENT_STARTUP_GRACE}"
   pid="$(cat "$(pid_file "${name}")")"
   while true; do
@@ -324,7 +356,7 @@ start_component() {
     waited=$((waited + 1))
   done
   if declare -F component_poststart >/dev/null; then
-    if ! (cd "${RELEASE}" && component_poststart) >>"${log_dir}/stdout.log" 2>&1; then
+    if ! run_component_hook component_poststart >>"${log_dir}/stdout.log" 2>&1; then
       echo "${name}: 就绪后的处理失败，见 ${log_dir}/stdout.log" >&2
       return 1
     fi
@@ -379,6 +411,8 @@ ensure_component() {
     runtime_log "${name}: 健康检查连续失败 ${failures} 次，重启"
     stop_component "${name}"
   else
+    # 进程已经不在：上一个进程留下的失败计数不能带到新进程上。
+    rm -f "${failures_file}"
     runtime_log "${name}: 未运行，启动"
   fi
   start_component "${name}"

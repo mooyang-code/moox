@@ -63,8 +63,8 @@ func (c Config) Validate() error {
 	}
 	switch c.Mode {
 	case ModeLocal:
-		if strings.TrimSpace(c.CAFile) == "" {
-			return errors.New("内部方式必须配置 gateway_client.ca_file")
+		if err := validateCAFileValue(c.CAFile); err != nil {
+			return err
 		}
 		if strings.TrimSpace(c.CacheDir) == "" {
 			return errors.New("内部方式必须配置 gateway_client.cache_dir")
@@ -90,6 +90,21 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("gateway_client.mode %q 无效，可选 local、access、tunnel", c.Mode)
+	}
+	return nil
+}
+
+// validateCAFileValue 要求 ca_file 是一个真实的证书文件路径。tRPC 把字面值 none 当作"不校验服务端证书"、root 当作
+// "使用系统根证书"、用冒号分隔的列表当作多个信任根，这些都会绕过"只信任 MooX 私有 CA"，所以一律拒绝。
+func validateCAFileValue(value string) error {
+	value = strings.TrimSpace(value)
+	switch {
+	case value == "":
+		return errors.New("内部方式必须配置 gateway_client.ca_file")
+	case value == "none" || value == "root":
+		return fmt.Errorf("gateway_client.ca_file 不能是 %q，必须是 MooX 私有 CA 证书文件的路径", value)
+	case strings.Contains(value, ":"):
+		return errors.New("gateway_client.ca_file 只能是一个证书文件的路径")
 	}
 	return nil
 }

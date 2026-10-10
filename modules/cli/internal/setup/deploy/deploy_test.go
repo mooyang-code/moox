@@ -289,9 +289,12 @@ func TestDeployHostBuildsSyncsUploadsAndInstalls(t *testing.T) {
 	assert.Equal(t, "arm64", d.builder.requests[0].GOARCH, "按主机的 CPU 架构构建")
 	assert.Equal(t, []string{"storage:storage-primary,storage-node,storage-view,access"}, placements.synced, "同步主机的完整组件列表")
 	assert.Equal(t, []string{"moox-credentials"}, d.hosts["control"].scripts(), "密钥与证书从 control 取")
-	assert.Equal(t, []string{"/tmp/moox-release-20261009T080000Z-abc123.tar.gz"}, d.hosts["storage"].uploads)
+	// 远端临时文件名带随机后缀：发布编号可以预测，固定的 /tmp 路径可以被其他本地用户抢先放置。
+	require.Len(t, d.hosts["storage"].uploads, 1)
+	archive := d.hosts["storage"].uploads[0]
+	assert.Regexp(t, `^/tmp/moox-release-20261009T080000Z-abc123-[0-9a-f]{16}\.tar\.gz$`, archive)
 	assert.Equal(t, []string{
-		"--root", "/data/moox/storage", "--archive", "/tmp/moox-release-20261009T080000Z-abc123.tar.gz",
+		"--root", "/data/moox/storage", "--archive", archive,
 		"--release", "20261009T080000Z-abc123", "--components", "storage-view",
 		"--generate-secrets", "storage-node-auth.env", "--maintenance-lock-held",
 	}, d.hosts["storage"].installerArgs())
@@ -391,7 +394,11 @@ func TestRunScriptPassesMaintenanceLockAndRejectsUnknownScripts(t *testing.T) {
 	assert.Equal(t, []string{"/data/moox/control/status.sh"}, d.hosts["control"].commands[1])
 	_, err = d.RunScript(context.Background(), "control", "install", false)
 	require.ErrorContains(t, err, "不支持的运行脚本")
-	_, err = d.Rollback(context.Background(), "storage")
+	_, err = d.Rollback(context.Background(), "storage", false)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"moox-rollback"}, d.hosts["storage"].scripts())
+	_, err = d.Rollback(context.Background(), "storage", true)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"moox-rollback", "moox-rollback"}, d.hosts["storage"].scripts())
+	last := d.hosts["storage"].commands[len(d.hosts["storage"].commands)-1]
+	assert.Equal(t, "1", last[len(last)-1], "持锁回滚要把 lockHeld 传给安装器")
 }

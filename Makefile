@@ -1,4 +1,4 @@
-.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-matrix test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-runtime-scripts package-skill clean proto
+.PHONY: build build-host-gateway build-storage-linux check-boundaries check-gateway-terms check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-matrix test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-runtime-scripts package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -14,6 +14,10 @@ check-boundaries: check-module-boundaries check-package-boundaries check-factor-
 
 check-factor-split:
 	./scripts/check/check-factor-split.sh
+
+# 旧网关名称、已删除的组件与配置键不能回到代码、配置、脚本、文档和 skills 里（需要 ripgrep）。
+check-gateway-terms:
+	./scripts/check/check-gateway-terms.sh
 
 check-module-boundaries:
 	./scripts/check/check-module-boundaries.sh
@@ -96,7 +100,7 @@ proto-check:
 
 verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
-verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-runtime-scripts test-caddy test-skill-contracts
+verify: verify-pr check-boundaries check-gateway-terms test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-runtime-scripts test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
@@ -124,6 +128,9 @@ test-skill-contracts:
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
+	bash skills/moox/scripts/test-caddy-ca.sh
+	bash skills/moox/scripts/test-cls-query.sh
+	bash skills/moox/scripts/test-firewall-script.sh
 
 test-script-e2e:
 	@set -e; for script in scripts/test/e2e/*.sh; do bash "$$script"; done

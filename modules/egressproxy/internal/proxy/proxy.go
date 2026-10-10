@@ -59,6 +59,7 @@ type Server struct {
 	defaultTimeout time.Duration
 	resolver       *resolver.Resolver
 	metrics        *Metrics
+	inflight       chan struct{}
 }
 
 // New 创建出口代理。dns 为空时 ResolveDomains 返回错误；metrics 可以为空。
@@ -99,6 +100,7 @@ func New(cfg Config, dns *resolver.Resolver, metrics *Metrics) (*Server, error) 
 	}
 	return &Server{
 		domains: domains, headers: headers, maxBody: maxBody, defaultTimeout: timeout, resolver: dns, metrics: metrics,
+		inflight: make(chan struct{}, maxInflight),
 		client: &http.Client{
 			Transport: transport,
 			// 不跟随重定向：重定向的目标可能不在白名单内，把 3xx 原样交给调用方处理。
@@ -119,13 +121,32 @@ func defaultTransport() *http.Transport {
 	}
 }
 
+// requestFailure 返回请求失败的原因，去掉 url.Error 里带 query 的完整 URL。
+func requestFailure(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
+}
+
+// maxInflight 是同时在途的请求数上限：Collector 的重试风暴不能把 compute-1 上其它服务（交易）的资源占满。
+const maxInflight = 32
+
 // Do 替调用方发出一次 HTTPS 请求。
 func (s *Server) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, error) {
+	select {
+	case s.inflight <- struct{}{}:
+		defer func() { <-s.inflight }()
+	default:
+		s.metrics.rejected("busy")
+		return &egresspb.DoRsp{RetInfo: retInfo(commonpb.ErrorCode_INNER_ERR, "出口代理繁忙，请稍后重试")}, nil
+	}
 	started := time.Now()
 	request, timeout, rejected := s.buildRequest(ctx, req)
 	if rejected != nil {
 		s.metrics.rejected(rejected.reason)
-		log.WarnContextf(ctx, "egress_proxy_rejected host=%q reason=%s msg=%s", req.GetHost(), rejected.reason, rejected.info.GetMsg())
+		log.WarnContextf(ctx, "egress_proxy_rejected host=%q reason=%s msg=%q", req.GetHost(), rejected.reason, rejected.info.GetMsg())
 		return &egresspb.DoRsp{RetInfo: rejected.info}, nil
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -133,8 +154,11 @@ func (s *Server) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, 
 	response, err := s.client.Do(request.WithContext(callCtx))
 	if err != nil {
 		s.metrics.forwarded(request.URL.Hostname(), "error", time.Since(started))
-		log.WarnContextf(ctx, "egress_proxy_failed host=%s path=%s duration_ms=%d error=%v", request.URL.Hostname(), request.URL.Path, time.Since(started).Milliseconds(), err)
-		return &egresspb.DoRsp{RetInfo: retInfo(commonpb.ErrorCode_INNER_ERR, fmt.Sprintf("请求 https://%s%s 失败: %v", request.URL.Host, request.URL.Path, err))}, nil
+		// url.Error 的文本带完整的 URL（含 query）：目前只代理公开行情接口，以后若用于带签名的请求就会把签名写进日志
+		// 和返回给调用方的错误里，所以只取里面真正的错误。
+		reason := requestFailure(err)
+		log.WarnContextf(ctx, "egress_proxy_failed host=%s path=%q duration_ms=%d error=%s", request.URL.Hostname(), request.URL.Path, time.Since(started).Milliseconds(), reason)
+		return &egresspb.DoRsp{RetInfo: retInfo(commonpb.ErrorCode_INNER_ERR, fmt.Sprintf("请求 https://%s%s 失败: %s", request.URL.Host, request.URL.Path, reason))}, nil
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, s.maxBody+1))
@@ -147,7 +171,7 @@ func (s *Server) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, 
 		return &egresspb.DoRsp{RetInfo: retInfo(commonpb.ErrorCode_INNER_ERR, fmt.Sprintf("https://%s%s 的响应超过 %d 字节", request.URL.Host, request.URL.Path, s.maxBody))}, nil
 	}
 	s.metrics.forwarded(request.URL.Hostname(), fmt.Sprint(response.StatusCode), time.Since(started))
-	log.InfoContextf(ctx, "egress_proxy_done method=%s host=%s path=%s status=%d bytes=%d duration_ms=%d", request.Method, request.URL.Hostname(), request.URL.Path, response.StatusCode, len(body), time.Since(started).Milliseconds())
+	log.InfoContextf(ctx, "egress_proxy_done method=%s host=%s path=%q status=%d bytes=%d duration_ms=%d", request.Method, request.URL.Hostname(), request.URL.Path, response.StatusCode, len(body), time.Since(started).Milliseconds())
 	return &egresspb.DoRsp{
 		RetInfo: retInfo(commonpb.ErrorCode_SUCCESS, ""),
 		Status:  int32(response.StatusCode), Headers: flattenHeaders(response.Header), Body: body,

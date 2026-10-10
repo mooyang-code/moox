@@ -80,16 +80,33 @@ func TestRegisterSubjectSyncRegistersListingBeforeTimers(t *testing.T) {
 	require.ErrorContains(t, err, "缺少定时器")
 	require.Equal(t, map[string][]string{"binance": {"spot", "swap"}}, store.registered, "启动时先向 Storage 登记支持的数据源")
 
+	// 登记失败不能让 Collector 起不来：照常往下注册定时器（这里因为没有定时器服务而报缺少定时器，而不是登记失败）。
 	store = &fakeSubjectSyncStore{registerErr: errors.New("storage unavailable")}
 	err = registerSubjectSync(context.Background(), &server.Server{}, SubjectSyncConfig{FetchTimeout: time.Second}, store, testSubjectListers(), nil)
-	require.ErrorContains(t, err, "登记")
+	require.ErrorContains(t, err, "缺少定时器")
+}
+
+// 启动时登记失败，之后每次标签同步前重试，成功之后不再重复。
+func TestListingRegistrarRetriesUntilSuccess(t *testing.T) {
+	store := &fakeSubjectSyncStore{registerErr: errors.New("storage unavailable")}
+	registrar := &listingRegistrar{store: store, supported: testSubjectListers().Supported()}
+	require.Error(t, registrar.ensure(context.Background()))
+	store.mu.Lock()
+	store.registerErr = nil
+	store.mu.Unlock()
+	require.NoError(t, registrar.ensure(context.Background()))
+	store.mu.Lock()
+	store.registered = nil
+	store.mu.Unlock()
+	require.NoError(t, registrar.ensure(context.Background()))
+	require.Nil(t, store.registered, "登记成功后不再重复登记")
 }
 
 // 一次标签同步超过 1 分钟时，下一次触发被跳过，不会并发执行。
 func TestSubjectTagJobSkipsOverlappingTrigger(t *testing.T) {
 	store := &fakeSubjectSyncStore{listEntered: make(chan struct{}), listRelease: make(chan struct{})}
 	tags := &subjectsync.TagRunner{Store: store, Listers: testSubjectListers()}
-	tagJob, _, err := subjectSyncJobs(tags, &subjectsync.AttributeRunner{}, time.Now)
+	tagJob, _, err := subjectSyncJobs(tags, &subjectsync.AttributeRunner{}, time.Now, nil)
 	require.NoError(t, err)
 
 	firstDone := make(chan error, 1)
@@ -109,7 +126,7 @@ func TestSubjectAttributeJobUsesTriggerTime(t *testing.T) {
 		Jobs: []subjectsync.AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}},
 	}
 	trigger := time.Date(2026, 10, 9, 0, 10, 45, 0, time.UTC)
-	_, attributeJob, err := subjectSyncJobs(&subjectsync.TagRunner{Store: store}, attributes, func() time.Time { return trigger })
+	_, attributeJob, err := subjectSyncJobs(&subjectsync.TagRunner{Store: store}, attributes, func() time.Time { return trigger }, nil)
 	require.NoError(t, err)
 	require.NoError(t, attributeJob.Handle(context.Background()))
 	require.Equal(t, 1, store.attributes["crypto"])

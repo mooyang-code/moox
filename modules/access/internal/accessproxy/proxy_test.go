@@ -3,6 +3,7 @@ package accessproxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -214,4 +215,26 @@ func TestNewRequiresDependencies(t *testing.T) {
 	require.Error(t, err)
 	_, err = New(Options{Registry: registry, Upstream: &fakeUpstream{}})
 	require.Error(t, err)
+}
+
+// 未认证的请求可以带任意的 RPC 名：指标只能按通过白名单的服务和方法打标签，否则公网请求能无限增加序列；
+// 签名失败的原因也不能返回给未认证的调用方。
+func TestUnauthenticatedRequestsDoNotCreateMetricSeriesOrLeakReasons(t *testing.T) {
+	upstream := &fakeUpstream{localHostID: "storage"}
+	metrics := &fakeMetrics{}
+	proxy := testProxy(t, upstream, metrics)
+	body := []byte("x")
+
+	unknown := gatewayauth.Credentials{KeyID: "intruder-1", Caller: "scf-collector", Secret: "guessed"}
+	for index := 0; index < 20; index++ {
+		rpcName := fmt.Sprintf("/svc.random%d/Method%d", index, index)
+		_, err := proxy.Forward(signedContext(t, unknown, storageAccess, rpcName, body), &codec.Body{Data: body})
+		requireCode(t, err, gatewayroute.RetUnauthenticated)
+		require.NotContains(t, err.Error(), "intruder-1", "未知的 KeyID 不能回显给调用方")
+		require.NotContains(t, err.Error(), "KeyID")
+	}
+	// 已认证但不在白名单里的请求同样不记服务和方法标签。
+	_, err := proxy.Forward(signedContext(t, scfCollector, storageAccess, "/svc.random/Method", body), &codec.Body{Data: body})
+	requireCode(t, err, gatewayroute.RetForbidden)
+	require.Empty(t, metrics.forwarded, "只有通过白名单的请求才按服务和方法记指标")
 }

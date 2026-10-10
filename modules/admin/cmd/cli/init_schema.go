@@ -105,6 +105,9 @@ func initSQLiteDSN(dbPath string) string {
 		"_pragma=temp_store(MEMORY)",
 		"_pragma=cache_size(-64000)",
 		"_pragma=wal_autocheckpoint(1000)",
+		// 事务一开始就取写锁。默认的 DEFERRED 事务先读后写，读快照之后别的连接一提交，升级写锁就立即
+		// 返回 SQLITE_BUSY_SNAPSHOT，busy_timeout 不会重试；IMMEDIATE 让写事务在入口排队。
+		"_txlock=immediate",
 	}
 	sep := "?"
 	if strings.Contains(dbPath, "?") {

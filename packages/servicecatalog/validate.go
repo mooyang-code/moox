@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	maxTimeoutMS    int64 = 960000
-	maxMaxBodyBytes int64 = 64 << 20
+	maxTimeoutMS int64 = 960000
+	// maxMaxBodyBytes 必须小于 tRPC 的单帧上限（gatewayclient 提到 40 MiB），否则声明的请求体到不了服务。
+	maxMaxBodyBytes int64 = 32 << 20
 )
 
 var (
@@ -182,12 +183,28 @@ func (c *Catalog) buildServices(identities map[string]string) error {
 			if err := service.validate(identities); err != nil {
 				return fmt.Errorf("服务 %s: %w", service.Path, err)
 			}
+			// 主机网关的调用方身份（host-gateway@<主机>）只用来拉取快照、上报状态：只有 control 上的网关控制可以放行它。
+			// 放在别的服务的 ACL 里，会让那台主机收到所有主机网关的校验密钥，进而冒充其他主机的网关拉取快照。
+			if component.Scope != ScopeControl && serviceAllowsCaller(service, HostGatewayCaller) {
+				return fmt.Errorf("服务 %s: %s 只能出现在 control 范围组件的 ACL 里", service.Path, HostGatewayCaller)
+			}
 			c.services[service.Path] = service
 			c.serviceOwner[service.Path] = component.ID
 			c.acl[service.Path] = service.expandACL()
 		}
 	}
 	return nil
+}
+
+func serviceAllowsCaller(service *Service, caller string) bool {
+	for _, rule := range service.ACL {
+		for _, name := range rule.Callers {
+			if name == caller {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (service *Service) validate(identities map[string]string) error {

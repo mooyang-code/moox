@@ -127,7 +127,7 @@ func hostCheck(ctx context.Context, checker SSHChecker, host setupconfig.Host) C
 	if err := checker.Check(ctx, host); err != nil {
 		check.Status = "invalid"
 		check.Code = sshErrorCode(err)
-		if check.Code == "host_key_unknown" {
+		if check.Code == "host_key_unknown" || check.Code == "host_key_changed" {
 			check.Fingerprint = sshFingerprint(err)
 		}
 	}
@@ -147,6 +147,8 @@ func sshErrorCode(err error) string {
 	switch {
 	case errors.Is(err, setupssh.ErrHostKeyUnknown):
 		return "host_key_unknown"
+	case errors.Is(err, setupssh.ErrHostKeyChanged):
+		return "host_key_changed"
 	case errors.Is(err, setupssh.ErrAuthFailed):
 		return "ssh_auth_failed"
 	case errors.Is(err, setupssh.ErrUnreachable):

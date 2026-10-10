@@ -919,7 +919,6 @@
             "DeleteFieldGroup",
             "DeleteView",
             "RebindDatasetDataNode",
-            "RegisterArchiveFile",
             "RequestViewRebuild",
             "UpdateDataNode",
             "UpdateDataSource",
@@ -933,11 +932,9 @@
             "UpsertViewColumn"
           ],
           "allowed_callers": [
-            "archive",
             "collector",
             "console",
             "factor-mgr",
-            "monitor",
             "moox-cli",
             "storage-view"
           ]
@@ -1061,22 +1058,31 @@
         },
         {
           "service_id": "storage-primary",
+          "address": "127.0.0.1:20100",
+          "service_path": "trpc.moox.storage.Metadata",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "RegisterArchiveFile"
+          ],
+          "allowed_callers": [
+            "archive",
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
           "address": "127.0.0.1:20102",
           "service_path": "trpc.moox.storage.PrimaryStore",
           "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
-            "AppendDatasetSyncPoint",
-            "ReadFields",
-            "ReadRecordRows",
-            "WaitViewSyncPoint"
+            "AppendDatasetSyncPoint"
           ],
           "allowed_callers": [
-            "archive",
             "collector",
             "console",
             "factor-mgr",
-            "monitor",
             "moox-cli",
             "storage-view"
           ]
@@ -1111,11 +1117,9 @@
             "RestoreDatasetRows"
           ],
           "allowed_callers": [
-            "archive",
             "collector",
             "console",
             "factor-mgr",
-            "monitor",
             "storage-view"
           ]
         },
@@ -1126,8 +1130,7 @@
           "timeout_ms": 300000,
           "max_body_bytes": 33554432,
           "allowed_methods": [
-            "GetFactorPeriodComputed",
-            "UpsertFields"
+            "GetFactorPeriodComputed"
           ],
           "allowed_callers": [
             "access",
@@ -1150,6 +1153,27 @@
             "ListHistorySubjects"
           ],
           "allowed_callers": [
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ReadFields",
+            "ReadRecordRows",
+            "WaitViewSyncPoint"
+          ],
+          "allowed_callers": [
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
             "storage-view"
           ]
         },
@@ -1185,11 +1209,28 @@
           ],
           "allowed_callers": [
             "access",
-            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "timeout_ms": 300000,
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "UpsertFields"
+          ],
+          "allowed_callers": [
+            "access",
             "collector",
             "console",
             "factor-mgr",
             "monitor",
+            "moox-cli",
             "storage-view"
           ]
         },

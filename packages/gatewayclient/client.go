@@ -175,11 +175,6 @@ func WithTimeout(timeout time.Duration) CallOption {
 	return func(o *callOptions) { o.timeout = timeout }
 }
 
-// WithSerialization 设置 Invoke 的序列化类型，默认 PB。
-func WithSerialization(serialization int) CallOption {
-	return func(o *callOptions) { o.serialization = serialization }
-}
-
 // WithMetadata 附加透传给目标服务的 tRPC 元数据。以 x-moox- 开头的键会被主机网关丢弃。
 func WithMetadata(key string, value []byte) CallOption {
 	return func(o *callOptions) {
@@ -372,13 +367,20 @@ func orderHosts(hosts []string, local string, failed map[string]bool) []string {
 	return ordered
 }
 
-// defaultRemoteAddress 选择跨主机地址：同一地域且双方都有私网地址时走私网，否则走公网。
-func defaultRemoteAddress(local, targetHost servicecatalog.DirectoryHost) string {
-	address := targetHost.Address
-	if targetHost.PrivateAddress != "" && local.PrivateAddress != "" && local.Region != "" && local.Region == targetHost.Region {
-		address = targetHost.PrivateAddress
+// defaultRemoteAddress 是跨主机地址：目标主机的公网地址加 11003。地域和私网地址只用来让 SCF 就近访问外部接入
+// （设计文档 3.1），主机之间不走私网：防火墙只放行其他主机的公网地址，私网来源会被挡掉。
+func defaultRemoteAddress(_, targetHost servicecatalog.DirectoryHost) string {
+	return net.JoinHostPort(targetHost.Address, RemotePort)
+}
+
+// defaultTimeout 是调用方既没有设置超时、ctx 也没有截止时间时使用的超时：组件目录里该服务的超时加上一跳的余量。
+// 没有它，对端黑洞或网关卡死时后台协程会一直阻塞。
+func (c *Client) defaultTimeout(servicePath string) time.Duration {
+	const margin = 2 * time.Second
+	if service, _, ok := c.catalog.Service(servicePath); ok && service.TimeoutMS > 0 {
+		return time.Duration(service.TimeoutMS)*time.Millisecond + margin
 	}
-	return net.JoinHostPort(address, RemotePort)
+	return 10 * time.Second
 }
 
 func (c *Client) send(ctx context.Context, chosen target, servicePath, method string, body []byte, options callOptions) ([]byte, error) {
@@ -400,12 +402,20 @@ func (c *Client) send(ctx context.Context, chosen target, servicePath, method st
 		client.WithSerializationType(options.serialization),
 		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
 		client.WithPool(c.pool),
+		// 签名头和元数据已经在这里一次性写好。调用方模块配置的全局客户端过滤器（例如 transinfo-blocker 的白名单）
+		// 属于外层桩的过滤器链，已经执行过；内层不再重复执行，免得它们剥掉签名头。
+		client.WithDisableFilter(),
 	}
 	if chosen.tls {
 		if c.caFile == "" {
 			return nil, errors.New("跨主机调用需要 MooX 私有 CA 证书")
 		}
 		invokeOptions = append(invokeOptions, client.WithTLS("", "", c.caFile, chosen.hostID))
+	}
+	if options.timeout == 0 {
+		if _, hasDeadline := callCtx.Deadline(); !hasDeadline {
+			options.timeout = c.defaultTimeout(servicePath)
+		}
 	}
 	if options.timeout > 0 {
 		invokeOptions = append(invokeOptions, client.WithTimeout(options.timeout))

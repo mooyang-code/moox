@@ -117,3 +117,6 @@ docs/.vitepress/cache/
 
 # local build toolchain cache
 /.toolchain/
+
+# moox-cli setup export-state 的输出含函数环境变量里的密钥
+/moox-state-*.json

@@ -302,7 +302,7 @@ func validateHostEntry(host Host) error {
 	if host.Region != "" && !regionPattern.MatchString(host.Region) {
 		return fmt.Errorf("config_invalid: %s.region %q 不是有效的地域，例如 ap-nanjing", path, host.Region)
 	}
-	if !rootPattern.MatchString(host.Root) || host.Root == "/" || strings.Contains(host.Root, "/../") || strings.HasSuffix(host.Root, "/..") {
+	if !rootPattern.MatchString(host.Root) || host.Root == "/" || strings.Contains(host.Root, "..") {
 		return fmt.Errorf("config_invalid: %s.root 必须是不含特殊字符的绝对路径", path)
 	}
 	switch host.TLSMode {

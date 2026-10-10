@@ -48,7 +48,7 @@ plugins:
           - traceparent
           - tracestate
           - x-moox-trace-id
-          - x-moox-space-id
+          - x-space-id
   metrics:
     prometheus:
       ip: 127.0.0.1

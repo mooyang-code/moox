@@ -4,6 +4,8 @@ package deploy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -225,7 +227,7 @@ func (d *Deployer) Deploy(ctx context.Context, hostID string, opts Options) (Res
 		_ = archive.Close()
 		return Result{}, err
 	}
-	remoteArchive := "/tmp/moox-release-" + releaseID + ".tar.gz"
+	remoteArchive := "/tmp/moox-release-" + releaseID + "-" + randomToken() + ".tar.gz"
 	d.logf("上传发布 %s（%.1f MiB）", releaseID, float64(info.Size())/(1<<20))
 	if err := transport.Upload(ctx, archive, info.Size(), remoteArchive, 0o600); err != nil {
 		_ = archive.Close()
@@ -286,8 +288,18 @@ bash "$script" "$@" || status=$?
 rm -f "$archive" "$script"
 exit "$status"`
 
+// randomToken 给远端临时文件名加上随机后缀：发布编号是时间加提交哈希，可以预测；主机上有其他本地用户时，
+// 可预测的 /tmp 路径可以被预先放置符号链接或抢先写入。
+func randomToken() string {
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(raw)
+}
+
 func runInstaller(ctx context.Context, transport setupssh.Client, archive, releaseID string, args []string) (string, error) {
-	argv := append([]string{"bash", "-c", installerCommand, "moox-install", archive, "/tmp/moox-install-" + releaseID + ".sh"}, args...)
+	argv := append([]string{"bash", "-c", installerCommand, "moox-install", archive, "/tmp/moox-install-" + releaseID + "-" + randomToken() + ".sh"}, args...)
 	result, err := transport.Run(ctx, argv, nil)
 	output := result.Stdout
 	if result.Stderr != "" {
@@ -318,8 +330,9 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// Rollback 把主机切回上一个发布并重启全部组件。
-func (d *Deployer) Rollback(ctx context.Context, hostID string) (string, error) {
+// Rollback 把主机切回上一个发布并重启全部组件。lockHeld 表示操作员已在主机上持有维护锁（停机窗口里回滚），
+// 安装器不再加锁。
+func (d *Deployer) Rollback(ctx context.Context, hostID string, lockHeld bool) (string, error) {
 	host, ok := d.Manifest.Host(hostID)
 	if !ok {
 		return "", fmt.Errorf("moox.toml 中没有主机 %s", hostID)
@@ -329,10 +342,17 @@ func (d *Deployer) Rollback(ctx context.Context, hostID string) (string, error) 
 		return "", err
 	}
 	defer transport.Close()
+	held := "0"
+	if lockHeld {
+		held = "1"
+	}
 	result, err := transport.Run(ctx, []string{"bash", "-c", `set -eu
 root="$1"
 [ -L "$root/current" ] || { echo "主机上还没有发布" >&2; exit 1; }
-exec bash "$root/current/install.sh" --root "$root" --rollback`, "moox-rollback", host.Root}, nil)
+if [ "$2" = 1 ]; then
+  exec bash "$root/current/install.sh" --root "$root" --rollback --maintenance-lock-held
+fi
+exec bash "$root/current/install.sh" --root "$root" --rollback`, "moox-rollback", host.Root, held}, nil)
 	output := result.Stdout + result.Stderr
 	if err != nil {
 		return output, fmt.Errorf("回滚失败: %w", err)

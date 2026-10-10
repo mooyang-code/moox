@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
@@ -23,14 +24,23 @@ type fakeSSHClient struct {
 
 func (c *fakeSSHClient) Check(context.Context) error { return nil }
 
-func (c *fakeSSHClient) ForwardLocal(_ context.Context, remote string) (net.Listener, error) {
+// ForwardLocal 和真实实现一样：传入的 ctx 结束时关闭监听。
+func (c *fakeSSHClient) ForwardLocal(ctx context.Context, remote string) (net.Listener, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.failWith != nil {
 		return nil, c.failWith
 	}
 	c.remotes = append(c.remotes, remote)
-	return net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+	return listener, nil
 }
 
 func (c *fakeSSHClient) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
@@ -84,4 +94,22 @@ func TestSSHTunnelClosesConnectionWhenForwardFails(t *testing.T) {
 	require.True(t, client.closed, "转发失败时关闭 SSH 连接")
 	_, err = tunnel.Address(context.Background(), "")
 	require.Error(t, err)
+}
+
+// 隧道按主机缓存、被多次调用复用：首次调用用的是临时 ctx（例如服务目录后台刷新），它结束后隧道必须仍然可用。
+func TestSSHTunnelSurvivesCancellationOfFirstCallContext(t *testing.T) {
+	tunnel := NewSSHTunnel(func(context.Context, string) (setupssh.Client, error) { return &fakeSSHClient{}, nil })
+	defer tunnel.Close()
+	first, cancel := context.WithCancel(context.Background())
+	address, err := tunnel.Address(first, "control")
+	require.NoError(t, err)
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+
+	again, err := tunnel.Address(context.Background(), "control")
+	require.NoError(t, err)
+	require.Equal(t, address, again)
+	connection, err := net.DialTimeout("tcp", again, time.Second)
+	require.NoError(t, err, "首次调用的 ctx 取消之后，本地转发端口仍然要能连上")
+	_ = connection.Close()
 }

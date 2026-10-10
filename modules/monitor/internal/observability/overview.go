@@ -102,7 +102,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out := Overview{GeneratedAt: now}
 	var err error
-	if out.Services, err = b.buildServices(ctx, spaceID); err != nil {
+	if out.Services, err = b.buildServices(ctx, spaceID, now); err != nil {
 		return Overview{}, err
 	}
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
@@ -190,7 +190,11 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 	}}, nil
 }
 
-func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {
+// neverReportedGrace 是新部署登记之后等待首次上报的宽限：检查由 Monitor 的部署同步定时器建出（最长一分钟），
+// 在此之前指标上报会被拒收；宽限内不判为"从未上报"，免得每次新增部署或主机都触发一次告警再恢复。
+const neverReportedGrace = 5 * time.Minute
+
+func (b Builder) buildServices(ctx context.Context, spaceID string, now time.Time) ([]ServiceStatus, error) {
 	services := make(map[string]ServiceStatus)
 	reporterServices := expectedReporterServices()
 	if b.Metrics != nil && b.Metrics.Catalog() != nil {
@@ -246,7 +250,7 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 		if len(matched) == 0 {
 			key := serviceInstanceKey(nodeID, serviceName, "")
 			service := ServiceStatus{NodeID: nodeID, ServiceName: serviceName, Status: "unknown", Reason: "health not checked"}
-			if reporterServices[serviceName] {
+			if reporterServices[serviceName] && now.Sub(check.CreatedAt) >= neverReportedGrace {
 				// 已登记的部署从未上报运行指标（或已超过 24 小时没有上报，上报目录已清理）。
 				service.ReporterStatus = ReporterNeverReported
 				service.Reason = "从未上报运行指标"

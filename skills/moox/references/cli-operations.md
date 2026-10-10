@@ -147,8 +147,9 @@ K 线，历史不足时以现有数据激活。
 
 ## 收敛默认 View 集合
 
-新项目只保留三个行情 View 和五个系统监控 View。需要删除其他 View 定义时，先停止
-`storage-view`，再执行一次性元数据收敛命令：
+新项目只保留三个行情 View 和五个系统监控 View。需要删除其他 View 定义时，先暂停
+`storage-view`（`/data/moox/storage/pause.sh storage-view`，写暂停标记并停止进程；只停止不够，健康检查会在一分钟内
+把它重新拉起来），再执行一次性元数据收敛命令，完成后用 `resume.sh storage-view` 恢复：
 
 ```bash
 /data/moox/storage/current/bin/moox-storage-cli retain-views \
@@ -165,7 +166,7 @@ K 线，历史不足时以现有数据激活。
   --yes
 ```
 
-命令要求精确传入八个活动 View，并且 `storage-view` 必须已经停止。它只删除 SQLite
+命令要求精确传入八个活动 View，并且 `storage-view` 必须已经暂停。它只删除 SQLite
 中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
 物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 

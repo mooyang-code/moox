@@ -273,16 +273,26 @@ func sameDefinition(existing *domain.Check, check *domain.Check) bool {
 		existing.IntervalSeconds == check.IntervalSeconds && existing.TimeoutMS == check.TimeoutMS
 }
 
-// deleteUnwanted 删除已经没有部署的检查，返回删除的数量。
+// legacyCheckSource 是旧版按服务部署记录生成的检查的来源。这些检查不再有调度方，也没有人维护，
+// 留在库里会一直占着检查数，其中处于告警中的状态永远不会恢复，所以同步时一并清理。
+const legacyCheckSource = "sysdeploy"
+
+// deleteUnwanted 删除已经没有部署的检查和旧版遗留的检查，返回删除的数量。
 func (s *Syncer) deleteUnwanted(ctx context.Context, wanted map[string]struct{}) (int, error) {
 	existing, err := s.checks.ListBySource(ctx, domain.CheckSourcePlacement)
 	if err != nil {
 		return 0, err
 	}
+	legacy, err := s.checks.ListBySource(ctx, legacyCheckSource)
+	if err != nil {
+		return 0, err
+	}
 	deleted := 0
-	for _, check := range existing {
-		if _, ok := wanted[check.CheckID]; ok {
-			continue
+	for _, check := range append(existing, legacy...) {
+		if check.Source == domain.CheckSourcePlacement {
+			if _, ok := wanted[check.CheckID]; ok {
+				continue
+			}
 		}
 		if err := s.checks.DeleteWithRules(ctx, check.SpaceID, check.CheckID); err != nil {
 			return deleted, err

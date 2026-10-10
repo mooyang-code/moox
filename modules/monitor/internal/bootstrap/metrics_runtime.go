@@ -137,9 +137,7 @@ func startObservabilityConsumer(
 		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{
 			Checks: runtime.Repositories.Checks,
 			// SCF 采集函数（组件目录中的外部调用方 scf-collector）没有部署记录；其余上报方都必须是已登记的部署。
-			ExternalProducers: map[string]struct{}{
-				"scf-collector": {},
-			},
+			ExternalProducers: externalProducers,
 		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
 		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 	}

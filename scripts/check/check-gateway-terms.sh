@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # 旧称扫描：网关重构后，代码、配置、脚本、文档和 skills 中不应再出现旧的网关名称和已删除的组件、配置键。
-# 排除 docs/计划/ 下的计划文档（记录的是当时的名称和做法）、本脚本、部署时才重新生成的控制台静态资源（web-host 的 statik.go），
+# 排除 docs/计划/ 下的计划文档（记录的是当时的名称和做法）、本脚本、部署时才重新生成的控制台静态资源（web-host/internal/statik/statik.go），
 # 以及专门断言旧名称已删除或会被拒绝的文件（见 exempt）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
-command -v rg >/dev/null 2>&1 || { echo "check-gateway-terms: 需要 rg" >&2; exit 1; }
+command -v rg >/dev/null 2>&1 || { echo "check-gateway-terms: 需要 ripgrep（rg）" >&2; exit 1; }
 
 terms=(
   # 旧的网关称呼
@@ -20,10 +20,12 @@ terms=(
   'ServiceGatewayTarget' 'ServiceGatewayNodeID' 'CredentialsFromEnv'
   # 已删除的配置键与环境变量
   'gateway_target' 'gateway_node_id' 'admin_gateway_url' 'MOOX_NODE_GATEWAY_' 'MOOX_GATEWAY_TARGET_NODE'
-  'MOOX_SERVICE_GATEWAY_' 'MOOX_COLLECTOR_ADMIN_GATEWAY_URL' 'MOOX_GATEWAY_CONTROL_'
+  'MOOX_SERVICE_GATEWAY_' 'MOOX_COLLECTOR_ADMIN_GATEWAY_URL' 'MOOX_GATEWAY_CONTROL_' 'MOOX_PUBLIC_HOST'
   # 已删除的组件与服务
   'moox-collector-subject' 'collector-subject' 'TradeDNSResolverService' 'trade_dns_resolver' 'trade_console'
   'collector_market_runtime' 'storage_access_targets' 'collector_rpc_gateway_target' 'storage_gateway_host'
+  # 旧的服务管理与控制台转发名称
+  'collectmgr' 'factormgr' '/api/service/' 'service-deployments' 'ops/services'
   # 旧部署脚本
   'deploy-moox.sh' 'caddy-managed.sh'
 )
@@ -39,6 +41,13 @@ exempt=(
   scripts/test/contract/test-deploy-factor-engine.sh
   skills/moox/scripts/test-custom-setup-contract.sh
   skills/moox/scripts/test-private-network-contract.sh
+  modules/admin/internal/console/console_test.go
+  modules/hostgateway/internal/health/state_test.go
+  modules/cli/internal/setup/release/caddy_test.go
+  modules/cli/internal/command/default_setup_bundle_test.go
+  scripts/test/contract/test-greenfield-contract.sh
+  web/scripts/check-deployments-contract.mjs
+  web/scripts/check-menu-structure.mjs
 )
 
 args=()
@@ -48,10 +57,10 @@ done
 for file in "${exempt[@]}"; do
   args+=(--glob "!${file}")
 done
-matches="$(rg -n -F --no-heading "${args[@]}" \
+matches="$(rg -n -F --no-heading --hidden --glob '!.git/**' "${args[@]}" \
   --glob '!docs/计划/**' \
   --glob '!scripts/check/check-gateway-terms.sh' \
-  --glob '!web-host/internal/statik.go' \
+  --glob '!web-host/internal/statik/statik.go' \
   --glob '!**/node_modules/**' \
   --glob '!web/dist/**' \
   --glob '!release/**' \

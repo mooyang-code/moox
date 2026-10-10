@@ -114,7 +114,7 @@ func renderHostGateway(r *renderer, c *Component) error {
 			"tls.ca_file":        r.caFile(),
 			"control.caller":     servicecatalog.HostGatewayIdentity(r.host.ID),
 			"store.path":         r.dataPath("host-gateway"),
-			"server.health_addr": "0.0.0.0:11012",
+			"server.health_addr": net.JoinHostPort(r.healthIP(), "11012"),
 		}
 		if r.isControl() {
 			// control 的主机网关直连本机的网关控制，不需要签名密钥。

@@ -149,9 +149,13 @@ func untarFiles(raw []byte) ([]release.File, error) {
 		if strings.HasPrefix(name, "..") || !(strings.HasPrefix(name, "secrets/") || strings.HasPrefix(name, "certs/")) {
 			return nil, fmt.Errorf("control 导出的文件路径无效：%s", header.Name)
 		}
-		data, err := io.ReadAll(io.LimitReader(reader, 1<<20))
+		data, err := io.ReadAll(io.LimitReader(reader, maxCredentialFileBytes+1))
 		if err != nil {
 			return nil, err
+		}
+		// 超过上限时直接报错：静默截断会让一份被截掉的密钥或证书被当成完整文件装到主机上。
+		if len(data) > maxCredentialFileBytes {
+			return nil, fmt.Errorf("control 导出的文件 %s 超过 %d 字节", header.Name, maxCredentialFileBytes)
 		}
 		files = append(files, release.File{Path: name, Mode: 0o600, Data: data})
 	}
@@ -165,6 +169,9 @@ func notificationFile(manifest setupconfig.Manifest) release.File {
 		manifest.Notification.ChannelType, manifest.Notification.WebhookURL)
 	return release.File{Path: "secrets/notification.env", Mode: 0o600, Data: []byte(data)}
 }
+
+// maxCredentialFileBytes 是单个密钥或证书文件的大小上限。
+const maxCredentialFileBytes = 1 << 20
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"

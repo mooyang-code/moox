@@ -43,7 +43,8 @@ VERSION=v0.1.0 make release-matrix          # 生成全部平台的发布包和 
 上一个发布并重新启动这些组件。
 
 发布包不包含数据、日志；密钥和证书只在安装时装进 `secrets/`、`certs/`，随后从发布目录删除。组件目录内嵌在 Admin、Monitor、CLI、
-主机网关和外部接入中，组件目录有变化时这几个组件要一起发布。
+主机网关、外部接入和所有使用 gatewayclient 的组件中（gatewayclient 用它判断方法是否只读来决定重试），
+组件目录有变化时这些组件要一起发布。
 
 只部署一个服务时不必重新部署整台主机：`deploy-service` 只重新部署该组件。**EventBus 凭据刚轮换时先完成
 [`eventbus-credentials.md`](eventbus-credentials.md) 的 fan-out**，因为 `deploy-service` 不会更新同一主机上其他组件的凭据。
