@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"
 	trpcserver "trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type snapshotStore interface {
@@ -399,6 +400,8 @@ const gatewayCloseWait = 10 * time.Second
 func newGatewayService(address string, listener net.Listener) trpcserver.Service {
 	return trpcserver.New(
 		trpcserver.WithAddress(address), trpcserver.WithListener(listener), trpcserver.WithNetwork("tcp"),
+		// 监听器要记录连接以便关闭时断开，tnet 接不了自定义监听器：直接用标准库传输，免得每次启动都回退并打 ERROR。
+		trpcserver.WithTransport(transport.NewServerTransport()),
 		trpcserver.WithProtocol("trpc"), trpcserver.WithCurrentSerializationType(codec.SerializationTypeNoop),
 		// 不解压请求：帧头里声明的压缩方式由未认证的调用方决定，tRPC 会在验签之前先解压，一个几十 KB 的压缩帧
 		// 就能让进程分配几百 MB 内存。网关本来就只转发原始字节，gatewayclient 也不压缩。

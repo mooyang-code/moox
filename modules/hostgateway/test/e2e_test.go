@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/pool/connpool"
 	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const (
@@ -579,7 +580,8 @@ func plainCall(address string, credentials gatewayauth.Credentials, targetNode, 
 	options := []client.Option{client.WithTarget("ip://" + address), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
 		client.WithServiceName(servicePath), client.WithCalleeMethod(method), client.WithSerializationType(codec.SerializationTypeJSON),
 		client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithTimeout(3 * time.Second),
-		client.WithPool(connpool.NewConnectionPool())}
+		// 标准库连接池只能配标准库传输；linux 上默认传输是 tnet，不接受标准连接。
+		client.WithPool(connpool.NewConnectionPool()), client.WithTransport(transport.DefaultClientTransport)}
 	for key, value := range headers {
 		options = append(options, client.WithMetaData(key, []byte(value)))
 	}
