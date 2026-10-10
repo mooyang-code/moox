@@ -61,7 +61,18 @@ func ChineseReason(raw string) string {
 		}
 		return strings.Join(translated, "；")
 	}
+	if base, ok := strings.CutSuffix(text, ": authentication failed"); ok {
+		return ChineseReason(base) + "（认证失败）"
+	}
 	switch text {
+	case "eventbus connection unavailable":
+		return "无法连接消息总线"
+	case "metrics history write to Storage failed":
+		return "指标历史写入存储服务失败"
+	case "metrics catalog write failed":
+		return "指标目录写入监控数据库失败"
+	case "host metrics write failed":
+		return "主机指标写入失败"
 	case "reporter fresh":
 		return "监控上报正常"
 	case "reporter missing":

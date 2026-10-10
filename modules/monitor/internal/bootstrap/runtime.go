@@ -40,12 +40,13 @@ type Runtime struct {
 	ModuleMetrics            *report.ModuleMetrics
 }
 
-func (r *Runtime) recordObservabilityWriteFailure(err error) {
+// recordObservabilityWriteFailure 记录服务指标写入失败；reason 指明失败的环节。
+func (r *Runtime) recordObservabilityWriteFailure(reason string, err error) {
 	if r == nil || err == nil {
 		return
 	}
 	sequence := r.writeStateSequence.Add(1)
-	r.observabilityWriteError.Store(sanitizedMetricsError(err))
+	r.observabilityWriteError.Store(failureReason(reason, err))
 	storeWriteStateSequence(&r.observabilityWriteFailed, sequence)
 }
 
@@ -61,7 +62,7 @@ func (r *Runtime) recordHostWriteFailure(err error) {
 		return
 	}
 	sequence := r.writeStateSequence.Add(1)
-	r.hostWriteError.Store(sanitizedMetricsError(err))
+	r.hostWriteError.Store(failureReason(reasonHostMetrics, err))
 	storeWriteStateSequence(&r.hostWriteFailed, sequence)
 }
 
@@ -106,7 +107,7 @@ func (r *Runtime) setMetricsReporterState(ready bool, err error) {
 	r.MetricsReporterReady.Store(ready)
 	message := ""
 	if err != nil {
-		message = sanitizedMetricsError(err)
+		message = failureReason(reasonEventbus, err)
 	}
 	r.metricsReporterError.Store(message)
 }
@@ -118,7 +119,7 @@ func (r *Runtime) setObservabilityIngestState(ready bool, err error) {
 	r.ObservabilityIngestReady.Store(ready)
 	message := ""
 	if err != nil {
-		message = sanitizedMetricsError(err)
+		message = failureReason(reasonEventbus, err)
 	}
 	r.observabilityIngestError.Store(message)
 }

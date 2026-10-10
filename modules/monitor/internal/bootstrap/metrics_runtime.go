@@ -259,15 +259,20 @@ func metricsObservabilityRoute(
 		if err != nil || duplicate {
 			return err
 		}
+		// 先记录上报方在线，再写 Storage 历史：Storage 不可用时上报方不会被误判为停止上报。
+		if err := messageStore.TouchService(ctx, message, metricReport); err != nil {
+			runtime.recordObservabilityWriteFailure(reasonMetricsCatalog, err)
+			return err
+		}
 		if err := storage.WriteSamples(ctx, samples); err != nil {
 			monmetrics.RecordIngest(moduleMetrics, "error", time.Time{})
-			runtime.recordObservabilityWriteFailure(err)
+			runtime.recordObservabilityWriteFailure(reasonMetricsHistory, err)
 			return err
 		}
 		duplicate, err = messageStore.CommitIngest(ctx, message, metricReport, samples)
 		if err != nil || duplicate {
 			if err != nil {
-				runtime.recordObservabilityWriteFailure(err)
+				runtime.recordObservabilityWriteFailure(reasonMetricsCatalog, err)
 			}
 			return err
 		}
@@ -310,15 +315,25 @@ func waitObservabilityRetry(ctx context.Context) bool {
 	}
 }
 
-func sanitizedMetricsError(err error) string {
+// 健康原因按出错环节区分，不带原始错误文本（可能含地址或凭据）。
+const (
+	reasonEventbus       = "eventbus connection unavailable"
+	reasonMetricsHistory = "metrics history write to Storage failed"
+	reasonMetricsCatalog = "metrics catalog write failed"
+	reasonHostMetrics    = "host metrics write failed"
+	reasonAuthSuffix     = ": authentication failed"
+)
+
+// failureReason 返回环节原因；凭据类错误追加认证失败说明。
+func failureReason(reason string, err error) string {
 	if err == nil {
 		return ""
 	}
 	message := strings.ToLower(err.Error())
 	for _, secretTerm := range []string{"credential", "authorization", "authentication", "password", "token"} {
 		if strings.Contains(message, secretTerm) {
-			return "eventbus authentication unavailable"
+			return reason + reasonAuthSuffix
 		}
 	}
-	return "eventbus connection unavailable"
+	return reason
 }

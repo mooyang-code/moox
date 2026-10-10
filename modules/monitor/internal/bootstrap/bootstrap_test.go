@@ -302,7 +302,7 @@ func TestMonitorHealthSnapshotMetricsBranches(t *testing.T) {
 
 func TestObservabilityWriteFailureRequiresSubsequentSuccess(t *testing.T) {
 	rt := &Runtime{}
-	rt.recordObservabilityWriteFailure(errors.New("storage unavailable"))
+	rt.recordObservabilityWriteFailure(reasonMetricsHistory, errors.New("storage unavailable"))
 
 	ready, _ := rt.observabilityWriteReady(time.Now().Add(24 * time.Hour))
 	assert.False(t, ready)
@@ -360,4 +360,16 @@ func TestRegisterMonitorServiceSkipsMissingService(t *testing.T) {
 	assert.Equal(t, "ip://127.0.0.1:20102", normalizeHostStorageTarget("  "))
 	assert.Equal(t, 5, maxInt(5, 5))
 	_ = cfg
+}
+
+func TestFailureReasonNamesTheFailingStepWithoutTheRawError(t *testing.T) {
+	assert.Equal(t, "metrics history write to Storage failed", failureReason(reasonMetricsHistory, errors.New("write metrics history: dial tcp 10.0.0.8:20102: connection refused")))
+	assert.Equal(t, "eventbus connection unavailable: authentication failed", failureReason(reasonEventbus, errors.New("nats: Authorization Violation")))
+	assert.Empty(t, failureReason(reasonEventbus, nil))
+
+	rt := &Runtime{}
+	rt.recordObservabilityWriteFailure(reasonMetricsHistory, errors.New("storage-primary unavailable"))
+	ready, reason := rt.observabilityWriteReady(time.Now())
+	assert.False(t, ready)
+	assert.Equal(t, "metrics history write to Storage failed", reason, "a Storage outage must not be reported as an eventbus problem")
 }

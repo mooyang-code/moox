@@ -51,6 +51,15 @@ export default defineConfig({
 
     sidebar: [
       {
+        text: '计划（待实施）',
+        collapsed: true,
+        items: [
+          { text: '网关与服务部署重构设计', link: '/计划/网关与服务部署重构设计' },
+          { text: '网关与服务部署重构执行计划', link: '/计划/网关与服务部署重构执行计划' },
+          { text: 'Console Proxy 内嵌 Caddy', link: '/2026-10-09-console-proxy-embedded-caddy-execution-plan' },
+        ],
+      },
+      {
         text: '总体',
         items: [
           { text: '总体设计', link: '/总体设计' },
