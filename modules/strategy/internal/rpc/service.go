@@ -23,11 +23,11 @@ import (
 // Resolver 解析绑定、装配最新周期（试算）并校验回放区间。
 type Resolver interface {
 	Resolve(ctx context.Context, spaceID, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
-	// CheckAgeCoverage 在启用时校验 View 能追溯 min_age_bars。
-	CheckAgeCoverage(ctx context.Context, spaceID string, resolved input.Resolved) error
+	// CheckCoverage 在启用时校验 View 的覆盖：A 股行键、min_age_bars 所需的历史。
+	CheckCoverage(ctx context.Context, spaceID string, resolved input.Resolved, now time.Time) error
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
 	// ReplayWindow 校验并截断回放区间，返回截断后的终点与校验所用的活动索引代次。
-	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error)
+	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error)
 }
 
 // Owner 是 Trade 组合账户的会话所有权接口。

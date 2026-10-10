@@ -835,7 +835,8 @@ func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeT
 	if defaults.SuccessMissedIntervals > 0 && runBase > 0 {
 		successLag = time.Duration(defaults.SuccessMissedIntervals)*runBase + 30*time.Second
 	}
-	watermarkLag := max(time.Duration(defaults.WatermarkPeriods)*frequency, defaults.MinimumWatermarkLag)
+	// 水位容忍按“周期与期望间隔中较大者”放大：A 股等交易日历数据集的期望间隔跨周末、长假，可能远大于名义周期。
+	watermarkLag := max(time.Duration(defaults.WatermarkPeriods)*max(frequency, runBase), defaults.MinimumWatermarkLag)
 	for _, override := range policy.Overrides {
 		if override.SpaceID == key.spaceID && override.DatasetID == key.datasetID && sameDatasetFrequency(override.Freq, key.freq) && override.WatermarkLag > 0 {
 			watermarkLag = override.WatermarkLag

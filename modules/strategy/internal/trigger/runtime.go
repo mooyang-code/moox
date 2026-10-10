@@ -36,7 +36,9 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 	}
 	resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
 	if err != nil {
-		return &runtime{sessionID: sessionID, dslHash: session.DSLHash}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+		// 会话快照损坏：退回实例上的同一份副本取日历与周期，跳过记录才能按正确的周期写；两者都坏时调用方只记日志与计数。
+		fallback, _ := input.ParseResolved(instance.ResolvedJSON)
+		return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: fallback}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 	}
 	// 编译失败时仍用快照里的日历与周期记录跳过：零值会让周期按 crypto 日历换算，写错 bar_end 与有效期。
 	compiled, program, err := input.Compile(resolved, version.DSLYaml)

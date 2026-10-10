@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -32,7 +33,7 @@ func rowEnv(id string, row Row, score float64, vars map[string]float64) map[stri
 func runBool(expression *dsl.Expression, id string, row Row, score float64) (bool, error) {
 	value, err := expression.Run(rowEnv(id, row, score, nil))
 	if err != nil {
-		return false, err
+		return false, errors.New(runtimeErrorText(err))
 	}
 	result, ok := value.(bool)
 	if !ok {
@@ -96,25 +97,18 @@ func evaluateNumeric(expression *dsl.Expression, ids []string, rows map[string]R
 	return result
 }
 
-// scoreErrorHints 是表达式运行错误的中文原因，按出现顺序匹配第一条。
-var scoreErrorHints = []struct{ raw, text string }{
-	{"divide by zero", "除以零"},
-	{"out of range", "下标越界"},
-	{"invalid operation", "运算的操作数类型不对"},
-	{"cannot fetch", "取不到值"},
-	{"nil pointer", "值为空"},
-	{"<nil>", "值为空"},
+// runtimeErrorText 把表达式运行错误换成中文原因；运行库的英文原文不进入结果记录。DSL 的限制（只有浮点运算、bars 只有
+// 两项、matches 的正则是编译期校验过的字面量）让运行错误几乎不会发生，这里只给出通用的说明。
+func runtimeErrorText(err error) string {
+	if strings.Contains(strings.ToLower(err.Error()), "regexp") {
+		return "表达式求值出错（正则表达式无效）"
+	}
+	return "表达式求值出错"
 }
 
-// scoreErrorReason 把表达式运行错误换成中文的明细原因（score_error:<原因>）；运行库的英文原文不进入明细。
+// scoreErrorReason 把分数表达式的运行错误写成明细原因 score_error:<中文原因>。
 func scoreErrorReason(err error) string {
-	message := strings.ToLower(err.Error())
-	for _, hint := range scoreErrorHints {
-		if strings.Contains(message, hint.raw) {
-			return "score_error:" + hint.text
-		}
-	}
-	return "score_error:求值出错"
+	return "score_error:" + strings.TrimPrefix(runtimeErrorText(err), "表达式")
 }
 
 func without(ids []string, failed map[string]string) []string {

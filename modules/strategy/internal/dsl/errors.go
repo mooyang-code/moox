@@ -67,6 +67,8 @@ var exprHints = []struct{ raw, text string }{
 	{"too many arguments", "参数太多"},
 	{"cannot use", "类型不匹配"},
 	{"unknown func", "使用了不支持的函数"},
+	{"error parsing regexp", "正则表达式无效"},
+	{"divide by zero", "除以零"},
 }
 
 // exprError 把表达式库的错误换成中文说明。what 是错误类别（“语法错误”或“编译失败”）；withPosition 为 true 时给出

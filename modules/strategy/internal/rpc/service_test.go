@@ -44,7 +44,7 @@ type fakeResolver struct {
 	calendar string
 }
 
-func (f *fakeResolver) CheckAgeCoverage(context.Context, string, input.Resolved) error {
+func (f *fakeResolver) CheckCoverage(context.Context, string, input.Resolved, time.Time) error {
 	return f.coverageErr
 }
 
@@ -80,8 +80,8 @@ func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.
 	return f.loaded, f.loadErr
 }
 
-func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error) {
-	end, err := input.ReplayWindow(resolved, program, f.view, start, end)
+func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error) {
+	end, err := input.ReplayWindow(resolved, program, f.view, start, end, now)
 	return end, f.view.Generation, err
 }
 

@@ -1,3 +1,4 @@
+// Package marketcalendar 提供内嵌的交易日历（目前只有 A 股 cn_stock）：按日期判断交易日、前后推交易日。
 package marketcalendar
 
 import (
@@ -17,31 +18,26 @@ import (
 const civilDateLayout = "2006-01-02"
 
 var (
-	ErrUnknownCalendar      = errors.New("unknown trading calendar")
-	ErrInvalidCivilDate     = errors.New("invalid civil date")
-	ErrOutOfCoverage        = errors.New("date is outside calendar coverage")
-	ErrNoPreviousTradingDay = errors.New("no previous trading day in calendar coverage")
-	ErrNoNextTradingDay     = errors.New("no next trading day in calendar coverage")
-	ErrInvalidCalendarData  = errors.New("invalid trading calendar data")
-	ErrInvalidManifest      = errors.New("invalid trading calendar manifest")
-	ErrCalendarChecksum     = errors.New("trading calendar checksum mismatch")
-	ErrCalendarExpiring     = errors.New("trading calendar is nearing valid_through")
-	ErrCalendarExpired      = errors.New("trading calendar coverage has expired")
+	ErrUnknownCalendar      = errors.New("未知的交易日历")
+	ErrInvalidCivilDate     = errors.New("日期无效")
+	ErrOutOfCoverage        = errors.New("日期超出交易日历的覆盖范围")
+	ErrNoPreviousTradingDay = errors.New("交易日历覆盖范围内没有更早的交易日")
+	ErrNoNextTradingDay     = errors.New("交易日历覆盖范围内没有更晚的交易日")
+	ErrInvalidCalendarData  = errors.New("交易日历数据无效")
+	ErrInvalidManifest      = errors.New("交易日历清单无效")
+	ErrCalendarChecksum     = errors.New("交易日历校验和不一致")
 	// ErrNotTradingDay 表示给定日期在日历覆盖范围内，但不是交易日。
-	ErrNotTradingDay = errors.New("date is not a trading day")
+	ErrNotTradingDay = errors.New("不是交易日")
 )
 
-// CivilDate is a calendar date without a clock or location.
-//
-// Its fields are private on purpose: callers can only construct a validated
-// value, so converting through a time zone can never change its date.
+// CivilDate 是不带时刻与时区的日历日期。字段刻意不导出：只能构造经过校验的值，经时区换算也不会改变日期。
 type CivilDate struct {
 	year  int16
 	month uint8
 	day   uint8
 }
 
-// NewCivilDate constructs a validated civil date.
+// NewCivilDate 构造经过校验的日期。
 func NewCivilDate(year int, month time.Month, day int) (CivilDate, error) {
 	if year < 1 || year > 9999 || month < time.January || month > time.December || day < 1 || day > 31 {
 		return CivilDate{}, fmt.Errorf("%w: %04d-%02d-%02d", ErrInvalidCivilDate, year, month, day)
@@ -53,17 +49,17 @@ func NewCivilDate(year int, month time.Month, day int) (CivilDate, error) {
 	return CivilDate{year: int16(year), month: uint8(month), day: uint8(day)}, nil
 }
 
-// ParseCivilDate parses the canonical YYYY-MM-DD representation.
+// ParseCivilDate 解析规范的 YYYY-MM-DD 写法。
 func ParseCivilDate(value string) (CivilDate, error) {
 	if len(value) != len(civilDateLayout) || value[4] != '-' || value[7] != '-' {
-		return CivilDate{}, fmt.Errorf("%w: %q must use YYYY-MM-DD", ErrInvalidCivilDate, value)
+		return CivilDate{}, fmt.Errorf("%w：%q 必须写成 YYYY-MM-DD", ErrInvalidCivilDate, value)
 	}
 	for i, character := range value {
 		if i == 4 || i == 7 {
 			continue
 		}
 		if character < '0' || character > '9' {
-			return CivilDate{}, fmt.Errorf("%w: %q must use YYYY-MM-DD", ErrInvalidCivilDate, value)
+			return CivilDate{}, fmt.Errorf("%w：%q 必须写成 YYYY-MM-DD", ErrInvalidCivilDate, value)
 		}
 	}
 	year, _ := strconv.Atoi(value[:4])
@@ -76,7 +72,7 @@ func ParseCivilDate(value string) (CivilDate, error) {
 	return date, nil
 }
 
-// Validate reports whether d is a non-zero, valid civil date.
+// Validate 检查 d 是非零的有效日期。
 func (d CivilDate) Validate() error {
 	if d.year < 1 || d.month < uint8(time.January) || d.month > uint8(time.December) || d.day < 1 {
 		return fmt.Errorf("%w: %q", ErrInvalidCivilDate, d)
@@ -144,7 +140,7 @@ type calendarData struct {
 	tradingDaySet map[CivilDate]struct{}
 }
 
-// TradingCalendar is an immutable view over an embedded trading calendar.
+// TradingCalendar 是内嵌交易日历的不可变视图。
 type TradingCalendar struct {
 	data *calendarData
 }
@@ -155,7 +151,7 @@ var embeddedTradingDays []byte
 //go:embed data/manifest.json
 var embeddedManifest []byte
 
-// Load loads one of the built-in calendars by ID.
+// Load 按 ID 加载内嵌日历。
 func Load(id string) (TradingCalendar, error) {
 	if id != "cn_stock" {
 		return TradingCalendar{}, fmt.Errorf("%w: %q", ErrUnknownCalendar, id)
@@ -177,7 +173,7 @@ func (c TradingCalendar) LastDate() CivilDate {
 	return c.data.tradingDays[len(c.data.tradingDays)-1]
 }
 
-// Status classifies date without assuming that an unknown date is a holiday.
+// Status 判断日期是否交易日；覆盖范围之外的日期返回 OutOfCoverage 与错误，不当作休市日。
 func (c TradingCalendar) Status(date CivilDate) (CoverageStatus, error) {
 	if err := c.checkCovered(date); err != nil {
 		return OutOfCoverage, err
@@ -188,7 +184,7 @@ func (c TradingCalendar) Status(date CivilDate) (CoverageStatus, error) {
 	return NonTradingDay, nil
 }
 
-// PrevTradingDay returns the closest trading day strictly before date.
+// PrevTradingDay 返回严格早于 date 的最近一个交易日。
 func (c TradingCalendar) PrevTradingDay(date CivilDate) (CivilDate, error) {
 	if err := c.checkCovered(date); err != nil {
 		return CivilDate{}, err
@@ -205,7 +201,7 @@ func (c TradingCalendar) PrevTradingDay(date CivilDate) (CivilDate, error) {
 	}
 }
 
-// NextTradingDay returns the closest trading day strictly after date.
+// NextTradingDay 返回严格晚于 date 的最近一个交易日。
 func (c TradingCalendar) NextTradingDay(date CivilDate) (CivilDate, error) {
 	if err := c.checkCovered(date); err != nil {
 		return CivilDate{}, err
@@ -236,13 +232,13 @@ func (c TradingCalendar) TradingDayIndex(date CivilDate) (int, error) {
 
 func (c TradingCalendar) checkCovered(date CivilDate) error {
 	if c.data == nil {
-		return fmt.Errorf("%w: calendar is not loaded", ErrOutOfCoverage)
+		return fmt.Errorf("%w：日历未加载", ErrOutOfCoverage)
 	}
 	if err := date.Validate(); err != nil {
 		return err
 	}
 	if date.Before(c.FirstDate()) || date.After(c.LastDate()) {
-		return fmt.Errorf("%w: %s is outside %s..%s", ErrOutOfCoverage, date, c.FirstDate(), c.LastDate())
+		return fmt.Errorf("%w：%s 不在 %s 至 %s 之内", ErrOutOfCoverage, date, c.FirstDate(), c.LastDate())
 	}
 	return nil
 }
@@ -257,15 +253,15 @@ func loadCalendar(dataRaw, manifestRaw []byte) (TradingCalendar, error) {
 		return TradingCalendar{}, err
 	}
 	if manifest.CalendarID != data.calendarID {
-		return TradingCalendar{}, fmt.Errorf("%w: manifest calendar_id %q does not match data calendar_id %q", ErrInvalidManifest, manifest.CalendarID, data.calendarID)
+		return TradingCalendar{}, fmt.Errorf("%w：清单的 calendar_id %q 与数据的 calendar_id %q 不一致", ErrInvalidManifest, manifest.CalendarID, data.calendarID)
 	}
 	if manifest.ValidFrom != data.dates[0].String() || manifest.ValidThrough != data.dates[len(data.dates)-1].String() {
-		return TradingCalendar{}, fmt.Errorf("%w: manifest coverage does not match data boundaries", ErrInvalidManifest)
+		return TradingCalendar{}, fmt.Errorf("%w：清单的覆盖范围与数据的首末日期不一致", ErrInvalidManifest)
 	}
 	sum := sha256.Sum256(dataRaw)
 	wantHash := "sha256:" + hex.EncodeToString(sum[:])
 	if manifest.SHA256 != wantHash {
-		return TradingCalendar{}, fmt.Errorf("%w: got %q, want %q", ErrCalendarChecksum, manifest.SHA256, wantHash)
+		return TradingCalendar{}, fmt.Errorf("%w：清单为 %q，数据为 %q", ErrCalendarChecksum, manifest.SHA256, wantHash)
 	}
 	return TradingCalendar{data: &calendarData{
 		tradingDays:   append([]CivilDate(nil), data.dates...),
@@ -282,26 +278,26 @@ type parsedCalendarData struct {
 func parseCalendarData(raw []byte) (parsedCalendarData, error) {
 	var file calendarFile
 	if err := decodeJSON(raw, &file); err != nil {
-		return parsedCalendarData{}, fmt.Errorf("%w: decode data: %v", ErrInvalidCalendarData, err)
+		return parsedCalendarData{}, fmt.Errorf("%w：解析数据失败：%v", ErrInvalidCalendarData, err)
 	}
 	if strings.TrimSpace(file.CalendarID) == "" {
-		return parsedCalendarData{}, fmt.Errorf("%w: calendar_id is required", ErrInvalidCalendarData)
+		return parsedCalendarData{}, fmt.Errorf("%w：缺少 calendar_id", ErrInvalidCalendarData)
 	}
 	if len(file.TradingDays) == 0 {
-		return parsedCalendarData{}, fmt.Errorf("%w: trading_days is empty", ErrInvalidCalendarData)
+		return parsedCalendarData{}, fmt.Errorf("%w：trading_days 为空", ErrInvalidCalendarData)
 	}
 	dates := make([]CivilDate, 0, len(file.TradingDays))
 	set := make(map[CivilDate]struct{}, len(file.TradingDays))
 	for index, text := range file.TradingDays {
 		date, err := ParseCivilDate(text)
 		if err != nil {
-			return parsedCalendarData{}, fmt.Errorf("%w: trading_days[%d] %q: %v", ErrInvalidCalendarData, index, text, err)
+			return parsedCalendarData{}, fmt.Errorf("%w：trading_days[%d] %q：%v", ErrInvalidCalendarData, index, text, err)
 		}
 		if _, exists := set[date]; exists {
-			return parsedCalendarData{}, fmt.Errorf("%w: duplicate trading date %q", ErrInvalidCalendarData, text)
+			return parsedCalendarData{}, fmt.Errorf("%w：交易日 %q 重复", ErrInvalidCalendarData, text)
 		}
 		if len(dates) > 0 && !dates[len(dates)-1].Before(date) {
-			return parsedCalendarData{}, fmt.Errorf("%w: trading_days[%d] %q is not strictly after %q", ErrInvalidCalendarData, index, text, dates[len(dates)-1])
+			return parsedCalendarData{}, fmt.Errorf("%w：trading_days[%d] %q 没有严格晚于 %q", ErrInvalidCalendarData, index, text, dates[len(dates)-1])
 		}
 		dates = append(dates, date)
 		set[date] = struct{}{}
@@ -312,27 +308,27 @@ func parseCalendarData(raw []byte) (parsedCalendarData, error) {
 func parseCalendarManifest(raw []byte) (calendarManifest, error) {
 	var manifest calendarManifest
 	if err := decodeJSON(raw, &manifest); err != nil {
-		return calendarManifest{}, fmt.Errorf("%w: decode manifest: %v", ErrInvalidManifest, err)
+		return calendarManifest{}, fmt.Errorf("%w：解析清单失败：%v", ErrInvalidManifest, err)
 	}
 	if strings.TrimSpace(manifest.CalendarID) == "" || strings.TrimSpace(manifest.Source) == "" {
-		return calendarManifest{}, fmt.Errorf("%w: calendar_id and source are required", ErrInvalidManifest)
+		return calendarManifest{}, fmt.Errorf("%w：缺少 calendar_id 或 source", ErrInvalidManifest)
 	}
 	if manifest.Version <= 0 {
-		return calendarManifest{}, fmt.Errorf("%w: version must be positive", ErrInvalidManifest)
+		return calendarManifest{}, fmt.Errorf("%w：version 必须为正数", ErrInvalidManifest)
 	}
 	from, err := ParseCivilDate(manifest.ValidFrom)
 	if err != nil {
-		return calendarManifest{}, fmt.Errorf("%w: valid_from: %v", ErrInvalidManifest, err)
+		return calendarManifest{}, fmt.Errorf("%w：valid_from：%v", ErrInvalidManifest, err)
 	}
 	through, err := ParseCivilDate(manifest.ValidThrough)
 	if err != nil {
-		return calendarManifest{}, fmt.Errorf("%w: valid_through: %v", ErrInvalidManifest, err)
+		return calendarManifest{}, fmt.Errorf("%w：valid_through：%v", ErrInvalidManifest, err)
 	}
 	if from.After(through) {
-		return calendarManifest{}, fmt.Errorf("%w: valid_from is after valid_through", ErrInvalidManifest)
+		return calendarManifest{}, fmt.Errorf("%w：valid_from 晚于 valid_through", ErrInvalidManifest)
 	}
 	if !isSHA256(manifest.SHA256) {
-		return calendarManifest{}, fmt.Errorf("%w: sha256 must use sha256:<64 lowercase hex>", ErrInvalidManifest)
+		return calendarManifest{}, fmt.Errorf("%w：sha256 必须写成 sha256:<64 位小写十六进制>", ErrInvalidManifest)
 	}
 	return manifest, nil
 }
@@ -346,7 +342,7 @@ func decodeJSON(raw []byte, destination any) error {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return errors.New("multiple JSON values")
+			return errors.New("包含多个 JSON 值")
 		}
 		return err
 	}

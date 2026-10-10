@@ -208,10 +208,11 @@ func referencedTags(strategy dsl.Strategy) []string {
 	return uniqueSorted(tags)
 }
 
-// CheckAgeCoverage 在启用实例时校验 View 能追溯 min_age_bars（需要读取覆盖统计，统计未缓存时现算）。
-// 没有设置 min_age_bars 时不读取。
-func CheckAgeCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved) error {
-	if resolved.MinAgeBars <= 0 {
+// CheckCoverage 在启用实例时校验 View 的覆盖（需要读取覆盖统计，统计未缓存时现算）：A 股日线总是校验行键是交易日的
+// 上海零点（按 UTC 零点写行的数据集启用后每一期都会被丢弃）；设置了 min_age_bars 时校验能追溯所需的历史。两者都不
+// 涉及时不读取。
+func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved, now time.Time) error {
+	if resolved.MinAgeBars <= 0 && !stockDaily(resolved.Calendar, resolved.Bar) {
 		return nil
 	}
 	view, err := client.GetView(ctx, spaceID, resolved.ViewID)
@@ -221,34 +222,45 @@ func CheckAgeCoverage(ctx context.Context, client Client, spaceID string, resolv
 	if view, err = WithCoverage(ctx, client, spaceID, view, true); err != nil {
 		return err
 	}
-	return checkAgeCoverage(view, resolved, resolved.MinAgeBars)
+	if resolved.MinAgeBars > 0 {
+		return checkAgeCoverage(view, resolved, resolved.MinAgeBars, now)
+	}
+	// 只校验行键；还没有数据时无从校验，允许启用。
+	if _, err := CoverageBounds(view, resolved, now); err != nil && !errors.Is(err, ErrCoverageUnknown) {
+		return coverageUnusable(resolved.ViewID, err, "不能启用实例")
+	}
+	return nil
 }
 
 // checkAgeCoverage 校验 View 能追溯 min_age_bars：N 不超过每个序列保留的根数，且以最新一根为 T，
 // T − (N−1) 根不早于活跃序列的覆盖起点。覆盖范围未知（索引还没有任何行）时无法确认，拒绝启用。
-func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int) error {
+func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int, now time.Time) error {
 	if view.SeriesBars > 0 && minAgeBars > view.SeriesBars {
 		return fmt.Errorf("universe.min_age_bars=%d 超过 View %s 每个序列保留的 %d 根，永远无法满足", minAgeBars, resolved.ViewID, view.SeriesBars)
 	}
-	bounds, err := CoverageBounds(view, resolved)
+	bounds, err := CoverageBounds(view, resolved, now)
 	if errors.Is(err, ErrCoverageUnknown) {
 		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认 universe.min_age_bars=%d 所需的历史，请等数据写入后再启用", resolved.ViewID, minAgeBars)
 	}
 	if err != nil {
 		return coverageUnusable(resolved.ViewID, err, fmt.Sprintf("无法确认 universe.min_age_bars=%d 所需的历史", minAgeBars))
 	}
+	label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
 	start, latest := coverageStart(bounds, view, resolved, time.Time{}), bounds.To
+	if start.After(latest) {
+		return fmt.Errorf("View %s 的数据已超出 A 股内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，无法确认 universe.min_age_bars=%d 所需的历史；请更新日历数据", resolved.ViewID, label(latest), bounds.Beyond, view.SeriesBars, minAgeBars)
+	}
 	target, err := HistoryStart(resolved.Calendar, resolved.Bar, latest, minAgeBars)
 	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
 		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 A 股内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars",
-			minAgeBars, resolved.ViewID, start.Format(time.RFC3339), latest.Format(time.RFC3339))
+			minAgeBars, resolved.ViewID, label(start), label(latest))
 	}
 	if err != nil {
 		return err
 	}
 	if target.Before(start) {
 		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 %s，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars 或等待 View 积累更多历史",
-			minAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339), latest.Format(time.RFC3339))
+			minAgeBars, label(target), resolved.ViewID, label(start), label(latest))
 	}
 	return nil
 }

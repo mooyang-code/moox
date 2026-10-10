@@ -55,7 +55,7 @@ func TestQueueTruncationIsNoted(t *testing.T) {
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	metrics := metricsOf(t, done)
-	if done.Status != store.ReplayDone || metrics.Bars != 6 || !hasNote(metrics, "排队期间 View 重建了索引") || !hasNote(metrics, "最后一根 K 线结束于 2026-09-01T08:00:00Z") {
+	if done.Status != store.ReplayDone || metrics.Bars != 6 || !hasNote(metrics, "排队期间 View 重建了索引") || !hasNote(metrics, "区间内最后一根 K 线结束于 2026-09-01T08:00:00Z") {
 		t.Fatalf("排队期间截短应写进说明：%+v", metrics)
 	}
 }
@@ -72,7 +72,7 @@ func TestRecheckReportsCoverageReason(t *testing.T) {
 	}
 	resolved := input.Resolved{ViewID: "view_a", Bar: "1d", Calendar: "cn_stock"}
 	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", ViewID: "view_a", EndTime: time.Date(2027, 2, 1, 0, 0, 0, 0, shanghai)}
-	_, _, err = runner.recheckWindow(context.Background(), job, resolved, nil, view, time.Date(2026, 12, 1, 0, 0, 0, 0, shanghai), job.EndTime, true)
+	_, _, err = runner.recheckWindow(context.Background(), job, resolved, nil, view, time.Date(2026, 12, 1, 0, 0, 0, 0, shanghai), job.EndTime, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") || strings.Contains(err.Error(), "暂时未知") {
 		t.Fatalf("复查应说明具体原因：%v", err)
 	}

@@ -84,7 +84,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	}
 	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
 	generation := ""
-	if end, generation, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end); err != nil {
+	if end, generation, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end, s.nowTime()); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, start, end, input.DefaultReplayMaxBars)

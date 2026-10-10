@@ -49,6 +49,7 @@ func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 // A 股日线按上海日期回放：UTC 零点输入的 [09-01, 10-01) 记录为上海日期零点，回放 09-01 到 09-30 的交易日。
 func TestStartReplayStockUsesShanghaiDates(t *testing.T) {
 	h := newHarness(t)
+	h.now = time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	h.resolver.calendar = "cn_stock"
 	shanghai := time.FixedZone("CST", 8*3600)
 	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, shanghai), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai)}

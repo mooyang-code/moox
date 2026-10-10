@@ -29,7 +29,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -271,7 +270,7 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 	switch {
 	case err == nil:
 		return "", false
-	case errors.Is(err, marketcalendar.ErrCalendarExpiring):
+	case errors.Is(err, input.ErrCalendarExpiring):
 		return err.Error(), false
 	default:
 		return err.Error() + "；使用 A 股日历的实例无法求值", true

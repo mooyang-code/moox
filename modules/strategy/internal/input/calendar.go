@@ -28,7 +28,13 @@ type PeriodBoundaries struct {
 	BarIndex      int64
 }
 
-// translateCalendarError 把交易日历包的英文错误换成带覆盖范围的中文说明；nil 与已换过的错误原样返回。
+// A 股内嵌日历的可用截止日检查结果（StockCalendarReadiness 的底层原因）。
+var (
+	ErrCalendarExpiring = errors.New("A 股交易日历即将到期")
+	ErrCalendarExpired  = errors.New("A 股交易日历已到期")
+)
+
+// translateCalendarError 把交易日历包的错误换成带覆盖范围的说明；nil 与已换过的错误原样返回。
 func translateCalendarError(err error) error {
 	if err == nil {
 		return nil
@@ -403,7 +409,7 @@ func CheckCalendar(calendarID, frequency string) error {
 
 // StockCalendarReadiness 检查内嵌 A 股日历在 now 是否还能完整处理当天的周期。周期的有效期要推到其后 validBars 个
 // 交易日，日历最后 validBars 个交易日的周期已推不出有效期，实际可用截止日是“最后一个交易日往前 validBars 个交易日”：
-// 过了它返回 marketcalendar.ErrCalendarExpired，warning 时间内将到它返回 marketcalendar.ErrCalendarExpiring。
+// 过了它返回 ErrCalendarExpired，warning 时间内将到它返回 ErrCalendarExpiring。
 func StockCalendarReadiness(now time.Time, warning time.Duration, validBars int) error {
 	calendar, location, err := stockCalendar()
 	if err != nil {
@@ -425,14 +431,14 @@ func StockCalendarReadiness(now time.Time, warning time.Duration, validBars int)
 	if today.After(usable) {
 		return &describedError{
 			message: fmt.Sprintf("A 股内嵌交易日历止于 %s，%s 之后的周期已无法推算有效期，请更新日历数据", calendar.LastDate(), usable),
-			cause:   marketcalendar.ErrCalendarExpired,
+			cause:   ErrCalendarExpired,
 		}
 	}
 	usableEnd := time.Date(usable.Year(), usable.Month(), usable.Day(), 15, 0, 0, 0, location)
 	if warning > 0 && !now.Add(warning).Before(usableEnd) {
 		return &describedError{
 			message: fmt.Sprintf("A 股内嵌交易日历止于 %s，%s 之后的周期将无法处理，请在此之前更新日历数据", calendar.LastDate(), usable),
-			cause:   marketcalendar.ErrCalendarExpiring,
+			cause:   ErrCalendarExpiring,
 		}
 	}
 	return nil

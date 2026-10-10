@@ -110,6 +110,7 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		o.datasets.ObserveInventoryRefreshError()
 		return fmt.Errorf("读取启用实例：%w", err)
 	}
+	o.loadBases(ctx, instances)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	next := make(map[string]report.DatasetExpectation, len(instances))
@@ -138,6 +139,37 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// loadBases 为还没有基准的 A 股实例从库里取最近处理的一根与最近一个 ok 的一根（不分会话）：进程重启或重新启用后，
+// Monitor 里上次运行与成功的时间仍在，期望间隔要以同样的基准计算，否则周末重启后周一跳过一根就会报 success stale。
+// 读取失败时留到下一次刷新。
+func (o *instanceObserver) loadBases(ctx context.Context, instances []store.Instance) {
+	for _, instance := range instances {
+		resolved, err := input.ParseResolved(instance.ResolvedJSON)
+		if err != nil || !strings.EqualFold(strings.TrimSpace(resolved.Calendar), "cn_stock") {
+			continue
+		}
+		o.mu.Lock()
+		_, known := o.lastBarEnd[instance.InstanceID]
+		o.mu.Unlock()
+		if known {
+			continue
+		}
+		processed, ok, err := o.store.LatestBarEnds(ctx, instance.InstanceID)
+		if err != nil {
+			o.log("读取实例 %s 最近处理的周期失败：%v", instance.InstanceID, err)
+			continue
+		}
+		o.mu.Lock()
+		if !processed.IsZero() && processed.After(o.lastBarEnd[instance.InstanceID]) {
+			o.lastBarEnd[instance.InstanceID] = processed
+		}
+		if !ok.IsZero() && ok.After(o.lastOkBarEnd[instance.InstanceID]) {
+			o.lastOkBarEnd[instance.InstanceID] = ok
+		}
+		o.mu.Unlock()
+	}
 }
 
 // 与 config/setup/dataset-health-policy.yaml 一致：Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行

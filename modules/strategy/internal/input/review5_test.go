@@ -31,11 +31,11 @@ func TestStockCalendarTail(t *testing.T) {
 	}
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2025, 1, 2), IndexedTo: stockDay(t, 2027, 1, 6), SeriesBars: 5000}
-	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2025, 3, 3), stockDay(t, 2025, 7, 1))
+	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2025, 3, 3), stockDay(t, 2025, 7, 1), testNow)
 	if err != nil || !end.Equal(stockDay(t, 2025, 7, 1)) {
 		t.Fatalf("索引最新一根超出日历时历史窗口应照常可用：%s err=%v", end, err)
 	}
-	if err := checkAgeCoverage(view, resolved, resolved.MinAgeBars); err != nil {
+	if err := checkAgeCoverage(view, resolved, resolved.MinAgeBars, testNow); err != nil {
 		t.Fatalf("索引最新一根超出日历时启用校验应照常进行：%v", err)
 	}
 }
@@ -44,15 +44,15 @@ func TestStockCalendarTail(t *testing.T) {
 func TestCoverageBoundsSnapToTradingDays(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
 	// 10-03 到 10-05 整段是假期：规整后最早一根（10-08）晚于最晚一根（09-30），报出行都不在交易日上。
-	if bounds, err := CoverageBounds(ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 3), IndexedTo: stockDay(t, 2026, 10, 5)}, resolved); err == nil || !strings.Contains(err.Error(), "都不在 A 股交易日上") {
+	if bounds, err := CoverageBounds(ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 3), IndexedTo: stockDay(t, 2026, 10, 5)}, resolved, testNow); err == nil || !strings.Contains(err.Error(), "都不在 A 股交易日上") {
 		t.Fatalf("整段落在假期内的覆盖范围应报出原因：%+v err=%v", bounds, err)
 	}
 	view := ViewInfo{IndexedFrom: stockDay(t, 2026, 9, 27), IndexedTo: stockDay(t, 2026, 10, 5), SeriesBars: 5000}
-	bounds, err := CoverageBounds(view, resolved)
+	bounds, err := CoverageBounds(view, resolved, testNow)
 	if err != nil || !bounds.From.Equal(stockDay(t, 2026, 9, 28)) || !bounds.To.Equal(stockDay(t, 2026, 9, 30)) || bounds.ToClosed {
 		t.Fatalf("覆盖边界应规整到交易日：%+v err=%v", bounds, err)
 	}
-	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 28), stockDay(t, 2026, 10, 9)); err != nil {
+	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 28), stockDay(t, 2026, 10, 9), testNow); err != nil {
 		t.Fatalf("覆盖边界落在节假日时回放仍应可以提交：%v", err)
 	}
 }
@@ -115,12 +115,12 @@ func TestAgeProbeCalendarErrorIsConfigError(t *testing.T) {
 func TestReplayWindowRejectsUnsatisfiableHistory(t *testing.T) {
 	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 150}
 	view := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
-	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
+	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 超过每个序列保留的根数应拒绝：%v", err)
 	}
 	resolved.MinAgeBars = 30
 	view = ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-10 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
-	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-5*time.Hour), barStart); err == nil || !strings.Contains(err.Error(), "暂不能回放") || strings.Contains(err.Error(), "可用起点") {
+	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-5*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "暂不能回放") || strings.Contains(err.Error(), "可用起点") {
 		t.Fatalf("可用起点会晚于最新一根时应直接说明历史不足：%v", err)
 	}
 }

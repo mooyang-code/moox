@@ -58,7 +58,7 @@ func TestCoverageStartAnchorsAtProcessedBar(t *testing.T) {
 	if start := CoverageStartAt(view, resolved, barStart); !start.Equal(barStart.Add(-23 * time.Hour)) {
 		t.Fatalf("以 T 为基准的覆盖起点不符：%s", start)
 	}
-	if start := CoverageStart(view, resolved); !start.Equal(barStart.Add(-21 * time.Hour)) {
+	if start := CoverageStartAt(view, resolved, time.Time{}); !start.Equal(barStart.Add(-21 * time.Hour)) {
 		t.Fatalf("以索引最新一根为基准的覆盖起点不符：%s", start)
 	}
 	if start := CoverageStartAt(view, resolved, barStart.Add(10*time.Hour)); !start.Equal(barStart.Add(-21 * time.Hour)) {
@@ -111,7 +111,7 @@ func TestLoadBarReadsCoverageOnlyForAgeProbe(t *testing.T) {
 	if len(client.coverageReads) != 1 || client.coverageReads[0] {
 		t.Fatalf("年龄探针只应读取一次缓存的统计：%v", client.coverageReads)
 	}
-	if err := CheckAgeCoverage(context.Background(), client, "space", aged); err != nil {
+	if err := CheckCoverage(context.Background(), client, "space", aged, testNow); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.coverageReads) != 2 || !client.coverageReads[1] {

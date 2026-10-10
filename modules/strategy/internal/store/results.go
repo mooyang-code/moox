@@ -321,6 +321,25 @@ func (s *Store) LatestOk(ctx context.Context, instanceID, sessionID string) (Res
 	return row.result(), true, nil
 }
 
+// LatestBarEnds 返回实例（不分会话）最近处理的一根与最近一个 ok 的一根的 bar_end；没有记录时为零值。Monitor 的
+// 期望间隔以它们为基准，进程重启或重新启用后从库里恢复，而不是退回偏宽或偏紧的估计。
+func (s *Store) LatestBarEnds(ctx context.Context, instanceID string) (processed, ok time.Time, err error) {
+	var row struct {
+		Processed sql.NullInt64 `gorm:"column:processed"`
+		OK        sql.NullInt64 `gorm:"column:ok"`
+	}
+	if err := s.db.WithContext(ctx).Raw(`SELECT MAX(c_bar_end_time) AS processed, MAX(CASE WHEN c_status = 'ok' THEN c_bar_end_time END) AS ok FROM t_strategy_results WHERE c_instance_id = ?`, instanceID).Scan(&row).Error; err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	if row.Processed.Valid {
+		processed = fromMillis(row.Processed.Int64)
+	}
+	if row.OK.Valid {
+		ok = fromMillis(row.OK.Int64)
+	}
+	return processed, ok, nil
+}
+
 // ResultAtBar 返回本会话某个周期的记录。
 func (s *Store) ResultAtBar(ctx context.Context, instanceID, sessionID string, barEnd time.Time) (Result, bool, error) {
 	var row resultRow

@@ -23,7 +23,7 @@ func (s Service) Resolve(ctx context.Context, spaceID, viewID string, strategy d
 }
 
 // ReplayWindow 读取 View 的覆盖范围，校验回放起点并截断终点，返回截断后的终点与校验所用的活动索引代次。
-func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, start, end time.Time) (time.Time, string, error) {
+func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error) {
 	if s.Client == nil {
 		return time.Time{}, "", errors.New("Storage 与 Factor 依赖未配置，不能回放")
 	}
@@ -34,16 +34,16 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 	if view, err = WithCoverage(ctx, s.Client, spaceID, view, true); err != nil {
 		return time.Time{}, "", err
 	}
-	end, err = ReplayWindow(resolved, program, view, start, end)
+	end, err = ReplayWindow(resolved, program, view, start, end, now)
 	return end, view.Generation, err
 }
 
-// CheckAgeCoverage 在启用实例时校验 View 能追溯 min_age_bars。
-func (s Service) CheckAgeCoverage(ctx context.Context, spaceID string, resolved Resolved) error {
+// CheckCoverage 在启用实例时校验 View 的覆盖（见包级 CheckCoverage）。
+func (s Service) CheckCoverage(ctx context.Context, spaceID string, resolved Resolved, now time.Time) error {
 	if s.Client == nil {
 		return errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
 	}
-	return CheckAgeCoverage(ctx, s.Client, spaceID, resolved)
+	return CheckCoverage(ctx, s.Client, spaceID, resolved, now)
 }
 
 // LoadLatest 装配 now 之前最近一个已闭合周期的输入；该周期没有行时向前最多再找两根。

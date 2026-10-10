@@ -349,7 +349,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
 			return reload(), err
 		}
-		if err := s.Resolver.CheckAgeCoverage(ctx, instance.SpaceID, resolved); err != nil {
+		if err := s.Resolver.CheckCoverage(ctx, instance.SpaceID, resolved, s.nowTime()); err != nil {
 			return reload(), err
 		}
 		resolvedJSON, err = json.Marshal(resolved)

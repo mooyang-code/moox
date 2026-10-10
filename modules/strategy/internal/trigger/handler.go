@@ -108,7 +108,9 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 }
 
 // firstDrop 报告这条事件对这个实例的丢弃是否第一次发生（调用方持有 h.mu）。丢弃不落记录，没有别的依据去重：
-// 同一事件因其他实例需要重投而再次投递时，不能把这个实例重复计入周期计数与模块健康失败。
+// 同一事件因其他实例需要重投而再次投递时，不能把这个实例重复计入周期计数与模块健康失败。边界：记录在 Handle 返回
+// nil 时清理，ACK 本身失败而重投时会再计一次；事件在确认前被流的保留策略清掉时条目留在内存里（只积累在重试中的事件
+// 上，量很小），进程重启后清零。
 func (h *Handler) firstDrop(eventID, instanceID string) bool {
 	if h.dropped == nil {
 		h.dropped = make(map[string]struct{})
@@ -140,10 +142,23 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if rtErr != nil && !errors.As(rtErr, &skip) {
 		return rtErr
 	}
-	calendar, bar := input.DefaultCalendar, strings.ToLower(payload.GetFrequency())
-	if rt != nil && rt.resolved.Bar != "" {
-		calendar, bar = rt.resolved.Calendar, rt.resolved.Bar
+	// 因子结果 View 只由 factor_period.computed 驱动，K 线 View 只由 collector.period.completed 驱动；实例绑定哪种 View
+	// 在启用时就确定了，其他类型的完成事件不是这个实例的触发信号，先于一切处理忽略（编译失败的会话也带着快照里的类型）。
+	if rt != nil {
+		if want := rt.resolved.CompletionKind; want != "" && payload.GetCompletionKind() != want {
+			h.logf("实例 %s 只接受 %s 触发，忽略 %s 事件 %s", instance.InstanceID, want, payload.GetCompletionKind(), message.GetEventId())
+			return nil
+		}
 	}
+	// 绑定快照（会话与实例上的副本）都无法解析：不知道日历与周期，写不出正确的跳过记录，只记日志与计数。
+	if rt == nil || rt.resolved.Bar == "" {
+		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
+			h.logf("实例 %s 的绑定快照无法解析，本期丢弃：%v", instance.InstanceID, rtErr)
+			h.observe(instance, strings.ToLower(payload.GetFrequency()), time.Time{}, store.StatusSkipped, input.SkipConfigError)
+		}
+		return nil
+	}
+	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
 	// 日历换算失败（例如 A 股内嵌日历已过期、周期不在交易日上）无法确定周期与有效期，只能 ACK：
 	// 记日志并计入模块健康失败，不能悄悄丢掉这一期。
 	boundary, err := input.FromStorageStart(calendar, bar, periodTime)
@@ -166,12 +181,6 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	p.input = store.InputRecord{ViewID: payload.GetViewId(), Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, EventID: message.GetEventId()}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
-	}
-	// 因子结果 View 只由 factor_period.computed 驱动，K 线 View 只由 collector.period.completed 驱动；
-	// 实例绑定哪种 View 在启用时就确定了，其他类型的完成事件不是这个实例的触发信号。
-	if want := rt.resolved.CompletionKind; want != "" && payload.GetCompletionKind() != want {
-		h.logf("实例 %s 只接受 %s 触发，忽略 %s 事件 %s", instance.InstanceID, want, payload.GetCompletionKind(), message.GetEventId())
-		return nil
 	}
 	latest, hasLatest, err := h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID)
 	if err != nil {
@@ -388,8 +397,10 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 		}
 		if store.IsPermanentWriteError(err) {
 			// 连兜底的 skipped 也写不进去：重投不会成功，记错误日志并计入模块健康失败后确认，不能无限重投。
-			h.logf("实例 %s 周期 %s 的 skipped(%s) 记录无法写入，放弃本期：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, err)
-			h.observe(p.instance, p.input.Bar, p.boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+			if h.firstDrop(p.eventID, p.instance.InstanceID) {
+				h.logf("实例 %s 周期 %s 的 skipped(%s) 记录无法写入，放弃本期：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, err)
+				h.observe(p.instance, p.input.Bar, p.boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+			}
 			return nil
 		}
 		return fmt.Errorf("写入 skipped(%s) 记录：%w", reason, err)

@@ -205,26 +205,26 @@ func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve 不应读取覆盖统计：%v", err)
 	}
-	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "当前只覆盖") {
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "当前只覆盖") {
 		t.Fatalf("View 覆盖不足时应拒绝启用：%v", err)
 	}
 	view.IndexedFrom = barStart.Add(-300 * time.Hour)
 	client.views["view_factor_1h"] = view
-	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err != nil {
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err != nil {
 		t.Fatalf("覆盖足够时应允许启用：%v", err)
 	}
 	view.SeriesBars = 200
 	client.views["view_factor_1h"] = view
-	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 超过每个序列保留的根数应拒绝启用：%v", err)
 	}
 	view.SeriesBars, view.IndexedFrom, view.IndexedTo = 0, time.Time{}, time.Time{}
 	client.views["view_factor_1h"] = view
-	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
 		t.Fatalf("覆盖统计未知时应拒绝启用：%v", err)
 	}
 	client.errors["coverage"] = errors.New("覆盖统计读取失败")
-	if err := CheckAgeCoverage(context.Background(), client, "space", resolved); err == nil || !strings.Contains(err.Error(), "覆盖统计读取失败") {
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "覆盖统计读取失败") {
 		t.Fatalf("覆盖统计读取失败应返回错误：%v", err)
 	}
 	delete(client.errors, "coverage")

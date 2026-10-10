@@ -234,6 +234,12 @@ func (w *walker) visit(node *ast.Node) error {
 	case *ast.UnaryNode:
 		return w.visit(&n.Node)
 	case *ast.BinaryNode:
+		// matches 的正则只能是字符串字面量：编译时就校验，求值时不会因为数据（例如标的 ID 里的括号）而报错。
+		if n.Operator == "matches" {
+			if _, literal := n.Right.(*ast.StringNode); !literal {
+				return errors.New("matches 右边只能是字符串字面量（正则表达式）")
+			}
+		}
 		if err := w.visit(&n.Left); err != nil {
 			return err
 		}

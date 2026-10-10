@@ -9,16 +9,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
-// setClock 在测试期间固定“当前时间”。
-func setClock(t *testing.T, now time.Time) {
-	t.Helper()
-	previous := clock
-	clock = func() time.Time { return now }
-	t.Cleanup(func() { clock = previous })
-}
+// testNow 是测试里判断“已经闭合”的当前时间：晚于测试数据里的 bar、仍在 A 股内嵌日历之内。
+var testNow = time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
 
 // leaksRaw 报告报错里是否夹带了 Storage 的英文原文。
 func leaksRaw(err error) bool {
@@ -77,7 +71,7 @@ rules:
 	for _, seriesBars := range []int{0, 10000} {
 		resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 		view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 1990, 12, 19), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: seriesBars}
-		if _, err := ReplayWindow(resolved, program, view, stockDay(t, 2020, 1, 2), stockDay(t, 2020, 6, 1)); err != nil {
+		if _, err := ReplayWindow(resolved, program, view, stockDay(t, 2020, 1, 2), stockDay(t, 2020, 6, 1), testNow); err != nil {
 			t.Fatalf("数据从日历首日开始时（每序列 %d 根）回放应可以提交：%v", seriesBars, err)
 		}
 	}
@@ -87,7 +81,7 @@ rules:
 func TestReplayWindowStockShortCoverage(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 120}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
-	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 9))
+	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 9), testNow)
 	if err == nil || !strings.Contains(err.Error(), "需要 120 根数据") || strings.Contains(err.Error(), "更新日历") {
 		t.Fatalf("覆盖太短应说明历史不足：%v", err)
 	}
@@ -97,28 +91,29 @@ func TestReplayWindowStockShortCoverage(t *testing.T) {
 func TestCoverageBeyondCalendarSaysWhy(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2027, 1, 4), IndexedTo: stockDay(t, 2027, 3, 1), SeriesBars: 5000}
-	if _, err := CoverageBounds(view, resolved); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") {
+	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") {
 		t.Fatalf("覆盖整体超出日历应说明原因：%v", err)
 	}
-	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 2, 1)); err == nil || strings.Contains(err.Error(), "还没有数据") || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") {
+	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 2, 1), testNow); err == nil || strings.Contains(err.Error(), "还没有数据") || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") {
 		t.Fatalf("回放提交应说明超出日历：%v", err)
 	}
-	if err := checkAgeCoverage(view, resolved, 5); err == nil || strings.Contains(err.Error(), "请等数据写入") || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") {
+	if err := checkAgeCoverage(view, resolved, 5, testNow); err == nil || strings.Contains(err.Error(), "请等数据写入") || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") {
 		t.Fatalf("启用校验应说明超出日历：%v", err)
 	}
-	if _, err := CoverageBounds(ViewInfo{}, resolved); !errors.Is(err, ErrCoverageUnknown) {
+	if _, err := CoverageBounds(ViewInfo{}, resolved, testNow); !errors.Is(err, ErrCoverageUnknown) {
 		t.Fatalf("没有统计时应是覆盖未知：%v", err)
 	}
 }
 
-// 索引最新一根超出内嵌日历时，日历的最后一个交易日已经写完：经提交路径也能回放到它。
+// 当前时间已过内嵌日历、索引里还有日历之后的数据时，日历的最后一个交易日已经写完：经提交路径也能回放到它，终点是
+// 次日的上海零点（区间仍按“不含结束日”的整日口径）。
 func TestReplayWindowIncludesLastCalendarDay(t *testing.T) {
-	setClock(t, time.Date(2027, 1, 10, 0, 0, 0, 0, time.UTC))
+	now := time.Date(2027, 1, 10, 0, 0, 0, 0, time.UTC)
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 8), SeriesBars: 5000}
-	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1))
-	if err != nil {
-		t.Fatal(err)
+	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1), now)
+	if err != nil || !end.Equal(stockDay(t, 2027, 1, 1)) {
+		t.Fatalf("终点应是日历末日次日的上海零点：%s err=%v", end, err)
 	}
 	bars, err := ReplayBars("cn_stock", "1d", stockDay(t, 2026, 12, 1), end, DefaultReplayMaxBars)
 	if err != nil || !bars[len(bars)-1].StorageStart.Equal(stockDay(t, 2026, 12, 31)) {
@@ -126,7 +121,7 @@ func TestReplayWindowIncludesLastCalendarDay(t *testing.T) {
 	}
 	// 没有超出日历时，最新一根可能还没写完，回放只到它之前。
 	view.IndexedTo = stockDay(t, 2026, 12, 31)
-	if end, err = ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1)); err != nil || !end.Equal(stockDay(t, 2026, 12, 31)) {
+	if end, err = ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1), now); err != nil || !end.Equal(stockDay(t, 2026, 12, 31)) {
 		t.Fatalf("最新一根在日历内时终点应截到它之前：%s err=%v", end, err)
 	}
 }
@@ -164,11 +159,11 @@ func TestReplayRangeUsesShanghaiDates(t *testing.T) {
 func TestReplayWindowRejectsMinAgeEqualToSeriesBars(t *testing.T) {
 	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 100}
 	view := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
-	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
+	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 等于每序列根数应拒绝：%v", err)
 	}
 	resolved.MinAgeBars = 99
-	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-time.Hour), barStart); err != nil {
+	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-time.Hour), barStart, testNow); err != nil {
 		t.Fatalf("N 比每序列根数少一根时最新一根之前那根可以回放：%v", err)
 	}
 }
@@ -268,7 +263,7 @@ func TestStorageErrorsAreChinese(t *testing.T) {
 
 // 启用前的日历截止日检查在输入层由 StockCalendarReadiness 完成：过了截止日返回 ErrCalendarExpired。
 func TestStockCalendarReadinessCutoff(t *testing.T) {
-	if err := StockCalendarReadiness(time.Date(2026, 12, 30, 10, 0, 0, 0, shanghai(t)), 0, 2); !errors.Is(err, marketcalendar.ErrCalendarExpired) {
+	if err := StockCalendarReadiness(time.Date(2026, 12, 30, 10, 0, 0, 0, shanghai(t)), 0, 2); !errors.Is(err, ErrCalendarExpired) {
 		t.Fatalf("过了可用截止日应返回过期：%v", err)
 	}
 	if err := StockCalendarReadiness(time.Date(2026, 12, 29, 10, 0, 0, 0, shanghai(t)), 0, 2); err != nil {

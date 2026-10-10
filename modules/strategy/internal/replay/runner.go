@@ -190,11 +190,18 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if len(subjects) == 0 {
 		return Metrics{}, fmt.Errorf("View %s 的数据集没有标的绑定", job.ViewID)
 	}
+	// 退避之前和之后都确认回放没有被取消：写入密集的 View 上一段读取可能退避很久，取消要尽快生效。
+	abort := func(ctx context.Context) error {
+		if status, err := r.Store.ReplayStatus(ctx, job.ReplayID); err == nil && status == store.ReplayCancelled {
+			return errCancelled
+		}
+		return nil
+	}
 	// 活动索引的代次没变：同一代索引只追加、不删除行，提交时校验过的区间仍然有效（覆盖统计随新 bar 前移不影响已有的行）。
 	// 代次变了（排队期间重建过索引，新一代只保留最近的根数）才按新索引的精确统计复查起点并截断终点。
 	end := job.EndTime
 	if view.Generation != job.ViewGeneration {
-		if view, end, err = r.recheckWindow(ctx, job, resolved, program, view, job.StartTime, end, false); err != nil {
+		if view, end, err = r.recheckWindow(ctx, job, resolved, program, view, job.StartTime, end, false, abort); err != nil {
 			return Metrics{}, err
 		}
 	}
@@ -213,18 +220,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	acc.metrics.Factors = resolved.Factors
 	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy))
 	if end.Before(job.EndTime) {
-		acc.setNote(noteTruncated, fmt.Sprintf("排队期间 View 重建了索引，回放截到新索引的最新一根之前：最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[len(bars)-1].BarEnd)))
+		acc.setNote(noteTruncated, fmt.Sprintf("排队期间 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[len(bars)-1].BarEnd)))
 	}
 	columns := uniqueStrings(append(append([]string{"close"}, program.Columns...), program.PreviousColumns...))
-	// 退避重读之前确认回放没有被取消：写入密集的 View 上一段读取可能退避很久，取消要尽快生效。
-	abort := func(ctx context.Context) error {
-		if status, err := r.Store.ReplayStatus(ctx, job.ReplayID); err == nil && status == store.ReplayCancelled {
-			return errCancelled
-		}
-		return nil
-	}
 	reader := &segmentReader{
-		runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc,
+		runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort,
 		rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: columns, Abort: abort},
 		history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}, Abort: abort},
 	}
@@ -243,7 +243,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		if cut := sort.Search(len(bars), func(i int) bool { return !bars[i].StorageStart.Before(reader.end) }); cut < len(bars) {
 			bars = bars[:cut]
 			segment = bars[start:min(start+chunk, len(bars))]
-			acc.setNote(noteTruncated, fmt.Sprintf("回放过程中 View 重建了索引，回放截到新索引的最新一根之前：最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[cut-1].BarEnd)))
+			acc.setNote(noteTruncated, fmt.Sprintf("回放过程中 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[cut-1].BarEnd)))
 		}
 		for _, bar := range segment {
 			if status, err := r.Store.ReplayStatus(ctx, job.ReplayID); err != nil {
@@ -309,15 +309,54 @@ const maxRecheckRereads = 3
 
 var recheckRereadBackoff = time.Second
 
+// pause 等待 d，等待前后都确认回放没有被取消（abort 为空时只等待）；ctx 结束时返回 ctx 的错误。
+func pause(ctx context.Context, abort func(context.Context) error, d time.Duration) error {
+	check := func() error {
+		if abort == nil {
+			return nil
+		}
+		return abort(ctx)
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	return check()
+}
+
+// withTransportRetry 调用 call，遇到传输失败（Storage 暂时不可用）时按 1、2、3 倍 recheckRereadBackoff 退避重试，
+// 最多 3 次，与分段读取一致：长回放不因复查时的一次瞬时失败而失败。
+func withTransportRetry[T any](ctx context.Context, abort func(context.Context) error, call func() (T, error)) (T, error) {
+	for retries := 0; ; retries++ {
+		value, err := call()
+		var transportErr *input.TransportError
+		if err == nil || !errors.As(err, &transportErr) || retries >= maxRecheckRereads {
+			return value, err
+		}
+		if err := pause(ctx, abort, time.Duration(retries+1)*recheckRereadBackoff); err != nil {
+			var zero T
+			return zero, err
+		}
+	}
+}
+
 // recheckWindow 在活动索引换了一代后，按新索引的精确统计复查 [start, end) 的起点并截断终点；midRun 说明换代发生在
 // 回放过程中（start 是剩余区间的起点）还是排队期间（start 是回放起点）。新索引的统计未知时无法确认区间仍然有效，拒绝继续。
-func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, view input.ViewInfo, start, end time.Time, midRun bool) (input.ViewInfo, time.Time, error) {
+func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, view input.ViewInfo, start, end time.Time, midRun bool, abort func(context.Context) error) (input.ViewInfo, time.Time, error) {
 	when := "在排队期间"
 	if midRun {
 		when = "在回放过程中"
 	}
 	for attempt := 0; ; attempt++ {
-		covered, err := input.WithCoverage(ctx, r.Client, job.SpaceID, view, true)
+		covered, err := withTransportRetry(ctx, abort, func() (input.ViewInfo, error) {
+			return input.WithCoverage(ctx, r.Client, job.SpaceID, view, true)
+		})
 		if err == nil {
 			view = covered
 			break
@@ -329,20 +368,20 @@ func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved i
 		if attempt >= maxRecheckRereads {
 			return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引，读取新索引的覆盖统计时索引仍在变化：%w；请稍后重新发起回放", job.ViewID, when, err)
 		}
-		select {
-		case <-ctx.Done():
-			return input.ViewInfo{}, time.Time{}, ctx.Err()
-		case <-time.After(time.Duration(attempt+1) * recheckRereadBackoff):
+		if err := pause(ctx, abort, time.Duration(attempt+1)*recheckRereadBackoff); err != nil {
+			return input.ViewInfo{}, time.Time{}, err
 		}
-		if view, err = r.Client.GetView(ctx, job.SpaceID, job.ViewID); err != nil {
+		if view, err = withTransportRetry(ctx, abort, func() (input.ViewInfo, error) {
+			return r.Client.GetView(ctx, job.SpaceID, job.ViewID)
+		}); err != nil {
 			return input.ViewInfo{}, time.Time{}, err
 		}
 	}
 	// 覆盖统计未知时无法确认区间仍然有效；其余覆盖问题（行全在非交易日上、超出内嵌日历）由 ReplayWindow 说明具体原因。
-	if _, err := input.CoverageBounds(view, resolved); errors.Is(err, input.ErrCoverageUnknown) {
+	if _, err := input.CoverageBounds(view, resolved, r.now()); errors.Is(err, input.ErrCoverageUnknown) {
 		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引，新索引的覆盖范围暂时未知，无法确认回放区间仍然有效；请稍后重新发起回放", job.ViewID, when)
 	}
-	newEnd, err := input.ReplayWindow(resolved, program, view, start, end)
+	newEnd, err := input.ReplayWindow(resolved, program, view, start, end, r.now())
 	var early *input.EarlyStartError
 	if midRun && errors.As(err, &early) {
 		// 回放过程中复查的是剩余区间，起点是本段的第一根，不是回放起点。
@@ -370,8 +409,10 @@ type segmentReader struct {
 	program  *dsl.Program
 	rows     *input.RangeLoader
 	history  *input.RangeLoader
-	// acc 记录换代的局限说明：每次换代成功后立即写入，回放失败或取消时保存的部分指标也带着它。
+	// acc 记录换代的局限说明：每次换代成功后立即写入，回放失败或取消时保存的部分指标也带着它；abort 在退避前后确认
+	// 回放没有被取消。
 	acc      *accumulator
+	abort    func(context.Context) error
 	switches int
 	// end 是当前有效的终点（不含）：换代后可能被新索引截短。
 	end time.Time
@@ -396,7 +437,7 @@ func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundari
 			return input.RangeRows{}, nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", s.job.ViewID)
 		}
 		s.switches++
-		view, end, err := s.runner.recheckWindow(ctx, s.job, s.resolved, s.program, changed.View, segment[0].StorageStart, s.end, true)
+		view, end, err := s.runner.recheckWindow(ctx, s.job, s.resolved, s.program, changed.View, segment[0].StorageStart, s.end, true, s.abort)
 		if err != nil {
 			return input.RangeRows{}, nil, err
 		}

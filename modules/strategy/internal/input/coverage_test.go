@@ -185,24 +185,24 @@ func TestResolveCompletionKindByDatasetRole(t *testing.T) {
 func TestCoverageStartAndAgeCoverage(t *testing.T) {
 	resolved := Resolved{ViewID: "view", Calendar: DefaultCalendar, Bar: "1h"}
 	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
-	if start := CoverageStart(view, resolved); !start.Equal(barStart.Add(-99 * time.Hour)) {
+	if start := CoverageStartAt(view, resolved, time.Time{}); !start.Equal(barStart.Add(-99 * time.Hour)) {
 		t.Fatalf("活跃序列的覆盖起点应是最新一根往前 99 根：%s", start)
 	}
 	view.SeriesBars = 0
-	if start := CoverageStart(view, resolved); !start.Equal(view.IndexedFrom) {
+	if start := CoverageStartAt(view, resolved, time.Time{}); !start.Equal(view.IndexedFrom) {
 		t.Fatalf("保留根数未知时以索引统计为准：%s", start)
 	}
-	if !CoverageStart(ViewInfo{}, resolved).IsZero() {
+	if !CoverageStartAt(ViewInfo{}, resolved, time.Time{}).IsZero() {
 		t.Fatal("覆盖范围未知时应返回零值")
 	}
 	view.SeriesBars = 100
-	if err := checkAgeCoverage(view, resolved, 120); err == nil || !strings.Contains(err.Error(), "每个序列保留的 100 根") {
+	if err := checkAgeCoverage(view, resolved, 120, testNow); err == nil || !strings.Contains(err.Error(), "每个序列保留的 100 根") {
 		t.Fatalf("min_age_bars 超过保留根数应拒绝：%v", err)
 	}
-	if err := checkAgeCoverage(view, resolved, 100); err != nil {
+	if err := checkAgeCoverage(view, resolved, 100, testNow); err != nil {
 		t.Fatalf("恰好等于保留根数应允许：%v", err)
 	}
-	if err := checkAgeCoverage(ViewInfo{}, resolved, 10); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+	if err := checkAgeCoverage(ViewInfo{}, resolved, 10, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
 		t.Fatalf("覆盖范围未知时应拒绝启用：%v", err)
 	}
 }
@@ -211,14 +211,14 @@ func TestCoverageStartAndAgeCoverage(t *testing.T) {
 func TestReplayWindowUsesActiveCoverage(t *testing.T) {
 	resolved := Resolved{ViewID: "view", Calendar: DefaultCalendar, Bar: "1h"}
 	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
-	end, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart.Add(10*time.Hour))
+	end, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart.Add(10*time.Hour), testNow)
 	if err != nil || !end.Equal(barStart) {
 		t.Fatalf("终点应截到最新一根的 bar_start：%s err=%v", end, err)
 	}
-	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-500*time.Hour), barStart); err == nil || !strings.Contains(err.Error(), "可用起点为 "+barStart.Add(-99*time.Hour).Format(time.RFC3339)) {
+	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-500*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "可用起点为 "+barStart.Add(-99*time.Hour).Format(time.RFC3339)) {
 		t.Fatalf("起点早于活跃序列的覆盖起点应给出可用起点：%v", err)
 	}
-	if _, err := ReplayWindow(resolved, nil, ViewInfo{}, barStart.Add(-5*time.Hour), barStart); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+	if _, err := ReplayWindow(resolved, nil, ViewInfo{}, barStart.Add(-5*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
 		t.Fatalf("覆盖范围未知时应拒绝回放：%v", err)
 	}
 }

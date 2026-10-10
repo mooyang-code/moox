@@ -43,6 +43,8 @@ type fakeClient struct {
 	// switchedTo 非零时换代后的最新一根改为它（新一代可能截短终点）；coverageStale 是读取覆盖统计依次返回 ErrStale 的次数。
 	switchedTo    time.Time
 	coverageStale int
+	// coverageTransport 是读取覆盖统计依次遇到传输失败的次数。
+	coverageTransport int
 	// viewDeleted 模拟 View 已被删除。
 	viewDeleted bool
 }
@@ -60,6 +62,10 @@ func price(id string, hour int) float64 {
 
 func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool) (input.Coverage, error) {
 	f.coverageCalls++
+	if f.coverageTransport > 0 {
+		f.coverageTransport--
+		return input.Coverage{}, &input.TransportError{Operation: "读取 View 覆盖统计", Err: errors.New("connection refused")}
+	}
 	if f.coverageStale > 0 {
 		f.coverageStale--
 		return input.Coverage{}, input.ErrStale

@@ -207,7 +207,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口无法换算：%v", resolved.MinAgeBars, err)}
 		}
 		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
-			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, target.Format(time.RFC3339), resolved.ViewID, start.Format(time.RFC3339))}
+			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, target), resolved.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
 		selected := make([]Subject, 0, len(instruments))
 		for _, id := range instruments {
@@ -238,7 +238,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 				return nil, fmt.Errorf("年龄探针确认查询：%w", err)
 			}
 			if len(present) == 0 {
-				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars, from.Format(time.RFC3339), to.Add(-time.Nanosecond).Format(time.RFC3339))}
+				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
 			}
 		}
 		return satisfied, nil

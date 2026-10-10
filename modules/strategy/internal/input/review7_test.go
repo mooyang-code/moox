@@ -12,37 +12,55 @@ import (
 func TestCoverageBoundsRejectsUTCMidnightStockKeys(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), SeriesBars: 5000}
-	if _, err := CoverageBounds(view, resolved); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
+	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
 		t.Fatalf("UTC 零点的行键应报错：%v", err)
 	}
-	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 1)); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
+	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 1), testNow); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
 		t.Fatalf("提交回放时就应报出：%v", err)
 	}
 }
 
-// 日历末日只有在当前时间过了它的收盘之后才算写完；索引里一行误写的未来日期不能让交易中的末日被当作完整的 bar。
-func TestToClosedRequiresTheLastDayClose(t *testing.T) {
+// 日历末日只有在当前时间已过日历、并且索引里确有之后的数据时才算写完；当前时间还在日历之内时，日历之外的行是误写的
+// 未来数据：最晚一根夹到已闭合的最后一根，不算超出日历。
+func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 8), SeriesBars: 5000}
-	setClock(t, time.Date(2026, 12, 31, 10, 0, 0, 0, shanghai(t)))
-	bounds, err := CoverageBounds(view, resolved)
-	if err != nil || bounds.ToClosed || bounds.Beyond != 8 {
-		t.Fatalf("末日收盘前不算写完：%+v err=%v", bounds, err)
+	inside := time.Date(2026, 12, 31, 10, 0, 0, 0, shanghai(t))
+	bounds, err := CoverageBounds(view, resolved, inside)
+	if err != nil || bounds.ToClosed || bounds.Beyond != 0 || !bounds.To.Equal(stockDay(t, 2026, 12, 30)) {
+		t.Fatalf("日历之内时未来行不算超出日历，最晚一根夹到已闭合的 12-30：%+v err=%v", bounds, err)
 	}
-	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1))
-	if err != nil || !end.Equal(stockDay(t, 2026, 12, 31)) {
-		t.Fatalf("末日收盘前终点应截到末日之前：%s err=%v", end, err)
+	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1), inside)
+	if err != nil || !end.Equal(stockDay(t, 2026, 12, 30)) {
+		t.Fatalf("终点应截到已闭合的最后一根之前：%s err=%v", end, err)
 	}
-	setClock(t, time.Date(2026, 12, 31, 15, 1, 0, 0, shanghai(t)))
-	if bounds, err := CoverageBounds(view, resolved); err != nil || !bounds.ToClosed {
-		t.Fatalf("末日收盘后算写完：%+v err=%v", bounds, err)
+	after := time.Date(2027, 1, 5, 10, 0, 0, 0, shanghai(t))
+	if bounds, err := CoverageBounds(view, resolved, after); err != nil || !bounds.ToClosed || bounds.Beyond != 5 {
+		t.Fatalf("已过日历时日历之后的行是真的数据（扣减不超过今天）：%+v err=%v", bounds, err)
+	}
+}
+
+// 当前时间还在日历之内，索引里一行误写的远期数据：不报“数据超出日历”，回放也不延伸到还没发生的 bar。
+func TestFutureRowsAreClampedToNow(t *testing.T) {
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, shanghai(t))
+	stock := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 6, 1), SeriesBars: 100}
+	end, err := ReplayWindow(stock, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2027, 1, 1), now)
+	if err != nil || !end.Equal(stockDay(t, 2026, 10, 8)) {
+		t.Fatalf("终点应截到 10-08（已闭合的最后一根）之前：%s err=%v", end, err)
+	}
+	crypto := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar}
+	future := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart.Add(48 * time.Hour), SeriesBars: 5000}
+	bounds, err := CoverageBounds(future, crypto, barStart.Add(30*time.Minute))
+	if err != nil || !bounds.To.Equal(barStart.Add(-time.Hour)) {
+		t.Fatalf("crypto 的最晚一根也夹到已闭合的最后一根：%+v err=%v", bounds, err)
 	}
 }
 
 // 索引最新一根超出内嵌日历时，真正的最新一根在日历之外：每个序列保留的根数先扣掉日历之外至多的根数，不把覆盖起点
 // 估得偏早；扣完一根都不剩时报历史不足。
 func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
-	setClock(t, time.Date(2027, 1, 20, 0, 0, 0, 0, time.UTC))
+	now := time.Date(2027, 1, 20, 0, 0, 0, 0, time.UTC)
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 4), SeriesBars: 10}
 	// 日历之外最多 4 个交易日（01-01 至 01-04），日历之内只能确定保留 6 根：覆盖起点是末日往前 5 个交易日。
@@ -50,11 +68,15 @@ func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := CoverageStart(view, resolved); !got.Equal(want) {
+	bounds, err := CoverageBounds(view, resolved, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := coverageStart(bounds, view, resolved, time.Time{}); !got.Equal(want) {
 		t.Fatalf("覆盖起点应扣掉日历之外的根数：%s，期望 %s", got, want)
 	}
 	view.IndexedTo = stockDay(t, 2027, 1, 15)
-	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 18), stockDay(t, 2027, 1, 1)); err == nil || !strings.Contains(err.Error(), "暂不能回放") {
+	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 18), stockDay(t, 2027, 1, 1), now); err == nil || !strings.Contains(err.Error(), "暂不能回放") {
 		t.Fatalf("日历之内一根都不能确定保留时应报历史不足：%v", err)
 	}
 }
@@ -63,7 +85,7 @@ func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
 func TestStockReplayErrorsUseShanghaiDates(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
-	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2026, 10, 9))
+	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2026, 10, 9), testNow)
 	var early *EarlyStartError
 	if !errors.As(err, &early) || !strings.Contains(err.Error(), "2026-09-07（上海日期）") || strings.Contains(err.Error(), "T16:00:00Z") {
 		t.Fatalf("可用起点应写上海日期：%v", err)

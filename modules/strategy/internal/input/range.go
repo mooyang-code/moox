@@ -93,10 +93,14 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 	return current, nil
 }
 
-// beyondCalendarError 说明 at 之后的周期超出了 A 股内嵌日历。
+// beyondCalendarError 说明 at 之后的周期超出了 A 股内嵌日历；时间按上海时间写，与其余 A 股报错一致。
 func beyondCalendarError(at time.Time) error {
+	label := at.UTC().Format(time.RFC3339)
+	if _, location, err := stockCalendar(); err == nil {
+		label = at.In(location).Format("2006-01-02 15:04:05") + "（上海时间）"
+	}
 	return &describedError{
-		message: fmt.Sprintf("%s 之后的周期%s", at.UTC().Format(time.RFC3339), translateCalendarError(marketcalendar.ErrNoNextTradingDay).Error()),
+		message: fmt.Sprintf("%s 之后的周期%s", label, translateCalendarError(marketcalendar.ErrNoNextTradingDay).Error()),
 		cause:   marketcalendar.ErrNoNextTradingDay,
 	}
 }
@@ -161,16 +165,16 @@ func BarEndLabel(calendar, bar string, barEnd time.Time) string {
 }
 
 // ReplayWindow 校验并截断回放区间 [start, end)：
-// 起点不能早于活跃序列的覆盖起点（CoverageStart）加上 min_age_bars 与 bars[-1] 所需的历史，否则返回 *EarlyStartError；
-// 终点截到最新一根（按日历规整后的 IndexedTo）之前：更晚的 bar 还没有数据，最新一根也可能还没写完，都不能当作
-// 完整的 bar 回放。最新一根已经写完时（见 Bounds.ToClosed）回放到它为止。
-func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start, end time.Time) (time.Time, error) {
+// 起点不能早于活跃序列的覆盖起点加上 min_age_bars 与 bars[-1] 所需的历史，否则返回 *EarlyStartError；
+// 终点截到最新一根（按日历规整、并夹到 now 时已闭合的最后一根之内）之前：更晚的 bar 还没有数据，最新一根也可能还没
+// 写完，都不能当作完整的 bar 回放。最新一根已经写完时（见 Bounds.ToClosed）回放到它为止。
+func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start, end, now time.Time) (time.Time, error) {
 	if !end.After(start) {
 		return time.Time{}, errors.New("回放区间必须满足 start < end")
 	}
 	label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
 	need, source := historyNeed(resolved, program)
-	bounds, boundsErr := CoverageBounds(view, resolved)
+	bounds, boundsErr := CoverageBounds(view, resolved, now)
 	// 稳定状态下覆盖起点是最新一根往前 SeriesBars−1 根，可用起点再往后 need−1 根，而回放只到最新一根之前：每一根连同
 	// 自身所需的根数 need 不小于 SeriesBars 时没有任何一根可以回放。最新一根已经写完时它本身可以回放，交给下面按覆盖
 	// 判断。
@@ -188,10 +192,11 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	if err != nil {
 		return time.Time{}, err
 	}
-	// limit 是终点的上限，last 是最后一根可以回放的 bar；区间按毫秒落库，加一毫秒即可包含最新一根。
+	// limit 是终点的上限，last 是最后一根可以回放的 bar。最新一根已经写完时它就是日历的最后一个交易日：终点取次日的
+	// 上海零点，区间仍是“不含结束日”的整日口径（之后没有可知的交易日，ReplayBars 枚举到日历末尾为止）。
 	limit, last := latest.StorageStart, latest.PreviousStart
 	if bounds.ToClosed {
-		limit, last = latest.StorageStart.Add(time.Millisecond), latest.StorageStart
+		limit, last = latest.StorageStart.Add(24*time.Hour), latest.StorageStart
 	}
 	if last.IsZero() {
 		return time.Time{}, fmt.Errorf("View %s 还没有完整的 bar（最新一根 %s 可能还没写完），暂不能回放", resolved.ViewID, label(latest.StorageStart))
@@ -316,40 +321,55 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 	}
 }
 
-// wait 先确认是否要放弃（Abort），再等待 d；ctx 结束时返回 ctx 的错误。
+// wait 等待 d，等待前后都确认是否要放弃（Abort）：取消可能就落在等待期间；ctx 结束时返回 ctx 的错误。
 func (l *RangeLoader) wait(ctx context.Context, d time.Duration) error {
-	if l.Abort != nil {
-		if err := l.Abort(ctx); err != nil {
-			return err
-		}
+	if err := l.abort(ctx); err != nil {
+		return err
 	}
-	return sleepContext(ctx, d)
+	if err := sleepContext(ctx, d); err != nil {
+		return err
+	}
+	return l.abort(ctx)
+}
+
+func (l *RangeLoader) abort(ctx context.Context) error {
+	if l.Abort == nil {
+		return nil
+	}
+	return l.Abort(ctx)
 }
 
 // checkGeneration 确认活动索引仍是读取器固定的那一代，只读代次、不读列；换代时读取完整的 View 并返回
-// *IndexChangedError。传输失败单独计重试，不占用读取行的重试次数（否则读行用完重试后，一次复核失败就会丢掉已读的行）。
+// *IndexChangedError（完整读到的仍是同一代时视为没有换代）。两次读取的传输失败都单独计重试，不占用读取行的重试次数
+// （否则读行用完重试后，一次复核失败就会丢掉已读的行）。
 func (l *RangeLoader) checkGeneration(ctx context.Context) error {
-	for retries := 0; ; {
-		generation, err := l.Client.ViewGeneration(ctx, l.SpaceID, l.View.ViewID)
+	generation, err := retryTransport(ctx, l, func() (string, error) {
+		return l.Client.ViewGeneration(ctx, l.SpaceID, l.View.ViewID)
+	})
+	if err != nil || generation == l.View.Generation {
+		return err
+	}
+	view, err := retryTransport(ctx, l, func() (ViewInfo, error) {
+		return l.Client.GetView(ctx, l.SpaceID, l.View.ViewID)
+	})
+	if err != nil || view.Generation == l.View.Generation {
+		return err
+	}
+	return &IndexChangedError{View: view}
+}
+
+// retryTransport 调用 call，遇到传输失败时按分段读取的退避重试（最多 maxRangeTransportRetries 次）。
+func retryTransport[T any](ctx context.Context, l *RangeLoader, call func() (T, error)) (T, error) {
+	for retries := 0; ; retries++ {
+		value, err := call()
 		var transportErr *TransportError
-		if err != nil && errors.As(err, &transportErr) && retries < maxRangeTransportRetries {
-			retries++
-			if err := l.wait(ctx, time.Duration(retries)*rangeRetryBackoff); err != nil {
-				return err
-			}
-			continue
+		if err == nil || !errors.As(err, &transportErr) || retries >= maxRangeTransportRetries {
+			return value, err
 		}
-		if err != nil {
-			return err
+		if waitErr := l.wait(ctx, time.Duration(retries+1)*rangeRetryBackoff); waitErr != nil {
+			var zero T
+			return zero, waitErr
 		}
-		if generation == l.View.Generation {
-			return nil
-		}
-		view, err := l.Client.GetView(ctx, l.SpaceID, l.View.ViewID)
-		if err != nil {
-			return err
-		}
-		return &IndexChangedError{View: view}
 	}
 }
 
