@@ -98,6 +98,23 @@ describe("strategy store", () => {
     expect(store.strategiesComplete).toBe(true);
   });
 
+  it("invalidates the cached catalog and ignores an in-flight catalog request", async () => {
+    const definition = (id: string) => ({ strategy_id: id, name: id, dsl_yaml: "", dsl_hash: "h", created_at: "", updated_at: "" });
+    const pending = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listStrategies.mockReturnValueOnce(Promise.resolve({ items: [definition("s1")], page: { total: 1 } })).mockReturnValueOnce(pending.promise);
+    const store = useStrategyStore();
+    await store.loadAllStrategies(200);
+    expect(store.strategiesComplete).toBe(true);
+    // 保存了新定义：目录作废；此时在途的旧目录请求返回，也不能把旧目录重新标成完整。
+    const stale = store.loadAllStrategies(200);
+    store.invalidateStrategyCatalog();
+    expect(store.strategiesComplete).toBe(false);
+    pending.resolve({ items: [definition("s1")], page: { total: 1 } });
+    await stale;
+    expect(store.strategiesComplete).toBe(false);
+    expect(store.strategyCatalog).toHaveLength(1);
+  });
+
   it("applies a fast target response without waiting for slow history", async () => {
     const targets = deferred<{ targets: []; session_id: string; bar_end_time: string; valid_until: string; result_id: string }>();
     const results = deferred<{ items: []; page: { total: number } }>();

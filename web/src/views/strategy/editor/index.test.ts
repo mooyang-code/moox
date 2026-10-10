@@ -26,4 +26,8 @@ describe("strategy DSL editor contract", () => {
     expect(source).not.toContain("original.value = source.value;\n    Message.success");
     expect(source).toContain(':readonly="saving"');
   });
+
+  it("invalidates the cached definition catalog after a successful save", () => {
+    expect(source).toContain("strategyStore.invalidateStrategyCatalog();");
+  });
 });

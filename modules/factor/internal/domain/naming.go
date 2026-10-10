@@ -29,7 +29,7 @@ func SourceHash(sourceCode string) string {
 func DefinitionHash(factor FactorDef) string {
 	sourceHash := strings.TrimSpace(factor.SourceHash)
 	if sourceHash == "" {
-		sourceHash = SourceHash(strings.TrimSpace(factor.SourceCode))
+		sourceHash = SourceHash(factor.SourceCode) // 与目录服务存储的 SourceHash 同一口径：对源码原文计算，不裁剪空白
 	}
 	params, err := normalizeParamsJSON(factor.ParamsJSON)
 	if err != nil {

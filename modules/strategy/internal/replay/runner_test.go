@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 )
 
@@ -752,5 +754,57 @@ func TestReplayFinishStopsRetryingWhenContextEnds(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("ctx 结束后终态重试应停止")
+	}
+}
+
+// 设计 4.5 / 计划 D：同一份数据、同一周期，回放的目标必须与实时装配 + 同一引擎得到的目标逐字节一致。
+func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
+	for name, dslYaml := range map[string]string{"当期因子": replayDSL, "bars[-1]": previousDSL} {
+		t.Run(name, func(t *testing.T) {
+			repo := openStore(t)
+			client := &fakeClient{marketType: "spot"}
+			job := startReplay(t, repo, "p1", dslYaml, 10)
+			(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
+			if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+				t.Fatalf("回放应完成：%+v", done)
+			}
+			strategy, err := dsl.Parse([]byte(dslYaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, program, err := input.Resolve(context.Background(), client, "crypto", "view_a", strategy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compared := 0
+			for _, replayed := range barsOf(t, repo, "p1") {
+				if replayed.Status != store.StatusOK {
+					continue
+				}
+				boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+				if err != nil {
+					t.Fatal(err)
+				}
+				loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: []string{"A", "B"}})
+				if err != nil {
+					t.Fatalf("实时装配 %v 失败：%v", replayed.BarEndTime, err)
+				}
+				decision, err := engine.Evaluate(program, loaded.Frame, engine.State{})
+				if err != nil || decision.Status != engine.StatusOK {
+					t.Fatalf("实时求值 %v：status=%s err=%v", replayed.BarEndTime, decision.Status, err)
+				}
+				_, live, err := trigger.EncodeTargets(decision.Targets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(live) != string(replayed.TargetsJSON) {
+					t.Fatalf("%v 的目标不一致：实时 %s，回放 %s", replayed.BarEndTime, live, replayed.TargetsJSON)
+				}
+				compared++
+			}
+			if compared == 0 {
+				t.Fatal("没有可比较的 ok 周期")
+			}
+		})
 	}
 }

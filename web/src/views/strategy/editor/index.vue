@@ -68,6 +68,7 @@ import { Message } from "@arco-design/web-vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { createStrategy, getStrategy, updateStrategy } from "@/api/strategy";
 import { useSpaceStore } from "@/store/modules/space";
+import { useStrategyStore } from "@/store/modules/strategy";
 import TrialPanel from "@/views/strategy/components/strategy-trial-panel.vue";
 import { parseDSL, rankedTemplate, signalTemplate } from "@/views/strategy/dsl";
 
@@ -75,6 +76,7 @@ defineOptions({ name: "StrategyEditor" });
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
+const strategyStore = useStrategyStore();
 const editing = computed(() => Boolean(route.params.strategyId));
 const strategyId = ref(String(route.params.strategyId || ""));
 const source = ref(editing.value ? "" : rankedTemplate);
@@ -129,6 +131,8 @@ async function save() {
     if (editing.value) await updateStrategy(strategyId.value.trim(), submitted);
     else await createStrategy({ strategy_id: strategyId.value.trim() || undefined, dsl_yaml: submitted });
     original.value = submitted;
+    // 新建或修改了定义：运行页、回放页缓存的完整目录已过期，作废后下次进入时重新读取。
+    strategyStore.invalidateStrategyCatalog();
     Message.success("策略定义已保存");
     router.push({ name: "strategy-overview" });
   } catch (err) {

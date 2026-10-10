@@ -93,6 +93,13 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
+  /** 定义有新增或修改后作废完整目录：在途的目录请求不再写入，下次进入运行页、回放页时重新读取。 */
+  function invalidateStrategyCatalog() {
+    catalogRequest += 1;
+    strategiesComplete.value = false;
+    listLoading.value = false;
+  }
+
   async function loadInstances(params: Parameters<typeof listInstances>[0] = {}) {
     const requestId = ++instancesRequest;
     listLoading.value = true;
@@ -272,6 +279,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     detailError,
     loadStrategies,
     loadAllStrategies,
+    invalidateStrategyCatalog,
     loadInstances,
     loadInstanceDetail,
     loadResultPage,
