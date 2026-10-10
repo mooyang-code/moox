@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -131,19 +130,6 @@ func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
 	err := r.db.WithContext(ctx).Model(&domain.Check{}).
 		Where("c_enabled = 1").Count(&total).Error
 	return total, err
-}
-
-// IsPlacementRegistered reports whether a component has an enabled deployment probe.
-func (r *CheckRepository) IsPlacementRegistered(ctx context.Context, serviceName, nodeID string) (bool, error) {
-	if r == nil || r.db == nil {
-		return false, gorm.ErrInvalidDB
-	}
-	var count int64
-	checkID := "placement:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
-	err := r.db.WithContext(ctx).Model(&domain.Check{}).
-		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1", checkID, domain.CheckSourcePlacement).
-		Count(&count).Error
-	return count > 0, err
 }
 
 func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {

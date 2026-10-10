@@ -249,7 +249,7 @@ run_native_listener_guard() {
   perl -0pi -e "s#native_addr:\\s*[^\\n]+#native_addr: ${initial_native}#" "${fixture}/gateway/config/app.yaml"
   awk '
     /^start_gateway\(\) \{/ { inside = 1 }
-    inside && /^[[:space:]]+runtime_identity_env moox_gateway/ { exit }
+    inside && /^[[:space:]]+runtime_identity_env host-gateway/ { exit }
     inside { print }
   ' "${TMP_ROOT}/unpacked/start.sh" >"${check_script}"
   printf '%s\n' '  return 0' '}' \

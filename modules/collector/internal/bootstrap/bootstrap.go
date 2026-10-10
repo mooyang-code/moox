@@ -314,7 +314,7 @@ func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconc
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("collector", "moox_collector"))
+	h, err := report.NewHandler(report.DefaultConfig("collector", "collector"))
 	if err != nil {
 		log.Warnf("collector metrics reporter disabled: %v", err)
 		return

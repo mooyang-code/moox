@@ -114,16 +114,10 @@ func buildBusinessFreshnessReporterWithInterval(
 			if service.ReporterStatus == "" {
 				continue
 			}
-			expected, err := reporterDeploymentExpected(ctx, repositories.Checks, service)
-			if err != nil {
-				return err
-			}
-			if !expected {
+			if !service.Enabled {
 				continue
 			}
-			checkID := strings.Join([]string{
-				"reporter", service.NodeID, service.ServiceName, service.InstanceID,
-			}, ":")
+			checkID := strings.Join([]string{"reporter", service.NodeID, service.ServiceName}, ":")
 			item := businessFreshnessItem{
 				spaceID: monmetrics.InternalMetricSpaceID,
 				checkID: checkID,
@@ -163,7 +157,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			if dataset.Producer == "factor" {
 				if !factorExpectedKnown {
-					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor_mgr")
+					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Topology, "factor-mgr")
 					if err != nil {
 						return err
 					}
@@ -265,7 +259,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			if frozenGateway[key] {
 				continue
 			}
-			if strings.HasPrefix(check.CheckID, "gateway:") {
+			if strings.HasPrefix(check.CheckID, "gateway:") || strings.HasPrefix(check.CheckID, "reporter:") {
 				if _, expected := items[key]; !expected {
 					if err := disableCheckAndDeleteRules(ctx, repositories, &check); err != nil {
 						return err
@@ -300,7 +294,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			switch {
 			case err == nil:
 				if !check.Enabled {
-					if strings.HasPrefix(item.checkID, "gateway:") {
+					if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") {
 						check.Enabled = true
 						if err := repositories.Checks.Update(ctx, check); err != nil {
 							return err
@@ -413,67 +407,24 @@ func storageViewDatasetIDs(spaceID, viewID, primaryDatasetID string) []string {
 	return ids
 }
 
-func serviceDeploymentExpected(
-	ctx context.Context,
-	checks *store.CheckRepository,
-	serviceName string,
-) (bool, error) {
-	if checks == nil || strings.TrimSpace(serviceName) == "" {
-		return true, nil
+func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepository, componentID string) (bool, error) {
+	if topology == nil {
+		return false, nil
 	}
-	const (
-		pageSize  = 500
-		maxChecks = 1500
-	)
-	opts := store.ListChecksOptions{Source: domain.CheckSourcePlacement}
-	total, err := checks.Count(ctx, opts)
-	if err != nil {
+	snapshot, err := topology.Snapshot(ctx)
+	if err != nil || snapshot == nil {
 		return false, err
 	}
-	if total > maxChecks {
-		return false, fmt.Errorf("placement checks exceed limit %d", maxChecks)
+	hosts := make(map[string]bool, len(snapshot.Hosts))
+	for _, host := range snapshot.Hosts {
+		hosts[host.HostID] = host.Status == "enabled"
 	}
-	found := false
-	for page := 1; int64((page-1)*pageSize) < total; page++ {
-		opts.Page = store.Page{Page: page, PageSize: pageSize}
-		rows, err := checks.List(ctx, opts)
-		if err != nil {
-			return false, err
-		}
-		for _, check := range rows {
-			if strings.HasSuffix(check.CheckID, ":"+serviceName) {
-				found = true
-				if check.Enabled {
-					return true, nil
-				}
-			}
-		}
-		if len(rows) < pageSize {
-			return !found, nil
+	for _, placement := range snapshot.Placements {
+		if placement.ComponentID == componentID && placement.Status == "enabled" && hosts[placement.HostID] {
+			return true, nil
 		}
 	}
-	return !found, nil
-}
-
-func reporterDeploymentExpected(
-	ctx context.Context,
-	checks *store.CheckRepository,
-	service monitorobservability.ServiceStatus,
-) (bool, error) {
-	if checks == nil || strings.TrimSpace(service.NodeID) == "" || strings.TrimSpace(service.ServiceName) == "" {
-		return true, nil
-	}
-	checkID := strings.Join([]string{"placement", service.NodeID, service.ServiceName}, ":")
-	check, err := checks.Get(ctx, "", checkID)
-	switch {
-	case err == nil:
-		return check.Enabled, nil
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		// External reporters, such as SCF nodes, do not have placement checks.
-		return true, nil
-	default:
-		return false, err
-	}
+	return false, nil
 }
 
 // noLongerExpected resolves a check whose subject was disabled or removed.

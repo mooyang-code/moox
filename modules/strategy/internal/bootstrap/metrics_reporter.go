@@ -17,7 +17,7 @@ func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
 	if err != nil {
 		return nil, err
 	}
-	h, err := report.NewHandler(report.DefaultConfig("strategy", "moox_strategy"))
+	h, err := report.NewHandler(report.DefaultConfig("strategy", "strategy"))
 	if err != nil {
 		return nil, err
 	}

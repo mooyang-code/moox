@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -29,6 +28,10 @@ type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
 	ReporterStatus                                  string
+	Enabled                                         bool
+	ProbeStatus, ProbeReason, ProbeRawError         string
+	ProbeCheckedAt                                  time.Time
+	Instances                                       []ReporterInstance
 }
 
 type HostStatus struct {
@@ -57,6 +60,8 @@ type BusinessStatus struct {
 type Overview struct {
 	GeneratedAt    time.Time
 	Services       []ServiceStatus
+	Unregistered   []ServiceStatus
+	TopologyKnown  bool
 	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
@@ -67,6 +72,7 @@ type Builder struct {
 	Metrics                    *monmetrics.QueryService
 	Hosts                      *hostmetrics.Store
 	Checks                     *store.CheckRepository
+	Topology                   *store.TopologyRepository
 	Gateways                   *store.GatewayRepository
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
@@ -96,7 +102,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out := Overview{GeneratedAt: now}
 	var err error
-	if out.Services, err = b.buildServices(ctx, spaceID); err != nil {
+	if out.Services, out.Unregistered, out.TopologyKnown, err = b.buildServices(ctx, now); err != nil {
 		return Overview{}, err
 	}
 	if out.Hosts, err = b.buildHosts(ctx); err != nil {
@@ -186,189 +192,6 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Module: "storage_outbox",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
-}
-
-func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {
-	services := make(map[string]ServiceStatus)
-	reporterServices, err := expectedReporterServices()
-	if err != nil {
-		return nil, err
-	}
-	if b.Metrics != nil && b.Metrics.Catalog() != nil {
-		rows, total, err := b.Metrics.Catalog().ListServices(ctx, spaceID, 0, 500)
-		if err != nil {
-			return nil, err
-		}
-		if total > maxOverviewServices {
-			return nil, fmt.Errorf("observability services exceed limit %d", maxOverviewServices)
-		}
-		if total > int64(len(rows)) {
-			more, _, err := b.Metrics.Catalog().ListServices(ctx, spaceID, len(rows), int(total)-len(rows))
-			if err != nil {
-				return nil, err
-			}
-			rows = append(rows, more...)
-		}
-		for _, row := range rows {
-			key := serviceInstanceKey(row.NodeID, row.ServiceName, row.InstanceID)
-			if current, exists := services[key]; exists && !row.LastSeenAt.After(current.LastSeenAt) {
-				continue
-			}
-			status, reason := "healthy", "reporter fresh"
-			if row.LastSeenAt.IsZero() {
-				status, reason = "unknown", "尚未上报"
-			} else if row.IsStale {
-				status, reason = "stale", "producer stale"
-			}
-			services[key] = ServiceStatus{
-				NodeID: row.NodeID, ServiceName: row.ServiceName, InstanceID: row.InstanceID,
-				Status: status, ReporterStatus: status, Reason: reason, LastSeenAt: row.LastSeenAt.UTC(),
-			}
-		}
-	}
-
-	checks, err := b.listEnabledPlacementChecks(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	for _, check := range checks {
-		if !strings.HasPrefix(check.CheckID, "placement:") {
-			continue
-		}
-		labels, err := serviceCheckLabels(check.Labels)
-		if err != nil {
-			return nil, fmt.Errorf("placement check %q labels: %w", check.CheckID, err)
-		}
-		nodeID, serviceName := labels["host_id"], labels["component_id"]
-		matched := make([]string, 0, 1)
-		for key, item := range services {
-			if item.NodeID == nodeID && item.ServiceName == serviceName {
-				matched = append(matched, key)
-			}
-		}
-		if len(matched) == 0 {
-			key := serviceInstanceKey(nodeID, serviceName, "")
-			service := ServiceStatus{NodeID: nodeID, ServiceName: serviceName, Status: "unknown", Reason: "health not checked"}
-			if reporterServices[serviceName] {
-				service.ReporterStatus = "missing"
-				service.Reason = "reporter missing"
-			}
-			services[key] = service
-			matched = append(matched, key)
-		}
-		var latest *domain.CheckResult
-		if b.Results != nil {
-			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
-			if err != nil {
-				return nil, err
-			}
-			if len(results) > 0 {
-				latest = &results[0]
-			}
-		}
-		for _, key := range matched {
-			services[key] = mergeServiceHealth(services[key], latest)
-		}
-	}
-
-	out := make([]ServiceStatus, 0, len(services))
-	for _, item := range services {
-		out = append(out, item)
-	}
-	return out, nil
-}
-
-func expectedReporterServices() (map[string]bool, error) {
-	manifest, err := doctor.LoadEmbeddedManifest()
-	if err != nil {
-		return nil, fmt.Errorf("load observability component manifest: %w", err)
-	}
-	out := make(map[string]bool, len(manifest.Components))
-	for _, component := range manifest.Components {
-		if component.Transport == doctor.TransportReporter {
-			out[component.ServiceName] = true
-		}
-	}
-	return out, nil
-}
-
-func serviceInstanceKey(nodeID, serviceName, instanceID string) string {
-	return strings.Join([]string{nodeID, serviceName, instanceID}, "\x00")
-}
-
-func (b Builder) listEnabledPlacementChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
-	if b.Checks == nil {
-		return []domain.Check{}, nil
-	}
-	enabled := true
-	out := make([]domain.Check, 0, 500)
-	for page := 1; len(out) < maxOverviewServices; page++ {
-		rows, err := b.Checks.List(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
-			Page: store.Page{Page: page, PageSize: 500},
-		})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rows...)
-		if len(rows) < 500 {
-			break
-		}
-	}
-	if len(out) >= maxOverviewServices {
-		total, err := b.Checks.Count(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if total > maxOverviewServices {
-			return nil, fmt.Errorf("placement checks exceed limit %d", maxOverviewServices)
-		}
-	}
-	return out, nil
-}
-
-func serviceCheckLabels(raw string) (map[string]string, error) {
-	labels := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
-		return nil, err
-	}
-	for _, key := range []string{"host_id", "component_id"} {
-		labels[key] = strings.TrimSpace(labels[key])
-		if labels[key] == "" {
-			return nil, fmt.Errorf("%s is required", key)
-		}
-	}
-	return labels, nil
-}
-
-func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) ServiceStatus {
-	healthStatus, healthReason := "unknown", "health not checked"
-	if result != nil {
-		service.LastSeenAt = maxTime(service.LastSeenAt, result.CheckedAt.UTC())
-		switch {
-		case !result.Success:
-			healthStatus, healthReason = "down", strings.TrimSpace(result.ErrorMessage)
-			if healthReason == "" {
-				healthReason = "health check failed"
-			}
-		case result.Status == domain.CheckStatusDegraded:
-			healthStatus, healthReason = "degraded", "health check degraded"
-		default:
-			healthStatus, healthReason = "healthy", "health check ok"
-		}
-	}
-	if service.ReporterStatus == "" {
-		service.Status = healthStatus
-		service.Reason = healthReason
-		return service
-	}
-	if statusRank(healthStatus) < statusRank(service.Status) {
-		service.Status = healthStatus
-	}
-	service.Reason = strings.Join([]string{service.Reason, healthReason}, "; ")
-	return service
 }
 
 func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
@@ -1306,7 +1129,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		return nil, err
 	} else {
 		for _, service := range services {
-			if service.ServiceName == "moox_collector" && !service.IsStale {
+			if service.ServiceName == "collector" && !service.IsStale {
 				collectorReporterFresh = true
 				break
 			}
@@ -1687,7 +1510,7 @@ func sortOverview(out *Overview) {
 		if statusRank(out.Services[i].Status) != statusRank(out.Services[j].Status) {
 			return statusRank(out.Services[i].Status) < statusRank(out.Services[j].Status)
 		}
-		return out.Services[i].ServiceName < out.Services[j].ServiceName
+		return strings.Join([]string{out.Services[i].ServiceName, out.Services[i].NodeID, out.Services[i].InstanceID}, "\x00") < strings.Join([]string{out.Services[j].ServiceName, out.Services[j].NodeID, out.Services[j].InstanceID}, "\x00")
 	})
 	sort.Slice(out.Hosts, func(i, j int) bool {
 		if statusRank(out.Hosts[i].Status) != statusRank(out.Hosts[j].Status) {

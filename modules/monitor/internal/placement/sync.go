@@ -16,21 +16,21 @@ import (
 )
 
 type Syncer struct {
-	checks   *store.CheckRepository
+	topology *store.TopologyRepository
 	source   Source
 	https    map[string]domain.HTTPSConfig
 	gateways *store.GatewayRepository
 	now      func() time.Time
 }
 
-func NewSyncer(checks *store.CheckRepository, source Source, https map[string]domain.HTTPSConfig, gateways *store.GatewayRepository) *Syncer {
-	return &Syncer{checks: checks, source: source, https: https, gateways: gateways, now: time.Now}
+func NewSyncer(topology *store.TopologyRepository, source Source, https map[string]domain.HTTPSConfig, gateways *store.GatewayRepository) *Syncer {
+	return &Syncer{topology: topology, source: source, https: https, gateways: gateways, now: time.Now}
 }
 
 func CheckID(hostID, componentID string) string { return "placement:" + hostID + ":" + componentID }
 
 func (s *Syncer) Sync(ctx context.Context) (int, error) {
-	if s == nil || s.source == nil || s.checks == nil {
+	if s == nil || s.source == nil || s.topology == nil {
 		return 0, fmt.Errorf("placement synchronization is not initialized")
 	}
 	snapshot, err := s.source.Snapshot(ctx)
@@ -41,11 +41,22 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	count, err := s.checks.ReconcilePlacements(ctx, checks)
+	count, err := s.topology.Reconcile(ctx, topologySnapshot(snapshot, s.now().UTC()), checks)
 	if err != nil {
 		return count, err
 	}
 	return count, s.syncGateways(ctx, snapshot)
+}
+
+func topologySnapshot(snapshot Snapshot, now time.Time) domain.TopologySnapshot {
+	out := domain.TopologySnapshot{Catalog: snapshot.Catalog, ObservedAt: now}
+	for _, host := range snapshot.Hosts {
+		out.Hosts = append(out.Hosts, domain.TopologyHost{HostID: host.GetHostId(), Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Region: host.GetRegion(), Status: host.GetStatus()})
+	}
+	for _, placement := range snapshot.Placements {
+		out.Placements = append(out.Placements, domain.TopologyPlacement{HostID: placement.GetHostId(), ComponentID: placement.GetComponentId(), Status: placement.GetStatus()})
+	}
+	return out
 }
 
 // Checks validates the complete discovery result before any database mutation.

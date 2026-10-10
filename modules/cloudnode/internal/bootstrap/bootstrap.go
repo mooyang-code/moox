@@ -170,7 +170,7 @@ func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
 	if err != nil {
 		return nil, err
 	}
-	h, err := report.NewHandler(report.DefaultConfig("cloudnode", "moox_cloudnode"))
+	h, err := report.NewHandler(report.DefaultConfig("cloudnode", "cloudnode"))
 	if err != nil {
 		return nil, err
 	}

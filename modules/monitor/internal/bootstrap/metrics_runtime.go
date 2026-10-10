@@ -38,7 +38,7 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 		}
 		return nil
 	}
-	h, err := report.NewHandler(report.DefaultConfig("monitor", "moox_monitor"))
+	h, err := report.NewHandler(report.DefaultConfig("monitor", "monitor"))
 	if err != nil {
 		if runtime != nil {
 			runtime.setMetricsReporterState(false, err)
@@ -134,20 +134,8 @@ func startObservabilityConsumer(
 		return
 	}
 	routes := observabilityconsumer.Routes{
-		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{
-			Checks: runtime.Repositories.Checks,
-			ExternalProducers: map[string]struct{}{
-				"moox_collector_scf": {},
-				// No placement check registers these producers on every node they
-				// run on: storage-node has no deployment, and moox_gateway also
-				// runs on nodes (such as Storage) without a deployment row of its
-				// own. Their EventBus credentials are still scoped to this control
-				// plane.
-				"storage-node": {},
-				"moox_gateway": {},
-			},
-		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
-		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
+		Metrics: metricsObservabilityRoute(storage, messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
+		Host:    hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 	}
 	runtime.Go(func() {
 		for ctx.Err() == nil {
@@ -220,7 +208,6 @@ func startObservabilityConsumer(
 func metricsObservabilityRoute(
 	storage *monmetrics.StorageAdapter,
 	messageStore *monmetrics.MetricMessageStore,
-	authorizer monmetrics.ProducerAuthorizer,
 	moduleMetrics *report.ModuleMetrics,
 	runtime *Runtime,
 	enabled bool,
@@ -234,15 +221,6 @@ func metricsObservabilityRoute(
 		}
 		if message.GetSpaceId() != monmetrics.InternalMetricSpaceID {
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
-		}
-		if authorizer != nil {
-			registered, err := authorizer.IsRegistered(ctx, metricReport.GetServiceName(), metricReport.GetNodeId())
-			if err != nil {
-				return fmt.Errorf("authorize metric producer: %w", err)
-			}
-			if !registered {
-				return observabilityconsumer.Permanent(fmt.Errorf("unregistered metric producer %s/%s", metricReport.GetServiceName(), metricReport.GetNodeId()))
-			}
 		}
 		observed := message.GetOccurredAt().AsTime()
 		samples, err := monmetrics.ParseSnapshot(metricReport.GetSnapshot(), monmetrics.Envelope{

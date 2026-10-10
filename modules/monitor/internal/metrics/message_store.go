@@ -79,7 +79,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 			duplicate = true
 			return nil
 		}
-		if err := upsertMetricService(tx, report, now); err != nil {
+		if err := upsertMetricService(tx, report, reportSeenAt(msg, now)); err != nil {
 			return err
 		}
 		return upsertSamples(tx, samples)
@@ -100,11 +100,14 @@ func (r *MetricMessageStore) TouchService(ctx context.Context, msg *eventpb.Even
 	if msg == nil || report == nil {
 		return errors.New("metric report is required")
 	}
-	seenAt := time.Now().UTC()
-	if at := msg.GetOccurredAt(); at != nil && at.AsTime().Before(seenAt) {
-		seenAt = at.AsTime().UTC()
+	return upsertMetricService(r.db.WithContext(ctx), report, reportSeenAt(msg, time.Now().UTC()))
+}
+
+func reportSeenAt(msg *eventpb.EventMessage, receivedAt time.Time) time.Time {
+	if at := msg.GetOccurredAt(); at != nil && at.AsTime().Before(receivedAt) {
+		return at.AsTime().UTC()
 	}
-	return upsertMetricService(r.db.WithContext(ctx), report, seenAt)
+	return receivedAt
 }
 
 func upsertMetricService(tx *gorm.DB, report *metricspb.MetricReport, seenAt time.Time) error {
@@ -230,14 +233,20 @@ func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (in
 // reporter that is reported again is simply recreated.
 const RetiredSeriesAfter = 24 * time.Hour
 
+// ReporterPlacement identifies a registered component without relying on probes.
+type ReporterPlacement struct{ NodeID, ServiceName string }
+
 // PruneRetiredSeries removes the series not reported since RetiredSeriesAfter
-// before now, together with their latest values, and the reporter instances
-// that went silent in the same window. Dropping a reporter lets its freshness
-// check resolve as no longer expected, so a renamed or removed service does not
-// keep alerting; Placement probes still cover a registered service that is down.
-func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time) (int64, error) {
+// before now, together with their latest values and retired reporter history.
+// The newest reporter per registered placement survives cleanup, so a stopped
+// component cannot become "never reported". A nil registration list means
+// discovery is still unknown; an empty non-nil list is authoritative.
+func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time, registered []ReporterPlacement) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("message store is not initialized")
+	}
+	if len(registered) > 1500 {
+		return 0, errors.New("registered metric placements exceed limit 1500")
 	}
 	cutoff := now.UTC().Add(-RetiredSeriesAfter)
 	var pruned int64
@@ -251,7 +260,26 @@ func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Ti
 			return result.Error
 		}
 		pruned = result.RowsAffected
-		return tx.Where("c_last_seen_at < ?", cutoff).Delete(&MetricService{}).Error
+		if registered == nil {
+			return nil
+		}
+		retired := tx.Where("c_last_seen_at < ?", cutoff)
+		if len(registered) > 0 {
+			pairs := make([][]any, 0, len(registered))
+			for _, placement := range registered {
+				pairs = append(pairs, []any{placement.NodeID, placement.ServiceName})
+			}
+			latest := tx.Raw(`SELECT c_id FROM (
+				SELECT c_id, ROW_NUMBER() OVER (
+					PARTITION BY c_node_id, c_service_name
+					ORDER BY c_last_seen_at DESC, c_id DESC
+				) AS placement_rank
+				FROM t_monitor_metric_services
+				WHERE (c_node_id, c_service_name) IN ?
+			) WHERE placement_rank = 1`, pairs)
+			retired = retired.Where("c_id NOT IN (?)", latest)
+		}
+		return retired.Delete(&MetricService{}).Error
 	})
 	return pruned, err
 }

@@ -73,7 +73,7 @@ func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	source := &memorySource{snapshot: testSnapshot(t)}
-	syncer := NewSyncer(repos.Checks, source, testHTTPS(), nil)
+	syncer := NewSyncer(repos.Topology, source, testHTTPS(), nil)
 	_, err = syncer.Sync(t.Context())
 	require.NoError(t, err)
 	id := CheckID("control", "console-proxy")
@@ -111,10 +111,15 @@ func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
 		require.Nil(t, check.NextCheckAt, "enabled deployment must be checked immediately")
 	}
 
-	// An incomplete API response must not remove the valid checks.
+	// An incomplete API response must not remove checks or the authoritative topology.
+	previousTopology, err := repos.Topology.Snapshot(t.Context())
+	require.NoError(t, err)
 	source.err = errors.New("directory temporarily unavailable")
 	_, err = syncer.Sync(t.Context())
 	require.Error(t, err)
+	preservedTopology, topologyErr := repos.Topology.Snapshot(t.Context())
+	require.NoError(t, topologyErr)
+	require.Equal(t, previousTopology, preservedTopology)
 	source.err = nil
 	source.snapshot.Placements[0].ComponentId = "unknown-component"
 	_, err = syncer.Sync(t.Context())
@@ -142,7 +147,7 @@ func TestSyncRollsBackAllDefinitionsOnOwnershipCollision(t *testing.T) {
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: CheckID("storage", "storage-primary"), Source: domain.CheckSourceObservability}))
-	syncer := NewSyncer(repos.Checks, &memorySource{snapshot: testSnapshot(t)}, testHTTPS(), nil)
+	syncer := NewSyncer(repos.Topology, &memorySource{snapshot: testSnapshot(t)}, testHTTPS(), nil)
 	count, err := syncer.Sync(t.Context())
 	require.ErrorContains(t, err, "collides")
 	require.Zero(t, count)

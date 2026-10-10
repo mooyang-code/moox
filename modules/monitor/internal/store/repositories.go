@@ -16,6 +16,7 @@ var (
 // keeping database construction out of orchestration code.
 type Repositories struct {
 	Checks        *CheckRepository
+	Topology      *TopologyRepository
 	Gateways      *GatewayRepository
 	Results       *ResultRepository
 	Alerts        *AlertRepository
@@ -25,6 +26,7 @@ type Repositories struct {
 func NewRepositories(db *gorm.DB) *Repositories {
 	return &Repositories{
 		Checks:        NewCheckRepository(db),
+		Topology:      &TopologyRepository{db: db},
 		Gateways:      &GatewayRepository{db: db},
 		Results:       NewResultRepository(db),
 		Alerts:        NewAlertRepository(db),

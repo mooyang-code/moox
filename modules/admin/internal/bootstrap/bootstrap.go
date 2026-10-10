@@ -121,7 +121,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("admin", "admin_gateway"))
+	h, err := report.NewHandler(report.DefaultConfig("admin", "admin"))
 	if err != nil {
 		log.Warnf("admin metrics reporter disabled: %v", err)
 		return

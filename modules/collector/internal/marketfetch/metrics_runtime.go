@@ -32,7 +32,7 @@ func NewInvocationMetrics(functionName, spaceID string) (*InvocationMetrics, err
 	if functionName == "" {
 		return nil, fmt.Errorf("SCF function name is required for metrics identity")
 	}
-	cfg := report.DefaultConfig("collector", "moox_collector_scf")
+	cfg := report.DefaultConfig("collector", "scf-collector")
 	cfg.SpaceID = strings.TrimSpace(spaceID)
 	cfg.InstanceID = firstNonEmptyString(os.Getenv("MOOX_INSTANCE_ID"), functionName)
 	cfg.NodeID = firstNonEmptyString(os.Getenv("MOOX_NODE_ID"), functionName)

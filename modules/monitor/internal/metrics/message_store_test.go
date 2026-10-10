@@ -222,7 +222,7 @@ func TestMetricMessageStorePrunesRetiredSeriesAndReporters(t *testing.T) {
 		Update("c_last_seen_at", now.Add(-RetiredSeriesAfter-time.Minute)).Error)
 	require.NoError(t, r.db.Model(&MetricService{}).Where("c_service_name = ?", report.ServiceName).
 		Update("c_last_seen_at", now.Add(-time.Minute)).Error)
-	pruned, err := r.PruneRetiredSeries(context.Background(), now)
+	pruned, err := r.PruneRetiredSeries(context.Background(), now, []ReporterPlacement{})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, pruned)
 	var services []MetricService
@@ -237,4 +237,45 @@ func TestMetricMessageStorePrunesRetiredSeriesAndReporters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, series, 1)
 	require.Equal(t, "live", series[0].SeriesID)
+}
+
+func TestMetricCleanupKeepsLastReportOfEveryRegisteredPlacement(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	now := time.Now().UTC()
+	for _, row := range []MetricService{
+		{ServiceName: "collector", NodeID: "control", InstanceID: "current", BootID: "old", LastSeenAt: now.Add(-4 * RetiredSeriesAfter)},
+		{ServiceName: "collector", NodeID: "control", InstanceID: "current", BootID: "new", LastSeenAt: now.Add(-2 * RetiredSeriesAfter)},
+		{ServiceName: "collector", NodeID: "control", InstanceID: "retired-instance", BootID: "1", LastSeenAt: now.Add(-3 * RetiredSeriesAfter)},
+		{ServiceName: "collector", NodeID: "other-host", InstanceID: "unregistered", BootID: "1", LastSeenAt: now.Add(-2 * RetiredSeriesAfter)},
+		{ServiceName: "admin", NodeID: "other-host", InstanceID: "disabled", BootID: "1", LastSeenAt: now.Add(-5 * RetiredSeriesAfter)},
+	} {
+		require.NoError(t, r.db.Create(&row).Error)
+	}
+	_, err = r.PruneRetiredSeries(t.Context(), now, nil)
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
+	require.EqualValues(t, 5, count, "unknown discovery cannot discard reporter history")
+	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterPlacement{{NodeID: "control", ServiceName: "collector"}, {NodeID: "other-host", ServiceName: "admin"}})
+	require.NoError(t, err)
+	rows, _, err := NewCatalog(r).ListServicesAt(t.Context(), "", 0, 10, now)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
+	require.EqualValues(t, 2, count, "redundant boots and unregistered retired reporters are removed")
+	for _, row := range rows {
+		require.True(t, row.IsStale, "last reporting time is retained without inventing recovery")
+		if row.ServiceName == "collector" {
+			require.Equal(t, "new", row.BootID)
+			require.WithinDuration(t, now.Add(-2*RetiredSeriesAfter), row.LastSeenAt, time.Millisecond)
+		}
+	}
+	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterPlacement{})
+	require.NoError(t, err)
+	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
+	require.Zero(t, count, "a successfully discovered empty deployment set removes retired history")
 }

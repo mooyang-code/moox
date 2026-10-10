@@ -1,3 +1,10 @@
+-- 完整部署快照与系统探测定义在同一事务内更新。
+CREATE TABLE IF NOT EXISTS t_monitor_topology (
+    c_id INTEGER NOT NULL PRIMARY KEY,
+    c_snapshot_json TEXT NOT NULL,
+    CHECK (c_id = 1)
+);
+
 CREATE TABLE IF NOT EXISTS t_monitor_checks (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',

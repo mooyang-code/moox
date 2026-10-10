@@ -40,24 +40,24 @@ func Duration(d time.Duration) string {
 
 // serviceNames names deployed services for people reading alerts.
 var serviceNames = map[string]string{
-	"admin_gateway":            "管理后台网关",
+	"admin":                    "管理后台网关",
 	"web_host":                 "管理后台前端",
 	"service_gateway":          "服务网关",
 	"service_gateway_native":   "公网服务网关",
-	"moox_gateway":             "节点服务网关",
+	"host-gateway":             "节点服务网关",
 	"storage-primary":          "存储主服务",
 	"storage-view":             "存储视图服务",
 	"storage-node":             "存储数据节点",
 	"eventbus":                 "消息总线",
-	"moox_monitor":             "监控服务",
-	"moox_collector":           "行情采集服务",
+	"monitor":                  "监控服务",
+	"collector":                "行情采集服务",
 	"collector_market_runtime": "行情采集运行环境",
-	"moox_cloudnode":           "云节点服务",
-	"moox_factor_mgr":          "因子管理服务",
-	"moox_strategy":            "策略服务",
-	"moox_archive":             "归档服务",
-	"moox_hostagent":           "主机采集代理",
-	"moox_trade":               "交易服务",
+	"cloudnode":                "云节点服务",
+	"factor-mgr":               "因子管理服务",
+	"strategy":                 "策略服务",
+	"archive":                  "归档服务",
+	"host-agent":               "主机采集代理",
+	"trade":                    "交易服务",
 }
 
 // Service is a deployed service's human name, falling back to its ID.

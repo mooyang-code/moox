@@ -36,7 +36,7 @@ func TestGatewaySamplingKeepsOtherHostsOnReadFailureAndSkipsDisabledHosts(t *tes
 	for _, hostID := range []string{"control", "storage"} {
 		source.statuses[hostID] = &adminpb.HostGatewayRuntimeStatus{InstanceId: hostID + "-first", ExpectedHash: "desired", AppliedHash: "old", LastSeenAt: now.Format(time.RFC3339Nano)}
 	}
-	syncer := NewSyncer(repos.Checks, source, testHTTPS(), repos.Gateways)
+	syncer := NewSyncer(repos.Topology, source, testHTTPS(), repos.Gateways)
 	syncer.now = func() time.Time { return now }
 	_, err = syncer.Sync(t.Context())
 	require.NoError(t, err)

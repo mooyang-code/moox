@@ -3195,7 +3195,7 @@ func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeRe
 	for kind, value := range values {
 		functions.WithLabelValues("stockcn", "stockcn_equity_kline_1m_v4", kind).Set(float64(max(value, 0)))
 	}
-	cfg := metricsreport.DefaultConfig("collector", "moox_collector_cli")
+	cfg := metricsreport.DefaultConfig("collector", "moox-cli")
 	cfg.SpaceID = "stockcn"
 	cfg.InstanceID = firstNonEmpty(os.Getenv("MOOX_INSTANCE_ID"), "moox-cli")
 	cfg.NodeID = firstNonEmpty(os.Getenv("MOOX_NODE_ID"), "moox-cli")

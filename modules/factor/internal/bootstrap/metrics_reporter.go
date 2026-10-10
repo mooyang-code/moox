@@ -22,7 +22,7 @@ func registerMetricsReporter(s *server.Server, engine engineView) error {
 	if service == nil {
 		return fmt.Errorf("factor metrics timer service %s is not configured", factorMetricsTimerService)
 	}
-	handler, err := report.NewHandler(report.DefaultConfig("factor", "moox_factor_mgr"))
+	handler, err := report.NewHandler(report.DefaultConfig("factor", "factor-mgr"))
 	if err != nil {
 		return fmt.Errorf("create factor metrics reporter: %w", err)
 	}
