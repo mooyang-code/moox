@@ -20,6 +20,13 @@ func TestRuntimeCommandReportsVersionWithoutOperatorConfiguration(t *testing.T) 
 }
 
 func TestRuntimeCommandRejectsMissingFlagsAndUnknownOperations(t *testing.T) {
+	for _, operation := range []string{"activate", "rollback", "recover"} {
+		for _, args := range [][]string{{operation}, {operation, "--unknown"}, {operation, "unexpected"}} {
+			var stdout, stderr bytes.Buffer
+			require.Error(t, run(context.Background(), args, &stdout, &stderr))
+			require.Empty(t, stdout.String())
+		}
+	}
 	for _, args := range [][]string{{"inspect-release"}, {"inspect-release", "--unknown"}, {"inspect-release", "--directory", "missing", "unexpected"}, {"inspect-release", "--directory", "missing"}} {
 		var stdout, stderr bytes.Buffer
 		require.Error(t, run(context.Background(), args, &stdout, &stderr))

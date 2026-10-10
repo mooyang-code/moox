@@ -23,6 +23,13 @@ func TestValidateDoesNotProvisionOrCreateState(t *testing.T) {
 		t.Fatal("validate provisioned Caddy state")
 	}
 	out.Reset()
+	if err := run(context.Background(), []string{"check-state", "--config", path}, &out); err == nil || out.Len() != 0 {
+		t.Fatal("check-state accepted a missing internal CA or emitted success output")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state")); !os.IsNotExist(err) {
+		t.Fatal("check-state created persistent state")
+	}
+	out.Reset()
 	if err := run(context.Background(), []string{"stop-budget", "--config", path}, &out); err != nil {
 		t.Fatal(err)
 	}

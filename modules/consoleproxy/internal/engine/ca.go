@@ -93,6 +93,26 @@ func caDir(c config.Config) string {
 // prepareCA is called before Caddy Load, so corrupt/missing existing state
 // cannot be silently replaced by Caddy's automatic CA creation.
 func prepareCA(c config.Config) (*x509.Certificate, error) {
+	return verifyCA(c, true)
+}
+
+// CheckState validates persisted keys, certificates and the existing trust
+// baseline without creating files, issuing certificates or starting listeners.
+func CheckState(c config.Config) (string, error) {
+	cert, err := verifyCA(c, false)
+	if err != nil {
+		return "", err
+	}
+	if cert == nil {
+		if c.TLS.Mode == "internal" {
+			return "", errors.New("internal CA state is absent")
+		}
+		return "", nil
+	}
+	return strings.TrimSpace(fingerprint(cert)), nil
+}
+
+func verifyCA(c config.Config, allowImport bool) (*x509.Certificate, error) {
 	dir := caDir(c)
 	_, err := os.Stat(filepath.Join(dir, "root.crt"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -139,8 +159,10 @@ func prepareCA(c config.Config) (*x509.Certificate, error) {
 		if err := checkPublishedCA(c, cert); err != nil {
 			return nil, fmt.Errorf("trusted legacy CA import: %w", err)
 		}
-		if err := atomicWrite(c.TLS.CABaseline, []byte(fingerprint(cert)), 0600); err != nil {
-			return nil, err
+		if allowImport {
+			if err := atomicWrite(c.TLS.CABaseline, []byte(fingerprint(cert)), 0600); err != nil {
+				return nil, err
+			}
 		}
 	}
 	for _, name := range []string{"root.crt", "root.sha256"} {

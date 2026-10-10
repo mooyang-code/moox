@@ -111,6 +111,36 @@ func TestRenderedConfigurationInvariants(t *testing.T) {
 	}
 }
 
+func TestStateCheckDoesNotProvisionOrWriteLegacyBaseline(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ready")) }))
+	defer upstream.Close()
+	c := testConfig(t, upstream.URL, upstream.URL)
+	if _, err := CheckState(c); err == nil {
+		t.Fatal("accepted absent internal CA")
+	}
+	if _, err := os.Stat(c.TLS.StorageRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("read-only check created state")
+	}
+	e, _, _ := start(t, c)
+	if err := e.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want, err := CheckState(c)
+	if err != nil || len(want) != 95 || strings.TrimSpace(want) != want {
+		t.Fatalf("persisted state failed: %v", err)
+	}
+	if err := os.Remove(c.TLS.CABaseline); err != nil {
+		t.Fatal(err)
+	}
+	got, err := CheckState(c)
+	if err != nil || got != want {
+		t.Fatalf("trusted legacy state failed read-only check: %v", err)
+	}
+	if _, err := os.Stat(c.TLS.CABaseline); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("read-only check wrote a legacy baseline")
+	}
+}
+
 func TestHTTPSRoutesTrustAndCAContinuity(t *testing.T) {
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

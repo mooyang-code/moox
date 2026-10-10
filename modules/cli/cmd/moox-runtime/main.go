@@ -39,6 +39,9 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && (args[0] == "activate" || args[0] == "rollback" || args[0] == "recover") {
+		return installOperation(ctx, args[0], args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "inspect-release" {
 		flags := flag.NewFlagSet("moox-runtime inspect-release", flag.ContinueOnError)
 		flags.SetOutput(stderr)
@@ -89,6 +92,46 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		ids = strings.Split(components, ",")
 	}
 	result, err := unitruntime.Execute(ctx, plan, args[0], ids, options)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(result)
+}
+
+func installOperation(ctx context.Context, operation string, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime "+operation, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var options unitinstall.ActivateOptions
+	var lock unitruntime.Options
+	var unitRoot, components string
+	if operation == "activate" {
+		flags.StringVar(&options.Directory, "directory", "", "physical prepared release")
+		flags.BoolVar(&options.NoStart, "no-start", false, "switch current without starting components")
+		flags.StringVar(&components, "components", "", "component start selection")
+	} else {
+		flags.StringVar(&unitRoot, "unit-root", "", "physical deployment unit root")
+	}
+	flags.BoolVar(&lock.MaintenanceLockHeld, "maintenance-lock-held", false, "reuse a verified inherited maintenance lock")
+	flags.IntVar(&lock.MaintenanceLockFD, "maintenance-lock-fd", 3, "inherited maintenance descriptor")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || (operation == "activate" && options.Directory == "") || (operation != "activate" && unitRoot == "") {
+		return errors.New("installation operation requires its directory/root and no positional arguments")
+	}
+	if components != "" {
+		options.Components = strings.Split(components, ",")
+	}
+	var result unitinstall.Activation
+	var err error
+	switch operation {
+	case "activate":
+		result, err = unitinstall.Activate(ctx, options, lock)
+	case "rollback":
+		result, err = unitinstall.Rollback(ctx, unitRoot, lock)
+	default:
+		result, err = unitinstall.Recover(ctx, unitRoot, lock)
+	}
 	if err != nil {
 		return err
 	}

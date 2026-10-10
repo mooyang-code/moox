@@ -33,7 +33,7 @@ func main() {
 
 func run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: moox-console-proxy serve|validate|version|stop-budget [--config path]")
+		return errors.New("usage: moox-console-proxy serve|validate|check-state|version|stop-budget [--config path]")
 	}
 	if args[0] == "version" {
 		if len(args) != 1 {
@@ -49,7 +49,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		}
 		return json.NewEncoder(out).Encode(map[string]string{"component": "console-proxy", "version": Version, "git_commit": GitCommit, "build_time": BuildTime, "caddy_version": caddyVersion})
 	}
-	if args[0] != "serve" && args[0] != "validate" && args[0] != "stop-budget" {
+	if args[0] != "serve" && args[0] != "validate" && args[0] != "check-state" && args[0] != "stop-budget" {
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -66,6 +66,12 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	switch args[0] {
+	case "check-state":
+		fingerprint, err := engine.CheckState(cfg)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]string{"ca_sha256": fingerprint})
 	case "validate":
 		if _, err := engine.Render(cfg); err != nil {
 			return err

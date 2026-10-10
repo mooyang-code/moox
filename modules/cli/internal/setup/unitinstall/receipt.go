@@ -26,6 +26,16 @@ import (
 // receipt. Runtime state must be copied only after this check and while holding
 // maintenance; an already running release is not a new preparation candidate.
 func ReadPrepared(ctx context.Context, directory string) (Prepared, error) {
+	return readRelease(ctx, directory, false, true)
+}
+
+// ReadInstalled verifies immutable release content while allowing only the
+// component data/log directories created by the running services.
+func ReadInstalled(ctx context.Context, directory string) (Prepared, error) {
+	return readRelease(ctx, directory, true, true)
+}
+
+func readRelease(ctx context.Context, directory string, installed, verifyInventory bool) (Prepared, error) {
 	if err := ctx.Err(); err != nil {
 		return Prepared{}, err
 	}
@@ -85,12 +95,14 @@ func ReadPrepared(ctx context.Context, directory string) (Prepared, error) {
 			return Prepared{}, errors.New("prepared component order does not match its receipt")
 		}
 	}
-	files, err := inventory(ctx, root, prepared)
-	if err != nil {
-		return Prepared{}, err
-	}
-	if len(prepared.Files) == 0 || !reflect.DeepEqual(files, prepared.Files) {
-		return Prepared{}, errors.New("prepared release inventory changed after preparation")
+	if verifyInventory {
+		files, err := inventory(ctx, root, prepared, installed)
+		if err != nil {
+			return Prepared{}, err
+		}
+		if len(prepared.Files) == 0 || !reflect.DeepEqual(files, prepared.Files) {
+			return Prepared{}, errors.New("prepared release inventory changed after preparation")
+		}
 	}
 	if err := unitruntime.ValidateRelease(filepath.Join(directory, "runtime.json")); err != nil {
 		return Prepared{}, err
@@ -98,7 +110,7 @@ func ReadPrepared(ctx context.Context, directory string) (Prepared, error) {
 	return prepared, nil
 }
 
-func inventory(ctx context.Context, root *os.Root, prepared Prepared) ([]unitpackage.File, error) {
+func inventory(ctx context.Context, root *os.Root, prepared Prepared, installed bool) ([]unitpackage.File, error) {
 	if prepared.Profile != "host" {
 		info, err := root.Lstat("host-gateway")
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -108,6 +120,7 @@ func inventory(ctx context.Context, root *os.Root, prepared Prepared) ([]unitpac
 	var files []unitpackage.File
 	var total int64
 	entries := 0
+	mutable := mutablePaths(prepared, true)
 	err := fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -122,6 +135,12 @@ func inventory(ctx context.Context, root *os.Root, prepared Prepared) ([]unitpac
 		info, err := entry.Info()
 		if err != nil || !fsutil.Owned(info) {
 			return errors.New("prepared release object ownership cannot be verified")
+		}
+		if slices.Contains(mutable, name) {
+			if !installed || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+				return errors.New("release state must use owned physical directories after activation")
+			}
+			return fs.SkipDir
 		}
 		if info.IsDir() {
 			if info.Mode().Perm() != 0o700 {

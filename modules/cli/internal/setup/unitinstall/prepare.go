@@ -93,6 +93,7 @@ func prepareComponents(options PrepareOptions) ([]string, error) {
 	if options.Profile == "host" {
 		ids = []string{"host-gateway", "host-agent"}
 	}
+	ids = lifecycleOrder(ids)
 	if len(options.Environment) != len(ids) {
 		return nil, errors.New("runtime environment must be explicit for every selected component")
 	}
@@ -216,7 +217,7 @@ func Prepare(ctx context.Context, options PrepareOptions, lockOptions unitruntim
 			return err
 		}
 		prepared := Prepared{Version: 1, HostID: projection.HostID, Profile: options.Profile, Directory: destination, DeploymentRoot: options.DeploymentRoot, UnitRoot: options.UnitRoot, HostUnitRoot: options.HostUnitRoot, PackageSHA256: extracted.Package.SHA256, Identity: projection, Components: components}
-		prepared.Files, err = inventory(ctx, root, prepared)
+		prepared.Files, err = inventory(ctx, root, prepared, false)
 		if err != nil {
 			return err
 		}

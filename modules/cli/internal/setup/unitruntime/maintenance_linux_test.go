@@ -57,3 +57,34 @@ func TestRuntimeLinuxScopedMaintenanceSerializesAndBoundsLifecycle(t *testing.T)
 	})
 	require.NoError(t, err, "callback must release the lock even after host/cancellation failures")
 }
+
+func TestRuntimeLinuxInterruptedInstallationBlocksAutomaticStartsUntilRecovery(t *testing.T) {
+	path, plan := planFixture(t, "web-host")
+	unitRoot := filepath.Dir(filepath.Dir(plan.ReleaseRoot))
+	err := WithMaintenance(t.Context(), plan.DeploymentRoot, plan.HostID, Options{}, func(guard *Maintenance) error {
+		return guard.BeginInstallation(t.Context(), unitRoot, plan.ReleaseRoot)
+	})
+	require.NoError(t, err)
+	checked, err := Execute(t.Context(), path, "healthcheck", nil, Options{})
+	require.NoError(t, err)
+	require.True(t, checked.Skipped)
+	for _, operation := range []string{"start", "restart", "resume"} {
+		_, err := Execute(t.Context(), path, operation, nil, Options{})
+		require.Error(t, err)
+	}
+	_, err = Execute(t.Context(), path, "pause", nil, Options{})
+	require.NoError(t, err)
+	err = WithMaintenance(t.Context(), plan.DeploymentRoot, plan.HostID, Options{}, func(guard *Maintenance) error {
+		otherPath, other := planFixture(t, "web-host")
+		_ = otherPath
+		require.Error(t, guard.BeginInstallation(t.Context(), filepath.Dir(filepath.Dir(other.ReleaseRoot)), other.ReleaseRoot))
+		require.NoError(t, guard.BeginInstallation(t.Context(), unitRoot, plan.ReleaseRoot))
+		result, err := guard.Execute(t.Context(), path, "start", nil)
+		require.NoError(t, err)
+		require.Equal(t, "paused", result.Components[0].State)
+		return guard.EndInstallation()
+	})
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(plan.DeploymentRoot, "run/installation.json"))
+	require.FileExists(t, filepath.Join(plan.DeploymentRoot, "run/paused/web-host"))
+}

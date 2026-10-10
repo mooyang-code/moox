@@ -100,6 +100,15 @@ func Execute(ctx context.Context, planPath, operation string, ids []string, opts
 	if err := state.ensureHostIdentity(); err != nil {
 		return result, err
 	}
+	if pending, err := state.pendingInstallation(); err != nil {
+		return result, err
+	} else if pending != nil && !opts.MaintenanceLockHeld && slices.Contains([]string{"start", "restart", "resume", "healthcheck"}, operation) {
+		if operation == "healthcheck" {
+			result.Skipped = true
+			return result, nil
+		}
+		return result, errors.New("an interrupted installation must be recovered before starting components")
+	}
 	if operation == "restart" {
 		stopping := slices.Clone(components)
 		slices.Reverse(stopping)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -17,6 +18,7 @@ type Maintenance struct {
 	mu           sync.Mutex
 	lock         *os.File
 	hostID, root string
+	installation *installation
 }
 
 func WithMaintenance(ctx context.Context, deploymentRoot, hostID string, options Options, work func(*Maintenance) error) error {
@@ -63,6 +65,41 @@ func (m *Maintenance) Execute(ctx context.Context, planPath, operation string, i
 		return Result{}, errors.New("maintenance lifecycle cannot cross its host or deployment root")
 	}
 	return Execute(ctx, planPath, operation, ids, Options{MaintenanceLockHeld: true, MaintenanceLockFD: int(m.lock.Fd())})
+}
+
+// CheckUnit processes must belong to the current/candidate releases of this
+// unit. A valid PID record from another unit is not permission to stop it.
+func (m *Maintenance) CheckUnit(ctx context.Context, planPath string, allowedReleaseRoots []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lock == nil {
+		return errors.New("maintenance callback has ended")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	plan, err := LoadPlan(planPath)
+	if err != nil {
+		return err
+	}
+	if plan.HostID != m.hostID || plan.DeploymentRoot != m.root {
+		return errors.New("maintenance ownership check cannot cross its host or deployment root")
+	}
+	state, err := openRuntime(plan)
+	if err != nil {
+		return err
+	}
+	defer state.close()
+	for _, component := range plan.Components {
+		record, alive, err := state.record(component)
+		if err != nil {
+			return err
+		}
+		if alive && !slices.Contains(allowedReleaseRoots, record.ReleaseRoot) {
+			return errors.New("running component belongs to a different deployment unit")
+		}
+	}
+	return nil
 }
 
 func (s *runtimeState) ensureHostIdentity() error {

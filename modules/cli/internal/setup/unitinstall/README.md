@@ -1,6 +1,6 @@
-# 发布目录准备
+# 发布准备、激活与恢复
 
-`unitinstall` 在软件包与身份消费层之上生成完整、私密的候选发布目录，供后续安装器激活。它不读取操作员的 `moox.toml`，不切换 `current`、复制运行数据或启停现有服务。
+`unitinstall` 在软件包与身份消费层之上准备、激活、恢复和回滚私密发布目录，不读取操作员的 `moox.toml`。`Prepare` 只生成候选；`Activate` 在同一主机维护锁下停止旧单元、复制状态、切换 `current` 并启动所选组件。
 
 `Prepare` 的输入是已构建的软件包及生产端摘要、部署/单元根目录、新发布 ID、已核验身份包的目录与拓扑/信任参数，以及按组件显式提供的运行环境和私密配置覆盖。单元根与部署根必须预先存在且由部署用户拥有；发布 ID 不覆盖已有文件、目录或链接。纯 Go 软件与测试制品在本机构建，Linux 仅运行它们；需要 CGO 的目标仍使用 Linux 编译机。
 
@@ -19,7 +19,15 @@
 
 `ReadPrepared` 与 `moox-runtime inspect-release --directory /absolute/unit/releases/ID` 用于安装切换前核验候选发布：要求物理私密目录、规范收据、匹配的主机/组件/运行计划，以及逐文件完整性。未列出的文件、缺失或改动的文件、权限变化和非法链接都会失败。它用于尚未启动或复制运行状态的候选目录；已运行的发布包含可变数据，不能再次视为全新候选。
 
-生成的 `start/stop/restart/pause/resume/healthcheck/status.sh` 只定位实际发布目录并调用 host 包的共用 `moox-runtime`，不复制停止等待或强杀逻辑。脚本将带空格、引号或 shell 特殊字符的主机路径作为字面值传递。安装切换、状态复制、失败回滚、bootstrap 和 `setup pause/resume` 接线仍由后续阶段完成。
+生成的 `start/stop/restart/pause/resume/healthcheck/status.sh` 只定位实际发布目录并调用 host 包的共用 `moox-runtime`，不复制停止等待或强杀逻辑。脚本将带空格、引号或 shell 特殊字符的主机路径作为字面值传递。生命周期按依赖排序：Admin、EventBus 等服务先于 Web Host 和 Console Proxy 启动，停止时反序。实际 `setup` 部署入口、bootstrap 和 `setup pause/resume` 接线仍由后续阶段完成。
+
+`moox-runtime activate --directory DIR` 激活完整单元，`--components ID,...` 可指定启动子集，`--no-start` 只切换目录，供五步 bootstrap 分阶段启动。重复激活已完成的当前发布会核验静态内容，不重新启动服务。`ReadInstalled` 验证已运行发布的静态清单，同时允许组件的 data/var/log/logs 与代理 certs 目录；`ReadPrepared` 仍要求未复制状态的候选。
+
+单元根的 0600 `activation.json` 在停止、复制、切换、启动和恢复阶段持久化旧/新发布及原运行选择。部署根 `run/installation.json` 在安装器进程退出、flock 释放后仍阻止自动启动；只有同单元/发布的恢复可接管。`healthcheck` 跳过，外部 start/restart/resume 拒绝，stop/pause 仍可执行。成功激活或完整恢复后才删除此标记，用户暂停标记保持独立。
+
+状态在全部旧进程退出后复制到新目录，拒绝链接/特殊文件，逐文件同步，不使用可变数据硬链接。旧目录保留独立的停机快照；新启动失败自动恢复旧 current 和此前运行的组件。取消后的自动恢复继续使用各进程持久化的完整停止预算；恢复失败保留持久标记，等待 `moox-runtime recover --unit-root ROOT`。`rollback --unit-root ROOT` 显式恢复上次升级前的快照，升级后的数据保留在被退役的新目录，不向旧 schema 合并。首次安装没有可回滚的先前快照。
+
+代理升级拒绝仍开启 initialize_ca 的候选，将状态路径限制在可复制的组件 data/certs 内；使用真实 `moox-console-proxy check-state` 在停机前后、复制后和启动后校验 CA 指纹。检查命令只读，不生成证书或写入旧基线。历史 CA 导入、首次初始化授权的一次性持久消费，以及正式部署流程仍属于后续 G7/G11 接线。五步 bootstrap 还需首装状态导入入口，把离线 Admin 的初始化数据库装入新发布；当前 API 尚未接通，不以共享运行库路径绕过独立快照。
 
 验证入口：
 
@@ -27,4 +35,6 @@
 make test-unit-install
 ```
 
-Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建的 `MOOX_UNIT_INSTALL_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，真实隔离 Admin 生产的 `MOOX_HOST_MATERIAL_FIXTURE`，以及 host/Access 软件包路径和对应 `sha256:<64 位小写十六进制>` 摘要：`MOOX_UNIT_INSTALL_HOST_ARCHIVE`、`MOOX_UNIT_INSTALL_HOST_SHA256`、`MOOX_UNIT_INSTALL_ACCESS_ARCHIVE`、`MOOX_UNIT_INSTALL_ACCESS_SHA256`。七组必需场景全部执行，不接受跳过。普通 Linux 模块测试缺少这些制品时会跳过实际准备场景，不能算完整门禁通过。
+Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建的 `MOOX_UNIT_INSTALL_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，真实隔离 Admin 生产的 `MOOX_HOST_MATERIAL_FIXTURE`，以及 host/Access/control 软件包路径和对应 `sha256:<64 位小写十六进制>` 摘要：`MOOX_UNIT_INSTALL_HOST_ARCHIVE`、`MOOX_UNIT_INSTALL_HOST_SHA256`、`MOOX_UNIT_INSTALL_ACCESS_ARCHIVE`、`MOOX_UNIT_INSTALL_ACCESS_SHA256`，以及 `MOOX_UNIT_INSTALL_CONTROL_ARCHIVE`、`MOOX_UNIT_INSTALL_CONTROL_SHA256`。十三组必需场景全部执行，不接受跳过。普通 Linux 模块测试缺少这些制品时会跳过实际准备场景，不能算完整门禁通过。
+
+门禁启动真实 Web Host 和 Console Proxy，占用合成健康端口。Linux 主机已有业务时，使用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-install-linux.sh` 隔离网络，不停止现有业务。
