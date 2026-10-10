@@ -131,10 +131,13 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 	if err := o.datasets.ReplaceExpected(expectations(next)); err != nil {
 		return err
 	}
-	added := make([]string, 0)
-	for id := range next {
-		if _, known := o.expected[id]; !known {
-			added = append(added, id)
+	added := make([]store.Instance, 0)
+	for _, instance := range instances {
+		if _, inNext := next[instance.InstanceID]; !inNext {
+			continue
+		}
+		if _, known := o.expected[instance.InstanceID]; !known {
+			added = append(added, instance)
 		}
 	}
 	o.expected = next
@@ -158,12 +161,14 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 }
 
 // graceNewInstancesLocked 给新启用、从未处理过任何周期的实例一个首期等待宽限：登记期望后 Monitor 里还没有这个数据集的运行，
-// 会立即判为“尚未上报”并生成告警，而它的首个事件要等到下一个 bar 收线之后才到。这里记一次“空”运行（只刷新最近运行与
-// 最近成功时间，不推进任何水位），之后 Monitor 的运行与成功新鲜度检查从启用时刻起算，超过容忍的间隔数仍没有首期结果才告警。
-// 已经处理过周期的实例（含进程重启与停用后重新启用）不再给宽限，调用方持有 o.mu。
-func (o *instanceObserver) graceNewInstancesLocked(ctx context.Context, ids []string, expected map[string]report.DatasetExpectation) {
-	for _, id := range ids {
-		if !o.lastBarEnd[id].IsZero() {
+// 会立即判为“尚未上报”并生成告警，而它的首个事件要等到下一个 bar 收线之后才到。这里以本次启用（会话创建）的时刻记一次
+// “空”运行（只刷新最近运行与最近成功时间，不推进任何水位），Monitor 的运行与成功新鲜度检查从启用时刻起算，超过容忍的间隔数
+// 仍没有首期结果才告警。起点固定在启用时刻而不是当前时间：进程重启后再次登记不会把宽限重新开始，反复重启也延后不了告警。
+// 已经处理过周期的实例（含停用后重新启用）不再给宽限，调用方持有 o.mu。
+func (o *instanceObserver) graceNewInstancesLocked(ctx context.Context, instances []store.Instance, expected map[string]report.DatasetExpectation) {
+	for _, instance := range instances {
+		id := instance.InstanceID
+		if !o.lastBarEnd[id].IsZero() || instance.SessionID == nil {
 			continue
 		}
 		if processed, _, err := o.store.LatestBarEnds(ctx, id); err != nil {
@@ -172,7 +177,12 @@ func (o *instanceObserver) graceNewInstancesLocked(ctx context.Context, ids []st
 		} else if !processed.IsZero() {
 			continue
 		}
-		observation := report.DatasetObservation{Key: expected[id].Key, Result: "empty", FinishedAt: o.now().UTC()}
+		session, err := o.store.GetSession(ctx, *instance.SessionID)
+		if err != nil {
+			o.log("读取实例 %s 的会话失败，跳过首期宽限：%v", id, err)
+			continue
+		}
+		observation := report.DatasetObservation{Key: expected[id].Key, Result: "empty", FinishedAt: session.CreatedAt.UTC()}
 		if err := o.datasets.ObserveRun(observation); err != nil {
 			o.log("记录实例 %s 的首期等待宽限失败：%v", id, err)
 		}

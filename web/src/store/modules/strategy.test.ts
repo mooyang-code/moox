@@ -65,6 +65,21 @@ describe("strategy store", () => {
     expect(store.results).toEqual([]);
   });
 
+  it("drops a late all-history response after switching back to a session-less current scope", async () => {
+    api.getInstance.mockResolvedValue(instance({ session_id: "", enabled: false }));
+    api.listStrategyTargets.mockResolvedValue({ targets: [] });
+    const late = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listStrategyResults.mockReturnValue(late.promise);
+    const store = useStrategyStore();
+    await store.loadInstanceDetail("instance-1");
+    const history = store.loadResultPage(1, 20, true);
+    await store.loadResultPage(1, 20, false);
+    late.resolve({ items: [{ result_id: "old-session" }], page: { total: 1 } });
+    await history;
+    expect(store.results).toEqual([]);
+    expect(store.totalResults).toBe(0);
+  });
+
   it("applies a fast target response without waiting for slow history", async () => {
     const targets = deferred<{ targets: []; session_id: string; bar_end_time: string; valid_until: string; result_id: string }>();
     const results = deferred<{ items: []; page: { total: number } }>();

@@ -104,6 +104,7 @@ import ResultTimeline from "@/views/strategy/components/strategy-result-table.vu
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import TargetTable from "@/views/strategy/components/strategy-target-table.vue";
 import { deriveTargetState } from "@/views/strategy/model";
+import { useNowClock } from "@/views/strategy/use-now-clock";
 
 defineOptions({ name: "StrategyDetail" });
 const route = useRoute();
@@ -117,8 +118,10 @@ const resultPageSize = 20;
 const resultScope = ref<"session" | "all">("session");
 const controlUncertain = ref(false);
 const autoRefresh = ref(true);
+// 目标有效期要随时间流逝重算：关闭自动刷新后页面不再请求数据，只读 Date.now() 的 computed 不会自己更新。
+const nowMs = useNowClock();
 const targetState = computed(() =>
-  store.instance && !controlUncertain.value ? deriveTargetState(store.instance, store.targetSnapshot) : "unknown"
+  store.instance && !controlUncertain.value ? deriveTargetState(store.instance, store.targetSnapshot, nowMs.value) : "unknown"
 );
 async function load(reconcileControlState = false) {
   try {

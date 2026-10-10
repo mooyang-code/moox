@@ -154,6 +154,8 @@ export const useStrategyStore = defineStore("strategy", () => {
   async function loadResultPage(page: number, pageSize = 20, allHistory = false) {
     if (!instance.value) return;
     if (!allHistory && !instance.value.session_id) {
+      // 使在途的“全部历史”请求作废：迟到的响应不能把旧结果填进无会话的“本次启用”表格。
+      resultRequest += 1;
       results.value = [];
       totalResults.value = 0;
       detailError.value = "";

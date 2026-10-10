@@ -91,45 +91,53 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 	}
 }
 
-// 新启用、从未处理过周期的实例登记后立即有一次“空”运行：Monitor 不会在首个事件到达之前把它判为“尚未上报”，
-// 但输出水位不推进，首期没有结果时仍会在容忍的间隔数之后告警。
+// 新启用、从未处理过周期的实例登记后立即有一次“空”运行，起点是启用（会话创建）时刻：Monitor 不会在首个事件到达之前把它判为
+// “尚未上报”，输出水位不推进，首期没有结果时仍会在容忍的间隔数之后告警；进程重启后重新登记不会把宽限重新开始。
 func TestInstanceObserverGivesNewInstanceFirstPeriodGrace(t *testing.T) {
 	repo := openStore(t)
 	seedEnabled(t, repo, "i1", nil, resolvedJSON)
-	registry := prometheus.NewRegistry()
-	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	instance, err := repo.GetInstance(context.Background(), "i1")
+	if err != nil || instance.SessionID == nil {
+		t.Fatalf("读取实例失败：%+v %v", instance, err)
+	}
+	session, err := repo.GetSession(context.Background(), *instance.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC)
-	observer.now = func() time.Time { return now }
-	if err := observer.refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	value := func(name string) (float64, bool) {
-		families, err := registry.Gather()
+	enabledAt := session.CreatedAt.UTC().Unix()
+	registerAt := func(now time.Time) func(string) (float64, bool) {
+		registry := prometheus.NewRegistry()
+		observer, err := newInstanceObserver(repo, registry, t.Logf)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, family := range families {
-			if family.GetName() == name && len(family.GetMetric()) > 0 {
-				return family.GetMetric()[0].GetGauge().GetValue(), true
-			}
+		observer.now = func() time.Time { return now }
+		if err := observer.refresh(context.Background()); err != nil {
+			t.Fatal(err)
 		}
-		return 0, false
+		return func(name string) (float64, bool) {
+			families, err := registry.Gather()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, family := range families {
+				if family.GetName() == name && len(family.GetMetric()) > 0 {
+					return family.GetMetric()[0].GetGauge().GetValue(), true
+				}
+			}
+			return 0, false
+		}
 	}
-	if got, ok := value("moox_strategy_dataset_last_success_timestamp_seconds"); !ok || int64(got) != now.Unix() {
+	value := registerAt(session.CreatedAt.Add(5 * time.Minute))
+	if got, ok := value("moox_strategy_dataset_last_success_timestamp_seconds"); !ok || int64(got) != enabledAt {
 		t.Fatalf("登记后应有首期宽限（最近成功=启用时刻）：%v ok=%v", got, ok)
 	}
 	if got, ok := value("moox_strategy_dataset_output_watermark_timestamp_seconds"); ok && got != 0 {
 		t.Fatalf("宽限不能推进输出水位：%v", got)
 	}
-	// 再次刷新清单不重复给宽限。
-	now = now.Add(time.Hour)
-	if err := observer.refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := value("moox_strategy_dataset_last_success_timestamp_seconds"); int64(got) != now.Add(-time.Hour).Unix() {
-		t.Fatalf("刷新清单不应延长宽限：%v", got)
+	// 实例久未产出、进程重启后重新登记：起点仍是启用时刻，不会重新开始等待。
+	restarted := registerAt(session.CreatedAt.Add(30 * time.Hour))
+	if got, _ := restarted("moox_strategy_dataset_last_success_timestamp_seconds"); int64(got) != enabledAt {
+		t.Fatalf("重启后宽限起点不应后移：%v，期望 %d", got, enabledAt)
 	}
 }
