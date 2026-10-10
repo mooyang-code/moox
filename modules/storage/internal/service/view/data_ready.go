@@ -335,12 +335,12 @@ func (s *Service) positionsApplied(view *pb.View, required []*storagepb.Committe
 	runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
 	s.mu.RUnlock()
 	indexID := view.GetActiveIndexId()
+	// 活动索引取查询路径上的无锁副本：运行时锁在整段索引写入（可达秒级）与激活的元数据调用期间被持有，刷新持有全局的
+	// 串行锁，在这里等某个 View 的锁会让所有 View 的就绪发布排在后面。
 	if runtime != nil {
-		runtime.mu.Lock()
-		if runtime.active != "" {
-			indexID = runtime.active
+		if active := runtime.queryState().active; active != "" {
+			indexID = active
 		}
-		runtime.mu.Unlock()
 	}
 	if indexID == "" {
 		return false
@@ -389,12 +389,11 @@ func (s *Service) viewSnapshot(spaceID, viewID string) *pb.View {
 		return nil
 	}
 	clone := proto.Clone(view).(*pb.View)
+	// 同 positionsApplied：读无锁副本，不等运行时锁。
 	if runtime != nil {
-		runtime.mu.Lock()
-		if runtime.active != "" {
-			clone.ActiveIndexId = runtime.active
+		if active := runtime.queryState().active; active != "" {
+			clone.ActiveIndexId = active
 		}
-		runtime.mu.Unlock()
 	}
 	return clone
 }

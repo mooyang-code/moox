@@ -17,9 +17,6 @@ import (
 type EventConsumerOptions = eventconsumer.Config
 type DatasetRoute = eventconsumer.DatasetRoute
 
-type liveDeliveryLease struct {
-}
-
 type dynamicConsumerBoundState struct {
 	mu    sync.RWMutex
 	bound bool
@@ -41,16 +38,6 @@ func (s *dynamicConsumerBoundState) get() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.bound
-}
-
-func (l liveDeliveryLease) Acquire(ctx context.Context) error {
-	if ctx == nil {
-		return errors.New("View 投递缺少上下文")
-	}
-	return ctx.Err()
-}
-
-func (l liveDeliveryLease) Release() {
 }
 
 func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Client, configured ...EventConsumerOptions) (func(), error) {
@@ -88,7 +75,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	for i := range partitionConfigs {
 		partitionConfigs[i].PartitionConfigs = nil
 		partitionConfigs[i].Metrics = opts.Metrics
-		partitionConfigs[i].Lease = liveDeliveryLease{}
 		if strings.TrimSpace(partitionConfigs[i].PartitionID) == "" {
 			partitionConfigs[i].PartitionID = strings.TrimSpace(partitionConfigs[i].Consumer)
 		}
@@ -120,9 +106,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		partition := partition
 		partitionID := partition.PartitionID
 		if len(opts.PartitionConfigs) > 0 && len(partition.FilterSubjects) == 0 {
-			// A partition without static routes only supplies the delivery
-			// template for dynamic per-Dataset consumers. Starting it without
-			// filter subjects would subscribe to every Dataset event.
+			// 没有静态路由的分区只为动态的按数据集消费者提供投递模板。不带过滤主题启动它，会订阅所有数据集事件。
 			continue
 		}
 		state := &boundState{}
@@ -162,10 +146,8 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	}
 
 	stateReader := func(stateCtx context.Context) (jetstream.ConsumerState, error) {
-		// Dynamic View inventory reconciliation can register and unregister
-		// partitions while maintenance is reading the aggregate state. Snapshot
-		// the map under the service lock before iterating so the closure never
-		// races with those updates.
+		// 动态的 View 清单对账可以在维护读取汇总状态的同时注册和注销分区。遍历之前在服务锁内给映射做快照，
+		// 闭包就不会与这些更新竞争。
 		s.mu.RLock()
 		readers := make(map[string]func(context.Context) (jetstream.ConsumerState, error), len(s.consumerStates))
 		for partitionID, reader := range s.consumerStates {
@@ -195,10 +177,8 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 				return false
 			}
 		}
-		// Dynamic inventory partitions register after the static consumers have
-		// started. Include their bound state in the aggregate readiness signal so
-		// a newly discovered View cannot make the service look ready before its
-		// dedicated durable is attached.
+		// 动态清单的分区在静态消费者启动之后才注册。把它们的绑定状态也计入汇总的就绪信号，新发现的 View 就不会在它的
+		// 专用 durable 挂上之前让服务看起来已经就绪。
 		s.mu.RLock()
 		dynamicBounds := make(map[string]func() bool, len(s.consumerBounds))
 		for partitionID, reader := range s.consumerBounds {
@@ -309,8 +289,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		s.consumerPartitionByDataset = make(map[datasetRef]string)
 		s.mu.Unlock()
 	}
-	// Discard leftover rebuild journals from older binaries. Rebuilds never
-	// emit subject-ready from this directory.
+	// 丢弃旧二进制遗留的重建日志。重建从不从这个目录发出 subject-ready。
 	if err := s.ReplayPendingSubjects(ctx); err != nil {
 		stop()
 		return nil, fmt.Errorf("清理遗留的 View 标的日志失败：%w", err)
@@ -345,7 +324,6 @@ func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstr
 	config.FilterSubjects = append([]string(nil), spec.filters...)
 	config.DatasetRoutes = []DatasetRoute{{SpaceID: spec.ref.spaceID, DatasetID: spec.ref.datasetID}}
 	config.Metrics = s.metrics
-	config.Lease = liveDeliveryLease{}
 	config.BoundReporter = state.set
 	consumer, err := eventconsumer.New(partitionClient, s, config)
 	if err != nil {

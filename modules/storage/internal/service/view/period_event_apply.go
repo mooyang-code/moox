@@ -166,7 +166,7 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			DatasetId:      payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, "view:"+view.GetViewId()),
 			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
 			ReadyAt: cloneTimestamp(message.GetOccurredAt()),
-			// Factor states retain their frozen universe even when the View filters rows.
+			// 因子状态保留它们冻结的全集，即使 View 过滤了行。
 			UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
 			Factors:            cloneFactorStates(payload.GetFactors()),
 		}
@@ -229,10 +229,8 @@ func (s *Service) hasReadyViewIndex(ctx context.Context, view *pb.View) (bool, e
 	if view == nil {
 		return false, nil
 	}
-	// Unit tests and lightweight embedders may exercise the event protocol
-	// without opening a physical index engine. In a real Service, New always
-	// installs at least the Bleve engine, so this does not weaken runtime
-	// readiness checks.
+	// 单元测试与轻量的嵌入方可以不打开物理索引引擎就演练事件协议。真实的 Service 里，New 总是至少装上 Bleve 引擎，
+	// 所以这不会削弱运行时的就绪检查。
 	s.mu.RLock()
 	if len(s.engines) == 0 {
 		s.mu.RUnlock()
@@ -258,9 +256,8 @@ func (s *Service) hasReadyViewIndex(ctx context.Context, view *pb.View) (bool, e
 		activeMissing = true
 	}
 	if nextID != "" {
-		// A building-only index must be durably marked READY before a
-		// SyncPoint can be ACKed; otherwise a crash would discard it while the
-		// source fence has already been recorded.
+		// 只有构建中索引的 View，必须先把索引持久化地标记为就绪，才能确认 SyncPoint；否则源围栏已经记录，
+		// 一次崩溃就会丢掉这个索引。
 		if activeMissing && status != "active" {
 			return false, nil
 		}
@@ -283,9 +280,8 @@ func (s *Service) activeViewsForDataset(spaceID, datasetID string) []*pb.View {
 	return s.viewsForDataset(spaceID, datasetID, false)
 }
 
-// syncPointViewsForDataset includes a view with only a building index. Rows
-// are already applied to that index, so an import/catchup fence must not wait
-// forever for the first active revision.
+// syncPointViewsForDataset 包含只有构建中索引的 View。行已经写入那个索引，导入或追平围栏不能为了第一个活动
+// 版本永远等下去。
 func (s *Service) syncPointViewsForDataset(spaceID, datasetID string) []*pb.View {
 	return s.viewsForDataset(spaceID, datasetID, true)
 }
@@ -338,9 +334,7 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 		}
 		if active && contractID == datasetID {
 			view := candidate.view
-			// Carry the contract of the index that will receive this event. The
-			// catalog copy may describe a newer desired revision during A/B
-			// rebuild and must not change source-ready aggregation early.
+			// 携带将接收这个事件的索引的契约。A/B 重建期间目录里的副本可能描述更新的目标版本，不能提前改变源就绪的聚合。
 			view.DatasetId = contractID
 			if activeID != "" {
 				view.ActiveIndexId = activeID

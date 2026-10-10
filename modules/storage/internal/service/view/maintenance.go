@@ -1653,9 +1653,8 @@ func (s *Service) discardFailedBuild(ctx context.Context, spaceID, viewID, index
 			runtime.next = ""
 			runtime.status = "active"
 		} else if runtime.active == indexID {
-			runtime.active = ""
+			runtime.clearActiveLocked()
 			runtime.status = "failed"
-			runtime.publishReadStateLocked()
 		}
 		runtime.mu.Unlock()
 	}
