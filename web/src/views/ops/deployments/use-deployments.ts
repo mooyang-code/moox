@@ -59,6 +59,12 @@ export function useDeployments() {
       )
     }))
   );
+  const unregistered = computed(() => {
+    const registered = new Set(placements.value.map(item => `${item.host_id}\0${item.component_id}`));
+    return (overview.value?.unregistered || []).filter(
+      item => !registered.has(`${item.host_id || ""}\0${item.component_id || ""}`)
+    );
+  });
   const requestedHost = computed(() => query(route.query.host_id));
   const requestedComponent = computed(() => query(route.query.component_id));
   const locatorError = computed(() => {
@@ -247,6 +253,7 @@ export function useDeployments() {
     controlHostId,
     hosts,
     overview,
+    unregistered,
     loading,
     loaded,
     error,

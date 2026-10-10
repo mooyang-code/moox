@@ -126,10 +126,10 @@
             </div>
           </section>
           <p v-if="loaded && !visibleGroups.length" class="empty">没有符合筛选条件的部署</p>
-          <section v-if="overview?.unregistered?.length" class="host-group unregistered">
+          <section v-if="unregistered.length" class="host-group unregistered">
             <h3>未登记的进程</h3>
             <p>请在 moox.toml 的部署表中登记以下进程，并由 CLI 同步清单。</p>
-            <p v-for="item in overview.unregistered" :key="`${item.host_id}/${item.component_id}`">
+            <p v-for="item in unregistered" :key="`${item.host_id}/${item.component_id}`">
               {{ item.host_id }} · {{ item.component_id }} · {{ item.reason }}
             </p>
           </section>
@@ -284,6 +284,7 @@ const {
   controlHostId,
   hosts,
   overview,
+  unregistered,
   loading,
   loaded,
   error,

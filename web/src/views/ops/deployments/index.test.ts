@@ -256,6 +256,22 @@ describe("deployment page", () => {
     await flushPromises();
     expect(setHostStatus).toHaveBeenCalledWith("storage", "enabled");
   });
+  it("keeps a newly enabled deployment visible until Monitor catches up and removes already-registered hints", async () => {
+    vi.mocked(monitorApi.getOverview).mockResolvedValue({
+      overview: {
+        topology_known: true,
+        components: [{ host_id: "storage", component_id: "access", status: "disabled" }],
+        unregistered: [
+          { host_id: "storage", component_id: "access", reason: "刚登记但尚未对账" },
+          { host_id: "other", component_id: "collector", reason: "确实未登记" }
+        ]
+      }
+    });
+    const { page } = await render();
+    expect(page.get('[data-host-id="storage"] [data-component-id="access"]').text()).toContain("未知");
+    expect(page.text()).not.toContain("刚登记但尚未对账");
+    expect(page.text()).toContain("确实未登记");
+  });
   it("marks preserved data unknown and blocks changes when refreshing topology fails", async () => {
     const { page } = await render();
     vi.mocked(getCatalog).mockRejectedValue(new Error("Admin unavailable"));

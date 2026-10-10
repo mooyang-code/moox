@@ -31,12 +31,16 @@ export function placementRows(
     .filter(item => item.host_id === host.host_id)
     .map(placement => {
       const key = placementKey(placement.host_id, placement.component_id);
+      const enabled = host.status === "enabled" && placement.status === "enabled";
+      const observed = health.get(key);
+      // Admin enablement may be newer than Monitor's last topology sample.
+      const currentHealth = enabled && observed?.status === "disabled" ? undefined : observed;
       return {
         key,
         placement,
         definition: definitions.get(placement.component_id),
-        health: health.get(key),
-        status: host.status === "disabled" || placement.status === "disabled" ? "disabled" : health.get(key)?.status || "unknown"
+        health: currentHealth,
+        status: enabled ? currentHealth?.status || "unknown" : "disabled"
       };
     });
 }
