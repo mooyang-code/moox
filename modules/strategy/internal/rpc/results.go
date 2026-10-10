@@ -67,11 +67,21 @@ func (s *Service) GetStrategyResult(ctx context.Context, req *strategypb.GetStra
 		return &strategypb.GetStrategyResultRsp{RetInfo: failure(err)}, nil
 	}
 	rsp := &strategypb.GetStrategyResultRsp{RetInfo: success(), Result: resultProto(result), Items: itemProtos(items)}
-	if session, err := s.Store.GetSession(ctx, result.SessionID); err == nil {
+	// 快照确实不存在（旧数据）时留空，页面提示快照缺失；读取出错则整体失败：不能以成功返回不完整的解释，
+	// 调用方会把成功的响应缓存起来，数据库恢复后也不再重试。
+	session, err := s.Store.GetSession(ctx, result.SessionID)
+	switch {
+	case err == nil:
 		rsp.ResolvedJson = session.ResolvedJSON
+	case !errors.Is(err, store.ErrNotFound):
+		return &strategypb.GetStrategyResultRsp{RetInfo: failure(err)}, nil
 	}
-	if version, err := s.Store.GetDefinitionVersion(ctx, result.DSLHash); err == nil {
+	version, err := s.Store.GetDefinitionVersion(ctx, result.DSLHash)
+	switch {
+	case err == nil:
 		rsp.DslYaml = version.DSLYaml
+	case !errors.Is(err, store.ErrNotFound):
+		return &strategypb.GetStrategyResultRsp{RetInfo: failure(err)}, nil
 	}
 	return rsp, nil
 }

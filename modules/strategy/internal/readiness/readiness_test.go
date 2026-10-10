@@ -124,3 +124,23 @@ func TestCheckIgnoresNilAndBlankFactorStates(t *testing.T) {
 		t.Fatalf("空状态应被忽略：%+v", result)
 	}
 }
+
+// 因子缺失时仍保留事件里已有的其他因子指纹：下一期经 bars[-1] 读取它们时，相邻记录里才有版本证据。
+func TestCheckKeepsExistingHashesWhenAnotherFactorIsMissing(t *testing.T) {
+	binding := Binding{Factors: map[string]string{"a": "h1", "b": "h2"}, PreviousFactors: []string{"b"}}
+	result := Check(binding, nil, factorEvent(state("b", "complete", "h2")))
+	if result.Reason != ReasonFactorMissing {
+		t.Fatalf("应判因子缺失：%q", result.Reason)
+	}
+	if result.Hashes["b"] != "h2" {
+		t.Fatalf("缺失其他因子时仍应保留 b 的指纹：%v", result.Hashes)
+	}
+	if _, ok := result.Hashes["a"]; ok {
+		t.Fatalf("缺失的因子不应有指纹：%v", result.Hashes)
+	}
+	// 下一期两者恢复正常：相邻记录带着 b 的指纹，不再误记 previous_version_unknown。
+	next := Check(binding, &Record{Factors: result.Hashes}, factorEvent(state("a", "complete", "h1"), state("b", "complete", "h2")))
+	if next.Reason != "" {
+		t.Fatalf("恢复后不应再跳过：%q（%s）", next.Reason, next.Detail)
+	}
+}

@@ -626,3 +626,23 @@ func TestNotFoundIsReportedInChinese(t *testing.T) {
 		t.Fatalf("不应透出英文原文：%s", rsp.GetRetInfo().GetMsg())
 	}
 }
+
+// 会话或 DSL 版本快照读取出错（不是不存在）时，GetStrategyResult 失败而不是以成功返回空快照；页面会缓存成功的响应。
+func TestGetStrategyResultFailsWhenSnapshotReadErrors(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	created := h.createInstance("i1", "s1", "view_a", "", true)
+	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: created.GetInstance().GetSessionId(), BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{}`), TargetsJSON: []byte(`[]`), RuleStatesJSON: []byte(`{}`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, Now: h.now}); err != nil {
+		t.Fatal(err)
+	}
+	ok, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r1"})
+	requireOK(t, int32(ok.GetRetInfo().GetCode()), ok.GetRetInfo().GetMsg())
+	// 版本表读取出错（这里改掉列名模拟数据库读错误）：整体失败，不返回空 DSL 的成功响应。
+	// ApplySchema 在改动提交之后才校验 schema，会报“旧 schema”；这里要的正是这个被改坏的库，忽略它的错误。
+	_ = h.service.Store.ApplySchema(`ALTER TABLE t_strategy_def_versions RENAME COLUMN c_dsl_yaml TO c_dsl_yaml_broken;`)
+	failed, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r1"})
+	if failed.GetRetInfo().GetCode() == 0 {
+		t.Fatalf("快照读取出错应失败：%+v", failed.GetRetInfo())
+	}
+}

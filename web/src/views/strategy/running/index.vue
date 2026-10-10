@@ -106,7 +106,7 @@ const pagination = reactive({ current: 1, pageSize: 20, total: computed(() => st
 async function refresh() {
   await Promise.all([
     store.loadInstances({ ...filters, page: pagination.current, page_size: pagination.pageSize }),
-    store.strategyCatalogComplete ? Promise.resolve() : store.loadAllStrategies(200)
+    store.strategiesComplete ? Promise.resolve() : store.loadAllStrategies(200)
   ]).catch(() => undefined);
 }
 function reloadFirst() {
