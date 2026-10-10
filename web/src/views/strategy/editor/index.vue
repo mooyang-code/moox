@@ -31,6 +31,7 @@
             <a-textarea
               v-model="source"
               :disabled="!loaded || loading"
+              :readonly="saving"
               class="code-input"
               :auto-size="{ minRows: 24, maxRows: 36 }" /></a-form
         ></a-grid-item>
@@ -122,10 +123,12 @@ async function save() {
     return;
   }
   saving.value = true;
+  // 保存的是点击时的文本快照：只把这份快照标记为已保存，请求期间若文本变了，变化仍算未保存的草稿。
+  const submitted = source.value;
   try {
-    if (editing.value) await updateStrategy(strategyId.value.trim(), source.value);
-    else await createStrategy({ strategy_id: strategyId.value.trim() || undefined, dsl_yaml: source.value });
-    original.value = source.value;
+    if (editing.value) await updateStrategy(strategyId.value.trim(), submitted);
+    else await createStrategy({ strategy_id: strategyId.value.trim() || undefined, dsl_yaml: submitted });
+    original.value = submitted;
     Message.success("策略定义已保存");
     router.push({ name: "strategy-overview" });
   } catch (err) {

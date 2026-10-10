@@ -707,3 +707,50 @@ func TestReplayAgeProbeSharesRevisionWithMainRead(t *testing.T) {
 		t.Fatalf("应整段重读到新修订号：main=%v probe=%v", mainRevisions, probeRevisions)
 	}
 }
+
+// D1：终态写入连续失败的次数超过任何固定重试次数后数据库才恢复，任务仍要落到终态。
+func TestReplayFinishKeepsRetryingUntilDatabaseRecovers(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	restored := make(chan struct{})
+	go func() {
+		defer close(restored)
+		time.Sleep(600 * time.Millisecond)
+		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+			t.Error(err)
+		}
+	}()
+	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot", panicOnRows: true}, FinishRetryDelay: 5 * time.Millisecond}
+	runner.Execute(context.Background(), job)
+	<-restored
+	failed, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || failed.Status != store.ReplayFailed {
+		t.Fatalf("数据库恢复后终态应落库：%+v err=%v", failed, err)
+	}
+}
+
+// 进程退出（ctx 结束）时终态重试停止，任务保持 running，留给下次启动标记为 interrupted。
+func TestReplayFinishStopsRetryingWhenContextEnds(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.ApplySchema(`PRAGMA query_only = OFF;`) })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, FinishRetryDelay: 5 * time.Millisecond}
+	finished := make(chan error, 1)
+	go func() { finished <- runner.finish(ctx, job.ReplayID, store.ReplayDone, nil, "") }()
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatal("数据库只读时终态写入不应成功")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ctx 结束后终态重试应停止")
+	}
+}

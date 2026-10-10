@@ -116,6 +116,17 @@ async function run() {
   }
 }
 
+// DSL 或 View 一变，在途的试算作废、已有结果清除：不能在当前输入下展示旧输入的校验与解释。
+watch(
+  () => [props.source, viewId.value],
+  () => {
+    runRequest += 1;
+    result.value = null;
+    running.value = false;
+  },
+  { flush: "sync" }
+);
+
 watch(
   () => props.spaceId,
   () => {

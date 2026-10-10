@@ -23,9 +23,9 @@ const (
 	defaultChunkBars     = 50
 	defaultLiquidateBars = 3
 	pollInterval         = 30 * time.Second
-	// finishAttempts 与 finishRetryDelay：终态写入遇到临时错误（锁、只读、磁盘）时的重试次数与初始间隔（逐次翻倍）。
-	finishAttempts   = 6
+	// finishRetryDelay 是终态写入遇到临时错误（锁、只读、磁盘）后的初始重试间隔，逐次翻倍，上限是初始间隔的 finishDelayCap 倍。
 	finishRetryDelay = 2 * time.Second
+	finishDelayCap   = 8
 )
 
 var errCancelled = errors.New("回放已取消")
@@ -151,30 +151,30 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	}
 }
 
-// finish 写入回放终态。临时写入错误按退避重试：执行器只认领 pending，终态没写进去的任务会一直停在 running，
-// 占用活动任务额度，直到下次启动才被标成 interrupted 并丢掉已算出的指标。任务已不在 running（取消）返回 ErrNotFound。
+// finish 写入回放终态。临时写入错误按退避一直重试，直到成功、任务被取消（ErrNotFound）、遇到永久错误或进程退出（ctx 结束）：
+// 执行器只认领 pending，终态没写进去的任务会一直停在 running，占用活动任务额度，直到下次启动才被标成 interrupted 并丢掉
+// 已算出的指标。数据库不可用期间执行器本来也做不了别的事，所以在这里等它恢复。
 func (r *Runner) finish(ctx context.Context, replayID, status string, metricsJSON json.RawMessage, errText string) error {
-	delay := r.FinishRetryDelay
-	if delay <= 0 {
-		delay = finishRetryDelay
+	initial := r.FinishRetryDelay
+	if initial <= 0 {
+		initial = finishRetryDelay
 	}
-	var err error
-	for attempt := 0; attempt < finishAttempts; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return err
-			case <-time.After(delay):
-			}
-			delay *= 2
-		}
-		err = r.Store.FinishReplay(ctx, replayID, status, metricsJSON, errText, r.now())
+	delay := initial
+	for attempt := 1; ; attempt++ {
+		err := r.Store.FinishReplay(ctx, replayID, status, metricsJSON, errText, r.now())
 		if err == nil || errors.Is(err, store.ErrNotFound) || store.IsPermanentWriteError(err) {
 			return err
 		}
-		r.logf("写入回放 %s 的终态失败（第 %d 次）：%v", replayID, attempt+1, err)
+		r.logf("写入回放 %s 的终态失败（第 %d 次），稍后重试：%v", replayID, attempt, err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		if delay < initial*finishDelayCap {
+			delay *= 2
+		}
 	}
-	return err
 }
 
 func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) {

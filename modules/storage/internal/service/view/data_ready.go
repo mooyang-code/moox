@@ -310,6 +310,9 @@ func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.Comm
 	s.pendingReady = append(s.pendingReady, item)
 	s.observeReadyQueueLocked()
 	if err := s.persistPendingReadyLocked(); err != nil {
+		// 撤回这次入队：留在内存里会让重投被去重分支当成已入队而跳过落盘，随后以 Deferred 被 ACK，进程崩溃就丢事件。
+		s.pendingReady = s.pendingReady[:len(s.pendingReady)-1]
+		s.observeReadyQueueLocked()
 		return fmt.Errorf("View 就绪队列落盘失败：%w", err)
 	}
 	return nil
