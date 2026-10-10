@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,8 @@ func (s validationDatasetSource) ResolveSubjects(context.Context, string, []stri
 }
 
 type taskResultMetadataFake struct {
+	// mu 保护读取计数：盘点会并发调用元数据接口。
+	mu                sync.Mutex
 	datasets          map[string]*storagepb.Dataset
 	views             map[string]*storagepb.View
 	getDatasets       int
@@ -81,7 +84,9 @@ func newTaskResultMetadataFake(ids taskresult.IDs, taskID string) *taskResultMet
 }
 
 func (f *taskResultMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+	f.mu.Lock()
 	f.getDatasets++
+	f.mu.Unlock()
 	if f.failGetDataset != nil {
 		return nil, f.failGetDataset
 	}
@@ -116,7 +121,9 @@ func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb
 }
 
 func (f *taskResultMetadataFake) GetView(_ context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
+	f.mu.Lock()
 	f.getViews++
+	f.mu.Unlock()
 	view := f.views[req.GetViewId()]
 	if view == nil {
 		return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil

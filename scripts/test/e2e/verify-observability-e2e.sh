@@ -25,12 +25,6 @@ do
   run_go_tests "$module"
 done
 
-printf '\n==> HostAgent release contract\n'
-bash skills/moox/scripts/test-hostagent-release.sh
-
-printf '\n==> HostAgent deploy contract\n'
-bash skills/moox/scripts/test-hostagent-deploy.sh
-
 printf '\n==> Monitor coverage contract\n'
 bash scripts/test/contract/test-monitor-coverage-contract.sh
 

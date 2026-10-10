@@ -71,12 +71,14 @@ type periodE2EStorageReady struct {
 	SpaceID        string `json:"space_id"`
 	DatasetID      string `json:"dataset_id"`
 	Frequency      string `json:"frequency"`
-	StockSpaceID   string `json:"stock_space_id"`
-	StockDatasetID string `json:"stock_dataset_id"`
-	ClockFile      string `json:"clock_file"`
-	AppID          string `json:"app_id"`
-	PrimaryAppKey  string `json:"primary_app_key"`
-	OutboxTarget   string `json:"outbox_target"`
+	// HourlyDatasetID 是按小时对齐的结果数据集，只给重试耗尽场景用（一个 Dataset 只有一个频率）。
+	HourlyDatasetID string `json:"hourly_dataset_id"`
+	StockSpaceID    string `json:"stock_space_id"`
+	StockDatasetID  string `json:"stock_dataset_id"`
+	ClockFile       string `json:"clock_file"`
+	AppID           string `json:"app_id"`
+	PrimaryAppKey   string `json:"primary_app_key"`
+	OutboxTarget    string `json:"outbox_target"`
 }
 
 type periodE2EOutbox struct {
@@ -864,7 +866,7 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	applyPeriodE2ETagSnapshot(t, ctx, metadata, ready, items, clock.Add(2*time.Second))
 	db := openPeriodE2EDB(t, filepath.Join(root, "retry-exhaustion.db"))
 	params, err := json.Marshal(map[string]any{
-		"market_id": "crypto", "instrument_type": "spot", "source_id": "spot_http", "target_dataset_id": ready.DatasetID,
+		"market_id": "crypto", "instrument_type": "spot", "source_id": "spot_http", "target_dataset_id": ready.HourlyDatasetID,
 		"frequency": "1h", "output_fields": []string{"close"},
 	})
 	require.NoError(t, err)
@@ -915,7 +917,7 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	handler.NewCryptoKlinePipeline = func(storage marketfetch.Storage, instrument marketdata.InstrumentType) (*marketfetch.KlinePipeline, error) {
 		return &marketfetch.KlinePipeline{
 			Router: router, Storage: storage, CandidateChain: []string{"binance"}, RouteID: "period-e2e-crypto",
-			SpaceID: ready.SpaceID, MarketID: "crypto", InstrumentType: instrument, DatasetID: ready.DatasetID,
+			SpaceID: ready.SpaceID, MarketID: "crypto", InstrumentType: instrument, DatasetID: ready.HourlyDatasetID,
 			SourceID: "spot_http", SeriesTag: periodE2ESeriesTag, Now: func() time.Time { return now },
 		}, nil
 	}
@@ -1021,14 +1023,14 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	require.NoError(t, err)
 	require.Equal(t, domain.PeriodFailureReportAcknowledged, retry.PeriodFailureReportState)
 	snapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{
-		SpaceID: ready.SpaceID, DatasetID: ready.DatasetID, Frequency: ready.Frequency, PeriodTime: now.Truncate(time.Hour).Add(-time.Hour),
+		SpaceID: ready.SpaceID, DatasetID: ready.HourlyDatasetID, Frequency: "1h", PeriodTime: now.Truncate(time.Hour).Add(-time.Hour),
 	})
 	require.NoError(t, err)
 	require.True(t, found)
 	storage, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, target), marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	expectation := periodE2EStorageExpectation(snapshot, time.Time{})
-	expectation.Frequency = ready.Frequency
+	expectation.Frequency = "1h"
 	state, err := storage.GetDatasetPeriodStatus(ctx, expectation)
 	require.NoError(t, err)
 	require.Equal(t, domain.PeriodStatusWaiting, state.Status)
@@ -1088,7 +1090,8 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	cleanupNow := time.Now().UTC().Add(30*24*time.Hour + time.Hour)
 	deleted, err := reconciler.Reconcile(ctx, cleanupNow)
 	require.Error(t, err, "NOT_FOUND must defer its snapshot rather than manufacture a period")
-	require.Equal(t, int64(1), deleted, "only complete, expired and quiescent period may be deleted")
+	// 删除的行数是快照行加状态行：一个周期各一行，所以只删除一个周期时是 2。
+	require.Equal(t, int64(2), deleted, "only complete, expired and quiescent period may be deleted")
 	for _, expectation := range []*storagegen.DatasetPeriodExpectation{waiting, missing} {
 		_, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(expectation).Key)
 		require.NoError(t, err)
@@ -1149,7 +1152,7 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	}
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &unresolved))
 	blockedReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), storage, ready.SpaceID)
-	deleted, err = blockedReconciler.Reconcile(ctx, clock)
+	deleted, err = blockedReconciler.Reconcile(ctx, cleanupNow)
 	require.Error(t, err, "the missing independent period still defers reconciliation")
 	require.Zero(t, deleted, "a terminal Storage period cannot release its snapshot while a failure receipt is unresolved")
 	_, retained, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(waiting).Key)
@@ -1164,9 +1167,9 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	// Fresh scan starts before the old cursor, including the newly degraded
 	// period, while the still-missing period continues to defer cleanup.
 	finalReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), storage, ready.SpaceID)
-	deleted, err = finalReconciler.Reconcile(ctx, clock)
+	deleted, err = finalReconciler.Reconcile(ctx, cleanupNow)
 	require.Error(t, err)
-	require.Equal(t, int64(1), deleted)
+	require.Equal(t, int64(2), deleted, "降级的周期删除快照行和状态行各一行")
 	_, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(waiting).Key)
 	require.NoError(t, err)
 	require.False(t, found)

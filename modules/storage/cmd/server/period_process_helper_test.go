@@ -44,17 +44,19 @@ type periodProcessReady struct {
 	SpaceID        string `json:"space_id"`
 	DatasetID      string `json:"dataset_id"`
 	Frequency      string `json:"frequency"`
-	StockSpaceID   string `json:"stock_space_id"`
-	StockDatasetID string `json:"stock_dataset_id"`
-	OutboxTarget   string `json:"outbox_target"`
-	ClockFile      string `json:"clock_file"`
-	DataDir        string `json:"data_dir"`
-	AppID          string `json:"app_id"`
-	PrimaryAppKey  string `json:"primary_app_key"`
-	MetadataAppKey string `json:"metadata_app_key"`
-	NodeAppKey     string `json:"node_app_key"`
-	PrimarySecret  string `json:"primary_secret"`
-	NodeSecret     string `json:"node_secret"`
+	// HourlyDatasetID 是按小时对齐的结果数据集：一个 Dataset 只有一个频率，重试耗尽场景按小时规划周期。
+	HourlyDatasetID string `json:"hourly_dataset_id"`
+	StockSpaceID    string `json:"stock_space_id"`
+	StockDatasetID  string `json:"stock_dataset_id"`
+	OutboxTarget    string `json:"outbox_target"`
+	ClockFile       string `json:"clock_file"`
+	DataDir         string `json:"data_dir"`
+	AppID           string `json:"app_id"`
+	PrimaryAppKey   string `json:"primary_app_key"`
+	MetadataAppKey  string `json:"metadata_app_key"`
+	NodeAppKey      string `json:"node_app_key"`
+	PrimarySecret   string `json:"primary_secret"`
+	NodeSecret      string `json:"node_secret"`
 }
 
 type periodHelperOutboxSnapshot struct {
@@ -101,7 +103,7 @@ func TestPeriodNativeProcessHelper(t *testing.T) {
 	})
 	ready := periodProcessReady{
 		NodeID: "period-e2e-node", SpaceID: "period-e2e-space", DatasetID: "period-e2e-dataset",
-		Frequency: "1h", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline_1m",
+		HourlyDatasetID: "period-e2e-hourly-dataset", Frequency: "1m", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline_1m",
 		AppID: "moox-collector", DataDir: root,
 		ClockFile: filepath.Join(root, "clock"), PrimarySecret: periodHelperSecret(t), NodeSecret: periodHelperSecret(t),
 	}
@@ -403,25 +405,30 @@ func periodHelperSeed(t *testing.T, ctx context.Context, meta *metasqlite.Store,
 	if _, err := meta.RegisterDataNode(ctx, ready.NodeID, ready.DataNodeTarget, "Period E2E node"); err != nil {
 		t.Fatal(err)
 	}
-	dataset, err := meta.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, DataNodeId: ready.NodeID, Name: "Period E2E raw data",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: ready.Frequency,
-		Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": "period-e2e-task"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"open", "high", "low", "close", "volume", "amount"} {
-		if _, err := meta.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
-			SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, ColumnName: name,
-			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, OriginId: name,
-			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
-		}); err != nil {
+	for _, raw := range []struct{ datasetID, freq, taskID, name string }{
+		{ready.DatasetID, ready.Frequency, "period-e2e-task", "Period E2E raw data"},
+		{ready.HourlyDatasetID, "1h", "period-e2e-retry-task", "Period E2E hourly raw data"},
+	} {
+		dataset, err := meta.CreateDataset(ctx, &pb.Dataset{
+			SpaceId: ready.SpaceID, DatasetId: raw.datasetID, DataNodeId: ready.NodeID, Name: raw.name,
+			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: raw.freq,
+			Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": raw.taskID},
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	if _, err := meta.CommitDatasetActivation(ctx, ready.SpaceID, ready.DatasetID, dataset.GetRevision()); err != nil {
-		t.Fatal(err)
+		for _, name := range []string{"open", "high", "low", "close", "volume", "amount"} {
+			if _, err := meta.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
+				SpaceId: ready.SpaceID, DatasetId: raw.datasetID, ColumnName: name,
+				OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, OriginId: name,
+				ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := meta.CommitDatasetActivation(ctx, ready.SpaceID, raw.datasetID, dataset.GetRevision()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	periodHelperSeedStockCN(t, ctx, meta, ready)
 }
