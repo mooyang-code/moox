@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -99,7 +101,14 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 		if err != nil {
 			return err
 		}
-		return ensureEventBus(secretDAO, natsURL, stdout)
+		var metadata bytes.Buffer
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			return ensureEventBus(dao.NewSecretDAO(tx), natsURL, &metadata)
+		}); err != nil {
+			return err
+		}
+		_, err = stdout.Write(metadata.Bytes())
+		return err
 	case "export":
 		if outputDir == "" {
 			return errors.New("--output-dir is required")
@@ -248,14 +257,27 @@ func loadCLIKey(dbPath, keyFile string) error {
 
 func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
 	ctx := trpc.BackgroundContext()
+	existing, err := listEventbus(d, ctx)
+	if err != nil {
+		return err
+	}
+	_, hasCA := existing["eventbus_tls_ca"]
+	_, hasServer := existing["eventbus_tls_server"]
+	if hasCA != hasServer {
+		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
+	}
+	if hasCA {
+		if err := validateEventBusTLS(existing, natsURL); err != nil {
+			return err
+		}
+	}
 	for _, role := range eventBusRoles {
 		key := eventBusKeys[role]
 		if _, err := ensureToken(ctx, d, key, role); err != nil {
 			return err
 		}
 	}
-	existing, _ := listEventbus(d, ctx)
-	if _, ok := existing["eventbus_tls_ca"]; !ok {
+	if !hasCA {
 		bundle, err := makeTLSBundle(natsURL)
 		if err != nil {
 			return err
@@ -267,11 +289,6 @@ func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
 		serverValue, _ := json.Marshal(map[string]string{"cert": bundle.Cert, "key": bundle.Key})
 		if err := d.Create(ctx, &model.Secret{SpaceID: "mooxsys", SecretID: uuid.New().String(), Name: "EventBus TLS server", Description: "private EventBus server bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_server", SecretValue: string(serverValue), ExtraConfig: string(extra)}); err != nil {
 			return err
-		}
-	} else {
-		var extra map[string]string
-		if err := json.Unmarshal([]byte(existing["eventbus_tls_ca"].ExtraConfig), &extra); err != nil || extra["nats_url"] != natsURL {
-			return errors.New("EventBus TLS certificate host differs from the service directory; use --reset-data to rebuild")
 		}
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "roles": eventBusRoles, "tls": true})
@@ -308,6 +325,9 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	ctx := trpc.BackgroundContext()
 	rows, err := listEventbus(d, ctx)
 	if err != nil {
+		return err
+	}
+	if err := validateEventBusTLS(rows, natsURL); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -358,15 +378,54 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	if err := json.Unmarshal([]byte(server.SecretValue), &serverParts); err != nil {
 		return fmt.Errorf("decode EventBus TLS server bundle: %w", err)
 	}
-	if serverParts["cert"] != "" && serverParts["key"] != "" {
-		if err := atomicSecretFile(filepath.Join(dir, "server.pem"), []byte(serverParts["cert"])); err != nil {
-			return err
-		}
-		if err := atomicSecretFile(filepath.Join(dir, "server-key.pem"), []byte(serverParts["key"])); err != nil {
-			return err
-		}
+	if serverParts["cert"] == "" || serverParts["key"] == "" {
+		return errors.New("EventBus TLS server identity is incomplete")
+	}
+	if err := atomicSecretFile(filepath.Join(dir, "server.pem"), []byte(serverParts["cert"])); err != nil {
+		return err
+	}
+	if err := atomicSecretFile(filepath.Join(dir, "server-key.pem"), []byte(serverParts["key"])); err != nil {
+		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "roles": eventBusRoles})
+}
+
+func validateEventBusTLS(rows map[string]model.Secret, natsURL string) error {
+	ca, hasCA := rows["eventbus_tls_ca"]
+	server, hasServer := rows["eventbus_tls_server"]
+	if !hasCA || !hasServer {
+		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
+	}
+	var extra map[string]string
+	if json.Unmarshal([]byte(ca.ExtraConfig), &extra) != nil || extra["nats_url"] != natsURL {
+		return errors.New("EventBus TLS certificate host differs from the service directory; explicit identity rotation is required")
+	}
+	var parts struct {
+		Cert string `json:"cert"`
+		Key  string `json:"key"`
+	}
+	if json.Unmarshal([]byte(server.SecretValue), &parts) != nil {
+		return errors.New("EventBus TLS server identity is invalid")
+	}
+	pair, err := tls.X509KeyPair([]byte(parts.Cert), []byte(parts.Key))
+	if err != nil {
+		return errors.New("EventBus TLS server identity is invalid")
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return errors.New("EventBus TLS server certificate is invalid")
+	}
+	trust := x509.NewCertPool()
+	endpoint, err := validateEventBusNATSURL(natsURL)
+	if err != nil || !trust.AppendCertsFromPEM([]byte(ca.SecretValue)) {
+		return errors.New("EventBus TLS trust or endpoint is invalid")
+	}
+	for _, host := range []string{endpoint.Hostname(), "127.0.0.1"} {
+		if _, err := certificate.Verify(x509.VerifyOptions{Roots: trust, DNSName: host}); err != nil {
+			return errors.New("EventBus TLS server certificate does not verify for its endpoints")
+		}
+	}
+	return nil
 }
 
 func eventBusRoleFiles() map[string]string {

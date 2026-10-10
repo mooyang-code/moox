@@ -732,3 +732,5 @@ TARGET_GOOS=linux TARGET_GOARCH=arm64 ./scripts/build/build.sh console-proxy
 离线状态封存/导入接口随后已接入激活层，安装门禁扩展为十七组且无跳过通过。真实 Admin 离线初始化和重跑的数据库验证了摘要绑定、独立副本、篡改拒绝与快照回滚，主密钥和 MooX CA 私钥留在独立持久目录；代理导入状态即使不启动也须通过只读 CA 检查。完整 bootstrap 与历史 CA 迁移编排、首次 CA 授权的一次性消费、源码清理和最终候选验收仍未完成，正式环境尚未切换。
 
 目标主机 bootstrap 编排器已接入离线 Admin、封存状态、两个单元的激活/撤销及 Admin → HostGateway → EventBus/其余服务的就绪顺序；日志记录原运行集合，完成后重跑可修复相同发布。实际启动发现并修复 HostGateway 指标实例身份、标准健康 JSON、status 就绪报告及服务数据默认权限的遗漏，升级前拒绝缺失或不属于发布快照的 Admin 数据库。36 个 Go 测试包全量 race/vet，以及 Linux 五组 bootstrap、十八组安装、十四组运行必跑场景均通过；覆盖真实 HTTPS、升级失败恢复和 Admin 启动阶段实际 SIGKILL 后保持 MooX CA/KeyID 的整机恢复。纯 Go 制品均在本机编译，Linux 只执行。原生 CLI/SSH、完整三主机/九组件链路、其他中断阶段、代理 CA 一次性授权与最终候选验收尚未完成；主计划 G3 继续保留未完成，正式环境尚未切换。
+
+目标编排随后补齐 EventBus 的离线事务签发、TLS/角色鉴权和按组件投影，运行配置只引用发布内凭据副本，重跑复用已有角色及 CA。21 个相关测试包全量 race/vet、Linux 五组 bootstrap、二十组安装和七项凭据测试通过；真实 broker 拒绝无角色客户端，并验证升级和强杀恢复后的身份连续性。该安全依赖不替代原生 CLI 接线、代理 CA 一次性授权、完整系统与正式部署验收。

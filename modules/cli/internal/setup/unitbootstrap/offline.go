@@ -26,13 +26,51 @@ func (b *boundedOutput) Write(raw []byte) (int, error) {
 func offlineAdmin(ctx context.Context, binary, topology, database, master, pki, output string, lock unitruntime.Options) (hostbundle.Metadata, error) {
 	var metadata hostbundle.Metadata
 	command := exec.CommandContext(ctx, binary, "bootstrap", "--topology-file", topology, "--db-path", database, "--encryption-key-file", master, "--pki-dir", pki, "--output-dir", output)
-	command.Dir = filepath.Dir(binary)
+	raw, err := runOffline(ctx, command, master, lock)
+	if err != nil {
+		return metadata, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&metadata) != nil || decoder.Decode(new(any)) != io.EOF {
+		return metadata, errors.New("offline Admin returned invalid public metadata")
+	}
+	return metadata, nil
+}
+
+func offlineEventBus(ctx context.Context, binary, database, master, hostID, output string, lock unitruntime.Options) error {
+	for _, operation := range []string{"ensure", "export"} {
+		args := []string{"eventbus-credentials", operation, "--db-path", database, "--encryption-key-file", master, "--node-id", hostID}
+		if operation == "export" {
+			args = append(args, "--output-dir", output)
+		}
+		raw, err := runOffline(ctx, exec.CommandContext(ctx, binary, args...), master, lock)
+		if err != nil {
+			return err
+		}
+		var metadata struct {
+			Status    string   `json:"status"`
+			Roles     []string `json:"roles"`
+			TLS       bool     `json:"tls"`
+			OutputDir string   `json:"output_dir"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&metadata) != nil || decoder.Decode(new(any)) != io.EOF || metadata.Status != "ok" || len(metadata.Roles) == 0 || operation == "export" && metadata.OutputDir != output || operation == "ensure" && !metadata.TLS {
+			return errors.New("offline EventBus issuance returned invalid public metadata")
+		}
+	}
+	return nil
+}
+
+func runOffline(ctx context.Context, command *exec.Cmd, master string, lock unitruntime.Options) ([]byte, error) {
+	command.Dir = filepath.Dir(command.Path)
 	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Dir(master)}
 	var stdout boundedOutput
 	command.Stdout, command.Stderr = &stdout, io.Discard
 	closeLock, err := offlineProcess(command, lock)
 	if err != nil {
-		return metadata, err
+		return nil, err
 	}
 	defer closeLock()
 	// Linux parent-death signals track the creating OS thread. Keep that thread
@@ -41,14 +79,9 @@ func offlineAdmin(ctx context.Context, binary, topology, database, master, pki, 
 	defer runtime.UnlockOSThread()
 	if err := command.Run(); err != nil {
 		if ctx.Err() != nil {
-			return metadata, ctx.Err()
+			return nil, ctx.Err()
 		}
-		return metadata, errors.New("offline Admin initialization failed; private child output omitted")
+		return nil, errors.New("offline Admin operation failed; private child output omitted")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(stdout.buffer.Bytes()))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&metadata) != nil || decoder.Decode(new(any)) != io.EOF {
-		return metadata, errors.New("offline Admin returned invalid public metadata")
-	}
-	return metadata, nil
+	return stdout.buffer.Bytes(), nil
 }

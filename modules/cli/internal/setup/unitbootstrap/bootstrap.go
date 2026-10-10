@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 )
 
@@ -224,7 +226,20 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 	if err != nil {
 		return err
 	}
+	eventBusDirectory := filepath.Join(attempt.Name(), "eventbus")
+	if err := offlineEventBus(ctx, filepath.Join(extracted.Directory, "bin/moox-admin-cli"), filepath.Join(checkpoint, "admin/data/admin.db"), master, j.HostID, eventBusDirectory, lock); err != nil {
+		return err
+	}
 	control := request.Topology.Hosts[slices.IndexFunc(request.Topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == j.HostID })]
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	eventBus, found := catalog.Component("eventbus")
+	if !found || len(eventBus.Ports) != 1 {
+		return errors.New("EventBus catalog endpoint is invalid")
+	}
+	eventBusURL := "tls://" + net.JoinHostPort(control.Address, strconv.Itoa(eventBus.Ports[0]))
 	materialOptions := unitbundle.Options{HostID: j.HostID, ControlHostID: j.HostID, Address: control.Address, PrivateAddress: control.PrivateAddress, ControlAddress: control.Address, Components: input.components, ExpectedCA: metadata.CA.SHA256, ExpectedHash: metadata.ExpectedHash, AllowOperator: true}
 	if _, err := unitbundle.Load(ctx, metadata.BundleDir, materialOptions); err != nil {
 		return err
@@ -266,6 +281,7 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 			values["MOOX_ADMIN_DB_PATH"] = "./data/admin.db"
 		}
 		options := unitinstall.PrepareOptions{Archive: unit.Archive, SHA256: unit.SHA256, Profile: profile, DeploymentRoot: request.DeploymentRoot, UnitRoot: unit.UnitRoot, HostUnitRoot: request.Host.UnitRoot, ReleaseID: j.Attempt, MaterialDirectory: metadata.BundleDir, MaterialOptions: materialOptions, Components: components, Environment: environment, Overrides: overrides}
+		options.EventBusDirectory, options.EventBusURL = eventBusDirectory, eventBusURL
 		prepared[i], err = unitinstall.Prepare(ctx, options, lock)
 		if err != nil {
 			return err

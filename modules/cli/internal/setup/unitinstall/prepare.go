@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,6 +36,10 @@ type PrepareOptions struct {
 	// operator manifest. Overrides map release config paths to owned 0600 files.
 	Environment map[string]map[string]string `json:"environment"`
 	Overrides   map[string]string            `json:"overrides"`
+	// EventBusDirectory contains a closed offline credential export. Only the
+	// selected components' roles and required TLS material enter this release.
+	EventBusDirectory string `json:"eventbus_directory,omitempty"`
+	EventBusURL       string `json:"eventbus_url,omitempty"`
 }
 
 func (PrepareOptions) String() string     { return "MooXPrepareOptions{private inputs omitted}" }
@@ -179,6 +184,14 @@ func Prepare(ctx context.Context, options PrepareOptions, lockOptions unitruntim
 			}
 		}
 		if err := applyOverrides(root, options, components); err != nil {
+			return err
+		}
+		environment := make(map[string]map[string]string, len(options.Environment))
+		for id, values := range options.Environment {
+			environment[id] = maps.Clone(values)
+		}
+		options.Environment = environment
+		if err := projectEventBus(root, &options, components, destination); err != nil {
 			return err
 		}
 		projection, err := material.Inject(ctx, stagePath, components)

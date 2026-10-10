@@ -8,12 +8,14 @@
 
 1. 根据目标机实际平台验证并解包软件，检查所选组件属于软件单元和主机完整放置。
 2. 取得部署根共用维护锁并核对持久主机身份；已有调用方通过真实继承 FD 复用锁。
-3. 只注入所选组件的私密身份。host 单元包含 host-gateway 与 host-agent；TLS 材料只进入 host 单元。Access 的验证表包含其外部调用方密钥，其他业务单元不携带它；操作员身份不进入任何发布。
-4. 写入实际 KeyID、组件签名文件路径、健康绑定和 Host Agent 的规范 `host_id`，生成每个组件的 0600 环境文件。Host Agent 的 EventBus 配置必须由部署器显式提供；不会使用软件包中的占位凭据。
+3. 只注入所选组件的私密身份。host 单元包含 host-gateway 与 host-agent；主机网关的 MooX TLS 材料只进入 host 单元。Access 的验证表包含其外部调用方密钥，其他业务单元不携带它；操作员身份不进入任何发布。
+4. 写入实际 KeyID、组件签名文件路径、健康绑定和 Host Agent 的规范 `host_id`，生成每个组件的 0600 环境文件。Host Agent 的 EventBus 配置由已签发材料生成，或由部署器显式提供规范私密配置；不会使用软件包中的占位凭据。
 5. 主机与业务单元可使用独立根。业务发布的 `host-gateway` 链接指向主机单元的 `current/host-gateway`，主机 `current` 必须属于同主机、同部署根的有界 host 发布。业务单元不复制主机 TLS 私钥。
 6. 校验运行计划、环境、二进制与生命周期预算，生成七个共用助手包装脚本，记录全部静态文件的摘要、大小与权限；同步文件和目录后原子发布到 `releases/<ID>`。
 
 配置覆盖只接受所选组件 `config/` 下的 YAML/JSON 文件，并受单文件和总大小限制。host-gateway 配置来自已签发的身份包，不能覆盖。YAML 只接受单个映射文档，拒绝重复键、别名、锚点与 merge。所有未完成的暂存目录在失败时清理；原有 `current` 与部署根的暂停标记保持原状。
+
+`EventBusDirectory` 与 `EventBusURL` 可提供关闭后的离线凭据导出及目录规定的 TLS 端点。只复制所选组件需要的角色和 CA：server 私钥及用户 ACL 仅进入 EventBus，Host Agent 仅持自己的发布角色，其余报告组件持指标角色，消费组件另持自身角色。复制品写入发布内私密目录并纳入收据；配置与环境指向发布内副本，不引用导出目录。验证角色名、令牌字段、私密文件和服务端证书/端点，拒绝明文端点与绕过签发材料的连接环境覆盖。EventBus 的鉴权和 TLS 均启用；原有流配置保留。
 
 `moox-runtime prepare --request /absolute/private/request.json` 读取由 Go JSON 编码器生成、以换行结尾的规范 `PrepareOptions` 文件；文件为部署用户拥有的 0600 常规文件。运行环境和覆盖来源属于私密输入，不写入命令行或输出。成功输出的 `Prepared` 只包含路径、公开身份清单和摘要。
 
@@ -39,7 +41,7 @@
 make test-unit-install
 ```
 
-Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建的 `MOOX_UNIT_INSTALL_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，真实隔离 Admin 生产的 `MOOX_HOST_MATERIAL_FIXTURE`，以及 host/Access/control 软件包路径和对应 `sha256:<64 位小写十六进制>` 摘要：`MOOX_UNIT_INSTALL_HOST_ARCHIVE`、`MOOX_UNIT_INSTALL_HOST_SHA256`、`MOOX_UNIT_INSTALL_ACCESS_ARCHIVE`、`MOOX_UNIT_INSTALL_ACCESS_SHA256`，以及 `MOOX_UNIT_INSTALL_CONTROL_ARCHIVE`、`MOOX_UNIT_INSTALL_CONTROL_SHA256`。十八组必需场景全部执行，不接受跳过。普通 Linux 模块测试缺少这些制品时会跳过实际准备场景，不能算完整门禁通过。状态导入场景执行真实 Admin 离线 bootstrap 和重跑，验证 CA/KeyID 复用、封存数据库导入、独立快照及回滚；仅启动 Web Host，不替代五步 bootstrap 的 Admin/Gateway 启动验收。
+Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建的 `MOOX_UNIT_INSTALL_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，真实隔离 Admin 生产的 `MOOX_HOST_MATERIAL_FIXTURE`，以及 host/Access/control 软件包路径和对应 `sha256:<64 位小写十六进制>` 摘要：`MOOX_UNIT_INSTALL_HOST_ARCHIVE`、`MOOX_UNIT_INSTALL_HOST_SHA256`、`MOOX_UNIT_INSTALL_ACCESS_ARCHIVE`、`MOOX_UNIT_INSTALL_ACCESS_SHA256`，以及 `MOOX_UNIT_INSTALL_CONTROL_ARCHIVE`、`MOOX_UNIT_INSTALL_CONTROL_SHA256`。二十组必需场景全部执行，不接受跳过，包含 EventBus 角色隔离、独立副本和配置绕过拒绝。普通 Linux 模块测试缺少这些制品时会跳过实际准备场景，不能算完整门禁通过。状态导入场景执行真实 Admin 离线 bootstrap 和重跑，验证 CA/KeyID 复用、封存数据库导入、独立快照及回滚；仅启动 Web Host，不替代五步 bootstrap 的 Admin/Gateway 启动验收。
 
 门禁启动真实 Web Host 和 Console Proxy，占用合成健康端口。Linux 主机已有业务时，使用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-install-linux.sh` 隔离网络，不停止现有业务。
 

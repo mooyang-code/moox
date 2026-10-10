@@ -20,6 +20,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -58,7 +59,6 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 		require.NoError(t, os.WriteFile(filename, []byte(raw), 0o600))
 		return filename
 	}
-	request.Host.Overrides["host-agent/config/eventbus.yaml"] = write("agent-eventbus.yaml", "version: 1\nurls: [nats://127.0.0.1:4222]\nusername: host-agent\neventbus_token: synthetic-local-token\nca_file: ''\n")
 	request.Control.Overrides["admin/config/console.yaml"] = write("console.yaml", "jwt:\n  secret_key: ''\n  access_expired: 24h\nconsole:\n  debug: false\ncors:\n  allowed_origins: [https://localhost:9527]\n")
 	request.Control.Overrides["console-proxy/config/app.yaml"] = write("proxy.yaml", "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: 9527\n  http3: false\ntls:\n  mode: internal\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\n  initialize_ca: true\nupstreams:\n  admin: 127.0.0.1:11000\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 2s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 15s\n")
 	t.Cleanup(func() {
@@ -107,6 +107,16 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	initial, err := runBootstrap(t, request, root)
 	require.NoError(t, err)
 	require.Equal(t, "complete", initial.Phase)
+	busCA := filepath.Join(initial.ControlDirectory, "eventbus/secrets/eventbus/ca.pem")
+	unauthenticated, err := jetstream.Connect(t.Context(), jetstream.Config{URLs: []string{"tls://127.0.0.1:4222"}, TLSCAFile: busCA, ConnectTimeout: 2 * time.Second})
+	if unauthenticated != nil {
+		unauthenticated.Close()
+	}
+	require.Error(t, err, "the deployed broker must reject TLS clients without a role")
+	initialRole, err := jetstream.LoadCredentialFile(filepath.Join(initial.HostDirectory, "host-agent/config/eventbus.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, "hostagent-publisher", initialRole.Username)
+	require.NotEmpty(t, initialRole.EventBusToken)
 	host, control := runtimeStatus(t, initial.HostDirectory), runtimeStatus(t, initial.ControlDirectory)
 	for _, status := range append(host.Components, control.Components...) {
 		require.True(t, status.Ready, "%s", status.ID)
@@ -151,6 +161,14 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	require.NoError(t, err)
 	require.NotEqual(t, initial.ControlDirectory, upgraded.ControlDirectory)
 	require.Equal(t, initial.CAFingerprint, upgraded.CAFingerprint)
+	upgradedRole, err := jetstream.LoadCredentialFile(filepath.Join(upgraded.HostDirectory, "host-agent/config/eventbus.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, initialRole.EventBusToken, upgradedRole.EventBusToken, "offline reruns reuse issued EventBus role tokens")
+	upgradedBusCA, err := os.ReadFile(filepath.Join(upgraded.ControlDirectory, "eventbus/secrets/eventbus/ca.pem"))
+	require.NoError(t, err)
+	initialBusCA, err := os.ReadFile(busCA)
+	require.NoError(t, err)
+	require.Equal(t, initialBusCA, upgradedBusCA, "EventBus TLS identity survives upgrades")
 	newCA, err := os.ReadFile(filepath.Join(upgraded.ControlDirectory, "console-proxy/certs/caddy/root.crt"))
 	require.NoError(t, err)
 	require.Equal(t, ca, newCA)
@@ -207,6 +225,10 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	exit, ok := err.(*exec.ExitError)
 	require.True(t, ok)
 	require.Equal(t, syscall.SIGKILL, exit.Sys().(syscall.WaitStatus).Signal())
+	issuedRole, err := jetstream.LoadCredentialFile(filepath.Join(captured.Host.Candidate, "host-agent/config/eventbus.yaml"))
+	require.NoError(t, err)
+	issuedBusCA, err := os.ReadFile(filepath.Join(captured.Control.Candidate, "eventbus/secrets/eventbus/ca.pem"))
+	require.NoError(t, err)
 	_, err = os.Lstat(filepath.Join(request.DeploymentRoot, "run/bootstrap.json"))
 	require.NoError(t, err)
 	for _, directory := range []string{captured.Host.Candidate, captured.Control.Candidate} {
@@ -225,6 +247,12 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	require.Equal(t, "complete", recovered.Phase)
 	require.Equal(t, captured.CAFingerprint, recovered.CAFingerprint)
 	require.Equal(t, captured.ExpectedHash, recovered.ExpectedHash, "interrupted first initialization must retain issued gateway KeyIDs")
+	recoveredRole, err := jetstream.LoadCredentialFile(filepath.Join(recovered.HostDirectory, "host-agent/config/eventbus.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, issuedRole.EventBusToken, recoveredRole.EventBusToken, "SIGKILL recovery must retain issued EventBus roles")
+	recoveredBusCA, err := os.ReadFile(filepath.Join(recovered.ControlDirectory, "eventbus/secrets/eventbus/ca.pem"))
+	require.NoError(t, err)
+	require.Equal(t, issuedBusCA, recoveredBusCA, "SIGKILL recovery must retain the EventBus TLS identity")
 	require.NotEqual(t, captured.Control.Candidate, recovered.ControlDirectory)
 	for _, directory := range []string{recovered.HostDirectory, recovered.ControlDirectory} {
 		for _, status := range runtimeStatus(t, directory).Components {
