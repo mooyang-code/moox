@@ -337,3 +337,14 @@ func TestDoCompressesLargeResponseForTransfer(t *testing.T) {
 	require.NotContains(t, rsp.GetHeaders(), BodyEncodingHeader, "小响应不压缩")
 	require.Equal(t, `{"ok":true}`, string(rsp.GetBody()))
 }
+
+func TestDoDropsForgedBodyEncodingHeader(t *testing.T) {
+	server, _ := testProxy(t, 8<<20, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(BodyEncodingHeader, "gzip")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	})
+	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/small"})
+	require.NoError(t, err)
+	require.NotContains(t, rsp.GetHeaders(), BodyEncodingHeader)
+	require.Equal(t, `{"ok":true}`, string(rsp.GetBody()))
+}

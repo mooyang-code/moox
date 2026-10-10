@@ -77,8 +77,9 @@ func (c Config) Validate() error {
 	} else if domains.Empty() {
 		return errors.New("http.domains 不能为空")
 	}
-	if c.HTTP.MaxResponseBytes <= 0 {
-		return errors.New("http.max_response_bytes 必须大于 0")
+	if c.HTTP.MaxResponseBytes <= 0 || c.HTTP.MaxResponseBytes > proxy.DefaultMaxResponseBytes {
+		// Collector 解压响应时按默认上限限制，配得更大会让大响应在代理侧合法、客户端侧失败。
+		return fmt.Errorf("http.max_response_bytes 必须在 (0, %d] 之内", proxy.DefaultMaxResponseBytes)
 	}
 	if c.HTTP.DefaultTimeout <= 0 || c.HTTP.DefaultTimeout > proxy.MaxTimeout {
 		return fmt.Errorf("http.default_timeout 必须在 (0, %s] 之内", proxy.MaxTimeout)

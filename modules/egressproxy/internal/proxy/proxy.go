@@ -187,6 +187,8 @@ func (s *Server) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, 
 
 // compressBody 压缩较大的响应体并在响应头里标记；压缩失败或没有变小时原样返回。
 func compressBody(body []byte, headers map[string]string) ([]byte, map[string]string) {
+	// 压缩标记只能由代理自己写，上游带同名头时丢弃，免得客户端把明文当 gzip 解压。
+	delete(headers, BodyEncodingHeader)
 	if len(body) < compressMinBytes {
 		return body, headers
 	}
