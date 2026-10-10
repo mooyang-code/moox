@@ -1,6 +1,8 @@
 package httpclient
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -176,4 +178,32 @@ func TestEgressTransportForwardsPostBodyAndOmitsTimeoutWithoutDeadline(t *testin
 	require.Equal(t, "application/json", got.GetHeaders()["Content-Type"])
 	require.Equal(t, "x=1", got.GetQuery())
 	require.Zero(t, got.GetTimeoutMs(), "请求没有截止时间时由出口代理使用默认超时")
+}
+
+func TestEgressTransportInflatesCompressedBodyWithinLimit(t *testing.T) {
+	gzipped := func(plain string) []byte {
+		var buffer bytes.Buffer
+		writer := gzip.NewWriter(&buffer)
+		_, _ = io.WriteString(writer, plain)
+		require.NoError(t, writer.Close())
+		return buffer.Bytes()
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://api.binance.com/api/v3/exchangeInfo", nil)
+
+	rsp, err := egressResponse(req, &egresspb.DoRsp{
+		Status: http.StatusOK, Body: gzipped(`{"symbols":[]}`),
+		Headers: map[string]string{egressBodyEncodingHeader: "gzip", "Content-Type": "application/json"},
+	})
+	require.NoError(t, err)
+	body, err := io.ReadAll(rsp.Body)
+	require.NoError(t, err)
+	require.Equal(t, `{"symbols":[]}`, string(body))
+	require.Equal(t, int64(len(body)), rsp.ContentLength)
+	require.Empty(t, rsp.Header.Get(egressBodyEncodingHeader))
+
+	_, err = egressResponse(req, &egresspb.DoRsp{Status: http.StatusOK, Body: []byte("不是 gzip"), Headers: map[string]string{egressBodyEncodingHeader: "gzip"}})
+	require.ErrorContains(t, err, "解压失败")
+
+	_, err = gunzipLimited(gzipped(strings.Repeat("x", 2048)), 1024)
+	require.ErrorContains(t, err, "超过 1024 字节")
 }

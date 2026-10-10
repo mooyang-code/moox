@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -310,4 +311,29 @@ func TestDoRejectsWhenTooManyRequestsAreInflight(t *testing.T) {
 	for i := 0; i < maxInflight; i++ {
 		<-done
 	}
+}
+
+func TestDoCompressesLargeResponseForTransfer(t *testing.T) {
+	payload := strings.Repeat(`{"symbol":"BTCUSDT"},`, 20000)
+	server, _ := testProxy(t, 8<<20, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, payload)
+	})
+	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/api/v3/exchangeInfo"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "gzip", rsp.GetHeaders()[BodyEncodingHeader])
+	require.Less(t, len(rsp.GetBody()), len(payload)/5, "大响应压缩后才跨地域传输")
+	reader, err := gzip.NewReader(bytes.NewReader(rsp.GetBody()))
+	require.NoError(t, err)
+	plain, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, payload, string(plain))
+
+	small, _ := testProxy(t, 8<<20, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	})
+	rsp, err = small.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/small"})
+	require.NoError(t, err)
+	require.NotContains(t, rsp.GetHeaders(), BodyEncodingHeader, "小响应不压缩")
+	require.Equal(t, `{"ok":true}`, string(rsp.GetBody()))
 }

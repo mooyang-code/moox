@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -31,6 +32,10 @@ const (
 	MaxTimeout = 60 * time.Second
 	// DefaultTimeout 是请求没有指定超时时使用的超时。
 	DefaultTimeout = 15 * time.Second
+	// BodyEncodingHeader 标记响应体已被代理 gzip 压缩；跨地域传输时，exchangeInfo 这类十几 MB 的 JSON 压缩后只有约十分之一。
+	BodyEncodingHeader = "X-Moox-Body-Encoding"
+	// compressMinBytes 是压缩响应体的最小长度，更小的响应压缩得不偿失。
+	compressMinBytes = 64 << 10
 )
 
 // DefaultHeaders 是默认允许转发的请求头。
@@ -172,10 +177,29 @@ func (s *Server) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, 
 	}
 	s.metrics.forwarded(request.URL.Hostname(), fmt.Sprint(response.StatusCode), time.Since(started))
 	log.InfoContextf(ctx, "egress_proxy_done method=%s host=%s path=%q status=%d bytes=%d duration_ms=%d", request.Method, request.URL.Hostname(), request.URL.Path, response.StatusCode, len(body), time.Since(started).Milliseconds())
+	headers := flattenHeaders(response.Header)
+	body, headers = compressBody(body, headers)
 	return &egresspb.DoRsp{
 		RetInfo: retInfo(commonpb.ErrorCode_SUCCESS, ""),
-		Status:  int32(response.StatusCode), Headers: flattenHeaders(response.Header), Body: body,
+		Status:  int32(response.StatusCode), Headers: headers, Body: body,
 	}, nil
+}
+
+// compressBody 压缩较大的响应体并在响应头里标记；压缩失败或没有变小时原样返回。
+func compressBody(body []byte, headers map[string]string) ([]byte, map[string]string) {
+	if len(body) < compressMinBytes {
+		return body, headers
+	}
+	var buffer bytes.Buffer
+	writer, err := gzip.NewWriterLevel(&buffer, gzip.BestSpeed)
+	if err != nil {
+		return body, headers
+	}
+	if _, err := writer.Write(body); err != nil || writer.Close() != nil || buffer.Len() >= len(body) {
+		return body, headers
+	}
+	headers[BodyEncodingHeader] = "gzip"
+	return buffer.Bytes(), headers
 }
 
 type rejection struct {

@@ -2,10 +2,12 @@ package httpclient
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
@@ -28,6 +30,10 @@ const (
 	egressRPCMargin = 500 * time.Millisecond
 	// maxEgressRequestBody 是经出口代理发送的请求体上限。
 	maxEgressRequestBody = 1 << 20
+	// maxEgressResponseBody 是解压后的响应体上限，与出口代理的默认上限一致。
+	maxEgressResponseBody = 32 << 20
+	// egressBodyEncodingHeader 是出口代理标记响应体已压缩的响应头（proxy.BodyEncodingHeader）。
+	egressBodyEncodingHeader = "X-Moox-Body-Encoding"
 )
 
 // EgressTransport 把白名单域名的请求转成出口代理的 Do 调用，再把结果还原成 http.Response；其他域名交给
@@ -78,7 +84,7 @@ func (t *EgressTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if rsp.GetStatus() < 100 || rsp.GetStatus() > 999 {
 		return nil, fmt.Errorf("经出口代理请求 %s 失败: 状态码 %d 无效", doReq.GetHost(), rsp.GetStatus())
 	}
-	return egressResponse(req, rsp), nil
+	return egressResponse(req, rsp)
 }
 
 // buildEgressRequest 把 http.Request 转成 DoReq。出口代理只发 443 端口的 HTTPS 请求。
@@ -134,15 +140,27 @@ func egressTimeout(ctx context.Context) (time.Duration, error) {
 	return min(remaining, egressMaxTimeout), nil
 }
 
-// egressResponse 把 DoRsp 还原成 http.Response。响应体已由出口代理解压并完整读出，所以去掉描述传输方式的响应头。
-func egressResponse(req *http.Request, rsp *egresspb.DoRsp) *http.Response {
+// egressResponse 把 DoRsp 还原成 http.Response。响应体已由出口代理解压并完整读出，所以去掉描述传输方式的响应头；
+// 出口代理为跨地域传输压缩过的响应体在这里还原，解压后的长度受 maxEgressResponseBody 限制。
+func egressResponse(req *http.Request, rsp *egresspb.DoRsp) (*http.Response, error) {
 	header := make(http.Header, len(rsp.GetHeaders()))
+	compressed := false
 	for name, value := range rsp.GetHeaders() {
 		switch http.CanonicalHeaderKey(name) {
 		case "Content-Length", "Content-Encoding", "Transfer-Encoding", "Connection":
 			continue
+		case egressBodyEncodingHeader:
+			compressed = strings.EqualFold(value, "gzip")
+			continue
 		}
 		header.Set(name, value)
+	}
+	body := rsp.GetBody()
+	if compressed {
+		var err error
+		if body, err = gunzipLimited(body, maxEgressResponseBody); err != nil {
+			return nil, fmt.Errorf("经出口代理请求 %s 失败: 响应体解压失败: %w", req.URL.Hostname(), err)
+		}
 	}
 	status := int(rsp.GetStatus())
 	return &http.Response{
@@ -150,8 +168,25 @@ func egressResponse(req *http.Request, rsp *egresspb.DoRsp) *http.Response {
 		StatusCode: status,
 		Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
 		Header:        header,
-		Body:          io.NopCloser(bytes.NewReader(rsp.GetBody())),
-		ContentLength: int64(len(rsp.GetBody())),
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
 		Request:       req,
+	}, nil
+}
+
+// gunzipLimited 解压 gzip 数据，解压后超过 limit 字节时返回错误，防止压缩炸弹。
+func gunzipLimited(data []byte, limit int64) ([]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
 	}
+	defer reader.Close()
+	out, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(out)) > limit {
+		return nil, fmt.Errorf("解压后超过 %d 字节", limit)
+	}
+	return out, nil
 }
