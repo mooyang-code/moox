@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-func TestCVMClient_ExistingBroadSecurityGroupRule(t *testing.T) {
+// 完全一致的已有规则满足请求，不再创建；"全部协议、全部端口"的放行规则不算（见下一个测试）。
+func TestCVMClient_ExistingIdenticalSecurityGroupRule(t *testing.T) {
 	actions := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		action := r.Header.Get("X-TC-Action")
@@ -19,7 +20,7 @@ func TestCVMClient_ExistingBroadSecurityGroupRule(t *testing.T) {
 		case "DescribeInstances":
 			_, _ = w.Write([]byte(`{"Response":{"InstanceSet":[{"SecurityGroupIds":["sg-test"]}]}}`))
 		case "DescribeSecurityGroupPolicies":
-			_, _ = w.Write([]byte(`{"Response":{"SecurityGroupPolicySet":{"Ingress":[{"Protocol":"ALL","Port":"ALL","CidrBlock":"0.0.0.0/0","Action":"ACCEPT"}]}}}`))
+			_, _ = w.Write([]byte(`{"Response":{"SecurityGroupPolicySet":{"Ingress":[{"Protocol":"TCP","Port":"11003","CidrBlock":"0.0.0.0/0","Action":"ACCEPT"}]}}}`))
 		default:
 			t.Fatalf("unexpected action %s", action)
 		}
@@ -37,6 +38,40 @@ func TestCVMClient_ExistingBroadSecurityGroupRule(t *testing.T) {
 	}
 	if got, want := actions, []string{"DescribeInstances", "DescribeSecurityGroupPolicies"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("actions = %v, want %v", got, want)
+	}
+}
+
+// 安全组默认的"全部协议、全部端口、任意来源"放行规则不能算满足具体规则：否则具体规则永远建不出来，
+// 这条放行一切的规则也就关不掉。
+func TestCVMClient_AllowAllRuleDoesNotSatisfySpecificRule(t *testing.T) {
+	created := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Header.Get("X-TC-Action") {
+		case "DescribeInstances":
+			_, _ = w.Write([]byte(`{"Response":{"InstanceSet":[{"SecurityGroupIds":["sg-test"]}]}}`))
+		case "DescribeSecurityGroupPolicies":
+			_, _ = w.Write([]byte(`{"Response":{"SecurityGroupPolicySet":{"Ingress":[{"Protocol":"ALL","Port":"ALL","CidrBlock":"0.0.0.0/0","Action":"ACCEPT"}]}}}`))
+		case "CreateSecurityGroupPolicies":
+			created = true
+			_, _ = w.Write([]byte(`{"Response":{"RequestId":"req-create"}}`))
+		default:
+			t.Fatalf("unexpected action %s", r.Header.Get("X-TC-Action"))
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewCVMClient(ClientOptions{SecretID: "sid", SecretKey: "skey", Region: "ap-hongkong", Endpoint: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.now = func() time.Time { return time.Unix(1700000000, 0) }
+	if err := client.EnsureSecurityGroupRule(context.Background(), "43.132.204.177", CreateFirewallRulesOptions{
+		Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("放行一切的规则不应当让具体规则被跳过")
 	}
 }
 

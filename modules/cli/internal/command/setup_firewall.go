@@ -381,10 +381,20 @@ func (c *setupFirewallCloud) syncCVM(ctx context.Context, item *setupFirewallHos
 	if err != nil {
 		return fmt.Errorf("读取安全组规则: %w", err)
 	}
+	// 云服务器的安全组默认带一条"全部协议、全部端口、任意来源"的放行规则：它让下面的显式规则形同虚设。显式规则（含 SSH）
+	// 建好之后把它当作多余规则清理（--prune）。
+	desired = append(append([]setupFirewallEntry(nil), desired...), setupFirewallEntry{Port: "22", Source: "0.0.0.0/0", Description: "MooX SSH"})
+	managed = managedWithAllowAll(managed)
 	existing := make([]setupFirewallEntry, 0, len(policies))
 	for _, policy := range policies {
-		if strings.EqualFold(policy.Protocol, "TCP") && strings.EqualFold(policy.Action, "ACCEPT") {
+		if !strings.EqualFold(policy.Action, "ACCEPT") {
+			continue
+		}
+		switch {
+		case strings.EqualFold(policy.Protocol, "TCP"):
 			existing = append(existing, setupFirewallEntry{Port: policy.Port, Source: normalizeFirewallSource(policy.CidrBlock), Description: policy.Description})
+		case isAllowAllPolicy(policy):
+			existing = append(existing, setupFirewallEntry{Port: allowAllPort, Source: normalizeFirewallSource(policy.CidrBlock), Description: policy.Description})
 		}
 	}
 	missing, obsolete := diffFirewallEntries(desired, existing, managed)
@@ -415,7 +425,11 @@ func (c *setupFirewallCloud) syncCVM(ctx context.Context, item *setupFirewallHos
 		byGroup := map[string]*group{}
 		for _, policy := range latest {
 			entry := setupFirewallEntry{Port: policy.Port, Source: normalizeFirewallSource(policy.CidrBlock)}
-			if strings.EqualFold(policy.Protocol, "TCP") && strings.EqualFold(policy.Action, "ACCEPT") && containsFirewallEntry(obsolete, entry) {
+			if isAllowAllPolicy(policy) {
+				entry.Port = allowAllPort
+			}
+			matchesProtocol := strings.EqualFold(policy.Protocol, "TCP") || isAllowAllPolicy(policy)
+			if matchesProtocol && strings.EqualFold(policy.Action, "ACCEPT") && containsFirewallEntry(obsolete, entry) {
 				if byGroup[policy.SecurityGroupID] == nil {
 					byGroup[policy.SecurityGroupID] = &group{version: policy.PolicyVersion}
 				}
@@ -430,6 +444,23 @@ func (c *setupFirewallCloud) syncCVM(ctx context.Context, item *setupFirewallHos
 		item.Deleted = obsolete
 	}
 	return nil
+}
+
+// allowAllPort 是"全部协议、全部端口"放行规则在差异计算里的端口标记。
+const allowAllPort = "ALL"
+
+func isAllowAllPolicy(policy cloudtencent.SecurityGroupIngress) bool {
+	return strings.EqualFold(policy.Protocol, "ALL") && strings.EqualFold(policy.Port, "ALL")
+}
+
+// managedWithAllowAll 在受管端口里加上放行全部的规则，让它按多余规则处理。
+func managedWithAllowAll(managed map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(managed)+1)
+	for port, value := range managed {
+		out[port] = value
+	}
+	out[allowAllPort] = true
+	return out
 }
 
 // diffFirewallEntries 返回缺少的期望规则，以及受管端口上多余的规则。

@@ -443,6 +443,7 @@
         "MOOX_EVENTBUS_NATS_URL=tls://127.0.0.1:4222",
         "MOOX_METRICS_EVENTBUS_URL=tls://127.0.0.1:4222",
         "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=/data/moox/prod/secrets/eventbus/metrics-publisher.yaml",
+        "MOOX_EVENTBUS_CREDENTIAL_FILE=/data/moox/prod/secrets/eventbus/collector-market-fetch-consumer.yaml",
         "MOOX_STOCK_CN_SOURCE_CONFIG_DIR=/data/moox/prod/current/collector/config/sources/stockcn"
       ],
       "SecretEnv": [

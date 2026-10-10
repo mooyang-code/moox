@@ -326,6 +326,8 @@ func renderCollector(r *renderer, c *Component) error {
 	if spaces := r.marketFetchSpaces(); spaces != "" {
 		c.Env = append(c.Env, "MOOX_SPACE_IDS="+spaces)
 	}
+	// 采集完成回执和存储写入回执的消费者从这个凭据文件取用户名、密码和 CA；没有它就用系统根证书校验消息总线，连不上。
+	c.Env = append(c.Env, "MOOX_EVENTBUS_CREDENTIAL_FILE="+r.eventBusFile("collector-market-fetch-consumer.yaml"))
 	c.Prestart = []string{shellCommand("$RELEASE/bin/moox-collector-cli", "init", "--db-path", db,
 		"--seed-file", "$RELEASE/collector/config/setup/collection-tasks.yaml")}
 	if err := r.copyFile("config/setup/collection-tasks.yaml", "collector/config/setup/collection-tasks.yaml"); err != nil {

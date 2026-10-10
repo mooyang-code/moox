@@ -96,8 +96,8 @@ type vpcCreatePoliciesRequest struct {
 }
 
 // EnsureSecurityGroupRule makes the requested TCP/UDP ingress available on a
-// CVM's VPC security group. Existing broad ACCEPT rules are also accepted as
-// satisfying the request.
+// CVM's VPC security group. An identical existing rule satisfies the request; a
+// broad allow-all rule does not.
 func (c *CVMClient) EnsureSecurityGroupRule(ctx context.Context, publicIP string, opts CreateFirewallRulesOptions) error {
 	rule, err := NewCreateFirewallRulesRequest(CreateFirewallRulesOptions{
 		InstanceID:    "cvm",
@@ -185,16 +185,16 @@ func (c *CVMClient) RebootInstance(ctx context.Context, instanceID string) (stri
 	return response.Response.RequestID, nil
 }
 
+// coversCVMRule 判断已有规则是否正好是要创建的规则。宽泛的"全部协议、全部端口"放行规则不算：腾讯云安全组的默认规则
+// 就是它，把它当作满足会让具体规则永远建不出来，也就没办法关掉这条放行一切的规则。
 func coversCVMRule(existing, wanted vpcSecurityGroupPolicy) bool {
 	if !strings.EqualFold(strings.TrimSpace(existing.Action), strings.TrimSpace(wanted.Action)) {
 		return false
 	}
-	protocol := strings.ToUpper(strings.TrimSpace(existing.Protocol))
-	if protocol != strings.ToUpper(strings.TrimSpace(wanted.Protocol)) && protocol != "ALL" {
+	if !strings.EqualFold(strings.TrimSpace(existing.Protocol), strings.TrimSpace(wanted.Protocol)) {
 		return false
 	}
-	port := strings.TrimSpace(existing.Port)
-	if port != strings.TrimSpace(wanted.Port) && !strings.EqualFold(port, "ALL") {
+	if strings.TrimSpace(existing.Port) != strings.TrimSpace(wanted.Port) {
 		return false
 	}
 	return strings.TrimSpace(existing.CidrBlock) == strings.TrimSpace(wanted.CidrBlock)
