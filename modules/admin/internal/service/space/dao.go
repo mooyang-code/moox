@@ -174,7 +174,7 @@ func (d *DAO) AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method
 func tradeMethodMutates(method string) bool {
 	method = strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(strings.TrimSpace(method)))
 	switch method {
-	case "gettradingaccount", "listtradingaccounts", "getlogicalaccount", "listlogicalaccounts", "getoperatoraction", "getlogicalaccounttarget", "getorder", "listorders", "listfills", "listpositions", "getexecutioncapabilities", "queryequitycurve", "listholdings", "getstrategy", "liststrategies", "getrunner", "listrunners", "liststrategyresults", "getstrategyresult", "liststrategytargets", "getstrategyinstance", "liststrategyinstances":
+	case "gettradingaccount", "listtradingaccounts", "getlogicalaccount", "listlogicalaccounts", "getoperatoraction", "getlogicalaccounttarget", "getorder", "listorders", "listfills", "listpositions", "getexecutioncapabilities", "queryequitycurve", "listholdings", "getstrategy", "liststrategies", "getrunner", "listrunners", "liststrategyresults", "getstrategyresult", "liststrategytargets", "getstrategyinstance", "liststrategyinstances", "getreplay", "listreplays", "listreplaybars":
 		return false
 	default:
 		// Mutations are deny-by-default for ordinary Space members. Keeping a

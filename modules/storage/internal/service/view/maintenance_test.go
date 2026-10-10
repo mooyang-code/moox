@@ -1167,3 +1167,58 @@ func shouldRetryFailedBuild(view *pb.View, failedBuild *pb.ViewIndexBuild, capac
 func (s *Service) capacityMaintenanceBuildIdle(ctx context.Context) bool {
 	return s.capacityMaintenanceBuildIdleFor(ctx, viewRef{}, capacityMaintenanceBuildBacklogThreshold, 1)
 }
+
+// 激活 Metadata 之前，新索引继承的写入围栏就已经落盘：激活提交后、后台落盘前进程退出，重启后活动索引是新索引，
+// 要求旧位置的周期事件不会因为新索引没有围栏而永远等待。
+type fenceProbeMetadata struct {
+	*maintenanceMetadata
+	onActivate func()
+}
+
+func (m fenceProbeMetadata) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq, opts ...client.Option) (*pb.ActivateViewIndexRsp, error) {
+	m.onActivate()
+	return m.maintenanceMetadata.ActivateViewIndex(ctx, req, opts...)
+}
+
+func TestActivateViewBuildPersistsInheritedFenceBeforeMetadataActivation(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenceDir := t.TempDir()
+	svc.readyFenceDir = fenceDir
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	const oldID, newID = "records-a", "records-b"
+	columns := []*pb.ViewColumn{{SpaceId: "space", ViewId: "records", OriginId: "title", ColumnName: "title"}}
+	prepared, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: newID, Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "records", DatasetId: "records", ViewVersion: 2, Engine: "bleve", ViewSchemaHash: "schema-2", Columns: columns}})
+	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare: rsp=%v err=%v", prepared, err)
+	}
+	svc.mu.RLock()
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "records"}]
+	svc.mu.RUnlock()
+	runtime.mu.Lock()
+	runtime.active = oldID
+	runtime.mu.Unlock()
+	svc.NoteAppliedPosition("space", "records", oldID, "node-a", "store-a", 12)
+	var persisted uint64
+	metadata := fenceProbeMetadata{
+		maintenanceMetadata: &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", DatasetId: "records", ActiveIndexId: newID, ActiveViewRevision: 2, DesiredViewRevision: 2, Engine: "bleve", ActiveColumns: columns}},
+		onActivate: func() {
+			// 此刻 Metadata 尚未切换：另起一个实例读取磁盘上的围栏，模拟这时进程被强杀后的重启。
+			reloaded := &Service{appliedFence: make(map[appliedFenceKey]uint64)}
+			if err := reloaded.openReadyFence(fenceDir); err != nil {
+				t.Error(err)
+				return
+			}
+			persisted = reloaded.appliedSequence("space", "records", newID, "node-a", "store-a")
+		},
+	}
+	if err := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view"}, auth, metadata.view, "build-1", newID, "bleve", 2, "schema-2", columns); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if persisted != 12 {
+		t.Fatalf("激活前新索引的围栏应已落盘为 12：%d", persisted)
+	}
+}
