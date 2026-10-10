@@ -201,6 +201,14 @@ func TestEnqueueReadyPersistFailureIsNotAcked(t *testing.T) {
 	if err == nil || errors.Is(err, ErrViewDataReadyPending) || !strings.Contains(err.Error(), "落盘失败") {
 		t.Fatalf("落盘失败应返回错误、不 ACK：%v", err)
 	}
+	// 同一事件重投：队列里不能残留未落盘的副本，否则去重分支会跳过落盘并以 Deferred 被 ACK。
+	if service.pendingReadyContains("prices-ready-1") {
+		t.Fatal("落盘失败的事件不应留在内存队列")
+	}
+	err = service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-1", at), payload)
+	if err == nil || errors.Is(err, ErrViewDataReadyPending) || !strings.Contains(err.Error(), "落盘失败") {
+		t.Fatalf("重投时仍应返回落盘失败、不 ACK：%v", err)
+	}
 }
 
 // 所属 View 已不在目录中的就绪事件超过保留时长后隔离，不永久占着队列；队列深度与最老事件随之上报。

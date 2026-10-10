@@ -57,14 +57,21 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}}
 	states := indexFactors(event)
 	required := sortedKeys(binding.Factors)
+	// 先收齐事件里已有的全部指纹再判缺失：缺失的因子不能让其余因子的指纹没有保存，否则下一期经 bars[-1] 读取这些因子时，
+	// 相邻记录里缺少它们的证据，误记 previous_version_unknown。
 	for _, factorID := range required {
 		state, ok := states[factorID]
 		if !ok || strings.TrimSpace(state.GetDefinitionHash()) == "" {
-			result.Reason = ReasonFactorMissing
-			result.Detail = fmt.Sprintf("事件中没有因子 %s 的状态或指纹", factorID)
-			return result
+			if result.Reason == "" {
+				result.Reason = ReasonFactorMissing
+				result.Detail = fmt.Sprintf("事件中没有因子 %s 的状态或指纹", factorID)
+			}
+			continue
 		}
 		result.Hashes[factorID] = state.GetDefinitionHash()
+	}
+	if result.Reason != "" {
+		return result
 	}
 	for _, factorID := range required {
 		if expected, actual := binding.Factors[factorID], result.Hashes[factorID]; actual != expected {

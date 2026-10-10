@@ -629,3 +629,58 @@ func TestHandleHealthTransitions(t *testing.T) {
 		t.Fatalf("ok 周期不能清除 session_unverified：%+v", instance)
 	}
 }
+
+// S15：预算耗尽的那次终态写入失败后，重投不能重新读取输入、重新获得一整轮预算：
+// 即使输入此时已经恢复，也要把 skipped(infra_retry_exhausted) 写进去。
+func TestHandleExhaustedBudgetKeepsRetryingTerminalWrite(t *testing.T) {
+	h := newHarness(t, rankDSL, nil)
+	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
+	h.loader.errs = []error{errors.New("storage down"), errors.New("storage down")}
+	expectRetry(t, h.deliver(1))
+	if err := h.repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	// 第二次输入失败耗尽预算，终态写入又遇到只读数据库：NAK，不写记录。
+	expectRetry(t, h.deliver(1))
+	h.noResultAt(1)
+	if err := h.repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+		t.Fatal(err)
+	}
+	// 输入已恢复，但这次重投只能落终态，不能读输入后提交 ok。
+	callsBefore := h.loader.calls
+	expectAck(t, h.deliver(1))
+	if h.loader.calls != callsBefore {
+		t.Fatalf("预算耗尽后重投不应再读取输入：%d -> %d", callsBefore, h.loader.calls)
+	}
+	result := h.resultAt(1)
+	if result.Status != store.StatusSkipped || result.SkipReason != SkipInfraRetryExhausted {
+		t.Fatalf("应记为 infra_retry_exhausted：%+v", result)
+	}
+}
+
+// S17：决策已完成但提交失败，重投时周期已经跨过有效期：记 skipped(expired) 并 ACK，不产生 ok 决策，也不发布目标。
+func TestHandleCommitFailureThenExpiryOnRedelivery(t *testing.T) {
+	account := "acct-1"
+	h := newHarness(t, rankDSL, &account)
+	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
+	h.now = barStart(1).Add(90 * time.Minute)
+	if err := h.repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	// 决策已求出，但提交遇到只读数据库：NAK，不写任何记录。
+	expectRetry(t, h.deliver(1))
+	h.noResultAt(1)
+	if err := h.repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+		t.Fatal(err)
+	}
+	// 数据库恢复时，这个周期的有效期已过。
+	h.now = barStart(1).Add(4 * time.Hour)
+	expectAck(t, h.deliver(1))
+	result := h.resultAt(1)
+	if result.Status != store.StatusSkipped || result.SkipReason != store.SkipExpired || result.PublishStatus != store.PublishNone {
+		t.Fatalf("应为 skipped(expired)、不发布：%+v", result)
+	}
+	if _, ok, _ := h.repo.LatestOk(context.Background(), "i1", h.session); ok {
+		t.Fatal("过期周期不应产生 ok 决策")
+	}
+}

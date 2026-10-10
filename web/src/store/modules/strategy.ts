@@ -25,7 +25,10 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 export const useStrategyStore = defineStore("strategy", () => {
+  // strategies 是定义页当前页的分页列表；strategyCatalog 是完整目录（运行页、回放页的下拉与名称查找）。两者各有请求序号，
+  // 迟到的分页响应不能覆盖完整目录。
   const strategies = ref<Strategy[]>([]);
+  const strategyCatalog = ref<Strategy[]>([]);
   const instances = ref<StrategyInstance[]>([]);
   const instance = ref<StrategyInstance | null>(null);
   const strategy = ref<Strategy | null>(null);
@@ -46,6 +49,7 @@ export const useStrategyStore = defineStore("strategy", () => {
   let detailRequest = 0;
   let resultRequest = 0;
   let strategiesRequest = 0;
+  let catalogRequest = 0;
   let instancesRequest = 0;
 
   async function loadStrategies(params: Parameters<typeof listStrategies>[0] = {}) {
@@ -57,7 +61,6 @@ export const useStrategyStore = defineStore("strategy", () => {
       if (requestId !== strategiesRequest) return;
       strategies.value = result.items;
       totalStrategies.value = result.page.total;
-      strategiesComplete.value = result.items.length >= result.page.total;
     } catch (err) {
       if (requestId === strategiesRequest) error.value = errorMessage(err, "策略定义加载失败");
       throw err;
@@ -67,7 +70,7 @@ export const useStrategyStore = defineStore("strategy", () => {
   }
 
   async function loadAllStrategies(pageSize = 200) {
-    const requestId = ++strategiesRequest;
+    const requestId = ++catalogRequest;
     listLoading.value = true;
     error.value = "";
     try {
@@ -75,20 +78,26 @@ export const useStrategyStore = defineStore("strategy", () => {
       let total = 0;
       for (let page = 1; ; page += 1) {
         const response = await listStrategies({ page, page_size: pageSize });
-        if (requestId !== strategiesRequest) return;
+        if (requestId !== catalogRequest) return;
         items.push(...response.items);
         total = response.page.total;
         if (!response.items.length || items.length >= total) break;
       }
-      strategies.value = items;
-      totalStrategies.value = total || items.length;
+      strategyCatalog.value = items;
       strategiesComplete.value = true;
     } catch (err) {
-      if (requestId === strategiesRequest) error.value = errorMessage(err, "策略定义加载失败");
+      if (requestId === catalogRequest) error.value = errorMessage(err, "策略定义加载失败");
       throw err;
     } finally {
-      if (requestId === strategiesRequest) listLoading.value = false;
+      if (requestId === catalogRequest) listLoading.value = false;
     }
+  }
+
+  /** 定义有新增或修改后作废完整目录：在途的目录请求不再写入，下次进入运行页、回放页时重新读取。 */
+  function invalidateStrategyCatalog() {
+    catalogRequest += 1;
+    strategiesComplete.value = false;
+    listLoading.value = false;
   }
 
   async function loadInstances(params: Parameters<typeof listInstances>[0] = {}) {
@@ -154,6 +163,8 @@ export const useStrategyStore = defineStore("strategy", () => {
   async function loadResultPage(page: number, pageSize = 20, allHistory = false) {
     if (!instance.value) return;
     if (!allHistory && !instance.value.session_id) {
+      // 使在途的“全部历史”请求作废：迟到的响应不能把旧结果填进无会话的“本次启用”表格。
+      resultRequest += 1;
       results.value = [];
       totalResults.value = 0;
       detailError.value = "";
@@ -210,6 +221,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     try {
       await deleteStrategy(strategyId);
       strategies.value = strategies.value.filter(item => item.strategy_id !== strategyId);
+      strategyCatalog.value = strategyCatalog.value.filter(item => item.strategy_id !== strategyId);
       totalStrategies.value = Math.max(0, totalStrategies.value - 1);
     } finally {
       operationLoading.value = false;
@@ -249,6 +261,7 @@ export const useStrategyStore = defineStore("strategy", () => {
 
   return {
     strategies,
+    strategyCatalog,
     instances,
     instance,
     strategy,
@@ -266,6 +279,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     detailError,
     loadStrategies,
     loadAllStrategies,
+    invalidateStrategyCatalog,
     loadInstances,
     loadInstanceDetail,
     loadResultPage,

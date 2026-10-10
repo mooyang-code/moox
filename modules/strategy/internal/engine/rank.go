@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math/big"
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -25,16 +26,19 @@ const (
 	reasonNotSelected   = "not_selected"
 	reasonNotRebalanced = "not_rebalanced"
 	reasonNotExpected   = "not_expected"
+	reasonPeriodSkipped = "period_skipped"
 )
 
 // explanation 收集一条规则的解释明细，保证每个标的只有一条。
 type explanation struct {
 	ruleID string
 	items  map[string]Item
+	// tolerance 是明细里的权重量化时容忍的噪声，与目标量化一致（见 quantizationTolerance）。
+	tolerance quant.Decimal
 }
 
-func newExplanation(ruleID string) *explanation {
-	return &explanation{ruleID: ruleID, items: make(map[string]Item)}
+func newExplanation(ruleID string, tolerance quant.Decimal) *explanation {
+	return &explanation{ruleID: ruleID, items: make(map[string]Item), tolerance: tolerance}
 }
 
 // reject 记录本期在某个阶段被淘汰的标的。
@@ -49,7 +53,7 @@ func (e *explanation) reject(id, stage, reason string, score *float64, rank int)
 // weight 记录进入目标权重的标的。fresh 为 false 表示权重只来自延续批次；
 // 该标的本期若已被淘汰，最终阶段仍是 weighted，原因保留本期的淘汰原因。
 func (e *explanation) weight(id string, weight quant.Decimal, score *float64, rank int, fresh bool) {
-	item := Item{RuleID: e.ruleID, InstrumentID: id, Stage: StageWeighted, Weight: weight.String(), Rank: rank}
+	item := Item{RuleID: e.ruleID, InstrumentID: id, Stage: StageWeighted, Weight: truncateWeightWith(weight, e.tolerance).String(), Rank: rank}
 	if score != nil {
 		item.Score = formatScore(*score)
 	}
@@ -72,9 +76,9 @@ func (e *explanation) list() []Item {
 }
 
 // evaluateRank 执行截面选股：filter → score → select（buffer 或 holding）→ weight → filter_after。
-func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState) (ruleResult, error) {
+func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, tolerance quant.Decimal) (ruleResult, error) {
 	result := ruleResult{weights: map[string]quant.Decimal{}}
-	explain := newExplanation(rule.Rule.ID)
+	explain := newExplanation(rule.Rule.ID, tolerance)
 	// filter：引用列已由集合划分保证存在。
 	passed := make([]string, 0, len(sets.available))
 	for _, id := range sets.available {
@@ -272,6 +276,12 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 		}
 		outcome.chosen = chosen
 		base := baseShares(chosen, quant.One(), rule.Rule.Weight.Method)
+		if rule.Rule.Weight.HasCap {
+			// 先配权（含 cap）再 filter_after：cap 在完整选中集合上按批次份额落实并保存（份额上限 = cap / total，各批次叠加后
+			// 不超过 cap），filter_after 剔除与延续期间缺数移除的份额都只留现金。若每期对剩余份额重新套 cap，被裁剪的余量会
+			// 重新分给延续的持仓，等于剔除或缺数的份额没有留作现金。
+			base = applyCapRat(chosen, base, new(big.Rat).Quo(rule.Rule.Weight.Cap.Rat(), rule.Rule.Weight.Total.Rat()))
+		}
 		raw := make(map[string]string, len(base))
 		for _, id := range chosen {
 			if rule.FilterAfter != nil {

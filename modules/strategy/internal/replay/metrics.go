@@ -125,7 +125,7 @@ func (a *accumulator) finish() Metrics {
 	if len(m.SkipReasons) == 0 {
 		m.SkipReasons = nil
 	}
-	return m
+	return m.rounded()
 }
 
 // annualize 计算年化收益；不给出时返回说明原因的局限性条目。

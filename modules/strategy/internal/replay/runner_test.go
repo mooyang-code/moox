@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 )
 
@@ -27,7 +30,10 @@ type fakeClient struct {
 	ambiguous   map[int]bool            // 小时 → 标的 A 在该小时有两个序列
 	panicOnRows bool
 	queries     int
-	onQuery     func(query input.Query)
+	// revision 是服务端当前的索引修订号（零按 1）；bumpBeforeProbe 为真时，第一次年龄探针读取之前修订号升到 2（模拟两次读取之间的原地补算）。
+	revision        uint64
+	bumpBeforeProbe bool
+	onQuery         func(query input.Query)
 	// failQuery 返回非空错误时本次读取失败；unknownCoverage 模拟索引统计暂时未知。
 	failQuery       func(query input.Query) error
 	unknownCoverage bool
@@ -145,6 +151,16 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 	if query.ExpectedIndexID != "" && query.ExpectedIndexID != f.currentIndex() {
 		return nil, 0, input.ErrStale
 	}
+	if f.bumpBeforeProbe && len(query.Columns) == 1 && query.Columns[0] == "close" {
+		f.bumpBeforeProbe, f.revision = false, 2
+	}
+	served := f.revision
+	if served == 0 {
+		served = 1
+	}
+	if query.ExpectedRevision != 0 && query.ExpectedRevision != served {
+		return nil, 0, input.ErrStale
+	}
 	if f.onQuery != nil {
 		f.onQuery(query)
 	}
@@ -170,7 +186,7 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 			}
 		}
 	}
-	return rows, 1, nil
+	return rows, served, nil
 }
 
 func (f *fakeClient) GetFactor(context.Context, string) (input.FactorInfo, error) {
@@ -635,5 +651,237 @@ func TestReplayRunsWithUnknownCoverageAtExecution(t *testing.T) {
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 4 {
 		t.Fatalf("覆盖范围暂时未知时应按保存的区间执行：%+v", done)
+	}
+}
+
+// D1：终态写入遇到临时错误（数据库暂时只读）时要退避重试，恢复后任务落到终态，不能永久停在 running。
+func TestReplayFinishRetriesTransientWriteErrors(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	restored := make(chan struct{})
+	go func() {
+		defer close(restored)
+		time.Sleep(60 * time.Millisecond)
+		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+			t.Error(err)
+		}
+	}()
+	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot", panicOnRows: true}, FinishRetryDelay: 20 * time.Millisecond}
+	runner.Execute(context.Background(), job)
+	<-restored
+	failed, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "执行异常") {
+		t.Fatalf("终态写入应在数据库恢复后成功：%+v err=%v", failed, err)
+	}
+}
+
+// D2：年龄探针固定到主数据读到的修订号。两次读取之间同一代索引发生原地补算时，丢弃整段后连同主数据一起重读，
+// 不能让主数据来自旧修订号、年龄集合来自新修订号。
+func TestReplayAgeProbeSharesRevisionWithMainRead(t *testing.T) {
+	repo := openStore(t)
+	client := &fakeClient{marketType: "spot", bumpBeforeProbe: true}
+	probeRevisions, mainRevisions := []uint64{}, []uint64{}
+	client.onQuery = func(query input.Query) {
+		if len(query.Columns) == 1 && query.Columns[0] == "close" {
+			probeRevisions = append(probeRevisions, query.ExpectedRevision)
+		} else {
+			mainRevisions = append(mainRevisions, query.ExpectedRevision)
+		}
+	}
+	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
+	job := startReplay(t, repo, "p1", aged, 4)
+	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v", done)
+	}
+	if len(probeRevisions) == 0 {
+		t.Fatal("应有年龄探针读取")
+	}
+	for _, revision := range probeRevisions {
+		if revision == 0 {
+			t.Fatalf("年龄探针必须固定修订号：%v", probeRevisions)
+		}
+	}
+	// 修订号在第一次探针前升到 2：第一次主读取读到 1，探针固定 1 后被拒；整段重读，第二次主读取读到 2，探针固定 2。
+	if len(mainRevisions) < 2 || probeRevisions[len(probeRevisions)-1] != 2 {
+		t.Fatalf("应整段重读到新修订号：main=%v probe=%v", mainRevisions, probeRevisions)
+	}
+}
+
+// D1：终态写入连续失败的次数超过任何固定重试次数后数据库才恢复，任务仍要落到终态。
+func TestReplayFinishKeepsRetryingUntilDatabaseRecovers(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	restored := make(chan struct{})
+	go func() {
+		defer close(restored)
+		time.Sleep(600 * time.Millisecond)
+		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+			t.Error(err)
+		}
+	}()
+	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot", panicOnRows: true}, FinishRetryDelay: 5 * time.Millisecond}
+	runner.Execute(context.Background(), job)
+	<-restored
+	failed, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || failed.Status != store.ReplayFailed {
+		t.Fatalf("数据库恢复后终态应落库：%+v err=%v", failed, err)
+	}
+}
+
+// 进程退出（ctx 结束）时终态重试停止，任务保持 running，留给下次启动标记为 interrupted。
+func TestReplayFinishStopsRetryingWhenContextEnds(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.ApplySchema(`PRAGMA query_only = OFF;`) })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, FinishRetryDelay: 5 * time.Millisecond}
+	finished := make(chan error, 1)
+	go func() { finished <- runner.finish(ctx, job.ReplayID, store.ReplayDone, nil, "") }()
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatal("数据库只读时终态写入不应成功")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ctx 结束后终态重试应停止")
+	}
+}
+
+// 设计 4.5 / 计划 D：同一份数据、同一周期，回放的目标必须与实时装配 + 同一引擎得到的目标逐字节一致。
+func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
+	for name, dslYaml := range map[string]string{"当期因子": replayDSL, "bars[-1]": previousDSL} {
+		t.Run(name, func(t *testing.T) {
+			repo := openStore(t)
+			client := &fakeClient{marketType: "spot"}
+			job := startReplay(t, repo, "p1", dslYaml, 10)
+			(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
+			if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+				t.Fatalf("回放应完成：%+v", done)
+			}
+			strategy, err := dsl.Parse([]byte(dslYaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, program, err := input.Resolve(context.Background(), client, "crypto", "view_a", strategy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compared := 0
+			for _, replayed := range barsOf(t, repo, "p1") {
+				if replayed.Status != store.StatusOK {
+					continue
+				}
+				boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+				if err != nil {
+					t.Fatal(err)
+				}
+				loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: []string{"A", "B"}})
+				if err != nil {
+					t.Fatalf("实时装配 %v 失败：%v", replayed.BarEndTime, err)
+				}
+				decision, err := engine.Evaluate(program, loaded.Frame, engine.State{})
+				if err != nil || decision.Status != engine.StatusOK {
+					t.Fatalf("实时求值 %v：status=%s err=%v", replayed.BarEndTime, decision.Status, err)
+				}
+				_, live, err := trigger.EncodeTargets(decision.Targets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(live) != string(replayed.TargetsJSON) {
+					t.Fatalf("%v 的目标不一致：实时 %s，回放 %s", replayed.BarEndTime, live, replayed.TargetsJSON)
+				}
+				compared++
+			}
+			if compared == 0 {
+				t.Fatal("没有可比较的 ok 周期")
+			}
+		})
+	}
+}
+
+// 输出精度规范：回放写入的金额与占比最多 4 位小数，持仓数量最多 8 位；内部账本仍用全精度（见 TestReplayRunsEndToEnd）。
+func TestReplayOutputsFollowPrecisionRules(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 10)
+	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
+	done, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v err=%v", done, err)
+	}
+	places := func(label string, value float64, max int) {
+		t.Helper()
+		text := strconv.FormatFloat(value, 'f', -1, 64)
+		if i := strings.IndexByte(text, '.'); i >= 0 && len(text)-i-1 > max {
+			t.Errorf("%s 的小数位超过 %d 位：%s", label, max, text)
+		}
+	}
+	var metrics Metrics
+	if err := json.Unmarshal(done.MetricsJSON, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	for label, value := range map[string]float64{"initial": metrics.InitialEquity, "final": metrics.FinalEquity, "total_return": metrics.TotalReturn, "drawdown": metrics.MaxDrawdown, "turnover": metrics.AverageTurnover, "holdings": metrics.AverageHoldings, "fee": metrics.TotalFee} {
+		places("指标 "+label, value, 4)
+	}
+	for _, bar := range barsOf(t, repo, "p1") {
+		places("equity", bar.Equity, 4)
+		places("return", bar.Return, 4)
+		places("turnover", bar.Turnover, 4)
+		places("fee", bar.Fee, 4)
+		var snapshot struct {
+			Cash      float64 `json:"cash"`
+			Positions map[string]struct {
+				Quantity float64 `json:"quantity"`
+				Value    float64 `json:"value"`
+			} `json:"positions"`
+		}
+		if err := json.Unmarshal(bar.PositionsJSON, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		places("cash", snapshot.Cash, 4)
+		for id, position := range snapshot.Positions {
+			places(id+" quantity", position.Quantity, 8)
+			places(id+" value", position.Value, 4)
+		}
+	}
+}
+
+// 取消后的指标写入遇到临时错误要退避重试：任务已经是 cancelled，不会再被认领，启动恢复也只处理 running，
+// 只记日志的话 metrics_json 会永久停留在 {}。
+func TestReplayCancelledMetricsRetryUntilDatabaseRecovers(t *testing.T) {
+	repo := openStore(t)
+	startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.CancelReplay(context.Background(), "p1", origin); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	restored := make(chan struct{})
+	go func() {
+		defer close(restored)
+		time.Sleep(300 * time.Millisecond)
+		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+			t.Error(err)
+		}
+	}()
+	runner := &Runner{Store: repo, FinishRetryDelay: 5 * time.Millisecond}
+	if err := runner.recordCancelledMetrics(context.Background(), "p1", []byte(`{"bars":3}`)); err != nil {
+		t.Fatalf("数据库恢复后应写入成功：%v", err)
+	}
+	<-restored
+	cancelled, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || cancelled.Status != store.ReplayCancelled || !strings.Contains(string(cancelled.MetricsJSON), `"bars":3`) {
+		t.Fatalf("取消前的指标应已保存：%+v err=%v", cancelled, err)
 	}
 }

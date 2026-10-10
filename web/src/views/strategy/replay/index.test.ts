@@ -31,7 +31,7 @@ vi.mock("vue-router", () => ({ useRoute: () => ({ query: {} }) }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({
   useStrategyStore: () =>
-    reactive({ strategies: [{ strategy_id: "s1", name: "动量" }], loadAllStrategies: api.loadAllStrategies })
+    reactive({ strategyCatalog: [{ strategy_id: "s1", name: "动量" }], loadAllStrategies: api.loadAllStrategies })
 }));
 vi.mock("@visactor/vchart", () => ({
   default: class {

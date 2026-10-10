@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"fmt"
+	"math/big"
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -26,49 +26,64 @@ func baseShares(ordered []string, total quant.Decimal, method string) map[string
 	if method != dsl.WeightMethodRank {
 		return quant.DivideStable(total, ordered)
 	}
+	// 名次线性配权：最优 N 份、最差 1 份。各份之和恰好等于 total（剩下的最小单位补给名次靠前的），不因逐份截断而少掉零头。
 	n := len(ordered)
-	denominator := quant.Must(fmt.Sprint(n * (n + 1) / 2))
-	result := make(map[string]quant.Decimal, n)
-	for i, id := range ordered {
-		result[id] = total.Mul(quant.Must(fmt.Sprint(n - i))).Div(denominator)
+	parts := make([]int64, n)
+	for i := range parts {
+		parts[i] = int64(n - i)
 	}
-	return result
+	return quant.DivideProportional(total, ordered, parts)
 }
 
+// applyCap 把超过 cap 的权重裁到 cap，超出部分按比例分给未达上限的标的（按原权重比例，迭代到没有新的超限），仍分不出去的留现金。
+// 再分配用精确的有理数运算，只在最后向零截断一次：逐步用定点数做乘除会让本该恰好等于 cap 的权重差出 1e-12 量级。
 func applyCap(ordered []string, weights map[string]quant.Decimal, cap quant.Decimal) map[string]quant.Decimal {
+	return applyCapRat(ordered, weights, cap.Rat())
+}
+
+func applyCapRat(ordered []string, weights map[string]quant.Decimal, cap *big.Rat) map[string]quant.Decimal {
+	current := make(map[string]*big.Rat, len(ordered))
+	for _, id := range ordered {
+		current[id] = weights[id].Rat()
+	}
 	capped := make(map[string]struct{}, len(ordered))
 	for iteration := 0; iteration < len(ordered)+1; iteration++ {
-		excess := quant.Zero()
+		excess := new(big.Rat)
 		uncapped := make([]string, 0, len(ordered))
 		for _, id := range ordered {
 			if _, done := capped[id]; done {
 				continue
 			}
-			if weights[id].Cmp(cap) > 0 {
-				excess = excess.Add(weights[id].Sub(cap))
-				weights[id] = cap
+			if current[id].Cmp(cap) > 0 {
+				excess.Add(excess, new(big.Rat).Sub(current[id], cap))
+				current[id] = new(big.Rat).Set(cap)
 				capped[id] = struct{}{}
 				continue
 			}
 			uncapped = append(uncapped, id)
 		}
-		if excess.IsZero() || len(uncapped) == 0 {
+		if excess.Sign() == 0 || len(uncapped) == 0 {
 			break
 		}
-		sum := quant.Zero()
+		sum := new(big.Rat)
 		for _, id := range uncapped {
-			sum = sum.Add(weights[id])
+			sum.Add(sum, current[id])
 		}
-		if sum.IsZero() {
-			share := quant.DivideStable(excess, uncapped)
+		if sum.Sign() == 0 {
+			share := new(big.Rat).Quo(excess, new(big.Rat).SetInt64(int64(len(uncapped))))
 			for _, id := range uncapped {
-				weights[id] = weights[id].Add(share[id])
+				current[id] = new(big.Rat).Add(current[id], share)
 			}
 			continue
 		}
 		for _, id := range uncapped {
-			weights[id] = weights[id].Add(excess.Mul(weights[id]).Div(sum))
+			added := new(big.Rat).Mul(excess, current[id])
+			added.Quo(added, sum)
+			current[id] = new(big.Rat).Add(current[id], added)
 		}
+	}
+	for _, id := range ordered {
+		weights[id] = quant.FromRat(current[id])
 	}
 	return weights
 }
@@ -132,8 +147,4 @@ func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int
 		}
 	}
 	return result
-}
-
-func formatScore(value float64) string {
-	return fmt.Sprintf("%.10g", value)
 }

@@ -23,6 +23,9 @@ const (
 	defaultChunkBars     = 50
 	defaultLiquidateBars = 3
 	pollInterval         = 30 * time.Second
+	// finishRetryDelay 是终态写入遇到临时错误（锁、只读、磁盘）后的初始重试间隔，逐次翻倍，上限是初始间隔的 finishDelayCap 倍。
+	finishRetryDelay = 2 * time.Second
+	finishDelayCap   = 8
 )
 
 var errCancelled = errors.New("回放已取消")
@@ -37,6 +40,8 @@ type Runner struct {
 	InitialEquity             float64
 	Now                       func() time.Time
 	Logf                      func(format string, args ...any)
+	// FinishRetryDelay 是终态写入失败后的初始重试间隔；零值取默认值。
+	FinishRetryDelay time.Duration
 
 	once sync.Once
 	wake chan struct{}
@@ -98,7 +103,7 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			r.logf("回放 %s 执行异常：%v", job.ReplayID, recovered)
-			if err := r.Store.FinishReplay(ctx, job.ReplayID, store.ReplayFailed, nil, "回放执行异常，请查看策略模块日志", r.now()); err != nil && !errors.Is(err, store.ErrNotFound) {
+			if err := r.finish(ctx, job.ReplayID, store.ReplayFailed, nil, "回放执行异常，请查看策略模块日志"); err != nil && !errors.Is(err, store.ErrNotFound) {
 				r.logf("写入回放 %s 的终态失败：%v", job.ReplayID, err)
 			}
 		}
@@ -115,7 +120,7 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	if errors.Is(err, errCancelled) {
 		r.logf("回放 %s 已取消", job.ReplayID)
 		if metrics.Bars > 0 {
-			if recordErr := r.Store.RecordCancelledReplayMetrics(ctx, job.ReplayID, raw, r.now()); recordErr != nil {
+			if recordErr := r.recordCancelledMetrics(ctx, job.ReplayID, raw); recordErr != nil {
 				r.logf("写入回放 %s 取消前的指标失败：%v", job.ReplayID, recordErr)
 			}
 		}
@@ -131,11 +136,11 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 		status, message = store.ReplayFailed, friendly
 		r.logf("回放 %s 失败：%v；原始错误：%v", job.ReplayID, err, input.RawCause(err))
 	}
-	finishErr := r.Store.FinishReplay(ctx, job.ReplayID, status, raw, message, r.now())
+	finishErr := r.finish(ctx, job.ReplayID, status, raw, message)
 	if errors.Is(finishErr, store.ErrNotFound) {
 		// 结束前任务已被取消（取消落在最后一次状态检查之后，或取消后读取又失败）：保留已算出的部分指标。
 		if current, err := r.Store.ReplayStatus(ctx, job.ReplayID); err == nil && current == store.ReplayCancelled && metrics.Bars > 0 {
-			if recordErr := r.Store.RecordCancelledReplayMetrics(ctx, job.ReplayID, raw, r.now()); recordErr != nil {
+			if recordErr := r.recordCancelledMetrics(ctx, job.ReplayID, raw); recordErr != nil {
 				r.logf("写入回放 %s 取消前的指标失败：%v", job.ReplayID, recordErr)
 			}
 		}
@@ -143,6 +148,48 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	}
 	if finishErr != nil {
 		r.logf("写入回放 %s 的终态失败：%v", job.ReplayID, finishErr)
+	}
+}
+
+// finish 写入回放终态。临时写入错误按退避一直重试，直到成功、任务被取消（ErrNotFound）、遇到永久错误或进程退出（ctx 结束）：
+// 执行器只认领 pending，终态没写进去的任务会一直停在 running，占用活动任务额度，直到下次启动才被标成 interrupted 并丢掉
+// 已算出的指标。数据库不可用期间执行器本来也做不了别的事，所以在这里等它恢复。
+func (r *Runner) finish(ctx context.Context, replayID, status string, metricsJSON json.RawMessage, errText string) error {
+	return r.retryWrite(ctx, replayID, "终态", func() error {
+		return r.Store.FinishReplay(ctx, replayID, status, metricsJSON, errText, r.now())
+	})
+}
+
+// recordCancelledMetrics 为已取消的回放写入截至取消时的部分指标，重试规则与 finish 相同：任务已经是 cancelled，
+// 执行器不会再认领它，启动恢复也只处理 running，写入遇到临时错误后只记日志的话，指标会永久停留在 {}。
+func (r *Runner) recordCancelledMetrics(ctx context.Context, replayID string, metricsJSON json.RawMessage) error {
+	return r.retryWrite(ctx, replayID, "取消前的指标", func() error {
+		return r.Store.RecordCancelledReplayMetrics(ctx, replayID, metricsJSON, r.now())
+	})
+}
+
+// retryWrite 反复执行 write，遇到临时错误按退避重试（间隔逐次翻倍，上限为初始间隔的 finishDelayCap 倍），直到成功、
+// ErrNotFound、永久错误或 ctx 结束。
+func (r *Runner) retryWrite(ctx context.Context, replayID, what string, write func() error) error {
+	initial := r.FinishRetryDelay
+	if initial <= 0 {
+		initial = finishRetryDelay
+	}
+	delay := initial
+	for attempt := 1; ; attempt++ {
+		err := write()
+		if err == nil || errors.Is(err, store.ErrNotFound) || store.IsPermanentWriteError(err) {
+			return err
+		}
+		r.logf("写入回放 %s 的%s失败（第 %d 次），稍后重试：%v", replayID, what, attempt, err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		if delay < initial*finishDelayCap {
+			delay *= 2
+		}
 	}
 }
 
@@ -300,6 +347,9 @@ const maxIndexSwitches = 3
 // n 倍 recheckRereadBackoff（Storage 先改元数据、再切换内存里的活动索引，两者之间短暂不一致）。
 const maxRecheckRereads = 3
 
+// maxRevisionRereads 是同一段内主数据与年龄探针修订号不一致时整体重读的最多次数。
+const maxRevisionRereads = 5
+
 var recheckRereadBackoff = time.Second
 
 // pause 等待 d，等待前后都确认回放没有被取消（abort 为空时只等待）；ctx 结束时返回 ctx 的错误。
@@ -431,11 +481,23 @@ func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundari
 	if s.program.UsesPreviousBar && !segment[0].PreviousStart.IsZero() {
 		readFrom = segment[0].PreviousStart
 	}
+	revisionRereads := 0
 	for {
+		s.history.ExpectedRevision = 0
 		rows, err := s.rows.Load(ctx, readFrom, segment[len(segment)-1].StorageStart.Add(time.Nanosecond))
 		var ages *presence
 		if err == nil {
+			// 年龄探针固定到主数据读到的修订号：两次读取之间同一代索引发生原地补算时，丢弃整段重读，不混用两个修订号。
+			s.history.ExpectedRevision = rows.Revision
 			ages, err = agePresence(ctx, s.history, s.resolved, segment)
+			var changedRevision *input.RevisionChangedError
+			if errors.As(err, &changedRevision) {
+				if revisionRereads >= maxRevisionRereads {
+					return input.RangeRows{}, nil, fmt.Errorf("View %s 在回放读取期间持续有新的写入，没有读到同一修订号的数据，请稍后重新发起回放", s.job.ViewID)
+				}
+				revisionRereads++
+				continue
+			}
 		}
 		var changed *input.IndexChangedError
 		if !errors.As(err, &changed) {
@@ -551,7 +613,7 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	if err != nil {
 		return err
 	}
-	summary, err := json.Marshal(map[string]any{"skip_reason": decision.SkipReason, "decision": decision.Summary, "ledger": outcome})
+	summary, err := json.Marshal(map[string]any{"skip_reason": decision.SkipReason, "decision": decision.Summary, "ledger": outcome.rounded()})
 	if err != nil {
 		return err
 	}
@@ -563,7 +625,7 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	}
 	return r.Store.AppendReplayBar(ctx, store.ReplayBar{
 		ReplayID: replayID, BarEndTime: barEnd, Status: decision.Status, TargetsJSON: targetsJSON, PositionsJSON: positions, SummaryJSON: summary,
-		Return: barReturn, Equity: outcome.EquityAfter, Turnover: outcome.Turnover, Fee: outcome.Fee,
+		Return: round4(barReturn), Equity: round4(outcome.EquityAfter), Turnover: round4(outcome.Turnover), Fee: round4(outcome.Fee),
 		Holdings: ledger.Holdings(), Frozen: frozen, SkipReason: decision.SkipReason, Unfilled: len(outcome.Unfilled), Liquidated: len(outcome.Liquidated),
 	})
 }

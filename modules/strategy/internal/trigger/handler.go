@@ -58,6 +58,9 @@ type Handler struct {
 	mu       sync.Mutex
 	programs map[string]*runtime
 	attempts map[string]int
+	// exhausted 记录尝试预算已耗尽、但 skipped(infra_retry_exhausted) 尚未落库的（事件, 实例）及其概述：
+	// 终态写入失败后重投时直接重试这条终态，不能重新读取输入、重新获得一整轮预算。
+	exhausted map[string]string
 	// dropped 记录本进程内已丢弃过的（事件, 实例）：同一事件因其他实例需要重投而再次投递时，不重复记日志与计数。
 	dropped map[string]struct{}
 }
@@ -75,6 +78,9 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 	}
 	if h.attempts == nil {
 		h.attempts = make(map[string]int)
+	}
+	if h.exhausted == nil {
+		h.exhausted = make(map[string]string)
 	}
 	instances, err := h.Store.EnabledInstancesByView(ctx, message.GetSpaceId(), payload.GetViewId())
 	if err != nil {
@@ -97,6 +103,11 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 	for key := range h.attempts {
 		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
 			delete(h.attempts, key)
+		}
+	}
+	for key := range h.exhausted {
+		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+			delete(h.exhausted, key)
 		}
 	}
 	for key := range h.dropped {
@@ -279,6 +290,15 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 // evaluate 读取输入并求值。返回 nil 决策表示本期已作为 skipped 落库。
 func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready readiness.Result) (*engine.Decision, input.Loaded, error) {
 	rt := p.runtime
+	key := p.eventID + "\x00" + p.instance.InstanceID
+	if detail, done := h.exhausted[key]; done {
+		// 预算已耗尽：持续重试终态落库，成功之前不再读取输入。
+		err := h.commitSkipped(ctx, p, SkipInfraRetryExhausted, detail)
+		if err == nil {
+			delete(h.exhausted, key)
+		}
+		return nil, input.Loaded{}, err
+	}
 	var loaded input.Loaded
 	for reread := 0; ; reread++ {
 		var err error
@@ -297,13 +317,17 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 		if errors.As(err, &skip) {
 			return nil, input.Loaded{}, h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 		}
-		key := p.eventID + "\x00" + p.instance.InstanceID
 		h.attempts[key]++
 		// 记录里只保存不含服务地址的概述，原始错误写日志。
 		h.logf("实例 %s 周期 %s 读取输入失败（第 %d 次）：%v；原始错误：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), h.attempts[key], err, input.RawCause(err))
 		if h.attempts[key] >= h.budget() {
 			delete(h.attempts, key)
-			return nil, input.Loaded{}, h.commitSkipped(ctx, p, SkipInfraRetryExhausted, err.Error())
+			h.exhausted[key] = err.Error()
+			commitErr := h.commitSkipped(ctx, p, SkipInfraRetryExhausted, err.Error())
+			if commitErr == nil {
+				delete(h.exhausted, key)
+			}
+			return nil, input.Loaded{}, commitErr
 		}
 		return nil, input.Loaded{}, fmt.Errorf("读取输入（第 %d 次）：%w", h.attempts[key], err)
 	}

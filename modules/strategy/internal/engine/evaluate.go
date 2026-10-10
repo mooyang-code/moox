@@ -52,9 +52,13 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		}
 	}
 	if skipReason != "" {
+		for i := range program.Rules {
+			decision.Items = append(decision.Items, partitions[i].unevaluated(program.Rules[i].Rule.ID)...)
+		}
 		return skipped(decision, previous, skipReason, skipNote)
 	}
 	// 第二遍：逐规则求值。
+	tolerance := quantizationTolerance(program)
 	contributions := make(map[string]quant.Decimal)
 	for i := range program.Rules {
 		rule := &program.Rules[i]
@@ -62,19 +66,23 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		var err error
 		switch rule.Rule.Type {
 		case dsl.RuleTypeRank:
-			result, err = evaluateRank(rule, frame, partitions[i], previous.Rules[rule.Rule.ID])
+			result, err = evaluateRank(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		case dsl.RuleTypeSignal:
-			result, err = evaluateSignal(rule, frame, partitions[i], previous.Rules[rule.Rule.ID])
+			result, err = evaluateSignal(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		default:
 			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
 		}
 		if err != nil {
+			// 出错的规则与排在它后面的规则都还没有产出明细：补齐可用标的，使每条规则的解释仍覆盖全部 E(r)。
+			for j := i; j < len(program.Rules); j++ {
+				decision.Items = append(decision.Items, partitions[j].unevaluated(program.Rules[j].Rule.ID)...)
+			}
 			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err))
 		}
 		allocated := quant.Zero()
 		for id, weight := range result.weights {
 			contributions[id] = contributions[id].Add(weight)
-			allocated = allocated.Add(abs(weight))
+			allocated = allocated.Add(abs(truncateWeightWith(weight, tolerance)))
 		}
 		summary := decision.Summary.Rules[rule.Rule.ID]
 		summary.Filtered, summary.Scored, summary.Selected, summary.Weighted = result.filtered, result.scored, result.selected, len(result.weights)
@@ -84,7 +92,7 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		decision.Items = append(decision.Items, result.items...)
 		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}
-	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, previous); err != nil {
+	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, previous, tolerance); err != nil {
 		return skipped(decision, previous, SkipConfigError, err.Error())
 	}
 	return decision

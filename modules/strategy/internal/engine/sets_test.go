@@ -226,3 +226,68 @@ rules:
 		t.Fatalf("A、B 应入选：%+v", decision.Items)
 	}
 }
+
+// 只经 bars[-1] 引用的因子，本期上游对该标的失败时同样视为缺数，不能凭上一根的旧值入选。
+func TestPreviousBarOnlyFactorFailureCountsAsMissing(t *testing.T) {
+	program := compile(t, `name: prevfail
+rules:
+  - id: r
+    type: rank
+    score: "bars[-1].f"
+    select: {top: 2}
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`, "f")
+	frame := frameOf(program, map[string]Row{
+		"A": {Values: map[string]float64{}, Previous: map[string]float64{"f": 5}},
+		"B": {Values: map[string]float64{}, Previous: map[string]float64{"f": 1}},
+	})
+	frame.FailedColumns = map[string]map[string]string{"f": {"A": FailedFactor}}
+	decision := evaluate(t, program, frame, State{})
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"B": "1"})
+	if item := findItem(t, decision, "r", "A"); item.Stage != StageMissing || item.Reason != "factor_failed:bars[-1].f" {
+		t.Fatalf("A 应记为上一根因子失败：%+v", item)
+	}
+	if decision.Summary.Rules["r"].Missing != 1 {
+		t.Fatalf("缺数应为 1：%+v", decision.Summary.Rules["r"])
+	}
+}
+
+// 整期守门跳过时，每条规则的解释明细仍覆盖全部 E(r)，每个标的只有一条。
+func TestGuardSkipExplainsEveryExpectedInstrument(t *testing.T) {
+	program := compile(t, missingStrategy, "m")
+	ids := numberedIDs("ALT", 100)
+	rows := map[string]Row{"BTC-USDT": values("m", 1)}
+	for i, id := range ids {
+		if i < 40 {
+			continue
+		}
+		rows[id] = values("m", i)
+	}
+	frame := frameOf(program, rows)
+	frame.Expected["r"] = append([]string(nil), ids...)
+	frame.Expected["btc"] = []string{"BTC-USDT"}
+	frame.Universe = append(append([]string(nil), ids...), "BTC-USDT")
+	decision := evaluate(t, program, frame, State{})
+	assertSkipped(t, decision, SkipTooManyMissing)
+	seen := map[string]int{}
+	for _, item := range decision.Items {
+		seen[item.RuleID+"/"+item.InstrumentID]++
+	}
+	for _, id := range ids {
+		if seen["r/"+id] != 1 {
+			t.Fatalf("规则 r 下 %s 应恰有一条明细：%d", id, seen["r/"+id])
+		}
+	}
+	if seen["btc/BTC-USDT"] != 1 {
+		t.Fatalf("规则 btc 下 BTC 应恰有一条明细：%d", seen["btc/BTC-USDT"])
+	}
+	if item := findItem(t, decision, "r", ids[99]); item.Stage != StageIdle || item.Reason != "period_skipped" {
+		t.Fatalf("可用标的应记为整期跳过未求值：%+v", item)
+	}
+	if len(decision.Items) != 101 {
+		t.Fatalf("明细总数应为 101：%d", len(decision.Items))
+	}
+}

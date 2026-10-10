@@ -65,6 +65,56 @@ describe("strategy store", () => {
     expect(store.results).toEqual([]);
   });
 
+  it("drops a late all-history response after switching back to a session-less current scope", async () => {
+    api.getInstance.mockResolvedValue(instance({ session_id: "", enabled: false }));
+    api.listStrategyTargets.mockResolvedValue({ targets: [] });
+    const late = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listStrategyResults.mockReturnValue(late.promise);
+    const store = useStrategyStore();
+    await store.loadInstanceDetail("instance-1");
+    const history = store.loadResultPage(1, 20, true);
+    await store.loadResultPage(1, 20, false);
+    late.resolve({ items: [{ result_id: "old-session" }], page: { total: 1 } });
+    await history;
+    expect(store.results).toEqual([]);
+    expect(store.totalResults).toBe(0);
+  });
+
+  it("keeps the full strategy catalog when a late paged list response arrives", async () => {
+    const definition = (id: string) => ({ strategy_id: id, name: id, dsl_yaml: "", dsl_hash: "h", created_at: "", updated_at: "" });
+    const all = Array.from({ length: 21 }, (_, index) => definition(`s${index}`));
+    const latePage = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listStrategies.mockImplementation((params: { page?: number; page_size?: number }) =>
+      params.page_size === 200 ? Promise.resolve({ items: all, page: { total: 21 } }) : latePage.promise
+    );
+    const store = useStrategyStore();
+    await store.loadAllStrategies(200);
+    expect(store.strategyCatalog).toHaveLength(21);
+    const paged = store.loadStrategies({ page: 1, page_size: 20 });
+    latePage.resolve({ items: all.slice(0, 20), page: { total: 21 } });
+    await paged;
+    expect(store.strategies).toHaveLength(20);
+    expect(store.strategyCatalog).toHaveLength(21);
+    expect(store.strategiesComplete).toBe(true);
+  });
+
+  it("invalidates the cached catalog and ignores an in-flight catalog request", async () => {
+    const definition = (id: string) => ({ strategy_id: id, name: id, dsl_yaml: "", dsl_hash: "h", created_at: "", updated_at: "" });
+    const pending = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listStrategies.mockReturnValueOnce(Promise.resolve({ items: [definition("s1")], page: { total: 1 } })).mockReturnValueOnce(pending.promise);
+    const store = useStrategyStore();
+    await store.loadAllStrategies(200);
+    expect(store.strategiesComplete).toBe(true);
+    // 保存了新定义：目录作废；此时在途的旧目录请求返回，也不能把旧目录重新标成完整。
+    const stale = store.loadAllStrategies(200);
+    store.invalidateStrategyCatalog();
+    expect(store.strategiesComplete).toBe(false);
+    pending.resolve({ items: [definition("s1")], page: { total: 1 } });
+    await stale;
+    expect(store.strategiesComplete).toBe(false);
+    expect(store.strategyCatalog).toHaveLength(1);
+  });
+
   it("applies a fast target response without waiting for slow history", async () => {
     const targets = deferred<{ targets: []; session_id: string; bar_end_time: string; valid_until: string; result_id: string }>();
     const results = deferred<{ items: []; page: { total: number } }>();

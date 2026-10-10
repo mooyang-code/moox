@@ -10,7 +10,7 @@ import (
 
 // evaluateSignal 执行固定池择时：先对旧理论持仓判 exit，再对候选判 entry，退出优先；
 // 持有标的的 exit 输入缺失视为退出；本期持有的标的平分规则预算。
-func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState) (ruleResult, error) {
+func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, tolerance quant.Decimal) (ruleResult, error) {
 	result := ruleResult{weights: map[string]quant.Decimal{}}
 	ruleID := rule.Rule.ID
 	availableSet := make(map[string]struct{}, len(sets.available))
@@ -68,7 +68,7 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 			weight = weight.Neg()
 		}
 		weights[id] = weight
-		result.items = append(result.items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageWeighted, Weight: weight.String()})
+		result.items = append(result.items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageWeighted, Weight: truncateWeightWith(weight, tolerance).String()})
 	}
 	result.weights = weights
 	result.state.Held = held
