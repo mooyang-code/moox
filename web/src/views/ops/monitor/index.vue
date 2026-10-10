@@ -60,8 +60,8 @@
           <h3>数据链路</h3>
           <span>点击阶段查看明细</span>
         </div>
-        <div class="pipeline">
-          <template v-for="(stage, index) in pipeline" :key="stage.stage">
+        <div class="data-stages">
+          <template v-for="(stage, index) in dataStages" :key="stage.stage">
             <button
               type="button"
               class="stage-card"
@@ -73,7 +73,7 @@
               <a-tag size="small" :color="statusColor(stage.status)">{{ statusLabel(stage.status) }}</a-tag>
               <small>{{ stageSummary(stage) }}</small>
             </button>
-            <icon-right v-if="index < pipeline.length - 1" class="stage-arrow" aria-hidden="true" />
+            <icon-right v-if="index < dataStages.length - 1" class="stage-arrow" aria-hidden="true" />
           </template>
         </div>
         <div v-if="selectedStage" class="stage-detail">
@@ -301,8 +301,8 @@ import {
   type HealthComponent,
   type HealthHost,
   type HealthOverview,
-  type HealthPipelineDataset,
-  type HealthPipelineStage
+  type HealthStageDataset,
+  type HealthDataStage
 } from "@/api/monitor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import ComponentDrawer from "./component-drawer.vue";
@@ -346,7 +346,7 @@ let timer: number | undefined;
 const alerts = computed(() => overview.value.alerts || []);
 const components = computed(() => overview.value.components || []);
 const hosts = computed(() => overview.value.hosts || []);
-const pipeline = computed(() => overview.value.pipeline || []);
+const dataStages = computed(() => overview.value.data_stages || []);
 const businessChecks = computed(() => overview.value.business_checks || []);
 const unregistered = computed(() => overview.value.unregistered || []);
 const matrix = computed(() => buildComponentMatrix(components.value));
@@ -363,16 +363,16 @@ const pushLabel = computed(() =>
 // 没有手动选过阶段时，默认展开最严重的异常阶段。
 const activeStage = computed(() => {
   if (chosenStage.value) return chosenStage.value === "none" ? "" : chosenStage.value;
-  const worst = [...pipeline.value].sort((left, right) => statusRank(right.status) - statusRank(left.status))[0];
+  const worst = [...dataStages.value].sort((left, right) => statusRank(right.status) - statusRank(left.status))[0];
   return worst && isAttention(worst.status) ? worst.stage || "" : "";
 });
-const selectedStage = computed(() => pipeline.value.find(stage => stage.stage === activeStage.value));
+const selectedStage = computed(() => dataStages.value.find(stage => stage.stage === activeStage.value));
 const stageChecks = computed(() => businessChecks.value.filter(check => check.stage && check.stage === activeStage.value));
 const stageAlerts = computed(() =>
   alerts.value.filter(alert => alert.stage && alert.stage === activeStage.value && alert.target?.kind !== "dataset")
 );
 
-function stageSummary(stage: HealthPipelineStage) {
+function stageSummary(stage: HealthDataStage) {
   const counts = stageCounts(stage);
   if (!counts.total) return "暂无数据集";
   return counts.attention ? `${counts.total} 个数据集，${counts.attention} 个需关注` : `${counts.total} 个数据集`;
@@ -382,7 +382,7 @@ function toggleStage(stage?: string) {
   chosenStage.value = stage && stage !== activeStage.value ? stage : "none";
 }
 
-function datasetRowKey(record: HealthPipelineDataset) {
+function datasetRowKey(record: HealthStageDataset) {
   return `${record.space_id}:${record.dataset_id}:${record.frequency}:${record.producer}`;
 }
 
@@ -580,7 +580,7 @@ onUnmounted(stopPolling);
   white-space: nowrap;
 }
 
-.pipeline {
+.data-stages {
   display: flex;
   align-items: stretch;
   gap: var(--moox-space-2);

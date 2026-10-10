@@ -62,7 +62,7 @@ export interface HealthComponent {
   status_since?: string;
 }
 
-export interface HealthPipelineDataset {
+export interface HealthStageDataset {
   space_id?: string;
   dataset_id?: string;
   frequency?: string;
@@ -75,11 +75,11 @@ export interface HealthPipelineDataset {
   raw_error?: string;
 }
 
-export interface HealthPipelineStage {
+export interface HealthDataStage {
   stage?: string;
   name?: string;
   status?: string;
-  datasets?: HealthPipelineDataset[];
+  datasets?: HealthStageDataset[];
 }
 
 export interface HealthBusinessCheck {
@@ -125,7 +125,7 @@ export interface HealthOverview {
   summary?: HealthSummary;
   alerts?: HealthAlert[];
   components?: HealthComponent[];
-  pipeline?: HealthPipelineStage[];
+  data_stages?: HealthDataStage[];
   business_checks?: HealthBusinessCheck[];
   hosts?: HealthHost[];
   unregistered?: HealthUnregistered[];

@@ -28,7 +28,7 @@ func healthOverviewToPB(value healthview.Overview) *monitorpb.HealthOverview {
 		},
 		Alerts:         make([]*monitorpb.HealthAlert, 0, len(value.Alerts)),
 		Components:     make([]*monitorpb.HealthComponent, 0, len(value.Components)),
-		Pipeline:       make([]*monitorpb.HealthPipelineStage, 0, len(value.Pipeline)),
+		DataStages:       make([]*monitorpb.HealthDataStage, 0, len(value.DataStages)),
 		BusinessChecks: make([]*monitorpb.HealthBusinessCheck, 0, len(value.BusinessChecks)),
 		Hosts:          make([]*monitorpb.HealthHost, 0, len(value.Hosts)),
 		Unregistered:   make([]*monitorpb.HealthUnregistered, 0, len(value.Unregistered)),
@@ -64,20 +64,20 @@ func healthOverviewToPB(value healthview.Overview) *monitorpb.HealthOverview {
 		}
 		out.Components = append(out.Components, component)
 	}
-	for _, stage := range value.Pipeline {
-		item := &monitorpb.HealthPipelineStage{
+	for _, stage := range value.DataStages {
+		item := &monitorpb.HealthDataStage{
 			Stage: stage.Stage, Name: stage.Name, Status: stage.Status,
-			Datasets: make([]*monitorpb.HealthPipelineDataset, 0, len(stage.Datasets)),
+			Datasets: make([]*monitorpb.HealthStageDataset, 0, len(stage.Datasets)),
 		}
 		for _, dataset := range stage.Datasets {
-			item.Datasets = append(item.Datasets, &monitorpb.HealthPipelineDataset{
+			item.Datasets = append(item.Datasets, &monitorpb.HealthStageDataset{
 				SpaceId: dataset.SpaceID, DatasetId: dataset.DatasetID, Frequency: dataset.Frequency,
 				Producer: dataset.Producer, Status: dataset.Status, WatermarkAt: timeToString(dataset.WatermarkAt),
 				LagSeconds: dataset.LagSeconds, LastSuccessAt: timeToString(dataset.LastSuccessAt),
 				Reason: dataset.Reason, RawError: dataset.RawError,
 			})
 		}
-		out.Pipeline = append(out.Pipeline, item)
+		out.DataStages = append(out.DataStages, item)
 	}
 	for _, item := range value.BusinessChecks {
 		out.BusinessChecks = append(out.BusinessChecks, &monitorpb.HealthBusinessCheck{

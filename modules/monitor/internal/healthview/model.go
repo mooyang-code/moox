@@ -42,7 +42,7 @@ type Overview struct {
 	Summary        Summary
 	Alerts         []Alert
 	Components     []Component
-	Pipeline       []PipelineStage
+	DataStages       []DataStage
 	BusinessChecks []BusinessCheck
 	Hosts          []Host
 	Unregistered   []Unregistered
@@ -89,17 +89,17 @@ type Component struct {
 	StatusSince                               time.Time
 }
 
-// PipelineDataset 是数据链路中的一个数据集频率。
-type PipelineDataset struct {
+// StageDataset 是数据链路中的一个数据集频率。
+type StageDataset struct {
 	SpaceID, DatasetID, Frequency, Producer, Status, Reason, RawError string
 	WatermarkAt, LastSuccessAt                                        time.Time
 	LagSeconds                                                        int64
 }
 
-// PipelineStage 是数据链路的一个阶段。
-type PipelineStage struct {
+// DataStage 是数据链路的一个阶段。
+type DataStage struct {
 	Stage, Name, Status string
-	Datasets            []PipelineDataset
+	Datasets            []StageDataset
 }
 
 // BusinessCheck 是一项业务检查；Stage 是它所属的数据链路阶段，不属于数据链路时为空。

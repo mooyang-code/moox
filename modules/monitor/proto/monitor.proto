@@ -100,7 +100,7 @@ message HealthComponent {
   string status_since = 9;
 }
 
-message HealthPipelineDataset {
+message HealthStageDataset {
   string space_id = 1;
   string dataset_id = 2;
   string frequency = 3;
@@ -113,12 +113,12 @@ message HealthPipelineDataset {
   string raw_error = 10;
 }
 
-// HealthPipelineStage 是数据链路的一个阶段：stage 为 collect、storage、factor、trade。
-message HealthPipelineStage {
+// HealthDataStage 是数据链路的一个阶段：stage 为 collect、storage、factor、trade。
+message HealthDataStage {
   string stage = 1;
   string name = 2;
   string status = 3;
-  repeated HealthPipelineDataset datasets = 4;
+  repeated HealthStageDataset datasets = 4;
 }
 
 // HealthBusinessCheck 是一项业务检查：kind 为 market_fetch（行情采集协调）、canary（行情探针）、data_delivery（数据投递）
@@ -169,7 +169,7 @@ message HealthOverview {
   HealthSummary summary = 2;
   repeated HealthAlert alerts = 3;
   repeated HealthComponent components = 4;
-  repeated HealthPipelineStage pipeline = 5;
+  repeated HealthDataStage data_stages = 5;
   repeated HealthBusinessCheck business_checks = 6;
   repeated HealthHost hosts = 7;
   repeated HealthUnregistered unregistered = 8;

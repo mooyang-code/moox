@@ -29,7 +29,7 @@ describe("monitor page", () => {
     });
   });
 
-  it("shows alerts, the pipeline, the component matrix, hosts and notification settings", () => {
+  it("shows alerts, the data stages, the component matrix, hosts and notification settings", () => {
     const source = read("index.vue");
     for (const token of [
       "<h2>监控告警</h2>",

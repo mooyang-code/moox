@@ -3,7 +3,7 @@ import type {
   HealthComponent,
   HealthHost,
   HealthOverview,
-  HealthPipelineStage,
+  HealthDataStage,
   HealthTarget,
   WireInt64
 } from "@/api/monitor";
@@ -244,7 +244,7 @@ export function overallSentence(overview: HealthOverview) {
 }
 
 /** 数据链路阶段的数据集计数：总数和需关注的个数。 */
-export function stageCounts(stage: HealthPipelineStage) {
+export function stageCounts(stage: HealthDataStage) {
   const datasets = stage.datasets || [];
   return { total: datasets.length, attention: datasets.filter(item => isAttention(item.status)).length };
 }

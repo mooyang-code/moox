@@ -269,7 +269,7 @@
       "StatusSince": "2026-10-09T03:58:30Z"
     }
   ],
-  "Pipeline": [
+  "DataStages": [
     {
       "Stage": "collect",
       "Name": "采集",

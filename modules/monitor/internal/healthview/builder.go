@@ -101,7 +101,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	if out.Alerts, err = b.buildAlerts(ctx, spaceID, agents); err != nil {
 		return Overview{}, err
 	}
-	out.Pipeline = buildPipeline(facts, out.Alerts)
+	out.DataStages = buildDataStages(facts, out.Alerts)
 	out.BusinessChecks = buildBusinessChecks(facts.BusinessChecks)
 	out.Hosts = buildHosts(facts.GatewayHosts, facts.GatewayHostsErr == nil, agents, out.Alerts)
 	out.Unregistered = buildUnregistered(facts.Unregistered)
@@ -474,8 +474,8 @@ func alertTarget(spaceID, checkID string) (Target, string) {
 	return Target{Kind: TargetBusiness, SpaceID: spaceID}, ""
 }
 
-// pipelineStages 是数据链路的阶段，按数据流向排列。
-var pipelineStages = []struct{ id, name string }{
+// dataStages 是数据链路的阶段，按数据流向排列。
+var dataStages = []struct{ id, name string }{
 	{StageCollect, "采集"},
 	{StageStorage, "存储与视图"},
 	{StageFactor, "因子"},
@@ -511,16 +511,16 @@ func businessStage(kind string) string {
 	}
 }
 
-// buildPipeline 生成数据链路：阶段状态取该阶段数据集、业务检查和告警中最严重的一个，没有任何数据时为「不探测」。
-func buildPipeline(facts observability.Overview, alerts []Alert) []PipelineStage {
+// buildDataStages 生成数据链路：阶段状态取该阶段数据集、业务检查和告警中最严重的一个，没有任何数据时为「不探测」。
+func buildDataStages(facts observability.Overview, alerts []Alert) []DataStage {
 	storageScopes := make(map[string]struct{})
 	for _, item := range facts.Datasets {
 		if strings.EqualFold(strings.TrimSpace(item.Producer), "storage") {
 			storageScopes[datasetScopeKey(item.SpaceID, item.DatasetID, item.Freq)] = struct{}{}
 		}
 	}
-	datasets := make(map[string][]PipelineDataset, len(pipelineStages))
-	statuses := make(map[string][]string, len(pipelineStages))
+	datasets := make(map[string][]StageDataset, len(dataStages))
+	statuses := make(map[string][]string, len(dataStages))
 	for _, item := range facts.Datasets {
 		if isHostMonitoringDataset(item) || collectorCoveredByStorage(item, storageScopes) {
 			continue
@@ -528,7 +528,7 @@ func buildPipeline(facts observability.Overview, alerts []Alert) []PipelineStage
 		status := normalizeStatus(item.Status)
 		reason, raw := datasetReason(item)
 		stage := datasetStage(item.Producer)
-		datasets[stage] = append(datasets[stage], PipelineDataset{
+		datasets[stage] = append(datasets[stage], StageDataset{
 			SpaceID: item.SpaceID, DatasetID: item.DatasetID, Frequency: item.Freq, Producer: item.Producer,
 			Status: status, WatermarkAt: item.OutputWatermarkAt.UTC(), LagSeconds: item.LagSeconds,
 			LastSuccessAt: item.LastSuccessAt.UTC(), Reason: reason, RawError: raw,
@@ -545,14 +545,14 @@ func buildPipeline(facts observability.Overview, alerts []Alert) []PipelineStage
 			statuses[alert.Stage] = append(statuses[alert.Stage], StatusDown)
 		}
 	}
-	out := make([]PipelineStage, 0, len(pipelineStages))
-	for _, definition := range pipelineStages {
-		stage := PipelineStage{Stage: definition.id, Name: definition.name, Status: StatusUnchecked, Datasets: datasets[definition.id]}
+	out := make([]DataStage, 0, len(dataStages))
+	for _, definition := range dataStages {
+		stage := DataStage{Stage: definition.id, Name: definition.name, Status: StatusUnchecked, Datasets: datasets[definition.id]}
 		if len(statuses[definition.id]) > 0 {
 			stage.Status = worst(statuses[definition.id]...)
 		}
 		if stage.Datasets == nil {
-			stage.Datasets = []PipelineDataset{}
+			stage.Datasets = []StageDataset{}
 		}
 		sort.Slice(stage.Datasets, func(i, j int) bool {
 			left, right := stage.Datasets[i], stage.Datasets[j]
@@ -752,7 +752,7 @@ func summarize(overview Overview) Summary {
 	for _, item := range overview.BusinessChecks {
 		count(item.Status)
 	}
-	for _, stage := range overview.Pipeline {
+	for _, stage := range overview.DataStages {
 		for _, item := range stage.Datasets {
 			count(item.Status)
 		}

@@ -255,8 +255,8 @@ func TestOverviewWithoutSourcesHasStableSections(t *testing.T) {
 	require.True(t, got.GeneratedAt.Equal(snapshotNow))
 	require.NotNil(t, got.Alerts)
 	require.NotNil(t, got.Components)
-	require.Len(t, got.Pipeline, 4)
-	for _, stage := range got.Pipeline {
+	require.Len(t, got.DataStages, 4)
+	for _, stage := range got.DataStages {
 		require.Equal(t, StatusUnchecked, stage.Status)
 		require.NotNil(t, stage.Datasets)
 	}
