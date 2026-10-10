@@ -241,6 +241,9 @@ main() {
     "${ROOT}/releases/${previous}/stop.sh" "${removed[@]}"
   fi
   "${release}/stop.sh" "${selected[@]}"
+  # 启动失败切回时要恢复原来的 .previous，回滚才能继续回到更早的发布。
+  local earlier
+  earlier="$(cat "${ROOT}/releases/.previous" 2>/dev/null || true)"
   [[ -z "${previous}" ]] || printf '%s\n' "${previous}" >"${ROOT}/releases/.previous"
   switch_current "${RELEASE_ID}"
   write_wrappers
@@ -259,7 +262,11 @@ main() {
         grep -qx -- "${name}" "${ROOT}/releases/${previous}/runtime/components" && restart+=("${name}")
       done
       [[ ${#restart[@]} -eq 0 ]] || "${ROOT}/releases/${previous}/start.sh" "${restart[@]}" || true
-      rm -f "${ROOT}/releases/.previous"
+      if [[ -n "${earlier}" ]]; then
+        printf '%s\n' "${earlier}" >"${ROOT}/releases/.previous"
+      else
+        rm -f "${ROOT}/releases/.previous"
+      fi
     fi
     exit 1
   fi

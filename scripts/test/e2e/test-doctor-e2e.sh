@@ -16,8 +16,9 @@ if rg -n 'ActivateDataset\(' "${ROOT}/modules/cli/internal/doctor/storage_activa
   exit 1
 fi
 
-bash -n "${ROOT}/scripts/deploy/deploy-moox.sh"
-grep -q 'MOOX_SERVICE_NAME=${service_name}' "${ROOT}/scripts/deploy/deploy-moox.sh"
+# 部署时每个组件都带上身份环境变量（Doctor 按它关联上报与部署）。
+grep -Fq '"MOOX_SERVICE_NAME=" + id' "${ROOT}/modules/cli/internal/setup/release/components.go"
+grep -Fq '"MOOX_INSTANCE_ID=" + id + "@" + r.host.ID' "${ROOT}/modules/cli/internal/setup/release/components.go"
 
 storage_worktree_after="$(git -C "${ROOT}" status --short -- modules/storage)"
 if [[ "${storage_worktree_after}" != "${storage_worktree_before}" ]]; then

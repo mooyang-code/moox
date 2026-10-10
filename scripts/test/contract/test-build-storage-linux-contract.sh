@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 SCRIPT="${ROOT}/scripts/build/build-storage-linux.sh"
-DEPLOY_SCRIPT="${ROOT}/scripts/deploy/deploy-moox.sh"
+BUILDER="${ROOT}/modules/cli/internal/setup/deploy/build.go"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-build-storage-linux.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
@@ -11,12 +11,13 @@ command -v jq >/dev/null 2>&1 || { echo 'jq is required' >&2; exit 1; }
 ! grep -Fq '106.53.107.122' "${SCRIPT}"
 grep -Fq 'REMOTE_ROOT="${REMOTE_ROOT:-moox-build}"' "${SCRIPT}"
 grep -Fq '$(dirname "${BASH_SOURCE[0]}")/../.."' "${SCRIPT}"
-grep -Fq '"${ROOT}/scripts/build/build-storage-linux.sh"' "${DEPLOY_SCRIPT}"
-grep -Fq '"${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1' "${DEPLOY_SCRIPT}"
-grep -Fq '"${TARGET_GOARCH}" == amd64' "${DEPLOY_SCRIPT}"
-grep -Fq 'TARGET_GOOS="${HOST_GOOS}" TARGET_GOARCH="${HOST_GOARCH}"' "${DEPLOY_SCRIPT}"
-if grep -Fq '"${ROOT}/scripts/build/build.sh" all' "${DEPLOY_SCRIPT}"; then
-  echo 'deploy-moox must build only enabled services and use the compile host for cross-platform Storage' >&2
+# moox-cli 部署时只构建选中组件的目标；交叉编译 CGO 组件交给编译主机。
+grep -Fq '"scripts/build/build-storage-linux.sh"' "${BUILDER}"
+grep -Fq '"MOOX_STORAGE_BUILD_HOST_ROLE=compile"' "${BUILDER}"
+grep -Fq '"MOOX_LINUX_CGO_TARGET=" + target' "${BUILDER}"
+grep -Fq '"CONFIG=" + b.ConfigFile' "${BUILDER}"
+if grep -Fq '"all"' "${BUILDER}"; then
+  echo 'moox-cli 部署只能构建选中组件的目标' >&2
   exit 1
 fi
 
@@ -30,7 +31,7 @@ trap 'rm -rf "${TMP_ROOT}"; rm -f "${ROOT}/moox.toml.contract-test"' EXIT
 
 cat >"${FAKE_BIN}/moox-cli" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' '{"hosts":[{"name":"storage","address":"192.0.2.88","port":2200,"username":"storage-builder","role":"other"},{"name":"compile","address":"192.0.2.77","port":2222,"username":"builder","role":"compile"}]}'
+printf '%s\n' '{"hosts":[{"name":"storage","address":"192.0.2.88","port":2200,"username":"storage-builder","role":"host"},{"name":"compile","address":"192.0.2.77","port":2222,"username":"builder","role":"compile"}]}'
 EOF
 cat >"${FAKE_BIN}/rsync" <<'EOF'
 #!/usr/bin/env bash

@@ -1,10 +1,10 @@
-.PHONY: build build-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-matrix test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-runtime-scripts package-skill clean proto
 
 build:
 	./scripts/build/build.sh
 
-build-gateway:
-	./scripts/build/build.sh gateway
+build-host-gateway:
+	./scripts/build/build.sh host-gateway
 
 build-storage-linux:
 	./scripts/build/build.sh cli
@@ -74,17 +74,8 @@ test-greenfield-contract:
 release:
 	./scripts/release/release.sh
 
-release-binaries:
-	./scripts/build/build-release-binaries.sh
-
 release-matrix:
 	./scripts/release/release-matrix.sh
-
-deploy:
-	./scripts/deploy/deploy-moox.sh $(ARGS)
-
-publish-release-binaries:
-	./scripts/release/publish-release-binaries.sh $(ARGS)
 
 test: test-go test-web
 
@@ -105,7 +96,7 @@ proto-check:
 
 verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
-verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
+verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-runtime-scripts test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
@@ -113,18 +104,12 @@ verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
 	(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
-	bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
-	bash scripts/test/contract/test-deploy-moox-control-profile.sh
-	bash scripts/test/contract/test-deploy-moox-storage-profile.sh
-	bash scripts/test/contract/test-deploy-moox-storage-view.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 
 test-caddy:
-	bash scripts/test/contract/test-caddy-config.sh
-	bash scripts/test/contract/test-deploy-moox-https.sh
+	(cd modules/cli && go test -count=1 ./internal/setup/release -run 'Caddy|TLSMode')
 	bash scripts/test/contract/test-install-caddy-ca.sh
-	bash skills/moox/scripts/test-caddy-prerequisite.sh
 	bash skills/moox/scripts/test-caddy-ca.sh
 
 test-collector-scf-package-contract:
@@ -138,7 +123,6 @@ test-skill-contracts:
 	bash skills/moox/scripts/test-data-query-contract.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
-	bash skills/moox/scripts/test-hostagent-deploy.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
 
 test-script-e2e:
@@ -146,14 +130,13 @@ test-script-e2e:
 
 test-scripts: test-script-contracts test-script-e2e
 
-test-gateway-deploy:
-	bash scripts/test/contract/test-deploy-moox-host-gateway.sh
+# 主机运行脚本（安装器、启停、暂停、健康检查）的契约测试，需要 Linux。
+test-runtime-scripts:
+	bash scripts/test/contract/test-runtime-scripts.sh
 
-test-strategy-deploy:
-	bash scripts/test/contract/test-deploy-moox-strategy.sh
-
-test-strategy-deploy-e2e:
-	bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh
+# 部署渲染（G13 快照）与运行脚本。
+test-gateway-deploy: test-runtime-scripts
+	(cd modules/cli && go test -count=1 ./internal/setup/...)
 
 package-skill:
 	./scripts/build/package-skill.sh

@@ -296,10 +296,11 @@ start_component() {
   echo "${name}: 启动"
   local detach=()
   command -v setsid >/dev/null 2>&1 && detach=(setsid)
+  # 组件进程不能继承维护锁的文件描述符（9），否则安装器退出后锁仍被组件持有，健康检查会一直跳过。
   (
     cd "${RELEASE}/${COMPONENT_WORKDIR}"
     nohup "${detach[@]+"${detach[@]}"}" env -i "${env[@]}" "${binary}" "${COMPONENT_ARGS[@]+"${COMPONENT_ARGS[@]}"}" \
-      </dev/null >>"${log_dir}/stdout.log" 2>&1 &
+      </dev/null >>"${log_dir}/stdout.log" 2>&1 9>&- &
     echo $! >"$(pid_file "${name}")"
   )
   local pid waited=0 timeout="${COMPONENT_STARTUP_GRACE}"

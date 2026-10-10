@@ -1,6 +1,5 @@
 ROOT := ../..
 APP_NAME := moox-admin
-SERVER ?= $(MOOX_DEV_SSH_TARGET)
 
 .PHONY: help build build-linux build-darwin build-windows build-all clean deps lint install release deploy linux darwin windows
 
@@ -11,7 +10,7 @@ help:
 	@echo "  make build        - build moox-admin for local platform"
 	@echo "  make build-linux  - build moox-admin for linux/amd64"
 	@echo "  make release      - create repository release package"
-	@echo "  make deploy SERVER=user@host - deploy admin through scripts/deploy/deploy-moox.sh"
+	@echo "  make deploy       - 按 moox.toml 的部署表重新部署（moox-cli setup deploy-service）"
 
 build:
 	@cd $(ROOT) && ./scripts/build/build.sh admin
@@ -45,11 +44,7 @@ release:
 	@cd $(ROOT) && ./scripts/release/release.sh
 
 deploy:
-	@if [ -z "$(SERVER)" ]; then \
-		echo "请指定 SERVER=user@host，或设置 MOOX_DEV_SSH_TARGET"; \
-		exit 1; \
-	fi
-	@cd $(ROOT) && ./scripts/deploy/deploy-moox.sh --target "$(SERVER)" --no-storage --no-web-host --no-cloudnode --no-collector
+	@cd $(ROOT) && go run ./modules/cli/cmd/moox-cli setup deploy-service --component admin
 
 linux: build-linux
 darwin: build-darwin
