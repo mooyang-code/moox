@@ -12,6 +12,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // 重建切换活动索引后，写入围栏要随之转到新索引：行在切换前写入、周期完成事件在切换后才到（或切换时还在队列里）的
@@ -202,5 +203,39 @@ func TestAppliedFencePersistFailureLogsOnce(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(service.readyFenceDir, "applied.json")); err != nil {
 		t.Fatalf("失败期间的更新应在恢复后落盘：%v", err)
+	}
+}
+
+// 行围栏的更新与激活的继承互斥：激活持有 runtime.mu 继承并取快照时，旧索引推进到的位置新索引一定也有。
+// 行处理在锁外更新围栏时，快照里会出现旧索引已推进、新索引还没有的状态（随后激活提交并崩溃，重启后围栏缺这一行）。
+func TestAppliedFenceUpdateIsAtomicWithActivationInheritance(t *testing.T) {
+	service := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a"})
+	runtime := service.views[viewRef{spaceID: "quant", viewID: "source-view"}]
+	runtime.mu.Lock()
+	runtime.next, runtime.status = "source-view-b", "ready"
+	runtime.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for seq := uint64(1); seq <= 20000; seq++ {
+			service.noteAppliedFromPayload("quant", &storageeventpb.DatasetRowsUpserted{DatasetId: "prices", SourceNodeId: "node-a", SourceStoreId: "store-a", SourceSequence: seq})
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+		}
+		runtime.mu.Lock()
+		service.inheritAppliedFence("source-view-a", "source-view-b")
+		a := service.appliedSequence("quant", "source-view", "source-view-a", "node-a", "store-a")
+		b := service.appliedSequence("quant", "source-view", "source-view-b", "node-a", "store-a")
+		runtime.mu.Unlock()
+		if b < a {
+			t.Errorf("激活时继承之后新索引的围栏不应落后于旧索引：A=%d B=%d", a, b)
+			<-done
+			return
+		}
 	}
 }

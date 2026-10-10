@@ -371,15 +371,17 @@ func (s *Service) noteAppliedFromPayload(spaceID string, payload *storagepb.Data
 		if runtime == nil {
 			continue
 		}
+		// 索引的选择与两个围栏的更新必须在同一次 runtime.mu 临界区内完成（锁方向 runtime.mu → appliedFenceMu，与
+		// inheritAppliedFence 一致）：释放锁之后再更新，激活可以在两者之间继承并落盘围栏，落盘的快照里旧索引已推进、新索引
+		// 还没有；随后激活提交、进程退出，重启后活动索引是新索引，围栏却缺了这一行，对应的周期事件会一直等下去。
 		runtime.mu.Lock()
-		activeID, nextID := runtime.active, runtime.next
-		runtime.mu.Unlock()
-		if activeID != "" {
+		if activeID := runtime.active; activeID != "" {
 			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), activeID, payload.GetSourceNodeId(), payload.GetSourceStoreId(), payload.GetSourceSequence())
 		}
-		if nextID != "" {
+		if nextID := runtime.next; nextID != "" {
 			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), nextID, payload.GetSourceNodeId(), payload.GetSourceStoreId(), payload.GetSourceSequence())
 		}
+		runtime.mu.Unlock()
 	}
 }
 
