@@ -66,6 +66,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/eventbus"
@@ -137,6 +138,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/admin"
@@ -190,6 +192,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/host-gateway"
@@ -239,6 +242,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/host-agent"
@@ -283,6 +287,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/web-host"
@@ -315,7 +320,8 @@
         "MOOX_EVENTBUS_NATS_URL=tls://127.0.0.1:4222",
         "MOOX_METRICS_EVENTBUS_URL=tls://127.0.0.1:4222",
         "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=/data/moox/prod/secrets/eventbus/metrics-publisher.yaml",
-        "MOOX_DATASET_HEALTH_POLICY=/data/moox/prod/current/monitor/config/dataset-health-policy.yaml"
+        "MOOX_DATASET_HEALTH_POLICY=/data/moox/prod/current/monitor/config/dataset-health-policy.yaml",
+        "MOOX_DATASET_HEALTH_POLICY_HASH=sha256:ad6a29f8dfa8881cb8df719d0fa28eac854b525dca8009751df108efb830e650"
       ],
       "SecretEnv": [
         "health-auth.env",
@@ -343,6 +349,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/monitor"
@@ -401,6 +408,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/cloudnode"
@@ -462,6 +470,7 @@
         "URL": ""
       },
       "StartupGrace": 120,
+      "NeedsMetadata": true,
       "StopTimeout": 30,
       "DataDirs": [
         "data/collector"
@@ -523,6 +532,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/factor-mgr"
@@ -582,6 +592,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/strategy"
@@ -626,6 +637,7 @@
         "URL": "https://203.0.113.10:9527/"
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/console-proxy"

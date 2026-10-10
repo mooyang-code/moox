@@ -48,6 +48,8 @@ type Options struct {
 	// ReuseBinaries 时发布包不带二进制，全部复用当前发布（只更新配置、密钥和证书）。
 	ReuseBinaries bool
 	NoStart       bool
+	// FirstInstall 是空环境的首次启动：依赖 setup init 元数据的组件（Collector）起不来不算安装失败。
+	FirstInstall bool
 	// MaintenanceLockHeld 表示调用方已持有主机的维护锁，安装器不再加锁。
 	MaintenanceLockHeld bool
 
@@ -244,6 +246,9 @@ func (d *Deployer) Deploy(ctx context.Context, hostID string, opts Options) (Res
 	}
 	if opts.NoStart {
 		args = append(args, "--no-start")
+	}
+	if opts.FirstInstall {
+		args = append(args, "--first-install")
 	}
 	if opts.MaintenanceLockHeld {
 		args = append(args, "--maintenance-lock-held")

@@ -36,7 +36,7 @@ load_component() {
   local name="$1"
   runtime_has_component "${name}" || { echo "${name}: 这台主机上没有部署这个组件" >&2; return 1; }
   unset COMPONENT_BINARY COMPONENT_WORKDIR COMPONENT_ARGS COMPONENT_ENV COMPONENT_SECRET_ENV COMPONENT_DATA_DIRS \
-    COMPONENT_HEALTH_KIND COMPONENT_HEALTH_PORT COMPONENT_HEALTH_URL COMPONENT_STARTUP_GRACE COMPONENT_STOP_TIMEOUT
+    COMPONENT_HEALTH_KIND COMPONENT_HEALTH_PORT COMPONENT_HEALTH_URL COMPONENT_STARTUP_GRACE COMPONENT_STOP_TIMEOUT COMPONENT_NEEDS_METADATA
   unset -f component_prestart component_poststart 2>/dev/null || true
   # shellcheck source=/dev/null
   source "${RELEASE}/runtime/${name}.env"

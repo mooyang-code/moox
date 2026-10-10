@@ -63,6 +63,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/host-gateway"
@@ -112,6 +113,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/host-agent"
@@ -169,6 +171,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 120,
       "DataDirs": [
         "data/storage-node"
@@ -228,6 +231,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 120,
       "DataDirs": [
         "data/storage"
@@ -296,6 +300,7 @@
         "URL": ""
       },
       "StartupGrace": 900,
+      "NeedsMetadata": false,
       "StopTimeout": 120,
       "DataDirs": [
         "data/storage"
@@ -345,6 +350,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/access"

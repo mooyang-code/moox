@@ -1,6 +1,8 @@
 package release
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -272,7 +274,13 @@ func renderMonitor(r *renderer, c *Component) error {
 	c.EventBusFiles = append(c.EventBusFiles, "monitor-observability.yaml", eventBusCA)
 	db := r.dataPath("monitor", "monitor.db")
 	policy := r.currentPath("monitor", "config", "dataset-health-policy.yaml")
-	c.Env = append(c.Env, "MOOX_DATASET_HEALTH_POLICY="+policy)
+	// 策略文件和它的校验和一起交给 Monitor：校验和不一致或缺失时 Monitor 拒绝启动，防止策略被悄悄改动。
+	policyRaw, err := r.readRepositoryFile("config/setup/dataset-health-policy.yaml")
+	if err != nil {
+		return err
+	}
+	policySum := sha256.Sum256(policyRaw)
+	c.Env = append(c.Env, "MOOX_DATASET_HEALTH_POLICY="+policy, "MOOX_DATASET_HEALTH_POLICY_HASH=sha256:"+hex.EncodeToString(policySum[:]))
 	c.Prestart = []string{shellCommand("$RELEASE/bin/moox-monitor-cli", "init", "--db-path", db)}
 	if err := r.copyFile("config/setup/dataset-health-policy.yaml", "monitor/config/dataset-health-policy.yaml"); err != nil {
 		return err
@@ -310,6 +318,8 @@ func renderCollector(r *renderer, c *Component) error {
 	c.SharedSecrets = append(c.SharedSecrets, secretStorageInternalAuth)
 	c.EventBusFiles = append(c.EventBusFiles, "market-fetch-publisher.yaml", "collector-market-fetch-consumer.yaml", eventBusCA)
 	c.StartupGrace = 120
+	// 启动时要为每个采集任务确认结果数据集，需要 Storage 里已有标签：空环境里要等 setup init 之后才能启动。
+	c.NeedsMetadata = true
 	db := r.dataPath("collector", "moox_collector.db")
 	if spaces := r.marketFetchSpaces(); spaces != "" {
 		c.Env = append(c.Env, "MOOX_SPACE_IDS="+spaces)

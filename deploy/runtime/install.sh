@@ -11,7 +11,7 @@
 # 回滚：切回上一个发布并重启全部组件。
 set -euo pipefail
 
-ROOT="" ARCHIVE="" RELEASE_ID="" COMPONENTS="" GENERATE="" NO_START=0 LOCK_HELD=0 ROLLBACK=0
+ROOT="" ARCHIVE="" RELEASE_ID="" COMPONENTS="" GENERATE="" NO_START=0 LOCK_HELD=0 ROLLBACK=0 FIRST_INSTALL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root) ROOT="${2:-}"; shift 2 ;;
@@ -20,6 +20,7 @@ while [[ $# -gt 0 ]]; do
     --components) COMPONENTS="${2:-}"; shift 2 ;;
     --generate-secrets) GENERATE="${2:-}"; shift 2 ;;
     --no-start) NO_START=1; shift ;;
+    --first-install) FIRST_INSTALL=1; shift ;;
     --maintenance-lock-held) LOCK_HELD=1; shift ;;
     --rollback) ROLLBACK=1; shift ;;
     *) echo "install: 未知参数 $1" >&2; exit 2 ;;
@@ -276,7 +277,9 @@ main() {
     prune_releases "${RELEASE_ID}" "${previous}"
     return 0
   fi
-  if ! "${release}/start.sh" "${selected[@]}"; then
+  local -a start_flags=()
+  [[ "${FIRST_INSTALL}" != 1 ]] || start_flags=(--first-install)
+  if ! "${release}/start.sh" "${start_flags[@]+"${start_flags[@]}"}" "${selected[@]}"; then
     if [[ -n "${previous}" ]]; then
       echo "install: 启动失败，切回发布 ${previous}" >&2
       "${release}/stop.sh" "${selected[@]}" || true

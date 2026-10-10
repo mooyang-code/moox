@@ -62,6 +62,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/host-gateway"
@@ -111,6 +112,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/host-agent"
@@ -160,6 +162,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/access"
@@ -204,6 +207,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/egress-proxy"
@@ -260,6 +264,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
+      "NeedsMetadata": false,
       "StopTimeout": 30,
       "DataDirs": [
         "data/trade"

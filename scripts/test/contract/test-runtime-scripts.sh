@@ -106,7 +106,10 @@ component_poststart() {
 HOOKS
   fi
   cp "${FAKE}" "${stage}/bin/moox-test-alpha"
-  if [[ "${bad}" == --bad-beta ]]; then
+  if [[ "${bad}" == --bad-beta-meta ]]; then
+    printf "COMPONENT_NEEDS_METADATA='1'\n" >>"${stage}/runtime/beta.env"
+  fi
+  if [[ "${bad}" == --bad-beta || "${bad}" == --bad-beta-meta ]]; then
     printf 'moox-test-alpha\n' >"${stage}/runtime/binaries"
   else
     printf 'moox-test-alpha\nmoox-test-beta\n' >"${stage}/runtime/binaries"
@@ -150,6 +153,7 @@ for id in r1 r2 r3 r4 r5 r6; do
 done
 make_release r7 --bad-beta
 make_release r8 --hooks
+make_release r9 --bad-beta-meta
 
 # 1. 首次安装：全部组件启动，根目录有转到当前发布的脚本。
 install_release r1 >/dev/null
@@ -285,6 +289,15 @@ if "${HOST_ROOT}/start.sh" alpha >/dev/null 2>&1; then
 fi
 running alpha && fail "密钥文件缺失时 alpha 不应在运行"
 pass "钩子读得到密钥环境变量，密钥文件缺失时拒绝启动"
+
+# 14. 首次安装：依赖元数据的组件起不来不算失败（等 setup init 之后由健康检查拉起）；普通安装仍然失败并切回。
+if install_release r9 >/dev/null 2>&1; then
+  fail "没有 --first-install 时，依赖元数据的组件起不来也应当让安装失败"
+fi
+install_release r9 --first-install >/dev/null 2>&1 || fail "--first-install 时依赖元数据的组件起不来不应让安装失败"
+[[ "$(current_release)" == r9 ]] || fail "首次安装后 current 应指向 r9，当前是 $(current_release)"
+running beta && fail "beta 缺少二进制，不应在运行"
+pass "首次安装容忍依赖元数据的组件起不来"
 
 "${HOST_ROOT}/stop.sh" >/dev/null
 running alpha && fail "stop.sh 后 alpha 仍在运行"

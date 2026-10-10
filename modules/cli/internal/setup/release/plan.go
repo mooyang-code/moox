@@ -91,6 +91,8 @@ type Component struct {
 	Health        Health
 	// StartupGrace 是启动后健康检查失败也不重启的宽限时间（秒）。
 	StartupGrace int
+	// NeedsMetadata 表示组件启动时要读 Storage 里的元数据（空间、标签、数据集），空环境里要等 setup init 导入之后才能启动。
+	NeedsMetadata bool
 	// StopTimeout 是停止时等待进程退出的时间（秒），超时后强制结束。
 	StopTimeout int
 	// DataDirs 是 <root> 下要预先创建的数据目录。
@@ -325,6 +327,11 @@ func componentSpec(c Component) ([]byte, error) {
 	scalar("COMPONENT_HEALTH_URL", c.Health.URL)
 	scalar("COMPONENT_STARTUP_GRACE", strconv.Itoa(c.StartupGrace))
 	scalar("COMPONENT_STOP_TIMEOUT", strconv.Itoa(c.StopTimeout))
+	needsMetadata := "0"
+	if c.NeedsMetadata {
+		needsMetadata = "1"
+	}
+	scalar("COMPONENT_NEEDS_METADATA", needsMetadata)
 	hook := func(name string, commands []string) {
 		if len(commands) == 0 {
 			return

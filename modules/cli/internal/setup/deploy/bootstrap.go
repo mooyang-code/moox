@@ -77,7 +77,7 @@ func (d *Deployer) Bootstrap(ctx context.Context, opts BootstrapOptions) ([]Resu
 	}
 	d.logf("初始化第 3 步：启动 control")
 	results := []Result{}
-	result, err := d.Deploy(ctx, control.ID, Options{ReuseBinaries: true, MaintenanceLockHeld: opts.MaintenanceLockHeld})
+	result, err := d.Deploy(ctx, control.ID, Options{ReuseBinaries: true, FirstInstall: true, MaintenanceLockHeld: opts.MaintenanceLockHeld})
 	if err != nil {
 		return nil, err
 	}
