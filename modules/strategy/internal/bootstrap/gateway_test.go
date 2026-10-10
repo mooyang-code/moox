@@ -183,7 +183,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	t.Helper()
 	root := t.TempDir()
 	configPath := filepath.Join(root, "strategy", "config", "app.yaml")
-	hostPath := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-strategy.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, hostPath, keyPath, caPath} {

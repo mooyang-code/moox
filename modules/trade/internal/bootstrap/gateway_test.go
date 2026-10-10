@@ -34,7 +34,7 @@ import (
 func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "trade", "config", "app.yaml")
-	hostPath := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-trade.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, hostPath, keyPath, caPath} {

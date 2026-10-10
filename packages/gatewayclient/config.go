@@ -118,7 +118,7 @@ func (c ExternalFileConfig) OpenExternal(moduleConfigPath string) (*Client, erro
 }
 
 // OpenInternal uses the canonical release layout: <root>/<module>/config/app.yaml
-// and <root>/hostgateway/config/app.yaml. Host identity, loopback address and CA
+// and <root>/host-gateway/config/app.yaml. Host identity, loopback address and CA
 // come from the host gateway configuration. The key path is relative to the
 // module configuration; the directory cache belongs to the module data directory.
 func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefreshError func(error)) (*Client, error) {
@@ -136,7 +136,14 @@ func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefre
 	if err != nil {
 		return nil, err
 	}
-	hostPath := filepath.Join(filepath.Dir(configPath), "..", "..", "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(filepath.Dir(configPath), "..", "..", "host-gateway", "config", "app.yaml")
+	// Business units may live on a different mount and expose the independently
+	// installed host unit through a directory symlink. Relative CA paths belong
+	// to that host unit, rather than to the business release containing the view.
+	hostPath, err = filepath.EvalSymlinks(hostPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve local host gateway configuration: %w", err)
+	}
 	host, err := hostgatewayconfig.Load(hostPath)
 	if err != nil {
 		return nil, fmt.Errorf("load local host gateway configuration: %w", err)

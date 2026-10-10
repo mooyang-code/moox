@@ -4,7 +4,9 @@
 
 内部组件可用 `FileConfig` 读取 `gateway_client: { caller, key_id, key_file }`，再通过 `OpenInternal` 创建客户端。KeyID 是 Admin 生成的公开标识，与 caller 独立；部署时按 bootstrap 导出的凭据清单填写，不能用 caller 推导。签名文件为单个密钥值，必须是 0600 的普通文件，拒绝符号链接、超长或不足 32 字节的内容。
 
-内部组件配置固定放在 `<部署目录>/<模块>/config/app.yaml`。客户端从同级组件 `hostgateway/config/app.yaml` 读取主机 ID、loopback 地址和私有 CA，避免各模块重复配置目标主机、网关地址与 CA；`key_file` 相对模块配置文件解析。目录缓存写入调用方提供的数据目录下的 `gatewayclient/directory.json`。读取公开配置时允许 KeyID 留空，便于离线检查；实际连接 Storage 等服务时必须有完整身份。客户端由进程或命令持有并在退出时关闭。
+内部组件配置固定放在 `<部署目录>/<模块>/config/app.yaml`。客户端从同级组件 `host-gateway/config/app.yaml` 读取主机 ID、loopback 地址和私有 CA，避免各模块重复配置目标主机、网关地址与 CA；`key_file` 相对模块配置文件解析。目录缓存写入调用方提供的数据目录下的 `gatewayclient/directory.json`。读取公开配置时允许 KeyID 留空，便于离线检查；实际连接 Storage 等服务时必须有完整身份。客户端由进程或命令持有并在退出时关闭。
+
+业务包与主机包可使用不同部署根目录或数据挂载。业务根中的 `host-gateway` 可作为指向独立主机包的目录符号链接；客户端先解析主机配置的实际位置，再相对该位置解析 CA，避免将主机包的证书误读为业务包文件。组件自己的签名密钥与目录缓存仍从各自配置及数据目录读取。
 
 外部进程使用 `ExternalFileConfig` 承载以下配置，再调用 `OpenExternal(配置文件路径)`。外部方式由构造入口确定，不需要重复配置 `mode`；`key_file` 相对配置文件解析，也支持绝对路径。三个身份 `scf-collector`、`factor-engine`、`moox-skill` 及其逐方法权限取自组件目录，外部配置必须提供 Admin 分配的 KeyID。
 

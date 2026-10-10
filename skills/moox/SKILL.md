@@ -236,7 +236,7 @@ skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-caddy-root-
 skills/moox/scripts/caddy-ca.sh status --ca-file "$CA_FILE"
 ```
 
-Host gateways use the private CA configured in `hostgateway/config/app.yaml`. SCF connects to Access using `MOOX_ACCESS_ADDRESS`, `MOOX_ACCESS_ID`, `MOOX_CALLER=scf-collector`, and the Admin-assigned `MOOX_CALLER_KEY_ID` / `MOOX_CALLER_KEY`; it carries no service-edge CA or internal gateway credential. Access uses its separate internal identity for the gateway hop.
+Host gateways use the private CA configured in `host-gateway/config/app.yaml`. SCF connects to Access using `MOOX_ACCESS_ADDRESS`, `MOOX_ACCESS_ID`, `MOOX_CALLER=scf-collector`, and the Admin-assigned `MOOX_CALLER_KEY_ID` / `MOOX_CALLER_KEY`; it carries no service-edge CA or internal gateway credential. Access uses its separate internal identity for the gateway hop.
 
 For a CLS-enabled release, `scripts/deploy/deploy-moox.sh --enable-cls` runs the CLS
 predeploy check after stage creation and before release archive sync or service

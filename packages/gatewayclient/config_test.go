@@ -21,9 +21,23 @@ import (
 )
 
 func TestFileConfigUsesDeploymentIdentityAndCachedDirectory(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		name := "same-root"
+		if shared {
+			name = "shared-host-unit"
+		}
+		t.Run(name, func(t *testing.T) { testFileConfigDeployment(t, shared) })
+	}
+}
+
+func testFileConfigDeployment(t *testing.T, shared bool) {
+	t.Helper()
 	root := t.TempDir()
 	moduleConfig := filepath.Join(root, "admin", "config", "app.yaml")
-	hostConfig := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostConfig := filepath.Join(root, "host-gateway", "config", "app.yaml")
+	if shared {
+		hostConfig = filepath.Join(t.TempDir(), "host-unit", "host-gateway", "config", "app.yaml")
+	}
 	keyFile := filepath.Join(root, "secrets", "caller-admin.key")
 	for _, path := range []string{moduleConfig, hostConfig, keyFile} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
@@ -32,6 +46,17 @@ func TestFileConfigUsesDeploymentIdentityAndCachedDirectory(t *testing.T) {
 	ca, _, _ := testCertificates(t)
 	host := hostgatewayconfig.Default("storage", "control", "192.0.2.1", "host-signing-key")
 	host.TLS.CAFile = ca
+	if shared {
+		physicalCA := filepath.Join(filepath.Dir(hostConfig), "..", "..", "certs", "moox-ca.crt")
+		pem, err := os.ReadFile(ca)
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Dir(physicalCA), 0o700))
+		require.NoError(t, os.WriteFile(physicalCA, pem, 0o600))
+		ca, err = filepath.EvalSymlinks(physicalCA)
+		require.NoError(t, err)
+		host.TLS.CAFile = "../../certs/moox-ca.crt"
+		require.NoError(t, os.Symlink(filepath.Dir(filepath.Dir(hostConfig)), filepath.Join(root, "host-gateway")))
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	host.Server.LocalAddr = listener.Addr().String()

@@ -137,6 +137,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology bootstr
 		return fmt.Errorf("apply Admin schema: %w", err)
 	}
 	var exported []keys.SigningKey
+	var access []keys.VerificationKey
 	var expectedHash string
 	var caInfo pki.CAInfo
 	var ca *pki.Store
@@ -182,11 +183,15 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology bootstr
 		if err != nil {
 			return err
 		}
-		wanted := append([]string{"console", "moox-cli", "host-agent", "host-gateway@" + control.HostID}, control.Components...)
+		wanted := hostSigningCallers(control, true)
 		for _, key := range all {
 			if slices.Contains(wanted, key.Caller) {
 				exported = append(exported, key)
 			}
+		}
+		access, err = hostAccessVerification(ctx, store, control)
+		if err != nil {
+			return err
 		}
 		_, snapshot, err := dao.CompileSnapshot(ctx, control.HostID, master)
 		if err != nil {
@@ -205,7 +210,10 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology bootstr
 	}
 	// The master and CA are persistent retry checkpoints. Publish a bundle only
 	// after the topology and all encrypted caller keys have committed together.
-	result, err := publishBootstrapBundle(opts.outputDir, control, exported, ca, caInfo, expectedHash)
+	result, err := publishHostBundle(opts.outputDir, hostBundleMaterial{
+		host: control, control: control, signing: exported, access: access,
+		caInfo: caInfo, expectedHash: expectedHash, operator: true,
+	}, ca)
 	if err != nil {
 		return err
 	}

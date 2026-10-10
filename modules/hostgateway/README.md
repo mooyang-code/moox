@@ -39,9 +39,9 @@ make test-host-gateway-control-e2e
 门禁逐项核对六组场景的执行标记；缺少产物、标签或任何场景均失败。测试实际等待 90 秒陈旧阈值，整体时限为 6 分钟。
 
 ```bash
-moox-host-gateway-cli check-config --config hostgateway/config/app.yaml
-moox-host-gateway-cli routes --config hostgateway/config/app.yaml
-moox-host-gateway-cli health --config hostgateway/config/app.yaml
+moox-host-gateway-cli check-config --config host-gateway/config/app.yaml
+moox-host-gateway-cli routes --config host-gateway/config/app.yaml
+moox-host-gateway-cli health --config host-gateway/config/app.yaml
 ```
 
 `routes` 只输出公共诊断字段，省略校验密钥。`health` 从配置推导本机 `/readyz` 地址，并使用健康鉴权环境变量；也可用 `--url` 指定地址。

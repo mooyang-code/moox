@@ -15,7 +15,7 @@ TARGET_GOOS=linux TARGET_GOARCH=amd64 bash scripts/build/build.sh access
 - `verification_file`：Admin 导出的外部调用方校验文件；配置和密钥均为普通 `0600` 文件。
 - `nonce_path`：持久化 SQLite nonce 数据库。重启保留 nonce，数据库故障时拒绝请求。
 
-内部主机身份、loopback 地址和 CA 来自同一发布根目录下的 `hostgateway/config/app.yaml`。目录缓存位于 `data/access/gatewayclient`；控制面暂时不可达时继续使用有效缓存。就绪状态要求外部白名单涉及的服务都有目录 placement。
+内部主机身份、loopback 地址和 CA 来自同一发布根目录下的 `host-gateway/config/app.yaml`。目录缓存位于 `data/access/gatewayclient`；控制面暂时不可达时继续使用有效缓存。就绪状态要求外部白名单涉及的服务都有目录 placement。
 
 健康检查监听 loopback `11014`，使用共享健康鉴权的 `MOOX_HEALTH_AUTH_*` 配置。逐方法超时与请求体上限来自组件目录，拒绝指标为 `moox_access_denials_total`。独立部署 profile 为 `access`，本组件使用纯 Go SQLite，可在本机关闭 CGO 构建 Linux 制品。
 

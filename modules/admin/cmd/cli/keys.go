@@ -153,6 +153,13 @@ func exportAccessKeys(ctx context.Context, store *keys.Store, dir string, stdout
 	if err != nil {
 		return err
 	}
+	if err := writeAccessKeys(items, dir); err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{"status": "ok", "registry_file": filepath.Join(dir, "access-verification.json"), "key_count": len(items)})
+}
+
+func writeAccessKeys(items []keys.VerificationKey, dir string) error {
 	root, err := privatefiles.OpenRoot(dir)
 	if err != nil {
 		return err
@@ -183,5 +190,5 @@ func exportAccessKeys(ctx context.Context, store *keys.Store, dir string, stdout
 	if err := privatefiles.Write(root, "access-verification.json", append(raw, '\n')); err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"status": "ok", "registry_file": filepath.Join(dir, "access-verification.json"), "key_count": len(items)})
+	return nil
 }

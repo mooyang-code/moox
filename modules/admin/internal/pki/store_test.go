@@ -169,6 +169,32 @@ func TestPersistentCAReuseIssuanceAndPrivateTrust(t *testing.T) {
 	require.NotContains(t, string(metadata), "BEGIN")
 }
 
+func TestInfoRequiresExistingCAAndNeverRepairsOrRegeneratesIt(t *testing.T) {
+	store := newStore(t)
+	_, err := store.Info()
+	require.ErrorIs(t, err, ErrInvalidCA)
+	for _, name := range []string{"ca.crt", "ca.key", "ca.sha256"} {
+		_, err := store.root.Lstat(name)
+		require.True(t, os.IsNotExist(err))
+	}
+	created, err := store.EnsureCA()
+	require.NoError(t, err)
+	info, err := store.Info()
+	require.NoError(t, err)
+	require.False(t, info.Created)
+	require.Equal(t, created.CertificateInfo, info.CertificateInfo)
+	require.NoError(t, store.root.Remove("ca.sha256"))
+	_, err = store.Info()
+	require.NoError(t, err)
+	_, err = store.root.Lstat("ca.sha256")
+	require.True(t, os.IsNotExist(err), "read-only validation does not repair missing metadata")
+	require.NoError(t, store.root.Remove("ca.key"))
+	_, err = store.Info()
+	require.ErrorIs(t, err, ErrInvalidCA)
+	_, err = store.root.Lstat("ca.key")
+	require.True(t, os.IsNotExist(err))
+}
+
 func TestConcurrentEnsureKeepsOneRootAcrossIndependentStores(t *testing.T) {
 	dir := privateFixtureDir(t)
 	const writers = 6

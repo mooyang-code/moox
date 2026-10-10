@@ -139,7 +139,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 	root := t.TempDir()
 	configPath := filepath.Join(root, "monitor", "config", "app.yaml")
-	hostPath := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-monitor.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, hostPath, keyPath, caPath} {

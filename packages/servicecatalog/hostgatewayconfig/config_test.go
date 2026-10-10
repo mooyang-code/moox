@@ -14,7 +14,7 @@ func TestConfigRoundTripAndReleaseRelativePaths(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dir := filepath.Join(t.TempDir(), "hostgateway", "config")
+		dir := filepath.Join(t.TempDir(), "host-gateway", "config")
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}

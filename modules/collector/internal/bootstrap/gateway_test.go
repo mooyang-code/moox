@@ -323,7 +323,7 @@ func (w *collectorGatewayWire) RestoreDatasetRows(ctx context.Context, request *
 func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "collector", "config", "app.yaml")
-	hostPath := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-collector.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, hostPath, keyPath, caPath} {

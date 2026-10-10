@@ -135,6 +135,21 @@ func (s *Store) loadCA() (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {
 	return cert, key, certPEM, nil
 }
 
+// Info validates an existing CA without creating or repairing trust material.
+// Normal host deployments must use this after the initial offline bootstrap.
+func (s *Store) Info() (CAInfo, error) {
+	lock, err := s.lock()
+	if err != nil {
+		return CAInfo{}, err
+	}
+	defer lock.Close()
+	cert, _, _, err := s.loadCA()
+	if err != nil {
+		return CAInfo{}, err
+	}
+	return CAInfo{CertificateInfo: certificateInfo(cert)}, nil
+}
+
 func (s *Store) EnsureCA() (CAInfo, error) {
 	lock, err := s.lock()
 	if err != nil {

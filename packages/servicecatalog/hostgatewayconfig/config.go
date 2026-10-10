@@ -55,7 +55,7 @@ type Store struct {
 }
 
 // Default uses the release directory layout. Relative paths are resolved from
-// hostgateway/config/app.yaml; all hosts share the same path contract.
+// host-gateway/config/app.yaml; all hosts share the same path contract.
 func Default(hostID, controlHostID, controlAddress, keyID string) Config {
 	target := net.JoinHostPort(controlAddress, "11003")
 	if hostID == controlHostID {

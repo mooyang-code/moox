@@ -115,7 +115,7 @@ proto-check:
 check-go-module-graph:
 	bash scripts/ci/check-go-module-graph.sh
 
-verify-pr: test-deployment-packages test-host-placement-deployment check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
@@ -203,3 +203,7 @@ test-deployment-packages:
 .PHONY: test-host-placement-deployment
 test-host-placement-deployment:
 	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostPlacements|TestDoctorPlacements|TestEventBusURL|TestServiceRegistry|TestControlDeployOptions'
+
+.PHONY: test-host-identity-bundles
+test-host-identity-bundles:
+	go test ./modules/admin/cmd/cli ./modules/admin/internal/pki ./packages/gatewayclient ./packages/servicecatalog/hostgatewayconfig -run 'TestBootstrap|TestHostBundle|TestInfo|TestPersistentCA|TestFileConfig'

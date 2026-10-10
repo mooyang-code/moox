@@ -80,7 +80,7 @@ func (w *cloudnodeAdminWire) verify(ctx context.Context, service, method string,
 func TestCloudNodeAdminCallsShareDeploymentIdentityAndShutdown(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "cloudnode", "config", "app.yaml")
-	hostPath := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-cloudnode.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, hostPath, keyPath, caPath} {

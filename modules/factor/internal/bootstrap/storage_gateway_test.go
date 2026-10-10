@@ -132,7 +132,7 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	t.Setenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE", "/nonexistent/obsolete-factor.key")
 	root := t.TempDir()
 	configPath := filepath.Join(root, "factor-mgr", "config", "app.yaml")
-	hostPath := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-factor-mgr.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
 	for _, path := range []string{configPath, hostPath, keyPath, caPath} {

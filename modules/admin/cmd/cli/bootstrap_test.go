@@ -53,12 +53,12 @@ func bootstrapArguments(opts bootstrapOptions) []string {
 	return []string{"bootstrap", "--topology-file", opts.topologyFile, "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir}
 }
 
-func runBootstrapFixture(t *testing.T, opts bootstrapOptions) bootstrapResult {
+func runBootstrapFixture(t *testing.T, opts bootstrapOptions) hostBundleResult {
 	t.Helper()
 	var out, stderr bytes.Buffer
 	require.NoError(t, runBootstrapCommand(bootstrapArguments(opts), &out, &stderr), stderr.String())
 	require.NotContains(t, out.String()+stderr.String(), "BEGIN")
-	var result bootstrapResult
+	var result hostBundleResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
 	return result
 }
@@ -134,7 +134,7 @@ func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(
 	}
 	_, err = cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: "storage"})
 	require.Error(t, err)
-	metadata, err := os.ReadFile(filepath.Join(result.BundleDir, "bootstrap.json"))
+	metadata, err := os.ReadFile(filepath.Join(result.BundleDir, "bundle.json"))
 	require.NoError(t, err)
 	require.NotContains(t, string(metadata), key.Secret)
 	require.NotContains(t, string(metadata), strings.TrimSpace(string(master)))
@@ -300,7 +300,7 @@ func TestBootstrapFailedOutputCanRetryWithoutRotatingIdentity(t *testing.T) {
 	require.NoError(t, os.Chmod(opts.outputDir, 0o700))
 	result := runBootstrapFixture(t, opts)
 	require.False(t, result.CA.Created)
-	require.True(t, slices.ContainsFunc(result.Credentials, func(c bootstrapCredential) bool { return c.Caller == key.Caller && c.KeyID == key.KeyID }))
+	require.True(t, slices.ContainsFunc(result.Credentials, func(c hostBundleCredential) bool { return c.Caller == key.Caller && c.KeyID == key.KeyID }))
 }
 
 func TestBootstrapDatabaseFailureRollsBackTopologyAndPartialKeys(t *testing.T) {
@@ -375,10 +375,10 @@ func TestBootstrapConcurrentProcessesReuseAllIdentityMaterial(t *testing.T) {
 	}
 	wait.Wait()
 	created := 0
-	var first bootstrapResult
+	var first hostBundleResult
 	for i, err := range errors {
 		require.NoError(t, err, outputs[i].String())
-		var result bootstrapResult
+		var result hostBundleResult
 		require.NoError(t, json.Unmarshal(outputs[i].Bytes(), &result))
 		if first.CA.SHA256 == "" {
 			first = result

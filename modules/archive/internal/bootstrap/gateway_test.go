@@ -67,7 +67,7 @@ func installArchiveGatewayFixture(t *testing.T, cfg *config.Config, dir string) 
 	t.Helper()
 	root := filepath.Join(dir, "deployment")
 	configPath := filepath.Join(root, "archive", "config", "app.yaml")
-	hostPath := filepath.Join(root, "hostgateway", "config", "app.yaml")
+	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
 	keyPath := filepath.Join(root, "secrets", "caller-archive.key")
 	caPath := filepath.Join(root, "certs", "moox-ca.crt")
 	for _, path := range []string{configPath, hostPath, keyPath, caPath} {

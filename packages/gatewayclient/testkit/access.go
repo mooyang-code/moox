@@ -70,7 +70,7 @@ func StartAccess(t *testing.T, options AccessOptions) Access {
 	host.TLS.CAFile = caPath
 	hostBytes, err := hostgatewayconfig.Encode(host)
 	require.NoError(t, err)
-	write(t, filepath.Join(root, "hostgateway/config/app.yaml"), hostBytes)
+	write(t, filepath.Join(root, "host-gateway/config/app.yaml"), hostBytes)
 	write(t, filepath.Join(root, "secrets/access.key"), []byte(internal.Secret))
 	entries := make([]map[string]string, 0, len(options.ExternalCredentials))
 	for index, credential := range options.ExternalCredentials {
