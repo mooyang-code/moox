@@ -23,9 +23,15 @@ const reportedErrors = new WeakSet<object>();
 let serverClockOffset: number | null = null;
 
 /** 按最近一次响应的 Date 头换算的服务端当前时间（毫秒）；还没有读到 Date 头时返回 null。浏览器时钟可能与服务端不一致，
- *  比较服务端给出的时间戳时用它。 */
+ *  比较服务端给出的时间戳时用它。跨域时网关要暴露 Date 头才读得到。 */
 export function serverNow(): number | null {
   return serverClockOffset === null ? null : Date.now() + serverClockOffset;
+}
+
+/** 记录一次响应的 Date 头（服务端时钟减浏览器时钟）；读不出时间时保持原值。 */
+export function recordServerDate(header: unknown) {
+  const date = Date.parse(String(header ?? ""));
+  if (Number.isFinite(date)) serverClockOffset = date - Date.now();
 }
 
 export class ControlRequestError<T = unknown> extends Error {
@@ -78,8 +84,7 @@ installSpaceAwareSignedClient(adminClient);
 
 adminClient.interceptors.response.use(
   rsp => {
-    const date = Date.parse(String(rsp.headers?.date ?? ""));
-    if (Number.isFinite(date)) serverClockOffset = date - Date.now();
+    recordServerDate(rsp.headers?.date);
     // 框架错误：HTTP 200 但 trpc-ret != 0，body 为空，错误信息在 header。
     const trpcRet = rsp.headers?.["trpc-ret"] ?? rsp.headers?.["Trpc-Ret"];
     if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== "0") {

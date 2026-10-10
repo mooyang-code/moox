@@ -111,6 +111,8 @@ export interface Replay {
   /** 从实例发起时的来源实例与固化 DSL 的会话。 */
   instance_id: string;
   session_id: string;
+  /** 回放所用的日历（crypto_24x7 | cn_stock）：cn_stock 的区间按上海日期解释。 */
+  calendar: string;
 }
 
 /** 回放中一个周期的记录；brief 列表不含目标、持仓与摘要 JSON。 */

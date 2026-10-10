@@ -176,9 +176,7 @@ export interface ResolvedBinding {
   calendar: string;
   market_type: string;
   spot: boolean;
-  uses_previous_bar: boolean;
   min_age_bars: number;
-  retention_bars: number;
   columns: ResolvedColumn[];
 }
 
@@ -203,9 +201,7 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     calendar: value.calendar ?? "",
     market_type: value.market_type ?? "",
     spot: Boolean(value.spot),
-    uses_previous_bar: Boolean(value.uses_previous_bar),
     min_age_bars: Number(value.min_age_bars ?? 0),
-    retention_bars: Number(value.retention_bars ?? 0),
     columns
   };
 }

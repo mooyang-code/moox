@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   // serverNow 是请求层按 Date 头换算的服务端时间；null 表示还没有读到。
   serverNow: null as number | null,
   chartSpecs: [] as any[],
+  charts: [] as any[],
   space: null as null | { selectedSpaceId: string }
 }));
 vi.mock("@/api/strategy", () => ({
@@ -36,6 +37,7 @@ vi.mock("@visactor/vchart", () => ({
   default: class {
     constructor(spec: any) {
       api.chartSpecs.push(spec);
+      api.charts.push(this);
     }
     renderSync = vi.fn();
     updateData = vi.fn();
@@ -171,6 +173,7 @@ describe("strategy replay page", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     api.chartSpecs.length = 0;
+    api.charts.length = 0;
     api.space = reactive({ selectedSpaceId: "crypto" });
     for (const fn of [
       api.getReplay,
@@ -796,5 +799,68 @@ describe("strategy replay page", () => {
     second.resolve(bars);
     await flushPromises();
     expect(wrapper.find(".table").attributes("data-loading")).toBe("false");
+  });
+
+  it("does not let a background refresh void a manual page load", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const manual = deferred<unknown>();
+    api.listReplayBars.mockImplementation((_id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(bars);
+      return params?.page === 2 ? manual.promise : Promise.resolve(bars);
+    });
+    (wrapper.vm as any).changeTablePage(2);
+    await nextTick();
+    api.listReplayBars.mockClear();
+    // 轮询看到状态变化，正常会刷新表格；手动翻页还没返回时不做后台刷新。
+    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
+    await pollOnce();
+    expect(api.listReplayBars.mock.calls.filter(call => !call[1]?.brief)).toHaveLength(0);
+    const page2 = { items: [bar(), { ...bar(), bar_end_time: "2026-09-01T02:00:00Z" }], page: { total: 102 } };
+    manual.resolve(page2);
+    await flushPromises();
+    expect((wrapper.vm as any).tablePage).toBe(2);
+    expect((wrapper.vm as any).tableRows).toHaveLength(2);
+  });
+
+  it("counts the wait for a directly opened cancelled replay from the cancel time", async () => {
+    const cancelledAt = Date.now() - 100_000;
+    const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });
+    api.listReplays.mockResolvedValue({ items: [cancelled], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(cancelled);
+    api.serverNow = Date.now();
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain("正在等待写入");
+    // 取消已过去 100 秒：最多再等 20 秒。
+    await vi.advanceTimersByTimeAsync(25_000);
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("正在等待写入");
+  });
+
+  it("shows A-share replay ranges as Shanghai dates", async () => {
+    const stock = replay("r1", "done", "{}", {
+      calendar: "cn_stock",
+      start_time: "2026-08-31T16:00:00Z",
+      end_time: "2026-09-30T16:00:00Z"
+    });
+    api.listReplays.mockResolvedValue({ items: [stock], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(stock);
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(listText(wrapper)).toContain("2026-09-01 → 2026-10-01（上海日期，不含结束日）");
+    expect(wrapper.text()).toContain("区间 2026-09-01 → 2026-10-01（上海日期，不含结束日）");
+  });
+
+  it("releases the chart on unmount", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(api.charts).toHaveLength(1);
+    wrapper.unmount();
+    expect(api.charts[0].release).toHaveBeenCalled();
   });
 });

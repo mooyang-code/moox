@@ -18,12 +18,8 @@
         <a-descriptions-item label="源数据集"
           ><span class="mono">{{ binding.source_dataset_id || "-" }}</span></a-descriptions-item
         >
-        <a-descriptions-item label="上一根 bars[-1]">{{ binding.uses_previous_bar ? "使用" : "未使用" }}</a-descriptions-item>
         <a-descriptions-item label="上市年龄">{{
           binding.min_age_bars ? `${binding.min_age_bars} 根` : "不限"
-        }}</a-descriptions-item>
-        <a-descriptions-item label="View 保留">{{
-          binding.retention_bars ? `${binding.retention_bars} 根` : "不限"
         }}</a-descriptions-item>
       </a-descriptions>
       <a-table row-key="name" size="small" :data="binding.columns" :pagination="false" :scroll="{ x: 640 }">

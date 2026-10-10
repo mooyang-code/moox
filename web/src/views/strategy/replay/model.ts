@@ -114,6 +114,21 @@ export function formatUtcTime(value?: string): string {
   return `${new Date(timestamp).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
+/** 时刻所在的上海日期（YYYY-MM-DD）。 */
+function shanghaiDate(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "时间未知";
+  return new Date(timestamp + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/** 回放区间的写法：A 股日线按上海日期（含起始日、不含结束日），其余按 UTC 时间。 */
+export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }): string {
+  if (replay.calendar === "cn_stock" && replay.start_time && replay.end_time) {
+    return `${shanghaiDate(replay.start_time)} → ${shanghaiDate(replay.end_time)}（上海日期，不含结束日）`;
+  }
+  return `${formatUtcTime(replay.start_time)} → ${formatUtcTime(replay.end_time)}`;
+}
+
 /** 把新读到的周期记录合并到已加载的列表：按 bar_end_time 去重并保持升序。 */
 export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[] {
   if (!incoming.length) return known;

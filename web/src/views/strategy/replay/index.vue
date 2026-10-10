@@ -91,7 +91,7 @@
                     <span>{{ sourceLabel(item) }}</span>
                   </span>
                   <span class="replay-line muted mono">{{ item.view_id }}</span>
-                  <span class="replay-line muted">{{ formatUtcTime(item.start_time) }} → {{ formatUtcTime(item.end_time) }}</span>
+                  <span class="replay-line muted">{{ replayRangeLabel(item) }}</span>
                   <span v-if="item.status === 'running' && item.progress_time" class="replay-line muted">
                     进度 {{ formatUtcTime(item.progress_time) }}
                   </span>
@@ -138,8 +138,7 @@
                 · 实例 <span class="mono">{{ selected.instance_id }}</span
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
-              · View {{ selected.view_id }} · 区间 {{ formatUtcTime(selected.start_time) }} →
-              {{ formatUtcTime(selected.end_time) }} · 手续费 {{ selected.fee_bps }} bps
+              · View {{ selected.view_id }} · 区间 {{ replayRangeLabel(selected) }} · 手续费 {{ selected.fee_bps }} bps
               <template v-if="metrics?.first_bar_end">
                 · 实际首根 {{ formatUtcTime(metrics.first_bar_end) }}，末根 {{ formatUtcTime(metrics.last_bar_end) }}</template
               >
@@ -329,6 +328,7 @@ import {
   parseMetrics,
   parseUtcInput,
   recentUtcRange,
+  replayRangeLabel,
   replayStatusColor,
   replayStatusLabel
 } from "@/views/strategy/replay/model";
@@ -571,13 +571,16 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
 function maybeAwaitMetrics(replay: Replay, observedCancel: boolean) {
   if (replay.status !== "cancelled" || parseMetrics(replay.metrics_json) || !series.value.length) return;
   if (awaitingMetrics.value?.replayId === replay.replay_id) return;
+  // 直接打开时等待期限从取消时刻（按服务端时间换算）算起，而不是从打开页面算起。
+  let elapsed = 0;
   if (!observedCancel) {
     const now = serverNow();
     const updated = Date.parse(replay.updated_at);
     if (now === null || !Number.isFinite(updated) || now - updated > 120_000) return;
+    elapsed = Math.max(0, now - updated);
   }
   clock.value = Date.now();
-  awaitingMetrics.value = { replayId: replay.replay_id, until: clock.value + 120_000 };
+  awaitingMetrics.value = { replayId: replay.replay_id, until: clock.value + 120_000 - elapsed };
 }
 
 /** 用户在列表里选择一个回放。 */
@@ -660,6 +663,8 @@ async function refreshSelected() {
   }
   maybeAwaitMetrics(replay, current.status === "pending" || current.status === "running");
   const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
+  // 用户正在手动翻页（遮罩还在）时不做后台刷新：后台请求会把还没返回的手动请求作废，失败时表格就停在旧页的数据上。
+  if (tableLoading.value) return;
   if (tablePage.value >= lastPage - 1 || replay.status !== current.status) await loadTablePage(replayId, isCurrent, true);
 }
 

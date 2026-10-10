@@ -152,3 +152,18 @@ func TestContainsWildcard_WithStar_ShouldReturnTrue(t *testing.T) {
 	assert.True(t, containsWildcard([]string{" https://a.com ", "*"}))
 	assert.False(t, containsWildcard([]string{"https://a.com"}))
 }
+
+// 跨域请求的响应暴露 Date 头：页面据此换算服务端时间（判断回放是不是刚被取消）。
+func TestCORSMiddleware_ExposesDateHeader(t *testing.T) {
+	SetConfig(&Config{CORS: CORSConfig{AllowedOrigins: []string{"https://app.example.com"}}})
+	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/strategy/GetReplay", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Contains(t, rr.Header().Get("Access-Control-Expose-Headers"), "Date")
+}

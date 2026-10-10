@@ -3,6 +3,7 @@ import {
   equitySeries,
   equitySummary,
   formatUtcTime,
+  replayRangeLabel,
   mergeBars,
   parseBarDetail,
   parseMetrics,
@@ -164,5 +165,14 @@ describe("replay model helpers", () => {
     expect(
       equitySummary([point("2026-09-01T01:00:00Z", 1), point("2026-09-01T02:00:00Z", 1.2), point("2026-09-01T03:00:00Z", 0.9)])
     ).toBe("权益曲线：共 3 根，2026-09-01 01:00 UTC 权益 1.0000，2026-09-01 03:00 UTC 权益 0.9000，最高 1.2000，最低 0.9000");
+  });
+
+  it("labels A-share replay ranges with Shanghai dates", () => {
+    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "2026-08-31T16:00:00Z", end_time: "2026-09-30T16:00:00Z" })).toBe(
+      "2026-09-01 → 2026-10-01（上海日期，不含结束日）"
+    );
+    expect(
+      replayRangeLabel({ calendar: "crypto_24x7", start_time: "2026-09-01T00:00:00Z", end_time: "2026-09-02T00:00:00Z" })
+    ).toBe("2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC");
   });
 });
