@@ -11,6 +11,9 @@ import (
 // ErrStale 表示读取过程中 View 的活动索引或修订号发生变化，已读页面作废，需要整体重读。
 var ErrStale = errors.New("View 输入快照已过期")
 
+// ErrViewNotFound 表示 View 已不存在（被删除）。
+var ErrViewNotFound = errors.New("View 不存在")
+
 // staleError 是读取期间活动索引或修订号变化的错误：Error 只给中文说明，Storage 的原文经 Unwrap 留给日志；
 // errors.Is(err, ErrStale) 成立。
 type staleError struct {
@@ -155,6 +158,8 @@ type Coverage struct {
 type Client interface {
 	// GetView 读取 View 元数据与列，不含覆盖范围；需要覆盖范围时另调 ViewCoverage（见 WithCoverage）。
 	GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error)
+	// ViewGeneration 只读取 View 活动索引的代次（不读列），用于确认读取期间索引没有换代。
+	ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error)
 	// ViewCoverage 读取 View 活动索引的覆盖统计；exact 为 true 时统计未缓存也要求现算（代价是一次全量统计）。
 	ViewCoverage(ctx context.Context, spaceID string, view ViewInfo, exact bool) (Coverage, error)
 	GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error)

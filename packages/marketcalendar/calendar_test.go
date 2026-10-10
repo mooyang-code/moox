@@ -65,8 +65,8 @@ func TestLoadEmbeddedChinaCalendarAndManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseCalendarManifest() error = %v", err)
 	}
-	if calendar.ID() != "cn_stock" || manifest.CalendarID != "cn_stock" {
-		t.Fatalf("calendar identity = %q/%q", calendar.ID(), manifest.CalendarID)
+	if manifest.CalendarID != "cn_stock" {
+		t.Fatalf("manifest calendar_id = %q", manifest.CalendarID)
 	}
 	if manifest.Version == 0 {
 		t.Fatal("manifest version is zero")
@@ -238,21 +238,6 @@ func TestLoadCalendarValidatesManifestHashAndCoverage(t *testing.T) {
 			mutated.CalendarID, mutated.Source, mutated.Version, mutated.ValidFrom, mutated.ValidThrough, mutated.SHA256)
 		if _, err := loadCalendar(data, []byte(badManifest)); err == nil {
 			t.Fatal("loadCalendar() accepted invalid manifest")
-		}
-	}
-}
-
-func TestCoverageStatusString(t *testing.T) {
-	t.Parallel()
-
-	tests := map[CoverageStatus]string{
-		TradingDay:    "trading_day",
-		NonTradingDay: "non_trading_day",
-		OutOfCoverage: "out_of_coverage",
-	}
-	for status, want := range tests {
-		if got := status.String(); got != want {
-			t.Errorf("CoverageStatus(%d).String() = %q, want %q", status, got, want)
 		}
 	}
 }

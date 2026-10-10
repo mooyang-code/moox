@@ -320,15 +320,16 @@ func previousFactors(columns map[string]ColumnBinding, program *dsl.Program) []s
 }
 
 // Compile 用固化的解析结果重新编译 DSL（重启或恢复会话时使用），并按编译结果重算派生字段（经 bars[-1] 读取的因子）：
-// 它们不进快照，不会因快照缺字段而静默跳过上一根的版本核对。
+// 它们不进快照，不会因快照缺字段而静默跳过上一根的版本核对。编译失败时原样返回传入的解析结果：调用方仍要用其中的
+// 日历与周期记录跳过。
 func Compile(resolved Resolved, dslYaml string) (Resolved, *dsl.Program, error) {
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	if err != nil {
-		return Resolved{}, nil, err
+		return resolved, nil, err
 	}
 	program, err := dsl.Compile(strategy, resolved.ViewColumns)
 	if err != nil {
-		return Resolved{}, nil, err
+		return resolved, nil, err
 	}
 	resolved.PreviousFactors = previousFactors(resolved.Columns, program)
 	return resolved, program, nil

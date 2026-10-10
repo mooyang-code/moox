@@ -127,6 +127,13 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
+	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
+	return newHarnessWith(t, dslYaml, account, resolved)
+}
+
+// newHarnessWith 用给定的会话快照搭建一个已启用的实例。
+func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved input.Resolved) *harness {
+	t.Helper()
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +150,6 @@ func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", LogicalAccountID: account, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
 	raw, _ := json.Marshal(resolved)
 	session := "session-1"
 	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {

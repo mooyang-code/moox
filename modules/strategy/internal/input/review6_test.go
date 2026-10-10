@@ -12,6 +12,14 @@ import (
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
+// setClock 在测试期间固定“当前时间”。
+func setClock(t *testing.T, now time.Time) {
+	t.Helper()
+	previous := clock
+	clock = func() time.Time { return now }
+	t.Cleanup(func() { clock = previous })
+}
+
 // leaksRaw 报告报错里是否夹带了 Storage 的英文原文。
 func leaksRaw(err error) bool {
 	return strings.Contains(err.Error(), "revision changed") || strings.Contains(err.Error(), "expected=") || strings.Contains(err.Error(), "index")
@@ -80,7 +88,7 @@ func TestReplayWindowStockShortCoverage(t *testing.T) {
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 120}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
 	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 9))
-	if err == nil || !strings.Contains(err.Error(), "需要 119 根历史") || strings.Contains(err.Error(), "更新日历") {
+	if err == nil || !strings.Contains(err.Error(), "需要 120 根数据") || strings.Contains(err.Error(), "更新日历") {
 		t.Fatalf("覆盖太短应说明历史不足：%v", err)
 	}
 }
@@ -105,6 +113,7 @@ func TestCoverageBeyondCalendarSaysWhy(t *testing.T) {
 
 // 索引最新一根超出内嵌日历时，日历的最后一个交易日已经写完：经提交路径也能回放到它。
 func TestReplayWindowIncludesLastCalendarDay(t *testing.T) {
+	setClock(t, time.Date(2027, 1, 10, 0, 0, 0, 0, time.UTC))
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 8), SeriesBars: 5000}
 	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1))
@@ -188,6 +197,10 @@ func (c *scriptedClient) QueryRows(context.Context, string, Query) ([]Row, uint6
 
 func (c *scriptedClient) GetView(_ context.Context, _, viewID string) (ViewInfo, error) {
 	return ViewInfo{ViewID: viewID, ActiveIndexID: "idx_a", Generation: c.generation}, nil
+}
+
+func (c *scriptedClient) ViewGeneration(context.Context, string, string) (string, error) {
+	return c.generation, nil
 }
 
 func fastStaleRetries(t *testing.T, budget time.Duration) {

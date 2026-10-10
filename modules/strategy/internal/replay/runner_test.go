@@ -43,6 +43,8 @@ type fakeClient struct {
 	// switchedTo 非零时换代后的最新一根改为它（新一代可能截短终点）；coverageStale 是读取覆盖统计依次返回 ErrStale 的次数。
 	switchedTo    time.Time
 	coverageStale int
+	// viewDeleted 模拟 View 已被删除。
+	viewDeleted bool
 }
 
 func price(id string, hour int) float64 {
@@ -84,12 +86,20 @@ func (f *fakeClient) currentIndex() string {
 
 // GetView 与生产一致：View 元数据不带覆盖统计，需要时由 ViewCoverage 单独读取。
 func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
+	if f.viewDeleted {
+		return input.ViewInfo{}, &input.SkipError{Reason: input.SkipConfigError, Detail: "View view_a 已不存在", Cause: input.ErrViewNotFound}
+	}
 	index := f.currentIndex()
 	generation := index
 	if f.build != "" {
 		generation += "@" + f.build
 	}
 	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
+}
+
+func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
+	view, err := f.GetView(ctx, spaceID, viewID)
+	return view.Generation, err
 }
 
 func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
@@ -205,7 +215,7 @@ func pinnedFactors(t *testing.T, dslYaml string) map[string]string {
 
 func startReplay(t *testing.T, repo *store.Store, id, dslYaml string, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
+	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +403,7 @@ func TestReplayRejectsSwapAndEarlyStart(t *testing.T) {
 func TestRunnerDrainsQueueAndWakes(t *testing.T) {
 	repo := openStore(t)
 	for _, id := range []string{"p1", "p2"} {
-		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
+		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -494,7 +504,7 @@ func TestReplayPreviousBarAmbiguitySkips(t *testing.T) {
 // 发起时固化的因子指纹与执行时不一致：拒绝执行，提示重新发起。
 func TestReplayRejectsFactorDrift(t *testing.T) {
 	repo := openStore(t)
-	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
+	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}

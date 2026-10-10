@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -98,9 +97,4 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, targets []
 		Targets: payloadTargets,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: *instance.LogicalAccountID})
-}
-
-// ValidUntil 返回结果的有效期：bar_end 之后 ValidBars 根。
-func ValidUntil(calendar, bar string, barEnd time.Time) (time.Time, error) {
-	return advance(calendar, bar, barEnd, ValidBars)
 }

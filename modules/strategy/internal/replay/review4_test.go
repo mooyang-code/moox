@@ -16,7 +16,7 @@ import (
 // submitReplay 按 StartReplay 的做法登记并认领一个回放：记录 DSL 哈希与提交时校验区间所用的活动索引。
 func submitReplay(t *testing.T, repo *store.Store, dslYaml, indexID string, start time.Time, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: "p1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), ViewGeneration: indexID, SpaceID: "crypto", ViewID: "view_a", StartTime: start, EndTime: start.Add(time.Duration(hours) * time.Hour), Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
+	job := store.Replay{ReplayID: "p1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", ViewGeneration: indexID, SpaceID: "crypto", ViewID: "view_a", StartTime: start, EndTime: start.Add(time.Duration(hours) * time.Hour), Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}

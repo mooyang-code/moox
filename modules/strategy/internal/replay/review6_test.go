@@ -53,7 +53,7 @@ func TestReplayTruncatesAfterIndexSwitch(t *testing.T) {
 	}
 	noted := false
 	for _, note := range metrics.Limitations {
-		noted = noted || strings.Contains(note, "终点按新索引截到")
+		noted = noted || strings.Contains(note, "最后一根 K 线结束于 2026-09-01T08:00:00Z")
 	}
 	if !noted || metrics.Bars != 6 {
 		t.Fatalf("指标应说明终点被截短：%+v", metrics)

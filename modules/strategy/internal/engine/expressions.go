@@ -96,16 +96,25 @@ func evaluateNumeric(expression *dsl.Expression, ids []string, rows map[string]R
 	return result
 }
 
-// scoreErrorReason 把表达式运行错误压缩成一行、最多 120 个字符的明细原因。
+// scoreErrorHints 是表达式运行错误的中文原因，按出现顺序匹配第一条。
+var scoreErrorHints = []struct{ raw, text string }{
+	{"divide by zero", "除以零"},
+	{"out of range", "下标越界"},
+	{"invalid operation", "运算的操作数类型不对"},
+	{"cannot fetch", "取不到值"},
+	{"nil pointer", "值为空"},
+	{"<nil>", "值为空"},
+}
+
+// scoreErrorReason 把表达式运行错误换成中文的明细原因（score_error:<原因>）；运行库的英文原文不进入明细。
 func scoreErrorReason(err error) string {
-	message := strings.TrimSpace(err.Error())
-	if line, _, found := strings.Cut(message, "\n"); found {
-		message = strings.TrimSpace(line)
+	message := strings.ToLower(err.Error())
+	for _, hint := range scoreErrorHints {
+		if strings.Contains(message, hint.raw) {
+			return "score_error:" + hint.text
+		}
 	}
-	if runes := []rune(message); len(runes) > 120 {
-		message = string(runes[:120]) + "…"
-	}
-	return "score_error:" + message
+	return "score_error:求值出错"
 }
 
 func without(ids []string, failed map[string]string) []string {

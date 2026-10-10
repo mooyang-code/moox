@@ -47,8 +47,9 @@ type instanceObserver struct {
 
 	mu       sync.Mutex
 	expected map[string]report.DatasetExpectation
-	// lastBarEnd 是每个实例最近处理的一根的 bar_end，是 A 股实例期望间隔的基准。
-	lastBarEnd map[string]time.Time
+	// lastBarEnd 与 lastOkBarEnd 是每个实例最近处理的一根、最近一个 ok 的一根的 bar_end，是 A 股实例期望间隔的基准。
+	lastBarEnd   map[string]time.Time
+	lastOkBarEnd map[string]time.Time
 }
 
 func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, logf func(string, ...any)) (*instanceObserver, error) {
@@ -80,7 +81,7 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 		cancelled.WithLabelValues(reason).Add(float64(count))
 	})
 	repo.SetSentAfterCancelObserver(sentAfterCancel.Inc)
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}}, nil
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。
@@ -131,13 +132,25 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 			delete(o.lastBarEnd, id)
 		}
 	}
+	for id := range o.lastOkBarEnd {
+		if _, ok := next[id]; !ok {
+			delete(o.lastOkBarEnd, id)
+		}
+	}
 	return nil
 }
 
-// runIntervalLocked 返回实例的期望运行间隔（Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行就报
-// run stale）。crypto 是 bar 时长。A 股相邻交易日之间隔着周末与长假：取“最近处理的一根到其后第二根”的间隔的一半，
-// 即最近处理的一根之后第二个交易日收盘时下一根还没处理才告警（与 crypto 的口径一致），不因休市误报；还没处理过时以
-// 最近闭合一根的上一根为基准（偏宽）。调用方持有 o.mu。
+// 与 config/setup/dataset-health-policy.yaml 一致：Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行
+// 报 run stale，在最近一次成功之后 success_missed_intervals 个间隔没有新的成功报 success stale。
+const (
+	runMissedIntervals     = 2
+	successMissedIntervals = 3
+)
+
+// runIntervalLocked 返回实例的期望运行间隔。crypto 是 bar 时长。A 股相邻交易日之间隔着周末与长假，按交易日折算：
+// 运行口径取“最近处理的一根到其后第 2 根”的间隔的一半，成功口径取“最近一个 ok 的一根到其后第 3 根”的间隔的三分之一，
+// 两者取较大者——Monitor 的两种滞后都乘同一个间隔，只按运行口径时，周末后第一根跳过会让间隔缩短、立即报 success
+// stale。还没处理过时以最近闭合一根的上一根为基准（偏宽），还没有 ok 时成功口径与运行口径同一基准。调用方持有 o.mu。
 func (o *instanceObserver) runIntervalLocked(instanceID, calendar, bar string, nominal time.Duration) time.Duration {
 	if !strings.EqualFold(strings.TrimSpace(calendar), "cn_stock") {
 		return nominal
@@ -152,11 +165,18 @@ func (o *instanceObserver) runIntervalLocked(instanceID, calendar, bar string, n
 			return nominal
 		}
 	}
-	after, err := input.AdvanceBarEnd(calendar, bar, reference, 2)
-	if err != nil {
-		return nominal
+	success, ok := o.lastOkBarEnd[instanceID]
+	if !ok {
+		success = reference
 	}
-	return max(after.Sub(reference)/2, nominal)
+	interval := nominal
+	if after, err := input.AdvanceBarEnd(calendar, bar, reference, runMissedIntervals); err == nil {
+		interval = max(interval, after.Sub(reference)/runMissedIntervals)
+	}
+	if after, err := input.AdvanceBarEnd(calendar, bar, success, successMissedIntervals); err == nil {
+		interval = max(interval, after.Sub(success)/successMissedIntervals)
+	}
+	return interval
 }
 
 func expectations(values map[string]report.DatasetExpectation) []report.DatasetExpectation {
@@ -179,6 +199,9 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 	defer o.mu.Unlock()
 	if barEnd.After(o.lastBarEnd[instance.InstanceID]) {
 		o.lastBarEnd[instance.InstanceID] = barEnd
+	}
+	if result == store.StatusOK && barEnd.After(o.lastOkBarEnd[instance.InstanceID]) {
+		o.lastOkBarEnd[instance.InstanceID] = barEnd
 	}
 	expectation, ok := o.expected[instance.InstanceID]
 	if !ok {

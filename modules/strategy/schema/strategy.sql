@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_dsl_yaml TEXT NOT NULL,
     c_dsl_hash TEXT NOT NULL,
     c_view_generation TEXT NOT NULL,
+    c_calendar TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL,
     c_start_time INTEGER NOT NULL,

@@ -44,6 +44,33 @@ func viewGeneration(activeIndexID, buildID string) string {
 	return activeIndexID + "@" + buildID
 }
 
+// viewNotFound 是 View 已被删除的跳过：实时求值记 config_error（实例需要重新绑定），回放与启用直接报错。
+func viewNotFound(viewID string) error {
+	return &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 已不存在", viewID), Cause: ErrViewNotFound}
+}
+
+// ViewGeneration 只读取 View 的活动索引代次（不读列）。
+func (c *RPCClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
+	if c == nil || c.Metadata == nil {
+		return "", errors.New("Storage Metadata 客户端未配置")
+	}
+	rsp, err := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID})
+	if err != nil {
+		return "", transport("读取 View "+viewID, err)
+	}
+	if code := rsp.GetRetInfo().GetCode(); code == commonpb.ErrorCode_VIEW_NOT_FOUND || code == commonpb.ErrorCode_NOT_FOUND {
+		return "", viewNotFound(viewID)
+	}
+	if err := retError("读取 View "+viewID, rsp.GetRetInfo()); err != nil {
+		return "", err
+	}
+	view := rsp.GetView()
+	if view == nil {
+		return "", viewNotFound(viewID)
+	}
+	return viewGeneration(view.GetActiveIndexId(), view.GetAttributes()[activeBuildIDAttribute]), nil
+}
+
 // GetView 读取 View 及其全部列（不含覆盖范围，见 ViewCoverage）。
 func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error) {
 	if c == nil || c.Metadata == nil {
@@ -54,14 +81,14 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 		return ViewInfo{}, transport("读取 View "+viewID, err)
 	}
 	if code := rsp.GetRetInfo().GetCode(); code == commonpb.ErrorCode_VIEW_NOT_FOUND || code == commonpb.ErrorCode_NOT_FOUND {
-		return ViewInfo{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 已不存在，请重新绑定实例", viewID)}
+		return ViewInfo{}, viewNotFound(viewID)
 	}
 	if err := retError("读取 View "+viewID, rsp.GetRetInfo()); err != nil {
 		return ViewInfo{}, err
 	}
 	view := rsp.GetView()
 	if view == nil {
-		return ViewInfo{}, fmt.Errorf("View %s 不存在", viewID)
+		return ViewInfo{}, viewNotFound(viewID)
 	}
 	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus(), ActiveIndexID: strings.TrimSpace(view.GetActiveIndexId())}
 	info.Generation = viewGeneration(info.ActiveIndexID, view.GetAttributes()[activeBuildIDAttribute])
@@ -511,10 +538,11 @@ func viewRetError(operation, viewID string, columns []string, info *commonpb.Ret
 	}
 	if info.GetCode() == commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND || info.GetCode() == commonpb.ErrorCode_FIELD_NOT_FOUND {
 		// 列不存在是确定性的配置问题，重试不会恢复。
-		// 原文是英文，只取其中提到的请求列名；一个都认不出时列出全部请求的列。
+		// 原文是英文（形如 View column "close_adj" is not projected），只取其中带引号的请求列名（按子串匹配会把 close
+		// 误认成 close_adj）；一个都认不出时列出全部请求的列。
 		missing := make([]string, 0, len(columns))
 		for _, column := range columns {
-			if column != "" && strings.Contains(info.GetMsg(), column) {
+			if column != "" && strings.Contains(info.GetMsg(), `"`+column+`"`) {
 				missing = append(missing, column)
 			}
 		}

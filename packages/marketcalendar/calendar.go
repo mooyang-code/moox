@@ -108,52 +108,12 @@ func (d CivilDate) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", d.Year(), d.Month(), d.Day())
 }
 
-func (d CivilDate) GoString() string {
-	return d.String()
-}
-
 func (d CivilDate) Before(other CivilDate) bool {
 	return compareCivilDate(d, other) < 0
 }
 
 func (d CivilDate) After(other CivilDate) bool {
 	return compareCivilDate(d, other) > 0
-}
-
-func (d CivilDate) Equal(other CivilDate) bool {
-	return d == other
-}
-
-func (d CivilDate) MarshalText() ([]byte, error) {
-	if err := d.Validate(); err != nil {
-		return nil, err
-	}
-	return []byte(d.String()), nil
-}
-
-func (d *CivilDate) UnmarshalText(value []byte) error {
-	parsed, err := ParseCivilDate(string(value))
-	if err != nil {
-		return err
-	}
-	*d = parsed
-	return nil
-}
-
-func (d CivilDate) MarshalJSON() ([]byte, error) {
-	text, err := d.MarshalText()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(string(text))
-}
-
-func (d *CivilDate) UnmarshalJSON(value []byte) error {
-	var text string
-	if err := json.Unmarshal(value, &text); err != nil {
-		return fmt.Errorf("%w: civil date must be a JSON string", ErrInvalidCivilDate)
-	}
-	return d.UnmarshalText([]byte(text))
 }
 
 type CoverageStatus uint8
@@ -163,19 +123,6 @@ const (
 	NonTradingDay
 	OutOfCoverage
 )
-
-func (s CoverageStatus) String() string {
-	switch s {
-	case TradingDay:
-		return "trading_day"
-	case NonTradingDay:
-		return "non_trading_day"
-	case OutOfCoverage:
-		return "out_of_coverage"
-	default:
-		return fmt.Sprintf("coverage_status(%d)", s)
-	}
-}
 
 type calendarManifest struct {
 	CalendarID   string `json:"calendar_id"`
@@ -193,7 +140,6 @@ type calendarFile struct {
 }
 
 type calendarData struct {
-	id            string
 	tradingDays   []CivilDate
 	tradingDaySet map[CivilDate]struct{}
 }
@@ -215,13 +161,6 @@ func Load(id string) (TradingCalendar, error) {
 		return TradingCalendar{}, fmt.Errorf("%w: %q", ErrUnknownCalendar, id)
 	}
 	return loadCalendar(embeddedTradingDays, embeddedManifest)
-}
-
-func (c TradingCalendar) ID() string {
-	if c.data == nil {
-		return ""
-	}
-	return c.data.id
 }
 
 func (c TradingCalendar) FirstDate() CivilDate {
@@ -329,7 +268,6 @@ func loadCalendar(dataRaw, manifestRaw []byte) (TradingCalendar, error) {
 		return TradingCalendar{}, fmt.Errorf("%w: got %q, want %q", ErrCalendarChecksum, manifest.SHA256, wantHash)
 	}
 	return TradingCalendar{data: &calendarData{
-		id:            manifest.CalendarID,
 		tradingDays:   append([]CivilDate(nil), data.dates...),
 		tradingDaySet: data.set,
 	}}, nil

@@ -106,7 +106,7 @@ func TestAgeProbeCalendarErrorIsConfigError(t *testing.T) {
 	probe := NewAgeProbe(client, "space", resolved, ViewInfo{ViewID: "view_stock"}, map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0)
 	_, err := probe(context.Background(), []string{"600000.SH"})
 	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "早于 A 股内嵌交易日历的起点") {
+	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "之前没有交易日") {
 		t.Fatalf("日历换算失败应记 config_error 并给出中文说明：%v", err)
 	}
 }
@@ -139,6 +139,10 @@ func (c *staleClient) QueryRows(context.Context, string, Query) ([]Row, uint64, 
 
 func (c *staleClient) GetView(_ context.Context, _, viewID string) (ViewInfo, error) {
 	return ViewInfo{ViewID: viewID, ActiveIndexID: "idx_b", Generation: c.generation}, nil
+}
+
+func (c *staleClient) ViewGeneration(context.Context, string, string) (string, error) {
+	return c.generation, nil
 }
 
 // 回放读取期间活动索引换了一代：读取器返回 IndexChangedError 交给调用方复查，不静默改读新索引。

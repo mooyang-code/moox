@@ -38,6 +38,11 @@ func (f *fakeClient) GetView(_ context.Context, _, viewID string) (ViewInfo, err
 	return view, nil
 }
 
+func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
+	view, err := f.GetView(ctx, spaceID, viewID)
+	return view.Generation, err
+}
+
 func (f *fakeClient) ViewCoverage(_ context.Context, _ string, view ViewInfo, exact bool) (Coverage, error) {
 	f.coverageReads = append(f.coverageReads, exact)
 	if err := f.errors["coverage"]; err != nil {

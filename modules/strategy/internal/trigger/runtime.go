@@ -38,11 +38,12 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 	if err != nil {
 		return &runtime{sessionID: sessionID, dslHash: session.DSLHash}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 	}
-	resolved, program, err := input.Compile(resolved, version.DSLYaml)
+	// 编译失败时仍用快照里的日历与周期记录跳过：零值会让周期按 crypto 日历换算，写错 bar_end 与有效期。
+	compiled, program, err := input.Compile(resolved, version.DSLYaml)
 	if err != nil {
 		return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: resolved}, &input.SkipError{Reason: input.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
 	}
-	loaded := &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: resolved, program: program}
+	loaded := &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled, program: program}
 	// 每次重新启用都会产生新会话：缓存超过上限时整体清空，按需从会话快照重建（编译很便宜）。
 	if len(h.programs) >= maxCachedPrograms {
 		h.programs = make(map[string]*runtime)

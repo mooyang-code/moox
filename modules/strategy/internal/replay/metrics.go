@@ -36,6 +36,9 @@ type accumulator struct {
 	holdingsSum  float64
 	periodsPerYr float64
 	minBars      int
+	// notes 是按 key 区分的局限说明，noteOrder 是它们首次出现的顺序；finish 时接在固定的说明之后。
+	notes     map[string]string
+	noteOrder []string
 }
 
 func newAccumulator(initialEquity, periodsPerYear float64, minBars int) *accumulator {
@@ -87,18 +90,25 @@ func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outc
 	}
 }
 
-// note 追加一条局限说明（相同的说明只记一次）。
-func (a *accumulator) note(text string) {
-	for _, existing := range a.metrics.Limitations {
-		if existing == text {
-			return
-		}
+// setNote 设置一条按 key 区分的局限说明：同一 key 只保留最新的一条（例如多次截短只留最后一次的终点）。
+func (a *accumulator) setNote(key, text string) {
+	if a.notes == nil {
+		a.notes = make(map[string]string)
 	}
-	a.metrics.Limitations = append(a.metrics.Limitations, text)
+	if _, ok := a.notes[key]; !ok {
+		a.noteOrder = append(a.noteOrder, key)
+	}
+	a.notes[key] = text
 }
 
 func (a *accumulator) finish() Metrics {
 	m := a.metrics
+	if len(a.noteOrder) > 0 {
+		m.Limitations = append([]string(nil), m.Limitations...)
+		for _, key := range a.noteOrder {
+			m.Limitations = append(m.Limitations, a.notes[key])
+		}
+	}
 	if m.InitialEquity > 0 {
 		m.TotalReturn = m.FinalEquity/m.InitialEquity - 1
 	}

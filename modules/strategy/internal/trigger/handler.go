@@ -58,6 +58,8 @@ type Handler struct {
 	mu       sync.Mutex
 	programs map[string]*runtime
 	attempts map[string]int
+	// dropped 记录本进程内已丢弃过的（事件, 实例）：同一事件因其他实例需要重投而再次投递时，不重复记日志与计数。
+	dropped map[string]struct{}
 }
 
 // Handle 处理一条事件。返回 nil 表示所有绑定实例的本期终态都已落库，可以 ACK；
@@ -97,7 +99,26 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 			delete(h.attempts, key)
 		}
 	}
+	for key := range h.dropped {
+		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+			delete(h.dropped, key)
+		}
+	}
 	return nil
+}
+
+// firstDrop 报告这条事件对这个实例的丢弃是否第一次发生（调用方持有 h.mu）。丢弃不落记录，没有别的依据去重：
+// 同一事件因其他实例需要重投而再次投递时，不能把这个实例重复计入周期计数与模块健康失败。
+func (h *Handler) firstDrop(eventID, instanceID string) bool {
+	if h.dropped == nil {
+		h.dropped = make(map[string]struct{})
+	}
+	key := eventID + "\x00" + instanceID
+	if _, seen := h.dropped[key]; seen {
+		return false
+	}
+	h.dropped[key] = struct{}{}
+	return true
 }
 
 // period 是一个实例处理一期时的上下文。
@@ -127,14 +148,18 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	// 记日志并计入模块健康失败，不能悄悄丢掉这一期。
 	boundary, err := input.FromStorageStart(calendar, bar, periodTime)
 	if err != nil {
-		h.logf("实例 %s 无法确定周期边界（%s/%s），本期丢弃：%v", instance.InstanceID, calendar, bar, err)
-		h.observe(instance, bar, time.Time{}, store.StatusSkipped, input.SkipConfigError)
+		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
+			h.logf("实例 %s 无法确定周期边界（%s/%s），本期丢弃：%v", instance.InstanceID, calendar, bar, err)
+			h.observe(instance, bar, time.Time{}, store.StatusSkipped, input.SkipConfigError)
+		}
 		return nil
 	}
 	validUntil, err := advance(calendar, bar, boundary.BarEnd, ValidBars)
 	if err != nil {
-		h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339), calendar, bar, err)
-		h.observe(instance, bar, boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
+			h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339), calendar, bar, err)
+			h.observe(instance, bar, boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+		}
 		return nil
 	}
 	p := &period{loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
@@ -280,7 +305,8 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 		return nil, input.Loaded{}, err
 	} else if ok {
 		if err := json.Unmarshal(last.RuleStatesJSON, &previous); err != nil {
-			return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, fmt.Sprintf("解析上期规则状态失败：%v", err))
+			h.logf("实例 %s 上期结果 %s 的规则状态无法解析：%v", p.instance.InstanceID, last.ResultID, err)
+			return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, "上期结果的规则状态无法解析（记录已损坏），请停用后重新启用实例")
 		}
 	}
 	decision, err := engine.Evaluate(rt.program, loaded.Frame, previous)

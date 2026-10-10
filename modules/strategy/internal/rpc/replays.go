@@ -98,7 +98,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), ViewGeneration: generation, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), ViewGeneration: generation, Calendar: resolved.Calendar, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
