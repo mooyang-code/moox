@@ -1101,6 +1101,8 @@ func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, 
 			runtime.mu.Unlock()
 			return fmt.Errorf("mark displaced view index retiring: %w", err)
 		}
+		// 按元数据切换活动索引（例如激活响应丢失后由维护补上）与 switchViewLocked 一样继承写入围栏。
+		s.inheritAppliedFence(previousActive, view.GetActiveIndexId())
 	}
 	s.attachActiveViewLocked(view, runtime, schema, columns, activePrimaryDatasetID, engineName)
 	runtime.mu.Unlock()

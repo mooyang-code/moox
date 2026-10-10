@@ -59,7 +59,7 @@ func liveIndexWriteContext(ctx context.Context) (context.Context, context.Cancel
 
 func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventMessage, payload *storagepb.DatasetRowsUpserted) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("storage dataset event is empty"))
+		return eventconsumer.Permanent(errors.New("数据集行事件为空"))
 	}
 	rowEvent, err := eventmapper.ToStorageRows(payload)
 	if err != nil {
@@ -87,22 +87,22 @@ func (s *Service) flushReadyAfterRows(ctx context.Context, spaceID string) {
 // larger transaction for multiple subjects.
 func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsumer.DatasetRowsBatchItem) error {
 	if len(items) == 0 {
-		return eventconsumer.Permanent(errors.New("storage dataset rows batch is empty"))
+		return eventconsumer.Permanent(errors.New("数据集行事件批次为空"))
 	}
 	spaceID, datasetID := "", ""
 	rows := make([]*pb.RowFieldUpsert, 0)
 	for index, item := range items {
 		if item.Message == nil || item.Payload == nil {
-			return eventconsumer.Permanent(fmt.Errorf("storage dataset rows batch item %d is empty", index))
+			return eventconsumer.Permanent(fmt.Errorf("数据集行事件批次的第 %d 条为空", index))
 		}
 		if index == 0 {
 			spaceID, datasetID = item.Message.GetSpaceId(), item.Message.GetSubjectId()
 		}
 		if item.Message.GetSpaceId() != spaceID || item.Message.GetSubjectId() != datasetID {
-			return eventconsumer.Permanent(errors.New("storage dataset rows batch crosses Dataset queues"))
+			return eventconsumer.Permanent(errors.New("数据集行事件批次跨越了不同数据集的队列"))
 		}
 		if item.Payload.GetSpaceId() != spaceID || item.Payload.GetDatasetId() != datasetID {
-			return eventconsumer.Permanent(errors.New("storage dataset rows batch payload identity mismatch"))
+			return eventconsumer.Permanent(errors.New("数据集行事件批次的载荷与消息的空间或数据集不一致"))
 		}
 		rowEvent, err := eventmapper.ToStorageRows(item.Payload)
 		if err != nil {
@@ -111,7 +111,7 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 		rows = append(rows, rowEvent.GetRows()...)
 	}
 	if len(rows) == 0 {
-		return eventconsumer.Permanent(errors.New("storage dataset rows batch has no rows"))
+		return eventconsumer.Permanent(errors.New("数据集行事件批次没有任何行"))
 	}
 	if err := s.applyDatasetEvent(ctx, spaceID, datasetID, rows); err != nil {
 		return err
@@ -146,7 +146,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -167,7 +167,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		if runtime.buildFailed && runtime.next != "" {
 			failedID := runtime.next
 			failedGeneration := s.indexGenerationOf(failedID)
-			if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, errors.New("retrying failed replacement build")); failErr != nil {
+			if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, errors.New("重试已失败的替换构建")); failErr != nil {
 				runtime.mu.Unlock()
 				return failErr
 			}
@@ -185,7 +185,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			}
 			runtime.mu.Unlock()
 			s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
-			return errors.New("replacement view build failed")
+			return errors.New("View 的替换构建已失败")
 		}
 		activeID, nextID := runtime.active, runtime.next
 		activeReady, activeErr := s.liveIndexReady(ctx, activeID)
@@ -216,7 +216,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 		if activeErr == nil && !activeReady && nextID == "" {
 			runtime.mu.Unlock()
-			return fmt.Errorf("storage view active index %q is unavailable", activeID)
+			return fmt.Errorf("View 的活动索引 %q 不可用", activeID)
 		}
 		if activeErr == nil && activeReady {
 			writtenRows, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
@@ -315,7 +315,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				// durable READY/active index. Keep the source delivery pending so
 				// a crash before build metadata reaches READY cannot lose the row.
 				runtime.mu.Unlock()
-				return fmt.Errorf("replacement view index %q awaits activation", nextID)
+				return fmt.Errorf("View 的替换索引 %q 等待激活", nextID)
 			}
 		}
 		runtime.mu.Unlock()
@@ -450,7 +450,7 @@ func validateFactorResultEventColumns(view *pb.View, schema viewindex.ViewIndexS
 				continue
 			}
 			if _, ok := known[field.GetFieldId()]; !ok {
-				return fmt.Errorf("factor result field %q is not in the active View schema; retry after schema maintenance", field.GetFieldId())
+				return fmt.Errorf("因子结果字段 %q 不在活动 View 的 schema 中，等 schema 维护完成后重试", field.GetFieldId())
 			}
 		}
 	}
@@ -598,7 +598,7 @@ func (s *Service) recoverMissingRows(ctx context.Context, schema viewindex.ViewI
 	}
 	s.mu.RUnlock()
 	if reader == nil || auth == nil {
-		return nil, errors.New("primary reader and auth are required to recover a missing view row")
+		return nil, errors.New("恢复缺失的 View 行需要 Primary 读取客户端与鉴权")
 	}
 	datasetID := strings.TrimSpace(schema.PrimaryDatasetID)
 	fieldIDs := viewColumnFields(schema.Columns)

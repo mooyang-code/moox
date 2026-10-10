@@ -250,22 +250,17 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if opts.Metrics != nil && reader != nil {
 		opts.Metrics.SetConsumerBound(reader())
 	}
-	// 就绪事件主要随投递刷新；发布失败或进入退避后，没有新投递的 View 也要有人重试积压的事件。写入围栏也在这里合并落盘。
+	// 就绪事件主要随投递刷新；发布失败或进入退避后，没有新投递的 View 也要有人重试积压的事件。
 	retryCtx, stopRetry := context.WithCancel(ctx)
 	retryDone := make(chan struct{})
 	go func() {
 		defer close(retryDone)
 		retry := time.NewTicker(readyRetryBackoff)
 		defer retry.Stop()
-		persist := time.NewTicker(appliedPersistInterval)
-		defer persist.Stop()
 		for {
 			select {
 			case <-retryCtx.Done():
 				return
-			case <-persist.C:
-				s.persistAppliedFenceLogged()
-				continue
 			case <-retry.C:
 			}
 			if !s.hasPendingReady() {
@@ -276,10 +271,29 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 			}
 		}
 	}()
+	// 写入围栏每 appliedPersistInterval 合并落盘一次。它要一直跑到消费者完全停下：停止时在途投递的收尾（单次写入最长
+	// 几十秒）还会推进围栏，停服超时被强杀时也只丢最近一次落盘之后的更新。
+	persistCtx, stopPersist := context.WithCancel(context.WithoutCancel(ctx))
+	persistDone := make(chan struct{})
+	go func() {
+		defer close(persistDone)
+		ticker := time.NewTicker(appliedPersistInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-persistCtx.Done():
+				return
+			case <-ticker.C:
+				s.persistAppliedFenceLogged()
+			}
+		}
+	}()
 	stop := func() {
 		stopRetry()
 		<-retryDone
 		stopAll()
+		stopPersist()
+		<-persistDone
 		// 消费已停止，围栏不会再变：落盘最后一次，正常重启不丢任何更新。
 		s.persistAppliedFenceLogged()
 		if opts.Metrics != nil {

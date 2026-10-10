@@ -85,7 +85,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		if err != nil {
 			return err
 		}
-		if err := requireStorageSuccess("upsert view period dataset state", rsp.GetRetInfo()); err != nil {
+		if err := requireStorageSuccess("写入 View 周期的数据集状态", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 		if recorded := rsp.GetState(); recorded != nil && recorded.GetEventId() != message.GetEventId() {
@@ -101,7 +101,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		if err != nil {
 			return err
 		}
-		if err := requireStorageSuccess("list view period dataset states", statesRsp.GetRetInfo()); err != nil {
+		if err := requireStorageSuccess("读取 View 周期的数据集状态", statesRsp.GetRetInfo()); err != nil {
 			return err
 		}
 		seenDatasets := make(map[string]struct{}, len(statesRsp.GetStates()))
@@ -219,7 +219,7 @@ func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.E
 		if err != nil {
 			return err
 		}
-		if err := requireStorageSuccess("record view sync point", rsp.GetRetInfo()); err != nil {
+		if err := requireStorageSuccess("记录 View 同步点", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 	}

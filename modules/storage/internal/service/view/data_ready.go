@@ -26,8 +26,8 @@ type pendingViewReady struct {
 }
 
 // NoteAppliedPosition 记录某个索引已写入到的来源位置。只改内存并标脏：后台循环每 appliedPersistInterval 合并落盘一次，
-// 停止消费时再落盘一次。崩溃时丢失最近的更新只会让对应的就绪事件等到同一来源的下一次行写入才放行，不必为每条行事件
-// 同步落盘（那会让所有分区排队等 fsync）。
+// 停止消费时再落盘一次，不必为每条行事件同步落盘（那会让所有分区排队等 fsync）。代价是崩溃时丢失最近一次落盘之后的
+// 更新：这些行已经 ACK、不会重投，对应的就绪事件要等同一来源的下一次行写入才放行，日线来源会晚一个交易日。
 func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID string, sequence uint64) {
 	if s == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || strings.TrimSpace(indexID) == "" || strings.TrimSpace(nodeID) == "" || strings.TrimSpace(storeID) == "" || sequence == 0 {
 		return
@@ -44,9 +44,10 @@ func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID 
 	}
 }
 
-// inheritAppliedFence 在活动索引从 from 切换到 to 时，把 from 的写入围栏并入 to（逐个来源取较大值）。to 的回填包含
-// from 在 to 开始双写之前已写入的全部行，此后的行两边都写，所以 from 已写入到的位置 to 也都有了；不并入的话，行在
-// 切换前写入、周期完成事件在切换后才到的就绪事件，要等同一来源的下一次行写入才放行（日线要等一个交易日）。索引 ID
+// inheritAppliedFence 在活动索引从 from 切换到 to 时，把 from 的写入围栏并入 to（逐个来源取较大值）。to 在开始双写
+// 之后才从 Primary 回填，行事件又在 Primary 提交之后才发出，所以 from 在那之前写入的行 to 的回填都有，此后的行两边都
+// 写；不并入的话，行在切换前写入、周期完成事件在切换后才到的就绪事件，要等同一来源的下一次行写入才放行（日线要等一个
+// 交易日）。例外：回填时 Primary 超时被跳过的标的（记日志）在 to 里缺行，并入与否都缺，并入只是不再拖延放行。索引 ID
 // 内含空间与 View，按索引 ID 匹配即可。A/B 槽位名在重建时复用：to 上一代留下的旧键不会大于 from 继承来的值，不影响结果。
 func (s *Service) inheritAppliedFence(from, to string) {
 	if from == "" || to == "" || from == to {
