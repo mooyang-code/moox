@@ -1059,7 +1059,7 @@ build_core_binaries() {
   local host_cli="${MOOX_CLI:-}"
   local cross_cgo=0
   if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
-    if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_ACCESS}" -eq 1 || "${WITH_FACTOR_MGR}" -eq 1 ]]; then
+    if [[ "${WITH_STORAGE}" -eq 1 ]]; then
       cross_cgo=1
     fi
   fi
@@ -1071,7 +1071,7 @@ build_core_binaries() {
     install -m 0755 "${ROOT}/bin/moox-cli" "${host_cli}"
   fi
   local cross_storage=0
-  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_ACCESS}" -eq 1 ]] &&
+  if [[ "${WITH_STORAGE}" -eq 1 ]] &&
     [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
     [[ "${TARGET_GOOS}" == linux ]] || fail "cross-platform Storage build supports only Linux targets"
     [[ "${TARGET_GOARCH}" == amd64 ]] || fail "cross-platform Storage build supports only linux/amd64"
@@ -1090,7 +1090,7 @@ build_core_binaries() {
   fi
   if [[ "${WITH_GATEWAY}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build/build.sh" gateway
+      "${ROOT}/scripts/build/build.sh" host-gateway
   fi
   if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
@@ -1129,7 +1129,11 @@ build_core_binaries() {
       "${ROOT}/scripts/build/build.sh" archive
   fi
 
-  if [[ "${WITH_STORAGE}" -eq 0 && "${WITH_ACCESS}" -eq 0 ]]; then
+  if [[ "${WITH_ACCESS}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build/build.sh" access
+  fi
+  if [[ "${WITH_STORAGE}" -eq 0 ]]; then
     return 0
   fi
   if [[ "${cross_storage}" -eq 1 ]]; then

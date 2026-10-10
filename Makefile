@@ -115,7 +115,7 @@ proto-check:
 check-go-module-graph:
 	bash scripts/ci/check-go-module-graph.sh
 
-verify-pr: check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+verify-pr: test-deployment-packages check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
@@ -194,3 +194,8 @@ proto:
 clean:
 	rm -rf bin release dist
 	find modules -type d \( -name bin -o -name release -o -name .cache \) -prune -exec rm -rf {} +
+
+.PHONY: test-deployment-packages
+test-deployment-packages:
+	go test ./modules/cli/internal/setup/deploy ./modules/cli/internal/command -run 'TestUnit|TestSetupPackage'
+	bash scripts/test/contract/test-deployment-package-boundaries.sh

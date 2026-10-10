@@ -69,9 +69,6 @@ build_storage() {
 	      fi
 	    done
 	  )
-  if [[ "${TARGET_MODULE}" != "storage-cgo" ]]; then
-    build_go modules/access ./cmd/server moox-access 0
-  fi
 }
 
 build_storage_node() {
@@ -146,6 +143,7 @@ case "${TARGET_MODULE}" in
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
     build_storage_cli
+    build_go modules/access ./cmd/server moox-access 0
     build_archive
     ;;
   cli)

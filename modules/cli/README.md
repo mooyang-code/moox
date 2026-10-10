@@ -10,7 +10,10 @@
 ./scripts/build/build.sh cli
 ./bin/moox-cli --help
 go test -count=1 ./modules/cli/...
+make test-deployment-packages
 ```
+
+`setup package --profile <host|control|storage|access|egress-proxy|trade> --binary-dir <目标制品目录> --output <包.tar.gz>` 打包已编译的 Linux 软件和 Git 跟踪的配置模板；`setup package inspect <包.tar.gz>` 校验组件、平台、文件与摘要。这两个命令不加载 `moox.toml`。当前软件包尚待安装器接入运行配置、身份材料和启停脚本，详见[按组件边界打包](../../docs/模块/命令行工具.md#13-按组件边界打包)。
 
 ## 配置
 
