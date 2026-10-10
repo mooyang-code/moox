@@ -207,6 +207,51 @@ func (d Decimal) placeStep(places int) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDigits-places)), nil)
 }
 
+// Rat 返回精确的有理数值，供需要连续多步运算而不想逐步截断的调用方使用。
+func (d Decimal) Rat() *big.Rat { return new(big.Rat).SetFrac(d.normalized(), scale) }
+
+// FromRat 把有理数向零截断到定点精度。
+func FromRat(value *big.Rat) Decimal {
+	units := new(big.Int).Mul(value.Num(), scale)
+	units.Quo(units, value.Denom())
+	return Decimal{units: units}
+}
+
+// DivideProportional 按整数份数 parts 把 total 分给 orderedKeys：每份先向零取整，剩下的最小单位按顺序逐个补给前面的键，
+// 所以各份之和恰好等于 total（不会因为逐份截断而少掉零头）。parts 与 orderedKeys 等长且为正数。
+func DivideProportional(total Decimal, orderedKeys []string, parts []int64) map[string]Decimal {
+	result := make(map[string]Decimal, len(orderedKeys))
+	if len(orderedKeys) == 0 || len(parts) != len(orderedKeys) {
+		return result
+	}
+	sum := new(big.Int)
+	for _, part := range parts {
+		sum.Add(sum, big.NewInt(part))
+	}
+	if sum.Sign() <= 0 {
+		return result
+	}
+	totalUnits := total.normalized()
+	assigned := new(big.Int)
+	shares := make([]*big.Int, len(orderedKeys))
+	for i, part := range parts {
+		share := new(big.Int).Mul(totalUnits, big.NewInt(part))
+		share.Quo(share, sum)
+		shares[i] = share
+		assigned.Add(assigned, share)
+	}
+	leftover := new(big.Int).Sub(totalUnits, assigned)
+	one := big.NewInt(1)
+	for i := 0; leftover.Sign() > 0 && i < len(shares); i++ {
+		shares[i].Add(shares[i], one)
+		leftover.Sub(leftover, one)
+	}
+	for i, key := range orderedKeys {
+		result[key] = Decimal{units: shares[i]}
+	}
+	return result
+}
+
 func DivideStable(total Decimal, orderedKeys []string) map[string]Decimal {
 	result := make(map[string]Decimal, len(orderedKeys))
 	if len(orderedKeys) == 0 {

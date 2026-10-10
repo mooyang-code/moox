@@ -11,10 +11,50 @@ import (
 // applyPortfolio 把各规则的权重相加（做空为负）并执行组合级约束：
 // 单标的上限超出留现金、gross 不超过 leverage、现货不允许负权重且 Σw ≤ 1，最后写入目标、现金与换手。
 func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, spot bool, contributions map[string]quant.Decimal, previous State) error {
-	gross, net := quant.Zero(), quant.Zero()
-	targets := make([]Target, 0, len(contributions))
+	// 先容忍定点噪声量化（本该恰好落在网格上的值不被截低一格）；若这样会突破 max_weight、杠杆或现货上限（配置值离网格点比噪声还近），
+	// 退回精确的向零截断：它只会让绝对值变小，必然满足这些上限。
+	quantized := quantizeTargets(contributions, portfolio, spot, noise)
+	if quantized.violates(portfolio, spot) {
+		quantized = quantizeTargets(contributions, portfolio, spot, quant.Zero())
+	}
+	for _, note := range quantized.notes {
+		decision.Summary.Notes = append(decision.Summary.Notes, note)
+	}
+	for _, target := range quantized.targets {
+		if spot && target.Weight.IsNegative() {
+			return fmt.Errorf("现货 View 不允许负权重：%s = %s", target.InstrumentID, target.Weight.String())
+		}
+	}
+	if quantized.gross.Cmp(portfolio.Leverage) > 0 {
+		return fmt.Errorf("合成后的 gross %s 超过 portfolio.leverage %s", quantized.gross.String(), portfolio.Leverage.String())
+	}
+	if spot && quantized.net.Cmp(quant.One()) > 0 {
+		return fmt.Errorf("现货 View 的权重之和 %s 超过 1", quantized.net.String())
+	}
+	decision.Targets = quantized.targets
+	decision.Summary.Gross = quantized.gross.String()
+	decision.Summary.Net = quantized.net.String()
+	decision.Summary.Cash = quant.One().Sub(quantized.net).String()
+	decision.Summary.Turnover = turnover(quantized.targets, previous.Targets).RoundTo(WeightPlaces).String()
+	for _, target := range quantized.targets {
+		decision.State.Targets[target.InstrumentID] = target.Weight.String()
+	}
+	return nil
+}
+
+// quantizedTargets 是一次量化的结果：max_weight 裁剪、向零截断后仍非零的目标，以及它们的 gross、net。
+type quantizedTargets struct {
+	targets    []Target
+	gross, net quant.Decimal
+	notes      []string
+}
+
+// quantizeTargets 对每个标的的合成权重先套 max_weight 再向零截断（noiseTolerance 为 0 时是精确截断）；裁剪或截断后为零的
+// 标的不再出现在目标里（零权重的目标项会让下游为它读报价，空目标才能直接转现金）。
+func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portfolio, spot bool, noiseTolerance quant.Decimal) quantizedTargets {
+	result := quantizedTargets{gross: quant.Zero(), net: quant.Zero(), targets: make([]Target, 0, len(contributions))}
 	for _, id := range sortedIDs(contributions) {
-		weight := truncateWeight(contributions[id])
+		weight := contributions[id]
 		if weight.IsZero() {
 			continue
 		}
@@ -23,31 +63,33 @@ func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, spot bool, cont
 			if weight.IsNegative() {
 				capped = capped.Neg()
 			}
-			decision.Summary.Notes = append(decision.Summary.Notes, fmt.Sprintf("%s 的合成权重 %s 超过 portfolio.max_weight，裁剪为 %s，超出部分留现金", id, weight.String(), capped.String()))
-			weight = truncateWeight(capped)
+			result.notes = append(result.notes, fmt.Sprintf("%s 的合成权重 %s 超过 portfolio.max_weight，裁剪为 %s，超出部分留现金", id, weight.String(), capped.String()))
+			weight = capped
 		}
-		if spot && weight.IsNegative() {
-			return fmt.Errorf("现货 View 不允许负权重：%s = %s", id, weight.String())
+		weight = truncateWeightWith(weight, noiseTolerance)
+		if weight.IsZero() {
+			continue
 		}
-		gross = gross.Add(abs(weight))
-		net = net.Add(weight)
-		targets = append(targets, Target{InstrumentID: id, Weight: weight})
+		result.gross = result.gross.Add(abs(weight))
+		result.net = result.net.Add(weight)
+		result.targets = append(result.targets, Target{InstrumentID: id, Weight: weight})
 	}
-	if gross.Cmp(portfolio.Leverage) > 0 {
-		return fmt.Errorf("合成后的 gross %s 超过 portfolio.leverage %s", gross.String(), portfolio.Leverage.String())
+	return result
+}
+
+// violates 报告量化结果是否突破了 max_weight、杠杆或现货权重之和上限。
+func (q quantizedTargets) violates(portfolio dsl.Portfolio, spot bool) bool {
+	if q.gross.Cmp(portfolio.Leverage) > 0 || (spot && q.net.Cmp(quant.One()) > 0) {
+		return true
 	}
-	if spot && net.Cmp(quant.One()) > 0 {
-		return fmt.Errorf("现货 View 的权重之和 %s 超过 1", net.String())
+	if portfolio.HasMaxWeight {
+		for _, target := range q.targets {
+			if abs(target.Weight).Cmp(portfolio.MaxWeight) > 0 {
+				return true
+			}
+		}
 	}
-	decision.Targets = targets
-	decision.Summary.Gross = gross.String()
-	decision.Summary.Net = net.String()
-	decision.Summary.Cash = quant.One().Sub(net).String()
-	decision.Summary.Turnover = turnover(targets, previous.Targets).RoundTo(WeightPlaces).String()
-	for _, target := range targets {
-		decision.State.Targets[target.InstrumentID] = target.Weight.String()
-	}
-	return nil
+	return false
 }
 
 // turnover 是与上期理论目标相比的单边换手：Σ|w_new − w_old| / 2。

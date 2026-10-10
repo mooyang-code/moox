@@ -112,3 +112,89 @@ portfolio:
 	}
 	assertDecimal(t, "allocated", decision.Summary.Rules["s"].Allocated, total.String())
 }
+
+// 配置值离网格点比噪声容忍量还近（18 位小数）时，量化退回精确截断，仍然不突破上限；做空同理。
+func TestPrecisionExactLimitsFallBackToExactTruncation(t *testing.T) {
+	leverage := compile(t, `name: tight18
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 0.999999999999999999}
+portfolio:
+  leverage: 0.999999999999999999
+  max_missing: 1
+`, "m")
+	decision := evaluate(t, leverage, frameOf(leverage, map[string]Row{"A": values("m", 1)}), State{})
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"A": "0.9999"})
+
+	for _, tc := range []struct{ sideLine, want string }{{"", "0.4999"}, {"    side: short\n", "-0.4999"}} {
+		program := compile(t, `name: maxw18
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 1}
+`+tc.sideLine+`portfolio:
+  max_weight: 0.499999999999999999
+  leverage: 2
+  max_missing: 1
+`, "m")
+		decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 1)}), State{})
+		assertOK(t, decision)
+		assertWeights(t, decision, map[string]string{"A": tc.want})
+	}
+}
+
+// 大集合的 rank + cap 再分配用精确运算：200 个标的全部选中、cap 恰好等于平均份额时，每个都应是 0.005，不会被截低一格。
+func TestRankCapLargeSetKeepsExactShares(t *testing.T) {
+	program := compile(t, `name: big_cap
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 200}
+    weight: {total: 1, method: rank, cap: 0.005}
+portfolio:
+  max_missing: 1
+`, "m")
+	rows := map[string]Row{}
+	for i, id := range numberedIDs("ALT", 200) {
+		rows[id] = values("m", i)
+	}
+	decision := evaluate(t, program, frameOf(program, rows), State{})
+	assertOK(t, decision)
+	for _, target := range decision.Targets {
+		if target.Weight.String() != "0.005" {
+			t.Fatalf("%s 应为 0.005：%s", target.InstrumentID, target.Weight.String())
+		}
+	}
+	if len(decision.Targets) != 200 {
+		t.Fatalf("应有 200 个目标：%d", len(decision.Targets))
+	}
+	assertDecimal(t, "cash", decision.Summary.Cash, "0")
+}
+
+// max_weight 裁剪并截断后为零的标的不再出现在目标里：空目标才能让下游直接转现金，不为它读报价。
+func TestMaxWeightClippedToZeroDropsTarget(t *testing.T) {
+	program := compile(t, `name: tiny_max
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 1}
+portfolio:
+  max_weight: 0.00009
+  max_missing: 1
+`, "m")
+	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 1)}), State{Targets: map[string]string{"C": "0.5"}})
+	assertOK(t, decision)
+	if len(decision.Targets) != 0 {
+		t.Fatalf("裁剪为零的标的不应留在目标里：%+v", decision.Targets)
+	}
+	assertDecimal(t, "cash", decision.Summary.Cash, "1")
+}

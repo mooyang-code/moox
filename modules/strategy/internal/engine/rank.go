@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math/big"
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -277,7 +278,7 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			// 先配权（含 cap）再 filter_after：cap 在完整选中集合上按批次份额落实并保存（份额上限 = cap / total，各批次叠加后
 			// 不超过 cap），filter_after 剔除与延续期间缺数移除的份额都只留现金。若每期对剩余份额重新套 cap，被裁剪的余量会
 			// 重新分给延续的持仓，等于剔除或缺数的份额没有留作现金。
-			base = applyCap(chosen, base, rule.Rule.Weight.Cap.Div(rule.Rule.Weight.Total))
+			base = applyCapRat(chosen, base, new(big.Rat).Quo(rule.Rule.Weight.Cap.Rat(), rule.Rule.Weight.Total.Rat()))
 		}
 		raw := make(map[string]string, len(base))
 		for _, id := range chosen {

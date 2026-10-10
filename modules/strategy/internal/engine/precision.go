@@ -16,17 +16,20 @@ const (
 	ScoreDigits = 6
 )
 
-// noise 是定点运算（除法、按比例再分配）留下的舍入噪声的上界：截断前把绝对值加上它，免得 0.4 因为 0.39999…99 被截成 0.3999。
-// 只向外加这么一点点再截断（而不是先四舍五入到某一位）：四舍五入会把 0.9999999999999 这样合法的配置值进到 1，突破预算、
-// 杠杆与单标的上限；加上 1e-15 的噪声后，离网格点 1e-15 以上的值仍然被截到网格下面。
-var noise = quant.Must("0.000000000000001")
+// noise 是定点运算留下的舍入噪声的上界：截断前把绝对值加上它，免得本该恰好落在网格上的值（0.4）因为 0.39999…99 被截成 0.3999。
+// rank 配权的份额与 cap 再分配现在用整数分配与精确有理数运算，剩下的噪声只来自 1/3 这类无法用定点数精确表示的份额
+// （不超过集合大小 × 1e-18，集合上限一万个标的）。取 1e-13 留足余量；若这样会突破配置的精确上限，调用方退回精确截断。
+var noise = quant.Must("0.0000000000001")
 
-// truncateWeight 把权重向零截断到 WeightPlaces 位小数（先容忍 1e-15 以内的定点噪声）。
-func truncateWeight(value quant.Decimal) quant.Decimal {
+// truncateWeight 把权重向零截断到 WeightPlaces 位小数（先容忍 noise 以内的定点噪声）。
+func truncateWeight(value quant.Decimal) quant.Decimal { return truncateWeightWith(value, noise) }
+
+// truncateWeightWith 与 truncateWeight 相同，噪声容忍量由调用方给出（零表示精确的向零截断）。
+func truncateWeightWith(value, tolerance quant.Decimal) quant.Decimal {
 	if value.IsNegative() {
-		return value.Sub(noise).TruncateTo(WeightPlaces)
+		return value.Sub(tolerance).TruncateTo(WeightPlaces)
 	}
-	return value.Add(noise).TruncateTo(WeightPlaces)
+	return value.Add(tolerance).TruncateTo(WeightPlaces)
 }
 
 // formatScore 把分数格式化为 ScoreDigits 位有效数字。
