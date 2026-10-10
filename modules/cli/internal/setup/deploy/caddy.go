@@ -88,34 +88,103 @@ func caddyChecksum(path, archiveName string) (string, error) {
 	return "", fmt.Errorf("Caddy 校验和中没有 %s", archiveName)
 }
 
+// 下载慢或网络不稳时（例如经代理访问 GitHub）不能因为总耗时超过固定时间就放弃：只要还在持续收到数据就继续，
+// 一段时间没有数据才算这次尝试失败；失败后保留已下载的部分，下次从断点续传。
+var (
+	downloadAttempts    = 6
+	downloadIdleTimeout = 60 * time.Second
+	downloadTotalLimit  = 45 * time.Minute
+)
+
+// download 把 url 下载到 target：未完成的内容保存在 target.download，重试时用 Range 续传。
 func download(ctx context.Context, url, target string) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, downloadTotalLimit)
+	defer cancel()
+	var lastErr error
+	for attempt := 1; attempt <= downloadAttempts; attempt++ {
+		lastErr = downloadOnce(ctx, url, target)
+		if lastErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return lastErr
+}
+
+func downloadOnce(ctx context.Context, url, target string) error {
+	temporary := target + ".download"
+	var offset int64
+	if info, err := os.Stat(temporary); err == nil {
+		offset = info.Size()
+	}
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
+	}
+	if offset > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("下载 %s: %w", url, err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	flags := os.O_CREATE | os.O_WRONLY
+	switch {
+	case response.StatusCode == http.StatusOK:
+		// 服务端没有按 Range 返回（或者这是第一次下载）：从头写。
+		flags |= os.O_TRUNC
+	case response.StatusCode == http.StatusPartialContent && offset > 0 && contentRangeStart(response.Header.Get("Content-Range")) == offset:
+		flags |= os.O_APPEND
+	case response.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+		// 已有的部分和服务端对不上：丢弃，下一次从头开始。
+		_ = os.Remove(temporary)
+		return fmt.Errorf("下载 %s: 断点续传的位置无效，已丢弃未完成的部分", url)
+	default:
 		return fmt.Errorf("下载 %s: HTTP %d", url, response.StatusCode)
 	}
-	temporary := target + ".download"
-	file, err := os.Create(temporary)
+	file, err := os.OpenFile(temporary, flags, 0o644)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(file, response.Body); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("下载 %s: %w", url, err)
+	// 空闲超时：每收到一批数据就重新计时，一直没有数据时取消请求。
+	idle := time.AfterFunc(downloadIdleTimeout, cancel)
+	defer idle.Stop()
+	buffer := make([]byte, 64<<10)
+	for {
+		n, readErr := response.Body.Read(buffer)
+		if n > 0 {
+			idle.Reset(downloadIdleTimeout)
+			if _, err := file.Write(buffer[:n]); err != nil {
+				_ = file.Close()
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			_ = file.Close()
+			return fmt.Errorf("下载 %s: %w", url, readErr)
+		}
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
 	return os.Rename(temporary, target)
+}
+
+// contentRangeStart 解析 "bytes <起点>-<终点>/<总长>" 里的起点；格式不对时返回 -1。
+func contentRangeStart(header string) int64 {
+	var start, end, total int64
+	if _, err := fmt.Sscanf(header, "bytes %d-%d/%d", &start, &end, &total); err != nil {
+		return -1
+	}
+	return start
 }
 
 func fileSHA512(path string) (string, error) {
