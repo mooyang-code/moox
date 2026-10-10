@@ -23,7 +23,7 @@ func resolveSCFRoutePlan(ctx context.Context, snapshot *setupconfig.Snapshot, re
 	if !snapshot.Manifest.SCFFetcher.Enabled {
 		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: scf_fetcher.enabled is false")
 	}
-	host := snapshot.Manifest.StorageHost
+	host := snapshot.Manifest.StorageHost()
 	if !snapshot.Manifest.HasStorageHost() {
 		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: storage_host is required for automatic regional routing")
 	}
@@ -31,9 +31,6 @@ func resolveSCFRoutePlan(ctx context.Context, snapshot *setupconfig.Snapshot, re
 		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: storage_host provider must be tencent")
 	}
 	address := strings.TrimSpace(host.Address)
-	if address == "" {
-		address = strings.TrimSpace(host.Host)
-	}
 	if address == "" {
 		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: storage_host address is empty")
 	}

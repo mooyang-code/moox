@@ -278,9 +278,9 @@ func SCFAccessRoutes(snapshot *Snapshot) (map[string]string, map[string]map[stri
 		}
 	}
 	if base["access_address"] == "" {
-		host := snapshot.Manifest.StorageHost
+		host := snapshot.Manifest.StorageHost()
 		if host.Address == "" {
-			host = snapshot.Manifest.ControlHost
+			host = snapshot.Manifest.ControlHost()
 		}
 		if host.Address != "" {
 			base["access_address"] = net.JoinHostPort(host.Address, "11004")

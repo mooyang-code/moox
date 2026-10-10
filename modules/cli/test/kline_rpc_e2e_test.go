@@ -343,7 +343,7 @@ func writeKlineOperator(t *testing.T, gatewayTarget string) (string, string) {
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller-moox-cli.key"), []byte(klineGatewaySecret+"\n"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: "+klineGatewayKeyID+"\nkey_file: caller-moox-cli.key\n"), 0600))
 	manifest := filepath.Join(home, "moox.toml")
-	raw := fmt.Sprintf("[admin]\nusername='admin'\npassword='admin-test'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-test'\n[eventbus]\nhost='127.0.0.1'\nport=4222\ntls_enabled=true\n[hosts.\"127.0.0.1\"]\nport=%d\nusername='%s'\npassword='%s'\n[control_host]\nname='%s'\nhost='127.0.0.1'\n", host.Port, host.Username, host.Password, host.Name)
+	raw := fmt.Sprintf("[admin]\nusername='admin'\npassword='admin-test'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-test'\n[eventbus]\nport=4222\ntls_enabled=true\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\npassword='%s'\n[placements]\n%s=['admin','console-proxy','web-host','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.Password, host.Name)
 	require.NoError(t, os.WriteFile(manifest, []byte(raw), 0600))
 	return home, manifest
 }

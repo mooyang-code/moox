@@ -192,16 +192,16 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 	}
 
 	controlRules := append([]cloudtencent.CreateFirewallRulesOptions(nil), setupControlFirewallRulesForTLS(
-		setupdeploy.TLSMode(manifest.ControlHost.TLSMode), manifest.ControlHost.Address,
+		setupdeploy.TLSMode(manifest.ControlHost().TLSMode), manifest.ControlHost().Address,
 	)...)
 	controlRules = appendUniqueFirewallRules(controlRules, setupRuntimeFirewallRules(manifest.EventBus.Port)...)
-	add(manifest.ControlHost, controlRules)
+	add(manifest.ControlHost(), controlRules)
 
-	if setupconfigHostConfigured(manifest.StorageHost) {
-		add(manifest.StorageHost, []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
+	if setupconfigHostConfigured(manifest.StorageHost()) {
+		add(manifest.StorageHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
-	if setupconfigHostConfigured(manifest.ViewHost) {
-		add(manifest.ViewHost, []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
+	if setupconfigHostConfigured(manifest.ViewHost()) {
+		add(manifest.ViewHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
 	tradeNode := strings.TrimSpace(manifest.PlacementHost("trade"))
 	for _, host := range manifest.Hosts() {

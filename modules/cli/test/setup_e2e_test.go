@@ -34,27 +34,32 @@ func TestSetupWorkflowLeavesManifestAndArtifactsSecretFree(t *testing.T) {
 	raw := []byte(`[admin]
 username = "admin"
 password = "admin-e2e-password"
+
 [tencent_cloud]
 secret_id = "AKID-e2e"
 secret_key = "cloud-e2e-secret"
+
 [eventbus]
-host = "192.0.2.10"
 port = 4222
 tls_enabled = true
-[hosts."192.0.2.10"]
+
+[hosts.control]
+address = "192.0.2.10"
+[hosts.control.ssh]
 port = 22
 username = "ubuntu"
 password = "control-e2e-password"
-[hosts."192.0.2.11"]
+
+[hosts.compute-1]
+address = "192.0.2.11"
+[hosts.compute-1.ssh]
 port = 22
 username = "ubuntu"
 password = "compute-e2e-password"
-[control_host]
-name = "control"
-host = "192.0.2.10"
-[[other_hosts]]
-name = "compute-1"
-host = "192.0.2.11"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute-1 = []
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	before, err := os.ReadFile(path)
@@ -82,7 +87,7 @@ host = "192.0.2.11"
 	transport := &captureTransport{}
 	events := []setupdeploy.ReadinessStage{}
 	err = setupdeploy.Control(context.Background(), transport, setupdeploy.Options{
-		RepositoryRoot: root, PublicHost: snapshot.Manifest.ControlHost.Address, BrowserPort: 9527,
+		RepositoryRoot: root, PublicHost: snapshot.Manifest.ControlHost().Address, BrowserPort: 9527,
 		TargetGOOS: "linux", TargetGOARCH: "amd64",
 		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
 		EventBusPort:          snapshot.Manifest.EventBus.Port,

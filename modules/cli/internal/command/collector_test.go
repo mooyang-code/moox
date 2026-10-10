@@ -329,23 +329,8 @@ secret_key = "secret-key"
 region = "ap-guangzhou"
 
 [eventbus]
-host = "192.0.2.10"
 port = 4222
 tls_enabled = true
-
-[hosts."192.0.2.10"]
-port = 22
-username = "ubuntu"
-password = "password"
-
-[hosts."106.53.107.122"]
-port = 22
-username = "ubuntu"
-password = "password"
-
-[control_host]
-name = "control"
-host = "192.0.2.10"
 
 [scf_fetcher]
 enabled = true
@@ -360,7 +345,6 @@ cos_bucket = "moox-scf-guangzhou-1255382561"
 
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-access_host = "106.53.107.122"
 entrypoint = "crypto"
 package_config_dir = "scf/crypto"
 package_name = "moox-collector-crypto-market"
@@ -382,7 +366,6 @@ function_count = 1
 space_id = "stockcn"
 timer_function_count = 1
 measured_safe_group_size = 1
-access_host = "106.53.107.122"
 package_config_dir = "scf/stockcn"
 package_name = "moox-collector-stockcn"
 function_prefix = "moox-fetcher-stockcn"
@@ -398,6 +381,24 @@ storage_timeout_ms = 5000
 region = "ap-guangzhou"
 enabled = true
 function_count = 1
+
+[hosts.control]
+address = "192.0.2.10"
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "password"
+
+[hosts.storage]
+address = "106.53.107.122"
+[hosts.storage.ssh]
+port = 22
+username = "ubuntu"
+password = "password"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+storage = ["access"]
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 

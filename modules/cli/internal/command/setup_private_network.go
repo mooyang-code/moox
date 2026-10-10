@@ -276,7 +276,7 @@ func privatenetHostHasRole(host privatenet.ResolvedHost, role string) bool {
 func findSetupHostByAddress(manifest setupconfig.Manifest, address string) (setupconfig.Host, error) {
 	want := strings.TrimSpace(address)
 	for _, host := range manifest.Hosts() {
-		if host.Address == want || host.Host == want {
+		if host.Address == want {
 			return host, nil
 		}
 	}

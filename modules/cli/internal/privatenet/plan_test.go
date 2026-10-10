@@ -15,10 +15,12 @@ import (
 
 func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 	manifest := setupconfig.Manifest{
-		ControlHost: setupconfig.Host{Name: "control", Address: "106.53.107.122", Provider: "tencent"},
-		StorageHost: setupconfig.Host{Name: "storage", Address: "146.56.196.204", Provider: "tencent"},
-		ViewHost:    setupconfig.Host{Name: "view", Address: "146.56.196.204", Provider: "tencent"},
-		OtherHosts:  []setupconfig.Host{{Name: "compute-1", Address: "43.132.204.177", Provider: "tencent"}},
+		HostCatalog: map[string]setupconfig.HostDefinition{
+			"control":   {Address: "106.53.107.122", Provider: "tencent"},
+			"storage":   {Address: "146.56.196.204", Provider: "tencent"},
+			"compute-1": {Address: "43.132.204.177", Provider: "tencent"},
+		},
+		Placements: map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "storage": {"storage-primary", "storage-view"}},
 		SCFFetcher: setupconfig.SCFFetcher{
 			Enabled: true,
 			Spaces: []setupconfig.SCFFetcherSpace{

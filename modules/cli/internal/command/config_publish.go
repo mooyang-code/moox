@@ -176,7 +176,7 @@ func configTargets(snapshot *setupconfig.Snapshot) ([]configTarget, error) {
 	manifest := snapshot.Manifest
 	paths := manifest.Paths.Resolved()
 	// Without a dedicated storage_host, Storage runs on the control host.
-	storageHost := manifest.ControlHost
+	storageHost := manifest.ControlHost()
 	if manifest.HasStorageHost() {
 		host, err := resolveStorageDeploymentHost(manifest, "")
 		if err != nil {
@@ -194,7 +194,7 @@ func configTargets(snapshot *setupconfig.Snapshot) ([]configTarget, error) {
 		},
 		shrinks: retentionShrinks,
 	}, {
-		ID: "collector-runtime", Host: manifest.ControlHost, Root: paths.ControlRoot,
+		ID: "collector-runtime", Host: manifest.ControlHost(), Root: paths.ControlRoot,
 		Path: path.Join(paths.ControlRoot, "collector", "config", "app.yaml"), Format: "yaml",
 		Services: []string{"collector"},
 		render: func(current []byte) ([]byte, error) {

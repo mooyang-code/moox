@@ -21,8 +21,8 @@ func newSetupConsoleProxyPreflightCommand(deps setupDeps) *cobra.Command {
 			}
 			defer clearSetupSecrets(snapshot)
 			host, err := findSetupHost(snapshot.Manifest, hostName)
-			if snapshot.Manifest.HasCompileHost() && hostName == snapshot.Manifest.CompileHost.Name {
-				host, err = snapshot.Manifest.CompileHost, nil
+			if snapshot.Manifest.HasCompileHost() && hostName == snapshot.Manifest.CompileHost().Name {
+				host, err = snapshot.Manifest.CompileHost(), nil
 			}
 			if err != nil {
 				return err
@@ -34,9 +34,9 @@ func newSetupConsoleProxyPreflightCommand(deps setupDeps) *cobra.Command {
 			defer transport.Close()
 			paths := snapshot.Manifest.Paths.Resolved()
 			root := paths.DeployRoot
-			if host.Name == snapshot.Manifest.ControlHost.Name {
+			if host.Name == snapshot.Manifest.ControlHost().Name {
 				root = paths.ControlRoot
-			} else if host.Name == snapshot.Manifest.StorageHost.Name {
+			} else if host.Name == snapshot.Manifest.StorageHost().Name {
 				root = paths.StorageRoot
 			}
 			result, err := transport.Run(cmd.Context(), []string{"python3", "-c", consoleProxyPreflightScript, root}, nil)

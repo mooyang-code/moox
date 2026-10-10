@@ -76,7 +76,7 @@ func preflightCollectorBlacklistRuntime(ctx context.Context, snapshot *setupconf
 	if snapshot == nil {
 		return fmt.Errorf("deploy and restart Collector with the Space region blacklist before publishing SCFs")
 	}
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost())
 	if err != nil {
 		return fmt.Errorf("cannot verify running Collector blacklist; deploy and restart Collector first")
 	}

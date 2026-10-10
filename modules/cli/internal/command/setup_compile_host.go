@@ -68,7 +68,7 @@ func prepareCompileHost(cmd *cobra.Command, snapshot *setupconfig.Snapshot, sour
 	if err != nil {
 		return err
 	}
-	transport, err := dialSetupHost(cmd.Context(), snapshot.Manifest.CompileHost)
+	transport, err := dialSetupHost(cmd.Context(), snapshot.Manifest.CompileHost())
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func prepareCompileHost(cmd *cobra.Command, snapshot *setupconfig.Snapshot, sour
 	if _, err := transport.Run(cmd.Context(), []string{"bash", "-s", "--", version}, strings.NewReader(string(script))); err != nil {
 		return fmt.Errorf("compile_toolchain_prepare_failed: %w", err)
 	}
-	return writeSetupJSON(cmd, map[string]any{"status": "ok", "host": snapshot.Manifest.CompileHost.Name, "go_version": version, "prepared_only": true})
+	return writeSetupJSON(cmd, map[string]any{"status": "ok", "host": snapshot.Manifest.CompileHost().Name, "go_version": version, "prepared_only": true})
 }
 
 func runSetupBuildLinux(ctx context.Context, snapshot *setupconfig.Snapshot, file, module, sourceDir string) error {
@@ -112,11 +112,11 @@ func runSetupBuildLinux(ctx context.Context, snapshot *setupconfig.Snapshot, fil
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
 	command.Env = append(os.Environ(),
-		"MOOX_SSH_PASSWORD="+snapshot.Manifest.CompileHost.Password,
+		"MOOX_SSH_PASSWORD="+snapshot.Manifest.CompileHost().Password,
 		"MOOX_CLI="+cli,
 		"MOOX_CONFIG_ROOT="+configRoot,
 		"CONFIG="+configPath,
-		"MOOX_STORAGE_BUILD_HOST="+snapshot.Manifest.CompileHost.Name,
+		"MOOX_STORAGE_BUILD_HOST="+snapshot.Manifest.CompileHost().Name,
 		"MOOX_STORAGE_BUILD_HOST_ROLE=compile",
 		"MOOX_LINUX_CGO_TARGET="+module,
 	)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"io/fs"
 	"net"
@@ -118,7 +119,9 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	t.Setenv("MARKER", marker)
 	t.Chdir(root)
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.ControlHost.TLSMode = "internal"
+	host := snapshot.Manifest.HostCatalog["control"]
+	host.TLSMode = "internal"
+	snapshot.Manifest.HostCatalog["control"] = host
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
@@ -203,9 +206,9 @@ func TestSetupDeployServicePassesPackageAndService(t *testing.T) {
 func TestSetupEventBusURLUsesManifestEndpoint(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
-	require.Equal(t, "tls://eventbus.example.test:4333", setupEventBusURL(snapshot.Manifest))
+	require.Equal(t, "tls://203.0.113.8:4333", setupEventBusURL(snapshot.Manifest))
 	snapshot.Manifest.EventBus.TLSEnabled = false
-	require.Equal(t, "nats://eventbus.example.test:4333", setupEventBusURL(snapshot.Manifest))
+	require.Equal(t, "nats://203.0.113.8:4333", setupEventBusURL(snapshot.Manifest))
 	snapshot.Manifest.EventBus.Port = 0
 	require.Empty(t, setupEventBusURL(snapshot.Manifest))
 }
@@ -232,9 +235,8 @@ func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
 func TestSetupHostsListsCompileHostRole(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.CompileHost = setupconfig.Host{
-		Name: "compile", Address: "203.0.113.10", Port: 2222, Username: "builder", Password: "compile-password",
-	}
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 2222, Username: "builder", Password: "compile-password"})
+	snapshot.Manifest.CompileHostRef.Host = "compile"
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
@@ -251,7 +253,8 @@ func TestSetupHostsListsCompileHostRole(t *testing.T) {
 
 func TestFindSetupTrustHostIncludesCompileHost(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.CompileHost = setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder"}
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder"})
+	snapshot.Manifest.CompileHostRef.Host = "compile"
 	host, err := findSetupTrustHost(snapshot.Manifest, "compile")
 	require.NoError(t, err)
 	assert.Equal(t, "203.0.113.10", host.Address)
@@ -366,9 +369,12 @@ func TestSetupDeployControlAcceptsExplicitResetFlag(t *testing.T) {
 
 func TestSetupDeployControlValidatesConfiguredTradeAndEgressHost(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.OtherHosts[0].Name = "compute-1"
-	snapshot.Manifest.OtherHosts = append(snapshot.Manifest.OtherHosts, setupconfig.Host{Name: "egress-host", Address: "203.0.113.11"})
-	snapshot.Manifest.Placements = map[string][]string{"compute-1": {"trade"}, "egress-host": {"egress-proxy"}}
+	snapshot.Manifest.HostCatalog["compute-1"] = snapshot.Manifest.HostCatalog["compute"]
+	delete(snapshot.Manifest.HostCatalog, "compute")
+	delete(snapshot.Manifest.Placements, "compute")
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "egress-host", Address: "203.0.113.11"})
+	snapshot.Manifest.Placements["compute-1"] = []string{"trade"}
+	snapshot.Manifest.Placements["egress-host"] = []string{"egress-proxy"}
 	var hosts []setupconfig.Host
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -390,8 +396,10 @@ func TestSetupDeployControlValidatesConfiguredTradeAndEgressHost(t *testing.T) {
 
 func TestSetupDeployControlValidatesConfiguredTradeHostWithoutDNS(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.OtherHosts[0].Name = "compute-1"
-	snapshot.Manifest.Placements = map[string][]string{"compute-1": {"trade"}}
+	snapshot.Manifest.HostCatalog["compute-1"] = snapshot.Manifest.HostCatalog["compute"]
+	delete(snapshot.Manifest.HostCatalog, "compute")
+	delete(snapshot.Manifest.Placements, "compute")
+	snapshot.Manifest.Placements["compute-1"] = []string{"trade"}
 	var hosts []setupconfig.Host
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -421,11 +429,11 @@ func TestSetupCertificateSummarySelectsTrustModel(t *testing.T) {
 
 func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.Placements = map[string][]string{"compute": {"trade"}}
+	snapshot.Manifest.Placements["compute"] = []string{"trade"}
 	opts := controlDeployOptions(snapshot, "/repo")
 	require.Equal(t, "/repo", opts.RepositoryRoot)
 	require.Equal(t, "203.0.113.8", opts.PublicHost)
-	require.Equal(t, "eventbus.example.test", opts.EventBusPublicAddress)
+	require.Equal(t, "203.0.113.8", opts.EventBusPublicAddress)
 	require.Equal(t, 4333, opts.EventBusPort)
 	require.True(t, opts.EventBusTLSEnabled)
 	require.Equal(t, "wecom", opts.NotificationChannelType)
@@ -476,7 +484,7 @@ func (localReadSSH) Close() error { return nil }
 
 func TestControlDeployOptionsUsesConfiguredStorageGatewayHost(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "146.56.196.204", Port: 22}
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "storage", Address: "146.56.196.204", Port: 22}, "storage-primary")
 	opts := controlDeployOptions(snapshot, "/repo")
 	require.Equal(t, "ip://146.56.196.204:11003", opts.LocalStorageRPCGatewayTarget)
 	require.Equal(t, "storage", opts.LocalStorageGatewayNodeID)
@@ -484,9 +492,8 @@ func TestControlDeployOptionsUsesConfiguredStorageGatewayHost(t *testing.T) {
 
 func TestControlDeployOptionsPassCompileHost(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.CompileHost = setupconfig.Host{
-		Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder", Password: "compile-ssh-password",
-	}
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder", Password: "compile-ssh-password"})
+	snapshot.Manifest.CompileHostRef.Host = "compile"
 	opts := controlDeployOptions(snapshot, "/repo")
 	require.Equal(t, "compile-ssh-password", opts.StorageBuildPassword)
 	require.Equal(t, "compile", opts.StorageBuildHost)
@@ -561,11 +568,9 @@ func TestSetupRuntimeFirewallRulesIncludeEventBusAndServicePorts(t *testing.T) {
 
 func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	manifest := setupconfig.Manifest{
-		ControlHost: setupconfig.Host{Name: "control", Address: "203.0.113.8"},
-		StorageHost: setupconfig.Host{Name: "storage", Address: "203.0.113.10"},
+		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "compute": {Address: "203.0.113.9"}},
 		EventBus:    setupconfig.EventBus{PublicAddress: "203.0.113.8", Port: 4222},
-		Placements:  map[string][]string{"compute": {"trade"}},
-		OtherHosts:  []setupconfig.Host{{Name: "compute", Address: "203.0.113.9"}},
+		Placements:  map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "storage": {"storage-primary"}, "compute": {"trade"}},
 	}
 	targets := setupFirewallTargets(manifest)
 	require.Len(t, targets, 3)
@@ -722,34 +727,36 @@ func setupSnapshot(t *testing.T) *setupconfig.Snapshot {
 	raw := []byte(`[admin]
 username = "admin"
 password = "admin-test-password"
+
 [tencent_cloud]
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
+
 [eventbus]
-host = "eventbus.example.test"
 port = 4333
 tls_enabled = true
-[hosts."eventbus.example.test"]
-port = 22
-username = "ubuntu"
-password = "control-ssh-password"
-[hosts."203.0.113.8"]
-port = 22
-username = "ubuntu"
-password = "control-ssh-password"
-[hosts."203.0.113.9"]
-port = 22
-username = "ubuntu"
-password = "other-ssh-password"
+
 [notification]
 channel_type = "wecom"
 webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
-[control_host]
-name = "control"
-host = "203.0.113.8"
-[[other_hosts]]
-name = "compute"
-host = "203.0.113.9"
+
+[hosts.control]
+address = "203.0.113.8"
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "control-ssh-password"
+
+[hosts.compute]
+address = "203.0.113.9"
+[hosts.compute.ssh]
+port = 22
+username = "ubuntu"
+password = "other-ssh-password"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute = []
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	snapshot, err := setupconfig.Load(path, dir)

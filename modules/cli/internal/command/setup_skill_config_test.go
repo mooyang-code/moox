@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"io/fs"
 	"net"
@@ -205,7 +206,7 @@ func setupSkillSnapshotWithPath(t *testing.T, space, target, node string) (*setu
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "moox.toml")
-	raw := []byte("[admin]\nusername='admin'\npassword='admin-secret'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-secret'\n[eventbus]\nhost='203.0.113.8'\nport=4333\ntls_enabled=true\n[hosts.\"203.0.113.8\"]\nport=22\nusername='ubuntu'\npassword='ssh-secret'\n[control_host]\nname='control'\nhost='203.0.113.8'\n")
+	raw := []byte("[admin]\nusername='admin'\npassword='admin-secret'\n\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-secret'\n\n[eventbus]\nport=4333\ntls_enabled=true\n\n[hosts.control]\naddress = \"203.0.113.8\"\n[hosts.control.ssh]\nport=22\nusername='ubuntu'\npassword='ssh-secret'\n\n[placements]\ncontrol = [\"admin\", \"console-proxy\", \"web-host\", \"eventbus\"]\n")
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	snapshot, err := setupconfig.Load(path, dir)
 	require.NoError(t, err)
@@ -233,7 +234,7 @@ func mustRepoSkillKlineDatasets() skillKlineDatasets {
 
 func TestBuildSkillDataAccessConfigUsesStoragePlacementWithoutGatewaySecrets(t *testing.T) {
 	snapshot := setupSkillSnapshot(t, "crypto", "obsolete-not-used", "obsolete-not-used")
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "192.0.2.10"}
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "storage", Address: "192.0.2.10"}, "storage-primary")
 	reads := 0
 	cfg, err := buildSkillDataAccessConfig(t.Context(), snapshot, "crypto", func(_ context.Context, host setupconfig.Host, path string) ([]byte, error) {
 		reads++

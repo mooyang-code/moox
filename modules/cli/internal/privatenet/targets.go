@@ -35,9 +35,6 @@ func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 		}
 		address := strings.TrimSpace(host.Address)
 		if address == "" {
-			address = strings.TrimSpace(host.Host)
-		}
-		if address == "" {
 			return
 		}
 		key := strings.ToLower(address)
@@ -59,20 +56,20 @@ func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 			item.Name = strings.TrimSpace(host.Name)
 		}
 	}
-	add(manifest.ControlHost, "control")
+	add(manifest.ControlHost(), "control")
 	if manifest.HasStrategyHost() {
-		add(manifest.StrategyHost, "strategy")
+		add(manifest.StrategyHost(), "strategy")
 	}
 	if manifest.HasStorageHost() {
-		add(manifest.StorageHost, "storage")
+		add(manifest.StorageHost(), "storage")
 	}
 	if manifest.HasViewHost() {
-		add(manifest.ViewHost, "view")
+		add(manifest.ViewHost(), "view")
 	}
 	if manifest.HasCompileHost() {
-		add(manifest.CompileHost, "compile")
+		add(manifest.CompileHost(), "compile")
 	}
-	for _, host := range manifest.OtherHosts {
+	for _, host := range manifest.OtherHosts() {
 		role := "other"
 		if name := strings.TrimSpace(host.Name); name != "" {
 			role = name

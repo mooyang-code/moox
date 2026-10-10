@@ -663,8 +663,8 @@ func applyRequest(manifest setupconfig.Manifest, spaces []Space) *pb.ApplySetupR
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		ControlHost:  hostToPB(manifest.ControlHost),
-		OtherHosts:   hostsToPB(manifest.OtherHosts),
+		ControlHost:  hostToPB(manifest.ControlHost()),
+		OtherHosts:   hostsToPB(manifest.OtherHosts()),
 		Spaces:       spacesToPB(spaces),
 	}
 }
@@ -673,8 +673,8 @@ func statusRequest(manifest setupconfig.Manifest, spaces []Space) *pb.GetSetupSt
 	return &pb.GetSetupStatusReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		ControlHost:  hostToPB(manifest.ControlHost),
-		OtherHosts:   hostsToPB(manifest.OtherHosts),
+		ControlHost:  hostToPB(manifest.ControlHost()),
+		OtherHosts:   hostsToPB(manifest.OtherHosts()),
 		Spaces:       spacesToPB(spaces),
 	}
 }

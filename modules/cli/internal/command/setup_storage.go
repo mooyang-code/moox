@@ -1481,7 +1481,7 @@ func resolveStorageBrowserHost(manifest setupconfig.Manifest, requestedStorageHo
 	if _, err := findSetupHost(manifest, requestedStorageHost); err != nil {
 		return setupconfig.Host{}, err
 	}
-	control := manifest.ControlHost
+	control := manifest.ControlHost()
 	if strings.TrimSpace(control.Name) == "" || strings.TrimSpace(control.Address) == "" {
 		return setupconfig.Host{}, errors.New("browser_e2e_control_unavailable")
 	}

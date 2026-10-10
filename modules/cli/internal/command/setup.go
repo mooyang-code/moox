@@ -365,9 +365,9 @@ func newSetupRestartHostCommand(deps setupDeps) *cobra.Command {
 			defer transport.Close()
 			paths := snapshot.Manifest.Paths.Resolved()
 			root := paths.DeployRoot
-			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
 				root = paths.ControlRoot
-			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost.Name) {
+			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost().Name) {
 				root = paths.StorageRoot
 			}
 			result, err := transport.Run(cmd.Context(), []string{
@@ -431,9 +431,9 @@ func newSetupHostDiagnosticsCommand(deps setupDeps) *cobra.Command {
 			defer transport.Close()
 			paths := snapshot.Manifest.Paths.Resolved()
 			root := paths.DeployRoot
-			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
 				root = paths.ControlRoot
-			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost.Name) {
+			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost().Name) {
 				root = paths.StorageRoot
 			}
 			result, err := transport.Run(cmd.Context(), []string{"sh", "-lc", `set -eu
@@ -489,7 +489,7 @@ func newSetupPurgeEventBusCommand(deps setupDeps) *cobra.Command {
 			}
 			defer transport.Close()
 			root := snapshot.Manifest.Paths.Resolved().DeployRoot
-			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
 				root = snapshot.Manifest.Paths.Resolved().ControlRoot
 			}
 			result, err := transport.Run(cmd.Context(), []string{"sh", "-lc", `set -eu
@@ -647,20 +647,20 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 		}
 		defer clearSetupSecrets(snapshot)
 		hosts := make([]setupHostChoice, 0, len(snapshot.Manifest.Hosts())+1)
-		for index, host := range snapshot.Manifest.Hosts() {
+		for _, host := range snapshot.Manifest.Hosts() {
 			role := "other"
 			switch {
-			case index == 0:
+			case host.Name == snapshot.Manifest.ControlHost().Name:
 				role = "control"
-			case snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost.Name):
+			case snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost().Name):
 				role = "storage"
-			case snapshot.Manifest.HasViewHost() && strings.EqualFold(host.Name, snapshot.Manifest.ViewHost.Name):
+			case snapshot.Manifest.HasViewHost() && strings.EqualFold(host.Name, snapshot.Manifest.ViewHost().Name):
 				role = "view"
 			}
 			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Provider: host.Provider, Role: role})
 		}
 		if snapshot.Manifest.HasCompileHost() {
-			host := snapshot.Manifest.CompileHost
+			host := snapshot.Manifest.CompileHost()
 			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Provider: host.Provider, Role: "compile"})
 		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
@@ -724,7 +724,7 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			host := snapshot.Manifest.ControlHost
+			host := snapshot.Manifest.ControlHost()
 			result := map[string]any{
 				"host":   host.Name,
 				"status": "trusted",
@@ -756,8 +756,8 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		deploymentHosts := []setupconfig.Host{snapshot.Manifest.ControlHost}
-		selected := map[string]bool{snapshot.Manifest.ControlHost.Name: true}
+		deploymentHosts := []setupconfig.Host{snapshot.Manifest.ControlHost()}
+		selected := map[string]bool{snapshot.Manifest.ControlHost().Name: true}
 		for _, component := range []string{"trade", "egress-proxy"} {
 			hostID := snapshot.Manifest.PlacementHost(component)
 			if hostID == "" || selected[hostID] {
@@ -784,10 +784,10 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			return fmt.Errorf("config_changed")
 		}
 		return writeSetupJSON(cmd, map[string]any{
-			"host":        snapshot.Manifest.ControlHost.Name,
+			"host":        snapshot.Manifest.ControlHost().Name,
 			"status":      "ready",
 			"reset_data":  resetData,
-			"certificate": setupCertificateSummaryWithMode(snapshot.Manifest.ControlHost.Address, setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)),
+			"certificate": setupCertificateSummaryWithMode(snapshot.Manifest.ControlHost().Address, setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode)),
 		})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
@@ -907,7 +907,7 @@ func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost, storageHost})
+		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost(), storageHost})
 		if validationErr != nil {
 			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
 				return encodeErr
@@ -1114,15 +1114,15 @@ func defaultSetupDeps() setupDeps {
 		ensurePrivateNetwork:   defaultEnsurePrivateNetwork,
 		resolveSCFRoutes:       resolveSCFRoutePlan,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
-			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
-			tlsMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)
+			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
+			tlsMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode)
 			if err := ensureSetupBrowserCATrust(ctx, snapshot); err != nil {
 				return setupclient.LoginResult{}, err
 			}
-			if setupdeploy.UsesPublicTLSMode(tlsMode, snapshot.Manifest.ControlHost.Address) {
+			if setupdeploy.UsesPublicTLSMode(tlsMode, snapshot.Manifest.ControlHost().Address) {
 				return setupclient.VerifyPublicLogin(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
 			}
-			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address))
+			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
 	}
 }
@@ -1137,7 +1137,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return err
 	}
 	defer transport.Close()
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost())
 	if err != nil {
 		return err
 	}
@@ -1148,7 +1148,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	defer gateway.Close()
 	paths := snapshot.Manifest.Paths.Resolved()
-	useControlGateway := sameHostEndpoint(host, snapshot.Manifest.ControlHost)
+	useControlGateway := sameHostEndpoint(host, snapshot.Manifest.ControlHost())
 	primarySecret, viewSecret, err := controlStorageInternalAuth(ctx, control, paths.ControlRoot)
 	if err != nil {
 		return err
@@ -1157,8 +1157,8 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
-	controlTLSMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode)
-	controlURL, controlKey, serviceKey, gatewayCA, err := controlGatewayMaterial(ctx, control, snapshot.Manifest.ControlHost.Address, useControlGateway, paths.ControlRoot, controlTLSMode)
+	controlTLSMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode)
+	controlURL, controlKey, serviceKey, gatewayCA, err := controlGatewayMaterial(ctx, control, snapshot.Manifest.ControlHost().Address, useControlGateway, paths.ControlRoot, controlTLSMode)
 	if err != nil {
 		return err
 	}
@@ -1193,7 +1193,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	buildHost := host
 	buildHostRole := ""
 	if snapshot.Manifest.HasCompileHost() {
-		buildHost = snapshot.Manifest.CompileHost
+		buildHost = snapshot.Manifest.CompileHost()
 		buildHostRole = "compile"
 	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
@@ -1665,7 +1665,7 @@ func runSetupControlDeploySteps(ensureControl, deploy, ensureEventBus func() err
 }
 
 func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
-	host := snapshot.Manifest.ControlHost
+	host := snapshot.Manifest.ControlHost()
 	transport, err := dialSetupHost(ctx, host)
 	if err != nil {
 		return err
@@ -1714,9 +1714,9 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 // View route timeout) would never reach the Storage host's Gateway.
 func refreshSetupStoragePlacements(ctx context.Context, snapshot *setupconfig.Snapshot, client *setupclient.Client) error {
 	seen := map[string]bool{}
-	for _, host := range []setupconfig.Host{snapshot.Manifest.StorageHost, snapshot.Manifest.ViewHost} {
+	for _, host := range []setupconfig.Host{snapshot.Manifest.StorageHost(), snapshot.Manifest.ViewHost()} {
 		name := strings.TrimSpace(host.Name)
-		if name == "" || seen[name] || sameHostEndpoint(host, snapshot.Manifest.ControlHost) {
+		if name == "" || seen[name] || sameHostEndpoint(host, snapshot.Manifest.ControlHost()) {
 			continue
 		}
 		seen[name] = true
@@ -1897,7 +1897,7 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 	localStorageTarget := ""
 	localStorageNodeID := ""
 	if snapshot.Manifest.HasStorageHost() {
-		storageHost := snapshot.Manifest.StorageHost
+		storageHost := snapshot.Manifest.StorageHost()
 		localStorageTarget = "ip://" + net.JoinHostPort(strings.Trim(storageHost.Address, "[]"), "11003")
 		localStorageNodeID = storageHost.Name
 	}
@@ -1906,7 +1906,7 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		DeployRoot:                   paths.DeployRoot,
 		ControlRoot:                  paths.ControlRoot,
 		StorageRoot:                  paths.StorageRoot,
-		PublicHost:                   snapshot.Manifest.ControlHost.Address,
+		PublicHost:                   snapshot.Manifest.ControlHost().Address,
 		BrowserPort:                  9527,
 		EventBusPublicAddress:        snapshot.Manifest.EventBus.PublicAddress,
 		EventBusPort:                 snapshot.Manifest.EventBus.Port,
@@ -1917,12 +1917,12 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		NotificationWebhookURL:       snapshot.Manifest.Notification.WebhookURL,
 		LocalLogs:                    snapshot.Manifest.LocalLogs,
 		Observability:                snapshot.Manifest.Observability,
-		TLSMode:                      setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
+		TLSMode:                      setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode),
 		InstallLocalCA:               true,
 	}
 	if snapshot.Manifest.HasCompileHost() {
-		options.StorageBuildPassword = snapshot.Manifest.CompileHost.Password
-		options.StorageBuildHost = snapshot.Manifest.CompileHost.Name
+		options.StorageBuildPassword = snapshot.Manifest.CompileHost().Password
+		options.StorageBuildHost = snapshot.Manifest.CompileHost().Name
 		options.StorageBuildHostRole = "compile"
 	}
 	// The Trade execution host is an explicit placement, independent of the
@@ -1954,7 +1954,7 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	tradeConsoleBindAddress := ""
 	isTrade := strings.EqualFold(strings.TrimSpace(service), "trade") || strings.EqualFold(strings.TrimSpace(service), "moox_trade")
-	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
 		// TradeConsole has no authentication and trusts X-Space-Id. Keep it on
 		// loopback; external callers must use the authenticated trade_owner
 		// Gateway route.
@@ -1974,8 +1974,8 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	// remote-node deployments open a short-lived control-plane tunnel.
 	control := transport
 	closeControl := false
-	if !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
-		control, err = dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
+		control, err = dialSetupHost(ctx, snapshot.Manifest.ControlHost())
 		if err != nil {
 			// The package has already been activated on the target node. If the
 			// control-plane SSH connection fails, roll it back immediately rather
@@ -1994,7 +1994,7 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	var previousTradeCA []byte
 	var previousTradeCAExists bool
-	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
 		controlPaths := snapshot.Manifest.Paths.Resolved()
 		var readErr error
 		previousTradeCA, previousTradeCAExists, readErr = readTradeGatewayCA(ctx, control, controlPaths.ControlRoot)
@@ -2030,7 +2030,7 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	result, err = syncSetupServiceRegistry(ctx, snapshot, transport, host, service, tradeConsoleBindAddress != "", result)
 	if err != nil {
-		if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+		if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if restoreErr := restoreTradeGatewayRuntime(cleanupCtx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, previousTradeCA, previousTradeCAExists); restoreErr != nil {
@@ -2241,7 +2241,7 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return fmt.Errorf("browser_ca_trust_failed: resolve repository root: %w", err)
 	}
-	host := snapshot.Manifest.ControlHost
+	host := snapshot.Manifest.ControlHost()
 	return setupdeploy.EnsureLocalCATrustForHost(
 		ctx,
 		root,
@@ -2314,16 +2314,16 @@ func findSetupHost(manifest setupconfig.Manifest, name string) (setupconfig.Host
 func resolveStorageDeploymentHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
 	name = strings.TrimSpace(name)
 	if name == "" && manifest.HasStorageHost() {
-		name = manifest.StorageHost.Name
+		name = manifest.StorageHost().Name
 	}
 	host, err := findSetupHost(manifest, name)
 	if err != nil {
 		return setupconfig.Host{}, err
 	}
-	if manifest.HasStorageHost() && !strings.EqualFold(host.Name, manifest.StorageHost.Name) {
+	if manifest.HasStorageHost() && !strings.EqualFold(host.Name, manifest.StorageHost().Name) {
 		return setupconfig.Host{}, fmt.Errorf("storage_host_required")
 	}
-	if manifest.HasViewHost() && !sameHostEndpoint(host, manifest.ViewHost) {
+	if manifest.HasViewHost() && !sameHostEndpoint(host, manifest.ViewHost()) {
 		return setupconfig.Host{}, fmt.Errorf("storage_view_hosts_must_share_endpoint")
 	}
 	return host, nil
@@ -2342,8 +2342,8 @@ func sameHostEndpoint(left, right setupconfig.Host) bool {
 }
 
 func findSetupTrustHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
-	if manifest.HasCompileHost() && strings.EqualFold(manifest.CompileHost.Name, strings.TrimSpace(name)) {
-		return manifest.CompileHost, nil
+	if manifest.HasCompileHost() && strings.EqualFold(manifest.CompileHost().Name, strings.TrimSpace(name)) {
+		return manifest.CompileHost(), nil
 	}
 	return findSetupHost(manifest, name)
 }
@@ -2356,16 +2356,9 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.TencentCloud.SecretID = ""
 	snapshot.Manifest.TencentCloud.SecretKey = ""
 	snapshot.Manifest.Notification.WebhookURL = ""
-	snapshot.Manifest.ControlHost.Password = ""
-	snapshot.Manifest.CompileHost.Password = ""
-	snapshot.Manifest.StorageHost.Password = ""
-	snapshot.Manifest.ViewHost.Password = ""
-	for index := range snapshot.Manifest.OtherHosts {
-		snapshot.Manifest.OtherHosts[index].Password = ""
-	}
-	for address, definition := range snapshot.Manifest.HostCatalog {
-		definition.Password = ""
-		snapshot.Manifest.HostCatalog[address] = definition
+	for id, definition := range snapshot.Manifest.HostCatalog {
+		definition.SSH.Password = ""
+		snapshot.Manifest.HostCatalog[id] = definition
 	}
 }
 

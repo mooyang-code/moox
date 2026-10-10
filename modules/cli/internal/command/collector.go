@@ -698,7 +698,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	storageTargetExplicit := strings.TrimSpace(opts.AccessAddress) != ""
 	var storageRoutePlan privatenet.SCFRoutePlan
 	var storageRoutes map[string]privatenet.SCFStorageRoute
-	if fetcherConfig != nil && manifest != nil && manifest.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(manifest.Manifest.StorageHost.Provider), "tencent") {
+	if fetcherConfig != nil && manifest != nil && manifest.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(manifest.Manifest.StorageHost().Provider), "tencent") {
 		storageRoutePlan, err = resolveSCFRoutePlan(ctx, manifest, opts.Region)
 		if err != nil {
 			return collectorPublishSummary{}, err
@@ -719,7 +719,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 	var collectorCanaryTrust collectorSCFTrustMaterial
 	if fetcherConfig != nil {
-		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost(), manifest.Manifest.Paths.Resolved().ControlRoot)
 		if trustErr != nil {
 			return collectorPublishSummary{}, trustErr
 		}
@@ -1408,7 +1408,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		return summary, err
 	}
 	var storageRoutes map[string]privatenet.SCFStorageRoute
-	if manifest != nil && manifest.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(manifest.Manifest.StorageHost.Provider), "tencent") {
+	if manifest != nil && manifest.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(manifest.Manifest.StorageHost().Provider), "tencent") {
 		plan, routeErr := resolveSCFRoutePlan(ctx, manifest, "")
 		if routeErr != nil {
 			return summary, routeErr
@@ -1418,7 +1418,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return summary, err
 	}
-	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost(), manifest.Manifest.Paths.Resolved().ControlRoot)
 	if trustErr != nil {
 		return summary, trustErr
 	}
@@ -3688,7 +3688,7 @@ func preflightCollectorManifestEnvironmentLowerBound(opts collectorPublishOption
 	opts.CLSHost = scfCLSIngestHost(firstNonEmpty(manifest.Manifest.TencentCloud.Region, clsprepare.Region) + ".cls.tencentyun.com")
 	clsID, clsKey := collectorCLSCredentials()
 	opts.CLSSecretID, opts.CLSSecretKey = clsID, clsKey
-	storageKnown := strings.TrimSpace(opts.AccessAddress) != "" || !manifest.Manifest.HasStorageHost() || !strings.EqualFold(manifest.Manifest.StorageHost.Provider, "tencent")
+	storageKnown := strings.TrimSpace(opts.AccessAddress) != "" || !manifest.Manifest.HasStorageHost() || !strings.EqualFold(manifest.Manifest.StorageHost().Provider, "tencent")
 	if strings.TrimSpace(opts.AccessAddress) == "" && storageKnown {
 		opts.AccessAddress = fetcher.AccessAddress
 	}

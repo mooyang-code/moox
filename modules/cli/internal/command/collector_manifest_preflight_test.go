@@ -79,31 +79,19 @@ func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	manifest := fmt.Sprintf(`[admin]
 username = "admin"
 password = "test-password"
+
 [tencent_cloud]
 secret_id = "test-id"
 secret_key = "test-key"
 region = "ap-guangzhou"
+
 [eventbus]
-host = "203.0.113.10"
 port = 4222
 tls_enabled = true
-[hosts."127.0.0.1"]
-port = %d
-username = "test"
-password = "test"
-[hosts."203.0.113.10"]
-port = 22
-username = "test"
-password = "test"
-[hosts."203.0.113.20"]
-port = 22
-username = "test"
-password = "test"
-[control_host]
-name = "control"
-host = "127.0.0.1"
+
 [scf_fetcher]
 enabled = true
+
 [scf_fetcher.cloud_account]
 account_id = "tencent-scf"
 account_name = "Tencent SCF"
@@ -111,6 +99,7 @@ credential_secret_id = "tencent-default"
 app_id = "1255382561"
 cos_region = "ap-guangzhou"
 cos_bucket = "moox-scf-guangzhou-1255382561"
+
 [[scf_fetcher.spaces]]
 space_id = "stockcn"
 entrypoint = "market_data"
@@ -131,16 +120,46 @@ max_inflight_requests = 10
 request_timeout_ms = 1000
 http_max_attempts = 4
 storage_timeout_ms = 5000
-access_host = "203.0.113.20"
-access_ids = { ap-guangzhou = "access@a", ap-singapore = "access@%s" }
+
 [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 enabled = true
 function_count = 1
+
 [[scf_fetcher.spaces.regions]]
 region = "ap-singapore"
 enabled = true
 function_count = 1
+
+[hosts.control]
+address = "127.0.0.1"
+[hosts.control.ssh]
+port = %d
+username = "test"
+password = "test"
+
+[hosts.a]
+address = "203.0.113.20"
+region = "ap-guangzhou"
+[hosts.a.ssh]
+port = 22
+username = "test"
+password = "test"
+
+[hosts.%[2]s]
+address = "203.0.113.21"
+region = "ap-singapore"
+ssh = { port = 22, username = "test", password = "test" }
+
+[hosts.eventbus]
+address = "203.0.113.10"
+ssh = { port = 22, username = "test", password = "test" }
+
+[placements]
+control = ["admin", "console-proxy", "web-host"]
+eventbus = ["eventbus"]
+a = ["access"]
+%[2]s = ["access"]
 `, host.Port, strings.Repeat("b", 120))
 	require.NoError(t, os.WriteFile(manifestPath, []byte(manifest), 0o600))
 	fetcher, _, err := loadCollectorSCFFetcherConfigSnapshot(manifestPath, "stockcn")
@@ -204,7 +223,7 @@ function_count = 1
 				content = strings.ReplaceAll(content, "provider_id = \"eastmoney\"", "provider_id = \"binance\"")
 			}
 			if tc.missingRoute {
-				content = strings.ReplaceAll(content, "access@a", "missing-access-identity")
+				content = strings.ReplaceAll(content, ` = ["access"]`, " = []")
 			}
 			if tc.name == "local invoke overflow" {
 				content = strings.ReplaceAll(content, "timeout_seconds = 60\n", "timeout_seconds = 60\ninvoke_timeout_seconds = 900\n")
@@ -226,8 +245,8 @@ function_count = 1
 			_, err := publishCollectorFunction(context.Background(), opts)
 			require.Zero(t, mutations.Load(), "invalid publication must not change existing fleets or register accounts")
 			if tc.missingRoute {
-				require.ErrorContains(t, err, "access_ids")
-				require.Zero(t, reads.Load(), "invalid Access identity must fail before cloud API access")
+				require.ErrorContains(t, err, "requires an access component")
+				require.Zero(t, reads.Load(), "missing Access placement must fail before cloud API access")
 				return
 			}
 			require.ErrorContains(t, err, "4096")

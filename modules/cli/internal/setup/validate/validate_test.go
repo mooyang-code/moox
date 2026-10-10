@@ -61,25 +61,26 @@ secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
 
 [eventbus]
-host = "eventbus.example.test"
 port = 4222
 tls_enabled = true
-[hosts."eventbus.example.test"]
+
+[hosts.control]
+address = "eventbus.example.test"
+[hosts.control.ssh]
 port = 22
 username = "ubuntu"
 password = "recognizable-control-password"
-[hosts."192.0.2.11"]
+
+[hosts.compute-1]
+address = "192.0.2.11"
+[hosts.compute-1.ssh]
 port = 22
 username = "ubuntu"
 password = "recognizable-compute-password"
 
-[control_host]
-name = "control"
-host = "eventbus.example.test"
-
-[[other_hosts]]
-name = "compute-1"
-host = "192.0.2.11"
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute-1 = []
 `
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
@@ -130,7 +131,7 @@ func TestRunSSHHostsOnlyChecksDeploymentTargets(t *testing.T) {
 	result, err := RunSSHHosts(context.Background(), snapshot, Dependencies{
 		Identity: &fakeIdentity{err: fmt.Errorf("Tencent STS must not be called")},
 		SSH:      sshChecker,
-	}, []setupconfig.Host{snapshot.Manifest.ControlHost})
+	}, []setupconfig.Host{snapshot.Manifest.ControlHost()})
 	require.NoError(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},

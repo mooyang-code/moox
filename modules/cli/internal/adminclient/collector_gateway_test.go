@@ -106,7 +106,7 @@ func TestCollectorTaskWorkflowUsesNativeGatewayJSONAndInventoryPB(t *testing.T) 
 	knownHosts := filepath.Join(operator, "known_hosts")
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0o600))
 	snapshot := &setupconfig.Snapshot{}
-	snapshot.Manifest.ControlHost = testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts)
+	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "console-proxy", "web-host", "eventbus")
 	require.NoError(t, os.WriteFile(filepath.Join(operator, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: admin-assigned-cli-7\nkey_file: caller-moox-cli.key\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(operator, "caller-moox-cli.key"), []byte("operator-signing-secret-at-least-32-bytes"), 0o600))
 	gateway, err := gatewayio.Open(context.Background(), snapshot)

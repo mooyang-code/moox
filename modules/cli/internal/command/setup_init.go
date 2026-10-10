@@ -110,7 +110,7 @@ func runSetupInit(
 	// and applies private routing only to SCF functions in Storage's Tencent
 	// region.
 	var scfRoutes *privatenet.SCFRoutePlan
-	if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost.Provider), "tencent") {
+	if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost().Provider), "tencent") {
 		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")
 		if routeErr != nil {
 			return setupInitSummary{}, fmt.Errorf("scf-network: %w", routeErr)

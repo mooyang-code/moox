@@ -62,7 +62,7 @@ func newSetupRebuildStorageCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			validation, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost, storageHost})
+			validation, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost(), storageHost})
 			if validationErr != nil {
 				if encodeErr := writeSetupJSON(cmd, validation); encodeErr != nil {
 					return encodeErr
@@ -278,7 +278,7 @@ func parseStorageResetOperationResult(raw string) (storageResetOperationResult, 
 }
 
 func quiesceStorageWriters(ctx context.Context, snapshot *setupconfig.Snapshot) ([]string, error) {
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost())
 	if err != nil {
 		return nil, fmt.Errorf("storage_rebuild_control_unreachable: %w", err)
 	}
@@ -299,7 +299,7 @@ func quiesceStorageWriters(ctx context.Context, snapshot *setupconfig.Snapshot) 
 }
 
 func resumeStorageWriters(ctx context.Context, snapshot *setupconfig.Snapshot, services []string) error {
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost())
 	if err != nil {
 		return fmt.Errorf("storage_rebuild_resume_unreachable: %w", err)
 	}

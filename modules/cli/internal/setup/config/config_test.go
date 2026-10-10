@@ -579,12 +579,7 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(recommended), string(examplePolicy))
 	manifest.SCFFetcher.Enabled = true
-	for index := range manifest.SCFFetcher.Spaces {
-		space := &manifest.SCFFetcher.Spaces[index]
-		_, address, ok := findHostDefinition(manifest.HostCatalog, space.AccessHost)
-		require.True(t, ok)
-		space.AccessAddress = address + ":11004"
-	}
+	require.NoError(t, resolveManifestReferences(&manifest))
 	require.NoError(t, validateSCFFetcher(&manifest.SCFFetcher))
 
 	for _, space := range manifest.SCFFetcher.Spaces {
@@ -667,11 +662,12 @@ secret_id = "secret-id"
 secret_key = "secret-key"
 
 [eventbus]
-host = "192.0.2.10"
 port = 4222
 tls_enabled = true
 
-[hosts."192.0.2.10"]
+[hosts.control]
+address = "192.0.2.10"
+[hosts.control.ssh]
 port = 22
 username = "ubuntu"
 password = "control-password"
@@ -680,9 +676,8 @@ password = "control-password"
 channel_type = "wecom"
 webhook_url = ""
 
-[control_host]
-name = "control"
-host = "192.0.2.10"
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
 `
 
 func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
@@ -718,105 +713,113 @@ func TestLoadValidManifest(t *testing.T) {
 	require.NoError(t, policy.Validate())
 	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
 	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
-	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
+	assert.Equal(t, 22, snapshot.Manifest.ControlHost().Port)
 	assert.Empty(t, snapshot.Manifest.Notification.WebhookURL)
-	assert.Empty(t, snapshot.Manifest.OtherHosts)
+	assert.Empty(t, snapshot.Manifest.OtherHosts())
 	require.NoError(t, snapshot.VerifyUnchanged())
 }
 
 func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-
-[storage_host]
-name = "storage"
-host = "192.0.2.20"
-
-[view_host]
-name = "view"
-host = "192.0.2.20"
-`
-	body = strings.Replace(body, "\n[storage_host]", `
-
-[hosts."192.0.2.20"]
-port = 22
-username = "ubuntu"
-password = "storage-password"
+storage = ["storage-primary", "storage-node", "storage-view"]
+[hosts.storage]
+address = "192.0.2.20"
 provider = "Tencent"
-
-[storage_host]`, 1)
+ssh = { username = "ubuntu", password = "storage-password" }
+`
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	require.Equal(t, "storage", snapshot.Manifest.StorageHost.Name)
-	require.Equal(t, "view", snapshot.Manifest.ViewHost.Name)
-	require.Equal(t, snapshot.Manifest.StorageHost.Address, snapshot.Manifest.ViewHost.Address)
-	assert.Equal(t, "ubuntu", snapshot.Manifest.StorageHost.Username)
-	assert.Equal(t, "storage-password", snapshot.Manifest.ViewHost.Password)
-	assert.Equal(t, "tencent", snapshot.Manifest.StorageHost.Provider)
+	require.Equal(t, "storage", snapshot.Manifest.StorageHost().Name)
+	require.Equal(t, "storage", snapshot.Manifest.ViewHost().Name)
+	require.Equal(t, snapshot.Manifest.StorageHost(), snapshot.Manifest.ViewHost())
+	assert.Equal(t, "ubuntu", snapshot.Manifest.StorageHost().Username)
+	assert.Equal(t, "storage-password", snapshot.Manifest.ViewHost().Password)
+	assert.Equal(t, "tencent", snapshot.Manifest.StorageHost().Provider)
+	assert.Len(t, snapshot.Manifest.Hosts(), 2)
 }
 
-func TestLoadResolvesStorageGatewayHostFromSharedCatalog(t *testing.T) {
+func TestLoadDerivesAccessFromPlacement(t *testing.T) {
 	root := t.TempDir()
-	body := validManifest + `
-
+	body := strings.Replace(validManifest, `"web-host", "eventbus"`, `"web-host", "eventbus", "access"`, 1) + `
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-access_host = "192.0.2.10"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	require.Len(t, snapshot.Manifest.SCFFetcher.Spaces, 1)
-	assert.Equal(t, "192.0.2.10", snapshot.Manifest.SCFFetcher.Spaces[0].AccessHost)
-	assert.Equal(t, "192.0.2.10:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessAddress)
-	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].AccessPrivateAddress)
+	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "control", space.AccessHost)
+	assert.Equal(t, "access@control", space.AccessID)
+	assert.Equal(t, "192.0.2.10:11004", space.AccessAddress)
+	assert.Empty(t, space.AccessPrivateAddress)
 }
 
-func TestLoadNormalizesRegionalStorageAccessTargets(t *testing.T) {
+func TestLoadDerivesRegionalAccessTargets(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-
+storage = ["storage-primary", "access"]
+compute = ["access"]
+[hosts.storage]
+address = "192.0.2.20"
+region = "AP-NANJING"
+ssh = { username = "ubuntu" }
+[hosts.compute]
+address = "192.0.2.21"
+region = "ap-hongkong"
+ssh = { username = "ubuntu" }
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-access_host = "192.0.2.10"
-access_addresses = { AP-NANJING = "192.0.2.20:11004", ap-hongkong = "192.0.2.21:12004" }
-access_ids = { AP-NANJING = "access@access-nanjing", ap-hongkong = "access@access-hongkong" }
+[[scf_fetcher.spaces.regions]]
+region = "ap-nanjing"
+[[scf_fetcher.spaces.regions]]
+region = "ap-hongkong"
+[[scf_fetcher.spaces.regions]]
+region = "ap-guangzhou"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "storage", space.AccessHost)
 	assert.Equal(t, "192.0.2.20:11004", space.AccessAddressForRegion("ap-nanjing"))
-	assert.Equal(t, "192.0.2.21:12004", space.AccessAddressForRegion("ap-hongkong"))
-	assert.Equal(t, "access@access-nanjing", space.AccessIDForRegion("ap-nanjing"))
-	assert.Equal(t, "access@access-hongkong", space.AccessIDForRegion("ap-hongkong"))
+	assert.Equal(t, "192.0.2.21:11004", space.AccessAddressForRegion("ap-hongkong"))
+	assert.Equal(t, "192.0.2.20:11004", space.AccessAddressForRegion("ap-guangzhou"))
+	assert.Equal(t, "access@storage", space.AccessIDForRegion("ap-nanjing"))
+	assert.Equal(t, "access@compute", space.AccessIDForRegion("ap-hongkong"))
 }
 
-func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {
+func TestLoadKeepsPrivateAccessCandidateUntilNetworkVerification(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-
+storage = ["storage-primary", "access"]
+[hosts.storage]
+address = "192.0.2.20"
+private_address = "10.206.0.5"
+region = "ap-nanjing"
+ssh = { username = "ubuntu" }
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-access_host = "192.0.2.10"
-access_private_host = "10.206.0.5"
+[[scf_fetcher.spaces.regions]]
+region = "ap-nanjing"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, "192.0.2.10:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessAddress)
-	assert.Equal(t, "10.206.0.5:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessPrivateAddress)
+	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "10.206.0.5:11004", space.AccessPrivateAddress)
+	assert.Equal(t, "192.0.2.20:11004", space.AccessAddressForRegion("ap-nanjing"))
 }
 
-func TestLoadAcceptsPublicStoragePrivateGatewayHostAsConfiguredValue(t *testing.T) {
+func TestLoadSupportsIPv6HostsAndAccess(t *testing.T) {
 	root := t.TempDir()
-	body := validManifest + `
-
+	body := strings.ReplaceAll(validManifest, "192.0.2.10", "2001:db8::10")
+	body = strings.Replace(body, `"web-host", "eventbus"`, `"web-host", "eventbus", "access"`, 1) + `
 [[scf_fetcher.spaces]]
 space_id = "crypto"
-access_host = "192.0.2.10"
-access_private_host = "192.0.2.10"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, "192.0.2.10:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessPrivateAddress)
+	assert.Equal(t, "2001:db8::10", snapshot.Manifest.EventBus.PublicAddress)
+	assert.Equal(t, "[2001:db8::10]:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessAddress)
 }
 
 func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
@@ -1239,21 +1242,19 @@ func TestLoadTencentCloudRegion(t *testing.T) {
 	assert.Equal(t, "ap-shanghai", snapshot.Manifest.TencentCloud.Region)
 }
 
-func TestLoadDefaultsHostPorts(t *testing.T) {
+func TestLoadDefaultsHostPortsAndAllowsSSHKeyAuthentication(t *testing.T) {
 	root := t.TempDir()
-	body := validManifest + `
-[hosts."192.0.2.11"]
-username = "ubuntu"
-password = "compute-password"
-
-[[other_hosts]]
-name = "compute"
-host = "192.0.2.11"
+	body := strings.Replace(validManifest, `password = "control-password"`, "", 1) + `
+[hosts.compute]
+address = "192.0.2.11"
+ssh = { username = "ubuntu" }
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
-	assert.Equal(t, 22, snapshot.Manifest.OtherHosts[0].Port)
+	assert.Equal(t, 22, snapshot.Manifest.ControlHost().Port)
+	assert.Empty(t, snapshot.Manifest.ControlHost().Password)
+	require.Len(t, snapshot.Manifest.OtherHosts(), 1)
+	assert.Equal(t, 22, snapshot.Manifest.OtherHosts()[0].Port)
 }
 
 func TestLoadEgressProxyConfiguration(t *testing.T) {
@@ -1283,15 +1284,21 @@ domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
 	}
 }
 func TestPlacementsRejectAmbiguousOrInvalidComponents(t *testing.T) {
-	m := Manifest{ControlHost: Host{Name: "control"}, OtherHosts: []Host{{Name: "compute"}}}
+	m := Manifest{HostCatalog: map[string]HostDefinition{
+		"control": {Address: "192.0.2.10"}, "compute": {Address: "192.0.2.11"},
+	}}
 	for _, placements := range []map[string][]string{
 		{"missing": {"trade"}}, {"compute": {"missing"}}, {"compute": {"trade", "trade"}},
-		{"control": {"trade"}, "compute": {"trade"}}, {"compute": {"hostgateway"}}, {"compute": {"admin"}},
+		{"control": {"admin", "console-proxy", "web-host", "trade"}, "compute": {"trade"}},
+		{"compute": {"host-gateway"}}, {"compute": {"admin"}}, {"compute": {"web-host"}},
 	} {
+		if _, ok := placements["control"]; !ok {
+			placements["control"] = []string{"admin", "console-proxy", "web-host", "eventbus"}
+		}
 		m.Placements = placements
 		require.Error(t, validatePlacements(&m))
 	}
-	m.Placements = map[string][]string{"compute": {"trade", "egress-proxy"}}
+	m.Placements = map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "compute": {"trade", "egress-proxy"}}
 	require.NoError(t, validatePlacements(&m))
 	require.Equal(t, "compute", m.PlacementHost("trade"))
 }
@@ -1299,98 +1306,75 @@ func TestPlacementsRejectAmbiguousOrInvalidComponents(t *testing.T) {
 func TestLoadOptionalCompileHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-[hosts."192.0.2.20"]
-username = "builder"
-password = "compile-password"
-
+[hosts.compile]
+address = "192.0.2.20"
+ssh = { username = "builder" }
 [compile_host]
-name = "compile"
-host = "192.0.2.20"
+host = "compile"
 `
-
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.True(t, snapshot.Manifest.HasCompileHost())
-	assert.Equal(t, "compile", snapshot.Manifest.CompileHost.Name)
-	assert.Equal(t, 22, snapshot.Manifest.CompileHost.Port)
+	assert.Equal(t, "compile", snapshot.Manifest.CompileHost().Name)
+	assert.Equal(t, 22, snapshot.Manifest.CompileHost().Port)
 	assert.Len(t, snapshot.Manifest.Hosts(), 1)
+	topology, err := snapshot.Manifest.Topology()
+	require.NoError(t, err)
+	assert.Len(t, topology.Hosts, 1)
+	// An explicit empty placement includes a build host in the deployment.
+	body = strings.Replace(body, "[hosts.compile]", "compile = []\n[hosts.compile]", 1)
+	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Len(t, snapshot.Manifest.Hosts(), 2)
 }
 
 func TestLoadOptionalStrategyHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
-[hosts."192.0.2.21"]
-username = "ubuntu"
-password = "strategy-password"
-
-[strategy_host]
-name = "strategy"
-host = "192.0.2.21"
+strategy = ["strategy"]
+[hosts.strategy]
+address = "192.0.2.21"
+ssh = { username = "ubuntu" }
 `
-
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.True(t, snapshot.Manifest.HasStrategyHost())
-	assert.Equal(t, "strategy", snapshot.Manifest.StrategyHost.Name)
-	assert.Equal(t, 22, snapshot.Manifest.StrategyHost.Port)
+	assert.Equal(t, "strategy", snapshot.Manifest.StrategyHost().Name)
+	assert.Equal(t, 22, snapshot.Manifest.StrategyHost().Port)
 	require.Len(t, snapshot.Manifest.Hosts(), 2)
 	assert.Equal(t, "strategy", snapshot.Manifest.Hosts()[1].Name)
 }
 
 func TestLoadRejectsInvalidManifest(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "missing admin password", body: strings.Replace(validManifest, `password = "admin-password"`, `password = ""`, 1), want: "admin.password"},
-		{name: "bcrypt password too long", body: strings.Replace(validManifest, "admin-password", strings.Repeat("x", 73), 1), want: "72 bytes"},
-		{name: "missing secret id", body: strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), want: "tencent_cloud.secret_id"},
-		{name: "missing secret key", body: strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), want: "tencent_cloud.secret_key"},
-		{name: "empty region", body: strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \" \"", 1), want: "tencent_cloud.region"},
-		{name: "missing eventbus host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
-		{name: "eventbus host with scheme", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "tls://192.0.2.10"`, 1), want: "hosts"},
-		{name: "eventbus host with path", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10/nats"`, 1), want: "hosts"},
-		{name: "eventbus host with port", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10:4222"`, 1), want: "hosts"},
-		{name: "eventbus ipv6 host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "2001:db8::1"`, 1), want: "hosts"},
-		{name: "eventbus explicit zero port", body: strings.Replace(validManifest, "port = 4222", "port = 0", 1), want: "eventbus.port"},
-		{name: "eventbus invalid port", body: strings.Replace(validManifest, "port = 4222", "port = 70000", 1), want: "eventbus.port"},
-		{name: "eventbus tls disabled", body: strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), want: "eventbus.tls_enabled"},
-		{name: "notification webhook must use HTTPS", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "http://example.test/hook"`, 1), want: "notification.webhook_url"},
-		{name: "notification webhook must be a URL", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "not-a-url"`, 1), want: "notification.webhook_url"},
-		{name: "notification webhook must match channel host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://open.feishu.cn/hook"`, 1), want: "notification.webhook_url"},
-		{name: "notification webhook must use approved platform host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://example.invalid/hook"`, 1), want: "notification.webhook_url"},
-		{name: "missing host reference", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
-		{name: "invalid host name", body: strings.Replace(validManifest, `name = "control"`, `name = "Storage A"`, 1), want: "control_host.name"},
-		{name: "missing compile host address", body: validManifest + `
-[compile_host]
-name = "compile"
-host = "192.0.2.99"
-`, want: "compile_host.host"},
-		{name: "unknown field", body: validManifest + "unexpected = true\n", want: "unknown field"},
-		{name: "invalid port", body: strings.Replace(validManifest, "port = 22", "port = 70000", 1), want: "hosts"},
-		{
-			name: "duplicate host name",
-			body: validManifest + `
-[hosts."192.0.2.11"]
-username = "ubuntu"
-password = "password"
-
-[[other_hosts]]
-name = "control"
-host = "192.0.2.11"
-`,
-			want: "duplicate host name",
-		},
-		{
-			name: "duplicate host address",
-			body: validManifest + `
-[[other_hosts]]
-name = "compute"
-host = "192.0.2.10"
-`,
-			want: "duplicate host address",
-		},
+	tests := []struct{ name, body, want string }{
+		{"missing admin password", strings.Replace(validManifest, `password = "admin-password"`, `password = ""`, 1), "admin.password"},
+		{"bcrypt password too long", strings.Replace(validManifest, "admin-password", strings.Repeat("x", 73), 1), "72 bytes"},
+		{"missing secret id", strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), "tencent_cloud.secret_id"},
+		{"missing secret key", strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), "tencent_cloud.secret_key"},
+		{"empty region", strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \" \"", 1), "tencent_cloud.region"},
+		{"missing address", strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), "hosts.control.address"},
+		{"address with scheme", strings.ReplaceAll(validManifest, "192.0.2.10", "tls://192.0.2.10"), "hosts.control.address"},
+		{"address with path", strings.ReplaceAll(validManifest, "192.0.2.10", "192.0.2.10/nats"), "hosts.control.address"},
+		{"address with port", strings.ReplaceAll(validManifest, "192.0.2.10", "192.0.2.10:4222"), "hosts.control.address"},
+		{"invalid private address", strings.Replace(validManifest, "[hosts.control]", "[hosts.control]\nprivate_address = \"http://private\"", 1), "hosts.control.private_address"},
+		{"invalid host id", strings.ReplaceAll(validManifest, "hosts.control", "hosts.Uppercase"), "canonical host IDs"},
+		{"missing SSH username", strings.Replace(validManifest, `username = "ubuntu"`, `username = ""`, 1), "hosts.control.ssh.username"},
+		{"explicit zero SSH port", strings.Replace(validManifest, "port = 22", "port = 0", 1), "hosts.control.ssh.port"},
+		{"invalid SSH port", strings.Replace(validManifest, "port = 22", "port = 70000", 1), "hosts.control.ssh.port"},
+		{"invalid TLS mode", strings.Replace(validManifest, "[hosts.control]", "[hosts.control]\ntls_mode = \"bad\"", 1), "hosts.control.tls_mode"},
+		{"eventbus explicit zero port", strings.Replace(validManifest, "port = 4222", "port = 0", 1), "eventbus.port"},
+		{"eventbus invalid port", strings.Replace(validManifest, "port = 4222", "port = 70000", 1), "eventbus.port"},
+		{"eventbus tls disabled", strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), "eventbus.tls_enabled"},
+		{"missing eventbus placement", strings.Replace(validManifest, `, "eventbus"`, "", 1), "placements must include eventbus"},
+		{"protected component missing", strings.Replace(validManifest, `"console-proxy", `, "", 1), "protected component"},
+		{"unknown placement", validManifest + "unknown = [\"trade\"]\n", "placements host ID"},
+		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "automatic component"},
+		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
+		{"unknown compile host", validManifest + "[compile_host]\nhost = \"missing\"\n", "compile_host.host"},
+		{"duplicate address", validManifest + "[hosts.compute]\naddress = \"192.0.2.10\"\nssh = { username = \"ubuntu\" }\n", "duplicates hosts."},
+	}
+	for _, hook := range []string{"http://example.test/hook", "not-a-url", "https://open.feishu.cn/hook", "https://example.invalid/hook"} {
+		tests = append(tests, struct{ name, body, want string }{"invalid webhook " + hook, strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "`+hook+`"`, 1), "notification.webhook_url"})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1400,6 +1384,39 @@ host = "192.0.2.10"
 			assert.Contains(t, err.Error(), tt.want)
 			assert.NotContains(t, err.Error(), "admin-password")
 			assert.NotContains(t, err.Error(), "secret-key")
+		})
+	}
+}
+
+func TestLoadRejectsRetiredDeploymentKeys(t *testing.T) {
+	for _, section := range []string{"control_host", "storage_host", "view_host", "strategy_host", "other_hosts"} {
+		t.Run(section, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, validManifest+"["+section+"]\nname = \"control\"\n", 0o600), root)
+			require.ErrorContains(t, err, "[hosts.<host-id>]")
+			require.ErrorContains(t, err, "[placements]")
+		})
+	}
+	for _, field := range []string{"access_id", "access_host", "access_private_host", "access_addresses", "access_ids", "storage_gateway_host", "storage_access_targets", "storage_access_target_nodes", "collector_rpc_gateway_target", "collector_gateway_target_node"} {
+		t.Run(field, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + "[[scf_fetcher.spaces]]\nspace_id = \"crypto\"\n" + field + " = \"secret-retired-value\"\n"
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.ErrorContains(t, err, "derived")
+			assert.NotContains(t, err.Error(), "secret-retired-value")
+		})
+	}
+	for name, body := range map[string]string{
+		"IP catalog key":  strings.ReplaceAll(validManifest, "hosts.control", `hosts."192.0.2.10"`),
+		"flat SSH fields": validManifest + "[hosts.compute]\naddress = \"192.0.2.11\"\nusername = \"secret-retired-value\"\n",
+		"eventbus host":   strings.Replace(validManifest, "[eventbus]", "[eventbus]\nhost = \"secret-retired-value\"", 1),
+		"compile name":    validManifest + "[compile_host]\nname = \"secret-retired-value\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "secret-retired-value")
 		})
 	}
 }

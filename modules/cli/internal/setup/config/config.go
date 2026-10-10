@@ -126,7 +126,6 @@ type TencentCloud struct {
 }
 
 type EventBus struct {
-	Host          string `toml:"host"`
 	PublicAddress string `toml:"-"`
 	Port          int    `toml:"port"`
 	TLSEnabled    bool   `toml:"tls_enabled"`
@@ -207,29 +206,39 @@ type Notification struct {
 	WebhookURL  string `toml:"webhook_url"`
 }
 
+// Host is an execution target projected from one canonical host definition.
+// It is not a TOML input or an independently mutable deployment record.
 type Host struct {
-	Name     string `toml:"name"`
-	Host     string `toml:"host"`
-	Address  string `toml:"address"`
-	Port     int    `toml:"port"`
-	Username string `toml:"username"`
-	Password string `toml:"password"`
-	Provider string `toml:"provider"`
-	// TLSMode controls the certificate issuer for the control-plane HTTPS
-	// edge. "internal" is useful when the endpoint is a raw IP that cannot
-	// obtain a public ACME certificate; empty/"auto" keeps the existing
-	// host-based selection.
-	TLSMode string `toml:"tls_mode"`
+	Name           string
+	Address        string
+	PrivateAddress string
+	Region         string
+	Port           int
+	Username       string
+	Password       string `json:"-"`
+	Provider       string
+	TLSMode        string
 }
 
-// HostDefinition is the shared SSH credential record keyed by an address in
-// Manifest.HostCatalog. Role-specific sections only select one of these
-// records; they do not repeat credentials or endpoint data.
-type HostDefinition struct {
+type SSHConfig struct {
 	Port     int    `toml:"port"`
 	Username string `toml:"username"`
-	Password string `toml:"password"`
-	Provider string `toml:"provider"`
+	Password string `toml:"password" json:"-"`
+}
+
+type HostDefinition struct {
+	Address        string    `toml:"address"`
+	PrivateAddress string    `toml:"private_address"`
+	Region         string    `toml:"region"`
+	Provider       string    `toml:"provider"`
+	TLSMode        string    `toml:"tls_mode"`
+	SSH            SSHConfig `toml:"ssh"`
+}
+
+// CompileHostReference selects credentials from hosts without deploying a
+// compiler-only host. An explicit placements entry also makes it a MooX host.
+type CompileHostReference struct {
+	Host string `toml:"host"`
 }
 
 type SCFFetcherRegion struct {
@@ -711,19 +720,16 @@ type SCFFetcherSpace struct {
 	StaggerStartSecond        int    `toml:"stagger_start_second"`
 	StaggerWindowSeconds      int    `toml:"stagger_window_seconds"`
 	StaggerMaxStartsPerSecond int    `toml:"stagger_max_starts_per_second"`
-	AccessID                  string `toml:"access_id"`
-	AccessHost                string `toml:"access_host"`
+	AccessID                  string `toml:"-"`
+	AccessHost                string `toml:"-"`
 	AccessAddress             string `toml:"-"`
-	AccessPrivateHost         string `toml:"access_private_host"`
+	AccessPrivateHost         string `toml:"-"`
 	AccessPrivateAddress      string `toml:"-"`
-	// AccessAddresses overrides the central Storage gateway per SCF
-	// region. Values are regional stateless Access endpoints, while the
-	// central gateway remains the fallback for regions without an override.
-	AccessAddresses map[string]string `toml:"access_addresses"`
-	// AccessIDs selects the target-node identity used by the
-	// regional Access endpoint for each SCF region. The central gateway node
-	// remains the fallback when a region is not listed.
-	AccessIDs      map[string]string `toml:"access_ids"`
+	// AccessAddresses contains regional candidates derived from placements.
+	// Deployment verifies VPC membership before selecting private endpoints.
+	AccessAddresses map[string]string `toml:"-"`
+	// AccessIDs contains the canonical access@host-id identity per region.
+	AccessIDs      map[string]string `toml:"-"`
 	MemorySize     int               `toml:"memory_size"`
 	TimeoutSeconds int               `toml:"timeout_seconds"`
 	// InvokeTimeoutSeconds is used by deployment canary Invoke nodes. Timer
@@ -798,44 +804,7 @@ type Manifest struct {
 	Factors            FactorSetup               `toml:"factors"`
 	SCFFetcher         SCFFetcher                `toml:"scf_fetcher"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
-	ControlHost        Host                      `toml:"control_host"`
-	CompileHost        Host                      `toml:"compile_host"`
-	StrategyHost       Host                      `toml:"strategy_host"`
-	StorageHost        Host                      `toml:"storage_host"`
-	ViewHost           Host                      `toml:"view_host"`
-	OtherHosts         []Host                    `toml:"other_hosts"`
-}
-
-func (m Manifest) Hosts() []Host {
-	hosts := make([]Host, 0, 4+len(m.OtherHosts))
-	hosts = append(hosts, m.ControlHost)
-	if hostConfigured(m.StrategyHost) {
-		hosts = append(hosts, m.StrategyHost)
-	}
-	if hostConfigured(m.StorageHost) {
-		hosts = append(hosts, m.StorageHost)
-	}
-	if hostConfigured(m.ViewHost) {
-		hosts = append(hosts, m.ViewHost)
-	}
-	hosts = append(hosts, m.OtherHosts...)
-	return hosts
-}
-
-func (m Manifest) HasCompileHost() bool {
-	return hostConfigured(m.CompileHost)
-}
-
-func (m Manifest) HasStorageHost() bool {
-	return hostConfigured(m.StorageHost)
-}
-
-func (m Manifest) HasStrategyHost() bool {
-	return hostConfigured(m.StrategyHost)
-}
-
-func (m Manifest) HasViewHost() bool {
-	return hostConfigured(m.ViewHost)
+	CompileHostRef     CompileHostReference      `toml:"compile_host"`
 }
 
 type Snapshot struct {
@@ -932,7 +901,27 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		if first := keys[0].String(); first == "factors.items" || strings.HasPrefix(first, "factors.items.") {
 			return fmt.Errorf("config_invalid: factors.items is no longer supported; split it into [[factors.definitions]] (factor contract) and [[factors.members]] (source_dataset_id, freq, factor_id, status)")
 		}
-		return fmt.Errorf("config_invalid: unknown field %s", keys[0].String())
+		first := keys[0].String()
+		section := string(keys[0][0])
+		switch section {
+		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":
+			return fmt.Errorf("config_invalid: %s is retired; use [hosts.<host-id>] with address and ssh, and [placements]", section)
+		case "hosts":
+			return fmt.Errorf("config_invalid: invalid hosts field; use [hosts.<host-id>] with address and ssh = { port, username, password }")
+		case "scf_fetcher":
+			if strings.Contains(first, "access_") || strings.Contains(first, "gateway") {
+				return fmt.Errorf("config_invalid: SCF access/gateway settings are derived from [hosts.<host-id>] and [placements]; remove the retired field")
+			}
+		case "eventbus":
+			if first == "eventbus.host" {
+				return fmt.Errorf("config_invalid: eventbus.host is derived from the eventbus component in [placements]")
+			}
+		case "dns_resolver":
+			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
+		case "compile_host":
+			return fmt.Errorf("config_invalid: compile_host accepts only host = <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
+		}
+		return fmt.Errorf("config_invalid: unknown field %s", first)
 	}
 	if !md.IsDefined("eventbus", "port") {
 		out.EventBus.Port = 4222
@@ -940,14 +929,19 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("tencent_cloud", "region") {
 		out.TencentCloud.Region = "ap-guangzhou"
 	}
-	for address, definition := range out.HostCatalog {
-		definition.Username = strings.TrimSpace(definition.Username)
+	for id, definition := range out.HostCatalog {
+		definition.Address = strings.TrimSpace(definition.Address)
+		definition.PrivateAddress = strings.TrimSpace(definition.PrivateAddress)
+		definition.Region = strings.ToLower(strings.TrimSpace(definition.Region))
 		definition.Provider = strings.ToLower(strings.TrimSpace(definition.Provider))
-		if definition.Port == 0 {
-			definition.Port = 22
+		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
+		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
+		if !md.IsDefined("hosts", id, "ssh", "port") {
+			definition.SSH.Port = 22
 		}
-		out.HostCatalog[address] = definition
+		out.HostCatalog[id] = definition
 	}
+	out.CompileHostRef.Host = strings.TrimSpace(out.CompileHostRef.Host)
 	out.Paths = out.Paths.Resolved()
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = false
@@ -1045,161 +1039,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	return validate(out)
 }
 
-func resolveManifestReferences(manifest *Manifest) error {
-	if manifest == nil {
-		return fmt.Errorf("config_invalid: manifest is required")
-	}
-	if len(manifest.HostCatalog) == 0 {
-		return fmt.Errorf("config_invalid: hosts must not be empty")
-	}
-
-	lookup := func(path, reference string) (Host, error) {
-		reference = strings.TrimSpace(reference)
-		if reference == "" {
-			return Host{}, fmt.Errorf("config_invalid: %s.host is required", path)
-		}
-		definition, key, ok := findHostDefinition(manifest.HostCatalog, reference)
-		if !ok {
-			return Host{}, fmt.Errorf("config_invalid: %s.host %q was not found in hosts", path, reference)
-		}
-		return Host{
-			Host:     key,
-			Address:  key,
-			Port:     definition.Port,
-			Username: definition.Username,
-			Password: definition.Password,
-			Provider: definition.Provider,
-		}, nil
-	}
-
-	resolveRole := func(path, defaultName string, role *Host, required bool) error {
-		if !hostConfigured(*role) {
-			if required {
-				return fmt.Errorf("config_invalid: %s.host is required", path)
-			}
-			return nil
-		}
-		name := strings.TrimSpace(role.Name)
-		if name == "" {
-			name = defaultName
-		}
-		if strings.TrimSpace(role.Host) == "" {
-			return fmt.Errorf("config_invalid: %s.host is required", path)
-		}
-		if strings.TrimSpace(role.Address) != "" || role.Port != 0 ||
-			strings.TrimSpace(role.Username) != "" || role.Password != "" ||
-			strings.TrimSpace(role.Provider) != "" {
-			return fmt.Errorf("config_invalid: %s must reference hosts without repeating endpoint or credentials", path)
-		}
-		resolved, err := lookup(path, role.Host)
-		if err != nil {
-			return err
-		}
-		resolved.Name = name
-		resolved.TLSMode = role.TLSMode
-		*role = resolved
-		return nil
-	}
-
-	if err := resolveRole("control_host", "control", &manifest.ControlHost, true); err != nil {
-		return err
-	}
-	if err := resolveRole("compile_host", "compile", &manifest.CompileHost, false); err != nil {
-		return err
-	}
-	if err := resolveRole("strategy_host", "strategy", &manifest.StrategyHost, false); err != nil {
-		return err
-	}
-	if err := resolveRole("storage_host", "storage", &manifest.StorageHost, false); err != nil {
-		return err
-	}
-	if err := resolveRole("view_host", "view", &manifest.ViewHost, false); err != nil {
-		return err
-	}
-	for index := range manifest.OtherHosts {
-		role := &manifest.OtherHosts[index]
-		path := fmt.Sprintf("other_hosts[%d]", index)
-		if strings.TrimSpace(role.Name) == "" {
-			return fmt.Errorf("config_invalid: %s.name is required", path)
-		}
-		if strings.TrimSpace(role.Host) == "" {
-			return fmt.Errorf("config_invalid: %s.host is required", path)
-		}
-		if strings.TrimSpace(role.Address) != "" || role.Port != 0 ||
-			strings.TrimSpace(role.Username) != "" || role.Password != "" ||
-			strings.TrimSpace(role.Provider) != "" {
-			return fmt.Errorf("config_invalid: %s must reference hosts without repeating endpoint or credentials", path)
-		}
-		resolved, err := lookup(path, role.Host)
-		if err != nil {
-			return err
-		}
-		resolved.Name = strings.TrimSpace(role.Name)
-		resolved.TLSMode = role.TLSMode
-		*role = resolved
-	}
-
-	if strings.TrimSpace(manifest.EventBus.Host) == "" {
-		return fmt.Errorf("config_invalid: eventbus.host is required")
-	}
-	eventBusHost, err := lookup("eventbus", manifest.EventBus.Host)
-	if err != nil {
-		return err
-	}
-	manifest.EventBus.Host = eventBusHost.Host
-	manifest.EventBus.PublicAddress = eventBusHost.Address
-
-	for index := range manifest.SCFFetcher.Spaces {
-		space := &manifest.SCFFetcher.Spaces[index]
-		space.AccessHost = strings.TrimSpace(space.AccessHost)
-		if space.AccessHost != "" {
-			storageHost, err := lookup(fmt.Sprintf("scf_fetcher.spaces[%d]", index), space.AccessHost)
-			if err != nil {
-				return err
-			}
-			space.AccessHost = storageHost.Host
-			space.AccessAddress = net.JoinHostPort(storageHost.Address, "11004")
-			if space.AccessID == "" {
-				space.AccessID = "access@" + storageHost.Name
-			}
-		}
-		space.AccessPrivateHost = strings.TrimSpace(space.AccessPrivateHost)
-		if space.AccessPrivateHost == "" {
-			continue
-		}
-		privateAddress := space.AccessPrivateHost
-		if net.ParseIP(privateAddress) == nil {
-			if _, address, ok := findHostDefinition(manifest.HostCatalog, privateAddress); ok {
-				privateAddress = address
-			} else {
-				resolved, resolveErr := net.LookupIP(privateAddress)
-				if resolveErr != nil || len(resolved) == 0 {
-					return fmt.Errorf("config_invalid: resolve scf_fetcher.spaces[%d].access_private_host: %w", index, resolveErr)
-				}
-				privateAddress = resolved[0].String()
-			}
-		}
-		if net.ParseIP(privateAddress) == nil {
-			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].access_private_host must resolve to an IP", index)
-		}
-		space.AccessPrivateHost = privateAddress
-		space.AccessPrivateAddress = net.JoinHostPort(privateAddress, "11004")
-	}
-	return nil
-}
-
-func findHostDefinition(catalog map[string]HostDefinition, reference string) (HostDefinition, string, bool) {
-	if definition, ok := catalog[reference]; ok {
-		return definition, reference, true
-	}
-	for address, definition := range catalog {
-		if strings.EqualFold(strings.TrimSpace(address), reference) {
-			return definition, address, true
-		}
-	}
-	return HostDefinition{}, "", false
-}
-
 func validate(manifest *Manifest) error {
 	manifest.Paths = manifest.Paths.Resolved()
 	if err := validatePaths(&manifest.Paths); err != nil {
@@ -1227,8 +1066,8 @@ func validate(manifest *Manifest) error {
 		return fmt.Errorf("config_invalid: tencent_cloud.region is required")
 	}
 	eventBusAddress := strings.TrimSpace(manifest.EventBus.PublicAddress)
-	if eventBusAddress != manifest.EventBus.PublicAddress || !validEventBusAddress(eventBusAddress) {
-		return fmt.Errorf("config_invalid: eventbus.public_address must be an IPv4 address or DNS hostname")
+	if eventBusAddress != manifest.EventBus.PublicAddress || !servicecatalog.ValidHostAddress(eventBusAddress) {
+		return fmt.Errorf("config_invalid: eventbus.public_address must be an IP address or DNS hostname")
 	}
 	manifest.EventBus.PublicAddress = eventBusAddress
 	if manifest.EventBus.Port < 1 || manifest.EventBus.Port > 65535 {
@@ -1279,38 +1118,6 @@ func validate(manifest *Manifest) error {
 		return err
 	}
 
-	names := make(map[string]struct{}, 2+len(manifest.OtherHosts))
-	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
-	if err := validateHost("control_host", &manifest.ControlHost, names, addresses, true); err != nil {
-		return err
-	}
-	if manifest.HasCompileHost() {
-		// The compiler may intentionally run on the control host. Keep it out
-		// of the deployment-host uniqueness sets while still validating it.
-		if err := validateHost("compile_host", &manifest.CompileHost, nil, nil, false); err != nil {
-			return err
-		}
-	}
-	if manifest.HasStrategyHost() {
-		if err := validateHost("strategy_host", &manifest.StrategyHost, names, nil, true); err != nil {
-			return err
-		}
-	}
-	if manifest.HasStorageHost() {
-		if err := validateHost("storage_host", &manifest.StorageHost, names, nil, true); err != nil {
-			return err
-		}
-	}
-	if manifest.HasViewHost() {
-		if err := validateHost("view_host", &manifest.ViewHost, names, nil, true); err != nil {
-			return err
-		}
-	}
-	for i := range manifest.OtherHosts {
-		if err := validateHost(fmt.Sprintf("other_hosts[%d]", i), &manifest.OtherHosts[i], names, addresses, true); err != nil {
-			return err
-		}
-	}
 	if err := validateEgressProxy(&manifest.EgressProxy); err != nil {
 		return err
 	}
@@ -1425,46 +1232,42 @@ func validateEgressProxy(cfg *EgressProxy) error {
 // PlacementHost returns the selected host for a single component. Multi-copy
 // components are addressed through the compiled Directory instead.
 func (m Manifest) PlacementHost(component string) string {
+	selected := ""
 	for host, components := range m.Placements {
 		for _, id := range components {
-			if id == component {
-				return host
+			if id != component {
+				continue
 			}
+			if selected != "" && selected != host {
+				return ""
+			}
+			selected = host
 		}
 	}
-	return ""
+	return selected
 }
 func validatePlacements(m *Manifest) error {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
 	}
-	hosts := map[string]bool{}
-	for _, host := range m.Hosts() {
-		hosts[host.Name] = true
-	}
-	singles := map[string]string{}
-	for host, components := range m.Placements {
-		if !hosts[host] {
-			return fmt.Errorf("config_invalid: placements host %q is unknown", host)
+	for host := range m.Placements {
+		if _, ok := m.HostCatalog[host]; !ok {
+			return fmt.Errorf("config_invalid: placements host ID %q is unknown", host)
 		}
-		seen := map[string]bool{}
-		for _, id := range components {
+		for _, id := range m.Placements[host] {
 			component, ok := catalog.Component(id)
-			if !ok || component.Scope == servicecatalog.ScopeHost || seen[id] {
-				return fmt.Errorf("config_invalid: placements component %q is unknown, automatic or duplicated", id)
-			}
-			seen[id] = true
-			if component.Scope == servicecatalog.ScopeControl && host != m.ControlHost.Name {
-				return fmt.Errorf("config_invalid: component %q requires control host", id)
-			}
-			if component.Replicas == servicecatalog.Single {
-				if previous := singles[id]; previous != "" {
-					return fmt.Errorf("config_invalid: single component %q placed on %s and %s", id, previous, host)
-				}
-				singles[id] = host
+			if !ok || component.Scope == servicecatalog.ScopeHost {
+				return fmt.Errorf("config_invalid: placements contains an unknown or automatic component")
 			}
 		}
+	}
+	topology, err := m.Topology()
+	if err != nil {
+		return err
+	}
+	if err := catalog.ValidateTopology(topology); err != nil {
+		return fmt.Errorf("config_invalid: placements: %w", err)
 	}
 	return nil
 }
@@ -2404,118 +2207,7 @@ func validNotificationWebhook(channelType, rawURL string) bool {
 	}
 }
 
-var (
-	dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
-	hostNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
-	providerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-)
-
-func validEventBusAddress(address string) bool {
-	if address == "" {
-		return false
-	}
-	if ip := net.ParseIP(address); ip != nil {
-		return ip.To4() != nil
-	}
-	if len(address) > 253 || strings.Contains(address, "..") {
-		return false
-	}
-	labels := strings.Split(address, ".")
-	for _, label := range labels {
-		if !dnsLabelPattern.MatchString(label) {
-			return false
-		}
-	}
-	return true
-}
-
-func hostConfigured(host Host) bool {
-	return strings.TrimSpace(host.Name) != "" ||
-		strings.TrimSpace(host.Host) != "" ||
-		strings.TrimSpace(host.Address) != "" ||
-		host.Port != 0 ||
-		strings.TrimSpace(host.Username) != "" ||
-		host.Password != ""
-}
-
-func validateHostCatalog(catalog map[string]HostDefinition) error {
-	seenAddresses := make(map[string]string, len(catalog))
-	for address, definition := range catalog {
-		address = strings.TrimSpace(address)
-		path := fmt.Sprintf("hosts[%q]", address)
-		if !validEventBusAddress(address) {
-			return fmt.Errorf("config_invalid: %s must be an IPv4 address or DNS hostname", path)
-		}
-		addressKey := strings.ToLower(strings.TrimSuffix(address, "."))
-		if ip := net.ParseIP(addressKey); ip != nil {
-			addressKey = ip.String()
-		}
-		if previous, exists := seenAddresses[addressKey]; exists {
-			return fmt.Errorf("config_invalid: duplicate host address %s (also declared as %s)", address, previous)
-		}
-		seenAddresses[addressKey] = address
-		if definition.Port < 1 || definition.Port > 65535 {
-			return fmt.Errorf("config_invalid: %s.port must be between 1 and 65535", path)
-		}
-		if strings.TrimSpace(definition.Username) == "" {
-			return fmt.Errorf("config_invalid: %s.username is required", path)
-		}
-		if definition.Password == "" {
-			return fmt.Errorf("config_invalid: %s.password is required", path)
-		}
-		if provider := strings.ToLower(strings.TrimSpace(definition.Provider)); provider != "" {
-			if !providerPattern.MatchString(provider) {
-				return fmt.Errorf("config_invalid: %s.provider must use lowercase letters, digits, dash, or underscore", path)
-			}
-		}
-	}
-	return nil
-}
-
-func validateHost(path string, host *Host, names, addresses map[string]struct{}, requirePassword bool) error {
-	host.Name = strings.TrimSpace(host.Name)
-	host.Host = strings.TrimSpace(host.Host)
-	host.Address = strings.TrimSpace(host.Address)
-	host.Username = strings.TrimSpace(host.Username)
-	host.Provider = strings.ToLower(strings.TrimSpace(host.Provider))
-	host.TLSMode = strings.ToLower(strings.TrimSpace(host.TLSMode))
-	if host.TLSMode != "" && host.TLSMode != "auto" && host.TLSMode != "public" && host.TLSMode != "internal" {
-		return fmt.Errorf("config_invalid: %s.tls_mode must be auto, public, or internal", path)
-	}
-	if host.Name == "" {
-		return fmt.Errorf("config_invalid: %s.name is required", path)
-	}
-	if !hostNamePattern.MatchString(host.Name) {
-		return fmt.Errorf("config_invalid: %s.name must use lowercase letters, digits, dash, or underscore", path)
-	}
-	if host.Address == "" {
-		return fmt.Errorf("config_invalid: %s.address is required", path)
-	}
-	if host.Port < 1 || host.Port > 65535 {
-		return fmt.Errorf("config_invalid: %s.port must be between 1 and 65535", path)
-	}
-	if host.Username == "" {
-		return fmt.Errorf("config_invalid: %s.username is required", path)
-	}
-	if requirePassword && host.Password == "" {
-		return fmt.Errorf("config_invalid: %s.password is required", path)
-	}
-	if names != nil {
-		nameKey := strings.ToLower(host.Name)
-		if _, exists := names[nameKey]; exists {
-			return fmt.Errorf("config_invalid: duplicate host name %s", host.Name)
-		}
-		names[nameKey] = struct{}{}
-	}
-	if addresses != nil {
-		addressKey := strings.ToLower(host.Address)
-		if _, exists := addresses[addressKey]; exists {
-			return fmt.Errorf("config_invalid: duplicate host address %s", host.Address)
-		}
-		addresses[addressKey] = struct{}{}
-	}
-	return nil
-}
+var providerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 func validAccessInstanceID(id string) bool {
 	return strings.HasPrefix(id, "access@") && servicecatalog.ValidHostID(strings.TrimPrefix(id, "access@"))

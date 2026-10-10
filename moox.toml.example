@@ -8,7 +8,6 @@ secret_key = ""
 region = "ap-guangzhou"
 
 [eventbus]
-  host = "203.0.113.10"
 port = 4222
 tls_enabled = true
 
@@ -339,18 +338,8 @@ region_blacklist = ["ap-guangzhou"]
 # 南京承载现货和 Storage 同地域私网；香港承载 Binance 合约（国内 SCF 到不了 fapi）。
 timer_function_count = 80
 # Timer 用同一个 Access 连接向 Collector Claim 冻结批次，再写入 Storage 周期账本。
-access_id = "access@storage"
-access_host = "203.0.113.11"
-# access_host 是跨地域回源和故障回退地址；同地域 SCF 会自动使用
-# access_private_host 与 Storage VPC/子网。不要手工把私网地址写入公网字段。
-# 可选：填写 Storage 当前私网 IP 作为提示；CLI 仍以腾讯云实例发现结果为准。
-# access_private_host = "10.0.0.5"
-# 可选：按 SCF 地域配置固定 Access 入口；未配置的地域继续回退到
-# access_host / access_private_host。
-# access_addresses = { ap-nanjing = "203.0.113.11:11004", ap-hongkong = "203.0.113.12:12004" }
-# 可选：填写每个入口实际的 access@host 身份；KeyID 由 Admin 分配。
-# 未配置的地域回退到 access_id。
-# access_ids = { ap-nanjing = "access@access-nanjing", ap-hongkong = "access@access-hongkong" }
+# Access 地址和 access@host-id 由主机目录及 placements 自动派生。
+# 部署时核验地域、VPC 与子网后才启用同地域私网端点；跨地域使用公网。
 memory_size = 64
 timeout_seconds = 60
 # Timer and Invoke both reserve time for Storage and durable Completion.
@@ -407,9 +396,6 @@ function_prefix = "moox-fetcher-stockcn"
 timer_function_count = 170
 # 单个 stockcn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
 measured_safe_group_size = 40
-access_id = "access@storage"
-access_host = "203.0.113.11"
-# Storage 同地域的 SCF 自动使用私网 VPC 路径；跨地域自动回退到 access_host。
 memory_size = 64
 timeout_seconds = 60
 # 仅 Invoke 辅助函数使用该独立超时。
@@ -451,58 +437,43 @@ display_name = "西南（成都）"
 enabled = true
 function_count = 0
 
-# 腾讯云主机将 provider 设为 tencent。CLI 会从 storage_host 发现 Storage 的
-# 地域、VPC、子网和私网地址；同地域 SCF 绑定该 VPC，跨地域不创建 CCN 而走
-# access_host。SSH 和控制台入口仍使用主机公网地址。
-# 操作说明见 skills/moox/references/private-network.md。
-[hosts."203.0.113.10"]
-  port = 22
-  username = "ubuntu"
-  password = ""
-  provider = "tencent"
+# 主机 ID 是部署身份；address 用于 SSH 与公网访问，私网地址仅作为待核验候选。
+# SSH 密码可省略，此时使用本机 SSH agent 或私钥。
+[hosts.control]
+address = "203.0.113.10"
+region = "ap-guangzhou"
+provider = "tencent"
+tls_mode = "auto"
+ssh = { port = 22, username = "ubuntu" }
 
-[hosts."203.0.113.11"]
-  port = 22
-  username = "ubuntu"
-  password = ""
-  provider = "tencent"
+[hosts.storage]
+address = "203.0.113.11"
+region = "ap-nanjing"
+provider = "tencent"
+tls_mode = "auto"
+ssh = { port = 22, username = "ubuntu" }
 
-[hosts."203.0.113.12"]
-  port = 22
-  username = "ubuntu"
-  password = ""
-  provider = "tencent"
+[hosts.compute-1]
+address = "203.0.113.12"
+region = "ap-hongkong"
+provider = "tencent"
+ssh = { port = 22, username = "ubuntu" }
 
-[control_host]
-  name = "control"
-  host = "203.0.113.10"
-# Raw public IPs normally cannot obtain a public ACME certificate. Use the
-# bundled Caddy internal CA in that case; omit this field for host-based auto.
-  tls_mode = "auto"
+# 仅 CGO Linux 制品使用编译机；纯 Go 交叉编译与前端构建在本机执行。
+# 编译机使用独立主机 ID，且默认不加入 MooX 部署拓扑。
+# 如需同时部署组件，显式在 placements 中声明 compile（可为空列表）。
+[hosts.compile]
+address = "192.0.2.30"
+ssh = { port = 22, username = "builder" }
 
-[storage_host]
-  name = "storage"
-  host = "203.0.113.11"
-  tls_mode = "auto"
-
-[view_host]
-  name = "view"
-  host = "203.0.113.11"
-  tls_mode = "auto"
-
-# Storage、factor-mgr 等 CGO 组件在 compile_host 上编译（Linux amd64，glibc 不高于生产机）。
-# 不要使用运行中的生产机：编译 DuckDB 会占满 CPU/内存，拖慢同机的调度、网关与 SCF 调用。
 [compile_host]
-  name = "compile"
-  host = "203.0.113.10"
+host = "compile"
 
-[[other_hosts]]
-  name = "compute-1"
-  host = "203.0.113.12"
-
-# 服务放置与出口策略分别声明；主机目录将在统一部署阶段收敛。
+# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [placements]
-compute-1 = ["trade", "egress-proxy"]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
+storage = ["storage-primary", "storage-node", "storage-view", "access"]
+compute-1 = ["trade", "access", "egress-proxy"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision"]

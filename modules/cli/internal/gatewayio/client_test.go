@@ -98,9 +98,9 @@ func TestSignedGatewayUsesTrustedSSHTunnelsRefreshesRoutesAndCloses(t *testing.T
 	knownHosts := filepath.Join(root, "known_hosts")
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0o600))
 	snapshot := &setupconfig.Snapshot{}
-	snapshot.Manifest.ControlHost = testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts)
-	snapshot.Manifest.StorageHost = testfixture.GatewaySSH(t, "storage", listener.Addr().String(), knownHosts)
-	snapshot.Manifest.OtherHosts = []setupconfig.Host{testfixture.GatewaySSH(t, "storage-next", listener.Addr().String(), knownHosts)}
+	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "console-proxy", "web-host", "eventbus")
+	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "storage", listener.Addr().String(), knownHosts), "storage-primary")
+	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "storage-next", listener.Addr().String(), knownHosts))
 	identity := filepath.Join(root, "gateway-client.yaml")
 	require.NoError(t, os.WriteFile(identity, []byte("caller: moox-cli\nkey_id: "+wire.credentials.KeyID+"\nkey_file: caller-moox-cli.key\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "caller-moox-cli.key"), []byte(wire.credentials.Secret+"\n"), 0o600))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"testing"
 
@@ -14,8 +15,10 @@ import (
 
 func TestSetupPrivateNetworkDryRunJSON(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.ControlHost.Provider = "tencent"
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "203.0.113.9", Provider: "tencent"}
+	host := snapshot.Manifest.HostCatalog["control"]
+	host.Provider = "tencent"
+	snapshot.Manifest.HostCatalog["control"] = host
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "storage", Address: "203.0.113.9", Provider: "tencent"}, "storage-primary")
 	called := false
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -68,8 +71,10 @@ func TestSetupSCFNetworkPlanCommandPrintsResolvedRoutes(t *testing.T) {
 
 func TestSetupPrivateNetworkRestorePublicFlag(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.ControlHost.Provider = "tencent"
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "203.0.113.9", Provider: "tencent"}
+	host := snapshot.Manifest.HostCatalog["control"]
+	host.Provider = "tencent"
+	snapshot.Manifest.HostCatalog["control"] = host
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "storage", Address: "203.0.113.9", Provider: "tencent"}, "storage-primary")
 	cmd := newSetupCommand(setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
 		ensurePrivateNetwork: func(_ context.Context, _ *setupconfig.Snapshot, opts privatenet.Options, _ io.Writer) (privatenet.Result, error) {

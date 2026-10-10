@@ -67,27 +67,33 @@ func (h *fakeConfigHost) Close() error { return nil }
 const configTestManifest = `[admin]
 username = "admin"
 password = "admin-test-password"
+
 [tencent_cloud]
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
+
 [notification]
 channel_type = "wecom"
 webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+
 [eventbus]
-host = "203.0.113.8"
 tls_enabled = true
-[hosts."203.0.113.8"]
+
+[hosts.control]
+address = "203.0.113.8"
+[hosts.control.ssh]
 username = "ubuntu"
 password = "control-ssh-password"
-[hosts."203.0.113.20"]
+
+[hosts.storage]
+address = "203.0.113.20"
+[hosts.storage.ssh]
 username = "ubuntu"
 password = "storage-ssh-password"
-[control_host]
-name = "control"
-host = "203.0.113.8"
-[storage_host]
-name = "storage"
-host = "203.0.113.20"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+storage = ["storage-primary", "storage-node"]
 `
 
 const collectorTestConfig = "server:\n  name: collector\n"
@@ -176,7 +182,7 @@ func TestConfigPublishRequiresConsentToShortenRetention(t *testing.T) {
 	_, err := configCommand(t, deps, file, "publish", "--yes", "--only", "storage-policy")
 	require.NoError(t, err)
 
-	shorter := strings.Replace(configTestManifest, "[control_host]", "[storage_retention.spaces.crypto]\n\"1m\" = \"5d\"\n\n[control_host]", 1)
+	shorter := strings.Replace(configTestManifest, "[placements]", "[storage_retention.spaces.crypto]\n\"1m\" = \"5d\"\n\n[placements]", 1)
 	require.NoError(t, os.WriteFile(file, []byte(shorter), 0o600))
 	plan, err := configCommand(t, deps, file, "plan", "--only", "storage-policy")
 	require.NoError(t, err)

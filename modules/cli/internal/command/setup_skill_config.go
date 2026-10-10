@@ -118,7 +118,7 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
-	control, err := transportFor(ctx, snapshot.Manifest.ControlHost)
+	control, err := transportFor(ctx, snapshot.Manifest.ControlHost())
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
@@ -126,9 +126,9 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
-	host := snapshot.Manifest.StorageHost
+	host := snapshot.Manifest.StorageHost()
 	if !snapshot.Manifest.HasStorageHost() {
-		host = snapshot.Manifest.ControlHost
+		host = snapshot.Manifest.ControlHost()
 	}
 	digest := sha256.Sum256([]byte(credentials.KeyID))
 	config.GatewayClient = &gatewayclient.ExternalFileConfig{Address: net.JoinHostPort(host.Address, "11004"), InstanceID: "access@" + host.Name, Caller: "moox-skill", KeyID: credentials.KeyID, KeyFile: filepath.Join(".moox-skill-keys", hex.EncodeToString(digest[:])+".key")}
@@ -168,9 +168,9 @@ func buildSkillDataAccessConfig(
 	if selected == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: scf_fetcher has no configuration for space %q", spaceID)
 	}
-	storageHost := snapshot.Manifest.ControlHost
+	storageHost := snapshot.Manifest.ControlHost()
 	if snapshot.Manifest.HasStorageHost() {
-		storageHost = snapshot.Manifest.StorageHost
+		storageHost = snapshot.Manifest.StorageHost()
 	}
 	storageRoot := snapshot.Manifest.Paths.Resolved().StorageRoot
 

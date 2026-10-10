@@ -122,22 +122,17 @@ func TestPublishCollectorFunctionRejectsUnverifiedCanaryBeforeControlPlaneAccess
 	activeManifest := `[admin]
 username = "admin"
 password = "test-password"
+
 [tencent_cloud]
 secret_id = "test-id"
 secret_key = "test-key"
+
 [eventbus]
-host = "192.0.2.10"
 tls_enabled = true
-[hosts."192.0.2.10"]
-username = "ubuntu"
-password = "test-password"
-[hosts."192.0.2.20"]
-username = "ubuntu"
-password = "test-password"
-[control_host]
-host = "192.0.2.10"
+
 [scf_fetcher]
 enabled = true
+
 [scf_fetcher.cloud_account]
 account_id = "account-a"
 account_name = "test"
@@ -145,6 +140,7 @@ credential_secret_id = "cls-secret"
 app_id = "1234567890"
 cos_region = "ap-guangzhou"
 cos_bucket = "test-bucket"
+
 [[scf_fetcher.spaces]]
 space_id = "crypto"
 entrypoint = "market_data"
@@ -167,16 +163,32 @@ request_timeout_ms = 1000
 http_max_attempts = 4
 storage_timeout_ms = 5000
 max_retry_attempts = 3
-access_id = "control"
-access_host = "192.0.2.20"
+
 [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 enabled = false
 function_count = 0
+
 [[scf_fetcher.spaces.regions]]
 region = "ap-singapore"
 enabled = true
 function_count = 1
+
+[hosts.control]
+address = "192.0.2.10"
+[hosts.control.ssh]
+username = "ubuntu"
+password = "test-password"
+
+[hosts.storage]
+address = "192.0.2.20"
+[hosts.storage.ssh]
+username = "ubuntu"
+password = "test-password"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+storage = ["access"]
 `
 	manifestPath := filepath.Join(t.TempDir(), "moox.toml")
 	require.NoError(t, os.WriteFile(manifestPath, []byte(activeManifest), 0o600))

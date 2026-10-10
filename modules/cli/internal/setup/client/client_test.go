@@ -37,27 +37,32 @@ func clientSnapshotWithPath(t *testing.T) (*setupconfig.Snapshot, string) {
 	body := `[admin]
 username = "admin"
 password = "recognizable-admin-password"
+
 [tencent_cloud]
 secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
+
 [eventbus]
-host = "eventbus.example.test"
 port = 4222
 tls_enabled = true
-[hosts."eventbus.example.test"]
+
+[hosts.control]
+address = "eventbus.example.test"
+[hosts.control.ssh]
 port = 22
 username = "ubuntu"
 password = "recognizable-control-password"
-[hosts."192.0.2.11"]
+
+[hosts.compute]
+address = "192.0.2.11"
+[hosts.compute.ssh]
 port = 22
 username = "ubuntu"
 password = "recognizable-compute-password"
-[control_host]
-name = "control"
-host = "eventbus.example.test"
-[[other_hosts]]
-name = "compute"
-host = "192.0.2.11"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute = []
 `
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
