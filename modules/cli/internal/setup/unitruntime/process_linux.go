@@ -122,6 +122,10 @@ func releaseIdentity(launch processIdentity, binary string) (processIdentity, er
 }
 
 func execComponent(binary string, args, environment []string) error {
+	// This is the dedicated launcher process, immediately before exec. Service
+	// databases and caches must remain private even when the SSH user's umask
+	// permits group writes; never change the coordinator's process-wide umask.
+	unix.Umask(0o077)
 	return unix.Exec(binary, append([]string{binary}, args...), environment)
 }
 

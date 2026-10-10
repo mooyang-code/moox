@@ -91,6 +91,31 @@ func currentTarget(t *testing.T, unit string) string {
 	return value
 }
 
+func TestUnitActivationLinuxCompositeAbortRemovesOnlyItsFirstInstallation(t *testing.T) {
+	options := controlActivationOptions(t)
+	first, err := prepareWithHelper(t, options)
+	require.NoError(t, err)
+	cleanupActivation(t, first)
+	_, err = activationCommand(t, "activate", "--directory", first.Directory)
+	require.NoError(t, err)
+	_, err = activationCommand(t, "rollback", "--unit-root", options.UnitRoot)
+	require.Error(t, err, "operator rollback still requires an older snapshot")
+	options.ReleaseID = "unrelated-candidate"
+	unrelated, err := prepareWithHelper(t, options)
+	require.NoError(t, err)
+	_, err = Abort(t.Context(), unrelated.Directory, unitruntime.Options{})
+	require.Error(t, err)
+	require.Equal(t, first.Directory, currentTarget(t, options.UnitRoot))
+	_, err = Abort(t.Context(), first.Directory, unitruntime.Options{})
+	require.NoError(t, err)
+	_, err = os.Lstat(filepath.Join(options.UnitRoot, "current"))
+	require.True(t, os.IsNotExist(err))
+	_, err = ReadInstalled(t.Context(), first.Directory)
+	require.NoError(t, err, "retired first-installation data is retained")
+	_, err = Abort(t.Context(), first.Directory, unitruntime.Options{})
+	require.NoError(t, err, "composite recovery is repeatable")
+}
+
 func TestUnitActivationLinuxUsesActualWebHostCopiesStateAndRollsBack(t *testing.T) {
 	options := controlActivationOptions(t)
 	first, err := prepareWithHelper(t, options)

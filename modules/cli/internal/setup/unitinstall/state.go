@@ -39,10 +39,13 @@ func mutablePaths(prepared Prepared, logs bool) []string {
 // have exited. Files are independent: mutable data is never hard linked.
 func copyState(ctx context.Context, source, destination Prepared, imported []string) error {
 	paths := slices.DeleteFunc(mutablePaths(destination, false), func(name string) bool { return slices.Contains(imported, name) })
-	return copyStatePaths(ctx, source.Directory, destination.Directory, paths)
+	return CopyOfflineState(ctx, source.Directory, destination.Directory, paths)
 }
 
-func copyStatePaths(ctx context.Context, source, destination string, paths []string) error {
+// CopyOfflineState copies independent private state from a closed producer.
+// The caller must hold host maintenance and stop every writer (or wait for the
+// offline initializer to exit). It never provides a live database backup.
+func CopyOfflineState(ctx context.Context, source, destination string, paths []string) error {
 	from, err := fsutil.OpenPhysicalRoot(source, true)
 	if err != nil {
 		return err
@@ -54,6 +57,9 @@ func copyStatePaths(ctx context.Context, source, destination string, paths []str
 	}
 	defer to.Close()
 	for _, name := range paths {
+		if !fs.ValidPath(name) || name == "." {
+			return errors.New("offline state copy requires clean relative paths")
+		}
 		info, err := from.Lstat(name)
 		if os.IsNotExist(err) {
 			continue

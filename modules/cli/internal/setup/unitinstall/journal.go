@@ -162,17 +162,39 @@ func restore(ctx context.Context, guard *unitruntime.Maintenance, unit *os.Root,
 // Recover restores a pending transaction, or clears an already completed
 // transaction's leftover barrier. It does not roll back a successful release.
 func Recover(ctx context.Context, unitRoot string, lockOptions unitruntime.Options) (Activation, error) {
-	return runRecovery(ctx, unitRoot, false, lockOptions)
+	return runRecovery(ctx, unitRoot, false, "", lockOptions)
 }
 
 // Rollback explicitly restores the last activation's pre-upgrade snapshot and
 // its previous running selection. Changes made after that upgrade stay in the
 // retired new release, rather than being merged into an older schema.
 func Rollback(ctx context.Context, unitRoot string, lockOptions unitruntime.Options) (Activation, error) {
-	return runRecovery(ctx, unitRoot, true, lockOptions)
+	return runRecovery(ctx, unitRoot, true, "", lockOptions)
 }
 
-func runRecovery(ctx context.Context, unitRoot string, rollback bool, lockOptions unitruntime.Options) (result Activation, returnErr error) {
+// Abort cancels exactly the activation named by a composite bootstrap journal.
+// Unlike an operator rollback, it also removes a failed first installation's
+// current view. Its data and software remain available in the retired release.
+func Abort(ctx context.Context, directory string, lockOptions unitruntime.Options) (Activation, error) {
+	candidate, err := ReadInstalled(ctx, directory)
+	if err != nil {
+		return Activation{}, err
+	}
+	return runRecovery(ctx, candidate.UnitRoot, true, directory, lockOptions)
+}
+
+// ReadActivation inspects a durable unit journal without acquiring maintenance.
+// Callers coordinating several units must recheck it while holding the lock.
+func ReadActivation(unitRoot string) (Activation, bool, error) {
+	unit, err := fsutil.OpenPhysicalRoot(unitRoot, false)
+	if err != nil {
+		return Activation{}, false, err
+	}
+	defer unit.Close()
+	return readActivation(unit)
+}
+
+func runRecovery(ctx context.Context, unitRoot string, rollback bool, expectedDirectory string, lockOptions unitruntime.Options) (result Activation, returnErr error) {
 	unit, err := fsutil.OpenPhysicalRoot(unitRoot, false)
 	if err != nil {
 		return result, err
@@ -188,7 +210,10 @@ func runRecovery(ctx context.Context, unitRoot string, rollback bool, lockOption
 			return errors.Join(err, errors.New("activation journal changed while acquiring maintenance"))
 		}
 		journal = latest
-		if rollback && journal.Phase == "active" && journal.PreviousDirectory == "" {
+		if expectedDirectory != "" && journal.Directory != expectedDirectory {
+			return errors.New("bootstrap abort refuses an unrelated activation")
+		}
+		if rollback && expectedDirectory == "" && journal.Phase == "active" && journal.PreviousDirectory == "" {
 			return errors.New("first installation has no previous snapshot to roll back")
 		}
 		if (journal.Phase == "active" && !rollback) || journal.Phase == "rolled-back" {

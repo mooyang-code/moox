@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"gorm.io/gorm"
 )
 
@@ -122,8 +123,8 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 			return errors.New("host-bundle requires registered target and control hosts; sync placements first")
 		}
 		h := hosts[target]
-		material.host = bootstrapHost{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress}
-		material.control = bootstrapHost{HostID: hosts[control].HostID, Address: hosts[control].Address}
+		material.host = hostbundle.Host{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress}
+		material.control = hostbundle.Host{HostID: hosts[control].HostID, Address: hosts[control].Address}
 		for _, placement := range placements {
 			if placement.HostID == h.HostID {
 				material.host.Components = append(material.host.Components, placement.ComponentID)
@@ -165,7 +166,7 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 	return writeJSON(stdout, result)
 }
 
-func hostAccessVerification(ctx context.Context, store *keys.Store, host bootstrapHost) ([]keys.VerificationKey, error) {
+func hostAccessVerification(ctx context.Context, store *keys.Store, host hostbundle.Host) ([]keys.VerificationKey, error) {
 	if !slices.Contains(host.Components, "access") {
 		return nil, nil
 	}

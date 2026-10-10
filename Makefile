@@ -115,7 +115,7 @@ proto-check:
 check-go-module-graph:
 	bash scripts/ci/check-go-module-graph.sh
 
-verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
@@ -217,6 +217,13 @@ test-unit-bundle-linux:
 
 .PHONY: test-unit-runtime test-unit-runtime-linux
 .PHONY: test-unit-install test-unit-install-linux
+.PHONY: test-unit-bootstrap test-unit-bootstrap-linux
+test-unit-bootstrap:
+	go test ./modules/cli/internal/setup/unitbootstrap
+
+test-unit-bootstrap-linux:
+	bash scripts/test/gates/test-unit-bootstrap-linux.sh
+
 test-unit-install:
 	go test ./modules/cli/internal/setup/unitinstall
 

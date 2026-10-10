@@ -36,12 +36,13 @@ type Result struct {
 }
 
 type Status struct {
-	ID     string `json:"id"`
-	State  string `json:"state"`
-	PID    int    `json:"pid,omitempty"`
-	Ready  bool   `json:"ready"`
-	Forced bool   `json:"forced,omitempty"`
-	Binary string `json:"binary_sha256,omitempty"`
+	ID             string `json:"id"`
+	State          string `json:"state"`
+	PID            int    `json:"pid,omitempty"`
+	Ready          bool   `json:"ready"`
+	Forced         bool   `json:"forced,omitempty"`
+	Binary         string `json:"binary_sha256,omitempty"`
+	ReadinessError string `json:"readiness_error,omitempty"`
 }
 
 type pidRecord struct {
@@ -230,6 +231,8 @@ func (s *runtimeState) executeComponent(ctx context.Context, component Component
 		return status, nil
 	case "healthcheck":
 		return s.healthcheck(ctx, component)
+	case "status":
+		return s.inspect(ctx, component)
 	default:
 		return s.status(component)
 	}
@@ -297,6 +300,35 @@ func (s *runtimeState) status(component Component) (Status, error) {
 	return status, nil
 }
 
+// inspect is read-only. A health failure must not hide a verified running PID
+// or restart it; callers can distinguish not-ready from a failed probe.
+func (s *runtimeState) inspect(ctx context.Context, component Component) (Status, error) {
+	status, err := s.status(component)
+	if err != nil || status.State != "running" {
+		return status, err
+	}
+	record, _, err := s.record(component)
+	if err != nil {
+		return status, err
+	}
+	if record.Launcher != nil {
+		return status, nil
+	}
+	values, err := loadEnvironment(Component{ID: component.ID, EnvironmentFile: filepath.Join(record.ReleaseRoot, "secrets", "runtime-"+component.ID+".json")})
+	if err != nil {
+		status.ReadinessError = "runtime health environment cannot be loaded"
+		return status, nil
+	}
+	status.Ready, err = s.probe(ctx, component, record, values, true)
+	if ctx.Err() != nil {
+		return status, ctx.Err()
+	}
+	if err != nil {
+		status.ReadinessError = err.Error()
+	}
+	return status, nil
+}
+
 func componentArguments(id string) []string {
 	switch id {
 	case "console-proxy":
@@ -342,6 +374,7 @@ func (s *runtimeState) prepare(component Component) (map[string]string, time.Dur
 	}
 	values["MOOX_BINARY_SHA256"] = hex.EncodeToString(digest.Sum(nil))
 	values["MOOX_NODE_ID"], values["MOOX_SERVICE_NAME"] = s.plan.HostID, component.ID
+	values["MOOX_INSTANCE_ID"] = component.ID + "@" + s.plan.HostID
 	return values, stop, startup, nil
 }
 

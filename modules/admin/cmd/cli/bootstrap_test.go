@@ -35,7 +35,7 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	dir := filepath.Join(t.TempDir(), "private")
 	require.NoError(t, os.Mkdir(dir, 0o700))
 	opts := bootstrapOptions{topologyFile: filepath.Join(dir, "topology.json"), dbPath: filepath.Join(dir, "data", "admin.db"), masterFile: filepath.Join(dir, "secrets", "admin-encryption.key"), pkiDir: filepath.Join(dir, "secrets", "pki"), outputDir: filepath.Join(dir, "bundles")}
-	writeBootstrapTopology(t, opts, bootstrapTopology{Version: 1, ControlHostID: "control", Hosts: []bootstrapHost{
+	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
 		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
 		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-node", "storage-view"}},
 		{HostID: "compute-1", Address: "192.0.2.3", Components: []string{"access", "trade"}},
@@ -43,7 +43,7 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	return opts
 }
 
-func writeBootstrapTopology(t *testing.T, opts bootstrapOptions, topology bootstrapTopology) {
+func writeBootstrapTopology(t *testing.T, opts bootstrapOptions, topology hostbundle.Topology) {
 	t.Helper()
 	raw, err := json.Marshal(topology)
 	require.NoError(t, err)
@@ -208,12 +208,12 @@ func TestBootstrapRetryKeepsMasterCAKeysAndDisabledStates(t *testing.T) {
 }
 
 func TestBootstrapRejectsInvalidTopologyBeforeCreatingTrustMaterial(t *testing.T) {
-	for _, mutate := range []func(*bootstrapTopology){
-		func(t *bootstrapTopology) { t.Hosts[1].Components = append(t.Hosts[1].Components, "collector") },
-		func(t *bootstrapTopology) { t.Hosts[0].Components = []string{"admin"} },
-		func(t *bootstrapTopology) { t.Hosts[1].HostID = t.Hosts[0].HostID },
-		func(t *bootstrapTopology) { t.Hosts[1].Address = "http://invalid" },
-		func(t *bootstrapTopology) { t.Hosts[1].Components = []string{"host-gateway"} },
+	for _, mutate := range []func(*hostbundle.Topology){
+		func(t *hostbundle.Topology) { t.Hosts[1].Components = append(t.Hosts[1].Components, "collector") },
+		func(t *hostbundle.Topology) { t.Hosts[0].Components = []string{"admin"} },
+		func(t *hostbundle.Topology) { t.Hosts[1].HostID = t.Hosts[0].HostID },
+		func(t *hostbundle.Topology) { t.Hosts[1].Address = "http://invalid" },
+		func(t *hostbundle.Topology) { t.Hosts[1].Components = []string{"host-gateway"} },
 	} {
 		opts := newBootstrapFixture(t)
 		topology, err := readBootstrapTopology(opts.topologyFile)

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
@@ -39,6 +40,26 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "bootstrap" {
+		flags := flag.NewFlagSet("moox-runtime bootstrap", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		filename := flags.String("request", "", "generated private bootstrap JSON request")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *filename == "" || flags.NArg() != 0 {
+			return errors.New("bootstrap requires --request and no positional arguments")
+		}
+		request, err := unitbootstrap.ReadRequest(*filename)
+		if err != nil {
+			return err
+		}
+		result, err := unitbootstrap.Run(ctx, request)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(result)
+	}
 	if len(args) > 0 && (args[0] == "activate" || args[0] == "rollback" || args[0] == "recover") {
 		return installOperation(ctx, args[0], args[1:], stdout, stderr)
 	}

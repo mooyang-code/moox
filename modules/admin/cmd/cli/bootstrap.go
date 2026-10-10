@@ -25,23 +25,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// The deployment CLI writes this normalized input, rather than sending its
-// private moox.toml (SSH credentials and unrelated deployment secrets).
-type bootstrapTopology struct {
-	Version       int             `json:"version"`
-	ControlHostID string          `json:"control_host_id"`
-	Hosts         []bootstrapHost `json:"hosts"`
-}
-
-type bootstrapHost struct {
-	HostID         string   `json:"host_id"`
-	Address        string   `json:"address"`
-	PrivateAddress string   `json:"private_address"`
-	Region         string   `json:"region"`
-	Description    string   `json:"description"`
-	Components     []string `json:"components"`
-}
-
 type bootstrapOptions struct {
 	topologyFile, dbPath, masterFile, pkiDir, outputDir string
 }
@@ -92,12 +75,12 @@ func runBootstrapCommand(args []string, stdout, stderr io.Writer) error {
 	return bootstrapAdmin(context.Background(), opts, topology, stdout)
 }
 
-func readBootstrapTopology(path string) (bootstrapTopology, error) {
+func readBootstrapTopology(path string) (hostbundle.Topology, error) {
 	raw, err := privatefiles.Read(path, 1<<20)
 	if err != nil {
-		return bootstrapTopology{}, fmt.Errorf("read normalized topology: %w", err)
+		return hostbundle.Topology{}, fmt.Errorf("read normalized topology: %w", err)
 	}
-	var topology bootstrapTopology
+	var topology hostbundle.Topology
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&topology) != nil {
@@ -107,13 +90,13 @@ func readBootstrapTopology(path string) (bootstrapTopology, error) {
 	if decoder.Decode(&trailing) != io.EOF || topology.Version != 1 || !servicecatalog.ValidHostID(topology.ControlHostID) || len(topology.Hosts) == 0 || len(topology.Hosts) > 1024 {
 		return topology, errors.New("normalized topology requires version 1, canonical control_host_id and 1..1024 hosts in exactly one JSON document")
 	}
-	if !slices.ContainsFunc(topology.Hosts, func(h bootstrapHost) bool { return h.HostID == topology.ControlHostID }) {
+	if !slices.ContainsFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID }) {
 		return topology, errors.New("normalized topology must include the control host")
 	}
 	return topology, nil
 }
 
-func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology bootstrapTopology, stdout io.Writer) error {
+func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbundle.Topology, stdout io.Writer) error {
 	// Serialize the entire operation across processes, before opening SQLite or
 	// creating a master key. The persistent file itself is never a stale lock.
 	masterRoot, err := privatefiles.OpenRoot(filepath.Dir(opts.masterFile))
@@ -147,7 +130,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology bootstr
 			ca.Close()
 		}
 	}()
-	control := topology.Hosts[slices.IndexFunc(topology.Hosts, func(h bootstrapHost) bool { return h.HostID == topology.ControlHostID })]
+	control := topology.Hosts[slices.IndexFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID })]
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		dao, err := sysdeploy.NewTopologyDAO(tx, topology.ControlHostID)
 		if err != nil {

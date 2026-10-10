@@ -21,7 +21,7 @@ import (
 )
 
 type hostBundleMaterial struct {
-	host, control bootstrapHost
+	host, control hostbundle.Host
 	signing       []keys.SigningKey
 	access        []keys.VerificationKey
 	caInfo        hostbundle.CAInfo
@@ -29,7 +29,7 @@ type hostBundleMaterial struct {
 	operator      bool
 }
 
-func hostSigningCallers(host bootstrapHost, operator bool) []string {
+func hostSigningCallers(host hostbundle.Host, operator bool) []string {
 	callers := append([]string{"host-agent", "host-gateway@" + host.HostID}, host.Components...)
 	if slices.Contains(host.Components, "console-proxy") {
 		callers = append(callers, "console")

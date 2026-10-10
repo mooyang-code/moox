@@ -26,6 +26,7 @@ required=[
     'TestStateSeedRefusesUnrelatedFilesAndUnsafeDirectories',
     'TestStateSeedRequestRejectsNonCanonicalPrivateInput',
     'TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot',
+    'TestUnitActivationLinuxCompositeAbortRemovesOnlyItsFirstInstallation',
     'TestUnitStateCopiesIndependentFilesAndRefusesSymlinks',
     'TestProxyStateOutputCannotBypassItsTransferBound',
     'TestUnitActivationLinuxUsesActualWebHostCopiesStateAndRollsBack',
@@ -45,5 +46,5 @@ for name in required:
         raise SystemExit('required installation scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('unit installation Linux gate must not skip or fail a scenario')
-print('unit installation Linux gate passed: 17 required preparation/activation/state import/rollback scenarios, no compilation')
+print('unit installation Linux gate passed: 18 required preparation/activation/state import/rollback scenarios, no compilation')
 PY

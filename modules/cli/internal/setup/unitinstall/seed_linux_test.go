@@ -145,7 +145,7 @@ func TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot(t 
 	// the offline rerun; this does not claim the complete five-step bootstrap.
 	secondSeed := filepath.Join(seedRoot, "rerun")
 	require.NoError(t, os.Mkdir(secondSeed, 0o700))
-	require.NoError(t, copyStatePaths(t.Context(), first.Directory, secondSeed, []string{"admin/data"}))
+	require.NoError(t, CopyOfflineState(t.Context(), first.Directory, secondSeed, []string{"admin/data"}))
 	rerunMaterial := bootstrap(secondSeed, "rerun")
 	require.Equal(t, material.CA.SHA256, rerunMaterial.CA.SHA256)
 	require.Equal(t, material.Credentials, rerunMaterial.Credentials)

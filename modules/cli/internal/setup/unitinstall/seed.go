@@ -305,7 +305,7 @@ func importState(ctx context.Context, seed StateSeed, candidate Prepared) error 
 	if seed.Directory == "" {
 		return nil
 	}
-	if err := copyStatePaths(ctx, seed.Directory, candidate.Directory, seed.Paths); err != nil {
+	if err := CopyOfflineState(ctx, seed.Directory, candidate.Directory, seed.Paths); err != nil {
 		return err
 	}
 	root, err := fsutil.OpenPhysicalRoot(candidate.Directory, true)

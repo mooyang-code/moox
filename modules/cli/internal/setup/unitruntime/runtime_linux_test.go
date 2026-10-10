@@ -71,6 +71,9 @@ func runFixtureProcess() {
 	if !ok {
 		os.Exit(21)
 	}
+	if os.Getenv("MOOX_INSTANCE_ID") != component.ID+"@"+os.Getenv("MOOX_NODE_ID") {
+		os.Exit(23)
+	}
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(component.Health.Port)))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "synthetic health listener:", err)
@@ -107,7 +110,7 @@ func runFixtureProcess() {
 	go func() { _ = server.Serve(listener) }()
 	if path := os.Getenv("MOOX_RUNTIME_TEST_PROOF"); path != "" {
 		raw, _ := json.Marshal(map[string]bool{"operator_leaked": os.Getenv("MOOX_OPERATOR_SHOULD_NOT_LEAK") != ""})
-		_ = os.WriteFile(path, raw, 0o600)
+		_ = os.WriteFile(path, raw, 0o666)
 	}
 	for range term {
 		if os.Getenv("MOOX_RUNTIME_TEST_IGNORE_TERM") == "1" {
@@ -307,15 +310,22 @@ func TestRuntimeLinuxWatchdogUsesLivenessAndDoesNotRestartForReadinessOrBadCrede
 	checked := runRuntime(t, path, "healthcheck")
 	require.False(t, checked.Components[0].Ready)
 	require.Equal(t, started.Components[0].PID, checked.Components[0].PID)
+	status := runRuntime(t, path, "status")
+	require.False(t, status.Components[0].Ready)
+	require.Empty(t, status.Components[0].ReadinessError)
+	require.Equal(t, started.Components[0].PID, status.Components[0].PID)
 	values["MOOX_HEALTH_AUTH_SECRET_KEY"] = "different-fixture-health-signing-key"
 	writeFixture(t, plan.Components[0].EnvironmentFile, values)
 	_, err := Execute(context.Background(), path, "healthcheck", nil, Options{})
 	require.ErrorIs(t, err, errHealthIdentity)
-	require.Equal(t, started.Components[0].PID, runRuntime(t, path, "status").Components[0].PID)
+	status = runRuntime(t, path, "status")
+	require.Equal(t, started.Components[0].PID, status.Components[0].PID)
+	require.NotEmpty(t, status.Components[0].ReadinessError)
 	values["MOOX_HEALTH_AUTH_SECRET_KEY"] = fixtureEnvironment()["MOOX_HEALTH_AUTH_SECRET_KEY"]
 	writeFixture(t, plan.Components[0].EnvironmentFile, values)
 	require.NoError(t, os.Remove(marker))
 	require.True(t, runRuntime(t, path, "healthcheck").Components[0].Ready)
+	require.True(t, runRuntime(t, path, "status").Components[0].Ready)
 	runRuntime(t, path, "stop")
 	restarted := runRuntime(t, path, "healthcheck")
 	require.True(t, restarted.Components[0].Ready)

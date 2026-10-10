@@ -32,7 +32,7 @@ func TestRuntimeCommandRejectsMissingFlagsAndUnknownOperations(t *testing.T) {
 		require.Error(t, run(context.Background(), args, &stdout, &stderr))
 		require.Empty(t, stdout.String())
 	}
-	for _, operation := range []string{"prepare", "seal-state"} {
+	for _, operation := range []string{"prepare", "seal-state", "bootstrap"} {
 		for _, args := range [][]string{{operation}, {operation, "--unknown"}, {operation, "--request", "missing", "unexpected"}, {operation, "--request", "missing"}} {
 			var stdout, stderr bytes.Buffer
 			require.Error(t, run(context.Background(), args, &stdout, &stderr))

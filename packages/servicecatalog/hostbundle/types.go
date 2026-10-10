@@ -4,6 +4,22 @@ package hostbundle
 
 import "time"
 
+// Topology is normalized deployment input. It contains no operator credentials.
+type Topology struct {
+	Version       int    `json:"version"`
+	ControlHostID string `json:"control_host_id"`
+	Hosts         []Host `json:"hosts"`
+}
+
+type Host struct {
+	HostID         string   `json:"host_id"`
+	Address        string   `json:"address"`
+	PrivateAddress string   `json:"private_address"`
+	Region         string   `json:"region"`
+	Description    string   `json:"description"`
+	Components     []string `json:"components"`
+}
+
 type CertificateInfo struct {
 	SHA256   string    `json:"sha256"`
 	Serial   string    `json:"serial"`

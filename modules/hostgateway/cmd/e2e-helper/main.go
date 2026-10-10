@@ -30,7 +30,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayroute"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"gopkg.in/yaml.v3"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"
@@ -40,7 +39,6 @@ import (
 
 func main() {
 	mode := flag.String("mode", "kline-native", "kline-native, admin-native, doctor-native, cloudnode-native or collector-period-native")
-	deploymentYAML := flag.String("deployment-yaml", "", "test deployment YAML")
 	routeScope := flag.String("route-scope", "", "test route scope")
 	nodeID := flag.String("node-id", "", "test host ID")
 	upstream := flag.String("upstream-addr", "", "loopback fixture upstream")
@@ -68,7 +66,7 @@ func main() {
 	case "cloudnode-native":
 		err = runCloudNodeNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "collector-period-native":
-		err = runCollectorPeriodNative(*deploymentYAML, *routeScope, *upstream, *metadata, *nodeID, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+		err = runCollectorPeriodNative(*routeScope, *upstream, *metadata, *nodeID, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	default:
 		err = errors.New("unsupported native fixture mode")
 	}
@@ -308,147 +306,75 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	}
 }
 
-type deploymentRoutePolicy struct {
-	TimeoutMS      int64    `yaml:"timeout_ms"`
-	MaxBodyBytes   int64    `yaml:"max_body_bytes"`
-	GatewayMethods []string `yaml:"gateway_methods"`
-	GatewayCallers []string `yaml:"gateway_callers"`
-}
-
-func runCollectorPeriodNative(path, scope, upstreamAddress, metadataUpstreamAddress, nodeID, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	routes, err := loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress)
+func runCollectorPeriodNative(scope, upstreamAddress, metadataUpstreamAddress, nodeID, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	routes, err := loadCollectorPeriodRoutesWithMetadata(scope, upstreamAddress, metadataUpstreamAddress)
 	if err != nil {
 		return err
 	}
 	return runNativeRoutes(nodeID, routes, "collector", listenAddress, readyFile, nonceDirectory, keyID, secret)
 }
 
-func loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress string) ([]gatewayroute.Route, error) {
-	routes, err := loadCollectorPeriodRoutes(path, scope, upstreamAddress)
+func loadCollectorPeriodRoutesWithMetadata(scope, upstreamAddress, metadataUpstreamAddress string) ([]gatewayroute.Route, error) {
+	routes, err := loadCollectorPeriodRoutes(scope, upstreamAddress)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(metadataUpstreamAddress) == "" {
+	if metadataUpstreamAddress == "" {
 		return routes, nil
 	}
 	if scope != "storage-period" {
-		return nil, fmt.Errorf("metadata-upstream-addr requires storage-period route-scope")
+		return nil, errors.New("metadata-upstream-addr requires storage-period route-scope")
 	}
-	metadataRoutes, err := loadCollectorPeriodRoutes(path, "storage-metadata", metadataUpstreamAddress)
+	metadata, err := loadCollectorPeriodRoutes("storage-metadata", metadataUpstreamAddress)
 	if err != nil {
 		return nil, err
 	}
-	return append(routes, metadataRoutes...), nil
+	return append(routes, metadata...), nil
 }
 
-func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewayroute.Route, error) {
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("deployment-yaml must be an absolute path")
-	}
+// Fixture routes use the current catalog and retain only the methods exercised
+// by this scenario. There is no deployment seed or alternate ACL source.
+func loadCollectorPeriodRoutes(scope, upstreamAddress string) ([]gatewayroute.Route, error) {
 	host, port, err := net.SplitHostPort(upstreamAddress)
-	if err != nil || (host != "127.0.0.1" && host != "::1") || port == "" {
-		return nil, fmt.Errorf("upstream-addr must be a loopback host:port")
+	number, portErr := strconv.Atoi(port)
+	if err != nil || (host != "127.0.0.1" && host != "::1") || portErr != nil || number < 1 || number > 65535 {
+		return nil, errors.New("upstream-addr must be a loopback host:port")
 	}
-	serviceID, servicePath := "storage-primary", "trpc.moox.storage.PrimaryStore"
+	component, path := "storage-primary", "trpc.moox.storage.PrimaryStore"
 	required := []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}
 	switch scope {
 	case "storage-period":
 	case "storage-metadata":
-		servicePath = "trpc.moox.storage.Metadata"
+		path = "trpc.moox.storage.Metadata"
 		required = []string{"ApplyTagSnapshot", "GetTag", "ListSubjects", "ResolveSubjects"}
 	case "collector-runtime":
-		serviceID, servicePath = "collector-market-runtime", "trpc.moox.collector.MarketFetchRuntime"
+		component, path = "collector", "trpc.moox.collector.MarketFetchRuntime"
 		required = []string{"ClaimTimerBatch"}
 	default:
-		return nil, fmt.Errorf("unsupported route-scope %q", scope)
+		return nil, errors.New("unsupported route-scope")
 	}
-	var seed struct {
-		Services []struct {
-			Name             string `yaml:"name"`
-			Status           string `yaml:"status"`
-			Host             string `yaml:"host"`
-			Port             int    `yaml:"port"`
-			GatewayPath      string `yaml:"gateway_path"`
-			GatewayServiceID string `yaml:"gateway_service_id"`
-			GatewayEnabled   bool   `yaml:"gateway_enabled"`
-			ExtraConfig      struct {
-				deploymentRoutePolicy `yaml:",inline"`
-				GatewayRoutes         []struct {
-					deploymentRoutePolicy `yaml:",inline"`
-					ServicePath           string `yaml:"service_path"`
-					Port                  int    `yaml:"port"`
-				} `yaml:"gateway_routes"`
-			} `yaml:"extra_config"`
-		} `yaml:"services"`
-	}
-	raw, err := os.ReadFile(path)
+	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
 	}
-	if err := yaml.Unmarshal(raw, &seed); err != nil {
-		return nil, fmt.Errorf("decode deployment-yaml: %w", err)
-	}
-	counts := make(map[string]int)
-	var selected []gatewayroute.Route
-	for _, service := range seed.Services {
-		id := service.GatewayServiceID
-		if id == "" && service.Name == serviceID {
-			return nil, fmt.Errorf("required service %s needs explicit gateway_service_id", service.Name)
-		}
-		if id != serviceID {
-			continue
-		}
-		if !service.GatewayEnabled {
-			return nil, fmt.Errorf("required service %s is not gateway enabled", id)
-		}
-		if service.Status != "active" {
-			return nil, fmt.Errorf("required service %s must have active status", id)
-		}
-		appendRoute := func(path string, port int, policy deploymentRoutePolicy) error {
-			route := gatewayroute.Route{ServiceID: id, Address: net.JoinHostPort(service.Host, fmt.Sprint(port)), ServicePath: path,
-				TimeoutMS: policy.TimeoutMS, MaxBodyBytes: policy.MaxBodyBytes,
-				AllowedMethods: policy.GatewayMethods, AllowedCallers: policy.GatewayCallers}
-			chosen := false
-			for _, method := range required {
-				if route.AllowsMethod(method) {
-					counts[method]++
-					chosen = true
-				}
-			}
-			if !chosen {
-				return nil
-			}
-			if path != servicePath || !route.AllowsCaller("collector") {
-				return fmt.Errorf("required route %s must use %s and allow collector", id, servicePath)
-			}
-			if _, err := gatewayroute.NormalizeAndHash("validate-production-route", []gatewayroute.Route{route}); err != nil {
-				return fmt.Errorf("invalid production route: %w", err)
-			}
-			route.Address = upstreamAddress
-			selected = append(selected, route)
-			return nil
-		}
-		if err := appendRoute(service.GatewayPath, service.Port, service.ExtraConfig.deploymentRoutePolicy); err != nil {
-			return nil, err
-		}
-		for _, route := range service.ExtraConfig.GatewayRoutes {
-			if route.ServicePath == "" || route.Port < 1 {
-				return nil, fmt.Errorf("gateway_routes entries require service_path and positive port")
-			}
-			if err := appendRoute(route.ServicePath, route.Port, route.deploymentRoutePolicy); err != nil {
-				return nil, err
-			}
-		}
+	service, ok := catalog.Service(path)
+	if !ok {
+		return nil, errors.New("period fixture service is missing from the catalog")
 	}
 	for _, method := range required {
-		if counts[method] != 1 {
-			return nil, fmt.Errorf("required method %s must have exactly one route (got %d)", method, counts[method])
+		allowed := catalog.Allowed("collector", path, method)
+		if scope == "collector-runtime" {
+			allowed = catalog.PrincipalAllowed("scf-collector", path, method)
+		}
+		if !slices.Contains(service.Methods, method) || !allowed {
+			return nil, errors.New("period fixture method is not allowed by the catalog")
 		}
 	}
-	if _, err := gatewayroute.NormalizeAndHash("validate-selected-routes", selected); err != nil {
+	route := gatewayroute.Route{ServiceID: component, ServicePath: path, Address: upstreamAddress, AllowedMethods: required, AllowedCallers: []string{"collector"}, TimeoutMS: service.TimeoutMS, MaxBodyBytes: service.MaxBodyBytes}
+	if _, err := gatewayroute.NormalizeAndHash("period-fixture", []gatewayroute.Route{route}); err != nil {
 		return nil, err
 	}
-	return selected, nil
+	return []gatewayroute.Route{route}, nil
 }
 
 func writeReadyFile(path, value string) error {
