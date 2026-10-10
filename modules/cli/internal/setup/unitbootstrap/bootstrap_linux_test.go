@@ -127,6 +127,15 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	require.Equal(t, initial, repeated)
 	require.Equal(t, host, runtimeStatus(t, initial.HostDirectory))
 	require.Equal(t, control, runtimeStatus(t, initial.ControlDirectory))
+	partial := request
+	partial.Control.Components = []string{"admin", "eventbus"}
+	partial.Control.Environment = map[string]map[string]string{"admin": request.Control.Environment["admin"], "eventbus": request.Control.Environment["eventbus"]}
+	partial.Control.Overrides = map[string]string{"admin/config/console.yaml": request.Control.Overrides["admin/config/console.yaml"]}
+	partial.ProxyCA = ProxyCAAuthorization{}
+	_, err = runBootstrap(t, partial, root)
+	require.ErrorContains(t, err, "cannot narrow")
+	require.Equal(t, host, runtimeStatus(t, initial.HostDirectory))
+	require.Equal(t, control, runtimeStatus(t, initial.ControlDirectory))
 	for _, directory := range []string{initial.ControlDirectory, initial.HostDirectory} {
 		output, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "stop", "--plan", filepath.Join(directory, "runtime.json")).CombinedOutput()
 		require.NoError(t, err, "simulate host reboot: %s", output)
@@ -180,9 +189,16 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	}
 	require.Equal(t, "initial", description(initial.ControlDirectory))
 	require.Equal(t, "rerun", description(upgraded.ControlDirectory))
-	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = ""
+	// Credential changes are rejected before stopping. Use an invalid runtime
+	// duration to keep exercising an actual activation failure and rollback.
+	require.NoError(t, os.WriteFile(request.Control.Overrides["admin/config/console.yaml"], []byte("jwt:\n  secret_key: ''\n  access_expired: invalid-duration\nconsole:\n  debug: false\n"), 0o600))
 	_, err = runBootstrap(t, request, root)
 	require.Error(t, err)
+	journalRaw, err := os.ReadFile(filepath.Join(request.DeploymentRoot, "bootstrap/workflow.json"))
+	require.NoError(t, err)
+	var failed journal
+	require.NoError(t, json.Unmarshal(journalRaw, &failed))
+	require.Equal(t, "rolled-back", failed.Phase)
 	for _, item := range []struct{ unit, directory string }{{request.Host.UnitRoot, upgraded.HostDirectory}, {request.Control.UnitRoot, upgraded.ControlDirectory}} {
 		current, err := os.Readlink(filepath.Join(item.unit, "current"))
 		require.NoError(t, err)

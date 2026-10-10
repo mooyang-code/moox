@@ -23,6 +23,7 @@ log=Path(sys.argv[1]).read_text()
 required=[
     'TestBootstrapRequestRejectsUnsafeAndAmbiguousPrivateInput',
     'TestBootstrapPublicOutputBoundAndJournalIdentities',
+    'TestBootstrapRuntimeIdentityCannotChangeAfterInitialization',
     'TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether',
     'TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost',
     'TestBootstrapLinuxOfflineChildHoldsLockAndDiesWithParent',
@@ -33,5 +34,5 @@ for name in required:
         raise SystemExit('required bootstrap scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('bootstrap Linux gate must not skip or fail a scenario')
-print('bootstrap Linux gate passed: 6 required actual initialization/recovery/CA/private-input scenarios, no compilation')
+print('bootstrap Linux gate passed: 7 required actual initialization/recovery/CA/runtime-identity/private-input scenarios, no compilation')
 PY

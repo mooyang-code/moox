@@ -26,6 +26,7 @@ type Unit struct {
 	UnitRoot    string                       `json:"unit_root"`
 	Environment map[string]map[string]string `json:"environment"`
 	Overrides   map[string]string            `json:"overrides"`
+	Components  []string                     `json:"components,omitempty"`
 }
 
 type Request struct {
@@ -124,6 +125,20 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	if catalog.ValidateTopology(topology) != nil {
 		return result, errors.New("bootstrap topology does not satisfy the service catalog")
 	}
+	placements := slices.Clone(result.components)
+	if len(request.Host.Components) != 0 && !slices.Equal(request.Host.Components, []string{"host-gateway", "host-agent"}) {
+		return result, errors.New("bootstrap host selection must contain both host components")
+	}
+	if len(request.Control.Components) != 0 {
+		result.components = slices.Clone(request.Control.Components)
+		seen := map[string]bool{}
+		for _, id := range result.components {
+			if seen[id] || !slices.Contains(placements, id) {
+				return result, errors.New("bootstrap selection must be a unique subset of control placements")
+			}
+			seen[id] = true
+		}
+	}
 	// Host Agent needs EventBus before it can become ready on an empty host.
 	if !slices.Contains(result.components, "admin") || !slices.Contains(result.components, "eventbus") {
 		return result, errors.New("control bootstrap requires Admin and EventBus on the control host")
@@ -155,11 +170,6 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 			return result, errors.New("control host placements must belong to the control software unit")
 		}
 	}
-	type binding struct {
-		Request   Request
-		Overrides [2]map[string]string
-	}
-	bound := binding{Request: request}
 	for i, unit := range []Unit{request.Host, request.Control} {
 		profile, ids := "host", []string{"host-gateway", "host-agent"}
 		if i == 1 {
@@ -180,7 +190,7 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 		if software.SHA256 != unit.SHA256 || software.Manifest.Profile != profile || software.Manifest.GOOS != runtime.GOOS || software.Manifest.GOARCH != runtime.GOARCH {
 			return result, errors.New("bootstrap software does not match its producer digest, profile or platform")
 		}
-		result.overrides[i], bound.Overrides[i] = map[string][]byte{}, map[string]string{}
+		result.overrides[i] = map[string][]byte{}
 		var total int
 		for name, filename := range unit.Overrides {
 			root, err := fsutil.OpenPhysicalRoot(filepath.Dir(filename), false)
@@ -196,13 +206,40 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 			if total > 16<<20 {
 				return result, errors.New("bootstrap overrides exceed private input limit")
 			}
-			result.overrides[i][name], bound.Overrides[i][name] = raw, hash(raw)
+			result.overrides[i][name] = raw
+		}
+	}
+	result.digest, err = RequestHash(request, result.overrides)
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// RequestHash binds normalized input and the captured override bytes. It does
+// no filesystem I/O, so the native sender can pin the target helper's response.
+func RequestHash(request Request, overrides [2]map[string][]byte) (string, error) {
+	type binding struct {
+		Request   Request
+		Overrides [2]map[string]string
+	}
+	bound := binding{Request: request}
+	for i, unit := range []Unit{request.Host, request.Control} {
+		if len(overrides[i]) != len(unit.Overrides) {
+			return "", errors.New("bootstrap digest requires every captured override")
+		}
+		bound.Overrides[i] = map[string]string{}
+		for name := range unit.Overrides {
+			raw, ok := overrides[i][name]
+			if !ok {
+				return "", errors.New("bootstrap digest is missing a captured override")
+			}
+			bound.Overrides[i][name] = hash(raw)
 		}
 	}
 	raw, err := json.Marshal(bound)
 	if err != nil {
-		return result, err
+		return "", err
 	}
-	result.digest = hash(raw)
-	return result, nil
+	return hash(raw), nil
 }

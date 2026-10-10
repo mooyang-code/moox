@@ -55,6 +55,9 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 			return err
 		}
 		defer deployment.Close()
+		if err := bindRuntimeIdentity(deployment, input); err != nil {
+			return err
+		}
 		if err := privateDirectory(deployment, "bootstrap"); err != nil {
 			return err
 		}
@@ -68,6 +71,19 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 			return err
 		}
 		if exists && (j.Phase == "complete" || j.Phase == "repairing") && j.RequestSHA256 == input.digest {
+			for i, u := range []unitState{j.Host, j.Control} {
+				profile := "host"
+				if i == 1 {
+					profile = "control"
+				}
+				active, err := current(ctx, u.Root, j.DeploymentRoot, j.HostID, profile)
+				if err != nil {
+					return err
+				}
+				if active.Directory != u.Candidate {
+					return errors.New("completed bootstrap no longer matches current units")
+				}
+			}
 			if err := guard.BeginBootstrap(ctx, input.digest); err != nil {
 				return err
 			}
@@ -114,6 +130,18 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 		}
 		if (j.Host.Previous == "") != (j.Control.Previous == "") {
 			return errors.New("bootstrap requires both existing units or an empty control host")
+		}
+		if j.Control.Previous != "" {
+			previous, err := unitinstall.ReadInstalled(ctx, j.Control.Previous)
+			if err != nil {
+				return err
+			}
+			control := request.Topology.Hosts[slices.IndexFunc(request.Topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == j.HostID })]
+			for _, id := range previous.Components {
+				if slices.Contains(control.Components, id) && !slices.Contains(input.components, id) {
+					return errors.New("bootstrap cannot narrow an installed control placement to a core subset")
+				}
+			}
 		}
 		if err := writeJournal(root, &j, "captured"); err != nil {
 			return err
@@ -248,7 +276,7 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 		return errors.New("EventBus catalog endpoint is invalid")
 	}
 	eventBusURL := "tls://" + net.JoinHostPort(control.Address, strconv.Itoa(eventBus.Ports[0]))
-	materialOptions := unitbundle.Options{HostID: j.HostID, ControlHostID: j.HostID, Address: control.Address, PrivateAddress: control.PrivateAddress, ControlAddress: control.Address, Components: input.components, ExpectedCA: metadata.CA.SHA256, ExpectedHash: metadata.ExpectedHash, AllowOperator: true}
+	materialOptions := unitbundle.Options{HostID: j.HostID, ControlHostID: j.HostID, Address: control.Address, PrivateAddress: control.PrivateAddress, ControlAddress: control.Address, Components: control.Components, ExpectedCA: metadata.CA.SHA256, ExpectedHash: metadata.ExpectedHash, AllowOperator: true}
 	if _, err := unitbundle.Load(ctx, metadata.BundleDir, materialOptions); err != nil {
 		return err
 	}

@@ -46,6 +46,8 @@ type Options struct {
 	IdentityFiles  []string
 	AgentSocket    string
 	DisableAgent   bool
+	// OutputLimit bounds each command output stream. Zero selects 8 MiB.
+	OutputLimit int
 }
 
 type Result struct {
@@ -64,12 +66,16 @@ type Client interface {
 }
 
 type transport struct {
-	client *xssh.Client
-	mu     sync.Mutex
-	closed bool
+	client      *xssh.Client
+	mu          sync.Mutex
+	closed      bool
+	outputLimit int
 }
 
 func Dial(ctx context.Context, target Target, password string, opts Options) (Client, error) {
+	if opts.OutputLimit < 0 || opts.OutputLimit > 8<<20 {
+		return nil, errors.New("ssh_output_limit_invalid")
+	}
 	if err := validateTarget(target); err != nil {
 		return nil, err
 	}
@@ -109,7 +115,7 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 			return nil, ErrUnreachable
 		}
 	}
-	return &transport{client: connection}, nil
+	return &transport{client: connection, outputLimit: opts.OutputLimit}, nil
 }
 
 var errHostKeyCaptured = errors.New("host key captured")
@@ -385,6 +391,24 @@ func (r *contextReader) Read(p []byte) (int, error) {
 	}
 }
 
+type commandOutput struct {
+	buffer   bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (b *commandOutput) Write(raw []byte) (int, error) {
+	n := len(raw)
+	if remaining := b.limit - b.buffer.Len(); n > remaining {
+		b.overflow = true
+		raw = raw[:remaining]
+	}
+	_, _ = b.buffer.Write(raw)
+	// Drain the SSH stream even after overflow so a full channel cannot block
+	// remote exit. The command's context still bounds its lifetime.
+	return n, nil
+}
+
 func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Result, error) {
 	if len(argv) == 0 {
 		return Result{}, fmt.Errorf("ssh_command_invalid")
@@ -394,7 +418,11 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 		return Result{}, fmt.Errorf("ssh_command_failed: %w", err)
 	}
 	defer session.Close()
-	var stdout, stderr bytes.Buffer
+	limit := t.outputLimit
+	if limit == 0 {
+		limit = 8 << 20
+	}
+	stdout, stderr := commandOutput{limit: limit}, commandOutput{limit: limit}
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 	session.Stdin = stdin
@@ -409,7 +437,10 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 		_ = session.Close()
 		return Result{}, ctx.Err()
 	case err := <-done:
-		result := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+		if stdout.overflow || stderr.overflow {
+			return Result{}, errors.New("ssh_command_output_exceeded_limit")
+		}
+		result := Result{Stdout: stdout.buffer.String(), Stderr: stderr.buffer.String()}
 		if err == nil {
 			return result, nil
 		}

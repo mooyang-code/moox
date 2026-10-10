@@ -26,3 +26,10 @@ make test-unit-bundle-linux
 ```
 
 Linux 门禁强制十组消费/身份投影场景全部通过且无跳过，并从隔离空库真实执行 Admin bootstrap、重跑和三主机导出，再由真实助手检查每份包。可用 `MOOX_HOST_MATERIAL_FIXTURE_ROOT` 指定全新私密测试目录以保留合成材料，供本机实际 SSH 下载测试；默认在退出时清理。它不启动部署组件，不替代五步 bootstrap 或正式部署验收。
+
+## 操作员身份安装
+
+`FetchMetadata` 通过已核验 SSH 读取并绑定公开清单；`InstallOperator` 只取回清单中的
+操作员配置、签名密钥与公开 CA，核对原始字节摘要、分配的 KeyID、单一有效 CA 和
+原控制机绑定，再以不可变密钥文件及原子配置切换安装。网关 TLS 私钥和其他服务私钥
+不经过该接口传回本机；相同身份重试复用，其他 CA 的身份不能覆盖既有绑定。

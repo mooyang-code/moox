@@ -16,9 +16,11 @@
 
 出错时先停两个单元的候选/旧进程，恢复持有安装标记的未完成单元，再撤销本次候选激活，最后按依赖启动日志记录的旧运行集合。首次安装的撤销只移除 current，保留退役目录及其数据。真实 SIGKILL 后日志与标记仍在，自动启动保持阻断；匹配原请求的编排器先恢复两个旧单元，再使用新尝试目录重新执行。不同请求不能接管未完成流程。完整软件、私密配置、数据库和失败诊断目录按私密权限保留，后续清理由部署保留策略负责。
 
-普通本机验证：`make test-unit-bootstrap`。Linux 完整门禁 `make test-unit-bootstrap-linux` 只执行预先构建的制品，要求 `MOOX_BOOTSTRAP_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，以及 `MOOX_BOOTSTRAP_HOST_ARCHIVE`/`MOOX_BOOTSTRAP_HOST_SHA256`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE`/`MOOX_BOOTSTRAP_CONTROL_SHA256`。六组必需场景不接受跳过：私密输入、输出边界、真实服务初始化/升级失败恢复、Admin 启动窗口实际 SIGKILL 的整机恢复、离线子进程的锁继承与父进程死亡，以及代理 CA 首次授权消费/历史导入。
+普通本机验证：`make test-unit-bootstrap`。Linux 完整门禁 `make test-unit-bootstrap-linux` 只执行预先构建的制品，要求 `MOOX_BOOTSTRAP_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，以及 `MOOX_BOOTSTRAP_HOST_ARCHIVE`/`MOOX_BOOTSTRAP_HOST_SHA256`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE`/`MOOX_BOOTSTRAP_CONTROL_SHA256`。七组必需场景不接受跳过：私密输入、输出边界、运行身份持久绑定、真实服务初始化/升级失败恢复、Admin 启动窗口实际 SIGKILL 的整机恢复、离线子进程的锁继承与父进程死亡，以及代理 CA 首次授权消费/历史导入。
 
-实际服务场景使用完整 control 软件包中的 Admin、EventBus、Web Host、Console Proxy，以及完整 host 单元；没有声称验证全部九个 control 组件或三主机系统。顶层 `moox-cli setup bootstrap` 的配置生产和 SSH 传输、其余主机部署、生产历史状态归档、其他阶段的进程强杀、最终审查与正式验收仍待完成。
+实际服务场景使用完整 control 软件包中的 Admin、EventBus、Web Host、Console Proxy，以及完整 host 单元；没有声称验证全部九个 control 组件或三主机系统。顶层 `moox-cli setup bootstrap --stage core` 已连接核心子集的配置生产、SSH 传输与操作员身份安装，完整原生流程、其余主机部署、生产历史状态归档、其他阶段的进程强杀、最终审查与正式验收仍待完成。
+
+请求可显式指定 `control.components` 为完整放置清单的唯一子集，必须包含 Admin 和 EventBus；身份包仍按完整拓扑验证。核心子集升级到完整集合可以复用已有数据库、MooX CA 和 EventBus 身份，不能把仍在放置清单中的已安装组件缩减掉。全局健康/JWT 凭据在 `identity/runtime.json` 持久绑定，变化或既有部署缺失该绑定时在启停前拒绝，不能因本机状态丢失自动替换凭据。完成日志与 current 已不匹配的旧请求在设置 bootstrap 标记前拒绝。
 
 代理首次 internal CA 必须由请求的 `proxy_ca.create` 显式授权，或以 `proxy_ca.import_directory` 提供关闭后的规范源树；源树只需 `console-proxy/data` 和 `console-proxy/certs`，必须包含原始发布的根证书和指纹。创建和导入互斥，常规服务配置不接受初始化权限。`identity/console-proxy/receipt.json` 先记录 pending，完整材料在同级 `material/` 同步并原子发布后记录 ready；该目录独立于发布快照和候选清理。未发布的生成阶段可恢复，消费后材料丢失、损坏或主机不匹配则拒绝自动重新生成。升级复制最新关闭发布的状态，同时校验根身份与持久凭据一致；public-only 不生成多余 internal CA。
 

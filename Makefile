@@ -218,6 +218,14 @@ test-unit-bundle-linux:
 .PHONY: test-unit-runtime test-unit-runtime-linux
 .PHONY: test-unit-install test-unit-install-linux
 .PHONY: test-unit-bootstrap test-unit-bootstrap-linux
+.PHONY: test-unit-core test-unit-core-linux
+verify-pr: test-unit-core
+test-unit-core:
+	go test ./modules/cli/internal/setup/unitdeploy
+
+test-unit-core-linux:
+	bash scripts/test/gates/test-unit-core-linux.sh
+
 test-unit-bootstrap:
 	go test ./modules/cli/internal/setup/unitbootstrap
 
