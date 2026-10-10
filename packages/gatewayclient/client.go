@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/filter"
 	"trpc.group/trpc-go/trpc-go/pool/connpool"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const directoryFetchTimeout = 3 * time.Second
@@ -401,7 +402,9 @@ func (c *Client) send(ctx context.Context, chosen target, servicePath, method st
 		client.WithServiceName(servicePath), client.WithCalleeMethod(method),
 		client.WithSerializationType(options.serialization),
 		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
-		client.WithPool(c.pool),
+		// 自带连接池时必须同时指定 go-net 传输：linux/amd64 上 tRPC 默认把客户端切到 tnet，而 tnet 只接受自己的连接，
+		// 对自带池返回的标准连接报 "tnet transport doesn't support non tnet.Conn"，这个问题在 macOS 上不会出现。
+		client.WithPool(c.pool), client.WithTransport(transport.DefaultClientTransport),
 		// 签名头和元数据已经在这里一次性写好。调用方模块配置的全局客户端过滤器（例如 transinfo-blocker 的白名单）
 		// 属于外层桩的过滤器链，已经执行过；内层不再重复执行，免得它们剥掉签名头。
 		client.WithDisableFilter(),

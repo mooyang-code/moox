@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/pool/connpool"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 // DefaultRefreshInterval 是比对服务目录版本的间隔，与主机网关拉取快照的间隔一致。
@@ -55,7 +56,8 @@ func (s rpcSource) Fetch(ctx context.Context, currentVersion string) (View, bool
 	}
 	options := []client.Option{client.WithTarget("ip://" + address), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(s.timeout)}
 	if s.pool != nil {
-		options = append(options, client.WithPool(s.pool))
+		// 同 client.go：自带连接池要配 go-net 传输，linux/amd64 上默认的 tnet 不接受标准连接。
+		options = append(options, client.WithPool(s.pool), client.WithTransport(transport.DefaultClientTransport))
 	}
 	proxy := directorypb.NewDirectoryClientProxy(options...)
 	rsp, err := proxy.GetDirectory(ctx, &directorypb.GetDirectoryReq{CurrentVersion: currentVersion})

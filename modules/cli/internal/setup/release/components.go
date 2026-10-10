@@ -322,6 +322,10 @@ func renderCollector(r *renderer, c *Component) error {
 	if err := r.copyTree("modules/collector/config/markets", "collector/config/markets"); err != nil {
 		return err
 	}
+	// 行情采集的 Storage 绑定（现货、合约各绑定哪个数据集）：Collector 启动时从工作目录下的 config/sources/market 读取。
+	if err := r.copyTree("modules/collector/configs/sources/market", "collector/config/sources/market"); err != nil {
+		return err
+	}
 	raw, err := r.readRepositoryFile("modules/collector/config/app.yaml")
 	if err != nil {
 		return err

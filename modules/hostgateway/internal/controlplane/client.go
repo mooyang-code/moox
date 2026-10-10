@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const requestTimeout = 10 * time.Second
@@ -74,6 +75,8 @@ func New(options Options) (*Client, error) {
 			client.WithTLS("", "", cfg.TLS.CAFile, servicecatalog.ControlHostID),
 			// control 的主机网关重启后，旧的 TLS 连接要能被识别出来，不再复用。
 			client.WithPool(gatewayclient.NewConnectionPool()),
+			// 自带连接池要配 go-net 传输：linux/amd64 上默认的 tnet 不接受标准连接。
+			client.WithTransport(transport.DefaultClientTransport),
 		)
 	}
 	clientOptions = append(clientOptions, options.extra...)

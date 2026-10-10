@@ -1,0 +1,41 @@
+# Binance source configuration used by collector runtime.
+# Strictly decoded Binance source configuration.
+app:
+  id: "binance"
+  name: "加密交易所"
+  description: "加密现货/永续合约 K 线与标的采集"
+  type: "market"
+
+api:
+  base_url: "https://data-api.binance.vision"
+  spot_base_urls:
+    - "https://data-api.binance.vision"
+    - "https://api.binance.com"
+    - "https://api1.binance.com"
+    - "https://api2.binance.com"
+    - "https://api3.binance.com"
+    - "https://api4.binance.com"
+    - "https://api-gcp.binance.com"
+  swap_base_urls:
+    - "https://fapi.binance.com"
+    - "https://fapi1.binance.com"
+    - "https://fapi2.binance.com"
+    - "https://fapi3.binance.com"
+    - "https://fapi4.binance.com"
+
+storage:
+  bindings:
+    spot:
+      data_source_id: "binance"
+      subject_type: "crypto_pair"
+      subject_market: "spot"
+      auth_info:
+        app_id: "moox-collector"
+        app_key: "binance-spot-collector"
+    swap:
+      data_source_id: "binance"
+      subject_type: "crypto_pair"
+      subject_market: "swap"
+      auth_info:
+        app_id: "moox-collector"
+        app_key: "binance-swap-collector"
