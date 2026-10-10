@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -442,6 +444,54 @@ compute1 = ["access"]
 			require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 			t.Log("actual business unit ready with immutable retry:", profile)
 		}
+		python := os.Getenv("MOOX_FACTOR_PYTHON")
+		require.NotEmpty(t, python, "full control gate requires a real prepared pandas/numpy interpreter")
+		promotion := ControlOptions{CoreOptions: options, ProxyCA: unitbootstrap.ProxyCAAuthorization{Create: true}, FactorPython: python}
+		full, err := BootstrapControl(t.Context(), snapshot, promotion)
+		require.NoError(t, err)
+		require.Equal(t, "control-ready", full.Stage)
+		require.Len(t, full.Components, 9, "every control component must run")
+		require.NotEqual(t, initial.Bootstrap.ControlDirectory, full.Bootstrap.ControlDirectory)
+		require.Equal(t, initial.Bootstrap.CAFingerprint, full.Bootstrap.CAFingerprint)
+		require.Equal(t, passwordHash, nativeAdminPasswordHash(t, full.Bootstrap.ControlDirectory, snapshot.Manifest.Admin.Username))
+		fullStatus := status(full.Bootstrap.ControlDirectory)
+		ca, err := os.ReadFile(filepath.Join(full.Bootstrap.ControlDirectory, "console-proxy/certs/caddy/root.crt"))
+		require.NoError(t, err)
+		pool := x509.NewCertPool()
+		require.True(t, pool.AppendCertsFromPEM(ca))
+		httpsTransport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+		defer httpsTransport.CloseIdleConnections()
+		client := &http.Client{Transport: httpsTransport, Timeout: 10 * time.Second}
+		response, err := client.Get("https://127.0.0.1:9527/")
+		require.NoError(t, err)
+		_, err = io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		nativeAdminLoginAt(t, client, "https://127.0.0.1:9527", snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
+		promotion.RepositoryRoot, promotion.BinaryDirectory = "", ""
+		retried, err := BootstrapControl(t.Context(), snapshot, promotion)
+		require.NoError(t, err)
+		require.Equal(t, full, retried)
+		require.Equal(t, fullStatus, status(full.Bootstrap.ControlDirectory))
+		pause := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "pause", "--plan", filepath.Join(full.Bootstrap.ControlDirectory, "runtime.json"), "--components", "monitor")
+		pauseOutput, err := pause.CombinedOutput()
+		require.NoError(t, err, "%s", pauseOutput)
+		pausedControl, err := BootstrapControl(t.Context(), snapshot, promotion)
+		require.NoError(t, err)
+		require.Equal(t, "control-paused", pausedControl.Stage)
+		resume := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "resume", "--plan", filepath.Join(full.Bootstrap.ControlDirectory, "runtime.json"), "--components", "monitor")
+		resumeOutput, err := resume.CombinedOutput()
+		require.NoError(t, err, "%s", resumeOutput)
+		resumedControl, err := BootstrapControl(t.Context(), snapshot, promotion)
+		require.NoError(t, err)
+		require.Equal(t, "control-ready", resumedControl.Stage)
+		unchanged := status(full.Bootstrap.ControlDirectory)
+		promotion.ProxyCA.Create = false
+		_, err = BootstrapControl(t.Context(), snapshot, promotion)
+		require.ErrorContains(t, err, "original private deployment input changed")
+		require.Equal(t, unchanged, status(full.Bootstrap.ControlDirectory))
+		t.Log("all nine control services, trusted HTTPS page/login, immutable retry, pause/resume and original authorization binding passed")
 	} else {
 		t.Fatal("native business Linux gate requires MOOX_BUSINESS_BINARY_DIRECTORY")
 	}
@@ -469,11 +519,15 @@ func nativeAdminPasswordHash(t *testing.T, release, username string) string {
 
 func nativeAdminLogin(t *testing.T, username, password string) {
 	t.Helper()
-	client := http.Client{Timeout: 10 * time.Second}
+	nativeAdminLoginAt(t, &http.Client{Timeout: 10 * time.Second}, "http://127.0.0.1:11000", username, password)
+}
+
+func nativeAdminLoginAt(t *testing.T, client *http.Client, endpoint, username, password string) {
+	t.Helper()
 	call := func(method string, request, response proto.Message) {
 		raw, err := protojson.Marshal(request)
 		require.NoError(t, err)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:11000/api/admin/auth/"+method, bytes.NewReader(raw))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint+"/api/admin/auth/"+method, bytes.NewReader(raw))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		result, err := client.Do(req)

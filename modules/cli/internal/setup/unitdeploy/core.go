@@ -25,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 )
 
@@ -41,6 +42,7 @@ type CoreResult struct {
 	Stage          string               `json:"stage"`
 	Bootstrap      unitbootstrap.Result `json:"bootstrap"`
 	OperatorConfig string               `json:"operator_config"`
+	Components     []unitruntime.Status `json:"components,omitempty"`
 }
 
 type runtimeIdentity struct {
@@ -131,6 +133,10 @@ func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, 
 // result deliberately says core-ready: fleet services and Console Proxy are
 // installed by the outer workflow once Storage and other dependencies exist.
 func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options CoreOptions) (CoreResult, error) {
+	return bootstrap(ctx, snapshot, options, nil)
+}
+
+func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options CoreOptions, controlOptions *ControlOptions) (CoreResult, error) {
 	var result CoreResult
 	if snapshot == nil || snapshot.VerifyUnchanged() != nil {
 		return result, errors.New("bootstrap requires an unchanged private setup snapshot")
@@ -146,6 +152,15 @@ func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options 
 		return result, err
 	}
 	defer root.Close()
+	if controlOptions != nil {
+		var ready CoreResult
+		if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.Phase != "complete" || ready.Bootstrap.HostID != snapshot.Manifest.ControlHost().Name || !insideState(snapshot.Manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(snapshot.Manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
+			return result, errors.New("full control requires its original completed core receipt")
+		}
+		if _, err := fsutil.ReadPrivate(root, "runtime-identity.json", 4096); err != nil {
+			return result, errors.New("full control requires its original private runtime identity")
+		}
+	}
 	operatorRoot, err := privateRoot(options.OperatorDirectory)
 	if err != nil {
 		return result, err
@@ -169,19 +184,49 @@ func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options 
 	if err != nil {
 		return result, err
 	}
-	packages, helper, err := prepareCoreSoftware(ctx, root, options, arch)
+	var packages []unitpackage.Result
+	var helper string
+	if controlOptions == nil {
+		packages, helper, err = prepareCoreSoftware(ctx, root, options, arch)
+	} else {
+		stored, exists, readErr := readCoreSoftware(ctx, root, arch)
+		if readErr != nil || !exists {
+			return result, errors.New("full control requires its original verified core software")
+		}
+		packages, helper = stored.Packages, stored.Helper
+	}
 	if err != nil {
 		return result, err
 	}
 	request := coreRequest(snapshot.Manifest, identity, packages[0], packages[1])
+	overrides := [2]map[string][]byte{{}, {}}
+	if controlOptions != nil {
+		request, overrides[1], err = controlInput(ctx, snapshot, root, transport, request, identity, packages[1], *controlOptions)
+		if err != nil {
+			return result, err
+		}
+	}
+	for i, unit := range []*unitbootstrap.Unit{&request.Host, &request.Control} {
+		for name, content := range overrides[i] {
+			unit.Overrides[name] = path.Join(request.DeploymentRoot, "bootstrap-input/config", sha(content), "config.yaml")
+			if err := persistPrivateBytes(root, "overrides/"+sha(content)+".yaml", content); err != nil {
+				return result, err
+			}
+		}
+	}
 	raw, err := json.Marshal(request)
 	if err != nil {
 		return result, err
 	}
 	raw = append(raw, '\n')
-	expectedRequest, err := unitbootstrap.RequestHash(request, [2]map[string][]byte{})
+	expectedRequest, err := unitbootstrap.RequestHash(request, overrides)
 	if err != nil {
 		return result, err
+	}
+	if controlOptions != nil {
+		if err := bindControlRequest(root, expectedRequest); err != nil {
+			return result, err
+		}
 	}
 	requestPath := path.Join(request.DeploymentRoot, "bootstrap-input/requests", sha(raw), "request.json")
 	if err := persistRequest(root, sha(raw), raw); err != nil {
@@ -196,6 +241,11 @@ func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options 
 	for i, unit := range []unitbootstrap.Unit{request.Host, request.Control} {
 		if err := uploadFile(ctx, transport, request.DeploymentRoot, packages[i].Archive, unit.Archive, strings.TrimPrefix(unit.SHA256, "sha256:"), 0o600); err != nil {
 			return result, err
+		}
+		for name, content := range overrides[i] {
+			if err := uploadBytes(ctx, transport, request.DeploymentRoot, content, unit.Overrides[name], 0o600); err != nil {
+				return result, err
+			}
 		}
 	}
 	helperSHA, err := fileSHA(helper)
@@ -233,7 +283,20 @@ func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options 
 		return result, err
 	}
 	result.Stage, result.OperatorConfig = "core-ready", filepath.Join(options.OperatorDirectory, "gateway-client.yaml")
-	if err := saveJSON(root, "core-ready.json", result, true); err != nil {
+	receipt := "core-ready.json"
+	if controlOptions != nil {
+		result.Stage, receipt = "control-ready", "control-ready.json"
+		result.Components, err = activeControlStatus(ctx, transport, remoteHelper, result.Bootstrap.ControlDirectory, host.Name, request.Control.Components)
+		if err != nil {
+			return CoreResult{}, err
+		}
+		for _, component := range result.Components {
+			if component.State == "paused" {
+				result.Stage = "control-paused"
+			}
+		}
+	}
+	if err := saveJSON(root, receipt, result, true); err != nil {
 		return result, err
 	}
 	return result, nil

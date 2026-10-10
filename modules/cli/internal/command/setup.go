@@ -36,6 +36,7 @@ const defaultSetupFile = "./moox.toml"
 
 type setupDeps struct {
 	bootstrapCore          setupCoreBootstrap
+	bootstrapControl       setupControlBootstrap
 	deployHost             setupHostDeploy
 	deployUnit             setupUnitDeploy
 	load                   func(string) (*setupconfig.Snapshot, error)

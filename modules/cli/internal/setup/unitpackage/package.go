@@ -108,7 +108,10 @@ var unitSpecs = map[string]unitComponentSpec{
 	"web-host":      {}, // The frontend is embedded in the prebuilt web-host executable.
 	"admin":         {[]string{"moox-admin-cli"}, []unitAsset{configAsset("admin", "admin"), schemaAsset("admin", "admin")}},
 	"eventbus":      {assets: []unitAsset{configAsset("eventbus", "eventbus")}},
-	"monitor":       {[]string{"moox-monitor-cli"}, []unitAsset{configAsset("monitor", "monitor"), schemaAsset("monitor", "monitor")}},
+	"monitor": {[]string{"moox-monitor-cli"}, []unitAsset{
+		configAsset("monitor", "monitor"), schemaAsset("monitor", "monitor"),
+		{"config/setup/dataset-health-policy.yaml", "monitor/config/dataset-health-policy.yaml", false},
+	}},
 	"collector": {[]string{"moox-collector-cli"}, []unitAsset{
 		configAsset("collector", "collector"), schemaAsset("collector", "collector"),
 		{"modules/collector/configs/sources", "collector/configs/sources", true},
