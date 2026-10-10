@@ -2,14 +2,18 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"gorm.io/gorm"
 )
 
 type ReporterInstance struct {
@@ -19,17 +23,17 @@ type ReporterInstance struct {
 
 // buildServices joins all registered placements with reporters by exact host
 // and component identity. Probe existence never determines registration.
-func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceStatus, []ServiceStatus, bool, error) {
+func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceStatus, []ServiceStatus, *domain.TopologySnapshot, error) {
 	if b.Topology == nil {
-		return nil, nil, false, nil
+		return nil, nil, nil, nil
 	}
 	snapshot, err := b.Topology.Snapshot(ctx)
 	if err != nil || snapshot == nil {
-		return nil, nil, false, err
+		return nil, nil, nil, err
 	}
 	rows, err := b.reporters(ctx, now)
 	if err != nil {
-		return nil, nil, true, err
+		return nil, nil, snapshot, err
 	}
 	byPlacement := make(map[string][]monmetrics.MetricService)
 	for _, row := range rows {
@@ -55,23 +59,39 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 		if component.Doctor.Transport == "reporter" || len(reporterRows) > 0 {
 			item = withReporters(item, reporterRows)
 		}
-		switch {
-		case !item.Enabled:
-			item.Status, item.Reason, item.ProbeStatus = "disabled", "部署已停用", "disabled"
-		case component.Health.Kind == "none":
-			item.ProbeStatus, item.ProbeReason = "unchecked", "不探测"
-			item.Status, item.Reason = "unchecked", "不探测"
-		default:
-			var latest *domain.CheckResult
-			if b.Results != nil {
-				results, err := b.Results.Recent(ctx, "", "placement:"+placement.HostID+":"+placement.ComponentID, 1)
-				if err != nil {
-					return nil, nil, true, err
+
+		var latest *domain.CheckResult
+		if component.Health.Kind != "none" {
+			checkID := "placement:" + placement.HostID + ":" + placement.ComponentID
+			if b.Checks != nil {
+				check, err := b.Checks.Get(ctx, "", checkID)
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return nil, nil, snapshot, err
 				}
+				if check != nil {
+					item.ProbeURL = check.URL
+					if check.Kind == domain.CheckKindTCP {
+						item.ProbeURL = "tcp://" + net.JoinHostPort(check.TCPHost, strconv.Itoa(check.TCPPort))
+					}
+				}
+			}
+			if b.Results != nil {
+				results, err := b.Results.Recent(ctx, "", checkID, 10)
+				if err != nil {
+					return nil, nil, snapshot, err
+				}
+				item.ProbeHistory = results
 				if len(results) > 0 {
 					latest = &results[0]
 				}
 			}
+		}
+		switch {
+		case !item.Enabled:
+			item.Status, item.Reason, item.ProbeStatus = "disabled", "部署已停用", "disabled"
+		case component.Health.Kind == "none":
+			item.ProbeStatus, item.ProbeReason, item.Status, item.Reason = "unchecked", "不探测", "unchecked", "不探测"
+		default:
 			item = mergeServiceHealth(item, latest)
 		}
 		services = append(services, item)
@@ -95,7 +115,7 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 		a, z := unregistered[i], unregistered[j]
 		return strings.Join([]string{a.NodeID, a.ServiceName, a.InstanceID}, "\x00") < strings.Join([]string{z.NodeID, z.ServiceName, z.InstanceID}, "\x00")
 	})
-	return services, unregistered, true, nil
+	return services, unregistered, snapshot, nil
 }
 
 func (b Builder) reporters(ctx context.Context, now time.Time) ([]monmetrics.MetricService, error) {

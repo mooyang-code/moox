@@ -32,12 +32,15 @@ type ServiceStatus struct {
 	ProbeStatus, ProbeReason, ProbeRawError         string
 	ProbeCheckedAt                                  time.Time
 	Instances                                       []ReporterInstance
+	ProbeURL                                        string
+	ProbeHistory                                    []domain.CheckResult
 }
 
 type HostStatus struct {
-	AgentID, Hostname, Status, Reason               string
-	LastSeenAt                                      time.Time
-	CPUPercent, MemoryPercent, FilesystemMaxPercent float64
+	HostID, AgentID, Hostname, Status, Reason                      string
+	LastSeenAt                                                     time.Time
+	CPUPercent, MemoryPercent, FilesystemMaxPercent                float64
+	MemoryAvailable, DiskAvailable, MetricsAvailable, CPUAvailable bool
 }
 
 type DatasetFrequencyStatus struct {
@@ -54,6 +57,7 @@ type DatasetFrequencyStatus struct {
 
 type BusinessStatus struct {
 	SpaceID, Kind, Module, Status, Reason string
+	CheckID, RawError                     string
 	LastCheckedAt                         time.Time
 }
 
@@ -62,6 +66,7 @@ type Overview struct {
 	Services       []ServiceStatus
 	Unregistered   []ServiceStatus
 	TopologyKnown  bool
+	Topology       *domain.TopologySnapshot
 	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
@@ -102,10 +107,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out := Overview{GeneratedAt: now}
 	var err error
-	if out.Services, out.Unregistered, out.TopologyKnown, err = b.buildServices(ctx, now); err != nil {
+	if out.Services, out.Unregistered, out.Topology, err = b.buildServices(ctx, now); err != nil {
 		return Overview{}, err
 	}
-	if out.Hosts, err = b.buildHosts(ctx); err != nil {
+	out.TopologyKnown = out.Topology != nil
+	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
 		return Overview{}, err
 	}
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
@@ -132,6 +138,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
 		return Overview{}, err
 	}
+	out.BusinessChecks = uniqueBusinessChecks(out.BusinessChecks)
 	sortOverview(&out)
 	return out, nil
 }
@@ -194,11 +201,11 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 	}}, nil
 }
 
-func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
+func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, error) {
 	if b.Hosts == nil {
 		return []HostStatus{}, nil
 	}
-	rows, err := b.Hosts.ListAgents(ctx)
+	rows, err := b.Hosts.ListAgentsAt(ctx, now)
 	if err != nil {
 		return nil, err
 	}
@@ -208,15 +215,19 @@ func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
 		if !row.Reachable {
 			status, reason = "down", "agent unreachable"
 		}
-		item := HostStatus{AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
+		item := HostStatus{HostID: row.HostID, AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
 		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
 		if snapshot := row.Snapshot; snapshot != nil {
+			item.MetricsAvailable = true
 			if snapshot.GetCpu() != nil && snapshot.GetCpu().GetUsageAvailable() {
+				item.CPUAvailable = true
 				item.CPUPercent = snapshot.GetCpu().GetUsagePercent()
 			}
 			if snapshot.GetMemory() != nil {
+				item.MemoryAvailable = true
 				item.MemoryPercent = snapshot.GetMemory().GetUsagePercent()
 			}
+			item.DiskAvailable = len(snapshot.GetFilesystems()) > 0
 			for _, filesystem := range snapshot.GetFilesystems() {
 				item.FilesystemMaxPercent = max(item.FilesystemMaxPercent, filesystem.GetUsagePercent())
 			}
@@ -693,17 +704,19 @@ func parseOverviewFrequency(raw string) time.Duration {
 func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
 	out := make([]BusinessStatus, 0)
 	if b.Checks != nil && b.Results != nil {
-		enabled := true
-		checks, err := b.Checks.List(ctx, store.ListChecksOptions{SpaceID: spaceID, Enabled: &enabled, Page: store.Page{PageSize: 500}})
+		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page"}, 1501)
 		if err != nil {
 			return nil, err
+		}
+		if len(checks) > 1500 {
+			return nil, fmt.Errorf("business checks exceed 1500 items")
 		}
 		for _, check := range checks {
 			kind := businessKind(check)
 			if kind == "" {
 				continue
 			}
-			item := BusinessStatus{SpaceID: check.SpaceID, Kind: kind, Module: check.Source, Status: "unknown", Reason: "尚未上报"}
+			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报"}
 			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
 			if err != nil {
 				return nil, err
@@ -712,6 +725,7 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 				item.LastCheckedAt = results[0].CheckedAt.UTC()
 				item.Status = strings.ToLower(string(results[0].Status))
 				item.Reason = results[0].ErrorMessage
+				item.RawError = results[0].RawError
 				if item.Reason == "" {
 					item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
 				}
@@ -1494,15 +1508,54 @@ func (b Builder) balanceMetricValues(ctx context.Context, metricName string) (ma
 }
 
 func businessKind(check domain.Check) string {
-	text := strings.ToLower(strings.Join([]string{check.CheckID, check.Name, check.GroupName, check.Source}, " "))
-	switch {
-	case strings.Contains(text, "canary"):
-		return "canary"
-	case strings.Contains(text, "balance"):
-		return "balance"
+	kind, _, ok := strings.Cut(check.CheckID, ":")
+	if !ok {
+		return ""
+	}
+	switch kind {
+	case "market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page":
+		return kind
 	default:
 		return ""
 	}
+}
+
+func businessModule(checkID string) string {
+	kind, id, _ := strings.Cut(checkID, ":")
+	switch kind {
+	case "console-page":
+		return "console-proxy"
+	case "market_canary", "subject_tag", "kline_freshness":
+		return "collector"
+	case "balance":
+		return "trade"
+	case "module":
+		for _, check := range report.BuiltInModuleHealthChecks() {
+			if check.ID == id {
+				return check.Module
+			}
+		}
+	}
+	return ""
+}
+
+// Live metric facts supersede the cached external check for the same identity.
+func uniqueBusinessChecks(items []BusinessStatus) []BusinessStatus {
+	indexes := make(map[string]int, len(items))
+	out := make([]BusinessStatus, 0, len(items))
+	for _, item := range items {
+		if item.CheckID == "" {
+			item.CheckID = item.Kind + ":" + item.Module
+		}
+		key := item.SpaceID + "\x00" + item.CheckID
+		if i, exists := indexes[key]; exists {
+			out[i] = item
+			continue
+		}
+		indexes[key] = len(out)
+		out = append(out, item)
+	}
+	return out
 }
 
 func sortOverview(out *Overview) {

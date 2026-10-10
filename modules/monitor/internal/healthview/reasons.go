@@ -2,43 +2,6 @@ package healthview
 
 import "strings"
 
-type Definition struct{ Key, Name, Remark string }
-
-var businessCatalog = []Definition{
-	{Key: "market", Name: "行情采集", Remark: "检查 K 线采集、数据完整性、更新延迟和 SCF 容量"},
-	{Key: "factor", Name: "因子计算", Remark: "检查计算失败、输入输出时间差和无效结果"},
-	{Key: "trade", Name: "交易与余额", Remark: "检查账户余额同步、余额差异和交易服务状态"},
-}
-
-func ChineseName(id string) (string, string) {
-	id = strings.ToLower(id)
-	switch {
-	case strings.Contains(id, "collector"), strings.Contains(id, "market_fetch"), strings.Contains(id, "canary"):
-		return "行情采集", "检查行情任务分配、Timer 容量和 K 线新鲜度"
-	case strings.Contains(id, "factor"):
-		return "因子计算", "检查因子计算失败、时序滞后和结果新鲜度"
-	case strings.Contains(id, "balance"), strings.Contains(id, "trade"):
-		return "交易与余额", "检查账户余额同步和交易相关业务状态"
-	case strings.Contains(id, "dataset"), strings.Contains(id, "storage_view"), strings.Contains(id, "storage-view"), strings.Contains(id, "storage:"):
-		return "数据与视图", "检查数据集和视图的最新水位"
-	default:
-		return "核心服务", "检查服务是否在线并持续上报"
-	}
-}
-
-func Status(status string) string {
-	switch status {
-	case "healthy", "ok":
-		return "healthy"
-	case "degraded", "stale":
-		return "degraded"
-	case "down", "firing":
-		return "down"
-	default:
-		return "unknown"
-	}
-}
-
 func MaskURL(raw string) string {
 	if raw == "" {
 		return ""

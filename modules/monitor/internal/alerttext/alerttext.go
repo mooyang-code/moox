@@ -5,7 +5,10 @@ package alerttext
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 // Zone renders alert times in Beijing time, which operators read.
@@ -38,34 +41,17 @@ func Duration(d time.Duration) string {
 	}
 }
 
-// serviceNames names deployed services for people reading alerts.
-var serviceNames = map[string]string{
-	"admin":                    "管理后台网关",
-	"web_host":                 "管理后台前端",
-	"service_gateway":          "服务网关",
-	"service_gateway_native":   "公网服务网关",
-	"host-gateway":             "节点服务网关",
-	"storage-primary":          "存储主服务",
-	"storage-view":             "存储视图服务",
-	"storage-node":             "存储数据节点",
-	"eventbus":                 "消息总线",
-	"monitor":                  "监控服务",
-	"collector":                "行情采集服务",
-	"collector_market_runtime": "行情采集运行环境",
-	"cloudnode":                "云节点服务",
-	"factor-mgr":               "因子管理服务",
-	"strategy":                 "策略服务",
-	"archive":                  "归档服务",
-	"host-agent":               "主机采集代理",
-	"trade":                    "交易服务",
-}
+var embeddedCatalog = sync.OnceValues(servicecatalog.LoadEmbedded)
 
-// Service is a deployed service's human name, falling back to its ID.
-func Service(service string) string {
-	if name := serviceNames[strings.TrimSpace(service)]; name != "" {
-		return name
+// Service reads the single component-name registry. Unknown IDs stay explicit.
+func Service(id string) string {
+	catalog, err := embeddedCatalog()
+	if err == nil {
+		if component, ok := catalog.Component(id); ok {
+			return component.Name
+		}
 	}
-	return service
+	return id
 }
 
 // Node renders a node for alert text, such as "storage 节点".

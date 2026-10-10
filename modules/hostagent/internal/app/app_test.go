@@ -63,13 +63,15 @@ type fakeSnapshotCollector struct {
 }
 
 type fakeEventPublisher struct {
+	metric *hostmetricpb.HostMetric
 	err    error
 	ready  bool
 	closed bool
 	at     time.Time
 }
 
-func (f *fakeEventPublisher) PublishHostMetric(_ context.Context, _ string, _ *hostmetricpb.HostMetric, at time.Time) error {
+func (f *fakeEventPublisher) PublishHostMetric(_ context.Context, _ string, metric *hostmetricpb.HostMetric, at time.Time) error {
+	f.metric = metric
 	f.at = at
 	return f.err
 }
@@ -194,6 +196,7 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	snapshot := testSnapshot()
 
 	a := testAgent(t)
+	a.cfg.HostID = "control"
 	a.collector = fakeSnapshotCollector{snapshot: snapshot}
 	a.publisher = &fakeEventPublisher{ready: true}
 
@@ -204,6 +207,9 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	assert.NotNil(t, rsp.GetSnapshot())
 	assert.Equal(t, uint64(1), a.published.Load())
 	assert.Empty(t, a.lastErr)
+	publisher := a.publisher.(*fakeEventPublisher)
+	require.Equal(t, "control", publisher.metric.GetHostId())
+	require.Equal(t, a.id.AgentID, publisher.metric.GetAgentId())
 }
 
 func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {

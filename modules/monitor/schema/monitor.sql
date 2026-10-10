@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS t_monitor_gateway_observations (
 
 CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_agent_id TEXT PRIMARY KEY,
+    c_host_id TEXT NOT NULL DEFAULT '',
     c_hostname TEXT NOT NULL,
     c_boot_id TEXT NOT NULL,
     c_last_seen_at DATETIME NOT NULL,
@@ -277,3 +278,13 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_monitor_metric_latest SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+CREATE TABLE IF NOT EXISTS t_monitor_component_health (
+    c_host_id TEXT NOT NULL,
+    c_component_id TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_since_at DATETIME NOT NULL,
+    c_observed_at DATETIME NOT NULL,
+    PRIMARY KEY (c_host_id, c_component_id),
+    CHECK (c_status IN ('healthy', 'degraded', 'down', 'unknown', 'disabled', 'unchecked'))
+);

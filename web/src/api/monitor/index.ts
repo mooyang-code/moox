@@ -3,7 +3,7 @@ import type { HealthOverview, NotificationChannelResponse } from "./types";
 
 const SERVICE = "monitor";
 
-export const healthMonitorApi = {
+export const monitorApi = {
   getOverview(req: { space_id?: string } = {}) {
     return callControl<typeof req, { overview?: HealthOverview }>(SERVICE, "GetHealthOverview", req);
   },
@@ -15,11 +15,4 @@ export const healthMonitorApi = {
   }
 };
 
-export type {
-  HealthAlert,
-  HealthInstance,
-  HealthItem,
-  HealthOverview,
-  NotificationChannelResponse,
-  NotificationChannelSetting
-} from "./types";
+export type * from "./types";

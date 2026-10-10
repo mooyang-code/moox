@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
 )
 
@@ -17,6 +18,7 @@ const (
 )
 
 type hostAgentRecord struct {
+	HostID      string    `gorm:"column:c_host_id"`
 	AgentID     string    `gorm:"column:c_agent_id;primaryKey"`
 	Hostname    string    `gorm:"column:c_hostname"`
 	BootID      string    `gorm:"column:c_boot_id"`
@@ -30,6 +32,7 @@ type hostAgentRecord struct {
 func (hostAgentRecord) TableName() string { return "t_monitor_host_agents" }
 
 type HostObservation struct {
+	HostID     string
 	AgentID    string
 	Hostname   string
 	BootID     string
@@ -38,6 +41,7 @@ type HostObservation struct {
 }
 
 type PresenceTransition struct {
+	HostID     string
 	AgentID    string
 	Hostname   string
 	From       string
@@ -53,6 +57,7 @@ type ObserveResult struct {
 }
 
 type RegistryAgent struct {
+	HostID       string
 	AgentID      string
 	Hostname     string
 	BootID       string
@@ -74,6 +79,10 @@ func NewRegistry(db *gorm.DB) *Registry { return &Registry{db: db} }
 func (r *Registry) Observe(ctx context.Context, observation HostObservation) (ObserveResult, error) {
 	if r == nil || r.db == nil {
 		return ObserveResult{}, errors.New("host agent registry is unavailable")
+	}
+	observation.HostID = strings.TrimSpace(observation.HostID)
+	if observation.HostID != "" && !servicecatalog.ValidHostID(observation.HostID) {
+		return ObserveResult{}, errors.New("invalid deployment host identity")
 	}
 	observation.AgentID = strings.TrimSpace(observation.AgentID)
 	observation.Hostname = strings.TrimSpace(observation.Hostname)
@@ -97,7 +106,7 @@ func (r *Registry) Observe(ctx context.Context, observation HostObservation) (Ob
 		err := tx.Where("c_agent_id = ?", observation.AgentID).First(&current).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			record := hostAgentRecord{
-				AgentID: observation.AgentID, Hostname: observation.Hostname,
+				HostID: observation.HostID, AgentID: observation.AgentID, Hostname: observation.Hostname,
 				BootID: observation.BootID, LastSeenAt: observation.OccurredAt,
 				LastEventID: observation.EventID, Status: PresenceReachable,
 			}
@@ -118,7 +127,7 @@ func (r *Registry) Observe(ctx context.Context, observation HostObservation) (Ob
 		update := tx.Model(&hostAgentRecord{}).
 			Where("c_agent_id = ? AND c_last_seen_at < ?", observation.AgentID, observation.OccurredAt).
 			Updates(map[string]any{
-				"c_hostname": observation.Hostname, "c_boot_id": observation.BootID,
+				"c_host_id": observation.HostID, "c_hostname": observation.Hostname, "c_boot_id": observation.BootID,
 				"c_last_seen_at": observation.OccurredAt, "c_last_event_id": observation.EventID,
 				"c_status": PresenceReachable, "c_mtime": time.Now().UTC(),
 			})
@@ -129,7 +138,7 @@ func (r *Registry) Observe(ctx context.Context, observation HostObservation) (Ob
 		result.Current = result.Updated
 		if result.Updated && current.Status == PresenceUnreachable {
 			result.Transition = &PresenceTransition{
-				AgentID: observation.AgentID, Hostname: observation.Hostname,
+				HostID: observation.HostID, AgentID: observation.AgentID, Hostname: observation.Hostname,
 				From: PresenceUnreachable, To: PresenceReachable,
 				ObservedAt: observation.OccurredAt,
 			}
@@ -171,7 +180,7 @@ func (r *Registry) MarkUnreachable(ctx context.Context, now time.Time, staleAfte
 			}
 			if update.RowsAffected == 1 {
 				transitions = append(transitions, PresenceTransition{
-					AgentID: record.AgentID, Hostname: record.Hostname,
+					HostID: record.HostID, AgentID: record.AgentID, Hostname: record.Hostname,
 					From: PresenceReachable, To: PresenceUnreachable,
 					ObservedAt: now,
 				})
@@ -190,8 +199,11 @@ func (r *Registry) List(ctx context.Context, now time.Time) ([]RegistryAgent, er
 		return nil, err
 	}
 	var records []hostAgentRecord
-	if err := r.db.WithContext(ctx).Order("c_hostname ASC, c_agent_id ASC").Find(&records).Error; err != nil {
+	if err := r.db.WithContext(ctx).Order("c_hostname ASC, c_agent_id ASC").Limit(1501).Find(&records).Error; err != nil {
 		return nil, err
+	}
+	if len(records) > 1500 {
+		return nil, errors.New("host registry exceeds 1500 agents")
 	}
 	now = now.UTC()
 	out := make([]RegistryAgent, 0, len(records))
@@ -201,9 +213,9 @@ func (r *Registry) List(ctx context.Context, now time.Time) ([]RegistryAgent, er
 			stale = 0
 		}
 		out = append(out, RegistryAgent{
-			AgentID: record.AgentID, Hostname: record.Hostname, BootID: record.BootID,
+			HostID: record.HostID, AgentID: record.AgentID, Hostname: record.Hostname, BootID: record.BootID,
 			LastSeenAt: record.LastSeenAt.UTC(), LastEventID: record.LastEventID,
-			Reachable: record.Status == PresenceReachable, StaleSeconds: stale,
+			Reachable: record.Status == PresenceReachable && now.Sub(record.LastSeenAt) <= DefaultHostStaleAfter, StaleSeconds: stale,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

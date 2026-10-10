@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -89,16 +90,10 @@ func openRegistryTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "monitor.db")), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(`
-CREATE TABLE t_monitor_host_agents (
-    c_agent_id TEXT PRIMARY KEY,
-    c_hostname TEXT NOT NULL,
-    c_boot_id TEXT NOT NULL,
-    c_last_seen_at DATETIME NOT NULL,
-    c_last_event_id TEXT NOT NULL,
-    c_status TEXT NOT NULL CHECK (c_status IN ('reachable', 'unreachable')),
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-)`).Error)
+	require.NoError(t, db.Exec(schema.SQL()).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+
 	return db
 }

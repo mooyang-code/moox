@@ -18,7 +18,7 @@ import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import GatewayNodes from "./gateway-nodes.vue";
 import ServiceDeployments from "@/views/settings/service-deployments/index.vue";
-import HealthMonitor from "@/views/ops/health-monitor/index.vue";
+import HealthMonitor from "@/views/ops/monitor/index.vue";
 
 type ServiceManagementTab = "health" | "nodes" | "instances";
 const tabs = [

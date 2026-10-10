@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -55,7 +56,7 @@ func (r *AlertRepository) ListEnabledFiringStates(ctx context.Context, spaceID s
 		Where("s.c_check_id LIKE ? OR EXISTS (SELECT 1 FROM t_monitor_checks AS c WHERE c.c_space_id = s.c_space_id AND c.c_check_id = s.c_check_id AND c.c_enabled = 1)", "host:%").
 		Order("s.c_triggered_at DESC, s.c_id DESC")
 	if spaceID != "" {
-		query = query.Where("s.c_space_id = ?", spaceID)
+		query = query.Where("s.c_space_id IN ?", []string{spaceID, "", "mooxsys"})
 	}
 	if limit > 0 {
 		query = query.Limit(limit)
@@ -219,4 +220,13 @@ func (r *AlertRepository) ListRecentEvents(ctx context.Context, limit int) ([]do
 
 func (r *AlertRepository) DeleteEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	return DeleteBefore(ctx, r.db, "t_monitor_alert_events", "c_created_at", cutoff)
+}
+
+func (r *AlertRepository) LatestFiringEvent(ctx context.Context, spaceID, ruleID, checkID string) (*domain.AlertEvent, error) {
+	var event domain.AlertEvent
+	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ? AND c_event_type IN ?", spaceID, ruleID, checkID, []string{domain.AlertEventTriggered, domain.AlertEventReminder}).Order("c_created_at DESC, c_id DESC").First(&event).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &event, err
 }

@@ -181,3 +181,14 @@ func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID stri
 			"c_next_check_at":   nextAt,
 		}).Error
 }
+
+// ListEnabledKinds filters structured namespaces before the response bound.
+func (r *CheckRepository) ListEnabledKinds(ctx context.Context, spaceID string, kinds []string, limit int) ([]domain.Check, error) {
+	query := r.db.WithContext(ctx).Where("c_enabled = 1 AND substr(c_check_id, 1, instr(c_check_id, ':') - 1) IN ?", kinds)
+	if spaceID != "" {
+		query = query.Where("c_space_id IN ?", []string{spaceID, "", "mooxsys"})
+	}
+	var checks []domain.Check
+	err := query.Order("c_space_id, c_check_id").Limit(limit).Find(&checks).Error
+	return checks, err
+}

@@ -207,8 +207,9 @@ func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
 
 func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, state *domain.AlertState, eventType string, now time.Time, persistBeforeSend bool) error {
 	agentID := sample.agentID
-	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": sample.value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
-	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Payload: string(payload), CreatedAt: now}); err != nil {
+	title, message := hostAlertText(sample, eventType, now)
+	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "hostname": sample.hostname, "value": sample.value, "metric": sample.metric, "threshold": sample.threshold})
+	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Message: message, Payload: string(payload), CreatedAt: now}); err != nil {
 		return err
 	}
 	if persistBeforeSend {
@@ -216,7 +217,6 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 			return err
 		}
 	}
-	title, message := hostAlertText(sample, eventType, now)
 	if e.Notification != nil {
 		channel, err := e.Notification(ctx)
 		if err != nil {

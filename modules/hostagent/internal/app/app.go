@@ -103,7 +103,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		a.recordError(err)
 		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
 	}
-	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
+	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{HostId: a.cfg.HostID, AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
 	if err != nil {
 		a.dropped.Add(1)
 		a.recordError(err)

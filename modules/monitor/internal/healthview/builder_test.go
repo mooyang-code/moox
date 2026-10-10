@@ -1,243 +1,134 @@
 package healthview
 
 import (
-	"sort"
-	"strings"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
-func TestBuilderReturnsStableEmptySections(t *testing.T) {
-	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	view, err := (Builder{Now: func() time.Time { return now }}).Build(t.Context(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !view.GeneratedAt.Equal(now) || view.Alerts == nil || len(view.BusinessItems) != 3 || view.ServiceItems == nil {
-		t.Fatalf("overview sections are not stable: %+v", view)
-	}
-}
-
-func TestMaskURLNeverReturnsFullSecret(t *testing.T) {
-	const raw = "https://example.com/hooks/super-secret"
-	if got := MaskURL(raw); got == raw || got != "https://...cret" {
-		t.Fatalf("masked URL = %q", got)
-	}
-}
-
-func TestMergeItemKeepsWorstStatusAndLatestObservation(t *testing.T) {
-	items := map[string]Item{}
-	mergeItem(items, "business:行情采集", Item{Name: "行情采集", Status: "healthy", CheckedAt: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)})
-	mergeItem(items, "business:行情采集", Item{Name: "行情采集", Status: "down", Reason: "Timer 不可用", CheckedAt: time.Date(2026, 8, 23, 12, 1, 0, 0, time.UTC)})
-	got := items["business:行情采集"]
-	if got.Status != "down" || got.Reason != "Timer 不可用" || got.OmittedInstanceCount != 0 || !got.CheckedAt.Equal(time.Date(2026, 8, 23, 12, 1, 0, 0, time.UTC)) {
-		t.Fatalf("merged item = %+v", got)
-	}
-}
-
-func TestMergeItemReplacesEmptyCatalogUnknownWithHealthyFact(t *testing.T) {
-	items := map[string]Item{"business:行情采集": {Name: "行情采集", Status: "unknown"}}
-	mergeItem(items, "business:行情采集", Item{Name: "行情采集", Status: "healthy", Instances: []Instance{{Name: "binance_spot_kline_1m"}}})
-	if got := items["business:行情采集"]; got.Status != "healthy" || len(got.Instances) != 1 {
-		t.Fatalf("catalog item was not replaced by healthy fact: %+v", got)
-	}
-}
-
-func TestMergeItemCountsOnlyTruncatedInstances(t *testing.T) {
-	items := map[string]Item{}
-	mergeItem(items, "business:行情采集", Item{Name: "行情采集", Status: "healthy", Instances: []Instance{{Name: "a"}, {Name: "b"}}})
-	if got := items["business:行情采集"].OmittedInstanceCount; got != 0 {
-		t.Fatalf("visible instances were counted as omitted: %d", got)
-	}
-	items = map[string]Item{}
-	for i := 0; i < maxInstancesPerItem+1; i++ {
-		mergeItem(items, "business:行情采集", Item{Name: "行情采集", Status: "healthy", Instances: []Instance{{Name: string(rune(i))}}})
-	}
-	got := items["business:行情采集"]
-	if len(got.Instances) != maxInstancesPerItem || got.OmittedInstanceCount != 1 {
-		t.Fatalf("truncated instances = %d, omitted = %d", len(got.Instances), got.OmittedInstanceCount)
-	}
-}
-
-func TestBusinessCatalogRejectsTechnicalFacts(t *testing.T) {
-	if isBusinessName("核心服务") {
-		t.Fatal("technical service facts must not create a fourth business category")
-	}
-}
-
-func TestServiceNameUsesChineseBusinessLabels(t *testing.T) {
-	for raw, want := range map[string]string{"moox-collector": "行情采集", "storage-view": "数据存储", "moox-factor": "因子计算", "trade": "交易管理"} {
-		got, _ := serviceName(raw)
-		if got != want {
-			t.Fatalf("serviceName(%q) = %q, want %q", raw, got, want)
+func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	for i := range catalog.Components {
+		if catalog.Components[i].ID == "console-proxy" {
+			catalog.Components[i].Name = "目录中的控制台入口"
 		}
 	}
+	facts := observability.Overview{GeneratedAt: now, TopologyKnown: true, Topology: &domain.TopologySnapshot{Catalog: catalog, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}, {HostID: "offline", Address: "offline.test", Status: "enabled"}}},
+		Services: []observability.ServiceStatus{
+			{NodeID: "control", ServiceName: "console-proxy", Enabled: true, Status: "healthy", Reason: "health check ok", ProbeStatus: "healthy", ProbeCheckedAt: now, ReporterStatus: "healthy", LastSeenAt: now, Instances: []observability.ReporterInstance{{InstanceID: "proxy-1", BootID: "boot-1", Version: "v2", Status: "healthy", LastSeenAt: now}}},
+			{NodeID: "control", ServiceName: "web-host", Enabled: true, Status: "down", Reason: "health check failed", ProbeStatus: "down", ProbeReason: "健康检查失败", ProbeRawError: "dial tcp: connection refused\n原始错误", ProbeCheckedAt: now},
+			{NodeID: "offline", ServiceName: "web-host", Enabled: true, Status: "unknown", Reason: "health not checked", ProbeStatus: "unknown"},
+			{NodeID: "control", ServiceName: "eventbus", Enabled: true, Status: "unchecked", Reason: "不探测", ProbeStatus: "unchecked", ReporterStatus: "missing"},
+			{NodeID: "control", ServiceName: "archive", Status: "disabled", Reason: "部署已停用", ProbeStatus: "disabled"},
+		},
+		Unregistered:   []observability.ServiceStatus{{NodeID: "control", ServiceName: "unknown-collector-name", Instances: []observability.ReporterInstance{{InstanceID: "orphan", Version: "dev", Status: "healthy", LastSeenAt: now}}}},
+		Hosts:          []observability.HostStatus{{HostID: "offline", AgentID: "PHYSICAL01", Hostname: "offline-host", Status: "down", Reason: "agent unreachable", LastSeenAt: now.Add(-10 * time.Minute)}, {AgentID: "STANDALONE", Hostname: "control", Status: "healthy", Reason: "agent reachable", LastSeenAt: now}},
+		BusinessChecks: []observability.BusinessStatus{{CheckID: "console-page:control:console-proxy", Kind: "console-page", Module: "console-proxy", Status: "down", Reason: "页面请求失败", RawError: "HTTP 502\nupstream web-host", LastCheckedAt: now}},
+		GatewaySignals: []observability.GatewaySignal{{HostID: "offline", Kind: "heartbeat", Status: "down", Reason: "主机网关心跳已中断", CheckedAt: now}},
+		Datasets:       []observability.DatasetFrequencyStatus{{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Status: "degraded", Reason: "输出水位已落后", LastRunAt: now, LastSuccessAt: now.Add(-time.Minute), InputWatermarkAt: now, OutputWatermarkAt: now.Add(-2 * time.Minute), LastReportedAt: now, LagSeconds: 120}},
+	}
+	view := projectFacts(facts)
+	hostAlert, err := (Builder{}).projectAlert(t.Context(), domain.AlertState{CheckID: "host:PHYSICAL01:cpu", DedupeKey: "host-alert", TriggeredAt: &now, UpdatedAt: now}, facts)
+	require.NoError(t, err)
+	view.Alerts = append(view.Alerts, hostAlert)
+	view.Summary.AlertCount = int32(len(view.Alerts))
+	require.Len(t, view.Components, 5)
+	require.Equal(t, "目录中的控制台入口", view.Components[1].Name)
+	require.Equal(t, "healthy", view.Components[1].Status, "page failure must not overwrite proxy readiness")
+	require.Equal(t, "control", view.Hosts[1].HostId, "hostname alone must not consume the registered control host")
+	require.Equal(t, int32(1), view.Summary.Components.HealthyCount)
+	require.Equal(t, int32(1), view.Summary.UnregisteredCount)
+	wire, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(view)
+	require.NoError(t, err)
+	var normalized any
+	require.NoError(t, json.Unmarshal(wire, &normalized))
+	wire, err = json.MarshalIndent(normalized, "", "  ")
+	require.NoError(t, err)
+	wire = append(wire, '\n')
+	path := filepath.Join("testdata", "overview-v2.json")
+	if os.Getenv("UPDATE_HEALTH_GOLDEN") == "1" {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+		require.NoError(t, os.WriteFile(path, wire, 0644))
+	}
+	expected, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, string(expected), string(wire))
 }
 
-func TestHealthViewKeepsHostMonitoringOutOfCoreServices(t *testing.T) {
-	if name, _ := serviceName("moox-host-agent"); name != "主机监控" {
-		t.Fatalf("host agent label = %q", name)
+func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	checkID := "placement:control:web-host"
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: checkID, Name: "任意名称", Kind: domain.CheckKindExternal, Enabled: true}))
+	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "failed", CheckID: checkID, Status: "down", ErrorMessage: "health check failed", RawError: "x509: 原始错误\ncertificate expired", CheckedAt: now.Add(-time.Hour)}))
+	for i := 0; i < 20; i++ {
+		require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: fmt.Sprintf("success-%d", i), CheckID: checkID, Status: "ok", Success: true, CheckedAt: now.Add(time.Duration(i) * time.Second)}))
 	}
-	// The Builder skips this service label; host details remain available from the host workbench.
-	if name, _ := serviceName("moox-factor"); name == "主机监控" {
-		t.Fatal("factor must not be classified as host monitoring")
+	for _, id := range []string{checkID, "host:AGENT01:cpu"} {
+		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{RuleID: "default:" + id, CheckID: id, Enabled: true}))
+		require.NoError(t, repos.Alerts.UpsertState(t.Context(), &domain.AlertState{RuleID: "default:" + id, CheckID: id, Status: domain.AlertStatusFiring, DedupeKey: id, TriggeredAt: &now, UpdatedAt: now}))
 	}
-}
-
-func TestHealthViewExcludesHostMonitoringDatasetsAndAlerts(t *testing.T) {
-	for _, item := range []observability.DatasetFrequencyStatus{
-		{DatasetID: "dataset_mooxsys_host_resource"},
-		{DatasetID: "dataset_mooxsys_host_filesystem"},
-		{DatasetID: "dataset_mooxsys_host_network"},
-	} {
-		if !isHostMonitoringDataset(item) {
-			t.Fatalf("host dataset %q was not filtered", item.DatasetID)
+	require.NoError(t, repos.Alerts.CreateEvent(t.Context(), &domain.AlertEvent{EventID: "host-alert", RuleID: "default:host:AGENT01:cpu", CheckID: "host:AGENT01:cpu", EventType: domain.AlertEventTriggered, Message: "主机 CPU 使用率超过阈值（95%）", CreatedAt: now}))
+	view, err := (Builder{Results: repos.Results, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(t.Context(), "crypto")
+	require.NoError(t, err)
+	require.Len(t, view.Alerts, 2, "global host/component alerts remain visible when a space is selected")
+	var hostFound bool
+	for _, alert := range view.Alerts {
+		if alert.Object.Type == "host" {
+			hostFound = true
+			require.Equal(t, "AGENT01", alert.Object.AgentId)
+			require.Contains(t, alert.Reason, "95%")
+		} else {
+			require.Equal(t, "web-host", alert.Object.ComponentId)
+			require.Equal(t, "x509: 原始错误\ncertificate expired", alert.RawError)
+			require.Equal(t, stamp(now.Add(19*time.Second)), alert.LastCheckedAt)
+			require.Equal(t, stamp(now), alert.TriggeredAt)
 		}
 	}
-	if isHostMonitoringDataset(observability.DatasetFrequencyStatus{DatasetID: "dataset_mooxsys_service_metrics"}) {
-		t.Fatal("service metrics view must not be classified as host monitoring")
-	}
-	for _, checkID := range []string{
-		"host:AB12:cpu",
-		"dataset:storage:dataset_mooxsys_host_resource:1m",
-		"dataset:storage_view:dataset_mooxsys_host_filesystem:1m",
-	} {
-		if !isHostMonitoringCheck(checkID) {
-			t.Fatalf("host check %q was not filtered", checkID)
-		}
-	}
-	if isHostMonitoringCheck("dataset:storage:dataset_binance_kline_1m:1m") {
-		t.Fatal("market dataset check was incorrectly classified as host monitoring")
-	}
+	require.True(t, hostFound)
 }
 
-func TestCollectorDatasetUsesStorageAsAuthoritativeHealthFact(t *testing.T) {
-	items := []observability.DatasetFrequencyStatus{
-		{Producer: "collector", SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Freq: "1m"},
-		{Producer: "storage", SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Freq: "1m"},
-		{Producer: "collector", SpaceID: "crypto", DatasetID: "new_dataset", Freq: "1m"},
-	}
-	scopes := storageDatasetScopes(items)
-	if !collectorCoveredByStorage(items[0], scopes) {
-		t.Fatal("collector fact with a Primary Storage fact must be covered")
-	}
-	if collectorCoveredByStorage(items[2], scopes) {
-		t.Fatal("collector fact without a Primary Storage fact must remain visible")
-	}
-	if collectorCoveredByStorage(items[1], scopes) {
-		t.Fatal("non-collector fact must not be filtered")
-	}
+func TestUnknownTopologyNeverInventsComponentsAndNamesNeverMatchSubstrings(t *testing.T) {
+	view, err := (Builder{}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.False(t, view.TopologyKnown)
+	require.Empty(t, view.Components)
+	object := alertObject("crypto", "business:random-factor-collector", observability.Overview{})
+	require.Equal(t, "business", object.Type)
+	require.Empty(t, object.ComponentId)
+	require.Equal(t, "random-factor-collector", componentName(observability.Overview{}, "random-factor-collector"))
+	require.Equal(t, "监控上报正常；健康检查正常", ChineseReason("reporter fresh; health check ok"))
+	require.Equal(t, "https://...abcd", MaskURL("https://secret.example/abcd"))
 }
 
-func TestCollectorDatasetCoverageNormalizesFrequency(t *testing.T) {
-	items := []observability.DatasetFrequencyStatus{
-		{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1h"},
-	}
-	if !collectorCoveredByStorage(
-		observability.DatasetFrequencyStatus{Producer: "collector", SpaceID: "crypto", DatasetID: "bars", Freq: "1h"},
-		storageDatasetScopes(items),
-	) {
-		t.Fatal("frequency matching must be case-insensitive")
-	}
-}
-
-func TestChineseReasonTranslatesTechnicalResults(t *testing.T) {
-	for raw, want := range map[string]string{
-		"reporter fresh":                                                     "监控上报正常",
-		"reporter fresh; health check ok":                                    "监控上报正常；健康检查正常",
-		"health check failed":                                                "健康检查失败",
-		"balance difference 0.2 exceeds 0.1":                                 "账户余额差异超过阈值（当前值 0.2，阈值 0.1）",
-		"unexpected timeout":                                                 "监控检查失败，请查看日志详情",
-		"metrics history write to Storage failed":                            "指标历史写入存储服务失败",
-		"eventbus connection unavailable: authentication failed":             "无法连接消息总线（认证失败）",
-		"metrics history write to Storage failed; host metrics write failed": "指标历史写入存储服务失败；主机指标写入失败",
-	} {
-		if got := ChineseReason(raw); got != want {
-			t.Fatalf("ChineseReason(%q) = %q, want %q", raw, got, want)
-		}
-	}
-}
-
-func TestBusinessNameCollapsesStorageFactsIntoMarketHealth(t *testing.T) {
-	name, description := businessName("storage-view:binance_spot_kline_1m")
-	if name != "行情采集" || description == "" {
-		t.Fatalf("businessName() = %q, %q", name, description)
-	}
-}
-
-func TestBusinessNameCollapsesMarketCanaryIntoMarketHealth(t *testing.T) {
-	name, description := businessName("observability:canary")
-	if name != "行情采集" || description == "" {
-		t.Fatalf("businessName() = %q, %q", name, description)
-	}
-}
-
-func TestAlertTitleUsesHumanReadableHostAndServiceNames(t *testing.T) {
-	if got := alertTitle("host:AB12:filesystem_usage"); got != "主机 AB12 · 磁盘占用率" {
-		t.Fatalf("host alert title = %q", got)
-	}
-	if got := alertTitle("placement:control:storage-view"); got != "数据存储" {
-		t.Fatalf("service alert title = %q", got)
-	}
-	if got := alertTitle("dataset:factor:dataset_factor_binance_kline_1m:1m"); got != "因子计算任务 · dataset_factor_binance_kline_1m / 1m" {
-		t.Fatalf("factor alert title = %q", got)
-	}
-	if got := alertTitle("dataset:storage:dataset_factor_binance_kline_1m:1m"); got != "因子结果数据 · dataset_factor_binance_kline_1m / 1m" {
-		t.Fatalf("storage alert title = %q", got)
-	}
-	if got := alertTitle("dataset:storage_view:view_crypto_kline_1m:1m"); got != "行情结果视图 · view_crypto_kline_1m / 1m" {
-		t.Fatalf("market view alert title = %q", got)
-	}
-	if got := alertTitle("placement:control:factor-mgr"); got != "因子计算服务" {
-		t.Fatalf("factor service alert title = %q", got)
-	}
-}
-
-func TestDatasetAlertReasonIncludesFreshnessFacts(t *testing.T) {
-	now := time.Date(2026, 8, 23, 10, 38, 30, 0, time.UTC)
-	item := observability.DatasetFrequencyStatus{
-		DatasetID:         "dataset_factor_binance_kline_1m",
-		Freq:              "1m",
-		Reason:            "run stale",
-		LastRunAt:         time.Date(2026, 8, 23, 10, 29, 1, 0, time.UTC),
-		LastSuccessAt:     time.Date(2026, 8, 23, 10, 29, 1, 0, time.UTC),
-		OutputWatermarkAt: time.Date(2026, 8, 23, 10, 27, 0, 0, time.UTC),
-		LagSeconds:        690,
-	}
-	got := datasetAlertReason(item, now)
-	for _, want := range []string{"dataset_factor_binance_kline_1m（1m）", "最近运行 2026-08-23 10:29:01 UTC", "最近成功 2026-08-23 10:29:01 UTC", "最新输出 2026-08-23 10:27:00 UTC", "当前落后 11 分 30 秒"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("reason %q does not contain %q", got, want)
-		}
-	}
-}
-
-func TestFindDatasetAlertFactMatchesFrequencyAndProducer(t *testing.T) {
-	datasets := []observability.DatasetFrequencyStatus{{Producer: "factor", DatasetID: "bars", Freq: "1m", Reason: "run stale"}}
-	got, ok := findDatasetAlertFact("dataset:factor:bars:1m", datasets)
-	if !ok || got.DatasetID != "bars" {
-		t.Fatalf("fact = %+v, ok = %v", got, ok)
-	}
-	if _, ok := findDatasetAlertFact("dataset:storage:bars:1m", datasets); ok {
-		t.Fatal("fact from another producer must not match")
-	}
-}
-
-func TestCheckResultReasonExplainsHealthTimeout(t *testing.T) {
-	if got := checkResultReason(`Get "http://127.0.0.1:11414/readyz": context deadline exceeded`); got != "健康检查超时：服务未能在规定时间内返回就绪状态" {
-		t.Fatalf("timeout reason = %q", got)
-	}
-	if got := checkResultReason("Timer 不可用"); got != "Timer 不可用" {
-		t.Fatalf("business reason = %q", got)
-	}
-}
-
-func TestHealthRankPutsFailuresFirst(t *testing.T) {
-	items := []Item{{Name: "健康", Status: "healthy"}, {Name: "异常", Status: "down"}}
-	sort.Slice(items, func(i, j int) bool { return healthRank(items[i].Status) > healthRank(items[j].Status) })
-	if items[0].Name != "异常" {
-		t.Fatalf("items = %+v", items)
-	}
+func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.T) {
+	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}, Placements: []domain.TopologyPlacement{{HostID: "control", ComponentID: "host-agent", Status: "disabled"}}}, Hosts: []observability.HostStatus{{HostID: "control", AgentID: "AB12", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy", Reason: "主机网关心跳正常"}}}
+	view := projectFacts(facts)
+	require.Equal(t, "healthy", view.Hosts[0].Status)
+	require.Empty(t, view.Alerts)
+	facts.Topology.Placements[0].Status = "enabled"
+	view = projectFacts(facts)
+	require.Equal(t, "down", view.Hosts[0].Status)
+	require.Len(t, view.Alerts, 1)
+	facts.Topology.Hosts[0].Status = "disabled"
+	view = projectFacts(facts)
+	require.Equal(t, "disabled", view.Hosts[0].Status)
+	require.Empty(t, view.Alerts)
 }

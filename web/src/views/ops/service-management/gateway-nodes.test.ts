@@ -148,13 +148,14 @@ describe("gateway node and service instance contracts", () => {
   });
 
   it("keeps health monitoring as the last tab and removes its embedded duplicate title", () => {
-    const healthSource = fs.readFileSync(path.resolve(__dirname, "../health-monitor/index.vue"), "utf8");
+    const healthSource = fs.readFileSync(path.resolve(__dirname, "../monitor/index.vue"), "utf8");
     expect(healthSource).toContain("props.embedded");
-    expect(healthSource).toContain('@click="openItem(item)"');
+    expect(healthSource).toContain("component-matrix");
     expect(healthSource).not.toContain('@click.stop="openItem(item)"');
     expect(healthSource).not.toContain('@click.stop="openItem(item)">详情');
     expect(healthSource).toContain('width="min(860px, 100vw)"');
     expect(healthSource).toContain("最后上报：");
-    expect(healthSource).toContain("displayConclusion");
+    expect(healthSource).toContain("RawError");
+    expect(healthSource).not.toContain("displayConclusion");
   });
 });

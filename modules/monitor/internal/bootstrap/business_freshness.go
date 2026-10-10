@@ -50,6 +50,15 @@ func buildBusinessFreshnessReporterWithInterval(
 		if err != nil {
 			return err
 		}
+		if overview.TopologyKnown {
+			states := make([]domain.ComponentHealthState, 0, len(overview.Services))
+			for _, item := range overview.Services {
+				states = append(states, domain.ComponentHealthState{HostID: item.NodeID, ComponentID: item.ServiceName, Status: domain.HealthStatus(item.Status)})
+			}
+			if err := repositories.ComponentHealth.Reconcile(ctx, states, overview.GeneratedAt); err != nil {
+				return err
+			}
+		}
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
 		frozenGateway := make(map[string]bool)

@@ -46,6 +46,7 @@ export default {
     ["trading-positions"]: "持仓详情",
     ["trading-orders"]: "交易明细",
     ["ops"]: "资源与运维",
+    ["ops-monitor"]: "监控告警",
     ["ops-services"]: "服务管理",
     ["ops-hosts"]: "主机工作台",
     ["ops-storage"]: "存储配置",
