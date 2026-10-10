@@ -36,7 +36,11 @@ console-proxy 必须在它的 0600 `config/app.yaml` 中明确声明 `drain_time
 
 启动采用父子管道屏障：子进程先等待，父进程持久化最终可执行文件、启动器身份和预算后才允许 exec。同一 PID/start ticks 在启动器和最终进程之间连续保留；父进程在记录之前退出，管道 EOF 使子进程退出，避免未登记的后台服务。记录之后中断可由新助手继续等待就绪或停止，成功就绪后删除临时启动器身份。健康响应同时核对制品摘要和本次随机 boot ID，避免相同制品的其他实例被误认；重复 start 会探测运行中旧发布的 readiness。
 
-调用方已经持有维护锁时，传递同一文件描述符到助手（通常为 FD 3），同时使用 `--maintenance-lock-held --maintenance-lock-fd 3`。助手核对文件身份并复用同一个锁，不按标记直接绕过加锁。只有布尔参数、没有正确描述符会失败。
+调用方已经持有维护锁时，传递同一文件描述符到助手（通常为 FD 3），同时使用 `--maintenance-lock-held --maintenance-lock-fd 3`。助手核对文件身份和已有的独占 flock，再复用同一个锁；未加锁、共享锁或只有布尔参数均失败，不通过加锁/升级来补足无效继承。已有锁由 Linux [`/proc/self/fdinfo`](https://www.kernel.org/doc/html/latest/filesystems/proc.html) 的 `FLOCK ADVISORY WRITE` 记录核对。
+
+Go 编排器通过 `Maintenance.UseLock` 同步调用准备、封存、激活等持锁库。传出的选项绑定主机/部署根并在回调结束时失效；已进入的操作结束后才释放描述符，防止编号复用使过期选项再次通过。回调使用所提供的选项，不在其中调用同一个 guard 的方法。
+
+五步 bootstrap 另使用 `BeginBootstrap` / `EndBootstrap`，将请求摘要与随机令牌写入部署根的 0600 `run/bootstrap.json`。此标记跨 host/control 单元与进程退出保留，和每个单元的安装标记、用户暂停标记独立。没有已核验继承锁的 start/restart/resume 拒绝，healthcheck 跳过；其他安装入口也不能取得普通维护回调。只有携带匹配 `Options.BootstrapID` 的编排器可以重新取得维护锁并接管同一请求，单元完成不能清除整个 bootstrap 标记，仍有未完成单元安装时不能结束 bootstrap。完整编排器、恢复日志和 CLI 入口仍由 G3 接通；这里的实际 SIGKILL 验证只证明运行层保护窗口。
 
 Linux 读取进程的可执行文件时，先打开 `/proc/PID/exe` 固定同一执行镜像，再从该描述符读取路径和 inode，避免 exec 切换瞬间拼出不一致的身份。内核回归持续在同一 PID 上切换两个真实 ELF，要求每次快照中的路径与 inode 一致。
 
@@ -58,4 +62,4 @@ MOOX_RUNTIME_PROXY_BINARY=/absolute/path/moox-console-proxy \
 make test-unit-runtime-linux
 ```
 
-门禁要求十三组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。[发布准备层](../unitinstall/README.md) 已生成七个生命周期包装脚本，并在同一维护锁下写入身份、私密运行计划和环境；`prepare --request PATH` 准备新发布，`inspect-release --directory PATH` 核验尚未启动的候选目录。发布激活/回滚已共用本运行层，并以持久安装标记保护安装器退出后的恢复。实际 CLI 部署、bootstrap 和 `setup pause/resume` 仍须由 G2/G3/G6/G11 接线；这些进展不代表完整安装或正式发布已经完成。
+门禁要求十四组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。[发布准备层](../unitinstall/README.md) 已生成七个生命周期包装脚本，并在同一维护锁下写入身份、私密运行计划和环境；`prepare --request PATH` 准备新发布，`inspect-release --directory PATH` 核验尚未启动的候选目录。发布激活/回滚已共用本运行层，并以持久安装标记保护安装器退出后的恢复。实际 CLI 部署、bootstrap 和 `setup pause/resume` 仍须由 G2/G3/G6/G11 接线；这些进展不代表完整安装或正式发布已经完成。

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -177,6 +178,12 @@ func acquireLock(ctx context.Context, root *os.Root, held bool, inheritedFD int,
 			inherited.Close()
 			return nil, false, errors.New("inherited descriptor does not name this maintenance lock")
 		}
+		// LOCK_EX would also acquire an unlocked descriptor or upgrade a
+		// shared one. Verify the existing kernel lock before reusing it.
+		if !exclusiveFlock(fd) {
+			inherited.Close()
+			return nil, false, errors.New("inherited maintenance descriptor is not exclusively held")
+		}
 		if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 			inherited.Close()
 			return nil, false, errors.New("inherited maintenance descriptor is not exclusively held")
@@ -203,4 +210,23 @@ func acquireLock(ctx context.Context, root *os.Root, held bool, inheritedFD int,
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func exclusiveFlock(fd int) bool {
+	file, err := os.Open("/proc/self/fdinfo/" + strconv.Itoa(fd))
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 16<<10+1))
+	if err != nil || len(raw) > 16<<10 {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 5 && fields[0] == "lock:" && fields[2] == "FLOCK" && fields[3] == "ADVISORY" && fields[4] == "WRITE" {
+			return true
+		}
+	}
+	return false
 }

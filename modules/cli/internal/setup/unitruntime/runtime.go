@@ -22,6 +22,10 @@ import (
 type Options struct {
 	MaintenanceLockHeld bool
 	MaintenanceLockFD   int
+	// BootstrapID is used only by the bootstrap coordinator to reacquire its
+	// own interrupted host workflow. It never authorizes a runtime start.
+	BootstrapID string
+	scope       *scopedLock
 }
 
 type Result struct {
@@ -78,6 +82,11 @@ func Execute(ctx context.Context, planPath, operation string, ids []string, opts
 	if err != nil {
 		return Result{}, err
 	}
+	leave, err := opts.enterScope(plan.HostID, plan.DeploymentRoot)
+	if err != nil {
+		return Result{}, err
+	}
+	defer leave()
 	components, err := plan.selectComponents(ids)
 	if err != nil {
 		return Result{}, err
@@ -108,6 +117,15 @@ func Execute(ctx context.Context, planPath, operation string, ids []string, opts
 			return result, nil
 		}
 		return result, errors.New("an interrupted installation must be recovered before starting components")
+	}
+	if pending, err := state.pendingBootstrap(); err != nil {
+		return result, err
+	} else if pending != nil && !opts.MaintenanceLockHeld && slices.Contains([]string{"start", "restart", "resume", "healthcheck"}, operation) {
+		if operation == "healthcheck" {
+			result.Skipped = true
+			return result, nil
+		}
+		return result, errors.New("an interrupted bootstrap must be recovered before starting components")
 	}
 	if operation == "restart" {
 		stopping := slices.Clone(components)

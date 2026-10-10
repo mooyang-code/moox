@@ -18,6 +18,7 @@ from pathlib import Path
 import re,sys
 log=Path(sys.argv[1]).read_text()
 required=[
+    'TestRuntimeLinuxInterruptedBootstrapBlocksAllUnitsAndScopedRecovery',
     'TestRuntimeLinuxInterruptedInstallationBlocksAutomaticStartsUntilRecovery',
     'TestRuntimeLinuxScopedMaintenanceSerializesAndBoundsLifecycle',
     'TestRuntimeLinuxProcessIdentityRemainsCoherentAcrossExec',
@@ -37,5 +38,5 @@ for name in required:
         raise SystemExit('required runtime scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('runtime Linux gate must not skip or fail a scenario')
-print('unit runtime Linux gate passed: 13 required kernel/real-proxy scenarios, no compilation')
+print('unit runtime Linux gate passed: 14 required kernel/real-proxy scenarios, no compilation')
 PY

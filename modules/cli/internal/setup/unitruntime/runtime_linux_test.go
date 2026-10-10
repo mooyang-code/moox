@@ -26,6 +26,13 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if path := os.Getenv("MOOX_RUNTIME_TEST_BOOTSTRAP_PLAN"); path != "" {
+		if err := runBootstrapFixture(path); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(33)
+		}
+		return
+	}
 	if len(os.Args) == 4 && os.Args[1] == "exec-component" {
 		if err := RunComponentChild(os.Args[2], os.Args[3]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -320,6 +327,15 @@ func TestRuntimeLinuxMaintenanceLockSkipCancellationAndInheritedDescriptor(t *te
 	state, err := openRuntime(plan)
 	require.NoError(t, err)
 	defer state.close()
+	unheld, err := state.run.OpenFile("maintenance.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	_, err = Execute(t.Context(), path, "status", nil, Options{MaintenanceLockHeld: true, MaintenanceLockFD: int(unheld.Fd())})
+	require.ErrorContains(t, err, "not exclusively held")
+	require.NoError(t, syscall.Flock(int(unheld.Fd()), syscall.LOCK_SH|syscall.LOCK_NB))
+	_, err = Execute(t.Context(), path, "status", nil, Options{MaintenanceLockHeld: true, MaintenanceLockFD: int(unheld.Fd())})
+	require.ErrorContains(t, err, "not exclusively held", "shared descriptors must not be upgraded silently")
+	require.NoError(t, syscall.Flock(int(unheld.Fd()), syscall.LOCK_UN))
+	require.NoError(t, unheld.Close())
 	lock, _, err := acquireLock(context.Background(), state.run, false, 0, false)
 	require.NoError(t, err)
 	defer lock.Close()
