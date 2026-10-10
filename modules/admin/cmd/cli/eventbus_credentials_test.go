@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -316,10 +317,10 @@ func seedEventBusDeployment(t *testing.T, dbPath string) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(`INSERT INTO t_gateway_nodes(c_node_id,c_name,c_public_address,c_status) VALUES (?,?,?,?)`,
-		"gateway-node-1", "Gateway", "203.0.113.10", "enabled").Error)
-	require.NoError(t, db.Exec(`INSERT INTO t_service_deployments(c_node_id,c_service_name,c_service_kind,c_status,c_extra_config) VALUES (?,?,?,?,?)`,
-		"gateway-node-1", "eventbus", "eventbus", "active", `{"nats_url":"tls://203.0.113.10:4222"}`).Error)
+	defer closeAdminCLIDB(db)
+	dao, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
+	require.NoError(t, err)
+	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host", "eventbus"}}}))
 }
 
 func eventBusACLBlock(yaml, username string) string {
@@ -553,4 +554,23 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.NoError(t, factorConsumer.Close())
+}
+
+func TestEventBusURLFollowsRemotePlacementAndRejectsDisabledHost(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "admin.db")), &gorm.Config{})
+	require.NoError(t, err)
+	defer closeAdminCLIDB(db)
+	require.NoError(t, db.Exec(adminschema.AdminSQL()).Error)
+	dao, err := sysdeploy.NewTopologyDAO(db, "control")
+	require.NoError(t, err)
+	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{
+		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host"}},
+		{HostID: "bus", Address: "bus.example.test", Components: []string{"eventbus"}},
+	}))
+	address, err := eventBusNATSURL(db, "control")
+	require.NoError(t, err)
+	require.Equal(t, "tls://bus.example.test:4222", address)
+	require.NoError(t, dao.SetHostStatus(t.Context(), "bus", "disabled"))
+	_, err = eventBusNATSURL(db, "control")
+	require.ErrorContains(t, err, "active EventBus placement not found")
 }

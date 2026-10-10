@@ -53,7 +53,6 @@ func TestEffectiveDoctorUsesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("MOOX_DOCTOR_MONITOR_TARGET", "ip://monitor:11410")
 	got := (&Config{}).EffectiveDoctor()
 	assert.Equal(t, "node-a", got.NodeID)
-	assert.Equal(t, "config/setup/service-deployments.yaml", got.SeedPath)
 	assert.Equal(t, "config/setup/dataset-health-policy.yaml", got.DatasetHealthPolicyPath)
 }
 

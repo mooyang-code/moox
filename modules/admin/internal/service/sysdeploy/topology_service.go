@@ -16,7 +16,7 @@ import (
 )
 
 func (s *ServiceImpl) topologyDAO() (*TopologyDAO, error) {
-	return NewTopologyDAO(s.dao.db, s.adminNodeID)
+	return NewTopologyDAO(s.db, s.adminNodeID)
 }
 
 func topologyRet(err error) *pb.RetInfo {

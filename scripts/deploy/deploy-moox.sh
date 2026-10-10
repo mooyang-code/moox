@@ -2410,142 +2410,11 @@ complete_storage_bootstrap() {
   fi
 }
 
-import_trade_owner_route() {
-  local placement="${ROOT}/config/trade-gateway.json"
-  [[ -r "${placement}" ]] || return 0
-  local owner_placement owner_node owner_host
-  owner_placement=$(python3 - "${placement}" <<'PY'
-import ipaddress, json, re, sys
-from urllib.parse import urlsplit
-with open(sys.argv[1], encoding="utf-8") as handle:
-    value = json.load(handle)
-raw, node = value.get("gateway_url", ""), value.get("target_node", "")
-if not raw and not node:
-    sys.exit(0)
-url = urlsplit(raw)
-host = url.hostname
-if not re.fullmatch(r"[a-z0-9_-]+", node) or not host or url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
-    sys.exit("invalid persisted Trade Gateway placement")
-loopback = host.lower() == "localhost"
-if not loopback:
-    try:
-        loopback = ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        pass
-if url.scheme != "https" and not (url.scheme == "http" and loopback):
-    sys.exit("Trade Gateway placement requires HTTPS except loopback")
-print(node + "\t" + ("[" + host + "]" if ":" in host else host))
-PY
-  ) || return 1
-  [[ -n "${owner_placement}" ]] || return 0
-  IFS=$'\t' read -r owner_node owner_host <<<"${owner_placement}"
-  "${ROOT}/bin/moox-admin-cli" service-deployments import \
-    --db-path "${ROOT}/data/admin.db" \
-    --file "${ROOT}/config/setup/service-deployments.yaml" \
-    --node-id "${owner_node}" --public-host "${owner_host}" \
-    --eventbus-nats-url "${EVENTBUS_PUBLIC_URL_ENV}" \
-    --only-services trade_owner >>"${ROOT}/logs/admin/stdout.log" 2>&1
-}
-
 start_admin() {
   [[ "${WITH_ADMIN}" == "1" ]] || { echo "admin is disabled in this deployment package" >&2; exit 2; }
   local encryption_key_file="${HOME}/.config/moox/credentials/admin-encryption-key"
   [[ -f "${encryption_key_file}" ]] || { echo "missing Admin encryption key: ${encryption_key_file}" >&2; exit 1; }
   init_admin_schema
-  if [[ -x "${ROOT}/bin/moox-admin-cli" && -f "${ROOT}/config/setup/service-deployments.yaml" ]]; then
-    local service_seed_args=(service-deployments import
-      --db-path "${ROOT}/data/admin.db" \
-      --file "${ROOT}/config/setup/service-deployments.yaml" \
-      --node-id "${MOOX_ADMIN_NODE_ID}" \
-      --public-host "${PUBLIC_HOST:-127.0.0.1}" \
-      --eventbus-nats-url "${EVENTBUS_PUBLIC_URL_ENV}")
-    if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
-      service_seed_args+=(--with-storage-shard)
-    else
-      service_seed_args+=(--disable-storage-shard)
-    fi
-    local trade_gateway_url="${MOOX_TRADE_GATEWAY_URL:-}" trade_gateway_node="${MOOX_TRADE_GATEWAY_NODE_ID:-}"
-    if [[ -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && -r "${ROOT}/config/trade-gateway.json" ]]; then
-      local persisted_trade_gateway
-      persisted_trade_gateway=$(python3 - "${ROOT}/config/trade-gateway.json" <<'PY'
-import ipaddress, json, re, sys
-from urllib.parse import urlsplit
-with open(sys.argv[1], encoding="utf-8") as handle:
-    value = json.load(handle)
-raw, node = str(value.get("gateway_url", "")), str(value.get("target_node", ""))
-if not raw and not node:
-    sys.exit(0)
-url = urlsplit(raw)
-host = url.hostname
-loopback = False
-if host:
-    loopback = host.lower() == "localhost"
-    if not loopback:
-        try:
-            loopback = ipaddress.ip_address(host).is_loopback
-        except ValueError:
-            pass
-if not re.fullmatch(r"[a-z0-9_-]+", node) or not host or url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
-    sys.exit("invalid persisted Trade Gateway placement")
-if url.scheme != "https" and not (url.scheme == "http" and loopback):
-    sys.exit("Trade Gateway placement requires HTTPS except loopback")
-print(raw + "\t" + node)
-PY
-      ) || { echo "invalid persisted Trade Gateway placement" >&2; return 1; }
-      if [[ -n "${persisted_trade_gateway}" ]]; then
-        IFS=$'\t' read -r trade_gateway_url trade_gateway_node <<<"${persisted_trade_gateway}"
-      fi
-    fi
-    local runtime_json="${ROOT}/config/render-runtime-config.json"
-    local trade_console_host="" trade_console_port=""
-    if [[ -r "${runtime_json}" ]]; then
-      IFS='|' read -r trade_console_host trade_console_port < <(python3 - "${runtime_json}" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    value = json.load(handle)
-print("|".join([
-    value.get("trade_console_host", ""),
-    str(value.get("trade_console_port", "")),
-]))
-PY
-      )
-    fi
-    local disabled_services=()
-    # A normal partial deployment preserves the existing Storage routes. A
-    # control profile is intentionally isolated and disables its local routes.
-    if [[ "${WITH_STORAGE}" != "1" && "${PRESERVE_STORAGE_ROUTES}" != "1" ]]; then
-      disabled_services+=(storage-primary storage-view)
-    fi
-    [[ "${WITH_ARCHIVE}" == "1" ]] || disabled_services+=(moox_archive)
-    [[ "${WITH_CLOUDNODE}" == "1" ]] || disabled_services+=(moox_cloudnode)
-    [[ "${WITH_COLLECTOR}" == "1" ]] || disabled_services+=(moox_collector)
-    [[ "${WITH_FACTOR_MGR}" == "1" ]] || disabled_services+=(moox_factor_mgr)
-    [[ "${WITH_MONITOR}" == "1" ]] || disabled_services+=(moox_monitor)
-    [[ "${WITH_HOSTAGENT}" == "1" ]] || disabled_services+=(moox_hostagent)
-    [[ "${WITH_STRATEGY}" == "1" ]] || disabled_services+=(moox_strategy)
-    [[ "${WITH_TRADE}" == "1" ]] || disabled_services+=(moox_trade trade_owner)
-    [[ "${WITH_WEB_HOST}" == "1" ]] || disabled_services+=(web_host)
-    if [[ -n "${trade_console_host}" ]]; then
-      service_seed_args+=(--trade-console-host "${trade_console_host}" --trade-console-port "${trade_console_port:-11200}")
-    fi
-    # A same-node Trade process is reachable through Admin's normal loopback
-    # endpoint. Persisted placement metadata is only a browser-BFF override for
-    # a genuinely remote execution node; writing it for control would route to
-    # the non-gateway-enabled local trade_console row and break single-node UI.
-    if [[ -n "${trade_gateway_url}" || -n "${trade_gateway_node}" ]] && [[ "${trade_gateway_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
-      service_seed_args+=(--trade-gateway-url "${trade_gateway_url}" --trade-gateway-node "${trade_gateway_node}")
-    fi
-    if (( ${#disabled_services[@]} > 0 )); then
-      local disabled_services_csv
-      disabled_services_csv=$(IFS=,; printf '%s' "${disabled_services[*]}")
-      service_seed_args+=(--disabled-services "${disabled_services_csv}")
-    fi
-    "${ROOT}/bin/moox-admin-cli" "${service_seed_args[@]}" >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
-        echo "Storage shard service deployment import failed" >&2
-        exit 1
-    }
-    import_trade_owner_route || { echo "Trade owner service deployment import failed" >&2; exit 1; }
-  fi
   if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
     local eventbus_credentials_dir="${HOME}/.config/moox/eventbus"
     local eventbus_credentials_complete=1 credential_name
@@ -5892,15 +5761,8 @@ if [[ "$with_admin" == 1 ]]; then
   expect_status 404 "$browser/api/service/test/Ping"
 fi
 expect_status 404 "$service/api/admin/auth/Login"
-path=/api/service/sysdeploy/ListActiveServiceDeployments
-expect_status 401 -X POST -H "Content-Type: application/json" --data "{}" "$service$path"
-set -a; source "$service_auth_file"; set +a
-timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \$NF}")
-canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
-signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \$NF}")
-expected=404; [[ "$with_admin" == 0 ]] || expected=200
-expect_signed_status "$expected" "$path"
 if [[ "$with_admin" == 0 && "$with_trade" == 1 ]]; then
+  set -a; source "$service_auth_file"; set +a
   path=/api/service/trade_console/GetExecutionCapabilities
   timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \$NF}")
   canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")

@@ -655,8 +655,8 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		"--with-factor-mgr", "--no-trade", "--no-archive",
 		"--public-host", opts.PublicHost, "--browser-https-port", strconv.Itoa(opts.BrowserPort),
 		"--tls-mode", string(resolveTLSMode(opts.TLSMode, opts.PublicHost)),
-		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
-		"--monitor-instance-id", "monitor-control",
+		"--node-id", opts.NodeID, "--gateway-control-url", "http://127.0.0.1:11000",
+		"--monitor-instance-id", "monitor-" + opts.NodeID,
 	}
 	if os.Getenv("MOOX_SKIP_CONTROL_BUILD") == "1" {
 		args = append(args, "--skip-build")

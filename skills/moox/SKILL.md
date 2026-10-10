@@ -289,7 +289,10 @@ in Agent context. After Tencent hosts exist, resolve the Storage placement and
 apply the regional SCF route rules in
 [`references/private-network.md`](references/private-network.md).
 
-`t_service_deployments` remains the source of truth for service addresses.
+`t_hosts` and `t_placements` are the source of truth for service placement;
+SysDeploy v1 and its deployment seed have been removed. CLI deployment
+registration uses `SyncHostPlacements` with a full business component list;
+Admin adds host components and preserves persisted enablement state.
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never
 silently synchronized. SCF receives active service deployments from the control
 plane rather than embedding addresses at package time.

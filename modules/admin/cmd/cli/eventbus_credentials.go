@@ -18,8 +18,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -146,25 +149,46 @@ func parseCredentialToken(raw string) string {
 	return ""
 }
 
-func eventBusNATSURL(db *gorm.DB, nodeID string) (string, error) {
-	if nodeID == "" || nodeID != strings.TrimSpace(nodeID) {
-		return "", errors.New("--node-id is required and must not contain surrounding whitespace")
+// The EventBus address follows the active component placement, which may be
+// on a different host from Admin. Credential issuance does not mutate topology.
+func eventBusNATSURL(db *gorm.DB, controlHostID string) (string, error) {
+	dao, err := sysdeploy.NewTopologyDAO(db, controlHostID)
+	if err != nil {
+		return "", err
 	}
-	var deployment sysdeploy.Deployment
-	result := db.Where("c_node_id = ? AND c_service_name = ? AND c_status = ?", nodeID, "eventbus", "active").Find(&deployment)
-	if result.Error != nil {
-		return "", fmt.Errorf("query EventBus service deployment: %w", result.Error)
+	hosts, placements, err := dao.Read(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("query EventBus placement: %w", err)
 	}
-	if result.RowsAffected != 1 {
-		return "", fmt.Errorf("active EventBus service deployment for node %q not found", nodeID)
+	hostByID := make(map[string]sysdeploy.HostRecord, len(hosts))
+	for _, host := range hosts {
+		hostByID[host.HostID] = host
 	}
-	var extra map[string]any
-	if err := json.Unmarshal([]byte(deployment.ExtraConfig), &extra); err != nil {
-		return "", fmt.Errorf("decode EventBus extra_config: %w", err)
+	var address string
+	for _, placement := range placements {
+		host, exists := hostByID[placement.HostID]
+		if placement.ComponentID != "eventbus" || placement.Status != servicecatalog.Enabled || !exists || host.Status != servicecatalog.Enabled {
+			continue
+		}
+		if address != "" {
+			return "", errors.New("EventBus must have exactly one active placement")
+		}
+		address = host.Address
 	}
-	raw, _ := extra["nats_url"].(string)
+	if address == "" {
+		return "", errors.New("active EventBus placement not found")
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return "", err
+	}
+	component, ok := catalog.Component("eventbus")
+	if !ok || len(component.Ports) != 1 {
+		return "", errors.New("invalid EventBus catalog port")
+	}
+	raw := "tls://" + net.JoinHostPort(address, strconv.Itoa(component.Ports[0]))
 	if _, err := validateEventBusNATSURL(raw); err != nil {
-		return "", fmt.Errorf("EventBus service deployment nats_url: %w", err)
+		return "", err
 	}
 	return raw, nil
 }
@@ -473,4 +497,22 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "rotated": credential, "warning": "redeploy affected clients now; old token is invalid"})
+}
+
+func validateEventBusNATSURL(raw string) (*url.URL, error) {
+	if raw == "" || raw != strings.TrimSpace(raw) {
+		return nil, errors.New("--eventbus-nats-url is required and must not contain surrounding whitespace")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.Port() == "" {
+		return nil, errors.New("--eventbus-nats-url must be a tls URL with host and port")
+	}
+	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("--eventbus-nats-url must contain only scheme, host, and port")
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil, errors.New("--eventbus-nats-url port must be between 1 and 65535")
+	}
+	return parsed, nil
 }

@@ -24,7 +24,7 @@ func topologySpecs() []HostSpec {
 
 func topologyDAO(t *testing.T) *TopologyDAO {
 	t.Helper()
-	db := setupEmptySysDeployTestDB(t)
+	db := setupTopologyTestDB(t)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)

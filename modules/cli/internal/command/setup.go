@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1182,11 +1183,6 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 			return fmt.Errorf("read control EventBus admin credential for Storage maintenance: %w", err)
 		}
 	}
-	if !useControlGateway {
-		if _, err = setupclient.New(gateway).PrepareStoragePlacement(ctx, host.Name, host.Address); err != nil {
-			return err
-		}
-	}
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
@@ -1236,40 +1232,21 @@ chmod 600 "$dir/internal-admin.yaml"`}, bytes.NewReader(storageAdminEventBusCred
 			return fmt.Errorf("sync control EventBus admin credential to Storage: %w", err)
 		}
 	}
+	if err = setupclient.New(gateway).SyncHostPlacements(ctx, snapshot, host.Name); err != nil {
+		return err
+	}
 	if !useControlGateway {
-		if _, err = setupclient.New(gateway).ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {
-			return err
-		}
-		// PrepareStoragePlacement clones the control-plane Storage deployment
-		// rows onto the remote Gateway. A control row may intentionally be
-		// disabled while Storage is absent; after this package has passed its
-		// readiness probe, explicitly activate the remote rows as well so the
-		// remote Gateway publishes DataView and PrimaryStore routes.
-		if _, err = setupclient.New(gateway).ActivateStoragePlacement(ctx, host.Name); err != nil {
-			return err
-		}
 		if err = configureRemoteCollectorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
 			return err
 		}
 		if err = configureRemoteMonitorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
 			return err
 		}
-		if err = setupclient.New(gateway).DisableServiceDeployment(ctx, "control", "storage-view"); err != nil {
-			return err
-		}
 		if err = ensureSetupStorageGatewayFirewall(ctx, snapshot, host.Address); err != nil {
 			return err
 		}
-	} else {
-		// Control setup disables Storage routes until the package is installed.
-		// Activate them only after Storage readiness succeeds so the native
-		// gateway can resolve PrimaryStore and Metadata calls.
-		// Control-plane service deployments use the stable node id "control";
-		// the manifest host name is only an SSH/config alias.
-		if _, err = setupclient.New(gateway).ActivateStoragePlacement(ctx, "control"); err != nil {
-			return err
-		}
 	}
+
 	// Persist where Storage runs. On the control host (its own root beside
 	// Admin/Gateway) the control routes must survive the next Admin restart;
 	// on a separate host they must not, or every control deploy re-enables
@@ -1689,43 +1666,13 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 		return err
 	}
 	defer gateway.Close()
-	// The control profile deliberately does not run Trade. When Trade is
-	// placed on the dedicated node selected by moox.toml, update the
-	// browser-facing control route after Admin has seeded its defaults; doing
-	// this here makes a reset/redeploy deterministic instead of restoring the
-	// unusable loopback 127.0.0.1:11200 endpoint.
-	if tradeNode := strings.TrimSpace(snapshot.Manifest.PlacementHost("trade")); tradeNode != "" {
-		tradeHost, resolveErr := findSetupHost(snapshot.Manifest, tradeNode)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		if err := setupclient.New(gateway).ApplyTradeConsolePlacementForNode(ctx, tradeHost.Address, tradeHost.Name); err != nil {
+	client := setupclient.New(gateway)
+	for _, deployedHost := range snapshot.Manifest.Hosts() {
+		if err := client.SyncHostPlacements(ctx, snapshot, deployedHost.Name); err != nil {
 			return err
 		}
 	}
-	if err := refreshSetupStoragePlacements(ctx, snapshot, setupclient.New(gateway)); err != nil {
-		return err
-	}
 	return deployErr
-}
-
-// refreshSetupStoragePlacements re-syncs the Storage routes cloned onto Storage
-// hosts that run their own Gateway. Admin reseeds only the control node on a
-// control deploy, so without this a changed Storage default (for example the
-// View route timeout) would never reach the Storage host's Gateway.
-func refreshSetupStoragePlacements(ctx context.Context, snapshot *setupconfig.Snapshot, client *setupclient.Client) error {
-	seen := map[string]bool{}
-	for _, host := range []setupconfig.Host{snapshot.Manifest.StorageHost(), snapshot.Manifest.ViewHost()} {
-		name := strings.TrimSpace(host.Name)
-		if name == "" || seen[name] || sameHostEndpoint(host, snapshot.Manifest.ControlHost()) {
-			continue
-		}
-		seen[name] = true
-		if _, err := client.RefreshStoragePlacement(ctx, name); err != nil {
-			return fmt.Errorf("refresh Storage placement on %s: %w", name, err)
-		}
-	}
-	return nil
 }
 
 func ensureSetupFirewallRules(
@@ -1908,6 +1855,7 @@ func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string)
 		ControlRoot:                  paths.ControlRoot,
 		StorageRoot:                  paths.StorageRoot,
 		PublicHost:                   snapshot.Manifest.ControlHost().Address,
+		NodeID:                       snapshot.Manifest.ControlHost().Name,
 		BrowserPort:                  9527,
 		EventBusPublicAddress:        snapshot.Manifest.EventBus.PublicAddress,
 		EventBusPort:                 snapshot.Manifest.EventBus.Port,
@@ -2125,20 +2073,10 @@ func restoreTradeGatewayRuntime(ctx context.Context, control setupssh.Client, co
 }
 
 func syncSetupServiceRegistry(ctx context.Context, snapshot *setupconfig.Snapshot, transport setupssh.Client, host setupconfig.Host, service string, remoteTrade bool, result setupdeploy.ServiceResult) (setupdeploy.ServiceResult, error) {
-	isTrade := strings.EqualFold(strings.TrimSpace(service), "trade") || strings.EqualFold(strings.TrimSpace(service), "moox_trade")
-	gateway, err := openCommandGateway(ctx, "", snapshot)
-	if err != nil {
-		return setupdeploy.ServiceResult{}, err
-	}
-	defer gateway.Close()
-	controlClient := setupclient.New(gateway)
-	var tradeSnapshot setupclient.TradeDeploymentSnapshot
 	failRegistration := func(cause error, stage string) (setupdeploy.ServiceResult, error) {
-		// Registration may have committed before the caller timed out. Cleanup
-		// must not inherit that cancellation or hide a still-running process.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if isTrade {
+		if service == "trade" {
 			if _, err := transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-" + stage + "-failure", result.DeployDir}, nil); err != nil {
 				cause = errors.Join(cause, fmt.Errorf("stop Trade after registry failure: %w", err))
 			}
@@ -2146,36 +2084,25 @@ func syncSetupServiceRegistry(ctx context.Context, snapshot *setupconfig.Snapsho
 		if err := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); err != nil {
 			cause = errors.Join(cause, fmt.Errorf("rollback service deployment after failure: %w", err))
 		}
-		if isTrade && tradeSnapshot.Rows != nil {
-			if err := controlClient.RestoreTradeDeployments(cleanupCtx, host.Name, tradeSnapshot); err != nil {
-				cause = errors.Join(cause, fmt.Errorf("restore Trade registry after failure: %w", err))
-			}
-		}
 		return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", cause)
 	}
-	if isTrade {
-		var snapshotErr error
-		tradeSnapshot, snapshotErr = controlClient.SnapshotTradeDeployments(ctx, host.Name)
-		if snapshotErr != nil {
-			return failRegistration(snapshotErr, "registry-snapshot")
-		}
+	if snapshot == nil || !slices.Contains(snapshot.Manifest.Placements[host.Name], service) {
+		return failRegistration(fmt.Errorf("service is absent from the host's desired placements"), "placement")
 	}
-	if err := controlClient.RegisterServiceDeployment(ctx, host.Name, service, host.Address); err != nil {
-		// The service has already been activated by setupdeploy.Service. Do not
-		// leave a running Trade process without a matching control-plane route.
+	gateway, err := openCommandGateway(ctx, "", snapshot)
+	if err != nil {
+		return failRegistration(err, "gateway")
+	}
+	if gateway == nil {
+		return failRegistration(fmt.Errorf("gateway is unavailable"), "gateway")
+	}
+	defer gateway.Close()
+	if err := setupclient.New(gateway).SyncHostPlacements(ctx, snapshot, host.Name); err != nil {
 		return failRegistration(err, "registry")
 	}
 	if remoteTrade {
 		if err := probeTradeConsole(ctx, gateway); err != nil {
 			return failRegistration(err, "probe")
-		}
-		if err := controlClient.ApplyTradeConsolePlacementForNode(ctx, host.Address, host.Name); err != nil {
-			// Keep registry and process state aligned when the second control-plane
-			// write fails after activation.
-			return failRegistration(err, "route")
-		}
-		if err := controlClient.VerifyTradeOwnerRoute(ctx, host.Name); err != nil {
-			return failRegistration(err, "gateway-route")
 		}
 	}
 	result.RegistrySynced = true

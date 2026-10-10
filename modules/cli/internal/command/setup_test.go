@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"io/fs"
 	"net"
@@ -14,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -775,4 +776,12 @@ func TestRestartStorageClientsUsesBoundedRetries(t *testing.T) {
 // itself remains the source of truth for Caddy configuration and renewal.
 func setupCertificateSummary(publicHost string) map[string]any {
 	return setupCertificateSummaryWithMode(publicHost, "")
+}
+
+func TestControlDeployOptionsUsesCanonicalControlHostID(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.Placements[snapshot.Manifest.ControlHost().Name] = []string{"eventbus"}
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "primary-control", Address: "control.example.test", Username: "fixture"}, "admin", "console-proxy", "web-host")
+	options := controlDeployOptions(snapshot, t.TempDir())
+	require.Equal(t, "primary-control", options.NodeID)
 }

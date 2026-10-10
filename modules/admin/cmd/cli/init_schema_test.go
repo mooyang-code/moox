@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
@@ -30,8 +32,8 @@ func TestRunInitCommandAppliesAdminSchema(t *testing.T) {
 		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
 	}
 	assertTableExists(t, dbPath, "t_users")
-	assertTableExists(t, dbPath, "t_gateway_nodes")
-	assertTableExists(t, dbPath, "t_service_deployments")
+	assertTableExists(t, dbPath, "t_hosts")
+	assertTableExists(t, dbPath, "t_placements")
 	if stdout.String() == "" {
 		t.Fatalf("runInitCommand() wrote empty stdout")
 	}
@@ -53,11 +55,10 @@ func TestRunInitCommandIsIdempotent(t *testing.T) {
 		typ  string
 		name string
 	}{
-		{typ: "table", name: "t_gateway_nodes"},
-		{typ: "table", name: "t_service_deployments"},
-		{typ: "index", name: "idx_gateway_nodes_host_id"},
-		{typ: "index", name: "idx_service_deployments_node_name"},
-		{typ: "index", name: "idx_service_deployments_node_gateway_service"},
+		{typ: "table", name: "t_hosts"},
+		{typ: "table", name: "t_placements"},
+		{typ: "table", name: "t_host_gateway_status"},
+		{typ: "index", name: "idx_t_placements_component"},
 	} {
 		var count int64
 		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?", object.typ, object.name).Scan(&count).Error; err != nil {
@@ -83,7 +84,7 @@ func TestRunInitCommandIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRunInitCommandCreatesNodeScopedDeploymentConstraints(t *testing.T) {
+func TestRunInitCommandCreatesHostPlacementConstraints(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
 	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runInitCommand() error = %v", err)
@@ -97,39 +98,17 @@ func TestRunInitCommandCreatesNodeScopedDeploymentConstraints(t *testing.T) {
 		t.Fatalf("foreign_keys = %d, err = %v", foreignKeys, err)
 	}
 
-	insertNode := `INSERT INTO t_gateway_nodes(c_node_id, c_name, c_public_address) VALUES (?, ?, ?)`
-	if err := db.Exec(insertNode, "node-a", "Node A", "https://node-a.example").Error; err != nil {
-		t.Fatalf("insert node with nullable host: %v", err)
+	for _, host := range []string{"host-a", "host-b"} {
+		require.NoError(t, db.Exec("INSERT INTO t_hosts(c_host_id,c_address) VALUES (?,?)", host, host+".example.test").Error)
 	}
-	if err := db.Exec(insertNode, "node-b", "Node B", "https://node-b.example").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(`INSERT INTO t_gateway_nodes(c_node_id, c_host_id, c_name, c_public_address) VALUES ('bad-node', 999, 'Bad', 'https://bad.example')`).Error; err == nil {
-		t.Fatal("gateway node with unknown host must violate its foreign key")
-	}
-
-	insertDeployment := `INSERT INTO t_service_deployments(c_node_id, c_service_name, c_gateway_service_id, c_gateway_enabled) VALUES (?, ?, ?, ?)`
-	if err := db.Exec(insertDeployment, "node-a", "eventbus", "gateway-eventbus", 1).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(insertDeployment, "node-b", "eventbus", "gateway-eventbus", 1).Error; err != nil {
-		t.Fatalf("same service name and gateway ID on another node must be accepted: %v", err)
-	}
-	if err := db.Exec(insertDeployment, "node-a", "eventbus", "other-id", 1).Error; err == nil {
-		t.Fatal("duplicate service name on one node must be rejected")
-	}
-	if err := db.Exec(insertDeployment, "node-a", "archive", "gateway-eventbus", 1).Error; err == nil {
-		t.Fatal("duplicate enabled gateway service ID on one node must be rejected")
-	}
-	if err := db.Exec(insertDeployment, "node-a", "disabled-empty-id", "", 0).Error; err != nil {
-		t.Fatalf("disabled deployment with empty gateway service ID must be accepted: %v", err)
-	}
-	if err := db.Exec(insertDeployment, "node-a", "enabled-empty-id", "", 1).Error; err == nil {
-		t.Fatal("enabled deployment with empty gateway service ID must be rejected")
-	}
-	if err := db.Exec(insertDeployment, "missing-node", "archive", "gateway-archive", 1).Error; err == nil {
-		t.Fatal("deployment with unknown node must violate its foreign key")
-	}
+	insertPlacement := "INSERT INTO t_placements(c_host_id,c_component_id,c_status) VALUES (?,?,?)"
+	require.NoError(t, db.Exec(insertPlacement, "host-a", "host-agent", "enabled").Error)
+	require.NoError(t, db.Exec(insertPlacement, "host-b", "host-agent", "disabled").Error)
+	require.Error(t, db.Exec(insertPlacement, "host-a", "host-agent", "enabled").Error)
+	require.Error(t, db.Exec(insertPlacement, "missing-host", "host-agent", "enabled").Error)
+	require.Error(t, db.Exec(insertPlacement, "host-a", "host-gateway", "active").Error)
+	require.False(t, db.Migrator().HasTable("t_gateway_nodes"))
+	require.False(t, db.Migrator().HasTable("t_service_deployments"))
 }
 
 func assertTableExists(t *testing.T, dbPath string, tableName string) {

@@ -7,14 +7,13 @@ import (
 	"testing"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/require"
 )
 
-type deploymentClientStub struct{ rows []*adminpb.ServiceDeployment }
+type deploymentClientStub struct{ rows []Placement }
 
-func (s deploymentClientStub) ListDeployments(context.Context, string) ([]*adminpb.ServiceDeployment, error) {
+func (s deploymentClientStub) ListPlacements(context.Context, string) ([]Placement, error) {
 	return s.rows, nil
 }
 
@@ -22,13 +21,10 @@ func TestRunBootstrapInventory(t *testing.T) {
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
 	root := t.TempDir()
-	seed := "version: 1\nservices:\n"
-	rows := make([]*adminpb.ServiceDeployment, 0, len(manifest.Components))
+	rows := make([]Placement, 0, len(manifest.Components))
 	for _, component := range manifest.Components {
-		seed += "  - name: " + component.ServiceName + "\n    kind: service\n    deployment_mode: process\n    status: active\n"
-		rows = append(rows, &adminpb.ServiceDeployment{ServiceName: component.ServiceName, NodeId: "node-a", Status: "active"})
+		rows = append(rows, Placement{ComponentID: component.ComponentID, HostID: "node-a", Status: "enabled"})
 	}
-	seedPath := filepath.Join(root, "seed.yaml")
 	datasetHealthPolicyPath := filepath.Join(root, "dataset-health-policy.yaml")
 	manifestDir := filepath.Join(root, "config", "servicecatalog")
 	require.NoError(t, os.MkdirAll(manifestDir, 0o700))
@@ -38,9 +34,8 @@ func TestRunBootstrapInventory(t *testing.T) {
 	releaseManifest, err := core.LoadManifestFile(filepath.Join(manifestDir, "catalog.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "catalog.yaml.sha256"), []byte(releaseManifest.Checksum), 0o600))
-	require.NoError(t, os.WriteFile(seedPath, []byte(seed), 0o600))
 	require.NoError(t, os.WriteFile(datasetHealthPolicyPath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides: []\n"), 0o600))
-	report, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, SeedPath: seedPath, DatasetHealthPolicyPath: datasetHealthPolicyPath, CheckIDs: []string{"bootstrap.inventory"}, Client: deploymentClientStub{rows: rows}})
+	report, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, DatasetHealthPolicyPath: datasetHealthPolicyPath, CheckIDs: []string{"bootstrap.inventory"}, Client: deploymentClientStub{rows: rows}})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionHealthy, report.Conclusion)
 	require.Len(t, report.Checks, 2)
@@ -57,7 +52,7 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	pathCalls, processCalls := 0, 0
 	runner := &bootstrapRunner{
 		manifest:    manifest,
-		deployments: map[string]*adminpb.ServiceDeployment{"factor-mgr": {ServiceName: "factor-mgr", Status: "active"}},
+		deployments: map[string]Placement{"factor-mgr": {ComponentID: "factor-mgr", Status: "enabled"}},
 		options: BootstrapOptions{
 			NodeID:        "node-a",
 			ReleaseRoot:   t.TempDir(),

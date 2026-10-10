@@ -249,6 +249,7 @@ func TestCommandPackagerPassesMonitoringWebhook(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts", "deploy"), 0o700))
 	script := `#!/bin/sh
 set -eu
+case " $* " in *" --node-id primary-control "*) ;; *) exit 2 ;; esac
 	test "$MOOX_NOTIFICATION_WEBHOOK_URL" = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = --archive ]; then printf package >"$2"; exit 0; fi
@@ -259,7 +260,7 @@ exit 2
 	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), []byte(script), 0o700))
 
 	archive, err := (CommandPackager{}).Package(context.Background(), Options{
-		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
+		RepositoryRoot: root, NodeID: "primary-control", PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
 		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
 		NotificationChannelType: "wecom",
 		NotificationWebhookURL:  "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",

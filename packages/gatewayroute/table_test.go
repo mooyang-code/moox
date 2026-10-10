@@ -102,7 +102,7 @@ func TestTableAcceptsStateAwareEnabledAndDisabledHashes(t *testing.T) {
 }
 
 func TestTableDeepCopiesAllowedMethods(t *testing.T) {
-	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListActiveServiceDeployments"}, AllowedCallers: []string{"*"}}})
+	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListPlacements"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,14 +110,14 @@ func TestTableDeepCopiesAllowedMethods(t *testing.T) {
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot.Routes[0].AllowedMethods[0] = "DeleteGatewayNode"
+	snapshot.Routes[0].AllowedMethods[0] = "DeleteHost"
 	route, ok := table.Resolve("sysdeploy")
-	if !ok || !route.AllowsMethod("ListActiveServiceDeployments") || route.AllowsMethod("DeleteGatewayNode") {
+	if !ok || !route.AllowsMethod("ListPlacements") || route.AllowsMethod("DeleteHost") {
 		t.Fatalf("table methods mutated: %+v", route)
 	}
-	route.AllowedMethods[0] = "CreateGatewayNode"
+	route.AllowedMethods[0] = "SyncHostPlacements"
 	again, _ := table.Resolve("sysdeploy")
-	if !again.AllowsMethod("ListActiveServiceDeployments") {
+	if !again.AllowsMethod("ListPlacements") {
 		t.Fatalf("resolved method slice was live: %+v", again)
 	}
 }

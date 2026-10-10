@@ -34,6 +34,12 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
+	require.False(t, db.Migrator().HasTable("t_service_deployments"))
+	require.False(t, db.Migrator().HasTable("t_gateway_nodes"))
+	methods := pb.File_sysdeploy_service_proto.Services().ByName("SysDeploy").Methods()
+	require.Equal(t, 9, methods.Len())
+	require.Nil(t, methods.ByName("ListServiceDeployments"))
+
 	service := sysdeploy.NewService(manager, "control")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -52,16 +58,6 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	hosts, err := proxy.ListHosts(ctx, &pb.ListDeploymentHostsReq{})
 	check(hosts.GetRetInfo(), err)
 	require.Empty(t, hosts.GetHosts(), "service construction must not seed host configuration")
-	// During the staged migration, the legacy read path also traverses the real
-	// adapter, service and SQLite database instead of a global function patch.
-	legacyDAO := sysdeploy.NewDAO(db)
-	require.NoError(t, legacyDAO.CreateGatewayNode(ctx, &sysdeploy.GatewayNode{NodeID: "legacy-control", Name: "legacy", PublicAddress: "https://legacy.example.test", Status: "enabled"}))
-	legacyRow := sysdeploy.DefaultDeployments("legacy-control")[0]
-	require.NoError(t, legacyDAO.Create(ctx, &legacyRow))
-	legacy, err := proxy.ListServiceDeployments(ctx, &pb.ListServiceDeploymentsReq{ServiceName: legacyRow.ServiceName})
-	check(legacy.GetRetInfo(), err)
-	require.Len(t, legacy.GetDeployments(), 1)
-	require.Equal(t, "legacy-control", legacy.GetDeployments()[0].GetNodeId())
 	catalog, err := proxy.GetCatalog(ctx, &pb.GetCatalogReq{})
 	check(catalog.GetRetInfo(), err)
 	require.Equal(t, servicecatalog.EmbeddedYAML(), []byte(catalog.GetCatalogYaml()))
