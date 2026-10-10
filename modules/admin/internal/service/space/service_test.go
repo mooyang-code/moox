@@ -71,6 +71,20 @@ func TestDAO_AuthorizeTradeRequest_RequiresActiveMembershipForOrdinaryUser(t *te
 	assert.Error(t, d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", "PlaceManualOrder", 1))
 }
 
+// 空间成员可以查看策略回放（列表、详情、逐根明细），发起与取消回放仍要空间 owner / admin。
+func TestDAO_AuthorizeTradeRequest_MemberCanReadReplaysButNotMutate(t *testing.T) {
+	db := setupSpaceTestDB(t)
+	d := NewDAO(db)
+	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
+	require.NoError(t, db.Create(&SpaceMember{SpaceID: "crypto", UserID: "user-1", Role: "member", Status: "active"}).Error)
+	for _, method := range []string{"GetReplay", "ListReplays", "ListReplayBars"} {
+		require.NoError(t, d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", method, 1), method)
+	}
+	for _, method := range []string{"StartReplay", "CancelReplay"} {
+		assert.Error(t, d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", method, 1), method)
+	}
+}
+
 func TestDAO_AuthorizeTradeRequest_GlobalAdminAndInactiveSpace(t *testing.T) {
 	db := setupSpaceTestDB(t)
 	d := NewDAO(db)

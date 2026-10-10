@@ -90,3 +90,46 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 		t.Fatalf("停用实例应移出清单：%+v", observer.expected)
 	}
 }
+
+// 新启用、从未处理过周期的实例登记后立即有一次“空”运行：Monitor 不会在首个事件到达之前把它判为“尚未上报”，
+// 但输出水位不推进，首期没有结果时仍会在容忍的间隔数之后告警。
+func TestInstanceObserverGivesNewInstanceFirstPeriodGrace(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC)
+	observer.now = func() time.Time { return now }
+	if err := observer.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	value := func(name string) (float64, bool) {
+		families, err := registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() == name && len(family.GetMetric()) > 0 {
+				return family.GetMetric()[0].GetGauge().GetValue(), true
+			}
+		}
+		return 0, false
+	}
+	if got, ok := value("moox_strategy_dataset_last_success_timestamp_seconds"); !ok || int64(got) != now.Unix() {
+		t.Fatalf("登记后应有首期宽限（最近成功=启用时刻）：%v ok=%v", got, ok)
+	}
+	if got, ok := value("moox_strategy_dataset_output_watermark_timestamp_seconds"); ok && got != 0 {
+		t.Fatalf("宽限不能推进输出水位：%v", got)
+	}
+	// 再次刷新清单不重复给宽限。
+	now = now.Add(time.Hour)
+	if err := observer.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := value("moox_strategy_dataset_last_success_timestamp_seconds"); int64(got) != now.Add(-time.Hour).Unix() {
+		t.Fatalf("刷新清单不应延长宽限：%v", got)
+	}
+}

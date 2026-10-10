@@ -169,35 +169,49 @@ func percentileRank(ids []string, values map[string]float64) map[string]float64 
 	return result
 }
 
-// zScore 是截面标准化：样本值全部相同、或标准差相对量级小到只剩浮点误差时，全部记 0。
+// zScore 是截面标准化：样本值全部相同、或标准差相对量级小到只剩浮点误差时，全部记 0。先按样本的最大绝对值缩放到 [-1, 1]
+// 再算均值与方差（z 值与缩放无关）：直接累加偏差平方会在量级接近 1e154 时溢出成 Inf，有限的偏差除以 Inf 得 0，
+// 悄悄把所有标的的分数变成相同的 0。
 func zScore(ids []string, values map[string]float64) map[string]float64 {
 	result := make(map[string]float64, len(ids))
 	if len(ids) == 0 {
 		return result
 	}
-	mean, low, high := 0.0, math.Inf(1), math.Inf(-1)
+	scale := 0.0
 	for _, id := range ids {
-		value := values[id]
-		mean += value
-		low = math.Min(low, value)
-		high = math.Max(high, value)
+		scale = math.Max(scale, math.Abs(values[id]))
+	}
+	if scale == 0 || math.IsInf(scale, 0) || math.IsNaN(scale) {
+		// 全 0 无离散度；含 Inf、NaN 的样本交给上层的非有限值检查，这里不制造有限的分数。
+		for _, id := range ids {
+			result[id] = 0
+		}
+		if math.IsInf(scale, 0) || math.IsNaN(scale) {
+			for _, id := range ids {
+				result[id] = math.NaN()
+			}
+		}
+		return result
+	}
+	mean := 0.0
+	for _, id := range ids {
+		mean += values[id] / scale
 	}
 	mean /= float64(len(ids))
 	variance := 0.0
 	for _, id := range ids {
-		delta := values[id] - mean
+		delta := values[id]/scale - mean
 		variance += delta * delta
 	}
 	variance /= float64(len(ids))
 	deviation := math.Sqrt(variance)
-	scale := math.Max(math.Abs(low), math.Abs(high))
-	flat := low == high || deviation <= zeroVarianceTolerance*scale
+	flat := deviation <= zeroVarianceTolerance
 	for _, id := range ids {
 		if flat {
 			result[id] = 0
 			continue
 		}
-		result[id] = (values[id] - mean) / deviation
+		result[id] = (values[id]/scale - mean) / deviation
 	}
 	return result
 }
