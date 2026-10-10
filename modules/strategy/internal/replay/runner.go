@@ -120,7 +120,7 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	if errors.Is(err, errCancelled) {
 		r.logf("回放 %s 已取消", job.ReplayID)
 		if metrics.Bars > 0 {
-			if recordErr := r.Store.RecordCancelledReplayMetrics(ctx, job.ReplayID, raw, r.now()); recordErr != nil {
+			if recordErr := r.recordCancelledMetrics(ctx, job.ReplayID, raw); recordErr != nil {
 				r.logf("写入回放 %s 取消前的指标失败：%v", job.ReplayID, recordErr)
 			}
 		}
@@ -140,7 +140,7 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 	if errors.Is(finishErr, store.ErrNotFound) {
 		// 结束前任务已被取消（取消落在最后一次状态检查之后，或取消后读取又失败）：保留已算出的部分指标。
 		if current, err := r.Store.ReplayStatus(ctx, job.ReplayID); err == nil && current == store.ReplayCancelled && metrics.Bars > 0 {
-			if recordErr := r.Store.RecordCancelledReplayMetrics(ctx, job.ReplayID, raw, r.now()); recordErr != nil {
+			if recordErr := r.recordCancelledMetrics(ctx, job.ReplayID, raw); recordErr != nil {
 				r.logf("写入回放 %s 取消前的指标失败：%v", job.ReplayID, recordErr)
 			}
 		}
@@ -155,17 +155,33 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 // 执行器只认领 pending，终态没写进去的任务会一直停在 running，占用活动任务额度，直到下次启动才被标成 interrupted 并丢掉
 // 已算出的指标。数据库不可用期间执行器本来也做不了别的事，所以在这里等它恢复。
 func (r *Runner) finish(ctx context.Context, replayID, status string, metricsJSON json.RawMessage, errText string) error {
+	return r.retryWrite(ctx, replayID, "终态", func() error {
+		return r.Store.FinishReplay(ctx, replayID, status, metricsJSON, errText, r.now())
+	})
+}
+
+// recordCancelledMetrics 为已取消的回放写入截至取消时的部分指标，重试规则与 finish 相同：任务已经是 cancelled，
+// 执行器不会再认领它，启动恢复也只处理 running，写入遇到临时错误后只记日志的话，指标会永久停留在 {}。
+func (r *Runner) recordCancelledMetrics(ctx context.Context, replayID string, metricsJSON json.RawMessage) error {
+	return r.retryWrite(ctx, replayID, "取消前的指标", func() error {
+		return r.Store.RecordCancelledReplayMetrics(ctx, replayID, metricsJSON, r.now())
+	})
+}
+
+// retryWrite 反复执行 write，遇到临时错误按退避重试（间隔逐次翻倍，上限为初始间隔的 finishDelayCap 倍），直到成功、
+// ErrNotFound、永久错误或 ctx 结束。
+func (r *Runner) retryWrite(ctx context.Context, replayID, what string, write func() error) error {
 	initial := r.FinishRetryDelay
 	if initial <= 0 {
 		initial = finishRetryDelay
 	}
 	delay := initial
 	for attempt := 1; ; attempt++ {
-		err := r.Store.FinishReplay(ctx, replayID, status, metricsJSON, errText, r.now())
+		err := write()
 		if err == nil || errors.Is(err, store.ErrNotFound) || store.IsPermanentWriteError(err) {
 			return err
 		}
-		r.logf("写入回放 %s 的终态失败（第 %d 次），稍后重试：%v", replayID, attempt, err)
+		r.logf("写入回放 %s 的%s失败（第 %d 次），稍后重试：%v", replayID, what, attempt, err)
 		select {
 		case <-ctx.Done():
 			return err

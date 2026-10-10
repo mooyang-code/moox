@@ -855,3 +855,33 @@ func TestReplayOutputsFollowPrecisionRules(t *testing.T) {
 		}
 	}
 }
+
+// 取消后的指标写入遇到临时错误要退避重试：任务已经是 cancelled，不会再被认领，启动恢复也只处理 running，
+// 只记日志的话 metrics_json 会永久停留在 {}。
+func TestReplayCancelledMetricsRetryUntilDatabaseRecovers(t *testing.T) {
+	repo := openStore(t)
+	startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.CancelReplay(context.Background(), "p1", origin); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	restored := make(chan struct{})
+	go func() {
+		defer close(restored)
+		time.Sleep(300 * time.Millisecond)
+		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+			t.Error(err)
+		}
+	}()
+	runner := &Runner{Store: repo, FinishRetryDelay: 5 * time.Millisecond}
+	if err := runner.recordCancelledMetrics(context.Background(), "p1", []byte(`{"bars":3}`)); err != nil {
+		t.Fatalf("数据库恢复后应写入成功：%v", err)
+	}
+	<-restored
+	cancelled, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || cancelled.Status != store.ReplayCancelled || !strings.Contains(string(cancelled.MetricsJSON), `"bars":3`) {
+		t.Fatalf("取消前的指标应已保存：%+v err=%v", cancelled, err)
+	}
+}
