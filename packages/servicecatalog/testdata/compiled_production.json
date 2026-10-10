@@ -836,17 +836,26 @@
           "address": "127.0.0.1:11430",
           "service_path": "trpc.moox.strategy.StrategyMgr",
           "allowed_methods": [
+            "CancelReplay",
             "CreateStrategy",
             "CreateStrategyInstance",
+            "DeleteStrategy",
+            "DeleteStrategyInstance",
+            "GetReplay",
             "GetStrategy",
             "GetStrategyInstance",
             "GetStrategyResult",
+            "ListReplayBars",
+            "ListReplays",
             "ListStrategies",
             "ListStrategyInstances",
             "ListStrategyResults",
             "ListStrategyTargets",
             "SetStrategyInstanceEnabled",
-            "UpdateStrategy"
+            "StartReplay",
+            "UpdateStrategy",
+            "UpdateStrategyInstance",
+            "ValidateStrategy"
           ],
           "allowed_callers": [
             "console",

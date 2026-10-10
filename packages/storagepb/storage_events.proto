@@ -54,6 +54,8 @@ message FactorPeriodState {
   string status = 2; // complete | degraded | skipped
   repeated string failed_subjects = 3;
   string source_hash = 4;
+  // definition_hash 是因子完整计算契约的指纹，策略据此判断绑定的因子版本是否变化。
+  string definition_hash = 5;
 }
 
 // FactorPeriodComputed marks all frozen factors for one result Dataset period

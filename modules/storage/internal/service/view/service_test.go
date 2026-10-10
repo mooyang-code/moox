@@ -25,12 +25,12 @@ func TestAttachActiveViewRefreshesContractWhenIndexChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "prices", ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "a", Engine: "bleve", Status: "active"}
-	if err := svc.AttachActiveView(old); err != nil {
+	if err := svc.AttachActiveView(context.Background(), old); err != nil {
 		t.Fatal(err)
 	}
 	activeIDs, _ := json.Marshal([]string{"prices"})
 	updated := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "prices", ActiveIndexId: "prices-b", ActiveViewRevision: 2, DesiredViewRevision: 2, ActiveViewSchemaHash: "b", Engine: "bleve", Status: "active", Attributes: map[string]string{activeDatasetIDsAttr: string(activeIDs), activePrimaryDatasetAttr: "prices"}}
-	if err := svc.AttachActiveView(updated); err != nil {
+	if err := svc.AttachActiveView(context.Background(), updated); err != nil {
 		t.Fatal(err)
 	}
 	svc.mu.RLock()
@@ -114,7 +114,7 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare: rsp=%v err=%v", rsp, err)
 	}
-	if err := svc.AttachActiveView(&pb.View{
+	if err := svc.AttachActiveView(context.Background(), &pb.View{
 		SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices",
 		ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1",
 		Engine: "duckdb", ActiveColumns: columns, Status: "active",
@@ -174,7 +174,7 @@ func TestDuckDBABSwitchKeepsActiveReadableUntilCollectorDeletesOldFile(t *testin
 	}
 	attach := func(indexID string, version uint64) {
 		t.Helper()
-		if err := svc.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: indexID, ActiveViewRevision: version, ActiveViewSchemaHash: fmt.Sprintf("schema-%d", version), Engine: "duckdb", ActiveColumns: columns, Status: "active"}); err != nil {
+		if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: indexID, ActiveViewRevision: version, ActiveViewSchemaHash: fmt.Sprintf("schema-%d", version), Engine: "duckdb", ActiveColumns: columns, Status: "active"}); err != nil {
 			t.Fatalf("attach %s: %v", indexID, err)
 		}
 	}
@@ -203,7 +203,7 @@ func TestDuckDBABSwitchKeepsActiveReadableUntilCollectorDeletesOldFile(t *testin
 	apply(oldID, 1, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
 	apply(newID, 2, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
 	query(2, 101)
-	if err := svc.SwitchView(ctx, "quant", "prices-view", 0); err != nil {
+	if err := svc.SwitchView(ctx, "quant", "prices-view"); err != nil {
 		t.Fatal(err)
 	}
 	oldPath := filepath.Join(root, "duckdb", oldID+".duckdb")
@@ -279,7 +279,7 @@ func TestDuckDBBackfillDoesNotBlockActiveLiveWrite(t *testing.T) {
 		}
 	}
 	prepare("prices-a", 1, aColumns)
-	if err := svc.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", Engine: "duckdb", ActiveColumns: aColumns, Status: "active"}); err != nil {
+	if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", Engine: "duckdb", ActiveColumns: aColumns, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	apply("prices-a", 1, []*pb.ViewIndexRowWrite{{
@@ -317,7 +317,7 @@ func TestDuckDBBackfillDoesNotBlockActiveLiveWrite(t *testing.T) {
 	if err := <-backfillErr; err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	if err := svc.SwitchView(ctx, "quant", "prices-view", 0); err != nil {
+	if err := svc.SwitchView(ctx, "quant", "prices-view"); err != nil {
 		t.Fatalf("switch: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -402,7 +402,7 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("prepare rsp=%v err=%v", rsp, err)
 		}
-		if err := svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: id, DatasetId: map[string]string{"times": "prices", "records": "records"}[id], ActiveIndexId: id, ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: map[string]string{"times": "duckdb", "records": "bleve"}[id], ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}, Status: "active"}); err != nil {
+		if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: id, DatasetId: map[string]string{"times": "prices", "records": "records"}[id], ActiveIndexId: id, ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: map[string]string{"times": "duckdb", "records": "bleve"}[id], ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}, Status: "active"}); err != nil {
 			t.Fatalf("attach %s: %v", id, err)
 		}
 	}
@@ -620,7 +620,7 @@ func TestExplicitEmptyViewRoutesDatasetEventsWithoutBlocking(t *testing.T) {
 		t.Fatalf("prepare empty view: rsp=%v err=%v", rsp, err)
 	}
 	view := &pb.View{SpaceId: "space", ViewId: "empty", DatasetId: "market", ActiveIndexId: "empty-view", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: "bleve", Status: "active", Attributes: map[string]string{viewColumnsExplicitAttr: "true"}}
-	if err := svc.AttachActiveView(view); err != nil {
+	if err := svc.AttachActiveView(context.Background(), view); err != nil {
 		t.Fatal(err)
 	}
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
@@ -722,7 +722,7 @@ func TestViewBuildBackfillDoesNotOverwriteLiveAndSwitchesAtomically(t *testing.T
 	if err := svc.BackfillView(ctx, "space", "logical", 100); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.SwitchView(ctx, "space", "logical", time.Hour); err != nil {
+	if err := svc.SwitchView(ctx, "space", "logical"); err != nil {
 		t.Fatal(err)
 	}
 	rsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{
@@ -774,14 +774,14 @@ func TestBackfillReadsNewDatasetColumnsByExistingGrain(t *testing.T) {
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("apply rsp=%v err=%v", rsp, err)
 	}
-	if err := svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "joined", DatasetId: "primary", ActiveIndexId: "join-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: "bleve", ActiveColumns: []*pb.ViewColumn{primaryColumn}, Status: "active"}); err != nil {
+	if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: "joined", DatasetId: "primary", ActiveIndexId: "join-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: "bleve", ActiveColumns: []*pb.ViewColumn{primaryColumn}, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	prepare("join-b", primaryColumn, extraColumn)
 	if err := svc.BackfillViewWithReader(ctx, "space", "joined", 100, extraFieldReader{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.SwitchView(ctx, "space", "joined", time.Hour); err != nil {
+	if err := svc.SwitchView(ctx, "space", "joined"); err != nil {
 		t.Fatal(err)
 	}
 	result, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{

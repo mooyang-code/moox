@@ -5,7 +5,6 @@ global:
 server:
   filter:
     - recovery
-    - validation
     - prometheus
   timeout: 30000
   service:
@@ -28,11 +27,6 @@ server:
       timeout: 10000
 
 plugins:
-  auth:
-    validation:
-      enable_error_log: false
-      server_validate_err_code: 100101
-      client_validate_err_code: 100102
   metrics:
     prometheus:
       ip: 127.0.0.1

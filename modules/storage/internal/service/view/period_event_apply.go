@@ -48,7 +48,7 @@ type periodCompletionInput struct {
 
 func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.CollectorPeriodCompleted) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("collector period event is empty"))
+		return eventconsumer.Permanent(errors.New("Collector 周期完成事件为空"))
 	}
 	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
 		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
@@ -61,7 +61,7 @@ func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *e
 func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.EventMessage, completion periodCompletionInput) error {
 	metadata, publisher := s.periodDependencies()
 	if metadata == nil || publisher == nil {
-		return errors.New("storage View period dependencies are unavailable")
+		return errors.New("View 处理周期事件所需的依赖尚未就绪")
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), completion.datasetID)
 	if len(views) == 0 {
@@ -70,7 +70,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -85,13 +85,12 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		if err != nil {
 			return err
 		}
-		if err := requireStorageSuccess("upsert view period dataset state", rsp.GetRetInfo()); err != nil {
+		if err := requireStorageSuccess("写入 View 周期的数据集状态", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 		if recorded := rsp.GetState(); recorded != nil && recorded.GetEventId() != message.GetEventId() {
-			// The period was already decided by an earlier report, which also
-			// published its readiness; this re-report changes nothing.
-			log.Printf("storage view ignored duplicate period report space=%s view=%s dataset=%s freq=%s period=%d event=%s recorded_event=%s",
+			// 该周期已由更早的上报决定并发布了就绪，这次重复上报不改变任何东西。
+			log.Printf("storage view 忽略重复的周期上报 space=%s view=%s dataset=%s freq=%s period=%d event=%s recorded_event=%s",
 				message.GetSpaceId(), view.GetViewId(), completion.datasetID, completion.frequency, completion.periodTime, message.GetEventId(), recorded.GetEventId())
 			continue
 		}
@@ -101,7 +100,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		if err != nil {
 			return err
 		}
-		if err := requireStorageSuccess("list view period dataset states", statesRsp.GetRetInfo()); err != nil {
+		if err := requireStorageSuccess("读取 View 周期的数据集状态", statesRsp.GetRetInfo()); err != nil {
 			return err
 		}
 		seenDatasets := make(map[string]struct{}, len(statesRsp.GetStates()))
@@ -122,7 +121,9 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			continue
 		}
 		eventID := stableViewEventID("data-ready", message.GetSpaceId(), view.GetViewId(), completion.frequency, strconv.FormatInt(completion.periodTime, 10))
-		s.enqueueViewDataReady(view, completion.committedPositions, ready, message, eventID)
+		if err := s.enqueueViewDataReady(view, completion.committedPositions, ready, message, eventID); err != nil {
+			return err
+		}
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
@@ -135,11 +136,11 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 
 func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.FactorPeriodComputed) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("factor period event is empty"))
+		return eventconsumer.Permanent(errors.New("Factor 周期计算事件为空"))
 	}
 	_, publisher := s.periodDependencies()
 	if publisher == nil {
-		return errors.New("storage View ready publisher is unavailable")
+		return errors.New("View 就绪事件发布器尚未就绪")
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
 	if len(views) == 0 {
@@ -148,7 +149,7 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -165,12 +166,14 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			DatasetId:      payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, "view:"+view.GetViewId()),
 			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
 			ReadyAt: cloneTimestamp(message.GetOccurredAt()),
-			// Factor states retain their frozen universe even when the View filters rows.
+			// 因子状态保留它们冻结的全集，即使 View 过滤了行。
 			UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
 			Factors:            cloneFactorStates(payload.GetFactors()),
 		}
 		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
-		s.enqueueViewDataReady(view, nil, ready, message, eventID)
+		if err := s.enqueueViewDataReady(view, nil, ready, message, eventID); err != nil {
+			return err
+		}
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
@@ -183,11 +186,11 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 
 func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.DatasetSyncPoint) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("dataset sync-point event is empty"))
+		return eventconsumer.Permanent(errors.New("数据集同步点事件为空"))
 	}
 	metadata, _ := s.periodDependencies()
 	if metadata == nil {
-		return errors.New("storage View period metadata is unavailable")
+		return errors.New("View 处理周期事件所需的元数据客户端尚未就绪")
 	}
 	views := s.syncPointViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
 	if len(views) == 0 {
@@ -196,7 +199,7 @@ func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.E
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -206,7 +209,7 @@ func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.E
 			return readyErr
 		}
 		if !ready {
-			return fmt.Errorf("View %s/%s has no ready active or building index", view.GetSpaceId(), view.GetViewId())
+			return fmt.Errorf("View %s/%s 没有可用的活动索引或正在构建的索引", view.GetSpaceId(), view.GetViewId())
 		}
 		rsp, err := metadata.RecordViewSyncPoint(ctx, &pb.RecordViewSyncPointReq{AuthInfo: s.internalAuth(), SyncPoint: &pb.ViewSyncPoint{
 			SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), DatasetId: payload.GetDatasetId(), RequestId: payload.GetRequestId(),
@@ -215,7 +218,7 @@ func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.E
 		if err != nil {
 			return err
 		}
-		if err := requireStorageSuccess("record view sync point", rsp.GetRetInfo()); err != nil {
+		if err := requireStorageSuccess("记录 View 同步点", rsp.GetRetInfo()); err != nil {
 			return err
 		}
 	}
@@ -226,10 +229,8 @@ func (s *Service) hasReadyViewIndex(ctx context.Context, view *pb.View) (bool, e
 	if view == nil {
 		return false, nil
 	}
-	// Unit tests and lightweight embedders may exercise the event protocol
-	// without opening a physical index engine. In a real Service, New always
-	// installs at least the Bleve engine, so this does not weaken runtime
-	// readiness checks.
+	// 单元测试与轻量的嵌入方可以不打开物理索引引擎就演练事件协议。真实的 Service 里，New 总是至少装上 Bleve 引擎，
+	// 所以这不会削弱运行时的就绪检查。
 	s.mu.RLock()
 	if len(s.engines) == 0 {
 		s.mu.RUnlock()
@@ -255,9 +256,8 @@ func (s *Service) hasReadyViewIndex(ctx context.Context, view *pb.View) (bool, e
 		activeMissing = true
 	}
 	if nextID != "" {
-		// A building-only index must be durably marked READY before a
-		// SyncPoint can be ACKed; otherwise a crash would discard it while the
-		// source fence has already been recorded.
+		// 只有构建中索引的 View，必须先把索引持久化地标记为就绪，才能确认 SyncPoint；否则源围栏已经记录，
+		// 一次崩溃就会丢掉这个索引。
 		if activeMissing && status != "active" {
 			return false, nil
 		}
@@ -280,9 +280,8 @@ func (s *Service) activeViewsForDataset(spaceID, datasetID string) []*pb.View {
 	return s.viewsForDataset(spaceID, datasetID, false)
 }
 
-// syncPointViewsForDataset includes a view with only a building index. Rows
-// are already applied to that index, so an import/catchup fence must not wait
-// forever for the first active revision.
+// syncPointViewsForDataset 包含只有构建中索引的 View。行已经写入那个索引，导入或追平围栏不能为了第一个活动
+// 版本永远等下去。
 func (s *Service) syncPointViewsForDataset(spaceID, datasetID string) []*pb.View {
 	return s.viewsForDataset(spaceID, datasetID, true)
 }
@@ -335,9 +334,7 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 		}
 		if active && contractID == datasetID {
 			view := candidate.view
-			// Carry the contract of the index that will receive this event. The
-			// catalog copy may describe a newer desired revision during A/B
-			// rebuild and must not change source-ready aggregation early.
+			// 携带将接收这个事件的索引的契约。A/B 重建期间目录里的副本可能描述更新的目标版本，不能提前改变源就绪的聚合。
 			view.DatasetId = contractID
 			if activeID != "" {
 				view.ActiveIndexId = activeID
@@ -436,10 +433,10 @@ func cloneFactorStates(values []*storageeventpb.FactorPeriodState) []*storageeve
 
 func requireStorageSuccess(operation string, info *pb.RetInfo) error {
 	if info == nil {
-		return fmt.Errorf("%s returned empty ret_info", operation)
+		return fmt.Errorf("%s 返回的 ret_info 为空", operation)
 	}
 	if info.GetCode() != pb.ErrorCode_SUCCESS {
-		return fmt.Errorf("%s failed: %s", operation, info.GetMsg())
+		return fmt.Errorf("%s 失败：%s", operation, info.GetMsg())
 	}
 	return nil
 }

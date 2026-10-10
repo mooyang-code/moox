@@ -66,8 +66,7 @@ TRADE_TEST='TestExternalLogicalAccountTargetIsConsumedIntoTradeStore'
   CGO_ENABLED=1 go test -c -tags=e2e_external -o "$WORK_DIR/trade.test" ./test
 )
 
-# Trade owns the account/session before Strategy's production authorization
-# callback runs. Both test binaries share only the isolated broker and this
+# Trade 先认领账户与会话，Strategy 侧按启用时的校验确认授权后再求值。 Both test binaries share only the isolated broker and this
 # temporary coordination directory, not a database or hand-built event.
 "$WORK_DIR/trade.test" -test.v -test.timeout=60s -test.run="^${TRADE_TEST}$" \
   >"$WORK_DIR/trade-test.log" 2>&1 &
@@ -106,4 +105,4 @@ grep -Fq -- "--- PASS: ${TRADE_TEST}" "$WORK_DIR/trade-test.log" || {
   exit 1
 }
 
-echo "modern Strategy Processor -> NATS -> Trade session receipt -> Paper fill local E2E passed (upstream market data is a fixture)"
+echo "Strategy Handler -> NATS -> Trade session receipt -> Paper fill local E2E passed (upstream market data is a fixture)"

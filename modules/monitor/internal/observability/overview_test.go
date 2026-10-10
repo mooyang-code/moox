@@ -47,7 +47,7 @@ func TestDatasetStatusDistinguishesMissingStaleAndEmpty(t *testing.T) {
 	}
 }
 
-func TestDatasetTolerancesUseScheduleForRunsAndFrequencyForWatermark(t *testing.T) {
+func TestDatasetTolerancesWhenIntervalIsShorterThanFrequency(t *testing.T) {
 	for _, freq := range []string{"1h", "1H"} {
 		key := datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: freq}
 		runLag, successLag, watermarkLag := datasetTolerances(key, 60, testRealtimePolicy())
@@ -60,6 +60,20 @@ func TestDatasetTolerancesUseScheduleForRunsAndFrequencyForWatermark(t *testing.
 		if watermarkLag != 3*time.Hour {
 			t.Fatalf("%s watermark lag = %s", freq, watermarkLag)
 		}
+	}
+}
+
+// 交易日历数据集的期望间隔可能远大于名义周期（周五到周一 40 小时、长假更久），水位容忍随期望间隔放大，
+// 否则节后第一根产出前就会报水位落后；期望间隔不超过周期时（加密货币）保持按周期计算。
+func TestDatasetTolerancesScaleWatermarkWithExpectedInterval(t *testing.T) {
+	key := datasetKey{spaceID: "cn_stock", datasetID: "strategy_signal", freq: "1d"}
+	_, _, watermarkLag := datasetTolerances(key, (40 * time.Hour).Seconds(), testRealtimePolicy())
+	if watermarkLag != 120*time.Hour {
+		t.Fatalf("watermark lag = %s", watermarkLag)
+	}
+	_, _, watermarkLag = datasetTolerances(key, (12 * time.Hour).Seconds(), testRealtimePolicy())
+	if watermarkLag != 72*time.Hour {
+		t.Fatalf("watermark lag = %s", watermarkLag)
 	}
 }
 

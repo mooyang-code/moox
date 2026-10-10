@@ -33,6 +33,8 @@ message FactorPeriodState {
   string status = 2; // complete | degraded | skipped
   repeated string failed_subjects = 3;
   string source_hash = 4;
+  // definition_hash 是因子完整计算契约的指纹，由 Factor 计算并随周期标记透传。
+  string definition_hash = 5;
 }
 
 // FactorPeriodComputedMarker is appended after all result row writes commit.

@@ -117,6 +117,12 @@ export const staticRoutes = [
         meta: { title: "strategy-detail", hide: true }
       },
       {
+        path: "/strategy/replay",
+        name: "strategy-replay",
+        component: () => import("@/views/strategy/replay/index.vue"),
+        meta: { title: "strategy-replay" }
+      },
+      {
         path: "/data/import",
         name: "data-import",
         component: () => import("@/views/data/import/index.vue"),

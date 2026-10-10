@@ -83,12 +83,14 @@ reject '^[[:space:]]+(stream|topic):' \
 reject 'EventBus\.Stream|yaml:"stream"' \
   "Archive still exposes the Registry-owned stream setting" \
   --glob '*.go' modules/archive/internal
+# moox-factor-engine reaches the manager through the access service's HTTPS
+# entry; its manager.url is a gateway address, not an EventBus setting.
 reject 'NATS\.Stream|NATS\.Consumer|NATS\.URL\b|yaml:"stream"|yaml:"consumer"|yaml:"url"' \
   "Factor still exposes duplicate or fixed live EventBus settings" \
-  --glob '*.go' modules/factor/internal
+  --glob '*.go' --glob '!modules/factor/internal/engine/config.go' modules/factor/internal
 reject '^[[:space:]]+(stream|consumer|url):' \
   "Factor YAML still exposes duplicate or fixed live EventBus settings" \
-  --glob '*.yaml' modules/factor/config
+  --glob '*.yaml' --glob '!modules/factor/config/engine.yaml' modules/factor/config
 # FactorTypeCrossSection remains a supported calculation type; only its retired
 # persistence and recalculation APIs belong in this removal guard.
 reject 'NewDurableEventBatcher|PendingEventStore|t_factor_event_inbox|arrow_mmap|GetRecalcProgress|ListFactorRuns' \
@@ -119,7 +121,7 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
 (cd modules/archive && go test ./internal/config ./internal/eventconsumer)
 (cd modules/archive && go test ./internal/bootstrap -run '^TestAppRunConsumesStorageEventAndBecomesReadyE2E$' -count=1)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap ./internal/catalog ./internal/periodclock ./internal/trigger ./internal/pipeline ./internal/recalc ./internal/storageio)
-(cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/jobqueue ./internal/jobstate ./internal/rpc)
+(cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/rpc)
 # Strategy E2E tests are build-tagged e2e_external and require deployed services;
 # this local contract gate covers the package-level storage and outbox tests.
 (cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox)

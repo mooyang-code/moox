@@ -401,6 +401,8 @@ func runViewRole() error {
 	rebuildCheckInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
 	capacityCheckInterval, _ := time.ParseDuration(policy.View.CapacityCheckInterval)
 	capacityCheckJitter, _ := time.ParseDuration(policy.View.CapacityCheckJitter)
+	// 每序列保留根数随 DataView 查询响应告知调用方：不依赖维护器是否启动。
+	svc.SetSeriesBars(policy.View.Bars)
 	maintenanceOptions := viewservice.MaintenanceOptions{
 		Metadata:                    metadataProxy,
 		Primary:                     primaryProxy,
@@ -409,7 +411,6 @@ func runViewRole() error {
 		Interval:                    rebuildCheckInterval,
 		Bars:                        policy.View.Bars,
 		TrimBars:                    policy.View.TrimBars,
-		Grace:                       time.Minute,
 		MaxViewFileBytes:            policy.View.MaxViewFileBytes,
 		CapacityCheckInterval:       capacityCheckInterval,
 		CapacityCheckJitter:         capacityCheckJitter,

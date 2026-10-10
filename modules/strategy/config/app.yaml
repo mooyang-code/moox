@@ -11,6 +11,7 @@ eventbus:
   relay_batch_size: 100
   reconnect_interval: 1s
   connect_timeout: 3s
+  publish_timeout: 10s
   consumer_name: strategy_view_data_ready_v1
 # 访问 Storage 与 FactorMgr 统一经本机主机网关
 gateway_client:
@@ -28,3 +29,13 @@ storage:
   app_key: ""
   view_app_key: ""
   timeout: 5s
+evaluation:
+  attempt_budget: 5
+retention:
+  result_items_days: 90
+  replays_days: 90
+  replays_max: 50
+replay:
+  chunk_bars: 50
+  page_size: 2000
+  missing_price_liquidate_bars: 3

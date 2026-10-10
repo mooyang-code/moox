@@ -69,9 +69,24 @@ type Service struct {
 	maintenanceReady           bool
 	pendingReadyMu             sync.Mutex
 	pendingReady               []pendingViewReady
+	readyFlushMu               sync.Mutex
 	readyFenceDir              string
 	appliedFenceMu             sync.Mutex
 	appliedFence               map[appliedFenceKey]uint64
+
+	// readyReconnect 替换就绪事件发布器的专用连接；发布超时或连接被关闭后在刷新锁之外异步调用。
+	readyReconnect func(context.Context) error
+	// readyBackoffUntil 之前不再尝试发布就绪事件（上一次发布因连接问题失败）；readyReconnecting 保证同一时刻只有一个重连。
+	readyBackoffUntil time.Time
+	readyReconnecting atomic.Bool
+	// readyIssues 是就绪队列每类异常最近的一条日志，用于去重；appliedPersistMu 串行化写入围栏的落盘；
+	// appliedDirty 表示写入围栏有尚未落盘的更新（受 appliedFenceMu 保护）。
+	readyLogMu       sync.Mutex
+	readyIssues      map[string]string
+	appliedPersistMu sync.Mutex
+	appliedDirty     bool
+	// seriesBars 是时序 View 每个序列保留的根数，随查询响应告知调用方。
+	seriesBars uint64
 }
 
 type pendingRebuildLog struct {
@@ -117,7 +132,6 @@ type viewRuntime struct {
 	buildFailed                    bool
 	buildContext                   context.Context
 	lastCapacityMaintenanceBuildAt time.Time
-	applied                        map[appliedKey]uint64
 	// readState is a lock-free copy of what queries need. A delivery holds mu
 	// for its whole index write (seconds for a large factor batch), so queries
 	// that took mu to read the active index waited behind every write.
@@ -132,10 +146,30 @@ type runtimeReadState struct {
 	stats        viewindex.ViewIndexStats
 }
 
+// newViewRuntime 创建运行时并立即发布一份空的查询路径副本：没有发布过副本的运行时在读取 active 时要等运行时锁，
+// 首次构建期间整段索引写入都持有它，会拖住持有全局串行锁的就绪刷新。
+func newViewRuntime() *viewRuntime {
+	runtime := &viewRuntime{}
+	runtime.publishReadStateLocked()
+	return runtime
+}
+
 // publishReadStateLocked republishes the query-path copy; call it with mu held
 // after changing active, statsIndexID or stats.
 func (r *viewRuntime) publishReadStateLocked() {
 	r.readState.Store(&runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats})
+}
+
+// clearActiveLocked 清空活动索引及其数据集契约与统计缓存（调用方持有 mu）：之后重新挂载时按新的元数据重建契约，
+// 而不是沿用已删除索引的旧契约（周期事件会按旧数据集路由，新数据集的完成事件收不到）。
+func (r *viewRuntime) clearActiveLocked() {
+	r.active = ""
+	r.activeDatasetIDs = nil
+	r.activePrimaryDatasetID = ""
+	r.activeDatasetSet = false
+	r.statsIndexID = ""
+	r.stats = viewindex.ViewIndexStats{}
+	r.publishReadStateLocked()
 }
 
 // queryState returns the query-path copy without waiting for mu. A runtime
@@ -486,7 +520,7 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	s.mu.Lock()
 	runtime := s.views[viewKey]
 	if runtime == nil {
-		runtime = &viewRuntime{}
+		runtime = newViewRuntime()
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()
@@ -613,64 +647,106 @@ func (s *Service) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq) (
 
 func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexReq) (*pb.RemoveViewIndexRsp, error) {
 	if req == nil || req.GetIndexId() == "" {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id is required"))}, nil
+		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id 不能为空"))}, nil
 	}
 	if err := s.authorize(req.GetAuthInfo()); err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	engine, err := s.engineFor(req.GetIndexId())
-	if err != nil {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	s.mu.RLock()
-	viewKey, hasView := s.indexView[req.GetIndexId()]
-	runtime := s.views[viewKey]
-	engineName := normalizedEngine(s.indexEngine[req.GetIndexId()])
-	generation := s.indexGeneration[req.GetIndexId()]
-	s.mu.RUnlock()
-	if hasView && runtime != nil {
-		runtime.mu.Lock()
-		defer runtime.mu.Unlock()
-	}
-	release, err := s.indexWriteGate(req.GetIndexId()).lock(ctx)
+	indexID := req.GetIndexId()
+	// 先取所属 View 的运行时锁、再取写入闸门（与切换、挂载、清理的锁顺序一致），拿到两把锁之后才读映射与代次：
+	// 删除过程中与切换、挂载、准备串行，不会删掉刚准备好或正在挂载的索引。
+	runtime, release, err := s.lockIndexForRemoval(ctx, indexID)
 	if err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	defer release()
-	if generation, preparing := s.preparingGeneration(req.GetIndexId()); preparing {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("view index %q generation %d is being prepared", req.GetIndexId(), generation))}, nil
+	if generation, preparing := s.preparingGeneration(indexID); preparing {
+		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("View 索引 %q 的第 %d 代正在准备，不能删除", indexID, generation))}, nil
 	}
-	if err := engine.Remove(ctx, req.GetIndexId()); err != nil {
+	engine, err := s.engineFor(indexID)
+	if err != nil {
+		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	s.mu.RLock()
+	engineName := normalizedEngine(s.indexEngine[indexID])
+	generation := s.indexGeneration[indexID]
+	s.mu.RUnlock()
+	if err := engine.Remove(ctx, indexID); err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	s.mu.Lock()
-	s.removeIndexMappingsLocked(req.GetIndexId())
-	delete(s.indexEngine, req.GetIndexId())
-	delete(s.schemas, req.GetIndexId())
-	if current, retiring := s.retiringIndexes[req.GetIndexId()]; retiring && current == generation {
-		delete(s.retiringIndexes, req.GetIndexId())
+	s.removeIndexMappingsLocked(indexID)
+	delete(s.indexEngine, indexID)
+	delete(s.schemas, indexID)
+	delete(s.indexView, indexID)
+	if current, retiring := s.retiringIndexes[indexID]; retiring && current == generation {
+		delete(s.retiringIndexes, indexID)
 	}
 	for ref, candidate := range s.cleanupCandidates {
-		if ref.indexID == req.GetIndexId() && ref.engine == engineName && candidate.generation == generation {
+		if ref.indexID == indexID && ref.engine == engineName && candidate.generation == generation {
 			delete(s.cleanupCandidates, ref)
 		}
 	}
-	if hasView {
-		delete(s.indexView, req.GetIndexId())
-	}
 	s.mu.Unlock()
+	// 运行时锁由 lockIndexForRemoval 持有：清掉指向该索引的 active 与 next。
 	if runtime != nil {
-		runtime.mu.Lock()
-		if runtime.active == req.GetIndexId() {
-			runtime.active = ""
-			runtime.publishReadStateLocked()
+		if runtime.active == indexID {
+			runtime.clearActiveLocked()
 		}
-		if runtime.next == req.GetIndexId() {
+		if runtime.next == indexID {
 			runtime.next = ""
 		}
-		runtime.mu.Unlock()
 	}
 	return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
+// maxRemovalLockAttempts 是 lockIndexForRemoval 在运行时于取锁期间被创建时的重试次数。
+const maxRemovalLockAttempts = 3
+
+// lockIndexForRemoval 按“运行时锁 → 写入闸门”的顺序锁住索引所属 View，返回运行时（可能为空）与释放函数。运行时是
+// 首次准备索引时才创建的：取闸门期间它被创建了，就放开重来，保证总是先取运行时锁再取闸门，不会出现取闸门之后才
+// 发现需要运行时锁的颠倒顺序。
+func (s *Service) lockIndexForRemoval(ctx context.Context, indexID string) (*viewRuntime, func(), error) {
+	for attempt := 0; attempt < maxRemovalLockAttempts; attempt++ {
+		runtime := s.runtimeOfIndex(indexID)
+		if runtime != nil {
+			runtime.mu.Lock()
+		}
+		releaseGate, err := s.indexWriteGate(indexID).lock(ctx)
+		if err != nil {
+			if runtime != nil {
+				runtime.mu.Unlock()
+			}
+			return nil, nil, err
+		}
+		if s.runtimeOfIndex(indexID) == runtime {
+			return runtime, func() {
+				releaseGate()
+				if runtime != nil {
+					runtime.mu.Unlock()
+				}
+			}, nil
+		}
+		releaseGate()
+		if runtime != nil {
+			runtime.mu.Unlock()
+		}
+	}
+	return nil, nil, fmt.Errorf("View 索引 %q 所属的 View 正在初始化，请稍后重试", indexID)
+}
+
+// runtimeOfIndex 返回索引所属 View 的运行时：先按索引 ID 解析所属 View（与清理路径一致），解析不了的旧命名退回索引到
+// View 的映射；View 还没有运行时返回空。
+func (s *Service) runtimeOfIndex(indexID string) *viewRuntime {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if parsed, err := viewindex.ParseViewIndexID(indexID); err == nil {
+		return s.views[viewRef{spaceID: parsed.SpaceID, viewID: parsed.ViewID}]
+	}
+	if key, ok := s.indexView[indexID]; ok {
+		return s.views[key]
+	}
+	return nil
 }
 
 func (s *Service) ListViewIndexes(ctx context.Context, req *pb.ListViewIndexesReq) (*pb.ListViewIndexesRsp, error) {

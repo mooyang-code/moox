@@ -81,6 +81,7 @@ type FactorState struct {
 	Status         string
 	FailedSubjects []string
 	SourceHash     string
+	DefinitionHash string
 }
 
 type Store interface {

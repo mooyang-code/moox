@@ -304,11 +304,13 @@ components:
       - path: trpc.moox.strategy.StrategyMgr
         port: 11430
         console_name: strategy
-        rpcs: [CreateStrategy, UpdateStrategy, GetStrategy, ListStrategies, ListStrategyResults, GetStrategyResult,
-               ListStrategyTargets, CreateStrategyInstance, GetStrategyInstance, ListStrategyInstances,
-               SetStrategyInstanceEnabled]
-        read_only: [GetStrategy, ListStrategies, ListStrategyResults, GetStrategyResult, ListStrategyTargets,
-                    GetStrategyInstance, ListStrategyInstances]
+        rpcs: [CreateStrategy, UpdateStrategy, GetStrategy, ListStrategies, DeleteStrategy, ValidateStrategy,
+               CreateStrategyInstance, UpdateStrategyInstance, GetStrategyInstance, ListStrategyInstances,
+               SetStrategyInstanceEnabled, DeleteStrategyInstance, ListStrategyResults, GetStrategyResult,
+               ListStrategyTargets, StartReplay, GetReplay, ListReplays, ListReplayBars, CancelReplay]
+        read_only: [GetStrategy, ListStrategies, ValidateStrategy, GetStrategyInstance, ListStrategyInstances,
+                    ListStrategyResults, GetStrategyResult, ListStrategyTargets, GetReplay, ListReplays,
+                    ListReplayBars]
         acl:
           - all: true
             callers: [console, moox-cli]

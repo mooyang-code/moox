@@ -36,8 +36,8 @@ func TestPrimaryFactorPeriodComputedForwardsFactorStatesUnchanged(t *testing.T) 
 		DatasetId: "result", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: 1786032000, TriggerEventId: "source-ready",
 		Status: "degraded", UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"BTC"},
 		Factors: []*pb.FactorPeriodState{
-			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, SourceHash: "hash-z"},
-			{FactorId: "a-factor", Status: "complete", SourceHash: "hash-a"},
+			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, SourceHash: "hash-z", DefinitionHash: "def-z"},
+			{FactorId: "a-factor", Status: "complete", SourceHash: "hash-a", DefinitionHash: "def-a"},
 		},
 	}
 	rsp, err := service.ReportFactorPeriodComputed(ctx, &pb.ReportFactorPeriodComputedReq{AuthInfo: auth, SpaceId: "quant", Marker: marker})

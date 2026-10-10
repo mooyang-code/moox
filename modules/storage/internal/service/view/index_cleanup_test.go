@@ -514,7 +514,7 @@ func TestCleanupRetiredIndexesClearsMissingOldActiveForSlotReuse(t *testing.T) {
 	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{
 		active: oldID, next: newID, status: "ready",
 	}
-	if err := svc.SwitchView(context.Background(), "space", "prices", time.Minute); err != nil {
+	if err := svc.SwitchView(context.Background(), "space", "prices"); err != nil {
 		t.Fatal(err)
 	}
 	if _, retiring := svc.retiringGeneration(oldID); !retiring {
@@ -563,6 +563,39 @@ func TestRemoveViewIndexClearsRetirementForImmediateSlotReuse(t *testing.T) {
 	})
 	if err != nil || prepare.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("reuse explicitly removed slot: rsp=%v err=%v", prepare, err)
+	}
+}
+
+// 删除挂在 View 上的当前索引：整个过程持有运行时锁，结束时清掉 active 并释放锁（不能在已持有时再次加锁）。
+func TestRemoveViewIndexClearsActiveOfAttachedView(t *testing.T) {
+	id := cleanupIndexID("prices", viewindex.SlotA)
+	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
+	svc := newCleanupService(t, engine)
+	key := viewRef{spaceID: "space", viewID: "prices"}
+	runtime := &viewRuntime{active: id}
+	svc.views[key] = runtime
+	svc.indexEngine[id] = "fake"
+	svc.indexView[id] = key
+	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
+	done := make(chan *pb.RemoveViewIndexRsp, 1)
+	go func() {
+		rsp, _ := svc.RemoveViewIndex(context.Background(), &pb.RemoveViewIndexReq{AuthInfo: auth, IndexId: id})
+		done <- rsp
+	}()
+	select {
+	case rsp := <-done:
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("remove attached index: %v", rsp.GetRetInfo())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RemoveViewIndex 在成功路径上卡死")
+	}
+	if !runtime.mu.TryLock() {
+		t.Fatal("RemoveViewIndex 返回后仍持有运行时锁")
+	}
+	defer runtime.mu.Unlock()
+	if runtime.active != "" {
+		t.Fatalf("active 未清空：%q", runtime.active)
 	}
 }
 

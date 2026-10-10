@@ -921,8 +921,8 @@ func projectBackfillFields(fields []*pb.FieldValue, active, next viewindex.ViewI
 	return projected
 }
 
-func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace time.Duration) error {
-	_ = grace
+// SwitchView 把已完成的替换索引切成活动索引（测试与端到端用例直接驱动切换）。
+func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string) error {
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -953,6 +953,7 @@ func (s *Service) switchViewLocked(ctx context.Context, runtime *viewRuntime) (s
 			return "", 0, fmt.Errorf("mark old view index retiring: %w", err)
 		}
 	}
+	s.inheritAppliedFence(oldID, runtime.next)
 	runtime.active = runtime.next
 	runtime.activeDatasetIDs = append([]string(nil), runtime.nextDatasetIDs...)
 	runtime.activePrimaryDatasetID = runtime.nextPrimaryDatasetID
@@ -1039,12 +1040,7 @@ func (s *Service) failRuntimeBuild(ctx context.Context, key viewRef, runtime *vi
 	return nil
 }
 
-func (s *Service) AttachActiveView(view *pb.View) error {
-	return s.AttachActiveViewWithGrace(context.Background(), view, 0)
-}
-
-func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, grace time.Duration) error {
-	_ = grace
+func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" || view.GetActiveIndexId() == "" {
 		return errors.New("active view metadata is required")
 	}
@@ -1081,7 +1077,7 @@ func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, 
 	s.mu.Lock()
 	runtime := s.views[viewKey]
 	if runtime == nil {
-		runtime = &viewRuntime{}
+		runtime = newViewRuntime()
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()
@@ -1100,6 +1096,8 @@ func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, 
 			runtime.mu.Unlock()
 			return fmt.Errorf("mark displaced view index retiring: %w", err)
 		}
+		// 按元数据切换活动索引（例如激活响应丢失后由维护补上）与 switchViewLocked 一样继承写入围栏。
+		s.inheritAppliedFence(previousActive, view.GetActiveIndexId())
 	}
 	s.attachActiveViewLocked(view, runtime, schema, columns, activePrimaryDatasetID, engineName)
 	runtime.mu.Unlock()
@@ -1235,7 +1233,7 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	s.mu.Lock()
 	runtime := s.views[viewKey]
 	if runtime == nil {
-		runtime = &viewRuntime{}
+		runtime = newViewRuntime()
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()

@@ -722,3 +722,34 @@ func sameOptionalString(left, right *string) bool {
 	return (left == nil && right == nil) ||
 		(left != nil && right != nil && reflect.DeepEqual(*left, *right))
 }
+
+// 策略用“只带时间范围、不命中任何行”的查询读取覆盖范围与每序列保留根数：TotalMode=NONE 只返回已缓存的统计，
+// FORCE_EXACT 现算并缓存，之后的 NONE 查询也能拿到。
+func TestQueryTimeSeriesRowsServesCoverageProbe(t *testing.T) {
+	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, EntryCount: 1, IndexedFrom: "2026-07-29T00:00:00Z", IndexedTo: "2026-07-29T00:01:00Z"}}
+	svc, auth := queryTestService(engine, true)
+	svc.seriesBars = 5000
+	probe := func(mode pb.TotalMode) *pb.QueryTimeSeriesRowsRsp {
+		t.Helper()
+		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: "space", ViewId: "prices", Limit: 1, TotalMode: mode,
+			TimeRange: &pb.TimeRange{StartTime: "1970-01-01T00:00:00Z", EndTime: "1970-01-01T00:00:00.000000001Z"},
+		})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("rsp=%v err=%v", rsp, err)
+		}
+		if rsp.GetServedSeriesBars() != 5000 {
+			t.Fatalf("应返回每序列保留根数：%v", rsp)
+		}
+		return rsp
+	}
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetServedIndexedFrom() != "" {
+		t.Fatalf("统计未缓存时 NONE 不应现算覆盖范围：%v", rsp)
+	}
+	if rsp := probe(pb.TotalMode_FORCE_EXACT); rsp.GetServedIndexedFrom() != "2026-07-29T00:00:00Z" || rsp.GetServedIndexedTo() != "2026-07-29T00:01:00Z" {
+		t.Fatalf("FORCE_EXACT 应现算覆盖范围：%v", rsp)
+	}
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetServedIndexedFrom() != "2026-07-29T00:00:00Z" {
+		t.Fatalf("现算后的统计应被缓存：%v", rsp)
+	}
+}

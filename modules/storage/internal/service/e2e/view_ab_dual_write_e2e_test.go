@@ -43,7 +43,7 @@ func TestViewABDualWriteKeepsLiveValueAcrossBackfill(t *testing.T) {
 	if rsp, err := service.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: "ab-a", Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-ab-a", WriteMode: "LIVE_WRITE", RowWrites: []*pb.ViewIndexRowWrite{row("2026-08-12T00:00:00Z", 100), row("2026-08-12T00:01:00Z", 101)}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write A: rsp=%v err=%v", rsp, err)
 	}
-	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "ab-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "ab-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "schema-ab-a", ActiveColumns: columns, Status: "active"}); err != nil {
+	if err := service.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "ab-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "ab-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "schema-ab-a", ActiveColumns: columns, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	prepare("ab-b", 2)
@@ -72,7 +72,7 @@ func TestViewABDualWriteKeepsLiveValueAcrossBackfill(t *testing.T) {
 	if err := service.BackfillView(ctx, "quant", "ab-view", 100); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.SwitchView(ctx, "quant", "ab-view", 10*time.Millisecond); err != nil {
+	if err := service.SwitchView(ctx, "quant", "ab-view"); err != nil {
 		t.Fatal(err)
 	}
 	rsp, err := service.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{AuthInfo: auth, SpaceId: "quant", ViewId: "ab-view", TimeRange: &pb.TimeRange{StartTime: "2026-08-12T00:00:00Z", EndTime: "2026-08-12T00:03:00Z"}, Page: &pb.Page{Page: 1, Size: 10}, TotalMode: pb.TotalMode_NONE})

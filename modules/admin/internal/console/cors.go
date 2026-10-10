@@ -20,7 +20,8 @@ var (
 		"X-Moox-Nonce",
 		"X-Moox-Signature",
 	}
-	corsExposedHeaders = []string{"trpc-ret", "trpc-func-ret", "X-Trace-Id"}
+	// Date 供页面换算服务端时间（判断回放是不是刚被取消），跨域开发环境下浏览器默认读不到它。
+	corsExposedHeaders = []string{"trpc-ret", "trpc-func-ret", "X-Trace-Id", "Date"}
 )
 
 func corsMiddleware(next http.Handler) http.Handler {

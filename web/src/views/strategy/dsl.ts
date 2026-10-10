@@ -1,100 +1,123 @@
 import { parseDocument } from "yaml";
 
-export const rankedTemplate = `name: 收盘价排序示例
-triggers:
-  event: {name: source.ready}
-data: {bar: 1h, calendar: crypto_24x7}
+/** 截面选股模板：只用因子库已有的列（Binance 现货因子结果 View）；bias_20 = close / MA20。 */
+export const rankedTemplate = `name: binance_spot_momentum
+bar: 1m
+
+universe:
+  min_age_bars: 240
+  exclude: [BTC-USDT]
+
 rules:
-  rank:
-    pool: [BTC-USDT-SPOT, ETH-USDT-SPOT]
-    filter_before: "close > 0"
-    score: "close"
-    select: {top: 1}
-    weight: 0.60
+  - id: long_momentum
+    name: 多头动量选币
+    type: rank
+    filter: "quote_volume_mean_20 > 20000 && close > 0"
+    score: "0.6 * rank(bias_q_20) + 0.4 * rank(quote_volume_mean_q_20)"
+    select: {top: 5, buffer: 2}
+    weight: {total: 0.8, method: equal, cap: 0.3}
+
+  - id: btc_trend
+    name: BTC 上穿均线
+    type: signal
+    pool: [BTC-USDT]
+    entry: "bars[-1].bias_20 <= 1 && bars[0].bias_20 > 1"
+    exit: "bars[0].bias_20 < 1"
+    weight: {total: 0.2}
+
+portfolio:
+  leverage: 1
+  max_weight: 0.3
+  min_universe: 20
+  max_missing: 0.2
 `;
 
-export const signalTemplate = `name: 均线穿越示例
-triggers:
-  event: {name: factor.ready}
-data: {bar: 1h, calendar: crypto_24x7}
+/** 固定池择时模板：BTC、ETH 站上 20 期均线时持有。 */
+export const signalTemplate = `name: majors_trend
+bar: 1m
+
 rules:
-  trend:
-    pool: [BTC-USDT-SPOT]
-    score: "close"
-    select: {top: 1}
-    signals:
-      entry: "bars[-1].ma20 <= bars[-1].close && bars[0].ma20 > bars[0].close"
-      exit: "bars[-1].ma20 >= bars[-1].close && bars[0].ma20 < bars[0].close"
-    weight_each: 0.10
+  - id: majors_trend
+    name: 主流币均线择时
+    type: signal
+    pool: [BTC-USDT, ETH-USDT]
+    entry: "bars[-1].bias_20 <= 1 && bars[0].bias_20 > 1"
+    exit: "bars[0].bias_20 < 1"
+    weight: {total: 0.6}
+
+portfolio:
+  leverage: 1
 `;
 
 export interface DSLDiagnostic {
   message: string;
 }
 
+export interface DSLRulePreview {
+  id: string;
+  name: string;
+  type: string;
+}
+
 export interface DSLPreview {
   name: string;
   bar: string;
-  calendar: string;
-  triggers: string[];
-  eventName: string;
-  rules: string[];
+  rules: DSLRulePreview[];
+  universe: string;
+  leverage: string;
 }
 
+/** 本地只做 YAML 与结构预检；字段、表达式与列的完整校验以服务端 ValidateStrategy 为准。 */
 export function parseDSL(source: string): { preview: DSLPreview | null; diagnostics: DSLDiagnostic[] } {
   const document = parseDocument(source, { uniqueKeys: true });
-  const diagnostics = [...document.errors, ...document.warnings].map(item => ({ message: item.message }));
+  const diagnostics: DSLDiagnostic[] = [...document.errors, ...document.warnings].map(item => ({ message: item.message }));
   if (document.errors.length > 0) return { preview: null, diagnostics };
   const value = document.toJS() as Record<string, any> | null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { preview: null, diagnostics: [{ message: "DSL 必须是 YAML 对象" }] };
   }
-  const rules = value.rules && typeof value.rules === "object" ? Object.keys(value.rules) : [];
-  const triggers = value.triggers && typeof value.triggers === "object" ? Object.keys(value.triggers) : [];
-  const eventName = typeof value.triggers?.event?.name === "string" ? value.triggers.event.name : "";
+  if (typeof value.name !== "string" || !value.name.trim()) diagnostics.push({ message: "缺少 name" });
+  const rules: DSLRulePreview[] = [];
+  if (!Array.isArray(value.rules) || value.rules.length === 0) {
+    diagnostics.push({ message: "rules 必须是非空列表，每条规则包含 id 与 type" });
+  } else {
+    value.rules.forEach((rule: any, index: number) => {
+      const id = typeof rule?.id === "string" ? rule.id : "";
+      const type = typeof rule?.type === "string" ? rule.type : "";
+      if (!id) diagnostics.push({ message: `rules[${index}] 缺少 id` });
+      if (type !== "rank" && type !== "signal") diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank 或 signal` });
+      rules.push({ id: id || `#${index + 1}`, name: typeof rule?.name === "string" ? rule.name : "", type });
+    });
+  }
+  const universe = value.universe && typeof value.universe === "object" ? describeUniverse(value.universe) : "全部标的";
   return {
     preview: {
       name: typeof value.name === "string" ? value.name : "未命名策略",
-      bar: String(value.data?.bar ?? "-"),
-      calendar: String(value.data?.calendar ?? "-"),
-      triggers,
-      eventName,
-      rules
+      bar: value.bar === undefined ? "由 View 决定" : String(value.bar),
+      rules,
+      universe,
+      leverage: value.portfolio?.leverage === undefined ? "1" : String(value.portfolio.leverage)
     },
     diagnostics
   };
 }
 
-const builtinBarFields = new Set(["open", "high", "low", "close", "volume"]);
-const expressionFunctions = new Set(["abs", "ceil", "floor", "round", "min", "max", "sum", "avg", "mean", "std", "log", "sqrt", "pow", "rank", "zscore", "true", "false", "null", "and", "or", "not", "in"]);
-const expressionBuiltins = new Set([...builtinBarFields, "instrument_id", "score"]);
-
-function expressionFields(expression: string): string[] {
-  const fields = new Set<string>();
-  const withoutBars = expression
-    .replace(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g, " ")
-    .replace(/\bbars\[-?\d+\]\.([A-Za-z_][A-Za-z0-9_]*)/g, (_, field: string) => {
-    if (!builtinBarFields.has(field)) fields.add(field);
-    return " ";
-  });
-  for (const match of withoutBars.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\b/g)) {
-    const field = match[1];
-    const next = withoutBars.slice(match.index! + field.length).match(/^\s*\(/);
-    if (!expressionFunctions.has(field.toLowerCase()) && !expressionBuiltins.has(field) && !next) fields.add(field);
-  }
-  return [...fields];
+function describeUniverse(universe: Record<string, any>): string {
+  const parts: string[] = [];
+  if (Array.isArray(universe.tags) && universe.tags.length) parts.push(`标签 ${universe.tags.join("、")}`);
+  if (Array.isArray(universe.exclude_tags) && universe.exclude_tags.length)
+    parts.push(`排除标签 ${universe.exclude_tags.join("、")}`);
+  if (Array.isArray(universe.include) && universe.include.length) parts.push(`包含 ${universe.include.length} 个`);
+  if (Array.isArray(universe.exclude) && universe.exclude.length) parts.push(`排除 ${universe.exclude.join("、")}`);
+  if (universe.min_age_bars) parts.push(`上市满 ${universe.min_age_bars} 根`);
+  return parts.length ? parts.join("；") : "全部标的";
 }
 
-export function requiredFactorFields(source: string): string[] {
-  const document = parseDocument(source);
-  if (document.errors.length) return [];
-  const rules = (document.toJS() as Record<string, any> | null)?.rules;
-  const fields = new Set<string>();
-  const expressionKeys = new Set(["score", "filter_before", "filter_after", "entry", "exit", "signal", "where"]);
-  const visit = (value: unknown, key = "") => {
-    if (typeof value === "string" && expressionKeys.has(key)) expressionFields(value).forEach(field => fields.add(field));
-    else if (value && typeof value === "object") Object.entries(value as Record<string, unknown>).forEach(([childKey, child]) => visit(child, childKey));
-  };
-  visit(rules);
-  return [...fields];
+/** 定义列表里的一行摘要。 */
+export function summarizeDSL(source: string): string {
+  const preview = parseDSL(source).preview;
+  if (!preview) return "DSL 无法解析";
+  if (!preview.rules.length) return "DSL 没有规则";
+  const rules = preview.rules.map(rule => `${rule.name || rule.id}（${rule.type || "?"}）`).join("、");
+  return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
 }

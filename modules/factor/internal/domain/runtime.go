@@ -8,6 +8,7 @@ type FactorPeriodState struct {
 	Status         string
 	FailedSubjects []string
 	SourceHash     string
+	DefinitionHash string
 }
 
 // SetRunSummary is the latest live period of one factor set as reported by

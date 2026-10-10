@@ -38,6 +38,7 @@ export default {
     ["strategy-definition-new"]: "new strategy",
     ["strategy-definition-edit"]: "edit strategy",
     ["strategy-detail"]: "strategy detail",
+    ["strategy-replay"]: "strategy replay",
     ["compute-collector"]: "data collection",
     ["collector-cloudnodes"]: "cloud nodes",
     ["collector-tasks"]: "collection tasks",

@@ -32,6 +32,9 @@ message FactorDef {
   bool allow_partial_universe = 11;
   string created_at = 13;
   string updated_at = 14;
+  // definition_hash 是完整计算契约的指纹：源码 hash、因子类型、规范化参数、回看周期、
+  // 输入输出列与 allow_partial_universe；由管理端在读取时派生计算，不持久化。
+  string definition_hash = 15;
 }
 
 message FactorUsage {
@@ -58,6 +61,7 @@ message FactorPeriodState {
   string status = 2;
   repeated string failed_subjects = 3;
   string source_hash = 4;
+  string definition_hash = 5;
 }
 
 message SetRunSummary {

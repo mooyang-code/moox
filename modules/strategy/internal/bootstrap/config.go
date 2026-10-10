@@ -4,15 +4,19 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
+	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
+// EventBusConfig 是 EventBus 的连接与投递配置。
 type EventBusConfig struct {
 	URLs              []string      `yaml:"urls"`
 	CredentialFile    string        `yaml:"credential_file"`
@@ -21,62 +25,76 @@ type EventBusConfig struct {
 	RelayBatchSize    int           `yaml:"relay_batch_size"`
 	ReconnectInterval time.Duration `yaml:"reconnect_interval"`
 	ConnectTimeout    time.Duration `yaml:"connect_timeout"`
+	// PublishTimeout 是单次发布目标事件等待确认的上限。
+	PublishTimeout time.Duration `yaml:"publish_timeout"`
 }
 
-// RPCConfig describes an authenticated Strategy metadata/data dependency. 请求经 gateway_client
-// 发送；没有配置 gateway_client 时只运行控制面，V2 发布会被拒绝。
+// RPCConfig 是经主机网关访问的依赖服务（Factor、Storage）的调用参数。
 type RPCConfig struct {
 	AppID  string `yaml:"app_id"`
 	AppKey string `yaml:"app_key"`
-	// ViewAppKey authenticates DataView requests. Storage deliberately uses a
-	// separate secret for the read/index service from the Primary/Metadata
-	// caller secret, so Strategy must carry both identities explicitly.
+	// ViewAppKey 是 DataView 的调用密钥；Storage 对 Metadata 与 DataView 使用不同的鉴权密钥。
 	ViewAppKey string        `yaml:"view_app_key"`
 	Timeout    time.Duration `yaml:"timeout"`
 }
 
-// TradeConfig 是调用 Trade 逻辑账户归属方法的设置；请求经 gateway_client 以 strategy 身份发送。
-type TradeConfig struct {
-	Timeout time.Duration `yaml:"timeout"`
+// EvaluationConfig 是求值的重试参数。
+type EvaluationConfig struct {
+	// AttemptBudget 是同一事件对同一实例读输入的尝试次数，超过后记 skipped(infra_retry_exhausted)。
+	AttemptBudget int `yaml:"attempt_budget"`
 }
 
-func (c TradeConfig) validate() error {
-	if c.Timeout <= 0 {
-		return fmt.Errorf("trade timeout must be positive")
-	}
-	return nil
+// RetentionConfig 是解释明细与回放的保留期；结果主表、DSL 版本与会话永久保留。
+// 回放同时按天数与每个空间的个数清理（ReplaysMax 是每个空间保留的最近已结束回放数）。
+type RetentionConfig struct {
+	ResultItemsDays int `yaml:"result_items_days"`
+	ReplaysDays     int `yaml:"replays_days"`
+	ReplaysMax      int `yaml:"replays_max"`
 }
 
+// ReplayConfig 是回放的读取与账本参数。
+type ReplayConfig struct {
+	ChunkBars                 int `yaml:"chunk_bars"`
+	PageSize                  int `yaml:"page_size"`
+	MissingPriceLiquidateBars int `yaml:"missing_price_liquidate_bars"`
+}
+
+// Config 是 config/app.yaml 的结构。
 type Config struct {
-	Database   string         `yaml:"database"`
-	Trade      TradeConfig    `yaml:"trade"`
-	InstanceID string         `yaml:"instance_id"`
-	EventBus   EventBusConfig `yaml:"eventbus"`
-	// GatewayClient 是访问 Storage 与 FactorMgr 的 gatewayclient 配置（strategy 身份）。
+	Database   string            `yaml:"database"`
+	Trade      tradeowner.Config `yaml:"trade"`
+	InstanceID string            `yaml:"instance_id"`
+	EventBus   EventBusConfig    `yaml:"eventbus"`
+	// GatewayClient 是访问 Storage、FactorMgr 与 Trade 的 gatewayclient 配置（strategy 身份）；为空表示未接线，
+	// 此时只能管理定义，不能启用实例。
 	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
 	Factor        RPCConfig            `yaml:"factor"`
 	Storage       RPCConfig            `yaml:"storage"`
+	Evaluation    EvaluationConfig     `yaml:"evaluation"`
+	Retention     RetentionConfig      `yaml:"retention"`
+	Replay        ReplayConfig         `yaml:"replay"`
 }
 
-// executionConfigured 判断是否配置了执行所需的依赖（Storage 与 FactorMgr 经 gateway_client 访问）。
-func (c Config) executionConfigured() bool { return c.GatewayClient.Mode != "" }
+// DependenciesConfigured 报告 Factor、Storage 与 Trade 的网关调用是否已接线。
+func (c Config) DependenciesConfigured() bool { return c.GatewayClient.Mode != "" }
 
+// Load 读取配置、套用环境变量覆盖与默认值并校验。
 func Load(path string) (Config, error) {
-	b, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
 	}
 	var c Config
-	if err = yaml.Unmarshal(b, &c); err != nil {
-		return Config{}, err
+	if err := yaml.Unmarshal(raw, &c); err != nil {
+		return Config{}, fmt.Errorf("解析策略配置失败：%w", err)
 	}
 	if strings.TrimSpace(c.InstanceID) == "" {
 		c.InstanceID = "strategy-1"
 	}
 	if c.Trade.Timeout == 0 {
-		c.Trade.Timeout = defaultLogicalAccountTimeout
+		c.Trade.Timeout = tradeowner.DefaultTimeout
 	}
-	if err := c.Trade.validate(); err != nil {
+	if err := c.Trade.Validate(); err != nil {
 		return Config{}, err
 	}
 	if len(c.EventBus.URLs) == 0 {
@@ -94,8 +112,11 @@ func Load(path string) (Config, error) {
 	if c.EventBus.ConnectTimeout == 0 {
 		c.EventBus.ConnectTimeout = 3 * time.Second
 	}
+	if c.EventBus.PublishTimeout == 0 {
+		c.EventBus.PublishTimeout = 10 * time.Second
+	}
 	if c.EventBus.ConsumerName == "" {
-		c.EventBus.ConsumerName = "strategy_view_data_ready_v1"
+		c.EventBus.ConsumerName = trigger.ViewDataReadyConsumerName
 	}
 	if c.Factor.AppID == "" {
 		c.Factor.AppID = "strategy"
@@ -103,9 +124,7 @@ func Load(path string) (Config, error) {
 	if c.Storage.AppID == "" {
 		c.Storage.AppID = "strategy"
 	}
-	// Storage validates the service AppKey against the shared primary auth
-	// secret. Keep the secret out of checked-in YAML while deriving the exact
-	// per-caller key when the deployment injects it into the process.
+	// Storage 按共享密钥校验调用方的 AppKey；密钥不进仓库，由部署注入环境变量后派生。
 	if c.Storage.AppKey == "" {
 		if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
 			c.Storage.AppKey = serviceAuthKey(secret, c.Storage.AppID)
@@ -116,15 +135,15 @@ func Load(path string) (Config, error) {
 			c.Storage.ViewAppKey = serviceAuthKey(secret, c.Storage.AppID)
 		}
 	}
-	if c.executionConfigured() {
+	if c.DependenciesConfigured() {
 		if err := c.GatewayClient.Validate(); err != nil {
 			return Config{}, err
 		}
 		if strings.TrimSpace(c.Storage.AppKey) == "" {
-			return Config{}, fmt.Errorf("storage app_key is required when gateway_client is configured (set app_key or MOOX_STORAGE_PRIMARY_AUTH_SECRET)")
+			return Config{}, errors.New("配置了 gateway_client 时必须提供 storage 的 app_key（或设置 MOOX_STORAGE_PRIMARY_AUTH_SECRET）")
 		}
 		if strings.TrimSpace(c.Storage.ViewAppKey) == "" {
-			return Config{}, fmt.Errorf("storage view_app_key is required when gateway_client is configured (set view_app_key or MOOX_STORAGE_VIEW_AUTH_SECRET)")
+			return Config{}, errors.New("配置了 gateway_client 时必须提供 storage 的 view_app_key（或设置 MOOX_STORAGE_VIEW_AUTH_SECRET）")
 		}
 	}
 	if c.Factor.Timeout == 0 {
@@ -133,16 +152,46 @@ func Load(path string) (Config, error) {
 	if c.Storage.Timeout == 0 {
 		c.Storage.Timeout = 5 * time.Second
 	}
+	if c.Evaluation.AttemptBudget == 0 {
+		c.Evaluation.AttemptBudget = trigger.DefaultAttemptBudget
+	}
+	if c.Retention.ResultItemsDays == 0 {
+		c.Retention.ResultItemsDays = 90
+	}
+	if c.Retention.ReplaysDays == 0 {
+		c.Retention.ReplaysDays = 90
+	}
+	if c.Retention.ReplaysMax == 0 {
+		c.Retention.ReplaysMax = 50
+	}
+	if c.Replay.ChunkBars == 0 {
+		c.Replay.ChunkBars = 50
+	}
+	if c.Replay.PageSize == 0 {
+		c.Replay.PageSize = 2000
+	}
+	if c.Replay.MissingPriceLiquidateBars == 0 {
+		c.Replay.MissingPriceLiquidateBars = 3
+	}
 	for _, rawURL := range c.EventBus.URLs {
 		if strings.TrimSpace(rawURL) == "" {
-			return Config{}, fmt.Errorf("strategy eventbus URLs must not be empty")
+			return Config{}, errors.New("eventbus.urls 不能包含空地址")
 		}
 	}
-	if c.EventBus.RelayInterval <= 0 || c.EventBus.RelayBatchSize <= 0 || c.EventBus.ReconnectInterval <= 0 || c.EventBus.ConnectTimeout <= 0 {
-		return Config{}, fmt.Errorf("strategy eventbus durations and batch size must be positive")
+	if c.EventBus.RelayInterval <= 0 || c.EventBus.RelayBatchSize <= 0 || c.EventBus.ReconnectInterval <= 0 || c.EventBus.ConnectTimeout <= 0 || c.EventBus.PublishTimeout <= 0 {
+		return Config{}, errors.New("eventbus 的间隔、批量与超时必须大于 0")
 	}
 	if c.Factor.Timeout <= 0 || c.Storage.Timeout <= 0 {
-		return Config{}, fmt.Errorf("factor/storage timeouts must be positive")
+		return Config{}, errors.New("factor 与 storage 的超时必须大于 0")
+	}
+	if c.Evaluation.AttemptBudget <= 0 {
+		return Config{}, errors.New("evaluation.attempt_budget 必须大于 0")
+	}
+	if c.Retention.ResultItemsDays <= 0 || c.Retention.ReplaysDays <= 0 || c.Retention.ReplaysMax <= 0 {
+		return Config{}, errors.New("retention 的保留天数与 replays_max 必须大于 0")
+	}
+	if c.Replay.ChunkBars <= 0 || c.Replay.PageSize <= 0 || c.Replay.MissingPriceLiquidateBars <= 0 {
+		return Config{}, errors.New("replay 的 chunk_bars、page_size 与 missing_price_liquidate_bars 必须大于 0")
 	}
 	return c, nil
 }
