@@ -22,6 +22,10 @@ from pathlib import Path
 import re,sys
 log=Path(sys.argv[1]).read_text()
 required=[
+    'TestStateSeedBindsIndependentBytesAndRefusesMutation',
+    'TestStateSeedRefusesUnrelatedFilesAndUnsafeDirectories',
+    'TestStateSeedRequestRejectsNonCanonicalPrivateInput',
+    'TestUnitActivationLinuxImportsActualOfflineAdminAndKeepsRollbackSnapshot',
     'TestUnitStateCopiesIndependentFilesAndRefusesSymlinks',
     'TestProxyStateOutputCannotBypassItsTransferBound',
     'TestUnitActivationLinuxUsesActualWebHostCopiesStateAndRollsBack',
@@ -41,5 +45,5 @@ for name in required:
         raise SystemExit('required installation scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('unit installation Linux gate must not skip or fail a scenario')
-print('unit installation Linux gate passed: 13 required preparation/activation/rollback scenarios, no compilation')
+print('unit installation Linux gate passed: 17 required preparation/activation/state import/rollback scenarios, no compilation')
 PY

@@ -27,7 +27,11 @@
 
 状态在全部旧进程退出后复制到新目录，拒绝链接/特殊文件，逐文件同步，不使用可变数据硬链接。旧目录保留独立的停机快照；新启动失败自动恢复旧 current 和此前运行的组件。取消后的自动恢复继续使用各进程持久化的完整停止预算；恢复失败保留持久标记，等待 `moox-runtime recover --unit-root ROOT`。`rollback --unit-root ROOT` 显式恢复上次升级前的快照，升级后的数据保留在被退役的新目录，不向旧 schema 合并。首次安装没有可回滚的先前快照。
 
-代理升级拒绝仍开启 initialize_ca 的候选，将状态路径限制在可复制的组件 data/certs 内；使用真实 `moox-console-proxy check-state` 在停机前后、复制后和启动后校验 CA 指纹。检查命令只读，不生成证书或写入旧基线。历史 CA 导入、首次初始化授权的一次性持久消费，以及正式部署流程仍属于后续 G7/G11 接线。五步 bootstrap 还需首装状态导入入口，把离线 Admin 的初始化数据库装入新发布；当前 API 尚未接通，不以共享运行库路径绕过独立快照。
+离线状态通过 `SealState` / `moox-runtime seal-state --request PATH` 封存。0600 规范 JSON 请求对应 `SealStateOptions`，显式指定 `directory`、`release_directory`、`previous_directory` 和 `paths`；首装的 previous_directory 为空。源目录必须是 `<UnitRoot>/state-imports/<ID>` 下的物理 0700 目录，仅接受所选组件的 data/var、代理 certs 或全局 data，文件为拥有者的 0600 常规文件，拒绝链接、硬链接、配置、身份及无关内容。生产者须先结束离线初始化，或完成一致性备份并关闭数据库；封存不执行运行中数据库的文件复制。清单至多 1 MiB、4096 个文件、8192 个对象，文件内容流式校验且不限制数据字节总量。
+
+封存结果仅输出源目录和收据摘要。`activate --directory DIR --state-seed SOURCE --state-seed-sha256 SHA256` 在停机前核对收据、逐文件内容、目标发布和预期旧 current；复制后再次核对新发布里的全部导入字节。导入目录替代相应旧状态，其余状态仍从停机后的旧发布独立复制。源或 current 变化都会拒绝，失败恢复不依赖源目录；升级前快照保持独立。重复激活已完成发布可复用原摘要，不能用不同摘要替换已激活的数据。Admin 主密钥、MooX CA 私钥和操作员材料继续存放在各自的持久私密目录，不通过状态导入扩散到发布。五步 bootstrap 的停止/一致性备份、离线初始化、封存和激活编排仍须由实际部署入口接通。
+
+代理升级拒绝仍开启 initialize_ca 的候选，将状态路径限制在可复制的组件 data/certs 内；使用真实 `moox-console-proxy check-state` 在停机前后、复制后和启动后校验 CA 指纹，首次导入代理状态即使不启动也必须通过只读检查。检查命令不生成证书或写入旧基线。历史 CA 迁移编排、首次初始化授权的一次性持久消费，以及正式部署流程仍属于后续 G7/G11 接线。
 
 验证入口：
 
@@ -35,6 +39,6 @@
 make test-unit-install
 ```
 
-Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建的 `MOOX_UNIT_INSTALL_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，真实隔离 Admin 生产的 `MOOX_HOST_MATERIAL_FIXTURE`，以及 host/Access/control 软件包路径和对应 `sha256:<64 位小写十六进制>` 摘要：`MOOX_UNIT_INSTALL_HOST_ARCHIVE`、`MOOX_UNIT_INSTALL_HOST_SHA256`、`MOOX_UNIT_INSTALL_ACCESS_ARCHIVE`、`MOOX_UNIT_INSTALL_ACCESS_SHA256`，以及 `MOOX_UNIT_INSTALL_CONTROL_ARCHIVE`、`MOOX_UNIT_INSTALL_CONTROL_SHA256`。十三组必需场景全部执行，不接受跳过。普通 Linux 模块测试缺少这些制品时会跳过实际准备场景，不能算完整门禁通过。
+Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建的 `MOOX_UNIT_INSTALL_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，真实隔离 Admin 生产的 `MOOX_HOST_MATERIAL_FIXTURE`，以及 host/Access/control 软件包路径和对应 `sha256:<64 位小写十六进制>` 摘要：`MOOX_UNIT_INSTALL_HOST_ARCHIVE`、`MOOX_UNIT_INSTALL_HOST_SHA256`、`MOOX_UNIT_INSTALL_ACCESS_ARCHIVE`、`MOOX_UNIT_INSTALL_ACCESS_SHA256`，以及 `MOOX_UNIT_INSTALL_CONTROL_ARCHIVE`、`MOOX_UNIT_INSTALL_CONTROL_SHA256`。十七组必需场景全部执行，不接受跳过。普通 Linux 模块测试缺少这些制品时会跳过实际准备场景，不能算完整门禁通过。状态导入场景执行真实 Admin 离线 bootstrap 和重跑，验证 CA/KeyID 复用、封存数据库导入、独立快照及回滚；仅启动 Web Host，不替代五步 bootstrap 的 Admin/Gateway 启动验收。
 
 门禁启动真实 Web Host 和 Console Proxy，占用合成健康端口。Linux 主机已有业务时，使用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-install-linux.sh` 隔离网络，不停止现有业务。

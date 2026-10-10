@@ -61,6 +61,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "prepare" {
 		return prepare(ctx, args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "seal-state" {
+		return sealState(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "inspect-bundle" {
 		return inspectBundle(ctx, args[1:], stdout, stderr)
 	}
@@ -103,11 +106,13 @@ func installOperation(ctx context.Context, operation string, args []string, stdo
 	flags.SetOutput(stderr)
 	var options unitinstall.ActivateOptions
 	var lock unitruntime.Options
-	var unitRoot, components string
+	var unitRoot, components, seedDirectory, seedSHA256 string
 	if operation == "activate" {
 		flags.StringVar(&options.Directory, "directory", "", "physical prepared release")
 		flags.BoolVar(&options.NoStart, "no-start", false, "switch current without starting components")
 		flags.StringVar(&components, "components", "", "component start selection")
+		flags.StringVar(&seedDirectory, "state-seed", "", "sealed private offline state directory")
+		flags.StringVar(&seedSHA256, "state-seed-sha256", "", "state producer's receipt digest")
 	} else {
 		flags.StringVar(&unitRoot, "unit-root", "", "physical deployment unit root")
 	}
@@ -122,6 +127,9 @@ func installOperation(ctx context.Context, operation string, args []string, stdo
 	if components != "" {
 		options.Components = strings.Split(components, ",")
 	}
+	if seedDirectory != "" || seedSHA256 != "" {
+		options.StateSeed = &unitinstall.StateSeedReference{Directory: seedDirectory, SHA256: seedSHA256}
+	}
 	var result unitinstall.Activation
 	var err error
 	switch operation {
@@ -132,6 +140,30 @@ func installOperation(ctx context.Context, operation string, args []string, stdo
 	default:
 		result, err = unitinstall.Recover(ctx, unitRoot, lock)
 	}
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(result)
+}
+
+func sealState(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime seal-state", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	request := flags.String("request", "", "generated private offline state request")
+	var lock unitruntime.Options
+	flags.BoolVar(&lock.MaintenanceLockHeld, "maintenance-lock-held", false, "reuse a verified inherited maintenance lock")
+	flags.IntVar(&lock.MaintenanceLockFD, "maintenance-lock-fd", 3, "inherited maintenance descriptor")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *request == "" || flags.NArg() != 0 {
+		return errors.New("seal-state requires --request and no positional arguments")
+	}
+	options, err := unitinstall.ReadSealStateRequest(*request)
+	if err != nil {
+		return err
+	}
+	result, err := unitinstall.SealState(ctx, options, lock)
 	if err != nil {
 		return err
 	}

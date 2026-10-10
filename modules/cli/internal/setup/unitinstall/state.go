@@ -37,18 +37,23 @@ func mutablePaths(prepared Prepared, logs bool) []string {
 // copyState copies stopped service state into a new unpublished candidate.
 // SQLite databases/WAL and Pebble files are copied after all old unit writers
 // have exited. Files are independent: mutable data is never hard linked.
-func copyState(ctx context.Context, source, destination Prepared) error {
-	from, err := fsutil.OpenPhysicalRoot(source.Directory, true)
+func copyState(ctx context.Context, source, destination Prepared, imported []string) error {
+	paths := slices.DeleteFunc(mutablePaths(destination, false), func(name string) bool { return slices.Contains(imported, name) })
+	return copyStatePaths(ctx, source.Directory, destination.Directory, paths)
+}
+
+func copyStatePaths(ctx context.Context, source, destination string, paths []string) error {
+	from, err := fsutil.OpenPhysicalRoot(source, true)
 	if err != nil {
 		return err
 	}
 	defer from.Close()
-	to, err := fsutil.OpenPhysicalRoot(destination.Directory, true)
+	to, err := fsutil.OpenPhysicalRoot(destination, true)
 	if err != nil {
 		return err
 	}
 	defer to.Close()
-	for _, name := range mutablePaths(destination, false) {
+	for _, name := range paths {
 		info, err := from.Lstat(name)
 		if os.IsNotExist(err) {
 			continue

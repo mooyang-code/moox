@@ -16,6 +16,7 @@ type ActivateOptions struct {
 	Directory  string
 	NoStart    bool
 	Components []string
+	StateSeed  *StateSeedReference
 }
 
 type Activation struct {
@@ -29,6 +30,7 @@ type Activation struct {
 	Phase             string    `json:"phase"`
 	StartComponents   []string  `json:"start_components"`
 	PreviousRunning   []string  `json:"previous_running"`
+	StateSeedSHA256   string    `json:"state_seed_sha256,omitempty"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
@@ -39,6 +41,9 @@ func planPath(prepared Prepared) string { return filepath.Join(prepared.Director
 // Old data remains an independent stopped snapshot. Any failure after the
 // journal is written restores that snapshot and its previous running selection.
 func Activate(ctx context.Context, options ActivateOptions, lockOptions unitruntime.Options) (result Activation, returnErr error) {
+	if !validStateReference(options.StateSeed) {
+		return result, errors.New("activation state seed requires a producer SHA256 and directory")
+	}
 	candidate, err := readRelease(ctx, options.Directory, true, false)
 	if err != nil {
 		return result, err
@@ -81,6 +86,9 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 			if !exists || last.Phase != "active" || last.Directory != current {
 				return errors.New("current candidate has no completed activation journal")
 			}
+			if options.StateSeed != nil && options.StateSeed.SHA256 != last.StateSeedSHA256 {
+				return errors.New("current release was activated with different state input")
+			}
 			if _, err := ReadInstalled(ctx, candidate.Directory); err != nil {
 				return err
 			}
@@ -104,8 +112,13 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 				return err
 			}
 		}
+		seed, err := loadStateSeed(ctx, options.StateSeed, candidate, current)
+		if err != nil {
+			return err
+		}
 		proxy := slices.Contains(candidate.Components, "console-proxy")
 		previousProxy := proxy && slices.Contains(previous.Components, "console-proxy")
+		seededProxy := proxy && (slices.Contains(seed.Paths, "console-proxy/data") || slices.Contains(seed.Paths, "console-proxy/certs"))
 		previousCA := ""
 		if proxy {
 			if err := validateProxyPaths(candidate, previousProxy); err != nil {
@@ -130,6 +143,9 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 			}
 		}
 		journal := Activation{Version: 1, HostID: candidate.HostID, DeploymentRoot: candidate.DeploymentRoot, UnitRoot: candidate.UnitRoot, Profile: candidate.Profile, Directory: candidate.Directory, PreviousDirectory: current, Phase: "stopping", StartComponents: starts, PreviousRunning: []string{}}
+		if options.StateSeed != nil {
+			journal.StateSeedSHA256 = options.StateSeed.SHA256
+		}
 		if current != "" {
 			status, err := guard.Execute(ctx, planPath(previous), "status", lifecycleOrder(previous.Components))
 			if err != nil {
@@ -170,17 +186,20 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 			return fail(err)
 		}
 		if current != "" {
-			if err := copyState(ctx, previous, candidate); err != nil {
+			if err := copyState(ctx, previous, candidate, seed.Paths); err != nil {
 				return fail(err)
 			}
+		}
+		if err := importState(ctx, seed, candidate); err != nil {
+			return fail(err)
 		}
 		if _, err := ReadInstalled(ctx, candidate.Directory); err != nil {
 			return fail(err)
 		}
-		if previousProxy {
+		if previousProxy || seededProxy {
 			copiedCA, err := proxyState(ctx, candidate)
-			if err != nil || copiedCA != previousCA {
-				return fail(errors.New("copied proxy CA does not match the stopped release"))
+			if err != nil || (previousProxy && copiedCA != previousCA) {
+				return fail(errors.New("copied/imported proxy CA identity failed validation"))
 			}
 		}
 		if err := ctx.Err(); err != nil {

@@ -16,7 +16,7 @@ func TestUnitStateCopiesIndependentFilesAndRefusesSymlinks(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(source.Directory, "web-host/data"), 0o700))
 	original := filepath.Join(source.Directory, "web-host/data/database")
 	require.NoError(t, os.WriteFile(original, []byte("stopped-snapshot"), 0o600))
-	require.NoError(t, copyState(t.Context(), source, destination))
+	require.NoError(t, copyState(t.Context(), source, destination, nil))
 	copied := filepath.Join(destination.Directory, "web-host/data/database")
 	before, err := os.Stat(original)
 	require.NoError(t, err)
@@ -29,7 +29,7 @@ func TestUnitStateCopiesIndependentFilesAndRefusesSymlinks(t *testing.T) {
 	require.Equal(t, "stopped-snapshot", string(raw))
 	require.NoError(t, os.Symlink(original, filepath.Join(source.Directory, "web-host/data/escape")))
 	destination.Directory = privateParent(t)
-	require.Error(t, copyState(t.Context(), source, destination))
+	require.Error(t, copyState(t.Context(), source, destination, nil))
 }
 
 func TestProxyStateOutputCannotBypassItsTransferBound(t *testing.T) {

@@ -48,6 +48,9 @@ func readActivation(unit *os.Root) (Activation, bool, error) {
 	if journal.Directory == "" || journal.Directory == journal.PreviousDirectory || len(journal.StartComponents) > 64 || len(journal.PreviousRunning) > 64 {
 		return Activation{}, false, errors.New("activation journal requires bounded distinct release identities")
 	}
+	if journal.StateSeedSHA256 != "" && !validStateReference(&StateSeedReference{Directory: "journal", SHA256: journal.StateSeedSHA256}) {
+		return Activation{}, false, errors.New("activation journal state seed digest is invalid")
+	}
 	return journal, true, nil
 }
 

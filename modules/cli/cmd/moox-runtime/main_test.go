@@ -32,10 +32,12 @@ func TestRuntimeCommandRejectsMissingFlagsAndUnknownOperations(t *testing.T) {
 		require.Error(t, run(context.Background(), args, &stdout, &stderr))
 		require.Empty(t, stdout.String())
 	}
-	for _, args := range [][]string{{"prepare"}, {"prepare", "--unknown"}, {"prepare", "--request", "missing", "unexpected"}, {"prepare", "--request", "missing"}} {
-		var stdout, stderr bytes.Buffer
-		require.Error(t, run(context.Background(), args, &stdout, &stderr))
-		require.Empty(t, stdout.String())
+	for _, operation := range []string{"prepare", "seal-state"} {
+		for _, args := range [][]string{{operation}, {operation, "--unknown"}, {operation, "--request", "missing", "unexpected"}, {operation, "--request", "missing"}} {
+			var stdout, stderr bytes.Buffer
+			require.Error(t, run(context.Background(), args, &stdout, &stderr))
+			require.Empty(t, stdout.String())
+		}
 	}
 	for _, args := range [][]string{nil, {"start"}, {"start", "--plan", "missing", "unexpected"}, {"start", "--unknown"}, {"unknown", "--plan", "missing"}, {"extract"}, {"extract", "--unknown"}, {"extract", "unexpected"}, {"extract", "--archive", "missing", "--profile", "access", "--destination", "/tmp/unused", "--sha256", "invalid"}} {
 		var stdout, stderr bytes.Buffer
