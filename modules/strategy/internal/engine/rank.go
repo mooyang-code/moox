@@ -50,7 +50,7 @@ func (e *explanation) reject(id, stage, reason string, score *float64, rank int)
 // weight 记录进入目标权重的标的。fresh 为 false 表示权重只来自延续批次；
 // 该标的本期若已被淘汰，最终阶段仍是 weighted，原因保留本期的淘汰原因。
 func (e *explanation) weight(id string, weight quant.Decimal, score *float64, rank int, fresh bool) {
-	item := Item{RuleID: e.ruleID, InstrumentID: id, Stage: StageWeighted, Weight: weight.String(), Rank: rank}
+	item := Item{RuleID: e.ruleID, InstrumentID: id, Stage: StageWeighted, Weight: truncateWeight(weight).String(), Rank: rank}
 	if score != nil {
 		item.Score = formatScore(*score)
 	}

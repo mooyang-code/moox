@@ -99,8 +99,9 @@ rules:
 	}), State{})
 	assertOK(t, decision)
 	// rank 配权：A 0.45、B 0.3、C 0.15；A 超出 0.05 按 0.3:0.15 分给 B、C。
-	assertWeights(t, decision, map[string]string{"A": "0.4", "B": "0.333333333333333333", "C": "0.166666666666666666"})
-	assertDecimal(t, "allocated", decision.Summary.Rules["r"].Allocated, "0.899999999999999999")
+	assertWeights(t, decision, map[string]string{"A": "0.4", "B": "0.3333", "C": "0.1666"})
+	// 目标权重向零截断到 4 位小数，零头留作现金。
+	assertDecimal(t, "allocated", decision.Summary.Rules["r"].Allocated, "0.8999")
 }
 
 // S6：bottom 选择配合 method=rank，低分标的得到更高权重。

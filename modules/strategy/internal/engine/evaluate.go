@@ -81,7 +81,7 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		allocated := quant.Zero()
 		for id, weight := range result.weights {
 			contributions[id] = contributions[id].Add(weight)
-			allocated = allocated.Add(abs(weight))
+			allocated = allocated.Add(abs(truncateWeight(weight)))
 		}
 		summary := decision.Summary.Rules[rule.Rule.ID]
 		summary.Filtered, summary.Scored, summary.Selected, summary.Weighted = result.filtered, result.scored, result.selected, len(result.weights)

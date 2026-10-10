@@ -14,7 +14,7 @@ func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, spot bool, cont
 	gross, net := quant.Zero(), quant.Zero()
 	targets := make([]Target, 0, len(contributions))
 	for _, id := range sortedIDs(contributions) {
-		weight := contributions[id]
+		weight := truncateWeight(contributions[id])
 		if weight.IsZero() {
 			continue
 		}
@@ -24,7 +24,7 @@ func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, spot bool, cont
 				capped = capped.Neg()
 			}
 			decision.Summary.Notes = append(decision.Summary.Notes, fmt.Sprintf("%s 的合成权重 %s 超过 portfolio.max_weight，裁剪为 %s，超出部分留现金", id, weight.String(), capped.String()))
-			weight = capped
+			weight = truncateWeight(capped)
 		}
 		if spot && weight.IsNegative() {
 			return fmt.Errorf("现货 View 不允许负权重：%s = %s", id, weight.String())
@@ -43,7 +43,7 @@ func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, spot bool, cont
 	decision.Summary.Gross = gross.String()
 	decision.Summary.Net = net.String()
 	decision.Summary.Cash = quant.One().Sub(net).String()
-	decision.Summary.Turnover = turnover(targets, previous.Targets).String()
+	decision.Summary.Turnover = turnover(targets, previous.Targets).RoundTo(WeightPlaces).String()
 	for _, target := range targets {
 		decision.State.Targets[target.InstrumentID] = target.Weight.String()
 	}

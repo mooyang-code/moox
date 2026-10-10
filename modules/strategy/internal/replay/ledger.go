@@ -262,7 +262,9 @@ func (l *Ledger) sortedIDs() []string {
 func (l *Ledger) Snapshot() map[string]any {
 	positions := make(map[string]Position, len(l.Positions))
 	for id, position := range l.Positions {
-		positions[id] = *position
+		copied := *position
+		copied.Quantity, copied.Value = roundPlaces(copied.Quantity, quantityPlaces), round4(copied.Value)
+		positions[id] = copied
 	}
-	return map[string]any{"cash": l.Cash, "positions": positions}
+	return map[string]any{"cash": round4(l.Cash), "positions": positions}
 }

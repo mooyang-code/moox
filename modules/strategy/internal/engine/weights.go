@@ -133,7 +133,3 @@ func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int
 	}
 	return result
 }
-
-func formatScore(value float64) string {
-	return fmt.Sprintf("%.10g", value)
-}

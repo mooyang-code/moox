@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -806,5 +807,51 @@ func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
 				t.Fatal("没有可比较的 ok 周期")
 			}
 		})
+	}
+}
+
+// 输出精度规范：回放写入的金额与占比最多 4 位小数，持仓数量最多 8 位；内部账本仍用全精度（见 TestReplayRunsEndToEnd）。
+func TestReplayOutputsFollowPrecisionRules(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 10)
+	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
+	done, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v err=%v", done, err)
+	}
+	places := func(label string, value float64, max int) {
+		t.Helper()
+		text := strconv.FormatFloat(value, 'f', -1, 64)
+		if i := strings.IndexByte(text, '.'); i >= 0 && len(text)-i-1 > max {
+			t.Errorf("%s 的小数位超过 %d 位：%s", label, max, text)
+		}
+	}
+	var metrics Metrics
+	if err := json.Unmarshal(done.MetricsJSON, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	for label, value := range map[string]float64{"initial": metrics.InitialEquity, "final": metrics.FinalEquity, "total_return": metrics.TotalReturn, "drawdown": metrics.MaxDrawdown, "turnover": metrics.AverageTurnover, "holdings": metrics.AverageHoldings, "fee": metrics.TotalFee} {
+		places("指标 "+label, value, 4)
+	}
+	for _, bar := range barsOf(t, repo, "p1") {
+		places("equity", bar.Equity, 4)
+		places("return", bar.Return, 4)
+		places("turnover", bar.Turnover, 4)
+		places("fee", bar.Fee, 4)
+		var snapshot struct {
+			Cash      float64 `json:"cash"`
+			Positions map[string]struct {
+				Quantity float64 `json:"quantity"`
+				Value    float64 `json:"value"`
+			} `json:"positions"`
+		}
+		if err := json.Unmarshal(bar.PositionsJSON, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		places("cash", snapshot.Cash, 4)
+		for id, position := range snapshot.Positions {
+			places(id+" quantity", position.Quantity, 8)
+			places(id+" value", position.Value, 4)
+		}
 	}
 }

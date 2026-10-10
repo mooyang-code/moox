@@ -170,6 +170,43 @@ func (d Decimal) String() string {
 	return result
 }
 
+// TruncateTo 向零截断到 places 位小数（0 到 scaleDigits）：绝对值只会变小。目标权重用它保存精度规范：截断不会让权重之和、
+// 杠杆、单标的上限等约束从满足变成不满足，多出来的零头留作现金。
+func (d Decimal) TruncateTo(places int) Decimal {
+	step := d.placeStep(places)
+	if step == nil {
+		return d
+	}
+	units := d.normalized()
+	return Decimal{units: new(big.Int).Mul(new(big.Int).Quo(units, step), step)}
+}
+
+// RoundTo 四舍五入（远离零）到 places 位小数，用于不参与约束的展示量（例如换手）。
+func (d Decimal) RoundTo(places int) Decimal {
+	step := d.placeStep(places)
+	if step == nil {
+		return d
+	}
+	units := d.normalized()
+	half := new(big.Int).Rsh(step, 1)
+	rounded := new(big.Int).Abs(units)
+	rounded.Add(rounded, half)
+	rounded.Quo(rounded, step)
+	rounded.Mul(rounded, step)
+	if units.Sign() < 0 {
+		rounded.Neg(rounded)
+	}
+	return Decimal{units: rounded}
+}
+
+// placeStep 返回 places 位小数对应的最小单位（以内部定点单位计）；places 超出 0..scaleDigits 时返回 nil 表示不处理。
+func (d Decimal) placeStep(places int) *big.Int {
+	if places < 0 || places >= scaleDigits {
+		return nil
+	}
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDigits-places)), nil)
+}
+
 func DivideStable(total Decimal, orderedKeys []string) map[string]Decimal {
 	result := make(map[string]Decimal, len(orderedKeys))
 	if len(orderedKeys) == 0 {
