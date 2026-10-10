@@ -121,12 +121,9 @@ components:
       - path: trpc.moox.ops.SysDeploy
         port: 11109
         console_name: sysdeploy
-        rpcs: [ListServiceDeployments, GetServiceDeployment, CreateServiceDeployment, UpdateServiceDeployment,
-               DeleteServiceDeployment, ListActiveServiceDeployments, ListGatewayNodes, CreateGatewayNode,
-               UpdateGatewayNode, DeleteGatewayNode, GetGatewayNodeRoutes, GetCatalog, ListHosts, ListPlacements,
-               GetHostRoutes, GetDirectory, SetHostStatus, SetPlacementStatus, SyncHostPlacements, DeleteHost]
-        read_only: [ListServiceDeployments, GetServiceDeployment, ListActiveServiceDeployments, ListGatewayNodes,
-                    GetGatewayNodeRoutes, GetCatalog, ListHosts, ListPlacements, GetHostRoutes, GetDirectory]
+        rpcs: [GetCatalog, ListHosts, ListPlacements, GetHostRoutes, GetDirectory, SetHostStatus, SetPlacementStatus,
+               SyncHostPlacements, DeleteHost]
+        read_only: [GetCatalog, ListHosts, ListPlacements, GetHostRoutes, GetDirectory]
         acl:
           # 页面不能新增主机和部署：同步与删除主机只给 CLI。
           - all: true

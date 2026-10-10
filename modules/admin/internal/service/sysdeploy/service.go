@@ -1,492 +1,224 @@
+// Package sysdeploy 实现 SysDeploy 服务：组件目录、主机与部署的查看和启用 / 停用，以及 CLI 按 moox.toml 同步部署记录。
+// 组件定义写在代码里的组件目录（packages/servicecatalog），主机与部署的读写在 placement 包。
 package sysdeploy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/placement"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
-	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/log"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// Service 管理系统服务部署信息，并提供网关路由与健康检查所需的部署目录。
-type Service interface {
-	pb.SysDeployService
-	SeedDefaults(ctx context.Context) error
-	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (ServiceDetail, bool)
-	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayroute.Snapshot, error)
-	ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error
-}
-
-func (s *ServiceImpl) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayroute.Snapshot, error) {
-	return s.dao.CompileGatewaySnapshot(ctx, nodeID)
-}
-
-func (s *ServiceImpl) ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error {
-	return s.dao.ReportGatewayStatus(ctx, report)
-}
-
-type ServiceImpl struct {
+// Service 是 SysDeploy 的 tRPC 实现。
+type Service struct {
 	pb.UnimplementedSysDeploy
-	dao         *DAO
-	adminNodeID string
+	placements *placement.Service
+	control    *gatewaycontrol.Service
 }
 
-func NewService(dbManager *database.Manager, adminNodeID string) *ServiceImpl {
-	return &ServiceImpl{dao: NewDAO(dbManager.GetDB()), adminNodeID: strings.TrimSpace(adminNodeID)}
+// NewService 创建 SysDeploy 服务：部署记录委托 placement，主机路由快照委托网关控制。
+func NewService(placements *placement.Service, control *gatewaycontrol.Service) *Service {
+	return &Service{placements: placements, control: control}
 }
 
-func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
-	nodeID := s.adminNodeID
-	if nodeID == "" {
-		return fmt.Errorf("admin node id is required")
-	}
-	node, err := s.dao.GetGatewayNode(ctx, nodeID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		node := &GatewayNode{NodeID: nodeID, Name: nodeID, PublicAddress: "https://" + defaultPublicHost, Status: "enabled"}
-		if err := s.dao.CreateGatewayNode(ctx, node); err != nil {
-			return err
+// GetCatalog 返回组件目录，供服务部署页展示组件详情。
+func (s *Service) GetCatalog(context.Context, *pb.GetCatalogReq) (*pb.GetCatalogRsp, error) {
+	catalog := s.placements.Catalog()
+	rsp := &pb.GetCatalogRsp{RetInfo: retOK(), Checksum: catalog.Checksum()}
+	for _, component := range catalog.Components {
+		item := &pb.CatalogComponent{
+			Id: component.ID, Name: component.Name, Binary: component.Binary, Scope: string(component.Scope),
+			Replicas: string(component.Replicas), Protected: component.Protected,
+			HealthKind: string(component.Health.Kind), HealthPort: int32(component.Health.Port),
 		}
-	} else if err != nil {
-		return err
-	}
-	node, err = s.dao.GetGatewayNode(ctx, nodeID)
-	if err != nil {
-		return err
-	}
-	if node.HostID == nil {
-		publicURL, _ := url.Parse(node.PublicAddress)
-		var hostID int64
-		if publicURL != nil && publicURL.Hostname() != "" {
-			if err := s.dao.db.WithContext(ctx).Table("t_ssh_host").Select("c_id").Where("c_address = ?", publicURL.Hostname()).Limit(1).Scan(&hostID).Error; err != nil {
-				return err
+		for _, port := range component.Ports {
+			item.Ports = append(item.Ports, &pb.CatalogPort{Name: port.Name, Port: int32(port.Port)})
+		}
+		for _, service := range component.Services {
+			out := &pb.CatalogService{
+				Path: service.Path, Port: int32(service.Port), ConsoleName: service.ConsoleName,
+				TimeoutMs: service.TimeoutMS, MaxBodyBytes: service.MaxBodyBytes,
 			}
-		}
-		if hostID > 0 {
-			if err := s.dao.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Update("c_host_id", hostID).Error; err != nil {
-				return err
+			for _, method := range service.RPCs {
+				out.Methods = append(out.Methods, &pb.CatalogMethod{
+					Name: method, ReadOnly: service.IsReadOnly(method), Callers: catalog.MethodCallers(service.Path, method),
+				})
 			}
+			item.Services = append(item.Services, out)
 		}
+		rsp.Components = append(rsp.Components, item)
 	}
-	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID), nodeID, obsoleteDefaultDeploymentNames)
+	for _, principal := range catalog.Principals {
+		item := &pb.CatalogPrincipal{Id: principal.ID, Description: principal.Description}
+		for _, grant := range principal.Allow {
+			item.Allow = append(item.Allow, &pb.CatalogPrincipalGrant{Service: grant.Service, Methods: append([]string(nil), grant.Methods...)})
+		}
+		rsp.Principals = append(rsp.Principals, item)
+	}
+	return rsp, nil
 }
 
-// obsoleteDefaultDeploymentNames is intentionally destructive: the old split
-// Trade endpoints must not remain as active browser targets after Admin
-// restarts, and moox_factor became moox_factor_mgr (same gateway service id,
-// so the old row would block the new one's unique gateway route).
-var obsoleteDefaultDeploymentNames = []string{
-	"moox_factor",
-	"trade_exchange_account",
-	"trade_execution",
-	"trade_logical_account",
-}
-
-// ObsoleteDefaultDeploymentNames returns the retired default service names so
-// other seed paths (the admin CLI import) retire them the same way.
-func ObsoleteDefaultDeploymentNames() []string {
-	return append([]string(nil), obsoleteDefaultDeploymentNames...)
-}
-
-func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {
-	pageNo, offset, limit := normalizePage(req.GetPage())
-	rows, total, err := s.dao.List(ctx, ListFilter{
-		NodeID:         req.GetNodeId(),
-		ServiceName:    req.GetServiceName(),
-		ServiceKind:    req.GetServiceKind(),
-		Scope:          req.GetScope(),
-		Status:         req.GetStatus(),
-		GatewayEnabled: req.GatewayEnabled,
-	}, offset, limit)
+// ListHosts 返回全部主机与主机网关状态。
+func (s *Service) ListHosts(ctx context.Context, _ *pb.ListDeployHostsReq) (*pb.ListDeployHostsRsp, error) {
+	hosts, err := s.placements.ListHosts(ctx)
 	if err != nil {
-		log.ErrorContextf(ctx, "[SysDeploy] ListServiceDeployments failed: %v", err)
-		return &pb.ListServiceDeploymentsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询服务部署信息失败")}, nil
+		return &pb.ListDeployHostsRsp{RetInfo: placementError(err)}, nil
 	}
-	return &pb.ListServiceDeploymentsRsp{
-		RetInfo:     retOK(),
-		Deployments: modelsToPB(rows),
-		PageResult:  makePageResult(pageNo, limit, total),
+	statuses, err := s.placements.ListGatewayStatus(ctx)
+	if err != nil {
+		return &pb.ListDeployHostsRsp{RetInfo: placementError(err)}, nil
+	}
+	rsp := &pb.ListDeployHostsRsp{RetInfo: retOK()}
+	now := time.Now()
+	for _, host := range hosts {
+		item := hostToProto(host)
+		item.Gateway = gatewayStatusToProto(statuses[host.HostID], now)
+		rsp.Hosts = append(rsp.Hosts, item)
+	}
+	return rsp, nil
+}
+
+// ListPlacements 按主机、组件筛选部署。
+func (s *Service) ListPlacements(ctx context.Context, req *pb.ListPlacementsReq) (*pb.ListPlacementsRsp, error) {
+	rows, err := s.placements.ListPlacements(ctx, strings.TrimSpace(req.GetHostId()), strings.TrimSpace(req.GetComponentId()))
+	if err != nil {
+		return &pb.ListPlacementsRsp{RetInfo: placementError(err)}, nil
+	}
+	rsp := &pb.ListPlacementsRsp{RetInfo: retOK()}
+	for _, row := range rows {
+		rsp.Placements = append(rsp.Placements, s.placementToProto(row))
+	}
+	return rsp, nil
+}
+
+// GetHostRoutes 返回一台主机编译后的路由、期望哈希、校验密钥范围和主机网关状态。
+func (s *Service) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesReq) (*pb.GetHostRoutesRsp, error) {
+	hostID := strings.TrimSpace(req.GetHostId())
+	snapshot, err := s.control.Build(ctx, hostID)
+	if err != nil {
+		return &pb.GetHostRoutesRsp{RetInfo: placementError(err)}, nil
+	}
+	statuses, err := s.placements.ListGatewayStatus(ctx)
+	if err != nil {
+		return &pb.GetHostRoutesRsp{RetInfo: placementError(err)}, nil
+	}
+	return &pb.GetHostRoutesRsp{
+		RetInfo: retOK(), HostId: hostID, Disabled: snapshot.Proto.GetDisabled(), ExpectedHash: snapshot.Proto.GetHash(),
+		GeneratedAt: snapshot.Proto.GetGeneratedAt(), Routes: snapshot.Proto.GetRoutes(), Callers: snapshot.Callers,
+		Gateway: gatewayStatusToProto(statuses[hostID], time.Now()),
 	}, nil
 }
 
-func (s *ServiceImpl) GetServiceDeployment(ctx context.Context, req *pb.GetServiceDeploymentReq) (*pb.GetServiceDeploymentRsp, error) {
-	if req.GetNodeId() == "" || req.GetServiceName() == "" {
-		return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_id and service_name are required")}, nil
-	}
-	row, err := s.dao.Get(ctx, req.GetNodeId(), req.GetServiceName())
+// GetDirectory 返回当前的全局服务目录。
+func (s *Service) GetDirectory(ctx context.Context, _ *pb.GetDirectoryReq) (*pb.GetDirectoryRsp, error) {
+	compiled, err := s.placements.Compile(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "服务部署信息不存在")}, nil
-		}
-		log.ErrorContextf(ctx, "[SysDeploy] GetServiceDeployment failed: %v", err)
-		return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询服务部署信息失败")}, nil
+		return &pb.GetDirectoryRsp{RetInfo: placementError(err)}, nil
 	}
-	return &pb.GetServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row)}, nil
+	return &pb.GetDirectoryRsp{RetInfo: retOK(), Directory: gatewayclient.DirectoryToProto(compiled.Directory)}, nil
 }
 
-func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.CreateServiceDeploymentReq) (*pb.CreateServiceDeploymentRsp, error) {
-	item := pbToModel(req.GetDeployment())
-	if err := validateDeployment(item); err != nil {
-		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	if _, err := s.dao.GetGatewayNode(ctx, item.NodeID); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "gateway node not found")}, nil
-		}
-		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "query gateway node failed")}, nil
-	}
-	if err := s.dao.Create(ctx, item); err != nil {
-		log.ErrorContextf(ctx, "[SysDeploy] CreateServiceDeployment failed: %v", err)
-		code := pb.ErrorCode_INNER_ERR
-		if strings.Contains(err.Error(), "already exists") {
-			code = pb.ErrorCode_INVALID_PARAM
-		}
-		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
-	}
-	return &pb.CreateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(item)}, nil
-}
-
-func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.UpdateServiceDeploymentReq) (*pb.UpdateServiceDeploymentRsp, error) {
-	item := pbToModel(req.GetDeployment())
-	serviceName := req.GetServiceName()
-	nodeID := req.GetNodeId()
-	if serviceName == "" && item != nil {
-		serviceName = item.ServiceName
-	}
-	if item != nil {
-		item.ServiceName, item.NodeID = serviceName, nodeID
-	}
-	if err := validateDeployment(item); err != nil {
-		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	if err := s.dao.Update(ctx, nodeID, serviceName, item); err != nil {
-		log.ErrorContextf(ctx, "[SysDeploy] UpdateServiceDeployment failed: %v", err)
-		code := pb.ErrorCode_INNER_ERR
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			code = pb.ErrorCode_NOT_FOUND
-		}
-		if isUniqueConstraintError(err) {
-			code = pb.ErrorCode_INVALID_PARAM
-		}
-		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
-	}
-	row, err := s.dao.Get(ctx, nodeID, serviceName)
+// SetHostStatus 启用或停用整台主机；control 主机受保护。
+func (s *Service) SetHostStatus(ctx context.Context, req *pb.SetHostStatusReq) (*pb.SetHostStatusRsp, error) {
+	host, err := s.placements.SetHostStatus(ctx, strings.TrimSpace(req.GetHostId()), strings.TrimSpace(req.GetStatus()))
 	if err != nil {
-		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "保存后读取失败")}, nil
+		return &pb.SetHostStatusRsp{RetInfo: placementError(err)}, nil
 	}
-	return &pb.UpdateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row)}, nil
+	return &pb.SetHostStatusRsp{RetInfo: retOK(), Host: hostToProto(host)}, nil
 }
 
-func (s *ServiceImpl) DeleteServiceDeployment(ctx context.Context, req *pb.DeleteServiceDeploymentReq) (*pb.DeleteServiceDeploymentRsp, error) {
-	serviceName := req.GetServiceName()
-	nodeID := req.GetNodeId()
-	if serviceName == "" {
-		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "service_name is required")}, nil
-	}
-	if nodeID == "" {
-		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_id is required")}, nil
-	}
-	if err := s.dao.Delete(ctx, nodeID, serviceName); err != nil {
-		log.ErrorContextf(ctx, "[SysDeploy] DeleteServiceDeployment failed: %v", err)
-		code := pb.ErrorCode_INNER_ERR
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			code = pb.ErrorCode_NOT_FOUND
-		}
-		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
-	}
-	return &pb.DeleteServiceDeploymentRsp{RetInfo: retOK()}, nil
-}
-
-func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.ListActiveServiceDeploymentsReq) (*pb.ListActiveServiceDeploymentsRsp, error) {
-	rows, err := s.dao.ListActive(ctx, req.GetNodeId())
+// SetPlacementStatus 启用或停用一条部署；受保护的组件不能停用。停用只摘掉路由、停止健康检查，不停止进程。
+func (s *Service) SetPlacementStatus(ctx context.Context, req *pb.SetPlacementStatusReq) (*pb.SetPlacementStatusRsp, error) {
+	row, err := s.placements.SetPlacementStatus(ctx, strings.TrimSpace(req.GetHostId()), strings.TrimSpace(req.GetComponentId()), strings.TrimSpace(req.GetStatus()))
 	if err != nil {
-		log.ErrorContextf(ctx, "[SysDeploy] ListActiveServiceDeployments failed: %v", err)
-		return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询 active 服务部署信息失败")}, nil
+		return &pb.SetPlacementStatusRsp{RetInfo: placementError(err)}, nil
 	}
-	return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retOK(), Deployments: modelsToPB(rows), DeploymentMap: endpointMap(rows, req.GetNodeId() == "")}, nil
+	return &pb.SetPlacementStatusRsp{RetInfo: retOK(), Placement: s.placementToProto(row)}, nil
 }
 
-// ResolveAdminServiceDetail resolves browser control-plane forwarding only from
-// active deployments assigned to the Admin process's configured node.
-func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (ServiceDetail, bool) {
-	adminNodeID = strings.TrimSpace(adminNodeID)
-	if adminNodeID == "" || adminNodeID != s.adminNodeID {
-		return ServiceDetail{}, false
-	}
-	row, err := s.dao.Get(ctx, adminNodeID, gatewayDeploymentName(serviceID))
-	if err != nil || row == nil || row.Status != "active" {
-		return ServiceDetail{}, false
-	}
-	address := deploymentRPCAddress(row)
-	path := strings.TrimSpace(row.GatewayPath)
-	if address == "" || path == "" || strings.HasPrefix(path, "/") {
-		return ServiceDetail{}, false
-	}
-	extra, err := parseRouteExtraConfig(row.ExtraConfig)
+// SyncHostPlacements 按 moox.toml 事务性地同步一台主机的部署，供 CLI 部署时调用。
+func (s *Service) SyncHostPlacements(ctx context.Context, req *pb.SyncHostPlacementsReq) (*pb.SyncHostPlacementsRsp, error) {
+	host := req.GetHost()
+	result, err := s.placements.SyncHostPlacements(ctx, placement.HostSpec{
+		HostID: host.GetHostId(), Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(),
+		Region: host.GetRegion(), Description: host.GetDescription(),
+	}, req.GetComponents())
 	if err != nil {
-		return ServiceDetail{}, false
+		return &pb.SyncHostPlacementsRsp{RetInfo: placementError(err)}, nil
 	}
-	timeout := 30 * time.Second
-	if extra.TimeoutMS != nil && *extra.TimeoutMS > 0 {
-		timeout = time.Duration(*extra.TimeoutMS) * time.Millisecond
-	}
-	return ServiceDetail{Address: address, Path: path, Timeout: timeout}, true
+	return &pb.SyncHostPlacementsRsp{
+		RetInfo: retOK(), HostCreated: result.HostCreated, Added: result.Added, Removed: result.Removed, Kept: result.Kept,
+	}, nil
 }
 
-func gatewayDeploymentName(serviceID string) string {
-	switch serviceID {
-	case "auth":
-		return "admin_auth"
-	case "collector", "collectmgr":
-		return "moox_collector"
-	case "cloudnode":
-		return "moox_cloudnode"
-	case "factor", "factormgr":
-		return "moox_factor_mgr"
-	case "strategy", "strategymgr":
-		return "moox_strategy"
-	case "monitor":
-		return "moox_monitor"
-	case "archive":
-		return "moox_archive"
-	case "hostagent", "host-agent":
-		return "moox_hostagent"
-	case "trade":
-		return "moox_trade"
-	default:
-		return serviceID
+// DeleteHost 删除一台主机；主机上仍有非主机范围的部署时拒绝。
+func (s *Service) DeleteHost(ctx context.Context, req *pb.DeleteDeployHostReq) (*pb.DeleteDeployHostRsp, error) {
+	if err := s.placements.DeleteHost(ctx, strings.TrimSpace(req.GetHostId())); err != nil {
+		return &pb.DeleteDeployHostRsp{RetInfo: placementError(err)}, nil
+	}
+	return &pb.DeleteDeployHostRsp{RetInfo: retOK()}, nil
+}
+
+func hostToProto(host placement.Host) *pb.DeployHost {
+	return &pb.DeployHost{
+		HostId: host.HostID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
+		Status: host.Status, Description: host.Description, Protected: host.HostID == servicecatalog.ControlHostID,
+		CreatedAt: formatTime(host.CreatedAt), UpdatedAt: formatTime(host.UpdatedAt),
 	}
 }
 
-func validateDeployment(item *Deployment) error {
-	if item == nil {
-		return fmt.Errorf("deployment is required")
+func (s *Service) placementToProto(row placement.Placement) *pb.DeployPlacement {
+	item := &pb.DeployPlacement{
+		HostId: row.HostID, ComponentId: row.ComponentID, Status: row.Status,
+		CreatedAt: formatTime(row.CreatedAt), UpdatedAt: formatTime(row.UpdatedAt),
 	}
-	normalizeDeployment(item)
-	if item.NodeID == "" {
-		return fmt.Errorf("node_id is required")
+	if component, ok := s.placements.Catalog().Component(row.ComponentID); ok {
+		item.Protected = component.Protected
+		item.HostComponent = component.Scope == servicecatalog.ScopeHost
 	}
-	if item.ServiceName == "" {
-		return fmt.Errorf("service_name is required")
-	}
-	if item.Host == "" {
-		return fmt.Errorf("host is required")
-	}
-	if ip := net.ParseIP(item.Host); ip != nil {
-		if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return fmt.Errorf("host must be a routable unicast IP address")
-		}
-	} else if !validDeploymentDNSName(item.Host) {
-		return fmt.Errorf("host must be a routable IP address or DNS name")
-	}
-	if item.Port <= 0 || item.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-	switch item.Protocol {
-	case "http", "https", "trpc":
-	default:
-		return fmt.Errorf("protocol must be http, https, or trpc")
-	}
-	if item.Scope != "public" && item.Scope != "internal" {
-		return fmt.Errorf("scope must be public or internal")
-	}
-	if item.Status != "active" && item.Status != "disabled" {
-		return fmt.Errorf("status must be active or disabled")
-	}
-	if strings.HasPrefix(item.GatewayPath, "/") && item.ServiceKind != "gateway" {
-		return fmt.Errorf("gateway_path must be a tRPC service path for non-gateway deployments")
-	}
-	if item.ServiceKind == "gateway" && item.GatewayPath != "" && !strings.HasPrefix(item.GatewayPath, "/") {
-		return fmt.Errorf("gateway gateway_path must start with /")
-	}
-	extra := map[string]json.RawMessage{}
-	if err := json.Unmarshal([]byte(item.ExtraConfig), &extra); err != nil || extra == nil {
-		return fmt.Errorf("extra_config must be a valid JSON object")
-	}
-	if item.GatewayEnabled {
-		if item.Protocol != "http" {
-			return fmt.Errorf("gateway-enabled protocol must be http")
-		}
-		extra, err := parseRouteExtraConfig(item.ExtraConfig)
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
-		}
-		routes, err := deploymentGatewayRoutes(*item, extra)
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
-		}
-		for index := range routes {
-			routes[index].Address = deploymentRPCAddress(item)
-			if index > 0 {
-				for _, nested := range extra.GatewayRoutes {
-					if nested.ServicePath == routes[index].ServicePath {
-						routes[index].Address = net.JoinHostPort(item.Host, strconv.Itoa(int(nested.Port)))
-						break
-					}
-				}
-			}
-		}
-		if _, err := gatewayroute.NormalizeAndHash("validation", routes); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidGatewayRoute, err)
-		}
-	}
-	return nil
+	return item
 }
 
-// validDeploymentHost accepts the same DNS-capable host values used by setup
-// manifests. Route targets are still constrained to a single syntactic host
-// (no URL, port, wildcard, or whitespace), while IP multicast/unspecified and
-// link-local addresses remain forbidden.
-func validDeploymentDNSName(raw string) bool {
-	host := strings.TrimSpace(raw)
-	if host == "" || host != raw || len(host) > 253 || strings.Contains(host, "..") {
-		return false
-	}
-	if net.ParseIP(host) != nil {
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, ch := range label {
-			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func normalizePage(page *pb.Page) (int, int, int) {
-	pageNo, size := int(page.GetPage()), int(page.GetSize())
-	if pageNo <= 0 {
-		pageNo = 1
-	}
-	if size <= 0 || size > 500 {
-		size = 50
-	}
-	return pageNo, (pageNo - 1) * size, size
-}
-
-func makePageResult(pageNo, size int, total int64) *pb.PageResult {
-	return &pb.PageResult{Page: uint32(pageNo), Size: uint32(size), Total: uint32(total), HasMore: int64(pageNo*size) < total}
-}
-
-func retOK() *pb.RetInfo { return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"} }
-
-func retErr(code pb.ErrorCode, msg string) *pb.RetInfo { return &pb.RetInfo{Code: code, Msg: msg} }
-
-func modelsToPB(rows []Deployment) []*pb.ServiceDeployment {
-	items := make([]*pb.ServiceDeployment, 0, len(rows))
-	for i := range rows {
-		items = append(items, modelToPB(&rows[i]))
-	}
-	return items
-}
-
-func modelToPB(row *Deployment) *pb.ServiceDeployment {
-	if row == nil {
-		return nil
-	}
-	return &pb.ServiceDeployment{
-		Id:          row.ID,
-		ServiceName: row.ServiceName,
-		ServiceKind: row.ServiceKind,
-		Protocol:    row.Protocol,
-		Host:        row.Host,
-		Port:        row.Port,
-		BaseUrl:     deploymentBaseURL(row),
-		RpcAddress:  deploymentRPCAddress(row),
-		GatewayPath: row.GatewayPath,
-		Scope:       row.Scope,
-		Status:      row.Status,
-		Description: row.Description,
-		ExtraConfig: row.ExtraConfig,
-		CreatedAt:   formatTime(row.CreatedAt),
-		UpdatedAt:   formatTime(row.UpdatedAt),
-		NodeId:      row.NodeID, GatewayServiceId: row.GatewayServiceID, GatewayEnabled: row.GatewayEnabled,
+func gatewayStatusToProto(status placement.GatewayStatus, now time.Time) *pb.HostGatewayStatus {
+	return &pb.HostGatewayStatus{
+		State: status.State(now), Synced: status.Synced(), InstanceId: status.InstanceID, Version: status.Version,
+		ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, RouteCount: status.RouteCount,
+		LastSeenAt: formatTimePtr(status.LastSeenAt), LastError: status.LastError,
+		PreviousInstanceId: status.PreviousInstanceID, ReplacedAt: formatTimePtr(status.ReplacedAt),
+		ConflictInstanceId: status.ConflictInstanceID, ConflictSeenAt: formatTimePtr(status.ConflictSeenAt),
+		OutOfSyncSince: formatTimePtr(status.MismatchSince),
 	}
 }
 
-func pbToModel(item *pb.ServiceDeployment) *Deployment {
-	if item == nil {
-		return nil
-	}
-	return &Deployment{
-		ID:          item.GetId(),
-		ServiceName: item.GetServiceName(),
-		ServiceKind: item.GetServiceKind(),
-		Protocol:    item.GetProtocol(),
-		Host:        item.GetHost(),
-		Port:        item.GetPort(),
-		GatewayPath: item.GetGatewayPath(),
-		Scope:       item.GetScope(),
-		Status:      item.GetStatus(),
-		Description: item.GetDescription(),
-		ExtraConfig: item.GetExtraConfig(),
-		NodeID:      item.GetNodeId(), GatewayServiceID: item.GetGatewayServiceId(), GatewayEnabled: item.GetGatewayEnabled(),
-	}
-}
-
-func endpointMap(rows []Deployment, composite bool) map[string]*pb.ServiceDeploymentEndpoint {
-	items := make(map[string]*pb.ServiceDeploymentEndpoint, len(rows))
-	for i := range rows {
-		row := rows[i]
-		key := row.ServiceName
-		if composite {
-			key = row.NodeID + "/" + row.ServiceName
-		}
-		items[key] = &pb.ServiceDeploymentEndpoint{
-			ServiceName: row.ServiceName,
-			ServiceKind: row.ServiceKind,
-			Protocol:    row.Protocol,
-			Host:        row.Host,
-			Port:        row.Port,
-			BaseUrl:     deploymentBaseURL(&row),
-			RpcAddress:  deploymentRPCAddress(&row),
-			GatewayPath: row.GatewayPath,
-			Scope:       row.Scope,
-			Status:      row.Status,
-			NodeId:      row.NodeID, GatewayServiceId: row.GatewayServiceID, GatewayEnabled: row.GatewayEnabled,
-		}
-	}
-	return items
-}
-
-func deploymentRPCAddress(row *Deployment) string {
-	if row == nil || row.Host == "" || row.Port <= 0 {
+func formatTime(value time.Time) string {
+	if value.IsZero() {
 		return ""
 	}
-	return net.JoinHostPort(row.Host, strconv.Itoa(int(row.Port)))
+	return value.UTC().Format(time.RFC3339)
 }
 
-func deploymentBaseURL(row *Deployment) string {
-	if row == nil || (row.Protocol != "http" && row.Protocol != "https") {
+func formatTimePtr(value *time.Time) string {
+	if value == nil {
 		return ""
 	}
-	return row.Protocol + "://" + deploymentRPCAddress(row)
+	return formatTime(*value)
 }
 
-func formatTime(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return t.Format(time.RFC3339)
-}
+func retOK() *pb.RetInfo { return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "ok"} }
 
-func formatTimePtr(t *time.Time) string {
-	if t == nil {
-		return ""
+func placementError(err error) *pb.RetInfo {
+	code := pb.ErrorCode_INNER_ERR
+	switch {
+	case errors.Is(err, placement.ErrNotFound):
+		code = pb.ErrorCode_NOT_FOUND
+	case errors.Is(err, placement.ErrInvalid):
+		code = pb.ErrorCode_INVALID_PARAM
 	}
-	return formatTime(*t)
+	return &pb.RetInfo{Code: code, Msg: err.Error()}
 }

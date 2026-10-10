@@ -45,15 +45,8 @@ func main() {
 			return
 		}
 	}
-	if isServiceDeploymentsCommand(os.Args) {
-		if err := runServiceDeploymentsCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-			printInitError(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use init, user, random-secret, eventbus-credentials, pki, keys, bootstrap, placement, host, or service-deployments"))
+		printInitError(os.Stderr, fmt.Errorf("unknown command: use init, user, random-secret, eventbus-credentials, pki, keys, bootstrap, placement, or host"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

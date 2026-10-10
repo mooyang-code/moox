@@ -102,7 +102,6 @@
         "MOOX_EVENTBUS_NATS_URL=tls://127.0.0.1:4222",
         "MOOX_METRICS_EVENTBUS_URL=tls://127.0.0.1:4222",
         "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=/data/moox/prod/secrets/eventbus/metrics-publisher.yaml",
-        "MOOX_ADMIN_NODE_ID=control",
         "MOOX_ADMIN_DB_PATH=/data/moox/prod/data/admin/admin.db",
         "MOOX_ADMIN_ENCRYPTION_KEY_FILE=/data/moox/prod/secrets/admin-encryption-key",
         "MOOX_PKI_CA_FILE=/data/moox/prod/secrets/pki/ca.crt",

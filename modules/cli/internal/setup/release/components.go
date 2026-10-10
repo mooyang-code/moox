@@ -192,7 +192,6 @@ func renderAdmin(r *renderer, c *Component) error {
 	c.EventBusFiles = append(c.EventBusFiles, eventBusCA)
 	db := r.dataPath("admin", "admin.db")
 	c.Env = append(c.Env,
-		"MOOX_ADMIN_NODE_ID="+r.host.ID,
 		"MOOX_ADMIN_DB_PATH="+db,
 		"MOOX_ADMIN_ENCRYPTION_KEY_FILE="+r.secretPath(secretAdminEncryptionKey),
 		"MOOX_PKI_CA_FILE="+r.rootPath("secrets", "pki", "ca.crt"),

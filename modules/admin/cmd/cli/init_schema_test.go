@@ -30,8 +30,8 @@ func TestRunInitCommandAppliesAdminSchema(t *testing.T) {
 		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
 	}
 	assertTableExists(t, dbPath, "t_users")
-	assertTableExists(t, dbPath, "t_gateway_nodes")
-	assertTableExists(t, dbPath, "t_service_deployments")
+	assertTableExists(t, dbPath, "t_hosts")
+	assertTableExists(t, dbPath, "t_placements")
 	if stdout.String() == "" {
 		t.Fatalf("runInitCommand() wrote empty stdout")
 	}
@@ -53,11 +53,10 @@ func TestRunInitCommandIsIdempotent(t *testing.T) {
 		typ  string
 		name string
 	}{
-		{typ: "table", name: "t_gateway_nodes"},
-		{typ: "table", name: "t_service_deployments"},
-		{typ: "index", name: "idx_gateway_nodes_host_id"},
-		{typ: "index", name: "idx_service_deployments_node_name"},
-		{typ: "index", name: "idx_service_deployments_node_gateway_service"},
+		{typ: "table", name: "t_hosts"},
+		{typ: "table", name: "t_placements"},
+		{typ: "table", name: "t_host_gateway_status"},
+		{typ: "index", name: "idx_t_placements_component"},
 	} {
 		var count int64
 		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?", object.typ, object.name).Scan(&count).Error; err != nil {
@@ -83,7 +82,9 @@ func TestRunInitCommandIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRunInitCommandCreatesNodeScopedDeploymentConstraints(t *testing.T) {
+// TestRunInitCommandCreatesPlacementConstraints 校验部署表的约束：部署必须属于已登记的主机，同一主机上一个组件只登记一次，
+// 主机地址唯一，状态只能是 enabled 或 disabled。
+func TestRunInitCommandCreatesPlacementConstraints(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
 	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runInitCommand() error = %v", err)
@@ -97,38 +98,29 @@ func TestRunInitCommandCreatesNodeScopedDeploymentConstraints(t *testing.T) {
 		t.Fatalf("foreign_keys = %d, err = %v", foreignKeys, err)
 	}
 
-	insertNode := `INSERT INTO t_gateway_nodes(c_node_id, c_name, c_public_address) VALUES (?, ?, ?)`
-	if err := db.Exec(insertNode, "node-a", "Node A", "https://node-a.example").Error; err != nil {
-		t.Fatalf("insert node with nullable host: %v", err)
-	}
-	if err := db.Exec(insertNode, "node-b", "Node B", "https://node-b.example").Error; err != nil {
+	insertHost := `INSERT INTO t_hosts(c_host_id, c_address) VALUES (?, ?)`
+	if err := db.Exec(insertHost, "control", "106.53.107.122").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(`INSERT INTO t_gateway_nodes(c_node_id, c_host_id, c_name, c_public_address) VALUES ('bad-node', 999, 'Bad', 'https://bad.example')`).Error; err == nil {
-		t.Fatal("gateway node with unknown host must violate its foreign key")
+	if err := db.Exec(insertHost, "storage", "106.53.107.122").Error; err == nil {
+		t.Fatal("two hosts with the same address must be rejected")
+	}
+	if err := db.Exec(`INSERT INTO t_hosts(c_host_id, c_address, c_status) VALUES ('bad', '192.0.2.1', 'paused')`).Error; err == nil {
+		t.Fatal("unknown host status must be rejected")
 	}
 
-	insertDeployment := `INSERT INTO t_service_deployments(c_node_id, c_service_name, c_gateway_service_id, c_gateway_enabled) VALUES (?, ?, ?, ?)`
-	if err := db.Exec(insertDeployment, "node-a", "eventbus", "gateway-eventbus", 1).Error; err != nil {
+	insertPlacement := `INSERT INTO t_placements(c_host_id, c_component_id) VALUES (?, ?)`
+	if err := db.Exec(insertPlacement, "control", "admin").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(insertDeployment, "node-b", "eventbus", "gateway-eventbus", 1).Error; err != nil {
-		t.Fatalf("same service name and gateway ID on another node must be accepted: %v", err)
+	if err := db.Exec(insertPlacement, "control", "admin").Error; err == nil {
+		t.Fatal("duplicate placement on one host must be rejected")
 	}
-	if err := db.Exec(insertDeployment, "node-a", "eventbus", "other-id", 1).Error; err == nil {
-		t.Fatal("duplicate service name on one node must be rejected")
+	if err := db.Exec(insertPlacement, "missing", "admin").Error; err == nil {
+		t.Fatal("placement on an unknown host must violate its foreign key")
 	}
-	if err := db.Exec(insertDeployment, "node-a", "archive", "gateway-eventbus", 1).Error; err == nil {
-		t.Fatal("duplicate enabled gateway service ID on one node must be rejected")
-	}
-	if err := db.Exec(insertDeployment, "node-a", "disabled-empty-id", "", 0).Error; err != nil {
-		t.Fatalf("disabled deployment with empty gateway service ID must be accepted: %v", err)
-	}
-	if err := db.Exec(insertDeployment, "node-a", "enabled-empty-id", "", 1).Error; err == nil {
-		t.Fatal("enabled deployment with empty gateway service ID must be rejected")
-	}
-	if err := db.Exec(insertDeployment, "missing-node", "archive", "gateway-archive", 1).Error; err == nil {
-		t.Fatal("deployment with unknown node must violate its foreign key")
+	if err := db.Exec(`UPDATE t_placements SET c_status = 'paused' WHERE c_host_id = 'control'`).Error; err == nil {
+		t.Fatal("unknown placement status must be rejected")
 	}
 }
 

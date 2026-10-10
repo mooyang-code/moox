@@ -1,13 +1,12 @@
 # 系统初始化配置
 
-这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，只识别四个固定文件；Python
+这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，只识别三个固定文件；Python
 因子由用户配置文件 `moox.toml` 的 `[factors]` 配置控制：
 
 | 文件 | 消费方 | 内容 |
 | --- | --- | --- |
 | `metadata.yaml` | `moox-cli setup init` | Admin 业务 Space 与 Storage 元数据 |
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康阈值 |
-| `service-deployments.yaml` | Admin 部署导入 | 默认服务和 RPC 端点 |
 | `collection-tasks.yaml` | Collector | 默认采集任务 |
 
 `metadata.yaml` 的业务 Space 包含 `stockcn`、`stockhk`、`stockus` 和 `crypto`。`mooxsys` 带
@@ -26,34 +25,25 @@ Instrument snapshot Timer 预留函数配额。首次发布时 CloudNode 会在�
 配置和数据。Dataset 先以 disabled 创建，通过 Storage 激活检查后由 `setup init`
 显式激活。
 
-需要清空并重建全部 Storage/View 数据时，使用 `moox-cli setup rebuild-storage`；命令默认只做
-dry-run，确认目标和数量后加 `--yes` 执行全量删除、重新导入本目录的 `metadata.yaml` 并激活
-Dataset。
-
 ```bash
 moox-cli setup init \
   --file ./moox.toml \
-  --config-dir ./config/setup \
-  --storage-host control
+  --config-dir ./config/setup
 ```
 
-`--storage-host` 必须是 `moox.toml` 中已经部署 Storage 的主机名。`setup init` 读取
-`metadata.yaml` 完成 Storage 初始化；Monitor、Admin 和 Collector 分别读取其余三个
-职责专属配置文件。
+`setup init` 读取 `metadata.yaml` 完成 Storage 初始化（默认写入部署表中的存储主机，可用 `--storage-host`
+指定）；Monitor 和 Collector 分别读取其余两个职责专属配置文件，部署时由 moox-cli 放进它们的发布目录。
 
-启用 SCF 时，`setup init` 会在写入元数据前发现 `storage_host` 的腾讯地域/VPC/子网，
-并在结果中返回 `scf_routes`。后续发布命令按地域选择 Storage 私网或公网：
+启用 SCF 时，`setup init` 会在写入元数据前生成各地域访问外部接入的路由，并在结果中返回 `scf_routes`：
 
 ```bash
 moox-cli setup scf-network-plan --file ./moox.toml
 moox-cli collector function publish submit --file ./moox.toml --space-id crypto --same-region-first
 ```
 
-同地域函数绑定 Storage VPC/子网并使用私网 `11003`；发布时先完整占满该地域配置的
-节点数并完成 canary/回读，再继续其他地域。跨地域不创建 CCN，使用
-`storage_gateway_host` 公网回退。
-节点“占满”以该地域的 `function_count` 为准；如需集中内网流量，请在配置中提高
-Storage 同地域的目标数量，CLI 不会自动挪动其他地域配额。
+同地域主机上有外部接入时，函数绑定那台主机所在的 VPC，经私网访问外部接入（11004）；否则经公网访问
+`access@storage`。发布时先完整占满首选地域配置的节点数并完成 canary/回读，再继续其他地域。节点“占满”以该地域的
+`function_count` 为准，CLI 不会自动挪动其他地域配额。
 
 默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `Bias.py` 和 `Cci.py`
 加入币安现货、合约 1m 采集任务结果（`dataset_dasftksvjhj2jom4vhd0`、`dataset_dasftksvjhj2jom4vhdg`）的因子集。示例用 `[[factors.definitions]]`

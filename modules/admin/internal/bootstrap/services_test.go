@@ -34,7 +34,7 @@ func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 		}
 	}()
 
-	cfg := &Config{App: &config.AppConfig{}, AdminNodeID: "admin-node-test"}
+	cfg := &Config{App: &config.AppConfig{}}
 	services, err := createCoreServices(context.Background(), mgr, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, services)
@@ -42,7 +42,13 @@ func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 	require.NotNil(t, services.SSHService)
 	require.NotNil(t, services.SecretService)
 	require.NotNil(t, services.Setup)
-	require.NotNil(t, services.SysDeploy)
+	require.NotNil(t, services.Placements)
+	// Admin 启动时不写入任何主机和部署：部署记录只由 CLI 按 moox.toml 同步。
+	var hosts, placements int64
+	require.NoError(t, mgr.GetDB().Table("t_hosts").Count(&hosts).Error)
+	require.NoError(t, mgr.GetDB().Table("t_placements").Count(&placements).Error)
+	require.Zero(t, hosts)
+	require.Zero(t, placements)
 }
 
 func TestInitializeDatabase_ValidPath_ShouldOpenDB(t *testing.T) {
@@ -62,7 +68,6 @@ func TestStartBackgroundServices_FullFlow_ShouldPass(t *testing.T) {
 	}()
 
 	cfg := &Config{
-		AdminNodeID: "admin-node-test",
 		App: &config.AppConfig{
 			Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "unused.db")},
 		},

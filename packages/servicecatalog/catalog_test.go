@@ -104,7 +104,7 @@ func TestConsoleRoutes(t *testing.T) {
 		{"trade", "SubmitOrder", "trpc.moox.trade.TradeConsoleService", true},
 		{"factor-mgr", "ListFactors", "trpc.moox.factor.FactorMgr", true},
 		{"monitor", "GetHealthOverview", "trpc.moox.monitor.MonitorMgr", true},
-		{"sysdeploy", "ListServiceDeployments", "trpc.moox.ops.SysDeploy", true},
+		{"sysdeploy", "ListHosts", "trpc.moox.ops.SysDeploy", true},
 		{"unknown", "ListDatasets", "", false},
 	}
 	for _, tc := range cases {

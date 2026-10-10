@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -37,9 +36,6 @@ type Services struct {
 
 	// Setup is exposed only through the loopback setup listener.
 	Setup *setupservice.Service
-
-	// 系统服务部署信息
-	SysDeploy sysdeploy.Service
 
 	// Collector 发布租约由 Admin 控制面持久化与校验。
 	CollectorPublishLease *publishlease.Service
@@ -102,12 +98,6 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	log.Info("[Bootstrap] 正在创建 Space 服务...")
 	spaceService := space.NewService(dbManager)
 
-	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
-	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
-	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
-	if err := sysDeployService.SeedDefaults(ctx); err != nil {
-		return nil, err
-	}
 	db := dbManager.GetDB()
 
 	// 创建 SSH 服务
@@ -136,7 +126,6 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		SSHService:            sshService,
 		SecretService:         secretService,
 		Setup:                 setupService,
-		SysDeploy:             sysDeployService,
 		CollectorPublishLease: collectorPublishLease,
 		Placements:            placements,
 		Keys:                  keyService,

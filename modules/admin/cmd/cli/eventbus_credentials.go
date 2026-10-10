@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -447,4 +448,23 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "rotated": credential, "warning": "redeploy affected clients now; old token is invalid"})
+}
+
+// validateEventBusNATSURL 校验消息总线地址：只能是带主机和端口的 tls://，不能带用户、路径或参数。
+func validateEventBusNATSURL(raw string) (*url.URL, error) {
+	if raw == "" || raw != strings.TrimSpace(raw) {
+		return nil, errors.New("消息总线地址不能为空，也不能带首尾空白")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.Port() == "" {
+		return nil, errors.New("消息总线地址必须是带主机和端口的 tls:// 地址")
+	}
+	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("消息总线地址只能包含协议、主机和端口")
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil, errors.New("消息总线地址的端口必须在 1 到 65535 之间")
+	}
+	return parsed, nil
 }

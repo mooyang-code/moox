@@ -13,7 +13,7 @@ import (
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
-	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -73,7 +73,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	}); err != nil {
 		return err
 	}
-	sysDeploySvc := sysdeployrpc.NewService(services.SysDeploy, services.Placements, services.GatewayControl)
+	sysDeploySvc := sysdeploy.NewService(services.Placements, services.GatewayControl)
 	if err := register("sysdeploy", &adminpb.SysDeployServer_ServiceDesc, sysDeploySvc, func() {
 		adminpb.RegisterSysDeployService(s.Service("trpc.moox.ops.SysDeploy"), sysDeploySvc)
 	}); err != nil {

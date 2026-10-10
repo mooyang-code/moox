@@ -102,7 +102,7 @@ func TestTableAcceptsStateAwareEnabledAndDisabledHashes(t *testing.T) {
 }
 
 func TestTableDeepCopiesAllowedMethods(t *testing.T) {
-	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListActiveServiceDeployments"}, AllowedCallers: []string{"*"}}})
+	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,14 +110,14 @@ func TestTableDeepCopiesAllowedMethods(t *testing.T) {
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot.Routes[0].AllowedMethods[0] = "DeleteGatewayNode"
-	route, _, ok := table.ResolveRPC("/trpc.moox.ops.SysDeploy/ListActiveServiceDeployments")
-	if !ok || !route.AllowsMethod("ListActiveServiceDeployments") || route.AllowsMethod("DeleteGatewayNode") {
+	snapshot.Routes[0].AllowedMethods[0] = "DeleteHost"
+	route, _, ok := table.ResolveRPC("/trpc.moox.ops.SysDeploy/ListHosts")
+	if !ok || !route.AllowsMethod("ListHosts") || route.AllowsMethod("DeleteHost") {
 		t.Fatalf("table methods mutated: %+v", route)
 	}
 	route.AllowedMethods[0] = "CreateGatewayNode"
-	again, _, _ := table.ResolveRPC("/trpc.moox.ops.SysDeploy/ListActiveServiceDeployments")
-	if !again.AllowsMethod("ListActiveServiceDeployments") {
+	again, _, _ := table.ResolveRPC("/trpc.moox.ops.SysDeploy/ListHosts")
+	if !again.AllowsMethod("ListHosts") {
 		t.Fatalf("resolved method slice was live: %+v", again)
 	}
 }

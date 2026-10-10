@@ -18,10 +18,9 @@ import (
 
 // Config 应用配置集合
 type Config struct {
-	App         *config.AppConfig
-	Auth        *authcfg.Config
-	Gateway     *console.Config
-	AdminNodeID string
+	App     *config.AppConfig
+	Auth    *authcfg.Config
+	Gateway *console.Config
 }
 
 // LoadConfigs 加载系统中各个模块配置
@@ -38,10 +37,6 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	}
 	if err := validateSetupListener("./config/trpc_go.yaml"); err != nil {
 		return nil, err
-	}
-	adminNodeID := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID"))
-	if adminNodeID == "" {
-		return nil, fmt.Errorf("MOOX_ADMIN_NODE_ID is required in server mode")
 	}
 	log.Info("应用配置加载成功")
 
@@ -68,10 +63,9 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 
 	// 5. 创建配置对象
 	cfg := &Config{
-		App:         appCfg,
-		Auth:        authCfg,
-		Gateway:     gatewayCfg,
-		AdminNodeID: adminNodeID,
+		App:     appCfg,
+		Auth:    authCfg,
+		Gateway: gatewayCfg,
 	}
 	return cfg, nil
 }

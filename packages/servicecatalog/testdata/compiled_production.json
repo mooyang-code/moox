@@ -496,31 +496,6 @@
           "address": "127.0.0.1:11109",
           "service_path": "trpc.moox.ops.SysDeploy",
           "allowed_methods": [
-            "CreateGatewayNode",
-            "CreateServiceDeployment",
-            "DeleteGatewayNode",
-            "DeleteServiceDeployment",
-            "GetDirectory",
-            "GetGatewayNodeRoutes",
-            "GetServiceDeployment",
-            "ListActiveServiceDeployments",
-            "ListGatewayNodes",
-            "ListServiceDeployments",
-            "SetHostStatus",
-            "SetPlacementStatus",
-            "UpdateGatewayNode",
-            "UpdateServiceDeployment"
-          ],
-          "allowed_callers": [
-            "console",
-            "moox-cli"
-          ]
-        },
-        {
-          "service_id": "admin",
-          "address": "127.0.0.1:11109",
-          "service_path": "trpc.moox.ops.SysDeploy",
-          "allowed_methods": [
             "DeleteHost",
             "SyncHostPlacements"
           ],
@@ -541,6 +516,20 @@
           "allowed_callers": [
             "console",
             "monitor",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11109",
+          "service_path": "trpc.moox.ops.SysDeploy",
+          "allowed_methods": [
+            "GetDirectory",
+            "SetHostStatus",
+            "SetPlacementStatus"
+          ],
+          "allowed_callers": [
+            "console",
             "moox-cli"
           ]
         },

@@ -297,23 +297,23 @@ func TestNormalizeAndHashStateIncludesDisabledInHash(t *testing.T) {
 }
 
 func TestNormalizeAllowedMethodsSortsDedupesHashesAndAuthorizesExactly(t *testing.T) {
-	route := Route{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListActiveServiceDeployments", "GetGatewayNodeRoutes", "ListActiveServiceDeployments"}, AllowedCallers: []string{"*"}}
+	route := Route{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListHosts", "GetGatewayNodeRoutes", "ListHosts"}, AllowedCallers: []string{"*"}}
 	snapshot, err := NormalizeAndHash("node-1", []Route{route})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := snapshot.Routes[0]
-	if len(got.AllowedMethods) != 2 || got.AllowedMethods[0] != "GetGatewayNodeRoutes" || got.AllowedMethods[1] != "ListActiveServiceDeployments" {
+	if len(got.AllowedMethods) != 2 || got.AllowedMethods[0] != "GetGatewayNodeRoutes" || got.AllowedMethods[1] != "ListHosts" {
 		t.Fatalf("allowed methods = %v", got.AllowedMethods)
 	}
-	if !got.AllowsMethod("ListActiveServiceDeployments") || got.AllowsMethod("CreateGatewayNode") {
+	if !got.AllowsMethod("ListHosts") || got.AllowsMethod("CreateGatewayNode") {
 		t.Fatalf("unexpected authorization: %+v", got)
 	}
 	unrestricted := Route{}
 	if unrestricted.AllowsMethod("Anything") {
 		t.Fatal("empty allowlist should not authorize ordinary routes")
 	}
-	without, err := NormalizeAndHash("node-1", []Route{{ServiceID: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, AllowedMethods: []string{"ListActiveServiceDeployments"}, AllowedCallers: []string{"*"}}})
+	without, err := NormalizeAndHash("node-1", []Route{{ServiceID: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestNormalizeAllowedMethodsSortsDedupesHashesAndAuthorizesExactly(t *testin
 		t.Fatal("allowed methods missing from hash")
 	}
 	route.AllowedMethods[0] = "Mutated"
-	if snapshot.Routes[0].AllowedMethods[1] != "ListActiveServiceDeployments" {
+	if snapshot.Routes[0].AllowedMethods[1] != "ListHosts" {
 		t.Fatal("normalization retained caller method storage")
 	}
 }
