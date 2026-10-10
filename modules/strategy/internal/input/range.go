@@ -95,9 +95,9 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 
 // beyondCalendarError 说明 at 之后的周期超出了 A 股内嵌日历；时间按上海时间写，与其余 A 股报错一致。
 func beyondCalendarError(at time.Time) error {
-	label := at.UTC().Format(time.RFC3339)
+	label := at.UTC().Format(time.RFC3339) + " UTC"
 	if _, location, err := stockCalendar(); err == nil {
-		label = at.In(location).Format("2006-01-02 15:04:05") + "（上海时间）"
+		label = shanghaiLabel(at, location)
 	}
 	return &describedError{
 		message: fmt.Sprintf("%s 之后的周期%s", label, translateCalendarError(marketcalendar.ErrNoNextTradingDay).Error()),

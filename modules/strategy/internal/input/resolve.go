@@ -225,8 +225,11 @@ func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved 
 	if resolved.MinAgeBars > 0 {
 		return checkAgeCoverage(view, resolved, resolved.MinAgeBars, now)
 	}
-	// 只校验行键；还没有数据时无从校验，允许启用。
-	if _, err := CoverageBounds(view, resolved, now); err != nil && !errors.Is(err, ErrCoverageUnknown) {
+	// 没有 min_age_bars 时覆盖范围不影响实时求值，只校验行键；还没有数据时无从校验，允许启用。
+	if view.IndexedTo.IsZero() {
+		return nil
+	}
+	if err := checkStockCoverageKey(view.IndexedTo, resolved); err != nil {
 		return coverageUnusable(resolved.ViewID, err, "不能启用实例")
 	}
 	return nil
@@ -246,10 +249,8 @@ func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int, now time
 		return coverageUnusable(resolved.ViewID, err, fmt.Sprintf("无法确认 universe.min_age_bars=%d 所需的历史", minAgeBars))
 	}
 	label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
+	// 启用前已确认当前时间没有过内嵌日历的可用截止日，索引最晚一行不会超出日历（Beyond 为 0）。
 	start, latest := coverageStart(bounds, view, resolved, time.Time{}), bounds.To
-	if start.After(latest) {
-		return fmt.Errorf("View %s 的数据已超出 A 股内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，无法确认 universe.min_age_bars=%d 所需的历史；请更新日历数据", resolved.ViewID, label(latest), bounds.Beyond, view.SeriesBars, minAgeBars)
-	}
 	target, err := HistoryStart(resolved.Calendar, resolved.Bar, latest, minAgeBars)
 	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
 		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 A 股内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars",
@@ -353,8 +354,8 @@ func ParseResolved(raw []byte) (Resolved, error) {
 	if err := json.Unmarshal(raw, &resolved); err != nil {
 		return Resolved{}, &describedError{message: "会话快照的 resolved_json 无法解析", cause: err}
 	}
-	if resolved.ViewID == "" || resolved.Bar == "" || resolved.Calendar == "" {
-		return Resolved{}, errors.New("resolved_json 缺少 view_id、bar 或 calendar")
+	if resolved.ViewID == "" || resolved.Bar == "" || resolved.Calendar == "" || resolved.CompletionKind == "" {
+		return Resolved{}, errors.New("resolved_json 缺少 view_id、bar、calendar 或 completion_kind")
 	}
 	if resolved.Columns == nil {
 		resolved.Columns = map[string]ColumnBinding{}

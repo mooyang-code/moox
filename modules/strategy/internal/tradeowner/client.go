@@ -263,16 +263,20 @@ func (c *Client) call(ctx context.Context, spaceID string) (context.Context, con
 }
 
 // TransportError 表示与 Trade 通信失败、结果未知。Error 只给出中文概述；
-// 原始错误可能包含网关地址，经 Unwrap 保留给日志，不返回给接口调用方。
+// 原始错误可能包含网关地址，经 Unwrap 保留给日志，不返回给接口调用方。Unreadable 表示网关有响应但无法解析。
 type TransportError struct {
-	Operation string
-	Timeout   bool
-	Err       error
+	Operation  string
+	Timeout    bool
+	Unreadable bool
+	Err        error
 }
 
 func (e *TransportError) Error() string {
-	if e.Timeout {
+	switch {
+	case e.Timeout:
 		return fmt.Sprintf("Trade 账户%s超时，结果未知", e.Operation)
+	case e.Unreadable:
+		return fmt.Sprintf("Trade 账户%s失败：Trade 网关响应无法解析，结果未知", e.Operation)
 	}
 	return fmt.Sprintf("Trade 账户%s失败：Trade 或网关不可达，结果未知", e.Operation)
 }
@@ -287,7 +291,8 @@ func (c *Client) transportError(ctx context.Context, operation string, err error
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return &TransportError{Operation: operation, Timeout: true, Err: errors.Join(ctxErr, err)}
 	}
-	return &TransportError{Operation: operation, Err: err}
+	var unreadable *decodeError
+	return &TransportError{Operation: operation, Unreadable: errors.As(err, &unreadable), Err: err}
 }
 
 func validateResponse(operation, spaceID, logicalAccountID string, retInfo *tradepb.RetInfo, account *tradepb.LogicalAccount) error {

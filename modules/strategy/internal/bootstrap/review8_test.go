@@ -17,7 +17,7 @@ import (
 // 一致（周五 ok、周一跳过仍是 40 小时，而不是退回 24 小时、周一就报 success stale）。
 func TestStockBasesAreLoadedFromStore(t *testing.T) {
 	repo := openStore(t)
-	stockJSON := `{"view_id":"view_a","dataset_id":"ds","bar":"1d","calendar":"cn_stock","spot":true,"columns":{},"view_columns":["close"]}`
+	stockJSON := `{"completion_kind":"collector.period.completed","view_id":"view_a","dataset_id":"ds","bar":"1d","calendar":"cn_stock","spot":true,"columns":{},"view_columns":["close"]}`
 	seedEnabled(t, repo, "i1", nil, stockJSON)
 	shanghai := time.FixedZone("CST", 8*3600)
 	friday := time.Date(2026, 10, 9, 15, 0, 0, 0, shanghai)

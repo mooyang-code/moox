@@ -30,9 +30,6 @@ type Loaded struct {
 	Frame    engine.Frame
 	Sets     Sets
 	Boundary PeriodBoundaries
-	// IndexID 与 Revision 是本期读取固定的 View 代次，记录到输入摘要。
-	IndexID  string
-	Revision uint64
 }
 
 // LoadBar 读取绑定 View 的一期数据：集合划分 → 当期行（以及可选的上一根）→ 引擎帧。
@@ -139,7 +136,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 		frame.Rows[subjectID] = engineRow
 	}
-	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, IndexID: view.ActiveIndexID, Revision: revision}, nil
+	return Loaded{Frame: frame, Sets: sets, Boundary: boundary}, nil
 }
 
 // MissingColumns 返回策略需要、但 View 已不提供的列：当期列、bars[-1] 列，以及 min_age_bars 探针读取的 close。

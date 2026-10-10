@@ -192,7 +192,7 @@ func TestRetentionBars(t *testing.T) {
 }
 
 // min_age_bars 需要 View 提供 close 列，且 View 当前覆盖的历史要足够长；只按数据集保留期校验不够。
-// Resolve 只做静态解析（回放与校验也用它，不读取覆盖统计）；启用时由 CheckAgeCoverage 精确读取覆盖统计，
+// Resolve 只做静态解析（回放与校验也用它，不读取覆盖统计）；启用时由 CheckCoverage 精确读取覆盖统计，
 // 覆盖不足、统计未知、N 超过每个序列保留的根数都拒绝启用。
 func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 240\n", 1))

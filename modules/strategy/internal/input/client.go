@@ -203,7 +203,7 @@ func (c *RPCClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo,
 	if tag == nil {
 		return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
 	}
-	return TagInfo{TagID: tag.GetTagId(), MarketType: strings.ToLower(strings.TrimSpace(tag.GetMarketType()))}, nil
+	return TagInfo{MarketType: strings.ToLower(strings.TrimSpace(tag.GetMarketType()))}, nil
 }
 
 // ListDatasetSubjects 读取数据集的全部标的绑定（含停用的）及标的详情。
@@ -436,7 +436,7 @@ func (c *RPCClient) GetFactor(ctx context.Context, factorID string) (FactorInfo,
 	if factor == nil || factor.GetFactorId() == "" {
 		return FactorInfo{}, fmt.Errorf("因子 %s 不存在", factorID)
 	}
-	return FactorInfo{FactorID: factor.GetFactorId(), DefinitionHash: strings.TrimSpace(factor.GetDefinitionHash()), Outputs: append([]string(nil), factor.GetOutputs()...)}, nil
+	return FactorInfo{FactorID: factor.GetFactorId(), DefinitionHash: strings.TrimSpace(factor.GetDefinitionHash())}, nil
 }
 
 // ServiceError 是 Storage 或 Factor 返回的业务错误。Error 只给中文概述（操作与错误码的含义）；服务端的原文可能是

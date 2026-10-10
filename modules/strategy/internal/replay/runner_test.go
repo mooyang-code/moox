@@ -43,8 +43,10 @@ type fakeClient struct {
 	// switchedTo 非零时换代后的最新一根改为它（新一代可能截短终点）；coverageStale 是读取覆盖统计依次返回 ErrStale 的次数。
 	switchedTo    time.Time
 	coverageStale int
-	// coverageTransport 是读取覆盖统计依次遇到传输失败的次数。
+	// coverageTransport 是读取覆盖统计依次遇到传输失败的次数；viewTransport 是 GetView 依次遇到传输失败的次数，viewCalls 统计 GetView 的调用次数。
 	coverageTransport int
+	viewTransport     int
+	viewCalls         int
 	// viewDeleted 模拟 View 已被删除。
 	viewDeleted bool
 }
@@ -92,6 +94,11 @@ func (f *fakeClient) currentIndex() string {
 
 // GetView 与生产一致：View 元数据不带覆盖统计，需要时由 ViewCoverage 单独读取。
 func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
+	f.viewCalls++
+	if f.viewTransport > 0 {
+		f.viewTransport--
+		return input.ViewInfo{}, &input.TransportError{Operation: "读取 View", Err: errors.New("connection refused")}
+	}
 	if f.viewDeleted {
 		return input.ViewInfo{}, &input.SkipError{Reason: input.SkipConfigError, Detail: "View view_a 已不存在", Cause: input.ErrViewNotFound}
 	}
@@ -113,7 +120,7 @@ func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.D
 }
 
 func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (input.TagInfo, error) {
-	return input.TagInfo{TagID: tagID, MarketType: strings.TrimPrefix(tagID, "binance_")}, nil
+	return input.TagInfo{MarketType: strings.TrimPrefix(tagID, "binance_")}, nil
 }
 
 func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {
@@ -167,7 +174,7 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 }
 
 func (f *fakeClient) GetFactor(context.Context, string) (input.FactorInfo, error) {
-	return input.FactorInfo{FactorID: "mom", DefinitionHash: "sha256:mom", Outputs: []string{"mom"}}, nil
+	return input.FactorInfo{FactorID: "mom", DefinitionHash: "sha256:mom"}, nil
 }
 
 const replayDSL = `name: replay_demo

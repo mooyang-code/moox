@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 // A 股内嵌日历过了可用截止日（最后一个交易日往前 2 个交易日）后，启用的实例每一期都会被丢弃：启用时就拒绝，
@@ -27,7 +28,7 @@ func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, ViewColumns: []string{"close"}})
+	raw, _ := json.Marshal(input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, ViewColumns: []string{"close"}})
 	pending := "pending-session"
 	if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: pending, InstanceID: "i1", DSLHash: definition.DSLHash, ResolvedJSON: string(raw), CreatedAt: h.now}, definition.DSLYaml); err != nil {
 		t.Fatal(err)

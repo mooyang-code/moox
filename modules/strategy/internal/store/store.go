@@ -356,13 +356,6 @@ func nullableTime(value sql.NullTime) *time.Time {
 	return &at
 }
 
-func timeValue(value *time.Time) any {
-	if value == nil {
-		return nil
-	}
-	return value.UTC()
-}
-
 func millis(at time.Time) int64 { return at.UTC().UnixMilli() }
 
 func fromMillis(value int64) time.Time { return time.UnixMilli(value).UTC() }

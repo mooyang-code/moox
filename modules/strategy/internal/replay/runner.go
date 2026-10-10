@@ -191,12 +191,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		return Metrics{}, fmt.Errorf("View %s 的数据集没有标的绑定", job.ViewID)
 	}
 	// 退避之前和之后都确认回放没有被取消：写入密集的 View 上一段读取可能退避很久，取消要尽快生效。
-	abort := func(ctx context.Context) error {
-		if status, err := r.Store.ReplayStatus(ctx, job.ReplayID); err == nil && status == store.ReplayCancelled {
-			return errCancelled
-		}
-		return nil
-	}
+	abort := r.abortHook(job.ReplayID)
 	// 活动索引的代次没变：同一代索引只追加、不删除行，提交时校验过的区间仍然有效（覆盖统计随新 bar 前移不影响已有的行）。
 	// 代次变了（排队期间重建过索引，新一代只保留最近的根数）才按新索引的精确统计复查起点并截断终点。
 	end := job.EndTime
@@ -246,10 +241,8 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			acc.setNote(noteTruncated, fmt.Sprintf("回放过程中 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[cut-1].BarEnd)))
 		}
 		for _, bar := range segment {
-			if status, err := r.Store.ReplayStatus(ctx, job.ReplayID); err != nil {
+			if err := abort(ctx); err != nil {
 				return acc.finish(), err
-			} else if status == store.ReplayCancelled {
-				return acc.finish(), errCancelled
 			}
 			decision, err := r.evaluate(ctx, program, resolved, subjects, members, presence, rows, bar, state)
 			if err != nil {
@@ -343,6 +336,21 @@ func withTransportRetry[T any](ctx context.Context, abort func(context.Context) 
 			var zero T
 			return zero, err
 		}
+	}
+}
+
+// abortHook 返回确认回放是否已被取消的钩子：已取消返回 errCancelled；读取状态失败按错误返回（与逐期检查一致，数据库
+// 持续异常时不会在退避里空等）。
+func (r *Runner) abortHook(replayID string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		status, err := r.Store.ReplayStatus(ctx, replayID)
+		if err != nil {
+			return fmt.Errorf("读取回放状态：%w", err)
+		}
+		if status == store.ReplayCancelled {
+			return errCancelled
+		}
+		return nil
 	}
 }
 

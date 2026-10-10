@@ -52,7 +52,7 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 		t.Fatalf("装配失败：%v", err)
 	}
 	frame := loaded.Frame
-	if !frame.BarEnd.Equal(barStart.Add(time.Hour)) || !frame.Spot || loaded.IndexID != "idx_a" || loaded.Revision != 9 {
+	if !frame.BarEnd.Equal(barStart.Add(time.Hour)) || !frame.Spot {
 		t.Fatalf("帧元数据不符：%+v loaded=%+v", frame, loaded)
 	}
 	if !reflect.DeepEqual(rowIDs(frame), []string{"BTC-USDT", "ETH-USDT"}) {

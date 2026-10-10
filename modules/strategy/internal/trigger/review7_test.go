@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 )
@@ -20,13 +21,13 @@ func TestCompileFailureKeepsSnapshotCalendar(t *testing.T) {
 rules:
   - {id: r, type: rank, score: "missing_col", select: {top: 1}, weight: 1}
 `
-	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}}
+	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}}
 	h := newHarnessWith(t, brokenDSL, nil, resolved)
 	shanghai := time.FixedZone("CST", 8*3600)
 	periodStart := time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai)
 	h.now = time.Date(2026, 10, 9, 15, 5, 0, 0, shanghai)
 	message := &eventpb.EventMessage{EventId: "event-stock", EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_a", Frequency: "1d", PeriodTime: periodStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	payload := &storagepb.ViewDataReady{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewId: "view_a", Frequency: "1d", PeriodTime: periodStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	barEnd := time.Date(2026, 10, 9, 15, 0, 0, 0, shanghai)
 	result, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, barEnd)
@@ -54,7 +55,7 @@ func TestDroppedPeriodIsCountedOnceAcrossRedeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 	// i2 的快照是 A 股日线：按小时对齐的周期时间不是上海零点，周期无法换算，本期丢弃。
-	stock := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
+	stock := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
 	raw, _ := json.Marshal(stock)
 	session := "session-2"
 	if err := h.repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i2", DSLHash: definition.DSLHash, ResolvedJSON: string(raw), CreatedAt: bar0}, definition.DSLYaml); err != nil {

@@ -170,7 +170,7 @@ func FromBarEnd(calendarID, frequency string, end time.Time) (PeriodBoundaries, 
 		if status, err := calendar.Status(day); err != nil {
 			return PeriodBoundaries{}, stockDayError(day, err)
 		} else if status != marketcalendar.TradingDay {
-			return PeriodBoundaries{}, fmt.Errorf("bar_end %s 不在 A 股交易日上", end.UTC().Format(time.RFC3339))
+			return PeriodBoundaries{}, fmt.Errorf("bar_end %s 不在 A 股交易日上", shanghaiLabel(end, location))
 		}
 		return boundariesForStockDay(calendar, location, day)
 	}
@@ -368,9 +368,14 @@ func CeilStorageStart(calendarID, frequency string, at time.Time) (time.Time, er
 // 规整后每期都读不到行，只会一直 no_data（回放则每根都缺数据）。
 func checkStockRowKey(at time.Time, day marketcalendar.CivilDate, location *time.Location) error {
 	if midnight := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location); !at.Equal(midnight) {
-		return fmt.Errorf("行键 %s 不是上海时间零点：A 股日线的 bar_start 必须是交易日的上海时间零点（数据集是否按 UTC 零点写行？）", at.UTC().Format(time.RFC3339))
+		return fmt.Errorf("行键 %s（%s）不是上海时间零点：A 股日线的 bar_start 必须是交易日的上海时间零点（数据集是否按 UTC 零点写行？）", at.UTC().Format(time.RFC3339), shanghaiLabel(at, location))
 	}
 	return nil
+}
+
+// shanghaiLabel 把时刻写成上海时间（精确到秒），给 A 股的报错用。
+func shanghaiLabel(at time.Time, location *time.Location) string {
+	return at.In(location).Format("2006-01-02 15:04:05") + " 上海时间"
 }
 
 // localDay 返回时刻在给定时区的日期。

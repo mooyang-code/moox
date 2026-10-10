@@ -142,20 +142,18 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if rtErr != nil && !errors.As(rtErr, &skip) {
 		return rtErr
 	}
-	// 因子结果 View 只由 factor_period.computed 驱动，K 线 View 只由 collector.period.completed 驱动；实例绑定哪种 View
-	// 在启用时就确定了，其他类型的完成事件不是这个实例的触发信号，先于一切处理忽略（编译失败的会话也带着快照里的类型）。
-	if rt != nil {
-		if want := rt.resolved.CompletionKind; want != "" && payload.GetCompletionKind() != want {
-			h.logf("实例 %s 只接受 %s 触发，忽略 %s 事件 %s", instance.InstanceID, want, payload.GetCompletionKind(), message.GetEventId())
-			return nil
-		}
-	}
-	// 绑定快照（会话与实例上的副本）都无法解析：不知道日历与周期，写不出正确的跳过记录，只记日志与计数。
+	// 绑定快照（会话与实例上的副本）都无法解析：不知道日历、周期与触发类型，写不出正确的跳过记录，只记日志与计数。
 	if rt == nil || rt.resolved.Bar == "" {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的绑定快照无法解析，本期丢弃：%v", instance.InstanceID, rtErr)
 			h.observe(instance, strings.ToLower(payload.GetFrequency()), time.Time{}, store.StatusSkipped, input.SkipConfigError)
 		}
+		return nil
+	}
+	// 因子结果 View 只由 factor_period.computed 驱动，K 线 View 只由 collector.period.completed 驱动；实例绑定哪种 View
+	// 在启用时就确定了，其他类型的完成事件不是这个实例的触发信号，先于其余处理忽略（编译失败的会话也带着快照里的类型）。
+	if want := rt.resolved.CompletionKind; payload.GetCompletionKind() != want {
+		h.logf("实例 %s 只接受 %s 触发，忽略 %s 事件 %s", instance.InstanceID, want, payload.GetCompletionKind(), message.GetEventId())
 		return nil
 	}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
@@ -172,7 +170,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	validUntil, err := advance(calendar, bar, boundary.BarEnd, ValidBars)
 	if err != nil {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
-			h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339), calendar, bar, err)
+			h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, input.BarEndLabel(calendar, bar, boundary.BarEnd), calendar, bar, err)
 			h.observe(instance, bar, boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
 		}
 		return nil
@@ -190,10 +188,10 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		if boundary.BarEnd.Equal(latest.BarEndTime) {
 			return nil
 		}
-		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", latest.BarEndTime.Format(time.RFC3339)))
+		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
 	}
 	if !validUntil.After(h.now()) {
-		return h.commitSkipped(ctx, p, store.SkipExpired, fmt.Sprintf("有效期 %s 已过", validUntil.Format(time.RFC3339)))
+		return h.commitSkipped(ctx, p, store.SkipExpired, fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil)))
 	}
 	var adjacent *readiness.Record
 	if len(rt.resolved.PreviousFactors) > 0 {
@@ -250,7 +248,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 				return nil
 			}
 			if hasLatest && latest.BarEndTime.After(boundary.BarEnd) {
-				return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", latest.BarEndTime.Format(time.RFC3339)))
+				return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
 			}
 			expected = ""
 			if hasLatest {

@@ -59,6 +59,15 @@ var exprHints = []struct{ raw, text string }{
 	{"unexpected token", "出现了意外的符号或表达式不完整"},
 	{"literal not terminated", "字符串没有闭合"},
 	{"unclosed", "括号或引号没有闭合"},
+	{"unrecognized character", "出现了无法识别的字符"},
+	{"bad number syntax", "数字写法无效"},
+	{"invalid float literal", "数字写法无效或超出范围"},
+	{"invalid integer literal", "数字写法无效或超出范围"},
+	{"invalid hex literal", "数字写法无效或超出范围"},
+	{"invalid binary literal", "数字写法无效或超出范围"},
+	{"invalid octal literal", "数字写法无效或超出范围"},
+	{"coalesce expressions", "不允许使用 ??"},
+	{"non-bool expression", "三元表达式 ? : 的条件必须是布尔值"},
 	{"mismatched types", "运算两边的类型不匹配"},
 	{"invalid operation", "运算的操作数类型不对"},
 	{"expected bool", "结果应为布尔值"},
@@ -67,8 +76,13 @@ var exprHints = []struct{ raw, text string }{
 	{"too many arguments", "参数太多"},
 	{"cannot use", "类型不匹配"},
 	{"unknown func", "使用了不支持的函数"},
-	{"error parsing regexp", "正则表达式无效"},
 	{"divide by zero", "除以零"},
+}
+
+// exprFallbacks 是没有匹配到具体提示时的通用说明，免得错误里只剩类别。
+var exprFallbacks = map[string]string{
+	"语法错误": "表达式写法不合法",
+	"编译失败": "表达式的运算符或操作数类型不合法",
 }
 
 // exprError 把表达式库的错误换成中文说明。what 是错误类别（“语法错误”或“编译失败”）；withPosition 为 true 时给出
@@ -91,6 +105,9 @@ func exprError(what string, err error, withPosition bool) error {
 		if strings.Contains(text, hint.raw) {
 			return &describedError{message: message + "：" + hint.text, cause: err}
 		}
+	}
+	if fallback := exprFallbacks[what]; fallback != "" {
+		message += "：" + fallback
 	}
 	return &describedError{message: message, cause: err}
 }

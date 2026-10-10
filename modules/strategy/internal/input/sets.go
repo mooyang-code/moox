@@ -191,7 +191,7 @@ func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.T
 }
 
 // NewAgeProbe 构造每期一次的探针查询：读取年龄窗口内的 close 列，有行即满足。
-// revision 应与当期主查询一致；活跃序列的覆盖起点（CoverageStart）晚于目标根时无法判断年龄，返回 history_insufficient。
+// revision 应与当期主查询一致；活跃序列的覆盖起点（CoverageStartAt）晚于目标根时无法判断年龄，返回 history_insufficient。
 func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, subjects map[string]Subject, barStart time.Time, revision uint64) AgeProbe {
 	return func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
 		if resolved.MinAgeBars <= 0 || len(instruments) == 0 {

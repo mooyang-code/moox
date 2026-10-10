@@ -12,6 +12,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,11 +41,11 @@ type CivilDate struct {
 // NewCivilDate 构造经过校验的日期。
 func NewCivilDate(year int, month time.Month, day int) (CivilDate, error) {
 	if year < 1 || year > 9999 || month < time.January || month > time.December || day < 1 || day > 31 {
-		return CivilDate{}, fmt.Errorf("%w: %04d-%02d-%02d", ErrInvalidCivilDate, year, month, day)
+		return CivilDate{}, fmt.Errorf("%w：%04d-%02d-%02d", ErrInvalidCivilDate, year, month, day)
 	}
 	date := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 	if date.Year() != year || date.Month() != month || date.Day() != day {
-		return CivilDate{}, fmt.Errorf("%w: %04d-%02d-%02d", ErrInvalidCivilDate, year, month, day)
+		return CivilDate{}, fmt.Errorf("%w：%04d-%02d-%02d", ErrInvalidCivilDate, year, month, day)
 	}
 	return CivilDate{year: int16(year), month: uint8(month), day: uint8(day)}, nil
 }
@@ -67,7 +68,7 @@ func ParseCivilDate(value string) (CivilDate, error) {
 	day, _ := strconv.Atoi(value[8:10])
 	date, err := NewCivilDate(year, time.Month(month), day)
 	if err != nil {
-		return CivilDate{}, fmt.Errorf("%w: %q", ErrInvalidCivilDate, value)
+		return CivilDate{}, fmt.Errorf("%w：%q", ErrInvalidCivilDate, value)
 	}
 	return date, nil
 }
@@ -75,7 +76,7 @@ func ParseCivilDate(value string) (CivilDate, error) {
 // Validate 检查 d 是非零的有效日期。
 func (d CivilDate) Validate() error {
 	if d.year < 1 || d.month < uint8(time.January) || d.month > uint8(time.December) || d.day < 1 {
-		return fmt.Errorf("%w: %q", ErrInvalidCivilDate, d)
+		return fmt.Errorf("%w：%q", ErrInvalidCivilDate, d)
 	}
 	_, err := NewCivilDate(int(d.year), time.Month(d.month), int(d.day))
 	return err
@@ -151,12 +152,19 @@ var embeddedTradingDays []byte
 //go:embed data/manifest.json
 var embeddedManifest []byte
 
-// Load 按 ID 加载内嵌日历。
+var (
+	loadOnce       sync.Once
+	loadedStock    TradingCalendar
+	loadedStockErr error
+)
+
+// Load 按 ID 加载内嵌日历。内嵌日历不可变，解析与校验（约 1 毫秒、1.5 MB）只做一次，之后的调用复用同一份数据。
 func Load(id string) (TradingCalendar, error) {
 	if id != "cn_stock" {
-		return TradingCalendar{}, fmt.Errorf("%w: %q", ErrUnknownCalendar, id)
+		return TradingCalendar{}, fmt.Errorf("%w：%q", ErrUnknownCalendar, id)
 	}
-	return loadCalendar(embeddedTradingDays, embeddedManifest)
+	loadOnce.Do(func() { loadedStock, loadedStockErr = loadCalendar(embeddedTradingDays, embeddedManifest) })
+	return loadedStock, loadedStockErr
 }
 
 func (c TradingCalendar) FirstDate() CivilDate {
@@ -192,7 +200,7 @@ func (c TradingCalendar) PrevTradingDay(date CivilDate) (CivilDate, error) {
 	for candidate := date; ; {
 		previous, ok := shiftCivilDate(candidate, -1)
 		if !ok || previous.Before(c.FirstDate()) {
-			return CivilDate{}, fmt.Errorf("%w: %s", ErrNoPreviousTradingDay, date)
+			return CivilDate{}, fmt.Errorf("%w：%s", ErrNoPreviousTradingDay, date)
 		}
 		if _, ok := c.data.tradingDaySet[previous]; ok {
 			return previous, nil
@@ -209,7 +217,7 @@ func (c TradingCalendar) NextTradingDay(date CivilDate) (CivilDate, error) {
 	for candidate := date; ; {
 		next, ok := shiftCivilDate(candidate, 1)
 		if !ok || next.After(c.LastDate()) {
-			return CivilDate{}, fmt.Errorf("%w: %s", ErrNoNextTradingDay, date)
+			return CivilDate{}, fmt.Errorf("%w：%s", ErrNoNextTradingDay, date)
 		}
 		if _, ok := c.data.tradingDaySet[next]; ok {
 			return next, nil
@@ -225,7 +233,7 @@ func (c TradingCalendar) TradingDayIndex(date CivilDate) (int, error) {
 	}
 	index := lowerBound(c.data.tradingDays, date)
 	if index >= len(c.data.tradingDays) || c.data.tradingDays[index] != date {
-		return 0, fmt.Errorf("%w: %s", ErrNotTradingDay, date)
+		return 0, fmt.Errorf("%w：%s", ErrNotTradingDay, date)
 	}
 	return index, nil
 }

@@ -83,10 +83,10 @@ func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (TagInfo, error)
 		return TagInfo{}, err
 	}
 	if marketType, ok := f.tagMarkets[tagID]; ok {
-		return TagInfo{TagID: tagID, MarketType: marketType}, nil
+		return TagInfo{MarketType: marketType}, nil
 	}
 	if _, ok := f.tags[tagID]; ok {
-		return TagInfo{TagID: tagID}, nil
+		return TagInfo{}, nil
 	}
 	return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
 }
@@ -137,9 +137,9 @@ func newFakeClient(marketType string) *fakeClient {
 		tagMarkets: map[string]string{"binance_spot": "spot", "binance_swap": "swap", "mixed_bad": "option"},
 		errors:     map[string]error{},
 		factors: map[string]FactorInfo{
-			"ma":   {FactorID: "ma", DefinitionHash: "sha256:ma", Outputs: []string{"ma_20"}},
-			"bias": {FactorID: "bias", DefinitionHash: "sha256:bias", Outputs: []string{"bias_q_20"}},
-			"qv":   {FactorID: "qv", DefinitionHash: "sha256:qv", Outputs: []string{"quote_volume_mean_20", "quote_volume_mean_q_20"}},
+			"ma":   {FactorID: "ma", DefinitionHash: "sha256:ma"},
+			"bias": {FactorID: "bias", DefinitionHash: "sha256:bias"},
+			"qv":   {FactorID: "qv", DefinitionHash: "sha256:qv"},
 		},
 	}
 }

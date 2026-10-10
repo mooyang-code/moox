@@ -50,6 +50,9 @@ type instanceObserver struct {
 	// lastBarEnd 与 lastOkBarEnd 是每个实例最近处理的一根、最近一个 ok 的一根的 bar_end，是 A 股实例期望间隔的基准。
 	lastBarEnd   map[string]time.Time
 	lastOkBarEnd map[string]time.Time
+	// basesLoaded 记录已经成功从结果库载入过基准的 A 股实例（实例移出启用清单时清除，重新启用后再载入）：处理周期时
+	// 写入的基准只是库里基准的一部分，不能据此认为已载入。
+	basesLoaded map[string]bool
 }
 
 func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, logf func(string, ...any)) (*instanceObserver, error) {
@@ -81,10 +84,12 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 		cancelled.WithLabelValues(reason).Add(float64(count))
 	})
 	repo.SetSentAfterCancelObserver(sentAfterCancel.Inc)
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}}, nil
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}}, nil
 }
 
-// datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。
+// datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。数据集标识只接受小写：实例 ID 区分大小写，
+// 只差大小写的两个实例（Abc 与 abc）不能映射到同一个标识（登记会整批失败），所以只有本身已是合法小写形式的 ID 才直接使用，
+// 其余（含大写、含非法字符、过长）用 ID 的哈希。
 func datasetKey(instance store.Instance, bar string) (report.DatasetExpectation, bool) {
 	if !metricLabelPattern.MatchString(instance.SpaceID) {
 		return report.DatasetExpectation{}, false
@@ -93,8 +98,7 @@ func datasetKey(instance store.Instance, bar string) (report.DatasetExpectation,
 	if err != nil || freq.NominalDuration() <= 0 {
 		return report.DatasetExpectation{}, false
 	}
-	id := strings.ToLower(instance.InstanceID)
-	datasetID := "strategy_" + id
+	datasetID := "strategy_" + instance.InstanceID
 	if !metricLabelPattern.MatchString(datasetID) {
 		sum := sha256.Sum256([]byte(instance.InstanceID))
 		datasetID = "strategy_" + hex.EncodeToString(sum[:8])
@@ -138,12 +142,17 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 			delete(o.lastOkBarEnd, id)
 		}
 	}
+	for id := range o.basesLoaded {
+		if _, ok := next[id]; !ok {
+			delete(o.basesLoaded, id)
+		}
+	}
 	return nil
 }
 
-// loadBases 为还没有基准的 A 股实例从库里取最近处理的一根与最近一个 ok 的一根（不分会话）：进程重启或重新启用后，
+// loadBases 为还没有载入过基准的 A 股实例从库里取最近处理的一根与最近一个 ok 的一根（不分会话）：进程重启或重新启用后，
 // Monitor 里上次运行与成功的时间仍在，期望间隔要以同样的基准计算，否则周末重启后周一跳过一根就会报 success stale。
-// 读取失败时留到下一次刷新。
+// 与进程内已记下的基准取较晚者（重启后第一批积压事件可能先于第一次刷新到达）；读取失败时留到下一次刷新。
 func (o *instanceObserver) loadBases(ctx context.Context, instances []store.Instance) {
 	for _, instance := range instances {
 		resolved, err := input.ParseResolved(instance.ResolvedJSON)
@@ -151,9 +160,9 @@ func (o *instanceObserver) loadBases(ctx context.Context, instances []store.Inst
 			continue
 		}
 		o.mu.Lock()
-		_, known := o.lastBarEnd[instance.InstanceID]
+		loaded := o.basesLoaded[instance.InstanceID]
 		o.mu.Unlock()
-		if known {
+		if loaded {
 			continue
 		}
 		processed, ok, err := o.store.LatestBarEnds(ctx, instance.InstanceID)
@@ -162,12 +171,13 @@ func (o *instanceObserver) loadBases(ctx context.Context, instances []store.Inst
 			continue
 		}
 		o.mu.Lock()
-		if !processed.IsZero() && processed.After(o.lastBarEnd[instance.InstanceID]) {
+		if processed.After(o.lastBarEnd[instance.InstanceID]) {
 			o.lastBarEnd[instance.InstanceID] = processed
 		}
-		if !ok.IsZero() && ok.After(o.lastOkBarEnd[instance.InstanceID]) {
+		if ok.After(o.lastOkBarEnd[instance.InstanceID]) {
 			o.lastOkBarEnd[instance.InstanceID] = ok
 		}
+		o.basesLoaded[instance.InstanceID] = true
 		o.mu.Unlock()
 	}
 }

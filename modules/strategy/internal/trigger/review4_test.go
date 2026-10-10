@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 )
@@ -22,7 +23,7 @@ func (h *harness) rebindStock() {
 	if err := h.repo.DisableInstance(ctx, "i1", &h.session, nil, "", bar0); err != nil {
 		h.t.Fatal(err)
 	}
-	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
 	raw, _ := json.Marshal(resolved)
 	session := "session-stock"
 	if err := h.repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(rankDSL)), ResolvedJSON: string(raw), CreatedAt: bar0}, rankDSL); err != nil {
@@ -49,7 +50,7 @@ func TestHandleLogsUnmappablePeriods(t *testing.T) {
 	}
 	deliver := func(day time.Time) error {
 		message := &eventpb.EventMessage{EventId: "event-" + day.Format("0102"), EventName: "event.storage.view.data_ready", SpaceId: "space"}
-		payload := &storagepb.ViewDataReady{ViewId: "view_a", Frequency: "1d", PeriodTime: day.Unix(), Status: "complete", UniverseSubjectIds: []string{"A"}}
+		payload := &storagepb.ViewDataReady{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewId: "view_a", Frequency: "1d", PeriodTime: day.Unix(), Status: "complete", UniverseSubjectIds: []string{"A"}}
 		return h.handler.Handle(context.Background(), message, payload)
 	}
 	// 国庆假期不是交易日：无法确定周期边界。

@@ -82,7 +82,7 @@ type ViewInfo struct {
 	// 刷新，最晚一根可能略滞后；最早时间只会提前，可能来自已停更的序列）；只有经 WithCoverage 读取后才有值，零值表示未知。
 	IndexedFrom time.Time
 	IndexedTo   time.Time
-	// SeriesBars 是 View 每个序列至少保留的最近根数；0 表示未知。活跃序列可回溯的起点见 CoverageStart。
+	// SeriesBars 是 View 每个序列至少保留的最近根数；0 表示未知。活跃序列可回溯的起点见 CoverageStartAt。
 	SeriesBars int
 	Columns    []ViewColumn
 }
@@ -105,7 +105,6 @@ type DatasetInfo struct {
 
 // TagInfo 是标签元数据；MarketType 是标签唯一且不可修改的市场类型（spot | swap）。
 type TagInfo struct {
-	TagID      string
 	MarketType string
 }
 
@@ -121,7 +120,6 @@ type Subject struct {
 type FactorInfo struct {
 	FactorID       string
 	DefinitionHash string
-	Outputs        []string
 }
 
 // Row 是 View 的一行：数值列已转为 float64，无法解析的列不出现。
@@ -200,7 +198,7 @@ type Resolved struct {
 	// （Resolve 与 Compile 填入），不进快照。
 	PreviousFactors []string `json:"-"`
 	// CompletionKind 是触发本实例的完成事件类型：因子结果 View 为 factor_period.computed，K 线 View 为 collector.period.completed。
-	CompletionKind string   `json:"completion_kind,omitempty"`
+	CompletionKind string   `json:"completion_kind"`
 	MinAgeBars     int      `json:"min_age_bars,omitempty"`
 	ViewColumns    []string `json:"view_columns"`
 }

@@ -127,8 +127,19 @@ func (g *gateway) post(ctx context.Context, method string, request, response pro
 	if len(data) > maxResponseBytes {
 		return fmt.Errorf("Trade 网关响应超过大小限制")
 	}
-	return protojson.Unmarshal(data, response)
+	// 忽略当前协议没有的字段：Trade 先于 Strategy 升级、响应多出新字段时照常解析，不能让全部 Trade 调用都失败。
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(data, response); err != nil {
+		return &decodeError{cause: err}
+	}
+	return nil
 }
+
+// decodeError 是网关已返回 HTTP 200、响应却无法解析：请求多半已被 Trade 执行，结果未知（Client 按传输失败处理，
+// 认领等状态变更留给启动时的对账恢复），但不是“不可达”。解析器的英文原文经 Unwrap 留给日志。
+type decodeError struct{ cause error }
+
+func (e *decodeError) Error() string { return "Trade 网关响应无法解析" }
+func (e *decodeError) Unwrap() error { return e.cause }
 
 func (g *gateway) GetLogicalAccount(ctx context.Context, req *tradepb.GetLogicalAccountReq, _ ...client.Option) (*tradepb.GetLogicalAccountRsp, error) {
 	rsp := new(tradepb.GetLogicalAccountRsp)

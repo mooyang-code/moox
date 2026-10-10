@@ -61,7 +61,7 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	}
 }
 
-const resolvedJSON = `{"view_id":"view_a","dataset_id":"ds","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{},"view_columns":["close"]}`
+const resolvedJSON = `{"completion_kind":"collector.period.completed","view_id":"view_a","dataset_id":"ds","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{},"view_columns":["close"]}`
 
 func TestRequireExecutionDependencies(t *testing.T) {
 	repo := openStore(t)

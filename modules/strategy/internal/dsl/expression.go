@@ -3,6 +3,9 @@ package dsl
 import (
 	"errors"
 	"fmt"
+	"reflect"
+	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -58,7 +61,6 @@ type Expression struct {
 	Normalizers     []*Normalizer
 	Columns         []string // 直接引用的当期列（不含截面函数参数内部的引用）
 	PreviousColumns []string // 通过 bars[-1] 引用的上一根列
-	UsesScore       bool
 	Numeric         bool
 }
 
@@ -203,8 +205,46 @@ func compileAnalyzed(expression *Expression, columns map[string]struct{}) error 
 	if err != nil {
 		return exprError("编译失败", err, false)
 	}
+	if err := checkConditionals(program.Node()); err != nil {
+		return err
+	}
 	expression.Program = program
 	return nil
+}
+
+// conditionalChecker 检查编译后的表达式树里每个三元表达式 a ? b : c 的两个分支类型一致（都是布尔、都是数值或都是字符串）：
+// 分支类型不同时，表达式库编译能通过，只在走到类型不符的那个分支的行上求值失败，整期结果时好时坏。
+type conditionalChecker struct{ err error }
+
+func checkConditionals(root ast.Node) error {
+	checker := &conditionalChecker{}
+	ast.Walk(&root, checker)
+	return checker.err
+}
+
+func (c *conditionalChecker) Visit(node *ast.Node) {
+	conditional, ok := (*node).(*ast.ConditionalNode)
+	if !ok || c.err != nil {
+		return
+	}
+	if left, right := valueClass(conditional.Exp1.Type()), valueClass(conditional.Exp2.Type()); left == "" || left != right {
+		c.err = errors.New("三元表达式 ? : 的两个分支类型必须一致（都是布尔、都是数值或都是字符串）")
+	}
+}
+
+// valueClass 把类型归为 bool、number、string 三类；其余（含类型未知）返回空串。
+func valueClass(t reflect.Type) string {
+	switch t.Kind() {
+	case reflect.Bool:
+		return "bool"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.String:
+		return "string"
+	}
+	return ""
 }
 
 type normalizerSpec struct {
@@ -234,16 +274,13 @@ func (w *walker) visit(node *ast.Node) error {
 	case *ast.UnaryNode:
 		return w.visit(&n.Node)
 	case *ast.BinaryNode:
-		// matches 的正则只能是字符串字面量：编译时就校验，求值时不会因为数据（例如标的 ID 里的括号）而报错。
-		if n.Operator == "matches" {
-			if _, literal := n.Right.(*ast.StringNode); !literal {
-				return errors.New("matches 右边只能是字符串字面量（正则表达式）")
-			}
-		}
 		if err := w.visit(&n.Left); err != nil {
 			return err
 		}
-		return w.visit(&n.Right)
+		if err := w.visit(&n.Right); err != nil {
+			return err
+		}
+		return checkOperator(n)
 	case *ast.ConditionalNode:
 		for _, child := range []*ast.Node{&n.Cond, &n.Exp1, &n.Exp2} {
 			if err := w.visit(child); err != nil {
@@ -274,6 +311,57 @@ func (w *walker) visit(node *ast.Node) error {
 	}
 }
 
+// checkOperator 拒绝在编译时能通过、求值时却必然出错的运算符写法，保存时就给出原因：
+//   - ?? 的左边是不会为空的列值，求值时必然失败；
+//   - 范围 .. 与 in 会为每一行分配整段整数数组（范围过大时直接超出内存预算），数组与字典字面量本来就被禁用；
+//   - matches 的正则只能是字符串字面量并在这里校验写法：用数据（例如标的 ID）当正则，ID 里的括号会让整期求值失败。
+func checkOperator(n *ast.BinaryNode) error {
+	switch n.Operator {
+	case "??":
+		return errors.New("不允许使用 ??：列值不会为空，求值时必然出错")
+	case "..", "in":
+		return errors.New("不允许使用范围 .. 与 in")
+	case "matches":
+		literal, ok := n.Right.(*ast.StringNode)
+		if !ok {
+			return errors.New("matches 右边只能是字符串字面量（正则表达式）")
+		}
+		if _, err := regexp.Compile(literal.Value); err != nil {
+			return &describedError{message: fmt.Sprintf("matches 的正则表达式无效：%s（%q）", regexpReason(err), literal.Value), cause: err}
+		}
+	}
+	return nil
+}
+
+// regexpReasons 是正则语法错误的中文说明。
+var regexpReasons = map[syntax.ErrorCode]string{
+	syntax.ErrInvalidCharClass:      "字符类写法不合法",
+	syntax.ErrInvalidCharRange:      "字符范围不合法",
+	syntax.ErrInvalidEscape:         "转义序列不合法",
+	syntax.ErrInvalidNamedCapture:   "命名捕获组写法不合法",
+	syntax.ErrInvalidPerlOp:         "(?...) 写法不合法",
+	syntax.ErrInvalidRepeatOp:       "重复运算符使用不当",
+	syntax.ErrInvalidRepeatSize:     "重复次数过大",
+	syntax.ErrInvalidUTF8:           "不是合法的 UTF-8",
+	syntax.ErrMissingBracket:        "缺少右方括号 ]",
+	syntax.ErrMissingParen:          "缺少右括号 )",
+	syntax.ErrMissingRepeatArgument: "重复运算符前面没有可重复的内容",
+	syntax.ErrTrailingBackslash:     "末尾多了一个反斜杠",
+	syntax.ErrUnexpectedParen:       "多了一个右括号 )",
+	syntax.ErrNestingDepth:          "括号嵌套太深",
+	syntax.ErrLarge:                 "正则表达式太大",
+}
+
+func regexpReason(err error) string {
+	var syntaxErr *syntax.Error
+	if errors.As(err, &syntaxErr) {
+		if reason, ok := regexpReasons[syntaxErr.Code]; ok {
+			return reason
+		}
+	}
+	return "写法不合法"
+}
+
 func (w *walker) identifier(n *ast.IdentifierNode) error {
 	switch n.Value {
 	case identifierBars:
@@ -283,7 +371,6 @@ func (w *walker) identifier(n *ast.IdentifierNode) error {
 		if w.stage != StageSelectWhere && w.stage != StageFilterAfter {
 			return fmt.Errorf("score 只能在 select.where 和 filter_after 中使用，不能在 %s 中使用", w.stage)
 		}
-		w.expression.UsesScore = true
 		return nil
 	case identifierInstrument:
 		return nil

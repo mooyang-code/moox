@@ -560,7 +560,7 @@ func collectorStockCNCanaryPeriods(entry *collectorpb.TaskResultInventoryEntry, 
 	}
 	calendar, err := marketcalendar.Load("cn_stock")
 	if err != nil {
-		return nil, fmt.Errorf("load canary trading calendar: %w", err)
+		return nil, fmt.Errorf("加载金丝雀交易日历失败：%w", err)
 	}
 	sessions := make([][2]int, 0, len(entry.GetSessions()))
 	for _, raw := range entry.GetSessions() {
@@ -591,7 +591,7 @@ func collectorStockCNCanaryPeriods(entry *collectorpb.TaskResultInventoryEntry, 
 			var statusErr error
 			status, statusErr = calendar.Status(civil)
 			if statusErr != nil {
-				return nil, fmt.Errorf("StockCN calendar does not cover %s: %w", dateText, statusErr)
+				return nil, fmt.Errorf("A 股交易日历没有覆盖 %s：%w", dateText, statusErr)
 			}
 			statusByDate[dateText] = status
 		}

@@ -55,6 +55,14 @@ func CoverageBounds(view ViewInfo, resolved Resolved, now time.Time) (Bounds, er
 	if err != nil {
 		return Bounds{}, err
 	}
+	label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
+	if to.Before(from) {
+		// 日历规整后最早一根晚于最晚一根：索引里的行之间没有一个完整的周期。
+		if stockDaily(resolved.Calendar, resolved.Bar) {
+			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在 A 股交易日上", label(view.IndexedFrom), label(view.IndexedTo))
+		}
+		return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）没有落在完整的 bar 上", label(view.IndexedFrom), label(view.IndexedTo))
+	}
 	bounds := Bounds{From: from, To: to}
 	if !now.IsZero() {
 		// 索引里晚于当前已闭合最后一根的行是误写的未来数据：最晚一根夹到已闭合的最后一根。now 已过内嵌日历时推不出
@@ -65,13 +73,9 @@ func CoverageBounds(view ViewInfo, resolved Resolved, now time.Time) (Bounds, er
 		if beyond := daysBeyondStockCalendar(resolved, view.IndexedTo, now); beyond > 0 {
 			bounds.Beyond, bounds.ToClosed = beyond, true
 		}
-	}
-	if bounds.To.Before(bounds.From) {
-		label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
-		if stockDaily(resolved.Calendar, resolved.Bar) {
-			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在 A 股交易日上", label(view.IndexedFrom), label(view.IndexedTo))
+		if bounds.To.Before(bounds.From) {
+			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都晚于当前已闭合的最后一根（最新一根可能还没写完，或是误写的未来数据）", label(view.IndexedFrom), label(view.IndexedTo))
 		}
-		return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都晚于当前已闭合的最后一根（疑似误写的未来数据）", label(view.IndexedFrom), label(view.IndexedTo))
 	}
 	return bounds, nil
 }

@@ -104,7 +104,7 @@ func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.R
 	frame.Expected["r"] = ids
 	sets.Universe = ids
 	sets.Expected["r"] = ids
-	return input.Loaded{Frame: frame, Sets: sets, Boundary: boundary, IndexID: "idx", Revision: 1}, nil
+	return input.Loaded{Frame: frame, Sets: sets, Boundary: boundary}, nil
 }
 
 type recordingObserver struct {
@@ -127,7 +127,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
@@ -184,7 +184,7 @@ func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*e
 		factors = append(factors, &storagepb.FactorPeriodState{FactorId: id, Status: status, DefinitionHash: hash})
 	}
 	message := &eventpb.EventMessage{EventId: fmt.Sprintf("event-%d", n), EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, Factors: factors}
+	payload := &storagepb.ViewDataReady{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewId: "view_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, Factors: factors}
 	return message, payload
 }
 

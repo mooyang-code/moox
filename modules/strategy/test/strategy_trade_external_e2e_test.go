@@ -73,7 +73,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	hash := dsl.Hash([]byte(externalDSL))
 	require.NoError(t, repo.CreateDefinition(ctx, store.Definition{StrategyID: "strategy-e2e", Name: "external_e2e", DSLYaml: externalDSL, DSLHash: hash, CreatedAt: now}))
 	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", ViewID: "factor_view", LogicalAccountID: &logical, CreatedAt: now}))
-	resolved := input.Resolved{ViewID: "factor_view", DatasetID: "factor_ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
+	resolved := input.Resolved{CompletionKind: events.FactorPeriodComputed.Name(), ViewID: "factor_view", DatasetID: "factor_ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
 	require.NoError(t, repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
@@ -90,7 +90,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 
 	handler := &trigger.Handler{Store: repo, Loader: externalInput{}, Now: func() time.Time { return now }, Logf: t.Logf}
 	message := &eventpb.EventMessage{EventId: "external-ready", EventName: "event.storage.view.data_ready", SpaceId: "space-e2e"}
-	payload := &storagepb.ViewDataReady{ViewId: "factor_view", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, Factors: []*storagepb.FactorPeriodState{{FactorId: "bias", Status: "complete", DefinitionHash: "sha256:bias"}}}
+	payload := &storagepb.ViewDataReady{CompletionKind: events.FactorPeriodComputed.Name(), ViewId: "factor_view", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, Factors: []*storagepb.FactorPeriodState{{FactorId: "bias", Status: "complete", DefinitionHash: "sha256:bias"}}}
 	require.NoError(t, handler.Handle(ctx, message, payload))
 	result, found, err := repo.LatestOk(ctx, "instance-e2e", session)
 	require.NoError(t, err)
@@ -171,5 +171,5 @@ func (externalInput) LoadBar(_ context.Context, _ string, resolved input.Resolve
 		"ETH-USDT": {Values: map[string]float64{"bias": 1, "close": 10}},
 	}}
 	subjects := map[string]input.Subject{"BTC-USDT": {SubjectID: "BTC-USDT", Active: true}, "ETH-USDT": {SubjectID: "ETH-USDT", Active: true}}
-	return input.Loaded{Frame: frame, Sets: input.Sets{Universe: ids, Expected: frame.Expected, AgedOut: frame.AgedOut, Subjects: subjects}, Boundary: boundary, IndexID: "idx", Revision: 1}, nil
+	return input.Loaded{Frame: frame, Sets: input.Sets{Universe: ids, Expected: frame.Expected, AgedOut: frame.AgedOut, Subjects: subjects}, Boundary: boundary}, nil
 }

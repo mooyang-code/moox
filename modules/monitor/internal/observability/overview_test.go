@@ -47,7 +47,7 @@ func TestDatasetStatusDistinguishesMissingStaleAndEmpty(t *testing.T) {
 	}
 }
 
-func TestDatasetTolerancesUseScheduleForRunsAndFrequencyForWatermark(t *testing.T) {
+func TestDatasetTolerancesWhenIntervalIsShorterThanFrequency(t *testing.T) {
 	for _, freq := range []string{"1h", "1H"} {
 		key := datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: freq}
 		runLag, successLag, watermarkLag := datasetTolerances(key, 60, testRealtimePolicy())

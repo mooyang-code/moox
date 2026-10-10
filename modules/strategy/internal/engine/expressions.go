@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
@@ -33,7 +32,7 @@ func rowEnv(id string, row Row, score float64, vars map[string]float64) map[stri
 func runBool(expression *dsl.Expression, id string, row Row, score float64) (bool, error) {
 	value, err := expression.Run(rowEnv(id, row, score, nil))
 	if err != nil {
-		return false, errors.New(runtimeErrorText(err))
+		return false, errExprRuntime
 	}
 	result, ok := value.(bool)
 	if !ok {
@@ -84,7 +83,7 @@ func evaluateNumeric(expression *dsl.Expression, ids []string, rows map[string]R
 	for _, id := range sample {
 		value, err := expression.Run(rowEnv(id, rows[id], 0, vars[id]))
 		if err != nil {
-			result.failed[id] = scoreErrorReason(err)
+			result.failed[id] = scoreRuntimeReason
 			continue
 		}
 		number, ok := toFloat(value)
@@ -97,19 +96,13 @@ func evaluateNumeric(expression *dsl.Expression, ids []string, rows map[string]R
 	return result
 }
 
-// runtimeErrorText 把表达式运行错误换成中文原因；运行库的英文原文不进入结果记录。DSL 的限制（只有浮点运算、bars 只有
-// 两项、matches 的正则是编译期校验过的字面量）让运行错误几乎不会发生，这里只给出通用的说明。
-func runtimeErrorText(err error) string {
-	if strings.Contains(strings.ToLower(err.Error()), "regexp") {
-		return "表达式求值出错（正则表达式无效）"
-	}
-	return "表达式求值出错"
-}
+// errExprRuntime 与 scoreRuntimeReason 是表达式求值出错的中文说明；表达式库的英文原文不进入结果记录。保存与编译时已经
+// 拒绝了会在求值时必然出错的写法（?? 与范围、分支类型不同的三元表达式、写错的正则等），DSL 的限制又让其余运行错误
+// 不会发生，这里只是兜底。
+var errExprRuntime = errors.New("表达式求值出错")
 
-// scoreErrorReason 把分数表达式的运行错误写成明细原因 score_error:<中文原因>。
-func scoreErrorReason(err error) string {
-	return "score_error:" + strings.TrimPrefix(runtimeErrorText(err), "表达式")
-}
+// scoreRuntimeReason 是分数表达式运行出错时的明细原因 score_error:<中文原因>。
+const scoreRuntimeReason = "score_error:求值出错"
 
 func without(ids []string, failed map[string]string) []string {
 	if len(failed) == 0 {

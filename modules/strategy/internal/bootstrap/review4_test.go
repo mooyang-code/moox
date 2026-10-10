@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const stockResolvedJSON = `{"view_id":"view_a","dataset_id":"ds","bar":"1d","calendar":"cn_stock","spot":true,"columns":{},"view_columns":["close"]}`
+const stockResolvedJSON = `{"completion_kind":"collector.period.completed","view_id":"view_a","dataset_id":"ds","bar":"1d","calendar":"cn_stock","spot":true,"columns":{},"view_columns":["close"]}`
 
 // 有启用实例使用 A 股日历时，内嵌日历将到期给出提醒，已过期报未就绪；没有实例用它时不打扰。
 func TestStockCalendarWarning(t *testing.T) {
