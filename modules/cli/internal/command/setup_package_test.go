@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +25,7 @@ func TestSetupPackageAndInspectUseNoOperatorCredentials(t *testing.T) {
 	binary.LittleEndian.PutUint16(elf[18:], 62)
 	require.NoError(t, os.WriteFile(filepath.Join(binaries, "moox-access"), elf, 0o755))
 	output := filepath.Join(folder, "access package.tar.gz")
-	var built setupdeploy.UnitPackageResult
+	var built unitpackage.Result
 	for _, args := range [][]string{
 		{"package", "--repo-root", root, "--profile", "access", "--binary-dir", binaries, "--output", output},
 		{"package", "inspect", output},
@@ -39,7 +39,7 @@ func TestSetupPackageAndInspectUseNoOperatorCredentials(t *testing.T) {
 		command.SetErr(&buffer)
 		command.SetArgs(args)
 		require.NoError(t, command.Execute(), buffer.String())
-		var result setupdeploy.UnitPackageResult
+		var result unitpackage.Result
 		require.NoError(t, json.Unmarshal(buffer.Bytes(), &result))
 		if built.Archive == "" {
 			built = result
@@ -47,7 +47,7 @@ func TestSetupPackageAndInspectUseNoOperatorCredentials(t *testing.T) {
 			require.Equal(t, built, result)
 		}
 		require.Equal(t, "access", result.Manifest.Profile)
-		require.Equal(t, []setupdeploy.UnitComponent{{ID: "access", Binary: "bin/moox-access"}}, result.Manifest.Components)
+		require.Equal(t, []unitpackage.Component{{ID: "access", Binary: "bin/moox-access"}}, result.Manifest.Components)
 	}
 }
 

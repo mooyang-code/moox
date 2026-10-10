@@ -38,6 +38,8 @@ console-proxy 必须在它的 0600 `config/app.yaml` 中明确声明 `drain_time
 
 调用方已经持有维护锁时，传递同一文件描述符到助手（通常为 FD 3），同时使用 `--maintenance-lock-held --maintenance-lock-fd 3`。助手核对文件身份并复用同一个锁，不按标记直接绕过加锁。只有布尔参数、没有正确描述符会失败。
 
+软件准备另提供 `extract --archive PATH --sha256 DIGEST --profile PROFILE --destination NEW_DIR`，只为助手所在 Linux 平台解包已核验软件。它复用独立的[软件包模块](../unitpackage/README.md)，原子发布到新目录且不覆盖已有对象；不写 current、运行计划、身份或持久数据，也不启动服务。准备阶段可以在当前版本运行时执行，后续激活仍须使用共用维护锁。
+
 ```bash
 make test-unit-runtime
 TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh runtime

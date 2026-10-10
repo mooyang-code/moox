@@ -9,9 +9,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 )
 
@@ -35,6 +37,9 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "extract" {
+		return extract(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) == 1 && args[0] == "version" {
 		return json.NewEncoder(stdout).Encode(map[string]string{"version": Version, "catalog_sha256": unitruntime.CatalogSHA256()})
 	}
@@ -60,6 +65,27 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		ids = strings.Split(components, ",")
 	}
 	result, err := unitruntime.Execute(ctx, plan, args[0], ids, options)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(result)
+}
+
+func extract(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime extract", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := unitpackage.ExtractOptions{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+	flags.StringVar(&options.Archive, "archive", "", "uploaded software .tar.gz")
+	flags.StringVar(&options.ExpectedSHA256, "sha256", "", "digest from the package producer")
+	flags.StringVar(&options.Profile, "profile", "", "host/control/storage/access/egress-proxy/trade")
+	flags.StringVar(&options.Destination, "destination", "", "new physical release directory; never overwritten")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || options.Archive == "" {
+		return errors.New("extract requires --archive, --sha256, --profile and --destination, with no positional arguments")
+	}
+	result, err := unitpackage.Extract(ctx, options)
 	if err != nil {
 		return err
 	}

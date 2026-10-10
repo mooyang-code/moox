@@ -1,4 +1,4 @@
-package deploy
+package unitpackage
 
 import (
 	"archive/tar"
@@ -19,6 +19,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func requireFile(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return raw
+}
 
 func unitRepoRoot(t *testing.T) string {
 	t.Helper()
@@ -50,15 +57,15 @@ func unitELFFixture(arch string) []byte {
 	return raw
 }
 
-func unitFixtureOptions(t *testing.T, profile, arch string) UnitPackageOptions {
+func unitFixtureOptions(t *testing.T, profile, arch string) Options {
 	t.Helper()
 	binaries := t.TempDir()
-	names, err := UnitBinaries(profile)
+	names, err := Binaries(profile)
 	require.NoError(t, err)
 	for _, name := range names {
 		require.NoError(t, os.WriteFile(filepath.Join(binaries, name), unitELFFixture(arch), 0o755))
 	}
-	return UnitPackageOptions{RepositoryRoot: unitRepoRoot(t), BinaryDirectory: binaries, Output: filepath.Join(t.TempDir(), profile+".tar.gz"), Profile: profile, GOOS: "linux", GOARCH: arch}
+	return Options{RepositoryRoot: unitRepoRoot(t), BinaryDirectory: binaries, Output: filepath.Join(t.TempDir(), profile+".tar.gz"), Profile: profile, GOOS: "linux", GOARCH: arch}
 }
 
 func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing.T) {
@@ -68,9 +75,9 @@ func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing
 				opts := unitFixtureOptions(t, profile, arch)
 				// Unrelated executables in a shared build directory must never leak.
 				require.NoError(t, os.WriteFile(filepath.Join(opts.BinaryDirectory, "moox-unrelated"), unitELFFixture(arch), 0o755))
-				result, err := PackageUnit(t.Context(), opts)
+				result, err := Package(t.Context(), opts)
 				require.NoError(t, err)
-				inspected, err := InspectUnitPackage(t.Context(), result.Archive)
+				inspected, err := Inspect(t.Context(), result.Archive)
 				require.NoError(t, err)
 				assert.Equal(t, result, inspected)
 				info, err := os.Stat(result.Archive)
@@ -104,7 +111,7 @@ func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing
 				}
 				first, err := os.ReadFile(result.Archive)
 				require.NoError(t, err)
-				again, err := PackageUnit(t.Context(), opts)
+				again, err := Package(t.Context(), opts)
 				require.NoError(t, err)
 				second, err := os.ReadFile(again.Archive)
 				require.NoError(t, err)
@@ -143,7 +150,7 @@ func TestUnitPackagingExcludesIgnoredCredentialsAndRejectsSourceLinks(t *testing
 	for _, name := range []string{"moox.toml", "modules/access/config/operator.yaml"} {
 		require.NoError(t, os.WriteFile(filepath.Join(opts.RepositoryRoot, name), []byte("private-operator-secret"), 0o600))
 	}
-	result, err := PackageUnit(t.Context(), opts)
+	result, err := Package(t.Context(), opts)
 	require.NoError(t, err)
 	for _, entry := range readUnitEntries(t, result.Archive) {
 		assert.NotContains(t, string(entry.raw), "private-operator-secret")
@@ -151,26 +158,26 @@ func TestUnitPackagingExcludesIgnoredCredentialsAndRejectsSourceLinks(t *testing
 	config := filepath.Join(opts.RepositoryRoot, "modules/access/config/app.yaml")
 	require.NoError(t, os.Remove(config))
 	require.NoError(t, os.Symlink(filepath.Join(opts.RepositoryRoot, "moox.toml"), config))
-	_, err = PackageUnit(t.Context(), opts)
+	_, err = Package(t.Context(), opts)
 	require.ErrorContains(t, err, "symbolic links")
-	_, err = InspectUnitPackage(t.Context(), result.Archive)
+	_, err = Inspect(t.Context(), result.Archive)
 	require.NoError(t, err, "a failed package attempt must keep the previous valid archive")
 }
 
 func TestUnitPackagingRejectsWrongTargetAndPreservesSourcesAndOutputs(t *testing.T) {
-	for name, change := range map[string]func(*UnitPackageOptions){
-		"wrong architecture":   func(o *UnitPackageOptions) { o.GOARCH = "arm64" },
-		"wrong platform":       func(o *UnitPackageOptions) { o.GOOS = "darwin" },
-		"unknown profile":      func(o *UnitPackageOptions) { o.Profile = "gateway" },
-		"configuration output": func(o *UnitPackageOptions) { o.Output = filepath.Join(o.RepositoryRoot, "moox.toml") },
-		"source catalog mismatch": func(o *UnitPackageOptions) {
+	for name, change := range map[string]func(*Options){
+		"wrong architecture":   func(o *Options) { o.GOARCH = "arm64" },
+		"wrong platform":       func(o *Options) { o.GOOS = "darwin" },
+		"unknown profile":      func(o *Options) { o.Profile = "gateway" },
+		"configuration output": func(o *Options) { o.Output = filepath.Join(o.RepositoryRoot, "moox.toml") },
+		"source catalog mismatch": func(o *Options) {
 			o.RepositoryRoot = unitPrivateRepo(t)
 			require.NoError(t, os.WriteFile(filepath.Join(o.RepositoryRoot, "packages/servicecatalog/catalog.yaml"), []byte("version: 99\n"), 0o644))
 		},
-		"non executable": func(o *UnitPackageOptions) {
+		"non executable": func(o *Options) {
 			require.NoError(t, os.Chmod(filepath.Join(o.BinaryDirectory, "moox-access"), 0o644))
 		},
-		"script binary": func(o *UnitPackageOptions) {
+		"script binary": func(o *Options) {
 			require.NoError(t, os.WriteFile(filepath.Join(o.BinaryDirectory, "moox-access"), []byte(strings.Repeat("#!/bin/sh\n", 16)), 0o755))
 		},
 	} {
@@ -179,7 +186,7 @@ func TestUnitPackagingRejectsWrongTargetAndPreservesSourcesAndOutputs(t *testing
 			previous := opts.Output
 			require.NoError(t, os.WriteFile(previous, []byte("previous-archive"), 0o600))
 			change(&opts)
-			_, err := PackageUnit(t.Context(), opts)
+			_, err := Package(t.Context(), opts)
 			require.Error(t, err)
 			raw, err := os.ReadFile(previous)
 			require.NoError(t, err)
@@ -189,7 +196,7 @@ func TestUnitPackagingRejectsWrongTargetAndPreservesSourcesAndOutputs(t *testing
 	opts := unitFixtureOptions(t, "access", "amd64")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := PackageUnit(ctx, opts)
+	_, err := Package(ctx, opts)
 	require.Error(t, err)
 	_, err = os.Stat(opts.Output)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -242,13 +249,13 @@ func rewriteUnitEntries(t *testing.T, entries []unitArchiveEntry) string {
 }
 func rehashUnitManifest(t *testing.T, entries []unitArchiveEntry) {
 	t.Helper()
-	var manifest UnitManifest
+	var manifest Manifest
 	require.NoError(t, json.Unmarshal(entries[len(entries)-1].raw, &manifest))
 	manifest.Files = nil
 	for _, entry := range entries[:len(entries)-1] {
-		manifest.Files = append(manifest.Files, UnitFile{Path: entry.header.Name, SHA256: unitDigest(entry.raw), Mode: uint32(entry.header.Mode), Size: int64(len(entry.raw))})
+		manifest.Files = append(manifest.Files, File{Path: entry.header.Name, SHA256: unitDigest(entry.raw), Mode: uint32(entry.header.Mode), Size: int64(len(entry.raw))})
 	}
-	slices.SortFunc(manifest.Files, func(a, b UnitFile) int { return strings.Compare(a.Path, b.Path) })
+	slices.SortFunc(manifest.Files, func(a, b File) int { return strings.Compare(a.Path, b.Path) })
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	require.NoError(t, err)
 	entries[len(entries)-1].raw = append(raw, '\n')
@@ -256,7 +263,7 @@ func rehashUnitManifest(t *testing.T, entries []unitArchiveEntry) {
 
 func TestUnitInspectionRejectsTamperingAndProfileEscapes(t *testing.T) {
 	opts := unitFixtureOptions(t, "access", "amd64")
-	result, err := PackageUnit(t.Context(), opts)
+	result, err := Package(t.Context(), opts)
 	require.NoError(t, err)
 	for name, mutate := range map[string]func([]unitArchiveEntry) []unitArchiveEntry{
 		"corrupted file": func(entries []unitArchiveEntry) []unitArchiveEntry {
@@ -312,22 +319,24 @@ func TestUnitInspectionRejectsTamperingAndProfileEscapes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			entries := mutate(readUnitEntries(t, result.Archive))
 			archive := rewriteUnitEntries(t, entries)
-			_, err := InspectUnitPackage(t.Context(), archive)
+			_, err := Inspect(t.Context(), archive)
 			require.Error(t, err)
+			requireExtractionRejected(t, archive, "access", "amd64")
 		})
 	}
 	for _, suffix := range [][]byte{[]byte("extra"), requireFile(t, result.Archive)} {
 		original := requireFile(t, result.Archive)
 		archive := filepath.Join(t.TempDir(), "concatenated.tar.gz")
 		require.NoError(t, os.WriteFile(archive, append(original, suffix...), 0o600))
-		_, err := InspectUnitPackage(t.Context(), archive)
+		_, err := Inspect(t.Context(), archive)
 		require.ErrorContains(t, err, "trailing")
+		requireExtractionRejected(t, archive, "access", "amd64")
 	}
 }
 
 func TestUnitInspectionRejectsDataAfterTarTerminator(t *testing.T) {
 	opts := unitFixtureOptions(t, "access", "amd64")
-	result, err := PackageUnit(t.Context(), opts)
+	result, err := Package(t.Context(), opts)
 	require.NoError(t, err)
 	original := requireFile(t, result.Archive)
 	reader, err := gzip.NewReader(bytes.NewReader(original))
@@ -342,6 +351,7 @@ func TestUnitInspectionRejectsDataAfterTarTerminator(t *testing.T) {
 	require.NoError(t, writer.Close())
 	archive := filepath.Join(t.TempDir(), "extra-tar-data.tar.gz")
 	require.NoError(t, os.WriteFile(archive, changed.Bytes(), 0o600))
-	_, err = InspectUnitPackage(t.Context(), archive)
+	_, err = Inspect(t.Context(), archive)
 	require.ErrorContains(t, err, "trailing deployment tar data")
+	requireExtractionRejected(t, archive, "access", "amd64")
 }

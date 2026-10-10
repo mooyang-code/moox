@@ -1,4 +1,4 @@
-package deploy
+package unitpackage
 
 import (
 	"archive/tar"
@@ -32,9 +32,9 @@ const (
 	maxUnitFileBytes = int64(512 << 20)
 )
 
-// UnitPackageOptions consumes prebuilt executables. Packaging never compiles or
+// Options consumes prebuilt executables. Packaging never compiles or
 // reads the operator's manifest, SSH credentials, certificates, or runtime data.
-type UnitPackageOptions struct {
+type Options struct {
 	RepositoryRoot  string
 	BinaryDirectory string
 	Output          string
@@ -43,34 +43,34 @@ type UnitPackageOptions struct {
 	GOARCH          string
 }
 
-type UnitComponent struct {
+type Component struct {
 	ID     string `json:"id"`
 	Binary string `json:"binary"`
 }
 
-type UnitFile struct {
+type File struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 	Mode   uint32 `json:"mode"`
 	Size   int64  `json:"size"`
 }
 
-// UnitManifest describes immutable software and configuration templates.
+// Manifest describes immutable software and configuration templates.
 // Issued host material and rendered configuration belong to deployment.
-type UnitManifest struct {
-	Version       int             `json:"version"`
-	Profile       string          `json:"profile"`
-	GOOS          string          `json:"goos"`
-	GOARCH        string          `json:"goarch"`
-	CatalogSHA256 string          `json:"catalog_sha256"`
-	Components    []UnitComponent `json:"components"`
-	Files         []UnitFile      `json:"files"`
+type Manifest struct {
+	Version       int         `json:"version"`
+	Profile       string      `json:"profile"`
+	GOOS          string      `json:"goos"`
+	GOARCH        string      `json:"goarch"`
+	CatalogSHA256 string      `json:"catalog_sha256"`
+	Components    []Component `json:"components"`
+	Files         []File      `json:"files"`
 }
 
-type UnitPackageResult struct {
-	Archive  string       `json:"archive"`
-	SHA256   string       `json:"sha256"`
-	Manifest UnitManifest `json:"manifest"`
+type Result struct {
+	Archive  string   `json:"archive"`
+	SHA256   string   `json:"sha256"`
+	Manifest Manifest `json:"manifest"`
 }
 
 type unitAsset struct {
@@ -136,8 +136,8 @@ var unitSpecs = map[string]unitComponentSpec{
 	"trade":        {[]string{"moox-trade-cli"}, []unitAsset{configAsset("trade", "trade"), schemaAsset("trade", "trade")}},
 }
 
-// UnitComponents returns the exact process boundary of a deployment unit.
-func UnitComponents(profile string) ([]UnitComponent, error) {
+// Components returns the exact process boundary of a deployment unit.
+func Components(profile string) ([]Component, error) {
 	ids, ok := unitProfiles[profile]
 	if !ok {
 		return nil, fmt.Errorf("unsupported deployment profile %q; use host, control, storage, access, egress-proxy, or trade", profile)
@@ -146,7 +146,7 @@ func UnitComponents(profile string) ([]UnitComponent, error) {
 	if err != nil {
 		return nil, err
 	}
-	components := make([]UnitComponent, 0, len(ids))
+	components := make([]Component, 0, len(ids))
 	for _, id := range ids {
 		component, exists := catalog.Component(id)
 		if !exists || component.Binary == "" {
@@ -158,13 +158,13 @@ func UnitComponents(profile string) ([]UnitComponent, error) {
 		if (profile == "host") != (component.Scope == servicecatalog.ScopeHost) {
 			return nil, fmt.Errorf("invalid host component boundary for %q", id)
 		}
-		components = append(components, UnitComponent{ID: id, Binary: "bin/" + component.Binary})
+		components = append(components, Component{ID: id, Binary: "bin/" + component.Binary})
 	}
 	return components, nil
 }
 
-func UnitBinaries(profile string) ([]string, error) {
-	components, err := UnitComponents(profile)
+func Binaries(profile string) ([]string, error) {
+	components, err := Components(profile)
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +185,8 @@ type unitSource struct {
 	mode   fs.FileMode
 }
 
-func PackageUnit(ctx context.Context, opts UnitPackageOptions) (result UnitPackageResult, returnErr error) {
-	components, err := UnitComponents(opts.Profile)
+func Package(ctx context.Context, opts Options) (result Result, returnErr error) {
+	components, err := Components(opts.Profile)
 	if err != nil {
 		return result, err
 	}
@@ -226,7 +226,7 @@ func PackageUnit(ctx context.Context, opts UnitPackageOptions) (result UnitPacka
 		return result, fmt.Errorf("deployment source catalog differs from this CLI; rebuild moox-cli")
 	}
 	sources := map[string]unitSource{"config/servicecatalog/catalog.yaml": {data: catalog, mode: 0o644}}
-	names, err := UnitBinaries(opts.Profile)
+	names, err := Binaries(opts.Profile)
 	if err != nil {
 		return result, err
 	}
@@ -308,7 +308,7 @@ func PackageUnit(ctx context.Context, opts UnitPackageOptions) (result UnitPacka
 	digest := sha256.New()
 	compressed := gzip.NewWriter(io.MultiWriter(file, digest))
 	writer := tar.NewWriter(compressed)
-	manifest := UnitManifest{Version: 1, Profile: opts.Profile, GOOS: opts.GOOS, GOARCH: opts.GOARCH, CatalogSHA256: unitDigest(catalog), Components: components, Files: make([]UnitFile, 0, len(sources))}
+	manifest := Manifest{Version: 1, Profile: opts.Profile, GOOS: opts.GOOS, GOARCH: opts.GOARCH, CatalogSHA256: unitDigest(catalog), Components: components, Files: make([]File, 0, len(sources))}
 	paths := make([]string, 0, len(sources))
 	for name := range sources {
 		paths = append(paths, name)
@@ -329,7 +329,7 @@ func PackageUnit(ctx context.Context, opts UnitPackageOptions) (result UnitPacka
 		}
 		manifest.Files = append(manifest.Files, entry)
 	}
-	entries := make(map[string]UnitFile, len(manifest.Files))
+	entries := make(map[string]File, len(manifest.Files))
 	for _, entry := range manifest.Files {
 		entries[entry.Path] = entry
 	}
@@ -365,7 +365,7 @@ func PackageUnit(ctx context.Context, opts UnitPackageOptions) (result UnitPacka
 	if err = os.Rename(file.Name(), output); err != nil {
 		return result, err
 	}
-	return UnitPackageResult{Archive: output, SHA256: "sha256:" + hex.EncodeToString(digest.Sum(nil)), Manifest: manifest}, nil
+	return Result{Archive: output, SHA256: "sha256:" + hex.EncodeToString(digest.Sum(nil)), Manifest: manifest}, nil
 }
 
 func unitPlatform(goos, goarch string) error {
@@ -459,7 +459,7 @@ func validUnitELF(header []byte, goarch string) bool {
 	machine := binary.LittleEndian.Uint16(header[18:20])
 	return (kind == 2 || kind == 3) && ((goarch == "amd64" && machine == 62) || (goarch == "arm64" && machine == 183))
 }
-func writeUnitSource(ctx context.Context, writer *tar.Writer, name string, source unitSource) (UnitFile, error) {
+func writeUnitSource(ctx context.Context, writer *tar.Writer, name string, source unitSource) (File, error) {
 	var reader io.Reader = bytes.NewReader(source.data)
 	var file *os.File
 	var before os.FileInfo
@@ -468,43 +468,43 @@ func writeUnitSource(ctx context.Context, writer *tar.Writer, name string, sourc
 		var err error
 		relative, relErr := filepath.Rel(source.root, source.source)
 		if relErr != nil {
-			return UnitFile{}, relErr
+			return File{}, relErr
 		}
 		file, err = unitOpenRegular(source.root, filepath.ToSlash(relative))
 		if err != nil {
-			return UnitFile{}, err
+			return File{}, err
 		}
 		defer file.Close()
 		before, err = file.Stat()
 		if err != nil {
-			return UnitFile{}, err
+			return File{}, err
 		}
 		if source.arch != "" {
 			var header [64]byte
 			if _, err := io.ReadFull(file, header[:]); err != nil || before.Mode().Perm()&0o111 == 0 || !validUnitELF(header[:], source.arch) {
-				return UnitFile{}, fmt.Errorf("deployment binary changed before packaging")
+				return File{}, fmt.Errorf("deployment binary changed before packaging")
 			}
 			if _, err := file.Seek(0, io.SeekStart); err != nil {
-				return UnitFile{}, err
+				return File{}, err
 			}
 		}
 		size = before.Size()
 		reader = file
 	}
 	if err := writer.WriteHeader(&tar.Header{Name: name, Mode: int64(source.mode.Perm()), Size: size, Typeflag: tar.TypeReg, ModTime: time.Unix(0, 0), Format: tar.FormatPAX}); err != nil {
-		return UnitFile{}, err
+		return File{}, err
 	}
 	digest := sha256.New()
 	if _, err := io.CopyN(io.MultiWriter(&unitContextWriter{ctx: ctx, writer: writer}, digest), reader, size); err != nil {
-		return UnitFile{}, err
+		return File{}, err
 	}
 	if file != nil {
 		after, err := file.Stat()
 		if err != nil || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-			return UnitFile{}, fmt.Errorf("deployment source changed while packaging")
+			return File{}, fmt.Errorf("deployment source changed while packaging")
 		}
 	}
-	return UnitFile{Path: name, SHA256: "sha256:" + hex.EncodeToString(digest.Sum(nil)), Mode: uint32(source.mode.Perm()), Size: size}, nil
+	return File{Path: name, SHA256: "sha256:" + hex.EncodeToString(digest.Sum(nil)), Mode: uint32(source.mode.Perm()), Size: size}, nil
 }
 
 type unitContextWriter struct {

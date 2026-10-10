@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/spf13/cobra"
 )
 
 func newSetupPackageCommand() *cobra.Command {
-	var options setupdeploy.UnitPackageOptions
+	var options unitpackage.Options
 	command := &cobra.Command{
 		Use:   "package",
 		Short: "按组件边界打包已编译的部署制品",
@@ -29,7 +29,7 @@ func newSetupPackageCommand() *cobra.Command {
 			if options.BinaryDirectory == "" {
 				options.BinaryDirectory = filepath.Join(root, "bin")
 			}
-			result, err := setupdeploy.PackageUnit(command.Context(), options)
+			result, err := unitpackage.Package(command.Context(), options)
 			if err != nil {
 				return fmt.Errorf("package deployment unit: %w", err)
 			}
@@ -49,7 +49,7 @@ func newSetupPackageCommand() *cobra.Command {
 		Short: "校验部署包的组件边界、平台、文件与摘要",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			result, err := setupdeploy.InspectUnitPackage(command.Context(), args[0])
+			result, err := unitpackage.Inspect(command.Context(), args[0])
 			if err != nil {
 				return fmt.Errorf("inspect deployment unit: %w", err)
 			}

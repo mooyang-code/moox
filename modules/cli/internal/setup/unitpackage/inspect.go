@@ -1,4 +1,4 @@
-package deploy
+package unitpackage
 
 import (
 	"archive/tar"
@@ -20,8 +20,14 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// InspectUnitPackage verifies every entry without extracting the archive.
-func InspectUnitPackage(ctx context.Context, archive string) (result UnitPackageResult, returnErr error) {
+// Inspect verifies every entry without extracting the archive.
+func Inspect(ctx context.Context, archive string) (result Result, returnErr error) {
+	return inspect(ctx, archive, nil)
+}
+
+type entrySink func(*tar.Header) (*os.File, error)
+
+func inspect(ctx context.Context, archive string, sink entrySink) (result Result, returnErr error) {
 	absolute, err := filepath.Abs(archive)
 	if err != nil {
 		return result, err
@@ -48,9 +54,9 @@ func InspectUnitPackage(ctx context.Context, archive string) (result UnitPackage
 	defer compressed.Close()
 	compressed.Multistream(false)
 	reader := tar.NewReader(compressed)
-	observed := make(map[string]UnitFile)
+	observed := make(map[string]File)
 	binaryHeaders := make(map[string][]byte)
-	var manifest *UnitManifest
+	var manifest *Manifest
 	var total int64
 	for {
 		if err := ctx.Err(); err != nil {
@@ -81,7 +87,7 @@ func InspectUnitPackage(ctx context.Context, archive string) (result UnitPackage
 			if err != nil {
 				return result, err
 			}
-			var decoded UnitManifest
+			var decoded Manifest
 			decoder := json.NewDecoder(bytes.NewReader(raw))
 			decoder.DisallowUnknownFields()
 			if err := decoder.Decode(&decoded); err != nil {
@@ -95,21 +101,21 @@ func InspectUnitPackage(ctx context.Context, archive string) (result UnitPackage
 				return result, fmt.Errorf("deployment manifest must use canonical encoding")
 			}
 			manifest = &decoded
+			if sink != nil {
+				if _, _, err := readEntry(ctx, bytes.NewReader(raw), header, sink); err != nil {
+					return result, err
+				}
+			}
 			continue
 		}
-		digest := sha256.New()
-		if strings.HasPrefix(header.Name, "bin/") {
-			prefix := make([]byte, 64)
-			if _, err := io.ReadFull(reader, prefix); err != nil {
-				return result, fmt.Errorf("deployment binary is truncated")
-			}
-			_, _ = digest.Write(prefix)
-			binaryHeaders[header.Name] = prefix
-		}
-		if _, err := io.Copy(&unitContextWriter{ctx: ctx, writer: digest}, reader); err != nil {
+		entry, prefix, err := readEntry(ctx, reader, header, sink)
+		if err != nil {
 			return result, err
 		}
-		observed[header.Name] = UnitFile{Path: header.Name, SHA256: "sha256:" + hex.EncodeToString(digest.Sum(nil)), Mode: uint32(header.Mode), Size: header.Size}
+		observed[header.Name] = entry
+		if prefix != nil {
+			binaryHeaders[header.Name] = prefix
+		}
 	}
 	// Read through the checksum and reject concatenated/trailing payloads.
 	var trailing [1]byte
@@ -134,16 +140,65 @@ func InspectUnitPackage(ctx context.Context, archive string) (result UnitPackage
 	if err != nil || info.Size() != after.Size() || !info.ModTime().Equal(after.ModTime()) {
 		return result, fmt.Errorf("deployment archive changed while inspecting")
 	}
-	return UnitPackageResult{Archive: absolute, SHA256: "sha256:" + hex.EncodeToString(archiveDigest.Sum(nil)), Manifest: *manifest}, nil
+	return Result{Archive: absolute, SHA256: "sha256:" + hex.EncodeToString(archiveDigest.Sum(nil)), Manifest: *manifest}, nil
 }
-func validateUnitManifest(manifest UnitManifest, observed map[string]UnitFile) error {
+
+// Inspect and Extract consume the very same byte stream and validation path.
+// A sink may write only into an unpublished private staging directory.
+func readEntry(ctx context.Context, reader io.Reader, header *tar.Header, sink entrySink) (File, []byte, error) {
+	digest := sha256.New()
+	var writer io.Writer = digest
+	var file *os.File
+	if sink != nil {
+		var err error
+		file, err = sink(header)
+		if err != nil {
+			return File{}, nil, err
+		}
+		defer file.Close()
+		writer = io.MultiWriter(digest, file)
+	}
+	writer = &unitContextWriter{ctx: ctx, writer: writer}
+	var prefix []byte
+	var count int64
+	if strings.HasPrefix(header.Name, "bin/") {
+		prefix = make([]byte, 64)
+		if _, err := io.ReadFull(reader, prefix); err != nil {
+			return File{}, nil, fmt.Errorf("deployment binary is truncated")
+		}
+		if _, err := writer.Write(prefix); err != nil {
+			return File{}, nil, err
+		}
+		count = int64(len(prefix))
+	}
+	n, err := io.Copy(writer, reader)
+	if err != nil {
+		return File{}, nil, err
+	}
+	if count+n != header.Size {
+		return File{}, nil, fmt.Errorf("deployment entry size differs from its header")
+	}
+	if file != nil {
+		if err := file.Chmod(os.FileMode(header.Mode)); err != nil {
+			return File{}, nil, err
+		}
+		if err := file.Sync(); err != nil {
+			return File{}, nil, err
+		}
+		if err := file.Close(); err != nil {
+			return File{}, nil, err
+		}
+	}
+	return File{Path: header.Name, SHA256: "sha256:" + hex.EncodeToString(digest.Sum(nil)), Mode: uint32(header.Mode), Size: header.Size}, prefix, nil
+}
+func validateUnitManifest(manifest Manifest, observed map[string]File) error {
 	if manifest.Version != 1 {
 		return fmt.Errorf("unsupported deployment manifest version")
 	}
 	if err := unitPlatform(manifest.GOOS, manifest.GOARCH); err != nil {
 		return err
 	}
-	components, err := UnitComponents(manifest.Profile)
+	components, err := Components(manifest.Profile)
 	if err != nil {
 		return err
 	}
@@ -156,7 +211,7 @@ func validateUnitManifest(manifest UnitManifest, observed map[string]UnitFile) e
 	if catalog, ok := observed["config/servicecatalog/catalog.yaml"]; !ok || catalog.SHA256 != manifest.CatalogSHA256 {
 		return fmt.Errorf("deployment package catalog is missing or corrupted")
 	}
-	names, err := UnitBinaries(manifest.Profile)
+	names, err := Binaries(manifest.Profile)
 	if err != nil {
 		return err
 	}

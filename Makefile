@@ -195,10 +195,13 @@ clean:
 	rm -rf bin release dist
 	find modules -type d \( -name bin -o -name release -o -name .cache \) -prune -exec rm -rf {} +
 
-.PHONY: test-deployment-packages
+.PHONY: test-deployment-packages test-unit-package-linux
 test-deployment-packages:
-	go test ./modules/cli/internal/setup/deploy ./modules/cli/internal/command -run 'TestUnit|TestSetupPackage'
+	go test ./modules/cli/internal/setup/unitpackage ./modules/cli/internal/command -run 'TestUnit|TestSetupPackage'
 	bash scripts/test/contract/test-deployment-package-boundaries.sh
+
+test-unit-package-linux:
+	bash scripts/test/gates/test-unit-package-linux.sh
 
 .PHONY: test-host-placement-deployment
 test-host-placement-deployment:

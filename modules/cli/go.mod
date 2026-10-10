@@ -90,6 +90,7 @@ require (
 	github.com/mooyang-code/moox/packages/doctor v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
@@ -106,7 +107,7 @@ require (
 	go.uber.org/zap v1.25.0
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.43.0
 	golang.org/x/text v0.36.0 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
@@ -155,3 +156,5 @@ replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tra
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
 
 replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ../cloudnode/proto/cloudnodegen
+
+replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
