@@ -111,3 +111,55 @@ func TestGenerateSecretID_ShouldReturnUUID(t *testing.T) {
 	assert.NotEmpty(t, id1)
 	assert.NotEqual(t, id1, id2)
 }
+
+func TestSystemGatewayKeysAreInvisibleAndImmutableThroughGenericDAO(t *testing.T) {
+	db := setupSecretDAOTestDB(t)
+	d := NewSecretDAO(db)
+	ctx := context.Background()
+	regular := sampleSecret()
+	regular.Description = "visible description"
+	require.NoError(t, d.Create(ctx, regular))
+	for _, row := range []*model.Secret{
+		{SecretID: model.GatewayKeyringIDPrefix + "console", SecretType: "api_key"},
+		{SecretID: "opaque-system-record", SecretType: model.GatewayKeyringType},
+	} {
+		row.Name = "system"
+		row.Description = "visible description"
+		row.Category = "gateway"
+		row.Status = "active"
+		row.SecretValue = "deliberately-not-decryptable"
+		require.ErrorIs(t, d.Create(ctx, row), ErrSystemSecret)
+		require.NoError(t, db.Create(row).Error)
+		_, err := d.FindByID(ctx, row.SecretID)
+		require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+		require.ErrorIs(t, d.Update(ctx, row), ErrSystemSecret)
+		require.ErrorIs(t, d.Delete(ctx, row.SecretID), ErrSecretNotFound)
+		require.ErrorIs(t, d.UpdateStatus(ctx, row.SecretID, "inactive"), ErrSecretNotFound)
+		require.ErrorIs(t, d.UpdateLastUsed(ctx, row.SecretID, "forged"), ErrSecretNotFound)
+		// A caller cannot evade the write scope by changing the requested type.
+		forged := sampleSecret()
+		forged.SecretID = row.SecretID
+		err = d.Update(ctx, forged)
+		if row.SecretType == model.GatewayKeyringType {
+			require.ErrorIs(t, err, ErrSecretNotFound)
+		} else {
+			require.ErrorIs(t, err, ErrSystemSecret)
+		}
+		var actual model.Secret
+		require.NoError(t, db.First(&actual, row.ID).Error)
+		require.Equal(t, row.SecretValue, actual.SecretValue)
+		require.Equal(t, "active", actual.Status)
+		require.False(t, actual.IsDeleted)
+	}
+	for _, filters := range []*SecretFilters{nil, {Keyword: "visible"}, {Category: "gateway"}} {
+		rows, total, err := d.List(ctx, 0, 100, filters)
+		require.NoError(t, err, "system rows must be excluded before decryption")
+		if filters != nil && filters.Category == "gateway" {
+			require.Zero(t, total)
+			require.Empty(t, rows)
+		} else {
+			require.Equal(t, int64(1), total)
+			require.Equal(t, regular.SecretID, rows[0].SecretID)
+		}
+	}
+}

@@ -7,8 +7,9 @@ import (
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
+
+const DefaultCCNName = "moox-private-network"
 
 type HostTarget struct {
 	Name     string   `json:"name"`
@@ -23,15 +24,17 @@ type SCFTarget struct {
 	Prefixes        []string `json:"prefixes"`
 	PublicNetStatus string   `json:"public_net_status"`
 	FunctionCount   int      `json:"function_count"`
+	AccessAddress   string   `json:"access_address,omitempty"`
 }
 
-// CollectTencentHosts 返回腾讯云上的 MooX 主机和编译主机；Roles 是主机上部署的组件，编译主机为 compile。
-// 同一地址只出现一次。
 func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 	byAddr := make(map[string]*HostTarget)
-	add := func(name, address, provider string, roles []string) {
-		address = strings.TrimSpace(address)
-		if !strings.EqualFold(strings.TrimSpace(provider), "tencent") || address == "" {
+	add := func(host setupconfig.Host, role string) {
+		if !strings.EqualFold(strings.TrimSpace(host.Provider), "tencent") {
+			return
+		}
+		address := strings.TrimSpace(host.Address)
+		if address == "" {
 			return
 		}
 		key := strings.ToLower(address)
@@ -40,19 +43,38 @@ func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 		}
 		item, ok := byAddr[key]
 		if !ok {
-			item = &HostTarget{Name: name, Address: address, Provider: "tencent"}
+			item = &HostTarget{
+				Name: strings.TrimSpace(host.Name), Address: address,
+				Provider: "tencent",
+			}
 			byAddr[key] = item
 		}
-		for _, role := range roles {
+		if strings.TrimSpace(role) != "" {
 			item.Roles = appendUnique(item.Roles, role)
 		}
+		if item.Name == "" {
+			item.Name = strings.TrimSpace(host.Name)
+		}
 	}
-	for _, host := range manifest.HostList() {
-		roles := append(servicecatalog.Default().HostComponents(), manifest.Components(host.ID)...)
-		add(host.ID, host.Address, host.Provider, roles)
+	add(manifest.ControlHost(), "control")
+	if manifest.HasStrategyHost() {
+		add(manifest.StrategyHost(), "strategy")
 	}
-	if manifest.CompileHost.Configured() {
-		add("compile", manifest.CompileHost.Address, manifest.CompileHost.Provider, []string{"compile"})
+	if manifest.HasStorageHost() {
+		add(manifest.StorageHost(), "storage")
+	}
+	if manifest.HasViewHost() {
+		add(manifest.ViewHost(), "view")
+	}
+	if manifest.HasCompileHost() {
+		add(manifest.CompileHost(), "compile")
+	}
+	for _, host := range manifest.OtherHosts() {
+		role := "other"
+		if name := strings.TrimSpace(host.Name); name != "" {
+			role = name
+		}
+		add(host, role)
 	}
 	out := make([]HostTarget, 0, len(byAddr))
 	for _, item := range byAddr {
@@ -63,13 +85,20 @@ func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
 	return out
 }
 
-// CollectSCFTargets 返回启用的 SCF 采集函数所在的地域和命名空间。
 func CollectSCFTargets(manifest setupconfig.Manifest) []SCFTarget {
+	return collectSCFTargets(manifest, false)
+}
+
+func CollectSCFRestoreTargets(manifest setupconfig.Manifest) []SCFTarget {
+	return collectSCFTargets(manifest, true)
+}
+
+func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTarget {
 	if !manifest.SCFFetcher.Enabled {
 		return nil
 	}
 	byKey := make(map[string]*SCFTarget)
-	add := func(region, namespace, prefix, publicNet string, count int) {
+	add := func(region, namespace, prefix, publicNet, storageAccessTarget string, count int) {
 		region = strings.ToLower(strings.TrimSpace(region))
 		if region == "" {
 			return
@@ -78,7 +107,11 @@ func CollectSCFTargets(manifest setupconfig.Manifest) []SCFTarget {
 		key := region + "\x00" + namespace
 		item, ok := byKey[key]
 		if !ok {
-			item = &SCFTarget{Region: region, Namespace: namespace, PublicNetStatus: firstNonEmpty(publicNet, "ENABLE")}
+			item = &SCFTarget{
+				Region: region, Namespace: namespace,
+				PublicNetStatus: firstNonEmpty(publicNet, "ENABLE"),
+				AccessAddress:   strings.TrimSpace(storageAccessTarget),
+			}
 			byKey[key] = item
 		}
 		item.Prefixes = appendUnique(item.Prefixes, prefix)
@@ -86,17 +119,20 @@ func CollectSCFTargets(manifest setupconfig.Manifest) []SCFTarget {
 		if strings.TrimSpace(publicNet) != "" {
 			item.PublicNetStatus = publicNet
 		}
+		if strings.TrimSpace(storageAccessTarget) != "" {
+			item.AccessAddress = strings.TrimSpace(storageAccessTarget)
+		}
 	}
 	for _, space := range manifest.SCFFetcher.Spaces {
 		namespace := strings.TrimSpace(space.Namespace)
 		publicNet := strings.ToUpper(strings.TrimSpace(space.PublicNetStatus))
 		for _, region := range space.Regions {
-			if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
+			if !includeIdle && (!region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region)) {
 				continue
 			}
 			shards := setupconfig.SpaceRegionNamespaceShards(space, region, manifest.SCFFetcher.TencentLimits)
 			if len(shards) == 0 {
-				add(region.Region, namespace, space.FunctionPrefix, publicNet, region.FunctionCount)
+				add(region.Region, namespace, space.FunctionPrefix, publicNet, space.AccessAddressForRegion(region.Region), region.FunctionCount)
 				continue
 			}
 			for _, shard := range shards {
@@ -104,11 +140,11 @@ func CollectSCFTargets(manifest setupconfig.Manifest) []SCFTarget {
 				if strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") {
 					poolCount = shard.Invokes
 				}
-				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, poolCount)
+				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.AccessAddressForRegion(region.Region), poolCount)
 			}
-			if strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") {
+			if region.Enabled && region.FunctionCount > 0 && strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") && !space.IsRegionBlacklisted(region.Region) {
 				if namespace, err := setupconfig.SpaceRegionReleaseCanaryNamespace(space, region, manifest.SCFFetcher.TencentLimits); err == nil {
-					add(region.Region, namespace, space.FunctionPrefix, publicNet, 1)
+					add(region.Region, namespace, space.FunctionPrefix, publicNet, space.AccessAddressForRegion(region.Region), 1)
 				}
 			}
 		}
@@ -127,19 +163,8 @@ func CollectSCFTargets(manifest setupconfig.Manifest) []SCFTarget {
 	return out
 }
 
-// SCFRegions 返回这些采集函数所在的地域，去重并排序。
-func SCFRegions(targets []SCFTarget) []string {
-	var regions []string
-	for _, target := range targets {
-		regions = appendUnique(regions, target.Region)
-	}
-	sort.Strings(regions)
-	return regions
-}
-
-// PrivateServicePorts 是主机之间、SCF 到主机经私网访问的端口：消息总线、跨主机入口和外部接入。
 func PrivateServicePorts(eventBusPort int) []string {
-	ports := []int{eventBusPort, 11003, 11004}
+	ports := []int{eventBusPort, 11003, 11012}
 	out := make([]string, 0, len(ports))
 	seen := map[string]struct{}{}
 	for _, port := range ports {
@@ -176,6 +201,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func replaceIP(value, from, to string) string {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" || from == to || !strings.Contains(value, from) {
+		return value
+	}
+	return strings.ReplaceAll(value, from, to)
 }
 
 func hostHasRole(host HostTarget, role string) bool {

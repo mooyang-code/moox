@@ -1,3 +1,7 @@
+gateway_client:
+  caller: storage-view
+  key_id: "" # Admin 分配，部署时填入。
+  key_file: ../../secrets/caller-storage-view.key
 global:
   namespace: Development
   env_name: test
@@ -28,12 +32,14 @@ server:
       port: 20103
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.storage.ViewIndex
       ip: 127.0.0.1
       port: 20104
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.storage.view.metrics.timer
       port: 20307
@@ -48,11 +54,17 @@ server:
       protocol: timer
       timeout: 20000
 
-# 访问 Metadata 与 PrimaryStore 经顶层的 gateway_client。
 client:
   filter:
     - validation
     - opentelemetry
+  service:
+    - name: trpc.moox.storage.PrimaryStore
+      target: ip://127.0.0.1:20102
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 30000
 
 plugins:
   metrics:
@@ -79,14 +91,6 @@ plugins:
           max_backups: 5
           compress: false
 
-# storage-view 经本机主机网关访问 Metadata、PrimaryStore；相对路径按安装包根目录解析。
-gateway_client:
-  mode: local
-  caller: storage-view
-  key_file: ../secrets/caller-storage-view.key
-  ca_file: ../certs/moox-ca.crt
-  cache_dir: ./var/gatewayclient
-
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
@@ -106,9 +110,6 @@ storage:
     # This field is retained for the primary/legacy config loader only.
     max_ack_pending: 256
   view:
-    metadata_service_name: trpc.moox.storage.Metadata
-    primary_store_service_name: trpc.moox.storage.PrimaryStore
-    index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
     fetch_batch: 256

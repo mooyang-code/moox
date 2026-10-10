@@ -131,7 +131,7 @@ func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) erro
 	fs.StringVar(&opts.spaceID, "space-id", "", "View space ID")
 	fs.StringVar(&opts.viewID, "view-id", "", "View ID")
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml path")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "存储部署根目录（其下 current/ 是当前发布，内含 start.sh、stop.sh）")
+	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream")
 	fs.StringVar(&opts.consumer, "consumer", opts.consumer, "durable storage View consumer")
 	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
@@ -322,7 +322,7 @@ func bindRepairViewFlags(fs *flag.FlagSet, opts *repairViewOptions) {
 	fs.StringVar(&opts.spaceID, "space-id", "", "View space ID")
 	fs.StringVar(&opts.viewID, "view-id", "", "View ID")
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml path")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "存储部署根目录（其下 current/ 是当前发布，内含 start.sh、stop.sh）")
+	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", defaultRepairJSName, "JetStream stream")
 	fs.StringVar(&opts.consumer, "consumer", defaultRepairConsumer, "durable storage View consumer")
 	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
@@ -343,9 +343,9 @@ func defaultRepairStorageConfigPath() string {
 		return configured
 	}
 	if packageRoot := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PACKAGE_ROOT")); packageRoot != "" {
-		return filepath.Join(packageRoot, lifecycleDir, "storage-primary", "config", "storage.yaml")
+		return filepath.Join(packageRoot, "config", "storage.yaml")
 	}
-	for _, candidate := range []string{filepath.Join("config", "storage.yaml"), filepath.Join(lifecycleDir, "storage-primary", "config", "storage.yaml")} {
+	for _, candidate := range []string{filepath.Join("config", "storage.yaml"), filepath.Join("storage", "config", "storage.yaml")} {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -403,15 +403,13 @@ func resolveRepairPackageRoot(configured, configPath string) string {
 	return "."
 }
 
-// lifecycleDir 是部署根目录下指向当前发布的符号链接，start.sh、stop.sh、status.sh 都在发布目录里。
-const lifecycleDir = "current"
-
-// findLifecycleRoot 找到部署根目录：其下的 current/ 是当前发布。配置文件在 <部署根目录>/current/<组件>/config/ 下，
-// 从那里往上找，避免破坏性命令误操作到只含数据的子目录。
+// Config files live under <deploy-root>/storage/config while lifecycle
+// scripts live at <deploy-root>. Accept either layout so the destructive CLI
+// cannot accidentally operate on a data-only subdirectory.
 func findLifecycleRoot(candidate string) string {
 	candidate = filepath.Clean(candidate)
 	for current := candidate; ; current = filepath.Dir(current) {
-		if _, err := os.Stat(filepath.Join(current, lifecycleDir, "start.sh")); err == nil {
+		if _, err := os.Stat(filepath.Join(current, "start.sh")); err == nil {
 			return current
 		}
 		parent := filepath.Dir(current)
@@ -831,19 +829,11 @@ func runStorageComponentLifecycle(ctx context.Context, packageRoot, action, serv
 func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, action, serviceName string, replayPending bool, stderr io.Writer) error {
 	packageRoot = strings.TrimSpace(packageRoot)
 	if packageRoot == "" {
-		return errors.New("存储部署根目录为空，请指定 --package-root")
+		return errors.New("storage package root is empty; pass --package-root")
 	}
-	// 破坏性操作期间组件必须保持停止：stop.sh 不写暂停标记，健康检查会在一分钟内把它重新拉起来，
-	// 所以停止用 pause.sh（写标记并停止），启动用 resume.sh（删标记并启动）。
-	switch action {
-	case "stop":
-		action = "pause"
-	case "start":
-		action = "resume"
-	}
-	script := filepath.Join(packageRoot, lifecycleDir, action+".sh")
+	script := filepath.Join(packageRoot, action+".sh")
 	if info, err := os.Stat(script); err != nil || info.IsDir() {
-		return fmt.Errorf("存储部署根目录 %s 下没有当前发布的 %s.sh", packageRoot, action)
+		return fmt.Errorf("storage package %s is unavailable", packageRoot)
 	}
 	cmd := exec.CommandContext(ctx, script, serviceName)
 	cmd.Dir = packageRoot

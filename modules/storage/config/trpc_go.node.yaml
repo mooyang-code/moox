@@ -26,6 +26,7 @@ server:
       port: 20107
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 300000
     - name: trpc.moox.storage.node.metrics.timer
       port: 20309

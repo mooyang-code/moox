@@ -1153,10 +1153,10 @@ func TestDispatchDueRetriesLimitsBacklogPerMaintenancePass(t *testing.T) {
 	}
 	nodes := []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}}
 	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
-	require.Eventually(t, func() bool { return len(invoker.snapshot()) == expectedMaxRetryBatchesPerPass }, 2*time.Second, 10*time.Millisecond)
-	remaining, err := db.FetchRetries().CountPending(ctx, spaceID, datasetID, "1m")
-	require.NoError(t, err)
-	require.EqualValues(t, dueGroupCount-expectedMaxRetryBatchesPerPass, remaining, "the first maintenance pass should leave excess due work queued")
+	require.Eventually(t, func() bool {
+		remaining, err := db.FetchRetries().CountPending(ctx, spaceID, datasetID, "1m")
+		return err == nil && remaining == int64(dueGroupCount-expectedMaxRetryBatchesPerPass) && len(invoker.snapshot()) == expectedMaxRetryBatchesPerPass
+	}, 2*time.Second, 10*time.Millisecond, "the first maintenance pass should persist dispatches and leave excess due work queued")
 
 	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now.Add(time.Minute)))
 	require.Eventually(t, func() bool {
@@ -1970,7 +1970,7 @@ func TestRetryInvokeCandidatesExhaustedAdvancesOnNextMaintenancePass(t *testing.
 	require.Equal(t, 2, recoveredRetry.Attempt, "the failed planned attempt must advance through ordinary bounded recovery")
 	require.Equal(t, "pending", recoveredRetry.Status)
 	require.NotNil(t, recoveredRetry.NextRetryAt)
-	require.Equal(t, maintenanceAt.Add(5*time.Second), *recoveredRetry.NextRetryAt, "timeout recovery must preserve the five-second grace")
+	require.Equal(t, maintenanceAt.Add(5*time.Second), recoveredRetry.NextRetryAt.UTC(), "timeout recovery must preserve the five-second grace")
 	require.Equal(t, 2, invoker.count(), "a retry recovered in this pass must not bypass its persisted grace period")
 	futureRetry, err := db.FetchRetries().Get(ctx, spaceID, futureRetryKey)
 	require.NoError(t, err)
@@ -1986,7 +1986,7 @@ func TestRetryInvokeCandidatesExhaustedAdvancesOnNextMaintenancePass(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, domain.BatchStatusPlanned, nextBatch.Status, "maintenance must recover before redispatching the pending retry key")
 	require.NotNil(t, nextBatch.PlannedAt)
-	require.Equal(t, maintenanceAt.Add(5*time.Second), *nextBatch.PlannedAt, "the retry batch must use the actual maintenance pass time")
+	require.Equal(t, maintenanceAt.Add(5*time.Second), nextBatch.PlannedAt.UTC(), "the retry batch must use the actual maintenance pass time")
 	futureRetry, err = db.FetchRetries().Get(ctx, spaceID, futureRetryKey)
 	require.NoError(t, err)
 	require.Equal(t, "pending", futureRetry.Status, "the recovery grace must not make unrelated backoff work due early")

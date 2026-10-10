@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -36,7 +37,7 @@ func (r *ResultRepository) Recent(ctx context.Context, spaceID, checkID string, 
 	var results []domain.CheckResult
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_check_id = ?", spaceID, checkID).
-		Order("c_checked_at DESC").
+		Order("c_checked_at DESC, c_id DESC").
 		Limit(limit).
 		Find(&results).Error
 	return results, err
@@ -99,4 +100,14 @@ func (r *ResultRepository) Stats(ctx context.Context, spaceID string, since time
 
 func (r *ResultRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	return DeleteBefore(ctx, r.db, "t_monitor_check_results", "c_checked_at", cutoff)
+}
+
+// LastFailure preserves the cause while an alert waits for its recovery threshold.
+func (r *ResultRepository) LastFailure(ctx context.Context, spaceID, checkID string) (*domain.CheckResult, error) {
+	var result domain.CheckResult
+	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_check_id = ? AND c_success = 0", spaceID, checkID).Order("c_checked_at DESC, c_id DESC").First(&result).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &result, err
 }

@@ -12,24 +12,27 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"google.golang.org/protobuf/proto"
 )
 
 // ErrLeaseConflict means the manager rejected the call because another engine
 // holds the engine lease or the recalc job lease moved on.
 var ErrLeaseConflict = errors.New("factor engine lease conflict")
 
-// ManagerClient 经外部接入调用 moox-factor-mgr 的 FactorEngine 服务（tRPC），以 factor-engine 身份签名。
+const managerServicePath = "trpc.moox.factor.FactorEngine"
+
+// ManagerClient borrows the engine's external client, also used by Storage.
 type ManagerClient struct {
-	proxy    factorpb.FactorEngineClientProxy
+	gateway  gatewayclient.Invoker
+	timeout  time.Duration
 	identity domain.EngineIdentity
 }
 
-// NewManagerClient 用外部方式的 gatewayclient 创建 FactorEngine 客户端。
-func NewManagerClient(gateway *gatewayclient.Client, cfg ManagerConfig, identity domain.EngineIdentity) *ManagerClient {
-	return &ManagerClient{
-		proxy:    factorpb.NewFactorEngineClientProxy(gateway.ClientOptions(gatewayclient.WithTimeout(cfg.Timeout))...),
-		identity: identity,
+func NewManagerClient(gateway gatewayclient.Invoker, timeout time.Duration, identity domain.EngineIdentity) (*ManagerClient, error) {
+	if gateway == nil || timeout <= 0 {
+		return nil, errors.New("factor manager requires a shared external gateway and positive timeout")
 	}
+	return &ManagerClient{gateway: gateway, timeout: timeout, identity: identity}, nil
 }
 
 // CatalogSnapshot is one SyncEngineCatalog answer.
@@ -40,8 +43,9 @@ type CatalogSnapshot struct {
 }
 
 func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (CatalogSnapshot, error) {
-	rsp, err := c.proxy.SyncEngineCatalog(ctx, &factorpb.SyncEngineCatalogReq{Engine: factorwire.EngineIdentityToPB(c.identity), KnownHash: knownHash})
-	if err := managerResult("SyncEngineCatalog", rsp.GetRetInfo(), err); err != nil {
+	var rsp factorpb.SyncEngineCatalogRsp
+	req := &factorpb.SyncEngineCatalogReq{Engine: factorwire.EngineIdentityToPB(c.identity), KnownHash: knownHash}
+	if err := c.call(ctx, "SyncEngineCatalog", req, &rsp, rsp.GetRetInfo); err != nil {
 		return CatalogSnapshot{}, err
 	}
 	snapshot := CatalogSnapshot{Hash: rsp.GetCatalogHash(), NotModified: rsp.GetNotModified()}
@@ -56,8 +60,9 @@ func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (Cata
 }
 
 func (c *ManagerClient) Heartbeat(ctx context.Context, status domain.EngineStatus) (time.Duration, error) {
-	rsp, err := c.proxy.EngineHeartbeat(ctx, &factorpb.EngineHeartbeatReq{Engine: factorwire.EngineIdentityToPB(c.identity), Status: factorwire.EngineStatusToPB(status)})
-	if err := managerResult("EngineHeartbeat", rsp.GetRetInfo(), err); err != nil {
+	var rsp factorpb.EngineHeartbeatRsp
+	req := &factorpb.EngineHeartbeatReq{Engine: factorwire.EngineIdentityToPB(c.identity), Status: factorwire.EngineStatusToPB(status)}
+	if err := c.call(ctx, "EngineHeartbeat", req, &rsp, rsp.GetRetInfo); err != nil {
 		return 0, err
 	}
 	return time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second, nil
@@ -73,8 +78,9 @@ type PulledJob struct {
 }
 
 func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, error) {
-	rsp, err := c.proxy.PullRecalcJob(ctx, &factorpb.PullRecalcJobReq{Engine: factorwire.EngineIdentityToPB(c.identity)})
-	if err := managerResult("PullRecalcJob", rsp.GetRetInfo(), err); err != nil {
+	var rsp factorpb.PullRecalcJobRsp
+	req := &factorpb.PullRecalcJobReq{Engine: factorwire.EngineIdentityToPB(c.identity)}
+	if err := c.call(ctx, "PullRecalcJob", req, &rsp, rsp.GetRetInfo); err != nil {
 		return PulledJob{}, false, err
 	}
 	if !rsp.GetFound() {
@@ -105,21 +111,28 @@ func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, err
 
 // ReportRecalcProgress returns the manager's current status of the job.
 func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string) (string, error) {
-	rsp, err := c.proxy.ReportRecalcProgress(ctx, &factorpb.ReportRecalcProgressReq{
+	var rsp factorpb.ReportRecalcProgressRsp
+	req := &factorpb.ReportRecalcProgressReq{
 		Engine: factorwire.EngineIdentityToPB(c.identity), JobId: jobID, LeaseToken: leaseToken,
 		ProgressTime: factorwire.FormatTime(progress), Status: status, Error: errText,
-	})
-	if err := managerResult("ReportRecalcProgress", rsp.GetRetInfo(), err); err != nil {
+	}
+	if err := c.call(ctx, "ReportRecalcProgress", req, &rsp, rsp.GetRetInfo); err != nil {
 		return "", err
 	}
 	return rsp.GetJobStatus(), nil
 }
 
-// managerResult 把一次 FactorEngine 调用的传输错误和业务返回码统一成错误。
-func managerResult(method string, ret *commonpb.RetInfo, err error) error {
-	switch {
-	case err != nil:
+func (c *ManagerClient) call(ctx context.Context, method string, req, rsp proto.Message, retInfo func() *commonpb.RetInfo) error {
+	if c == nil || c.gateway == nil {
+		return errors.New("factor manager gateway is unavailable")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	if err := c.gateway.Invoke(callCtx, managerServicePath, method, req, rsp); err != nil {
 		return fmt.Errorf("call %s: %w", method, err)
+	}
+	ret := retInfo()
+	switch {
 	case ret == nil:
 		return fmt.Errorf("%s returned no ret_info", method)
 	case ret.GetCode() == commonpb.ErrorCode_SUCCESS:

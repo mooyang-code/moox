@@ -4,7 +4,9 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -13,13 +15,13 @@ import (
 
 // Config is the root moox-cloudnode configuration.
 type Config struct {
-	// GatewayClient 是 CloudNode 调用 Admin（发布租约、SecretMgr）使用的 gatewayclient 配置（cloudnode 身份）。
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	Database      DatabaseConfig       `yaml:"database"`
-	NodeBatch     NodeBatchConfig      `yaml:"node_batch"`
-	TencentSCF    TencentSCFConfig     `yaml:"tencent_scf"`
-	Debug         DebugConfig          `yaml:"debug"`
-	Health        HealthConfig         `yaml:"health"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath    string                   `yaml:"-"`
+	Database      DatabaseConfig           `yaml:"database"`
+	NodeBatch     NodeBatchConfig          `yaml:"node_batch"`
+	TencentSCF    TencentSCFConfig         `yaml:"tencent_scf"`
+	Debug         DebugConfig              `yaml:"debug"`
+	Health        HealthConfig             `yaml:"health"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -62,10 +64,15 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
+	cfg.sourcePath = path
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("cloudnode config must contain exactly one YAML document")
 	}
 	cfg.applyEnv()
 	if err := cfg.Validate(); err != nil {
@@ -78,13 +85,19 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is required")
 	}
+	if c.GatewayClient.Caller != "cloudnode" {
+		return fmt.Errorf("gateway_client.caller must be cloudnode")
+	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
+	}
 	if c.NodeBatch.BatchSize < 1 || c.NodeBatch.BatchSize > 10 {
 		return fmt.Errorf("node_batch.batch_size must be between 1 and 10")
 	}
 	if c.NodeBatch.PollInterval < 100*time.Millisecond || c.NodeBatch.PollInterval > 10*time.Second {
 		return fmt.Errorf("node_batch.poll_interval must be between 100ms and 10s")
 	}
-	return c.GatewayClient.Validate()
+	return nil
 }
 
 func (c *Config) applyEnv() {
@@ -102,11 +115,7 @@ func (c *Config) applyEnv() {
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
-		// 与部署布局一致：密钥和 CA 在安装根目录，目录缓存在组件的数据目录。
-		GatewayClient: gatewayclient.Config{
-			Mode: gatewayclient.ModeLocal, Caller: "cloudnode", KeyFile: "../secrets/caller-cloudnode.key",
-			CAFile: "../certs/moox-ca.crt", CacheDir: "./data/gatewayclient",
-		},
+		GatewayClient: gatewayclient.FileConfig{Caller: "cloudnode", KeyFile: "../../secrets/caller-cloudnode.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_cloudnode.db",
@@ -129,4 +138,15 @@ func Default() *Config {
 			Addr: ":11411",
 		},
 	}
+}
+
+// OpenGateway creates the process client shared by credential and lease calls.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("cloudnode gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "cloudnode" {
+		return nil, fmt.Errorf("gateway_client.caller must be cloudnode")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

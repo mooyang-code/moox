@@ -12,138 +12,164 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const SCFEnvironmentLimitBytes = 4096
 const CollectorTimerTimeoutSeconds = 60
 
-// SCF 采集函数经外部接入访问 MooX 使用的环境变量，与 gatewayclient 外部方式读取的变量一致。
-const (
-	EnvAccessAddress = "MOOX_ACCESS_ADDRESS"
-	EnvAccessID      = "MOOX_ACCESS_ID"
-	EnvCaller        = "MOOX_CALLER"
-	EnvCallerKey     = "MOOX_CALLER_KEY"
-	// SCFCollectorCaller 是 SCF 采集函数的外部调用方身份。
-	SCFCollectorCaller = "scf-collector"
-)
+var accessInstanceName = regexp.MustCompile(`^access@[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
-var accessHostID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
+// ValidateCollectorTimerEnvironment is shared by publication and merged
+// CloudNode deployment, so partial deploy patches cannot bypass create gates.
+func ValidateCollectorTimerEnvironment(values map[string]string) error {
+	return ValidateCollectorMarketFetchEnvironment(values)
+}
 
-// ValidateCollectorMarketFetchEnvironment 检查采集函数合并后的完整环境变量，Timer 和 Invoke 共用；
-// CLI 发布与 CloudNode 部署都调用它，部分更新也绕不过创建时的检查。
+// ValidateCollectorAccessEnvironment validates the five fields shared by
+// native Claim and Storage calls, without disclosing credential contents.
+func ValidateCollectorAccessEnvironment(values map[string]string) error {
+	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
+		if strings.TrimSpace(values[key]) == "" {
+			return fmt.Errorf("collector Access environment requires %s", key)
+		}
+	}
+	if values["MOOX_CALLER"] != "scf-collector" {
+		return fmt.Errorf("collector Access environment requires MOOX_CALLER=scf-collector")
+	}
+	if len(values["MOOX_ACCESS_ID"]) > 135 || !accessInstanceName.MatchString(values["MOOX_ACCESS_ID"]) {
+		return fmt.Errorf("collector Access environment has invalid MOOX_ACCESS_ID")
+	}
+	if err := validateCollectorRuntimeEndpoint("MOOX_ACCESS_ADDRESS", "ip://"+values["MOOX_ACCESS_ADDRESS"], "ip"); err != nil {
+		return err
+	}
+	keyID := values["MOOX_CALLER_KEY_ID"]
+	if len(keyID) > 128 || strings.ContainsAny(keyID, "/\\") || strings.ContainsFunc(keyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY_ID")
+	}
+	key := values["MOOX_CALLER_KEY"]
+	if len(key) < 32 || len(key) > 4096 || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY")
+	}
+	return nil
+}
+
+// RemoveCollectorInternalGatewayEnvironment clears internal credentials and
+// addresses when a function is published with the external Access contract.
+func RemoveCollectorInternalGatewayEnvironment(values map[string]string) bool {
+	changed := false
+	for _, key := range collectorInternalGatewayEnvironmentKeys {
+		if _, ok := values[key]; ok {
+			delete(values, key)
+			changed = true
+		}
+	}
+	return changed
+}
+
+var collectorInternalGatewayEnvironmentKeys = [...]string{
+	"MOOX_STORAGE_RPC_GATEWAY_TARGET", "MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE",
+	"MOOX_GATEWAY_CALLER", "MOOX_GATEWAY_SERVICE_KEY_ID", "MOOX_GATEWAY_SERVICE_SECRET_KEY",
+	"MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "MOOX_COLLECTOR_NODE_ID",
+	"MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY",
+	"MOOX_RPC_SERVICE_ID", "MOOX_RPC_SERVICE_SECRET", "MOOX_GATEWAY_CA_FILE", "MOOX_GATEWAY_CA_PEM_B64",
+	"MOOX_SERVICE_GATEWAY_CA_FILE", "MOOX_SERVICE_GATEWAY_CA_PEM_B64",
+}
+
+// ValidateCollectorMarketFetchEnvironment checks common Invoke and Timer
+// dependencies. Claim and Storage use the same Access identity and connection.
 func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
+	for _, key := range collectorInternalGatewayEnvironmentKeys {
+		if _, ok := values[key]; ok {
+			return fmt.Errorf("collector Access environment must not contain internal gateway field %s", key)
+		}
+	}
 	if err := ValidateSCFEnvironment(values); err != nil {
 		return err
 	}
 	for _, key := range []string{
 		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID",
-		EnvCaller, EnvCallerKey, EnvAccessAddress, EnvAccessID,
 		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
 		"MOOX_CLS_ENABLED", "MOOX_CLS_ENDPOINT", "MOOX_CLS_TOPIC_ID", "MOOX_CLS_TIMEOUT_MS",
 		"MOOX_CLS_SECRET_ID", "MOOX_CLS_SECRET_KEY",
 		"MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_NATS_TLS_CA_FILE",
 	} {
 		if strings.TrimSpace(values[key]) == "" {
-			return fmt.Errorf("采集函数的环境变量缺少 %s", key)
+			return fmt.Errorf("collector market-fetch runtime environment requires %s", key)
 		}
 	}
 	if err := validateStorageAppKeys(values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]); err != nil {
-		return fmt.Errorf("采集函数的 MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON 无效: %w", err)
+		return fmt.Errorf("collector market-fetch runtime environment has invalid MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON: %w", err)
 	}
-	if strings.TrimSpace(values[EnvCaller]) != SCFCollectorCaller {
-		return fmt.Errorf("采集函数的 %s 必须是 %s", EnvCaller, SCFCollectorCaller)
-	}
-	if keyID, secret, ok := strings.Cut(strings.TrimSpace(values[EnvCallerKey]), ":"); !ok || strings.TrimSpace(keyID) == "" || strings.TrimSpace(secret) == "" {
-		return fmt.Errorf("采集函数的 %s 格式应为 <key_id>:<secret>", EnvCallerKey)
-	}
-	if err := validateAccessAddress(values[EnvAccessAddress]); err != nil {
+	if err := ValidateCollectorAccessEnvironment(values); err != nil {
 		return err
 	}
-	if host, ok := strings.CutPrefix(strings.TrimSpace(values[EnvAccessID]), "access@"); !ok || !accessHostID.MatchString(host) {
-		return fmt.Errorf("采集函数的 %s 必须是 access@<主机 ID>", EnvAccessID)
-	}
-	if err := validateEventBusURL(values["MOOX_EVENTBUS_NATS_URL"]); err != nil {
+	if err := validateCollectorRuntimeEndpoint("MOOX_EVENTBUS_NATS_URL", values["MOOX_EVENTBUS_NATS_URL"], "tls"); err != nil {
 		return err
 	}
 	if enabled, err := strconv.ParseBool(values["MOOX_CLS_ENABLED"]); err != nil || !enabled {
-		return fmt.Errorf("采集函数的环境变量要求 MOOX_CLS_ENABLED=true")
+		return fmt.Errorf("collector market-fetch runtime environment requires MOOX_CLS_ENABLED=true")
 	}
 	if timeout, err := strconv.Atoi(values["MOOX_CLS_TIMEOUT_MS"]); err != nil || timeout <= 0 {
-		return fmt.Errorf("采集函数的 MOOX_CLS_TIMEOUT_MS 无效")
+		return fmt.Errorf("collector market-fetch runtime environment has invalid MOOX_CLS_TIMEOUT_MS")
 	}
 	if values["MOOX_EVENTBUS_NATS_TLS_CA_FILE"] != "certs/eventbus-ca.pem" {
-		return fmt.Errorf("采集函数的 MOOX_EVENTBUS_NATS_TLS_CA_FILE 必须指向代码包内的 certs/eventbus-ca.pem")
+		return fmt.Errorf("collector market-fetch runtime environment requires packaged MOOX_EVENTBUS_NATS_TLS_CA_FILE")
 	}
 	if strings.TrimSpace(values["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"]) != "" {
-		return fmt.Errorf("采集函数不能同时配置 CA 文件和 MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+		return fmt.Errorf("collector market-fetch runtime environment cannot combine CA file with MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	}
 	return nil
 }
 
-// validateAccessAddress 检查外部接入地址：host:port，不能是本机地址。
-func validateAccessAddress(value string) error {
-	host, rawPort, err := net.SplitHostPort(strings.TrimSpace(value))
-	if err != nil || host == "" {
-		return fmt.Errorf("采集函数的 %s 必须是 host:port", EnvAccessAddress)
-	}
-	if port, err := strconv.Atoi(rawPort); err != nil || port < 1 || port > 65535 || isLocalHost(host) {
-		return fmt.Errorf("采集函数的 %s 无效", EnvAccessAddress)
-	}
-	return nil
-}
-
-func validateEventBusURL(value string) error {
+func validateCollectorRuntimeEndpoint(key, value, scheme string) error {
 	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.Port() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("采集函数的 MOOX_EVENTBUS_NATS_URL 必须是 tls://host:port")
+	if err != nil || parsed.Scheme != scheme || parsed.Hostname() == "" || parsed.Port() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("collector runtime environment requires %s as %s://host:port", key, scheme)
 	}
-	if port, err := strconv.Atoi(parsed.Port()); err != nil || port < 1 || port > 65535 || isLocalHost(parsed.Hostname()) {
-		return fmt.Errorf("采集函数的 MOOX_EVENTBUS_NATS_URL 无效")
+	port, err := strconv.Atoi(parsed.Port())
+	ip := net.ParseIP(parsed.Hostname())
+	if err != nil || port < 1 || port > 65535 || strings.EqualFold(strings.TrimSuffix(parsed.Hostname(), "."), "localhost") || strings.EqualFold(parsed.Hostname(), "ip6-localhost") || (ip != nil && (ip.IsLoopback() || ip.IsUnspecified())) {
+		return fmt.Errorf("collector runtime environment has invalid %s", key)
 	}
 	return nil
-}
-
-func isLocalHost(host string) bool {
-	host = strings.TrimSuffix(host, ".")
-	ip := net.ParseIP(host)
-	return strings.EqualFold(host, "localhost") || strings.EqualFold(host, "ip6-localhost") || (ip != nil && (ip.IsLoopback() || ip.IsUnspecified()))
 }
 
 func validateStorageAppKeys(raw string) error {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return fmt.Errorf("必须是 JSON 对象")
+		return fmt.Errorf("must be a JSON object")
 	}
 	seen := make(map[string]struct{})
 	for decoder.More() {
 		token, err := decoder.Token()
 		appID, ok := token.(string)
 		if err != nil || !ok || strings.TrimSpace(appID) == "" {
-			return fmt.Errorf("app ID 无效")
+			return fmt.Errorf("invalid app ID")
 		}
 		if _, duplicate := seen[appID]; duplicate {
-			return fmt.Errorf("app ID 重复")
+			return fmt.Errorf("duplicate app ID")
 		}
 		seen[appID] = struct{}{}
 		var key string
 		if err := decoder.Decode(&key); err != nil || len(key) != 64 {
-			return fmt.Errorf("app key 必须是 64 位十六进制字符")
+			return fmt.Errorf("app keys must be 64 hex characters")
 		}
 		if _, err := hex.DecodeString(key); err != nil {
-			return fmt.Errorf("app key 必须是 64 位十六进制字符")
+			return fmt.Errorf("app keys must be 64 hex characters")
 		}
 	}
 	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return fmt.Errorf("app key 对象无效")
+		return fmt.Errorf("invalid app-key object")
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("JSON 之后有多余内容")
+		return fmt.Errorf("trailing JSON data")
 	}
 	if len(seen) == 0 {
-		return fmt.Errorf("app key 不能为空")
+		return fmt.Errorf("app keys must not be empty")
 	}
 	if _, ok := seen["moox-collector"]; !ok {
-		return fmt.Errorf("app key 必须包含 moox-collector 的绑定")
+		return fmt.Errorf("app keys must include the moox-collector binding")
 	}
 	return nil
 }
@@ -156,10 +182,11 @@ func SCFEnvironmentBytes(values map[string]string) int {
 	return total
 }
 
-// ValidateSCFEnvironment 检查合并后的完整环境变量；报错时只给出各变量的长度，不暴露凭据。
+// ValidateSCFEnvironment checks the complete merged environment without exposing
+// credential values in a release or CloudNode error.
 func ValidateSCFEnvironment(values map[string]string) error {
 	if value, exists := values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"]; exists {
-		return fmt.Errorf("SCF 环境变量不能包含 MOOX_STORAGE_PRIMARY_AUTH_SECRET（值长度 %d）", len(value))
+		return fmt.Errorf("SCF environment must not contain MOOX_STORAGE_PRIMARY_AUTH_SECRET (value length: %d)", len(value))
 	}
 	size := SCFEnvironmentBytes(values)
 	if size <= SCFEnvironmentLimitBytes {
@@ -174,5 +201,5 @@ func ValidateSCFEnvironment(values map[string]string) error {
 	for _, key := range keys {
 		lengths = append(lengths, fmt.Sprintf("%s:%d", key, len(values[key])))
 	}
-	return fmt.Errorf("环境变量共 %d 字节，超过上限 %d（各值长度：%s）", size, SCFEnvironmentLimitBytes, strings.Join(lengths, ", "))
+	return fmt.Errorf("environment is %d bytes; limit is %d (value lengths: %s)", size, SCFEnvironmentLimitBytes, strings.Join(lengths, ", "))
 }

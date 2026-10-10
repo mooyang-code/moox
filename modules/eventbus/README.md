@@ -15,3 +15,5 @@ go test -count=1 ./modules/eventbus/...
 ## 配置
 
 `config/app.yaml`（broker、Stream、TLS 与鉴权）、`config/trpc_go.yaml`。
+
+EventBusMgr 管理接口使用 loopback 原生 tRPC 11420，经共享网关调用；健康检查继续使用原有独立 HTTP 端点。

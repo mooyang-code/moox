@@ -112,7 +112,7 @@ func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error
 	if metric.GetSnapshot() == nil {
 		return nil, errors.New("host metric snapshot is missing")
 	}
-	if metric.GetAgentId() != msg.GetSubjectId() || metric.GetAgentId() == "" || metric.GetHostname() == "" || strings.TrimSpace(metric.GetHostId()) == "" {
+	if metric.GetAgentId() != msg.GetSubjectId() || metric.GetAgentId() == "" || metric.GetHostname() == "" {
 		return nil, errors.New("host metric identity is invalid")
 	}
 	if err := validateSnapshot(metric.GetSnapshot()); err != nil {
@@ -243,7 +243,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	canonicalAgentID := metric.GetAgentId()
 	if s.registry != nil {
 		result, err := s.registry.Observe(ctx, HostObservation{
-			AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
+			HostID: metric.GetHostId(), AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
 			OccurredAt: occurredAt, EventID: msg.GetEventId(),
 		})
 		if err != nil {
@@ -273,7 +273,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 		return fmt.Errorf("write host metric snapshot: %w", err)
 	}
 	view := AgentView{
-		AgentID: canonicalAgentID, HostID: strings.TrimSpace(metric.GetHostId()), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
+		HostID: metric.GetHostId(), AgentID: canonicalAgentID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
 		LastSeenAt: occurredAt.Format(time.RFC3339Nano), Reachable: true,
 		Snapshot: cloneSnapshot(metric.GetSnapshot()),
 	}
@@ -293,14 +293,13 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	return nil
 }
 
-// AgentView 是一台主机的主机采集器。HostID 是主机 ID（MOOX_NODE_ID），只保存在内存里：Monitor 重启后，收到该主机的下一次
-// 快照之前为空。
 type AgentView struct {
-	AgentID, HostID, Hostname, BootID, LastSeenAt string
-	Archived                                      bool
-	Reachable                                     bool
-	StaleSeconds                                  int64
-	Snapshot                                      *hostmetricpb.HostSnapshot
+	HostID                                string
+	AgentID, Hostname, BootID, LastSeenAt string
+	Archived                              bool
+	Reachable                             bool
+	StaleSeconds                          int64
+	Snapshot                              *hostmetricpb.HostSnapshot
 }
 
 type HistoryPoint struct {
@@ -309,6 +308,10 @@ type HistoryPoint struct {
 }
 
 func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
+	return s.ListAgentsAt(ctx, time.Now().UTC())
+}
+
+func (s *Store) ListAgentsAt(ctx context.Context, now time.Time) ([]AgentView, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -316,7 +319,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
 		return nil, errors.New("host metric store is nil")
 	}
 	if s.registry != nil {
-		presence, err := s.registry.List(ctx, time.Now().UTC())
+		presence, err := s.registry.List(ctx, now)
 		if err != nil {
 			return nil, err
 		}
@@ -324,12 +327,11 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
 		out := make([]AgentView, 0, len(presence))
 		for _, agent := range presence {
 			view := AgentView{
-				AgentID: agent.AgentID, Hostname: agent.Hostname, BootID: agent.BootID,
+				HostID: agent.HostID, AgentID: agent.AgentID, Hostname: agent.Hostname, BootID: agent.BootID,
 				LastSeenAt: agent.LastSeenAt.Format(time.RFC3339Nano),
 				Reachable:  agent.Reachable, StaleSeconds: agent.StaleSeconds,
 			}
 			if latest, ok := s.latest[agent.AgentID]; ok {
-				view.HostID = latest.HostID
 				view.Snapshot = cloneSnapshot(latest.Snapshot)
 			}
 			out = append(out, view)

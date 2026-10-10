@@ -4,13 +4,10 @@
 database:
   path: ./data/moox_trade.db
 
-# 读取交易所凭据（SecretMgr）经本机主机网关
 gateway_client:
-  mode: local
   caller: trade
-  key_file: ../secrets/caller-trade.key
-  ca_file: ../certs/moox-ca.crt
-  cache_dir: ./data/gatewayclient
+  key_id: ""
+  key_file: ../../secrets/caller-trade.key
 
 eventbus:
   enabled: true

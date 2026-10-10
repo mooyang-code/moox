@@ -1,4 +1,4 @@
-name: Release MooX
+name: Release and deploy MooX
 
 on:
   push:
@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing Git tag to package
+        description: Existing Git tag to package and deploy
         required: true
         type: string
+      deploy_production:
+        description: Deploy the package to 106.53.107.122
+        required: true
+        default: true
+        type: boolean
       publish_release:
         description: Create or update the GitHub Release asset
         required: true
@@ -81,3 +86,36 @@ jobs:
             release/moox-${RELEASE_TAG}-*.sha256 \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
+      - name: Reclaim runner workspace before deployment
+        if: github.event_name == 'push' || inputs.deploy_production
+        run: |
+          find release -mindepth 1 -maxdepth 1 -type d \
+            -name "moox-${RELEASE_TAG}-*" -exec rm -rf -- {} +
+          rm -rf web/node_modules web/dist
+          rm -rf /home/ubuntu/.cache/go-build
+          if [[ "${PUBLISH_RELEASE}" != "true" ]]; then
+            rm -f "release/moox-${RELEASE_TAG}-"*.tar.gz "release/moox-${RELEASE_TAG}-"*.sha256
+          fi
+          df -h .
+      - name: Deploy to 106.53.107.122
+        if: github.event_name == 'push' || inputs.deploy_production
+        run: |
+          ./scripts/deploy/deploy-moox.sh \
+            --target localhost \
+            --dir /home/ubuntu/moox/prod \
+            --goos linux \
+            --goarch amd64 \
+            --skip-build \
+            --local-ca skip \
+            --target-ca skip
+      - name: Verify deployed services
+        if: github.event_name == 'push' || inputs.deploy_production
+        run: |
+          set -a
+          source /home/ubuntu/moox/prod/secrets/health-auth.env
+          set +a
+          /home/ubuntu/moox/prod/healthcheck.sh
+          curl --fail --silent --show-error \
+            --cacert /home/ubuntu/moox/prod/certs/caddy/root.crt \
+            --resolve 106.53.107.122:9527:127.0.0.1 \
+            https://106.53.107.122:9527/ >/dev/null

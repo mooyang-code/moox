@@ -1,18 +1,13 @@
 package test
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,8 +19,8 @@ import (
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -39,22 +34,32 @@ func TestSetupWorkflowLeavesManifestAndArtifactsSecretFree(t *testing.T) {
 	raw := []byte(`[admin]
 username = "admin"
 password = "admin-e2e-password"
+
 [tencent_cloud]
 secret_id = "AKID-e2e"
 secret_key = "cloud-e2e-secret"
+
 [eventbus]
 port = 4222
 tls_enabled = true
+
 [hosts.control]
 address = "192.0.2.10"
-ssh = { username = "ubuntu", password = "control-e2e-password" }
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "control-e2e-password"
+
 [hosts.compute-1]
 address = "192.0.2.11"
-region = "ap-hongkong"
-ssh = { username = "ubuntu", password = "compute-e2e-password" }
+[hosts.compute-1.ssh]
+port = 22
+username = "ubuntu"
+password = "compute-e2e-password"
+
 [placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor"]
-compute-1 = ["access", "egress-proxy"]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute-1 = []
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	before, err := os.ReadFile(path)
@@ -68,8 +73,8 @@ compute-1 = ["access", "egress-proxy"]
 	require.NoError(t, err)
 	require.Len(t, validation.Checks, 4)
 
-	admin := &setupAdmin{}
-	privateClient := setupclient.New(&setupGateway{handler: admin.handler()})
+	forwarder := &setupForwarder{handler: setupAdminHandler()}
+	privateClient := setupclient.New(forwarder)
 	apply, err := privateClient.Apply(context.Background(), snapshot)
 	require.NoError(t, err)
 	assert.Equal(t, "created", apply.Action)
@@ -77,22 +82,27 @@ compute-1 = ["access", "egress-proxy"]
 	require.NoError(t, err)
 	assert.Equal(t, "completed", status.State)
 
-	repository, err := filepath.Abs(filepath.Join("..", "..", ".."))
-	require.NoError(t, err)
+	archive := filepath.Join(root, "control.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("safe-control-package"), 0o600))
 	transport := &captureTransport{}
-	deployer := &setupdeploy.Deployer{
-		Manifest: snapshot.Manifest, RepositoryRoot: repository, Version: "e2e",
-		Dial:       func(context.Context, setupconfig.Host) (setupssh.Client, error) { return transport, nil },
-		Builder:    fakeBuilder{dir: t.TempDir()},
-		Placements: privateClient,
-		Out:        io.Discard,
-	}
-	result, err := deployer.Deploy(context.Background(), "compute-1", setupdeploy.Options{})
+	events := []setupdeploy.ReadinessStage{}
+	err = setupdeploy.Control(context.Background(), transport, setupdeploy.Options{
+		RepositoryRoot: root, PublicHost: snapshot.Manifest.ControlHost().Address, BrowserPort: 9527,
+		TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:          snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
+	}, setupdeploy.Dependencies{
+		Packager: staticPackager{path: archive},
+		Probe:    captureProbe{events: &events},
+		CAStore:  discardCAStore{},
+	})
 	require.NoError(t, err)
-	assert.Equal(t, "compute-1", result.Host)
-	assert.Equal(t, []string{"host-gateway", "host-agent", "access", "egress-proxy"}, result.Components)
-	assert.Equal(t, []string{"compute-1:access,egress-proxy@192.0.2.11/ap-hongkong"}, admin.synced, "部署前按部署表同步部署记录")
-	assert.Contains(t, strings.Join(transport.commands, "\n"), "--root /data/moox/compute-1")
+	require.Equal(t, []setupdeploy.ReadinessStage{
+		setupdeploy.AdminReady, setupdeploy.SetupReady, setupdeploy.GatewayReady,
+		setupdeploy.EventBusReady, setupdeploy.CloudNodeReady, setupdeploy.CollectorReady,
+		setupdeploy.MonitorReady, setupdeploy.WebReady, setupdeploy.BrowserHTTPSReady,
+	}, events)
 
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -102,34 +112,11 @@ compute-1 = ["access", "egress-proxy"]
 	require.NoError(t, json.NewEncoder(&output).Encode(validation))
 	require.NoError(t, json.NewEncoder(&output).Encode(apply))
 	require.NoError(t, json.NewEncoder(&output).Encode(status))
-	require.NoError(t, json.NewEncoder(&output).Encode(result))
 	combined := output.String() + strings.Join(transport.commands, "\n")
-	require.NotZero(t, transport.uploaded.Len())
 	for _, secret := range secrets {
 		assert.NotContains(t, combined, secret)
-		assert.NotContains(t, transport.uploaded.String(), secret, "发布包不含 moox.toml 中的口令")
+		assert.NotContains(t, transport.uploaded.String(), secret)
 	}
-}
-
-// fakeBuilder 为每个二进制写一个可执行的占位文件。
-type fakeBuilder struct{ dir string }
-
-func (b fakeBuilder) Build(_ context.Context, request setupdeploy.BuildRequest) (map[string]string, error) {
-	out := map[string]string{}
-	for _, component := range request.Components {
-		binaries := component.Binaries
-		if component.Caddy {
-			binaries = []string{component.Binary}
-		}
-		for _, binary := range binaries {
-			path := filepath.Join(b.dir, binary)
-			if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
-				return nil, err
-			}
-			out[binary] = path
-		}
-	}
-	return out, nil
 }
 
 type staticIdentity struct{}
@@ -142,26 +129,13 @@ type staticSSHChecker struct{}
 
 func (staticSSHChecker) Check(context.Context, setupconfig.Host) error { return nil }
 
-// setupGateway 把 setup client 的调用转成对 handler 的 POST /<服务名>/<方法>（protojson 编码）。
-type setupGateway struct{ handler http.Handler }
+type setupForwarder struct{ handler http.Handler }
 
-func (f *setupGateway) Invoke(ctx context.Context, servicePath, method string, req, rsp any, _ ...gatewayclient.CallOption) error {
-	raw, err := protojson.Marshal(req.(proto.Message))
-	if err != nil {
-		return err
-	}
-	recorder := httptest.NewRecorder()
-	f.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/"+servicePath+"/"+method, bytes.NewReader(raw)).WithContext(ctx))
-	if recorder.Code != http.StatusOK {
-		return fmt.Errorf("HTTP %d", recorder.Code)
-	}
-	return protojson.Unmarshal(recorder.Body.Bytes(), rsp.(proto.Message))
+func (f *setupForwarder) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return (testfixture.HandlerGateway{Handler: f.handler}).Invoke(ctx, service, method, req, rsp)
 }
 
-// setupAdmin 模拟 Admin 的 Setup 与 SysDeploy.SyncHostPlacements，记录同步过的主机与组件。
-type setupAdmin struct{ synced []string }
-
-func (a *setupAdmin) handler() http.Handler {
+func setupAdminHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/trpc.moox.admin.Setup/ApplySetup", func(writer http.ResponseWriter, request *http.Request) {
 		var input pb.ApplySetupReq
@@ -181,17 +155,6 @@ func (a *setupAdmin) handler() http.Handler {
 			State:   "completed", Users: 1, Secrets: 1, Hosts: 2,
 		})
 	})
-	mux.HandleFunc("/trpc.moox.ops.SysDeploy/SyncHostPlacements", func(writer http.ResponseWriter, request *http.Request) {
-		var input pb.SyncHostPlacementsReq
-		raw, err := io.ReadAll(request.Body)
-		if err != nil || protojson.Unmarshal(raw, &input) != nil {
-			http.Error(writer, "invalid", http.StatusBadRequest)
-			return
-		}
-		host := input.GetHost()
-		a.synced = append(a.synced, fmt.Sprintf("%s:%s@%s/%s", host.GetHostId(), strings.Join(input.GetComponents(), ","), host.GetAddress(), host.GetRegion()))
-		writeSetupResponse(writer, &pb.SyncHostPlacementsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "ok"}})
-	})
 	return mux
 }
 
@@ -203,6 +166,23 @@ func writeSetupResponse(writer http.ResponseWriter, message proto.Message) {
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	_, _ = writer.Write(raw)
+}
+
+type staticPackager struct{ path string }
+
+func (p staticPackager) Package(context.Context, setupdeploy.Options) (string, error) {
+	return p.path, nil
+}
+
+type discardCAStore struct{}
+
+func (discardCAStore) Save(string, []byte) error { return nil }
+
+type captureProbe struct{ events *[]setupdeploy.ReadinessStage }
+
+func (p captureProbe) Wait(_ context.Context, _ setupssh.Client, stage setupdeploy.ReadinessStage, _ setupdeploy.Options) error {
+	*p.events = append(*p.events, stage)
+	return nil
 }
 
 type captureTransport struct {
@@ -226,21 +206,6 @@ func (c *captureTransport) Download(_ context.Context, _ string, _ io.Writer) (i
 }
 func (c *captureTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	c.commands = append(c.commands, strings.Join(argv, " "))
-	switch {
-	case len(argv) > 0 && argv[0] == "uname":
-		return setupssh.Result{Stdout: "Linux x86_64\n"}, nil
-	case len(argv) > 3 && argv[3] == "moox-credentials":
-		return setupssh.Result{Stdout: emptyTarGzBase64()}, nil
-	}
-	return setupssh.Result{Stdout: "ok\n"}, nil
-}
-
-// emptyTarGzBase64 是 control 导出密钥时返回的空包（base64 编码的 tar.gz）。
-func emptyTarGzBase64() string {
-	var buffer bytes.Buffer
-	gz := gzip.NewWriter(&buffer)
-	_ = tar.NewWriter(gz).Close()
-	_ = gz.Close()
-	return base64.StdEncoding.EncodeToString(buffer.Bytes())
+	return setupssh.Result{}, nil
 }
 func (c *captureTransport) Close() error { return nil }

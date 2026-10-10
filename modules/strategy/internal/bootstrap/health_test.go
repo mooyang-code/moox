@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -63,27 +61,6 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 }
 
 const resolvedJSON = `{"completion_kind":"collector.period.completed","view_id":"view_a","dataset_id":"ds","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{},"view_columns":["close"]}`
-
-func TestRequireExecutionDependencies(t *testing.T) {
-	repo := openStore(t)
-	if err := requireExecutionDependencies(context.Background(), repo, Config{}); err != nil {
-		t.Fatalf("没有启用实例时不应阻止启动：%v", err)
-	}
-	seedEnabled(t, repo, "observe", nil, resolvedJSON)
-	if err := requireExecutionDependencies(context.Background(), repo, Config{}); err == nil || !strings.Contains(err.Error(), "gateway_client") {
-		t.Fatalf("启用实例缺少依赖应阻止启动：%v", err)
-	}
-	wired := Config{GatewayClient: gatewayclient.Config{Mode: "local"}}
-	if err := requireExecutionDependencies(context.Background(), repo, wired); err != nil {
-		t.Fatalf("观察实例只需要 Factor 与 Storage：%v", err)
-	}
-	// 观察与绑定账户的实例都经同一个 gateway_client 访问 Factor、Storage 与 Trade。
-	account := "acct-1"
-	seedEnabled(t, repo, "trading", &account, resolvedJSON)
-	if err := requireExecutionDependencies(context.Background(), repo, wired); err != nil {
-		t.Fatalf("绑定账户的实例在配置 gateway_client 后应可启动：%v", err)
-	}
-}
 
 func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	repo := openStore(t)

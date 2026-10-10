@@ -3,23 +3,16 @@ global:
   env_name: egress-proxy
 
 server:
-  filter:
-    - recovery
-  timeout: 65000
-  # 停止时等待进行中的请求完成再断开连接（毫秒），小于运行脚本给组件的停止超时。
-  max_close_wait_time: 20000
-  admin:
-    ip: 127.0.0.1
-    port: 11940
-    read_timeout: 3000
-    write_timeout: 60000
+  filter: [recovery]
+  timeout: 120000
   service:
     - name: trpc.moox.egress.Proxy
       ip: 127.0.0.1
       port: 11440
       network: tcp
       protocol: trpc
-      timeout: 65000
+      transport: go-net
+      timeout: 120000
     - name: trpc.moox.egress.Health
       ip: 127.0.0.1
       port: 11441
@@ -28,12 +21,6 @@ server:
       timeout: 3000
 
 plugins:
-  metrics:
-    prometheus:
-      ip: 127.0.0.1
-      port: 12940
-      path: /metrics
-      enablepush: false
   log:
     default:
       - writer: file

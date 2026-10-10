@@ -80,8 +80,8 @@ func TestCollectorHealthSnapshot(t *testing.T) {
 	if rsp.Module != "collector" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)
 	}
-	if _, ok := rsp.Details["storage_rpc_gateway_target"]; ok {
-		t.Fatal("Collector 经 gatewayclient 访问 Storage，健康详情不再暴露网关地址")
+	if rsp.Details["gateway_caller"] != "collector" {
+		t.Fatalf("gateway_caller = %v", rsp.Details["gateway_caller"])
 	}
 	dnsDetails, ok := rsp.Details["dns_resolver"].(map[string]any)
 	if !ok || dnsDetails["enabled"] != false || dnsDetails["source"] != "local" {

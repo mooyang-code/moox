@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
-
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -84,10 +83,10 @@ func buildMonitorMarketCanary(
 	if runtime == nil || runtime.Repositories == nil {
 		return nil, nil, fmt.Errorf("monitor market canary requires repositories")
 	}
-	if runtime.Gateway == nil {
-		return nil, nil, fmt.Errorf("monitor market canary requires gatewayclient")
+	if runtime.StorageGateway == nil {
+		return nil, nil, fmt.Errorf("monitor market canary requires the shared Storage gateway client")
 	}
-	reader := storagepb.NewPrimaryStoreClientProxy(runtime.Gateway.ClientOptions()...)
+	reader := runtime.StorageGateway
 	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
 	tagSpaces := make([]string, 0, len(cfg.MarketCanary.Subjects))
 	seenTagSpaces := make(map[string]struct{})
@@ -221,13 +220,12 @@ func buildMonitorMarketCanary(
 						continue
 					}
 					checkID := subjectTagCheckID(spaceID, tag.GetTagId())
-					name := "采集对象标签 · " + tag.GetTagName()
 					check, getErr := runtime.Repositories.Checks.Get(runCtx, spaceID, checkID)
 					if errors.Is(getErr, gorm.ErrRecordNotFound) {
-						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: name, GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
+						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "采集对象标签 · " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
 						getErr = runtime.Repositories.Checks.Create(runCtx, check)
-					} else if getErr == nil && check.Name != name {
-						check.Name = name
+					} else if getErr == nil && check.Name != "Subject tag "+tag.GetTagName() {
+						check.Name = "Subject tag " + tag.GetTagName()
 						getErr = runtime.Repositories.Checks.Update(runCtx, check)
 					}
 					if getErr != nil {

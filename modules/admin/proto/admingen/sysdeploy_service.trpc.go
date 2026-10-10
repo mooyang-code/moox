@@ -19,24 +19,23 @@ import (
 
 // SysDeployService defines service.
 type SysDeployService interface {
-	// GetCatalog 管理台使用
 	GetCatalog(ctx context.Context, req *GetCatalogReq) (*GetCatalogRsp, error)
 
-	ListHosts(ctx context.Context, req *ListDeployHostsReq) (*ListDeployHostsRsp, error)
+	ListHosts(ctx context.Context, req *ListDeploymentHostsReq) (*ListDeploymentHostsRsp, error)
 
 	ListPlacements(ctx context.Context, req *ListPlacementsReq) (*ListPlacementsRsp, error)
 
 	GetHostRoutes(ctx context.Context, req *GetHostRoutesReq) (*GetHostRoutesRsp, error)
 
 	GetDirectory(ctx context.Context, req *GetDirectoryReq) (*GetDirectoryRsp, error)
-	// SetHostStatus 受保护的组件和 control 主机拒绝停用
+
 	SetHostStatus(ctx context.Context, req *SetHostStatusReq) (*SetHostStatusRsp, error)
 
 	SetPlacementStatus(ctx context.Context, req *SetPlacementStatusReq) (*SetPlacementStatusRsp, error)
-	// SyncHostPlacements CLI 使用
+
 	SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq) (*SyncHostPlacementsRsp, error)
-	// DeleteHost 主机上仍有非主机范围的部署时拒绝
-	DeleteHost(ctx context.Context, req *DeleteDeployHostReq) (*DeleteDeployHostRsp, error)
+
+	DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq) (*DeleteDeploymentHostRsp, error)
 }
 
 func SysDeployService_GetCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -58,13 +57,13 @@ func SysDeployService_GetCatalog_Handler(svr interface{}, ctx context.Context, f
 }
 
 func SysDeployService_ListHosts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListDeployHostsReq{}
+	req := &ListDeploymentHostsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SysDeployService).ListHosts(ctx, reqbody.(*ListDeployHostsReq))
+		return svr.(SysDeployService).ListHosts(ctx, reqbody.(*ListDeploymentHostsReq))
 	}
 
 	var rsp interface{}
@@ -184,13 +183,13 @@ func SysDeployService_SyncHostPlacements_Handler(svr interface{}, ctx context.Co
 }
 
 func SysDeployService_DeleteHost_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DeleteDeployHostReq{}
+	req := &DeleteDeploymentHostReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SysDeployService).DeleteHost(ctx, reqbody.(*DeleteDeployHostReq))
+		return svr.(SysDeployService).DeleteHost(ctx, reqbody.(*DeleteDeploymentHostReq))
 	}
 
 	var rsp interface{}
@@ -256,11 +255,10 @@ func RegisterSysDeployService(s server.Service, svr SysDeployService) {
 
 type UnimplementedSysDeploy struct{}
 
-// GetCatalog 管理台使用
 func (s *UnimplementedSysDeploy) GetCatalog(ctx context.Context, req *GetCatalogReq) (*GetCatalogRsp, error) {
 	return nil, errors.New("rpc GetCatalog of service SysDeploy is not implemented")
 }
-func (s *UnimplementedSysDeploy) ListHosts(ctx context.Context, req *ListDeployHostsReq) (*ListDeployHostsRsp, error) {
+func (s *UnimplementedSysDeploy) ListHosts(ctx context.Context, req *ListDeploymentHostsReq) (*ListDeploymentHostsRsp, error) {
 	return nil, errors.New("rpc ListHosts of service SysDeploy is not implemented")
 }
 func (s *UnimplementedSysDeploy) ListPlacements(ctx context.Context, req *ListPlacementsReq) (*ListPlacementsRsp, error) {
@@ -272,22 +270,16 @@ func (s *UnimplementedSysDeploy) GetHostRoutes(ctx context.Context, req *GetHost
 func (s *UnimplementedSysDeploy) GetDirectory(ctx context.Context, req *GetDirectoryReq) (*GetDirectoryRsp, error) {
 	return nil, errors.New("rpc GetDirectory of service SysDeploy is not implemented")
 }
-
-// SetHostStatus 受保护的组件和 control 主机拒绝停用
 func (s *UnimplementedSysDeploy) SetHostStatus(ctx context.Context, req *SetHostStatusReq) (*SetHostStatusRsp, error) {
 	return nil, errors.New("rpc SetHostStatus of service SysDeploy is not implemented")
 }
 func (s *UnimplementedSysDeploy) SetPlacementStatus(ctx context.Context, req *SetPlacementStatusReq) (*SetPlacementStatusRsp, error) {
 	return nil, errors.New("rpc SetPlacementStatus of service SysDeploy is not implemented")
 }
-
-// SyncHostPlacements CLI 使用
 func (s *UnimplementedSysDeploy) SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq) (*SyncHostPlacementsRsp, error) {
 	return nil, errors.New("rpc SyncHostPlacements of service SysDeploy is not implemented")
 }
-
-// DeleteHost 主机上仍有非主机范围的部署时拒绝
-func (s *UnimplementedSysDeploy) DeleteHost(ctx context.Context, req *DeleteDeployHostReq) (*DeleteDeployHostRsp, error) {
+func (s *UnimplementedSysDeploy) DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq) (*DeleteDeploymentHostRsp, error) {
 	return nil, errors.New("rpc DeleteHost of service SysDeploy is not implemented")
 }
 
@@ -299,24 +291,23 @@ func (s *UnimplementedSysDeploy) DeleteHost(ctx context.Context, req *DeleteDepl
 
 // SysDeployClientProxy defines service client proxy
 type SysDeployClientProxy interface {
-	// GetCatalog 管理台使用
 	GetCatalog(ctx context.Context, req *GetCatalogReq, opts ...client.Option) (rsp *GetCatalogRsp, err error)
 
-	ListHosts(ctx context.Context, req *ListDeployHostsReq, opts ...client.Option) (rsp *ListDeployHostsRsp, err error)
+	ListHosts(ctx context.Context, req *ListDeploymentHostsReq, opts ...client.Option) (rsp *ListDeploymentHostsRsp, err error)
 
 	ListPlacements(ctx context.Context, req *ListPlacementsReq, opts ...client.Option) (rsp *ListPlacementsRsp, err error)
 
 	GetHostRoutes(ctx context.Context, req *GetHostRoutesReq, opts ...client.Option) (rsp *GetHostRoutesRsp, err error)
 
 	GetDirectory(ctx context.Context, req *GetDirectoryReq, opts ...client.Option) (rsp *GetDirectoryRsp, err error)
-	// SetHostStatus 受保护的组件和 control 主机拒绝停用
+
 	SetHostStatus(ctx context.Context, req *SetHostStatusReq, opts ...client.Option) (rsp *SetHostStatusRsp, err error)
 
 	SetPlacementStatus(ctx context.Context, req *SetPlacementStatusReq, opts ...client.Option) (rsp *SetPlacementStatusRsp, err error)
-	// SyncHostPlacements CLI 使用
+
 	SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq, opts ...client.Option) (rsp *SyncHostPlacementsRsp, err error)
-	// DeleteHost 主机上仍有非主机范围的部署时拒绝
-	DeleteHost(ctx context.Context, req *DeleteDeployHostReq, opts ...client.Option) (rsp *DeleteDeployHostRsp, err error)
+
+	DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq, opts ...client.Option) (rsp *DeleteDeploymentHostRsp, err error)
 }
 
 type SysDeployClientProxyImpl struct {
@@ -348,7 +339,7 @@ func (c *SysDeployClientProxyImpl) GetCatalog(ctx context.Context, req *GetCatal
 	return rsp, nil
 }
 
-func (c *SysDeployClientProxyImpl) ListHosts(ctx context.Context, req *ListDeployHostsReq, opts ...client.Option) (*ListDeployHostsRsp, error) {
+func (c *SysDeployClientProxyImpl) ListHosts(ctx context.Context, req *ListDeploymentHostsReq, opts ...client.Option) (*ListDeploymentHostsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
 	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/ListHosts")
@@ -361,7 +352,7 @@ func (c *SysDeployClientProxyImpl) ListHosts(ctx context.Context, req *ListDeplo
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListDeployHostsRsp{}
+	rsp := &ListDeploymentHostsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -488,7 +479,7 @@ func (c *SysDeployClientProxyImpl) SyncHostPlacements(ctx context.Context, req *
 	return rsp, nil
 }
 
-func (c *SysDeployClientProxyImpl) DeleteHost(ctx context.Context, req *DeleteDeployHostReq, opts ...client.Option) (*DeleteDeployHostRsp, error) {
+func (c *SysDeployClientProxyImpl) DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq, opts ...client.Option) (*DeleteDeploymentHostRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
 	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/DeleteHost")
@@ -501,7 +492,7 @@ func (c *SysDeployClientProxyImpl) DeleteHost(ctx context.Context, req *DeleteDe
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &DeleteDeployHostRsp{}
+	rsp := &DeleteDeploymentHostRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

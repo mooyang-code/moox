@@ -17,8 +17,10 @@ describe("Trade response errors", () => {
       action: { action_id: "same-action", status: "RUNNING" }
     };
     client.post.mockResolvedValue({ data: response });
-    await expect(callTrade("console", "SubmitOrder", { action_id: "same-action" }))
-      .rejects.toMatchObject({ message: "market data unavailable", response });
+    await expect(callTrade("console", "SubmitOrder", { action_id: "same-action" })).rejects.toMatchObject({
+      message: "market data unavailable",
+      response
+    });
   });
 
   it("returns successful pending acceptance without converting it to a fill", async () => {

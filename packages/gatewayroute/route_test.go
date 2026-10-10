@@ -126,15 +126,29 @@ func TestNormalizeAndHashAppliesDefaultsSortsAndIsStable(t *testing.T) {
 	}
 }
 
-func TestValidateStorageRouteRequiresAllowlist(t *testing.T) {
+func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testing.T) {
 	base := Route{ServiceID: "storage", Address: "127.0.0.1:8002", ServicePath: "trpc.moox.storage.DataView"}
 	if err := ValidateRoute(base); err == nil {
 		t.Fatal("ValidateRoute accepted an unrestricted storage route")
 	}
 
+	for _, method := range []string{
+		"ClaimViewIndexBuild",
+		"MergePrimaryRows",
+		"DeletePrimaryRows",
+		"ApplyViewIndex",
+	} {
+		route := base
+		route.AllowedMethods = []string{method}
+		route.AllowedCallers = []string{"storage-view"}
+		if err := ValidateRoute(route); err == nil {
+			t.Fatalf("ValidateRoute accepted internal storage method %q", method)
+		}
+	}
+
 	public := base
 	public.AllowedMethods = []string{"SearchRecordRows"}
-	public.AllowedCallers = []string{"console"}
+	public.AllowedCallers = []string{"admin-gateway"}
 	if err := ValidateRoute(public); err != nil {
 		t.Fatalf("ValidateRoute rejected public storage method: %v", err)
 	}
@@ -150,6 +164,10 @@ func TestValidateStorageMetadataViewBuilderRoute(t *testing.T) {
 	}
 	if err := ValidateRoute(route); err != nil {
 		t.Fatalf("ValidateRoute rejected the storage-view metadata route: %v", err)
+	}
+	route.AllowedCallers = []string{"admin-gateway", "storage-view"}
+	if err := ValidateRoute(route); err == nil {
+		t.Fatal("ValidateRoute accepted view-builder metadata methods for a broader caller set")
 	}
 }
 
@@ -176,7 +194,7 @@ func TestCanonicalSnapshotHashExcludesGeneratedAt(t *testing.T) {
 }
 
 func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
-	route := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"GetStatus"}, AllowedCallers: []string{"console"}}
+	route := Route{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"GetStatus"}, AllowedCallers: []string{"admin-gateway"}}
 	if _, err := NormalizeAndHash("node-1", []Route{route, route}); err == nil {
 		t.Fatal("NormalizeAndHash accepted duplicate service IDs")
 	}
@@ -185,7 +203,7 @@ func TestNormalizeAndHashRejectsDuplicateServiceIDs(t *testing.T) {
 func TestNormalizeAndHashRejectsWildcardOverlapForDuplicateServiceIDs(t *testing.T) {
 	_, err := NormalizeAndHash("node-1", []Route{
 		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"*"}, AllowedCallers: []string{"strategy"}},
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
 	})
 	if err == nil {
 		t.Fatal("accepted wildcard and concrete method overlap for duplicate service IDs")
@@ -194,40 +212,19 @@ func TestNormalizeAndHashRejectsWildcardOverlapForDuplicateServiceIDs(t *testing
 
 func TestNormalizeAndHashRejectsNonAdjacentMethodOverlapForDuplicateServiceIDs(t *testing.T) {
 	_, err := NormalizeAndHash("node-1", []Route{
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Bar", AllowedMethods: []string{"GetOther"}, AllowedCallers: []string{"admin-gateway"}},
 		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Foo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Bar", AllowedMethods: []string{"GetOther"}, AllowedCallers: []string{"console"}},
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Foo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"operator"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Zoo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"operator"}},
 	})
 	if err == nil {
 		t.Fatal("accepted non-adjacent method overlap for duplicate service IDs")
 	}
 }
 
-func TestNormalizeAndHashAllowsSameMethodInDifferentServicesOfOneComponent(t *testing.T) {
-	_, err := NormalizeAndHash("control", []Route{
-		{ServiceID: "admin", Address: "127.0.0.1:11106", ServicePath: "trpc.moox.ops.Ssh", AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"console"}},
-		{ServiceID: "admin", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"console"}},
-	})
-	if err != nil {
-		t.Fatalf("同一组件不同服务的同名方法应当允许: %v", err)
-	}
-}
-
-func TestValidateRouteAcceptsHostGatewayCaller(t *testing.T) {
-	route := Route{ServiceID: "admin", Address: "127.0.0.1:11112", ServicePath: "trpc.moox.admin.GatewayControl", AllowedMethods: []string{"PullSnapshot"}, AllowedCallers: []string{"host-gateway@compute-1"}}
-	if err := ValidateRoute(route); err != nil {
-		t.Fatal(err)
-	}
-	route.AllowedCallers = []string{"host-gateway@compute@1"}
-	if err := ValidateRoute(route); err == nil {
-		t.Fatal("accepted a caller with two host separators")
-	}
-}
-
 func TestNormalizeAndHashAllowsDisjointNativeCallerRoutes(t *testing.T) {
 	snapshot, err := NormalizeAndHash("node-1", []Route{
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
-		{ServiceID: "trade-owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
+		{ServiceID: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -239,8 +236,8 @@ func TestNormalizeAndHashAllowsDisjointNativeCallerRoutes(t *testing.T) {
 
 func TestNormalizeAndHashRejectsOverlappingNativeCallerRoutes(t *testing.T) {
 	_, err := NormalizeAndHash("node-1", []Route{
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
-		{ServiceID: "trade-owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
 	})
 	if err == nil {
 		t.Fatal("accepted overlapping native caller routes")
@@ -249,7 +246,7 @@ func TestNormalizeAndHashRejectsOverlappingNativeCallerRoutes(t *testing.T) {
 
 func TestNormalizeAndHashAllowsDisjointMethodsForOneServiceID(t *testing.T) {
 	routes := []Route{
-		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"admin-gateway"}},
 		{ServiceID: "storage-primary", Address: "127.0.0.1:20201", ServicePath: "trpc.moox.storage.PrimaryStore", AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"storage-view"}},
 	}
 	snapshot, err := NormalizeAndHash("node-1", routes)
@@ -279,23 +276,23 @@ func TestNormalizeAndHashStateIncludesDisabledInHash(t *testing.T) {
 }
 
 func TestNormalizeAllowedMethodsSortsDedupesHashesAndAuthorizesExactly(t *testing.T) {
-	route := Route{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListHosts", "GetGatewayNodeRoutes", "ListHosts"}, AllowedCallers: []string{"*"}}
+	route := Route{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListPlacements", "GetHostRoutes", "ListPlacements"}, AllowedCallers: []string{"*"}}
 	snapshot, err := NormalizeAndHash("node-1", []Route{route})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := snapshot.Routes[0]
-	if len(got.AllowedMethods) != 2 || got.AllowedMethods[0] != "GetGatewayNodeRoutes" || got.AllowedMethods[1] != "ListHosts" {
+	if len(got.AllowedMethods) != 2 || got.AllowedMethods[0] != "GetHostRoutes" || got.AllowedMethods[1] != "ListPlacements" {
 		t.Fatalf("allowed methods = %v", got.AllowedMethods)
 	}
-	if !got.AllowsMethod("ListHosts") || got.AllowsMethod("CreateGatewayNode") {
+	if !got.AllowsMethod("ListPlacements") || got.AllowsMethod("SyncHostPlacements") {
 		t.Fatalf("unexpected authorization: %+v", got)
 	}
 	unrestricted := Route{}
 	if unrestricted.AllowsMethod("Anything") {
 		t.Fatal("empty allowlist should not authorize ordinary routes")
 	}
-	without, err := NormalizeAndHash("node-1", []Route{{ServiceID: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"*"}}})
+	without, err := NormalizeAndHash("node-1", []Route{{ServiceID: route.ServiceID, Address: route.Address, ServicePath: route.ServicePath, AllowedMethods: []string{"ListPlacements"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +300,7 @@ func TestNormalizeAllowedMethodsSortsDedupesHashesAndAuthorizesExactly(t *testin
 		t.Fatal("allowed methods missing from hash")
 	}
 	route.AllowedMethods[0] = "Mutated"
-	if snapshot.Routes[0].AllowedMethods[1] != "ListHosts" {
+	if snapshot.Routes[0].AllowedMethods[1] != "ListPlacements" {
 		t.Fatal("normalization retained caller method storage")
 	}
 }
@@ -313,25 +310,6 @@ func TestNormalizeAllowedMethodsRejectsUnsafeNames(t *testing.T) {
 		_, err := NormalizeAndHash("node-1", []Route{{ServiceID: "svc", Address: "127.0.0.1:1", ServicePath: "trpc.test.Service", AllowedMethods: []string{method}}})
 		if err == nil {
 			t.Fatalf("unsafe method %q accepted", method)
-		}
-	}
-}
-
-// 同一服务按调用方分成多条路由时，路由哈希不能因为输入顺序不同而变化。
-func TestRouteHashDoesNotDependOnInputOrder(t *testing.T) {
-	a := Route{ServiceID: "admin", Address: "127.0.0.1:11107", ServicePath: "trpc.moox.admin.SpaceMgr", AllowedMethods: []string{"ListSpaces"}, AllowedCallers: []string{"console"}}
-	b := Route{ServiceID: "admin", Address: "127.0.0.1:11107", ServicePath: "trpc.moox.admin.SpaceMgr", AllowedMethods: []string{"DeleteSpace"}, AllowedCallers: []string{"moox-cli"}}
-	c := Route{ServiceID: "admin", Address: "127.0.0.1:11107", ServicePath: "trpc.moox.admin.SpaceMgr", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"monitor"}}
-	var want string
-	for index, order := range [][]Route{{a, b, c}, {c, b, a}, {b, a, c}, {b, c, a}} {
-		snapshot, err := NormalizeAndHash("control", order)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if index == 0 {
-			want = snapshot.RouteHash
-		} else if snapshot.RouteHash != want {
-			t.Fatalf("输入顺序 %d 的哈希 %s 与第一次的 %s 不同", index, snapshot.RouteHash, want)
 		}
 	}
 }

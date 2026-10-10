@@ -109,6 +109,12 @@ func expansionCacheKey(spaceID string, tagIDs []string) string {
 // applies. It is intentionally a single process timer handler; SQLite unique
 // indexes provide the only idempotency needed by this single-user system.
 type Scheduler struct {
+	Lifetime                      context.Context
+	workerMu                      sync.Mutex
+	workerContext                 context.Context
+	cancelWorkers                 context.CancelFunc
+	workers                       sync.WaitGroup
+	workersClosed                 bool
 	SCFRegionBlacklists           map[string][]string
 	ResolveSymbol                 SymbolResolver
 	ResolveSourceID               func(string, string) string
@@ -124,7 +130,7 @@ type Scheduler struct {
 	TimerAssignments              func() []NodeAssignment
 	TimerMeasuredSafeGroupSize    int
 	Invoker                       MarketFetchInvoker
-	Storage                       StorageFactory
+	Storage                       func(string, string) (Storage, error)
 	BatchSize                     int
 	InvokeConcurrency             int
 	MaintenanceBatchLimit         int
@@ -297,7 +303,7 @@ func (s *Scheduler) startRetryMaintenance(spaceID string, nodes []scfinvoker.Nod
 	s.retryMaintenanceQueueMu.Lock()
 	if s.retryMaintenanceWake == nil {
 		s.retryMaintenanceWake = make(chan retryMaintenanceRequest, 1)
-		go s.retryMaintenanceWorker(s.retryMaintenanceWake)
+		s.launch(func() { s.retryMaintenanceWorker(s.retryMaintenanceWake) })
 	}
 	enqueueLatestRetryMaintenance(s.retryMaintenanceWake, request)
 	s.retryMaintenanceQueueMu.Unlock()
@@ -316,7 +322,13 @@ func enqueueLatestRetryMaintenance(wake chan retryMaintenanceRequest, request re
 }
 
 func (s *Scheduler) retryMaintenanceWorker(wake <-chan retryMaintenanceRequest) {
-	for request := range wake {
+	for {
+		var request retryMaintenanceRequest
+		select {
+		case <-s.lifetime().Done():
+			return
+		case request = <-wake:
+		}
 		s.retryMaintenanceQueueMu.Lock()
 		select {
 		case latest := <-wake:
@@ -325,7 +337,7 @@ func (s *Scheduler) retryMaintenanceWorker(wake <-chan retryMaintenanceRequest) 
 		}
 		s.retryMaintenanceQueueMu.Unlock()
 
-		maintenanceCtx, maintenanceCancel := context.WithTimeout(context.Background(), retryMaintenanceWindow)
+		maintenanceCtx, maintenanceCancel := context.WithTimeout(s.lifetime(), retryMaintenanceWindow)
 		passNow := time.Now().UTC()
 		if !request.now.IsZero() && request.now.After(passNow) {
 			passNow = request.now.UTC()
@@ -424,7 +436,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 		currentRunID = run.RunID
 		runCutoff = run.CreateTime.UTC()
 		finishRun = func() {
-			finishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			finishCtx, cancel := context.WithTimeout(s.lifetime(), 2*time.Second)
 			defer cancel()
 			if err != nil {
 				if updateErr := s.Runs.UpdateStatus(finishCtx, spaceID, currentRunID, domain.RunStatusFailed, err.Error()); updateErr != nil {
@@ -511,7 +523,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	// errors by launching every successfully persisted batch when Tick returns.
 	defer func() {
 		for _, dispatch := range deferredDispatches {
-			go s.dispatchPlanned(dispatch.req, dispatch.node, dispatch.nodes)
+			s.launch(func() { s.dispatchPlanned(dispatch.req, dispatch.node, dispatch.nodes) })
 		}
 	}()
 	// A fetch request is shared across CollectionTasks when its source-side
@@ -1426,7 +1438,7 @@ func (s *Scheduler) planOne(ctx context.Context, task domain.CollectionTask, req
 	if err != nil || !created {
 		return created, err
 	}
-	go s.dispatchPlanned(req, node, nodes)
+	s.launch(func() { s.dispatchPlanned(req, node, nodes) })
 	return true, nil
 }
 
@@ -1540,7 +1552,7 @@ func rotateTasksAfter(tasks []domain.CollectionTask, lastTaskID string) []domain
 
 func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []scfinvoker.Node) {
 	s.ensureInvokeSemaphore()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(s.lifetime(), 30*time.Second)
 	defer cancel()
 	select {
 	case s.invokeSem <- struct{}{}:
@@ -2097,10 +2109,13 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 				continue
 			}
 		}
-		go func(req Request, node scfinvoker.Node, nodes []scfinvoker.Node, retryKeys []string, batchID, spaceID string) {
+		launched := s.launch(func() {
 			defer s.endRetryDispatch(spaceID, batchID, retryKeys)
 			s.dispatchRetry(req, node, nodes, retryKeys)
-		}(req, node, nodes, retryKeys, batchID, spaceID)
+		})
+		if !launched {
+			s.endRetryDispatch(spaceID, batchID, retryKeys)
+		}
 	}
 	return nil
 }
@@ -2182,7 +2197,7 @@ func uniqueStrings(values []string) []string {
 
 func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scfinvoker.Node, retryKeys []string) {
 	s.ensureInvokeSemaphore()
-	ctx, cancel := context.WithTimeout(context.Background(), s.retryDispatchWaitBudget())
+	ctx, cancel := context.WithTimeout(s.lifetime(), s.retryDispatchWaitBudget())
 	defer cancel()
 	select {
 	case s.invokeSem <- struct{}{}:
@@ -2249,7 +2264,7 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 		return
 	}
 	log.WarnContextf(ctx, "SCF market fetch retry invoke exhausted failover batch=%s original_node=%s", req.BatchID, node.NodeID)
-	forceCtx, forceCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	forceCtx, forceCancel := context.WithTimeout(s.lifetime(), 5*time.Second)
 	defer forceCancel()
 	forced, forceErr := s.Batches.MakePlannedRetryBatchDue(forceCtx, req.SpaceID, req.BatchID, time.Now().UTC())
 	if forceErr != nil {

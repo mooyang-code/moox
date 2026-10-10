@@ -24,12 +24,46 @@ const (
 )
 
 var (
-	serviceIDPattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
-	// callerPattern 允许 host-gateway@<主机> 形式的主机网关身份。
-	callerPattern      = regexp.MustCompile(`^[a-z0-9_-]+(@[a-z0-9_-]+)?$`)
-	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 	methodPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	serviceIDPattern   = regexp.MustCompile(`^[a-z0-9_-]+$`)
+	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 )
+
+var storageInternalMethods = map[string]struct{}{
+	"ClaimViewIndexBuild":  {},
+	"UpdateViewIndexBuild": {},
+	"ActivateViewIndex":    {},
+	"FailViewIndexBuild":   {},
+	"MergePrimaryRows":     {},
+	"ScanPrimaryRows":      {},
+	"DeletePrimaryRows":    {},
+	"DeleteTimeSeriesRows": {},
+	"PrepareViewIndex":     {},
+	"ApplyViewIndex":       {},
+	"StatViewIndex":        {},
+	"RemoveViewIndex":      {},
+	"ListViewIndexes":      {},
+	"QueryTimeSeriesIndex": {},
+	"SearchRecordIndex":    {},
+	"GetShardState":        {},
+}
+
+var storageViewMetadataMethods = map[string]struct{}{
+	"ClaimViewIndexBuild":  {},
+	"UpdateViewIndexBuild": {},
+	"ActivateViewIndex":    {},
+	"FailViewIndexBuild":   {},
+}
+
+var storagePrivilegedMethods = map[string]map[string]struct{}{
+	"trpc.moox.storage.DataShard": {
+		"MergeRows":     {},
+		"ReadRows":      {},
+		"ScanRows":      {},
+		"DeleteRows":    {},
+		"GetShardState": {},
+	},
+}
 
 type Route struct {
 	ServiceID      string   `json:"service_id,omitempty"`
@@ -89,21 +123,72 @@ func ValidateRoute(route Route) error {
 	if len(route.AllowedCallers) == 0 {
 		return fmt.Errorf("route requires a nonempty allowed_callers list")
 	}
-	// 存储路由不能用通配符：存储的方法与调用方都由组件目录显式列出。
-	if strings.HasPrefix(route.ServicePath, "trpc.moox.storage.") {
-		if contains(route.AllowedMethods, "*") {
-			return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
+	isStoragePath := strings.HasPrefix(route.ServicePath, "trpc.moox.storage.")
+	if isStoragePath {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
+			}
 		}
-		if contains(route.AllowedCallers, "*") {
-			return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
+		for _, caller := range route.AllowedCallers {
+			if caller == "*" {
+				return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
+			}
+		}
+	}
+	if route.ServiceID == "storage" || route.ServiceID == "storage-primary" || route.ServiceID == "storage-view" {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				return fmt.Errorf("storage routes cannot use wildcard allowed_methods")
+			}
+			_, internal := storageInternalMethods[method]
+			_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
+			if internal && !dataShardPrivileged && !allowsStorageViewMetadataMethod(route, method) {
+				return fmt.Errorf("storage method %q is internal and cannot be routed", method)
+			}
+		}
+	}
+	if route.ServicePath == "trpc.moox.storage.DataShard" {
+		for _, method := range route.AllowedMethods {
+			if method == "*" {
+				return fmt.Errorf("DataShard routes cannot use wildcard allowed_methods")
+			}
+			if _, ok := storagePrivilegedMethods[route.ServicePath][method]; !ok {
+				return fmt.Errorf("DataShard method %q is not routable", method)
+			}
+		}
+		for _, caller := range route.AllowedCallers {
+			if caller != "storage-primary" {
+				return fmt.Errorf("DataShard routes only allow storage-primary caller")
+			}
+		}
+	}
+	for _, method := range route.AllowedMethods {
+		_, internal := storageInternalMethods[method]
+		_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
+		if internal && !dataShardPrivileged && !allowsStorageViewMetadataMethod(route, method) {
+			return fmt.Errorf("storage method %q is internal and cannot be routed", method)
 		}
 	}
 	for _, caller := range route.AllowedCallers {
-		if caller != "*" && !callerPattern.MatchString(caller) {
+		if isStoragePath && caller == "*" {
+			return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
+		}
+		if caller != "*" && !serviceIDPattern.MatchString(caller) {
 			return fmt.Errorf("allowed caller %q must be a lowercase URL-safe identifier", caller)
 		}
 	}
 	return nil
+}
+
+func allowsStorageViewMetadataMethod(route Route, method string) bool {
+	if route.ServiceID != "storage-primary" || route.ServicePath != "trpc.moox.storage.Metadata" {
+		return false
+	}
+	if _, ok := storageViewMetadataMethods[method]; !ok || len(route.AllowedCallers) != 1 {
+		return false
+	}
+	return route.AllowedCallers[0] == "storage-view"
 }
 
 func validateLoopbackAddress(address string) error {
@@ -171,25 +256,15 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 			return Snapshot{}, fmt.Errorf("route %d: %w", index, err)
 		}
 	}
-	// 同一服务可以有多条路由（按调用方分组）：排序键包含方法列表和调用方列表，哈希才与输入顺序无关。
-	sort.SliceStable(normalized, func(i, j int) bool {
-		left, right := normalized[i], normalized[j]
-		if left.ServiceID != right.ServiceID {
-			return left.ServiceID < right.ServiceID
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].ServiceID == normalized[j].ServiceID {
+			return normalized[i].ServicePath < normalized[j].ServicePath
 		}
-		if left.ServicePath != right.ServicePath {
-			return left.ServicePath < right.ServicePath
-		}
-		leftMethods, rightMethods := strings.Join(left.AllowedMethods, ","), strings.Join(right.AllowedMethods, ",")
-		if leftMethods != rightMethods {
-			return leftMethods < rightMethods
-		}
-		return strings.Join(left.AllowedCallers, ",") < strings.Join(right.AllowedCallers, ",")
+		return normalized[i].ServiceID < normalized[j].ServiceID
 	})
 	for i := range normalized {
 		for j := i + 1; j < len(normalized); j++ {
-			// 路由键是 service path 加方法名：同一组件的不同服务可以有同名方法。
-			if normalized[i].ServiceID != normalized[j].ServiceID || normalized[i].ServicePath != normalized[j].ServicePath {
+			if normalized[i].ServiceID != normalized[j].ServiceID {
 				continue
 			}
 			left, right := normalized[i], normalized[j]
@@ -282,13 +357,4 @@ func hashSnapshot(snapshot Snapshot) (string, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }

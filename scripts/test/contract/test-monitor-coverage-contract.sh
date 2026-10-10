@@ -3,10 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
-# 组件和探测方式只来自组件目录，Monitor 按部署生成检查；这里校验两边的单测和数据集健康策略。
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
-(cd "${ROOT}/packages/servicecatalog" && go test -count=1 ./...)
-(cd "${ROOT}/modules/monitor" && go test -count=1 ./internal/placement)
+(cd "${ROOT}/modules/admin" && go test -count=1 ./internal/service/sysdeploy)
 
 python3 - "${ROOT}" <<'PY'
 import pathlib
@@ -15,9 +13,25 @@ import sys
 import yaml
 
 root = pathlib.Path(sys.argv[1])
+catalog = yaml.safe_load((root / "packages/servicecatalog/catalog.yaml").read_text())
 policy_path = root / "config/setup/dataset-health-policy.yaml"
 policy_text = policy_path.read_text()
 policy = yaml.safe_load(policy_text)
+components = {item["id"]: item for item in catalog["components"]}
+if (root / "packages/doctor/components.yaml").exists():
+    raise SystemExit("Doctor must use the shared component catalog")
+for name, component in components.items():
+    doctor = component["doctor"]
+    if doctor["transport"] not in {"reporter", "host_snapshot", "health_only"}:
+        raise SystemExit(f"{name}: unsupported transport")
+    if not set(doctor.get("dependencies", [])).issubset(components):
+        raise SystemExit(f"{name}: unknown component dependency")
+    if component["health"]["kind"] not in {"readyz", "https", "none"}:
+        raise SystemExit(f"{name}: unsupported health kind")
+proxy = components["console-proxy"]
+health = proxy["health"]
+if proxy["doctor"]["transport"] != "health_only" or health["kind"] != "readyz" or health["port"] != 19528 or health.get("loopback") is not True:
+    raise SystemExit("console-proxy diagnostics contract changed")
 
 if policy.get("version") != 2:
     raise SystemExit("monitor policy must use version 2")
@@ -38,23 +52,16 @@ if set(defaults_policy) != required_defaults:
         f"monitor policy defaults mismatch: got={sorted(defaults_policy)}"
     )
 
-# 两个模块都要登记数据集指标，并把「预期的实时数据集」整体替换进去：
-# Collector 在 internal/observability 里维护清单，Factor 在 internal/bootstrap 的观察者里维护。
-collector = root / "modules/collector/internal"
-collector_bootstrap = (collector / "bootstrap/bootstrap.go").read_text()
-collector_inventory = (collector / "observability/realtime_inventory.go").read_text()
-if "NewDatasetMetrics" not in collector_bootstrap or "NewRealtimeInventory" not in collector_bootstrap:
-    raise SystemExit("collector: DatasetMetrics inventory is not registered")
-if "ReplaceExpected" not in collector_inventory:
-    raise SystemExit("collector: realtime inventory does not replace expected datasets")
+for module, registration, inventory_path, constructor in (
+    ("collector", "internal/bootstrap/bootstrap.go", "internal/observability/realtime_inventory.go", "NewRealtimeInventory"),
+    ("factor", "internal/bootstrap/metrics_reporter.go", "internal/bootstrap/dataset_observer.go", "newFactorDatasetObserver"),
+):
+    bootstrap = (root / "modules" / module / registration).read_text()
+    inventory = (root / "modules" / module / inventory_path).read_text()
+    if "NewDatasetMetrics" not in bootstrap or constructor not in bootstrap:
+        raise SystemExit(f"{module}: DatasetMetrics inventory is not registered")
+    if "ReplaceExpected" not in inventory:
+        raise SystemExit(f"{module}: realtime inventory does not replace expected datasets")
 
-factor = root / "modules/factor/internal/bootstrap"
-factor_reporter = (factor / "metrics_reporter.go").read_text()
-factor_observer = (factor / "dataset_observer.go").read_text()
-if "NewDatasetMetrics" not in factor_reporter:
-    raise SystemExit("factor: DatasetMetrics is not registered")
-if "ReplaceExpected" not in factor_observer:
-    raise SystemExit("factor: dataset observer does not replace expected datasets")
-
-print("monitor coverage contract passed")
+print(f"monitor coverage contract: {len(components)} independent processes")
 PY

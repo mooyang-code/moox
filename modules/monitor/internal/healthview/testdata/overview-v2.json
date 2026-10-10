@@ -1,0 +1,344 @@
+{
+  "alerts": [
+    {
+      "id": "host-presence:PHYSICAL01",
+      "last_checked_at": "2026-10-09T12:00:00Z",
+      "object": {
+        "agent_id": "PHYSICAL01",
+        "component_id": "",
+        "dataset_id": "",
+        "freq": "",
+        "host_id": "offline",
+        "kind": "presence",
+        "producer": "",
+        "space_id": "",
+        "type": "host"
+      },
+      "raw_error": "",
+      "reason": "主机采集代理超过三分钟未上报",
+      "severity": "critical",
+      "title": "主机 offline · 上报已中断",
+      "triggered_at": "2026-10-09T11:53:00Z"
+    },
+    {
+      "id": "host-alert",
+      "last_checked_at": "2026-10-09T12:00:00Z",
+      "object": {
+        "agent_id": "PHYSICAL01",
+        "component_id": "",
+        "dataset_id": "",
+        "freq": "",
+        "host_id": "offline",
+        "kind": "cpu",
+        "producer": "",
+        "space_id": "",
+        "type": "host"
+      },
+      "raw_error": "",
+      "reason": "监控项持续异常",
+      "severity": "critical",
+      "title": "主机 offline · CPU 使用率",
+      "triggered_at": "2026-10-09T12:00:00Z"
+    }
+  ],
+  "business_checks": [
+    {
+      "check_id": "console-page:control:console-proxy",
+      "checked_at": "2026-10-09T12:00:00Z",
+      "kind": "console-page",
+      "module": "console-proxy",
+      "raw_error": "HTTP 502\nupstream web-host",
+      "reason": "页面请求失败",
+      "space_id": "",
+      "status": "down"
+    }
+  ],
+  "components": [
+    {
+      "component_id": "archive",
+      "host_id": "control",
+      "instances": [],
+      "name": "归档服务",
+      "probe": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "",
+        "status": "disabled"
+      },
+      "probe_url": "",
+      "reason": "部署已停用",
+      "recent_probes": [],
+      "reporter": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "未配置指标上报",
+        "status": "unchecked"
+      },
+      "status": "disabled",
+      "status_since": ""
+    },
+    {
+      "component_id": "console-proxy",
+      "host_id": "control",
+      "instances": [
+        {
+          "boot_id": "boot-1",
+          "instance_id": "proxy-1",
+          "last_reported_at": "2026-10-09T12:00:00Z",
+          "status": "healthy",
+          "version": "v2"
+        }
+      ],
+      "name": "目录中的控制台入口",
+      "probe": {
+        "checked_at": "2026-10-09T12:00:00Z",
+        "raw_error": "",
+        "reason": "",
+        "status": "healthy"
+      },
+      "probe_url": "",
+      "reason": "健康检查正常",
+      "recent_probes": [],
+      "reporter": {
+        "checked_at": "2026-10-09T12:00:00Z",
+        "raw_error": "",
+        "reason": "监控上报正常",
+        "status": "healthy"
+      },
+      "status": "healthy",
+      "status_since": ""
+    },
+    {
+      "component_id": "eventbus",
+      "host_id": "control",
+      "instances": [],
+      "name": "消息总线",
+      "probe": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "",
+        "status": "unchecked"
+      },
+      "probe_url": "",
+      "reason": "不探测",
+      "recent_probes": [],
+      "reporter": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "从未收到监控上报",
+        "status": "unknown"
+      },
+      "status": "unchecked",
+      "status_since": ""
+    },
+    {
+      "component_id": "web-host",
+      "host_id": "control",
+      "instances": [],
+      "name": "控制台前端",
+      "probe": {
+        "checked_at": "2026-10-09T12:00:00Z",
+        "raw_error": "dial tcp: connection refused\n原始错误",
+        "reason": "健康检查失败",
+        "status": "down"
+      },
+      "probe_url": "",
+      "reason": "健康检查失败",
+      "recent_probes": [],
+      "reporter": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "未配置指标上报",
+        "status": "unchecked"
+      },
+      "status": "down",
+      "status_since": ""
+    },
+    {
+      "component_id": "web-host",
+      "host_id": "offline",
+      "instances": [],
+      "name": "控制台前端",
+      "probe": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "",
+        "status": "unknown"
+      },
+      "probe_url": "",
+      "reason": "尚未完成健康检查",
+      "recent_probes": [],
+      "reporter": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "未配置指标上报",
+        "status": "unchecked"
+      },
+      "status": "unknown",
+      "status_since": ""
+    }
+  ],
+  "generated_at": "2026-10-09T12:00:00Z",
+  "hosts": [
+    {
+      "address": "",
+      "agent_id": "STANDALONE",
+      "cpu_available": false,
+      "cpu_percent": 0,
+      "disk_available": false,
+      "disk_percent": 0,
+      "gateway_signals": [],
+      "host_id": "",
+      "hostname": "control",
+      "last_reported_at": "2026-10-09T12:00:00Z",
+      "memory_available": false,
+      "memory_percent": 0,
+      "metrics_available": false,
+      "reason": "主机连接正常",
+      "status": "healthy"
+    },
+    {
+      "address": "control.test",
+      "agent_id": "",
+      "cpu_available": false,
+      "cpu_percent": 0,
+      "disk_available": false,
+      "disk_percent": 0,
+      "gateway_signals": [],
+      "host_id": "control",
+      "hostname": "",
+      "last_reported_at": "",
+      "memory_available": false,
+      "memory_percent": 0,
+      "metrics_available": false,
+      "reason": "尚未收到主机指标",
+      "status": "unknown"
+    },
+    {
+      "address": "offline.test",
+      "agent_id": "PHYSICAL01",
+      "cpu_available": false,
+      "cpu_percent": 0,
+      "disk_available": false,
+      "disk_percent": 0,
+      "gateway_signals": [
+        {
+          "applied_hash": "",
+          "expected_hash": "",
+          "kind": "heartbeat",
+          "pending_since": "",
+          "signal": {
+            "checked_at": "2026-10-09T12:00:00Z",
+            "raw_error": "",
+            "reason": "主机网关心跳已中断",
+            "status": "down"
+          }
+        }
+      ],
+      "host_id": "offline",
+      "hostname": "offline-host",
+      "last_reported_at": "2026-10-09T11:50:00Z",
+      "memory_available": false,
+      "memory_percent": 0,
+      "metrics_available": false,
+      "reason": "主机网关心跳已中断",
+      "status": "down"
+    }
+  ],
+  "notification": {
+    "channel_type": "",
+    "configured": false,
+    "masked_url": "",
+    "updated_at": ""
+  },
+  "pipeline": [
+    {
+      "datasets": [],
+      "id": "collection",
+      "name": "行情采集服务",
+      "status": "disabled"
+    },
+    {
+      "datasets": [
+        {
+          "dataset_id": "bars",
+          "freq": "1m",
+          "input_watermark_at": "2026-10-09T12:00:00Z",
+          "lag_seconds": "120",
+          "last_reported_at": "2026-10-09T12:00:00Z",
+          "last_run_at": "2026-10-09T12:00:00Z",
+          "last_success_at": "2026-10-09T11:59:00Z",
+          "output_watermark_at": "2026-10-09T11:58:00Z",
+          "producer": "storage",
+          "raw_error": "",
+          "reason": "输出水位已落后",
+          "space_id": "crypto",
+          "status": "degraded"
+        }
+      ],
+      "id": "storage",
+      "name": "存储主服务 / 存储数据节点 / 存储视图服务",
+      "status": "disabled"
+    },
+    {
+      "datasets": [],
+      "id": "factor",
+      "name": "因子管理服务",
+      "status": "disabled"
+    },
+    {
+      "datasets": [],
+      "id": "trade",
+      "name": "交易服务",
+      "status": "disabled"
+    }
+  ],
+  "summary": {
+    "alert_count": 2,
+    "attention_count": 6,
+    "components": {
+      "attention_count": 1,
+      "disabled_count": 1,
+      "healthy_count": 1,
+      "unchecked_count": 1,
+      "unknown_count": 1
+    },
+    "healthy_count": 2,
+    "unknown_count": 2,
+    "unregistered_count": 1
+  },
+  "topology_known": true,
+  "unregistered": [
+    {
+      "component_id": "unknown-collector-name",
+      "host_id": "control",
+      "instances": [
+        {
+          "boot_id": "",
+          "instance_id": "orphan",
+          "last_reported_at": "2026-10-09T12:00:00Z",
+          "status": "healthy",
+          "version": "dev"
+        }
+      ],
+      "name": "unknown-collector-name",
+      "probe": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "",
+        "status": "unknown"
+      },
+      "probe_url": "",
+      "reason": "进程在上报，但没有部署记录",
+      "recent_probes": [],
+      "reporter": {
+        "checked_at": "",
+        "raw_error": "",
+        "reason": "未配置指标上报",
+        "status": "unchecked"
+      },
+      "status": "degraded",
+      "status_since": ""
+    }
+  ]
+}

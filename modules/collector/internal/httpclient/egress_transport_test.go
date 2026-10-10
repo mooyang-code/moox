@@ -2,208 +2,201 @@ package httpclient
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-go/client"
+	"google.golang.org/protobuf/proto"
 )
 
-// fakeEgress 记录收到的 DoReq，并按 respond 返回结果。
-type fakeEgress struct {
-	mu       sync.Mutex
-	requests []*egresspb.DoReq
-	deadline time.Time
-	respond  func(*egresspb.DoReq) (*egresspb.DoRsp, error)
+type egressInvoker func(context.Context, string, string, any, any) error
+
+func (f egressInvoker) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return f(ctx, service, method, req, rsp)
 }
 
-func (f *fakeEgress) Do(ctx context.Context, req *egresspb.DoReq, _ ...client.Option) (*egresspb.DoRsp, error) {
-	f.mu.Lock()
-	f.requests = append(f.requests, req)
-	f.deadline, _ = ctx.Deadline()
-	f.mu.Unlock()
-	return f.respond(req)
-}
+type directTransport func(*http.Request) (*http.Response, error)
 
-func (f *fakeEgress) last() *egresspb.DoReq {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.requests) == 0 {
-		return nil
-	}
-	return f.requests[len(f.requests)-1]
-}
+func (f directTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-func binanceWhitelist(t *testing.T) egresspb.DomainList {
-	t.Helper()
-	domains, err := egresspb.ParseDomainList([]string{"*.binance.com", "data-api.binance.vision"})
-	require.NoError(t, err)
-	return domains
-}
-
-func okResponse(status int32, body string, headers map[string]string) *egresspb.DoRsp {
-	return &egresspb.DoRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Status: status, Body: []byte(body), Headers: headers}
-}
-
-func TestEgressHTTPClientSendsWhitelistedRequestsThroughProxy(t *testing.T) {
-	egress := &fakeEgress{respond: func(*egresspb.DoReq) (*egresspb.DoRsp, error) {
-		return okResponse(http.StatusOK, `{"symbols":[{"symbol":"BTCUSDT"}]}`, map[string]string{
-			"Content-Type": "application/json", "Content-Encoding": "gzip", "Content-Length": "999", "X-Mbx-Used-Weight-1m": "20",
-		}), nil
-	}}
-	httpClient := NewEgressHTTPClient(binanceWhitelist(t), egress)
-	var result struct {
-		Symbols []struct{ Symbol string } `json:"symbols"`
-	}
-	query := url.Values{"symbol": []string{"BTCUSDT"}, "limit": []string{"2"}}
-	require.NoError(t, httpClient.Get(context.Background(), "FAPI.binance.com", "/fapi/v1/exchangeInfo", query, &result))
-	require.Equal(t, "BTCUSDT", result.Symbols[0].Symbol, "响应体按原样解码；解压由出口代理完成，客户端不能再按 gzip 解码")
-
-	req := egress.last()
-	require.NotNil(t, req)
-	require.Equal(t, http.MethodGet, req.GetMethod())
-	require.Equal(t, "fapi.binance.com", req.GetHost())
-	require.Equal(t, "/fapi/v1/exchangeInfo", req.GetPath())
-	require.Equal(t, "limit=2&symbol=BTCUSDT", req.GetQuery())
-	require.Equal(t, "moox-collector/1.0", req.GetHeaders()["User-Agent"])
-	require.Empty(t, req.GetBody())
-	// 客户端整体超时 60 秒，给出口代理的超时要留出回程的余量，且不超过出口代理的上限。
-	require.Greater(t, req.GetTimeoutMs(), int32(55_000))
-	require.LessOrEqual(t, req.GetTimeoutMs(), int32(60_000))
-	require.Less(t, time.Duration(req.GetTimeoutMs())*time.Millisecond, time.Until(egress.deadline))
-}
-
-func TestEgressHTTPClientPassesUpstreamStatusToRetryLogic(t *testing.T) {
-	for _, status := range []int32{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusFound} {
-		egress := &fakeEgress{respond: func(*egresspb.DoReq) (*egresspb.DoRsp, error) {
-			return okResponse(status, "busy", map[string]string{"Location": "https://evil.example.com/"}), nil
-		}}
-		err := NewEgressHTTPClient(binanceWhitelist(t), egress).Get(context.Background(), "api.binance.com", "/api/v3/exchangeInfo", nil, nil)
-		var statusErr *StatusError
-		require.ErrorAs(t, err, &statusErr)
-		require.Equal(t, int(status), statusErr.StatusCode)
-		require.Len(t, egress.requests, 1, "重定向不跟随，避免把请求带到白名单之外直连")
+func TestEgressTransportPreservesHTTPAndFiltersCredentials(t *testing.T) {
+	for _, status := range []int{200, 429, 503} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			calls := 0
+			gateway := egressInvoker(func(ctx context.Context, service, method string, request, response any) error {
+				calls++
+				require.Equal(t, egressService, service)
+				require.Equal(t, "Do", method)
+				req := request.(*egresspb.DoReq)
+				require.Equal(t, "api.binance.com", req.Host)
+				require.Equal(t, "/a%2Fb", req.Path)
+				require.Equal(t, "symbol=BTC%2BUSDT&n=1", req.Query)
+				require.Equal(t, http.MethodPost, req.Method)
+				require.Equal(t, []byte{0, 1, 255}, req.Body)
+				require.Equal(t, map[string]string{"Accept": "application/json", "Content-Type": "application/octet-stream"}, req.Headers)
+				require.Positive(t, req.TimeoutMs)
+				require.LessOrEqual(t, req.TimeoutMs, int32(2000))
+				*response.(*egresspb.DoRsp) = egresspb.DoRsp{
+					RetInfo: &commonpb.RetInfo{}, Status: int32(status), Body: []byte("decoded"),
+					Headers: map[string]string{"Content-Type": "application/json", "Content-Encoding": "gzip", "Content-Length": "300", "Set-Cookie": "secret", "Location": "https://evil.example/", "X-Internal": "private"},
+				}
+				return nil
+			})
+			transport, err := NewEgressTransport(gateway, []string{"*.binance.com"}, directTransport(func(*http.Request) (*http.Response, error) {
+				t.Fatal("proxy request reached direct transport")
+				return nil, nil
+			}))
+			require.NoError(t, err)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.binance.com/a%2Fb?symbol=BTC%2BUSDT&n=1", bytes.NewReader([]byte{0, 1, 255}))
+			require.NoError(t, err)
+			req.Header.Set("Accept", "application/json")
+			req.Header.Set("Content-Type", "application/octet-stream")
+			for _, header := range []string{"Authorization", "Cookie", "X-Space-Id", "X-Moox-Key-Id", "Connection", "Accept-Encoding"} {
+				req.Header.Set(header, "must-not-leave")
+			}
+			rsp, err := transport.RoundTrip(req)
+			require.NoError(t, err)
+			defer rsp.Body.Close()
+			require.Equal(t, status, rsp.StatusCode)
+			raw, err := io.ReadAll(rsp.Body)
+			require.NoError(t, err)
+			require.Equal(t, "decoded", string(raw))
+			require.Equal(t, int64(7), rsp.ContentLength)
+			require.True(t, rsp.Uncompressed)
+			require.Equal(t, http.Header{"Content-Type": {"application/json"}}, rsp.Header)
+			require.Equal(t, 1, calls)
+		})
 	}
 }
 
-func TestEgressHTTPClientReportsProxyFailures(t *testing.T) {
-	for name, respond := range map[string]func(*egresspb.DoReq) (*egresspb.DoRsp, error){
-		"调用失败": func(*egresspb.DoReq) (*egresspb.DoRsp, error) { return nil, errors.New("connection refused") },
-		"代理拒绝": func(*egresspb.DoReq) (*egresspb.DoRsp, error) {
-			return &egresspb.DoRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NO_PERMISSION, Msg: "域名不在白名单内"}}, nil
-		},
-		"空响应":   func(*egresspb.DoReq) (*egresspb.DoRsp, error) { return &egresspb.DoRsp{}, nil },
-		"状态码无效": func(*egresspb.DoReq) (*egresspb.DoRsp, error) { return okResponse(0, "", nil), nil },
-	} {
-		egress := &fakeEgress{respond: respond}
-		err := NewEgressHTTPClient(binanceWhitelist(t), egress).Get(context.Background(), "api.binance.com", "/api/v3/ping", nil, nil)
-		require.ErrorContains(t, err, "经出口代理请求 api.binance.com 失败", name)
-		var statusErr *StatusError
-		require.False(t, errors.As(err, &statusErr), "%s：代理自身的错误不能当成目标的状态码", name)
-	}
-}
-
-func TestEgressTransportSendsOtherDomainsDirectly(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `{"status":"direct"}`)
+func TestEgressHTTPClientKeepsOtherDomainsDirectAndProxyErrorsClosed(t *testing.T) {
+	directCalls, proxyCalls := 0, 0
+	direct := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		directCalls++
+		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
-	defer server.Close()
-	egress := &fakeEgress{respond: func(*egresspb.DoReq) (*egresspb.DoRsp, error) {
-		t.Fatal("白名单之外的域名不应经过出口代理")
-		return nil, nil
-	}}
-	direct := server.Client()
-	direct.Transport = NewEgressTransport(binanceWhitelist(t), egress, direct.Transport)
-	parsed, err := url.Parse(server.URL)
+	defer direct.Close()
+	gateway := egressInvoker(func(_ context.Context, _, _ string, request, _ any) error {
+		proxyCalls++
+		require.Equal(t, "/", request.(*egresspb.DoReq).Path)
+		return errors.New("proxy unavailable")
+	})
+	transport, err := NewEgressTransport(gateway, []string{"*.binance.com"}, direct.Client().Transport)
 	require.NoError(t, err)
-	var result map[string]string
-	require.NoError(t, NewHTTPClient(direct).Get(context.Background(), parsed.Host, "/", nil, &result))
-	require.Equal(t, "direct", result["status"])
+	client := &http.Client{Transport: transport}
+	rsp, err := client.Get(direct.URL)
+	require.NoError(t, err)
+	_ = rsp.Body.Close()
+	_, err = client.Get("https://api.binance.com")
+	require.ErrorContains(t, err, "proxy unavailable")
+	require.Equal(t, 1, proxyCalls)
+	require.Equal(t, 1, directCalls)
+	transport.CloseIdleConnections()
 }
 
-func TestEgressTransportRejectsRequestsTheProxyCannotSend(t *testing.T) {
-	egress := &fakeEgress{respond: func(*egresspb.DoReq) (*egresspb.DoRsp, error) {
-		t.Fatal("不应发出请求")
-		return nil, nil
-	}}
-	transport := NewEgressTransport(binanceWhitelist(t), egress, http.DefaultTransport)
-	for rawURL, want := range map[string]string{
-		"http://api.binance.com/api/v3/ping":       "只发 HTTPS",
-		"https://api.binance.com:8443/api/v3/ping": "只访问 443 端口",
-	} {
-		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+func TestEgressHTTPClientSnapshotIPsCannotBypassProxy(t *testing.T) {
+	calls := 0
+	client, err := NewEgressHTTPClient(egressInvoker(func(_ context.Context, _, _ string, req, rsp any) error {
+		calls++
+		require.Equal(t, "api.binance.com", req.(*egresspb.DoReq).Host)
+		*rsp.(*egresspb.DoRsp) = egresspb.DoRsp{RetInfo: &commonpb.RetInfo{}, Status: 200, Body: []byte(`{"ok":true}`)}
+		return nil
+	}), []string{"*.binance.com"})
+	require.NoError(t, err)
+	defer client.Close()
+	var result map[string]bool
+	require.NoError(t, client.GetWithIPs(context.Background(), "api.binance.com", []string{"127.0.0.1", "1.1.1.1"}, "/api", nil, &result))
+	require.True(t, result["ok"])
+	require.Equal(t, 1, calls)
+}
+
+func TestEgressTransportRejectsInvalidRequestsBeforeRPC(t *testing.T) {
+	transport, err := NewEgressTransport(egressInvoker(func(context.Context, string, string, any, any) error {
+		t.Fatal("invalid request reached proxy")
+		return nil
+	}), []string{"*.binance.com"}, nil)
+	require.NoError(t, err)
+	for _, raw := range []string{"http://api.binance.com/", "https://api.binance.com:444/", "https://user:password@api.binance.com/"} {
+		req, err := http.NewRequest(http.MethodGet, raw, nil)
 		require.NoError(t, err)
 		_, err = transport.RoundTrip(req)
-		require.ErrorContains(t, err, want, rawURL)
+		require.Error(t, err)
 	}
-	req, err := http.NewRequest(http.MethodPost, "https://api.binance.com/api/v3/order", strings.NewReader(strings.Repeat("x", maxEgressRequestBody+1)))
+	req, err := http.NewRequest(http.MethodDelete, "https://api.binance.com/", nil)
 	require.NoError(t, err)
 	_, err = transport.RoundTrip(req)
-	require.ErrorContains(t, err, "请求体超过")
-	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	require.Error(t, err)
+	req, err = http.NewRequest(http.MethodPost, "https://api.binance.com/", strings.NewReader(strings.Repeat("x", (1<<20)+1)))
+	require.NoError(t, err)
+	_, err = transport.RoundTrip(req)
+	require.ErrorContains(t, err, "1 MiB")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, "https://api.binance.com/", nil)
+	require.NoError(t, err)
+	_, err = transport.RoundTrip(req)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestEgressTransportCancellationUnblocksRequestBody(t *testing.T) {
+	transport, err := NewEgressTransport(egressInvoker(func(context.Context, string, string, any, any) error {
+		t.Fatal("canceled body reached proxy")
+		return nil
+	}), []string{"*.binance.com"}, nil)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req, err = http.NewRequestWithContext(expired, http.MethodGet, "https://api.binance.com/api/v3/ping", nil)
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.binance.com/", reader)
 	require.NoError(t, err)
-	_, err = transport.RoundTrip(req)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-}
-
-func TestEgressTransportForwardsPostBodyAndOmitsTimeoutWithoutDeadline(t *testing.T) {
-	egress := &fakeEgress{respond: func(*egresspb.DoReq) (*egresspb.DoRsp, error) {
-		return okResponse(http.StatusOK, "{}", nil), nil
-	}}
-	transport := NewEgressTransport(binanceWhitelist(t), egress, http.DefaultTransport)
-	req, err := http.NewRequest(http.MethodPost, "https://data-api.binance.vision/api/v3/query?x=1", strings.NewReader(`{"a":1}`))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	rsp, err := transport.RoundTrip(req)
-	require.NoError(t, err)
-	body, err := io.ReadAll(rsp.Body)
-	require.NoError(t, err)
-	require.Equal(t, "{}", string(body))
-	require.EqualValues(t, 2, rsp.ContentLength)
-	got := egress.last()
-	require.Equal(t, `{"a":1}`, string(got.GetBody()))
-	require.Equal(t, "application/json", got.GetHeaders()["Content-Type"])
-	require.Equal(t, "x=1", got.GetQuery())
-	require.Zero(t, got.GetTimeoutMs(), "请求没有截止时间时由出口代理使用默认超时")
-}
-
-func TestEgressTransportInflatesCompressedBodyWithinLimit(t *testing.T) {
-	gzipped := func(plain string) []byte {
-		var buffer bytes.Buffer
-		writer := gzip.NewWriter(&buffer)
-		_, _ = io.WriteString(writer, plain)
-		require.NoError(t, writer.Close())
-		return buffer.Bytes()
+	done := make(chan error, 1)
+	go func() { _, err := transport.RoundTrip(req); done <- err }()
+	cancel()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not unblock body read")
 	}
-	req := httptest.NewRequest(http.MethodGet, "https://api.binance.com/api/v3/exchangeInfo", nil)
+}
 
-	rsp, err := egressResponse(req, &egresspb.DoRsp{
-		Status: http.StatusOK, Body: gzipped(`{"symbols":[]}`),
-		Headers: map[string]string{egressBodyEncodingHeader: "gzip", "Content-Type": "application/json"},
-	})
+func TestEgressHTTPClientPreservesRedirectResponse(t *testing.T) {
+	client, err := NewEgressHTTPClient(egressInvoker(func(_ context.Context, _, _ string, _, response any) error {
+		*response.(*egresspb.DoRsp) = egresspb.DoRsp{RetInfo: &commonpb.RetInfo{}, Status: 302, Headers: map[string]string{"Location": "https://must-not-connect.invalid/"}}
+		return nil
+	}), []string{"*.binance.com"})
 	require.NoError(t, err)
-	body, err := io.ReadAll(rsp.Body)
+	defer client.Close()
+	rsp, err := client.httpClient.Get("https://api.binance.com/")
 	require.NoError(t, err)
-	require.Equal(t, `{"symbols":[]}`, string(body))
-	require.Equal(t, int64(len(body)), rsp.ContentLength)
-	require.Empty(t, rsp.Header.Get(egressBodyEncodingHeader))
-
-	_, err = egressResponse(req, &egresspb.DoRsp{Status: http.StatusOK, Body: []byte("不是 gzip"), Headers: map[string]string{egressBodyEncodingHeader: "gzip"}})
-	require.ErrorContains(t, err, "解压失败")
-
-	_, err = gunzipLimited(gzipped(strings.Repeat("x", 2048)), 1024)
-	require.ErrorContains(t, err, "超过 1024 字节")
+	defer rsp.Body.Close()
+	require.Equal(t, 302, rsp.StatusCode)
+	require.Empty(t, rsp.Header.Get("Location"))
+}
+func TestEgressTransportRejectsInvalidRPCResponses(t *testing.T) {
+	for _, response := range []*egresspb.DoRsp{
+		{}, {RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NO_PERMISSION}, Status: 200},
+		{RetInfo: &commonpb.RetInfo{}, Status: 99}, {RetInfo: &commonpb.RetInfo{}, Status: 600},
+	} {
+		proxy, err := NewEgressTransport(egressInvoker(func(_ context.Context, _, _ string, _, output any) error {
+			proto.Merge(output.(*egresspb.DoRsp), response)
+			return nil
+		}), []string{"*.binance.com"}, nil)
+		require.NoError(t, err)
+		req, err := http.NewRequest(http.MethodGet, "https://api.binance.com/", nil)
+		require.NoError(t, err)
+		_, err = proxy.RoundTrip(req)
+		require.Error(t, err)
+	}
 }

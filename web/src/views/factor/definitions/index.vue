@@ -22,7 +22,13 @@
             <template #icon><icon-plus /></template>
             新增因子
           </a-button>
-          <a-input v-model="filters.keyword" placeholder="按因子 ID 或模块名筛选" allow-clear style="width: 200px" @press-enter="search" />
+          <a-input
+            v-model="filters.keyword"
+            placeholder="按因子 ID 或模块名筛选"
+            allow-clear
+            style="width: 200px"
+            @press-enter="search"
+          />
           <a-select v-model="filters.type" placeholder="因子类型" style="width: 120px">
             <a-option value="">全部类型</a-option>
             <a-option value="timeseries">时序</a-option>

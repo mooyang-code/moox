@@ -35,7 +35,7 @@ import (
 	storagegen "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
+	accesskit "github.com/mooyang-code/moox/packages/gatewayclient/testkit"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -46,7 +46,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const (
@@ -55,6 +57,7 @@ const (
 	periodE2EGatewayBinaryEnv = "MOOX_PERIOD_E2E_GATEWAY_HELPER_BINARY"
 	periodE2EGatewayNodeID    = "period-e2e-gateway"
 	periodE2EGatewayKeyID     = "period-e2e-collector"
+	periodE2EGatewaySecret    = "fixture-period-gateway-signing-key-at-least-32-bytes"
 	periodE2ESpotTagID        = "period_e2e"
 	periodE2EWriteSource      = "collector-period-e2e"
 	periodE2ESeriesTag        = "venue:binance|market:spot|source:spot_http"
@@ -71,14 +74,13 @@ type periodE2EStorageReady struct {
 	SpaceID        string `json:"space_id"`
 	DatasetID      string `json:"dataset_id"`
 	Frequency      string `json:"frequency"`
-	// HourlyDatasetID 是按小时对齐的结果数据集，只给重试耗尽场景用（一个 Dataset 只有一个频率）。
-	HourlyDatasetID string `json:"hourly_dataset_id"`
-	StockSpaceID    string `json:"stock_space_id"`
-	StockDatasetID  string `json:"stock_dataset_id"`
-	ClockFile       string `json:"clock_file"`
-	AppID           string `json:"app_id"`
-	PrimaryAppKey   string `json:"primary_app_key"`
-	OutboxTarget    string `json:"outbox_target"`
+	RetryDatasetID string `json:"retry_dataset_id"`
+	StockSpaceID   string `json:"stock_space_id"`
+	StockDatasetID string `json:"stock_dataset_id"`
+	ClockFile      string `json:"clock_file"`
+	AppID          string `json:"app_id"`
+	PrimaryAppKey  string `json:"primary_app_key"`
+	OutboxTarget   string `json:"outbox_target"`
 }
 
 type periodE2EOutbox struct {
@@ -128,13 +130,15 @@ func TestPeriodStorageRPCE2E(t *testing.T) {
 	root := t.TempDir()
 	ready := startPeriodStorageHelper(t, ctx, root, storageBinary)
 
-	secret := periodE2ERandomHex(t, 32)
+	secret := periodE2EGatewaySecret
 	gatewayTarget := startPeriodStorageGateway(t, ctx, root, gatewayBinary, ready, secret)
+	configurePeriodAccess(t, gatewayBinary, stripPeriodE2EURL(t, ready.PrimaryTarget), "", secret)
 	configurePeriodE2EClients(t, root, ready, secret)
+	t.Setenv("MOOX_PERIOD_E2E_PRIMARY_TARGET", ready.PrimaryTarget)
 
-	storage, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, gatewayTarget), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(gatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
-	metadata, err := marketstorage.NewResampleMetadataClient(periodE2EStorageOptions(t, gatewayTarget), marketstorage.InstTypeSPOT)
+	metadata, err := periodMetadataClient(gatewayTarget, marketstorage.InstTypeSPOT)
 	require.NoError(t, err)
 
 	// A known calendar session keeps this test independent of holidays and the
@@ -211,7 +215,10 @@ func TestPeriodStorageRPCE2E(t *testing.T) {
 	t.Log("SCENARIO PASS snapshot-freeze")
 
 	runStockCNPeriodTimerE2E(t, ctx, root, gatewayBinary, ready, secret, gatewayTarget)
-	runPeriodRetryExhaustionRPCE2E(t, ctx, root, gatewayTarget, metadata, ready, initialItems, clock)
+	retryReady := ready
+	require.NotEmpty(t, ready.RetryDatasetID)
+	retryReady.DatasetID, retryReady.Frequency = ready.RetryDatasetID, "1h"
+	runPeriodRetryExhaustionRPCE2E(t, ctx, root, gatewayTarget, metadata, retryReady, initialItems, clock)
 
 	thirdPeriod := period.Add(2 * time.Minute)
 	thirdExpectation := periodE2EExpectation(ready, thirdPeriod, deadline, []string{"BTC-USDT", "ETH-USDT"})
@@ -324,79 +331,25 @@ func waitPeriodE2EFinalizerCycles(t *testing.T, ctx context.Context) {
 
 func startPeriodStorageGateway(t *testing.T, ctx context.Context, root, binary string, ready periodE2EStorageReady, secret string) string {
 	t.Helper()
-	readyFile := filepath.Join(root, "host-gateway-ready")
+	repoRoot := periodE2ERepositoryRoot(t)
+	yamlPath := filepath.Join(repoRoot, "config/setup/service-deployments.yaml")
+	readyFile := filepath.Join(root, "storage-gateway-ready")
 	nonceDir := filepath.Join(root, "gateway-nonces")
 	primary := stripPeriodE2EURL(t, ready.PrimaryTarget)
 	metadata := stripPeriodE2EURL(t, ready.MetadataTarget)
 	args := []string{
-		"-host-id=" + periodE2EGatewayNodeID,
-		"-route=trpc.moox.storage.PrimaryStore=" + primary, "-route=trpc.moox.storage.Metadata=" + metadata,
-		"-callers=collector", "-listen-addr=127.0.0.1:0", "-ready-file=" + readyFile, "-nonce-dir=" + nonceDir,
+		"-mode=collector-period-native", "-deployment-yaml=" + yamlPath, "-route-scope=storage-period",
+		"-node-id=" + periodE2EGatewayNodeID, "-upstream-addr=" + primary,
+		"-metadata-upstream-addr=" + metadata, "-listen-addr=127.0.0.1:0",
+		"-ready-file=" + readyFile, "-nonce-dir=" + nonceDir, "-key-id=" + periodE2EGatewayKeyID,
 	}
-	process := startPeriodE2EProcess(t, binary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_KEYS": periodE2EGatewayKeys(secret)})
+	process := startPeriodE2EProcess(t, binary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_SERVICE_SECRET": secret})
 	var target string
 	waitPeriodE2EReady(t, ctx, process, readyFile, func(raw []byte) error { target = strings.TrimSpace(string(raw)); return nil })
 	parsed, err := url.Parse(target)
 	require.NoError(t, err)
 	require.Equal(t, "ip", parsed.Scheme)
-	periodE2ESecrets.Store(target, secret)
 	return target
-}
-
-// periodE2ESecrets 记录每个 e2e-helper 地址对应的 collector 签名密钥。
-var periodE2ESecrets sync.Map
-
-// periodE2EStorageOptions 返回以 collector 身份、经 e2e-helper（主机网关本机入口）访问 Storage 的
-// gatewayclient 选项，与 Collector 进程的用法一致。
-func periodE2EStorageOptions(t *testing.T, target string) []client.Option {
-	t.Helper()
-	return periodE2EGateway(t, target).ClientOptions()
-}
-
-// periodE2ERuntimeClient 返回经 e2e-helper 领取 Timer 批次的客户端。生产中 SCF 经外部接入领取，外部接入这一段
-// 由 modules/access 的端到端测试覆盖；这里覆盖 Collector 与 Storage 之间的周期协议。
-func periodE2ERuntimeClient(t *testing.T, target string) marketfetch.TimerRuntimeClient {
-	t.Helper()
-	return marketfetch.NewTimerRuntimeClient(periodE2EGateway(t, target))
-}
-
-// periodE2EStorageWriter 返回 SCF 处理器按市场类型创建 Storage 客户端的函数。
-func periodE2EStorageWriter(t *testing.T, target string) func(string, string) (marketfetch.Storage, error) {
-	t.Helper()
-	options := periodE2EStorageOptions(t, target)
-	return func(market, source string) (marketfetch.Storage, error) {
-		return marketfetch.NewMarketStorageForMarket(options, market, source)
-	}
-}
-
-// periodE2EGateway 返回以 collector 身份经 e2e-helper 访问的 gatewayclient。没有登记的地址（例如不可达地址）
-// 使用无效密钥。
-func periodE2EGateway(t *testing.T, target string) *gatewayclient.Client {
-	t.Helper()
-	secret := "unregistered-period-e2e-secret"
-	if value, ok := periodE2ESecrets.Load(target); ok {
-		secret = value.(string)
-	}
-	credentials := gatewayauth.Credentials{KeyID: periodE2EGatewayKeyID, Caller: "collector", Secret: secret}
-	gateway, err := gatewayclient.New(gatewayclient.Options{
-		Config: gatewayclient.Config{
-			Mode: gatewayclient.ModeLocal, Caller: "collector", CAFile: "unused-moox-ca.crt", CacheDir: t.TempDir(),
-			LocalAddress: stripPeriodE2EURL(t, target),
-		},
-		Credentials: &credentials,
-	})
-	require.NoError(t, err)
-	t.Cleanup(gateway.Close)
-	return gateway
-}
-
-// periodE2EStorageFactory 返回经 periodE2EStorageOptions 访问 Storage 的市场存储工厂。
-func periodE2EStorageFactory(t *testing.T, target string) marketfetch.StorageFactory {
-	t.Helper()
-	options := periodE2EStorageOptions(t, target)
-	return func(_, source string) (marketfetch.Storage, error) {
-		return marketstorage.NewBatchStorage(options, marketstorage.InstTypeSPOT, source)
-	}
 }
 
 func startPeriodE2EProcess(t *testing.T, binary string, args []string, readyFile string, overrides map[string]string) *periodE2EProcess {
@@ -475,11 +428,6 @@ func periodE2EProcessFailure(process *periodE2EProcess) string {
 	return ""
 }
 
-// periodE2EGatewayKeys 是 e2e-helper 的校验密钥：只有 collector 一个调用方。
-func periodE2EGatewayKeys(secret string) string {
-	return "collector:" + periodE2EGatewayKeyID + ":" + secret
-}
-
 func periodE2EEnvironment(base []string, overrides map[string]string) []string {
 	result := make([]string, 0, len(base)+len(overrides))
 	for _, entry := range base {
@@ -511,8 +459,7 @@ func configurePeriodE2EClients(t *testing.T, root string, ready periodE2EStorage
 	require.NoError(t, err)
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", string(appKeys))
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
-	t.Setenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET", "")
-	_ = os.Unsetenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET")
+
 }
 
 func applyPeriodE2ETagSnapshot(t *testing.T, ctx context.Context, metadata *marketstorage.ResampleMetadataClient, ready periodE2EStorageReady, items []*storagegen.TagSnapshotItem, at time.Time) {
@@ -639,7 +586,7 @@ func newPeriodE2ESnapshotScheduler(t *testing.T, ctx context.Context, root, targ
 	}))
 	return db, &marketfetch.Scheduler{
 		SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(),
-		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: storagesource.NewDatasetSource(periodE2EStorageOptions(t, target)),
+		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: periodDatasetSource(target),
 		Invoker: periodE2EEmptyCloudNode{},
 	}
 }
@@ -689,7 +636,7 @@ func runPeriodMetadataDualProviderRPCE2E(t *testing.T, ctx context.Context, targ
 		CollectParams: fmt.Sprintf(`{"market_id":"crypto","instrument_type":"spot","source_id":"spot_http","target_dataset_id":%q,"frequency":"1m"}`, ready.DatasetID),
 		TagIDs:        []string{periodE2ESpotTagID, secondTag}, Enabled: true, PrepareState: domain.PrepareStateReady,
 	}))
-	scheduler := &marketfetch.Scheduler{SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: storagesource.NewDatasetSource(periodE2EStorageOptions(t, target)), Invoker: periodE2EEmptyCloudNode{}}
+	scheduler := &marketfetch.Scheduler{SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Symbols: periodDatasetSource(target), Invoker: periodE2EEmptyCloudNode{}}
 	snapshot := periodE2ESchedulerSnapshot(t, ctx, db, scheduler, ready, period)
 	require.Equal(t, uint32(2), snapshot.ExpectedCount)
 	require.Len(t, snapshot.Entries, 2)
@@ -699,7 +646,7 @@ func runPeriodMetadataDualProviderRPCE2E(t *testing.T, ctx context.Context, targ
 		providers[entry.Provider] = true
 	}
 	require.Equal(t, map[string]bool{"binance": true, "okx": true}, providers)
-	storage, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, target), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	expectation := periodE2EStorageExpectation(snapshot, deadline)
 	_, err = storage.EnsureDatasetPeriod(ctx, expectation)
@@ -762,7 +709,12 @@ func runPeriodFailureReporterRPCE2E(t *testing.T, ctx context.Context, root, tar
 		PeriodFailureReportState: domain.PeriodFailureReportPending,
 	}
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &retry))
-	unreachable := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), periodE2EStorageFactory(t, unusedPeriodE2ETarget(t)), ready.SpaceID)
+	newStorage := func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(target, marketstorage.InstTypeSPOT, source)
+	}
+	unreachable := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(unusedPeriodE2ETarget(t), market, source)
+	}, ready.SpaceID)
 	require.Error(t, unreachable.RunOnce(ctx, ready.SpaceID))
 	pending, err := db.FetchRetries().Get(ctx, ready.SpaceID, retry.RetryKey)
 	require.NoError(t, err)
@@ -770,7 +722,7 @@ func runPeriodFailureReporterRPCE2E(t *testing.T, ctx context.Context, root, tar
 	require.NotEmpty(t, pending.PeriodFailureLastError)
 	// Restore the actual Gateway client, not a success stub. The single response
 	// contains a replayed receipt and a first-after-deadline receipt.
-	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), periodE2EStorageFactory(t, target), ready.SpaceID)
+	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), newStorage, ready.SpaceID)
 	require.NoError(t, reporter.RunOnce(ctx, ready.SpaceID))
 	settled, err := db.FetchRetries().Get(ctx, ready.SpaceID, retry.RetryKey)
 	require.NoError(t, err)
@@ -866,7 +818,7 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	applyPeriodE2ETagSnapshot(t, ctx, metadata, ready, items, clock.Add(2*time.Second))
 	db := openPeriodE2EDB(t, filepath.Join(root, "retry-exhaustion.db"))
 	params, err := json.Marshal(map[string]any{
-		"market_id": "crypto", "instrument_type": "spot", "source_id": "spot_http", "target_dataset_id": ready.HourlyDatasetID,
+		"market_id": "crypto", "instrument_type": "spot", "source_id": "spot_http", "target_dataset_id": ready.DatasetID,
 		"frequency": "1h", "output_fields": []string{"close"},
 	})
 	require.NoError(t, err)
@@ -901,7 +853,6 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 		}
 	}()
 	handler := marketfetch.NewHandler()
-	handler.NewStorage = periodE2EStorageWriter(t, target)
 	handler.Now = func() time.Time { return now }
 	publish := handler.Publish
 	handler.Publish = func(publishCtx context.Context, request marketfetch.Request, payload proto.Message) error {
@@ -917,16 +868,18 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	handler.NewCryptoKlinePipeline = func(storage marketfetch.Storage, instrument marketdata.InstrumentType) (*marketfetch.KlinePipeline, error) {
 		return &marketfetch.KlinePipeline{
 			Router: router, Storage: storage, CandidateChain: []string{"binance"}, RouteID: "period-e2e-crypto",
-			SpaceID: ready.SpaceID, MarketID: "crypto", InstrumentType: instrument, DatasetID: ready.HourlyDatasetID,
+			SpaceID: ready.SpaceID, MarketID: "crypto", InstrumentType: instrument, DatasetID: ready.DatasetID,
 			SourceID: "spot_http", SeriesTag: periodE2ESeriesTag, Now: func() time.Time { return now },
 		}, nil
 	}
 	invoker := &periodE2EInvoke{handler: handler, results: make(chan error, 5), ctx: ctx}
-	newStorage := periodE2EStorageFactory(t, target)
+	newStorage := func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(target, marketstorage.InstTypeSPOT, source)
+	}
 	scheduler := &marketfetch.Scheduler{
 		SpaceID: ready.SpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), Instances: db.TaskInstances(), Retries: db.FetchRetries(),
 		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(),
-		Symbols: storagesource.NewDatasetSource(periodE2EStorageOptions(t, target)), Invoker: invoker, Storage: newStorage,
+		Symbols: periodDatasetSource(target), Invoker: invoker, Storage: newStorage,
 		// Separate initial batches isolate the real provider session guard: an
 		// ETH timeout should not turn the healthy BTC acquisition into a retry.
 		BatchSize: 1, InvokeConcurrency: 1, MaxRetryAttempts: 3, Now: func() time.Time { return now },
@@ -1023,14 +976,14 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	require.NoError(t, err)
 	require.Equal(t, domain.PeriodFailureReportAcknowledged, retry.PeriodFailureReportState)
 	snapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{
-		SpaceID: ready.SpaceID, DatasetID: ready.HourlyDatasetID, Frequency: "1h", PeriodTime: now.Truncate(time.Hour).Add(-time.Hour),
+		SpaceID: ready.SpaceID, DatasetID: ready.DatasetID, Frequency: ready.Frequency, PeriodTime: now.Truncate(time.Hour).Add(-time.Hour),
 	})
 	require.NoError(t, err)
 	require.True(t, found)
-	storage, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, target), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	expectation := periodE2EStorageExpectation(snapshot, time.Time{})
-	expectation.Frequency = "1h"
+	expectation.Frequency = ready.Frequency
 	state, err := storage.GetDatasetPeriodStatus(ctx, expectation)
 	require.NoError(t, err)
 	require.Equal(t, domain.PeriodStatusWaiting, state.Status)
@@ -1067,7 +1020,7 @@ func periodE2ESnapshot(expectation *storagegen.DatasetPeriodExpectation) domain.
 func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target string, ready periodE2EStorageReady, clock time.Time) {
 	t.Helper()
 	db := openPeriodE2EDB(t, filepath.Join(root, "period-cleanup.db"))
-	storage, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, target), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(target, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	period := clock.Add(-40 * 24 * time.Hour)
 	deadline := clock.Add(time.Hour)
@@ -1088,10 +1041,13 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	// only from the period timestamp. Advance the cleanup clock beyond that
 	// retention window so the just-confirmed complete period is eligible.
 	cleanupNow := time.Now().UTC().Add(30*24*time.Hour + time.Hour)
-	deleted, err := reconciler.Reconcile(ctx, cleanupNow)
+	counts, err := reconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err, "NOT_FOUND must defer its snapshot rather than manufacture a period")
-	// 删除的行数是快照行加状态行：一个周期各一行，所以只删除一个周期时是 2。
-	require.Equal(t, int64(2), deleted, "only complete, expired and quiescent period may be deleted")
+	require.EqualValues(t, 1, counts.SnapshotRows, "only the complete period's series entry may be deleted")
+	require.EqualValues(t, 1, counts.StateRows, "the complete period's confirmed state must be deleted with its entry")
+	_, completeRetained, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(complete).Key)
+	require.NoError(t, err)
+	require.False(t, completeRetained)
 	for _, expectation := range []*storagegen.DatasetPeriodExpectation{waiting, missing} {
 		_, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(expectation).Key)
 		require.NoError(t, err)
@@ -1099,12 +1055,12 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	}
 	_, err = storage.GetDatasetPeriodStatus(ctx, missing)
 	require.Error(t, err, "status query must not create a missing period")
-	unreachable, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, unusedPeriodE2ETarget(t)), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	unreachable, err := periodBatchStorage(unusedPeriodE2ETarget(t), marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	networkReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), unreachable, ready.SpaceID)
-	deleted, err = networkReconciler.Reconcile(ctx, cleanupNow)
+	counts, err = networkReconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err)
-	require.Zero(t, deleted, "network errors must not authorize cleanup")
+	require.Zero(t, counts.Total(), "network errors must not authorize cleanup")
 	t.Log("SCENARIO PASS cleanup-waiting-not-found-network-retention")
 	require.NoError(t, replacePeriodE2EClock(ready.ClockFile, deadline))
 	var terminal domain.PeriodStorageState
@@ -1152,13 +1108,15 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	}
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &unresolved))
 	blockedReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), storage, ready.SpaceID)
-	deleted, err = blockedReconciler.Reconcile(ctx, cleanupNow)
+	counts, err = blockedReconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err, "the missing independent period still defers reconciliation")
-	require.Zero(t, deleted, "a terminal Storage period cannot release its snapshot while a failure receipt is unresolved")
+	require.Zero(t, counts.Total(), "a terminal Storage period cannot release its snapshot while a failure receipt is unresolved")
 	_, retained, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(waiting).Key)
 	require.NoError(t, err)
 	require.True(t, retained)
-	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), periodE2EStorageFactory(t, target), ready.SpaceID)
+	reporter := marketfetch.NewPeriodFailureReporter(db.FetchRetries(), func(market, source string) (marketfetch.Storage, error) {
+		return periodBatchStorage(target, marketstorage.InstTypeSPOT, source)
+	}, ready.SpaceID)
 	require.NoError(t, reporter.RunOnce(ctx, ready.SpaceID))
 	settled, err := db.FetchRetries().Get(ctx, ready.SpaceID, unresolved.RetryKey)
 	require.NoError(t, err)
@@ -1167,9 +1125,10 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	// Fresh scan starts before the old cursor, including the newly degraded
 	// period, while the still-missing period continues to defer cleanup.
 	finalReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), storage, ready.SpaceID)
-	deleted, err = finalReconciler.Reconcile(ctx, cleanupNow)
+	counts, err = finalReconciler.ReconcileWithCleanupCounts(ctx, cleanupNow, 30*24*time.Hour, 1000, 1000)
 	require.Error(t, err)
-	require.Equal(t, int64(2), deleted, "降级的周期删除快照行和状态行各一行")
+	require.EqualValues(t, 1, counts.SnapshotRows)
+	require.EqualValues(t, 1, counts.StateRows)
 	_, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, periodE2ESnapshot(waiting).Key)
 	require.NoError(t, err)
 	require.False(t, found)
@@ -1224,7 +1183,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 		runID      = "stockcn-period-timer-e2e-run"
 	)
 
-	metadata, err := marketstorage.NewResampleMetadataClient(periodE2EStorageOptions(t, storageGatewayTarget), marketstorage.InstTypeSPOT)
+	metadata, err := periodMetadataClient(storageGatewayTarget, marketstorage.InstTypeSPOT)
 	require.NoError(t, err)
 	clockNow := time.Date(2026, time.September, 30, 7, 30, 0, 0, time.UTC)
 	require.NoError(t, replacePeriodE2EClock(ready.ClockFile, clockNow))
@@ -1287,7 +1246,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	deadline := time.Now().UTC().Truncate(time.Second).Add(30 * time.Minute)
 	ensureStorage := func(ensureCtx context.Context, current domain.PeriodSeriesSnapshot) (domain.PeriodStorageState, error) {
 		expectation := periodE2EStorageExpectation(current, deadline)
-		storage, storageErr := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, storageGatewayTarget), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+		storage, storageErr := periodBatchStorage(storageGatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 		if storageErr != nil {
 			return domain.PeriodStorageState{}, storageErr
 		}
@@ -1416,9 +1375,6 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	router, err := marketdata.NewRouter(registry, 3, nil, nil)
 	require.NoError(t, err)
 	handler := marketfetch.NewHandler()
-	handler.NewStorage = periodE2EStorageWriter(t, storageGatewayTarget)
-	runtimeClient := periodE2ERuntimeClient(t, collectorGatewayTarget)
-	handler.TimerRuntimeClient = runtimeClient
 	handler.Now = func() time.Time { return clockNow }
 	handler.NewStockKlinePipeline = func(storage marketfetch.Storage) (*marketfetch.KlinePipeline, error) {
 		return &marketfetch.KlinePipeline{
@@ -1478,7 +1434,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	}, 10*time.Second, 50*time.Millisecond, "second Timer completion must reconcile the next oldest period")
 	oldPeriodExpectation := periodE2EStorageExpectation(olderPlan.Snapshot, deadline)
 	latestPeriodExpectation := periodE2EStorageExpectation(latestPlan.Snapshot, deadline)
-	periodState, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, storageGatewayTarget), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	periodState, err := periodBatchStorage(storageGatewayTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	oldStatus, err := periodState.GetDatasetPeriodStatus(ctx, oldPeriodExpectation)
 	require.NoError(t, err)
@@ -1582,7 +1538,7 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	case <-ctx.Done():
 		t.Fatal("short unclaimed Timer lease did not expire before the harness deadline")
 	}
-	expiredProxy := collectorpb.NewMarketFetchRuntimeClientProxy(periodE2EGateway(t, collectorGatewayTarget).ClientOptions()...)
+	expiredProxy := collectorpb.NewMarketFetchRuntimeClientProxy(gatewayauth.NewTRPCClientOptions(collectorGatewayTarget, periodE2EGatewayNodeID+"-runtime", gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})...)
 	expiredClaim, err := expiredProxy.ClaimTimerBatch(ctx, &collectorpb.ClaimTimerBatchReq{
 		SpaceId: ready.StockSpaceID, FunctionName: function, RequestId: "expired-unclaimed-request",
 		GroupId: 0, GroupCount: 1, BindingHash: expiredManifest.BindingHash, TickTime: clockNow.Unix(),
@@ -1615,9 +1571,13 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	newStorage := handler.NewStorage
 	handler.NewStorage = func(market, source string) (marketfetch.Storage, error) {
 		storageCreated++
-		return newStorage(market, source)
+		return nil, fmt.Errorf("writer must not be constructed after an unreachable Claim")
 	}
-	handler.TimerRuntimeClient = periodE2ERuntimeClient(t, unusedPeriodE2ETarget(t))
+	accessHost, _, err := net.SplitHostPort(os.Getenv("MOOX_ACCESS_ADDRESS"))
+	require.NoError(t, err)
+	_, unusedPort, err := net.SplitHostPort(stripPeriodE2EURL(t, unusedPeriodE2ETarget(t)))
+	require.NoError(t, err)
+	t.Setenv("MOOX_ACCESS_ADDRESS", net.JoinHostPort(accessHost, unusedPort))
 	unreachableResponse, err := handler.HandleTimerAt(ctx, "stockcn-period-e2e-unreachable", function, clockNow)
 	require.True(t, err != nil || unreachableResponse != nil && !unreachableResponse.Success, "Claim transport failure cannot return a successful worker response")
 	if unreachableResponse != nil {
@@ -1631,7 +1591,6 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	}
 	t.Log("SCENARIO PASS timer-unreachable-claim-no-writer")
 	handler.NewStorage = newStorage
-	handler.TimerRuntimeClient = runtimeClient
 	deadline = time.Now().UTC().Truncate(time.Second).Add(30 * time.Minute)
 	publishPlan := makeTimerPlan(expectedMinutes[len(expectedMinutes)-7], "publish-failure-run")
 	runPeriodTimerPublishRecoveryRPCE2E(t, ctx, gatewayBinary, ready, secret, storageGatewayTarget, handler, provider, fetched, publishPlan, deadline, clockNow)
@@ -1647,7 +1606,7 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 	require.NoError(t, err)
 	plan.Task = *task
 	plan.TaskModifyTime = task.ModifyTime
-	storage, err := marketstorage.NewBatchStorage(periodE2EStorageOptions(t, storageTarget), marketstorage.InstTypeSPOT, periodE2EWriteSource)
+	storage, err := periodBatchStorage(storageTarget, marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	planner := &marketfetch.TimerPeriodPlanner{
 		Snapshots: db.PeriodSeriesSnapshot(), States: db.PeriodStorageStates(), Batches: db.TimerPeriodBatches(), Now: time.Now,
@@ -1663,11 +1622,17 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 	require.True(t, planned)
 	manifest, err := db.TimerPeriodBatches().GetByPeriod(ctx, plan.Snapshot.Key, 0)
 	require.NoError(t, err)
-	runtimeTarget := startPeriodCollectorRuntimeE2E(t, ctx, root, gatewayBinary, secret, db)
-	configurePeriodE2EEventBus(t)
+	startPeriodCollectorRuntimeE2E(t, ctx, root, gatewayBinary, secret, db)
+	bus := configurePeriodE2EEventBus(t)
 	completionCtx, cancel := context.WithCancel(ctx)
 	done, err := marketfetch.StartCompletionConsumerWithDone(completionCtx, ready.StockSpaceID, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil)
 	require.NoError(t, err)
+	// Startup is asynchronous. Observe the real durable before changing the
+	// publisher URL, so the consumer cannot capture the unavailable endpoint.
+	require.Eventually(t, func() bool {
+		_, err := bus.JetStream().ConsumerInfo(events.MarketFetchBatchCompleted.Stream(), "collector-market-fetch-completion-v1-"+ready.StockSpaceID, nats.Context(ctx))
+		return err == nil
+	}, 5*time.Second, 20*time.Millisecond)
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -1676,7 +1641,6 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 			t.Error("publish-recovery Completion consumer did not stop")
 		}
 	})
-	handler.TimerRuntimeClient = periodE2ERuntimeClient(t, runtimeTarget)
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", manifest.BindingHash)
 	busURL := os.Getenv("MOOX_EVENTBUS_NATS_URL")
 	// Fail the actual JetStream publisher's transport, not a replacement Publish
@@ -1843,10 +1807,10 @@ func claimPeriodE2EStockBatchConcurrently(t *testing.T, ctx context.Context, tar
 		err      error
 	}
 	results := make(chan claimResult, 2)
-	options := periodE2EGateway(t, target).ClientOptions()
+	runtimeNodeID := periodE2EGatewayNodeID + "-runtime"
 	for range 2 {
 		go func() {
-			proxy := collectorpb.NewMarketFetchRuntimeClientProxy(options...)
+			proxy := collectorpb.NewMarketFetchRuntimeClientProxy(gatewayauth.NewTRPCClientOptions(target, runtimeNodeID, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})...)
 			claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			response, err := proxy.ClaimTimerBatch(claimCtx, &collectorpb.ClaimTimerBatchReq{
@@ -1880,17 +1844,33 @@ func claimPeriodE2EStockBatchConcurrently(t *testing.T, ctx context.Context, tar
 
 func periodE2EStockCalendarPath(t *testing.T) string {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../../../.."))
+	repoRoot := periodE2ERepositoryRoot(t)
 	return filepath.Join(repoRoot, "modules", "collector", "config", "markets", "stockcn", "calendar.yaml")
+}
+
+// Runtime fixtures live beside the executing checkout. Compiler source paths
+// point to the build machine when this pure Go test is cross-compiled.
+func periodE2ERepositoryRoot(t *testing.T) string {
+	t.Helper()
+	directory, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if info, err := os.Stat(filepath.Join(directory, "go.work")); err == nil && info.Mode().IsRegular() {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("period E2E requires a checkout containing go.work")
+		}
+		directory = parent
+	}
 }
 
 func startPeriodCollectorRuntimeE2E(t *testing.T, ctx context.Context, root, gatewayBinary, secret string, db *store.Store) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	service := server.New(server.WithServiceName("trpc.moox.collector.MarketFetchRuntime"), server.WithProtocol("trpc"), server.WithNetwork("tcp"), server.WithListener(listener), server.WithServerAsync(false))
+	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithServiceName("trpc.moox.collector.MarketFetchRuntime"), server.WithProtocol("trpc"), server.WithNetwork("tcp"), server.WithListener(listener), server.WithServerAsync(false))
 	collectorpb.RegisterMarketFetchRuntimeService(service, collectorrpc.NewMarketFetchRuntime(&marketfetch.TimerBatchClaimer{Batches: db.TimerPeriodBatches()}))
 	done := make(chan error, 1)
 	go func() { done <- service.Serve() }()
@@ -1914,25 +1894,25 @@ func startPeriodCollectorRuntimeE2E(t *testing.T, ctx context.Context, root, gat
 		}
 	})
 
+	repoRoot := periodE2ERepositoryRoot(t)
 	readyFile := filepath.Join(root, "collector-runtime-gateway-ready")
 	args := []string{
-		"-host-id=" + periodE2EGatewayNodeID + "-runtime",
-		// 生产中 SCF 经外部接入领取批次；这里直接以 collector 身份调用，所以显式放行 ClaimTimerBatch。
-		"-route=trpc.moox.collector.MarketFetchRuntime=" + listener.Addr().String(),
-		"-callers=collector", "-methods=ClaimTimerBatch", "-listen-addr=127.0.0.1:0", "-ready-file=" + readyFile,
-		"-nonce-dir=" + filepath.Join(root, "runtime-gateway-nonces"),
+		"-mode=collector-period-native", "-deployment-yaml=" + filepath.Join(repoRoot, "config/setup/service-deployments.yaml"),
+		"-route-scope=collector-runtime", "-node-id=" + periodE2EGatewayNodeID + "-runtime",
+		"-upstream-addr=" + listener.Addr().String(), "-listen-addr=127.0.0.1:0", "-ready-file=" + readyFile,
+		"-nonce-dir=" + filepath.Join(root, "runtime-gateway-nonces"), "-key-id=" + periodE2EGatewayKeyID,
 	}
-	process := startPeriodE2EProcess(t, gatewayBinary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_KEYS": periodE2EGatewayKeys(secret)})
+	process := startPeriodE2EProcess(t, gatewayBinary, args, readyFile, map[string]string{"MOOX_GATEWAY_E2E_SERVICE_SECRET": secret})
 	var target string
 	waitPeriodE2EReady(t, ctx, process, readyFile, func(raw []byte) error { target = strings.TrimSpace(string(raw)); return nil })
 	parsed, err := url.Parse(target)
 	require.NoError(t, err)
 	require.Equal(t, "ip", parsed.Scheme)
-	periodE2ESecrets.Store(target, secret)
+	configurePeriodAccess(t, gatewayBinary, stripPeriodE2EURL(t, os.Getenv("MOOX_PERIOD_E2E_PRIMARY_TARGET")), listener.Addr().String(), secret)
 	return target
 }
 
-func configurePeriodE2EEventBus(t *testing.T) {
+func configurePeriodE2EEventBus(t *testing.T) *testkit.Server {
 	t.Helper()
 	server := testkit.Start(t)
 	registry, err := events.DefaultRegistry()
@@ -1953,6 +1933,7 @@ func configurePeriodE2EEventBus(t *testing.T) {
 	} {
 		t.Setenv(name, "")
 	}
+	return server
 }
 
 type periodE2EStockFetcher struct {
@@ -1994,4 +1975,51 @@ func (p *periodE2EStockFetcher) FetchKlines(ctx context.Context, request marketd
 		Open: 10, High: 11, Low: 9, Close: 10.5, VolumeShares: 100, AmountCNY: 1050,
 		ProviderTimestamp: end, FetchedAt: time.Now().UTC(), RequestID: request.RequestID,
 	}}, nil
+}
+
+func periodMetadataClient(target, instType string) (*marketstorage.ResampleMetadataClient, error) {
+	auth, err := marketstorage.ResolveStorageAuthInfo(instType)
+	if err != nil {
+		return nil, err
+	}
+	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})
+	return &marketstorage.ResampleMetadataClient{Client: storagegen.NewMetadataClientProxy(options...), Primary: storagegen.NewPrimaryStoreClientProxy(options...), Auth: auth}, nil
+}
+
+func periodDatasetSource(target string) *storagesource.DatasetSource {
+	options := gatewayauth.NewTRPCClientOptions(target, periodE2EGatewayNodeID, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})
+	return storagesource.NewDatasetSource(storagegen.NewMetadataClientProxy(options...))
+}
+
+// periodNativeGateway is the explicit signed boundary for the existing period
+// fixture. It neither discovers production routes nor retries writes.
+type periodNativeGateway struct{ target, host string }
+
+func (g periodNativeGateway) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	ctx, message := codec.WithNewMessage(ctx)
+	defer codec.PutBackMessage(message)
+	message.WithClientRPCName("/" + service + "/" + method)
+	message.WithCalleeServiceName(service)
+	message.WithCalleeMethod(method)
+	options := gatewayauth.NewTRPCClientOptions(g.target, g.host, gatewayauth.Credentials{Caller: "collector", KeyID: periodE2EGatewayKeyID, Secret: periodE2EGatewaySecret})
+	options = append(options, client.WithServiceName(service), client.WithCalleeMethod(method))
+	return client.DefaultClient.Invoke(ctx, req, rsp, options...)
+}
+func periodBatchStorage(target, market, source string) (marketstorage.BatchStorage, error) {
+	return marketstorage.NewGatewayBatchStorage(periodNativeGateway{target: target, host: periodE2EGatewayNodeID}, market, source)
+}
+
+func configurePeriodAccess(t *testing.T, gatewayBinary, storageAddress, runtimeAddress, secret string) {
+	t.Helper()
+	credential := gatewayauth.Credentials{Caller: "scf-collector", KeyID: "assigned-scf-period-73", Secret: secret}
+	fixture := accesskit.StartAccess(t, accesskit.AccessOptions{
+		AccessBinary: requirePeriodE2EFile(t, "MOOX_PERIOD_E2E_ACCESS_BINARY"), GatewayBinary: gatewayBinary,
+		HostID: periodE2EGatewayNodeID, StorageAddress: storageAddress, RuntimeAddress: runtimeAddress,
+		ExternalCredentials: []gatewayauth.Credentials{credential}, SCF: true,
+	})
+	t.Setenv("MOOX_ACCESS_ADDRESS", fixture.Address)
+	t.Setenv("MOOX_ACCESS_ID", fixture.InstanceID)
+	t.Setenv("MOOX_CALLER", credential.Caller)
+	t.Setenv("MOOX_CALLER_KEY_ID", credential.KeyID)
+	t.Setenv("MOOX_CALLER_KEY", credential.Secret)
 }

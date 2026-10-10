@@ -10,36 +10,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testGatewayClientYAML 是测试配置共用的 gateway_client 段。
-const testGatewayClientYAML = "gateway_client:\n  mode: local\n  caller: factor-mgr\n  key_file: caller-factor-mgr.key\n  ca_file: moox-ca.crt\n  cache_dir: ./data/gatewayclient\n"
-
-func writeFactorConfig(t *testing.T, content string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(testGatewayClientYAML+content), 0o600))
-	return path
-}
-
 func TestLoadConfigDefaults(t *testing.T) {
-	cfg, err := Load(writeFactorConfig(t, ""))
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	cfg, err := Load(path)
 	require.NoError(t, err)
 	require.Equal(t, "./data/factor/factor.db", cfg.Database.Path)
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
+	require.Empty(t, cfg.GatewayClient.KeyID)
+	require.Equal(t, "../../secrets/caller-factor-mgr.key", cfg.GatewayClient.KeyFile)
 	require.Equal(t, "python3", cfg.Python.Bin)
 	require.Equal(t, 45*time.Second, cfg.Engine.LeaseTTL)
 	require.Equal(t, 15*time.Minute, cfg.Engine.JobLeaseTTL)
 }
 
 func TestLoadConfigRejectsShortEngineLease(t *testing.T) {
-	_, err := Load(writeFactorConfig(t, "engine:\n  lease_ttl: 2s\n"))
-	require.ErrorContains(t, err, "engine.lease_ttl")
-}
-
-func TestLoadConfigRequiresGatewayClient(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("engine:\n  lease_ttl: 2s\n"), 0o600))
 	_, err := Load(path)
-	require.ErrorContains(t, err, "gateway_client")
+	require.ErrorContains(t, err, "engine.lease_ttl")
 }
 
 func TestLoadRejectsEngineOnlySections(t *testing.T) {
@@ -49,7 +38,9 @@ func TestLoadRejectsEngineOnlySections(t *testing.T) {
 		"python:\n  workers: 8\n",
 		"recalc:\n  chunk_periods: 500\n",
 	} {
-		_, err := Load(writeFactorConfig(t, section))
+		path := filepath.Join(t.TempDir(), "app.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(section), 0o600))
+		_, err := Load(path)
 		require.Error(t, err, section)
 	}
 }
@@ -69,4 +60,23 @@ func TestSourceCheckerLoadsModuleAndValidatesComputeContract(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
 		require.Error(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path), source)
 	}
+}
+
+func TestFactorConfigRejectsOldOrInvalidGatewayIdentity(t *testing.T) {
+	for _, raw := range []string{
+		"storage:\n  gateway_target: ip://127.0.0.1:11003\n",
+		"gateway_client:\n  target: ip://127.0.0.1:11003\n",
+		"gateway_client:\n  caller: factor\n",
+		"gateway_client:\n  key_id: first\n  key_id: second\n",
+		"gateway_client:\n  caller: factor-mgr\n---\npython:\n  bin: ignored\n",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+			_, err := Load(path)
+			require.Error(t, err)
+		})
+	}
+	_, err := Default().OpenGateway(nil)
+	require.ErrorContains(t, err, "loaded module configuration")
 }

@@ -15,17 +15,23 @@ var (
 // creates it once and injects the individual capabilities into services,
 // keeping database construction out of orchestration code.
 type Repositories struct {
-	Checks        *CheckRepository
-	Results       *ResultRepository
-	Alerts        *AlertRepository
-	Notifications *NotificationRepository
+	Checks          *CheckRepository
+	Topology        *TopologyRepository
+	ComponentHealth *ComponentHealthRepository
+	Gateways        *GatewayRepository
+	Results         *ResultRepository
+	Alerts          *AlertRepository
+	Notifications   *NotificationRepository
 }
 
 func NewRepositories(db *gorm.DB) *Repositories {
 	return &Repositories{
-		Checks:        NewCheckRepository(db),
-		Results:       NewResultRepository(db),
-		Alerts:        NewAlertRepository(db),
-		Notifications: NewNotificationRepository(db),
+		Checks:          NewCheckRepository(db),
+		Topology:        &TopologyRepository{db: db},
+		ComponentHealth: &ComponentHealthRepository{db: db},
+		Gateways:        &GatewayRepository{db: db},
+		Results:         NewResultRepository(db),
+		Alerts:          NewAlertRepository(db),
+		Notifications:   NewNotificationRepository(db),
 	}
 }

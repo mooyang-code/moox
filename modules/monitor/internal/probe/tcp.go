@@ -21,7 +21,9 @@ func (r TCPRunner) Run(ctx context.Context, check domain.Check) domain.CheckResu
 	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(reqCtx, "tcp", addr)
 	latency := time.Since(start)
 	if err != nil {
-		return failResult(check, latency, connectFailureText(err, timeout))
+		result := failResult(check, latency, connectFailureText(err, timeout))
+		result.RawError = err.Error()
+		return result
 	}
 	_ = conn.Close()
 

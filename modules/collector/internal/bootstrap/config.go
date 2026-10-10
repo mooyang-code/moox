@@ -4,40 +4,37 @@ package bootstrap
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
-	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	// GatewayClient 是 Collector 调用其他组件（Storage、CloudNode、出口代理等）使用的 gatewayclient 配置。
-	GatewayClient       gatewayclient.Config     `yaml:"gateway_client"`
-	SCFRegionBlacklists map[string][]string      `yaml:"scf_region_blacklists"`
-	Database            DatabaseConfig           `yaml:"database"`
-	CloudNode           CloudNodeConfig          `yaml:"cloudnode"`
-	Storage             StorageConfig            `yaml:"storage"`
-	CollectorRetention  CollectorRetentionConfig `yaml:"collector_retention"`
-	StockCN             StockCNConfig            `yaml:"stockcn"`
-	PeriodReadiness     PeriodReadinessConfig    `yaml:"period_readiness"`
-	KlineResample       KlineResampleConfig      `yaml:"kline_resample"`
-	Health              HealthConfig             `yaml:"health"`
-	DNS                 DNSConfig                `yaml:"dns"`
-	EgressProxy         EgressProxyConfig        `yaml:"egress_proxy"`
-	SubjectSync         SubjectSyncConfig        `yaml:"subject_sync"`
-}
-
-// SubjectSyncConfig 是标的同步的设置。标签同步按标签自己的计划每分钟检查一次；属性同步按 Attributes 的计划执行。
-type SubjectSyncConfig struct {
-	// FetchTimeout 是拉取一次标的列表的超时。
-	FetchTimeout time.Duration              `yaml:"fetch_timeout"`
-	Attributes   []subjectsync.AttributeJob `yaml:"attributes"`
+	GatewayClient       gatewayclient.FileConfig         `yaml:"gateway_client"`
+	sourcePath          string                           `yaml:"-"`
+	SCFRegionBlacklists map[string][]string              `yaml:"scf_region_blacklists"`
+	Database            DatabaseConfig                   `yaml:"database"`
+	Storage             StorageConfig                    `yaml:"storage"`
+	SCFAccess           gatewayclient.ExternalFileConfig `yaml:"scf_access"`
+	SCFAccessRoutes     map[string]SCFAccessEndpoint     `yaml:"scf_access_routes"`
+	CollectorRetention  CollectorRetentionConfig         `yaml:"collector_retention"`
+	StockCN             StockCNConfig                    `yaml:"stockcn"`
+	PeriodReadiness     PeriodReadinessConfig            `yaml:"period_readiness"`
+	KlineResample       KlineResampleConfig              `yaml:"kline_resample"`
+	Health              HealthConfig                     `yaml:"health"`
+	DNS                 DNSConfig                        `yaml:"dns"`
+	EgressProxy         EgressProxyConfig                `yaml:"egress_proxy"`
+	SubjectSync         subjectsync.Config               `yaml:"subject_sync"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -61,15 +58,16 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
 }
 
-// CloudNodeConfig describes cloudnode RPC routing.
-type CloudNodeConfig struct {
-	Address     string `yaml:"address"`
-	ServicePath string `yaml:"service_path"`
-}
-
-// StorageConfig 描述 Storage 相关的设置。Collector 自己访问 Storage 走 gateway_client。
+// StorageConfig identifies the node used for collected results.
 type StorageConfig struct {
 	ResultDataNodeID string `yaml:"result_data_node_id"`
+}
+
+// SCFAccessEndpoint is the fixed endpoint selected for one function region.
+// The publisher supplies private endpoints only after verifying its VPC route.
+type SCFAccessEndpoint struct {
+	Address    string `yaml:"access_address"`
+	InstanceID string `yaml:"access_id"`
 }
 
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
@@ -144,16 +142,11 @@ type DNSConfig struct {
 	Nameservers     []string      `yaml:"nameservers"`
 }
 
-// EgressProxyConfig 是 Collector 使用出口代理的设置。出口代理部署在香港，经主机网关调用；由 CLI 按
-// moox.toml 渲染。
+// EgressProxyConfig selects HTTP domains and DNS snapshots through the shared gateway.
 type EgressProxyConfig struct {
-	// Domains 是 HTTP 请求走出口代理的域名，支持 "*." 前缀；为空时所有请求直连。
-	Domains []string `yaml:"domains"`
-	// DNS 是由出口代理解析的域名，结果写入 SCF 的 DNS 快照。
-	DNS EgressDNSConfig `yaml:"dns"`
+	Domains []string        `yaml:"domains"`
+	DNS     EgressDNSConfig `yaml:"dns"`
 }
-
-// EgressDNSConfig 是向出口代理请求解析结果的设置；Domains 为空时只用本机解析（dns 段）。
 type EgressDNSConfig struct {
 	Domains         []string      `yaml:"domains"`
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
@@ -161,27 +154,7 @@ type EgressDNSConfig struct {
 	CacheTTL        time.Duration `yaml:"cache_ttl"`
 }
 
-// Enabled 判断是否向出口代理请求解析结果。
 func (c EgressDNSConfig) Enabled() bool { return len(c.Domains) > 0 }
-
-// maxEgressDNSDomains 是出口代理一次解析的域名上限。
-const maxEgressDNSDomains = 16
-
-// SnapshotDomains 返回写入 SCF DNS 快照的全部域名：本机解析的域名加上出口代理解析的域名，规范化并去重。
-func (c *Config) SnapshotDomains() []string {
-	all := append(append([]string(nil), c.DNS.Domains...), c.EgressProxy.DNS.Domains...)
-	seen := make(map[string]struct{}, len(all))
-	domains := make([]string, 0, len(all))
-	for _, raw := range all {
-		domain := egresspb.NormalizeHost(raw)
-		if _, exists := seen[domain]; exists || domain == "" {
-			continue
-		}
-		seen[domain] = struct{}{}
-		domains = append(domains, domain)
-	}
-	return domains
-}
 
 // Load reads YAML config from path.
 func Load(path string) (*Config, error) {
@@ -190,23 +163,34 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
+	cfg.sourcePath, err = filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve collector config: %w", err)
+	}
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	cfg.applyEnv()
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("collector config must contain exactly one YAML document")
+	}
+	if cfg.GatewayClient.Caller != "collector" {
+		return nil, fmt.Errorf("gateway_client.caller must be collector")
+	}
 	if err := cfg.GatewayClient.Validate(); err != nil {
 		return nil, err
 	}
+	cfg.applyEnv()
 	if err := cfg.validateEgressProxy(); err != nil {
 		return nil, err
 	}
-	if cfg.SubjectSync.FetchTimeout <= 0 {
-		return nil, fmt.Errorf("subject_sync.fetch_timeout 必须大于 0")
+	if err := cfg.SubjectSync.Validate(); err != nil {
+		return nil, fmt.Errorf("subject_sync: %w", err)
 	}
-	if err := subjectsync.NormalizeAttributeJobs(cfg.SubjectSync.Attributes); err != nil {
-		return nil, fmt.Errorf("subject_sync.%w", err)
+	if err := cfg.validateSCFAccess(); err != nil {
+		return nil, err
 	}
 	if err := cfg.validateKlineResample(); err != nil {
 		return nil, err
@@ -230,33 +214,67 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_DOMAINS"); v != "" {
+		c.DNS.Domains = splitCSV(v)
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_NAMESERVERS"); v != "" {
+		c.DNS.Nameservers = splitCSV(v)
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_REFRESH_INTERVAL"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			c.DNS.RefreshInterval = parsed
+		}
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVE_TIMEOUT"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			c.DNS.ResolveTimeout = parsed
+		}
+	}
+}
+
+func (c *Config) validateSCFAccess() error {
+	if c.SCFAccess.Caller != "scf-collector" {
+		return fmt.Errorf("scf_access.caller must be scf-collector")
+	}
+	// Offline Collector configuration can precede Admin credential assignment.
+	if c.SCFAccess.KeyID == "" {
+		return nil
+	}
+	if err := c.SCFAccess.Validate(); err != nil {
+		return fmt.Errorf("scf_access: %w", err)
+	}
+	for region, endpoint := range c.SCFAccessRoutes {
+		if region == "" || region != strings.ToLower(strings.TrimSpace(region)) {
+			return fmt.Errorf("scf_access_routes requires canonical regions")
+		}
+		config := c.SCFAccess
+		config.Address, config.InstanceID = endpoint.Address, endpoint.InstanceID
+		if err := config.Validate(); err != nil {
+			return fmt.Errorf("scf_access_routes[%s]: %w", region, err)
+		}
+	}
+	return nil
 }
 
 func (c *Config) validateEgressProxy() error {
-	if _, err := egresspb.ParseDomainList(c.EgressProxy.Domains); err != nil {
+	if _, err := domainpolicy.New(c.EgressProxy.Domains); err != nil {
 		return fmt.Errorf("egress_proxy.domains: %w", err)
 	}
-	dns := c.EgressProxy.DNS
-	seen := make(map[string]struct{}, len(dns.Domains))
-	for _, raw := range dns.Domains {
-		domain := egresspb.NormalizeHost(raw)
-		if !egresspb.ValidDomain(domain) {
-			return fmt.Errorf("egress_proxy.dns.domains 中的 %q 不是合法域名", raw)
+	dns := &c.EgressProxy.DNS
+	if len(dns.Domains) > 16 {
+		return fmt.Errorf("egress_proxy.dns supports at most 16 domains")
+	}
+	seen := map[string]bool{}
+	for i, raw := range dns.Domains {
+		domain, ok := domainpolicy.Host(strings.TrimSpace(raw))
+		if !ok || seen[domain] {
+			return fmt.Errorf("egress_proxy.dns domain %q is invalid or duplicated", raw)
 		}
-		if _, exists := seen[domain]; exists {
-			return fmt.Errorf("egress_proxy.dns.domains 中的 %q 重复", raw)
-		}
-		seen[domain] = struct{}{}
+		seen[domain] = true
+		dns.Domains[i] = domain
 	}
-	if !dns.Enabled() {
-		return nil
-	}
-	// 出口代理一次请求解析快照里的全部域名，超过上限时整个请求都会被拒绝。
-	if count := len(c.SnapshotDomains()); count > maxEgressDNSDomains {
-		return fmt.Errorf("dns.domains 与 egress_proxy.dns.domains 合计 %d 个域名，出口代理一次最多解析 %d 个", count, maxEgressDNSDomains)
-	}
-	if dns.RefreshInterval <= 0 || dns.RequestTimeout <= 0 || dns.CacheTTL <= 0 {
-		return fmt.Errorf("egress_proxy.dns 的 refresh_interval、request_timeout、cache_ttl 必须大于 0")
+	if dns.RefreshInterval <= 0 || dns.RequestTimeout <= 0 || dns.RequestTimeout > 60*time.Second || dns.CacheTTL <= 0 {
+		return fmt.Errorf("egress_proxy.dns intervals must be positive and request_timeout at most 60s")
 	}
 	return nil
 }
@@ -315,6 +333,7 @@ func (c *Config) validatePeriodReadiness() error {
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
+		GatewayClient: gatewayclient.FileConfig{Caller: "collector", KeyFile: "../../secrets/caller-collector.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_collector.db",
@@ -323,11 +342,9 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		CloudNode: CloudNodeConfig{
-			Address:     "127.0.0.1:11401",
-			ServicePath: "trpc.moox.cloudnode.CloudNodeMgr",
-		},
-		Storage: StorageConfig{ResultDataNodeID: "storage-node-0"},
+		Storage:     StorageConfig{ResultDataNodeID: "storage-node-0"},
+		SubjectSync: subjectsync.DefaultConfig(),
+		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
@@ -352,11 +369,48 @@ func Default() *Config {
 			RefreshInterval: 5 * time.Minute,
 			ResolveTimeout:  5 * time.Second,
 		},
-		EgressProxy: EgressProxyConfig{DNS: EgressDNSConfig{
+		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision"}, DNS: EgressDNSConfig{
 			RefreshInterval: 5 * time.Minute,
 			RequestTimeout:  3 * time.Second,
 			CacheTTL:        5 * time.Minute,
 		}},
-		SubjectSync: SubjectSyncConfig{FetchTimeout: subjectsync.DefaultFetchTimeout},
 	}
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+// OpenGateway opens one process-owned client using the canonical host identity.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" || c.GatewayClient.Caller != "collector" {
+		return nil, fmt.Errorf("collector gateway client requires a loaded collector configuration")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
+}
+
+func (c *Config) scfAccessEnvironment(region string) (map[string]string, error) {
+	config := c.SCFAccess
+	if route, ok := c.SCFAccessRoutes[strings.ToLower(strings.TrimSpace(region))]; ok {
+		config.Address, config.InstanceID = route.Address, route.InstanceID
+	}
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("SCF Access configuration: %w", err)
+	}
+	keyPath := config.KeyFile
+	if !filepath.IsAbs(keyPath) {
+		keyPath = filepath.Join(filepath.Dir(c.sourcePath), keyPath)
+	}
+	secret, err := gatewayauth.ReadSigningSecret(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("SCF Access signing key: %w", err)
+	}
+	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret}, nil
 }

@@ -1,42 +1,40 @@
-# 主机采集器运维
+# Host Agent 运维
 
-主机采集器（组件 `host-agent`，二进制 `moox-host-agent`）是每台 MooX 主机自动部署的主机组件，只支持 Linux `amd64`/`arm64`。
-它只采集 CPU、内存、文件系统、磁盘和网络，使用共享 JetStream 客户端把 `HostMetric` 发布到 EventBus；不保存 SQLite、outbox 或重放队列。
+Host Agent 是只支持 Linux `amd64`/`arm64` 的独立用户态服务。它只采集 CPU、内存、文件系统、磁盘和网络，使用共享 JetStream 客户端把 `HostMetric` 发布到 EventBus；不保存 SQLite、outbox 或重放队列。
 
-## 部署
+## 首次发布
 
-主机采集器不用写进 `moox.toml` 的 `[placements]`，随主机一起部署：
-
-```bash
-moox-cli setup deploy-host --host <主机>                            # 整台主机
-moox-cli setup deploy-host --host <主机> --components host-agent    # 只更新主机采集器
-```
-
-部署工具从 control 复制 `hostagent-publisher.yaml` 与 `ca.pem` 到该主机的 `secrets/eventbus/`，并下发 health HMAC。
-凭据文件必须是普通用户可读的 `0600` 文件，不要把 token 放进命令行参数或发布包。identity 文件在
-`~/.local/state/moox/hostagent/identity.yaml`，升级时复用。
-
-## 验收、升级和回滚
+先在管理端生成或导出 host-agent 角色凭据和私有 CA，再把两个临时文件交给部署脚本。凭据文件必须是普通用户可读的 `0600` 文件，不要把 token 放进命令行参数或 release archive。
 
 ```bash
-moox-cli setup service status --host <主机> --components host-agent
-moox-cli doctor diagnose --node <主机>
+./skills/moox/scripts/hostagent-release.sh
+./skills/moox/scripts/hostagent-deploy.sh user@host release/moox-host-agent-<version>-linux-amd64.tar.gz \
+  --eventbus-file /tmp/hostagent-publisher.yaml \
+  --ca-file /tmp/eventbus-ca.pem \
+  --health-auth-file /tmp/hostagent-health-auth.env
 ```
 
-健康端口 `11425` 需要 health HMAC，不要用未签名的 `curl` 访问。升级用 `deploy-host` 重新部署，原子切换 `current` 链接；
-回滚用 `moox-cli setup rollback --host <主机>`。
+部署脚本不使用 root，安装到 `~/.local/lib/moox/hostagent`，凭据写到 `~/.config/moox/hostagent`，identity 写到 `~/.local/state/moox/hostagent/identity.yaml`，并通过 `systemctl --user` 管理服务。Control 上的 `~/.config/moox/eventbus/` 与远程 Host Agent 的 `~/.config/moox/hostagent/` 是两套副本；`deploy-control` / `deploy-service` 不会覆盖后者。
+
+## 验收和升级
+
+```bash
+curl --fail http://127.0.0.1:11425/healthz
+systemctl --user status moox-host-agent.service
+```
+
+升级会复用 identity 文件；发布新 archive 后重复执行 deploy 即可原子切换 `current` 链接。回滚时把 `current` 指向旧 release 目录并执行 `systemctl --user restart moox-host-agent.service`。
 
 ## 凭据轮换
 
-EventBus CA 或任一 role token 轮换都会立刻让旧副本失效。只升级二进制、只在 control 上 `export`、或只重启 EventBus，都不够。
-完整的消费者清单和验收步骤见 [`eventbus-credentials.md`](eventbus-credentials.md)。
+EventBus CA 或任一 role token 轮换都会立刻让旧副本失效。只升级 Host Agent 二进制、只在 control 上 `export`、或只重启 EventBus，都不够。完整消费者清单和验收步骤见 [`eventbus-credentials.md`](eventbus-credentials.md)。
 
-二进制已在目标机上时，用 `--reuse-binaries` 只同步凭据：
+二进制已在目标机时，用 `--credentials-only` 同步 CA 和 `hostagent-publisher` 口令：
 
 ```bash
-moox-cli setup deploy-host --host <主机> --reuse-binaries
+./skills/moox/scripts/hostagent-deploy.sh user@host --credentials-only \
+  --eventbus-file /tmp/hostagent-publisher.yaml \
+  --ca-file /tmp/eventbus-ca.pem
 ```
 
-对部署表里每一台主机都要执行。确认 `moox-cli setup service status` 里组件是「运行中 … 就绪」、日志
-`logs/host-agent/stdout.log` 出现 `sample.timer launch success`、Monitor 收到新样本，且没有 `Authorization Violation` /
-`certificate signature failure`，再删除本机的临时凭据文件。
+对 **moox.toml 里每一台跑了 Host Agent 的主机** 都要执行，包括 compute 节点。确认 `systemctl --user is-active` 为 `active`、日志出现 `sample.timer launch success`、Monitor 收到新样本，且没有 `Authorization Violation` / `certificate signature failure` 后再删除本机临时凭据文件。

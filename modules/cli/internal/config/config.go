@@ -1,20 +1,20 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
-// Config CLI 配置。
+// Config stores local Doctor options. RPC routing comes from the shared gateway.
 type Config struct {
 	Doctor DoctorConfig `yaml:"doctor"`
 }
 
-// DoctorConfig 是 doctor 命令的配置。doctor 经本机主机网关以 moox-cli 身份调用 Monitor 与 SysDeploy，
-// 密钥和 CA 取自发布根目录下的 secrets/caller-moox-cli.key 与 certs/moox-ca.crt。
 type DoctorConfig struct {
 	NodeID                  string `yaml:"node_id"`
 	ReleaseRoot             string `yaml:"release_root"`
@@ -96,10 +96,14 @@ func LoadConfig() (*Config, error) {
 			continue // 尝试下一个路径
 		}
 
-		// 解析YAML到Config结构
-		if err := yaml.Unmarshal(yamlFile, &config); err != nil {
-			lastErr = fmt.Errorf("解析YAML失败 (%s): %v", configPath, err)
-			continue
+		decoder := yaml.NewDecoder(bytes.NewReader(yamlFile))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&config); err != nil {
+			return nil, fmt.Errorf("解析YAML失败 (%s): %w", configPath, err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return nil, fmt.Errorf("CLI 配置必须且只能包含一个 YAML 文档 (%s)", configPath)
 		}
 
 		// 成功加载配置
@@ -108,5 +112,5 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// 所有路径都失败了
-	return nil, fmt.Errorf("\033[91m⚠️  警告：加载配置失败: 无法找到配置文件，尝试的路径: %v，最后的错误: %v\033[0m", getConfigPaths(), lastErr)
+	return nil, fmt.Errorf("\033[91m⚠️  警告：加载配置失败: 无法找到配置文件，尝试的路径: %v，最后的错误: %w\033[0m", getConfigPaths(), lastErr)
 }

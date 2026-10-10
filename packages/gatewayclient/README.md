@@ -1,0 +1,38 @@
+# 网关客户端
+
+`Invoke` 将对象按配置的 PB 或 JSON 编码后签名；`Forward` 对传入的 PB/JSON 字节签名并原样发送。调用权限、请求与响应大小、默认超时以及只读方法均取自 `servicecatalog`。
+
+内部组件可用 `FileConfig` 读取 `gateway_client: { caller, key_id, key_file }`，再通过 `OpenInternal` 创建客户端。KeyID 是 Admin 生成的公开标识，与 caller 独立；部署时按 bootstrap 导出的凭据清单填写，不能用 caller 推导。签名文件为单个密钥值，必须是 0600 的普通文件，拒绝符号链接、超长或不足 32 字节的内容。
+
+内部组件配置固定放在 `<部署目录>/<模块>/config/app.yaml`。客户端从同级组件 `host-gateway/config/app.yaml` 读取主机 ID、loopback 地址和私有 CA，避免各模块重复配置目标主机、网关地址与 CA；`key_file` 相对模块配置文件解析。目录缓存写入调用方提供的数据目录下的 `gatewayclient/directory.json`。读取公开配置时允许 KeyID 留空，便于离线检查；实际连接 Storage 等服务时必须有完整身份。客户端由进程或命令持有并在退出时关闭。
+
+业务包与主机包可使用不同部署根目录或数据挂载。业务根中的 `host-gateway` 可作为指向独立主机包的目录符号链接；客户端先解析主机配置的实际位置，再相对该位置解析 CA，避免将主机包的证书误读为业务包文件。组件自己的签名密钥与目录缓存仍从各自配置及数据目录读取。
+
+外部进程使用 `ExternalFileConfig` 承载以下配置，再调用 `OpenExternal(配置文件路径)`。外部方式由构造入口确定，不需要重复配置 `mode`；`key_file` 相对配置文件解析，也支持绝对路径。三个身份 `scf-collector`、`factor-engine`、`moox-skill` 及其逐方法权限取自组件目录，外部配置必须提供 Admin 分配的 KeyID。
+
+```yaml
+gateway_client:
+  access_address: access.example.test:11004
+  access_id: access@storage
+  caller: factor-engine
+  key_id: <Admin 分配的公开 KeyID>
+  key_file: ../secrets/access-factor-engine.key
+```
+
+此入口复用内部客户端的私密文件校验，但不读取主机配置、目录缓存、SSH 或环境凭据；密钥文件缺失或无效即失败。客户端由外部进程持有并关闭。SCF 无需配置文件，由函数入口显式读取部署环境，再通过 `New(Config{Mode: External, ...})` 传入固定 Access 与签名身份；共享包不会查找环境变量或推导 KeyID。外部请求的签名目标始终是 `access@<主机>`，禁止的方法在发送前拒绝，重试仍遵循目录中的只读分类。
+
+调用方完成身份认证及空间授权后，可用 `WithCallMetadata` 传入可信的用户 ID、角色、空间 ID 和 trace ID，客户端将其作为固定的四个 tRPC 元数据字段发送。此接口不能修改网关签名身份，也不加工请求 JSON。Admin 控制台使用数据库中的 `console` 身份，目录来源直接读取 Admin 拓扑表，避免首次启动依赖尚未启动的本机网关。
+
+`Config.Mode` 支持三种方式：
+
+- `local`（`Internal`）：从本机 `127.0.0.1:11002` 取得目录，优先调用本机服务；跨主机连接目标的 TLS `11003`，只信任 `CAFile` 指定的 MooX 私有 CA，并使用主机 ID 校验证书名称。
+- `access`（`External`）：使用固定的 `AccessAddress` 与 `access@<主机>` 实例 ID，不获取目录；按照外部调用方的逐方法白名单发送签名请求。
+- `tunnel`（`Tunnel`）：供 `moox-cli` 使用，调用方提供目录来源与 SSH 隧道管理器；解析结果必须是字面 IP 的 loopback 地址。
+
+构造时取得有效目录，失败时可以使用已校验的落盘缓存；两者均不可用则启动失败。目录默认每 5 秒刷新，与网关的 5 秒快照轮询共同满足 15 秒部署可见性预算；网络错误或服务不存在时立即刷新。只读方法最多尝试两次，每次重新选路并生成 nonce；写方法和业务错误不重试。重试、刷新和传输共用一次调用的超时预算。
+
+缓存以内容哈希校验，限制为 4 MiB，临时文件使用 `0600` 权限并通过 rename 替换。刷新得到的撤回先应用到内存，落盘失败会报告错误，不会重新启用被撤回的主机。`Directory()` 返回独立副本。
+
+每个客户端持有自己的连接池。tRPC SDK 的默认池不区分 CA/SNI，本包按 TLS 身份隔离池，并保留同一身份的长连接。CA 配置在客户端生命周期内固定；修改 CA 后须重建客户端。`Close` 停止刷新并关闭持有的连接。`NewLocalDirectorySource` 创建的来源有独立的 `Close`；由调用方传入的来源及隧道由调用方管理生命周期。自定义目录来源必须遵守 context 取消，刷新错误回调应及时返回。
+
+运行网关、Access 与业务调用方的实际接入由主计划后续阶段完成；本包测试不能替代正式网络验收。

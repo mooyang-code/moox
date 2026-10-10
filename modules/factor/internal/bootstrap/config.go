@@ -4,7 +4,9 @@ package bootstrap
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,11 +16,11 @@ import (
 )
 
 type Config struct {
-	// GatewayClient 是 FactorMgr 访问 Storage 使用的 gatewayclient 配置（factor-mgr 身份）。
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	Database      DatabaseConfig       `yaml:"database"`
-	Python        PythonConfig         `yaml:"python"`
-	Engine        EngineConfig         `yaml:"engine"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath    string                   `yaml:"-"`
+	Database      DatabaseConfig           `yaml:"database"`
+	Python        PythonConfig             `yaml:"python"`
+	Engine        EngineConfig             `yaml:"engine"`
 }
 
 type DatabaseConfig struct {
@@ -42,11 +44,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read factor config %s: %w", path, err)
 	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve factor config: %w", err)
+	}
 	cfg := Default()
+	cfg.sourcePath = absolute
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse factor config %s: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("factor config must contain exactly one YAML document")
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
@@ -58,9 +69,10 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
-		Database: DatabaseConfig{Path: "./data/factor/factor.db"},
-		Python:   PythonConfig{Bin: "python3"},
-		Engine:   EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
+		Database:      DatabaseConfig{Path: "./data/factor/factor.db"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "factor-mgr", KeyFile: "../../secrets/caller-factor-mgr.key"},
+		Python:        PythonConfig{Bin: "python3"},
+		Engine:        EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
 	}
 }
 
@@ -96,6 +108,9 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Database.Path) == "" {
 		return fmt.Errorf("database.path is required")
 	}
+	if c.GatewayClient.Caller != "factor-mgr" {
+		return fmt.Errorf("gateway_client.caller must be factor-mgr")
+	}
 	if err := c.GatewayClient.Validate(); err != nil {
 		return err
 	}
@@ -109,4 +124,15 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("engine.job_lease_ttl must be at least 1m")
 	}
 	return nil
+}
+
+// OpenGateway loads the Manager's process-scoped signing identity and directory.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("factor gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "factor-mgr" {
+		return nil, fmt.Errorf("gateway_client.caller must be factor-mgr")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

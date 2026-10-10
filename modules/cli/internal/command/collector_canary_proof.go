@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,9 +17,9 @@ import (
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
-	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
@@ -116,51 +115,42 @@ func sameCollectorCanaryBinding(left, right *collectorpb.TaskResultInventoryEntr
 		left.GetExpectedCount() == right.GetExpectedCount() && slices.Equal(left.GetOutputFields(), right.GetOutputFields())
 }
 
-// collectorInventoryReader 经 moox-cli 的 gatewayclient 以 JSON 调用 CollectMgr 读取采集结果清单。
-type collectorInventoryReader struct {
-	control *adminclient.Client
-}
+// collectorGatewayInventoryReader borrows the command-owned gateway client.
+type collectorGatewayInventoryReader struct{ gateway gatewayclient.Invoker }
 
-func (r collectorInventoryReader) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq, _ ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error) {
-	if r.control == nil {
-		return nil, errors.New("Collector inventory control client is not configured")
-	}
-	body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	var raw json.RawMessage
-	if err := r.control.CallJSON(ctx, adminclient.ServiceCollectMgr, "GetTaskResultInventory", json.RawMessage(body), &raw); err != nil {
-		return nil, err
+func (r collectorGatewayInventoryReader) GetTaskResultInventory(ctx context.Context, req *collectorpb.GetTaskResultInventoryReq, options ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error) {
+	if r.gateway == nil || len(options) != 0 {
+		return nil, errors.New("Collector inventory requires the SSH gateway without RPC overrides")
 	}
 	rsp := &collectorpb.GetTaskResultInventoryRsp{}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, rsp); err != nil {
-		return nil, fmt.Errorf("decode Collector inventory: %w", err)
+	if err := r.gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", req, rsp); err != nil {
+		return nil, err
 	}
 	return rsp, nil
 }
 
-// newCollectorCanaryAccess 组装金丝雀证明的读取依赖；storageOptions 是 moox-cli 经隧道访问 Storage 的 gatewayclient 选项。
-func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, inventory collectorCanaryInventoryReader, storageOptions []client.Option, trust collectorSCFTrustMaterial) (collectorCanaryAccess, error) {
+func newCollectorCanaryAccess(fetcher *setupconfig.SCFFetcherSpace, inventory collectorCanaryInventoryReader, gateway gatewayclient.Invoker, trust collectorSCFTrustMaterial) (collectorCanaryAccess, error) {
 	if fetcher == nil {
 		return collectorCanaryAccess{}, errors.New("SCF canary requires manifest task ownership")
 	}
 	if inventory == nil {
 		return collectorCanaryAccess{}, errors.New("Collector inventory reader is required")
 	}
-	if len(storageOptions) == 0 {
-		return collectorCanaryAccess{}, errors.New("Storage proof requires the moox-cli gatewayclient")
+	if gateway == nil {
+		return collectorCanaryAccess{}, errors.New("Storage proof gateway tunnel is required")
 	}
 	if strings.TrimSpace(trust.StoragePrimaryAuthSecret) == "" || strings.TrimSpace(trust.StorageViewAuthSecret) == "" {
 		return collectorCanaryAccess{}, errors.New("Storage Primary and View proof credentials are required")
 	}
 
+	storage := storageGateway{gateway: gateway}
+
 	primaryReadAppID := "scf-market-canary"
 	viewReadAppID := "scf-market-canary"
 	return collectorCanaryAccess{
 		inventory: inventory,
-		primary:   storagepb.NewPrimaryStoreClientProxy(storageOptions...),
-		view:      storagepb.NewDataViewClientProxy(storageOptions...),
+		primary:   storage,
+		view:      storage,
 		periodAuth: &commonpb.AuthInfo{
 			AppId: "collector", AppKey: mooxsecurity.HMACSHA256Hex(trust.StoragePrimaryAuthSecret, []byte("collector")),
 		},

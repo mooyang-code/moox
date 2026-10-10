@@ -68,7 +68,7 @@ server:
       port: 11110
       network: tcp
       protocol: trpc
-      timeout: 120000
+      timeout: 30000
     - name: trpc.moox.admin.CollectorPublishLease
       ip: 127.0.0.1
       port: 11111
@@ -80,7 +80,7 @@ server:
       port: 11112
       network: tcp
       protocol: trpc
-      timeout: 10000
+      timeout: 5000
     - name: trpc.moox.admin.metrics.timer
       port: 11305
       network: "*/30 * * * * *"
@@ -95,7 +95,7 @@ server:
       port: 11307
       network: "0 0 0 * * *"
       protocol: timer
-      timeout: 10000
+      timeout: 30000
     # Daily system garbage collection, offset from midnight jobs and the top of the hour.
     - name: trpc.moox.admin.garbage_collection.timer
       port: 11308

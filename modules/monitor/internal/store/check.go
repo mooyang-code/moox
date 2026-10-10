@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -59,6 +58,11 @@ func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error
 			"c_group_name":       check.GroupName,
 			"c_kind":             check.Kind,
 			"c_url":              check.URL,
+			"c_connect_address":  check.ConnectAddress,
+			"c_server_name":      check.ServerName,
+			"c_trust_mode":       check.TrustMode,
+			"c_ca_file":          check.CAFile,
+			"c_ca_baseline":      check.CABaseline,
 			"c_method":           check.Method,
 			"c_headers":          check.Headers,
 			"c_body":             check.Body,
@@ -76,53 +80,6 @@ func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error
 			"c_last_checked_at":  check.LastCheckedAt,
 			"c_next_check_at":    check.NextCheckAt,
 		}).Error
-}
-
-// UpdatePlacementDefinition 用部署生成的定义整体覆盖部署检查；部署检查没有手工启停。
-func (r *CheckRepository) UpdatePlacementDefinition(ctx context.Context, check *domain.Check) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.Check{}).
-		Where("c_space_id = ? AND c_check_id = ? AND c_source = ?", check.SpaceID, check.CheckID, domain.CheckSourcePlacement).
-		Updates(map[string]any{
-			"c_name":             check.Name,
-			"c_group_name":       check.GroupName,
-			"c_kind":             check.Kind,
-			"c_url":              check.URL,
-			"c_method":           check.Method,
-			"c_headers":          check.Headers,
-			"c_body":             check.Body,
-			"c_tcp_host":         check.TCPHost,
-			"c_tcp_port":         check.TCPPort,
-			"c_interval_seconds": check.IntervalSeconds,
-			"c_timeout_ms":       check.TimeoutMS,
-			"c_expected_status":  check.ExpectedStatus,
-			"c_max_response_ms":  check.MaxResponseMS,
-			"c_body_contains":    check.BodyContains,
-			"c_enabled":          check.Enabled,
-			"c_source":           check.Source,
-			"c_labels":           check.Labels,
-			"c_description":      check.Description,
-		}).Error
-}
-
-// DeleteWithRules 删除检查及其结果、告警规则和告警状态；告警事件作为历史保留，按保留期清理。
-func (r *CheckRepository) DeleteWithRules(ctx context.Context, spaceID, checkID string) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		where := "c_space_id = ? AND c_check_id = ?"
-		for _, model := range []any{&domain.AlertState{}, &domain.AlertRule{}, &domain.CheckResult{}, &domain.Check{}} {
-			if err := tx.Where(where, spaceID, checkID).Delete(model).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// ListBySource 返回某个来源的全部检查（所有空间）。
-func (r *CheckRepository) ListBySource(ctx context.Context, source string) ([]domain.Check, error) {
-	var checks []domain.Check
-	err := r.db.WithContext(ctx).Where("c_source = ?", source).Order("c_check_id ASC").Find(&checks).Error
-	return checks, err
 }
 
 func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) error {
@@ -175,19 +132,6 @@ func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
 	return total, err
 }
 
-// IsPlacementRegistered 判断组件在这台主机上是否有启用的部署检查，即是否已在 SysDeploy 登记并启用。
-func (r *CheckRepository) IsPlacementRegistered(ctx context.Context, componentID, hostID string) (bool, error) {
-	if r == nil || r.db == nil {
-		return false, gorm.ErrInvalidDB
-	}
-	var count int64
-	checkID := "placement:" + strings.TrimSpace(hostID) + ":" + strings.TrimSpace(componentID)
-	err := r.db.WithContext(ctx).Model(&domain.Check{}).
-		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1", checkID, domain.CheckSourcePlacement).
-		Count(&count).Error
-	return count > 0, err
-}
-
 func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {
 	if opts.SpaceID != "" {
 		q = q.Where("c_space_id = ?", opts.SpaceID)
@@ -236,4 +180,15 @@ func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID stri
 			"c_last_checked_at": checkedAt,
 			"c_next_check_at":   nextAt,
 		}).Error
+}
+
+// ListEnabledKinds filters structured namespaces before the response bound.
+func (r *CheckRepository) ListEnabledKinds(ctx context.Context, spaceID string, kinds []string, limit int) ([]domain.Check, error) {
+	query := r.db.WithContext(ctx).Where("c_enabled = 1 AND substr(c_check_id, 1, instr(c_check_id, ':') - 1) IN ?", kinds)
+	if spaceID != "" {
+		query = query.Where("c_space_id IN ?", []string{spaceID, "", "mooxsys"})
+	}
+	var checks []domain.Check
+	err := query.Order("c_space_id, c_check_id").Limit(limit).Find(&checks).Error
+	return checks, err
 }

@@ -2,7 +2,6 @@ package test
 
 import (
 	"context"
-	"net"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -19,12 +18,9 @@ import (
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
-	"trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/server"
 )
 
 // TestDefaultRuleInitAndSchedulerE2E proves the complete recovery boundary:
@@ -45,12 +41,11 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5, summary.TasksCreated)
 
-	cloudNode := &defaultRuleCloudNode{}
-	address := startDefaultRuleCloudNode(t, cloudNode)
+	var invocationCount atomic.Int32
 
 	scheduler := &marketfetch.Scheduler{
 		Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
-		Invoker:           scfinvoker.New([]client.Option{client.WithTarget("ip://" + address), client.WithNetwork("tcp"), client.WithProtocol("trpc")}),
+		Invoker:           scfinvoker.New(scfinvoker.Config{Gateway: defaultRuleCloudNodeGateway{invocations: &invocationCount}}),
 		ResolveSymbol:     marketwiring.ResolveSymbol,
 		ResolveSourceID:   marketwiring.DefaultSourceID,
 		Symbols:           defaultRuleDatasetSource{},
@@ -58,8 +53,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 		InvokeConcurrency: 1, Now: func() time.Time { return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC) },
 	}
 	require.NoError(t, scheduler.Tick(ctx, "crypto"))
-	require.Eventually(t, func() bool { return cloudNode.invocations.Load() > 0 }, 2*time.Second, 10*time.Millisecond)
-	require.Equal(t, "crypto", cloudNode.space.Load(), "CloudNode 从 tRPC 元数据取得 space")
+	require.Eventually(t, func() bool { return invocationCount.Load() > 0 }, 2*time.Second, 10*time.Millisecond)
 
 	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", Page: 1, PageSize: 200})
 	require.NoError(t, err)
@@ -105,34 +99,15 @@ func (defaultRuleDatasetSource) ResolveSubjects(_ context.Context, _ string, tag
 	return []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}}, nil
 }
 
-// defaultRuleCloudNode 是假的 CloudNodeMgr：列出一个已部署的采集节点，并记录函数调用。
-type defaultRuleCloudNode struct {
-	cloudnodepb.UnimplementedCloudNodeMgr
-	invocations atomic.Int32
-	space       atomic.Value
-}
+type defaultRuleCloudNodeGateway struct{ invocations *atomic.Int32 }
 
-func (f *defaultRuleCloudNode) GetNodeList(ctx context.Context, _ *cloudnodepb.GetNodeListReq) (*cloudnodepb.GetNodeListRsp, error) {
-	f.space.Store(string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID)))
-	return &cloudnodepb.GetNodeListRsp{
-		RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-		Items:   []*cloudnodepb.CloudNode{{NodeId: "node-symbols", FunctionName: "node-symbols", Region: "ap-guangzhou", PackageId: "pkg", BizType: "market_fetcher", TriggerType: "invoke", Metadata: &structpb.Struct{Fields: map[string]*structpb.Value{"deployment_ready": structpb.NewBoolValue(true)}}}},
-		Page:    &commonpb.PageResult{Page: 1, Size: 100, Total: 1, HasMore: false},
-	}, nil
-}
-
-func (f *defaultRuleCloudNode) InvokeFunction(context.Context, *cloudnodepb.InvokeFunctionReq) (*cloudnodepb.InvokeFunctionRsp, error) {
-	f.invocations.Add(1)
-	return &cloudnodepb.InvokeFunctionRsp{RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"}, Scf: &cloudnodepb.ScfInvokeResult{Code: 0, RequestId: "request-1"}}, nil
-}
-
-func startDefaultRuleCloudNode(t *testing.T, impl cloudnodepb.CloudNodeMgrService) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	service := server.New(server.WithListener(listener), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName("trpc.moox.cloudnode.CloudNodeMgr"))
-	cloudnodepb.RegisterCloudNodeMgrService(service, impl)
-	go func() { _ = service.Serve() }()
-	t.Cleanup(func() { _ = service.Close(nil) })
-	return listener.Addr().String()
+func (g defaultRuleCloudNodeGateway) Invoke(_ context.Context, _ string, method string, _ any, rsp any) error {
+	switch method {
+	case "GetNodeList":
+		proto.Merge(rsp.(proto.Message), &cloudnodepb.GetNodeListRsp{Items: []*cloudnodepb.CloudNode{{NodeId: "node-symbols", FunctionName: "node-symbols", Region: "ap-guangzhou", PackageId: "pkg", BizType: "market_fetcher", TriggerType: "invoke", Metadata: &structpb.Struct{Fields: map[string]*structpb.Value{"deployment_ready": structpb.NewBoolValue(true)}}}}, Page: &commonpb.PageResult{Page: 1, Size: 100, Total: 1}})
+	case "InvokeFunction":
+		g.invocations.Add(1)
+		proto.Merge(rsp.(proto.Message), &cloudnodepb.InvokeFunctionRsp{Scf: &cloudnodepb.ScfInvokeResult{RequestId: "request-1"}})
+	}
+	return nil
 }

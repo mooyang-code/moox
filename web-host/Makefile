@@ -1,5 +1,6 @@
 ROOT := ..
 APP_NAME := moox-web-host
+SERVER ?= $(MOOX_DEV_SSH_TARGET)
 STATIK_VERSION ?= v0.1.7
 
 .PHONY: help statik build build-linux build-darwin build-windows build-all clean deps lint install release deploy linux darwin windows
@@ -12,11 +13,11 @@ help:
 	@echo "  make build        - build moox-web-host with current embedded statik assets"
 	@echo "  make build-linux  - build moox-web-host for linux/amd64"
 	@echo "  make release      - create repository release package"
-	@echo "  make deploy       - 按 moox.toml 的部署表重新部署（moox-cli setup deploy-service）"
+	@echo "  make deploy SERVER=user@host - deploy web-host through scripts/deploy/deploy-moox.sh"
 
 statik:
 	@if [ ! -d "$(ROOT)/web/dist" ]; then \
-		echo "../web/dist not found; run the frontend build first (pnpm run build:prod in web/)"; \
+		echo "../web/dist not found; run frontend build first, or use scripts/deploy/deploy-moox.sh --build-web-assets"; \
 		exit 1; \
 	fi
 	@go run github.com/rakyll/statik@$(STATIK_VERSION) -src=$(ROOT)/web/dist -dest=./internal
@@ -53,7 +54,11 @@ release:
 	@cd $(ROOT) && ./scripts/release/release.sh
 
 deploy:
-	@cd $(ROOT) && go run ./modules/cli/cmd/moox-cli setup deploy-service --component web-host
+	@if [ -z "$(SERVER)" ]; then \
+		echo "请指定 SERVER=user@host，或设置 MOOX_DEV_SSH_TARGET"; \
+		exit 1; \
+	fi
+	@cd $(ROOT) && ./scripts/deploy/deploy-moox.sh --target "$(SERVER)" --no-storage --no-cloudnode --no-collector --build-web-assets
 
 linux: build-linux
 darwin: build-darwin

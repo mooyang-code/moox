@@ -7,12 +7,17 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
+
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// NewTRPCClientFilter 在请求经过主机网关之前对序列化后的请求体签名；生成的 tRPC 客户端不用改，
-// 调用方只需提供目标和这个过滤器。
+// NewTRPCClientFilter signs the serialized request body before it crosses the
+// native Node Service Gateway. The generated Storage clients remain unchanged;
+// only their target and this filter are supplied by the caller.
 func NewTRPCClientFilter(credentials Credentials, targetNode string, now func() time.Time) filter.ClientFilter {
 	if now == nil {
 		now = time.Now
@@ -51,5 +56,22 @@ func NewTRPCClientFilter(credentials Credentials, targetNode string, now func() 
 			return err
 		}
 		return codec.Unmarshal(msg.SerializationType(), rawRsp.Data, rsp)
+	}
+}
+
+// NewTRPCClientOptions returns the common target, protocol, and HMAC options
+// for a generated client that must use the native Node Service Gateway.
+func NewTRPCClientOptions(target, targetNode string, credentials Credentials) []client.Option {
+	target = strings.TrimSpace(target)
+	if target != "" && !strings.Contains(target, "://") {
+		target = "ip://" + target
+	}
+	return []client.Option{
+		client.WithTarget(target),
+		client.WithNetwork("tcp"),
+		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
+		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
+		client.WithFilter(NewTRPCClientFilter(credentials, strings.TrimSpace(targetNode), nil)),
 	}
 }

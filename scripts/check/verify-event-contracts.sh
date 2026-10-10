@@ -83,7 +83,7 @@ reject '^[[:space:]]+(stream|topic):' \
 reject 'EventBus\.Stream|yaml:"stream"' \
   "Archive still exposes the Registry-owned stream setting" \
   --glob '*.go' modules/archive/internal
-# moox-factor-engine reaches the manager through the access service's HTTPS
+# moox-factor-engine reaches the manager through the service gateway's HTTPS
 # entry; its manager.url is a gateway address, not an EventBus setting.
 reject 'NATS\.Stream|NATS\.Consumer|NATS\.URL\b|yaml:"stream"|yaml:"consumer"|yaml:"url"' \
   "Factor still exposes duplicate or fixed live EventBus settings" \

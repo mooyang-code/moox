@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,4 +42,28 @@ func TestHTTPProberRejectsRedirectsAndNonLocalHosts(t *testing.T) {
 	_, err = prober.Get(context.Background(), redirect.URL+"/healthz")
 	require.ErrorContains(t, err, "redirect")
 	require.Zero(t, targetCalls)
+}
+
+func TestProbeWritablePathAlwaysCleansUp(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "data", "factor")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, ProbeWritablePath(cancelled, root, "data/factor"))
+	matches, err := filepath.Glob(filepath.Join(dir, probePrefix+"*"))
+	require.NoError(t, err)
+	require.Empty(t, matches)
+	require.Error(t, ProbeWritablePath(context.Background(), root, "../outside"))
+}
+
+func TestProbeWritablePathRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "data"), 0o700))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "data", "escaped")))
+	require.ErrorContains(t, ProbeWritablePath(context.Background(), root, "data/escaped"), "escapes release root")
+	matches, err := filepath.Glob(filepath.Join(outside, probePrefix+"*"))
+	require.NoError(t, err)
+	require.Empty(t, matches)
 }

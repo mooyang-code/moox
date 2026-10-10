@@ -156,6 +156,11 @@ var rawRouteOperations = map[string]string{
 	"ssh/WsConnect": "ssh_ws", "ssh/SftpDownload": "sftp_download", "ssh/SftpUpload": "sftp_upload",
 }
 
+func isRawTicketPath(path string) bool {
+	_, ok := rawRouteOperations[strings.TrimPrefix(path, "/api/admin/")]
+	return ok
+}
+
 func validateRawRouteTicket(r *http.Request, serviceID, method string) (*accessClaims, error) {
 	operation, ok := rawRouteOperations[serviceID+"/"+method]
 	if !ok {

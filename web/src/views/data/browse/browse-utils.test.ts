@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
 
 import { rowsToColumnNames } from "./browse-utils";
-import { buildKlineChartRecords, buildViewColumnLabels, buildViewFilterFieldOptions, buildViewFilterExprs, exactSeriesTagFromFilters, viewModeFromPrimaryDataset } from "../view-browse/view-browse-utils";
+import {
+  buildKlineChartRecords,
+  buildViewColumnLabels,
+  buildViewFilterFieldOptions,
+  buildViewFilterExprs,
+  exactSeriesTagFromFilters,
+  viewModeFromPrimaryDataset
+} from "../view-browse/view-browse-utils";
 
 describe("Kline series tag isolation", () => {
   it("requires an exact tag and never overwrites another tag at the same timestamp", () => {
@@ -59,11 +66,7 @@ describe("rowsToColumnNames", () => {
       rowsToColumnNames(
         [
           {
-            fields: [
-              { field_id: "open" },
-              { field_id: "bias_20" },
-              { field_id: "cci" }
-            ]
+            fields: [{ field_id: "open" }, { field_id: "bias_20" }, { field_id: "cci" }]
           }
         ],
         ["open", "close"]
@@ -103,14 +106,7 @@ describe("buildViewFilterFieldOptions", () => {
       labels
     );
 
-    expect(options.map(item => item.value)).toEqual([
-      "subject_id",
-      "freq",
-      "series_tag",
-      "data_time",
-      "open",
-      "close"
-    ]);
+    expect(options.map(item => item.value)).toEqual(["subject_id", "freq", "series_tag", "data_time", "open", "close"]);
     expect(options.map(item => item.label)).not.toContain("成交额");
   });
 
@@ -167,7 +163,6 @@ describe("view factor column labels", () => {
 });
 
 describe("viewBoundDatasetId", () => {
-
   it("treats SQL time_series data_kind as a time-series dataset", () => {
     expect(
       viewModeFromPrimaryDataset(

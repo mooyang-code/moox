@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +27,35 @@ type fakeTimeSeriesReader struct {
 	wait    bool
 }
 
+type klineTestCloser func() error
+
+func (f klineTestCloser) Close() error { return f() }
+
+func TestDataKlineOwnsGatewayUntilRequestFinishes(t *testing.T) {
+	for _, rpcError := range []error{nil, errors.New("RPC failed")} {
+		t.Run(fmt.Sprint(rpcError), func(t *testing.T) {
+			closed := false
+			reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}}, err: rpcError}
+			cmd := newDataKlineGetCmd(dataKlineDeps{
+				loadConfig: func(string) (dataAccessConfig, error) { return testSkillDataAccessConfig(), nil },
+				newReader: func(ctx context.Context, file string, _ dataAccessConfig, _ string) (timeSeriesReader, io.Closer, error) {
+					require.Equal(t, "operator.toml", file)
+					_, bounded := ctx.Deadline()
+					require.True(t, bounded)
+					return reader, klineTestCloser(func() error { closed = true; return nil }), nil
+				},
+			})
+			cmd.SetArgs([]string{"--file", "operator.toml", "--data-type", "crypto", "--symbol", "BTC-USDT"})
+			if rpcError == nil {
+				require.NoError(t, cmd.Execute())
+			} else {
+				require.ErrorContains(t, cmd.Execute(), rpcError.Error())
+			}
+			require.True(t, closed)
+		})
+	}
+}
+
 func (f *fakeTimeSeriesReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq, _ ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
 	f.ctx = ctx
 	f.request = req
@@ -40,7 +71,9 @@ func newTestDataKlineCommand(t *testing.T, reader *fakeTimeSeriesReader) (*bytes
 	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cmd := newDataKlineGetCmd(dataKlineDeps{
 		loadConfig: func(string) (dataAccessConfig, error) { return loadDataAccessConfig(configPath) },
-		newReader:  func(dataAccessConfig) (timeSeriesReader, func(), error) { return reader, func() {}, nil },
+		newReader: func(context.Context, string, dataAccessConfig, string) (timeSeriesReader, io.Closer, error) {
+			return reader, nil, nil
+		},
 	})
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	cmd.SetOut(stdout)
@@ -174,7 +207,9 @@ func TestDataKlineRejectsConfigAsOutput(t *testing.T) {
 	configPath := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cmd := newDataKlineGetCmd(dataKlineDeps{
 		loadConfig: func(string) (dataAccessConfig, error) { return loadDataAccessConfig(configPath) },
-		newReader:  func(dataAccessConfig) (timeSeriesReader, func(), error) { return reader, func() {}, nil },
+		newReader: func(context.Context, string, dataAccessConfig, string) (timeSeriesReader, io.Closer, error) {
+			return reader, nil, nil
+		},
 	})
 	cmd.SetArgs([]string{"--config", configPath, "--data-type", "crypto", "--symbol", "BTC-USDT", "--output", configPath})
 	err := cmd.Execute()

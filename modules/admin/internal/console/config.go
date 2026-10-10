@@ -9,9 +9,9 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// 全局配置变量(网关层 由于有权限插件 限流插件，无法依赖注入，故需要有全局配置)
+// 全局配置供控制台权限和限流插件使用。
 var (
-	gatewayConfig *Config
+	consoleConfig *Config
 	configMutex   sync.RWMutex
 )
 
@@ -20,10 +20,10 @@ type CORSConfig struct {
 	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
-// Config 网关服务配置
+// Config 控制台服务配置
 type Config struct {
 	JWT       JWTConfig       `yaml:"jwt"`        // JWT配置
-	Gateway   GatewayConfig   `yaml:"gateway"`    // 网关配置
+	Console   ConsoleConfig   `yaml:"console"`    // 控制台配置
 	RateLimit RateLimitConfig `yaml:"rate_limit"` // 限流配置
 	CORS      CORSConfig      `yaml:"cors"`       // 跨域配置
 	Security  SecurityConfig  `yaml:"security"`
@@ -39,10 +39,25 @@ type JWTConfig struct {
 	SecretKey string `yaml:"secret_key"` // JWT密钥
 }
 
-// GatewayConfig 网关配置
-type GatewayConfig struct {
+// ConsoleConfig 控制台配置
+type ConsoleConfig struct {
 	Debug         bool     `yaml:"debug"`           // 是否开启调试模式
 	NoAuthMethods []string `yaml:"no_auth_methods"` // 不需要鉴权的接口列表
+}
+
+// ServiceDetail 服务详细配置
+type ServiceDetail struct {
+	Address string
+	Path    string
+	// GatewayURL/GatewayNode identify an authenticated remote Node Gateway for
+	// browser BFF calls (currently the dedicated TradeConsole surface). When
+	// empty, callers use the direct in-process tRPC endpoint above.
+	GatewayURL  string
+	GatewayNode string
+	// Timeout is the maximum duration the Admin BFF may wait for this
+	// deployment. Provider-backed read operations can legitimately outlive
+	// the short default used by ordinary control-plane calls.
+	Timeout time.Duration
 }
 
 // RateLimitConfig 限流配置
@@ -61,18 +76,18 @@ type MethodLimit struct {
 	Burst int `yaml:"burst"`
 }
 
-// SetConfig 设置网关配置（依赖注入）
+// SetConfig 设置控制台配置
 func SetConfig(cfg *Config) {
 	configMutex.Lock()
 	defer configMutex.Unlock()
-	gatewayConfig = cfg
+	consoleConfig = cfg
 }
 
-// GetConfig 获取网关配置
+// GetConfig 获取控制台配置
 func GetConfig() *Config {
 	configMutex.RLock()
 	defer configMutex.RUnlock()
-	return gatewayConfig
+	return consoleConfig
 }
 
 // LoadConfig 加载配置文件

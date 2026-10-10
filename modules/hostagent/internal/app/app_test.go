@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,6 +20,10 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 func writeEventBusConfig(t *testing.T, dir string) string {
@@ -39,7 +44,6 @@ func testAgent(t *testing.T) *Agent {
 		},
 		id:        identity.File{AgentID: uuid.New().String()},
 		collector: collector.New(),
-		hostID:    "test-host-id",
 		hostname:  "test-host",
 		bootID:    "boot-id",
 		version:   "test-version",
@@ -59,13 +63,15 @@ type fakeSnapshotCollector struct {
 }
 
 type fakeEventPublisher struct {
+	metric *hostmetricpb.HostMetric
 	err    error
 	ready  bool
 	closed bool
 	at     time.Time
 }
 
-func (f *fakeEventPublisher) PublishHostMetric(_ context.Context, _ string, _ *hostmetricpb.HostMetric, at time.Time) error {
+func (f *fakeEventPublisher) PublishHostMetric(_ context.Context, _ string, metric *hostmetricpb.HostMetric, at time.Time) error {
+	f.metric = metric
 	f.at = at
 	return f.err
 }
@@ -190,6 +196,7 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	snapshot := testSnapshot()
 
 	a := testAgent(t)
+	a.cfg.HostID = "control"
 	a.collector = fakeSnapshotCollector{snapshot: snapshot}
 	a.publisher = &fakeEventPublisher{ready: true}
 
@@ -200,6 +207,9 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	assert.NotNil(t, rsp.GetSnapshot())
 	assert.Equal(t, uint64(1), a.published.Load())
 	assert.Empty(t, a.lastErr)
+	publisher := a.publisher.(*fakeEventPublisher)
+	require.Equal(t, "control", publisher.metric.GetHostId())
+	require.Equal(t, a.id.AgentID, publisher.metric.GetAgentId())
 }
 
 func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {
@@ -298,4 +308,35 @@ func (c completionSnapshotCollector) Collect(context.Context) (*hostmetricpb.Hos
 	time.Sleep(time.Millisecond)
 	*c.completedAt = time.Now().UTC()
 	return c.snapshot, nil, nil
+}
+
+func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
+	agent := testAgent(t)
+	agent.latest = testSnapshot()
+	agent.lastCollect = time.Now().UTC()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	service := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTransport(transport.NewServerTransport()))
+	hostagentpb.RegisterHostAgentMgrService(service, agent)
+	done := make(chan error, 1)
+	go func() { done <- service.Serve() }()
+	t.Cleanup(func() {
+		_ = service.Close(nil)
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("HostAgent native listener did not stop")
+		}
+	})
+	for _, serialization := range []int{codec.SerializationTypePB, codec.SerializationTypeJSON} {
+		proxy := hostagentpb.NewHostAgentMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithProtocol("trpc"), client.WithNetwork("tcp"), client.WithSerializationType(serialization), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
+		status, err := proxy.GetStatus(t.Context(), &hostagentpb.GetStatusReq{})
+		require.NoError(t, err)
+		require.Equal(t, agent.id.AgentID, status.GetAgentId())
+		require.Equal(t, agent.hostname, status.GetHostname())
+		snapshot, err := proxy.GetSnapshot(t.Context(), &hostagentpb.GetSnapshotReq{})
+		require.NoError(t, err)
+		require.Equal(t, agent.lastCollect.Format(time.RFC3339Nano), snapshot.GetCollectedAt())
+		require.Equal(t, agent.latest.GetCpu().GetLogicalCores(), snapshot.GetSnapshot().GetCpu().GetLogicalCores())
+	}
 }

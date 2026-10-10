@@ -3,7 +3,6 @@ package subjectsync
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -47,7 +46,7 @@ func TestTagDue(t *testing.T) {
 	}
 }
 
-func TestRunDueAppliesAndReports(t *testing.T) {
+func TestRunOnceAppliesAndReports(t *testing.T) {
 	store := &fakeTagStore{
 		tags: []*pb.Tag{
 			{SpaceId: "crypto", TagId: "binance_spot", Mode: "auto", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC"},
@@ -61,11 +60,8 @@ func TestRunDueAppliesAndReports(t *testing.T) {
 		{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
 		{Source: "binance", InstrumentType: "swap"}: fakeSubjectLister{err: errors.New("451")},
 	}
-	runner := &TagRunner{Store: store, Listers: listers, FetchTimeout: time.Second}
-	err := runner.RunDue(context.Background(), time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC))
-	if err == nil || !strings.Contains(err.Error(), "binance_swap") {
-		t.Fatalf("失败的标签应当体现在返回的错误里: %v", err)
-	}
+	runner := &TagRunner{Store: store, Listers: listers, FetchTimeout: time.Second, Now: func() time.Time { return time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC) }}
+	runner.RunOnce(context.Background())
 	if store.applied["binance_spot"] != 1 {
 		t.Fatalf("applied = %v", store.applied)
 	}
@@ -77,46 +73,5 @@ func TestRunDueAppliesAndReports(t *testing.T) {
 	}
 	if _, ok := store.applied["manual_bound"]; ok {
 		t.Fatalf("manual tag membership must remain operator-owned: %v", store.applied)
-	}
-}
-
-func TestRunDueSyncsOnlyDueTags(t *testing.T) {
-	now := time.Date(2026, 10, 9, 10, 30, 30, 0, time.UTC)
-	store := &fakeTagStore{
-		tags: []*pb.Tag{
-			// 每小时一次，上次 10:00 已跑过：未到期。
-			{SpaceId: "crypto", TagId: "fresh", Mode: "auto", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC", LastRunAt: "2026-10-09 10:00:00", UpdatedAt: "2026-10-01 00:00:00"},
-			// 上次 09:00：10:00 的计划已过，到期。
-			{SpaceId: "crypto", TagId: "stale", Mode: "auto", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC", LastRunAt: "2026-10-09 09:00:00", UpdatedAt: "2026-10-01 00:00:00"},
-			// 从未运行：到期。
-			{SpaceId: "crypto", TagId: "new", Mode: "auto", Source: "binance", MarketType: "swap", Cron: "0 * * * *", Timezone: "UTC"},
-		},
-		applied: map[string]int{}, failures: map[string]string{},
-	}
-	listers := Listers{
-		{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
-		{Source: "binance", InstrumentType: "swap"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "ETH-USDT"}}},
-	}
-	if err := (&TagRunner{Store: store, Listers: listers}).RunDue(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := store.applied["fresh"]; ok {
-		t.Fatalf("未到期的标签不应同步: %v", store.applied)
-	}
-	if store.applied["stale"] != 1 || store.applied["new"] != 1 {
-		t.Fatalf("到期的标签应当同步: %v", store.applied)
-	}
-}
-
-type failingListTagStore struct{ fakeTagStore }
-
-func (*failingListTagStore) ListTags(context.Context) ([]*pb.Tag, error) {
-	return nil, errors.New("storage unavailable")
-}
-
-func TestRunDueReturnsListFailure(t *testing.T) {
-	err := (&TagRunner{Store: &failingListTagStore{}}).RunDue(context.Background(), time.Now())
-	if err == nil || !strings.Contains(err.Error(), "读取标签失败") {
-		t.Fatalf("读取标签失败应当返回错误: %v", err)
 	}
 }

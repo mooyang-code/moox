@@ -57,10 +57,10 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		}
 		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", startedAt, ready)
 		rsp.Details = map[string]any{
-			"database":                 map[bool]string{true: "ok", false: "error"}[databaseReady],
-			"scheduler_ok":             schedulerReady,
-			"active_checks":            activeChecks,
-			"placement_checks_enabled": cfg.PlacementChecks.Enabled,
+			"database":          map[bool]string{true: "ok", false: "error"}[databaseReady],
+			"scheduler_ok":      schedulerReady,
+			"active_checks":     activeChecks,
+			"placement_enabled": cfg.Placement.Enabled,
 		}
 		metricsReady := !cfg.Metrics.Enabled
 		metricsReason := "metrics ingestion disabled"

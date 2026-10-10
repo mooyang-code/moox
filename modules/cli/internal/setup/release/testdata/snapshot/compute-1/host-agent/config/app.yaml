@@ -1,6 +1,0 @@
-version: 1
-identity_path: ~/.local/state/moox/hostagent/identity.yaml
-eventbus_config: /data/moox/compute-1/secrets/eventbus/hostagent-publisher.yaml
-health_addr: 0.0.0.0:11425
-# Optional display name used to associate this agent with an SSH host entry.
-host_name: ""

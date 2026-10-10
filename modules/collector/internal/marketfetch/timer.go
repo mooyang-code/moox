@@ -16,8 +16,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// TimerInvocation 是 Timer 触发时领取批次需要的身份：只从函数环境变量解析，批次成员和写入绑定都由 Collector
-// 在领取结果中给出。领取和写入都经外部接入，地址同样来自函数环境变量（见 scfGateway）。
+// TimerRequestFromEnv parses only the managed identity used
+// to Claim frozen work. Membership and write bindings come from Collector.
 type TimerInvocation struct {
 	Claim     *collectorpb.ClaimTimerBatchReq
 	DNSRoutes map[string]sources.DNSResolution

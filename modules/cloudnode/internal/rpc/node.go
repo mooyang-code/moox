@@ -661,7 +661,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 			environment = make(map[string]string)
 		}
 		environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
-		if err := tencent.ValidateCollectorMarketFetchEnvironment(environment); err != nil {
+		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
 			return err
 		}
 	} else if modernMarketFetchNode(node, *pkg) {
@@ -974,6 +974,9 @@ func (s *Service) updateSCFFunctionCode(
 	for key, value := range desiredEnvironment {
 		environment[key] = value
 	}
+	if modernMarketFetchNode(&node, pkg) {
+		tencent.RemoveCollectorInternalGatewayEnvironment(environment)
+	}
 	if strings.TrimSpace(environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"]) != "" {
 		delete(environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	}
@@ -985,7 +988,7 @@ func (s *Service) updateSCFFunctionCode(
 		if err := validateMarketFetchTimerTimeout(&node, pkg, environment, configInt64(desiredConfig, "timeout", info.Timeout)); err != nil {
 			return err
 		}
-		if err := tencent.ValidateCollectorMarketFetchEnvironment(environment); err != nil {
+		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
 			return err
 		}
 	} else if modernMarketFetchNode(&node, pkg) {

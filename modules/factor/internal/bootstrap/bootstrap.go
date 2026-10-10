@@ -36,8 +36,8 @@ const (
 // moox-factor-mgr: the SQLite catalog, result-dataset reconciliation and the
 // engine hub. Factor computation runs in moox-factor-engine.
 type Runtime struct {
-	store       *store.Store
 	gateway     *gatewayclient.Client
+	store       *store.Store
 	stopCatalog func() error
 	cancel      context.CancelFunc
 	health      *factorhealth.State
@@ -73,12 +73,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.store = db
 
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	runtime.gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(appCtx, "factor-mgr gateway directory refresh: %v", err) })
 	if err != nil {
-		return nil, fmt.Errorf("创建 factor-mgr 的 gatewayclient: %w", err)
+		return nil, fmt.Errorf("open factor Storage gateway client: %w", err)
 	}
-	runtime.gateway = gateway
-	storage := storageio.NewClientWithOptions(gateway.ClientOptions(), storageio.AuthInfo(fmt.Sprintf("factor-mgr-%d", time.Now().UnixNano())))
+	storage := storageio.NewGatewayClient(runtime.gateway, storageio.AuthInfo(fmt.Sprintf("factor-mgr-%d", time.Now().UnixNano())))
 
 	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL))
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
@@ -129,7 +128,7 @@ func (r *Runtime) Close() error {
 			r.err = errors.Join(r.err, r.stopCatalog())
 		}
 		if r.gateway != nil {
-			r.gateway.Close()
+			r.err = errors.Join(r.err, r.gateway.Close())
 		}
 		if r.store != nil {
 			r.err = errors.Join(r.err, r.store.Close())

@@ -9,93 +9,113 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 )
 
-// resolveSCFRoutePlan 生成各地域 SCF 采集函数访问外部接入的路由：外部接入的位置取自控制面的服务目录，走私网的
-// 外部接入主机再向腾讯云查询 VPC 和子网。只读；VPC 绑定在发布采集函数时由 CloudNode 完成。requestedRegion 非空时
-// 只计算该地域。
+// resolveSCFRoutePlan discovers the Tencent instance behind the configured
+// Storage host and turns it into per-region SCF data-plane routes. Discovery
+// is intentionally read-only; applying a VPC binding remains CloudNode's
+// responsibility during normal collector publication.
 func resolveSCFRoutePlan(ctx context.Context, snapshot *setupconfig.Snapshot, requestedRegion string) (privatenet.SCFRoutePlan, error) {
 	if snapshot == nil {
-		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: 缺少初始化配置")
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: setup configuration is missing")
 	}
 	if !snapshot.Manifest.SCFFetcher.Enabled {
-		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: scf_fetcher.enabled 为 false")
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: scf_fetcher.enabled is false")
 	}
-	regions := privatenet.SCFRegions(privatenet.CollectSCFTargets(snapshot.Manifest))
-	if requested := strings.ToLower(strings.TrimSpace(requestedRegion)); requested != "" {
-		regions = []string{requested}
+	host := snapshot.Manifest.StorageHost()
+	if !snapshot.Manifest.HasStorageHost() {
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: storage_host is required for automatic regional routing")
 	}
-	gateway, err := openControlGateway(snapshot.Manifest)
-	if err != nil {
-		return privatenet.SCFRoutePlan{}, err
+	if !strings.EqualFold(strings.TrimSpace(host.Provider), "tencent") {
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: storage_host provider must be tencent")
 	}
-	defer gateway.Close()
-	directoryCtx, cancelDirectory := context.WithTimeout(ctx, 30*time.Second)
-	view, err := gateway.Directory(directoryCtx)
-	cancelDirectory()
-	if err != nil {
-		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: 读取控制面的服务目录: %w", err)
+	address := strings.TrimSpace(host.Address)
+	if address == "" {
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: storage_host address is empty")
 	}
-	privateHosts, err := privatenet.PrivateAccessHosts(view.Directory, regions)
+	if strings.TrimSpace(snapshot.Manifest.TencentCloud.SecretID) == "" || strings.TrimSpace(snapshot.Manifest.TencentCloud.SecretKey) == "" {
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: Tencent credentials are required for Storage region discovery")
+	}
+
+	network, err := tencent.NewNetworkClient(tencent.ClientOptions{
+		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+		Region: snapshot.Manifest.TencentCloud.Region,
+	})
 	if err != nil {
 		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: %w", err)
 	}
-	resolved := map[string]privatenet.ResolvedHost{}
-	if len(privateHosts) > 0 {
-		hosts, err := resolveTencentHosts(ctx, snapshot, privateHosts)
-		if err != nil {
-			return privatenet.SCFRoutePlan{}, err
-		}
-		for _, host := range hosts {
-			resolved[host.Name] = host
-		}
-	}
-	plan := privatenet.SCFRoutePlan{Notes: []string{
-		"外部接入的位置取自控制面的服务目录；同地域主机上有外部接入时，函数绑定该主机所在的 VPC 走私网，否则走 access@storage 的公网地址。",
-		"Collector 按同一规则维护函数环境变量中的外部接入地址；不需要云联网（CCN）。",
-	}}
-	for _, region := range regions {
-		route, err := privatenet.BuildSCFAccessRoute(view.Directory, resolved, region)
-		if err != nil {
-			return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: %w", err)
-		}
-		plan.Routes = append(plan.Routes, route)
-	}
-	if host, ok := view.Directory.Host(servicecatalog.AccessFallbackHostID); ok {
-		plan.PreferredRegion = strings.ToLower(strings.TrimSpace(host.Region))
-	}
-	return plan, nil
-}
-
-// resolveTencentHosts 向腾讯云查询主机对应的实例。
-func resolveTencentHosts(ctx context.Context, snapshot *setupconfig.Snapshot, hosts []privatenet.HostTarget) ([]privatenet.ResolvedHost, error) {
-	tencentCloud := snapshot.Manifest.TencentCloud
-	if strings.TrimSpace(tencentCloud.SecretID) == "" || strings.TrimSpace(tencentCloud.SecretKey) == "" {
-		return nil, fmt.Errorf("scf-network: 查询外部接入主机的 VPC 需要腾讯云凭据")
-	}
-	options := tencent.ClientOptions{SecretID: tencentCloud.SecretID, SecretKey: tencentCloud.SecretKey, Region: tencentCloud.Region}
-	network, err := tencent.NewNetworkClient(options)
+	lighthouse, err := tencent.NewClient(tencent.ClientOptions{
+		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
+		Region: snapshot.Manifest.TencentCloud.Region,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("scf-network: %w", err)
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: %w", err)
 	}
-	lighthouse, err := tencent.NewClient(options)
-	if err != nil {
-		return nil, fmt.Errorf("scf-network: %w", err)
-	}
+	cloud := privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}
+	regions := tencent.ProbeRegions(snapshot.Manifest.TencentCloud.Region)
 	lookupCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	return privatenet.ResolveHosts(lookupCtx, privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}, hosts, tencent.ProbeRegions(tencentCloud.Region))
+	resolved, err := privatenet.ResolveHosts(lookupCtx, cloud, []privatenet.HostTarget{{
+		Name: firstNonEmpty(host.Name, "storage"), Address: address, Provider: "tencent", Roles: []string{"storage"},
+	}}, regions)
+	if err != nil {
+		return privatenet.SCFRoutePlan{}, err
+	}
+	if len(resolved) != 1 {
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: Storage instance discovery returned %d hosts", len(resolved))
+	}
+
+	targets := privatenet.CollectSCFTargets(snapshot.Manifest)
+	requestedRegion = strings.ToLower(strings.TrimSpace(requestedRegion))
+	if requestedRegion != "" {
+		seen := false
+		for _, target := range targets {
+			if strings.EqualFold(target.Region, requestedRegion) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			targets = append(targets, privatenet.SCFTarget{Region: requestedRegion})
+		}
+	}
+	routes := make([]privatenet.SCFStorageRoute, 0, len(targets))
+	storageRegionConfigured := false
+	for _, target := range targets {
+		if strings.EqualFold(strings.TrimSpace(target.Region), strings.TrimSpace(resolved[0].Instance.Region)) {
+			storageRegionConfigured = true
+		}
+		routes = append(routes, privatenet.BuildSCFStorageRouteForTarget(resolved[0], target))
+	}
+	notes := []string{
+		"Storage host region/VPC/subnet is discovered from Tencent instead of being hand-copied into each SCF region.",
+		"Same-region SCF uses Storage private VPC route; cross-region SCF uses Storage public gateway. CCN is not required.",
+		"Private binding assumes the SCF cloud account can use Storage's VPC/subnet; cross-account or insufficient-permission deployments must use the public fallback.",
+	}
+	if !storageRegionConfigured {
+		notes = append(notes, "No enabled SCF region matches Storage's region; add a same-region region or run an explicit one-node canary before the full fleet.")
+	}
+	return privatenet.SCFRoutePlan{
+		Storage: resolved[0], StorageRegionConfigured: storageRegionConfigured, Routes: routes, Notes: notes,
+	}, nil
+}
+
+func routeMap(plan privatenet.SCFRoutePlan) map[string]privatenet.SCFStorageRoute {
+	out := make(map[string]privatenet.SCFStorageRoute, len(plan.Routes))
+	for _, route := range plan.Routes {
+		out[strings.ToLower(strings.TrimSpace(route.Region))] = route
+	}
+	return out
 }
 
 func newSetupSCFNetworkPlanCommand(deps setupDeps) *cobra.Command {
 	var file, region string
 	cmd := &cobra.Command{
 		Use:   "scf-network-plan",
-		Short: "生成 SCF 采集函数访问外部接入的私网/公网路由计划",
-		Long: `只读：从控制面的服务目录取外部接入的位置，输出每个 SCF 地域的访问路径。
-同地域主机上有外部接入时绑定该主机所在的 VPC 走私网；否则走 access@storage 的公网地址。
+		Short: "发现 Storage 地域并生成 SCF 私网/公网路由计划",
+		Long: `只读查询 moox.toml 中 storage_host 对应的腾讯云实例，输出每个 SCF 地域的访问路径。
+同地域且 Storage 有完整 VPC/子网/私网地址时使用私网；跨地域或条件不完整时使用公网。
 命令不会创建 CCN、修改主机或修改 SCF。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -107,6 +127,16 @@ func newSetupSCFNetworkPlanCommand(deps setupDeps) *cobra.Command {
 			plan, err := deps.resolveSCFRoutes(cmd.Context(), snapshot, region)
 			if err != nil {
 				return err
+			}
+			if requested := strings.ToLower(strings.TrimSpace(region)); requested != "" {
+				filtered := make([]privatenet.SCFStorageRoute, 0, 1)
+				for _, route := range plan.Routes {
+					if strings.EqualFold(strings.TrimSpace(route.Region), requested) {
+						filtered = append(filtered, route)
+					}
+				}
+				plan.Routes = filtered
+				plan.StorageRegionConfigured = len(filtered) > 0 && filtered[0].SameRegion
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")

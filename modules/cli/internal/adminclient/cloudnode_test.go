@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +16,7 @@ import (
 func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
 	var pages []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", r.URL.Path)
+		assert.Equal(t, "/api/admin/cloudnode/GetNodeList", r.URL.Path)
 		var body struct {
 			CloudAccountID string `json:"cloud_account_id"`
 			Region         string `json:"region"`
@@ -48,7 +49,7 @@ func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newTestClient(server.URL)
+	client := collectorTestClient(server)
 	nodes, err := client.ListCloudNodes(context.Background(), CloudNodeListFilter{
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
@@ -77,7 +78,7 @@ func TestListCloudNodesPassesScopedTimerReadbackFilters(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := newTestClient(server.URL).ListCloudNodes(context.Background(), CloudNodeListFilter{
+	_, err := collectorTestClient(server).ListCloudNodes(context.Background(), CloudNodeListFilter{
 		CloudAccountID: "account-a",
 		Namespace:      "default",
 		Region:         "ap-singapore",
@@ -91,12 +92,12 @@ func TestListCloudNodesPassesScopedTimerReadbackFilters(t *testing.T) {
 
 func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/ListCloudAccounts", r.URL.Path)
+		assert.Equal(t, "/api/admin/cloudnode/ListCloudAccounts", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"accounts":[{"account_id":"a1","provider":"tencent"}]}`))
 	}))
 	defer server.Close()
 
-	client := newTestClient(server.URL)
+	client := collectorTestClient(server)
 	accounts, err := client.ListCloudAccounts(context.Background(), "tencent")
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
@@ -105,7 +106,7 @@ func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 
 func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/CreateCloudAccount", r.URL.Path)
+		assert.Equal(t, "/api/admin/cloudnode/CreateCloudAccount", r.URL.Path)
 		var body struct {
 			Account CloudAccountInput `json:"account"`
 		}
@@ -117,7 +118,7 @@ func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
 	}))
 	defer server.Close()
 
-	account, err := newTestClient(server.URL).CreateCloudAccount(context.Background(), CloudAccountInput{
+	account, err := collectorTestClient(server).CreateCloudAccount(context.Background(), CloudAccountInput{
 		AccountID: "tencent-scf-singapore", AccountName: "Tencent SCF Singapore", Provider: "tencent",
 		CredentialSecretID: "tencent-default", AppID: "1255382561", COSRegion: "ap-singapore", COSBucket: "moox-scf-singapore-1255382561",
 	})
@@ -130,11 +131,11 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		switch r.URL.Path {
-		case "/trpc.moox.collector.CollectMgr/GetTaskDetail":
+		case "/api/admin/collectmgr/GetTaskDetail":
 			assert.Equal(t, "stockcn", body["space_id"])
 			assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", body["task_id"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task":{"space_id":"stockcn","task_id":"d5v5n3p8r7c9m2k4j6h1","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_d5v5n3p8r7c9m2k4j6h1"}}}`))
-		case "/trpc.moox.collector.CollectMgr/UpdateTask":
+		case "/api/admin/collectmgr/UpdateTask":
 			task, ok := body["task"].(map[string]any)
 			require.True(t, ok)
 			assert.Equal(t, true, task["enabled"])
@@ -146,12 +147,12 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, newTestClient(server.URL).EnableCollectionTask(context.Background(), "stockcn", "d5v5n3p8r7c9m2k4j6h1"))
+	require.NoError(t, collectorTestClient(server).EnableCollectionTask(context.Background(), "stockcn", "d5v5n3p8r7c9m2k4j6h1"))
 }
 
 func TestCreateTaskStartsDisabled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.collector.CollectMgr/CreateTask", r.URL.Path)
+		assert.Equal(t, "/api/admin/collectmgr/CreateTask", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		task, ok := body["task"].(map[string]any)
@@ -172,7 +173,7 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	taskID, err := newTestClient(server.URL).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+	taskID, err := collectorTestClient(server).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
 		"frequency": "1m",
 	}, &ResultConfig{DataNodeID: "node-1", Description: "A 股 K 线结果"})
 	require.NoError(t, err)
@@ -180,7 +181,7 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 }
 
 func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
-	_, err := newTestClient("http://127.0.0.1").CreateTask(context.Background(), "stockcn", "任务一", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+	_, err := (&Client{}).CreateTask(context.Background(), "stockcn", "任务一", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
 		"target_dataset_id": "dataset-user-selected",
 		"frequency":         "1m",
 	}, nil)
@@ -189,7 +190,7 @@ func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
 
 func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.collector.CollectMgr/GetTaskList", r.URL.Path)
+		assert.Equal(t, "/api/admin/collectmgr/GetTaskList", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, true, body["enabled"])
@@ -216,7 +217,7 @@ func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tasks, err := newTestClient(server.URL).ListEnabledTasks(context.Background(), "stockcn")
+	tasks, err := collectorTestClient(server).ListEnabledTasks(context.Background(), "stockcn")
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "A 股 K 线 1m", tasks[0].TaskName)
@@ -235,4 +236,8 @@ func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 	assert.Equal(t, 2, ResolvePackageType("factor"))
 	assert.Equal(t, 3, ResolvePackageType("custom"))
 	assert.Equal(t, 1, ResolvePackageType("unknown"))
+}
+
+func collectorTestClient(server *httptest.Server) *Client {
+	return &Client{Gateway: testfixture.HandlerGateway{Handler: server.Config.Handler}}
 }

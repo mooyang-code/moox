@@ -8,8 +8,8 @@ import "google/protobuf/struct.proto";
 option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collectorgen;collectorpb";
 
 // CollectMgr 管理采集任务、任务实例和任务结果。
-// 纯 RPC 服务，由主机网关按组件目录路由：
-//   - /api/admin/collector/{method}（JWT，面向前端，经控制台转发）
+// 纯 RPC 服务，由统一 HTTP 转发层调度：
+//   - /api/admin/collectmgr/{method}（JWT，面向前端）
 //
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。

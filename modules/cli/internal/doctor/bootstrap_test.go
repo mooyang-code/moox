@@ -7,50 +7,38 @@ import (
 	"testing"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/require"
 )
 
-type placementClientStub struct{ rows []*adminpb.DeployPlacement }
+type deploymentClientStub struct{ rows []Placement }
 
-func (s placementClientStub) ListPlacements(context.Context, string) ([]*adminpb.DeployPlacement, error) {
+func (s deploymentClientStub) ListPlacements(context.Context, string) ([]Placement, error) {
 	return s.rows, nil
-}
-
-func writeDatasetHealthPolicy(t *testing.T, root string) string {
-	t.Helper()
-	path := filepath.Join(root, "dataset-health-policy.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides: []\n"), 0o600))
-	return path
 }
 
 func TestRunBootstrapInventory(t *testing.T) {
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
 	root := t.TempDir()
-	rows := make([]*adminpb.DeployPlacement, 0, len(manifest.Components))
+	rows := make([]Placement, 0, len(manifest.Components))
 	for _, component := range manifest.Components {
-		rows = append(rows, &adminpb.DeployPlacement{HostId: "node-a", ComponentId: component.ComponentID, Status: "enabled"})
+		rows = append(rows, Placement{ComponentID: component.ComponentID, HostID: "node-a", Status: "enabled"})
 	}
-	report, err := RunBootstrap(context.Background(), BootstrapOptions{
-		NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, DatasetHealthPolicyPath: writeDatasetHealthPolicy(t, root),
-		CheckIDs: []string{"bootstrap.inventory"}, Client: placementClientStub{rows: rows},
-	})
+	datasetHealthPolicyPath := filepath.Join(root, "dataset-health-policy.yaml")
+	manifestDir := filepath.Join(root, "config", "servicecatalog")
+	require.NoError(t, os.MkdirAll(manifestDir, 0o700))
+	manifestRaw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "servicecatalog", "catalog.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "catalog.yaml"), manifestRaw, 0o600))
+	releaseManifest, err := core.LoadManifestFile(filepath.Join(manifestDir, "catalog.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "catalog.yaml.sha256"), []byte(releaseManifest.Checksum), 0o600))
+	require.NoError(t, os.WriteFile(datasetHealthPolicyPath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides: []\n"), 0o600))
+	report, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, DatasetHealthPolicyPath: datasetHealthPolicyPath, CheckIDs: []string{"bootstrap.inventory"}, Client: deploymentClientStub{rows: rows}})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionHealthy, report.Conclusion)
 	require.Len(t, report.Checks, 2)
-	require.Equal(t, manifest.Checksum, report.ManifestChecksum, "诊断报告标明依据的组件目录版本")
-}
-
-func TestRunBootstrapInventoryFailsWithoutPlacements(t *testing.T) {
-	root := t.TempDir()
-	report, err := RunBootstrap(context.Background(), BootstrapOptions{
-		NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, DatasetHealthPolicyPath: writeDatasetHealthPolicy(t, root),
-		CheckIDs: []string{"bootstrap.inventory"}, Client: placementClientStub{},
-	})
-	require.NoError(t, err)
-	require.NotEqual(t, core.ConclusionHealthy, report.Conclusion)
 }
 
 func TestRunBootstrapRejectsRemoteNode(t *testing.T) {
@@ -61,32 +49,23 @@ func TestRunBootstrapRejectsRemoteNode(t *testing.T) {
 func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
-	root := t.TempDir()
-	var pidPaths []string
+	pathCalls, processCalls := 0, 0
 	runner := &bootstrapRunner{
-		manifest:   manifest,
-		placements: map[string]*adminpb.DeployPlacement{"factor-mgr": {HostId: "node-a", ComponentId: "factor-mgr", Status: "enabled"}},
+		manifest:    manifest,
+		deployments: map[string]Placement{"factor-mgr": {ComponentID: "factor-mgr", Status: "enabled"}},
 		options: BootstrapOptions{
-			NodeID:       "node-a",
-			ReleaseRoot:  root,
-			ProcessAlive: func(path string) bool { pidPaths = append(pidPaths, path); return true },
+			NodeID:        "node-a",
+			ReleaseRoot:   t.TempDir(),
+			ProbeWritable: func(context.Context, string, string) error { pathCalls++; return nil },
+			ProcessAlive:  func(string) bool { processCalls++; return true },
 		},
 	}
+	pathResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:factor-mgr@node-a"}, nil)
 	processResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.service_autostart:factor-mgr@node-a"}, nil)
+	require.Equal(t, core.StatusPass, pathResult.Status)
 	require.Equal(t, core.StatusPass, processResult.Status)
-	require.Equal(t, []string{filepath.Join(root, "run", "factor-mgr.pid")}, pidPaths, "PID 文件按组件 ID 命名")
-
-	skipped := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.service_autostart:collector@node-a"}, nil)
-	require.Equal(t, core.StatusSkipped, skipped.Status, "没有部署在这台主机上的组件跳过")
-}
-
-func TestLocalHealthURLUsesCatalogHealthPort(t *testing.T) {
-	manifest, err := core.LoadEmbeddedManifest()
-	require.NoError(t, err)
-	collector, ok := manifest.Component("collector")
-	require.True(t, ok)
-	require.Equal(t, "http://127.0.0.1:11412/readyz", localHealthURL(collector, collector.HealthPath))
-	require.Equal(t, "http://127.0.0.1:11412/metrics", localHealthURL(collector, "/metrics"))
+	require.Positive(t, pathCalls)
+	require.Equal(t, 1, processCalls)
 }
 
 func TestReporterFailureGateUsesRecentErrorTimestamp(t *testing.T) {

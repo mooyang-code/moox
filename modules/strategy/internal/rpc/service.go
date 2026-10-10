@@ -12,12 +12,11 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+	"github.com/mooyang-code/moox/modules/strategy/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
-	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -181,9 +180,10 @@ func rawCause(err error) error {
 	}
 }
 
-// requestSpaceID 读取调用方在 tRPC 元数据 x-space-id 中声明的空间（控制台转发时写入，主机网关原样透传）。
+// requestSpaceID 读取主机网关转发的可信空间（控制台转发时写入元数据，网关原样透传）。
 func requestSpaceID(ctx context.Context) string {
-	return strings.TrimSpace(string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID)))
+	spaceID, _ := spacecontext.FromContext(ctx)
+	return spaceID
 }
 
 func requireSpaceID(ctx context.Context) (string, error) {

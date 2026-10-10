@@ -112,7 +112,7 @@ func TestSingleDatasetView(t *testing.T) {
 		require.Equal(t, "1m", got.GetView().GetFreq())
 
 		rebuild, err := svc.RequestViewRebuild(ctx, &pb.RequestViewRebuildReq{
-			AuthInfo: &pb.AuthInfo{AppId: "console", AppKey: datanode.ServiceAuthKey("secret", "console")},
+			AuthInfo: &pb.AuthInfo{AppId: "admin-gateway", AppKey: datanode.ServiceAuthKey("secret", "admin-gateway")},
 			SpaceId:  "space", ViewId: "view_close",
 		})
 		require.NoError(t, err)

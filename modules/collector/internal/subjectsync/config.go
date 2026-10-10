@@ -8,10 +8,11 @@ import (
 	"github.com/robfig/cron"
 )
 
-// DefaultFetchTimeout 是拉取一次标的列表的默认超时。
-const DefaultFetchTimeout = 2 * time.Minute
+type Config struct {
+	FetchTimeout time.Duration  `yaml:"fetch_timeout"`
+	Attributes   []AttributeJob `yaml:"attributes"`
+}
 
-// AttributeJob 是一项属性同步任务：按带时区的 cron 计划，从数据源刷新一个空间的标的属性。
 type AttributeJob struct {
 	SpaceID        string   `yaml:"space_id"`
 	Sources        []string `yaml:"sources"`
@@ -20,11 +21,24 @@ type AttributeJob struct {
 	Timezone       string   `yaml:"timezone"`
 }
 
-// NormalizeAttributeJobs 校验属性同步任务并补上默认值：时区默认 UTC，cron 默认每天 00:00。
-func NormalizeAttributeJobs(jobs []AttributeJob) error {
-	for i := range jobs {
-		job := &jobs[i]
+func DefaultConfig() Config {
+	return Config{FetchTimeout: 2 * time.Minute, Attributes: []AttributeJob{
+		{SpaceID: "stockcn", Sources: []string{"eastmoney"}, InstrumentType: "equity", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"},
+		{SpaceID: "crypto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"},
+	}}
+}
+
+// Validate normalizes the subject_sync section of the Collector configuration.
+func (c *Config) Validate() error {
+	if c.FetchTimeout <= 0 || c.FetchTimeout > 10*time.Minute {
+		return fmt.Errorf("fetch_timeout must be positive and at most 10m")
+	}
+	for i := range c.Attributes {
+		job := &c.Attributes[i]
 		job.SpaceID = strings.TrimSpace(job.SpaceID)
+		job.Cron = strings.TrimSpace(job.Cron)
+		job.Timezone = strings.TrimSpace(job.Timezone)
+		job.InstrumentType = strings.ToLower(strings.TrimSpace(job.InstrumentType))
 		if job.Timezone == "" {
 			job.Timezone = "UTC"
 		}
@@ -32,13 +46,29 @@ func NormalizeAttributeJobs(jobs []AttributeJob) error {
 			job.Cron = "0 0 * * *"
 		}
 		if job.SpaceID == "" || len(job.Sources) == 0 {
-			return fmt.Errorf("attributes[%d]: space_id 和 sources 不能为空", i)
+			return fmt.Errorf("attributes[%d]: space_id and sources are required", i)
 		}
-		if _, err := cron.ParseStandard(job.Cron); err != nil {
-			return fmt.Errorf("attributes[%d].cron 无效: %w", i, err)
+		seen := map[string]bool{}
+		for j, source := range job.Sources {
+			source = strings.ToLower(strings.TrimSpace(source))
+			if source == "" || seen[source] {
+				return fmt.Errorf("attributes[%d].sources: empty or duplicate source", i)
+			}
+			seen[source], job.Sources[j] = true, source
 		}
-		if _, err := time.LoadLocation(job.Timezone); err != nil {
-			return fmt.Errorf("attributes[%d].timezone 无效: %w", i, err)
+		if strings.HasPrefix(job.Cron, "@every") {
+			return fmt.Errorf("attributes[%d].cron must define a calendar schedule", i)
+		}
+		schedule, err := cron.ParseStandard(job.Cron)
+		if err != nil {
+			return fmt.Errorf("attributes[%d].cron: %w", i, err)
+		}
+		loc, err := time.LoadLocation(job.Timezone)
+		if err != nil {
+			return fmt.Errorf("attributes[%d].timezone: %w", i, err)
+		}
+		if schedule.Next(time.Now().In(loc)).IsZero() {
+			return fmt.Errorf("attributes[%d].cron has no scheduled occurrence", i)
 		}
 	}
 	return nil

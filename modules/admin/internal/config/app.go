@@ -12,18 +12,7 @@ import (
 
 // AppConfig 应用配置（总配置）
 type AppConfig struct {
-	Database      DatabaseConfig      `yaml:"database"`
-	GatewayClient GatewayClientConfig `yaml:"gateway_client"`
-}
-
-// GatewayClientConfig 是 Admin 调用其他组件时使用的 gatewayclient 配置。Admin 有两个调用方身份：
-// 控制台转发浏览器请求用 console，Admin 内部任务（例如每日垃圾回收）用 admin。
-type GatewayClientConfig struct {
-	CAFile         string `yaml:"ca_file"`
-	CacheDir       string `yaml:"cache_dir"`
-	LocalAddress   string `yaml:"local_address"`
-	ConsoleKeyFile string `yaml:"console_key_file"`
-	AdminKeyFile   string `yaml:"admin_key_file"`
+	Database DatabaseConfig `yaml:"database"`
 }
 
 // DatabaseConfig 数据库配置

@@ -150,8 +150,9 @@ func (s *Service) EndCollectorPublishOperation(ctx context.Context, req *pb.Coll
 func (s *Service) authorizeUser(ctx context.Context, spaceID string) error {
 	userID, _, role, err := utils.GetUserInfoFromCtx(ctx)
 	if err != nil {
-		// 没有用户身份的是服务调用方，主机网关已按组件目录的 ACL 校验过（只有 moox-cli、console、cloudnode、
-		// collector）；浏览器请求经过会话鉴权，在下面按空间成员关系校验。
+		// Service callers are restricted to moox-cli/admin-gateway by the
+		// Node Service Gateway route ACL. Browser requests pass the JWT filter
+		// and are checked against Space membership below.
 		return nil
 	}
 	if s.authorizer == nil {

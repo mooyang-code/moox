@@ -211,8 +211,10 @@ func (s *Service) RequestViewRebuild(ctx context.Context, req *pb.RequestViewReb
 	return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Success("rebuild requested"), View: view}, nil
 }
 
-// validateManualRebuildAuth 在 Storage 边界上再限制一次这个开销很大的操作员动作（控制台也会校验管理员角色）。
-// 主机网关的 ACL 只是纵深防御：持有服务凭据的调用方不能只改 AppId 就冒充控制台。
+// validateManualRebuildAuth keeps this expensive operator action restricted at
+// the Storage boundary as well as at the browser gateway. The gateway route
+// allow-list is defense in depth, not an authentication mechanism: a service
+// credential must not be able to forge admin-gateway by only changing AppId.
 func (s *Service) validateManualRebuildAuth(auth *pb.AuthInfo) error {
 	if strings.TrimSpace(s.operatorSecret) == "" {
 		return errors.New("storage auth secret is not configured")
@@ -221,7 +223,7 @@ func (s *Service) validateManualRebuildAuth(auth *pb.AuthInfo) error {
 		return errors.New("administrator service auth is required")
 	}
 	appID := strings.TrimSpace(auth.GetAppId())
-	if appID != "console" && appID != "moox-cli" {
+	if appID != "admin-gateway" && appID != "moox-cli" {
 		return errors.New("administrator identity required")
 	}
 	expected := serviceAuthKey(s.operatorSecret, appID)

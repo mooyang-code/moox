@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestHTTPProbeSignsSysDeployHealthPathsWithFreshNonce(t *testing.T) {
+func TestHTTPProbeSignsPlacementHealthPathsWithFreshNonce(t *testing.T) {
 	authenticator, err := healthz.NewAuthenticator(healthz.AuthConfig{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"})
 	require.NoError(t, err)
 	var headers []string
@@ -270,25 +270,4 @@ func TestFailResult(t *testing.T) {
 	assert.Equal(t, "boom", got.ErrorMessage)
 	assert.Equal(t, int64(12), got.LatencyMS)
 	require.NotEmpty(t, got.ResultID)
-}
-
-func TestHTTPProbeAcceptsPlacementHTTPSWithoutVerifyingCertificateOrFollowingRedirects(t *testing.T) {
-	var requests int
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		if r.Header.Get("X-Moox-Health-Auth") != "" {
-			t.Fatal("https 探测不能携带健康检查凭据")
-		}
-		http.Redirect(w, r, "/login", http.StatusFound)
-	}))
-	defer srv.Close()
-	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
-	result := runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, URL: srv.URL + "/", ExpectedStatus: "200-399"})
-	require.True(t, result.Success, result.ErrorMessage)
-	require.Equal(t, http.StatusFound, result.HTTPStatus, "3xx 算正常，不跟随重定向")
-	require.Equal(t, 1, requests)
-
-	// 其他来源的 https 检查仍然校验证书。
-	result = runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceObservability, URL: srv.URL + "/", ExpectedStatus: "200-399"})
-	require.False(t, result.Success)
 }

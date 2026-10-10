@@ -1,5 +1,5 @@
-# 控制台 API 配置，合并了认证服务配置
-# 配置文件包含：控制台、认证服务、限流配置
+# 控制台服务配置 - 合并了认证服务配置
+# 配置文件包含：网关服务、认证服务、限流配置
 
 # 缓存配置（认证服务使用BadgerDB）
 cache:
@@ -21,8 +21,8 @@ security:
   nonce_ttl: "2m"
   raw_ticket_ttl: "60s"
 
-# 控制台 API 配置
-gateway:
+# 控制台服务配置
+console:
   # 是否开启调试模式
   debug: true
 
@@ -30,8 +30,11 @@ gateway:
   no_auth_methods:
     - "/api/admin/auth/GetLoginSalt"
     - "/api/admin/auth/Login"
-  # 这里不维护服务地址：/api/admin/<console_name>/<方法> 按组件目录映射到 tRPC 服务，
-  # 管理后台自己的服务在进程内调用，其他服务经主机网关转发。
+  # /api/admin/{console_name}/{method} 从共享 servicecatalog 解析服务和 console ACL。
+  # Admin 自身服务进程内调用；其余服务由 gatewayclient 透传原始 JSON。
+  # 目录直接读取 Admin 的主机/部署表，启动不依赖本机网关。
+  # console 签名密钥读取已初始化的加密数据库，不在此配置密钥。
+  # 私有 CA 使用 MOOX_ADMIN_PKI_DIR/ca.crt；默认位于 Admin 主密钥同目录的 pki/。
 
 # CORS 跨域配置（生产环境请配置具体前端域名，避免使用 *）
 cors:

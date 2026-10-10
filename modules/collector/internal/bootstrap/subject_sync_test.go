@@ -2,166 +2,109 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"os"
-	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-type fakeSubjectSyncStore struct {
-	mu          sync.Mutex
-	registered  map[string][]string
-	registerErr error
-	tags        []*pb.Tag
-	listCalls   atomic.Int32
-	listEntered chan struct{}
-	listRelease chan struct{}
-	attributes  map[string]int
-}
-
-func (s *fakeSubjectSyncStore) RegisterSubjectListing(_ context.Context, supported map[string][]string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.registered = supported
-	return s.registerErr
-}
-
-func (s *fakeSubjectSyncStore) ListTags(context.Context) ([]*pb.Tag, error) {
-	s.listCalls.Add(1)
-	if s.listEntered != nil {
-		s.listEntered <- struct{}{}
-		<-s.listRelease
-	}
-	return s.tags, nil
-}
-
-func (*fakeSubjectSyncStore) ApplyTagSnapshot(context.Context, string, string, time.Time, []*pb.TagSnapshotItem) error {
-	return nil
-}
-
-func (*fakeSubjectSyncStore) ReportTagRunFailure(context.Context, string, string, time.Time, string) error {
-	return nil
-}
-
-func (s *fakeSubjectSyncStore) UpdateSubjectAttributes(_ context.Context, spaceID string, items []*pb.SubjectAttributes) (int, int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.attributes == nil {
-		s.attributes = map[string]int{}
-	}
-	s.attributes[spaceID] = len(items)
-	return len(items), 0, nil
-}
-
-type staticSubjectLister []marketdata.Instrument
-
-func (l staticSubjectLister) List(context.Context) ([]marketdata.Instrument, error) { return l, nil }
-
-func testSubjectListers() subjectsync.Listers {
-	return subjectsync.Listers{
-		{Source: "binance", InstrumentType: "spot"}: staticSubjectLister{{SubjectID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT"}},
-		{Source: "binance", InstrumentType: "swap"}: staticSubjectLister{{SubjectID: "ETH-USDT"}},
-	}
-}
-
-func TestRegisterSubjectSyncRegistersListingBeforeTimers(t *testing.T) {
-	store := &fakeSubjectSyncStore{}
-	err := registerSubjectSync(context.Background(), &server.Server{}, SubjectSyncConfig{FetchTimeout: time.Second}, store, testSubjectListers(), nil)
-	require.ErrorContains(t, err, "缺少定时器")
-	require.Equal(t, map[string][]string{"binance": {"spot", "swap"}}, store.registered, "启动时先向 Storage 登记支持的数据源")
-
-	// 登记失败不能让 Collector 起不来：照常往下注册定时器（这里因为没有定时器服务而报缺少定时器，而不是登记失败）。
-	store = &fakeSubjectSyncStore{registerErr: errors.New("storage unavailable")}
-	err = registerSubjectSync(context.Background(), &server.Server{}, SubjectSyncConfig{FetchTimeout: time.Second}, store, testSubjectListers(), nil)
-	require.ErrorContains(t, err, "缺少定时器")
-}
-
-// 启动时登记失败，之后每次标签同步前重试，成功之后不再重复。
-func TestListingRegistrarRetriesUntilSuccess(t *testing.T) {
-	store := &fakeSubjectSyncStore{registerErr: errors.New("storage unavailable")}
-	registrar := &listingRegistrar{store: store, supported: testSubjectListers().Supported()}
-	require.Error(t, registrar.ensure(context.Background()))
-	store.mu.Lock()
-	store.registerErr = nil
-	store.mu.Unlock()
-	require.NoError(t, registrar.ensure(context.Background()))
-	store.mu.Lock()
-	store.registered = nil
-	store.mu.Unlock()
-	require.NoError(t, registrar.ensure(context.Background()))
-	require.Nil(t, store.registered, "登记成功后不再重复登记")
-}
-
-// 一次标签同步超过 1 分钟时，下一次触发被跳过，不会并发执行。
-func TestSubjectTagJobSkipsOverlappingTrigger(t *testing.T) {
-	store := &fakeSubjectSyncStore{listEntered: make(chan struct{}), listRelease: make(chan struct{})}
-	tags := &subjectsync.TagRunner{Store: store, Listers: testSubjectListers()}
-	tagJob, _, err := subjectSyncJobs(tags, &subjectsync.AttributeRunner{}, time.Now, nil)
-	require.NoError(t, err)
-
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- tagJob.Handle(context.Background()) }()
-	<-store.listEntered
-	require.NoError(t, tagJob.Handle(context.Background()), "重叠的触发直接跳过")
-	close(store.listRelease)
-	require.NoError(t, <-firstDone)
-	require.EqualValues(t, 1, store.listCalls.Load())
-}
-
-// 属性同步按触发时刻判断是否到点：北京时间 08:10:45 触发时执行。
-func TestSubjectAttributeJobUsesTriggerTime(t *testing.T) {
-	store := &fakeSubjectSyncStore{}
-	attributes := &subjectsync.AttributeRunner{
-		Store: store, Listers: testSubjectListers(),
-		Jobs: []subjectsync.AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}},
-	}
-	trigger := time.Date(2026, 10, 9, 0, 10, 45, 0, time.UTC)
-	_, attributeJob, err := subjectSyncJobs(&subjectsync.TagRunner{Store: store}, attributes, func() time.Time { return trigger }, nil)
-	require.NoError(t, err)
-	require.NoError(t, attributeJob.Handle(context.Background()))
-	require.Equal(t, 1, store.attributes["crypto"])
-
-	trigger = trigger.Add(time.Minute)
-	store.attributes = nil
-	require.NoError(t, attributeJob.Handle(context.Background()))
-	require.Empty(t, store.attributes, "下一分钟不再执行")
-}
-
-// 两个标的同步定时器错开 schedule（第 0 秒）：标签在第 30 秒，属性在第 45 秒，超时都是 10 分钟。
-func TestSubjectSyncTimersInTRPCConfig(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
+func TestSubjectSyncTimerConfig(t *testing.T) {
+	raw, err := os.ReadFile("../../config/trpc_go.yaml")
 	require.NoError(t, err)
 	var config struct {
 		Server struct {
-			Service []struct {
-				Name     string `yaml:"name"`
-				Network  string `yaml:"network"`
-				Protocol string `yaml:"protocol"`
-				Timeout  int    `yaml:"timeout"`
+			Services []struct {
+				Name, Network, Protocol string
+				Timeout                 int
 			} `yaml:"service"`
-		} `yaml:"server"`
+		}
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &config))
 	want := map[string]string{subjectTagsTimerService: "30 * * * * *", subjectAttributesTimerService: "45 * * * * *"}
-	for _, service := range config.Server.Service {
-		cron, ok := want[service.Name]
-		if !ok {
-			continue
+	for _, service := range config.Server.Services {
+		if schedule, ok := want[service.Name]; ok {
+			require.Equal(t, schedule, service.Network)
+			require.Equal(t, "timer", service.Protocol)
+			require.Equal(t, 600000, service.Timeout)
+			delete(want, service.Name)
 		}
-		require.Equal(t, cron, service.Network, service.Name)
-		require.Equal(t, "timer", service.Protocol, service.Name)
-		require.Equal(t, int(subjectSyncTimeout/time.Millisecond), service.Timeout, service.Name)
-		delete(want, service.Name)
 	}
-	require.Empty(t, want, "trpc_go.yaml 缺少标的同步定时器")
+	require.Empty(t, want)
+}
+
+func TestSubjectSyncTimerRejectsMissingServices(t *testing.T) {
+	process := newRuntime(context.Background(), nil)
+	defer process.Close()
+	run := func(context.Context) error { return nil }
+	require.ErrorContains(t, registerSubjectSyncTimers(nil, process, run, run), "require a server")
+	s := &server.Server{}
+	require.ErrorContains(t, registerSubjectSyncTimers(s, process, run, run), subjectTagsTimerService)
+	s.AddService(subjectTagsTimerService, server.New(server.WithProtocol("timer")))
+	require.ErrorContains(t, registerSubjectSyncTimers(s, process, run, run), subjectAttributesTimerService)
+	s.AddService(subjectAttributesTimerService, server.New(server.WithProtocol("timer")))
+	require.NoError(t, registerSubjectSyncTimers(s, process, run, run))
+}
+
+func TestSubjectSyncTimerSkipsOverlapAndJoinsBeforeClientClose(t *testing.T) {
+	s := &server.Server{}
+	process := newRuntime(context.Background(), s)
+	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	httpClosed, databaseClosed := make(chan struct{}), make(chan struct{})
+	process.beforeClose = []func() error{func() error { close(httpClosed); return nil }}
+	process.closeDatabase = func() error { close(databaseClosed); return nil }
+	var calls atomic.Int32
+	job, err := subjectSyncJob("collector_subject_overlap_test", process, func(ctx context.Context) error {
+		calls.Add(1)
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > subjectSyncTimeout || time.Until(deadline) < 9*time.Minute {
+			t.Error("subject sync timer has no bounded deadline")
+		}
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return ctx.Err()
+	})
+	require.NoError(t, err)
+	finished := make(chan error, 1)
+	go func() { finished <- job.Handle(context.Background()) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timer did not start")
+	}
+	require.NoError(t, job.Handle(context.Background()), "next minute skips a still-running invocation")
+	require.Equal(t, int32(1), calls.Load())
+	// A slow tag sync must leave the independent periodic planner available.
+	planned := false
+	require.NoError(t, process.run(context.Background(), func(context.Context) error { planned = true; return nil }))
+	require.True(t, planned)
+	closed := make(chan error, 1)
+	go func() {
+		_ = s.Close(nil)
+		closed <- process.Close()
+	}()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel the timer")
+	}
+	select {
+	case <-httpClosed:
+		t.Fatal("HTTP closed before timer joined")
+	case <-databaseClosed:
+		t.Fatal("database closed before timer joined")
+	default:
+	}
+	close(release)
+	require.ErrorIs(t, <-finished, context.Canceled)
+	require.NoError(t, <-closed)
+	<-httpClosed
+	<-databaseClosed
+	require.ErrorIs(t, job.Handle(context.Background()), context.Canceled)
+	require.Equal(t, int32(1), calls.Load(), "no callbacks after shutdown")
 }

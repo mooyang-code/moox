@@ -32,7 +32,7 @@ CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]
 `[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺
 不删除；旧的 `[[factors.items]]` 已移除。
 Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
-和 `status`；单个周期的诊断用引擎自己的 `moox-factor-engine run-once`。
+`run-once` 和 `status`。
 
 ## 清理 Storage View 积压并触发 A/B 重建
 
@@ -40,12 +40,12 @@ Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/current/storage-primary/config/storage.yaml \
+  --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
-  --credential-file <从 control 复制来的 internal-admin.yaml，mode 0600> \
+  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
   --yes
 ```
@@ -66,12 +66,12 @@ moox-cli storage repair-view \
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/current/storage-primary/config/storage.yaml \
+  --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
-  --credential-file <从 control 复制来的 internal-admin.yaml，mode 0600> \
+  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
   --dry-run
 ```
@@ -83,7 +83,7 @@ moox-cli storage repair-view \
 | `--space-id` | 无，必填 | View 所属 Space |
 | `--view-id` | 无，必填 | 要修复的 View |
 | `--storage-conf` | `MOOX_STORAGE_CONFIG` 或 `config/storage.yaml` | Storage 配置 |
-| `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | 存储部署根目录，其下 `current/` 是当前发布，内含 `start.sh`/`stop.sh`/`status.sh` |
+| `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | `start.sh`/`stop.sh` 所在根目录 |
 | `--stream` | `MOOX_STORAGE` | JetStream stream |
 | `--consumer` | `storage_view_kline` | 分区 durable；kline 三个行情 View 共用，因子 View 用 `storage_view_factor` |
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
@@ -115,10 +115,10 @@ moox-cli storage repair-view ... \
 但业务 Dataset 的历史事件必须保留时，不要删除整个 consumer。先检查精确 subject：
 
 ```bash
-/data/moox/storage/current/bin/moox-storage-cli purge-dataset-events \
+/home/<user>/moox/storage/bin/moox-storage-cli purge-dataset-events \
   --space mooxsys \
   --dataset dataset_mooxsys_service_metrics \
-  --credential-file <从 control 复制来的 internal-admin.yaml，mode 0600> \
+  --credential-file /home/<user>/.config/moox/eventbus/internal-admin.yaml \
   --dry-run
 ```
 
@@ -133,8 +133,8 @@ rows、period、factor-computed 和 sync-point 事件；不会删除 durable con
 
 ```bash
 moox-cli storage force-rebuild-view \
-  --storage-conf /data/moox/storage/current/storage-primary/config/storage.yaml \
-  --package-root /data/moox/storage \
+  --storage-conf /home/<user>/moox/storage/config/storage.yaml \
+  --package-root /home/<user>/moox/storage \
   --space-id crypto \
 	--view-id view_factor_binance_kline_1m \
   --dry-run
@@ -147,14 +147,13 @@ K 线，历史不足时以现有数据激活。
 
 ## 收敛默认 View 集合
 
-新项目只保留三个行情 View 和五个系统监控 View。需要删除其他 View 定义时，先暂停
-`storage-view`（`/data/moox/storage/pause.sh storage-view`，写暂停标记并停止进程；只停止不够，健康检查会在一分钟内
-把它重新拉起来），再执行一次性元数据收敛命令，完成后用 `resume.sh storage-view` 恢复：
+新项目只保留三个行情 View 和五个系统监控 View。需要删除其他 View 定义时，先停止
+`storage-view`，再执行一次性元数据收敛命令：
 
 ```bash
-/data/moox/storage/current/bin/moox-storage-cli retain-views \
-  --metadata-db /data/moox/storage/data/storage/metadata/storage_metadata.db \
-  --package-root /data/moox/storage \
+/home/<user>/moox/storage/bin/moox-storage-cli retain-views \
+  --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
+  --package-root /home/<user>/moox/storage \
   --keep-view crypto/view_dasftksvjhj2jom4vhd0_kline_1m \
   --keep-view crypto/view_crypto_swap_kline_1h \
   --keep-view crypto/view_crypto_spot_kline_1h \
@@ -166,7 +165,7 @@ K 线，历史不足时以现有数据激活。
   --yes
 ```
 
-命令要求精确传入八个活动 View，并且 `storage-view` 必须已经暂停。它只删除 SQLite
+命令要求精确传入八个活动 View，并且 `storage-view` 必须已经停止。它只删除 SQLite
 中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
 物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 

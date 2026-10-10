@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 )
 
@@ -28,9 +27,12 @@ type RunOnceRequest struct {
 // the saved snapshot), then computes and writes a single period like a
 // recalc chunk.
 func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Outcome, error) {
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	if cfg == nil {
+		return pipeline.Outcome{}, errors.New("factor engine config is required")
+	}
+	gateway, err := cfg.GatewayClient.OpenExternal(cfg.sourcePath)
 	if err != nil {
-		return pipeline.Outcome{}, fmt.Errorf("创建因子引擎的 gatewayclient: %w", err)
+		return pipeline.Outcome{}, err
 	}
 	defer gateway.Close()
 	storage, err := newStorageClient(gateway, cfg.Storage)
@@ -44,8 +46,9 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if _, err := cache.Load(); err != nil {
 		return pipeline.Outcome{}, err
 	}
-	manager := NewManagerClient(gateway, cfg.Manager, domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: "run-once"})
-	_ = (&catalogSyncer{client: manager, cache: cache}).SyncOnce(ctx)
+	if manager, err := NewManagerClient(gateway, cfg.Manager.Timeout, domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: "run-once"}); err == nil {
+		_ = (&catalogSyncer{client: manager, cache: cache}).SyncOnce(ctx)
+	}
 	set, err := cache.Set(strings.TrimSpace(req.SetID))
 	if err != nil {
 		return pipeline.Outcome{}, err

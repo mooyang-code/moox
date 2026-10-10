@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,21 +17,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// factorEngineCaller 是因子引擎的外部调用方身份。
-const factorEngineCaller = "factor-engine"
-
 type Config struct {
-	Engine IdentityConfig `yaml:"engine"`
-	// GatewayClient 是因子引擎访问 MooX 的 gatewayclient：外部方式，经外部接入调用 moox-factor-mgr 的
-	// FactorEngine 服务和 Storage。
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	Manager       ManagerConfig        `yaml:"manager"`
-	CatalogSync   CatalogSyncConfig    `yaml:"catalog_sync"`
-	Storage       StorageConfig        `yaml:"storage"`
-	EventBus      EventBusConfig       `yaml:"eventbus"`
-	Python        PythonConfig         `yaml:"python"`
-	Pipeline      PipelineConfig       `yaml:"pipeline"`
-	Recalc        RecalcConfig         `yaml:"recalc"`
+	GatewayClient gatewayclient.ExternalFileConfig `yaml:"gateway_client"`
+	sourcePath    string                           `yaml:"-"`
+	Engine        IdentityConfig                   `yaml:"engine"`
+	Manager       ManagerConfig                    `yaml:"manager"`
+	CatalogSync   CatalogSyncConfig                `yaml:"catalog_sync"`
+	Storage       StorageConfig                    `yaml:"storage"`
+	EventBus      EventBusConfig                   `yaml:"eventbus"`
+	Python        PythonConfig                     `yaml:"python"`
+	Pipeline      PipelineConfig                   `yaml:"pipeline"`
+	Recalc        RecalcConfig                     `yaml:"recalc"`
 }
 
 // IdentityConfig names the engine; engine_id must stay stable across restarts
@@ -40,7 +37,7 @@ type IdentityConfig struct {
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
 }
 
-// ManagerConfig 是调用 moox-factor-mgr 的 FactorEngine 服务的设置。
+// ManagerConfig bounds manager calls made through the shared external client.
 type ManagerConfig struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
@@ -53,8 +50,8 @@ type CatalogSyncConfig struct {
 	StateFile string        `yaml:"state_file"`
 }
 
-// StorageConfig 中 auth_secret_file 保存 Storage Primary 的密钥，用来签名因子引擎的 AppID；访问 Storage 走
-// gateway_client。
+// StorageConfig supplies application authentication independently of the
+// external gateway credential.
 type StorageConfig struct {
 	AuthSecretFile string `yaml:"auth_secret_file"`
 }
@@ -100,11 +97,16 @@ func Load(path string) (*Config, error) {
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse factor engine config %s: %w", path, err)
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("factor engine configuration requires one YAML document")
+	}
 	cfg.applyDefaults()
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ENGINE_ID")); value != "" {
 		cfg.Engine.ID = value
 	}
 	if absolute, err := filepath.Abs(path); err == nil {
+		cfg.sourcePath = absolute
 		root := filepath.Dir(absolute)
 		if filepath.Base(root) == "config" {
 			root = filepath.Dir(root)
@@ -123,10 +125,11 @@ func Default() *Config {
 		hostname = short
 	}
 	return &Config{
+		GatewayClient: gatewayclient.ExternalFileConfig{Caller: "factor-engine", KeyFile: "../secrets/access-factor-engine.key"},
 		Engine:        IdentityConfig{ID: "factor-engine@" + hostname, HeartbeatInterval: 10 * time.Second},
-		GatewayClient: gatewayclient.Config{Mode: gatewayclient.ModeAccess, Caller: factorEngineCaller},
 		Manager:       ManagerConfig{Timeout: 30 * time.Second},
 		CatalogSync:   CatalogSyncConfig{Interval: time.Minute, Offset: 45 * time.Second, StateFile: "./data/engine/catalog.json"},
+		Storage:       StorageConfig{AuthSecretFile: "./secrets/storage-primary-auth.secret"},
 		EventBus:      EventBusConfig{FetchMaxWait: 10 * time.Second},
 		Python: PythonConfig{
 			Bin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./data/engine/factors",
@@ -165,7 +168,7 @@ func (c *Config) applyDefaults() {
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
-		&c.GatewayClient.KeyFile, &c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
+		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
 		&c.Python.WorkerPath, &c.Python.FactorsDir,
 	} {
 		value := strings.TrimSpace(*path)
@@ -188,15 +191,14 @@ func (c *Config) Validate() error {
 	}
 	require(strings.TrimSpace(c.Engine.ID) != "", "engine.id is required")
 	require(c.Engine.HeartbeatInterval > 0, "engine.heartbeat_interval must be positive")
+	require(c.Manager.Timeout > 0, "manager.timeout must be positive")
+	require(c.GatewayClient.Caller == "factor-engine", "gateway_client.caller must be factor-engine")
 	if err := c.GatewayClient.Validate(); err != nil {
 		problems = append(problems, err.Error())
 	}
-	require(c.GatewayClient.Mode == gatewayclient.ModeAccess, "gateway_client.mode must be access")
-	require(strings.TrimSpace(c.GatewayClient.Caller) == factorEngineCaller, "gateway_client.caller must be "+factorEngineCaller)
-	require(strings.TrimSpace(c.GatewayClient.KeyFile) != "", "gateway_client.key_file is required")
-	require(c.Manager.Timeout > 0, "manager.timeout must be positive")
 	require(c.CatalogSync.Interval >= 10*time.Second, "catalog_sync.interval must be at least 10s")
 	require(c.CatalogSync.Offset >= 0 && c.CatalogSync.Offset < c.CatalogSync.Interval, "catalog_sync.offset must be within [0, interval)")
+	require(strings.TrimSpace(c.Storage.AuthSecretFile) != "", "storage.auth_secret_file is required")
 	require(len(c.EventBus.URLs) > 0, "eventbus.urls must not be empty")
 	require(c.Python.Workers > 0 && c.Python.TaskTimeout > 0, "python.workers and python.task_timeout must be positive")
 	require(c.Pipeline.PeriodBudgetMin <= c.Pipeline.PeriodBudgetMax, "pipeline.period_budget_min must not exceed period_budget_max")

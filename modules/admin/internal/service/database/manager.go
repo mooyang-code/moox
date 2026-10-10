@@ -86,8 +86,10 @@ func (dm *Manager) GetCache() *badger.DB {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		"_pragma=foreign_keys(1)",
 		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(OFF)",
+		// Topology and encrypted signing keys must survive a committed write.
+		"_pragma=synchronous(FULL)",
 		// SQLite has one writer. Keep a bounded wait for short lock
 		// contention, while the application-level retry handles the few
 		// bookkeeping updates that race with route/health writes.
@@ -95,9 +97,6 @@ func buildSQLiteDSN(dbPath string) string {
 		"_pragma=temp_store(MEMORY)",
 		"_pragma=cache_size(-64000)",
 		"_pragma=wal_autocheckpoint(1000)",
-		// 事务一开始就取写锁。默认的 DEFERRED 事务先读后写，读快照之后别的连接一提交，升级写锁就立即
-		// 返回 SQLITE_BUSY_SNAPSHOT，busy_timeout 不会重试；IMMEDIATE 让写事务在入口排队。
-		"_txlock=immediate",
 	}
 	sep := "?"
 	if strings.Contains(dbPath, "?") {

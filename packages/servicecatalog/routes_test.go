@@ -1,182 +1,292 @@
 package servicecatalog
 
 import (
-	"encoding/json"
-	"flag"
-	"os"
-	"path/filepath"
+	"bytes"
+	"net"
+	"slices"
 	"strings"
 	"testing"
-
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
-var update = flag.Bool("update", false, "重新生成 testdata 中的期望结果")
-
-// productionDeployment 是生产三台主机的部署（设计文档 3.2）。
-func productionDeployment() Deployment {
-	hosts := []Host{
-		{ID: "control", Address: "106.53.107.122", Enabled: true},
-		{ID: "storage", Address: "146.56.196.204", PrivateAddress: "10.206.0.5", Region: "ap-nanjing", Enabled: true},
-		{ID: "compute-1", Address: "43.132.204.177", PrivateAddress: "172.19.32.13", Region: "ap-hongkong", Enabled: true},
-	}
-	placements := map[string][]string{
-		"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"},
-		"storage":   {"storage-primary", "storage-node", "storage-view", "access"},
-		"compute-1": {"trade", "access", "egress-proxy"},
-	}
-	deployment := Deployment{Hosts: hosts}
-	for host, components := range placements {
-		for _, component := range components {
-			deployment.Placements = append(deployment.Placements, Placement{HostID: host, ComponentID: component, Enabled: true})
+// This is the intended three-host placement, not a claim that production has
+// migrated. The old service IDs and duplicate compute gateway are not inputs.
+func productionTopology() Topology {
+	t := Topology{ControlHostID: "control", Hosts: []Host{
+		{ID: "control", Address: "106.53.107.122", Status: Enabled},
+		{ID: "storage", Address: "146.56.196.204", PrivateAddress: "10.206.0.5", Region: "ap-nanjing", Status: Enabled},
+		{ID: "compute-1", Address: "43.132.204.177", PrivateAddress: "172.19.32.13", Region: "ap-hongkong", Status: Enabled},
+	}}
+	for _, host := range t.Hosts {
+		for _, id := range []string{"host-gateway", "host-agent"} {
+			t.Placements = append(t.Placements, Placement{HostID: host.ID, ComponentID: id, Status: Enabled})
 		}
 	}
-	return deployment
+	for host, ids := range map[string][]string{
+		"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"},
+		"storage":   {"storage-primary", "storage-node", "storage-view", "archive", "access"},
+		"compute-1": {"access", "egress-proxy", "trade"},
+	} {
+		for _, id := range ids {
+			t.Placements = append(t.Placements, Placement{HostID: host, ComponentID: id, Status: Enabled})
+		}
+	}
+	return t
 }
 
-func TestCompileProductionDeployment(t *testing.T) {
-	compiled, err := Default().Compile(productionDeployment())
-	if err != nil {
+func TestTopologyRejectsInvalidPlacementsAtomically(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Catalog, *Topology)
+	}{
+		{"control component elsewhere", func(c *Catalog, p *Topology) {
+			for i := range p.Placements {
+				if p.Placements[i].ComponentID == "console-proxy" {
+					p.Placements[i].HostID = "storage"
+				}
+			}
+		}},
+		{"single replicas", func(c *Catalog, p *Topology) {
+			p.Placements = append(p.Placements, Placement{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
+		}},
+		{"single on disabled host still counts", func(c *Catalog, p *Topology) {
+			p.Hosts[2].Status = Disabled
+			p.Placements = append(p.Placements, Placement{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
+		}},
+		{"same-host port conflict", func(c *Catalog, p *Topology) { componentPtr(c, "access").Health.Port = 11012 }},
+		{"unknown host", func(c *Catalog, p *Topology) { p.Placements[0].HostID = "unknown" }},
+		{"unknown component", func(c *Catalog, p *Topology) { p.Placements[0].ComponentID = "unknown" }},
+		{"duplicate placement", func(c *Catalog, p *Topology) { p.Placements = append(p.Placements, p.Placements[0]) }},
+		{"duplicate host", func(c *Catalog, p *Topology) { p.Hosts = append(p.Hosts, p.Hosts[0]) }},
+		{"duplicate address", func(c *Catalog, p *Topology) { p.Hosts[1].Address = p.Hosts[0].Address }},
+		{"host address includes scheme", func(c *Catalog, p *Topology) { p.Hosts[1].Address = "http://storage:11003" }},
+		{"host address includes port", func(c *Catalog, p *Topology) { p.Hosts[1].Address = "storage:11003" }},
+		{"host ID exceeds directory limit", func(c *Catalog, p *Topology) { p.Hosts[1].ID = strings.Repeat("s", 129) }},
+		{"region exceeds directory limit", func(c *Catalog, p *Topology) { p.Hosts[1].Region = strings.Repeat("r", 129) }},
+		{"invalid host status", func(c *Catalog, p *Topology) { p.Hosts[1].Status = "active" }},
+		{"invalid placement status", func(c *Catalog, p *Topology) { p.Placements[0].Status = "active" }},
+		{"control disabled", func(c *Catalog, p *Topology) { p.Hosts[0].Status = Disabled }},
+		{"protected disabled", func(c *Catalog, p *Topology) {
+			for i := range p.Placements {
+				if p.Placements[i].ComponentID == "admin" {
+					p.Placements[i].Status = Disabled
+				}
+			}
+		}},
+		{"protected removed", func(c *Catalog, p *Topology) {
+			p.Placements = slices.DeleteFunc(p.Placements, func(p Placement) bool { return p.ComponentID == "admin" })
+		}},
+		{"automatic host placement removed", func(c *Catalog, p *Topology) {
+			p.Placements = slices.DeleteFunc(p.Placements, func(p Placement) bool { return p.ComponentID == "host-agent" && p.HostID == "storage" })
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, p := mustCatalog(t), productionTopology()
+			tc.mutate(&c, &p)
+			before := jsonBytes(t, p)
+			if err := c.ValidateTopology(p); err == nil {
+				t.Fatal("invalid topology accepted")
+			}
+			if !bytes.Equal(before, jsonBytes(t, p)) {
+				t.Fatal("validation changed its input")
+			}
+		})
+	}
+}
+
+func TestPortCollisionIsPerHostAndDisabledPlacementHasNoListener(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	componentPtr(&c, "egress-proxy").Health.Port = 20211 // same as storage-view, on another host
+	p.Placements = append(p.Placements, Placement{HostID: "compute-1", ComponentID: "collector", Status: Disabled})
+	if err := c.ValidateTopology(p); err != nil {
 		t.Fatal(err)
 	}
-	for _, host := range compiled.Hosts {
-		if _, err := gatewayroute.NormalizeAndHash(host.HostID, host.Routes); err != nil {
-			t.Fatalf("主机 %s 的路由无法通过网关校验: %v", host.HostID, err)
-		}
+}
+
+func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	want := map[string]struct {
+		routes  int
+		callers []string
+		hash    string
+	}{
+		"control":   {143, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "225eeb73570ab6727d7d11c5f207d7a59fe68c32f81fed86716739847b85dcf9"},
+		"storage":   {99, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "2b873a8c7b08124a2cb89084f298644989acba91232ed1527fa8c71b23589fd3"},
+		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "e59decf268b23179b384d5f21ced98ed2fde3c9e1113aed38153c7a14356da7a"},
 	}
-	golden := filepath.Join("testdata", "compiled_production.json")
-	encoded, err := json.MarshalIndent(compiled, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded = append(encoded, '\n')
-	if *update {
-		if err := os.WriteFile(golden, encoded, 0o644); err != nil {
+	for _, host := range p.Hosts {
+		compiled, err := c.Compile(p, host.ID)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	want, err := os.ReadFile(golden)
-	if err != nil {
-		t.Fatalf("读取期望结果失败（可用 go test -run TestCompileProductionDeployment -update 生成）: %v", err)
-	}
-	if string(want) != string(encoded) {
-		t.Fatalf("编译结果与 %s 不一致；确认改动无误后用 -update 重新生成", golden)
-	}
-
-	control, _ := compiled.HostConfig("control")
-	assertRouteCallers(t, control, "trpc.moox.admin.GatewayControl", "PullSnapshot",
-		[]string{"host-gateway@compute-1", "host-gateway@control", "host-gateway@storage"})
-	assertRouteCallers(t, control, "trpc.moox.cloudnode.CloudNodeMgr", "CollectGarbage", []string{"admin"})
-	assertRouteCallers(t, control, "trpc.moox.collector.MarketFetchRuntime", "ClaimTimerBatch", []string{"access"})
-	storage, _ := compiled.HostConfig("storage")
-	assertRouteCallers(t, storage, "trpc.moox.storage.PrimaryStore", "WriteFactorRows", []string{"access", "factor-mgr"})
-	if containsCaller(storage.Callers, "host-gateway@storage") {
-		t.Fatal("storage 不提供网关控制，不需要主机网关的校验密钥")
-	}
-	if !containsCaller(control.Callers, "host-gateway@storage") || !containsCaller(control.Callers, "console") {
-		t.Fatalf("control 的校验密钥范围不完整: %v", control.Callers)
-	}
-	compute, _ := compiled.HostConfig("compute-1")
-	if !containsCaller(compute.Callers, "strategy") || !containsCaller(compute.Callers, "collector") || containsCaller(compute.Callers, "factor-mgr") {
-		t.Fatalf("compute-1 的校验密钥范围不对: %v", compute.Callers)
-	}
-	// 出口代理只给 Collector 调用。
-	assertRouteCallers(t, compute, "trpc.moox.egress.Proxy", "Do", []string{"collector"})
-	assertRouteCallers(t, compute, "trpc.moox.egress.Proxy", "ResolveDomains", []string{"collector"})
-	if got := compiled.Directory.ServiceHostIDs("trpc.moox.storage.Metadata"); strings.Join(got, ",") != "storage" {
-		t.Fatalf("Metadata 应当在 storage，实际 %v", got)
-	}
-	if got := compiled.Directory.ComponentHostIDs("access"); strings.Join(got, ",") != "compute-1,storage" {
-		t.Fatalf("外部接入应当在 compute-1 和 storage，实际 %v", got)
-	}
-	if got := compiled.Directory.ComponentHostIDs("host-gateway"); strings.Join(got, ",") != "compute-1,control,storage" {
-		t.Fatalf("主机网关应当在每台主机，实际 %v", got)
+		if compiled.Disabled || len(compiled.Hash) != 64 || len(compiled.Directory.Version) != 64 {
+			t.Fatalf("invalid snapshot for %s", host.ID)
+		}
+		if len(compiled.Routes) != want[host.ID].routes || !slices.Equal(compiled.VerificationCallers, want[host.ID].callers) || compiled.Hash != want[host.ID].hash {
+			t.Fatalf("review snapshot change for %s: routes=%d callers=%v hash=%s", host.ID, len(compiled.Routes), compiled.VerificationCallers, compiled.Hash)
+		}
+		if !slices.Equal(compiled.Directory.Services["trpc.moox.storage.PrimaryStore"], []string{"storage"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.trade.TradeConsoleService"], []string{"compute-1"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.hostagent.HostAgentMgr"], []string{"compute-1", "control", "storage"}) {
+			t.Fatal("directory does not represent the topology")
+		}
+		if len(compiled.Directory.Hosts) != 3 {
+			t.Fatal("missing directory hosts")
+		}
+		for _, route := range compiled.Routes {
+			address, _, err := net.SplitHostPort(route.Address)
+			if err != nil || address != "127.0.0.1" {
+				t.Fatalf("non-local route: %+v", route)
+			}
+			if route.TimeoutMS <= 0 || route.MaxBodyBytes <= 0 || len(route.Callers) == 0 {
+				t.Fatalf("unbounded route: %+v", route)
+			}
+			found := false
+			for _, placement := range p.Placements {
+				found = found || placement.HostID == host.ID && placement.ComponentID == route.ComponentID
+			}
+			if !found {
+				t.Fatalf("route forwards to another host: %+v", route)
+			}
+			for _, caller := range route.Callers {
+				if !c.Allowed(caller, route.ServicePath, route.Method) {
+					t.Fatalf("compiled ACL widened: %s %s/%s", caller, route.ServicePath, route.Method)
+				}
+			}
+			if route.ServicePath == GatewayControlPath && !slices.Equal(route.Callers, []string{"host-gateway@compute-1", "host-gateway@control", "host-gateway@storage"}) {
+				t.Fatal("GatewayControl key scope is incorrect")
+			}
+		}
+		for _, caller := range compiled.VerificationCallers {
+			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "moox-skill"}, caller) {
+				t.Fatalf("unexpanded or external verification scope %q", caller)
+			}
+		}
+		if (host.ID == "compute-1") && slices.Contains(compiled.VerificationCallers, "access") {
+			t.Fatal("access must not have permission to trade or egress")
+		}
+		if (host.ID == "storage" || host.ID == "control") && !slices.Contains(compiled.VerificationCallers, "access") {
+			t.Fatal("external whitelist did not add access")
+		}
+		t.Logf("%s routes=%d callers=%v hash=%s", host.ID, len(compiled.Routes), compiled.VerificationCallers, compiled.Hash)
 	}
 }
 
-func TestCompileDisabledPlacementAndHost(t *testing.T) {
-	deployment := productionDeployment()
-	for i := range deployment.Placements {
-		if deployment.Placements[i].ComponentID == "storage-view" {
-			deployment.Placements[i].Enabled = false
-		}
-	}
-	for i := range deployment.Hosts {
-		if deployment.Hosts[i].ID == "compute-1" {
-			deployment.Hosts[i].Enabled = false
-		}
-	}
-	compiled, err := Default().Compile(deployment)
+func TestCompilePreservesMethodSpecificPermissionBoundaries(t *testing.T) {
+	c := mustCatalog(t)
+	compiled, err := c.Compile(productionTopology(), "compute-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := compiled.Directory.ServiceHostIDs("trpc.moox.storage.DataView"); len(got) != 0 {
-		t.Fatalf("停用的部署不应出现在目录里: %v", got)
-	}
-	storage, _ := compiled.HostConfig("storage")
-	for _, route := range storage.Routes {
-		if route.ServicePath == "trpc.moox.storage.DataView" {
-			t.Fatal("停用的部署不应产生路由")
-		}
-	}
-	compute, _ := compiled.HostConfig("compute-1")
-	if !compute.Disabled || len(compute.Routes) != 0 {
-		t.Fatalf("停用的主机应当收到无路由的 Disabled 快照: %+v", compute)
-	}
-	if _, ok := compiled.Directory.Host("compute-1"); ok {
-		t.Fatal("停用的主机不应出现在目录里")
-	}
-	control, _ := compiled.HostConfig("control")
-	assertRouteCallers(t, control, "trpc.moox.admin.GatewayControl", "ReportStatus",
-		[]string{"host-gateway@compute-1", "host-gateway@control", "host-gateway@storage"})
-}
-
-func TestCompileVersionTracksDirectory(t *testing.T) {
-	first, err := Default().Compile(productionDeployment())
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := Default().Compile(productionDeployment())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Directory.Version == "" || first.Directory.Version != second.Directory.Version {
-		t.Fatalf("同一部署的目录版本应当稳定: %q %q", first.Directory.Version, second.Directory.Version)
-	}
-	deployment := productionDeployment()
-	deployment.Hosts[1].PrivateAddress = "10.206.0.6"
-	third, err := Default().Compile(deployment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if third.Directory.Version == first.Directory.Version {
-		t.Fatal("主机地址变化后目录版本应当变化")
-	}
-}
-
-func assertRouteCallers(t *testing.T, host HostConfig, path, method string, want []string) {
-	t.Helper()
-	for _, route := range host.Routes {
-		if route.ServicePath != path {
+	for _, route := range compiled.Routes {
+		if route.ServicePath != "trpc.moox.trade.TradeConsoleService" {
 			continue
 		}
-		for _, candidate := range route.AllowedMethods {
-			if candidate == method {
-				if strings.Join(route.AllowedCallers, ",") != strings.Join(want, ",") {
-					t.Fatalf("%s/%s 的调用方 = %v, want %v", path, method, route.AllowedCallers, want)
-				}
-				return
+		if slices.Contains(route.Callers, "strategy") != slices.Contains([]string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, route.Method) {
+			t.Fatalf("strategy permission crossed method boundary: %+v", route)
+		}
+	}
+}
+
+func TestCompilationIsOrderIndependentAndDoesNotMutateInputs(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	beforeC, beforeP := jsonBytes(t, c), jsonBytes(t, p)
+	first, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeC, jsonBytes(t, c)) || !bytes.Equal(beforeP, jsonBytes(t, p)) {
+		t.Fatal("compiler changed input")
+	}
+	slices.Reverse(c.Components)
+	slices.Reverse(c.Principals)
+	slices.Reverse(p.Hosts)
+	slices.Reverse(p.Placements)
+	for i := range c.Components {
+		for j := range c.Components[i].Services {
+			s := &c.Components[i].Services[j]
+			slices.Reverse(s.Methods)
+			slices.Reverse(s.ACL)
+			for k := range s.ACL {
+				slices.Reverse(s.ACL[k].Methods)
+				slices.Reverse(s.ACL[k].Callers)
 			}
 		}
 	}
-	t.Fatalf("主机 %s 没有 %s/%s 的路由", host.HostID, path, method)
+	second, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(jsonBytes(t, first), jsonBytes(t, second)) {
+		t.Fatal("input ordering changed compiled definition")
+	}
 }
 
-func containsCaller(callers []string, caller string) bool {
-	for _, item := range callers {
-		if item == caller {
-			return true
+func TestHashTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	first, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Hosts[1].PrivateAddress = "10.206.0.6"
+	changed, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Hash == changed.Hash || first.Directory.Version == changed.Directory.Version {
+		t.Fatal("remote address change did not invalidate snapshots")
+	}
+	p = productionTopology()
+	servicePtr(&c, "trpc.moox.cloudnode.CloudNodeMgr").ACL[1].Callers = append(servicePtr(&c, "trpc.moox.cloudnode.CloudNodeMgr").ACL[1].Callers, "monitor")
+	changed, err = c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Hash == changed.Hash || first.Directory.Version != changed.Directory.Version {
+		t.Fatal("ACL should change route hash and preserve directory version")
+	}
+}
+
+func TestDisabledHostAndPlacementWithdrawRoutes(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	p.Hosts[2].Status = Disabled
+	compiled, err := c.Compile(p, "compute-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.Disabled || len(compiled.Routes) != 0 || len(compiled.VerificationCallers) != 0 {
+		t.Fatal("disabled host retains routes or keys")
+	}
+	if _, exists := compiled.Directory.Hosts["compute-1"]; exists {
+		t.Fatal("disabled host retained in directory")
+	}
+	if len(compiled.Directory.Services["trpc.moox.trade.TradeConsoleService"]) != 0 {
+		t.Fatal("disabled host service retained in directory")
+	}
+	control, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(control.VerificationCallers, "host-gateway@compute-1") {
+		t.Fatal("disabled host cannot fetch disabled snapshot")
+	}
+	p = productionTopology()
+	for i := range p.Placements {
+		if p.Placements[i].ComponentID == "collector" {
+			p.Placements[i].Status = Disabled
 		}
 	}
-	return false
+	compiled, err = c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range compiled.Routes {
+		if route.ComponentID == "collector" {
+			t.Fatal("disabled placement retains a route")
+		}
+	}
+	if len(compiled.Directory.Services["trpc.moox.collector.MarketFetchRuntime"]) != 0 {
+		t.Fatal("disabled placement remains discoverable")
+	}
+	if _, err := c.Compile(p, "unknown"); err == nil {
+		t.Fatal("unknown host compiled")
+	}
 }

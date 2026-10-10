@@ -54,7 +54,6 @@ func (s validationDatasetSource) ResolveSubjects(context.Context, string, []stri
 }
 
 type taskResultMetadataFake struct {
-	// mu 保护读取计数：盘点会并发调用元数据接口。
 	mu                sync.Mutex
 	datasets          map[string]*storagepb.Dataset
 	views             map[string]*storagepb.View
@@ -85,8 +84,8 @@ func newTaskResultMetadataFake(ids taskresult.IDs, taskID string) *taskResultMet
 
 func (f *taskResultMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getDatasets++
-	f.mu.Unlock()
 	if f.failGetDataset != nil {
 		return nil, f.failGetDataset
 	}
@@ -98,17 +97,23 @@ func (f *taskResultMetadataFake) GetDataset(_ context.Context, req *storagepb.Ge
 }
 
 func (f *taskResultMetadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	dataset := req.GetDataset()
 	f.datasets[dataset.GetDatasetId()] = dataset
 	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
 func (f *taskResultMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
 	return &storagepb.UpdateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: req.GetDataset()}, nil
 }
 
 func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.deleteDatasets++
 	if f.failDeleteDataset {
 		return &storagepb.DeleteDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "dataset delete failed"}}, nil
@@ -122,8 +127,8 @@ func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb
 
 func (f *taskResultMetadataFake) GetView(_ context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getViews++
-	f.mu.Unlock()
 	view := f.views[req.GetViewId()]
 	if view == nil {
 		return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
@@ -132,18 +137,24 @@ func (f *taskResultMetadataFake) GetView(_ context.Context, req *storagepb.GetVi
 }
 
 func (f *taskResultMetadataFake) CreateView(_ context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	view := req.GetView()
 	f.views[view.GetViewId()] = view
 	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
 }
 
 func (f *taskResultMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	view := req.GetView()
 	f.views[view.GetViewId()] = view
 	return &storagepb.UpdateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
 }
 
 func (f *taskResultMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.deleteViews++
 	if _, ok := f.views[req.GetViewId()]; !ok {
 		return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil

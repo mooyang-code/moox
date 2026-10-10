@@ -19,16 +19,13 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 )
 
-// sourceEgress 标记来自出口代理的解析结果；只有这类结果会持久化，供重启后兜底。
-const sourceEgress = "egress"
-
-// Coordinator 生成写入 SCF 的 DNS 快照：优先使用出口代理的解析结果，出口代理没有给出的域名用本机解析补齐。
 type Coordinator struct {
-	Local    *dnscache.Cache
-	Remote   DomainResolver
-	Domains  []string
-	Interval time.Duration
-	CacheTTL time.Duration
+	Local         *dnscache.Cache
+	Remote        DomainResolver
+	Domains       []string
+	RemoteDomains []string
+	Interval      time.Duration
+	CacheTTL      time.Duration
 
 	mu              sync.RWMutex
 	refreshMu       sync.Mutex
@@ -65,6 +62,7 @@ type CoordinatorConfig struct {
 	Local           *dnscache.Cache
 	Remote          DomainResolver
 	Domains         []string
+	RemoteDomains   []string
 	Interval        time.Duration
 	CacheTTL        time.Duration
 	Metrics         *Metrics
@@ -76,14 +74,14 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		cfg.Interval = 5 * time.Minute
 	}
 	return &Coordinator{
-		Local: cfg.Local, Remote: cfg.Remote, Domains: normalizeDomains(cfg.Domains),
+		Local: cfg.Local, Remote: cfg.Remote, Domains: normalizeDomains(cfg.Domains), RemoteDomains: normalizeDomains(cfg.RemoteDomains),
 		Interval: cfg.Interval, CacheTTL: cfg.CacheTTL, routes: make(map[string]sources.DNSResolution), routeSource: make(map[string]string),
 		metrics: cfg.Metrics, persistencePath: strings.TrimSpace(cfg.PersistencePath),
 	}
 }
 
-// RestoreLastGoodSnapshot loads the last successful egress proxy snapshot, if
-// one is present. A restored route has no local receipt time so a restart does not
+// RestoreLastGoodSnapshot loads the last successful Egress snapshot, if one is
+// present. A restored route has no local receipt time so a restart does not
 // discard the route before the first bounded remote refresh can complete.
 func (c *Coordinator) RestoreLastGoodSnapshot() error {
 	if c == nil || c.persistencePath == "" {
@@ -101,8 +99,12 @@ func (c *Coordinator) RestoreLastGoodSnapshot() error {
 		return fmt.Errorf("decode DNS snapshot %s: %w", c.persistencePath, err)
 	}
 	now := time.Now().UTC()
-	allowed := make(map[string]struct{}, len(c.Domains))
-	for _, domain := range c.Domains {
+	allowedDomains := c.Domains
+	if c.Remote != nil {
+		allowedDomains = c.RemoteDomains
+	}
+	allowed := make(map[string]struct{}, len(allowedDomains))
+	for _, domain := range allowedDomains {
 		allowed[normalizeDomain(domain)] = struct{}{}
 	}
 	routes := make(map[string]sources.DNSResolution, len(persisted.Routes))
@@ -151,7 +153,7 @@ func (c *Coordinator) RestoreLastGoodSnapshot() error {
 	c.routes = routes
 	c.routeSource = make(map[string]string, len(routes))
 	for host := range routes {
-		c.routeSource[host] = sourceEgress
+		c.routeSource[host] = "egress"
 	}
 	c.status = buildStatus(now, routes, c.routeSource, c.status, nil, nil, false)
 	c.mu.Unlock()
@@ -191,8 +193,8 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	}
 	var remoteRoutes map[string]sources.DNSResolution
 	var remoteErr error
-	if c.Remote != nil && len(domains) > 0 {
-		remoteRoutes, remoteErr = c.Remote.ResolveDomains(ctx, domains)
+	if c.Remote != nil && len(c.RemoteDomains) > 0 {
+		remoteRoutes, remoteErr = c.Remote.ResolveDomains(ctx, append([]string(nil), c.RemoteDomains...))
 		receiptAt := time.Now().UTC()
 		for host, route := range remoteRoutes {
 			route.ResolvedAt = receiptAt
@@ -228,7 +230,7 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	}
 	for host, route := range remoteRoutes {
 		merged[host] = route
-		mergedSources[host] = sourceEgress
+		mergedSources[host] = "egress"
 	}
 	status := buildStatus(now, merged, mergedSources, previousStatus, remoteErr, localErr, len(remoteRoutes) > 0 || len(localRoutes) > 0)
 	c.mu.Lock()
@@ -275,7 +277,7 @@ type persistedSnapshot struct {
 func (c *Coordinator) persistEgressSnapshot(routes map[string]sources.DNSResolution, routeSource map[string]string) error {
 	egressRoutes := make(map[string]sources.DNSResolution)
 	for host, route := range routes {
-		if routeSource[host] != sourceEgress || len(route.IPs) == 0 {
+		if routeSource[host] != "egress" || len(route.IPs) == 0 {
 			continue
 		}
 		egressRoutes[normalizeDomain(host)] = route

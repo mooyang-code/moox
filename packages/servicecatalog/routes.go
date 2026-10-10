@@ -5,246 +5,274 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 )
 
-// Compiled 是按「组件目录 × 部署」编译出的结果：全局服务目录，以及每台主机网关的路由和校验密钥范围。
-type Compiled struct {
-	Directory Directory
-	Hosts     []HostConfig
-}
-
-// HostConfig 是一台主机网关需要的路由与校验密钥范围。
-type HostConfig struct {
-	HostID   string
-	Disabled bool
-	Routes   []gatewayroute.Route
-	// Callers 是本机路由放行的全部调用方，即需要下发给这台主机网关的校验密钥范围。
-	Callers []string
-}
-
-// Directory 是全局服务目录：哪个 tRPC 服务、哪个组件在哪些主机，以及主机地址。
-type Directory struct {
-	Version    string           `json:"version"`
-	Services   []ServiceHosts   `json:"services"`
-	Components []ComponentHosts `json:"components"`
-	Hosts      []DirectoryHost  `json:"hosts"`
-}
-
-// ServiceHosts 是一个 tRPC 服务所在的主机，按主机 ID 排序。
-type ServiceHosts struct {
-	Path    string   `json:"path"`
-	HostIDs []string `json:"host_ids"`
-}
-
-// ComponentHosts 是一个组件启用的部署所在的主机，按主机 ID 排序。
-type ComponentHosts struct {
-	ComponentID string   `json:"component_id"`
-	HostIDs     []string `json:"host_ids"`
-}
-
-// DirectoryHost 是服务目录中的主机地址信息。
-type DirectoryHost struct {
+type Host struct {
 	ID             string `json:"id"`
 	Address        string `json:"address"`
-	PrivateAddress string `json:"private_address"`
-	Region         string `json:"region"`
+	PrivateAddress string `json:"private_address,omitempty"`
+	Region         string `json:"region,omitempty"`
+	Status         string `json:"status"`
 }
 
-// Host 返回目录中的一台主机。
-func (d Directory) Host(id string) (DirectoryHost, bool) {
-	for _, host := range d.Hosts {
-		if host.ID == id {
-			return host, true
+type Placement struct {
+	HostID      string `json:"host_id"`
+	ComponentID string `json:"component_id"`
+	Status      string `json:"status"`
+}
+
+type Topology struct {
+	ControlHostID string      `json:"control_host_id"`
+	Hosts         []Host      `json:"hosts"`
+	Placements    []Placement `json:"placements"`
+}
+
+type DirectoryHost struct {
+	Address        string `json:"address"`
+	PrivateAddress string `json:"private_address,omitempty"`
+	Region         string `json:"region,omitempty"`
+}
+
+type Directory struct {
+	Version  string                   `json:"version"`
+	Services map[string][]string      `json:"services"`
+	Hosts    map[string]DirectoryHost `json:"hosts"`
+}
+
+// Route grants callers to exactly one service and method. Merging ACL groups
+// into separate method/caller sets would accidentally widen permissions.
+type Route struct {
+	ComponentID  string   `json:"component_id"`
+	ServicePath  string   `json:"service_path"`
+	Method       string   `json:"method"`
+	Address      string   `json:"address"`
+	TimeoutMS    int64    `json:"timeout_ms"`
+	MaxBodyBytes int64    `json:"max_body_bytes"`
+	ReadOnly     bool     `json:"read_only"`
+	Callers      []string `json:"callers"`
+}
+
+// CompiledHost is a definition, not the final signed-key snapshot. The control
+// plane must hash the actual verification key IDs/material along with this
+// definition so a key rotation changes the snapshot even without route changes.
+type CompiledHost struct {
+	HostID              string    `json:"host_id"`
+	Disabled            bool      `json:"disabled"`
+	Routes              []Route   `json:"routes"`
+	Directory           Directory `json:"directory"`
+	VerificationCallers []string  `json:"verification_callers"`
+	Hash                string    `json:"hash"`
+}
+
+func (c Catalog) ValidateTopology(t Topology) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if len(t.Hosts) == 0 || len(t.Hosts) > 1024 {
+		return fmt.Errorf("topology requires 1..1024 hosts")
+	}
+	hosts := map[string]Host{}
+	addresses := map[string]bool{}
+	for _, host := range t.Hosts {
+		key := strings.ToLower(host.Address)
+		if ip := net.ParseIP(host.Address); ip != nil {
+			key = ip.String()
 		}
-	}
-	return DirectoryHost{}, false
-}
-
-// ServiceHostIDs 返回服务所在的主机。
-func (d Directory) ServiceHostIDs(path string) []string {
-	for _, service := range d.Services {
-		if service.Path == path {
-			return append([]string(nil), service.HostIDs...)
+		if !validDirectoryHost(host.ID, DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}) || !validStatus(host.Status) {
+			return fmt.Errorf("invalid host %q", host.ID)
 		}
-	}
-	return nil
-}
-
-// ComponentHostIDs 返回组件启用的部署所在的主机。
-func (d Directory) ComponentHostIDs(componentID string) []string {
-	for _, component := range d.Components {
-		if component.ComponentID == componentID {
-			return append([]string(nil), component.HostIDs...)
+		if _, exists := hosts[host.ID]; exists || addresses[key] {
+			return fmt.Errorf("duplicate host ID or address %q", host.ID)
 		}
+		hosts[host.ID], addresses[key] = host, true
 	}
-	return nil
-}
-
-// HostConfig 返回某台主机的编译结果。
-func (c Compiled) HostConfig(hostID string) (HostConfig, bool) {
-	for _, host := range c.Hosts {
-		if host.HostID == hostID {
-			return host, true
+	control, exists := hosts[t.ControlHostID]
+	if !exists || control.Status != Enabled {
+		return fmt.Errorf("control host must exist and be enabled")
+	}
+	placements := map[string]Placement{}
+	singles := map[string]string{}
+	ports := map[string]map[int]string{}
+	for _, p := range t.Placements {
+		_, hostExists := hosts[p.HostID]
+		component, ok := c.Component(p.ComponentID)
+		if !hostExists || !ok || !validStatus(p.Status) {
+			return fmt.Errorf("invalid placement %s/%s", p.HostID, p.ComponentID)
 		}
-	}
-	return HostConfig{}, false
-}
-
-// Compile 校验部署后，编译服务目录和每台主机的路由。停用的主机不出现在目录里，它的主机网关收到
-// Disabled 快照、没有任何路由；停用的部署不产生路由，也不出现在目录里。
-func (c *Catalog) Compile(deployment Deployment) (Compiled, error) {
-	if err := c.ValidateDeployment(deployment); err != nil {
-		return Compiled{}, err
-	}
-	hosts := append([]Host(nil), deployment.Hosts...)
-	sort.Slice(hosts, func(i, j int) bool { return hosts[i].ID < hosts[j].ID })
-	enabledHosts := map[string]bool{}
-	gatewayCallers := make([]string, 0, len(hosts))
-	for _, host := range hosts {
-		enabledHosts[host.ID] = host.Enabled
-		// 网关控制要接收所有已登记主机的拉取，停用的主机也要能拿到 Disabled 快照。
-		gatewayCallers = append(gatewayCallers, HostGatewayIdentity(host.ID))
-	}
-
-	serviceHosts := map[string][]string{}
-	componentHosts := map[string][]string{}
-	perHost := map[string][]*Component{}
-	for _, placement := range c.EffectivePlacements(deployment) {
-		if !placement.Enabled || !enabledHosts[placement.HostID] {
+		key := p.HostID + "/" + p.ComponentID
+		if _, exists := placements[key]; exists {
+			return fmt.Errorf("duplicate placement %s", key)
+		}
+		placements[key] = p
+		if component.Scope == ScopeControl && p.HostID != t.ControlHostID {
+			return fmt.Errorf("control component %q cannot be placed on %q", component.ID, p.HostID)
+		}
+		if (component.Protected || component.Scope == ScopeHost) && p.Status != Enabled {
+			return fmt.Errorf("protected or host component %q cannot be disabled", component.ID)
+		}
+		if p.Status != Enabled {
 			continue
 		}
-		component := c.components[placement.ComponentID]
-		perHost[placement.HostID] = append(perHost[placement.HostID], component)
-		componentHosts[component.ID] = append(componentHosts[component.ID], placement.HostID)
+		if component.Scope != ScopeHost && component.Replicas == Single {
+			if previous := singles[component.ID]; previous != "" {
+				return fmt.Errorf("single component %q is enabled on both %q and %q", component.ID, previous, p.HostID)
+			}
+			singles[component.ID] = p.HostID
+		}
+		if ports[p.HostID] == nil {
+			ports[p.HostID] = map[int]string{}
+		}
+		for _, port := range componentPorts(component) {
+			if previous := ports[p.HostID][port]; previous != "" {
+				return fmt.Errorf("port conflict on host %q: %s and %s use %d", p.HostID, previous, component.ID, port)
+			}
+			ports[p.HostID][port] = component.ID
+		}
+	}
+	for _, component := range c.Components {
+		if component.Protected && component.Scope == ScopeControl {
+			if _, ok := placements[t.ControlHostID+"/"+component.ID]; !ok {
+				return fmt.Errorf("protected component %q is missing on control", component.ID)
+			}
+		}
+		if component.Scope != ScopeHost {
+			continue
+		}
+		for id := range hosts {
+			if _, ok := placements[id+"/"+component.ID]; !ok {
+				return fmt.Errorf("host %q is missing automatic placement %q", id, component.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func validStatus(status string) bool { return status == Enabled || status == Disabled }
+
+func componentPorts(component Component) []int {
+	ports := slices.Clone(component.Ports)
+	if component.Health.Port != 0 {
+		ports = append(ports, component.Health.Port)
+	}
+	for _, service := range component.Services {
+		ports = append(ports, service.Port)
+	}
+	return ports
+}
+
+func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
+	if err := c.ValidateTopology(t); err != nil {
+		return CompiledHost{}, err
+	}
+	var current Host
+	directory := Directory{Services: map[string][]string{}, Hosts: map[string]DirectoryHost{}}
+	hosts := map[string]Host{}
+	for _, host := range t.Hosts {
+		hosts[host.ID] = host
+		if host.ID == hostID {
+			current = host
+		}
+		if host.Status == Enabled {
+			directory.Hosts[host.ID] = DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
+		}
+	}
+	if current.ID == "" {
+		return CompiledHost{}, fmt.Errorf("unknown host %q", hostID)
+	}
+	compiled := CompiledHost{HostID: hostID, Disabled: current.Status != Enabled, Routes: []Route{}, VerificationCallers: []string{}}
+	verification := map[string]bool{}
+	for _, placement := range t.Placements {
+		if placement.Status != Enabled || hosts[placement.HostID].Status != Enabled {
+			continue
+		}
+		component, _ := c.Component(placement.ComponentID)
 		for _, service := range component.Services {
-			serviceHosts[service.Path] = append(serviceHosts[service.Path], placement.HostID)
-		}
-	}
-
-	directory := Directory{}
-	for _, path := range sortedMapKeys(serviceHosts) {
-		directory.Services = append(directory.Services, ServiceHosts{Path: path, HostIDs: sortedUnique(serviceHosts[path])})
-	}
-	for _, id := range sortedMapKeys(componentHosts) {
-		directory.Components = append(directory.Components, ComponentHosts{ComponentID: id, HostIDs: sortedUnique(componentHosts[id])})
-	}
-	for _, host := range hosts {
-		if host.Enabled {
-			directory.Hosts = append(directory.Hosts, DirectoryHost{ID: host.ID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region})
-		}
-	}
-	version, err := DirectoryVersion(directory)
-	if err != nil {
-		return Compiled{}, err
-	}
-	directory.Version = version
-
-	compiled := Compiled{Directory: directory}
-	for _, host := range hosts {
-		config := HostConfig{HostID: host.ID, Disabled: !host.Enabled}
-		if host.Enabled {
-			callerSet := map[string]bool{}
-			for _, component := range perHost[host.ID] {
-				for _, service := range component.Services {
-					for _, route := range c.serviceRoutes(component, service, gatewayCallers) {
-						for _, caller := range route.AllowedCallers {
-							callerSet[caller] = true
-						}
-						config.Routes = append(config.Routes, route)
-					}
+			directory.Services[service.Path] = append(directory.Services[service.Path], placement.HostID)
+			if placement.HostID != hostID {
+				continue
+			}
+			for _, method := range service.Methods {
+				callers := c.routeCallers(service, method, t.Hosts)
+				if len(callers) == 0 {
+					continue
+				}
+				timeout, limit := service.TimeoutMS, service.MaxBodyBytes
+				if timeout == 0 {
+					timeout = DefaultTimeoutMS
+				}
+				if limit == 0 {
+					limit = DefaultMaxBodyBytes
+				}
+				compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: timeout, MaxBodyBytes: limit, ReadOnly: slices.Contains(service.ReadOnlyMethods, method), Callers: callers})
+				for _, caller := range callers {
+					verification[caller] = true
 				}
 			}
-			config.Callers = sortedKeys(callerSet)
 		}
-		compiled.Hosts = append(compiled.Hosts, config)
 	}
-	return compiled, nil
-}
-
-// serviceRoutes 把一个服务按「调用方集合」分组成路由；没有任何调用方的方法不经路由。
-func (c *Catalog) serviceRoutes(component *Component, service Service, gatewayCallers []string) []gatewayroute.Route {
-	groups := map[string][]string{}
-	groupCallers := map[string][]string{}
-	for _, method := range service.RPCs {
-		callers := c.expandCallers(c.acl[service.Path][method], gatewayCallers)
-		if len(callers) == 0 {
-			continue
-		}
-		key := strings.Join(callers, ",")
-		groups[key] = append(groups[key], method)
-		groupCallers[key] = callers
+	for _, ids := range directory.Services {
+		sort.Strings(ids)
 	}
-	routes := make([]gatewayroute.Route, 0, len(groups))
-	for key, methods := range groups {
-		sort.Strings(methods)
-		routes = append(routes, gatewayroute.Route{
-			ServiceID:      component.ID,
-			Address:        "127.0.0.1:" + strconv.Itoa(service.Port),
-			ServicePath:    service.Path,
-			TimeoutMS:      service.TimeoutMS,
-			MaxBodyBytes:   service.MaxBodyBytes,
-			AllowedMethods: methods,
-			AllowedCallers: groupCallers[key],
-		})
-	}
-	sort.Slice(routes, func(i, j int) bool { return routes[i].AllowedMethods[0] < routes[j].AllowedMethods[0] })
-	return routes
-}
-
-// expandCallers 把 ACL 中的 host-gateway 展开成每台已登记主机的 host-gateway@<主机>。
-func (c *Catalog) expandCallers(callers, gatewayCallers []string) []string {
-	out := make([]string, 0, len(callers)+len(gatewayCallers))
-	for _, caller := range callers {
-		if caller == HostGatewayCaller {
-			out = append(out, gatewayCallers...)
-			continue
-		}
-		out = append(out, caller)
-	}
-	return sortedUnique(out)
-}
-
-// DirectoryVersion 计算服务目录的版本号：目录内容（不含版本号本身）的 sha256。主机网关据此校验收到的目录。
-func DirectoryVersion(directory Directory) (string, error) {
-	encoded, err := json.Marshal(canonicalDirectory(directory))
+	version, err := contentHash(directory)
 	if err != nil {
-		return "", fmt.Errorf("序列化服务目录: %w", err)
+		return CompiledHost{}, err
 	}
-	sum := sha256.Sum256(encoded)
+	directory.Version = version
+	compiled.Directory = directory
+	sort.Slice(compiled.Routes, func(i, j int) bool {
+		left, right := compiled.Routes[i], compiled.Routes[j]
+		if left.ServicePath != right.ServicePath {
+			return left.ServicePath < right.ServicePath
+		}
+		return left.Method < right.Method
+	})
+	for caller := range verification {
+		compiled.VerificationCallers = append(compiled.VerificationCallers, caller)
+	}
+	sort.Strings(compiled.VerificationCallers)
+	compiled.Hash, err = contentHash(compiled)
+	return compiled, err
+}
+
+func (c Catalog) routeCallers(service Service, method string, hosts []Host) []string {
+	set := map[string]bool{}
+	for _, grant := range service.ACL {
+		if !slices.Contains(grant.Methods, method) {
+			continue
+		}
+		for _, caller := range grant.Callers {
+			if caller == "host-gateway@*" {
+				// Disabled hosts must still authenticate to obtain their disabled
+				// snapshot. Removed hosts disappear from this scope immediately.
+				for _, host := range hosts {
+					set["host-gateway@"+host.ID] = true
+				}
+			} else {
+				set[caller] = true
+			}
+		}
+	}
+	if c.externallyAllowed(service.Path, method) {
+		set["access"] = true
+	}
+	callers := make([]string, 0, len(set))
+	for caller := range set {
+		callers = append(callers, caller)
+	}
+	sort.Strings(callers)
+	return callers
+}
+
+func contentHash(value any) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("hash catalog definition: %w", err)
+	}
+	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// canonicalDirectory 把空切片统一成非 nil，保证经过 proto 往返后算出的版本号不变。
-func canonicalDirectory(directory Directory) Directory {
-	out := Directory{Services: []ServiceHosts{}, Components: []ComponentHosts{}, Hosts: []DirectoryHost{}}
-	for _, service := range directory.Services {
-		out.Services = append(out.Services, ServiceHosts{Path: service.Path, HostIDs: append([]string{}, service.HostIDs...)})
-	}
-	for _, component := range directory.Components {
-		out.Components = append(out.Components, ComponentHosts{ComponentID: component.ComponentID, HostIDs: append([]string{}, component.HostIDs...)})
-	}
-	out.Hosts = append(out.Hosts, directory.Hosts...)
-	return out
-}
-
-func sortedMapKeys[V any](values map[string]V) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedUnique(values []string) []string {
-	set := make(map[string]bool, len(values))
-	for _, value := range values {
-		set[value] = true
-	}
-	return sortedKeys(set)
 }

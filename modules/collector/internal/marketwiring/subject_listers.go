@@ -24,12 +24,14 @@ func (l fetcherLister) List(ctx context.Context) ([]marketdata.Instrument, error
 	return snapshot.Instruments, nil
 }
 
-// NewSubjectListers 创建标的同步用的数据源列表。binanceHTTP 是访问币安的客户端，Collector 传入经出口代理的
-// 客户端；为空时直连。
-func NewSubjectListers(binanceHTTP *httpclient.HTTPClient) (subjectsync.Listers, error) {
+func NewSubjectListers(clients ...*httpclient.HTTPClient) (subjectsync.Listers, error) {
+	var http *httpclient.HTTPClient
+	if len(clients) > 0 {
+		http = clients[0]
+	}
 	listers := subjectsync.Listers{
-		{Source: "binance", InstrumentType: "spot"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{InstrumentType: marketdata.InstrumentSpot, HTTPClient: binanceHTTP}), marketID: "crypto"},
-		{Source: "binance", InstrumentType: "swap"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{InstrumentType: marketdata.InstrumentSwap, HTTPClient: binanceHTTP}), marketID: "crypto"},
+		{Source: "binance", InstrumentType: "spot"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: http, InstrumentType: marketdata.InstrumentSpot}), marketID: "crypto"},
+		{Source: "binance", InstrumentType: "swap"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: http, InstrumentType: marketdata.InstrumentSwap}), marketID: "crypto"},
 	}
 	route, err := marketfetch.LoadStockCNRoute()
 	if err != nil {

@@ -25,8 +25,11 @@ const (
 
 var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_BINDING_HASH":        {},
-	tencent.EnvAccessAddress:                {},
-	tencent.EnvAccessID:                     {},
+	"MOOX_ACCESS_ADDRESS":                   {},
+	"MOOX_ACCESS_ID":                        {},
+	"MOOX_CALLER":                           {},
+	"MOOX_CALLER_KEY_ID":                    {},
+	"MOOX_CALLER_KEY":                       {},
 	"MOOX_FETCH_TIMEOUT_SECONDS":            {},
 	"MOOX_MARKET_FETCH_PROVIDER":            {},
 	"MOOX_MARKET_FETCH_MARKET_TYPE":         {},
@@ -218,6 +221,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		environment = make(map[string]string)
 	}
 	needsEnvironmentUpdate := !managedEnvironmentMatches(environment, item.GetManagedEnvironment())
+	needsEnvironmentUpdate = tencent.RemoveCollectorInternalGatewayEnvironment(environment) || needsEnvironmentUpdate
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}
@@ -238,7 +242,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		if environment["MOOX_FETCH_TIMEOUT_SECONDS"] != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
 			return "", fmt.Errorf("scf function %s Timer runtime environment requires MOOX_FETCH_TIMEOUT_SECONDS=60", ref.FunctionName)
 		}
-		if err := tencent.ValidateCollectorMarketFetchEnvironment(environment); err != nil {
+		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
 			return "", fmt.Errorf("scf function %s Timer runtime environment: %w", ref.FunctionName, err)
 		}
 	}
@@ -284,7 +288,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		return "", mutationError(fmt.Errorf("ensure timer trigger for %s: %w", ref.FunctionName, err))
 	}
 	providerMutationStarted = true
-	metadata := map[string]any{"access_address": environment[tencent.EnvAccessAddress], "access_id": environment[tencent.EnvAccessID], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	metadata := map[string]any{"access_address": environment["MOOX_ACCESS_ADDRESS"], "access_id": environment["MOOX_ACCESS_ID"], "access_caller": environment["MOOX_CALLER"], "access_key_id": environment["MOOX_CALLER_KEY_ID"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	assignmentMetadata, err := assignmentRuntimeMetadata(item.GetManagedEnvironment())
 	if err != nil {
 		return "", mutationError(err)

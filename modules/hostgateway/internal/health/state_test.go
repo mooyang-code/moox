@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/timerjob"
 )
 
@@ -113,6 +115,34 @@ func TestLivenessFailsWhenPersistentStorageIsUnavailable(t *testing.T) {
 	state := NewState()
 	state.SetStorageCheck(func() error { return errors.New("disk unavailable") })
 	assertStatus(t, state.Handler(), "/healthz", http.StatusServiceUnavailable)
+	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
+}
+
+func TestHealthJSONBindsRuntimeProcessAndSnapshotIdentity(t *testing.T) {
+	t.Setenv("MOOX_NODE_ID", "control")
+	t.Setenv("MOOX_INSTANCE_ID", "host-gateway@control")
+	t.Setenv("MOOX_BINARY_SHA256", strings.Repeat("a", 64))
+	t.Setenv("MOOX_BOOT_ID", strings.Repeat("b", 64))
+	state := NewState()
+	for _, path := range []string{"/healthz", "/readyz"} {
+		if path == "/readyz" {
+			state.ApplyRoutes("snapshot-hash", 2, false)
+			state.RouteSyncSucceeded(time.Now())
+			state.RouteReportSucceeded(time.Now())
+		}
+		recorder := httptest.NewRecorder()
+		state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		var payload healthz.Response
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if recorder.Code != http.StatusOK || !payload.Ready || payload.BinarySHA256 != strings.Repeat("a", 64) || payload.BootID != strings.Repeat("b", 64) || payload.InstanceID != "host-gateway@control" {
+			t.Fatalf("health identity mismatch: %+v", payload)
+		}
+		if path == "/readyz" && payload.Details["route_hash"] != "snapshot-hash" {
+			t.Fatal("readiness must identify the applied route snapshot")
+		}
+	}
 }
 
 func assertStatus(t *testing.T, handler http.Handler, path string, want int) {
@@ -121,24 +151,5 @@ func assertStatus(t *testing.T, handler http.Handler, path string, want int) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 	if recorder.Code != want {
 		t.Fatalf("%s status = %d, want %d", path, recorder.Code, want)
-	}
-}
-
-// Monitor 的部署检查按响应体里的 "ready":true 判定就绪，主机网关的 /readyz 要和其他组件一致。
-func TestReadyzBodyMatchesMonitorProbe(t *testing.T) {
-	state := NewState()
-	read := func() (int, string) {
-		recorder := httptest.NewRecorder()
-		state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		return recorder.Code, recorder.Body.String()
-	}
-	if code, body := read(); code != http.StatusServiceUnavailable || !strings.Contains(body, `"ready":false`) {
-		t.Fatalf("未就绪时 = %d %q", code, body)
-	}
-	state.ApplyRoutes("hash", 1, false)
-	state.RouteSyncSucceeded(time.Now())
-	state.RouteReportSucceeded(time.Now())
-	if code, body := read(); code != http.StatusOK || !strings.Contains(body, `"ready":true`) {
-		t.Fatalf("就绪时 = %d %q", code, body)
 	}
 }

@@ -107,7 +107,6 @@ func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {
 		require.NoError(t, err, name)
 	}
 	for _, path := range []string{
-		"service-deployments.yaml",
 		"metadata-quant-initial.seed.yaml",
 		"metadata-monitor-host.seed.yaml",
 		"metadata-monitor-metrics.seed.yaml",

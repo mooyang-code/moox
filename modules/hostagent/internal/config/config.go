@@ -10,6 +10,7 @@ import (
 )
 
 type Config struct {
+	HostID         string `yaml:"host_id"`
 	Version        int    `yaml:"version"`
 	IdentityPath   string `yaml:"identity_path"`
 	EventBusConfig string `yaml:"eventbus_config"`
@@ -46,6 +47,7 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.IdentityPath, cfg.EventBusConfig = Expand(cfg.IdentityPath), Expand(cfg.EventBusConfig)
 	cfg.HostName = strings.TrimSpace(cfg.HostName)
+	cfg.HostID = strings.TrimSpace(cfg.HostID)
 	return cfg, nil
 }
 

@@ -33,149 +33,136 @@ message AlertEvent {
   string created_at = 10;
 }
 
-// 健康概览 v2：后端给出结构化数据和中文摘要，保留原始错误；状态统一为 healthy、degraded、down、unknown、
-// disabled、unchecked（不探测）六种。
-
-// HealthSummary 是概览计数：告警数，以及组件、主机、业务检查、数据集中需关注（降级或故障）、正常、未知的数量。
-message HealthSummary {
-  int32 alerts = 1;
-  int32 attention = 2;
-  int32 healthy = 3;
-  int32 unknown = 4;
-}
-
-// HealthTarget 是告警对象：kind 为 component、dataset、host 或 business。
-message HealthTarget {
-  string kind = 1;
+// Health overview v2: identities are explicit; status has six canonical values.
+message HealthObject {
+  string type = 1;
   string host_id = 2;
   string component_id = 3;
-  string space_id = 4;
-  string dataset_id = 5;
-  string frequency = 6;
+  string dataset_id = 4;
+  string freq = 5;
+  string agent_id = 6;
+  string kind = 7;
+  string space_id = 8;
+  string producer = 9;
 }
-
 message HealthAlert {
   string id = 1;
-  // critical 或 warning。
   string severity = 2;
-  HealthTarget target = 3;
+  HealthObject object = 3;
   string title = 4;
-  // reason 是中文原因，raw_error 是原始错误。
   string reason = 5;
   string raw_error = 6;
   string triggered_at = 7;
   string last_checked_at = 8;
-  // 告警所属的数据链路阶段，不属于数据链路时为空。
-  string stage = 9;
 }
-
-// HealthProbe 是一次健康探测的结果。
-message HealthProbe {
+message HealthSignal {
   string status = 1;
-  string url = 2;
-  string checked_at = 3;
-  string raw_error = 4;
+  string reason = 2;
+  string raw_error = 3;
+  string checked_at = 4;
 }
-
-// HealthReporter 是组件的运行指标上报：status 为 healthy、stale、never_reported；只做健康探测的组件为空。
 message HealthReporter {
-  string status = 1;
-  string instance_id = 2;
+  string instance_id = 1;
+  string boot_id = 2;
   string version = 3;
-  string last_seen_at = 4;
+  string status = 4;
+  string last_reported_at = 5;
 }
-
-// HealthComponent 是部署在一台主机上的一个组件。
 message HealthComponent {
   string host_id = 1;
   string component_id = 2;
   string name = 3;
   string status = 4;
   string reason = 5;
-  // probe 是最近一次探测，history 是最近几次探测（新的在前）。
-  HealthProbe probe = 6;
-  repeated HealthProbe history = 7;
-  HealthReporter reporter = 8;
-  // 当前状态的开始时间。
+  HealthSignal probe = 6;
+  HealthSignal reporter = 7;
+  repeated HealthReporter instances = 8;
   string status_since = 9;
+  string probe_url = 10;
+  repeated HealthSignal recent_probes = 11;
 }
-
-message HealthStageDataset {
-  string space_id = 1;
-  string dataset_id = 2;
-  string frequency = 3;
-  string producer = 4;
+message HealthDataset {
+  string producer = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string freq = 4;
   string status = 5;
-  string watermark_at = 6;
-  int64 lag_seconds = 7;
-  string last_success_at = 8;
-  string reason = 9;
-  string raw_error = 10;
+  string reason = 6;
+  string raw_error = 7;
+  string input_watermark_at = 8;
+  string output_watermark_at = 9;
+  string last_success_at = 10;
+  string last_run_at = 11;
+  string last_reported_at = 12;
+  int64 lag_seconds = 13;
 }
-
-// HealthDataStage 是数据链路的一个阶段：stage 为 collect、storage、factor、trade。
-message HealthDataStage {
-  string stage = 1;
+message HealthPipelineStage {
+  string id = 1;
   string name = 2;
   string status = 3;
-  repeated HealthStageDataset datasets = 4;
+  repeated HealthDataset datasets = 4;
 }
-
-// HealthBusinessCheck 是一项业务检查：kind 为 market_fetch（行情采集协调）、canary（行情探针）、data_delivery（数据投递）
-// 或 balance（账户余额同步）；name 是中文名称。
 message HealthBusinessCheck {
-  string kind = 1;
-  string module = 2;
-  string space_id = 3;
-  string status = 4;
-  string reason = 5;
-  string raw_error = 6;
-  string checked_at = 7;
-  string name = 8;
-  // 所属的数据链路阶段，不属于数据链路时为空。
-  string stage = 9;
+  string check_id = 1;
+  string kind = 2;
+  string module = 3;
+  string space_id = 4;
+  string status = 5;
+  string reason = 6;
+  string raw_error = 7;
+  string checked_at = 8;
 }
-
-// HealthHost 是一台主机的摘要：主机网关状态与主机采集器上报的资源占用；agent_id 是主机采集器 ID，用于跳转到主机监控。
+message HealthGatewaySignal {
+  string kind = 1;
+  HealthSignal signal = 2;
+  // Persisted first observation of the current desired/applied mismatch.
+  string pending_since = 3;
+  string expected_hash = 4;
+  string applied_hash = 5;
+}
 message HealthHost {
   string host_id = 1;
-  string status = 2;
-  string reason = 3;
-  string gateway_state = 4;
-  double cpu_percent = 5;
-  double memory_percent = 6;
-  double disk_percent = 7;
-  string last_seen_at = 8;
-  string agent_id = 9;
+  string agent_id = 2;
+  string hostname = 3;
+  string address = 4;
+  string status = 5;
+  string reason = 6;
+  double cpu_percent = 7;
+  double memory_percent = 8;
+  double disk_percent = 9;
+  bool metrics_available = 10;
+  bool cpu_available = 11;
+  string last_reported_at = 12;
+  repeated HealthGatewaySignal gateway_signals = 13;
+  bool memory_available = 14;
+  bool disk_available = 15;
 }
-
-// HealthUnregistered 是在上报运行指标、但没有登记部署的进程。
-message HealthUnregistered {
-  string host_id = 1;
-  string component_id = 2;
-  string instance_id = 3;
-  string version = 4;
-  string last_seen_at = 5;
+message HealthCounts {
+  int32 healthy_count = 1;
+  int32 attention_count = 2;
+  int32 unknown_count = 3;
+  int32 disabled_count = 4;
+  int32 unchecked_count = 5;
 }
-
-message HealthNotification {
-  string channel_type = 1;
-  bool configured = 2;
-  string webhook_masked = 3;
+message HealthSummary {
+  int32 alert_count = 1;
+  int32 healthy_count = 2;
+  int32 attention_count = 3;
+  int32 unknown_count = 4;
+  int32 unregistered_count = 5;
+  HealthCounts components = 6;
 }
-
 message HealthOverview {
   string generated_at = 1;
-  HealthSummary summary = 2;
-  repeated HealthAlert alerts = 3;
-  repeated HealthComponent components = 4;
-  repeated HealthDataStage data_stages = 5;
-  repeated HealthBusinessCheck business_checks = 6;
-  repeated HealthHost hosts = 7;
-  repeated HealthUnregistered unregistered = 8;
-  HealthNotification notification = 9;
-  // 数据来源暂时不可用等需要提示的情况。
-  repeated string warnings = 10;
+  bool topology_known = 2;
+  HealthSummary summary = 3;
+  repeated HealthAlert alerts = 4;
+  repeated HealthComponent components = 5;
+  repeated HealthPipelineStage pipeline = 6;
+  repeated HealthBusinessCheck business_checks = 7;
+  repeated HealthHost hosts = 8;
+  repeated HealthComponent unregistered = 9;
+  NotificationChannelSetting notification = 10;
 }
 message GetHealthOverviewReq { string space_id = 1; }
 message GetHealthOverviewRsp { common.RetInfo ret_info = 1; HealthOverview overview = 2; }
@@ -200,7 +187,6 @@ message HostAgentInfo {
   trpc.moox.hostagent.HostSnapshot snapshot = 6;
   bool reachable = 7;
   int64 stale_seconds = 8;
-  // 主机 ID（MOOX_NODE_ID）；Monitor 重启后收到下一次快照之前为空。
   string host_id = 9;
 }
 message ListHostAgentsReq {}

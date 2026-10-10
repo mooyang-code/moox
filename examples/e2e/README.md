@@ -33,8 +33,10 @@ RetryItem 状态和 Storage watermark；不读取 `cloud_job_item_id`。
 
 ```bash
 ./bin/moox-cli collector function probe-egress \
-  --file ./moox.toml \
-  --space-id "$MOOX_SPACE_ID"
+  --control-url "$MOOX_CONTROL_URL" \
+  --space-id "$MOOX_SPACE_ID" \
+  --service-access-key "$MOOX_GATEWAY_SERVICE_KEY_ID" \
+  --service-secret-key "$MOOX_GATEWAY_SERVICE_SECRET_KEY"
 ```
 
 探针会对每个已部署的 `market_fetcher` 节点发起同步调用。Binance 轻量接口成功是通过条件；

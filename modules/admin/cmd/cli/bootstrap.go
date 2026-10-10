@@ -10,209 +10,256 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"time"
+	"slices"
+	"strings"
 
-	trpc "trpc.group/trpc-go/trpc-go"
-
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
+	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/placement"
-	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
+	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
+	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"gorm.io/gorm"
 )
 
-// moox-admin-cli bootstrap 是首次部署的离线初始化（设计文档 3.12 第 2 步），不依赖任何运行中的服务，
-// 可以重复执行：已有的表、CA、密钥都复用，不会重建。依次完成：
-//  1. 执行 admin.sql 建表；
-//  2. 生成 MooX 私有 CA；
-//  3. 按部署表写入全部主机和部署（与 SyncHostPlacements 同一套校验）；
-//  4. 生成全部调用方密钥并存入 Admin 密钥表；
-//  5. 为 control 签发主机网关证书，并导出 control 主机网关需要的 CA 与证书。control 的主机网关直连
-//     本机的网关控制，不需要调用方密钥。
-
-// BootstrapSpec 是 moox-cli 按 moox.toml 渲染的部署表。
-type BootstrapSpec struct {
-	Hosts []BootstrapHost `json:"hosts"`
-}
-
-// BootstrapHost 是部署表中的一台主机。
-type BootstrapHost struct {
-	ID             string   `json:"id"`
-	Address        string   `json:"address"`
-	PrivateAddress string   `json:"private_address"`
-	Region         string   `json:"region"`
-	Components     []string `json:"components"`
+type bootstrapOptions struct {
+	topologyFile, dbPath, masterFile, pkiDir, outputDir string
 }
 
 func isBootstrapCommand(args []string) bool { return len(args) > 1 && args[1] == "bootstrap" }
 
 func runBootstrapCommand(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "bootstrap" {
+		return errors.New("expected bootstrap command")
+	}
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dbPath, keyFile, pkiDir, specPath, outDir := defaultInitDBPath, "", defaultPKIDir, "", ""
-	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite 数据库路径")
-	fs.StringVar(&keyFile, "encryption-key-file", "", "0600 的 Admin 加密密钥文件（不存在时生成）")
-	fs.StringVar(&pkiDir, "pki-dir", pkiDir, "MooX 私有 CA 目录")
-	fs.StringVar(&specPath, "spec", "", "部署表 JSON（由 moox-cli 按 moox.toml 生成）")
-	fs.StringVar(&outDir, "out-dir", "", "control 主机网关文件的输出根目录（写入 certs/ 与 secrets/）")
+	var opts bootstrapOptions
+	fs.StringVar(&opts.topologyFile, "topology-file", "", "normalized 0600 topology JSON from moox-cli")
+	fs.StringVar(&opts.dbPath, "db-path", defaultInitDBPath, "Admin SQLite database")
+	fs.StringVar(&opts.masterFile, "encryption-key-file", "", "persistent 0600 Admin encryption key; generated only for an empty secret table")
+	fs.StringVar(&opts.pkiDir, "pki-dir", "", "persistent 0700 control CA directory")
+	fs.StringVar(&opts.outputDir, "output-dir", "", "0700 parent directory for a complete new bootstrap bundle")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	if specPath == "" || outDir == "" {
-		return errors.New("bootstrap 需要 --spec 和 --out-dir")
+	if fs.NArg() != 0 {
+		return errors.New("unexpected bootstrap arguments")
 	}
-	spec, err := loadBootstrapSpec(specPath)
+	for _, path := range []*string{&opts.topologyFile, &opts.dbPath, &opts.masterFile, &opts.pkiDir, &opts.outputDir} {
+		if *path == "" || *path != strings.TrimSpace(*path) || strings.ContainsAny(*path, "\x00\r\n?#") || strings.HasPrefix(*path, "file:") {
+			return errors.New("bootstrap requires ordinary --topology-file, --db-path, --encryption-key-file, --pki-dir and --output-dir paths")
+		}
+		abs, err := filepath.Abs(*path)
+		if err != nil {
+			return err
+		}
+		*path = abs
+	}
+	if opts.dbPath == opts.masterFile || opts.dbPath == opts.topologyFile || opts.masterFile == opts.topologyFile {
+		return errors.New("database, encryption key and topology input must use different files")
+	}
+	topology, err := readBootstrapTopology(opts.topologyFile)
 	if err != nil {
 		return err
 	}
-	if err := loadCLIKey(dbPath, keyFile); err != nil {
+	return bootstrapAdmin(context.Background(), opts, topology, stdout)
+}
+
+func readBootstrapTopology(path string) (hostbundle.Topology, error) {
+	raw, err := privatefiles.Read(path, 1<<20)
+	if err != nil {
+		return hostbundle.Topology{}, fmt.Errorf("read normalized topology: %w", err)
+	}
+	var topology hostbundle.Topology
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&topology) != nil {
+		return topology, errors.New("invalid normalized topology JSON or unknown fields")
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF || topology.Version != 1 || !servicecatalog.ValidHostID(topology.ControlHostID) || len(topology.Hosts) == 0 || len(topology.Hosts) > 1024 {
+		return topology, errors.New("normalized topology requires version 1, canonical control_host_id and 1..1024 hosts in exactly one JSON document")
+	}
+	if !slices.ContainsFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID }) {
+		return topology, errors.New("normalized topology must include the control host")
+	}
+	return topology, nil
+}
+
+func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbundle.Topology, stdout io.Writer) error {
+	// Serialize the entire operation across processes, before opening SQLite or
+	// creating a master key. The persistent file itself is never a stale lock.
+	masterRoot, err := privatefiles.OpenRoot(filepath.Dir(opts.masterFile))
+	if err != nil {
 		return err
 	}
-	result, err := bootstrap(trpc.BackgroundContext(), dbPath, pkiDir, outDir, spec, time.Now())
+	defer masterRoot.Close()
+	lock, err := privatefiles.Lock(masterRoot, ".bootstrap-"+filepath.Base(opts.masterFile)+".lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := prepareBootstrapDatabase(opts.dbPath); err != nil {
+		return err
+	}
+	db, err := openAdminCLIDB(opts.dbPath)
+	if err != nil {
+		return err
+	}
+	defer closeAdminCLIDB(db)
+	if err := db.Transaction(func(tx *gorm.DB) error { return tx.Exec(adminschema.AdminSQL()).Error }); err != nil {
+		return fmt.Errorf("apply Admin schema: %w", err)
+	}
+	var exported []keys.SigningKey
+	var access []keys.VerificationKey
+	var expectedHash string
+	var caInfo hostbundle.CAInfo
+	var ca *pki.Store
+	defer func() {
+		if ca != nil {
+			ca.Close()
+		}
+	}()
+	control := topology.Hosts[slices.IndexFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID })]
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		dao, err := sysdeploy.NewTopologyDAO(tx, topology.ControlHostID)
+		if err != nil {
+			return err
+		}
+		specs := make([]sysdeploy.HostSpec, 0, len(topology.Hosts))
+		for _, h := range topology.Hosts {
+			specs = append(specs, sysdeploy.HostSpec{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Description: h.Description, Components: h.Components})
+		}
+		// This also reserves SQLite's writer before validating the full fleet.
+		if err := dao.SyncHosts(ctx, specs); err != nil {
+			return err
+		}
+		master, err := bootstrapMaster(tx, masterRoot, filepath.Base(opts.masterFile))
+		if err != nil {
+			return err
+		}
+		store, err := keys.NewStore(tx, master)
+		if err != nil {
+			return err
+		}
+		// A database with established gateway keys cannot silently acquire a
+		// replacement trust root even if the entire PKI directory has been lost.
+		var previousKeys int64
+		if err := tx.Table("t_secrets").Where("c_secret_type = ?", secretmodel.GatewayKeyringType).Count(&previousKeys).Error; err != nil {
+			return err
+		}
+		if previousKeys > 0 {
+			if _, err := os.Lstat(filepath.Join(opts.pkiDir, "ca.crt")); err != nil {
+				return pki.ErrInvalidCA
+			}
+		}
+		all, err := store.EnsureAll(ctx)
+		if err != nil {
+			return err
+		}
+		wanted := hostSigningCallers(control, true)
+		for _, key := range all {
+			if slices.Contains(wanted, key.Caller) {
+				exported = append(exported, key)
+			}
+		}
+		access, err = hostAccessVerification(ctx, store, control)
+		if err != nil {
+			return err
+		}
+		_, snapshot, err := dao.CompileSnapshot(ctx, control.HostID, master)
+		if err != nil {
+			return err
+		}
+		expectedHash = snapshot.Hash
+		ca, err = pki.Open(opts.pkiDir)
+		if err != nil {
+			return err
+		}
+		caInfo, err = ca.EnsureCA()
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	// The master and CA are persistent retry checkpoints. Publish a bundle only
+	// after the topology and all encrypted caller keys have committed together.
+	result, err := publishHostBundle(opts.outputDir, hostBundleMaterial{
+		host: control, control: control, signing: exported, access: access,
+		caInfo: caInfo, expectedHash: expectedHash, operator: true,
+	}, ca)
 	if err != nil {
 		return err
 	}
 	return writeJSON(stdout, result)
 }
 
-func loadBootstrapSpec(path string) (BootstrapSpec, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return BootstrapSpec{}, fmt.Errorf("读取部署表: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var spec BootstrapSpec
-	if err := decoder.Decode(&spec); err != nil {
-		return BootstrapSpec{}, fmt.Errorf("解析部署表: %w", err)
-	}
-	if len(spec.Hosts) == 0 {
-		return BootstrapSpec{}, errors.New("部署表没有主机")
-	}
-	hasControl := false
-	for _, host := range spec.Hosts {
-		if host.ID == servicecatalog.ControlHostID {
-			hasControl = true
+func bootstrapMaster(tx *gorm.DB, root *os.Root, name string) (string, error) {
+	master, err := privatefiles.ReadAt(root, name, 8192)
+	if err == nil {
+		value := strings.TrimSpace(string(master))
+		if len(value) < 32 || strings.ContainsAny(value, "\x00\r\n") {
+			return "", errors.New("Admin encryption key must contain at least 32 characters on one line")
 		}
+		return value, nil
 	}
-	if !hasControl {
-		return BootstrapSpec{}, errors.New("部署表必须包含 control 主机")
+	if !os.IsNotExist(err) {
+		return "", err
 	}
-	return spec, nil
+	var count int64
+	if err := tx.Table("t_secrets").Count(&count).Error; err != nil {
+		return "", err
+	}
+	if count != 0 {
+		return "", errors.New("Admin encryption key is missing but encrypted secrets exist; restore the original key")
+	}
+	value, err := security.RandomHex(32)
+	if err != nil {
+		return "", err
+	}
+	if err := privatefiles.Write(root, name, []byte(value+"\n")); err != nil {
+		return "", err
+	}
+	return value, nil
 }
 
-type bootstrapResult struct {
-	Status      string   `json:"status"`
-	CACreated   bool     `json:"ca_created"`
-	HostsSynced []string `json:"hosts_synced"`
-	KeysCreated []string `json:"keys_created"`
-	OutDir      string   `json:"out_dir"`
+func prepareBootstrapDatabase(path string) error {
+	root, err := privatefiles.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	name := filepath.Base(path)
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err == nil {
+		return file.Close()
+	}
+	if !os.IsExist(err) {
+		return err
+	}
+	return validateExistingAdminDatabase(path)
 }
 
-func bootstrap(ctx context.Context, dbPath, pkiDir, outDir string, spec BootstrapSpec, now time.Time) (bootstrapResult, error) {
-	if err := ensureAdminSchema(dbPath); err != nil {
-		return bootstrapResult{}, err
+func validateExistingAdminDatabase(path string) error {
+	if path == "" || path != strings.TrimSpace(path) || strings.ContainsAny(path, "\x00\r\n?#") || strings.HasPrefix(path, "file:") {
+		return errors.New("Admin database requires an ordinary file path")
 	}
-	caCreated, _, err := pki.EnsureCA(pkiDir, now)
+	info, err := os.Lstat(path)
 	if err != nil {
-		return bootstrapResult{}, err
+		return fmt.Errorf("stat existing Admin database: %w", err)
 	}
-	db, err := openAdminCLIDBWithPragmas(dbPath)
-	if err != nil {
-		return bootstrapResult{}, err
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return errors.New("Admin database must be an existing regular 0600 file")
 	}
-	defer closeAdminCLIDB(db)
-
-	// control 先写：受保护的组件必须部署在 control。
-	hosts := append([]BootstrapHost(nil), spec.Hosts...)
-	sort.SliceStable(hosts, func(i, j int) bool {
-		return hosts[i].ID == servicecatalog.ControlHostID && hosts[j].ID != servicecatalog.ControlHostID
-	})
-	result := bootstrapResult{Status: "ok", CACreated: caCreated, OutDir: outDir}
-	var control BootstrapHost
-	// 所有主机在同一个事务里写入：第 3 台主机违反目录规则时，前面的主机不留在库里，库不会停在只写了一半的状态。
-	if err := db.Transaction(func(tx *gorm.DB) error {
-		placements := placement.NewService(tx, nil)
-		for _, host := range hosts {
-			if _, err := placements.SyncHostPlacements(ctx, placement.HostSpec{
-				HostID: host.ID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
-			}, host.Components); err != nil {
-				return fmt.Errorf("写入主机 %s: %w", host.ID, err)
-			}
-			result.HostsSynced = append(result.HostsSynced, host.ID)
-			if host.ID == servicecatalog.ControlHostID {
-				control = host
-			}
-		}
-		return nil
-	}); err != nil {
-		return bootstrapResult{}, err
-	}
-
-	keyService := keys.NewService(secretdao.NewSecretDAO(db))
-	for _, identity := range bootstrapIdentities(spec) {
-		_, created, err := keyService.Ensure(ctx, keys.CategoryCaller, identity)
-		if err != nil {
-			return bootstrapResult{}, err
-		}
-		if created {
-			result.KeysCreated = append(result.KeysCreated, identity)
-		}
-	}
-	for _, principal := range servicecatalog.Default().Principals {
-		_, created, err := keyService.Ensure(ctx, keys.CategoryPrincipal, principal.ID)
-		if err != nil {
-			return bootstrapResult{}, err
-		}
-		if created {
-			result.KeysCreated = append(result.KeysCreated, principal.ID)
-		}
-	}
-
-	if _, err := issueHostCertificate(pkiDir, control.ID, []string{control.Address, control.PrivateAddress},
-		filepath.Join(outDir, "certs", "host-gateway"), now); err != nil {
-		return bootstrapResult{}, err
-	}
-	if err := exportCA(pkiDir, filepath.Join(outDir, "certs", "moox-ca.crt")); err != nil {
-		return bootstrapResult{}, err
-	}
-	return result, nil
-}
-
-// bootstrapIdentities 返回初始化时生成密钥的全部内部调用方身份：每个组件、console、moox-cli，
-// 以及 control 之外每台主机的 host-gateway@<主机>。
-func bootstrapIdentities(spec BootstrapSpec) []string {
-	catalog := servicecatalog.Default()
-	identities := map[string]bool{}
-	for _, component := range catalog.Components {
-		if component.ID == servicecatalog.HostGatewayCaller {
-			continue
-		}
-		identities[component.ID] = true
-	}
-	for _, caller := range catalog.Callers {
-		identities[caller.ID] = true
-	}
-	for _, host := range spec.Hosts {
-		if host.ID != servicecatalog.ControlHostID {
-			identities[servicecatalog.HostGatewayIdentity(host.ID)] = true
-		}
-	}
-	out := make([]string, 0, len(identities))
-	for identity := range identities {
-		out = append(out, identity)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func openAdminCLIDBWithPragmas(dbPath string) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(initSQLiteDSN(dbPath)), &gorm.Config{})
-	if err != nil {
-		return nil, fmt.Errorf("打开数据库: %w", err)
-	}
-	return db, nil
+	return nil
 }

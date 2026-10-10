@@ -30,7 +30,7 @@ type HostMetric struct {
 	BootId       string        `protobuf:"bytes,3,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
 	AgentVersion string        `protobuf:"bytes,4,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
 	Snapshot     *HostSnapshot `protobuf:"bytes,5,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	// 主机 ID（MOOX_NODE_ID），与 SysDeploy 的主机对应。
+	// Explicit deployment identity; empty for standalone agents.
 	HostId string `protobuf:"bytes,6,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 }
 

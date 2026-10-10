@@ -77,33 +77,16 @@ assert(factorCompute.sort > dataCollection.sort, "factor-compute must appear aft
 assert(factorCompute.sort < trading.sort, "factor-compute must appear before trading");
 assert(ops.path === "/ops/monitor", "ops default path must be /ops/monitor");
 const monitor = findMenu("ops-monitor");
-const services = findMenu("ops-deployments");
+const deployments = findMenu("ops-deployments");
 const hosts = findMenu("ops-hosts");
-assert(monitor.parentId === ops.id, "ops-monitor must be under ops");
-assert(services.parentId === ops.id, "ops-deployments must be under ops");
-assert(services.path === "/ops/deployments", "ops-deployments path must be /ops/deployments");
-assert(zhCN.includes('["ops-deployments"]: "服务部署"'), "ops-deployments zh-CN label must be 服务部署");
-assert(hosts.parentId === ops.id, "ops-hosts must be under ops");
-assert(monitor.sort < hosts.sort, "monitoring must be the first ops page");
-assert(hosts.sort < services.sort, "host workbench must appear before deployments");
-assert(zhCN.includes('["ops-monitor"]: "监控告警"'), "ops-monitor zh-CN label must be 监控告警");
-assert(routes.includes('path: "/ops/monitor"'), "monitoring route must exist");
-assert(
-  !staticMenu.includes('menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 2, {'),
-  "ops-hosts must not have a custom icon"
-);
-assert(
-  !staticMenu.includes(
-    'menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 3, {'
-  ),
-  "ops-deployments must not have a custom icon"
-);
+for (const item of [monitor, deployments, hosts]) assert(item.parentId === ops.id, `${item.menuName} must be under ops`);
+assert(monitor.sort < deployments.sort && deployments.sort < hosts.sort, "monitor, deployments and hosts must keep their intended order");
+assert(!staticMenu.includes("ops-services"), "retired service management menu must be absent");
 assert(staticMenu.includes('svgIcon: "experiment"'), "factor icon must be unique");
 assert(staticMenu.includes('svgIcon: "mind-mapping"'), "strategy icon must be unique");
 assert(!staticMenu.includes('menu("0600", "06", "/ops/service-monitor"'), "legacy service monitor must not remain visible");
 for (const retired of [
   "/settings/service-deployments",
-  "/ops/services",
   "/data/datasets",
   "/data/factors",
   "/data/views",

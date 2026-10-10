@@ -65,17 +65,12 @@ func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 	}
 	for _, host := range value.Hosts {
 		rsp.HostResources = append(rsp.HostResources, &monitorpb.HostAgentInfo{
-			AgentId: host.AgentID, HostId: host.HostID, Hostname: host.Hostname, BootId: host.BootID,
+			HostId: host.HostID, AgentId: host.AgentID, Hostname: host.Hostname, BootId: host.BootID,
 			LastSeenAt: host.LastSeenAt, Archived: host.Archived, Snapshot: host.Snapshot,
 			Reachable: host.Reachable, StaleSeconds: host.StaleSeconds,
 		})
-		// Monitor 重启后收到下一次快照之前不知道主机 ID，退回到主机名。
-		nodeID := host.HostID
-		if nodeID == "" {
-			nodeID = host.Hostname
-		}
 		for _, forecast := range value.Forecasts[host.AgentID] {
-			rsp.DiskForecasts = append(rsp.DiskForecasts, &monitorpb.DoctorDiskForecast{NodeId: nodeID, AgentId: host.AgentID, Mountpoint: forecast.Mountpoint, Status: forecast.Status, GrowthBytesPerDay: forecast.GrowthBytesPerDay, RemainingDays: forecast.RemainingDays, ValidIntervals: uint32(forecast.ValidIntervals), Summary: forecast.Summary})
+			rsp.DiskForecasts = append(rsp.DiskForecasts, &monitorpb.DoctorDiskForecast{NodeId: host.Hostname, AgentId: host.AgentID, Mountpoint: forecast.Mountpoint, Status: forecast.Status, GrowthBytesPerDay: forecast.GrowthBytesPerDay, RemainingDays: forecast.RemainingDays, ValidIntervals: uint32(forecast.ValidIntervals), Summary: forecast.Summary})
 		}
 	}
 	for _, event := range value.Alerts {

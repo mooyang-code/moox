@@ -7,23 +7,23 @@ import (
 )
 
 type Probe struct {
-	From     string `json:"from"`
-	To       string `json:"to"`
-	PublicIP string `json:"public_ip,omitempty"`
-	Port     string `json:"port,omitempty"`
-	Area     string `json:"area,omitempty"`
-	Expect   string `json:"expect,omitempty"`
-	Status   string `json:"status"`
-	Detail   string `json:"detail,omitempty"`
+	From       string   `json:"from"`
+	To         string   `json:"to"`
+	PublicIP   string   `json:"public_ip,omitempty"`
+	Port       string   `json:"port,omitempty"`
+	Area       string   `json:"area,omitempty"`
+	Expect     string   `json:"expect,omitempty"`
+	Status     string   `json:"status"`
+	Detail     string   `json:"detail,omitempty"`
+	ConfigHits []string `json:"config_hits,omitempty"`
 }
 
-// listenerPorts 是其他主机需要连得上的端口：主机网关的跨主机入口，以及消息总线所在主机的消息总线端口。
 func listenerPorts(host ResolvedHost, eventBusPort string) []string {
-	ports := make([]string, 0, 2)
-	if hostHasRole(host.HostTarget, "host-gateway") {
-		ports = append(ports, "11003")
+	ports := make([]string, 0, 4)
+	if hostHasRole(host.HostTarget, "storage") || hostHasRole(host.HostTarget, "view") {
+		ports = append(ports, "11003", "11012")
 	}
-	if hostHasRole(host.HostTarget, "eventbus") && eventBusPort != "" {
+	if hostHasRole(host.HostTarget, "control") && eventBusPort != "" {
 		ports = append(ports, eventBusPort)
 	}
 	return ports
@@ -69,6 +69,30 @@ func RunHostProbes(ctx context.Context, exec func(context.Context, string, strin
 		probes[i].Detail = firstNonEmpty(stdout, fmt.Sprintf("%v", err))
 	}
 	return probes
+}
+
+func InspectPublicIPRefs(ctx context.Context, exec func(context.Context, string, string) (string, error), hosts []ResolvedHost) []Probe {
+	out := make([]Probe, 0, len(hosts))
+	script := `grep -RIn --include='*.yaml' --include='*.yml' --include='*.env' --include='*.sh' --include='*.json' -E '146\.56\.196\.204|106\.53\.107\.122|43\.132\.204\.177' /data/moox/prod /data/moox/storage /home/ubuntu/moox/prod 2>/dev/null | grep -viE 'password|secret|token|private_key|certificate' | head -n 80`
+	for _, host := range hosts {
+		if exec == nil {
+			continue
+		}
+		stdout, err := exec(ctx, host.Address, script)
+		item := Probe{From: host.Name, To: "runtime-config", Status: "inspected"}
+		if err != nil {
+			item.Status = "inspect_failed"
+			item.Detail = err.Error()
+		} else {
+			for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+				if strings.TrimSpace(line) != "" {
+					item.ConfigHits = append(item.ConfigHits, line)
+				}
+			}
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func PublicProbesFailed(probes []Probe) error {

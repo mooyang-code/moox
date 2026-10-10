@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,29 +36,52 @@ func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
 func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_DB_PATH", "./override/collector.db")
 	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
+	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET", "ip://127.0.0.1:30100")
+	t.Setenv("MOOX_GATEWAY_CALLER", "collector")
 
 	path := writeCollectorConfig(t, `
 database:
   path: ./original/collector.db
 storage:
-  result_data_node_id: storage-node-1
+  result_data_node_id: result-test
 `)
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
-	assert.Equal(t, "storage-node-1", cfg.Storage.ResultDataNodeID)
+	assert.Equal(t, "result-test", cfg.Storage.ResultDataNodeID)
+	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
 }
 
-func TestLoadRejectsRemovedSCFGatewaySettings(t *testing.T) {
-	for _, body := range []string{"storage:\n  gateway_target: ip://127.0.0.1:20100\n", "collector_runtime:\n  node_id: collector-2\n"} {
-		_, err := Load(writeCollectorConfig(t, body))
-		require.Error(t, err, "SCF 改走外部接入后，Collector 不再配置 SCF 的网关地址")
-	}
+func TestSCFAccessConfigUsesAssignedIdentityAndRegionalRoutes(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `scf_access:
+  access_address: storage.example:11004
+  access_id: access@storage
+  caller: scf-collector
+  key_id: assigned-scf-key-17
+  key_file: ../secrets/scf.key
+scf_access_routes:
+  ap-guangzhou:
+    access_address: 10.0.0.5:11004
+    access_id: access@storage
+`))
+	require.NoError(t, err)
+	require.Equal(t, "assigned-scf-key-17", cfg.SCFAccess.KeyID)
+	require.Equal(t, "10.0.0.5:11004", cfg.SCFAccessRoutes["ap-guangzhou"].Address)
+	_, err = cfg.scfAccessEnvironment("ap-guangzhou")
+	require.ErrorContains(t, err, "signing key")
 }
 
-func TestCollectorServicesListenOnLoopbackTRPC(t *testing.T) {
+func TestLoadRejectsRemovedCollectorRuntimeGatewayConfig(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, `collector_runtime:
+  gateway_target: collector.example:11003
+  node_id: control
+`))
+	require.Error(t, err)
+}
+
+func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
 	require.NoError(t, err)
 	var config struct {
@@ -73,21 +95,36 @@ func TestCollectorServicesListenOnLoopbackTRPC(t *testing.T) {
 		} `yaml:"server"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &config))
-	type listener struct {
+	listeners := make(map[string]struct {
 		ip       string
 		port     int
 		protocol string
-	}
-	listeners := map[string]listener{}
+	})
+	foundCollectMgr := false
 	for _, service := range config.Server.Service {
-		listeners[service.Name] = listener{service.IP, service.Port, service.Protocol}
+		require.NotEqual(t, 11418, service.Port)
+		if service.Name == "trpc.moox.collector.CollectMgr" {
+			foundCollectMgr = true
+			require.Equal(t, "127.0.0.1", service.IP)
+			require.Equal(t, 11402, service.Port)
+			require.Equal(t, "trpc", service.Protocol)
+		}
+		if strings.Contains(service.Name, "MarketFetchRuntime") {
+			listeners[service.Protocol] = struct {
+				ip       string
+				port     int
+				protocol string
+			}{service.IP, service.Port, service.Protocol}
+		}
 	}
-	// 与组件目录一致：两个服务都只监听本机回环地址，经主机网关以 tRPC 访问。
-	assert.Equal(t, listener{"127.0.0.1", 11402, "trpc"}, listeners["trpc.moox.collector.CollectMgr"])
-	assert.Equal(t, listener{"127.0.0.1", 11422, "trpc"}, listeners["trpc.moox.collector.MarketFetchRuntime"])
-	for name := range listeners {
-		assert.NotContains(t, name, ".http", "HTTP 入口已经删除")
-	}
+	require.True(t, foundCollectMgr)
+	assert.NotContains(t, listeners, "http")
+	require.Len(t, listeners, 1)
+	assert.Equal(t, struct {
+		ip       string
+		port     int
+		protocol string
+	}{"127.0.0.1", 11422, "trpc"}, listeners["trpc"])
 }
 
 func TestStockCNTargetDataTimeValidatorUsesConfiguredCalendar(t *testing.T) {
@@ -238,96 +275,91 @@ func TestLoadRejectsMissingFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "read config")
 }
 
-func TestLoadEgressProxyConfig(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, `
-dns:
-  domains: [api.binance.com, data-api.binance.vision]
-egress_proxy:
-  domains: ["*.binance.com", data-api.binance.vision]
+func TestLoadEgressProxyUsesSharedGateway(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `egress_proxy:
+  domains: ["*.binance.com", "data-api.binance.vision"]
   dns:
-    domains: [FAPI.binance.com., api.binance.com]
-    refresh_interval: 2m
+    domains: [FAPI.BINANCE.COM., api.binance.com]
     request_timeout: 2s
-    cache_ttl: 4m
 `))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"*.binance.com", "data-api.binance.vision"}, cfg.EgressProxy.Domains)
-	assert.True(t, cfg.EgressProxy.DNS.Enabled())
-	assert.Equal(t, 2*time.Minute, cfg.EgressProxy.DNS.RefreshInterval)
-	assert.Equal(t, []string{"api.binance.com", "data-api.binance.vision", "fapi.binance.com"}, cfg.SnapshotDomains())
+	require.True(t, cfg.EgressProxy.DNS.Enabled())
+	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.EgressProxy.DNS.Domains)
+	require.Equal(t, 2*time.Second, cfg.EgressProxy.DNS.RequestTimeout)
 }
-
-func TestLoadDefaultsToDirectHTTPAndLocalDNS(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
-	require.NoError(t, err)
-	assert.Empty(t, cfg.EgressProxy.Domains)
-	assert.False(t, cfg.EgressProxy.DNS.Enabled())
-}
-
-func TestLoadShippedConfig(t *testing.T) {
-	cfg, err := Load(filepath.Join("..", "..", "config", "app.yaml"))
-	require.NoError(t, err)
-	assert.Empty(t, cfg.EgressProxy.Domains, "仓库里的配置默认直连，生产的白名单由 CLI 渲染")
-	assert.Len(t, cfg.SnapshotDomains(), 4)
-	require.Len(t, cfg.SubjectSync.Attributes, 2)
-	for _, job := range cfg.SubjectSync.Attributes {
-		assert.Equal(t, "10 8 * * *", job.Cron, "属性同步统一在北京时间 08:10 执行")
-		assert.Equal(t, "Asia/Shanghai", job.Timezone)
-	}
-	assert.Equal(t, 2*time.Minute, cfg.SubjectSync.FetchTimeout)
-}
-
-func TestLoadRejectsInvalidSubjectSyncConfig(t *testing.T) {
-	for name, body := range map[string]string{
-		"拉取超时为 0": "subject_sync:\n  fetch_timeout: 0s\n",
-		"cron 无效": "subject_sync:\n  attributes:\n    - {space_id: crypto, sources: [binance], cron: bad}\n",
-		"缺少数据源":   "subject_sync:\n  attributes:\n    - {space_id: crypto}\n",
-		"未知字段":    "subject_sync:\n  poll_interval: 1m\n",
+func TestLoadRejectsInvalidEgressProxy(t *testing.T) {
+	for _, raw := range []string{
+		"dns_resolver: {enabled: true}",
+		"egress_proxy: {target: 'ip://old.example:11003'}",
+		"egress_proxy: {domains: [binance.com.evil/path]}",
+		"egress_proxy: {dns: {domains: ['*.binance.com']}}",
+		"egress_proxy: {dns: {domains: [api.binance.com, API.BINANCE.COM.]}}",
+		"egress_proxy: {dns: {request_timeout: 0s}}",
+		"egress_proxy: {dns: {request_timeout: 61s}}",
+		"egress_proxy: {dns: {node_id: old}}",
 	} {
-		_, err := Load(writeCollectorConfig(t, body))
-		require.Error(t, err, name)
+		_, err := Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
 	}
 }
-
-func TestLoadRejectsInvalidEgressProxyConfig(t *testing.T) {
-	tooMany := make([]string, 0, 17)
-	for i := 0; i < 17; i++ {
-		tooMany = append(tooMany, fmt.Sprintf("d%d.binance.com", i))
-	}
-	for name, body := range map[string]string{
-		"白名单带协议":    "egress_proxy:\n  domains: [https://api.binance.com]\n",
-		"白名单重复":     "egress_proxy:\n  domains: [api.binance.com, API.binance.com]\n",
-		"解析域名无效":    "egress_proxy:\n  dns:\n    domains: [1.2.3.4]\n",
-		"解析域名重复":    "egress_proxy:\n  dns:\n    domains: [api.binance.com, api.binance.com.]\n",
-		"超时为 0":     "egress_proxy:\n  dns:\n    domains: [api.binance.com]\n    request_timeout: 0s\n",
-		"合计超过 16 个": "egress_proxy:\n  dns:\n    domains: [" + strings.Join(tooMany, ", ") + "]\n",
-		"旧的交易服务解析":  "dns_resolver:\n  enabled: true\n",
-	} {
-		_, err := Load(writeCollectorConfig(t, body))
-		require.Error(t, err, name)
-	}
-}
-
-func TestLoadRequiresGatewayClient(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("database:\n  path: ./collector.db\n"), 0o644))
-	_, err := Load(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "gateway_client")
-}
-
-// testGatewayClientYAML 是测试配置共用的 gateway_client 段。
-const testGatewayClientYAML = `gateway_client:
-  mode: local
-  caller: collector
-  key_file: caller-collector.key
-  ca_file: moox-ca.crt
-  cache_dir: ./data/gatewayclient
-`
 
 func writeCollectorConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(testGatewayClientYAML+content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
+}
+
+func TestCollectorGatewayIdentityUsesStrictConfiguration(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CALLER", "wrong-legacy-caller")
+	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID", "obsolete-key")
+	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE", "/nonexistent/obsolete-key")
+	cfg, err := Load(writeCollectorConfig(t, "gateway_client:\n  key_id: admin-assigned-collector-key\n"))
+	require.NoError(t, err)
+	require.Equal(t, "collector", cfg.GatewayClient.Caller)
+	require.Equal(t, "admin-assigned-collector-key", cfg.GatewayClient.KeyID)
+	require.Equal(t, "../../secrets/caller-collector.key", cfg.GatewayClient.KeyFile)
+	for _, raw := range []string{
+		"gateway_client: {caller: monitor}\n",
+		"gateway_client: {key_id: 'bad key'}\n",
+		"gateway_client: {target: 'ip://127.0.0.1:11003'}\n",
+		"gateway_client: {key_file: ''}\n",
+		"storage: {key_id: old}\n",
+		"storage: {hmac_key_file: old}\n",
+		"gateway_client: {caller: collector, caller: monitor}\n",
+		"{}\n---\n{}\n",
+	} {
+		_, err := Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
+	}
+	_, err = Default().OpenGateway(nil)
+	require.Error(t, err, "an in-memory default must not manufacture a deployment identity")
+}
+
+func TestLoadSubjectSyncFromCollectorConfig(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, "subject_sync: {fetch_timeout: 3m, attributes: [{space_id: crypto, sources: [' BINANCE '], cron: '10 8 * * *', timezone: Asia/Shanghai}]}"))
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Minute, cfg.SubjectSync.FetchTimeout)
+	require.Equal(t, []string{"binance"}, cfg.SubjectSync.Attributes[0].Sources)
+	defaults, err := Load(writeCollectorConfig(t, "{}"))
+	require.NoError(t, err)
+	require.Len(t, defaults.SubjectSync.Attributes, 2)
+	for _, job := range defaults.SubjectSync.Attributes {
+		require.Equal(t, "10 8 * * *", job.Cron)
+		require.Equal(t, "Asia/Shanghai", job.Timezone)
+	}
+	for _, raw := range []string{
+		"subject_sync: {fetch_timeout: 0s}", "subject_sync: {fetch_timeout: 11m}",
+		"subject_sync: {poll_interval: 1m}", "subject_sync: {health_addr: ':11413'}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: bad}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: '0 0 31 2 *'}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: '@every 2m'}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], timezone: Invalid/Zone}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [' ']}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance, BINANCE]}]}",
+		"subject_sync: {attributes: [{space_id: '', sources: [binance]}]}",
+	} {
+		_, err = Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
+	}
 }

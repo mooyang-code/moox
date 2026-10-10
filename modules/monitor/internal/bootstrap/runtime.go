@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
@@ -17,17 +19,16 @@ import (
 
 // Runtime owns monitor's process-scoped resources and shutdown ordering.
 type Runtime struct {
-	StartedAt    time.Time
-	cancel       context.CancelFunc
-	workers      sync.WaitGroup
-	closeOnce    sync.Once
-	closeErr     error
-	Store        *store.Store
-	Gateway      *gatewayclient.Client
-	Repositories *store.Repositories
-	MetricStores *monmetrics.Stores
-	// Unregistered 记录在上报运行指标、但没有登记部署的进程。
-	Unregistered             *monmetrics.UnregisteredProducers
+	Gateway                  *gatewayclient.Client
+	StorageGateway           *storagegateway.Client
+	StartedAt                time.Time
+	cancel                   context.CancelFunc
+	workers                  sync.WaitGroup
+	closeOnce                sync.Once
+	closeErr                 error
+	Store                    *store.Store
+	Repositories             *store.Repositories
+	MetricStores             *monmetrics.Stores
 	HostRuleCache            *hostmetrics.RuleCache
 	Scheduler                *scheduler.Scheduler
 	ObservabilityIngestReady atomic.Bool
@@ -157,10 +158,10 @@ func (r *Runtime) Close() error {
 		}
 		r.workers.Wait()
 		if r.Gateway != nil {
-			r.Gateway.Close()
+			r.closeErr = r.Gateway.Close()
 		}
 		if r.Store != nil {
-			r.closeErr = r.Store.Close()
+			r.closeErr = errors.Join(r.closeErr, r.Store.Close())
 		}
 	})
 	return r.closeErr

@@ -43,18 +43,15 @@ func NewHTTPClient(base ...*http.Client) *HTTPClient {
 	if len(base) > 0 && base[0] != nil {
 		return &HTTPClient{httpClient: base[0]}
 	}
-	return &HTTPClient{httpClient: &http.Client{Timeout: defaultRequestTimeout, Transport: newDirectTransport()}}
-}
-
-// newDirectTransport 是直连的 HTTPS 传输层。它不读 HTTPS_PROXY 等环境变量：需要经出口代理访问的域名
-// 必须显式使用 NewEgressHTTPClient。
-func newDirectTransport() *http.Transport {
-	return &http.Transport{
-		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}
+	return &HTTPClient{httpClient: &http.Client{
+		Timeout: defaultRequestTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}}
 }
 
 func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
@@ -99,7 +96,8 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		ctx = context.Background()
 	}
 	candidates := uniqueIPs(ips)
-	if skipControlPlaneIPs(domain) {
+	proxy, proxied := c.httpClient.Transport.(*EgressTransport)
+	if skipControlPlaneIPs(domain) || proxied && proxy.domains.Allows(domain) {
 		candidates = nil
 	}
 	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
@@ -205,7 +203,11 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 	if c == nil || c.httpClient == nil {
 		return nil
 	}
-	base, ok := c.httpClient.Transport.(*http.Transport)
+	roundTripper := c.httpClient.Transport
+	if proxy, ok := roundTripper.(*EgressTransport); ok {
+		roundTripper = proxy.direct
+	}
+	base, ok := roundTripper.(*http.Transport)
 	if !ok || base == nil {
 		return nil
 	}

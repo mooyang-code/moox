@@ -25,8 +25,8 @@ type fakeFactorJSONClient struct {
 	setStatus     string
 }
 
-func (f *fakeFactorJSONClient) CallJSON(_ context.Context, servicePath, method string, body, response any) error {
-	path := "/" + servicePath + "/" + method
+func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string, method string, body, response any) error {
+	path := service + "/" + method
 	f.calls = append(f.calls, path)
 	var request map[string]any
 	raw, err := json.Marshal(body)
@@ -37,9 +37,9 @@ func (f *fakeFactorJSONClient) CallJSON(_ context.Context, servicePath, method s
 		return err
 	}
 	result := response.(*factorAPIResponse)
-	result.RetInfo.Code = 0
+	result.RetInfo = &factorAPIRetInfo{Code: 0}
 	switch path {
-	case "/trpc.moox.factor.FactorMgr/GetFactorSet":
+	case "trpc.moox.factor.FactorMgr/GetFactorSet":
 		if f.existingSet == nil {
 			result.RetInfo.Code, result.RetInfo.Msg = 9, "not found"
 		} else {
@@ -51,12 +51,12 @@ func (f *fakeFactorJSONClient) CallJSON(_ context.Context, servicePath, method s
 			result.FactorSet.Subjects = append([]string(nil), f.existingSet.Subjects...)
 			result.FactorSet.Status = f.setStatus
 		}
-	case "/trpc.moox.factor.FactorMgr/CreateFactorSet":
+	case "trpc.moox.factor.FactorMgr/CreateFactorSet":
 		set := request["factor_set"].(map[string]any)
 		f.createdSetIDs = append(f.createdSetIDs, set["set_id"].(string))
-	case "/trpc.moox.factor.FactorMgr/UpdateFactorSet":
+	case "trpc.moox.factor.FactorMgr/UpdateFactorSet":
 		f.updatedSetIDs = append(f.updatedSetIDs, request["set_id"].(string))
-	case "/trpc.moox.factor.FactorMgr/GetFactor":
+	case "trpc.moox.factor.FactorMgr/GetFactor":
 		if f.existing == nil {
 			result.RetInfo.Code, result.RetInfo.Msg = 9, "not found"
 		} else {
@@ -70,13 +70,13 @@ func (f *fakeFactorJSONClient) CallJSON(_ context.Context, servicePath, method s
 			result.Factor.LookbackPeriods = f.existing.LookbackPeriods
 			result.Usages = append([]factorAPIUsage(nil), f.usages...)
 		}
-	case "/trpc.moox.factor.FactorMgr/CreateFactor":
+	case "trpc.moox.factor.FactorMgr/CreateFactor":
 		factor := request["factor"].(map[string]any)
 		f.createdBodies = append(f.createdBodies, factor)
 		f.createdTypes = append(f.createdTypes, factor["factor_type"].(string))
-	case "/trpc.moox.factor.FactorMgr/AddFactorToSet":
+	case "trpc.moox.factor.FactorMgr/AddFactorToSet":
 		f.addedMembers = append(f.addedMembers, request["set_id"].(string)+"/"+request["factor_id"].(string))
-	case "/trpc.moox.factor.FactorMgr/SetFactorMemberStatus":
+	case "trpc.moox.factor.FactorMgr/SetFactorMemberStatus":
 		f.statuses = append(f.statuses, request["status"].(string))
 	}
 	return nil
@@ -214,12 +214,12 @@ func TestApplyCreatesSetsThenDefinitionsThenMembers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, setupFactorSummary{Enabled: true, Definitions: 1, Members: 1, SetsCreated: 1, Imported: 1, MembersAdded: 1, MembersEnabled: 1}, result)
 	require.Equal(t, []string{
-		"/trpc.moox.factor.FactorMgr/GetFactorSet",
-		"/trpc.moox.factor.FactorMgr/CreateFactorSet",
-		"/trpc.moox.factor.FactorMgr/GetFactor",
-		"/trpc.moox.factor.FactorMgr/CreateFactor",
-		"/trpc.moox.factor.FactorMgr/AddFactorToSet",
-		"/trpc.moox.factor.FactorMgr/SetFactorMemberStatus",
+		"trpc.moox.factor.FactorMgr/GetFactorSet",
+		"trpc.moox.factor.FactorMgr/CreateFactorSet",
+		"trpc.moox.factor.FactorMgr/GetFactor",
+		"trpc.moox.factor.FactorMgr/CreateFactor",
+		"trpc.moox.factor.FactorMgr/AddFactorToSet",
+		"trpc.moox.factor.FactorMgr/SetFactorMemberStatus",
 	}, client.calls)
 	require.Equal(t, []string{"enabled"}, client.statuses)
 	require.Equal(t, []string{"fset_prices_1m/Bias"}, client.addedMembers)
@@ -238,7 +238,7 @@ func TestApplyIsIdempotentWhenNothingChanged(t *testing.T) {
 	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, setupFactorSummary{Enabled: true, Definitions: 1, Members: 1, Unchanged: 1, MembersUnchanged: 1}, result)
-	require.Equal(t, []string{"/trpc.moox.factor.FactorMgr/GetFactorSet", "/trpc.moox.factor.FactorMgr/GetFactor"}, client.calls)
+	require.Equal(t, []string{"trpc.moox.factor.FactorMgr/GetFactorSet", "trpc.moox.factor.FactorMgr/GetFactor"}, client.calls)
 }
 
 func TestApplyResumesPendingFactorSet(t *testing.T) {
@@ -249,7 +249,7 @@ func TestApplyResumesPendingFactorSet(t *testing.T) {
 	}
 	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
-	require.Equal(t, []string{"/trpc.moox.factor.FactorMgr/GetFactorSet", "/trpc.moox.factor.FactorMgr/CreateFactorSet", "/trpc.moox.factor.FactorMgr/GetFactor"}, client.calls,
+	require.Equal(t, []string{"trpc.moox.factor.FactorMgr/GetFactorSet", "trpc.moox.factor.FactorMgr/CreateFactorSet", "trpc.moox.factor.FactorMgr/GetFactor"}, client.calls,
 		"a set left pending by an interrupted creation must be resumed before members are added")
 }
 

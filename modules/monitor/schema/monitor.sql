@@ -1,3 +1,10 @@
+-- 完整部署快照与系统探测定义在同一事务内更新。
+CREATE TABLE IF NOT EXISTS t_monitor_topology (
+    c_id INTEGER NOT NULL PRIMARY KEY,
+    c_snapshot_json TEXT NOT NULL,
+    CHECK (c_id = 1)
+);
+
 CREATE TABLE IF NOT EXISTS t_monitor_checks (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -6,6 +13,11 @@ CREATE TABLE IF NOT EXISTS t_monitor_checks (
     c_group_name TEXT NOT NULL DEFAULT '',
     c_kind TEXT NOT NULL,
     c_url TEXT NOT NULL DEFAULT '',
+    c_connect_address TEXT NOT NULL DEFAULT '',
+    c_server_name TEXT NOT NULL DEFAULT '',
+    c_trust_mode TEXT NOT NULL DEFAULT '',
+    c_ca_file TEXT NOT NULL DEFAULT '',
+    c_ca_baseline TEXT NOT NULL DEFAULT '',
     c_method TEXT NOT NULL DEFAULT 'GET',
     c_headers TEXT NOT NULL DEFAULT '{}',
     c_body TEXT NOT NULL DEFAULT '',
@@ -43,6 +55,7 @@ CREATE TABLE IF NOT EXISTS t_monitor_check_results (
     c_connected INTEGER NOT NULL DEFAULT 0,
     c_latency_ms INTEGER NOT NULL DEFAULT 0,
     c_error_message TEXT NOT NULL DEFAULT '',
+    c_raw_error TEXT NOT NULL DEFAULT '',
     c_body_excerpt TEXT NOT NULL DEFAULT '',
     c_checked_at DATETIME NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -54,8 +67,23 @@ CREATE INDEX IF NOT EXISTS idx_monitor_results_recent
 ON t_monitor_check_results (c_space_id, c_check_id, c_checked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at ON t_monitor_check_results (c_checked_at);
 
+-- Non-secret gateway status and durable route convergence deadlines.
+CREATE TABLE IF NOT EXISTS t_monitor_gateway_observations (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_host_enabled_at DATETIME NOT NULL,
+    c_first_observed_at DATETIME NOT NULL,
+    c_observed_at DATETIME,
+    c_last_attempt_at DATETIME NOT NULL,
+    c_status_json TEXT NOT NULL DEFAULT '',
+    c_expected_hash TEXT NOT NULL DEFAULT '',
+    c_applied_hash TEXT NOT NULL DEFAULT '',
+    c_hash_mismatch_since DATETIME,
+    c_read_error TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_agent_id TEXT PRIMARY KEY,
+    c_host_id TEXT NOT NULL DEFAULT '',
     c_hostname TEXT NOT NULL,
     c_boot_id TEXT NOT NULL,
     c_last_seen_at DATETIME NOT NULL,
@@ -250,3 +278,13 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_monitor_metric_latest SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+CREATE TABLE IF NOT EXISTS t_monitor_component_health (
+    c_host_id TEXT NOT NULL,
+    c_component_id TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_since_at DATETIME NOT NULL,
+    c_observed_at DATETIME NOT NULL,
+    PRIMARY KEY (c_host_id, c_component_id),
+    CHECK (c_status IN ('healthy', 'degraded', 'down', 'unknown', 'disabled', 'unchecked'))
+);

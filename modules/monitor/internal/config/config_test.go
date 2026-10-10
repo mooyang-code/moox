@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,39 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestHTTPSProbeConfigurationResolvesTrustRelativeToModuleConfig(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "app.yaml")
+	raw := "placement:\n  enabled: false\n  https:\n    console-proxy:\n      url: https://console.example.test:9527/\n      connect_address: 127.0.0.1:9527\n      server_name: console.example.test\n      trust_mode: internal\n      ca_file: ../../certs/caddy/root.crt\n      ca_baseline: ../../certs/caddy/root.sha256\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := cfg.Placement.HTTPS["console-proxy"]
+	if target.CAFile != filepath.Clean(filepath.Join(directory, "../../certs/caddy/root.crt")) || !filepath.IsAbs(target.CABaseline) {
+		t.Fatalf("unresolved HTTPS trust files: %+v", target)
+	}
+}
+
+func TestHTTPSProbeConfigurationRejectsAmbiguousTrust(t *testing.T) {
+	for _, target := range []domain.HTTPSConfig{
+		{URL: "http://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public"},
+		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "wrong.example.test", TrustMode: "public"},
+		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "internal", CAFile: "root.crt"},
+		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public", CAFile: "root.crt", CABaseline: "root.sha256"},
+	} {
+		cfg := Default()
+		cfg.Placement.Enabled = false
+		cfg.Placement.HTTPS = map[string]domain.HTTPSConfig{"console-proxy": target}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid HTTPS configuration accepted: %+v", target)
+		}
+	}
+}
 
 func TestMonitorConfigDefaults(t *testing.T) {
 	cfg := Default()
@@ -29,8 +63,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Scheduler.MaxConcurrency != 16 {
 		t.Fatalf("max concurrency = %d", cfg.Scheduler.MaxConcurrency)
 	}
-	if !cfg.PlacementChecks.Enabled {
-		t.Fatalf("placement_checks = %+v", cfg.PlacementChecks)
+	if !cfg.Placement.Enabled {
+		t.Fatalf("placement = %+v", cfg.Placement)
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
@@ -65,8 +99,10 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	var cfg struct {
 		Server struct {
 			Service []struct {
-				Name string `yaml:"name"`
-				Port int    `yaml:"port"`
+				Name     string `yaml:"name"`
+				Protocol string `yaml:"protocol"`
+				IP       string `yaml:"ip"`
+				Port     int    `yaml:"port"`
 			} `yaml:"service"`
 		} `yaml:"server"`
 	}
@@ -76,7 +112,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if len(cfg.Server.Service) != 7 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
-	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
+	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 || cfg.Server.Service[0].Protocol != "trpc" || cfg.Server.Service[0].IP != "127.0.0.1" {
 		t.Fatalf("service = %+v", cfg.Server.Service[0])
 	}
 	if cfg.Server.Service[1].Name != "trpc.moox.monitor.Health" || cfg.Server.Service[1].Port != 11409 {
@@ -119,13 +155,53 @@ func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
 	}
 }
 
-func TestMonitorDefaultGatewayClientFollowsDeploymentLayout(t *testing.T) {
-	cfg := Default()
-	if err := cfg.GatewayClient.Validate(); err != nil {
-		t.Fatalf("默认的 gateway_client 应当合法: %v", err)
+func TestMonitorStorageUsesConfiguredIdentityInsteadOfLegacyEnvironment(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
+	cfg, err := Load(writeConfig(t, `gateway_client:
+  caller: monitor
+  key_id: admin-assigned-monitor-key
+  key_file: ../../secrets/caller-monitor.key
+`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cfg.GatewayClient.Caller != "monitor" || cfg.Metrics.Storage.AppID != "monitor" || cfg.Metrics.HostStorage.AppID != "monitor" {
-		t.Fatalf("gateway client = %+v, storage app = %q/%q", cfg.GatewayClient, cfg.Metrics.Storage.AppID, cfg.Metrics.HostStorage.AppID)
+	if cfg.GatewayClient.Caller != "monitor" || cfg.GatewayClient.KeyID != "admin-assigned-monitor-key" || cfg.GatewayClient.KeyFile != "../../secrets/caller-monitor.key" {
+		t.Fatalf("gateway identity was overridden: %+v", cfg.GatewayClient)
+	}
+
+}
+
+func TestMonitorRejectsOldAndInvalidGatewayConfiguration(t *testing.T) {
+	for _, raw := range []string{
+		"metrics:\n  storage:\n    gateway_target: ip://127.0.0.1:11003\n",
+		"metrics:\n  host_storage:\n    hmac_key_file: legacy.key\n",
+		"gateway_client:\n  target: ip://127.0.0.1:11003\n",
+		"gateway_client:\n  key_id: first\n  key_id: second\n",
+		"gateway_client:\n  caller: archive\n",
+		"gateway_client:\n  caller: monitor\n---\ngateway_client:\n  caller: archive\n",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+			t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
+			if _, err := Load(writeConfig(t, raw)); err == nil {
+				t.Fatal("invalid gateway configuration was accepted")
+			}
+		})
+	}
+	if _, err := Default().OpenGateway(nil); err == nil {
+		t.Fatal("opening without a loaded config must fail")
+	}
+}
+
+func TestMonitorRejectsOldCollectorGatewayConfiguration(t *testing.T) {
+	for _, old := range []string{"collector_gateway_url: http://127.0.0.1:11002", "collector_gateway_node_id: control"} {
+		if _, err := Load(writeConfig(t, "kline_freshness:\n  "+old+"\n")); err == nil {
+			t.Fatalf("old Collector route was accepted: %s", old)
+		}
 	}
 }
 
@@ -142,14 +218,14 @@ func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigRequiresHealthCredentialsWhenPlacementChecksEnabled(t *testing.T) {
+func TestMonitorConfigRequiresHealthCredentialsWhenPlacementEnabled(t *testing.T) {
 	cfg := Default()
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want health credential error")
 	}
-	cfg.PlacementChecks.Enabled = false
+	cfg.Placement.Enabled = false
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() with placement checks disabled = %v", err)
+		t.Fatalf("Validate() with placement disabled = %v", err)
 	}
 }
 
@@ -197,16 +273,6 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &app); err != nil {
 		t.Fatal(err)
 	}
-	metrics, ok := app["metrics"].(map[string]any)
-	if !ok {
-		t.Fatal("metrics config is missing")
-	}
-	for _, name := range []string{"storage", "host_storage"} {
-		storage, ok := metrics[name].(map[string]any)
-		if !ok || storage["app_id"] != "monitor" {
-			t.Fatalf("metrics.%s 应当配置 Storage app_id: %v", name, metrics[name])
-		}
-	}
 	fixture, err := yaml.Marshal(app)
 	if err != nil {
 		t.Fatal(err)
@@ -224,10 +290,10 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	}
 	freshness, ok := app["kline_freshness"].(map[string]any)
 	if !ok {
-		t.Fatal("kline_freshness config is missing")
+		t.Fatal("kline freshness configuration is missing")
 	}
-	if _, legacy := freshness["collector_gateway_url"]; legacy {
-		t.Fatal("Collector 清单经 gatewayclient 访问，不再配置网关地址")
+	if _, exists := freshness["collector_gateway_url"]; exists {
+		t.Fatal("obsolete Collector HTTP route remains")
 	}
 	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute {
@@ -282,7 +348,7 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 
 func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg := Default()
-	cfg.PlacementChecks.Enabled = false
+	cfg.Placement.Enabled = false
 	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.Subjects = []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_task", Symbol: "BTC-USDT", Frequency: "1m"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires series_tag") {
@@ -304,7 +370,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
-	cfg.PlacementChecks.Enabled = false
+	cfg.Placement.Enabled = false
 	cfg.KlineFreshness.Enabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
@@ -345,7 +411,7 @@ func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
 
 func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	cfg := Default()
-	cfg.PlacementChecks.Enabled = false
+	cfg.Placement.Enabled = false
 	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.ClosedBarMinCoverage = 1.01
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
@@ -353,14 +419,14 @@ func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	}
 
 	cfg = Default()
-	cfg.PlacementChecks.Enabled = false
+	cfg.Placement.Enabled = false
 	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
 		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
 	}
 
 	cfg = Default()
-	cfg.PlacementChecks.Enabled = false
+	cfg.Placement.Enabled = false
 	cfg.MarketHealth.LowCapacityHeadroom = -1
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "low_capacity_headroom") {
 		t.Fatalf("Validate() error = %v, want low capacity headroom error", err)

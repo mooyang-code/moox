@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# 在运行因子引擎的机器上安装 moox-factor-engine（macOS 用 launchd，Linux 用 systemd 用户服务）。引擎只发起
-# 出站连接：经外部接入调用 moox-factor-mgr 的 FactorEngine 服务、读写 Storage，以及连接 EventBus。
+# Installs moox-factor-engine on the machine that runs it (macOS with launchd,
+# Linux with a systemd user unit). The engine only dials out: to
+# native Access for FactorMgr and Storage, and to EventBus.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -12,6 +13,7 @@ SECRETS_DIR=""
 ENGINE_ID=""
 ACCESS_ADDRESS=""
 ACCESS_ID=""
+ACCESS_KEY_ID=""
 EVENTBUS_URL=""
 SKIP_BUILD=0
 NO_START=0
@@ -20,27 +22,25 @@ SYSTEMD_USER_DIR="${MOOX_SYSTEMD_USER_DIR:-${HOME}/.config/systemd/user}"
 
 usage() {
   cat <<'EOF'
-用法：
-  scripts/deploy/deploy-factor-engine.sh --access-address HOST:PORT --access-id access@HOST --eventbus-url URL [选项]
+Usage:
+  scripts/deploy/deploy-factor-engine.sh --access-address HOST:PORT --access-id access@HOST \
+    --access-key-id KEY_ID --eventbus-url URL [options]
 
-选项：
-  --dir <path>              安装目录，默认 ~/moox/factor-engine；macOS 上不要放在 ~/Documents 下。
-  --secrets-dir <path>      存放引擎密钥的目录，默认 <dir>/secrets。
-  --engine-id <id>          稳定的引擎 ID，默认 factor-engine@<短主机名>。
-  --access-address <addr>   外部接入地址，例如 146.56.196.204:11004。
-  --access-id <id>          外部接入实例 ID，例如 access@storage。
-  --eventbus-url <url>      EventBus 地址，例如 tls://106.53.107.122:4222。
-  --skip-build              复用 <dir>/bin/moox-factor-engine。
-  --no-start                只安装文件，不（重新）启动服务。
+Options:
+  --dir <path>              Install directory. Default: ~/moox/factor-engine. On macOS keep it out of ~/Documents.
+  --secrets-dir <path>      Directory holding the engine credentials. Default: <dir>/secrets.
+  --engine-id <id>          Stable engine id. Default: factor-engine@<short hostname>.
+  --access-address <addr>  Fixed native Access host:port for both FactorMgr and Storage.
+  --access-id <id>         Access identity, e.g. access@storage.
+  --access-key-id <id>     KeyID assigned by Admin keys export --caller factor-engine.
+  --eventbus-url <url>      EventBus URL, e.g. tls://106.53.107.122:4222.
+  --skip-build              Reuse <dir>/bin/moox-factor-engine.
+  --no-start                Install files only; do not (re)start the service.
 
-密钥目录中需要的文件（普通文件，权限 0600）：
-  caller-factor-engine.key           factor-engine 外部调用方的签名密钥；在 control 的部署根目录下执行
-                                     current/bin/moox-admin-cli keys ensure --db-path data/admin/admin.db \
-                                       --encryption-key-file secrets/admin-encryption-key \
-                                       --caller factor-engine --principal --out <文件>
-                                     导出（已有就复用）
-  storage-primary-auth.secret        Storage 部署的 MOOX_STORAGE_PRIMARY_AUTH_SECRET
-  factor-eventbus.yaml               因子 EventBus 角色凭据（ca_file 放在同一目录）
+Credentials expected in the secrets directory (regular files, mode 0600):
+  access-factor-engine.key           External factor-engine signing key exported by Admin
+  storage-primary-auth.secret        MOOX_STORAGE_PRIMARY_AUTH_SECRET of the Storage deployment
+  factor-eventbus.yaml               factor EventBus role credential (its ca_file next to it)
 EOF
 }
 
@@ -60,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --engine-id) ENGINE_ID="$2"; shift 2 ;;
     --access-address) ACCESS_ADDRESS="$2"; shift 2 ;;
     --access-id) ACCESS_ID="$2"; shift 2 ;;
+    --access-key-id) ACCESS_KEY_ID="$2"; shift 2 ;;
     --eventbus-url) EVENTBUS_URL="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --no-start) NO_START=1; shift ;;
@@ -68,8 +69,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "${ACCESS_ADDRESS}" =~ ^[^/:@[:space:]]+:[0-9]+$ ]] || fail "--access-address 必须是 host:port"
-[[ "${ACCESS_ID}" =~ ^access@[A-Za-z0-9_-]+$ ]] || fail "--access-id 必须是 access@<主机 ID>"
+[[ "${ACCESS_ADDRESS}" =~ ^(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):[0-9]+$ ]] || fail "--access-address must be host:port"
+[[ "${ACCESS_ID}" =~ ^access@[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]] || fail "--access-id must be access@host"
+[[ "${ACCESS_KEY_ID}" =~ ^[A-Za-z0-9._@:-]+$ && ${#ACCESS_KEY_ID} -le 128 ]] || fail "--access-key-id must be the assigned credential identifier"
 [[ "${EVENTBUS_URL}" =~ ^(nats|tls):// ]] || fail "--eventbus-url must be a nats:// or tls:// URL"
 mkdir -p "${DEPLOY_DIR}"
 DEPLOY_DIR="$(cd "${DEPLOY_DIR}" && pwd -P)"
@@ -93,10 +95,9 @@ require_secret() {
 mkdir -p "${DEPLOY_DIR}/bin" "${DEPLOY_DIR}/config" "${DEPLOY_DIR}/pyworker" "${DEPLOY_DIR}/data/engine" "${DEPLOY_DIR}/logs"
 mkdir -p "${SECRETS_DIR}"
 chmod 0700 "${SECRETS_DIR}"
-for secret in caller-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
+for secret in access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
   require_secret "${secret}"
 done
-
 # Go module downloads stall behind an operator's local HTTP proxy; the build
 # talks to the module mirror directly.
 if [[ "${SKIP_BUILD}" -eq 0 ]]; then
@@ -138,11 +139,11 @@ engine:
   heartbeat_interval: 10s
 
 gateway_client:
-  mode: access
+  access_address: "${ACCESS_ADDRESS}"
+  access_id: "${ACCESS_ID}"
   caller: factor-engine
-  key_file: ${SECRETS_DIR}/caller-factor-engine.key
-  access_address: ${ACCESS_ADDRESS}
-  access_id: ${ACCESS_ID}
+  key_id: "${ACCESS_KEY_ID}"
+  key_file: ${SECRETS_DIR}/access-factor-engine.key
 
 manager:
   timeout: 30s

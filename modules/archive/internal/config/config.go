@@ -18,10 +18,10 @@ var consumerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var sourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 type Config struct {
-	// GatewayClient 是 Archive 登记归档文件、回填时访问 Storage 的 gatewayclient 配置（archive 身份）。
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	Archive       ArchiveConfig        `yaml:"archive"`
-	Health        HealthConfig         `yaml:"health"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	SourcePath    string                   `yaml:"-"`
+	Archive       ArchiveConfig            `yaml:"archive"`
+	Health        HealthConfig             `yaml:"health"`
 }
 
 type ArchiveConfig struct {
@@ -71,11 +71,7 @@ type HealthConfig struct {
 
 func Default() *Config {
 	return &Config{
-		// 与部署布局一致：密钥和 CA 在安装根目录，目录缓存与其他数据放在一起。
-		GatewayClient: gatewayclient.Config{
-			Mode: gatewayclient.ModeLocal, Caller: "archive", KeyFile: "../secrets/caller-archive.key",
-			CAFile: "../certs/moox-ca.crt", CacheDir: "../data/archive-gatewayclient",
-		},
+		GatewayClient: gatewayclient.FileConfig{Caller: "archive", KeyFile: "../../secrets/caller-archive.key"},
 		Archive: ArchiveConfig{
 			RootDir:  "../data/archive",
 			StateDir: "../data/archive-state",
@@ -105,6 +101,10 @@ func Load(path string) (*Config, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse archive config %s: %w", path, err)
+	}
+	cfg.SourcePath, err = filepath.Abs(path)
+	if err != nil {
+		return nil, err
 	}
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
@@ -163,6 +163,7 @@ func (c *Config) applyDefaults() {
 	if c.Health.Addr == "" {
 		c.Health.Addr = d.Health.Addr
 	}
+
 }
 
 func (c *Config) SourceSpaceIDs() []string {
@@ -233,10 +234,22 @@ func (c *Config) Validate() error {
 	if c.Archive.COS.Enabled && (strings.TrimSpace(c.Archive.COS.Region) == "" || strings.TrimSpace(c.Archive.COS.Bucket) == "") {
 		return fmt.Errorf("archive cos region and bucket are required")
 	}
-	return c.GatewayClient.Validate()
+	if c.GatewayClient.Caller != "archive" {
+		return fmt.Errorf("archive gateway_client.caller must be archive")
+	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func pathContains(parent, child string) bool {
 	rel, err := filepath.Rel(parent, child)
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// OpenGateway creates an owned client only for operations that need Storage.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	return c.GatewayClient.OpenInternal(c.SourcePath, c.Archive.StateDir, onRefreshError)
 }

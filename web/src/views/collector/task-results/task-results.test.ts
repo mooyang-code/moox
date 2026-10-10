@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 
 import type { CollectorTask } from "@/api/collector";
 
-import { buildResultsQuery, buildTaskResultTabs, getTaskResultState, resolveActiveTask, selectTaskIdFromQuery } from "./task-results-model";
+import {
+  buildResultsQuery,
+  buildTaskResultTabs,
+  getTaskResultState,
+  resolveActiveTask,
+  selectTaskIdFromQuery
+} from "./task-results-model";
 
 describe("collector result workflow", () => {
   const tasks: CollectorTask[] = [

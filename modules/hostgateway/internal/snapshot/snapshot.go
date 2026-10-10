@@ -1,117 +1,205 @@
-// Package snapshot 校验并持有主机网关当前应用的快照：本机路由、全局服务目录和调用方校验密钥。
-// 新快照先整体校验，任何一项不通过就整体拒绝，继续使用旧快照。
+// Package snapshot validates and atomically publishes the complete host view.
+// One request reads one immutable view for routing, identity and authorization.
 package snapshot
 
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
-	"github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"google.golang.org/protobuf/proto"
 )
 
-// ErrInvalid 表示快照没有通过校验。
-var ErrInvalid = errors.New("主机网关快照无效")
+const MaxBytes = 16 << 20
 
-// Applied 是校验通过后的快照。
-type Applied struct {
-	HostID    string
-	Hash      string
-	Disabled  bool
-	Proto     *adminpb.HostSnapshot
-	Table     *gatewayroute.Table
-	Registry  *gatewayauth.CredentialRegistry
-	Directory *directorypb.DirectorySnapshot
-	Routes    int
+var ErrInvalid = errors.New("invalid host gateway snapshot")
+
+type State struct{ current atomic.Pointer[View] }
+
+func (s *State) Load() *View   { return s.current.Load() }
+func (s *State) Apply(v *View) { s.current.Store(v) }
+
+type verification struct {
+	credentials gatewayauth.Credentials
+	expires     int64
 }
 
-// Validate 校验一份快照属于本机、路由合法、目录版本与内容一致、哈希覆盖路由、目录和密钥。
-func Validate(hostID string, snapshot *adminpb.HostSnapshot) (*Applied, error) {
-	if snapshot == nil {
-		return nil, fmt.Errorf("%w: 快照为空", ErrInvalid)
+type View struct {
+	raw       *pb.HostGatewaySnapshot
+	routes    map[string]servicecatalog.Route
+	keys      map[string]verification
+	directory servicecatalog.Directory
+}
+
+// String/GoString deliberately exclude verification material.
+func (v *View) String() string {
+	return fmt.Sprintf("HostSnapshot{host=%s hash=%s routes=%d}", v.HostID(), v.Hash(), v.Count())
+}
+func (v *View) GoString() string { return v.String() }
+func (v *View) HostID() string   { return v.raw.HostId }
+func (v *View) Hash() string     { return v.raw.Hash }
+func (v *View) Disabled() bool   { return v.raw.Disabled }
+func (v *View) Count() int       { return len(v.routes) }
+func (v *View) Proto() *pb.HostGatewaySnapshot {
+	return proto.Clone(v.raw).(*pb.HostGatewaySnapshot)
+}
+func (v *View) Directory() servicecatalog.Directory { return v.directory.Clone() }
+
+func (v *View) Resolve(service, method string) (servicecatalog.Route, bool) {
+	route, ok := v.routes[service+"/"+method]
+	route.Callers = slices.Clone(route.Callers)
+	return route, ok
+}
+
+func (v *View) Verify(request gatewayauth.Request, headers http.Header, now time.Time) (gatewayauth.Claims, error) {
+	ids := headers.Values("X-Moox-Key-Id")
+	if len(ids) != 1 {
+		return gatewayauth.Claims{}, errors.New("host gateway authentication failed")
 	}
-	if snapshot.GetHostId() != hostID {
-		return nil, fmt.Errorf("%w: 快照属于主机 %q，本机是 %q", ErrInvalid, snapshot.GetHostId(), hostID)
+	key, found := v.keys[ids[0]]
+	if !found || key.expires > 0 && now.Unix() >= key.expires {
+		return gatewayauth.Claims{}, errors.New("host gateway authentication failed")
 	}
-	routes := make([]gatewayroute.Route, 0, len(snapshot.GetRoutes()))
-	for _, route := range snapshot.GetRoutes() {
-		routes = append(routes, gatewayroute.Route{
-			ServiceID: route.GetComponentId(), Address: route.GetAddress(), ServicePath: route.GetServicePath(),
-			TimeoutMS: route.GetTimeoutMs(), MaxBodyBytes: route.GetMaxBodyBytes(),
-			AllowedMethods: route.GetMethods(), AllowedCallers: route.GetCallers(),
-		})
-	}
-	normalized, err := gatewayroute.NormalizeAndHashState(hostID, snapshot.GetDisabled(), routes)
+	claims, err := gatewayauth.Verify(key.credentials, request, headers, now)
 	if err != nil {
-		return nil, fmt.Errorf("%w: 路由: %v", ErrInvalid, err)
+		return gatewayauth.Claims{}, errors.New("host gateway authentication failed")
 	}
-	var table gatewayroute.Table
-	if err := table.Replace(normalized); err != nil {
-		return nil, fmt.Errorf("%w: 路由: %v", ErrInvalid, err)
+	return claims, nil
+}
+
+// Build owns its input and rejects a mismatched hash, noncanonical routing or
+// out-of-scope verification keys. Network addresses can never redirect RPCs
+// away from the catalog's fixed loopback service port.
+func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
+	bad := func(reason string) (*View, error) { return nil, fmt.Errorf("%w: %s", ErrInvalid, reason) }
+	if !servicecatalog.ValidHostID(hostID) || raw == nil || raw.HostId != hostID || raw.SchemaVersion != 1 ||
+		len(raw.Routes) > 10000 || len(raw.VerificationKeys) > 4096 || proto.Size(raw) > MaxBytes {
+		return bad("host, schema or size")
 	}
-	directory := snapshot.GetDirectory()
-	if directory == nil || directory.GetVersion() == "" {
-		return nil, fmt.Errorf("%w: 缺少服务目录", ErrInvalid)
+	if len(raw.ProtoReflect().GetUnknown()) != 0 {
+		return bad("unknown schema fields")
 	}
-	version, err := servicecatalog.DirectoryVersion(gatewayclient.DirectoryFromProto(directory))
+	hash, err := pb.SnapshotHash(raw)
+	if err != nil || raw.Hash != hash {
+		return bad("content hash")
+	}
+	owned := proto.Clone(raw).(*pb.HostGatewaySnapshot)
+	dir, err := decodeDirectory(owned.Directory)
 	if err != nil {
-		return nil, fmt.Errorf("%w: 服务目录: %v", ErrInvalid, err)
+		return bad("directory")
 	}
-	if version != directory.GetVersion() {
-		return nil, fmt.Errorf("%w: 服务目录版本与内容不一致", ErrInvalid)
+	_, enabled := dir.Hosts[hostID]
+	if owned.Disabled == enabled || owned.Disabled && len(owned.Routes) != 0 {
+		return bad("host enabled state")
 	}
-	keys := make([]gatewayroute.VerificationKey, 0, len(snapshot.GetKeys()))
-	credentials := make([]gatewayauth.Credentials, 0, len(snapshot.GetKeys()))
-	for _, key := range snapshot.GetKeys() {
-		keys = append(keys, gatewayroute.VerificationKey{KeyID: key.GetKeyId(), Caller: key.GetCaller(), Secret: key.GetSecret()})
-		credentials = append(credentials, gatewayauth.Credentials{KeyID: key.GetKeyId(), Caller: key.GetCaller(), Secret: key.GetSecret()})
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return nil, err
 	}
-	var registry *gatewayauth.CredentialRegistry
-	if len(credentials) > 0 {
-		registry, err = gatewayauth.NewCredentialRegistry(credentials)
-		if err != nil {
-			return nil, fmt.Errorf("%w: 校验密钥: %v", ErrInvalid, err)
+	for path := range dir.Services {
+		if _, ok := catalog.Service(path); !ok {
+			return bad("unknown directory service")
 		}
 	}
-	hash, err := gatewayroute.StateHash(normalized.RouteHash, directory.GetVersion(), keys)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	v := &View{raw: owned, routes: map[string]servicecatalog.Route{}, keys: map[string]verification{}, directory: dir}
+	callers := map[string]bool{}
+	for _, route := range owned.Routes {
+		if route == nil || len(route.ProtoReflect().GetUnknown()) != 0 {
+			return bad("route fields")
+		}
+		component, ok := catalog.Component(route.ComponentId)
+		if !ok {
+			return bad("route component")
+		}
+		var service servicecatalog.Service
+		for _, candidate := range component.Services {
+			if candidate.Path == route.ServicePath {
+				service = candidate
+			}
+		}
+		timeout, limit := service.TimeoutMS, service.MaxBodyBytes
+		if timeout == 0 {
+			timeout = servicecatalog.DefaultTimeoutMS
+		}
+		if limit == 0 {
+			limit = servicecatalog.DefaultMaxBodyBytes
+		}
+		if service.Path == "" || !slices.Contains(service.Methods, route.Method) ||
+			route.Address != net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)) ||
+			route.TimeoutMs != timeout || route.MaxBodyBytes != limit || route.ReadOnly != catalog.ReadOnly(service.Path, route.Method) ||
+			!slices.Contains(dir.Services[service.Path], hostID) || len(route.Callers) == 0 || len(route.Callers) > 2048 {
+			return bad("route differs from catalog or directory")
+		}
+		seen := map[string]bool{}
+		for _, caller := range route.Callers {
+			if !catalog.Allowed(caller, route.ServicePath, route.Method) || seen[caller] {
+				return bad("route caller")
+			}
+			seen[caller], callers[caller] = true, true
+		}
+		key := route.ServicePath + "/" + route.Method
+		if _, duplicate := v.routes[key]; duplicate {
+			return bad("duplicate route")
+		}
+		v.routes[key] = servicecatalog.Route{ComponentID: route.ComponentId, ServicePath: route.ServicePath, Method: route.Method,
+			Address: route.Address, TimeoutMS: route.TimeoutMs, MaxBodyBytes: route.MaxBodyBytes, ReadOnly: route.ReadOnly, Callers: slices.Clone(route.Callers)}
 	}
-	if hash != snapshot.GetHash() {
-		return nil, fmt.Errorf("%w: 快照哈希不一致", ErrInvalid)
+	counts := map[string]int{}
+	for _, key := range owned.VerificationKeys {
+		if key == nil || len(key.ProtoReflect().GetUnknown()) != 0 || !callers[key.Caller] || !keyID(key.KeyId) ||
+			len(key.Secret) < 32 || len(key.Secret) > 4096 || key.ExpiresAtUnix < 0 {
+			return bad("verification key scope or fields")
+		}
+		if _, duplicate := v.keys[key.KeyId]; duplicate {
+			return bad("duplicate key ID")
+		}
+		counts[key.Caller]++
+		if counts[key.Caller] > 2 {
+			return bad("more than two keys per caller")
+		}
+		v.keys[key.KeyId] = verification{credentials: gatewayauth.Credentials{Caller: key.Caller, KeyID: key.KeyId, Secret: string(key.Secret)}, expires: key.ExpiresAtUnix}
 	}
-	return &Applied{
-		HostID: hostID, Hash: hash, Disabled: snapshot.GetDisabled(), Proto: proto.Clone(snapshot).(*adminpb.HostSnapshot),
-		Table: &table, Registry: registry, Directory: directory, Routes: len(normalized.Routes),
-	}, nil
+	for caller := range callers {
+		if counts[caller] == 0 {
+			return bad("missing verification key")
+		}
+	}
+	return v, nil
 }
 
-// Current 原子地持有当前快照，转发和 Directory 服务并发读取。
-type Current struct {
-	value     atomic.Pointer[Applied]
-	appliedAt atomic.Int64
+func keyID(id string) bool {
+	return id != "" && len(id) <= 128 && !strings.ContainsAny(id, "/\\") &&
+		!strings.ContainsFunc(id, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 }
 
-// Store 换上新快照。
-func (c *Current) Store(applied *Applied, at time.Time) {
-	c.value.Store(applied)
-	c.appliedAt.Store(at.Unix())
-}
-
-// Load 返回当前快照；还没有快照时返回 nil。
-func (c *Current) Load() *Applied { return c.value.Load() }
-
-// Hash 返回当前快照哈希。
-func (c *Current) Hash() string {
-	if applied := c.value.Load(); applied != nil {
-		return applied.Hash
+func decodeDirectory(raw *directorypb.ServiceDirectory) (servicecatalog.Directory, error) {
+	d := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{}, Services: map[string][]string{}}
+	if raw == nil || len(raw.ProtoReflect().GetUnknown()) != 0 {
+		return d, errors.New("missing or unknown directory")
 	}
-	return ""
+	d.Version = raw.Version
+	for id, host := range raw.Hosts {
+		if host == nil || len(host.ProtoReflect().GetUnknown()) != 0 {
+			return d, errors.New("invalid directory host")
+		}
+		d.Hosts[id] = servicecatalog.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
+	}
+	for path, hosts := range raw.Services {
+		if hosts == nil || len(hosts.ProtoReflect().GetUnknown()) != 0 {
+			return d, errors.New("invalid directory service")
+		}
+		d.Services[path] = append([]string{}, hosts.HostIds...)
+	}
+	return d, d.Validate()
 }

@@ -17,7 +17,7 @@ import (
 )
 
 // 没有接线 Factor 与 Storage 的进程也能启动（只管理定义），并把遗留的 running 回放标记为 failed(interrupted)。
-func TestInitializeWithoutDependenciesMarksInterruptedReplays(t *testing.T) {
+func TestInitializeMarksInterruptedReplays(t *testing.T) {
 	t.Setenv("MOOX_INSTANCE_ID", "strategy-test")
 	t.Setenv("MOOX_NODE_ID", "strategy-node")
 	t.Setenv("MOOX_BOOT_ID", "strategy-boot")
@@ -54,12 +54,10 @@ func TestInitializeWithoutDependenciesMarksInterruptedReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, closeFn, err := Initialize(ctx, trpc.NewServerWithConfig(trpcConfig), Config{
-		Database: database, InstanceID: "strategy-test",
-		EventBus:  EventBusConfig{RelayInterval: time.Second, ReconnectInterval: time.Second, RelayBatchSize: 1},
-		Replay:    ReplayConfig{ChunkBars: 10, MissingPriceLiquidateBars: 3},
-		Retention: RetentionConfig{ResultItemsDays: 90, ReplaysDays: 90},
-	})
+	// 网关是必需依赖：用网关桩的配置装配，数据库换成上面预置了遗留回放的那个。
+	cfg, _ := strategyGatewayFixture(t, "")
+	cfg.Database = database
+	server, closeFn, err := Initialize(ctx, trpc.NewServerWithConfig(trpcConfig), cfg)
 	if err != nil {
 		t.Fatalf("Initialize() 失败：%v", err)
 	}

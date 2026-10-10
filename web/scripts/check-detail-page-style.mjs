@@ -36,10 +36,7 @@ const pageShellFiles = [
 
 const tableFiles = [
   ...pageShellFiles,
-  "src/views/collector/cloud-account/cloud-account-manage.vue",
-  "src/views/ops/deployments/services-tab.vue",
-  "src/views/ops/deployments/routes-tab.vue",
-  "src/views/ops/deployments/component-drawer.vue"
+  "src/views/collector/cloud-account/cloud-account-manage.vue"
 ];
 
 function read(relativePath) {

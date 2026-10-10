@@ -2,10 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bash "${ROOT}/scripts/ci/check-go-version.sh"
+export GOTOOLCHAIN=local
 VERSION="${VERSION:-dev}"
 BUILD_TIME="$(date +"%Y-%m-%d_%H:%M:%S")"
 GIT_COMMIT="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-BIN_DIR="${ROOT}/bin"
+BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
 TARGET_MODULE="${1:-all}"
@@ -80,8 +82,7 @@ build_storage_node() {
 }
 
 build_storage_cli() {
-  local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
-  build_go modules/storage ./cmd/cli moox-storage-cli "${storage_cgo}"
+  build_go modules/storage ./cmd/cli moox-storage-cli 0
 }
 
 build_web_host() {
@@ -100,15 +101,15 @@ build_archive() {
 }
 
 build_hostagent() {
-  [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-host-agent 只支持 linux" >&2; exit 1; }
-  case "${TARGET_GOARCH}" in amd64|arm64) ;; *) echo "moox-host-agent 只支持 amd64 和 arm64" >&2; exit 1 ;; esac
+  [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-host-agent supports linux only" >&2; exit 1; }
+  case "${TARGET_GOARCH}" in amd64|arm64) ;; *) echo "moox-host-agent supports amd64/arm64 only" >&2; exit 1 ;; esac
   build_go modules/hostagent ./cmd/server moox-host-agent 0
   build_go modules/hostagent ./cmd/cli moox-host-agent-cli 0
 }
 
 build_collector_market_data_scf() {
   [[ "${TARGET_GOOS}" == "linux" && "${TARGET_GOARCH}" == "amd64" ]] || {
-    echo "moox-collector-scf 只支持 linux/amd64" >&2
+    echo "moox-collector-scf supports linux/amd64 only" >&2
     exit 1
   }
   build_go modules/collector ./cmd/scf/market_data moox-collector-scf 0
@@ -117,18 +118,21 @@ build_collector_market_data_scf() {
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
+    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
     build_go modules/admin ./cmd/server moox-admin 0
     build_go modules/admin ./cmd/cli moox-admin-cli 0
     build_go modules/hostgateway ./cmd/server moox-host-gateway 0
     build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
     build_go modules/eventbus ./cmd/server moox-eventbus 0
+    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     build_web_host
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
     build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
-    build_go modules/factor ./cmd/mgr moox-factor-mgr 1
-    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 1
+    build_go modules/factor ./cmd/mgr moox-factor-mgr 0
+    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
     build_go modules/factor ./cmd/engine moox-factor-engine 0
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0
@@ -140,11 +144,14 @@ case "${TARGET_MODULE}" in
     build_storage
     build_storage_cli
     build_go modules/access ./cmd/server moox-access 0
-    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     build_archive
     ;;
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
+    ;;
+  runtime)
+    [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-runtime supports linux only" >&2; exit 1; }
+    build_go modules/cli ./cmd/moox-runtime moox-runtime 0
     ;;
   admin)
     build_go modules/admin ./cmd/server moox-admin 0
@@ -156,9 +163,16 @@ case "${TARGET_MODULE}" in
   host-gateway)
     build_go modules/hostgateway ./cmd/server moox-host-gateway 0
     build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
+    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
     ;;
   eventbus)
     build_go modules/eventbus ./cmd/server moox-eventbus 0
+    ;;
+  egress-proxy)
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
+    ;;
+  console-proxy)
+    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
     ;;
   cloudnode)
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
@@ -178,8 +192,8 @@ case "${TARGET_MODULE}" in
     build_collector_market_data_scf
     ;;
   factor-mgr)
-    build_go modules/factor ./cmd/mgr moox-factor-mgr 1
-    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 1
+    build_go modules/factor ./cmd/mgr moox-factor-mgr 0
+    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
     ;;
   factor-engine)
     build_go modules/factor ./cmd/engine moox-factor-engine 0
@@ -202,6 +216,12 @@ case "${TARGET_MODULE}" in
     build_storage
     build_storage_cli
     ;;
+  storage-cgo)
+    build_storage
+    ;;
+  access)
+    build_go modules/access ./cmd/server moox-access 0
+    ;;
   storage-primary)
     build_go modules/storage ./cmd/server moox-storage-primary 1
     ;;
@@ -210,12 +230,6 @@ case "${TARGET_MODULE}" in
     ;;
   storage-cli)
     build_storage_cli
-    ;;
-  access)
-    build_go modules/access ./cmd/server moox-access 0
-    ;;
-  egress-proxy)
-    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     ;;
   archive)
     build_archive
@@ -227,14 +241,14 @@ case "${TARGET_MODULE}" in
   monitor-cli)
     build_go modules/monitor ./cmd/cli moox-monitor-cli 0
     ;;
-  host-agent)
+  hostagent)
     build_hostagent
     ;;
   web-host)
     build_web_host
     ;;
   *)
-    echo "未知的构建目标：${TARGET_MODULE}" >&2
+    echo "unknown build target: ${TARGET_MODULE}" >&2
     exit 1
     ;;
 esac

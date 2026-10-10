@@ -2,22 +2,26 @@ package registry
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type registryProxy struct {
-	storagepb.MetadataClientProxy
 	generations []string
 }
 
-func (p *registryProxy) RegisterArchiveFile(_ context.Context, req *storagepb.RegisterArchiveFileReq, _ ...client.Option) (*storagepb.RegisterArchiveFileRsp, error) {
+func (p *registryProxy) Invoke(_ context.Context, service, method string, input, output any) error {
+	if service != "trpc.moox.storage.Metadata" || method != "RegisterArchiveFile" {
+		return fmt.Errorf("unexpected method %s/%s", service, method)
+	}
+	req := input.(*storagepb.RegisterArchiveFileReq)
 	p.generations = append(p.generations, req.GetArchiveFile().GetAttributes()["generation"])
-	return &storagepb.RegisterArchiveFileRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	output.(*storagepb.RegisterArchiveFileRsp).RetInfo = &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
+	return nil
 }
 
 func TestArchiveFileUsesStableIdentity(t *testing.T) {
@@ -60,7 +64,7 @@ func TestStableArchiveFileID(t *testing.T) {
 
 func TestClientRefusesRegistryGenerationRollback(t *testing.T) {
 	proxy := &registryProxy{}
-	c := &Client{proxy: proxy}
+	c := NewClient(proxy)
 	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}
 	manifest := domain.Manifest{Path: "/tmp/archive.parquet", Generation: 2, SHA256: "hash", RowCount: 1}
 	require.NoError(t, c.Register(t.Context(), BuildArchiveFile("device", key, manifest, false, domain.COSState{})))

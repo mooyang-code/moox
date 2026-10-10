@@ -10,9 +10,11 @@ import (
 )
 
 const minimalEngineConfig = `gateway_client:
-  key_file: ./secrets/caller-factor-engine.key
-  access_address: 146.56.196.204:11004
+  access_address: storage.example:11004
   access_id: access@storage
+  caller: factor-engine
+  key_id: assigned-factor-engine-47
+  key_file: ../secrets/access-factor-engine.key
 eventbus:
   urls: [tls://control.example:4222]
 `
@@ -38,10 +40,9 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, time.Minute, cfg.CatalogSync.Interval)
 	require.Equal(t, 45*time.Second, cfg.CatalogSync.Offset)
 	require.Equal(t, filepath.Join(root, "data/engine/catalog.json"), cfg.CatalogSync.StateFile)
-	require.Equal(t, filepath.Join(root, "secrets/caller-factor-engine.key"), cfg.GatewayClient.KeyFile)
-	require.Equal(t, "access", string(cfg.GatewayClient.Mode))
-	require.Equal(t, "factor-engine", cfg.GatewayClient.Caller)
-	require.Equal(t, 30*time.Second, cfg.Manager.Timeout)
+	require.Equal(t, "../secrets/access-factor-engine.key", cfg.GatewayClient.KeyFile)
+	require.Equal(t, "assigned-factor-engine-47", cfg.GatewayClient.KeyID)
+	require.Equal(t, filepath.Join(root, "secrets/storage-primary-auth.secret"), cfg.Storage.AuthSecretFile)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
 	require.Equal(t, filepath.Join(root, "pyworker/worker.py"), cfg.Python.WorkerPath)
 }
@@ -51,17 +52,9 @@ func TestEngineConfigRejectsDatabaseSection(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestEngineConfigRequiresAccessGatewayClient(t *testing.T) {
+func TestEngineConfigRequiresCompleteExternalGateway(t *testing.T) {
 	_, err := Load(writeEngineConfig(t, "eventbus:\n  urls: [nats://127.0.0.1:4222]\n"))
-	require.ErrorContains(t, err, "access_address")
-	require.ErrorContains(t, err, "gateway_client.key_file")
-
-	_, err = Load(writeEngineConfig(t, minimalEngineConfig+"manager:\n  url: https://control.example:11001\n"))
-	require.Error(t, err, "旧的 manager.url 等网关配置已删除")
-
-	local := "gateway_client:\n  mode: local\n  caller: factor-engine\n  key_file: ./k\n  ca_file: ./ca\n  cache_dir: ./cache\neventbus:\n  urls: [tls://control.example:4222]\n"
-	_, err = Load(writeEngineConfig(t, local))
-	require.ErrorContains(t, err, "gateway_client.mode must be access")
+	require.ErrorContains(t, err, "access address")
 }
 
 func TestEngineConfigRejectsOffsetNotLessThanInterval(t *testing.T) {

@@ -16,9 +16,9 @@ import (
 
 // RPCClient 经主机网关调用 Storage 的 Metadata / DataView 与 Factor 的 FactorMgr。
 type RPCClient struct {
-	Metadata storagepb.MetadataClientProxy
-	DataView storagepb.DataViewClientProxy
-	Factor   factorpb.FactorMgrClientProxy
+	Metadata MetadataClient
+	DataView DataViewClient
+	Factor   FactorClient
 	// Auth 是 Metadata 的调用身份；ViewAuth 是 DataView 的调用身份（Storage 用不同的密钥校验）。
 	Auth     *commonpb.AuthInfo
 	ViewAuth *commonpb.AuthInfo

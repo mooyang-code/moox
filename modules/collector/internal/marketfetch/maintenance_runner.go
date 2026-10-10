@@ -45,11 +45,16 @@ func ValidateMaintenanceSchedule(interval, offset, timeout time.Duration) error 
 }
 
 func (r *MaintenanceRunner) Start(ctx context.Context) error {
+	_, err := r.StartWithDone(ctx)
+	return err
+}
+
+func (r *MaintenanceRunner) StartWithDone(ctx context.Context) (<-chan struct{}, error) {
 	if r == nil || r.pass == nil {
-		return fmt.Errorf("Collector maintenance runner is not initialized")
+		return nil, fmt.Errorf("Collector maintenance runner is not initialized")
 	}
 	if err := ValidateMaintenanceSchedule(r.interval, r.offset, r.timeout); err != nil {
-		return err
+		return nil, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -57,11 +62,12 @@ func (r *MaintenanceRunner) Start(ctx context.Context) error {
 	r.startMu.Lock()
 	defer r.startMu.Unlock()
 	if r.started {
-		return fmt.Errorf("Collector maintenance runner already started")
+		return nil, fmt.Errorf("Collector maintenance runner already started")
 	}
 	r.started = true
-	go r.run(ctx)
-	return nil
+	done := make(chan struct{})
+	go func() { defer close(done); r.run(ctx) }()
+	return done, nil
 }
 
 // nextRun returns the first phase-aligned start strictly after now.

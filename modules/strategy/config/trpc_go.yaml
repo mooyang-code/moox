@@ -5,6 +5,8 @@ global:
 server:
   filter:
     - recovery
+    - validation
+    - spacectx
     - prometheus
   timeout: 30000
   service:
@@ -13,6 +15,7 @@ server:
       port: 11430
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.strategy.Health
       ip: 127.0.0.1
@@ -27,6 +30,11 @@ server:
       timeout: 10000
 
 plugins:
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
   metrics:
     prometheus:
       ip: 127.0.0.1

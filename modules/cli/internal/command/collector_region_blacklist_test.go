@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
@@ -23,21 +23,21 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 			waited := false
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+				case "/api/admin/cloudnode/GetNodeList":
 					_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": []adminclient.CloudNode{
 						{NodeID: "blocked", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": true}},
 						{NodeID: "disabled", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": false}},
 						{NodeID: "allowed", Region: "ap-singapore", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": true}},
 						{NodeID: "invoke", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke"},
 					}})
-				case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs":
+				case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
 					var request struct {
 						Nodes []collectorRuntimeConfigPatch `json:"nodes"`
 					}
 					require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 					submitted = request.Nodes
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"disable"}`))
-				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+				case "/api/admin/cloudnode/GetNodeBatchChange":
 					waited = true
 					_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "job": map[string]any{"job_id": "disable", "status": status}})
 				default:
@@ -45,7 +45,7 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			err := disableCollectorBlacklistedTimers(context.Background(), admintest.Client(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}})
+			err := disableCollectorBlacklistedTimers(context.Background(), collectorTestClient(server), &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}})
 			if status == "SUCCESS" {
 				require.NoError(t, err)
 			} else {
@@ -66,20 +66,20 @@ func TestDisableCollectorTimerFleetLeavesInvokeNodesUntouched(t *testing.T) {
 	var submitted []collectorRuntimeConfigPatch
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": []adminclient.CloudNode{
 				{NodeID: "timer-a", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer"},
 				{NodeID: "timer-b", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer"},
 				{NodeID: "invoke-a", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke"},
 			}})
-		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs":
+		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
 			var request struct {
 				Nodes []collectorRuntimeConfigPatch `json:"nodes"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			submitted = append(submitted, request.Nodes...)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"disable-all"}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"disable-all","status":"SUCCESS"}}`))
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
@@ -87,7 +87,7 @@ func TestDisableCollectorTimerFleetLeavesInvokeNodesUntouched(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, disableCollectorTimerFleet(context.Background(), admintest.Client(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}))
+	require.NoError(t, disableCollectorTimerFleet(context.Background(), collectorTestClient(server), &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}))
 	require.Len(t, submitted, 2)
 	require.Equal(t, []string{"timer-a", "timer-b"}, []string{submitted[0].NodeID, submitted[1].NodeID})
 	for _, patch := range submitted {
@@ -111,21 +111,24 @@ func TestCollectorBlacklistRuntimePreflight(t *testing.T) {
 	require.NoError(t, preflightCollectorBlacklistRuntime(context.Background(), nil, nil))
 	require.Error(t, preflightCollectorBlacklistRuntime(context.Background(), nil, &setupconfig.SCFFetcherSpace{}))
 	raw := "scf_region_blacklists:\n  crypto: [ap-guangzhou]\n"
+	hash := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(raw)))
 	cfg := &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}}
 	empty := &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}
-	exe := "/data/moox/control/releases/r1/bin/moox-collector"
-	require.ErrorContains(t, validateCollectorBlacklistRuntime(empty, []byte(raw), exe), "differs")
-	require.NoError(t, validateCollectorBlacklistRuntime(empty, []byte("scf_region_blacklists:\n  crypto: []\n"), exe))
+	require.ErrorContains(t, validateCollectorBlacklistRuntime(empty, []byte(raw), hash, "/data/moox/bin/moox-collector"), "differs")
+	cleared := []byte("scf_region_blacklists:\n  crypto: []\n")
+	require.NoError(t, validateCollectorBlacklistRuntime(empty, cleared, fmt.Sprintf("sha256:%x", sha256.Sum256(cleared)), "/data/moox/bin/moox-collector"))
 	for _, test := range []struct {
-		name, config, exe string
-		fail              bool
+		name, config, hash, exe string
+		fail                    bool
 	}{
-		{"loaded", raw, exe, false},
-		{"wrong process", raw, "/data/moox/control/releases/r1/bin/moox-admin", true},
-		{"missing policy", "{}\n", exe, true},
+		{"loaded", raw, hash, "/data/moox/bin/moox-collector", false},
+		{"missing identity", raw, "", "/data/moox/bin/moox-collector", true},
+		{"not restarted", raw, "sha256:old", "/data/moox/bin/moox-collector", true},
+		{"wrong process", raw, hash, "/data/moox/bin/moox-admin", true},
+		{"missing policy", "{}\n", fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("{}\n"))), "/data/moox/bin/moox-collector", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateCollectorBlacklistRuntime(cfg, []byte(test.config), test.exe)
+			err := validateCollectorBlacklistRuntime(cfg, []byte(test.config), test.hash, test.exe)
 			if test.fail {
 				require.Error(t, err)
 			} else {
@@ -133,9 +136,9 @@ func TestCollectorBlacklistRuntimePreflight(t *testing.T) {
 			}
 		})
 	}
-	ssh := &collectorBlacklistSSHStub{result: setupssh.Result{Stdout: exe + "\n" + raw}}
-	require.NoError(t, verifyCollectorBlacklistRuntime(context.Background(), ssh, "/data/moox/control", cfg))
-	require.Equal(t, "/data/moox/control", ssh.args[len(ssh.args)-1])
+	ssh := &collectorBlacklistSSHStub{result: setupssh.Result{Stdout: hash + "\n/data/moox/bin/moox-collector\n" + raw}}
+	require.NoError(t, verifyCollectorBlacklistRuntime(context.Background(), ssh, "/data/moox", cfg))
+	require.Equal(t, "/data/moox", ssh.args[len(ssh.args)-1])
 	ssh.err = fmt.Errorf("sensitive remote output")
 	err := verifyCollectorBlacklistRuntime(context.Background(), ssh, "/data/moox", cfg)
 	require.Error(t, err)

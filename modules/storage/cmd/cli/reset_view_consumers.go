@@ -65,7 +65,7 @@ func runResetViewConsumers(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(io.Discard)
 	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream, timeout: 5 * time.Minute, restart: true}
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml path")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "存储部署根目录（其下 current/ 是当前发布，内含 start.sh、stop.sh）")
+	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream to purge")
 	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential YAML")
 	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")

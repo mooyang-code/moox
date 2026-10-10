@@ -1,116 +1,92 @@
 package snapshot
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
-func validSnapshot(t *testing.T) []byte {
-	t.Helper()
-	built, err := testsnapshot.Build("storage", false, []gatewayroute.Route{{
-		ServiceID: "storage-view", Address: "127.0.0.1:20103", ServicePath: "trpc.moox.storage.DataView",
-		AllowedMethods: []string{"QueryTimeSeriesRows"}, AllowedCallers: []string{"strategy"},
-	}}, []gatewayroute.VerificationKey{{KeyID: "strategy-1", Caller: "strategy", Secret: "s"}, {KeyID: "strategy-2", Caller: "strategy", Secret: "t"}},
-		testsnapshot.Directory("storage", "trpc.moox.storage.DataView"))
-	if err != nil {
-		t.Fatal(err)
+func TestViewOwnsCompleteSnapshotAndEnforcesRotationExpiry(t *testing.T) {
+	raw := testsnapshot.New(t, "storage", "storage-primary")
+	credential := testsnapshot.Credential("collector")
+	key := &pb.GatewayVerificationKey{Caller: "collector", KeyId: "rotated-collector", Secret: []byte(strings.Repeat("r", 64)), ExpiresAtUnix: time.Now().Add(time.Hour).Unix()}
+	raw.VerificationKeys = append(raw.VerificationKeys, key)
+	testsnapshot.Rehash(t, raw)
+	view, err := Build("storage", raw)
+	require.NoError(t, err)
+	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows", Callee: "trpc.moox.storage.PrimaryStore", Func: "ReadTimeSeriesRows", TargetNode: "storage", Body: []byte("bytes")}
+	for _, cred := range []gatewayauth.Credentials{credential, {Caller: "collector", KeyID: key.KeyId, Secret: string(key.Secret)}} {
+		headers, err := gatewayauth.Sign(cred, request, time.Now())
+		require.NoError(t, err)
+		_, err = view.Verify(request, headers, time.Now())
+		require.NoError(t, err)
+		if cred.KeyID == key.KeyId {
+			_, err = view.Verify(request, headers, time.Unix(key.ExpiresAtUnix, 0))
+			require.Error(t, err)
+		}
 	}
-	encoded, err := proto.Marshal(built)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded
-}
-
-func TestValidateAcceptsConsistentSnapshot(t *testing.T) {
-	built, err := testsnapshot.Build("storage", false, []gatewayroute.Route{{
-		ServiceID: "storage-view", Address: "127.0.0.1:20103", ServicePath: "trpc.moox.storage.DataView",
-		AllowedMethods: []string{"QueryTimeSeriesRows"}, AllowedCallers: []string{"strategy"},
-	}}, []gatewayroute.VerificationKey{{KeyID: "strategy-1", Caller: "strategy", Secret: "s"}}, testsnapshot.Directory("storage", "trpc.moox.storage.DataView"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied, err := Validate("storage", built)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if applied.Routes != 1 || applied.Registry == nil || applied.Directory.GetVersion() == "" {
-		t.Fatalf("%+v", applied)
-	}
-	var current Current
-	if current.Load() != nil || current.Hash() != "" {
-		t.Fatal("空的 Current 应当没有快照")
-	}
-	current.Store(applied, time.Now())
-	if current.Hash() != built.GetHash() {
-		t.Fatal("Current 没有保存快照")
+	route, ok := view.Resolve("trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows")
+	require.True(t, ok)
+	route.Callers[0] = "changed"
+	route, ok = view.Resolve("trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows")
+	require.True(t, ok)
+	require.NotContains(t, route.Callers, "changed")
+	raw.Hash = "changed"
+	raw.VerificationKeys[0].Secret[0] ^= 1
+	require.NotEqual(t, raw.Hash, view.Hash())
+	copy := view.Proto()
+	copy.VerificationKeys[0].Secret[0] ^= 1
+	require.False(t, proto.Equal(copy, view.Proto()))
+	for _, key := range view.Proto().VerificationKeys {
+		require.NotContains(t, fmt.Sprintf("%+v %#v", view, view), string(key.Secret))
 	}
 }
 
-func TestValidateRejectsTamperedSnapshots(t *testing.T) {
-	cases := []struct {
-		name   string
-		mutate func(*testing.T, []byte) (string, []byte)
-		want   string
-	}{
-		{"其他主机的快照", func(_ *testing.T, raw []byte) (string, []byte) { return "compute-1", raw }, "属于主机"},
-		{"篡改路由", func(t *testing.T, raw []byte) (string, []byte) {
-			return "storage", mutate(t, raw, func(s *hostSnapshot) { s.Routes[0].Callers = []string{"console"} })
-		}, "哈希不一致"},
-		{"篡改密钥", func(t *testing.T, raw []byte) (string, []byte) {
-			return "storage", mutate(t, raw, func(s *hostSnapshot) { s.Keys[0].Secret = "other" })
-		}, "哈希不一致"},
-		{"篡改目录", func(t *testing.T, raw []byte) (string, []byte) {
-			return "storage", mutate(t, raw, func(s *hostSnapshot) { s.Directory.Hosts[0].Address = "1.2.3.4" })
-		}, "服务目录版本与内容不一致"},
-		{"缺少目录", func(t *testing.T, raw []byte) (string, []byte) {
-			return "storage", mutate(t, raw, func(s *hostSnapshot) { s.Directory = nil })
-		}, "缺少服务目录"},
-		{"非法路由", func(t *testing.T, raw []byte) (string, []byte) {
-			return "storage", mutate(t, raw, func(s *hostSnapshot) { s.Routes[0].Address = "10.0.0.1:20103" })
-		}, "路由"},
-		{"重复的 KeyID", func(t *testing.T, raw []byte) (string, []byte) {
-			return "storage", mutate(t, raw, func(s *hostSnapshot) { s.Keys[1].KeyId = s.Keys[0].KeyId })
-		}, "校验密钥"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			hostID, raw := tc.mutate(t, validSnapshot(t))
-			_, err := Validate(hostID, unmarshal(t, raw))
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("期望报错包含 %q，实际 %v", tc.want, err)
-			}
+func TestRejectSnapshotCorruptionAndPrivilegeExpansion(t *testing.T) {
+	for name, mutate := range map[string]func(*pb.HostGatewaySnapshot){
+		"host":                func(s *pb.HostGatewaySnapshot) { s.HostId = "elsewhere" },
+		"schema":              func(s *pb.HostGatewaySnapshot) { s.SchemaVersion = 2 },
+		"remote upstream":     func(s *pb.HostGatewaySnapshot) { s.Routes[0].Address = "192.0.2.1:11426" },
+		"wrong loopback port": func(s *pb.HostGatewaySnapshot) { s.Routes[0].Address = "127.0.0.1:9999" },
+		"timeout":             func(s *pb.HostGatewaySnapshot) { s.Routes[0].TimeoutMs++ },
+		"body limit":          func(s *pb.HostGatewaySnapshot) { s.Routes[0].MaxBodyBytes++ },
+		"read-only":           func(s *pb.HostGatewaySnapshot) { s.Routes[0].ReadOnly = !s.Routes[0].ReadOnly },
+		"duplicate route":     func(s *pb.HostGatewaySnapshot) { s.Routes = append(s.Routes, s.Routes[0]) },
+		"unknown component":   func(s *pb.HostGatewaySnapshot) { s.Routes[0].ComponentId = "unknown" },
+		"wildcard method":     func(s *pb.HostGatewaySnapshot) { s.Routes[0].Method = "*" },
+		"external caller":     func(s *pb.HostGatewaySnapshot) { s.Routes[0].Callers = append(s.Routes[0].Callers, "moox-skill") },
+		"duplicate caller": func(s *pb.HostGatewaySnapshot) {
+			s.Routes[0].Callers = append(s.Routes[0].Callers, s.Routes[0].Callers[0])
+		},
+		"missing keys": func(s *pb.HostGatewaySnapshot) { s.VerificationKeys = nil },
+		"duplicate key": func(s *pb.HostGatewaySnapshot) {
+			s.VerificationKeys = append(s.VerificationKeys, s.VerificationKeys[0])
+		},
+		"out of scope key":  func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].Caller = "moox-skill" },
+		"short secret":      func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].Secret = []byte("short") },
+		"negative expiry":   func(s *pb.HostGatewaySnapshot) { s.VerificationKeys[0].ExpiresAtUnix = -1 },
+		"directory missing": func(s *pb.HostGatewaySnapshot) { s.Directory = nil },
+		"directory hash":    func(s *pb.HostGatewaySnapshot) { s.Directory.Version = "bad" },
+		"disabled mismatch": func(s *pb.HostGatewaySnapshot) { s.Disabled = true },
+		"unknown fields":    func(s *pb.HostGatewaySnapshot) { s.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw := testsnapshot.New(t, "storage", "storage-primary")
+			mutate(raw)
+			testsnapshot.Rehash(t, raw)
+			_, err := Build("storage", raw)
+			require.ErrorIs(t, err, ErrInvalid)
 		})
 	}
-	if _, err := Validate("storage", nil); err == nil {
-		t.Fatal("空快照应当报错")
-	}
-}
-
-type hostSnapshot = adminpb.HostSnapshot
-
-func unmarshal(t *testing.T, raw []byte) *adminpb.HostSnapshot {
-	t.Helper()
-	out := &adminpb.HostSnapshot{}
-	if err := proto.Unmarshal(raw, out); err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
-func mutate(t *testing.T, raw []byte, change func(*hostSnapshot)) []byte {
-	t.Helper()
-	snapshot := unmarshal(t, raw)
-	change(snapshot)
-	encoded, err := proto.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded
+	raw := testsnapshot.New(t, "storage")
+	raw.Hash = strings.Repeat("0", 64)
+	_, err := Build("storage", raw)
+	require.ErrorIs(t, err, ErrInvalid)
 }

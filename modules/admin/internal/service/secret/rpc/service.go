@@ -1,6 +1,6 @@
 // Package rpc 提供 secret 对外的 trpc 普通 RPC 服务实现，
 // 承载秘钥管理 API（CRUD + 启用/禁用），
-// 由统一 HTTP 转发层（/api/admin/secret/{method}）调度。
+// 由主机网关转发原生 tRPC；控制台通过生成的 handler 在 Admin 进程内调用。
 package rpc
 
 import (

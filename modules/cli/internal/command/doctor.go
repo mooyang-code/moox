@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
@@ -19,10 +18,8 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/security"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type doctorExitError struct{ code int }
@@ -32,8 +29,8 @@ func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
-	newClient         func([]client.Option) *doctorcli.Client
-	newMetadataClient func([]client.Option, string) doctorcli.StorageActivationClient
+	newClient         func(gatewayclient.Invoker) *doctorcli.Client
+	newMetadataClient func(gatewayclient.Invoker, string) doctorcli.StorageActivationClient
 }
 
 func init() {
@@ -65,7 +62,7 @@ func newDoctorViewConsumerRepairCommand() *cobra.Command {
 }
 
 func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
-	var nodeID, format, output string
+	var nodeID, format, output, file string
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
@@ -78,24 +75,26 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := deps.loadConfig()
 			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
 				cfg = &config.Config{}
 			}
 			doctorCfg := cfg.EffectiveDoctor()
 			if nodeID == "" {
 				nodeID = doctorCfg.NodeID
 			}
-			gateway, closeGateway, err := newDoctorGateway(doctorCfg.ReleaseRoot)
+			gateway, err := openCommandGateway(cmd.Context(), file, nil)
 			if err != nil {
 				return err
 			}
-			defer closeGateway()
-			options := gateway.ClientOptions(gatewayclient.WithTimeout(15 * time.Second))
-			client := deps.newClient(options)
+			defer gateway.Close()
+			client := deps.newClient(gateway)
 			metadataClientFactory := deps.newMetadataClient
 			if metadataClientFactory == nil {
 				metadataClientFactory = newSignedStorageMetadataClient
 			}
-			storageActivation := metadataClientFactory(options, os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
+			storageActivation := metadataClientFactory(gateway, os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
 			auth, err := loadDoctorHealthAuth(doctorCfg.ReleaseRoot)
 			if err != nil {
 				return err
@@ -135,6 +134,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&file, "file", "./moox.toml", "deployment manifest for the operator SSH gateway")
 	cmd.Flags().StringVar(&nodeID, "node", "", "target node ID")
 	cmd.Flags().StringSliceVar(&checks, "check", nil, "specific bounded check ID")
 	cmd.Flags().StringVar(&format, "format", "json", "report format: json, text, or markdown")
@@ -142,44 +142,20 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	return cmd
 }
 
-// newDoctorGateway 以 moox-cli 身份经本机主机网关访问 Monitor 和 SysDeploy：密钥和 CA 取自发布根目录，
-// 服务目录缓存放在临时目录，用完删除。
-func newDoctorGateway(releaseRoot string) (*gatewayclient.Client, func(), error) {
-	cacheDir, err := os.MkdirTemp("", "moox-doctor-gatewayclient-")
-	if err != nil {
-		return nil, nil, err
-	}
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: gatewayclient.Config{
-		Mode: gatewayclient.ModeLocal, Caller: servicecatalog.MooxCLICaller,
-		KeyFile:  resolveReleasePath(releaseRoot, "secrets/caller-moox-cli.key"),
-		CAFile:   resolveReleasePath(releaseRoot, "certs/moox-ca.crt"),
-		CacheDir: cacheDir,
-	}})
-	if err != nil {
-		_ = os.RemoveAll(cacheDir)
-		return nil, nil, fmt.Errorf("创建 doctor 的 gatewayclient: %w", err)
-	}
-	return gateway, func() {
-		gateway.Close()
-		_ = os.RemoveAll(cacheDir)
-	}, nil
-}
-
 type signedStorageMetadataClient struct {
-	proxy pb.MetadataClientProxy
-	auth  *commonpb.AuthInfo
+	gateway gatewayclient.Invoker
+	auth    *commonpb.AuthInfo
 }
 
-// newSignedStorageMetadataClient 用给定的 tRPC 客户端选项（gatewayclient）以 storage-metadata 只读身份读取数据集激活状态。
-func newSignedStorageMetadataClient(options []client.Option, secret string) doctorcli.StorageActivationClient {
+func newSignedStorageMetadataClient(gateway gatewayclient.Invoker, secret string) doctorcli.StorageActivationClient {
 	return &signedStorageMetadataClient{
-		proxy: pb.NewMetadataClientProxy(options...),
-		auth:  &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		gateway: gateway,
+		auth:    &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
 	}
 }
 
 func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, errors.New("storage metadata client is unavailable")
 	}
 	request := &pb.ListDatasetsReq{}
@@ -187,11 +163,13 @@ func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.
 		request = proto.Clone(req).(*pb.ListDatasetsReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.ListDatasets(ctx, request)
+	rsp := &pb.ListDatasetsRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDatasets", request, rsp)
+	return rsp, err
 }
 
 func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, errors.New("storage metadata client is unavailable")
 	}
 	request := &pb.CheckDatasetActivationReq{}
@@ -199,7 +177,9 @@ func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context
 		request = proto.Clone(req).(*pb.CheckDatasetActivationReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.CheckDatasetActivation(ctx, request)
+	rsp := &pb.CheckDatasetActivationRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CheckDatasetActivation", request, rsp)
+	return rsp, err
 }
 
 func validateDoctorFlags(format, output string, checks []string) error {

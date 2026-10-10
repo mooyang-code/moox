@@ -27,11 +27,15 @@ const (
 var collectorTimerInventoryNow = time.Now
 
 type collectorTimerInventoryOptions struct {
-	File           string
-	SpaceID        string
-	CloudAccountID string
-	Namespace      string
-	Region         string
+	ControlURL       string
+	AccessToken      string
+	ServiceAccessKey string
+	ServiceSecretKey string
+	File             string
+	SpaceID          string
+	CloudAccountID   string
+	Namespace        string
+	Region           string
 }
 
 type collectorTimerInventoryNode struct {
@@ -76,14 +80,11 @@ var collectorFunctionTimerInventoryCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		ctx, cancel := context.WithTimeout(cmd.Context(), collectorTimerInventoryTimeout)
 		defer cancel()
-		if strings.TrimSpace(collectorTimerInventoryFlags.SpaceID) == "" {
-			return fmt.Errorf("--space-id is required")
-		}
-		client, closeControl, err := useControlClient(nil, nil, collectorTimerInventoryFlags.File, collectorTimerInventoryFlags.SpaceID)
+		client, cleanup, err := newCollectorTimerInventoryClient(ctx, collectorTimerInventoryFlags)
+		defer cleanup()
 		if err != nil {
 			return err
 		}
-		defer closeControl()
 		summary, err := inspectCollectorTimerInventory(ctx, client, collectorTimerInventoryFlags)
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
@@ -97,7 +98,11 @@ var collectorFunctionTimerInventoryCmd = &cobra.Command{
 func init() {
 	collectorFunctionCmd.AddCommand(collectorFunctionTimerInventoryCmd)
 	flags := collectorFunctionTimerInventoryCmd.Flags()
-	flags.StringVar(&collectorTimerInventoryFlags.File, "file", "", "moox.toml；访问控制面所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
+	flags.StringVar(&collectorTimerInventoryFlags.ControlURL, "control-url", "", "Control service base URL")
+	flags.StringVar(&collectorTimerInventoryFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
+	flags.StringVar(&collectorTimerInventoryFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名 access key")
+	flags.StringVar(&collectorTimerInventoryFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
+	flags.StringVar(&collectorTimerInventoryFlags.File, "file", "", "可信 SSH 主机配置")
 	flags.StringVar(&collectorTimerInventoryFlags.SpaceID, "space-id", "", "required space id")
 	flags.StringVar(&collectorTimerInventoryFlags.CloudAccountID, "cloud-account-id", "", "required SCF cloud account id")
 	flags.StringVar(&collectorTimerInventoryFlags.Namespace, "namespace", "", "required SCF namespace")
@@ -296,4 +301,16 @@ func collectorTimerNodeIsMarketFetcher(node adminclient.CloudNode) bool {
 
 func timerInventoryAvailable(status string) bool {
 	return strings.EqualFold(strings.TrimSpace(status), "available")
+}
+
+func newCollectorTimerInventoryClient(ctx context.Context, opts collectorTimerInventoryOptions) (*adminclient.Client, func(), error) {
+	cleanup := func() {}
+	if strings.TrimSpace(opts.SpaceID) == "" {
+		return nil, cleanup, fmt.Errorf("--space-id is required")
+	}
+	gateway, err := openCommandGateway(ctx, opts.File, nil)
+	if err != nil {
+		return nil, cleanup, err
+	}
+	return &adminclient.Client{Gateway: gateway, SpaceID: opts.SpaceID}, func() { _ = gateway.Close() }, nil
 }

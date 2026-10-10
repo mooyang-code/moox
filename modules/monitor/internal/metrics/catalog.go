@@ -32,6 +32,10 @@ func (c *MetricCatalog) NoDataAfter() time.Duration {
 }
 
 func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset, limit int) ([]MetricService, int64, error) {
+	return c.ListServicesAt(ctx, spaceID, offset, limit, time.Now().UTC())
+}
+
+func (c *MetricCatalog) ListServicesAt(ctx context.Context, spaceID string, offset, limit int, now time.Time) ([]MetricService, int64, error) {
 	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
 		return nil, 0, ErrMetricsStoreUnavailable
 	}
@@ -64,7 +68,7 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 	if err := c.messageStore.db.WithContext(ctx).Raw(listSQL, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
-	c.markServicesStale(rows)
+	c.markServicesStaleAt(rows, now)
 	return rows, total, nil
 }
 
@@ -161,10 +165,6 @@ func (c *MetricCatalog) CurrentBootIDs(ctx context.Context, now time.Time) (map[
 		out[key] = bootID
 	}
 	return out, nil
-}
-
-func (c *MetricCatalog) markServicesStale(rows []MetricService) {
-	c.markServicesStaleAt(rows, time.Now().UTC())
 }
 
 func (c *MetricCatalog) markServicesStaleAt(rows []MetricService, now time.Time) {

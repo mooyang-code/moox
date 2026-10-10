@@ -40,7 +40,7 @@ func runRetainViews(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(io.Discard)
 	opts := retainViewsOptions{}
 	fs.StringVar(&opts.metadataDB, "metadata-db", "", "Metadata SQLite database path")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "存储部署根目录（其下 current/ 是当前发布）；storage-view 必须已停止")
+	fs.StringVar(&opts.packageRoot, "package-root", "", "Storage package root; the View process must be stopped")
 	fs.Var((*stringListValue)(&opts.keepViews), "keep-view", "View to retain, in space_id/view_id form (repeat exactly eight times)")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent metadata deletion")
 	if err := fs.Parse(args); err != nil {
@@ -103,26 +103,21 @@ func validateRetainViewsOptions(opts retainViewsOptions) error {
 
 func ensureStorageViewStopped(packageRoot string) error {
 	packageRoot = strings.TrimSpace(packageRoot)
-	statusPath := filepath.Join(packageRoot, lifecycleDir, "status.sh")
+	statusPath := filepath.Join(packageRoot, "status.sh")
 	if _, err := exec.LookPath(statusPath); err != nil {
-		return fmt.Errorf("找不到当前发布的 status.sh: %w", err)
+		return fmt.Errorf("storage status script is unavailable: %w", err)
 	}
-	// status.sh 是 Bash 脚本（用到数组和 pipefail），按它自己的 shebang 执行。组件没有在运行或没有就绪时它以退出码 1
-	// 结束，所以只在无法执行时报错，运行状态以输出为准。
+	// status.sh is generated as a Bash script (it uses arrays and pipefail),
+	// so invoke its shebang rather than forcing the POSIX sh interpreter.
 	output, err := exec.Command(statusPath, "storage-view").CombinedOutput()
-	var exitErr *exec.ExitError
-	if err != nil && !errors.As(err, &exitErr) {
-		return fmt.Errorf("检查 storage-view 的状态: %w", err)
+	if err != nil {
+		return fmt.Errorf("check storage-view status: %w", err)
 	}
-	if strings.Contains(string(output), "storage-view: 运行中") {
-		return errors.New("retain-views 之前必须先停止 storage-view")
+	if strings.Contains(string(output), "storage-view: running") {
+		return errors.New("storage-view must be stopped before retain-views")
 	}
-	if !strings.Contains(string(output), "storage-view: 未运行") {
-		return errors.New("无法确定 storage-view 的状态，拒绝执行 retain-views")
-	}
-	// 只停止不够：没有暂停标记时，健康检查会在整理元数据的过程中把 storage-view 重新拉起来。
-	if !strings.Contains(string(output), "已暂停") {
-		return errors.New("retain-views 之前必须先暂停 storage-view（pause.sh storage-view），否则健康检查会把它重新拉起")
+	if !strings.Contains(string(output), "storage-view: stopped") {
+		return errors.New("storage-view status is indeterminate; refusing retain-views")
 	}
 	return nil
 }

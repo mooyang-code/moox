@@ -40,8 +40,12 @@ func TestDiagnoseSpecsOnlyCreateChecksSupportedByBuiltInSignals(t *testing.T) {
 			continue
 		}
 		seenModules[healthCheck.Module] = true
+		componentID := healthCheck.Module
+		if componentID == "factor" {
+			componentID = "factor-mgr"
+		}
 		components = append(components, &monitorpb.DoctorExpectedComponent{
-			ComponentId: moduleComponent(healthCheck.Module), NodeId: "node-a", Expected: true,
+			ComponentId: componentID, NodeId: "node-a", Expected: true,
 			Transport: "reporter", FunctionalObservability: "active",
 		})
 	}
@@ -88,7 +92,7 @@ func TestRunDiagnoseRejectsManifestMismatch(t *testing.T) {
 func TestRunDiagnoseReporterConflictFailsClosed(t *testing.T) {
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:     embeddedManifestChecksum(t),
-		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
+		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", ServiceName: "moox-factor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
 		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FRESH"}},
 		MissingObservations:  []*monitorpb.DoctorObservation{{Kind: "identity", ComponentId: "factor-mgr", Status: "CONFLICT", Conflict: true}},
 	}
@@ -175,12 +179,4 @@ func TestRunDiagnoseDisabledModuleDoesNotFailHealthCheck(t *testing.T) {
 	require.NotNil(t, check)
 	require.Equal(t, core.StatusSkipped, check.Status)
 	require.Equal(t, core.ConclusionHealthy, result.Conclusion)
-}
-
-// moduleComponent 是上报某个模块指标的组件：factor 模块由 factor-mgr 上报，其余与模块同名。
-func moduleComponent(module string) string {
-	if module == "factor" {
-		return "factor-mgr"
-	}
-	return module
 }

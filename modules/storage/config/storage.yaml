@@ -1,3 +1,7 @@
+gateway_client:
+  caller: storage-view
+  key_id: "" # Admin 分配，部署时填入。
+  key_file: ../../secrets/caller-storage-view.key
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
@@ -26,9 +30,6 @@ storage:
       backoff_base_ms: 200
       backoff_max_ms: 30000
   view:
-    metadata_service_name: trpc.moox.storage.Metadata
-    primary_store_service_name: trpc.moox.storage.PrimaryStore
-    index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
     fetch_batch: 1

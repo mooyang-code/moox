@@ -16,8 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -65,42 +63,29 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	}
 }
 
-func TestNewMetricsStorageWithoutGatewayIsUnavailable(t *testing.T) {
-	cfg := config.Default()
-	if storage := newMetricsStorage(&Runtime{}, cfg); storage == nil {
-		t.Fatal("没有 gatewayclient 时也应返回适配器，由 schema 检查报告不可用")
-	}
+type collectorInventoryTestInvoke func(context.Context, string, string, any, any) error
+
+func (f collectorInventoryTestInvoke) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return f(ctx, service, method, req, rsp)
 }
 
-func TestBuildKlineFreshnessInventoryUsesGatewayClient(t *testing.T) {
+func TestBuildKlineFreshnessInventoryBorrowsGateway(t *testing.T) {
 	cfg := config.Default()
 	cfg.KlineFreshness.Enabled = true
-	cfg.GatewayClient.KeyFile = filepath.Join(t.TempDir(), "caller-monitor.key")
-	cfg.GatewayClient.CacheDir = t.TempDir()
-	key, err := gatewayauth.MarshalCallerKey(gatewayauth.CallerKey{Caller: "monitor", KeyID: "monitor-1", Secret: "test-gateway-secret"})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfg.GatewayClient.KeyFile, key, 0o600))
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
-	require.NoError(t, err)
-	defer gateway.Close()
-	runtime := &Runtime{Gateway: gateway}
-
-	cache, err := buildKlineFreshnessInventory(cfg, runtime)
+	gateway := collectorInventoryTestInvoke(func(context.Context, string, string, any, any) error { return nil })
+	cache, err := buildKlineFreshnessInventory(cfg, gateway)
 	require.NoError(t, err)
 	require.NotNil(t, cache)
-
-	_, err = buildKlineFreshnessInventory(cfg, &Runtime{})
-	require.ErrorContains(t, err, "gatewayclient")
-
+	_, err = buildKlineFreshnessInventory(cfg, nil)
+	require.ErrorContains(t, err, "gateway client")
 	disabled := *cfg
 	disabled.KlineFreshness.Enabled = false
-	cache, err = buildKlineFreshnessInventory(&disabled, runtime)
+	cache, err = buildKlineFreshnessInventory(&disabled, nil)
 	require.NoError(t, err)
 	require.Nil(t, cache)
-
 	invalid := *cfg
 	invalid.KlineFreshness.InventoryPageSize = 101
-	_, err = buildKlineFreshnessInventory(&invalid, runtime)
+	_, err = buildKlineFreshnessInventory(&invalid, gateway)
 	require.ErrorContains(t, err, "page size")
 }
 
@@ -149,7 +134,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	startObservabilityConsumer(ctx, cfg, nil, nil, nil, nil)
 	startObservabilityConsumer(ctx, cfg, &Runtime{}, nil, hostmetrics.NewStore(nil, nil), nil)
 
-	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{PlacementChecks: config.PlacementChecksConfig{Enabled: false}}, rt))
+	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{Placement: config.PlacementConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	registerMetricsReporter(nil, nil)
@@ -157,7 +142,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 }
 
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
-	wantErr := errors.New("sysdeploy unavailable")
+	wantErr := errors.New("placement unavailable")
 	called := 0
 	handler := monitorSyncHandler(func(context.Context) (int, error) {
 		called++

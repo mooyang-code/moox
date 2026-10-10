@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -77,14 +75,14 @@ func TestCollectorSCFCanaryEnsuresPeriodBeforeInvoke(t *testing.T) {
 	view.complete = true
 
 	var ensureCallsAtInvoke atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		ensureCallsAtInvoke.Store(primary.ensureCalls.Load())
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"scf":{"code":0,"result":{"success":true}}}`))
 	}))
 	defer server.Close()
 
-	err := runCollectorSCFCanary(context.Background(), admintest.Client(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
+	err := runCollectorSCFCanary(context.Background(), collectorTestClient(server), collectorPublishOptions{canaryProof: proof}, "canary-node")
 	require.NoError(t, err)
 	require.EqualValues(t, 1, ensureCallsAtInvoke.Load(), "Storage must have persisted the period contract before SCF writes it")
 	require.NotNil(t, primary.ensuredExpectation)
@@ -105,14 +103,14 @@ func TestCollectorSCFCanaryDoesNotInvokeWhenEnsureFails(t *testing.T) {
 	view.viewRows = []*storagepb.TimeSeriesRow{collectorCanaryTestRow(proof)}
 	view.complete = true
 	var invokeCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		invokeCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"scf":{"code":0,"result":{"success":true}}}`))
 	}))
 	defer server.Close()
 
-	err := runCollectorSCFCanary(context.Background(), admintest.Client(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
+	err := runCollectorSCFCanary(context.Background(), collectorTestClient(server), collectorPublishOptions{canaryProof: proof}, "canary-node")
 	require.ErrorContains(t, err, "ensure Storage period")
 	require.Zero(t, invokeCalls.Load())
 }
@@ -124,18 +122,17 @@ func TestPublishCollectorFunctionRejectsUnverifiedCanaryBeforeControlPlaneAccess
 	activeManifest := `[admin]
 username = "admin"
 password = "test-password"
+
 [tencent_cloud]
 secret_id = "test-id"
 secret_key = "test-key"
+
 [eventbus]
 tls_enabled = true
-[hosts.control]
-address = "192.0.2.10"
-ssh = { username = "ubuntu", password = "test-password" }
-[placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector"]
+
 [scf_fetcher]
 enabled = true
+
 [scf_fetcher.cloud_account]
 account_id = "account-a"
 account_name = "test"
@@ -143,6 +140,7 @@ credential_secret_id = "cls-secret"
 app_id = "1234567890"
 cos_region = "ap-guangzhou"
 cos_bucket = "test-bucket"
+
 [[scf_fetcher.spaces]]
 space_id = "crypto"
 entrypoint = "market_data"
@@ -163,23 +161,51 @@ realtime_batch_size = 10
 max_inflight_requests = 10
 request_timeout_ms = 1000
 http_max_attempts = 4
-storage_max_attempts = 1
 storage_timeout_ms = 5000
 max_retry_attempts = 3
+
 [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 enabled = false
 function_count = 0
+
 [[scf_fetcher.spaces.regions]]
 region = "ap-singapore"
 enabled = true
 function_count = 1
+
+[hosts.control]
+address = "192.0.2.10"
+[hosts.control.ssh]
+username = "ubuntu"
+password = "test-password"
+
+[hosts.storage]
+address = "192.0.2.20"
+[hosts.storage.ssh]
+username = "ubuntu"
+password = "test-password"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+storage = ["access"]
 `
 	manifestPath := filepath.Join(t.TempDir(), "moox.toml")
 	require.NoError(t, os.WriteFile(manifestPath, []byte(activeManifest), 0o600))
 	activeSpace, _, err := loadCollectorSCFFetcherConfigSnapshot(manifestPath, "crypto")
 	require.NoError(t, err)
 	require.NotNil(t, activeSpace)
+	marketConfig, err := os.ReadFile(filepath.Join(collectorRoot, "configs/scf/market_data/sources/market/binance.yaml"))
+	require.NoError(t, err)
+	eventBusCA, err := os.ReadFile(filepath.Join(filepath.Dir(credentialFile), "eventbus-ca.pem"))
+	require.NoError(t, err)
+	zipPath := filepath.Join(t.TempDir(), "collector.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{
+		"main":                        "binary",
+		"sources/market/binance.yaml": string(marketConfig),
+		"certs/eventbus-ca.pem":       string(eventBusCA),
+	})
+
 	previousCLS := newCollectorCLSAPI
 	newCollectorCLSAPI = func(string, string, string) (tencent.CLSAPI, error) {
 		return collectorCLSAPI{}, nil
@@ -187,28 +213,30 @@ function_count = 1
 	t.Cleanup(func() { newCollectorCLSAPI = previousCLS })
 
 	for _, tc := range []struct {
-		name, file, region, trigger, wantError string
+		name, file, region, trigger string
+		zipPath                     string
 	}{
-		{name: "without manifest", region: "ap-guangzhou", trigger: "invoke", wantError: "需要 --file"},
-		{name: "active manifest selects disabled region", file: manifestPath, region: "ap-guangzhou", trigger: "invoke", wantError: "canary verification contract is unavailable"},
+		{name: "ad hoc invoke", region: "ap-guangzhou", trigger: "invoke", zipPath: zipPath},
+		{name: "ad hoc timer", region: "ap-guangzhou", trigger: "timer", zipPath: zipPath},
+		{name: "active manifest selects disabled region", file: manifestPath, region: "ap-guangzhou", trigger: "invoke"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var reads, uploads, mutations atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/trpc.moox.cloudnode.CloudNodeMgr/ListCloudAccounts":
+				case "/api/admin/cloudnode/ListCloudAccounts", "/api/service/cloudnode/ListCloudAccounts":
 					reads.Add(1)
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a","provider":"tencent","credential_secret_id":"cls-secret"}]}`))
-				case "/trpc.moox.ops.SecretMgr/GetSecretValue":
+				case "/api/admin/secret/GetSecretValue", "/api/service/secret/GetSecretValue":
 					reads.Add(1)
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_id":"cls-secret","category":"cloud","provider":"tencent","status":"active","key_id":"cls-id","secret_value":"cls-key"}}`))
-				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+				case "/api/admin/cloudnode/GetNodeList", "/api/service/cloudnode/GetNodeList":
 					reads.Add(1)
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
-				case "/trpc.moox.cloudnode.CloudNodeMgr/InitPackageUpload":
+				case "/api/admin/cloudnode/InitPackageUpload":
 					uploads.Add(1)
 					http.Error(w, "package upload must be blocked", http.StatusInternalServerError)
-				case "/trpc.moox.cloudnode.CloudNodeMgr/CreateCloudAccount", "/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes", "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeployNodes", "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs":
+				case "/api/admin/cloudnode/CreateCloudAccount", "/api/admin/cloudnode/SubmitCreateNodes", "/api/admin/cloudnode/SubmitDeployNodes", "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
 					mutations.Add(1)
 					http.Error(w, "node or account mutation must be blocked", http.StatusInternalServerError)
 				default:
@@ -220,15 +248,23 @@ function_count = 1
 
 			_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{
 				collectorPackageOptions: collectorPackageOptions{CollectorRoot: collectorRoot, SpaceID: "crypto", PackageConfigDir: "scf/market_data"},
-				control:                 admintest.Client(server.URL), File: tc.file, SpaceID: "crypto",
+				ControlURL:              server.URL, File: tc.file, AccessToken: "test-token", ServiceAccessKey: "cli-test", ServiceSecretKey: "cli-secret", SpaceID: "crypto", ZipPath: tc.zipPath,
 				CloudAccountID: "account-a", Region: tc.region, NodeCount: 1, TriggerType: tc.trigger, EventBusCredentialFile: credentialFile,
 			})
-			require.ErrorContains(t, err, tc.wantError)
-			require.Zero(t, reads.Load(), "发布门禁必须先于任何控制面读取")
+			require.ErrorContains(t, err, "canary verification contract is unavailable")
+			if tc.file == "" {
+				require.Greater(t, reads.Load(), int32(0), "ad-hoc mode may inspect its existing fleet before failing closed")
+			} else {
+				require.Zero(t, reads.Load(), "manifest canary gate must precede external route discovery")
+			}
 			require.Zero(t, uploads.Load(), "canary proof preflight must precede package upload")
 			require.Zero(t, mutations.Load(), "canary proof preflight must precede account and node mutations")
 		})
 	}
+}
+
+func TestCollectorSCFCanaryProofPreflightRejectsEmptyPlans(t *testing.T) {
+	require.ErrorContains(t, validateCollectorSCFCanaryProofPreflight(), "ownership-validated disabled task")
 }
 
 func TestCollectorSCFReleaseCanaryOptionsUseIsolatedInvokeSlot(t *testing.T) {
@@ -237,7 +273,7 @@ func TestCollectorSCFReleaseCanaryOptionsUseIsolatedInvokeSlot(t *testing.T) {
 	limits := setupconfig.TencentSCFLimits{RegionLimits: map[string]setupconfig.TencentSCFRegionLimit{
 		"ap-nanjing": {MaxNamespacesPerRegion: 3, MaxFunctionsPerNamespace: 2},
 	}}
-	base := collectorPublishOptions{FunctionNamePrefix: fetcher.FunctionPrefix, TriggerType: "timer", NodeCount: 3, AccessRoute: collectorTestAccessRoute("ap-nanjing")}
+	base := collectorPublishOptions{FunctionNamePrefix: fetcher.FunctionPrefix, TriggerType: "timer", NodeCount: 3, AccessAddress: "storage:11004"}
 
 	got, err := collectorSCFReleaseCanaryOptions(base, fetcher, region, limits)
 	require.NoError(t, err)
@@ -247,7 +283,7 @@ func TestCollectorSCFReleaseCanaryOptionsUseIsolatedInvokeSlot(t *testing.T) {
 	assert.Equal(t, 1, got.NodeCount)
 	assert.Zero(t, got.IndexOffset)
 	assert.Equal(t, "moox-fetcher-crypto-release-canary", got.FunctionNamePrefix)
-	assert.Equal(t, base.AccessRoute, got.AccessRoute, "canary 函数沿用所在地域的外部接入路由")
+	assert.Equal(t, base.AccessAddress, got.AccessAddress)
 }
 
 func TestCollectorSCFReleaseCanaryOptionsSupportStockCN(t *testing.T) {
@@ -375,10 +411,10 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 			var cancelOnce atomic.Bool
 			var inventoryReads atomic.Int32
 			var createJobTerminal atomic.Bool
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
-				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+				case "/api/admin/cloudnode/GetNodeList":
 					read := inventoryReads.Add(1)
 					if tc.interruptAfterDeploy && createJobTerminal.Load() && read > 1 && cancelOnce.CompareAndSwap(false, true) {
 						cancel()
@@ -387,7 +423,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 						sawCleanupWithLiveContext.Store(true)
 					}
 					_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": nodes, "page": map[string]any{"has_more": false}})
-				case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes":
+				case "/api/admin/cloudnode/SubmitCreateNodes":
 					var request struct {
 						Nodes []adminclient.NodeCreateItem `json:"nodes"`
 					}
@@ -400,7 +436,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 						TriggerType: item.TriggerType, BizType: "market_fetcher", FunctionName: prefix + "-ap-nanjing-0", Metadata: item.Metadata,
 					})
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"create-job","operation":"NODE_BATCH_OPERATION_CREATE_NODES","total_count":1}`))
-				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+				case "/api/admin/cloudnode/GetNodeBatchChange":
 					var request struct {
 						JobID string `json:"job_id"`
 					}
@@ -412,11 +448,11 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 						return
 					}
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
-				case "/trpc.moox.cloudnode.CloudNodeMgr/InvokeFunction":
+				case "/api/admin/cloudnode/InvokeFunction":
 					response, err := json.Marshal(map[string]any{"ret_info": map[string]any{"code": 0}, "scf": map[string]any{"code": 0, "result": tc.invokeResult}})
 					require.NoError(t, err)
 					_, _ = w.Write(response)
-				case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
+				case "/api/admin/cloudnode/SubmitDeleteNodes":
 					var request struct {
 						NodeIDs []string `json:"node_ids"`
 					}
@@ -444,11 +480,11 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 			opts := collectorPublishOptions{
 				CloudAccountID: "account-a", SpaceID: "crypto", Region: "ap-nanjing", Namespace: "canary-ns",
 				NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
-				FunctionNamePrefix: prefix, AccessRoute: collectorTestAccessRoute("ap-nanjing"), CallerKey: collectorTestCallerKey,
+				FunctionNamePrefix: prefix, AccessAddress: "192.0.2.20:11004",
 				EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON,
 				canaryProof: proof,
 			}
-			summary, canaryNode, err := publishCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), opts, "candidate-package")
+			summary, canaryNode, err := publishCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), opts, "candidate-package")
 			if tc.wantError {
 				require.Error(t, err)
 			} else {
@@ -480,12 +516,12 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 	}
 	var deletedIDs []string
 	var statusReads atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": nodes, "page": map[string]any{"has_more": false}})
-		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
+		case "/api/admin/cloudnode/SubmitDeleteNodes":
 			var request struct {
 				NodeIDs []string `json:"node_ids"`
 			}
@@ -497,7 +533,7 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 				}
 			}
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-job","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			statusReads.Add(1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
 		default:
@@ -509,7 +545,7 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", FunctionNamePrefix: prefix,
 	}, "", true, false)
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown, "without the caller context, an accepted async delete cannot be reported as complete")
@@ -520,17 +556,17 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 func TestCleanupWaitsForKnownCanaryDeploymentBatchBeforeInventory(t *testing.T) {
 	var statusReads atomic.Int32
 	var inventoryAfterTerminal atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			read := statusReads.Add(1)
 			status := "NODE_BATCH_STATUS_RUNNING"
 			if read > 1 {
 				status = "NODE_BATCH_STATUS_SUCCESS"
 			}
 			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":"create-job","status":%q},"items":[]}`, status)
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			inventoryAfterTerminal.Store(statusReads.Load() > 1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
 		default:
@@ -540,7 +576,7 @@ func TestCleanupWaitsForKnownCanaryDeploymentBatchBeforeInventory(t *testing.T) 
 	}))
 	defer server.Close()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), admintest.Client(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
 	}, "create-job", false, false)
@@ -554,10 +590,10 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 	var inventoryReads atomic.Int32
 	var statusReads atomic.Int32
 	var deletedIDs []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			read := inventoryReads.Add(1)
 			items := []adminclient.CloudNode(nil)
 			if read == 2 {
@@ -568,14 +604,14 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 				}}
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": items, "page": map[string]any{"has_more": false}})
-		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
+		case "/api/admin/cloudnode/SubmitDeleteNodes":
 			var request struct {
 				NodeIDs []string `json:"node_ids"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			deletedIDs = append(deletedIDs, request.NodeIDs...)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-job","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			statusReads.Add(1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
 		default:
@@ -585,7 +621,7 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 	}))
 	defer server.Close()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), admintest.Client(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: prefix,
 	}, "", false, true)
@@ -597,7 +633,7 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 
 func TestCleanupCanceledKnownCanaryBatchFailsClosedBeforeInventory(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		t.Errorf("canceled cleanup must not issue follow-up requests, got %s", r.URL.Path)
 		http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -606,7 +642,7 @@ func TestCleanupCanceledKnownCanaryBatchFailsClosedBeforeInventory(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
 	}, "create-job", false, false)
@@ -617,10 +653,10 @@ func TestCleanupCanceledKnownCanaryBatchFailsClosedBeforeInventory(t *testing.T)
 func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 	const prefix = "release-canary-0123456789abcdef0123456789abcdef"
 	var statusReads atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ret_info": map[string]any{"code": 0},
 				"items": []adminclient.CloudNode{{
@@ -630,9 +666,9 @@ func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 				}},
 				"page": map[string]any{"has_more": false},
 			})
-		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
+		case "/api/admin/cloudnode/SubmitDeleteNodes":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-job","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			statusReads.Add(1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
 		default:
@@ -644,7 +680,7 @@ func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, collectorTestClient(server), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: prefix,
 	}, "", true, false)
@@ -802,7 +838,7 @@ func TestCollectorSCFCanaryEventBindsInventoryTaskPeriodAndView(t *testing.T) {
 	proof := &collectorSCFCanaryProof{entry: collectorCanaryTestEntry(), period: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), interval: time.Minute}
 	proof.entry.OutputFields = []string{"close", "volume"}
 	proof.entry.SeriesHash = "series-hash"
-	opts := collectorPublishOptions{SpaceID: "crypto", Region: "ap-singapore", AccessRoute: collectorTestAccessRoute("ap-singapore")}
+	opts := collectorPublishOptions{SpaceID: "crypto", Region: "ap-singapore", AccessAddress: "storage:11004"}
 	event := collectorSCFCanaryEventForProof(opts, "canary-node", "batch-123", proof)
 	data, ok := event["data"].(map[string]any)
 	require.True(t, ok)
@@ -850,7 +886,7 @@ func TestCollectorSCFCanaryProofRequiresCompletePeriodAndExactPrimaryAndViewRows
 
 func TestCollectorStockCNActivationRequiresPackageIdentityBeforeManifestOrTimerMutation(t *testing.T) {
 	_, err := activateStockCNCollection(context.Background(), collectorStockCNActivateOptions{
-		File: "/missing/moox.toml", Version: "candidate",
+		ControlURL: "https://control.invalid", File: "/missing/moox.toml", Version: "candidate",
 	})
 	require.ErrorContains(t, err, "--region-package-id")
 }
@@ -861,14 +897,14 @@ func canaryResponseClient(t *testing.T, result map[string]any) *adminclient.Clie
 		"ret_info": map[string]any{"code": 0},
 		"scf":      map[string]any{"code": 0, "result": result},
 	})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/InvokeFunction", r.URL.Path)
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/InvokeFunction", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write(raw)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	return admintest.Client(server.URL)
+	return collectorTestClient(server)
 }
 
 func mustCanaryJSON(t *testing.T, value any) []byte {
@@ -1038,27 +1074,20 @@ func TestCollectorCanaryRejectsAViewRowWithoutTheRequestedField(t *testing.T) {
 	require.ErrorContains(t, err, `missing requested field "close"`)
 }
 
-func TestCollectorHTTPInventoryReaderUsesTheServiceGatewayRoute(t *testing.T) {
-	var gotPath string
-	var gotBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"snapshot_id":"snap-1","entries":[{"task_id":"canary","enabled":false,"expected_count":1}],"page":{"page":1,"size":100,"total":1}}`))
-	}))
-	defer server.Close()
-
-	reader := collectorInventoryReader{control: admintest.Client(server.URL)}
-	rsp, err := reader.GetTaskResultInventory(context.Background(), &collectorpb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 100},
-	})
+func TestCollectorGatewayInventoryReaderUsesTheTaskInventoryMethod(t *testing.T) {
+	var got *collectorpb.GetTaskResultInventoryReq
+	reader := collectorGatewayInventoryReader{gateway: storageGatewayCall(func(_ context.Context, service, method string, request, response any) error {
+		require.Equal(t, "trpc.moox.collector.CollectMgr", service)
+		require.Equal(t, "GetTaskResultInventory", method)
+		got = request.(*collectorpb.GetTaskResultInventoryReq)
+		*response.(*collectorpb.GetTaskResultInventoryRsp) = collectorpb.GetTaskResultInventoryRsp{SnapshotId: "snap-1"}
+		return nil
+	})}
+	rsp, err := reader.GetTaskResultInventory(context.Background(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 100}})
 	require.NoError(t, err)
-	assert.Equal(t, "/trpc.moox.collector.CollectMgr/GetTaskResultInventory", gotPath)
-	assert.Equal(t, "crypto", gotBody["space_id"])
-	assert.Equal(t, "snap-1", rsp.GetSnapshotId())
-	require.Len(t, rsp.GetEntries(), 1)
-	assert.Equal(t, "canary", rsp.GetEntries()[0].GetTaskId())
-	assert.EqualValues(t, 1, rsp.GetEntries()[0].GetExpectedCount())
-	assert.EqualValues(t, 1, rsp.GetPage().GetTotal())
+	require.Equal(t, "crypto", got.GetSpaceId())
+	require.Equal(t, uint32(100), got.GetPage().GetSize())
+	require.Equal(t, "snap-1", rsp.GetSnapshotId())
+	_, err = reader.GetTaskResultInventory(context.Background(), got, client.WithTarget("ip://127.0.0.1:1"))
+	require.ErrorContains(t, err, "overrides")
 }

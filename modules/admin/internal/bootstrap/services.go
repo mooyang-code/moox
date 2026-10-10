@@ -6,9 +6,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/placement"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/publishlease"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
@@ -16,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -37,17 +36,22 @@ type Services struct {
 	// Setup is exposed only through the loopback setup listener.
 	Setup *setupservice.Service
 
+	// 系统服务部署信息
+	SysDeploy sysdeploy.Service
+
 	// Collector 发布租约由 Admin 控制面持久化与校验。
 	CollectorPublishLease *publishlease.Service
 
-	// 部署主机与部署（按组件目录校验）。
-	Placements *placement.Service
+	consoleGateway *gatewayclient.Client
+	machineGateway *gatewayclient.Client
+}
 
-	// 调用方签名密钥的主副本。
-	Keys *keys.Service
-
-	// 网关控制：向主机网关下发快照并接收心跳。
-	GatewayControl *gatewaycontrol.Service
+func (s *Services) closeGateways() {
+	for _, gateway := range []*gatewayclient.Client{s.consoleGateway, s.machineGateway} {
+		if gateway != nil {
+			_ = gateway.Close()
+		}
+	}
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。
@@ -98,6 +102,9 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	log.Info("[Bootstrap] 正在创建 Space 服务...")
 	spaceService := space.NewService(dbManager)
 
+	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
+	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
+	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
 	db := dbManager.GetDB()
 
 	// 创建 SSH 服务
@@ -116,8 +123,6 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	}
 	setupService := setupservice.NewService(db, encryptionKey)
 	collectorPublishLease := publishlease.NewService(db, spaceService)
-	placements := placement.NewService(db, nil)
-	keyService := keys.NewService(secretDAO)
 
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
@@ -126,10 +131,8 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		SSHService:            sshService,
 		SecretService:         secretService,
 		Setup:                 setupService,
+		SysDeploy:             sysDeployService,
 		CollectorPublishLease: collectorPublishLease,
-		Placements:            placements,
-		Keys:                  keyService,
-		GatewayControl:        gatewaycontrol.NewService(placements, keyService),
 	}
 
 	return services, nil

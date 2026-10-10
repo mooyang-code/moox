@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -22,10 +24,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -59,17 +64,21 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	}
 	fs := flag.NewFlagSet("eventbus-credentials", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dbPath, keyFile, natsURL, outputDir, credential := "./data/admin.db", "", "", "", ""
+	dbPath, keyFile, nodeID, outputDir, credential, roles := "./data/admin.db", "", "", "", "", ""
 	confirm := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&keyFile, "encryption-key-file", "", "0600 encryption key file")
-	fs.StringVar(&natsURL, "nats-url", "", "消息总线的公网地址，例如 tls://106.53.107.122:4222（由 moox-cli 按 moox.toml 传入）")
+	fs.StringVar(&nodeID, "node-id", "", "registered control host containing the EventBus deployment")
 	fs.StringVar(&outputDir, "output-dir", "", "credential output directory")
 	fs.StringVar(&credential, "credential", "", "role token to rotate")
+	fs.StringVar(&roles, "roles", "", "comma-separated canonical client roles for export-clients")
 	fs.BoolVar(&confirm, "confirm", false, "confirm rotation and immediate invalidation")
 	sub := args[1]
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
+	}
+	if roles != "" && sub != "export-clients" {
+		return errors.New("--roles is only valid for export-clients")
 	}
 	// A control-plane reset removes admin.db, while an externally managed
 	// EventBus keeps its role files. Reconcile only users.yaml from those
@@ -91,17 +100,28 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	defer closeAdminCLIDB(db)
 	secretDAO := dao.NewSecretDAO(db)
 	switch sub {
+	case "export-clients":
+		return exportEventBusClients(context.Background(), db, nodeID, outputDir, roles, stdout)
 	case "ensure":
-		if _, err := validateEventBusNATSURL(natsURL); err != nil {
-			return fmt.Errorf("--nats-url: %w", err)
+		natsURL, err := eventBusNATSURL(db, nodeID)
+		if err != nil {
+			return err
 		}
-		return ensureEventBus(secretDAO, natsURL, stdout)
+		var metadata bytes.Buffer
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			return ensureEventBus(dao.NewSecretDAO(tx), natsURL, &metadata)
+		}); err != nil {
+			return err
+		}
+		_, err = stdout.Write(metadata.Bytes())
+		return err
 	case "export":
 		if outputDir == "" {
 			return errors.New("--output-dir is required")
 		}
-		if _, err := validateEventBusNATSURL(natsURL); err != nil {
-			return fmt.Errorf("--nats-url: %w", err)
+		natsURL, err := eventBusNATSURL(db, nodeID)
+		if err != nil {
+			return err
 		}
 		return exportEventBus(secretDAO, outputDir, natsURL, stdout)
 	case "rotate":
@@ -144,11 +164,55 @@ func parseCredentialToken(raw string) string {
 	return ""
 }
 
+// The EventBus address follows the active component placement, which may be
+// on a different host from Admin. Credential issuance does not mutate topology.
+func eventBusNATSURL(db *gorm.DB, controlHostID string) (string, error) {
+	dao, err := sysdeploy.NewTopologyDAO(db, controlHostID)
+	if err != nil {
+		return "", err
+	}
+	hosts, placements, err := dao.Read(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("query EventBus placement: %w", err)
+	}
+	hostByID := make(map[string]sysdeploy.HostRecord, len(hosts))
+	for _, host := range hosts {
+		hostByID[host.HostID] = host
+	}
+	var address string
+	for _, placement := range placements {
+		host, exists := hostByID[placement.HostID]
+		if placement.ComponentID != "eventbus" || placement.Status != servicecatalog.Enabled || !exists || host.Status != servicecatalog.Enabled {
+			continue
+		}
+		if address != "" {
+			return "", errors.New("EventBus must have exactly one active placement")
+		}
+		address = host.Address
+	}
+	if address == "" {
+		return "", errors.New("active EventBus placement not found")
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return "", err
+	}
+	component, ok := catalog.Component("eventbus")
+	if !ok || len(component.Ports) != 1 {
+		return "", errors.New("invalid EventBus catalog port")
+	}
+	raw := "tls://" + net.JoinHostPort(address, strconv.Itoa(component.Ports[0]))
+	if _, err := validateEventBusNATSURL(raw); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
 func openAdminCLIDB(path string) (*gorm.DB, error) {
 	if path == "" {
 		return nil, errors.New("db path is required")
 	}
-	return gorm.Open(sqlite.Open(path), &gorm.Config{})
+	return gorm.Open(sqlite.Open(initSQLiteDSN(path)), &gorm.Config{})
 }
 func closeAdminCLIDB(db *gorm.DB) {
 	if db != nil {
@@ -170,6 +234,9 @@ func loadCLIKey(dbPath, keyFile string) error {
 	}
 	raw, err := os.ReadFile(keyFile)
 	if os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
+			return err
+		}
 		if info != nil {
 			return errors.New("admin database exists but encryption key is missing")
 		}
@@ -196,14 +263,27 @@ func loadCLIKey(dbPath, keyFile string) error {
 
 func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
 	ctx := trpc.BackgroundContext()
+	existing, err := listEventbus(d, ctx)
+	if err != nil {
+		return err
+	}
+	_, hasCA := existing["eventbus_tls_ca"]
+	_, hasServer := existing["eventbus_tls_server"]
+	if hasCA != hasServer {
+		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
+	}
+	if hasCA {
+		if err := validateEventBusTLS(existing, natsURL); err != nil {
+			return err
+		}
+	}
 	for _, role := range eventBusRoles {
 		key := eventBusKeys[role]
 		if _, err := ensureToken(ctx, d, key, role); err != nil {
 			return err
 		}
 	}
-	existing, _ := listEventbus(d, ctx)
-	if _, ok := existing["eventbus_tls_ca"]; !ok {
+	if !hasCA {
 		bundle, err := makeTLSBundle(natsURL)
 		if err != nil {
 			return err
@@ -215,11 +295,6 @@ func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
 		serverValue, _ := json.Marshal(map[string]string{"cert": bundle.Cert, "key": bundle.Key})
 		if err := d.Create(ctx, &model.Secret{SpaceID: "mooxsys", SecretID: uuid.New().String(), Name: "EventBus TLS server", Description: "private EventBus server bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_server", SecretValue: string(serverValue), ExtraConfig: string(extra)}); err != nil {
 			return err
-		}
-	} else {
-		var extra map[string]string
-		if err := json.Unmarshal([]byte(existing["eventbus_tls_ca"].ExtraConfig), &extra); err != nil || extra["nats_url"] != natsURL {
-			return errors.New("EventBus TLS certificate host differs from the service directory; use --reset-data to rebuild")
 		}
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "roles": eventBusRoles, "tls": true})
@@ -256,6 +331,9 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	ctx := trpc.BackgroundContext()
 	rows, err := listEventbus(d, ctx)
 	if err != nil {
+		return err
+	}
+	if err := validateEventBusTLS(rows, natsURL); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -306,15 +384,54 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	if err := json.Unmarshal([]byte(server.SecretValue), &serverParts); err != nil {
 		return fmt.Errorf("decode EventBus TLS server bundle: %w", err)
 	}
-	if serverParts["cert"] != "" && serverParts["key"] != "" {
-		if err := atomicSecretFile(filepath.Join(dir, "server.pem"), []byte(serverParts["cert"])); err != nil {
-			return err
-		}
-		if err := atomicSecretFile(filepath.Join(dir, "server-key.pem"), []byte(serverParts["key"])); err != nil {
-			return err
-		}
+	if serverParts["cert"] == "" || serverParts["key"] == "" {
+		return errors.New("EventBus TLS server identity is incomplete")
+	}
+	if err := atomicSecretFile(filepath.Join(dir, "server.pem"), []byte(serverParts["cert"])); err != nil {
+		return err
+	}
+	if err := atomicSecretFile(filepath.Join(dir, "server-key.pem"), []byte(serverParts["key"])); err != nil {
+		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "roles": eventBusRoles})
+}
+
+func validateEventBusTLS(rows map[string]model.Secret, natsURL string) error {
+	ca, hasCA := rows["eventbus_tls_ca"]
+	server, hasServer := rows["eventbus_tls_server"]
+	if !hasCA || !hasServer {
+		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
+	}
+	var extra map[string]string
+	if json.Unmarshal([]byte(ca.ExtraConfig), &extra) != nil || extra["nats_url"] != natsURL {
+		return errors.New("EventBus TLS certificate host differs from the service directory; explicit identity rotation is required")
+	}
+	var parts struct {
+		Cert string `json:"cert"`
+		Key  string `json:"key"`
+	}
+	if json.Unmarshal([]byte(server.SecretValue), &parts) != nil {
+		return errors.New("EventBus TLS server identity is invalid")
+	}
+	pair, err := tls.X509KeyPair([]byte(parts.Cert), []byte(parts.Key))
+	if err != nil {
+		return errors.New("EventBus TLS server identity is invalid")
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return errors.New("EventBus TLS server certificate is invalid")
+	}
+	trust := x509.NewCertPool()
+	endpoint, err := validateEventBusNATSURL(natsURL)
+	if err != nil || !trust.AppendCertsFromPEM([]byte(ca.SecretValue)) {
+		return errors.New("EventBus TLS trust or endpoint is invalid")
+	}
+	for _, host := range []string{endpoint.Hostname(), "127.0.0.1"} {
+		if _, err := certificate.Verify(x509.VerifyOptions{Roots: trust, DNSName: host}); err != nil {
+			return errors.New("EventBus TLS server certificate does not verify for its endpoints")
+		}
+	}
+	return nil
 }
 
 func eventBusRoleFiles() map[string]string {
@@ -447,21 +564,20 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 	return writeJSON(out, map[string]any{"status": "ok", "rotated": credential, "warning": "redeploy affected clients now; old token is invalid"})
 }
 
-// validateEventBusNATSURL 校验消息总线地址：只能是带主机和端口的 tls://，不能带用户、路径或参数。
 func validateEventBusNATSURL(raw string) (*url.URL, error) {
 	if raw == "" || raw != strings.TrimSpace(raw) {
-		return nil, errors.New("消息总线地址不能为空，也不能带首尾空白")
+		return nil, errors.New("--eventbus-nats-url is required and must not contain surrounding whitespace")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.Port() == "" {
-		return nil, errors.New("消息总线地址必须是带主机和端口的 tls:// 地址")
+		return nil, errors.New("--eventbus-nats-url must be a tls URL with host and port")
 	}
 	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, errors.New("消息总线地址只能包含协议、主机和端口")
+		return nil, errors.New("--eventbus-nats-url must contain only scheme, host, and port")
 	}
 	port, err := strconv.Atoi(parsed.Port())
 	if err != nil || port < 1 || port > 65535 {
-		return nil, errors.New("消息总线地址的端口必须在 1 到 65535 之间")
+		return nil, errors.New("--eventbus-nats-url port must be between 1 and 65535")
 	}
 	return parsed, nil
 }

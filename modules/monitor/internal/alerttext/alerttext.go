@@ -5,6 +5,7 @@ package alerttext
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -40,26 +41,26 @@ func Duration(d time.Duration) string {
 	}
 }
 
-// Service 返回组件的中文名称，取自组件目录；外部调用方（例如 SCF 采集函数）取它的说明；都找不到时返回 ID。
-func Service(componentID string) string {
-	componentID = strings.TrimSpace(componentID)
-	catalog := servicecatalog.Default()
-	if component, ok := catalog.Component(componentID); ok {
-		return component.Name
+var embeddedCatalog = sync.OnceValues(servicecatalog.LoadEmbedded)
+
+// Service reads the single component-name registry. Unknown IDs stay explicit.
+func Service(id string) string {
+	catalog, err := embeddedCatalog()
+	if err == nil {
+		if component, ok := catalog.Component(id); ok {
+			return component.Name
+		}
 	}
-	if principal, ok := catalog.Principal(componentID); ok && principal.Description != "" {
-		return principal.Description
-	}
-	return componentID
+	return id
 }
 
-// Node 渲染告警中的主机，例如 "storage 主机"。
-func Node(hostID string) string {
-	hostID = strings.TrimSpace(hostID)
-	if hostID == "" {
-		return "未知主机"
+// Node renders a node for alert text, such as "storage 节点".
+func Node(node string) string {
+	node = strings.TrimSpace(node)
+	if node == "" {
+		return "未知节点"
 	}
-	return hostID + " 主机"
+	return node + " 节点"
 }
 
 // Frequency renders a frequency for alert text, such as "1小时".

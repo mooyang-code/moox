@@ -19,7 +19,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/mooyang-code/moox/packages/trpcretry"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -189,7 +188,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
 		Keys:        recentMarketCanaryKeys(config, storageFrequency, candidateTimes),
 		ColumnNames: []string{"close"},
-	}, client.WithFilter(trpcretry.ReadOnly()))
+	})
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
 		result.ErrorMessage = "storage_unreachable"
@@ -305,7 +304,7 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		AuthInfo: c.AuthInfo, SpaceId: config.SpaceID, DatasetId: config.DatasetID,
 		Keys:        recentMarketCanaryKeys(config, "1m", expected),
 		ColumnNames: []string{"open", "high", "low", "close", "volume", "amount", "source_provider"},
-	}, client.WithFilter(trpcretry.ReadOnly()))
+	})
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
 		result.ErrorMessage = "storage_unreachable"
@@ -489,7 +488,7 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
 		Keys:        recentMarketCanaryKeys(config, frequency, times),
 		ColumnNames: []string{"close"},
-	}, client.WithFilter(trpcretry.ReadOnly()))
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrStorageUnavailable, err)
 	}

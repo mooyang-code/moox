@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/pkg/sftp"
 	xssh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -25,7 +24,6 @@ import (
 
 var (
 	ErrHostKeyUnknown      = errors.New("host_key_unknown")
-	ErrHostKeyChanged      = errors.New("host_key_changed")
 	ErrFingerprintMismatch = errors.New("host_key_fingerprint_mismatch")
 	ErrAuthFailed          = errors.New("ssh_auth_failed")
 	ErrUnreachable         = errors.New("ssh_unreachable")
@@ -38,16 +36,6 @@ type Target struct {
 	Username string
 }
 
-// HostTarget 返回 moox.toml 中一台主机的 SSH 目标。
-func HostTarget(host setupconfig.Host) Target {
-	return Target{Name: host.ID, Address: host.Address, Port: host.SSH.Port, Username: host.SSH.Username}
-}
-
-// DialHost 用 moox.toml 中的 SSH 口令连接一台主机。
-func DialHost(ctx context.Context, host setupconfig.Host, opts Options) (Client, error) {
-	return Dial(ctx, HostTarget(host), host.SSH.Password, opts)
-}
-
 func (t Target) DialAddress() string {
 	return net.JoinHostPort(t.Address, strconv.Itoa(t.Port))
 }
@@ -55,6 +43,11 @@ func (t Target) DialAddress() string {
 type Options struct {
 	KnownHostsPath string
 	Timeout        time.Duration
+	IdentityFiles  []string
+	AgentSocket    string
+	DisableAgent   bool
+	// OutputLimit bounds each command output stream. Zero selects 8 MiB.
+	OutputLimit int
 }
 
 type Result struct {
@@ -73,12 +66,16 @@ type Client interface {
 }
 
 type transport struct {
-	client *xssh.Client
-	mu     sync.Mutex
-	closed bool
+	client      *xssh.Client
+	mu          sync.Mutex
+	closed      bool
+	outputLimit int
 }
 
 func Dial(ctx context.Context, target Target, password string, opts Options) (Client, error) {
+	if opts.OutputLimit < 0 || opts.OutputLimit > 8<<20 {
+		return nil, errors.New("ssh_output_limit_invalid")
+	}
 	if err := validateTarget(target); err != nil {
 		return nil, err
 	}
@@ -92,25 +89,25 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 	}
 	wrappedCallback := func(hostname string, remote net.Addr, key xssh.PublicKey) error {
 		if err := callback(hostname, remote, key); err != nil {
-			// known_hosts 里已有这台主机的另一把密钥：主机被重装，或者连到了冒充者。和"第一次连接"分开报告。
-			var keyErr *knownhosts.KeyError
-			if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
-				return fmt.Errorf("%w: %s", ErrHostKeyChanged, xssh.FingerprintSHA256(key))
-			}
 			return fmt.Errorf("%w: %s", ErrHostKeyUnknown, xssh.FingerprintSHA256(key))
 		}
 		return nil
 	}
+	methods, closeAgent := authentication(ctx, password, opts)
+	defer closeAgent()
+	if len(methods) == 0 {
+		return nil, ErrAuthFailed
+	}
 	config := &xssh.ClientConfig{
 		User:            target.Username,
-		Auth:            []xssh.AuthMethod{xssh.Password(password)},
+		Auth:            methods,
 		HostKeyCallback: wrappedCallback,
 		Timeout:         timeout(opts),
 	}
 	connection, err := dialContext(ctx, target.DialAddress(), config, timeout(opts))
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrHostKeyUnknown), errors.Is(err, ErrHostKeyChanged):
+		case errors.Is(err, ErrHostKeyUnknown):
 			return nil, err
 		case isAuthenticationError(err):
 			return nil, ErrAuthFailed
@@ -118,7 +115,7 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 			return nil, ErrUnreachable
 		}
 	}
-	return &transport{client: connection}, nil
+	return &transport{client: connection, outputLimit: opts.OutputLimit}, nil
 }
 
 var errHostKeyCaptured = errors.New("host key captured")
@@ -149,14 +146,6 @@ func TrustHost(ctx context.Context, target Target, expectedFingerprint string, o
 	}
 	if !errors.Is(err, errHostKeyCaptured) || captured == nil {
 		return ErrUnreachable
-	}
-	// known_hosts 里已有这台主机的另一把密钥时拒绝追加：追加会让两把密钥都被接受，等于绕过了密钥变更告警。
-	// 主机确实重装过，由操作员核对后手工删除旧条目再信任。
-	if existing, err := knownhosts.New(knownHostsPath); err == nil {
-		var keyErr *knownhosts.KeyError
-		if checkErr := existing(knownhosts.Normalize(target.DialAddress()), &net.TCPAddr{}, captured); errors.As(checkErr, &keyErr) && len(keyErr.Want) > 0 {
-			return ErrHostKeyChanged
-		}
 	}
 	line := knownhosts.Line([]string{knownhosts.Normalize(target.DialAddress())}, captured) + "\n"
 	f, err := os.OpenFile(knownHostsPath, os.O_WRONLY|os.O_APPEND, 0o600)
@@ -238,9 +227,18 @@ func isAuthenticationError(err error) bool {
 }
 
 func (t *transport) Check(ctx context.Context) error {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return ErrUnreachable
+	}
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := t.client.SendRequest("keepalive@moox", true, nil)
+		// A no-reply keepalive checks transport writability without entering
+		// x/crypto's global-response drain, which can spin on a closed channel.
+		// The subsequent RPC independently bounds response and dial time.
+		_, _, err := t.client.SendRequest("keepalive@moox", false, nil)
 		done <- err
 	}()
 	select {
@@ -326,12 +324,6 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	}
 	fileOpen := true
 	removeTemporary := true
-	// 发布包里有全部密钥：写入任何内容之前先收紧权限，不能等写完再 chmod（服务端按 umask 创建，通常是 0644）。
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		_ = client.Remove(temporary)
-		return fmt.Errorf("ssh_upload_failed: 无法收紧临时文件权限: %w", err)
-	}
 	defer func() {
 		if fileOpen {
 			_ = file.Close()
@@ -399,6 +391,24 @@ func (r *contextReader) Read(p []byte) (int, error) {
 	}
 }
 
+type commandOutput struct {
+	buffer   bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (b *commandOutput) Write(raw []byte) (int, error) {
+	n := len(raw)
+	if remaining := b.limit - b.buffer.Len(); n > remaining {
+		b.overflow = true
+		raw = raw[:remaining]
+	}
+	_, _ = b.buffer.Write(raw)
+	// Drain the SSH stream even after overflow so a full channel cannot block
+	// remote exit. The command's context still bounds its lifetime.
+	return n, nil
+}
+
 func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Result, error) {
 	if len(argv) == 0 {
 		return Result{}, fmt.Errorf("ssh_command_invalid")
@@ -408,7 +418,11 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 		return Result{}, fmt.Errorf("ssh_command_failed: %w", err)
 	}
 	defer session.Close()
-	var stdout, stderr bytes.Buffer
+	limit := t.outputLimit
+	if limit == 0 {
+		limit = 8 << 20
+	}
+	stdout, stderr := commandOutput{limit: limit}, commandOutput{limit: limit}
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 	session.Stdin = stdin
@@ -423,7 +437,10 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 		_ = session.Close()
 		return Result{}, ctx.Err()
 	case err := <-done:
-		result := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+		if stdout.overflow || stderr.overflow {
+			return Result{}, errors.New("ssh_command_output_exceeded_limit")
+		}
+		result := Result{Stdout: stdout.buffer.String(), Stderr: stderr.buffer.String()}
 		if err == nil {
 			return result, nil
 		}

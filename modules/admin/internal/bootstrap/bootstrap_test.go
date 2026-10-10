@@ -63,7 +63,7 @@ func TestAdminCertificateWatchTimerConfig(t *testing.T) {
 			assert.Equal(t, 11307, service.Port)
 			assert.Equal(t, "0 0 0 * * *", service.Network)
 			assert.Equal(t, "timer", service.Protocol)
-			assert.Equal(t, 10000, service.Timeout)
+			assert.Equal(t, int(certificateWatchTimeout/time.Millisecond), service.Timeout)
 			return
 		}
 	}

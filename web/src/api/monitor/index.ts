@@ -15,22 +15,4 @@ export const monitorApi = {
   }
 };
 
-export type {
-  HealthAlert,
-  HealthBusinessCheck,
-  HealthComponent,
-  HealthHost,
-  HealthNotification,
-  HealthOverview,
-  HealthStageDataset,
-  HealthDataStage,
-  HealthProbe,
-  HealthReporter,
-  HealthStatus,
-  HealthSummary,
-  HealthTarget,
-  HealthUnregistered,
-  NotificationChannelResponse,
-  NotificationChannelSetting,
-  WireInt64
-} from "./types";
+export type * from "./types";

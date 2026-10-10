@@ -129,13 +129,6 @@ func TestNormalizedStorageImportBatchSize(t *testing.T) {
 	assert.Equal(t, 200, normalizedStorageImportBatchSize(200))
 }
 
-func TestRetryableStorageImportWriteError(t *testing.T) {
-	assert.True(t, retryableStorageImportWriteError(assertErr("subject not bound")))
-	assert.True(t, retryableStorageImportWriteError(assertErr("路由未注册")))
-	assert.False(t, retryableStorageImportWriteError(assertErr("permission denied")))
-	assert.False(t, retryableStorageImportWriteError(nil))
-}
-
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
@@ -200,27 +193,6 @@ func TestWriteStorageImportSummary(t *testing.T) {
 	raw, err := io.ReadAll(r)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"written_rows": 3`)
-}
-
-func TestWriteStorageImportRowsImmediateSuccess(t *testing.T) {
-	writer := fakeStorageWriter{}
-	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.PrimaryUpsertFieldsReq{}, false))
-}
-
-type retryOnceWriter struct{ calls int }
-
-func (w *retryOnceWriter) UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error {
-	w.calls++
-	if w.calls == 1 {
-		return assertErr("subject not bound")
-	}
-	return nil
-}
-
-func TestWriteStorageImportRowsRetriesRetryableError(t *testing.T) {
-	writer := &retryOnceWriter{}
-	require.NoError(t, writeStorageImportRows(context.Background(), writer, &pb.PrimaryUpsertFieldsReq{}, true))
-	assert.Equal(t, 2, writer.calls)
 }
 
 func TestRunStorageImportWritePath(t *testing.T) {

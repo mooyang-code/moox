@@ -1,18 +1,9 @@
-# moox-egress-proxy 配置。部署时由 CLI 按 moox.toml 的 [egress_proxy] 渲染。
-
-# Do：只发 HTTPS 请求，只访问白名单内的域名
-http:
-  # 走出口代理的域名，支持 "*." 前缀通配；Collector 按同一份白名单决定哪些请求走出口代理
-  domains: ["*.binance.com", "data-api.binance.vision"]
-  allowed_headers: [Accept, Content-Type, User-Agent]
-  max_response_bytes: 33554432
-  default_timeout: 15s
-
-# ResolveDomains：为 SCF 的 DNS 快照解析域名
+# HTTP 出口与 DNS 快照使用各自的域名白名单。
+domains: ["*.binance.com", "data-api.binance.vision"]
 dns:
-  domains: [data-api.binance.vision, api-gcp.binance.com, api.binance.com, fapi.binance.com]
-  lookup_timeout: 1500ms
-  probe_timeout: 500ms
+  domains: ["api.binance.com", "fapi.binance.com", "data-api.binance.vision"]
+  lookup_timeout_ms: 1500
+  probe_timeout_ms: 500
   probe_port: 443
-  cache_ttl: 5m
+  cache_ttl_seconds: 300
   max_ips_per_domain: 4

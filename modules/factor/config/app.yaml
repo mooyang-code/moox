@@ -1,13 +1,10 @@
 database:
   path: ./data/factor/factor.db
 
-# FactorMgr 经本机主机网关访问 Storage
 gateway_client:
-  mode: local
   caller: factor-mgr
-  key_file: ../secrets/caller-factor-mgr.key
-  ca_file: ../certs/moox-ca.crt
-  cache_dir: ./data/gatewayclient
+  key_id: ""
+  key_file: ../../secrets/caller-factor-mgr.key
 
 # python 只用于创建、编辑因子定义时试加载源码，需要能 import pandas 与 numpy
 python:

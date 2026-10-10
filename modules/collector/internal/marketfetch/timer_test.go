@@ -25,8 +25,7 @@ func TestTimerRequestFromEnvBuildsClaimWithoutUsingLegacyMembership(t *testing.T
 
 func TestTimerRequestFromEnvRequiresCompleteRuntimeIdentity(t *testing.T) {
 	setTimerClaimEnvironment(t)
-	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "")
-	_, err := TimerRequestFromEnv("request-1", "function-1", time.Now())
+	_, err := TimerRequestFromEnv("", "function-1", time.Now())
 	require.ErrorContains(t, err, "claim identity is incomplete")
 }
 
@@ -44,5 +43,8 @@ func setTimerClaimEnvironment(t *testing.T) {
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "3")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "200")
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
+	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
 	t.Setenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON", "")
 }

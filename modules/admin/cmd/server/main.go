@@ -5,6 +5,7 @@ import (
 	"time"
 
 	_ "github.com/mooyang-code/moox/modules/admin/internal/console"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/masking"
@@ -22,7 +23,7 @@ import (
 func main() {
 	defer shutdownTracing()
 	ctx := trpc.BackgroundContext()
-	s := trpc.NewServer()
+	s := trpc.NewServer(gatewaycontrol.ServerOption())
 	trpclog.InstallServiceName("admin")
 
 	// 初始化应用（加载配置、启动后台服务、注册 trpc 服务）

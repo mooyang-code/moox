@@ -2,138 +2,129 @@ package bootstrap
 
 import (
 	"fmt"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
+	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 
-	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/filter"
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-// RegisterTRPCServices 注册管理后台的全部 tRPC 服务，并把它们登记为控制台的进程内服务：
-// 控制台调用管理后台自己的服务时不经过主机网关。
+// RegisterTRPCServices 注册所有TRPC服务。
+// 控制台复用相同实例及生成的 RPC handler，独立校验 console ACL。
 func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) error {
-	local := console.NewLocalServices(configuredServerFilters()...)
-	register := func(name string, desc *server.ServiceDesc, impl any, registerTRPC func()) error {
-		registerTRPC()
-		if err := local.Register(desc, impl); err != nil {
-			return fmt.Errorf("登记进程内服务 %s: %w", name, err)
-		}
-		return nil
+	local, err := console.NewLocalDispatcher()
+	if err != nil {
+		return err
 	}
-
+	register := func(desc *server.ServiceDesc, implementation any) error {
+		filters, err := localServiceFilters(desc.ServiceName)
+		if err != nil {
+			return err
+		}
+		if err := local.Register(desc, implementation, filters...); err != nil {
+			return err
+		}
+		rpc := s.Service(desc.ServiceName)
+		if rpc == nil {
+			return fmt.Errorf("Admin RPC service %q is not configured", desc.ServiceName)
+		}
+		return rpc.Register(desc, implementation)
+	}
+	// 1. 注册认证服务
 	log.Info("正在初始化认证服务...")
 	authImp, err := authsvr.NewService(cfg.Auth, services.DBManager)
 	if err != nil {
 		return err
 	}
-	if err := register("auth", &adminpb.AuthServer_ServiceDesc, authImp, func() {
-		adminpb.RegisterAuthService(s.Service("trpc.moox.infra.Auth"), authImp)
-	}); err != nil {
+	if err := register(&adminpb.AuthServer_ServiceDesc, authImp); err != nil {
 		return err
 	}
-	if err := adminhealth.Register(s.Service("trpc.moox.admin.Health"), time.Now()); err != nil {
+	// Auth initializes the shared durable Badger cache. GatewayControl uses its
+	// own nonce namespace, independent of each host gateway's local nonce DB.
+	cache, err := authdao.NewCacheDBFromBadger(services.DBManager.GetCache())
+	if err != nil {
 		return err
 	}
-	if err := register("space", &adminpb.SpaceMgrServer_ServiceDesc, services.SpaceMgr, func() {
-		adminpb.RegisterSpaceMgrService(s.Service("trpc.moox.admin.SpaceMgr"), services.SpaceMgr)
-	}); err != nil {
+	master, err := adminsecurity.GetEncryptionKey()
+	if err != nil {
+		return err
+	}
+	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID, master, authdao.NewUserDAO(services.DBManager.GetDB(), cache))
+	if err != nil {
+		return err
+	}
+	if err := gatewaycontrol.Register(s.Service("trpc.moox.admin.GatewayControl"), control); err != nil {
 		return err
 	}
 
-	// SSH 管理；终端和文件传输走控制台的原始处理器，每次连接或传输先经签名的 RPC 获取一次性 ticket。
+	if err := adminhealth.Register(s.Service("trpc.moox.admin.Health"), time.Now()); err != nil {
+		return err
+	}
+
+	if err := register(&adminpb.SpaceMgrServer_ServiceDesc, services.SpaceMgr); err != nil {
+		return err
+	}
+
+	// 3.5 SSH 管理服务（直连端点走 rawhandler）
 	sshSvc := sshrpc.NewService(services.SSHService)
-	if err := register("ssh", &adminpb.SshServer_ServiceDesc, sshSvc, func() {
-		adminpb.RegisterSshService(s.Service("trpc.moox.ops.Ssh"), sshSvc)
-	}); err != nil {
+	if err := register(&adminpb.SshServer_ServiceDesc, sshSvc); err != nil {
 		return err
 	}
 	console.SetRawSessionOwnerVerifier(services.SSHService.SessionBelongsToUser)
+	// 注册 SSH 裸 HTTP 处理器。每次连接/传输必须先通过已签名的管理 RPC
+	// 获取与操作类型绑定的一次性 ticket；session_id 本身不承担鉴权。
 	console.RegisterRawHandler("ssh", "WsConnect", console.RawHandler(sshrpc.WebSocketConnectHandler(services.SSHService)))
 	console.RegisterRawHandler("ssh", "SftpDownload", console.RawHandler(sshrpc.SftpDownloadHandler(services.SSHService)))
 	console.RegisterRawHandler("ssh", "SftpUpload", console.RawHandler(sshrpc.SftpUploadHandler(services.SSHService)))
 
+	// 3.7 秘钥管理服务
 	secretSvc := secretrpc.NewService(services.SecretService)
-	if err := register("secret", &adminpb.SecretMgrServer_ServiceDesc, secretSvc, func() {
-		adminpb.RegisterSecretMgrService(s.Service("trpc.moox.ops.SecretMgr"), secretSvc)
-	}); err != nil {
-		return err
-	}
-	sysDeploySvc := sysdeploy.NewService(services.Placements, services.GatewayControl)
-	if err := register("sysdeploy", &adminpb.SysDeployServer_ServiceDesc, sysDeploySvc, func() {
-		adminpb.RegisterSysDeployService(s.Service("trpc.moox.ops.SysDeploy"), sysDeploySvc)
-	}); err != nil {
-		return err
-	}
-	// 网关控制只给主机网关，不登记为控制台的进程内服务（组件目录也不放行 console）。
-	adminpb.RegisterGatewayControlService(s.Service("trpc.moox.admin.GatewayControl"), services.GatewayControl)
-	setupSvc := setuprpc.NewService(services.Setup)
-	if err := register("setup", &adminpb.SetupServer_ServiceDesc, setupSvc, func() {
-		adminpb.RegisterSetupService(s.Service("trpc.moox.admin.Setup"), setupSvc)
-	}); err != nil {
-		return err
-	}
-	if err := register("publishlease", &adminpb.CollectorPublishLeaseServer_ServiceDesc, services.CollectorPublishLease, func() {
-		adminpb.RegisterCollectorPublishLeaseService(s.Service("trpc.moox.admin.CollectorPublishLease"), services.CollectorPublishLease)
-	}); err != nil {
+	if err := register(&adminpb.SecretMgrServer_ServiceDesc, secretSvc); err != nil {
 		return err
 	}
 
-	options := console.Options{Catalog: servicecatalog.Default(), Local: local, Authorizer: services.SpaceMgr}
-	remote, err := newGatewayClient(cfg.App.GatewayClient, servicecatalog.ConsoleCaller, cfg.App.GatewayClient.ConsoleKeyFile)
-	if err != nil {
-		return fmt.Errorf("创建控制台的 gatewayclient: %w", err)
-	}
-	if remote != nil {
-		options.Remote = remote
-	} else {
-		log.Warn("没有配置 gateway_client：控制台只能调用管理后台自己的服务")
-	}
-	if err := console.Register(s, options); err != nil {
+	// 3.8 服务部署信息
+	sysDeploySvc := sysdeployrpc.NewService(services.SysDeploy)
+	if err := register(&adminpb.SysDeployServer_ServiceDesc, sysDeploySvc); err != nil {
 		return err
 	}
+
+	// Machine setup uses its dedicated loopback listener; the browser surface
+	// uses the same implementation and the catalog's console ACL.
+	if err := register(&adminpb.SetupServer_ServiceDesc, setuprpc.NewService(services.Setup)); err != nil {
+		return err
+	}
+	if err := register(&adminpb.CollectorPublishLeaseServer_ServiceDesc, services.CollectorPublishLease); err != nil {
+		return err
+	}
+
+	gateway, err := newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "console")
+	if err != nil {
+		return err
+	}
+	if err := console.InitConsoleServices(s, local, gateway, services.SpaceMgr); err != nil {
+		_ = gateway.Close()
+		return err
+	}
+	services.consoleGateway = gateway
+	services.machineGateway, err = newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "admin")
+	if err != nil {
+		services.closeGateways()
+		return err
+	}
+
 	log.Info("TRPC 服务注册完成")
 	return nil
-}
-
-// newGatewayClient 按 gateway_client 配置为一个调用方身份创建内部方式的客户端；没有配置时返回 nil。
-func newGatewayClient(cfg config.GatewayClientConfig, caller, keyFile string) (*gatewayclient.Client, error) {
-	if strings.TrimSpace(keyFile) == "" {
-		return nil, nil
-	}
-	return gatewayclient.New(gatewayclient.Options{Config: gatewayclient.Config{
-		Mode: gatewayclient.ModeLocal, Caller: caller, KeyFile: keyFile, CAFile: cfg.CAFile,
-		CacheDir: filepath.Join(cfg.CacheDir, caller), LocalAddress: cfg.LocalAddress,
-	}})
-}
-
-// configuredServerFilters 返回 trpc_go.yaml 中配置的服务端过滤器，进程内调用经过同一组过滤器（校验、脱敏等）。
-func configuredServerFilters() []filter.ServerFilter {
-	global := trpc.GlobalConfig()
-	if global == nil {
-		return nil
-	}
-	var filters []filter.ServerFilter
-	for _, name := range global.Server.Filter {
-		if f := filter.GetServer(name); f != nil {
-			filters = append(filters, f)
-		} else {
-			log.Warnf("进程内调用找不到服务端过滤器 %s", name)
-		}
-	}
-	return filters
 }

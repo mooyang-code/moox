@@ -207,8 +207,9 @@ func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
 
 func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, state *domain.AlertState, eventType string, now time.Time, persistBeforeSend bool) error {
 	agentID := sample.agentID
-	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": sample.value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
-	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Payload: string(payload), CreatedAt: now}); err != nil {
+	title, message := hostAlertText(sample, eventType, now)
+	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "hostname": sample.hostname, "value": sample.value, "metric": sample.metric, "threshold": sample.threshold})
+	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Message: message, Payload: string(payload), CreatedAt: now}); err != nil {
 		return err
 	}
 	if persistBeforeSend {
@@ -216,7 +217,6 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 			return err
 		}
 	}
-	title, message := hostAlertText(sample, eventType, now)
 	if e.Notification != nil {
 		channel, err := e.Notification(ctx)
 		if err != nil {
@@ -278,34 +278,6 @@ var hostMetricLabels = map[string]string{
 	HostMetricNetworkErrors:   "网络错误包",
 }
 
-// MetricLabel 返回主机指标的中文名称，例如「CPU 使用率」。
-func MetricLabel(metric string) string {
-	if label := hostMetricLabels[metric]; label != "" {
-		return label
-	}
-	return metric
-}
-
-// formatHostValue 渲染主机指标的取值：网络错误包为每秒个数，其余为百分比。
-func formatHostValue(metric string, value float64) string {
-	if metric == HostMetricNetworkErrors {
-		return fmt.Sprintf("每秒 %.1f 个", value)
-	}
-	return fmt.Sprintf("%.1f%%", value)
-}
-
-// HostAlertReason 是主机阈值告警的中文原因，例如「CPU 使用率当前 93.2%，告警阈值 90.0%」；快照里没有这个指标时只给出阈值。
-func HostAlertReason(rule domain.AlertRule, metric string, snapshot *hostmetricpb.HostSnapshot) string {
-	threshold, _ := hostThresholds(rule, metric)
-	label := MetricLabel(metric)
-	if snapshot != nil {
-		if current, ok := hostValues(snapshot)[metric]; ok && current.available {
-			return fmt.Sprintf("%s当前 %s，告警阈值 %s", label, formatHostValue(metric, current.value), formatHostValue(metric, threshold))
-		}
-	}
-	return fmt.Sprintf("%s超过告警阈值 %s", label, formatHostValue(metric, threshold))
-}
-
 // hostAlertText renders a host threshold alert for people: the host and
 // metric as the title, the value against its threshold in the body.
 func hostAlertText(sample hostSample, eventType string, now time.Time) (string, string) {
@@ -313,8 +285,16 @@ func hostAlertText(sample hostSample, eventType string, now time.Time) (string, 
 	if host == "" {
 		host = sample.agentID
 	}
-	label := MetricLabel(sample.metric)
-	value := func(v float64) string { return formatHostValue(sample.metric, v) }
+	label := hostMetricLabels[sample.metric]
+	if label == "" {
+		label = sample.metric
+	}
+	value := func(v float64) string {
+		if sample.metric == HostMetricNetworkErrors {
+			return fmt.Sprintf("每秒 %.1f 个", v)
+		}
+		return fmt.Sprintf("%.1f%%", v)
+	}
 	var lines []string
 	switch eventType {
 	case domain.AlertEventResolved:

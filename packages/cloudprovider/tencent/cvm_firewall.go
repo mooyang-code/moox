@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -96,9 +97,13 @@ type vpcCreatePoliciesRequest struct {
 }
 
 // EnsureSecurityGroupRule makes the requested TCP/UDP ingress available on a
-// CVM's VPC security group. An identical existing rule satisfies the request; a
-// broad allow-all rule does not.
+// CVM's VPC security group. Existing broad ACCEPT rules are also accepted as
+// satisfying the request.
 func (c *CVMClient) EnsureSecurityGroupRule(ctx context.Context, publicIP string, opts CreateFirewallRulesOptions) error {
+	publicIP = strings.TrimSpace(publicIP)
+	if net.ParseIP(publicIP) == nil {
+		return fmt.Errorf("invalid public ip: %s", publicIP)
+	}
 	rule, err := NewCreateFirewallRulesRequest(CreateFirewallRulesOptions{
 		InstanceID:    "cvm",
 		Protocol:      opts.Protocol,
@@ -116,9 +121,21 @@ func (c *CVMClient) EnsureSecurityGroupRule(ctx context.Context, publicIP string
 		CidrBlock: rule.FirewallRules[0].CidrBlock, Action: rule.FirewallRules[0].Action,
 		PolicyDescription: rule.FirewallRules[0].FirewallRuleDescription,
 	}
-	groups, err := c.securityGroups(ctx, publicIP)
-	if err != nil {
+	var instances cvmDescribeInstancesResponse
+	if err := c.do(ctx, "cvm", cvmVersion, "DescribeInstances", c.endpointFor("cvm"), map[string]any{
+		"Filters": []map[string]any{{"Name": "public-ip-address", "Values": []string{publicIP}}}, "Limit": 1,
+	}, &instances); err != nil {
 		return err
+	}
+	if instances.Response.Error != nil {
+		return fmt.Errorf("%s: %s", instances.Response.Error.Code, instances.Response.Error.Message)
+	}
+	if len(instances.Response.InstanceSet) == 0 {
+		return fmt.Errorf("cvm instance not found for public ip %s", publicIP)
+	}
+	groups := instances.Response.InstanceSet[0].SecurityGroupIDs
+	if len(groups) == 0 {
+		return fmt.Errorf("cvm instance has no security group for public ip %s", publicIP)
 	}
 	for _, groupID := range groups {
 		var policies vpcDescribePoliciesResponse
@@ -185,16 +202,16 @@ func (c *CVMClient) RebootInstance(ctx context.Context, instanceID string) (stri
 	return response.Response.RequestID, nil
 }
 
-// coversCVMRule 判断已有规则是否正好是要创建的规则。宽泛的"全部协议、全部端口"放行规则不算：腾讯云安全组的默认规则
-// 就是它，把它当作满足会让具体规则永远建不出来，也就没办法关掉这条放行一切的规则。
 func coversCVMRule(existing, wanted vpcSecurityGroupPolicy) bool {
 	if !strings.EqualFold(strings.TrimSpace(existing.Action), strings.TrimSpace(wanted.Action)) {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(existing.Protocol), strings.TrimSpace(wanted.Protocol)) {
+	protocol := strings.ToUpper(strings.TrimSpace(existing.Protocol))
+	if protocol != strings.ToUpper(strings.TrimSpace(wanted.Protocol)) && protocol != "ALL" {
 		return false
 	}
-	if strings.TrimSpace(existing.Port) != strings.TrimSpace(wanted.Port) {
+	port := strings.TrimSpace(existing.Port)
+	if port != strings.TrimSpace(wanted.Port) && !strings.EqualFold(port, "ALL") {
 		return false
 	}
 	return strings.TrimSpace(existing.CidrBlock) == strings.TrimSpace(wanted.CidrBlock)

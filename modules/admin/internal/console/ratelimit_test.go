@@ -16,7 +16,7 @@ func TestGetDefaultRateLimitConfig_ShouldContainLoginLimit(t *testing.T) {
 	assert.Equal(t, 2, cfg.MethodLimits["/api/admin/auth/Login"].Burst)
 }
 
-func TestLoadRateLimitConfig_NilGatewayConfig_ShouldUseDefaults(t *testing.T) {
+func TestLoadRateLimitConfig_NilConsoleConfig_ShouldUseDefaults(t *testing.T) {
 	SetConfig(nil)
 	cfg := loadRateLimitConfig()
 	require.NotNil(t, cfg)

@@ -10,11 +10,10 @@ import (
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 var (
-	dataManifestFile    string
+	dataManifest        string
 	dataSpaceID         string
 	dataDatasetID       string
 	dataSubjectID       string
@@ -49,21 +48,17 @@ var dataRowsExportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		storage, closeStorage, err := openStorageInvoker(dataManifestFile)
+		gateway, err := openCommandGateway(cmd.Context(), dataManifest, nil)
 		if err != nil {
 			return err
 		}
-		defer closeStorage()
+		defer gateway.Close()
 		selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
-		rsp, err := exportRowsRemote(trpc.BackgroundContext(), storage, &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: auth,
-			SpaceId:  defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
+		rsp, err := exportRowsRemote(cmd.Context(), gateway, &pb.ReadTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
 			Selectors: []*pb.TimeSeriesSelector{selector},
-			TimeRange: &pb.TimeRange{
-				StartTime: dataStartTime,
-				EndTime:   dataEndTime,
-			},
-			Page: &pb.Page{Page: 1, Size: dataPageSize},
+			TimeRange: &pb.TimeRange{StartTime: dataStartTime, EndTime: dataEndTime},
+			Page:      &pb.Page{Page: 1, Size: dataPageSize},
 		})
 		if err != nil {
 			return err
@@ -88,7 +83,7 @@ func init() {
 	dataCmd.AddCommand(dataRowsCmd)
 	dataRowsCmd.AddCommand(dataRowsExportCmd)
 
-	dataRowsExportCmd.Flags().StringVar(&dataManifestFile, "manifest", "", "moox.toml；访问存储所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
+	dataRowsExportCmd.Flags().StringVar(&dataManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	dataRowsExportCmd.Flags().StringVar(&dataStorageAuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")
@@ -102,15 +97,25 @@ func init() {
 }
 
 func dataPrimaryAuth(path string) (*pb.AuthInfo, error) {
-	const appID = "moox-cli-data-export"
+	return storagePrimaryRoleAuth(path, "moox-cli-data-export")
+}
+
+func storagePrimaryRoleAuth(path, appID string) (*pb.AuthInfo, error) {
 	secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
 	if secret == "" {
 		raw, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			return nil, fmt.Errorf("读取 Storage 鉴权文件失败: %w", err)
 		}
-		if secret, err = secretEnvValue(raw, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"); err != nil {
+		normalized, err := normalizeStorageInternalAuth(string(raw))
+		if err != nil {
 			return nil, fmt.Errorf("Storage 鉴权文件无效: %w", err)
+		}
+		for _, line := range strings.Split(normalized, "\n") {
+			if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_PRIMARY_AUTH_SECRET="); ok {
+				secret = value
+				break
+			}
 		}
 	}
 	if secret == "" {

@@ -2,16 +2,14 @@ package command
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"testing"
-
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"os"
+	"path/filepath"
+	"testing"
 )
 
 func TestGetFullVersionInfoDefaultsToDev(t *testing.T) {
@@ -108,7 +106,7 @@ func TestSeedToPBHelpers(t *testing.T) {
 }
 
 func TestRunMetadataImportWithNoCalls(t *testing.T) {
-	summary, err := runMetadataImport(context.Background(), httpStorageInvoker{"http://unused"}, nil, false)
+	summary, err := runMetadataImport(context.Background(), nil, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, summary.Applied)
 }
@@ -144,16 +142,21 @@ func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
 	assert.Equal(t, "v", env["K"])
 }
 
-func TestUseControlClientPrefersInjectedClientAndSetsSpace(t *testing.T) {
-	injected := admintest.Client("http://127.0.0.1:1")
-	client, closeControl, err := useControlClient(injected, nil, "/missing/moox.toml", " crypto ")
+func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
+	t.Setenv("TENCENTCLOUD_SECRET_ID", "test-cls-id")
+	t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
 	require.NoError(t, err)
-	defer closeControl()
-	require.Same(t, injected, client)
-	assert.Equal(t, "crypto", client.SpaceID)
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
+}
 
-	_, _, err = useControlClient(nil, nil, filepath.Join(t.TempDir(), "moox.toml"), "crypto")
-	require.ErrorContains(t, err, "SSH 连接信息")
+func TestDeployCollectorFunctionValidatesRequiredFields(t *testing.T) {
+	_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "control-url")
 }
 
 func TestRunStorageImportDryRunPath(t *testing.T) {

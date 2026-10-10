@@ -10,11 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/security/domainpolicy"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 
@@ -24,7 +27,9 @@ const (
 	// The cloud disk mounted at /data is the canonical runtime volume. Keep all
 	// generated packages, state, logs and credentials below this root so a
 	// host's small system disk is not consumed by MooX.
-	DefaultDeployRoot = "/data/moox"
+	DefaultDeployRoot  = "/data/moox"
+	DefaultControlRoot = "/data/moox/prod"
+	DefaultStorageRoot = "/data/moox/storage"
 	// SCFCLSReserveMilliseconds is injected into every short-lived market SCF.
 	// Keep setup validation aligned with the runtime's CLS flush reservation.
 	SCFCLSReserveMilliseconds = 3000
@@ -75,9 +80,15 @@ const (
 	DefaultSCFMaxBurstConcurrencyPerMinute = 500
 )
 
-// Paths 是部署目录的默认位置：主机省略 root 时，部署根目录为 <deploy_root>/<主机 ID>；维护锁放在部署根目录旁边。
+// Paths controls where setup-cli installs the control and Storage packages.
+// Storage may be deployed to a separate host with a different mount layout,
+// so StorageRoot is independently validated as an absolute safe path.
+// The section is optional: omitted values resolve to the cloud-disk defaults
+// above, which keeps older moox.toml files deterministic.
 type Paths struct {
-	DeployRoot string `toml:"deploy_root"`
+	DeployRoot  string `toml:"deploy_root"`
+	ControlRoot string `toml:"control_root"`
+	StorageRoot string `toml:"storage_root"`
 }
 
 // LocalLogs bounds process stdout/stderr and framework log files under each
@@ -91,7 +102,15 @@ func (p Paths) Resolved() Paths {
 	if strings.TrimSpace(p.DeployRoot) == "" {
 		p.DeployRoot = DefaultDeployRoot
 	}
+	if strings.TrimSpace(p.ControlRoot) == "" {
+		p.ControlRoot = filepath.Join(p.DeployRoot, "prod")
+	}
+	if strings.TrimSpace(p.StorageRoot) == "" {
+		p.StorageRoot = filepath.Join(p.DeployRoot, "storage")
+	}
 	p.DeployRoot = filepath.Clean(strings.TrimSpace(p.DeployRoot))
+	p.ControlRoot = filepath.Clean(strings.TrimSpace(p.ControlRoot))
+	p.StorageRoot = filepath.Clean(strings.TrimSpace(p.StorageRoot))
 	return p
 }
 
@@ -106,10 +125,10 @@ type TencentCloud struct {
 	Region    string `toml:"region"`
 }
 
-// EventBus 是消息总线的监听配置；地址取自 [placements] 中部署 eventbus 的主机。
 type EventBus struct {
-	Port       int  `toml:"port"`
-	TLSEnabled bool `toml:"tls_enabled"`
+	PublicAddress string `toml:"-"`
+	Port          int    `toml:"port"`
+	TLSEnabled    bool   `toml:"tls_enabled"`
 }
 
 type Observability struct {
@@ -117,8 +136,22 @@ type Observability struct {
 	DeliverPolicyExplicit bool   `toml:"-"`
 }
 
-// DNSResolver 是 [dns_resolver] 段。Domains 和刷新设置是写入 SCF DNS 快照、由出口代理解析的域名，渲染进
-// Collector 的 egress_proxy.dns；TradeNode 是交易服务所在的主机（other_hosts 中的名称）。
+// EgressProxy separates upstream policy from service placement.
+type EgressProxy struct {
+	HTTPDomains []string  `toml:"http_domains"`
+	DNS         EgressDNS `toml:"dns"`
+}
+type EgressDNS struct {
+	RefreshIntervalSeconds int      `toml:"refresh_interval_seconds"`
+	RequestTimeoutMS       int      `toml:"request_timeout_ms"`
+	LookupTimeoutMS        int      `toml:"lookup_timeout_ms"`
+	ProbeTimeoutMS         int      `toml:"probe_timeout_ms"`
+	ProbePort              int      `toml:"probe_port"`
+	CacheTTLSeconds        int      `toml:"cache_ttl_seconds"`
+	MaxIPsPerDomain        int      `toml:"max_ips_per_domain"`
+	Domains                []string `toml:"domains"`
+}
+
 // StorageRetention is the [storage_retention] table: how long each
 // time-series Dataset keeps its rows, by space and frequency, and how many
 // bars a View keeps. An omitted defaults or spaces table takes the
@@ -173,9 +206,41 @@ type Notification struct {
 	WebhookURL  string `toml:"webhook_url"`
 }
 
-// HostDefinition is the shared SSH credential record keyed by an address in
-// Manifest.HostCatalog. Role-specific sections only select one of these
-// records; they do not repeat credentials or endpoint data.
+// Host is an execution target projected from one canonical host definition.
+// It is not a TOML input or an independently mutable deployment record.
+type Host struct {
+	Name           string
+	Address        string
+	PrivateAddress string
+	Region         string
+	Port           int
+	Username       string
+	Password       string `json:"-"`
+	Provider       string
+	TLSMode        string
+}
+
+type SSHConfig struct {
+	Port     int    `toml:"port"`
+	Username string `toml:"username"`
+	Password string `toml:"password" json:"-"`
+}
+
+type HostDefinition struct {
+	Address        string    `toml:"address"`
+	PrivateAddress string    `toml:"private_address"`
+	Region         string    `toml:"region"`
+	Provider       string    `toml:"provider"`
+	TLSMode        string    `toml:"tls_mode"`
+	SSH            SSHConfig `toml:"ssh"`
+}
+
+// CompileHostReference selects credentials from hosts without deploying a
+// compiler-only host. An explicit placements entry also makes it a MooX host.
+type CompileHostReference struct {
+	Host string `toml:"host"`
+}
+
 type SCFFetcherRegion struct {
 	Region        string `toml:"region"`
 	DisplayName   string `toml:"display_name"`
@@ -631,6 +696,10 @@ type SCFFetcherSpace struct {
 	TDXPort              int      `toml:"tdx_port"`
 	TDXRoutes            []string `toml:"tdx_routes"`
 	TDXRouteSnapshotJSON string   `toml:"tdx_route_snapshot_json"`
+	StorageAppID         string   `toml:"storage_app_id"`
+	StorageAppKey        string   `toml:"storage_app_key"`
+	StorageOperator      string   `toml:"storage_operator"`
+	StorageRequestID     string   `toml:"storage_request_id"`
 	PackageConfigDir     string   `toml:"package_config_dir"`
 	PackageName          string   `toml:"package_name"`
 	// CLSCloudAccountID owns the single regional CLS topic used by every
@@ -646,14 +715,23 @@ type SCFFetcherSpace struct {
 	// TimerFunctionCount is retained as the manifest field name for fleet capacity.
 	// It is a Timer count for stockcn and an Invoke-pool count for crypto. stockcn
 	// must set it explicitly; other Spaces may use the built-in default.
-	TimerFunctionCount        int `toml:"timer_function_count"`
-	MeasuredSafeGroupSize     int `toml:"measured_safe_group_size"`
-	StaggerStartSecond        int `toml:"stagger_start_second"`
-	StaggerWindowSeconds      int `toml:"stagger_window_seconds"`
-	StaggerMaxStartsPerSecond int `toml:"stagger_max_starts_per_second"`
-	// 函数经外部接入访问 MooX：发布时按函数所在地域从服务目录选择外部接入（设计文档 3.7），不再单独配置。
-	MemorySize     int `toml:"memory_size"`
-	TimeoutSeconds int `toml:"timeout_seconds"`
+	TimerFunctionCount        int    `toml:"timer_function_count"`
+	MeasuredSafeGroupSize     int    `toml:"measured_safe_group_size"`
+	StaggerStartSecond        int    `toml:"stagger_start_second"`
+	StaggerWindowSeconds      int    `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond int    `toml:"stagger_max_starts_per_second"`
+	AccessID                  string `toml:"-"`
+	AccessHost                string `toml:"-"`
+	AccessAddress             string `toml:"-"`
+	AccessPrivateHost         string `toml:"-"`
+	AccessPrivateAddress      string `toml:"-"`
+	// AccessAddresses contains regional candidates derived from placements.
+	// Deployment verifies VPC membership before selecting private endpoints.
+	AccessAddresses map[string]string `toml:"-"`
+	// AccessIDs contains the canonical access@host-id identity per region.
+	AccessIDs      map[string]string `toml:"-"`
+	MemorySize     int               `toml:"memory_size"`
+	TimeoutSeconds int               `toml:"timeout_seconds"`
 	// InvokeTimeoutSeconds is used by deployment canary Invoke nodes. Timer
 	// nodes retain TimeoutSeconds.
 	InvokeTimeoutSeconds int                `toml:"invoke_timeout_seconds"`
@@ -664,12 +742,36 @@ type SCFFetcherSpace struct {
 	MaxInflightRequests  int                `toml:"max_inflight_requests"`
 	RequestTimeoutMS     int                `toml:"request_timeout_ms"`
 	HTTPMaxAttempts      int                `toml:"http_max_attempts"`
-	StorageMaxAttempts   int                `toml:"storage_max_attempts"`
 	StorageTimeoutMS     int                `toml:"storage_timeout_ms"`
 	MaxRetryAttempts     int                `toml:"max_retry_attempts"`
 	RetryDelays          []string           `toml:"retry_delays"`
 	StaggerEnabled       bool               `toml:"stagger_enabled"`
 	Regions              []SCFFetcherRegion `toml:"regions"`
+}
+
+// AccessAddressForRegion returns the normalized regional Access target for one
+// SCF region, if the manifest explicitly configured one.
+func (s SCFFetcherSpace) AccessAddressForRegion(region string) string {
+	region = strings.ToLower(strings.TrimSpace(region))
+	for configuredRegion, target := range s.AccessAddresses {
+		if strings.EqualFold(strings.TrimSpace(configuredRegion), region) {
+			return strings.TrimSpace(target)
+		}
+	}
+	return ""
+}
+
+// AccessIDForRegion returns the target-node identity for one SCF
+// region. Regional Access nodes use distinct replay namespaces; callers that
+// do not configure a regional identity retain the legacy central node.
+func (s SCFFetcherSpace) AccessIDForRegion(region string) string {
+	region = strings.ToLower(strings.TrimSpace(region))
+	for configuredRegion, node := range s.AccessIDs {
+		if strings.EqualFold(strings.TrimSpace(configuredRegion), region) {
+			return strings.TrimSpace(node)
+		}
+	}
+	return strings.TrimSpace(s.AccessID)
 }
 
 // DefaultTimerFunctionCount returns the built-in Timer capacity for a known
@@ -687,24 +789,22 @@ func DefaultTimerFunctionCount(spaceID string) int {
 }
 
 type Manifest struct {
-	Admin              Admin              `toml:"admin"`
-	TencentCloud       TencentCloud       `toml:"tencent_cloud"`
-	EventBus           EventBus           `toml:"eventbus"`
-	Paths              Paths              `toml:"paths"`
-	StorageRetention   StorageRetention   `toml:"storage_retention"`
-	StorageView        StorageView        `toml:"storage_view"`
-	CollectorRetention CollectorRetention `toml:"collector_retention"`
-	LocalLogs          LocalLogs          `toml:"local_logs"`
-	Observability      Observability      `toml:"observability"`
-	Notification       Notification       `toml:"notification"`
-	Factors            FactorSetup        `toml:"factors"`
-	SCFFetcher         SCFFetcher         `toml:"scf_fetcher"`
-	// Hosts 是全部 MooX 主机，键为主机 ID。
-	Hosts map[string]Host `toml:"hosts"`
-	// Placements 是部署表：主机 ID → 业务组件；主机组件（主机网关、主机采集器）每台主机自动部署，不写在这里。
-	Placements  map[string][]string `toml:"placements"`
-	EgressProxy EgressProxy         `toml:"egress_proxy"`
-	CompileHost CompileHost         `toml:"compile_host"`
+	Admin              Admin                     `toml:"admin"`
+	TencentCloud       TencentCloud              `toml:"tencent_cloud"`
+	EventBus           EventBus                  `toml:"eventbus"`
+	Paths              Paths                     `toml:"paths"`
+	EgressProxy        EgressProxy               `toml:"egress_proxy"`
+	Placements         map[string][]string       `toml:"placements"`
+	StorageRetention   StorageRetention          `toml:"storage_retention"`
+	StorageView        StorageView               `toml:"storage_view"`
+	CollectorRetention CollectorRetention        `toml:"collector_retention"`
+	LocalLogs          LocalLogs                 `toml:"local_logs"`
+	Observability      Observability             `toml:"observability"`
+	Notification       Notification              `toml:"notification"`
+	Factors            FactorSetup               `toml:"factors"`
+	SCFFetcher         SCFFetcher                `toml:"scf_fetcher"`
+	HostCatalog        map[string]HostDefinition `toml:"hosts"`
+	CompileHostRef     CompileHostReference      `toml:"compile_host"`
 }
 
 type Snapshot struct {
@@ -745,15 +845,6 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 		info:     info,
 		digest:   sha256.Sum256(raw),
 	}, nil
-}
-
-// Parse 解析并校验 moox.toml 的内容，不检查文件的位置和权限；渲染测试和离线渲染使用。
-func Parse(raw []byte) (Manifest, error) {
-	var manifest Manifest
-	if err := decodeStrict(raw, &manifest); err != nil {
-		return Manifest{}, err
-	}
-	return manifest, nil
 }
 
 func (s *Snapshot) VerifyUnchanged() error {
@@ -807,15 +898,30 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		return fmt.Errorf("config_invalid: decode moox.toml")
 	}
 	if keys := md.Undecoded(); len(keys) != 0 {
-		for _, key := range keys {
-			if err := legacyKeyError(key.String()); err != nil {
-				return err
-			}
-		}
 		if first := keys[0].String(); first == "factors.items" || strings.HasPrefix(first, "factors.items.") {
 			return fmt.Errorf("config_invalid: factors.items is no longer supported; split it into [[factors.definitions]] (factor contract) and [[factors.members]] (source_dataset_id, freq, factor_id, status)")
 		}
-		return fmt.Errorf("config_invalid: unknown field %s", keys[0].String())
+		first := keys[0].String()
+		section := string(keys[0][0])
+		switch section {
+		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":
+			return fmt.Errorf("config_invalid: %s is retired; use [hosts.<host-id>] with address and ssh, and [placements]", section)
+		case "hosts":
+			return fmt.Errorf("config_invalid: invalid hosts field; use [hosts.<host-id>] with address and ssh = { port, username, password }")
+		case "scf_fetcher":
+			if strings.Contains(first, "access_") || strings.Contains(first, "gateway") {
+				return fmt.Errorf("config_invalid: SCF access/gateway settings are derived from [hosts.<host-id>] and [placements]; remove the retired field")
+			}
+		case "eventbus":
+			if first == "eventbus.host" {
+				return fmt.Errorf("config_invalid: eventbus.host is derived from the eventbus component in [placements]")
+			}
+		case "dns_resolver":
+			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
+		case "compile_host":
+			return fmt.Errorf("config_invalid: compile_host accepts only host = <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
+		}
+		return fmt.Errorf("config_invalid: unknown field %s", first)
 	}
 	if !md.IsDefined("eventbus", "port") {
 		out.EventBus.Port = 4222
@@ -823,8 +929,20 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("tencent_cloud", "region") {
 		out.TencentCloud.Region = "ap-guangzhou"
 	}
+	for id, definition := range out.HostCatalog {
+		definition.Address = strings.TrimSpace(definition.Address)
+		definition.PrivateAddress = strings.TrimSpace(definition.PrivateAddress)
+		definition.Region = strings.ToLower(strings.TrimSpace(definition.Region))
+		definition.Provider = strings.ToLower(strings.TrimSpace(definition.Provider))
+		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
+		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
+		if !md.IsDefined("hosts", id, "ssh", "port") {
+			definition.SSH.Port = 22
+		}
+		out.HostCatalog[id] = definition
+	}
+	out.CompileHostRef.Host = strings.TrimSpace(out.CompileHostRef.Host)
 	out.Paths = out.Paths.Resolved()
-	normalizeTopology(out, md.IsDefined)
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = false
 	}
@@ -891,6 +1009,33 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("factors", "source_dir") || strings.TrimSpace(out.Factors.SourceDir) == "" {
 		out.Factors.SourceDir = "./modules/factor/factors"
 	}
+	if !md.IsDefined("egress_proxy", "http_domains") {
+		out.EgressProxy.HTTPDomains = []string{"*.binance.com", "data-api.binance.vision"}
+	}
+	if !md.IsDefined("egress_proxy", "dns", "refresh_interval_seconds") {
+		out.EgressProxy.DNS.RefreshIntervalSeconds = 300
+	}
+	if !md.IsDefined("egress_proxy", "dns", "request_timeout_ms") {
+		out.EgressProxy.DNS.RequestTimeoutMS = 3000
+	}
+	if !md.IsDefined("egress_proxy", "dns", "lookup_timeout_ms") {
+		out.EgressProxy.DNS.LookupTimeoutMS = 1500
+	}
+	if !md.IsDefined("egress_proxy", "dns", "probe_timeout_ms") {
+		out.EgressProxy.DNS.ProbeTimeoutMS = 500
+	}
+	if !md.IsDefined("egress_proxy", "dns", "probe_port") {
+		out.EgressProxy.DNS.ProbePort = 443
+	}
+	if !md.IsDefined("egress_proxy", "dns", "cache_ttl_seconds") {
+		out.EgressProxy.DNS.CacheTTLSeconds = 300
+	}
+	if !md.IsDefined("egress_proxy", "dns", "max_ips_per_domain") {
+		out.EgressProxy.DNS.MaxIPsPerDomain = 4
+	}
+	if err := resolveManifestReferences(out); err != nil {
+		return err
+	}
 	return validate(out)
 }
 
@@ -920,6 +1065,11 @@ func validate(manifest *Manifest) error {
 	if manifest.TencentCloud.Region == "" {
 		return fmt.Errorf("config_invalid: tencent_cloud.region is required")
 	}
+	eventBusAddress := strings.TrimSpace(manifest.EventBus.PublicAddress)
+	if eventBusAddress != manifest.EventBus.PublicAddress || !servicecatalog.ValidHostAddress(eventBusAddress) {
+		return fmt.Errorf("config_invalid: eventbus.public_address must be an IP address or DNS hostname")
+	}
+	manifest.EventBus.PublicAddress = eventBusAddress
 	if manifest.EventBus.Port < 1 || manifest.EventBus.Port > 65535 {
 		return fmt.Errorf("config_invalid: eventbus.port must be between 1 and 65535")
 	}
@@ -964,7 +1114,14 @@ func validate(manifest *Manifest) error {
 	if manifest.LocalLogs.BackupCount < 1 || manifest.LocalLogs.BackupCount > 100 {
 		return fmt.Errorf("config_invalid: local_logs.backup_count must be between 1 and 100")
 	}
-	return validateTopology(manifest)
+	if err := validateHostCatalog(manifest.HostCatalog); err != nil {
+		return err
+	}
+
+	if err := validateEgressProxy(&manifest.EgressProxy); err != nil {
+		return err
+	}
+	return validatePlacements(manifest)
 }
 
 func validatePaths(paths *Paths) error {
@@ -972,10 +1129,46 @@ func validatePaths(paths *Paths) error {
 		return fmt.Errorf("config_invalid: paths is required")
 	}
 	paths.DeployRoot = filepath.Clean(strings.TrimSpace(paths.DeployRoot))
-	if !rootPattern.MatchString(paths.DeployRoot) || paths.DeployRoot == "/" {
-		return fmt.Errorf("config_invalid: paths.deploy_root 必须是不含特殊字符的绝对路径")
+	paths.ControlRoot = filepath.Clean(strings.TrimSpace(paths.ControlRoot))
+	paths.StorageRoot = filepath.Clean(strings.TrimSpace(paths.StorageRoot))
+	for name, value := range map[string]string{
+		"deploy_root": paths.DeployRoot, "control_root": paths.ControlRoot, "storage_root": paths.StorageRoot,
+	} {
+		if value == "" || !filepath.IsAbs(value) || value == "/" || strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("config_invalid: paths.%s must be a non-root absolute path", name)
+		}
+		for _, r := range value {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("/._-", r) {
+				continue
+			}
+			return fmt.Errorf("config_invalid: paths.%s contains an unsupported character", name)
+		}
+	}
+	base := paths.DeployRoot + string(filepath.Separator)
+	if paths.ControlRoot != paths.DeployRoot && !strings.HasPrefix(paths.ControlRoot, base) {
+		return fmt.Errorf("config_invalid: paths.control_root must stay under paths.deploy_root")
+	}
+	if paths.StorageRoot == paths.DeployRoot || pathsOverlap(paths.StorageRoot, paths.ControlRoot) {
+		return fmt.Errorf("config_invalid: paths.storage_root must not overlap deploy_root or control_root")
 	}
 	return nil
+}
+
+func pathsOverlap(left, right string) bool {
+	return pathContains(left, right) || pathContains(right, left)
+}
+
+func pathContains(parent, child string) bool {
+	parent = filepath.Clean(strings.TrimSpace(parent))
+	child = filepath.Clean(strings.TrimSpace(child))
+	if parent == "" || child == "" {
+		return false
+	}
+	relative, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func validateCollectorRetention(cfg *CollectorRetention) error {
@@ -1006,6 +1199,75 @@ func validateCollectorRetention(cfg *CollectorRetention) error {
 		if err != nil || duration <= 0 || duration > 365*24*time.Hour {
 			return fmt.Errorf("config_invalid: collector_retention.%s must be greater than 0 and at most 365 days", field)
 		}
+	}
+	return nil
+}
+
+func validateEgressProxy(cfg *EgressProxy) error {
+	if _, err := domainpolicy.New(cfg.HTTPDomains); err != nil {
+		return fmt.Errorf("config_invalid: egress_proxy.http_domains: %w", err)
+	}
+	dns := &cfg.DNS
+	if dns.RefreshIntervalSeconds <= 0 || dns.RequestTimeoutMS <= 0 || dns.RequestTimeoutMS > 60000 || dns.LookupTimeoutMS <= 0 || dns.LookupTimeoutMS > 60000 || dns.ProbeTimeoutMS <= 0 || dns.ProbeTimeoutMS > 60000 || dns.CacheTTLSeconds <= 0 {
+		return fmt.Errorf("config_invalid: egress_proxy.dns intervals must be positive and request/lookup/probe timeout at most 60000ms")
+	}
+	if dns.ProbePort < 1 || dns.ProbePort > 65535 || dns.MaxIPsPerDomain < 1 || dns.MaxIPsPerDomain > 4 {
+		return fmt.Errorf("config_invalid: egress_proxy.dns invalid probe port or IP cap")
+	}
+	if len(dns.Domains) > 16 {
+		return fmt.Errorf("config_invalid: egress_proxy.dns supports at most 16 domains")
+	}
+	seen := map[string]bool{}
+	for i, raw := range dns.Domains {
+		domain, ok := domainpolicy.Host(strings.TrimSpace(raw))
+		if !ok || seen[domain] {
+			return fmt.Errorf("config_invalid: egress_proxy.dns domain %q is invalid or duplicated", raw)
+		}
+		seen[domain] = true
+		dns.Domains[i] = domain
+	}
+	return nil
+}
+
+// PlacementHost returns the selected host for a single component. Multi-copy
+// components are addressed through the compiled Directory instead.
+func (m Manifest) PlacementHost(component string) string {
+	selected := ""
+	for host, components := range m.Placements {
+		for _, id := range components {
+			if id != component {
+				continue
+			}
+			if selected != "" && selected != host {
+				return ""
+			}
+			selected = host
+		}
+	}
+	return selected
+}
+func validatePlacements(m *Manifest) error {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	for host := range m.Placements {
+		if _, ok := m.HostCatalog[host]; !ok {
+			return fmt.Errorf("config_invalid: placements host ID %q is unknown", host)
+		}
+		for _, id := range m.Placements[host] {
+			component, ok := catalog.Component(id)
+			if !ok || component.Scope == servicecatalog.ScopeHost {
+				return fmt.Errorf("config_invalid: placements contains an unknown or automatic component")
+			}
+		}
+	}
+	topology, err := m.Topology()
+	if err != nil {
+		return err
+	}
+	if err := catalog.ValidateTopology(topology); err != nil {
+		return fmt.Errorf("config_invalid: placements: %w", err)
 	}
 	return nil
 }
@@ -1416,6 +1678,46 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	if cfg.Namespace == "" {
 		cfg.Namespace = "default"
 	}
+	cfg.AccessAddress = strings.TrimSpace(cfg.AccessAddress)
+	if err := validateAccessAddress(cfg.AccessAddress, path+".access_address"); err != nil {
+		return err
+	}
+	if len(cfg.AccessAddresses) > 0 {
+		normalizedAccessTargets := make(map[string]string, len(cfg.AccessAddresses))
+		for rawRegion, rawTarget := range cfg.AccessAddresses {
+			region := strings.ToLower(strings.TrimSpace(rawRegion))
+			if !supportedSCFRegion(region) {
+				return fmt.Errorf("config_invalid: %s.access_addresses[%q] uses unsupported SCF region", path, rawRegion)
+			}
+			target := strings.TrimSpace(rawTarget)
+			if err := validateAccessAddress(target, fmt.Sprintf("%s.access_addresses[%s]", path, region)); err != nil {
+				return err
+			}
+			if _, exists := normalizedAccessTargets[region]; exists {
+				return fmt.Errorf("config_invalid: %s.access_addresses contains duplicate region %q", path, region)
+			}
+			normalizedAccessTargets[region] = target
+		}
+		cfg.AccessAddresses = normalizedAccessTargets
+	}
+	if len(cfg.AccessIDs) > 0 {
+		normalizedAccessNodes := make(map[string]string, len(cfg.AccessIDs))
+		for rawRegion, rawNode := range cfg.AccessIDs {
+			region := strings.ToLower(strings.TrimSpace(rawRegion))
+			if !supportedSCFRegion(region) {
+				return fmt.Errorf("config_invalid: %s.access_ids[%q] uses unsupported SCF region", path, rawRegion)
+			}
+			node := strings.ToLower(strings.TrimSpace(rawNode))
+			if !validAccessInstanceID(node) {
+				return fmt.Errorf("config_invalid: %s.access_ids[%s] must be access@host", path, region)
+			}
+			if _, exists := normalizedAccessNodes[region]; exists {
+				return fmt.Errorf("config_invalid: %s.access_ids contains duplicate region %q", path, region)
+			}
+			normalizedAccessNodes[region] = node
+		}
+		cfg.AccessIDs = normalizedAccessNodes
+	}
 	if cfg.Runtime == "" {
 		cfg.Runtime = "Go1"
 	}
@@ -1516,8 +1818,8 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	if cfg.MaxInflightRequests <= 0 || cfg.MaxInflightRequests > 64 {
 		return fmt.Errorf("config_invalid: %s.max_inflight_requests must be between 1 and 64", path)
 	}
-	if cfg.RequestTimeoutMS <= 0 || cfg.StorageMaxAttempts < 1 || cfg.StorageMaxAttempts > 3 || cfg.HTTPMaxAttempts != 4 {
-		return fmt.Errorf("config_invalid: %s request/storage attempts are invalid", path)
+	if cfg.RequestTimeoutMS <= 0 || cfg.HTTPMaxAttempts != 4 {
+		return fmt.Errorf("config_invalid: %s request timeout or HTTP attempts are invalid", path)
 	}
 	if cfg.StorageTimeoutMS == 0 {
 		cfg.StorageTimeoutMS = 5000
@@ -1905,42 +2207,16 @@ func validNotificationWebhook(channelType, rawURL string) bool {
 	}
 }
 
-var (
-	dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
-	providerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-)
+var providerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-func validEventBusAddress(address string) bool {
-	if address == "" {
-		return false
-	}
-	if ip := net.ParseIP(address); ip != nil {
-		return ip.To4() != nil
-	}
-	if len(address) > 253 || strings.Contains(address, "..") {
-		return false
-	}
-	labels := strings.Split(address, ".")
-	for _, label := range labels {
-		if !dnsLabelPattern.MatchString(label) {
-			return false
-		}
-	}
-	return true
+func validAccessInstanceID(id string) bool {
+	return strings.HasPrefix(id, "access@") && servicecatalog.ValidHostID(strings.TrimPrefix(id, "access@"))
 }
-
-func validDNSResolverDomain(domain string) bool {
-	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
-		return false
+func validateAccessAddress(address, path string) error {
+	host, port, err := net.SplitHostPort(address)
+	number, portErr := strconv.Atoi(port)
+	if err != nil || portErr != nil || number < 1 || number > 65535 || !servicecatalog.ValidHostAddress(host) || address != strings.TrimSpace(address) {
+		return fmt.Errorf("config_invalid: %s must be host:port", path)
 	}
-	labels := strings.Split(domain, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	for _, label := range labels {
-		if !dnsLabelPattern.MatchString(label) {
-			return false
-		}
-	}
-	return true
+	return nil
 }

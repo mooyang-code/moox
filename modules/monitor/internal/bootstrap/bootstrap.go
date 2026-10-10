@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -19,10 +18,11 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
+	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/report"
@@ -53,11 +53,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
-	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories(), Unregistered: monmetrics.NewUnregisteredProducers()}
-	if runtime.Gateway, err = gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient}); err != nil {
+	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
+	runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "monitor gateway directory refresh: %v", err) })
+	if err != nil {
 		_ = runtime.Close()
-		return nil, fmt.Errorf("创建 monitor 的 gatewayclient: %w", err)
+		return nil, err
 	}
+	runtime.StorageGateway = storagegateway.New(runtime.Gateway)
+
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
 		_ = runtime.Close()
@@ -112,9 +115,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	var hostGate *hostmetrics.StorageGate
 	var hostRuleCache *hostmetrics.RuleCache
 	if cfg.Metrics.HostStorage.Enabled {
-		options := runtime.Gateway.ClientOptions()
-		hostAccess := storagepb.NewPrimaryStoreClientProxy(options...)
-		hostMetadata := storagepb.NewMetadataClientProxy(options...)
+		hostAccess, hostMetadata := runtime.StorageGateway, runtime.StorageGateway
 		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
 		hostReader = hostmetrics.NewStorageReader(hostAccess, cfg.Metrics.HostStorage)
 		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)
@@ -145,7 +146,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	var metricsStorage *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
 	if cfg.Metrics.Enabled {
-		metricsStorage = newMetricsStorage(runtime, cfg)
+		metricsStorage = monmetrics.NewStorageAdapter(runtime.StorageGateway, runtime.StorageGateway, cfg.Metrics.Storage)
 		metricStores, err := store.WithDatabase(mgr, monmetrics.NewStores)
 		if err != nil {
 			_ = runtime.Close()
@@ -203,7 +204,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, policyErr
 	}
 	doctorContext := &monitordoctor.Builder{
-		Placements: newPlacementSource(runtime), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Deployments: monitorplacement.NewClientSource(runtime.Gateway), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}
@@ -217,16 +218,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
 	}
-	klineInventory, err := buildKlineFreshnessInventory(cfg, runtime)
+	klineInventory, err := buildKlineFreshnessInventory(cfg, runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
 	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory)
-	placementSource := newPlacementSource(runtime)
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
-		Metrics: metricsQuery, GatewayHosts: placementSource, Unregistered: runtime.Unregistered,
-		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Metrics: metricsQuery, Hosts: hostStore,
+		Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways,
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 		MarketFetchThresholds:      marketFetchThresholds,
@@ -245,21 +245,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{
-		Facts: &monitorobservability.Builder{
-			Metrics: metricsQuery, GatewayHosts: placementSource, Unregistered: runtime.Unregistered,
-			Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-			Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
-			BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
-			MarketFetchThresholds:      marketFetchThresholds,
-		},
-		Placements: placementSource,
-		Checks:     runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-		Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications,
-	}
-	if hostStore != nil {
-		health.Hosts = hostStore
-	}
+	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
@@ -290,15 +276,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-// buildKlineFreshnessInventory 经 gatewayclient 调用 CollectMgr.GetTaskResultInventory，缓存 K 线任务的结果清单。
-func buildKlineFreshnessInventory(cfg *config.Config, runtime *Runtime) (*monmetrics.TaskResultInventoryCache, error) {
+func buildKlineFreshnessInventory(cfg *config.Config, gateway gatewayclient.Invoker) (*monmetrics.TaskResultInventoryCache, error) {
 	if cfg == nil || !cfg.KlineFreshness.Enabled {
 		return nil, nil
 	}
-	if runtime == nil || runtime.Gateway == nil {
-		return nil, fmt.Errorf("monitor collector inventory requires gatewayclient")
+	client, err := monmetrics.NewCollectorInventoryGatewayClient(gateway)
+	if err != nil {
+		return nil, err
 	}
-	client := collectorpb.NewCollectMgrClientProxy(runtime.Gateway.ClientOptions(gatewayclient.WithTimeout(15 * time.Second))...)
 	source, err := monmetrics.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryPageSize, cfg.KlineFreshness.InventoryMaxEntries)
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory source: %w", err)

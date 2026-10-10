@@ -33,7 +33,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -64,20 +63,23 @@ func initialize(
 	if err != nil {
 		return nil, err
 	}
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
-	if err != nil {
-		_ = tradeStore.Close()
-		return nil, fmt.Errorf("创建 trade 的 gatewayclient: %w", err)
-	}
 	cleanupStore := true
 	defer func() {
 		if cleanupStore {
-			gateway.Close()
 			_ = tradeStore.Close()
 		}
 	}()
 
-	secrets := secretclient.New(gateway, 10*time.Second)
+	gateway, err := cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "trade gateway directory refresh failed: %v", err) })
+	if err != nil {
+		return nil, fmt.Errorf("initialize trade gateway: %w", err)
+	}
+	defer func() {
+		if cleanupStore {
+			_ = gateway.Close()
+		}
+	}()
+	secrets := secretclient.New(gateway)
 	registry := execution.NewRegistry()
 	registerBuiltins(registry)
 	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
@@ -377,6 +379,7 @@ func initialize(
 				return result.Action, result.Order, cancelErr
 			},
 		},
+
 		rpc.ConsoleOptions{
 			Paper:              &papersimulation.Service{Store: tradeStore},
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
@@ -411,7 +414,7 @@ func initialize(
 			eventBus.Close()
 		}
 		workers.Wait()
-		gateway.Close()
+		_ = gateway.Close()
 		_ = tradeStore.Close()
 	})
 	cleanupStore = false

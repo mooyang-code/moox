@@ -4,42 +4,40 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-func withMetadataSpace(spaceID string) context.Context {
-	ctx, msg := codec.WithNewMessage(context.Background())
-	msg.WithServerMetaData(codec.MetaData{gatewayroute.MetadataSpaceID: []byte(spaceID)})
-	return ctx
-}
-
-func TestFromContextReadsExplicitSpaceID(t *testing.T) {
-	got, ok := FromContext(WithSpaceID(context.Background(), "crypto"))
-	if !ok || got != "crypto" {
-		t.Fatalf("FromContext = %q %v, want crypto", got, ok)
+func TestFromContextReadsNativeMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata map[string][]byte
+		want     string
+	}{
+		{name: "canonical", metadata: map[string][]byte{SpaceIDHeader: []byte("crypto")}, want: "crypto"},
+		{name: "lowercase and whitespace", metadata: map[string][]byte{"x-space-id": []byte(" crypto ")}, want: "crypto"},
+		{name: "missing"},
+		{name: "blank", metadata: map[string][]byte{SpaceIDHeader: []byte("   ")}},
+		{name: "conflicting keys", metadata: map[string][]byte{SpaceIDHeader: []byte("crypto"), "x-space-id": []byte("stock")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, message := codec.WithNewMessage(context.Background())
+			defer codec.PutBackMessage(message)
+			message.WithServerMetaData(tc.metadata)
+			got, ok := FromContext(ctx)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.want != "", ok)
+		})
 	}
 }
 
-func TestFromContextReadsTRPCMetadata(t *testing.T) {
-	got, ok := FromContext(withMetadataSpace("crypto"))
-	if !ok || got != "crypto" {
-		t.Fatalf("FromContext = %q %v, want crypto", got, ok)
-	}
-}
-
-func TestFromContextPrefersExplicitSpaceIDOverMetadata(t *testing.T) {
-	got, ok := FromContext(WithSpaceID(withMetadataSpace("wrong"), "crypto"))
-	if !ok || got != "crypto" {
-		t.Fatalf("FromContext = %q %v, want explicit crypto", got, ok)
-	}
-}
-
-func TestFromContextRejectsBlankMetadata(t *testing.T) {
-	if got, ok := FromContext(withMetadataSpace("   ")); ok {
-		t.Fatalf("FromContext ok = true, want false with value %q", got)
-	}
-	if _, err := MustFromContext(context.Background()); err == nil {
-		t.Fatal("缺少 space 时应当报错")
-	}
+func TestFromContextPrefersExplicitSpaceID(t *testing.T) {
+	ctx, message := codec.WithNewMessage(context.Background())
+	defer codec.PutBackMessage(message)
+	message.WithServerMetaData(map[string][]byte{SpaceIDHeader: []byte("wrong")})
+	got, ok := FromContext(WithSpaceID(ctx, " crypto "))
+	require.True(t, ok)
+	require.Equal(t, "crypto", got)
+	_, err := MustFromContext(context.Background())
+	require.Error(t, err)
 }

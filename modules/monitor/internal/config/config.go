@@ -3,29 +3,32 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	// GatewayClient 是 Monitor 访问 Storage 等组件的 gatewayclient 配置（monitor 身份）。
-	GatewayClient   gatewayclient.Config  `yaml:"gateway_client"`
-	Database        DatabaseConfig        `yaml:"database"`
-	Health          HealthConfig          `yaml:"health"`
-	HealthAuth      HealthAuthConfig      `yaml:"health_auth"`
-	Instance        InstanceConfig        `yaml:"instance"`
-	Scheduler       SchedulerConfig       `yaml:"scheduler"`
-	PlacementChecks PlacementChecksConfig `yaml:"placement_checks"`
-	Alert           AlertConfig           `yaml:"alert"`
-	Observability   ObservabilityConfig   `yaml:"observability"`
-	Metrics         MetricsConfig         `yaml:"metrics"`
-	MarketCanary    MarketCanaryConfig    `yaml:"market_canary"`
-	MarketHealth    MarketHealthConfig    `yaml:"market_health"`
-	KlineFreshness  KlineFreshnessConfig  `yaml:"kline_freshness"`
+	GatewayClient  gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath     string                   `yaml:"-"`
+	Database       DatabaseConfig           `yaml:"database"`
+	Health         HealthConfig             `yaml:"health"`
+	HealthAuth     HealthAuthConfig         `yaml:"health_auth"`
+	Instance       InstanceConfig           `yaml:"instance"`
+	Scheduler      SchedulerConfig          `yaml:"scheduler"`
+	Placement      PlacementConfig          `yaml:"placement"`
+	Alert          AlertConfig              `yaml:"alert"`
+	Observability  ObservabilityConfig      `yaml:"observability"`
+	Metrics        MetricsConfig            `yaml:"metrics"`
+	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
+	MarketHealth   MarketHealthConfig       `yaml:"market_health"`
+	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
 }
 
 type DatabaseConfig struct {
@@ -56,9 +59,9 @@ type SchedulerConfig struct {
 	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
-// PlacementChecksConfig 控制是否按 SysDeploy 的部署生成健康检查；SysDeploy 经 gateway_client 访问。
-type PlacementChecksConfig struct {
-	Enabled bool `yaml:"enabled"`
+type PlacementConfig struct {
+	Enabled bool                          `yaml:"enabled"`
+	HTTPS   map[string]domain.HTTPSConfig `yaml:"https"`
 }
 
 type AlertConfig struct {
@@ -127,8 +130,6 @@ type MarketCanarySubject struct {
 }
 
 type MetricsStorageConfig struct {
-	// AppID 是 Storage 应用鉴权使用的 app_id；请求经 gateway_client 发送。
-	AppID                      string        `yaml:"app_id"`
 	SpaceID                    string        `yaml:"space_id"`
 	DatasetID                  string        `yaml:"dataset_id"`
 	Frequency                  string        `yaml:"frequency"`
@@ -136,11 +137,9 @@ type MetricsStorageConfig struct {
 	WriteBatchSize             int           `yaml:"write_batch_size"`
 }
 
-// HostStorageConfig controls the direct Storage path for host snapshots.
+// HostStorageConfig controls the Storage datasets for host snapshots.
 type HostStorageConfig struct {
-	Enabled bool `yaml:"enabled"`
-	// AppID 是 Storage 应用鉴权使用的 app_id；请求经 gateway_client 发送。
-	AppID                   string        `yaml:"app_id"`
+	Enabled                 bool          `yaml:"enabled"`
 	SpaceID                 string        `yaml:"space_id"`
 	Frequency               string        `yaml:"frequency"`
 	WriteTimeout            time.Duration `yaml:"write_timeout"`
@@ -158,14 +157,31 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve monitor config: %w", err)
+	}
 	cfg := Default()
+	cfg.sourcePath = absolutePath
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("monitor config must contain exactly one YAML document")
+	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
+	for id, target := range cfg.Placement.HTTPS {
+		for _, path := range []*string{&target.CAFile, &target.CABaseline} {
+			if *path != "" && !filepath.IsAbs(*path) {
+				*path = filepath.Join(filepath.Dir(absolutePath), *path)
+			}
+		}
+		cfg.Placement.HTTPS[id] = target
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -174,11 +190,7 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
-		// 与部署布局一致：密钥和 CA 在安装根目录，目录缓存在组件的数据目录。
-		GatewayClient: gatewayclient.Config{
-			Mode: gatewayclient.ModeLocal, Caller: "monitor", KeyFile: "../secrets/caller-monitor.key",
-			CAFile: "../certs/moox-ca.crt", CacheDir: "./data/monitor/gatewayclient",
-		},
+		GatewayClient: gatewayclient.FileConfig{Caller: "monitor", KeyFile: "../../secrets/caller-monitor.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/monitor/monitor.db",
@@ -198,7 +210,7 @@ func Default() *Config {
 			ResultRetentionDays: 14,
 			MaxConcurrency:      16,
 		},
-		PlacementChecks: PlacementChecksConfig{Enabled: true},
+		Placement: PlacementConfig{Enabled: true},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
@@ -211,7 +223,7 @@ func Default() *Config {
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{AppID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, AppID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -331,9 +343,6 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
 	}
-	if c.Metrics.Storage.AppID == "" {
-		c.Metrics.Storage.AppID = metricsDefaults.Storage.AppID
-	}
 	if c.Metrics.Storage.SpaceID == "" {
 		c.Metrics.Storage.SpaceID = metricsDefaults.Storage.SpaceID
 	}
@@ -348,9 +357,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.Storage.WriteBatchSize == 0 {
 		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
-	}
-	if c.Metrics.HostStorage.AppID == "" {
-		c.Metrics.HostStorage.AppID = metricsDefaults.HostStorage.AppID
 	}
 	if c.Metrics.HostStorage.SpaceID == "" {
 		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID
@@ -415,6 +421,7 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
 		c.Metrics.DatasetHealthPolicyPath = v
 	}
+
 }
 
 func (c *Config) Validate() error {
@@ -484,8 +491,13 @@ func (c *Config) Validate() error {
 	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
 		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
 	}
-	if c.PlacementChecks.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
-		return fmt.Errorf("启用部署健康检查时 health_auth 的 version、access_key、secret_key 不能为空")
+	for id, target := range c.Placement.HTTPS {
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("placement.https.%s: %w", id, err)
+		}
+	}
+	if c.Placement.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
+		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when placement monitoring is enabled")
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage
@@ -504,9 +516,13 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if c.GatewayClient.Caller != "monitor" {
+		return fmt.Errorf("gateway_client.caller must be monitor")
+	}
 	if err := c.GatewayClient.Validate(); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -562,4 +578,15 @@ func firstEnv(names ...string) string {
 		}
 	}
 	return ""
+}
+
+// OpenGateway owns the client shared by Storage, Collector and Admin consumers.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("monitor gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "monitor" {
+		return nil, fmt.Errorf("gateway_client.caller must be monitor")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

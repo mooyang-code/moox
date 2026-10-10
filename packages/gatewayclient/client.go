@@ -1,456 +1,411 @@
-// Package gatewayclient 是 MooX 组件、外部调用方和 moox-cli 调用 tRPC 服务的唯一客户端。
-//
-// 它按服务目录选出目标主机网关，对实际发出的字节签名，再经 tRPC 发送：
-//   - Invoke 序列化请求对象后发送，供各组件之间的普通调用使用；
-//   - Forward 保留调用方给定的序列化类型，直接对原始字节签名并原样发送，供外部接入和控制台透传使用；
-//   - ClientOptions 让生成的 tRPC 客户端桩走同一条路径。
+// Package gatewayclient provides signed object calls and raw tRPC forwarding
+// through the host gateway, fixed external access, or SSH tunnels.
 package gatewayclient
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
-	"sort"
+	"os"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
-	"trpc.group/trpc-go/trpc-go/filter"
-	"trpc.group/trpc-go/trpc-go/pool/connpool"
-	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-const directoryFetchTimeout = 3 * time.Second
+const (
+	Internal = "local"
+	External = "access"
+	Tunnel   = "tunnel"
+)
 
-// Tunnel 是隧道方式下的 SSH 隧道：返回连到目标主机 127.0.0.1:11002 的本地地址。
-type Tunnel interface {
-	Address(ctx context.Context, hostID string) (string, error)
+// TunnelResolver connects to a host selected by ID using trusted SSH settings.
+// Returned addresses must be local forwards to the host's 127.0.0.1:11002.
+type TunnelResolver interface {
+	Resolve(ctx context.Context, hostID string) (string, error)
 }
 
-// Options 是 New 的参数。
-type Options struct {
-	Config Config
-	// Credentials 直接给出签名凭据时不读 key_file，供 SCF 环境变量和测试使用。
-	Credentials *gatewayauth.Credentials
-	// Tunnel 是隧道方式必需的 SSH 隧道。
-	Tunnel Tunnel
-	// Source 覆盖默认的目录来源，供测试使用。
-	Source Source
-	// RemoteAddress 覆盖跨主机目标地址的计算，供在一台机器上模拟多台主机的测试使用。
-	RemoteAddress   func(local, target servicecatalog.DirectoryHost) string
-	RefreshInterval time.Duration
-	Catalog         *servicecatalog.Catalog
-	Now             func() time.Time
+// Invoker is the object-call interface used by service clients.
+type Invoker interface {
+	Invoke(context.Context, string, string, any, any) error
 }
 
-// Client 是并发安全的网关客户端，应在进程内长期复用。
+type Config struct {
+	Mode             string
+	Credentials      gatewayauth.Credentials
+	LocalHostID      string
+	LocalAddress     string
+	CAFile           string
+	Source           DirectorySource
+	CachePath        string
+	Tunnels          TunnelResolver
+	AccessAddress    string
+	AccessInstanceID string
+	Serialization    int
+	Timeout          time.Duration
+	DirectoryTimeout time.Duration
+	RefreshInterval  time.Duration
+	OnRefreshError   func(error)
+}
+
+type endpoint struct {
+	address, target, caFile, serverName string
+}
+
+type invokeFunc func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error)
+
 type Client struct {
-	mode          Mode
-	credentials   gatewayauth.Credentials
-	caFile        string
-	localAddress  string
-	accessAddress string
-	accessID      string
-	tunnel        Tunnel
-	directory     *directoryState
-	remoteAddress func(local, target servicecatalog.DirectoryHost) string
-	catalog       *servicecatalog.Catalog
-	now           func() time.Time
-	// pool 是客户端自己的连接池：tRPC 默认连接池只按网络、地址和协议区分连接，
-	// 不同的 TLS 设置（或明文与 TLS）会共用同一条连接；它也检测不出失效的 TLS 连接。
-	pool connpool.Pool
+	config      Config
+	catalog     servicecatalog.Catalog
+	mu          sync.RWMutex
+	directory   servicecatalog.Directory
+	refresh     chan struct{}
+	invoke      invokeFunc
+	pool        *rpcPool
+	ownedSource io.Closer
+	cancel      context.CancelFunc
+	done        chan struct{}
+	closed      atomic.Bool
 }
 
-// New 按配置创建客户端。内部方式和隧道方式会在后台每 15 秒比对一次服务目录版本。
-func New(options Options) (*Client, error) {
-	// 相对路径按进程工作目录解析，只展开 ~/。
-	config, err := options.Config.ResolvePaths("")
+var hostID = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+
+func New(config Config) (*Client, error) {
+	if config.DirectoryTimeout == 0 {
+		config.DirectoryTimeout = 5 * time.Second
+	}
+	if config.RefreshInterval == 0 {
+		// Directory publication follows the host snapshot pull. Leave room for
+		// both polling stages within the 15-second deployment visibility budget.
+		config.RefreshInterval = 5 * time.Second
+	}
+	if config.Timeout < 0 || config.DirectoryTimeout <= 0 || config.RefreshInterval <= 0 || config.Serialization != codec.SerializationTypePB && config.Serialization != codec.SerializationTypeJSON {
+		return nil, fmt.Errorf("gateway client requires positive timeouts and PB or JSON serialization")
+	}
+	if config.Credentials.Caller == "" {
+		return nil, fmt.Errorf("gateway caller is required")
+	}
+	if _, err := gatewayauth.Sign(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/validate", TargetNode: "bootstrap"}, time.Now()); err != nil {
+		return nil, err
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
 	}
-	if err := config.Validate(); err != nil {
-		return nil, err
-	}
-	var credentials gatewayauth.Credentials
-	if options.Credentials != nil {
-		credentials = *options.Credentials
-	} else {
-		loaded, err := gatewayauth.LoadCallerKey(config.KeyFile)
+	var ownedSource io.Closer
+	switch config.Mode {
+	case Internal:
+		if !hostID.MatchString(config.LocalHostID) {
+			return nil, fmt.Errorf("internal client requires local host ID")
+		}
+		if config.LocalAddress == "" {
+			config.LocalAddress = "127.0.0.1:11002"
+		}
+		if !loopbackAddress(config.LocalAddress) {
+			return nil, fmt.Errorf("local gateway must use a loopback address")
+		}
+		if config.CAFile == "" || config.CAFile == "none" || config.CAFile == "root" {
+			return nil, fmt.Errorf("internal client requires the MooX private CA file")
+		}
+		pem, err := os.ReadFile(config.CAFile)
 		if err != nil {
+			return nil, fmt.Errorf("read MooX CA: %w", err)
+		}
+		if !x509.NewCertPool().AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("MooX CA file contains no certificates")
+		}
+		if config.Source == nil {
+			source, err := NewLocalDirectorySource(config.LocalAddress, config.DirectoryTimeout)
+			if err != nil {
+				return nil, err
+			}
+			config.Source, ownedSource = source, source
+		}
+	case Tunnel:
+		if config.Credentials.Caller != "moox-cli" || config.Source == nil || config.Tunnels == nil {
+			return nil, fmt.Errorf("tunnel client requires moox-cli identity, directory source and tunnel resolver")
+		}
+	case External:
+		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.AccessAddress, config.AccessInstanceID); err != nil {
 			return nil, err
 		}
-		credentials = loaded
-	}
-	if credentials.Caller == "" {
-		credentials.Caller = config.Caller
-	}
-	if credentials.Caller != strings.TrimSpace(config.Caller) {
-		return nil, fmt.Errorf("密钥属于调用方 %s，但配置的调用方是 %s", credentials.Caller, config.Caller)
-	}
-	c := &Client{
-		mode: config.Mode, credentials: credentials, caFile: strings.TrimSpace(config.CAFile),
-		localAddress: strings.TrimSpace(config.LocalAddress), accessAddress: strings.TrimSpace(config.AccessAddress),
-		accessID: strings.TrimSpace(config.AccessID), tunnel: options.Tunnel, remoteAddress: options.RemoteAddress,
-		catalog: options.Catalog, now: options.Now, pool: NewConnectionPool(),
-	}
-	if c.localAddress == "" {
-		c.localAddress = DefaultLocalAddress
-	}
-	if c.catalog == nil {
-		c.catalog = servicecatalog.Default()
-	}
-	if c.now == nil {
-		c.now = time.Now
-	}
-	if c.remoteAddress == nil {
-		c.remoteAddress = defaultRemoteAddress
-	}
-	source := options.Source
-	switch config.Mode {
-	case ModeLocal:
-		if source == nil {
-			address := c.localAddress
-			source = rpcSource{address: func(context.Context) (string, error) { return address, nil }, timeout: directoryFetchTimeout, pool: c.pool}
+		if config.Source != nil || config.CachePath != "" || config.Tunnels != nil {
+			return nil, fmt.Errorf("external client does not use directory discovery")
 		}
-		c.directory = newDirectoryState(source, config.CacheDir, options.RefreshInterval, false)
-	case ModeTunnel:
-		if options.Tunnel == nil {
-			return nil, errors.New("隧道方式必须提供 SSH 隧道")
-		}
-		if source == nil {
-			tunnel := options.Tunnel
-			source = rpcSource{address: func(ctx context.Context) (string, error) {
-				return tunnel.Address(ctx, servicecatalog.ControlHostID)
-			}, timeout: directoryFetchTimeout, pool: c.pool}
-		}
-		c.directory = newDirectoryState(source, config.CacheDir, options.RefreshInterval, true)
+	default:
+		return nil, fmt.Errorf("unknown gateway client mode")
 	}
-	if c.directory != nil {
-		c.directory.start()
+	pool := newRPCPool()
+	c := &Client{config: config, catalog: catalog, pool: pool, ownedSource: ownedSource, invoke: pool.invoke, done: make(chan struct{}), refresh: make(chan struct{}, 1)}
+	if config.Mode != External {
+		if config.CachePath != "" {
+			if cached, err := readCache(config.CachePath); err == nil {
+				c.directory = cached
+			}
+		}
+		err := c.Refresh(context.Background())
+		if c.directory.Version == "" {
+			_ = pool.Close()
+			if ownedSource != nil {
+				_ = ownedSource.Close()
+			}
+			return nil, fmt.Errorf("initial directory unavailable: %w", err)
+		}
+		if err != nil {
+			c.report(err)
+		}
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.cancel = cancel
+	go c.poll(ctx)
 	return c, nil
 }
 
-// Close 停止后台刷新。
-func (c *Client) Close() {
-	if c.directory != nil {
-		c.directory.close()
+func (c *Client) Directory() servicecatalog.Directory {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.directory.Clone()
+}
+
+// LocalHostID is the identity loaded from this internal client's host gateway
+// configuration. External clients have no local host identity.
+func (c *Client) LocalHostID() string { return c.config.LocalHostID }
+
+func (c *Client) Refresh(ctx context.Context) error {
+	if c.closed.Load() {
+		return net.ErrClosed
 	}
-}
-
-// Caller 返回签名使用的调用方身份。
-func (c *Client) Caller() string { return c.credentials.Caller }
-
-// Directory 返回当前服务目录；外部方式没有服务目录。
-func (c *Client) Directory(ctx context.Context) (View, error) {
-	if c.directory == nil {
-		return View{}, errors.New("外部方式没有服务目录")
+	if c.config.Mode == External {
+		return nil
 	}
-	return c.directory.current(ctx)
-}
-
-// CallOption 调整单次调用。
-type CallOption func(*callOptions)
-
-type callOptions struct {
-	host          string
-	timeout       time.Duration
-	serialization int
-	metadata      map[string][]byte
-}
-
-// WithHost 指定目标主机，用于每台主机都有一份的服务（例如主机采集器）。
-func WithHost(hostID string) CallOption {
-	return func(o *callOptions) { o.host = strings.TrimSpace(hostID) }
-}
-
-// WithTimeout 设置单次调用的超时。
-func WithTimeout(timeout time.Duration) CallOption {
-	return func(o *callOptions) { o.timeout = timeout }
-}
-
-// WithMetadata 附加透传给目标服务的 tRPC 元数据。以 x-moox- 开头的键会被主机网关丢弃。
-func WithMetadata(key string, value []byte) CallOption {
-	return func(o *callOptions) {
-		if o.metadata == nil {
-			o.metadata = map[string][]byte{}
-		}
-		o.metadata[key] = append([]byte(nil), value...)
+	ctx, cancel := context.WithTimeout(ctx, c.config.DirectoryTimeout)
+	defer cancel()
+	select {
+	case c.refresh <- struct{}{}:
+		defer func() { <-c.refresh }()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-}
-
-func buildCallOptions(opts []CallOption) callOptions {
-	out := callOptions{serialization: codec.SerializationTypePB}
-	for _, opt := range opts {
-		opt(&out)
-	}
-	return out
-}
-
-// Invoke 序列化请求对象，对序列化后的字节签名并发送，再把响应反序列化到 rsp。
-func (c *Client) Invoke(ctx context.Context, servicePath, method string, req, rsp any, opts ...CallOption) error {
-	options := buildCallOptions(opts)
-	body, err := codec.Marshal(options.serialization, req)
-	if err != nil {
-		return fmt.Errorf("序列化 %s/%s 请求: %w", servicePath, method, err)
-	}
-	out, err := c.do(ctx, servicePath, method, body, options)
+	current := c.Directory().Version
+	update, err := c.config.Source.Fetch(ctx, current)
 	if err != nil {
 		return err
 	}
-	if err := codec.Unmarshal(options.serialization, out, rsp); err != nil {
-		return fmt.Errorf("解析 %s/%s 响应: %w", servicePath, method, err)
+	if !update.Changed {
+		if current == "" || update.Directory.Version != current {
+			return fmt.Errorf("unchanged directory has an unexpected version")
+		}
+		return nil
+	}
+	if err := update.Directory.Validate(); err != nil {
+		return err
+	}
+	directory := update.Directory.Clone()
+	c.mu.Lock()
+	c.directory = directory
+	c.mu.Unlock()
+	// A disk failure must not keep a disabled host in the active in-memory map.
+	if err := writeCache(c.config.CachePath, directory); err != nil {
+		return fmt.Errorf("persist directory: %w", err)
 	}
 	return nil
 }
 
-// Forward 保留给定的序列化类型，直接对 body 签名并原样发送，返回原始响应字节。
-func (c *Client) Forward(ctx context.Context, servicePath, method string, serialization int, body []byte, opts ...CallOption) ([]byte, error) {
-	options := buildCallOptions(opts)
-	options.serialization = serialization
-	return c.do(ctx, servicePath, method, body, options)
-}
-
-// ClientOptions 返回给生成的 tRPC 客户端桩使用的选项：桩照常序列化请求，由一个终结过滤器
-// 完成选路、签名和发送，不再经过 tRPC 自带的寻址。
-func (c *Client) ClientOptions(opts ...CallOption) []client.Option {
-	return []client.Option{client.WithFilter(c.stubFilter(opts))}
-}
-
-func (c *Client) stubFilter(base []CallOption) filter.ClientFilter {
-	return func(ctx context.Context, req, rsp interface{}, _ filter.ClientHandleFunc) error {
-		msg := codec.Message(ctx)
-		servicePath, method := msg.CalleeServiceName(), msg.CalleeMethod()
-		if servicePath == "" || method == "" {
-			servicePath, method, _ = splitRPCName(msg.ClientRPCName())
-		}
-		if servicePath == "" || method == "" {
-			return errors.New("生成桩没有给出 tRPC 服务名和方法名")
-		}
-		options := buildCallOptions(base)
-		options.serialization = msg.SerializationType()
-		for key, value := range msg.ClientMetaData() {
-			if options.metadata == nil {
-				options.metadata = map[string][]byte{}
+func (c *Client) poll(ctx context.Context) {
+	defer close(c.done)
+	if c.config.Mode == External {
+		<-ctx.Done()
+		return
+	}
+	ticker := time.NewTicker(c.config.RefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.Refresh(ctx); err != nil && ctx.Err() == nil {
+				c.report(err)
 			}
-			options.metadata[key] = value
 		}
-		if deadline, ok := ctx.Deadline(); ok && options.timeout == 0 {
-			options.timeout = time.Until(deadline)
-		}
-		body, err := codec.Marshal(options.serialization, req)
-		if err != nil {
-			return fmt.Errorf("序列化 %s/%s 请求: %w", servicePath, method, err)
-		}
-		out, err := c.do(ctx, servicePath, method, body, options)
-		if err != nil {
-			return err
-		}
-		return codec.Unmarshal(options.serialization, out, rsp)
 	}
 }
 
-type target struct {
-	hostID  string
-	address string
-	tls     bool
+func (c *Client) report(err error) {
+	if c.config.OnRefreshError != nil {
+		c.config.OnRefreshError(err)
+	}
 }
 
-func (c *Client) do(ctx context.Context, servicePath, method string, body []byte, options callOptions) ([]byte, error) {
-	attempts := 1
-	if c.catalog.IsReadOnly(servicePath, method) {
-		attempts = 2
+func (c *Client) Close() error {
+	c.closed.Store(true)
+	c.cancel()
+	err := c.pool.Close()
+	if c.ownedSource != nil {
+		err = errors.Join(err, c.ownedSource.Close())
 	}
-	failed := map[string]bool{}
-	refreshed := false
-	var lastErr error
-	for attempt := 0; attempt < attempts; attempt++ {
-		chosen, err := c.pick(ctx, servicePath, options.host, failed)
-		if err != nil && !refreshed && c.directory != nil && errs.Code(err) == gatewayroute.RetServiceNotHere {
-			// 本地目录里没有可用的部署，目录可能已过期：刷新后再选一次。请求还没有发出，任何方法都可以重选。
-			refreshed = true
-			if c.directory.refresh(ctx) == nil {
-				chosen, err = c.pick(ctx, servicePath, options.host, failed)
-			}
-		}
+	timer := time.NewTimer(c.config.DirectoryTimeout)
+	defer timer.Stop()
+	select {
+	case <-c.done:
+		return err
+	case <-timer.C:
+		return errors.Join(err, fmt.Errorf("directory source did not stop within client timeout"))
+	}
+}
+
+func (c *Client) Invoke(ctx context.Context, service, method string, req, rsp interface{}) error {
+	body, err := codec.Marshal(c.config.Serialization, req)
+	if err != nil {
+		return err
+	}
+	response, err := c.Forward(ctx, service, method, c.config.Serialization, body)
+	if err != nil {
+		return err
+	}
+	if err := codec.Unmarshal(c.config.Serialization, response, rsp); err != nil {
+		return errs.NewFrameError(errs.RetClientDecodeFail, "decode gateway response")
+	}
+	return nil
+}
+
+func (c *Client) Forward(ctx context.Context, service, method string, serialization int, body []byte) ([]byte, error) {
+	if c.closed.Load() {
+		return nil, net.ErrClosed
+	}
+	if serialization != codec.SerializationTypePB && serialization != codec.SerializationTypeJSON {
+		return nil, fmt.Errorf("forward requires PB or JSON serialization")
+	}
+	allowed := c.catalog.Allowed(c.config.Credentials.Caller, service, method)
+	if c.config.Mode == External {
+		allowed = c.catalog.PrincipalAllowed(c.config.Credentials.Caller, service, method)
+	}
+	if !allowed {
+		return nil, fmt.Errorf("gateway caller is not allowed for this method")
+	}
+	spec, _ := c.catalog.Service(service)
+	limit := spec.MaxBodyBytes
+	if limit == 0 {
+		limit = servicecatalog.DefaultMaxBodyBytes
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("gateway request exceeds service body limit")
+	}
+	timeout := c.config.Timeout
+	if timeout == 0 {
+		timeout = time.Duration(spec.TimeoutMS) * time.Millisecond
+	}
+	if timeout == 0 {
+		timeout = time.Duration(servicecatalog.DefaultTimeoutMS) * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	failedHost := ""
+	for attempt := 0; attempt < 2; attempt++ {
+		ep, err := c.endpoint(ctx, service, failedHost)
 		if err != nil {
-			if lastErr != nil {
-				return nil, lastErr
-			}
 			return nil, err
 		}
-		out, err := c.send(ctx, chosen, servicePath, method, body, options)
+		headers, err := gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: ep.target, Caller: c.config.Credentials.Caller, Callee: service, Func: method, Body: body}, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		metadata := CallMetadataFromContext(ctx)
+		for name, value := range map[string]string{
+			"X-Space-Id": metadata.SpaceID, "X-User-Id": metadata.UserID,
+			"X-User-Role": metadata.UserRole, "X-Trace-Id": metadata.TraceID,
+		} {
+			if value != "" {
+				headers.Set(name, value)
+			}
+		}
+		response, err := c.invoke(ctx, ep, service, method, serialization, body, headers)
 		if err == nil {
-			return out, nil
+			if int64(len(response)) > limit {
+				return nil, fmt.Errorf("gateway response exceeds service body limit")
+			}
+			return response, nil
 		}
-		lastErr = err
-		if !needsDirectoryRefresh(err) {
+		code := errs.Code(err)
+		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService
+		retry := refresh || code == errs.RetClientTimeout
+		if refresh && c.config.Mode != External {
+			if refreshErr := c.Refresh(ctx); refreshErr != nil {
+				c.report(refreshErr)
+			}
+		}
+		if attempt == 1 || !retry || !c.catalog.ReadOnly(service, method) || ctx.Err() != nil {
 			return nil, err
 		}
-		failed[chosen.hostID] = true
-		if c.directory != nil {
-			refreshed = true
-			_ = c.directory.refresh(ctx)
-		}
+		failedHost = ep.target
 	}
-	return nil, lastErr
+	panic("unreachable gateway retry attempt")
 }
 
-// needsDirectoryRefresh 判断错误是否说明目录可能过期：服务不在目标主机、目标主机已停用、连不上，
-// 或连接在收到响应前断开（例如目标主机网关正在重启）。只读方法遇到这些错误时刷新目录后重试一次。
-func needsDirectoryRefresh(err error) bool {
-	switch errs.Code(err) {
-	case gatewayroute.RetServiceNotHere, gatewayroute.RetHostDisabled, errs.RetClientConnectFail, errs.RetClientNetErr, errs.RetClientReadFrameErr:
-		return true
-	default:
+func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoint, error) {
+	if c.config.Mode == External {
+		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID}, nil
+	}
+	c.mu.RLock()
+	// Published directory maps are immutable. Keep one coherent snapshot without
+	// copying the entire fleet on every RPC.
+	directory := c.directory
+	c.mu.RUnlock()
+	hosts := slices.Clone(directory.Services[service])
+	if len(hosts) == 0 {
+		return endpoint{}, fmt.Errorf("service has no enabled deployment")
+	}
+	slices.Sort(hosts)
+	if i := slices.Index(hosts, c.config.LocalHostID); i >= 0 {
+		hosts = append([]string{hosts[i]}, append(hosts[:i], hosts[i+1:]...)...)
+	}
+	chosen := hosts[0]
+	if chosen == previous && len(hosts) > 1 {
+		chosen = hosts[1]
+	}
+	if c.config.Mode == Tunnel {
+		address, err := c.config.Tunnels.Resolve(ctx, chosen)
+		if err != nil {
+			return endpoint{}, err
+		}
+		if !loopbackAddress(address) {
+			return endpoint{}, fmt.Errorf("SSH tunnel returned a non-loopback endpoint")
+		}
+		return endpoint{address: address, target: chosen}, nil
+	}
+	if chosen == c.config.LocalHostID {
+		return endpoint{address: c.config.LocalAddress, target: chosen}, nil
+	}
+	host := directory.Hosts[chosen]
+	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen}, nil
+}
+
+func validAddress(address string) bool {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || strings.ContainsAny(host, "/@?# \t\r\n") {
 		return false
 	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n > 0 && n <= 65535
 }
 
-func (c *Client) pick(ctx context.Context, servicePath, host string, failed map[string]bool) (target, error) {
-	if c.mode == ModeAccess {
-		return target{hostID: c.accessID, address: c.accessAddress}, nil
+func loopbackAddress(address string) bool {
+	if !validAddress(address) {
+		return false
 	}
-	view, err := c.directory.current(ctx)
-	if err != nil {
-		return target{}, err
-	}
-	hosts := view.Directory.ServiceHostIDs(servicePath)
-	if host != "" {
-		if !contains(hosts, host) {
-			return target{}, errs.New(gatewayroute.RetServiceNotHere, fmt.Sprintf("服务 %s 不在主机 %s 上", servicePath, host))
-		}
-		hosts = []string{host}
-	}
-	if len(hosts) == 0 {
-		return target{}, errs.New(gatewayroute.RetServiceNotHere, fmt.Sprintf("服务 %s 没有已启用的部署", servicePath))
-	}
-	ordered := orderHosts(hosts, view.LocalHostID, failed)
-	hostID := ordered[0]
-	if c.mode == ModeTunnel {
-		address, err := c.tunnel.Address(ctx, hostID)
-		if err != nil {
-			return target{}, fmt.Errorf("建立到主机 %s 的隧道失败: %w", hostID, err)
-		}
-		return target{hostID: hostID, address: address}, nil
-	}
-	if hostID == view.LocalHostID {
-		return target{hostID: hostID, address: c.localAddress}, nil
-	}
-	targetHost, ok := view.Directory.Host(hostID)
-	if !ok {
-		return target{}, fmt.Errorf("服务目录中没有主机 %s 的地址", hostID)
-	}
-	localHost, _ := view.Directory.Host(view.LocalHostID)
-	return target{hostID: hostID, address: c.remoteAddress(localHost, targetHost), tls: true}, nil
-}
-
-// orderHosts 优先本机，其次按主机 ID 排序；刚失败的主机排到最后。
-func orderHosts(hosts []string, local string, failed map[string]bool) []string {
-	ordered := append([]string(nil), hosts...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		left, right := ordered[i], ordered[j]
-		if failed[left] != failed[right] {
-			return !failed[left]
-		}
-		if (left == local) != (right == local) {
-			return left == local
-		}
-		return left < right
-	})
-	return ordered
-}
-
-// defaultRemoteAddress 是跨主机地址：目标主机的公网地址加 11003。地域和私网地址只用来让 SCF 就近访问外部接入
-// （设计文档 3.1），主机之间不走私网：防火墙只放行其他主机的公网地址，私网来源会被挡掉。
-func defaultRemoteAddress(_, targetHost servicecatalog.DirectoryHost) string {
-	return net.JoinHostPort(targetHost.Address, RemotePort)
-}
-
-// defaultTimeout 是调用方既没有设置超时、ctx 也没有截止时间时使用的超时：组件目录里该服务的超时加上一跳的余量。
-// 没有它，对端黑洞或网关卡死时后台协程会一直阻塞。
-func (c *Client) defaultTimeout(servicePath string) time.Duration {
-	const margin = 2 * time.Second
-	if service, _, ok := c.catalog.Service(servicePath); ok && service.TimeoutMS > 0 {
-		return time.Duration(service.TimeoutMS)*time.Millisecond + margin
-	}
-	return 10 * time.Second
-}
-
-func (c *Client) send(ctx context.Context, chosen target, servicePath, method string, body []byte, options callOptions) ([]byte, error) {
-	rpcName := "/" + servicePath + "/" + method
-	headers, err := gatewayauth.Sign(c.credentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: rpcName, TargetNode: chosen.hostID, Caller: c.credentials.Caller,
-		Callee: servicePath, Func: method, Body: body,
-	}, c.now())
-	if err != nil {
-		return nil, fmt.Errorf("签名 %s 失败: %w", rpcName, err)
-	}
-	callCtx, msg := codec.WithNewMessage(ctx)
-	msg.WithClientRPCName(rpcName)
-	msg.WithCalleeServiceName(servicePath)
-	msg.WithCalleeMethod(method)
-	invokeOptions := []client.Option{
-		client.WithTarget("ip://" + chosen.address), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
-		client.WithServiceName(servicePath), client.WithCalleeMethod(method),
-		client.WithSerializationType(options.serialization),
-		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
-		// 自带连接池时必须同时指定 go-net 传输：linux/amd64 上 tRPC 默认把客户端切到 tnet，而 tnet 只接受自己的连接，
-		// 对自带池返回的标准连接报 "tnet transport doesn't support non tnet.Conn"，这个问题在 macOS 上不会出现。
-		client.WithPool(c.pool), client.WithTransport(transport.DefaultClientTransport),
-		// 签名头和元数据已经在这里一次性写好。调用方模块配置的全局客户端过滤器（例如 transinfo-blocker 的白名单）
-		// 属于外层桩的过滤器链，已经执行过；内层不再重复执行，免得它们剥掉签名头。
-		client.WithDisableFilter(),
-	}
-	if chosen.tls {
-		if c.caFile == "" {
-			return nil, errors.New("跨主机调用需要 MooX 私有 CA 证书")
-		}
-		invokeOptions = append(invokeOptions, client.WithTLS("", "", c.caFile, chosen.hostID))
-	}
-	if options.timeout == 0 {
-		if _, hasDeadline := callCtx.Deadline(); !hasDeadline {
-			options.timeout = c.defaultTimeout(servicePath)
-		}
-	}
-	if options.timeout > 0 {
-		invokeOptions = append(invokeOptions, client.WithTimeout(options.timeout))
-	}
-	for key, value := range options.metadata {
-		if strings.HasPrefix(strings.ToLower(key), "x-moox-") {
-			continue
-		}
-		invokeOptions = append(invokeOptions, client.WithMetaData(key, value))
-	}
-	for key, values := range headers {
-		if len(values) == 1 {
-			invokeOptions = append(invokeOptions, client.WithMetaData(key, []byte(values[0])))
-		}
-	}
-	rsp := &codec.Body{}
-	if err := client.New().Invoke(callCtx, &codec.Body{Data: body}, rsp, invokeOptions...); err != nil {
-		return nil, err
-	}
-	return rsp.Data, nil
-}
-
-func splitRPCName(rpcName string) (string, string, bool) {
-	servicePath, method, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(rpcName), "/"), "/")
-	return servicePath, method, ok && servicePath != "" && method != ""
-}
-
-func contains(values []string, value string) bool {
-	for _, item := range values {
-		if item == value {
-			return true
-		}
-	}
-	return false
+	host, _, _ := net.SplitHostPort(address)
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

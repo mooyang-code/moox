@@ -1,45 +1,29 @@
 package client
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
-// fakeGateway 把 Invoke 转成对 handler 的 POST /<服务名>/<方法>（protojson 编码），沿用各测试的 HTTP 处理函数。
-type fakeGateway struct {
+type fakeForwarder struct {
 	handler http.Handler
-	service string
+	remote  string
 }
 
-func (f *fakeGateway) Invoke(ctx context.Context, servicePath, method string, req, rsp any, _ ...gatewayclient.CallOption) error {
-	f.service = servicePath
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req.(proto.Message))
-	if err != nil {
-		return err
-	}
-	request := httptest.NewRequest(http.MethodPost, "/"+servicePath+"/"+method, bytes.NewReader(raw)).WithContext(ctx)
-	request.Header.Set("Content-Type", "application/json")
-	recorder := httptest.NewRecorder()
-	f.handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		return fmt.Errorf("HTTP %d", recorder.Code)
-	}
-	return protojson.Unmarshal(recorder.Body.Bytes(), rsp.(proto.Message))
+func (f *fakeForwarder) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	f.remote = service
+	return (testfixture.HandlerGateway{Handler: f.handler}).Invoke(ctx, service, method, req, rsp)
 }
 
 func clientSnapshot(t *testing.T) *setupconfig.Snapshot {
@@ -53,20 +37,32 @@ func clientSnapshotWithPath(t *testing.T) (*setupconfig.Snapshot, string) {
 	body := `[admin]
 username = "admin"
 password = "recognizable-admin-password"
+
 [tencent_cloud]
 secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
+
 [eventbus]
 port = 4222
 tls_enabled = true
+
 [hosts.control]
 address = "eventbus.example.test"
-ssh = { username = "ubuntu", password = "recognizable-control-password" }
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "recognizable-control-password"
+
 [hosts.compute]
 address = "192.0.2.11"
-ssh = { username = "ubuntu", password = "recognizable-compute-password" }
+[hosts.compute.ssh]
+port = 22
+username = "ubuntu"
+password = "recognizable-compute-password"
+
 [placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor"]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute = []
 `
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
@@ -75,10 +71,10 @@ control = ["console-proxy", "web-host", "admin", "eventbus", "monitor"]
 	return snapshot, path
 }
 
-func TestApplyCallsSetupService(t *testing.T) {
+func TestApplyUsesCommandGateway(t *testing.T) {
 	var capturedPath string
 	var capturedRequest pb.ApplySetupReq
-	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		capturedPath = request.URL.Path
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
@@ -88,11 +84,11 @@ func TestApplyCallsSetupService(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(gateway).Apply(context.Background(), clientSnapshot(t))
+	result, err := New(forwarder).Apply(context.Background(), clientSnapshot(t))
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Action)
 	assert.Equal(t, 2, result.Hosts)
-	assert.Equal(t, "trpc.moox.admin.Setup", gateway.service)
+	assert.Equal(t, "trpc.moox.admin.Setup", forwarder.remote)
 	assert.Equal(t, "/trpc.moox.admin.Setup/ApplySetup", capturedPath)
 	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetTencentCloud().GetSecretKey())
 	assert.Empty(t, capturedRequest.GetSpaces())
@@ -100,7 +96,7 @@ func TestApplyCallsSetupService(t *testing.T) {
 
 func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 	var capturedRequest pb.ApplySetupReq
-	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.ApplySetupRsp{
@@ -115,7 +111,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 		Status: "active", AttributesJSON: `{"managed_by":"moox-cli"}`,
 	}}
 
-	result, err := New(gateway).ApplyWithSpaces(context.Background(), clientSnapshot(t), spaces)
+	result, err := New(forwarder).ApplyWithSpaces(context.Background(), clientSnapshot(t), spaces)
 	require.NoError(t, err)
 	require.Len(t, capturedRequest.GetSpaces(), 1)
 	assert.Equal(t, "stockcn", capturedRequest.GetSpaces()[0].GetSpaceId())
@@ -129,7 +125,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 
 func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 	var capturedRequest pb.GetSetupStatusReq
-	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
@@ -138,7 +134,7 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(gateway).Status(context.Background(), clientSnapshot(t))
+	result, err := New(forwarder).Status(context.Background(), clientSnapshot(t))
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.State)
 	assert.Equal(t, "recognizable-admin-password", capturedRequest.GetAdmin().GetPassword())
@@ -147,7 +143,7 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 
 func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 	var capturedRequest pb.GetSetupStatusReq
-	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
@@ -157,7 +153,7 @@ func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(gateway).StatusWithSpaces(context.Background(), clientSnapshot(t), []Space{{
+	result, err := New(forwarder).StatusWithSpaces(context.Background(), clientSnapshot(t), []Space{{
 		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
 		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
 	}})
@@ -174,13 +170,13 @@ func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 		want string
 	}{
 		{name: "conflict", body: `{"ret_info":{"code":1,"msg":"setup_conflict"}}`, want: "setup_conflict"},
-		{name: "unexpected remote text", body: `recognizable-secret-key`, want: "setup_remote_failed"},
+		{name: "unexpected remote text", body: `recognizable-secret-key`, want: "setup_response_invalid"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, tt.body)
 			})}
-			_, err := New(gateway).Apply(context.Background(), clientSnapshot(t))
+			_, err := New(forwarder).Apply(context.Background(), clientSnapshot(t))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 			assert.NotContains(t, err.Error(), "recognizable-secret-key")
@@ -192,8 +188,8 @@ func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 func TestApplyDetectsManifestMutationBeforeRequest(t *testing.T) {
 	snapshot, path := clientSnapshotWithPath(t)
 	require.NoError(t, os.WriteFile(path, []byte("changed"), 0o600))
-	gateway := &fakeGateway{handler: http.NotFoundHandler()}
-	_, err := New(gateway).Apply(context.Background(), snapshot)
+	forwarder := &fakeForwarder{handler: http.NotFoundHandler()}
+	_, err := New(forwarder).Apply(context.Background(), snapshot)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config_changed")
 }

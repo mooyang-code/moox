@@ -6,38 +6,26 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen;egresspb";
 
-// Proxy 是出口代理：替 MooX 内部组件访问国内连不上的外部 HTTPS 接口（目前是 Binance 的 REST 接口），
-// 并为 SCF 的 DNS 快照解析这些域名的可用地址。只允许 collector 经主机网关调用。
 service Proxy {
-  // Do 发出一次 HTTPS 请求，把目标的响应原样返回。目标返回的 HTTP 错误（如 429、5xx）放在 status 里，
-  // 只有代理自身出错时才设置 ret_info。
   rpc Do(DoReq) returns (DoRsp);
-  // ResolveDomains 解析白名单域名，返回经过 TCP 探测的 IPv4 地址，按连接延迟排序。
   rpc ResolveDomains(ResolveDomainsReq) returns (ResolveDomainsRsp);
 }
 
 message DoReq {
-  // method 只支持 GET 和 POST。
   string method = 1;
-  // host 是目标域名，必须在白名单内，例如 fapi.binance.com。
   string host = 2;
-  // path 是请求路径，例如 /fapi/v1/exchangeInfo。
   string path = 3;
-  // query 是已编码的查询参数，不含开头的 ?。
   string query = 4;
-  // headers 只转发白名单内的请求头。
   map<string, string> headers = 5;
   bytes body = 6;
-  // timeout_ms 是本次请求的超时，不超过 60000；不填时使用默认超时。
   int32 timeout_ms = 7;
 }
 
 message DoRsp {
   trpc.moox.common.RetInfo ret_info = 1;
-  // status 是目标返回的 HTTP 状态码。
   int32 status = 2;
   map<string, string> headers = 3;
-  // body 已解压，不超过 32MB。
+  // 已解压，最多 32 MiB；HTTP 错误状态仍是代理成功响应。
   bytes body = 4;
 }
 

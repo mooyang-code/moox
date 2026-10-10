@@ -141,7 +141,7 @@ func TestRequestViewRebuildReturnsImmediatelyAndPreservesActiveView(t *testing.T
 	require.NoError(t, err)
 
 	rsp, err := svc.RequestViewRebuild(context.Background(), &pb.RequestViewRebuildReq{
-		AuthInfo: &pb.AuthInfo{AppId: "console", AppKey: serviceAuthKey("secret", "console")},
+		AuthInfo: &pb.AuthInfo{AppId: "admin-gateway", AppKey: serviceAuthKey("secret", "admin-gateway")},
 		SpaceId:  "space-a", ViewId: "view-a",
 	})
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestRequestViewRebuildRejectsMissingOrForgedIdentity(t *testing.T) {
 	require.NoError(t, err)
 	for _, auth := range []*pb.AuthInfo{
 		nil,
-		{AppId: "console", AppKey: "wrong"},
+		{AppId: "admin-gateway", AppKey: "wrong"},
 		{AppId: "collector", AppKey: serviceAuthKey("secret", "collector")},
 	} {
 		rsp, callErr := svc.RequestViewRebuild(context.Background(), &pb.RequestViewRebuildReq{AuthInfo: auth, SpaceId: "space-a", ViewId: "view-a"})
@@ -515,7 +515,7 @@ func TestDeleteCollectorDatasetRequiresSignedCollectorIdentity(t *testing.T) {
 		{name: "missing", auth: nil, want: pb.ErrorCode_NO_PERMISSION},
 		{name: "app id only", auth: &pb.AuthInfo{AppId: "moox-collector"}, want: pb.ErrorCode_NO_PERMISSION},
 		{name: "wrong hmac", auth: &pb.AuthInfo{AppId: "moox-collector", AppKey: "wrong"}, want: pb.ErrorCode_NO_PERMISSION},
-		{name: "other signed service", auth: &pb.AuthInfo{AppId: "console", AppKey: serviceAuthKey("secret", "console")}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "other signed service", auth: &pb.AuthInfo{AppId: "admin-gateway", AppKey: serviceAuthKey("secret", "admin-gateway")}, want: pb.ErrorCode_NO_PERMISSION},
 		{name: "signed collector", auth: &pb.AuthInfo{AppId: "moox-collector", AppKey: serviceAuthKey("secret", "moox-collector")}, want: pb.ErrorCode_SUCCESS},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -542,7 +542,7 @@ func TestDeleteFactorResultDatasetRequiresSignedFactorIdentity(t *testing.T) {
 	}{
 		{name: "missing", want: pb.ErrorCode_NO_PERMISSION},
 		{name: "wrong hmac", auth: &pb.AuthInfo{AppId: "moox-factor", AppKey: "wrong"}, want: pb.ErrorCode_NO_PERMISSION},
-		{name: "other signed service", auth: &pb.AuthInfo{AppId: "console", AppKey: serviceAuthKey("secret", "console")}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "other signed service", auth: &pb.AuthInfo{AppId: "admin-gateway", AppKey: serviceAuthKey("secret", "admin-gateway")}, want: pb.ErrorCode_NO_PERMISSION},
 		{name: "collector signed", auth: &pb.AuthInfo{AppId: "moox-collector", AppKey: serviceAuthKey("secret", "moox-collector")}, want: pb.ErrorCode_NO_PERMISSION},
 		{name: "signed factor", auth: &pb.AuthInfo{AppId: "moox-factor", AppKey: serviceAuthKey("secret", "moox-factor")}, want: pb.ErrorCode_SUCCESS},
 	} {

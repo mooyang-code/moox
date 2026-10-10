@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,10 +11,11 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
@@ -51,7 +51,7 @@ func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) 
 		t.Fatal(err)
 	}
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Checks: repositories.Checks, Results: repositories.Results,
+		Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestBusinessFreshnessReporterDoesNotResolveMarketCanary(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Checks: repositories.Checks, Results: repositories.Results,
+		Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results, Now: func() time.Time { return now },
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return now },
 	}, repositories, nil, evaluator)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testi
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
 	}}, 20)
-	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results}, repositories, nil, 5*time.Minute, evaluator)
+	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results}, repositories, nil, 5*time.Minute, evaluator)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
 	builder := &monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
 	}
 	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, time.Second, evaluator)
@@ -286,7 +286,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
 	builder := &monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
 	}
 	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, time.Second, evaluator)
@@ -379,7 +379,7 @@ func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *test
 	}
 	repositories := manager.Repositories()
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
@@ -447,7 +447,7 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 	}
 	repositories := manager.Repositories()
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
@@ -509,7 +509,7 @@ func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T)
 	}
 	repositories := manager.Repositories()
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
@@ -555,7 +555,7 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 		t.Fatal(err)
 	}
 	repositories := manager.Repositories()
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results, Now: func() time.Time { return now }}, repositories, nil)
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return now }}, repositories, nil)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +568,7 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 	}
 }
 
-func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testing.T) {
+func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testing.T) {
 	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
@@ -599,7 +599,7 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 		},
 		{
 			SpaceID: monmetrics.InternalMetricSpaceID,
-			CheckID: "reporter:control:factor-mgr:factor-mgr@control",
+			CheckID: "reporter:control:factor-mgr",
 			Name:    "Reporter factor-mgr control factor-mgr@control",
 			Source:  domain.CheckSourceObservability, Kind: domain.CheckKindExternal,
 			Enabled: true, IntervalSeconds: 30,
@@ -609,8 +609,9 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 			t.Fatal(err)
 		}
 	}
+	seedBusinessTopology(t, repositories, "control", "factor-mgr", false)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
@@ -618,15 +619,16 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 	results, err := repositories.Results.Recent(
 		t.Context(),
 		monmetrics.InternalMetricSpaceID,
-		"reporter:control:factor-mgr:factor-mgr@control",
+		"reporter:control:factor-mgr",
 		1,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != noLongerExpected {
-		t.Fatalf("results = %+v", results)
-	}
+	require.Empty(t, results, "disabling a deployment must not fabricate recovery")
+	check, err := repositories.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, "reporter:control:factor-mgr")
+	require.NoError(t, err)
+	require.False(t, check.Enabled)
 }
 
 func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.T) {
@@ -677,8 +679,9 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 			t.Fatal(err)
 		}
 	}
+	seedBusinessTopology(t, repositories, "control", "factor-mgr", false)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
@@ -694,34 +697,23 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 	}
 }
 
-func TestServiceDeploymentExpectedAcceptsConfiguredLimit(t *testing.T) {
+func TestServiceDeploymentExpectedRequiresExplicitRegistration(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	rows := make([]domain.Check, 1500)
-	for i := range rows {
-		rows[i] = domain.Check{
-			CheckID: "placement:node-" + fmt.Sprint(i) + ":service-" + fmt.Sprint(i),
-			Source:  domain.CheckSourcePlacement, Enabled: false, IntervalSeconds: 30,
-		}
-	}
-	if _, err := store.WithDatabase(manager, func(db *gorm.DB) struct{} {
-		if err := db.CreateInBatches(rows, 100).Error; err != nil {
-			t.Fatal(err)
-		}
-		return struct{}{}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	expected, err := serviceDeploymentExpected(t.Context(), manager.Repositories().Checks, "factor-mgr")
-	if err != nil || !expected {
-		t.Fatalf("expected = %v, err = %v", expected, err)
-	}
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repositories := manager.Repositories()
+	expected, err := serviceDeploymentExpected(t.Context(), repositories.Topology, "factor-mgr")
+	require.NoError(t, err)
+	require.False(t, expected, "unknown topology cannot invent a deployment")
+	seedBusinessTopology(t, repositories, "control", "factor-mgr", true)
+	expected, err = serviceDeploymentExpected(t.Context(), repositories.Topology, "factor-mgr")
+	require.NoError(t, err)
+	require.True(t, expected)
+	seedBusinessTopology(t, repositories, "control", "factor-mgr", false)
+	expected, err = serviceDeploymentExpected(t.Context(), repositories.Topology, "factor-mgr")
+	require.NoError(t, err)
+	require.False(t, expected)
 }
 
 func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDatasets(t *testing.T) {
@@ -775,15 +767,9 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 		t.Fatal(err)
 	}
 	repositories := manager.Repositories()
-	// 上报方对应一条启用的部署检查：没有部署记录的上报行（部署已删除）不会告警。
-	if err := repositories.Checks.Create(t.Context(), &domain.Check{
-		CheckID: placement.CheckID("node-a", "collector"), Name: "collector", Source: domain.CheckSourcePlacement,
-		Enabled: true, IntervalSeconds: 30, TimeoutMS: 3000, Labels: `{"host_id":"node-a","component_id":"collector"}`,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	seedBusinessTopology(t, repositories, "node-a", "collector", true)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Policy: report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
 			RunMissedIntervals: 2, SuccessMissedIntervals: 3,
 			WatermarkPeriods: 3, MinimumWatermarkLag: 10 * time.Minute,
@@ -800,7 +786,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 	if err != nil {
 		t.Fatal(err)
 	}
-	reporterCheckID := "reporter:node-a:collector:collector@node-a"
+	reporterCheckID := "reporter:node-a:collector"
 	if len(checks) != 1 || checks[0].CheckID != reporterCheckID {
 		t.Fatalf("checks = %+v", checks)
 	}
@@ -841,4 +827,16 @@ func buildBusinessFreshnessReporter(
 	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
 ) func(context.Context) error {
 	return buildBusinessFreshnessReporterWithInterval(builder, repositories, hook, 30*time.Second, klineEvaluators...)
+}
+
+func seedBusinessTopology(t *testing.T, repositories *store.Repositories, hostID, componentID string, enabled bool) {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	status := servicecatalog.Enabled
+	if !enabled {
+		status = servicecatalog.Disabled
+	}
+	_, err = repositories.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Placements: []domain.TopologyPlacement{{HostID: hostID, ComponentID: componentID, Status: status}}}, nil)
+	require.NoError(t, err)
 }

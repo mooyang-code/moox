@@ -65,10 +65,8 @@ func TestDatasetSourceResolveSubjectsDerivesFromTagsWithoutSymbolMapping(t *test
 	require.Equal(t, "BTC-USDT", items[0].SubjectID)
 }
 
-func TestDatasetSourceGetTag(t *testing.T) {
-	src := &DatasetSource{metadata: &fakeMetadataClient{tag: &storagepb.Tag{SpaceId: "crypto", TagId: "binance_spot", Source: "binance", MarketType: "spot"}}}
-	tag, err := src.GetTag(context.Background(), "crypto", "binance_spot")
-	require.NoError(t, err)
-	require.Equal(t, "binance_spot", tag.GetTagId())
-	require.Equal(t, "binance", tag.GetSource())
+func TestDatasetSourcePreservesCancellationAndDoesNotUseDirectFallback(t *testing.T) {
+	source := NewDatasetSource(&fakeMetadataClient{tagErr: context.Canceled})
+	_, err := source.GetTag(context.Background(), "crypto", "binance_spot")
+	require.ErrorIs(t, err, context.Canceled)
 }

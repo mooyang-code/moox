@@ -9,7 +9,7 @@ for command_name in "${required_commands[@]}"; do
   }
 done
 
-go version
+bash "$(dirname "${BASH_SOURCE[0]}")/check-go-version.sh"
 node --version
 pnpm --version
 gh --version | head -1

@@ -162,7 +162,7 @@ message DataSource {
   map<string, string> attributes = 11;
 }
 
-// Tag 是 Subject 的分组；auto 标签成员由 Collector 的标的同步按 cron 维护。
+// Tag 是 Subject 的分组；auto 标签成员由 moox-collector 同步。
 message Tag {
   string space_id = 1;
   string tag_id = 2;

@@ -4,160 +4,111 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/release"
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var setupTestSecrets = []string{"admin-test-password", "control-ssh-password", "storage-ssh-password", "AKID-test-secret", "cloud-test-secret"}
-
-// fakeSetupDeployer 记录部署命令的调用。
-type fakeSetupDeployer struct {
-	deploys          []fakeDeployCall
-	scripts          []fakeScriptCall
-	rollbacks        []string
-	rollbackLockHeld []bool
-	bootstrap        *setupdeploy.BootstrapOptions
-	plan             release.Plan
-}
-
-type fakeDeployCall struct {
-	host string
-	opts setupdeploy.Options
-}
-
-type fakeScriptCall struct {
-	host, script string
-	lockHeld     bool
-	args         []string
-}
-
-func (f *fakeSetupDeployer) Bootstrap(_ context.Context, opts setupdeploy.BootstrapOptions) ([]setupdeploy.Result, error) {
-	f.bootstrap = &opts
-	return []setupdeploy.Result{{Host: "control", Release: "r1", Components: []string{"admin"}, Output: "control-ssh-password"}}, nil
-}
-
-func (f *fakeSetupDeployer) Deploy(_ context.Context, hostID string, opts setupdeploy.Options) (setupdeploy.Result, error) {
-	f.deploys = append(f.deploys, fakeDeployCall{host: hostID, opts: opts})
-	return setupdeploy.Result{Host: hostID, Release: "r1", Components: opts.Components, Output: "installer output"}, nil
-}
-
-func (f *fakeSetupDeployer) Rollback(_ context.Context, hostID string, lockHeld bool) (string, error) {
-	f.rollbacks = append(f.rollbacks, hostID)
-	f.rollbackLockHeld = append(f.rollbackLockHeld, lockHeld)
-	return "已切换到发布 r0\n", nil
-}
-
-func (f *fakeSetupDeployer) RunScript(_ context.Context, hostID, script string, lockHeld bool, args ...string) (string, error) {
-	f.scripts = append(f.scripts, fakeScriptCall{host: hostID, script: script, lockHeld: lockHeld, args: args})
-	return script + " ok\n", nil
-}
-
-func (f *fakeSetupDeployer) Plan(hostID string) (release.Plan, error) {
-	f.plan.HostID = hostID
-	return f.plan, nil
-}
-
-// setupTestDeps 返回注入了 moox.toml 快照和假部署器的依赖；syncs 记录每次打开部署器时是否同步部署记录。
-func setupTestDeps(t *testing.T, snapshot *setupconfig.Snapshot, deployer *fakeSetupDeployer, syncs *[]bool) setupDeps {
-	t.Helper()
-	return setupDeps{
+func TestSetupCommandContractAndSecrecy(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	secrets := []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"}
+	validateCalls := 0
+	deploymentValidateCalls := 0
+	deps := setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		openDeployer: func(_ *setupconfig.Snapshot, _ string, _ io.Writer, sync bool) (setupDeployer, func(), error) {
-			if syncs != nil {
-				*syncs = append(*syncs, sync)
-			}
-			return deployer, func() {}, nil
+		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+			validateCalls++
+			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
+		},
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			deploymentValidateCalls++
+			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
+		},
+		trustHost:     func(context.Context, *setupconfig.Snapshot, string, string) error { return nil },
+		deployControl: func(context.Context, *setupconfig.Snapshot, bool) error { return nil },
+		apply: func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
+			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 1, Hosts: 2}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed", Users: 1, Secrets: 1, Hosts: 2}, nil
+		},
+		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
+			return setupclient.LoginResult{LoginAPI: "valid"}, nil
 		},
 	}
-}
 
-func runSetup(t *testing.T, deps setupDeps, args ...string) (string, string, error) {
-	t.Helper()
-	cmd := newSetupCommand(deps)
-	var stdout, stderr bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
-	cmd.SetArgs(args)
-	err := cmd.Execute()
-	return stdout.String(), stderr.String(), err
-}
-
-func TestSetupCommandContractAndSecrecy(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	validateCalls := 0
-	deployer := &fakeSetupDeployer{}
-	deps := setupTestDeps(t, snapshot, deployer, nil)
-	deps.validate = func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
-		validateCalls++
-		return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
-	}
-	deps.trustHost = func(context.Context, *setupconfig.Snapshot, string, string) error { return nil }
-	deps.apply = func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
-		return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 1, Hosts: 2}, nil
-	}
-	deps.status = func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
-		return setupclient.StatusResult{State: "completed", Users: 1, Secrets: 1, Hosts: 2}, nil
-	}
-	deps.login = func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
-		return setupclient.LoginResult{LoginAPI: "valid"}, nil
-	}
-	for _, test := range []struct {
+	tests := []struct {
 		name string
 		args []string
 		key  string
 	}{
-		{name: "validate", args: []string{"validate"}, key: "checks"},
-		{name: "trust", args: []string{"trust-host", "--host", "control", "--fingerprint", "SHA256:test"}, key: "status"},
-		{name: "bootstrap", args: []string{"bootstrap"}, key: "hosts"},
-		{name: "deploy-host", args: []string{"deploy-host", "--host", "storage"}, key: "release"},
-		{name: "apply", args: []string{"apply"}, key: "login_api"},
-		{name: "status", args: []string{"status"}, key: "state"},
-	} {
+		{name: "validate", args: []string{"validate", "--file", "moox.toml"}, key: "checks"},
+		{name: "trust", args: []string{"trust-host", "--file", "moox.toml", "--host", "control", "--fingerprint", "SHA256:test"}, key: "status"},
+		{name: "deploy", args: []string{"deploy-control", "--file", "moox.toml"}, key: "status"},
+		{name: "apply", args: []string{"apply", "--file", "moox.toml"}, key: "login_api"},
+		{name: "status", args: []string{"status", "--file", "moox.toml"}, key: "state"},
+	}
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			stdout, stderr, err := runSetup(t, deps, append(test.args, "--file", "moox.toml")...)
-			require.NoError(t, err)
+			cmd := newSetupCommand(deps)
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetArgs(test.args)
+			require.NoError(t, cmd.Execute())
 			var result map[string]any
-			require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
 			require.Contains(t, result, test.key)
-			for _, secret := range setupTestSecrets {
-				require.NotContains(t, stdout+stderr, secret)
+			combined := stdout.String() + stderr.String()
+			for _, secret := range secrets {
+				require.NotContains(t, combined, secret)
 			}
+			require.NotContains(t, combined, "将使用默认配置")
 		})
 	}
-	require.Equal(t, 2, validateCalls, "validate 和 apply 都校验完整的 moox.toml")
+	require.Equal(t, 2, validateCalls, "validate and apply must validate the full manifest")
+	require.Equal(t, 1, deploymentValidateCalls, "deploy-control must only validate config and SSH")
 }
 
 func TestSetupHelpListsWorkflowCommands(t *testing.T) {
-	stdout, _, err := runSetup(t, setupDeps{}, "--help")
-	require.NoError(t, err)
-	for _, name := range []string{
-		"init", "hosts", "validate", "trust-host", "trust-browser", "bootstrap", "deploy-host", "deploy-service",
-		"rollback", "pause", "resume", "service", "render", "export-state", "build-linux", "apply", "status",
-		"export-skill-config", "firewall", "private-network", "scf-network-plan",
-	} {
-		require.Contains(t, stdout, "  "+name+" ", name)
+	t.Parallel()
+	cmd := newSetupCommand(setupDeps{})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"--help"})
+	require.NoError(t, cmd.Execute())
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "build-linux", "apply", "status", "deploy-storage", "rebuild-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "export-skill-config", "firewall", "private-network"} {
+		require.Contains(t, output.String(), name)
 	}
-	for _, removed := range []string{"deploy-control", "deploy-storage", "rebuild-storage", "install-storage-watchdog", "metadata-import", "render-runtime-config", "purge-eventbus-data"} {
-		require.NotContains(t, stdout, removed)
-	}
+	require.Contains(t, output.String(), "render-runtime-config")
 }
 
 func TestSetupTrustBrowserSkipsPublicTLS(t *testing.T) {
+	t.Parallel()
 	snapshot := setupSnapshot(t)
-	stdout, _, err := runSetup(t, setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }}, "trust-browser")
-	require.NoError(t, err)
-	require.JSONEq(t, `{"host":"control","status":"not_required"}`, stdout)
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"trust-browser", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
+	require.JSONEq(t, `{"host":"control","status":"not_required"}`, output.String())
 }
 
 func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
@@ -167,221 +118,607 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --check '*) test -f \"$MARKER\";;\n  *) : >\"$MARKER\";;\nesac\n"), 0o700))
 	t.Setenv("MARKER", marker)
-	t.Setenv("HOME", root)
 	t.Chdir(root)
 	snapshot := setupSnapshot(t)
-	control := snapshot.Manifest.Hosts["control"]
-	control.TLSMode = "internal"
-	snapshot.Manifest.Hosts["control"] = control
-	require.NoError(t, os.MkdirAll(filepath.Dir(setupdeploy.CAPath(control.Address)), 0o700))
-	require.NoError(t, os.WriteFile(setupdeploy.CAPath(control.Address), []byte("ca"), 0o600))
-	stdout, _, err := runSetup(t, setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }}, "trust-browser")
-	require.NoError(t, err)
+	host := snapshot.Manifest.HostCatalog["control"]
+	host.TLSMode = "internal"
+	snapshot.Manifest.HostCatalog["control"] = host
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"trust-browser", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
 	require.FileExists(t, marker)
-	require.Contains(t, stdout, `"status":"trusted"`)
+	require.Contains(t, output.String(), `"status":"trusted"`)
+}
+
+func TestBrowserServiceNames(t *testing.T) {
+	for _, service := range []string{"admin", "admin_gateway", "moox-admin", "web-host", "web_host", "moox-web-host"} {
+		assert.True(t, isBrowserService(service), service)
+	}
+	for _, service := range []string{"storage-view", "collector", "factor"} {
+		assert.False(t, isBrowserService(service), service)
+	}
+}
+
+func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	egressPath := filepath.Join(t.TempDir(), "egress-proxy", "app.yaml")
+	collectorPath := filepath.Join(t.TempDir(), "collector", "app.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(egressPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(collectorPath), 0o755))
+	require.NoError(t, os.WriteFile(egressPath, []byte("database:\n  path: ./egress.db\n"), 0o644))
+	require.NoError(t, os.WriteFile(collectorPath, []byte("database:\n  path: ./collector.db\n"), 0o644))
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"render-runtime-config", "--file", "moox.toml", "--egress-output", egressPath, "--collector-output", collectorPath})
+	require.NoError(t, cmd.Execute())
+	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","egress_output":%q,"collector_output":%q,"trade_console_host":"","trade_console_port":0}`, egressPath, collectorPath), output.String())
+	egressRaw, err := os.ReadFile(egressPath)
+	require.NoError(t, err)
+	require.Contains(t, string(egressRaw), "domains:")
+	collectorRaw, err := os.ReadFile(collectorPath)
+	require.NoError(t, err)
+	require.Contains(t, string(collectorRaw), "egress_proxy:")
+}
+
+func TestSetupInstallStorageWatchdogCommand(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var selectedHost string
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		installStorageWatchdog: func(_ context.Context, _ *setupconfig.Snapshot, host string) error {
+			selectedHost = host
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"install-storage-watchdog", "--file", "moox.toml", "--host", "compute"})
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "compute", selectedHost)
+	require.JSONEq(t, `{"host":"compute","status":"ready"}`, output.String())
+}
+
+func TestSetupDeployServicePassesPackageAndService(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var selectedHost, selectedPackage, selectedService, selectedDir string
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		deployService: func(_ context.Context, _ *setupconfig.Snapshot, host, packagePath, service, deployDir string) (setupdeploy.ServiceResult, error) {
+			selectedHost, selectedPackage, selectedService, selectedDir = host, packagePath, service, deployDir
+			return setupdeploy.ServiceResult{ServiceName: service, DeployDir: deployDir, LocalSHA256: "local", RemoteSHA256: "local"}, nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-service", "--file", "moox.toml", "--host", "compute", "--service", "admin", "--package", "./release/moox-admin.zip", "--deploy-dir", "/home/ubuntu/moox/prod"})
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "compute", selectedHost)
+	require.Equal(t, "./release/moox-admin.zip", selectedPackage)
+	require.Equal(t, "admin", selectedService)
+	require.Equal(t, "/home/ubuntu/moox/prod", selectedDir)
+	require.JSONEq(t, `{"service_name":"admin","deploy_dir":"/home/ubuntu/moox/prod","remote_archive":"","local_sha256":"local","remote_sha256":"local"}`, output.String())
+}
+
+func TestSetupEventBusURLUsesManifestEndpoint(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	require.Equal(t, "tls://203.0.113.8:4333", setupEventBusURL(snapshot.Manifest))
+	snapshot.Manifest.EventBus.TLSEnabled = false
+	require.Equal(t, "nats://203.0.113.8:4333", setupEventBusURL(snapshot.Manifest))
+	snapshot.Manifest.EventBus.Port = 0
+	require.Empty(t, setupEventBusURL(snapshot.Manifest))
 }
 
 func TestSetupHostsListsSanitizedManifestHosts(t *testing.T) {
+	t.Parallel()
 	snapshot := setupSnapshot(t)
-	snapshot.Manifest.CompileHost = setupconfig.CompileHost{
-		Address: "203.0.113.10", SSH: setupconfig.SSH{Port: 2222, Username: "builder", Password: "compile-password"},
-	}
-	stdout, _, err := runSetup(t, setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }}, "hosts")
-	require.NoError(t, err)
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"hosts", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
 	var result struct {
 		Hosts []setupHostChoice `json:"hosts"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.Equal(t, []string{"control", "compute"}, []string{result.Hosts[0].Name, result.Hosts[1].Name})
+	require.Equal(t, "control", result.Hosts[0].Role)
+	for _, secret := range []string{"admin-test-password", "control-ssh-password", "other-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
+		require.NotContains(t, output.String(), secret)
+	}
+}
+
+func TestSetupHostsListsCompileHostRole(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 2222, Username: "builder", Password: "compile-password"})
+	snapshot.Manifest.CompileHostRef.Host = "compile"
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"hosts", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
+	var result struct {
+		Hosts []setupHostChoice `json:"hosts"`
+	}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.Len(t, result.Hosts, 3)
-	assert.Equal(t, "control", result.Hosts[0].Name)
-	assert.Equal(t, "host", result.Hosts[0].Role)
-	assert.Equal(t, "/data/moox/control", result.Hosts[0].Root)
-	assert.Equal(t, "storage", result.Hosts[1].Name)
-	assert.Equal(t, []string{"storage-primary", "storage-node", "storage-view", "access"}, result.Hosts[1].Components)
 	assert.Equal(t, setupHostChoice{Name: "compile", Address: "203.0.113.10", Port: 2222, Username: "builder", Role: "compile"}, result.Hosts[2])
-	for _, secret := range append(setupTestSecrets, "compile-password") {
-		require.NotContains(t, stdout, secret)
+	assert.NotContains(t, output.String(), "compile-password")
+}
+
+func TestFindSetupTrustHostIncludesCompileHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder"})
+	snapshot.Manifest.CompileHostRef.Host = "compile"
+	host, err := findSetupTrustHost(snapshot.Manifest, "compile")
+	require.NoError(t, err)
+	assert.Equal(t, "203.0.113.10", host.Address)
+}
+
+func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	selected := ""
+	var validatedHosts []string
+	reset := true
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, fmt.Errorf("full validation must not run")
+		},
+		validateDeployment: func(_ context.Context, _ *setupconfig.Snapshot, hosts []setupconfig.Host) (setupvalidate.Result, error) {
+			for _, host := range hosts {
+				validatedHosts = append(validatedHosts, host.Name)
+			}
+			return setupvalidate.Result{}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed"}, nil
+		},
+		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, host string, selectedReset, _ bool) error {
+			selected = host
+			reset = selectedReset
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute"})
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "compute", selected)
+	require.Equal(t, []string{"control", "compute"}, validatedHosts)
+	require.False(t, reset, "reset must default to false")
+	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false,"reset_view_data":false}`, output.String())
+}
+
+func TestNormalizeStorageInternalAuthRejectsShellContent(t *testing.T) {
+	const valid = "MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary+/=\nMOOX_STORAGE_VIEW_AUTH_SECRET=view._-\n"
+	got, err := normalizeStorageInternalAuth(valid)
+	require.NoError(t, err)
+	assert.Equal(t, valid, got)
+
+	for _, raw := range []string{
+		valid + "touch /tmp/pwned\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=$(id)\nMOOX_STORAGE_VIEW_AUTH_SECRET=view\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=one\nMOOX_STORAGE_PRIMARY_AUTH_SECRET=two\nMOOX_STORAGE_VIEW_AUTH_SECRET=view\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary\n",
+	} {
+		_, err := normalizeStorageInternalAuth(raw)
+		require.Error(t, err)
 	}
 }
 
-func TestSetupTrustTargetIncludesCompileHost(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	snapshot.Manifest.CompileHost = setupconfig.CompileHost{Address: "203.0.113.10", SSH: setupconfig.SSH{Port: 22, Username: "builder"}}
-	target, err := setupTrustTarget(snapshot.Manifest, "compile")
+func TestNormalizeHealthAuthRejectsShellContent(t *testing.T) {
+	const valid = "MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=health+/=\n"
+	got, err := normalizeHealthAuth(valid)
 	require.NoError(t, err)
-	assert.Equal(t, "203.0.113.10", target.Address)
-	target, err = setupTrustTarget(snapshot.Manifest, "storage")
-	require.NoError(t, err)
-	assert.Equal(t, "203.0.113.9", target.Address)
-	_, err = setupTrustTarget(snapshot.Manifest, "missing")
-	require.ErrorContains(t, err, "没有主机")
-}
+	assert.Equal(t, valid, got)
 
-func TestSetupDeployHostPassesOptions(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	deployer := &fakeSetupDeployer{}
-	var syncs []bool
-	deps := setupTestDeps(t, snapshot, deployer, &syncs)
-	_, _, err := runSetup(t, deps, "deploy-host", "--host", "storage", "--components", "storage-view,access", "--skip-build", "--maintenance-lock-held")
-	require.NoError(t, err)
-	_, _, err = runSetup(t, deps, "deploy-host", "--host", "control", "--reuse-binaries", "--no-start", "--no-sync")
-	require.NoError(t, err)
-	require.Equal(t, []fakeDeployCall{
-		{host: "storage", opts: setupdeploy.Options{Components: []string{"storage-view", "access"}, SkipBuild: true, MaintenanceLockHeld: true}},
-		{host: "control", opts: setupdeploy.Options{ReuseBinaries: true, NoStart: true}},
-	}, deployer.deploys)
-	require.Equal(t, []bool{true, false}, syncs, "默认同步部署记录，--no-sync 时不同步")
-
-	_, _, err = runSetup(t, deps, "deploy-host", "--host", "missing")
-	require.ErrorContains(t, err, "没有主机")
-	require.Len(t, deployer.deploys, 2)
-}
-
-func TestSetupDeployServiceDeploysEveryPlacedHost(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	deployer := &fakeSetupDeployer{}
-	deps := setupTestDeps(t, snapshot, deployer, nil)
-	_, _, err := runSetup(t, deps, "deploy-service", "--component", "host-gateway", "--reuse-binaries")
-	require.NoError(t, err)
-	require.Equal(t, []string{"control", "storage"}, []string{deployer.deploys[0].host, deployer.deploys[1].host}, "主机组件部署在每台主机上")
-	require.Equal(t, []string{"host-gateway"}, deployer.deploys[0].opts.Components)
-
-	deployer.deploys = nil
-	_, _, err = runSetup(t, deps, "deploy-service", "--component", "access", "--host", "storage")
-	require.NoError(t, err)
-	require.Equal(t, []fakeDeployCall{{host: "storage", opts: setupdeploy.Options{Components: []string{"access"}}}}, deployer.deploys)
-
-	_, _, err = runSetup(t, deps, "deploy-service", "--component", "access", "--host", "control")
-	require.ErrorContains(t, err, "没有部署组件 access")
-	_, _, err = runSetup(t, deps, "deploy-service", "--component", "trade")
-	require.ErrorContains(t, err, "部署表中没有组件")
-}
-
-func TestSetupPauseResumeAndServiceRunHostScripts(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	deployer := &fakeSetupDeployer{}
-	deps := setupTestDeps(t, snapshot, deployer, nil)
-	stdout, _, err := runSetup(t, deps, "pause", "--host", "control", "--components", "collector,strategy", "--maintenance-lock-held")
-	require.NoError(t, err)
-	require.Equal(t, "pause ok\n", stdout)
-	_, _, err = runSetup(t, deps, "resume", "--host", "control", "--components", "collector")
-	require.NoError(t, err)
-	_, _, err = runSetup(t, deps, "service", "restart", "--host", "storage", "--components", "storage-view", "--force")
-	require.NoError(t, err)
-	_, _, err = runSetup(t, deps, "service", "status")
-	require.NoError(t, err)
-	_, _, err = runSetup(t, deps, "rollback", "--host", "storage")
-	require.NoError(t, err)
-	_, _, err = runSetup(t, deps, "rollback", "--host", "control", "--maintenance-lock-held")
-	require.NoError(t, err)
-	require.Equal(t, []fakeScriptCall{
-		{host: "control", script: "pause", lockHeld: true, args: []string{"collector", "strategy"}},
-		{host: "control", script: "resume", args: []string{"collector"}},
-		{host: "storage", script: "restart", args: []string{"--force", "storage-view"}},
-		{host: "control", script: "status"},
-	}, deployer.scripts)
-	require.Equal(t, []string{"storage", "control"}, deployer.rollbacks)
-	require.Equal(t, []bool{false, true}, deployer.rollbackLockHeld)
-
-	_, _, err = runSetup(t, deps, "pause", "--host", "control")
-	require.ErrorContains(t, err, "--components")
-	_, _, err = runSetup(t, deps, "service", "stop", "--force")
-	require.ErrorContains(t, err, "--force")
-	_, _, err = runSetup(t, deps, "service", "reload")
-	require.ErrorContains(t, err, "不支持的操作")
-}
-
-func TestSetupBootstrapUsesCLIKeyFileAndDefersPlacementSync(t *testing.T) {
-	t.Setenv("MOOX_CLI_CALLER_KEY_FILE", "/tmp/moox-test-cli.key")
-	snapshot := setupSnapshot(t)
-	deployer := &fakeSetupDeployer{}
-	var syncs []bool
-	stdout, _, err := runSetup(t, setupTestDeps(t, snapshot, deployer, &syncs), "bootstrap", "--skip-build")
-	require.NoError(t, err)
-	require.NotNil(t, deployer.bootstrap)
-	assert.True(t, deployer.bootstrap.SkipBuild)
-	assert.Equal(t, "/tmp/moox-test-cli.key", deployer.bootstrap.CLIKeyFile)
-	assert.NotNil(t, deployer.bootstrap.NewPlacements)
-	assert.Equal(t, []bool{false}, syncs, "control 就绪前不能经 Admin 同步部署记录")
-	assert.NotContains(t, stdout, "control-ssh-password", "安装器输出不进命令结果")
-	assert.False(t, deployer.bootstrap.ControlOnly)
-	assert.False(t, deployer.bootstrap.MaintenanceLockHeld)
-
-	_, _, err = runSetup(t, setupTestDeps(t, snapshot, deployer, nil), "bootstrap", "--control-only", "--maintenance-lock-held")
-	require.NoError(t, err)
-	assert.True(t, deployer.bootstrap.ControlOnly)
-	assert.True(t, deployer.bootstrap.MaintenanceLockHeld)
-}
-
-func TestSetupRenderWritesPlanFiles(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	deployer := &fakeSetupDeployer{plan: release.Plan{Root: "/data/moox/storage", Files: []release.File{
-		{Path: "runtime/host.env", Mode: 0o644, Data: []byte("HOST_ID=storage\n")},
-		{Path: "storage-view/config/trpc_go.yaml", Mode: 0o644, Data: []byte("server: {}\n")},
-	}}}
-	out := filepath.Join(t.TempDir(), "rendered")
-	stdout, _, err := runSetup(t, setupTestDeps(t, snapshot, deployer, nil), "render", "--host", "storage", "--out", out)
-	require.NoError(t, err)
-	raw, err := os.ReadFile(filepath.Join(out, "runtime", "host.env"))
-	require.NoError(t, err)
-	require.Equal(t, "HOST_ID=storage\n", string(raw))
-	require.FileExists(t, filepath.Join(out, "storage-view", "config", "trpc_go.yaml"))
-	require.Contains(t, stdout, `"files":2`)
-
-	_, _, err = runSetup(t, setupTestDeps(t, snapshot, deployer, nil), "render", "--host", "storage", "--out", out)
-	require.ErrorContains(t, err, "不为空")
-}
-
-func TestSetupFirewallRulesFollowPlacements(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	addresses := map[string]string{"control": "203.0.113.8", "storage": "203.0.113.9"}
-	rules := setupFirewallRules(snapshot.Manifest, addresses)
-	has := func(host, port, source string) bool {
-		return containsFirewallEntry(rules[host], setupFirewallEntry{Port: port, Source: source})
+	for _, raw := range []string{
+		valid + "touch /tmp/pwned\n",
+		"MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=$(id)\n",
+		"MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\n",
+	} {
+		_, err := normalizeHealthAuth(raw)
+		require.Error(t, err)
 	}
-	assert.True(t, has("control", "9527", "0.0.0.0/0"), "控制台对公网开放")
-	assert.True(t, has("control", "80", "0.0.0.0/0"), "公网证书需要 80 端口完成验证")
-	assert.True(t, has("control", "4333", "0.0.0.0/0"), "消息总线端口保持对公网开放（SCF 发布事件）")
-	assert.True(t, has("control", "11003", "203.0.113.9"))
-	assert.False(t, has("control", "11003", "0.0.0.0/0"), "跨主机入口不对公网开放")
-	assert.False(t, has("control", "11012", "203.0.113.8"), "control 自己的健康端口不用开放")
-	assert.True(t, has("storage", "11003", "203.0.113.8"))
-	assert.True(t, has("storage", "11004", "0.0.0.0/0"), "外部接入对公网开放")
-	assert.True(t, has("storage", "11012", "203.0.113.8"), "主机网关的健康端口只对 control 开放")
-	assert.True(t, has("storage", "20210", "203.0.113.8"), "存储主服务的健康端口只对 control 开放")
-	assert.False(t, has("storage", "9527", "0.0.0.0/0"))
-
-	control := snapshot.Manifest.Hosts["control"]
-	control.TLSMode = "internal"
-	snapshot.Manifest.Hosts["control"] = control
-	rules = setupFirewallRules(snapshot.Manifest, addresses)
-	assert.False(t, has("control", "80", "0.0.0.0/0"), "内置 CA 不需要 80 端口")
 }
 
-func TestDiffFirewallEntriesPrunesOnlyManagedPorts(t *testing.T) {
+func TestSetupDeployControlWritesSanitizedValidationResultOnFailure(t *testing.T) {
+	t.Parallel()
 	snapshot := setupSnapshot(t)
-	managed := setupFirewallManagedPorts(snapshot.Manifest)
-	desired := []setupFirewallEntry{{Port: "11003", Source: "203.0.113.8"}, {Port: "11004", Source: "0.0.0.0/0"}}
-	existing := []setupFirewallEntry{
-		{Port: "11003", Source: "0.0.0.0/0"},
-		{Port: "11003", Source: "203.0.113.8/32"},
-		{Port: "12004", Source: "0.0.0.0/0"},
-		{Port: "11001", Source: "0.0.0.0/0"},
-		{Port: "22", Source: "0.0.0.0/0"},
-		{Port: "8080-9000", Source: "0.0.0.0/0"},
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "host:control", Status: "invalid", Code: "host_key_unknown", Fingerprint: "SHA256:verified"}}}, setupvalidate.ErrValidationFailed
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml"})
+	require.ErrorIs(t, cmd.Execute(), setupvalidate.ErrValidationFailed)
+	require.JSONEq(t, `{"checks":[{"name":"host:control","status":"invalid","code":"host_key_unknown","fingerprint":"SHA256:verified"}]}`, output.String())
+}
+
+func TestSetupDeployControlAcceptsExplicitResetFlag(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	reset := false
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		deployControl: func(_ context.Context, _ *setupconfig.Snapshot, selectedReset bool) error {
+			reset = selectedReset
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml", "--reset-data"})
+	require.NoError(t, cmd.Execute())
+	require.True(t, reset)
+	require.JSONEq(t, `{"host":"control","status":"ready","reset_data":true,"certificate":{"mode":"public","issuer":"letsencrypt","automatic_renewal":true,"renewal":"caddy_acme_ari"}}`, output.String())
+}
+
+func TestSetupDeployControlValidatesConfiguredTradeAndEgressHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.HostCatalog["compute-1"] = snapshot.Manifest.HostCatalog["compute"]
+	delete(snapshot.Manifest.HostCatalog, "compute")
+	delete(snapshot.Manifest.Placements, "compute")
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "egress-host", Address: "203.0.113.11"})
+	snapshot.Manifest.Placements["compute-1"] = []string{"trade"}
+	snapshot.Manifest.Placements["egress-host"] = []string{"egress-proxy"}
+	var hosts []setupconfig.Host
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(_ context.Context, _ *setupconfig.Snapshot, values []setupconfig.Host) (setupvalidate.Result, error) {
+			hosts = append([]setupconfig.Host(nil), values...)
+			return setupvalidate.Result{}, nil
+		},
+		deployControl: func(context.Context, *setupconfig.Snapshot, bool) error { return nil },
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
+	require.Len(t, hosts, 3)
+	require.Equal(t, "control", hosts[0].Name)
+	require.Equal(t, "compute-1", hosts[1].Name)
+	require.Equal(t, "egress-host", hosts[2].Name)
+}
+
+func TestSetupDeployControlValidatesConfiguredTradeHostWithoutDNS(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.HostCatalog["compute-1"] = snapshot.Manifest.HostCatalog["compute"]
+	delete(snapshot.Manifest.HostCatalog, "compute")
+	delete(snapshot.Manifest.Placements, "compute")
+	snapshot.Manifest.Placements["compute-1"] = []string{"trade"}
+	var hosts []setupconfig.Host
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(_ context.Context, _ *setupconfig.Snapshot, values []setupconfig.Host) (setupvalidate.Result, error) {
+			hosts = append([]setupconfig.Host(nil), values...)
+			return setupvalidate.Result{}, nil
+		},
+		deployControl: func(context.Context, *setupconfig.Snapshot, bool) error { return nil },
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
+	require.Len(t, hosts, 2)
+	require.Equal(t, "compute-1", hosts[1].Name)
+}
+
+func TestSetupCertificateSummarySelectsTrustModel(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, map[string]any{
+		"mode": "public", "issuer": "letsencrypt", "automatic_renewal": true, "renewal": "caddy_acme_ari",
+	}, setupCertificateSummary("203.0.113.8"))
+	assert.Equal(t, map[string]any{
+		"mode": "internal", "issuer": "caddy_internal_ca", "automatic_renewal": true, "renewal": "caddy_internal",
+	}, setupCertificateSummary("127.0.0.1"))
+}
+
+func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.Placements["compute"] = []string{"trade"}
+	opts := controlDeployOptions(snapshot, "/repo")
+	require.Equal(t, "/repo", opts.RepositoryRoot)
+	require.Equal(t, "203.0.113.8", opts.PublicHost)
+	require.Equal(t, "203.0.113.8", opts.EventBusPublicAddress)
+	require.Equal(t, 4333, opts.EventBusPort)
+	require.True(t, opts.EventBusTLSEnabled)
+	require.Equal(t, "wecom", opts.NotificationChannelType)
+	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", opts.NotificationWebhookURL)
+	require.Equal(t, "https://203.0.113.9:11001", opts.TradeGatewayURL)
+	require.Equal(t, "compute", opts.TradeGatewayNode)
+}
+
+func TestReadTradeGatewayCASeparatesMissingFromReadFailure(t *testing.T) {
+	root := t.TempDir()
+	missing, exists, err := readTradeGatewayCA(context.Background(), localReadSSH{}, root)
+	require.NoError(t, err)
+	require.False(t, exists)
+	require.Empty(t, missing)
+	target := filepath.Join(root, "certs", "caddy", "trade-gateway-root.crt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
+	require.NoError(t, os.Mkdir(target, 0o700))
+	_, exists, err = readTradeGatewayCA(context.Background(), localReadSSH{}, root)
+	require.Error(t, err)
+	require.False(t, exists, "failed reads must not be treated as a valid existing CA")
+}
+
+type localReadSSH struct{}
+
+func (localReadSSH) Check(context.Context) error { return nil }
+func (localReadSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
+	return nil, errors.New("not implemented")
+}
+func (localReadSSH) Download(context.Context, string, io.Writer) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+func (localReadSSH) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
+	return errors.New("not implemented")
+}
+func (localReadSSH) Run(ctx context.Context, argv []string, stdin io.Reader) (setupssh.Result, error) {
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.Stdin = stdin
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err := command.Run()
+	result := setupssh.Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		result.ExitCode = exitErr.ExitCode()
 	}
-	missing, obsolete := diffFirewallEntries(desired, existing, managed)
-	assert.Equal(t, []setupFirewallEntry{{Port: "11004", Source: "0.0.0.0/0"}}, missing, "203.0.113.8/32 与 203.0.113.8 是同一条规则")
-	assert.Equal(t, []setupFirewallEntry{
-		{Port: "11003", Source: "0.0.0.0/0"}, {Port: "12004", Source: "0.0.0.0/0"}, {Port: "11001", Source: "0.0.0.0/0"},
-	}, obsolete, "SSH 和端口范围不受管")
+	return result, err
+}
+func (localReadSSH) Close() error { return nil }
+
+func TestControlDeployOptionsUsesConfiguredStorageGatewayHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "storage", Address: "146.56.196.204", Port: 22}, "storage-primary")
+	opts := controlDeployOptions(snapshot, "/repo")
+	require.Equal(t, "ip://146.56.196.204:11003", opts.LocalStorageRPCGatewayTarget)
+	require.Equal(t, "storage", opts.LocalStorageGatewayNodeID)
+}
+
+func TestControlDeployOptionsPassCompileHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "compile", Address: "203.0.113.10", Port: 22, Username: "builder", Password: "compile-ssh-password"})
+	snapshot.Manifest.CompileHostRef.Host = "compile"
+	opts := controlDeployOptions(snapshot, "/repo")
+	require.Equal(t, "compile-ssh-password", opts.StorageBuildPassword)
+	require.Equal(t, "compile", opts.StorageBuildHost)
+	require.Equal(t, "compile", opts.StorageBuildHostRole)
+}
+
+func TestEventBusFirewallIPResolvesDNSWithoutChangingAdvertisedAddress(t *testing.T) {
+	lookup := func(_ context.Context, network, host string) ([]net.IP, error) {
+		require.Equal(t, "ip4", network)
+		require.Equal(t, "eventbus.example.test", host)
+		return []net.IP{net.ParseIP("203.0.113.10")}, nil
+	}
+	ip, err := eventBusFirewallIP(context.Background(), "eventbus.example.test", lookup)
+	require.NoError(t, err)
+	require.Equal(t, "203.0.113.10", ip)
+}
+
+func TestEventBusFirewallIPRejectsAmbiguousDNS(t *testing.T) {
+	lookup := func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("203.0.113.11")}, nil
+	}
+	_, err := eventBusFirewallIP(context.Background(), "eventbus.example.test", lookup)
+	require.ErrorContains(t, err, "exactly one IPv4")
+}
+
+func TestSetupControlFirewallRulesIncludePublicTLSAndServicePorts(t *testing.T) {
+	rules := setupControlFirewallRules()
+	require.Len(t, rules, 3)
+	assert.Equal(t, "80", rules[0].Ports)
+	assert.Equal(t, "MooX ACME HTTP challenge", rules[0].Description)
+	assert.Equal(t, "9527", rules[1].Ports)
+	assert.Equal(t, "MooX browser HTTPS", rules[1].Description)
+	assert.Equal(t, "11001", rules[2].Ports)
+	assert.Equal(t, "MooX service HTTPS", rules[2].Description)
+	for _, rule := range rules {
+		assert.Equal(t, "TCP", rule.Protocol)
+		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
+		assert.Equal(t, "ACCEPT", rule.Action)
+	}
+}
+
+func TestSetupControlFirewallRulesSkipACMEForInternalTLS(t *testing.T) {
+	rules := setupControlFirewallRulesForTLS(setupdeploy.TLSModeInternal, "203.0.113.8")
+	require.Len(t, rules, 2)
+	require.Equal(t, "9527", rules[0].Ports)
+	require.Equal(t, "11001", rules[1].Ports)
 }
 
 func TestIsPublicFirewallIPRejectsPrivateAndLoopbackAddresses(t *testing.T) {
-	assert.True(t, isPublicFirewallIP("106.53.107.122"))
-	for _, address := range []string{"10.0.0.1", "127.0.0.1", "192.168.1.2", "::1", "not-an-ip"} {
-		assert.False(t, isPublicFirewallIP(address), address)
+	require.True(t, isPublicFirewallIP("203.0.113.8"))
+	require.False(t, isPublicFirewallIP("10.0.0.8"))
+	require.False(t, isPublicFirewallIP("127.0.0.1"))
+}
+
+func TestSetupRuntimeFirewallRulesIncludeEventBusAndServicePorts(t *testing.T) {
+	rules := setupRuntimeFirewallRules(4333)
+	require.Len(t, rules, 4)
+	assert.Equal(t, "4333", rules[0].Ports)
+	assert.Equal(t, "MooX EventBus TLS", rules[0].Description)
+	assert.Equal(t, "11003", rules[1].Ports)
+	assert.Equal(t, "MooX service gateway native", rules[1].Description)
+	assert.Equal(t, "11012", rules[2].Ports)
+	assert.Equal(t, "MooX SCF Gateway readiness", rules[2].Description)
+	assert.Equal(t, "11409", rules[3].Ports)
+	assert.Equal(t, "MooX SCF Monitor readiness", rules[3].Description)
+	for _, rule := range rules {
+		assert.Equal(t, "TCP", rule.Protocol)
+		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
+		assert.Equal(t, "ACCEPT", rule.Action)
 	}
+}
+
+func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
+	manifest := setupconfig.Manifest{
+		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "compute": {Address: "203.0.113.9"}},
+		EventBus:    setupconfig.EventBus{PublicAddress: "203.0.113.8", Port: 4222},
+		Placements:  map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "storage": {"storage-primary"}, "compute": {"trade"}},
+	}
+	targets := setupFirewallTargets(manifest)
+	require.Len(t, targets, 3)
+	ports := func(name string) []string {
+		for _, target := range targets {
+			if target.Host.Name != name {
+				continue
+			}
+			got := make([]string, 0, len(target.Rules))
+			for _, rule := range target.Rules {
+				got = append(got, rule.Ports)
+			}
+			return got
+		}
+		return nil
+	}
+	assert.Contains(t, ports("control"), "4222")
+	assert.Equal(t, []string{"11003"}, ports("storage"))
+	assert.Equal(t, []string{"11003", "11200"}, ports("compute"))
+}
+
+func TestSetupControlDeploymentOpensACMEBeforeDeploy(t *testing.T) {
+	events := []string{}
+	step := func(name string, fail bool) func() error {
+		return func() error {
+			events = append(events, name)
+			if fail {
+				return errors.New(name)
+			}
+			return nil
+		}
+	}
+	require.NoError(t, runSetupControlDeploySteps(step("control-firewall", false), step("deploy", false), step("eventbus-firewall", false)))
+	require.Equal(t, []string{"control-firewall", "deploy", "eventbus-firewall"}, events)
+
+	events = nil
+	require.EqualError(t, runSetupControlDeploySteps(step("control-firewall", true), step("deploy", false), step("eventbus-firewall", false)), "control-firewall")
+	require.Equal(t, []string{"control-firewall"}, events)
+}
+
+func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var reset bool
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed"}, nil
+		},
+		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, _ string, selectedReset, _ bool) error {
+			reset = selectedReset
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute", "--reset-storage-data"})
+	require.NoError(t, cmd.Execute())
+	require.True(t, reset)
+	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":true,"reset_view_data":false}`, output.String())
+}
+
+func TestSetupDeployStoragePassesViewResetFlagAndRejectsCombinedReset(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var resetView bool
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed"}, nil
+		},
+		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, _ string, _, selectedResetView bool) error {
+			resetView = selectedResetView
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute", "--reset-view-data"})
+	require.NoError(t, cmd.Execute())
+	require.True(t, resetView)
+	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false,"reset_view_data":true}`, output.String())
+
+	cmd = newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed"}, nil
+		},
+		deployStorage: func(context.Context, *setupconfig.Snapshot, string, bool, bool) error { return nil },
+	})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute", "--reset-view-data", "--reset-storage-data"})
+	require.EqualError(t, cmd.Execute(), "--reset-storage-data and --reset-view-data are mutually exclusive")
+}
+
+func TestSetupDeployStorageRequiresCompletedControlSetup(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	deployed := false
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "incomplete"}, nil
+		},
+		deployStorage: func(context.Context, *setupconfig.Snapshot, string, bool, bool) error {
+			deployed = true
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "moox.toml", "--host", "compute"})
+	require.EqualError(t, cmd.Execute(), "setup_incomplete")
+	require.False(t, deployed)
+}
+
+func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var host, seed string
+	var spaces []string
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		importMetadata: func(_ context.Context, _ *setupconfig.Snapshot, selectedHost, selectedSeed string, selectedSpaces []string) (metadataImportSummary, error) {
+			host, seed, spaces = selectedHost, selectedSeed, append([]string(nil), selectedSpaces...)
+			return metadataImportSummary{Status: "ok", Planned: 12, Applied: 12}, nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"metadata-import", "--file", "moox.toml", "--seed", "seed.yaml", "--storage-host", "compute", "--spaces", "stockcn,crypto"})
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "compute", host)
+	require.Equal(t, "seed.yaml", seed)
+	require.Equal(t, []string{"stockcn", "crypto"}, spaces)
+	var result metadataImportSummary
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.Equal(t, 12, result.Applied)
 }
 
 func setupSnapshot(t *testing.T) *setupconfig.Snapshot {
@@ -391,27 +728,36 @@ func setupSnapshot(t *testing.T) *setupconfig.Snapshot {
 	raw := []byte(`[admin]
 username = "admin"
 password = "admin-test-password"
+
 [tencent_cloud]
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
+
 [eventbus]
 port = 4333
 tls_enabled = true
+
 [notification]
 channel_type = "wecom"
 webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+
 [hosts.control]
 address = "203.0.113.8"
-provider = "tencent"
-ssh = { username = "ubuntu", password = "control-ssh-password" }
-[hosts.storage]
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "control-ssh-password"
+
+[hosts.compute]
 address = "203.0.113.9"
-region = "ap-nanjing"
-provider = "tencent"
-ssh = { username = "ubuntu", password = "storage-ssh-password" }
+[hosts.compute.ssh]
+port = 22
+username = "ubuntu"
+password = "other-ssh-password"
+
 [placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector"]
-storage = ["storage-primary", "storage-node", "storage-view", "access"]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute = []
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	snapshot, err := setupconfig.Load(path, dir)
@@ -419,8 +765,23 @@ storage = ["storage-primary", "storage-node", "storage-view", "access"]
 	return snapshot
 }
 
-func TestSetupSnapshotFixtureIsValid(t *testing.T) {
+func TestRestartStorageClientsUsesBoundedRetries(t *testing.T) {
+	t.Parallel()
+	require.Contains(t, restartStorageClientsScript, "for attempt in 1 2 3")
+	require.Contains(t, restartStorageClientsScript, "sleep 2")
+}
+
+// setupCertificateSummary makes the certificate work performed by
+// deploy-control explicit without exposing any key material. The deployment
+// itself remains the source of truth for Caddy configuration and renewal.
+func setupCertificateSummary(publicHost string) map[string]any {
+	return setupCertificateSummaryWithMode(publicHost, "")
+}
+
+func TestControlDeployOptionsUsesCanonicalControlHostID(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	require.Equal(t, []string{"control", "storage"}, snapshot.Manifest.HostIDs())
-	require.True(t, strings.HasPrefix(snapshot.Manifest.EventBusURL(), "tls://203.0.113.8:"))
+	snapshot.Manifest.Placements[snapshot.Manifest.ControlHost().Name] = []string{"eventbus"}
+	testfixture.SetHost(&snapshot.Manifest, setupconfig.Host{Name: "primary-control", Address: "control.example.test", Username: "fixture"}, "admin", "console-proxy", "web-host")
+	options := controlDeployOptions(snapshot, t.TempDir())
+	require.Equal(t, "primary-control", options.NodeID)
 }

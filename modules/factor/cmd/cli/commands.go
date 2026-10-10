@@ -24,9 +24,9 @@ import (
 	factorgen "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type catalogEntry struct {
@@ -389,7 +389,7 @@ func runStatus(ctx context.Context, cli cliConfig, out io.Writer) error {
 		return errors.New("FactorMgr target is required: pass --target or set MOOX_FACTOR_RPC_TARGET")
 	}
 	api := factorgen.NewFactorMgrClientProxy(
-		client.WithTarget(cli.RPCTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
+		client.WithTarget(cli.RPCTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport),
 	)
 	rsp, err := api.GetStatus(ctx, &factorgen.GetStatusReq{})
 	if err != nil {
@@ -417,16 +417,17 @@ func newRequestID() (string, error) {
 	return "cli-" + hex.EncodeToString(value[:]), nil
 }
 
-// newStorageClient 以 factor-mgr 身份经本机主机网关访问 Storage；用完调用返回的 close。
-func newStorageClient(cfg runtimeConfig) (*storageio.Client, func(), error) {
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
-	if err != nil {
-		return nil, nil, fmt.Errorf("创建 gatewayclient: %w", err)
-	}
+func newStorageClient(cfg runtimeConfig) (*storageio.Client, func() error, error) {
 	requestID, err := newRequestID()
 	if err != nil {
-		gateway.Close()
 		return nil, nil, err
 	}
-	return storageio.NewClientWithOptions(gateway.ClientOptions(), storageio.AuthInfo(requestID)), gateway.Close, nil
+	if cfg.GatewayClient.Caller != "factor-mgr" {
+		return nil, nil, errors.New("gateway_client.caller must be factor-mgr")
+	}
+	gateway, err := cfg.GatewayClient.OpenInternal(cfg.ConfigPath, filepath.Dir(cfg.DatabasePath), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return storageio.NewGatewayClient(gateway, storageio.AuthInfo(requestID)), gateway.Close, nil
 }

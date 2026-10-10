@@ -35,6 +35,18 @@ if [[ "${1:-}" == -n ]]; then
 fi
 "$@"
 EOF
+cat >"${TMP}/bin/ssh" <<'EOF'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) shift 2 ;;
+    -t) shift ;;
+    *) shift; break ;;
+  esac
+done
+[[ $# -eq 1 ]] || { echo "unexpected ssh arguments: $*" >&2; exit 2; }
+bash -c "$1"
+EOF
 chmod +x "${TMP}/bin"/*
 
 status() {
@@ -53,32 +65,27 @@ grep -Fq 'curl --cacert' <<<"${help_out}"
 if "${SCRIPT}" fetch --target localhost --deploy-dir "${TMP}" --output "${TMP}/root.key" >/dev/null 2>&1; then
   echo 'FAIL: private-key output path accepted' >&2; exit 1
 fi
-# fetch 从控制台代理的数据目录取根证书，并按期望指纹校验。
-mkdir -p "${TMP}/deploy/data/console-proxy/caddy/pki/authorities/local"
-cp "${CA_FILE}" "${TMP}/deploy/data/console-proxy/caddy/pki/authorities/local/root.crt"
-fetched=$("${SCRIPT}" fetch --target localhost --deploy-dir "${TMP}/deploy" --output "${TMP}/fetched/root.crt")
-[[ "${fetched}" == "${FINGERPRINT}" ]] || { echo "FAIL: fetch 输出的指纹 ${fetched} 与证书的 ${FINGERPRINT} 不一致" >&2; exit 1; }
-cmp -s "${CA_FILE}" "${TMP}/fetched/root.crt"
-if "${SCRIPT}" fetch --target localhost --deploy-dir "${TMP}/deploy" --output "${TMP}/fetched/other.crt" \
-  --expected-fingerprint 'AA:BB' >/dev/null 2>&1; then
-  echo 'FAIL: 指纹不一致时 fetch 必须失败' >&2; exit 1
-fi
-[[ ! -e "${TMP}/fetched/other.crt" ]] || { echo 'FAIL: 指纹不一致时必须删除下载的文件' >&2; exit 1; }
-
-# install 调用系统信任库；没有免密 sudo 且 --non-interactive 时以 77 失败，不等待输入。
+mkdir -p "${TMP}/deploy/certs/caddy"
+cp "${CA_FILE}" "${TMP}/deploy/certs/caddy/root.crt"
 : >"${TMP}/install.log"
 PATH="${TMP}/bin:${PATH}" MOCK_TRUSTED=0 MOCK_FINGERPRINT_HEX="${FINGERPRINT_HEX}" MOCK_LOG="${TMP}/install.log" \
-  "${SCRIPT}" install --ca-file "${CA_FILE}" >/dev/null
+  "${SCRIPT}" install-target --target localhost --deploy-dir "${TMP}/deploy" >/dev/null
 grep -Fq 'add-trusted-cert' "${TMP}/install.log"
 set +e
 PATH="${TMP}/bin:${PATH}" MOCK_TRUSTED=0 MOCK_SUDO_DENY=1 MOCK_FINGERPRINT_HEX="${FINGERPRINT_HEX}" MOCK_LOG="${TMP}/install.log" \
-  "${SCRIPT}" install --ca-file "${CA_FILE}" --non-interactive >/dev/null 2>&1
+  "${SCRIPT}" install-target --target localhost --deploy-dir "${TMP}/deploy" --non-interactive >/dev/null 2>&1
 status=$?
 set -e
-[[ "${status}" -eq 77 ]] || { echo "FAIL: 拒绝授权时退出码是 ${status}，期望 77" >&2; exit 1; }
+[[ "${status}" -eq 77 ]] || { echo "FAIL: permission denial returned ${status}, want 77" >&2; exit 1; }
 
-# install-target 已删除：没有主机进程需要信任控制台代理的根证书。
-if "${SCRIPT}" install-target --target localhost --deploy-dir "${TMP}/deploy" >/dev/null 2>&1; then
-  echo 'FAIL: install-target 应该已删除' >&2; exit 1
-fi
-printf 'PASS: skill status、fetch、install 和 CA 安全契约\n'
+REMOTE_HOME="${TMP}/remote-home"
+REMOTE_DEPLOY="${REMOTE_HOME}/target path"
+mkdir -p "${REMOTE_DEPLOY}/certs/caddy" "${REMOTE_DEPLOY}/lib"
+cp "${CA_FILE}" "${REMOTE_DEPLOY}/certs/caddy/root.crt"
+cp "${ROOT}/scripts/deploy/install-caddy-ca.sh" "${REMOTE_DEPLOY}/lib/install-caddy-ca.sh"
+chmod +x "${REMOTE_DEPLOY}/lib/install-caddy-ca.sh"
+: >"${TMP}/remote-install.log"
+HOME="${REMOTE_HOME}" PATH="${TMP}/bin:${PATH}" MOCK_TRUSTED=0 MOCK_FINGERPRINT_HEX="${FINGERPRINT_HEX}" MOCK_LOG="${TMP}/remote-install.log" \
+  "${SCRIPT}" install-target --target user@example --deploy-dir '~/target path' --non-interactive >/dev/null
+grep -Fq 'add-trusted-cert' "${TMP}/remote-install.log"
+printf 'PASS: skill status, target install, and CA safety contracts\n'

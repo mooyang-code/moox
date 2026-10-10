@@ -22,7 +22,6 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -113,12 +112,12 @@ func runSyncCOS(ctx context.Context, cli cliConfig, cfg *config.Config, out io.W
 		return err
 	}
 	defer store.Close()
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	gateway, err := cfg.OpenGateway(nil)
 	if err != nil {
-		return fmt.Errorf("创建 gatewayclient: %w", err)
+		return err
 	}
 	defer gateway.Close()
-	metadataRegistry := registry.NewClientWithOptions(gateway.ClientOptions())
+	metadataRegistry := registry.NewClient(gateway)
 	if err := (cosstore.Syncer{
 		Client: client, Journal: store,
 		Registry: registry.PartitionRegistry{Client: metadataRegistry, DeviceID: cfg.Archive.DeviceID},
@@ -150,21 +149,18 @@ func runBackfill(ctx context.Context, cli cliConfig, cfg *config.Config, out io.
 		return err
 	}
 	defer store.Close()
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	gateway, err := cfg.OpenGateway(nil)
 	if err != nil {
-		return fmt.Errorf("创建 gatewayclient: %w", err)
+		return err
 	}
 	defer gateway.Close()
-	options := gateway.ClientOptions()
-	access := storagepb.NewPrimaryStoreClientProxy(options...)
-	metadata := storagepb.NewMetadataClientProxy(options...)
 	const appID = "archive-backfill"
 	primarySecret, err := archivePrimarySecret(cli.StorageAuthFile)
 	if err != nil {
 		return err
 	}
 	auth := &storagepb.AuthInfo{AppId: appID, AppKey: security.HMACSHA256Hex(primarySecret, []byte(appID))}
-	count, err := backfill.New(access, metadata, auth, store, w).Run(ctx, plan)
+	count, err := backfill.New(gateway, auth, store, w).Run(ctx, plan)
 	if err != nil {
 		return err
 	}

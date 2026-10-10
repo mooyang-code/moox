@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -77,7 +79,11 @@ const (
 		LIMIT ?`
 )
 
-type FetchBatchRepository struct{ db *gorm.DB }
+type FetchBatchRepository struct {
+	db              *gorm.DB
+	retryMu         sync.Mutex
+	retryStatements [completionRetryBatchSize]*sql.Stmt
+}
 
 // MarketFetchInstanceUpdate is the small, stable freshness update emitted by
 // the short-lived collector. Keeping it here lets batch completion commit the
@@ -349,7 +355,10 @@ func (r *FetchBatchRepository) MarkRetryBatchDispatched(ctx context.Context, spa
 			return nil
 		}
 
-		result = tx.Model(&domain.RetryItem{}).
+		// Probe this batch's retry identities directly. With an entire failed
+		// fleet pending, SQLite otherwise chooses a status index and scans the
+		// shrinking pending wave once for every dispatched batch.
+		result = tx.Table("t_collector_fetch_retry_items INDEXED BY idx_collector_fetch_retry").
 			Where("c_space_id = ? AND c_retry_key IN ? AND c_status = ?", spaceID, keys, "pending").
 			Updates(map[string]any{"c_status": "dispatched", "c_mtime": now})
 		if result.Error != nil {
@@ -501,6 +510,14 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 	if !batch.Status.Terminal() {
 		return false, fmt.Errorf("market fetch batch completion status %q is not terminal", batch.Status)
 	}
+	var retryStatements [completionRetryBatchSize]*sql.Stmt
+	if len(effects.Retries) > 0 {
+		var err error
+		retryStatements, err = r.prepareCompletionRetries(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
 	updated := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{
@@ -581,6 +598,31 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 				return fmt.Errorf("completion write target %s changed during transaction", item.WriteTargetID)
 			}
 		}
+		transactionStatements := make(map[int]*sql.Stmt)
+		defer func() {
+			for _, statement := range transactionStatements {
+				_ = statement.Close()
+			}
+		}()
+		writeRetries := func(arguments []any) error {
+			count := len(arguments) / len(completionRetryColumns)
+			if count == 0 {
+				return nil
+			}
+			statement := transactionStatements[count]
+			if statement == nil {
+				transaction, ok := tx.Statement.ConnPool.(*sql.Tx)
+				if !ok {
+					return gorm.ErrInvalidTransaction
+				}
+				statement = transaction.StmtContext(ctx, retryStatements[count-1])
+				transactionStatements[count] = statement
+			}
+			_, err := statement.ExecContext(ctx, arguments...)
+			return err
+		}
+		arguments := make([]any, 0, completionRetryBatchSize*len(completionRetryColumns))
+		retryTime := time.Now().UTC()
 		for _, item := range effects.Retries {
 			if item == nil {
 				continue
@@ -595,27 +637,37 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 				item.PeriodFailureResultsJSON = "[]"
 			}
 			if item.CreateTime.IsZero() {
-				item.CreateTime = time.Now().UTC()
+				item.CreateTime = retryTime
 			}
-			item.ModifyTime = time.Now().UTC()
-			if err := tx.Clauses(clause.OnConflict{
-				Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_retry_key"}},
-				DoUpdates: clause.Assignments(map[string]any{
-					"c_source_batch_id": clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"}, "c_batch_kind": clause.Expr{SQL: "excluded.c_batch_kind"}, "c_attempt": clause.Expr{SQL: "excluded.c_attempt"},
-					"c_instance_id": clause.Expr{SQL: "excluded.c_instance_id"}, "c_write_target_id": clause.Expr{SQL: "excluded.c_write_target_id"}, "c_retry_scope": clause.Expr{SQL: "excluded.c_retry_scope"},
-					"c_subject_id": clause.Expr{SQL: "excluded.c_subject_id"}, "c_frequency": clause.Expr{SQL: "excluded.c_frequency"}, "c_target_data_time": clause.Expr{SQL: "excluded.c_target_data_time"},
-					"c_period_time":        clause.Expr{SQL: "CASE WHEN c_period_time IS NOT NULL THEN c_period_time ELSE excluded.c_period_time END"},
-					"c_period_deadline_at": clause.Expr{SQL: "CASE WHEN c_period_deadline_at IS NOT NULL THEN c_period_deadline_at ELSE excluded.c_period_deadline_at END"},
-					"c_task_json":          clause.Expr{SQL: "excluded.c_task_json"},
-					"c_status":             clause.Expr{SQL: "CASE WHEN c_status IN ('succeeded', 'permanent_failed', 'superseded') THEN c_status ELSE excluded.c_status END"}, "c_next_retry_at": clause.Expr{SQL: "excluded.c_next_retry_at"},
-					"c_last_error_type": clause.Expr{SQL: "excluded.c_last_error_type"}, "c_last_error_summary": clause.Expr{SQL: "excluded.c_last_error_summary"},
-					"c_failure_targets_json": clause.Expr{SQL: "CASE WHEN c_failure_targets_json <> '' AND c_failure_targets_json <> '[]' THEN c_failure_targets_json ELSE excluded.c_failure_targets_json END"},
-					"c_mtime":                clause.Expr{SQL: "excluded.c_mtime"},
-				}),
-			}).Create(item).Error; err != nil {
-				return err
+			item.ModifyTime = retryTime
+			// Retry keys identify completion effects. IDs are never consumed by
+			// the caller; omit RETURNING to avoid a temporary SQLite table for every row.
+			retry := map[string]any{
+				"c_space_id": item.SpaceID, "c_retry_key": item.RetryKey, "c_source_batch_id": item.SourceBatchID,
+				"c_batch_kind": item.BatchKind, "c_instance_id": item.InstanceID, "c_write_target_id": item.WriteTargetID,
+				"c_retry_scope": item.RetryScope, "c_subject_id": item.SubjectID, "c_frequency": item.Frequency,
+				"c_target_data_time": item.TargetDataTime, "c_period_time": item.PeriodTime, "c_period_deadline_at": item.PeriodDeadlineAt,
+				"c_task_json": item.TaskJSON, "c_failure_targets_json": item.FailureTargetsJSON, "c_attempt": item.Attempt,
+				"c_status": item.Status, "c_period_failure_report_state": item.PeriodFailureReportState,
+				"c_period_failure_results_json": item.PeriodFailureResultsJSON, "c_period_failure_last_error": item.PeriodFailureLastError,
+				"c_period_failure_deadline_exceeded_at": item.PeriodFailureDeadlineExceededAt, "c_next_retry_at": item.NextRetryAt,
+				"c_last_error_type": item.LastErrorType, "c_last_error_summary": item.LastErrorSummary,
+				"c_ctime": item.CreateTime, "c_mtime": item.ModifyTime,
+			}
+			for _, column := range completionRetryColumns {
+				arguments = append(arguments, retry[column])
+			}
+			if len(arguments) == cap(arguments) {
+				if err := writeRetries(arguments); err != nil {
+					return err
+				}
+				arguments = arguments[:0]
 			}
 		}
+		if err := writeRetries(arguments); err != nil {
+			return err
+		}
+
 		for _, key := range effects.SucceededRetryKeys {
 			if sourceIsTerminal(effectSourceKey(key)) {
 				continue
@@ -734,7 +786,18 @@ func validateCompletionScope(tx *gorm.DB, batch *domain.BatchInvocation, effects
 	if tx == nil || batch == nil {
 		return gorm.ErrInvalidData
 	}
-	validatedInstances := make(map[string]struct{})
+	// Scope membership is immutable within this writer transaction. Fetch it
+	// once instead of performing a COUNT for every item in a timeout wave.
+	members := make(map[string]bool)
+	if len(effects.InstanceUpdates)+len(effects.Retries)+len(effects.WriteTargetUpdates) > 0 {
+		var ids []string
+		if err := tx.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", batch.SpaceID, batch.BatchID).Pluck("c_instance_id", &ids).Error; err != nil {
+			return err
+		}
+		for _, id := range ids {
+			members[id] = true
+		}
+	}
 	validateInstance := func(spaceID, instanceID string) error {
 		spaceID, instanceID = strings.TrimSpace(spaceID), strings.TrimSpace(instanceID)
 		if spaceID == "" {
@@ -743,20 +806,9 @@ func validateCompletionScope(tx *gorm.DB, batch *domain.BatchInvocation, effects
 		if instanceID == "" {
 			return gorm.ErrInvalidData
 		}
-		key := spaceID + "\x00" + instanceID
-		if _, ok := validatedInstances[key]; ok {
-			return nil
-		}
-		var count int64
-		if err := tx.Table("t_collector_fetch_batch_items").
-			Where("c_space_id = ? AND c_batch_id = ? AND c_instance_id = ?", spaceID, batch.BatchID, instanceID).
-			Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 1 {
+		if spaceID != strings.TrimSpace(batch.SpaceID) || !members[instanceID] {
 			return fmt.Errorf("completion instance %s is not attached to batch %s", instanceID, batch.BatchID)
 		}
-		validatedInstances[key] = struct{}{}
 		return nil
 	}
 	for _, item := range effects.InstanceUpdates {

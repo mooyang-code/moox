@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
@@ -82,9 +84,7 @@ func TestRunInitCommandIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRunInitCommandCreatesPlacementConstraints 校验部署表的约束：部署必须属于已登记的主机，同一主机上一个组件只登记一次，
-// 主机地址唯一，状态只能是 enabled 或 disabled。
-func TestRunInitCommandCreatesPlacementConstraints(t *testing.T) {
+func TestRunInitCommandCreatesHostPlacementConstraints(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
 	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runInitCommand() error = %v", err)
@@ -98,30 +98,17 @@ func TestRunInitCommandCreatesPlacementConstraints(t *testing.T) {
 		t.Fatalf("foreign_keys = %d, err = %v", foreignKeys, err)
 	}
 
-	insertHost := `INSERT INTO t_hosts(c_host_id, c_address) VALUES (?, ?)`
-	if err := db.Exec(insertHost, "control", "106.53.107.122").Error; err != nil {
-		t.Fatal(err)
+	for _, host := range []string{"host-a", "host-b"} {
+		require.NoError(t, db.Exec("INSERT INTO t_hosts(c_host_id,c_address) VALUES (?,?)", host, host+".example.test").Error)
 	}
-	if err := db.Exec(insertHost, "storage", "106.53.107.122").Error; err == nil {
-		t.Fatal("two hosts with the same address must be rejected")
-	}
-	if err := db.Exec(`INSERT INTO t_hosts(c_host_id, c_address, c_status) VALUES ('bad', '192.0.2.1', 'paused')`).Error; err == nil {
-		t.Fatal("unknown host status must be rejected")
-	}
-
-	insertPlacement := `INSERT INTO t_placements(c_host_id, c_component_id) VALUES (?, ?)`
-	if err := db.Exec(insertPlacement, "control", "admin").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(insertPlacement, "control", "admin").Error; err == nil {
-		t.Fatal("duplicate placement on one host must be rejected")
-	}
-	if err := db.Exec(insertPlacement, "missing", "admin").Error; err == nil {
-		t.Fatal("placement on an unknown host must violate its foreign key")
-	}
-	if err := db.Exec(`UPDATE t_placements SET c_status = 'paused' WHERE c_host_id = 'control'`).Error; err == nil {
-		t.Fatal("unknown placement status must be rejected")
-	}
+	insertPlacement := "INSERT INTO t_placements(c_host_id,c_component_id,c_status) VALUES (?,?,?)"
+	require.NoError(t, db.Exec(insertPlacement, "host-a", "host-agent", "enabled").Error)
+	require.NoError(t, db.Exec(insertPlacement, "host-b", "host-agent", "disabled").Error)
+	require.Error(t, db.Exec(insertPlacement, "host-a", "host-agent", "enabled").Error)
+	require.Error(t, db.Exec(insertPlacement, "missing-host", "host-agent", "enabled").Error)
+	require.Error(t, db.Exec(insertPlacement, "host-a", "host-gateway", "active").Error)
+	require.False(t, db.Migrator().HasTable("t_gateway_nodes"))
+	require.False(t, db.Migrator().HasTable("t_service_deployments"))
 }
 
 func assertTableExists(t *testing.T, dbPath string, tableName string) {

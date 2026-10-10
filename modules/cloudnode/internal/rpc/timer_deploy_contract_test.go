@@ -17,11 +17,10 @@ import (
 
 func completeTimerEnvironment() map[string]string {
 	return map[string]string{
-		"MOOX_CALLER": "scf-collector",
 		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
 		"MOOX_SPACE_ID": "crypto", "MOOX_CODE_PACKAGE_ID": "old-package", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-		"MOOX_CALLER_KEY":     "scf-collector-1:private-test-secret",
-		"MOOX_ACCESS_ADDRESS": "146.56.196.204:11004", "MOOX_ACCESS_ID": "access@storage",
+		"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector",
+		"MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64),
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic",
 		"MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
 		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret",
@@ -90,7 +89,7 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 		wantSuccess   bool
 	}{
 		{"timeout downgrade", "", true, false}, {"Access address", "MOOX_ACCESS_ADDRESS", false, false},
-		{"Access ID", "MOOX_ACCESS_ID", false, false}, {"Caller key", "MOOX_CALLER_KEY", false, false},
+		{"Access identity", "MOOX_ACCESS_ID", false, false}, {"Access credential", "MOOX_CALLER_KEY", false, false},
 		{"CLS credential", "MOOX_CLS_SECRET_KEY", false, false}, {"EventBus credential", "MOOX_EVENTBUS_NATS_PASSWORD", false, false},
 		{"complete remote patch", "", false, true},
 		{"Storage app keys", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", false, false},
@@ -134,6 +133,8 @@ func TestMarketFetcherTimerDeployRemovesLegacyEmbeddedCA(t *testing.T) {
 	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "timer", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "timer", CreateTime: time.Now(), Metadata: `{}`}))
 	env := completeTimerEnvironment()
 	env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
+	env["MOOX_GATEWAY_SERVICE_SECRET_KEY"] = "remove-internal-key"
+	env["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = "ip://internal.example:11003"
 	fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: 60}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 
@@ -141,4 +142,6 @@ func TestMarketFetcherTimerDeployRemovesLegacyEmbeddedCA(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fake.configured, 1)
 	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+	require.NotContains(t, fake.configured[0].Environment, "MOOX_GATEWAY_SERVICE_SECRET_KEY")
+	require.NotContains(t, fake.configured[0].Environment, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
 }

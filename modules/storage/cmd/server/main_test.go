@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type cleanupDatasetReader struct{}
@@ -560,6 +561,7 @@ func TestDataNodeResolverPeriodRPCContract(t *testing.T) {
 	address := listener.Addr().String()
 
 	dn := server.New(
+		server.WithTransport(transport.NewServerTransport()),
 		server.WithServiceName("trpc.moox.storage.DataNodePeriodRuntime"),
 		server.WithProtocol("trpc"),
 		server.WithNetwork("tcp"),
@@ -744,6 +746,7 @@ func startPeriodRuntimeNode(t *testing.T, nodeID, secret string) (*datanode.Serv
 		t.Fatal(err)
 	}
 	dn := server.New(
+		server.WithTransport(transport.NewServerTransport()),
 		server.WithServiceName("trpc.moox.storage.DataNodePeriodRuntime"),
 		server.WithProtocol("trpc"),
 		server.WithNetwork("tcp"),
@@ -857,5 +860,20 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 	}
 	if runtime == nil || runtime.writes != 1 || runtime.reads != 1 || runtime.target != "ip://127.0.0.1:20107" {
 		t.Fatalf("runtime=%+v", runtime)
+	}
+}
+
+func TestStorageViewGatewayRequiresConfigurationAndItsOwnIdentity(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	if _, err := openStorageViewGateway(t.TempDir()); err == nil || !strings.Contains(err.Error(), "MOOX_STORAGE_CONFIG is required") {
+		t.Fatalf("missing config error: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(path, []byte("gateway_client:\n  caller: console\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	if _, err := openStorageViewGateway(t.TempDir()); err == nil || !strings.Contains(err.Error(), "caller must be storage-view") {
+		t.Fatalf("wrong caller error: %v", err)
 	}
 }

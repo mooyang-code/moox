@@ -12,20 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadRuntimeConfigReadsDatabaseGatewayClientAndPython(t *testing.T) {
+func TestLoadRuntimeConfigReadsDatabaseStorageAndPython(t *testing.T) {
 	root := t.TempDir()
-	configDir := filepath.Join(root, "config")
-	require.NoError(t, os.MkdirAll(configDir, 0o700))
-	path := filepath.Join(configDir, "app.yaml")
-	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  mode: local\n  caller: factor-mgr\n  key_file: ../secrets/caller-factor-mgr.key\n  ca_file: ../certs/moox-ca.crt\n  cache_dir: ./data/gatewayclient\npython:\n  bin: python311\n"
+	path := filepath.Join(root, "app.yaml")
+	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  caller: factor-mgr\n  key_id: admin-assigned-factor-key\n  key_file: ../../secrets/caller-factor-mgr.key\npython:\n  bin: python311\n"
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(root, "state/factor.db"), cfg.DatabasePath)
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
-	require.Equal(t, filepath.Join(filepath.Dir(root), "secrets/caller-factor-mgr.key"), cfg.GatewayClient.KeyFile, "相对路径按组件目录解析")
-	require.Equal(t, filepath.Join(root, "data/gatewayclient"), cfg.GatewayClient.CacheDir)
+	require.Equal(t, "admin-assigned-factor-key", cfg.GatewayClient.KeyID)
+	require.Equal(t, path, cfg.ConfigPath)
 	require.Equal(t, "python311", cfg.PythonBin)
 }
 
@@ -34,10 +32,14 @@ func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	path := filepath.Join(root, "app.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("python:\n  bin: configured-python\n"), 0o600))
 	t.Setenv("MOOX_FACTOR_PYTHON_BIN", "env-python")
+	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
+	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID", "storage-node-0")
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, "env-python", cfg.PythonBin)
+	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
+	require.Empty(t, cfg.GatewayClient.KeyID)
 }
 
 func TestValidateImportableSetRejectsPendingAndDeleting(t *testing.T) {

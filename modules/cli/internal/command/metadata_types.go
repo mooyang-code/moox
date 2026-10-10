@@ -58,16 +58,17 @@ var metadataImportCmd = &cobra.Command{
 			return writeMetadataImportSummary(metadataImportSummary{
 				Status:    "dry_run",
 				DryRun:    true,
+				Service:   metadataServiceName,
 				Planned:   len(calls),
 				Resources: countMetadataCalls(calls),
 			})
 		}
-		storage, closeStorage, err := openStorageInvoker(metadataImportManifest)
+		gateway, err := openCommandGateway(cmd.Context(), metadataImportManifest, nil)
 		if err != nil {
 			return err
 		}
-		defer closeStorage()
-		summary, err := runMetadataImport(cmd.Context(), storage, calls, metadataImportIfNotExists)
+		defer gateway.Close()
+		summary, err := runMetadataImport(cmd.Context(), gateway, calls, metadataImportIfNotExists)
 		if err != nil {
 			return err
 		}
@@ -109,14 +110,14 @@ var metadataApplyCmd = &cobra.Command{
 			return err
 		}
 		if metadataApplyDryRun {
-			return writeMetadataImportSummary(metadataImportSummary{Status: "dry_run", DryRun: true, Planned: len(calls), Resources: countMetadataCalls(calls)})
+			return writeMetadataImportSummary(metadataImportSummary{Status: "dry_run", DryRun: true, Service: metadataServiceName, Planned: len(calls), Resources: countMetadataCalls(calls)})
 		}
-		storage, closeStorage, err := openStorageInvoker(metadataApplyManifest)
+		gateway, err := openCommandGateway(cmd.Context(), metadataApplyManifest, nil)
 		if err != nil {
 			return err
 		}
-		defer closeStorage()
-		summary, err := runMetadataApply(cmd.Context(), storage, calls)
+		defer gateway.Close()
+		summary, err := runMetadataApply(cmd.Context(), gateway, calls)
 		if err != nil {
 			return err
 		}
@@ -288,6 +289,7 @@ type metadataExistsProbe struct {
 type metadataImportSummary struct {
 	Status    string         `json:"status"`
 	DryRun    bool           `json:"dry_run,omitempty"`
+	Service   string         `json:"service"`
 	Planned   int            `json:"planned"`
 	Applied   int            `json:"applied"`
 	Skipped   int            `json:"skipped"`

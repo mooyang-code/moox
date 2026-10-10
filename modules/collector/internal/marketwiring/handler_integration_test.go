@@ -117,6 +117,9 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 						t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
 						t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
 						t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
+						t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime")
+						t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
+						t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage")
 						period := start.UTC().Format(time.RFC3339Nano)
 						claimed, marshalErr := json.Marshal(marketfetch.Request{
 							BatchID: "timer-batch", RequestID: "request", BatchKind: domain.BatchKindRealtime,

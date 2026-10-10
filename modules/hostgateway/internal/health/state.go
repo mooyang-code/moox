@@ -2,6 +2,7 @@
 package health
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -51,6 +53,7 @@ type State struct {
 	staleAfterSeconds  atomic.Int64
 	clockMu            sync.RWMutex
 	clock              func() time.Time
+	startedAt          time.Time
 	mu                 sync.Mutex
 	requests           map[requestKey]uint64
 	durations          map[durationKey]durationValue
@@ -58,10 +61,10 @@ type State struct {
 
 func NewState() *State {
 	staleAfter := int64(90)
-	if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("MOOX_HOST_GATEWAY_SYNC_STALE_AFTER_SECONDS")), 10, 64); err == nil && value > 0 {
+	if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS")), 10, 64); err == nil && value > 0 {
 		staleAfter = value
 	}
-	state := &State{requests: make(map[requestKey]uint64), durations: make(map[durationKey]durationValue), clock: time.Now}
+	state := &State{requests: make(map[requestKey]uint64), durations: make(map[durationKey]durationValue), clock: time.Now, startedAt: time.Now().UTC()}
 	state.staleAfterSeconds.Store(staleAfter)
 	return state
 }
@@ -177,22 +180,17 @@ func (state *State) Handler() http.Handler {
 	prometheusHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{DisableCompression: true})
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		if check := state.storage.Load(); check != nil && check.check() != nil {
-			http.Error(response, "persistent storage unavailable", http.StatusServiceUnavailable)
+			state.writeHealth(response, false)
 			return
 		}
-		response.WriteHeader(http.StatusOK)
-		_, _ = response.Write([]byte("ok\n"))
+		state.writeHealth(response, true)
 	})
-	// 响应体与其他组件一致（{"ready":true}）：Monitor 的部署检查按这个内容判定就绪。
 	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Content-Type", "application/json")
-		if !state.Ready() {
-			response.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = response.Write([]byte(`{"ready":false,"details":{"reason":"控制面同步或心跳已过期"}}` + "\n"))
+		if check := state.storage.Load(); check != nil && check.check() != nil {
+			state.writeHealth(response, false)
 			return
 		}
-		response.WriteHeader(http.StatusOK)
-		_, _ = response.Write([]byte(`{"ready":true}` + "\n"))
+		state.writeHealth(response, state.Ready())
 	})
 	mux.HandleFunc("GET /metrics", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -200,6 +198,19 @@ func (state *State) Handler() http.Handler {
 		prometheusHandler.ServeHTTP(response, request)
 	})
 	return mux
+}
+
+func (state *State) writeHealth(response http.ResponseWriter, ready bool) {
+	payload := healthz.Base("host_gateway", "", "", "", state.startedAt, ready)
+	hash, count := state.Current()
+	payload.Details = map[string]any{"route_hash": hash, "route_count": count, "disabled": state.Disabled()}
+	response.Header().Set("Content-Type", "application/json")
+	code := http.StatusOK
+	if !ready {
+		code = http.StatusServiceUnavailable
+	}
+	response.WriteHeader(code)
+	_ = json.NewEncoder(response).Encode(payload)
 }
 
 func (state *State) writeMetrics(response http.ResponseWriter) {

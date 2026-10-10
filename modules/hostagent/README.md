@@ -7,11 +7,12 @@ Linux 主机代理：每分钟采集 CPU、内存、文件系统、磁盘和网�
 ## 构建与测试
 
 ```bash
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh host-agent
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh hostagent
 go test -count=1 ./modules/hostagent/...
 ```
 
 ## 配置
 
-`config/app.yaml`（身份文件、EventBus 凭据、健康端口、`host_name`）、`config/trpc_go.yaml`。主机采集器是每台主机自动部署的
-主机组件，随 `moox-cli setup deploy-host` 一起部署。
+`config/app.yaml`（身份文件、EventBus 凭据、健康端口、`host_name`）、`config/trpc_go.yaml`。部署使用 `skills/moox/scripts/hostagent-deploy.sh`。
+
+HostAgentMgr 管理接口使用 loopback 原生 tRPC 11426，经共享网关调用；健康检查继续使用原有独立 HTTP 端点。

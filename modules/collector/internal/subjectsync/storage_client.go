@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
+	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -25,7 +27,7 @@ type metadataClient interface {
 	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq, ...client.Option) (*storagepb.UpdateDataSourceRsp, error)
 }
 
-// StorageClient is the narrow Storage Metadata client used by the standalone
+// StorageClient is the narrow Storage Metadata client used by Collector's
 // subject synchronizer. Keeping the RPC surface small makes the two schedulers
 // independently testable and prevents accidental writes outside metadata.
 type StorageClient struct {
@@ -33,13 +35,15 @@ type StorageClient struct {
 	auth   *storagepb.AuthInfo
 }
 
-// NewStorageClient 创建经给定 tRPC 客户端选项（gatewayclient）访问 Storage Metadata 的客户端。
-func NewStorageClient(options []client.Option) (*StorageClient, error) {
+func NewStorageClient(gateway gatewayclient.Invoker) (*StorageClient, error) {
 	auth, err := marketstorage.ResolveStorageAuthInfo(marketstorage.InstTypeSPOT)
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage auth: %w", err)
 	}
-	return &StorageClient{client: storagepb.NewMetadataClientProxy(options...), auth: auth}, nil
+	if gateway == nil {
+		return nil, fmt.Errorf("collector gateway client is required")
+	}
+	return &StorageClient{client: storageio.NewGatewayClient(gateway), auth: auth}, nil
 }
 
 func (c *StorageClient) ListTags(ctx context.Context) ([]*storagepb.Tag, error) {

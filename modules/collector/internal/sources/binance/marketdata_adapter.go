@@ -26,12 +26,11 @@ var (
 )
 
 type AdapterConfig struct {
+	HTTPClient      *httpclient.HTTPClient
 	InstrumentType  marketdata.InstrumentType
 	KlineCollector  *KlineCollector
 	SymbolCollector *SymbolCollector
-	// HTTPClient 是默认采集器发请求用的客户端；为空时直连。Collector 的标的同步传入经出口代理的客户端。
-	HTTPClient *httpclient.HTTPClient
-	Now        func() time.Time
+	Now             func() time.Time
 }
 
 // MarketDataAdapter exposes the existing Binance collectors through the common
@@ -48,14 +47,11 @@ func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
 	if cfg.InstrumentType == "" {
 		cfg.InstrumentType = marketdata.InstrumentSpot
 	}
-	if cfg.KlineCollector == nil || cfg.SymbolCollector == nil {
-		client := newConfiguredClient(cfg.HTTPClient)
-		if cfg.KlineCollector == nil {
-			cfg.KlineCollector = NewKlineCollector(client)
-		}
-		if cfg.SymbolCollector == nil {
-			cfg.SymbolCollector = NewSymbolCollector(client)
-		}
+	if cfg.KlineCollector == nil {
+		cfg.KlineCollector = NewKlineCollector(newConfiguredClient(cfg.HTTPClient))
+	}
+	if cfg.SymbolCollector == nil {
+		cfg.SymbolCollector = NewSymbolCollector(newConfiguredClient(cfg.HTTPClient))
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

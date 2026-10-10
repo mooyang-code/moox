@@ -13,16 +13,7 @@ func TestDefaultConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	assert.False(t, cfg.Runtime.LiveTradingEnabled)
 	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
 	assert.Equal(t, "trade", cfg.GatewayClient.Caller)
-	assert.Equal(t, "../secrets/caller-trade.key", cfg.GatewayClient.KeyFile)
-	require.NoError(t, cfg.GatewayClient.Validate())
 	assert.True(t, cfg.EventBus.Enabled)
-}
-
-func TestLoadRejectsRemovedDNSResolverSection(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("dns_resolver:\n  enabled: false\n"), 0o644))
-	_, err := Load(path)
-	require.Error(t, err, "DNS 解析已移到出口代理，交易服务不再接受 dns_resolver 段")
 }
 
 func TestLoad_FromValidYAML_ShouldApplyAndValidate(t *testing.T) {
@@ -40,10 +31,11 @@ eventbus:
 	assert.Equal(t, filepath.Join(dir, "data", "trade.db"), cfg.Database.Path)
 }
 
-func TestLoad_MissingFile_ShouldUseDefaults(t *testing.T) {
-	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
-	require.NoError(t, err)
-	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
+func TestLoadRequiresExistingConfiguration(t *testing.T) {
+	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
+	_, err = DefaultConfig().OpenGateway(nil)
+	require.Error(t, err)
 }
 
 func TestValidate_EventBusEnabledWithoutURLs_ShouldFail(t *testing.T) {
@@ -64,12 +56,17 @@ func TestApplyEnv_OverridesBusinessFields(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "env.db")
 	t.Setenv("MOOX_TRADE_DB_PATH", dbPath)
 	t.Setenv("MOOX_TRADE_LIVE_TRADING_ENABLED", "true")
+	t.Setenv("MOOX_TRADE_ADMIN_URL", "http://127.0.0.1:18080")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "env-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "env-sk")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
 
 	cfg := DefaultConfig()
 	require.NoError(t, cfg.applyEnv())
 
 	assert.Equal(t, dbPath, cfg.Database.Path)
 	assert.True(t, cfg.Runtime.LiveTradingEnabled)
+	assert.Equal(t, "trade", cfg.GatewayClient.Caller)
 }
 
 func TestLoad_InvalidYAML_ShouldReturnParseError(t *testing.T) {
@@ -94,7 +91,9 @@ func TestLoad_UnknownLegacyField_ShouldFail(t *testing.T) {
 
 func TestLoadRejectsInvalidLiveTradingEnvironment(t *testing.T) {
 	t.Setenv("MOOX_TRADE_LIVE_TRADING_ENABLED", "sometimes")
-	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	_, err := Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MOOX_TRADE_LIVE_TRADING_ENABLED")
 }
@@ -118,4 +117,31 @@ func TestValidate_EventBusEnabledWithoutConsumer_ShouldFail(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "eventbus target consumer is required")
+}
+
+func TestGatewayIdentityAndStrictConfiguration(t *testing.T) {
+	for _, body := range []string{
+		"gateway_client:\n  caller: admin\n",
+		"gateway_client:\n  caller: trade\n  caller: admin\n",
+		"gateway_client:\n  unknown: true\n",
+		"{}\n---\n{}\n",
+		"service_auth:\n  caller: old\n",
+	} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(body), 0600))
+			_, err := Load(path)
+			require.Error(t, err)
+		})
+	}
+	cfg := DefaultConfig()
+	_, err := cfg.OpenGateway(nil)
+	require.Error(t, err)
+}
+
+func TestLoadRejectsRetiredDNSResolverConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("dns_resolver: {enabled: true}\n"), 0600))
+	_, err := Load(path)
+	require.ErrorContains(t, err, "dns_resolver")
 }

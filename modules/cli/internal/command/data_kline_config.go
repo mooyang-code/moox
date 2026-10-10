@@ -4,12 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -20,19 +18,11 @@ const (
 )
 
 type dataAccessConfig struct {
-	Version   int                       `yaml:"version"`
-	Access    dataAccessEndpoint        `yaml:"access"`
-	Storage   dataStorageAuthConfig     `yaml:"storage"`
-	DataTypes map[string]dataTypeConfig `yaml:"data_types"`
-}
-
-// dataAccessEndpoint 是 moox-skill 访问 MooX 的外部接入：地址、实例 ID（access@<主机>）、外部调用方身份和签名密钥。
-type dataAccessEndpoint struct {
-	Address string `yaml:"address"`
-	ID      string `yaml:"id"`
-	Caller  string `yaml:"caller"`
-	// Key 是签名密钥，格式 <key_id>:<secret>。
-	Key string `yaml:"key"`
+	GatewayClient *gatewayclient.ExternalFileConfig `yaml:"gateway_client,omitempty"`
+	SigningKey    string                            `yaml:"-"`
+	Version       int                               `yaml:"version"`
+	Storage       dataStorageAuthConfig             `yaml:"storage"`
+	DataTypes     map[string]dataTypeConfig         `yaml:"data_types"`
 }
 
 type dataStorageAuthConfig struct {
@@ -129,8 +119,15 @@ func loadDataAccessConfig(explicitPath string) (dataAccessConfig, error) {
 	}
 	defer file.Close()
 
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || opened.Mode().Perm() != 0o600 {
+		return dataAccessConfig{}, fmt.Errorf("data access config changed while opening")
+	}
+	if opened.Size() > 1<<20 {
+		return dataAccessConfig{}, fmt.Errorf("data access config exceeds 1 MiB")
+	}
 	var cfg dataAccessConfig
-	decoder := yaml.NewDecoder(file)
+	decoder := yaml.NewDecoder(io.LimitReader(file, (1<<20)+1))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
 		return dataAccessConfig{}, fmt.Errorf("decode data access config %q (unknown or invalid field): %w", path, err)
@@ -148,7 +145,22 @@ func loadDataAccessConfig(explicitPath string) (dataAccessConfig, error) {
 	return cfg, nil
 }
 
+func (cfg dataAccessConfig) validateSkill() error {
+	if cfg.GatewayClient == nil || cfg.GatewayClient.Caller != "moox-skill" || cfg.Storage.AppID != "moox-skill" {
+		return fmt.Errorf("Skill requires the moox-skill Access and Storage identities")
+	}
+	return cfg.validate()
+}
+
 func (cfg dataAccessConfig) validate() error {
+	if cfg.GatewayClient != nil {
+		if cfg.GatewayClient.Caller != "moox-skill" {
+			return fmt.Errorf("gateway_client.caller must be moox-skill")
+		}
+		if err := cfg.GatewayClient.Validate(); err != nil {
+			return err
+		}
+	}
 	if cfg.Version != 1 {
 		return fmt.Errorf("version must be 1")
 	}
@@ -156,10 +168,6 @@ func (cfg dataAccessConfig) validate() error {
 		name  string
 		value string
 	}{
-		{"access.address", cfg.Access.Address},
-		{"access.id", cfg.Access.ID},
-		{"access.caller", cfg.Access.Caller},
-		{"access.key", cfg.Access.Key},
 		{"storage.app_id", cfg.Storage.AppID},
 		{"storage.app_key", cfg.Storage.AppKey},
 	}
@@ -167,15 +175,6 @@ func (cfg dataAccessConfig) validate() error {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("%s is required", field.name)
 		}
-	}
-	if _, _, err := net.SplitHostPort(strings.TrimSpace(cfg.Access.Address)); err != nil {
-		return fmt.Errorf("access.address 必须是 host:port")
-	}
-	if err := gatewayclient.ValidateAccessID(cfg.Access.ID); err != nil {
-		return fmt.Errorf("access.id: %w", err)
-	}
-	if _, err := gatewayauth.ParseCallerKeyValue(cfg.Access.Caller, cfg.Access.Key); err != nil {
-		return fmt.Errorf("access.key: %w", err)
 	}
 	if len(cfg.DataTypes) == 0 {
 		return fmt.Errorf("data_types is required")
@@ -215,22 +214,6 @@ func (cfg dataAccessConfig) validate() error {
 		}
 	}
 	return nil
-}
-
-// newGateway 创建以外部方式经外部接入访问 MooX 的 gatewayclient。
-func (cfg dataAccessConfig) newGateway() (*gatewayclient.Client, error) {
-	caller := strings.TrimSpace(cfg.Access.Caller)
-	credentials, err := gatewayauth.ParseCallerKeyValue(caller, cfg.Access.Key)
-	if err != nil {
-		return nil, fmt.Errorf("access.key: %w", err)
-	}
-	return gatewayclient.New(gatewayclient.Options{
-		Config: gatewayclient.Config{
-			Mode: gatewayclient.ModeAccess, Caller: caller,
-			AccessAddress: strings.TrimSpace(cfg.Access.Address), AccessID: strings.TrimSpace(cfg.Access.ID),
-		},
-		Credentials: &credentials,
-	})
 }
 
 func (cfg dataAccessConfig) resolveKline(dataType, exchange, interval string) (klineSelection, error) {

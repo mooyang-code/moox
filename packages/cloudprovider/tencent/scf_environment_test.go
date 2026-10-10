@@ -6,7 +6,7 @@ import (
 )
 
 func TestValidateSCFEnvironmentIncludesAllCredentialsAndRedactsValues(t *testing.T) {
-	values := map[string]string{"PROVIDER_SECRET_KEY": strings.Repeat("secret-value", 400), "MOOX_ACCESS_ADDRESS": "10.206.0.5:11004"}
+	values := map[string]string{"PROVIDER_SECRET_KEY": strings.Repeat("secret-value", 400), "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector:11002"}
 	err := ValidateSCFEnvironment(values)
 	if err == nil || !strings.Contains(err.Error(), "PROVIDER_SECRET_KEY") || strings.Contains(err.Error(), "secret-value") {
 		t.Fatalf("expected redacted total environment validation, got %v", err)
@@ -25,26 +25,35 @@ func TestValidateSCFEnvironmentRejectsPrimaryMasterSecret(t *testing.T) {
 	}
 }
 
-func validCollectorEnvironment() map[string]string {
-	return map[string]string{
+func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *testing.T) {
+	valid := map[string]string{
+		"MOOX_CALLER": "scf-collector", "MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64),
 		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
 		"MOOX_SPACE_ID": "stockcn", "MOOX_CODE_PACKAGE_ID": "collector_dev_00000000-0000-0000-0000-000000000000",
-		"MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY": "scf-collector-1:private-test-secret",
-		"MOOX_ACCESS_ADDRESS": "10.206.0.5:11004", "MOOX_ACCESS_ID": "access@storage",
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic", "MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
 		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret", "MOOX_EVENTBUS_NATS_TLS_CA_FILE": "certs/eventbus-ca.pem",
 	}
-}
-
-func TestCollectorMarketFetchEnvironmentRejectsIncompleteOrInvalidValues(t *testing.T) {
-	valid := validCollectorEnvironment()
-	if err := ValidateCollectorMarketFetchEnvironment(valid); err != nil {
+	if err := ValidateCollectorTimerEnvironment(valid); err != nil {
 		t.Fatal(err)
 	}
-	withLegacyCA := validCollectorEnvironment()
+	withLegacyCA := make(map[string]string)
+	for key, value := range valid {
+		withLegacyCA[key] = value
+	}
 	withLegacyCA["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
-	if err := ValidateCollectorMarketFetchEnvironment(withLegacyCA); err == nil || !strings.Contains(err.Error(), "CA") {
-		t.Fatalf("不能同时配置 CA 文件和内嵌 PEM，实际 %v", err)
+	if err := ValidateCollectorTimerEnvironment(withLegacyCA); err == nil || !strings.Contains(err.Error(), "CA") {
+		t.Fatalf("Timer must reject simultaneous CA file and embedded PEM, got %v", err)
+	}
+	invoke := make(map[string]string)
+	for key, value := range valid {
+		invoke[key] = value
+	}
+	invoke["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
+	if err := ValidateCollectorMarketFetchEnvironment(invoke); err != nil {
+		t.Fatalf("Invoke has its own timeout and shares Access: %v", err)
+	}
+	if err := ValidateCollectorTimerEnvironment(invoke); err != nil {
+		t.Fatalf("Timer shares the same Access connection: %v", err)
 	}
 	for _, test := range []struct {
 		name, appKeys string
@@ -53,48 +62,75 @@ func TestCollectorMarketFetchEnvironmentRejectsIncompleteOrInvalidValues(t *test
 		{"other binding only", `{"other":"` + strings.Repeat("b", 64) + `"}`, true},
 		{"Collector binding with extra key", `{"other":"` + strings.Repeat("b", 64) + `","moox-collector":"` + strings.Repeat("a", 64) + `"}`, false},
 	} {
-		t.Run("Storage binding/"+test.name, func(t *testing.T) {
-			values := validCollectorEnvironment()
-			values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = test.appKeys
-			err := ValidateCollectorMarketFetchEnvironment(values)
-			if test.wantError {
-				if err == nil || !strings.Contains(err.Error(), "moox-collector") || strings.Contains(err.Error(), strings.Repeat("b", 64)) {
-					t.Fatalf("缺少 Collector 绑定时必须报错且不暴露密钥: %v", err)
+		for _, validator := range []struct {
+			name     string
+			validate func(map[string]string) error
+		}{
+			{"Invoke", ValidateCollectorMarketFetchEnvironment},
+			{"Timer", ValidateCollectorTimerEnvironment},
+		} {
+			t.Run("Storage binding/"+validator.name+"/"+test.name, func(t *testing.T) {
+				values := make(map[string]string)
+				for key, value := range valid {
+					values[key] = value
 				}
-			} else if err != nil {
-				t.Fatalf("Collector 绑定加额外的 key 是合法的: %v", err)
-			}
-		})
+				values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = test.appKeys
+				err := validator.validate(values)
+				if test.wantError {
+					if err == nil || !strings.Contains(err.Error(), "moox-collector") || strings.Contains(err.Error(), strings.Repeat("b", 64)) {
+						t.Fatalf("missing Collector binding must fail without exposing keys: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("Collector binding plus extra keys is valid: %v", err)
+				}
+			})
+		}
 	}
 	for key := range valid {
 		t.Run("missing "+key, func(t *testing.T) {
-			values := validCollectorEnvironment()
-			delete(values, key)
-			if err := ValidateCollectorMarketFetchEnvironment(values); err == nil {
-				t.Fatalf("缺少 %s 时必须报错", key)
+			copy := make(map[string]string)
+			for k, v := range valid {
+				copy[k] = v
+			}
+			delete(copy, key)
+			if err := ValidateCollectorTimerEnvironment(copy); err == nil {
+				t.Fatalf("missing %s must fail closed", key)
 			}
 		})
 	}
 	for _, test := range []struct{ key, value string }{
-		{"MOOX_CALLER", "collector"}, {"MOOX_CALLER_KEY", "no-separator"}, {"MOOX_CALLER_KEY", "scf-collector-1:"},
-		{"MOOX_ACCESS_ADDRESS", "10.206.0.5"}, {"MOOX_ACCESS_ADDRESS", "127.0.0.1:11004"}, {"MOOX_ACCESS_ADDRESS", "localhost:11004"},
-		{"MOOX_ACCESS_ADDRESS", "10.206.0.5:0"}, {"MOOX_ACCESS_ID", "storage"}, {"MOOX_ACCESS_ID", "access@bad node"},
+		{"MOOX_CALLER", "collector"},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{}`}, {"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"short"}`},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("g", 64) + `"}`},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`},
-		{"MOOX_EVENTBUS_NATS_URL", "nats://eventbus.example:4222"}, {"MOOX_EVENTBUS_NATS_URL", "tls://127.0.0.1:4222"},
-		{"MOOX_CLS_ENABLED", "false"}, {"MOOX_CLS_TIMEOUT_MS", "invalid"}, {"MOOX_EVENTBUS_NATS_TLS_CA_FILE", "/tmp/ca.pem"},
+		{"MOOX_ACCESS_ADDRESS", "localhost:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:0"}, {"MOOX_ACCESS_ADDRESS", "ip://storage.example:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:11004/path"},
+		{"MOOX_ACCESS_ID", "storage"}, {"MOOX_ACCESS_ID", "access@bad_node"}, {"MOOX_CALLER_KEY_ID", "bad key"}, {"MOOX_CALLER_KEY_ID", ""}, {"MOOX_CALLER_KEY", "short"}, {"MOOX_CALLER_KEY", strings.Repeat("a", 4097)}, {"MOOX_CALLER_KEY", strings.Repeat("a", 32) + "\n"},
+		{"MOOX_EVENTBUS_NATS_URL", "nats://eventbus.example:4222"}, {"MOOX_CLS_ENABLED", "false"}, {"MOOX_CLS_TIMEOUT_MS", "invalid"}, {"MOOX_EVENTBUS_NATS_TLS_CA_FILE", "/tmp/ca.pem"},
 	} {
 		t.Run("invalid "+test.key+" "+test.value, func(t *testing.T) {
-			values := validCollectorEnvironment()
-			values[test.key] = test.value
-			err := ValidateCollectorMarketFetchEnvironment(values)
-			if err == nil {
-				t.Fatalf("%s=%q 必须报错", test.key, test.value)
+			copy := make(map[string]string)
+			for k, v := range valid {
+				copy[k] = v
 			}
-			if strings.Contains(err.Error(), "private-test-secret") {
-				t.Fatalf("报错不能暴露调用方密钥: %v", err)
+			copy[test.key] = test.value
+			if err := ValidateCollectorTimerEnvironment(copy); err == nil {
+				t.Fatalf("invalid %s must fail closed", test.key)
 			}
 		})
+	}
+}
+
+func TestCollectorAccessPublicationRemovesInternalGatewayCredentials(t *testing.T) {
+	for _, key := range collectorInternalGatewayEnvironmentKeys {
+		values := map[string]string{key: "private-internal-test-value", "MOOX_CALLER_KEY": strings.Repeat("a", 64), "MOOX_CLS_SECRET_KEY": "preserve-cls-key"}
+		if err := ValidateCollectorMarketFetchEnvironment(values); err == nil || !strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "private-internal-test-value") {
+			t.Fatalf("internal field %s must be rejected without disclosure: %v", key, err)
+		}
+		if !RemoveCollectorInternalGatewayEnvironment(values) || RemoveCollectorInternalGatewayEnvironment(values) {
+			t.Fatalf("internal field %s was not removed exactly once", key)
+		}
+		if len(values) != 2 || values["MOOX_CLS_SECRET_KEY"] != "preserve-cls-key" || values["MOOX_CALLER_KEY"] != strings.Repeat("a", 64) {
+			t.Fatalf("removing %s changed unrelated credentials", key)
+		}
 	}
 }

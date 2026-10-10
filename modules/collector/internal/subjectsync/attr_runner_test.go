@@ -2,7 +2,8 @@ package subjectsync
 
 import (
 	"context"
-	"errors"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -11,16 +12,15 @@ import (
 )
 
 type fakeAttributeStore struct {
-	calls int
 	space string
 	items []*pb.SubjectAttributes
-	err   error
+	calls int
 }
 
 func (f *fakeAttributeStore) UpdateSubjectAttributes(_ context.Context, space string, items []*pb.SubjectAttributes) (int, int, error) {
-	f.calls++
 	f.space, f.items = space, items
-	return len(items), 0, f.err
+	f.calls++
+	return len(items), 0, nil
 }
 
 type contextAwareSubjectLister struct {
@@ -34,69 +34,83 @@ func (l contextAwareSubjectLister) List(ctx context.Context) ([]marketdata.Instr
 	return l.items, nil
 }
 
-func cryptoAttributeRunner(store AttributeStore, lister Lister) *AttributeRunner {
-	return &AttributeRunner{
+func TestAttributeRunnerUsesTimezoneAndStatelessMinuteWindow(t *testing.T) {
+	if os.Getenv("MOOX_SUBJECT_TIMEZONE_CHILD") != "1" {
+		for _, hostZone := range []string{"UTC", "Asia/Shanghai"} {
+			t.Run(hostZone, func(t *testing.T) {
+				command := exec.Command(os.Args[0], "-test.run=^TestAttributeRunnerUsesTimezoneAndStatelessMinuteWindow$", "-test.count=1")
+				command.Env = append(os.Environ(), "TZ="+hostZone, "MOOX_SUBJECT_TIMEZONE_CHILD=1")
+				output, err := command.CombinedOutput()
+				if err != nil {
+					t.Fatalf("timezone %s: %v\n%s", hostZone, err, output)
+				}
+			})
+		}
+		return
+	}
+	if time.Local.String() != os.Getenv("TZ") {
+		t.Fatalf("host timezone=%s", time.Local)
+	}
+	now := time.Date(2026, 10, 9, 0, 9, 45, 0, time.UTC)
+	store := &fakeAttributeStore{}
+	runner := &AttributeRunner{
 		Store:   store,
-		Listers: Listers{{Source: "binance", InstrumentType: "spot"}: lister},
-		// 北京时间每天 08:10，与生产配置一致。
-		Jobs: []AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}},
+		Listers: Listers{{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Name: "BTC"}}}},
+		Jobs:    []AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}},
+		Now:     func() time.Time { return now.In(time.Local) },
+	}
+	for i := 0; i < 3; i++ {
+		if err := runner.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && store.calls != 0 {
+			t.Fatal("ran before schedule")
+		}
+		if i == 1 && store.calls != 1 {
+			t.Fatal("missed Beijing 08:10:45")
+		}
+		now = now.Add(time.Minute)
+	}
+	if store.calls != 1 || store.space != "crypto" || store.items[0].GetAttributes()["base"] != "BTC" || store.items[0].GetAttributes()["quote"] != "USDT" {
+		t.Fatalf("calls=%d space=%s items=%+v", store.calls, store.space, store.items)
 	}
 }
 
-func TestAttributeRunnerRunsOnceAtBeijingTimeRegardlessOfHostTimezone(t *testing.T) {
-	shanghai, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 定时器每分钟第 45 秒触发；把一整天的触发时刻分别放在 UTC 和 Asia/Shanghai 两种“主机时区”下模拟。
-	for _, host := range []*time.Location{time.UTC, shanghai} {
-		store := &fakeAttributeStore{}
-		runner := cryptoAttributeRunner(store, fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT", BaseAsset: "btc", QuoteAsset: "usdt", Name: "BTC"}}})
-		start := time.Date(2026, 10, 9, 0, 0, 45, 0, host)
-		var ranAt []time.Time
-		for minute := 0; minute < 24*60; minute++ {
-			trigger := start.Add(time.Duration(minute) * time.Minute)
-			before := store.calls
-			if err := runner.RunDue(context.Background(), trigger); err != nil {
+func TestAttributeRunnerFirstTriggerAndWindowBoundaries(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		minute, second int
+		want           int
+	}{
+		{"before", 9, 59, 0}, {"inclusive right", 10, 0, 1},
+		{"first trigger", 10, 45, 1}, {"exclusive left", 11, 0, 0},
+		{"next trigger", 11, 45, 0}, {"no downtime catchup", 20, 45, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeAttributeStore{}
+			runner := &AttributeRunner{
+				Store:   store,
+				Listers: Listers{{Source: "binance", InstrumentType: "spot"}: contextAwareSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}}},
+				Jobs:    []AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}},
+				Now:     func() time.Time { return time.Date(2026, 10, 9, 0, tt.minute, tt.second, 0, time.UTC) },
+			}
+			if err := runner.RunOnce(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if store.calls != before {
-				ranAt = append(ranAt, trigger)
+			if store.calls != tt.want {
+				t.Fatalf("calls=%d want=%d", store.calls, tt.want)
 			}
-		}
-		if len(ranAt) != 1 {
-			t.Fatalf("主机时区 %s：一天内执行 %d 次（%v），应当只执行一次", host, len(ranAt), ranAt)
-		}
-		if got := ranAt[0].In(shanghai).Format("15:04:05"); got != "08:10:45" {
-			t.Fatalf("主机时区 %s：执行时刻为北京时间 %s，应当是 08:10:45", host, got)
-		}
-		if store.space != "crypto" || store.items[0].GetAttributes()["base"] != "BTC" || store.items[0].GetAttributes()["quote"] != "USDT" {
-			t.Fatalf("属性更新 = %q %+v", store.space, store.items)
-		}
+		})
 	}
 }
 
-func TestAttributeRunnerUsesDefaultFetchTimeout(t *testing.T) {
+func TestAttributeRunnerRejectsImpossibleSchedule(t *testing.T) {
 	store := &fakeAttributeStore{}
-	runner := cryptoAttributeRunner(store, contextAwareSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}})
-	trigger := time.Date(2026, 10, 9, 0, 10, 45, 0, time.UTC)
-	if err := runner.RunDue(context.Background(), trigger); err != nil {
-		t.Fatal(err)
+	runner := &AttributeRunner{Store: store, Jobs: []AttributeJob{{SpaceID: "crypto", Cron: "0 0 31 2 *", Timezone: "UTC"}}}
+	if err := runner.RunOnce(context.Background()); err == nil {
+		t.Fatal("impossible schedule was treated as due")
 	}
-	if len(store.items) != 1 {
-		t.Fatalf("items = %+v", store.items)
-	}
-}
-
-func TestAttributeRunnerReportsFailures(t *testing.T) {
-	trigger := time.Date(2026, 10, 9, 0, 10, 45, 0, time.UTC)
-	listFailure := cryptoAttributeRunner(&fakeAttributeStore{}, fakeSubjectLister{err: errors.New("出口代理不可用")})
-	if err := listFailure.RunDue(context.Background(), trigger); err == nil {
-		t.Fatal("拉取失败应当返回错误")
-	}
-	store := &fakeAttributeStore{err: errors.New("storage unavailable")}
-	writeFailure := cryptoAttributeRunner(store, fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}})
-	if err := writeFailure.RunDue(context.Background(), trigger); err == nil {
-		t.Fatal("写入失败应当返回错误")
+	if store.calls != 0 {
+		t.Fatal("impossible schedule performed an update")
 	}
 }

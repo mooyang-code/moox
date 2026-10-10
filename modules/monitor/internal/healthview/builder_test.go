@@ -1,278 +1,147 @@
 package healthview
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
-var updateSnapshot = flag.Bool("update", false, "重写健康概览快照")
-
-var snapshotNow = time.Date(2026, 10, 9, 4, 0, 0, 0, time.UTC)
-
-func ago(d time.Duration) time.Time { return snapshotNow.Add(-d) }
-
-func agoText(d time.Duration) string { return ago(d).Format(time.RFC3339Nano) }
-
-type staticFacts struct{ overview observability.Overview }
-
-func (s staticFacts) Build(context.Context, string) (observability.Overview, error) {
-	return s.overview, nil
-}
-
-type staticPlacements struct {
-	placements []*adminpb.DeployPlacement
-	err        error
-}
-
-func (s staticPlacements) Placements(context.Context) ([]*adminpb.DeployPlacement, error) {
-	return s.placements, s.err
-}
-
-type staticAgents []hostmetrics.AgentView
-
-func (s staticAgents) ListAgents(context.Context) ([]hostmetrics.AgentView, error) { return s, nil }
-
-func newRepositories(t *testing.T) *store.Repositories {
-	t.Helper()
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.Close() })
-	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	return mgr.Repositories()
-}
-
-// snapshotCatalog 是内置组件目录，只把出口代理改成不探测，用来覆盖「不探测」的组件。
-func snapshotCatalog(t *testing.T) *servicecatalog.Catalog {
-	t.Helper()
-	raw := string(servicecatalog.Embedded())
-	const egressHealth = "health: {kind: readyz, port: 11441}"
-	require.Equal(t, 1, strings.Count(raw, egressHealth))
-	catalog, err := servicecatalog.Parse([]byte(strings.Replace(raw, egressHealth, "health: {kind: none}", 1)))
-	require.NoError(t, err)
-	return catalog
-}
-
-func addPlacementCheck(t *testing.T, repositories *store.Repositories, hostID, componentID, url string, enabled bool) {
-	t.Helper()
-	labels, err := json.Marshal(placement.Labels{HostID: hostID, ComponentID: componentID})
-	require.NoError(t, err)
-	require.NoError(t, repositories.Checks.Create(t.Context(), &domain.Check{
-		CheckID: placement.CheckID(hostID, componentID), Name: alerttext.Service(componentID) + "（" + hostID + "）· 健康检查",
-		Kind: domain.CheckKindHTTP, URL: url, Enabled: enabled, Source: domain.CheckSourcePlacement, Labels: string(labels),
-	}))
-}
-
-func addResult(t *testing.T, repositories *store.Repositories, spaceID, checkID string, at time.Time, rawError string) {
-	t.Helper()
-	status := domain.CheckStatusOK
-	if rawError != "" {
-		status = domain.CheckStatusDown
+	for i := range catalog.Components {
+		if catalog.Components[i].ID == "console-proxy" {
+			catalog.Components[i].Name = "目录中的控制台入口"
+		}
 	}
-	require.NoError(t, repositories.Results.Insert(t.Context(), &domain.CheckResult{
-		ResultID: checkID + "@" + at.Format(time.RFC3339), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor",
-		Success: rawError == "", Status: status, ErrorMessage: rawError, CheckedAt: at,
-	}))
-}
-
-func addFiringAlert(t *testing.T, repositories *store.Repositories, spaceID, checkID, description string, triggeredAt time.Time) {
-	t.Helper()
-	ruleID := "default:" + checkID
-	require.NoError(t, repositories.Alerts.CreateRule(t.Context(), &domain.AlertRule{
-		SpaceID: spaceID, RuleID: ruleID, CheckID: checkID, FailureThreshold: 1, SuccessThreshold: 1,
-		Enabled: true, Description: description,
-	}))
-	require.NoError(t, repositories.Alerts.UpsertState(t.Context(), &domain.AlertState{
-		SpaceID: spaceID, RuleID: ruleID, CheckID: checkID, Status: domain.AlertStatusFiring, FailureCount: 3,
-		TriggeredAt: &triggeredAt, DedupeKey: ruleID + ":" + checkID,
-	}))
-}
-
-// TestOverviewSnapshot 覆盖：一个组件异常（storage 上的存储主服务探测失败）；一台主机没有心跳（storage）；一个未登记的
-// 进程（compute-1 上的存储数据节点）；一条主机告警（control 的磁盘空间）；一个 https 探测的组件（控制台代理）。另外还有
-// 不探测、部署停用、主机停用的组件，以及采集、存储、因子三个阶段的数据集。
-func TestOverviewSnapshot(t *testing.T) {
-	ctx := t.Context()
-	repositories := newRepositories(t)
-
-	hosts := []*adminpb.DeployHost{
-		{HostId: "control", Address: "203.0.113.10", Status: "enabled", CreatedAt: agoText(30 * 24 * time.Hour),
-			Gateway: &adminpb.HostGatewayStatus{State: "online", InstanceId: "host-gateway@control", ExpectedHash: "abc", AppliedHash: "abc", LastSeenAt: agoText(20 * time.Second)}},
-		{HostId: "storage", Address: "203.0.113.20", Status: "enabled", CreatedAt: agoText(30 * 24 * time.Hour),
-			Gateway: &adminpb.HostGatewayStatus{State: "offline", InstanceId: "host-gateway@storage", ExpectedHash: "abc", AppliedHash: "abc", LastSeenAt: agoText(10 * time.Minute)}},
-		{HostId: "compute-1", Address: "203.0.113.30", Status: "disabled", CreatedAt: agoText(30 * 24 * time.Hour)},
-	}
-	gatewayHosts := make([]observability.GatewayHostStatus, 0, len(hosts))
-	for _, host := range hosts {
-		gatewayHosts = append(gatewayHosts, observability.EvaluateGatewayHost(host, snapshotNow))
-	}
-	placements := []*adminpb.DeployPlacement{
-		{HostId: "control", ComponentId: "console-proxy", Status: "enabled"},
-		{HostId: "control", ComponentId: "monitor", Status: "enabled"},
-		{HostId: "control", ComponentId: "host-agent", Status: "enabled"},
-		{HostId: "control", ComponentId: "egress-proxy", Status: "enabled"},
-		{HostId: "storage", ComponentId: "storage-primary", Status: "enabled"},
-		{HostId: "storage", ComponentId: "access", Status: "disabled", UpdatedAt: agoText(2 * time.Hour)},
-		{HostId: "compute-1", ComponentId: "trade", Status: "enabled"},
-	}
-
-	addPlacementCheck(t, repositories, "control", "console-proxy", "https://203.0.113.10:9527/", true)
-	addPlacementCheck(t, repositories, "control", "monitor", "http://127.0.0.1:11409/readyz", true)
-	addPlacementCheck(t, repositories, "control", "host-agent", "http://127.0.0.1:11425/readyz", true)
-	addPlacementCheck(t, repositories, "storage", "storage-primary", "http://203.0.113.20:20210/readyz", true)
-	addPlacementCheck(t, repositories, "storage", "access", "http://203.0.113.20:11014/readyz", false)
-	addPlacementCheck(t, repositories, "compute-1", "trade", "http://203.0.113.30:11210/readyz", false)
-	for _, offset := range []time.Duration{90 * time.Second, 60 * time.Second, 30 * time.Second} {
-		addResult(t, repositories, "", placement.CheckID("control", "console-proxy"), ago(offset), "")
-	}
-	addResult(t, repositories, "", placement.CheckID("control", "monitor"), ago(30*time.Second), "")
-	addResult(t, repositories, "", placement.CheckID("control", "host-agent"), ago(30*time.Second), "")
-	refused := "Get \"http://203.0.113.20:20210/readyz\": dial tcp 203.0.113.20:20210: connect: connection refused"
-	addResult(t, repositories, "", placement.CheckID("storage", "storage-primary"), ago(120*time.Second), "")
-	for _, offset := range []time.Duration{90 * time.Second, 60 * time.Second, 30 * time.Second} {
-		addResult(t, repositories, "", placement.CheckID("storage", "storage-primary"), ago(offset), refused)
-	}
-	addFiringAlert(t, repositories, "", placement.CheckID("storage", "storage-primary"), "", ago(60*time.Second))
-
-	storageGateway := gatewayHosts[1]
-	require.NoError(t, repositories.Checks.Create(ctx, &domain.Check{
-		SpaceID: monmetrics.InternalMetricSpaceID, CheckID: "host_gateway:storage", Name: "主机网关（storage）· 心跳与路由同步",
-		Kind: domain.CheckKindExternal, Enabled: true, Source: domain.CheckSourceObservability,
-	}))
-	addResult(t, repositories, monmetrics.InternalMetricSpaceID, "host_gateway:storage", ago(10*time.Second), storageGateway.Reason)
-	addFiringAlert(t, repositories, monmetrics.InternalMetricSpaceID, "host_gateway:storage", "", ago(7*time.Minute))
-	addFiringAlert(t, repositories, hostmetrics.SpaceID, hostmetrics.HostRuleKey("aB3x", hostmetrics.HostMetricFilesystemUsage),
-		`{"threshold":85,"recovery_threshold":80}`, ago(3*time.Minute))
-
-	require.NoError(t, repositories.Notifications.SeedIfAbsent(ctx, domain.NotificationChannel{
-		ChannelType: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=secret-key-0042",
-	}))
-
-	agents := staticAgents{
-		{AgentID: "aB3x", HostID: "control", Hostname: "VM-0-1-ubuntu", LastSeenAt: agoText(15 * time.Second), Reachable: true,
-			Snapshot: &hostmetricpb.HostSnapshot{
-				Cpu:    &hostmetricpb.CpuMetric{UsagePercent: 12.5, UsageAvailable: true},
-				Memory: &hostmetricpb.MemoryMetric{UsagePercent: 40.2},
-				Filesystems: []*hostmetricpb.FilesystemMetric{
-					{Mountpoint: "/", UsagePercent: 91}, {Mountpoint: "/data", UsagePercent: 50},
-				},
-			}},
-		{AgentID: "cD5y", HostID: "storage", Hostname: "VM-0-2-ubuntu", LastSeenAt: agoText(10 * time.Minute), Reachable: false,
-			Snapshot: &hostmetricpb.HostSnapshot{
-				Cpu:         &hostmetricpb.CpuMetric{UsagePercent: 5, UsageAvailable: true},
-				Memory:      &hostmetricpb.MemoryMetric{UsagePercent: 30},
-				Filesystems: []*hostmetricpb.FilesystemMetric{{Mountpoint: "/", UsagePercent: 60}},
-			}},
-	}
-	facts := observability.Overview{
-		GeneratedAt: snapshotNow,
+	facts := observability.Overview{GeneratedAt: now, TopologyKnown: true, Topology: &domain.TopologySnapshot{Catalog: catalog, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}, {HostID: "offline", Address: "offline.test", Status: "enabled"}}},
 		Services: []observability.ServiceStatus{
-			{NodeID: "control", ServiceName: "monitor", InstanceID: "monitor@control", ReporterStatus: "healthy", Version: "v1.2.3", ReportedAt: ago(20 * time.Second)},
-			{NodeID: "storage", ServiceName: "storage-primary", InstanceID: "storage-primary@storage-old", ReporterStatus: "stale", Version: "v1.2.2", ReportedAt: ago(3 * time.Hour)},
-			{NodeID: "storage", ServiceName: "storage-primary", InstanceID: "storage-primary@storage", ReporterStatus: "stale", Version: "v1.2.3", ReportedAt: ago(6 * time.Minute)},
+			{NodeID: "control", ServiceName: "console-proxy", Enabled: true, Status: "healthy", Reason: "health check ok", ProbeStatus: "healthy", ProbeCheckedAt: now, ReporterStatus: "healthy", LastSeenAt: now, Instances: []observability.ReporterInstance{{InstanceID: "proxy-1", BootID: "boot-1", Version: "v2", Status: "healthy", LastSeenAt: now}}},
+			{NodeID: "control", ServiceName: "web-host", Enabled: true, Status: "down", Reason: "health check failed", ProbeStatus: "down", ProbeReason: "健康检查失败", ProbeRawError: "dial tcp: connection refused\n原始错误", ProbeCheckedAt: now},
+			{NodeID: "offline", ServiceName: "web-host", Enabled: true, Status: "unknown", Reason: "health not checked", ProbeStatus: "unknown"},
+			{NodeID: "control", ServiceName: "eventbus", Enabled: true, Status: "unchecked", Reason: "不探测", ProbeStatus: "unchecked", ReporterStatus: "missing"},
+			{NodeID: "control", ServiceName: "archive", Status: "disabled", Reason: "部署已停用", ProbeStatus: "disabled"},
 		},
-		Datasets: []observability.DatasetFrequencyStatus{
-			// Storage 已有同一数据集频率的事实，Collector 的这一行不再单独列出。
-			{Producer: "collector", SpaceID: "crypto", DatasetID: "dataset_crypto_kline", Freq: "1m", Status: "unknown", Reason: "尚未上报"},
-			{Producer: "collector", SpaceID: "crypto", DatasetID: "dataset_crypto_funding", Freq: "8h", Status: "unknown", Reason: "尚未上报"},
-			{Producer: "storage", SpaceID: "crypto", DatasetID: "dataset_crypto_kline", Freq: "1m", Status: "healthy", Reason: "normal",
-				LastRunAt: ago(30 * time.Second), LastSuccessAt: ago(30 * time.Second), OutputWatermarkAt: ago(time.Minute), LagSeconds: 60},
-			{Producer: "factor", SpaceID: "crypto", DatasetID: "dataset_crypto_factor_momentum", Freq: "1h", Status: "stale", Reason: "run stale",
-				LastRunAt: ago(3 * time.Hour), LastSuccessAt: ago(3 * time.Hour), OutputWatermarkAt: ago(3 * time.Hour), LagSeconds: 10800},
-			// 主机指标数据集由主机告警覆盖，不放进数据链路。
-			{Producer: "storage", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_host_resource", Freq: "15s", Status: "healthy"},
-		},
-		BusinessChecks: []observability.BusinessStatus{
-			{SpaceID: "crypto", Kind: "market_fetch", Name: "行情采集 · SCF 定时协调", Module: "scf_timer", Status: "healthy", Reason: "Timer 分配和触发器正常", LastCheckedAt: snapshotNow},
-			{SpaceID: "crypto", Kind: "balance", Name: "账户余额同步 · 交易服务", Module: "trade", Status: "down", Reason: "balance sync failed 3 consecutive runs", LastCheckedAt: snapshotNow},
-		},
-		GatewayHosts: gatewayHosts,
-		Unregistered: []monmetrics.UnregisteredProducer{
-			{ServiceName: "storage-node", NodeID: "compute-1", InstanceID: "storage-node@compute-1", Version: "v1.2.3", FirstSeenAt: ago(5 * time.Minute), LastSeenAt: ago(25 * time.Second)},
-		},
+		Unregistered:   []observability.ServiceStatus{{NodeID: "control", ServiceName: "unknown-collector-name", Instances: []observability.ReporterInstance{{InstanceID: "orphan", Version: "dev", Status: "healthy", LastSeenAt: now}}}},
+		Hosts:          []observability.HostStatus{{HostID: "offline", AgentID: "PHYSICAL01", Hostname: "offline-host", Status: "down", Reason: "agent unreachable", LastSeenAt: now.Add(-10 * time.Minute)}, {AgentID: "STANDALONE", Hostname: "control", Status: "healthy", Reason: "agent reachable", LastSeenAt: now}},
+		BusinessChecks: []observability.BusinessStatus{{CheckID: "console-page:control:console-proxy", Kind: "console-page", Module: "console-proxy", Status: "down", Reason: "页面请求失败", RawError: "HTTP 502\nupstream web-host", LastCheckedAt: now}},
+		GatewaySignals: []observability.GatewaySignal{{HostID: "offline", Kind: "heartbeat", Status: "down", Reason: "主机网关心跳已中断", CheckedAt: now}},
+		Datasets:       []observability.DatasetFrequencyStatus{{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Status: "degraded", Reason: "输出水位已落后", LastRunAt: now, LastSuccessAt: now.Add(-time.Minute), InputWatermarkAt: now, OutputWatermarkAt: now.Add(-2 * time.Minute), LastReportedAt: now, LagSeconds: 120}},
 	}
-
-	got, err := (Builder{
-		Facts: staticFacts{facts}, Placements: staticPlacements{placements: placements}, Hosts: agents,
-		Checks: repositories.Checks, Results: repositories.Results, Alerts: repositories.Alerts,
-		Notifications: repositories.Notifications, Catalog: snapshotCatalog(t), Now: func() time.Time { return snapshotNow },
-	}).Build(ctx, "")
+	view := projectFacts(facts)
+	hostAlert, err := (Builder{}).projectAlert(t.Context(), domain.AlertState{CheckID: "host:PHYSICAL01:cpu", DedupeKey: "host-alert", TriggeredAt: &now, UpdatedAt: now}, facts)
 	require.NoError(t, err)
-
-	encoded, err := json.MarshalIndent(got, "", "  ")
+	view.Alerts = append(view.Alerts, hostAlert)
+	view.Summary.AlertCount = int32(len(view.Alerts))
+	require.Len(t, view.Components, 5)
+	require.Equal(t, "目录中的控制台入口", view.Components[1].Name)
+	require.Equal(t, "healthy", view.Components[1].Status, "page failure must not overwrite proxy readiness")
+	require.Equal(t, "control", view.Hosts[1].HostId, "hostname alone must not consume the registered control host")
+	require.Equal(t, int32(1), view.Summary.Components.HealthyCount)
+	require.Equal(t, int32(1), view.Summary.UnregisteredCount)
+	wire, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(view)
 	require.NoError(t, err)
-	encoded = append(encoded, '\n')
-	path := filepath.Join("testdata", "overview_snapshot.json")
-	if *updateSnapshot {
-		require.NoError(t, os.MkdirAll("testdata", 0o755))
-		require.NoError(t, os.WriteFile(path, encoded, 0o644))
+	var normalized any
+	require.NoError(t, json.Unmarshal(wire, &normalized))
+	wire, err = json.MarshalIndent(normalized, "", "  ")
+	require.NoError(t, err)
+	wire = append(wire, '\n')
+	path := filepath.Join("testdata", "overview-v2.json")
+	if os.Getenv("UPDATE_HEALTH_GOLDEN") == "1" {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+		require.NoError(t, os.WriteFile(path, wire, 0644))
 	}
-	want, err := os.ReadFile(path)
-	require.NoError(t, err, "快照不存在时用 go test -run TestOverviewSnapshot -update 生成")
-	require.Equal(t, string(want), string(encoded))
+	expected, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, string(expected), string(wire))
 }
 
-func TestOverviewFallsBackToPlacementChecksWhenSysDeployIsUnavailable(t *testing.T) {
-	repositories := newRepositories(t)
-	addPlacementCheck(t, repositories, "storage", "storage-view", "http://203.0.113.20:20211/readyz", true)
-	addResult(t, repositories, "", placement.CheckID("storage", "storage-view"), ago(30*time.Second), "")
-
-	got, err := (Builder{
-		Placements: staticPlacements{err: errors.New("dial tcp: i/o timeout")},
-		Checks:     repositories.Checks, Results: repositories.Results, Now: func() time.Time { return snapshotNow },
-	}).Build(t.Context(), "")
+func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
-	require.Len(t, got.Components, 1)
-	require.Equal(t, "storage-view", got.Components[0].ComponentID)
-	require.Equal(t, "存储视图服务", got.Components[0].Name)
-	require.Equal(t, StatusDegraded, got.Components[0].Status, "从未上报运行指标")
-	require.Equal(t, StatusHealthy, got.Components[0].Probe.Status)
-	require.Equal(t, []string{"暂时读不到 SysDeploy 的部署列表（dial tcp: i/o timeout），组件列表取自健康检查，未列出不探测的组件"}, got.Warnings)
-}
-
-func TestOverviewWithoutSourcesHasStableSections(t *testing.T) {
-	got, err := (Builder{Now: func() time.Time { return snapshotNow }}).Build(t.Context(), "")
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	checkID := "placement:control:web-host"
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: checkID, Name: "任意名称", Kind: domain.CheckKindExternal, Enabled: true}))
+	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "failed", CheckID: checkID, Status: "down", ErrorMessage: "health check failed", RawError: "x509: 原始错误\ncertificate expired", CheckedAt: now.Add(-time.Hour)}))
+	for i := 0; i < 20; i++ {
+		require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: fmt.Sprintf("success-%d", i), CheckID: checkID, Status: "ok", Success: true, CheckedAt: now.Add(time.Duration(i) * time.Second)}))
+	}
+	for _, id := range []string{checkID, "host:AGENT01:cpu"} {
+		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{RuleID: "default:" + id, CheckID: id, Enabled: true}))
+		require.NoError(t, repos.Alerts.UpsertState(t.Context(), &domain.AlertState{RuleID: "default:" + id, CheckID: id, Status: domain.AlertStatusFiring, DedupeKey: id, TriggeredAt: &now, UpdatedAt: now}))
+	}
+	require.NoError(t, repos.Alerts.CreateEvent(t.Context(), &domain.AlertEvent{EventID: "host-alert", RuleID: "default:host:AGENT01:cpu", CheckID: "host:AGENT01:cpu", EventType: domain.AlertEventTriggered, Message: "主机 CPU 使用率超过阈值（95%）", CreatedAt: now}))
+	view, err := (Builder{Results: repos.Results, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(t.Context(), "crypto")
 	require.NoError(t, err)
-	require.True(t, got.GeneratedAt.Equal(snapshotNow))
-	require.NotNil(t, got.Alerts)
-	require.NotNil(t, got.Components)
-	require.Len(t, got.DataStages, 4)
-	for _, stage := range got.DataStages {
-		require.Equal(t, StatusUnchecked, stage.Status)
-		require.NotNil(t, stage.Datasets)
+	require.Len(t, view.Alerts, 2, "global host/component alerts remain visible when a space is selected")
+	var hostFound bool
+	for _, alert := range view.Alerts {
+		if alert.Object.Type == "host" {
+			hostFound = true
+			require.Equal(t, "AGENT01", alert.Object.AgentId)
+			require.Contains(t, alert.Reason, "95%")
+		} else {
+			require.Equal(t, "web-host", alert.Object.ComponentId)
+			require.Equal(t, "x509: 原始错误\ncertificate expired", alert.RawError)
+			require.Equal(t, stamp(now.Add(19*time.Second)), alert.LastCheckedAt)
+			require.Equal(t, stamp(now), alert.TriggeredAt)
+		}
 	}
-	require.Equal(t, Summary{}, got.Summary)
+	require.True(t, hostFound)
 }
 
-func TestMaskURLNeverReturnsFullSecret(t *testing.T) {
-	const raw = "https://example.com/hooks/super-secret"
-	if got := MaskURL(raw); got == raw || got != "https://...cret" {
-		t.Fatalf("masked URL = %q", got)
-	}
+func TestUnknownTopologyNeverInventsComponentsAndNamesNeverMatchSubstrings(t *testing.T) {
+	view, err := (Builder{}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.False(t, view.TopologyKnown)
+	require.Empty(t, view.Components)
+	object := alertObject("crypto", "business:random-factor-collector", observability.Overview{})
+	require.Equal(t, "business", object.Type)
+	require.Empty(t, object.ComponentId)
+	require.Equal(t, "random-factor-collector", componentName(observability.Overview{}, "random-factor-collector"))
+	require.Equal(t, "监控上报正常；健康检查正常", ChineseReason("reporter fresh; health check ok"))
+	require.Equal(t, "https://...abcd", MaskURL("https://secret.example/abcd"))
 }
 
-func TestChineseReasonKeepsChineseAndTranslatesKnownCodes(t *testing.T) {
-	require.Equal(t, "账户余额已连续三次同步失败", ChineseReason("balance sync failed 3 consecutive runs"))
-	require.Equal(t, "无法连接消息总线（认证失败）", ChineseReason("eventbus connection unavailable: authentication failed"))
-	require.Equal(t, "数据变更投递正常", ChineseReason("数据变更投递正常"))
-	require.Equal(t, "检查失败，详见原始错误", ChineseReason("unexpected EOF"))
+func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.T) {
+	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}, Placements: []domain.TopologyPlacement{{HostID: "control", ComponentID: "host-agent", Status: "disabled"}}}, Hosts: []observability.HostStatus{{HostID: "control", AgentID: "AB12", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy", Reason: "主机网关心跳正常"}}}
+	view := projectFacts(facts)
+	require.Equal(t, "healthy", view.Hosts[0].Status)
+	require.Empty(t, view.Alerts)
+	facts.Topology.Placements[0].Status = "enabled"
+	view = projectFacts(facts)
+	require.Equal(t, "down", view.Hosts[0].Status)
+	require.Len(t, view.Alerts, 1)
+	facts.Topology.Hosts[0].Status = "disabled"
+	view = projectFacts(facts)
+	require.Equal(t, "disabled", view.Hosts[0].Status)
+	require.Empty(t, view.Alerts)
+}
+
+func TestGatewayPendingTimeKeepsItsSnapshotIdentity(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	pending := now.Add(-time.Minute)
+	facts := observability.Overview{GeneratedAt: now, TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "route_sync", Status: "unknown", PendingSince: pending, ExpectedHash: "new", AppliedHash: "old", CheckedAt: now}}}
+	hosts := projectHosts(facts)
+	require.Len(t, hosts, 1)
+	require.Len(t, hosts[0].GatewaySignals, 1)
+	signal := hosts[0].GatewaySignals[0]
+	require.Equal(t, pending.Format(time.RFC3339Nano), signal.PendingSince)
+	require.Equal(t, "new", signal.ExpectedHash)
+	require.Equal(t, "old", signal.AppliedHash)
 }

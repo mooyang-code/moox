@@ -19,10 +19,8 @@ import (
 
 // ProxyService defines service.
 type ProxyService interface {
-	// Do Do 发出一次 HTTPS 请求，把目标的响应原样返回。目标返回的 HTTP 错误（如 429、5xx）放在 status 里，
-	//  只有代理自身出错时才设置 ret_info。
 	Do(ctx context.Context, req *DoReq) (*DoRsp, error)
-	// ResolveDomains ResolveDomains 解析白名单域名，返回经过 TCP 探测的 IPv4 地址，按连接延迟排序。
+
 	ResolveDomains(ctx context.Context, req *ResolveDomainsReq) (*ResolveDomainsRsp, error)
 }
 
@@ -89,14 +87,9 @@ func RegisterProxyService(s server.Service, svr ProxyService) {
 
 type UnimplementedProxy struct{}
 
-// Do Do 发出一次 HTTPS 请求，把目标的响应原样返回。目标返回的 HTTP 错误（如 429、5xx）放在 status 里，
-//
-//	只有代理自身出错时才设置 ret_info。
 func (s *UnimplementedProxy) Do(ctx context.Context, req *DoReq) (*DoRsp, error) {
 	return nil, errors.New("rpc Do of service Proxy is not implemented")
 }
-
-// ResolveDomains ResolveDomains 解析白名单域名，返回经过 TCP 探测的 IPv4 地址，按连接延迟排序。
 func (s *UnimplementedProxy) ResolveDomains(ctx context.Context, req *ResolveDomainsReq) (*ResolveDomainsRsp, error) {
 	return nil, errors.New("rpc ResolveDomains of service Proxy is not implemented")
 }
@@ -109,10 +102,8 @@ func (s *UnimplementedProxy) ResolveDomains(ctx context.Context, req *ResolveDom
 
 // ProxyClientProxy defines service client proxy
 type ProxyClientProxy interface {
-	// Do Do 发出一次 HTTPS 请求，把目标的响应原样返回。目标返回的 HTTP 错误（如 429、5xx）放在 status 里，
-	//  只有代理自身出错时才设置 ret_info。
 	Do(ctx context.Context, req *DoReq, opts ...client.Option) (rsp *DoRsp, err error)
-	// ResolveDomains ResolveDomains 解析白名单域名，返回经过 TCP 探测的 IPv4 地址，按连接延迟排序。
+
 	ResolveDomains(ctx context.Context, req *ResolveDomainsReq, opts ...client.Option) (rsp *ResolveDomainsRsp, err error)
 }
 

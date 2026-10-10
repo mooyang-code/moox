@@ -7,7 +7,6 @@ const (
 	CheckKindTCP      = "tcp"
 	CheckKindExternal = "external"
 
-	// CheckSourcePlacement 是按 SysDeploy 的部署生成的健康检查，ID 为 placement:<主机>:<组件>。
 	CheckSourcePlacement     = "placement"
 	CheckSourceObservability = "observability"
 )
@@ -20,6 +19,11 @@ type Check struct {
 	GroupName       string     `gorm:"column:c_group_name"`
 	Kind            string     `gorm:"column:c_kind"`
 	URL             string     `gorm:"column:c_url"`
+	ConnectAddress  string     `gorm:"column:c_connect_address"`
+	ServerName      string     `gorm:"column:c_server_name"`
+	TrustMode       string     `gorm:"column:c_trust_mode"`
+	CAFile          string     `gorm:"column:c_ca_file"`
+	CABaseline      string     `gorm:"column:c_ca_baseline"`
 	Method          string     `gorm:"column:c_method"`
 	Headers         string     `gorm:"column:c_headers"`
 	Body            string     `gorm:"column:c_body"`

@@ -48,8 +48,8 @@ func reporterReasonText(status string) string {
 		return "运行指标正常上报"
 	case "stale":
 		return "运行指标已中断：服务可能卡住、重启中，或无法连接消息总线"
-	case monitorobservability.ReporterNeverReported:
-		return "已登记的部署从未上报运行指标：服务可能未启动，或无法连接消息总线"
+	case "missing":
+		return "没有收到该服务的运行指标：服务可能未启动，或无法连接消息总线"
 	default:
 		return "还没有收到该服务的运行指标"
 	}

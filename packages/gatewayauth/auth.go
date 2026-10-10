@@ -18,7 +18,7 @@ import (
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
-const Version = "moox-host-gateway-auth-v1"
+const Version = "moox-gateway-auth-v1"
 
 const (
 	headerKeyID      = "X-Moox-Key-Id"
@@ -204,12 +204,6 @@ func escapedPath(req Request) (string, error) {
 	}
 	if err := ValidateTargetNode(req.TargetNode); err != nil {
 		return "", err
-	}
-	// 签名材料用换行拼接各个字段：callee、func 里的控制字符（尤其是换行）会让字段边界产生歧义。
-	for _, field := range []string{req.Callee, req.Func} {
-		if strings.ContainsFunc(field, unicode.IsControl) {
-			return "", errors.New("gateway callee and func must not contain control characters")
-		}
 	}
 	if req.Path == "" || !strings.HasPrefix(req.Path, "/") {
 		return "", errors.New("gateway request path must be absolute")

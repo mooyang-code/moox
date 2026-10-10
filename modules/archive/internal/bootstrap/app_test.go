@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	archivewriter "github.com/mooyang-code/moox/modules/archive/internal/writer"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	server "github.com/nats-io/nats-server/v2/server"
@@ -22,7 +21,6 @@ import (
 
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -238,12 +236,7 @@ func TestAppRunConsumesStorageEventAndBecomesReadyE2E(t *testing.T) {
 				cancel()
 				select {
 				case err := <-errCh:
-					// This ingress E2E intentionally has no Storage metadata RPC
-					// fixture. The delivery is already journaled and ACKed above;
-					// only the separate shutdown materialization step may fail.
-					if err != nil && !strings.Contains(err.Error(), "gateway target node is invalid") {
-						t.Fatalf("app.Run shutdown: %v", err)
-					}
+					require.NoError(t, err)
 				case <-time.After(10 * time.Second):
 					t.Fatal("app.Run did not stop after cancel")
 				}
@@ -298,17 +291,15 @@ func archiveTestConfig(t *testing.T, natsURL string) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
+	cfg.Archive.Sources = map[string]config.SourceConfig{"crypto": {Datasets: []string{"dataset_spot_kline_1h"}}}
 	cfg.Archive.RootDir = filepath.Join(dir, "archive")
 	cfg.Archive.StateDir = filepath.Join(dir, "state")
-	cfg.GatewayClient.KeyFile = filepath.Join(dir, "caller-archive.key")
-	cfg.GatewayClient.CacheDir = filepath.Join(dir, "gatewayclient")
-	key, err := gatewayauth.MarshalCallerKey(gatewayauth.CallerKey{Caller: "archive", KeyID: "archive-1", Secret: "archive-test-secret"})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfg.GatewayClient.KeyFile, key, 0o600))
+
 	cfg.Archive.EventBus.URLs = []string{natsURL}
 	cfg.Archive.EventBus.Consumer = fmt.Sprintf("archive_test_%d", time.Now().UnixNano())
 	cfg.Archive.Materialize.ShutdownTimeout = 5 * time.Second
 	cfg.Archive.COS.Enabled = false
+	installArchiveGatewayFixture(t, cfg, dir)
 	require.NoError(t, cfg.Validate())
 	return cfg
 }

@@ -29,16 +29,19 @@ server:
       port: 20102
       network: tcp
       protocol: trpc
+      transport: go-net
     - name: trpc.moox.storage.PrimaryStore
       ip: 127.0.0.1
       port: 20101
       network: tcp
       protocol: trpc
+      transport: go-net
     - name: trpc.moox.storage.DataNode
       ip: 127.0.0.1
       port: 20106
       network: tcp
       protocol: trpc
+      transport: go-net
     - name: trpc.moox.storage.Metadata.trpc
       ip: 127.0.0.1
       port: 20100

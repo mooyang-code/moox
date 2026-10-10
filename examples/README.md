@@ -4,17 +4,16 @@
 
 - `metadata.yaml`：A 股、加密货币和内部监控元数据。
 - `dataset-health-policy.yaml`：Monitor 的 Dataset 健康判定阈值。
+- `service-deployments.yaml`：Admin 服务部署清单。
 - `collection-tasks.yaml`：Collector 默认采集任务。
-
-主机与部署写在 `moox.toml` 的 `[hosts]` 和 `[placements]` 中，由 `moox-cli setup bootstrap`、`deploy-host`
-同步到 Admin，不在这个目录里。
 
 新系统使用 `moox-cli setup init` 读取这个固定目录，不需要逐个挑选 YAML：
 
 ```bash
 moox-cli setup init \
   --file ./moox.toml \
-  --config-dir ./config/setup
+  --config-dir ./config/setup \
+  --storage-host control
 ```
 
 行情样例在 [`data/kline/`](./data/kline/)，可执行端到端流程在

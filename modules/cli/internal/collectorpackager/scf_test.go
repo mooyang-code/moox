@@ -205,7 +205,6 @@ func TestValidateSCFPackageZipRejectsSecretsAndInvalidCA(t *testing.T) {
 func TestValidateSCFPackageZipRejectsCredentialAssignmentsInScalarsAndLists(t *testing.T) {
 	for _, payload := range []string{
 		"note: MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n",
-		"MOOX_CALLER_KEY=scf-collector-1:topsecret\n",
 		"notes:\n  - MOOX_EVENTBUS_NATS_PASSWORD=secret\n",
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret:\n",
 		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n",

@@ -1,12 +1,15 @@
 package bootstrap
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,22 +64,20 @@ type ReplayConfig struct {
 
 // Config 是 config/app.yaml 的结构。
 type Config struct {
+	// GatewayClient 是访问 Storage、FactorMgr 与 Trade 的 gatewayclient 配置（strategy 身份）。
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	// sourcePath 是读取的配置文件绝对路径：网关客户端的相对路径（密钥、目录缓存）以它为基准。
+	sourcePath string            `yaml:"-"`
 	Database   string            `yaml:"database"`
 	Trade      tradeowner.Config `yaml:"trade"`
 	InstanceID string            `yaml:"instance_id"`
 	EventBus   EventBusConfig    `yaml:"eventbus"`
-	// GatewayClient 是访问 Storage、FactorMgr 与 Trade 的 gatewayclient 配置（strategy 身份）；为空表示未接线，
-	// 此时只能管理定义，不能启用实例。
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	Factor        RPCConfig            `yaml:"factor"`
-	Storage       RPCConfig            `yaml:"storage"`
-	Evaluation    EvaluationConfig     `yaml:"evaluation"`
-	Retention     RetentionConfig      `yaml:"retention"`
-	Replay        ReplayConfig         `yaml:"replay"`
+	Factor     RPCConfig         `yaml:"factor"`
+	Storage    RPCConfig         `yaml:"storage"`
+	Evaluation EvaluationConfig  `yaml:"evaluation"`
+	Retention  RetentionConfig   `yaml:"retention"`
+	Replay     ReplayConfig      `yaml:"replay"`
 }
-
-// DependenciesConfigured 报告 Factor、Storage 与 Trade 的网关调用是否已接线。
-func (c Config) DependenciesConfigured() bool { return c.GatewayClient.Mode != "" }
 
 // Load 读取配置、套用环境变量覆盖与默认值并校验。
 func Load(path string) (Config, error) {
@@ -84,9 +85,26 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	var c Config
-	if err := yaml.Unmarshal(raw, &c); err != nil {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("解析策略配置路径失败：%w", err)
+	}
+	c := Config{sourcePath: absolute, GatewayClient: gatewayclient.FileConfig{Caller: "strategy", KeyFile: "../../secrets/caller-strategy.key"}}
+	// 严格解析：未知字段（例如已经删除的 gateway_url、target）直接报错，不静默忽略。
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&c); err != nil {
 		return Config{}, fmt.Errorf("解析策略配置失败：%w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return Config{}, errors.New("策略配置必须只包含一个 YAML 文档")
+	}
+	if c.GatewayClient.Caller != "strategy" {
+		return Config{}, errors.New("gateway_client.caller 必须是 strategy")
+	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return Config{}, err
 	}
 	if strings.TrimSpace(c.InstanceID) == "" {
 		c.InstanceID = "strategy-1"
@@ -133,17 +151,6 @@ func Load(path string) (Config, error) {
 	if c.Storage.ViewAppKey == "" {
 		if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")); secret != "" {
 			c.Storage.ViewAppKey = serviceAuthKey(secret, c.Storage.AppID)
-		}
-	}
-	if c.DependenciesConfigured() {
-		if err := c.GatewayClient.Validate(); err != nil {
-			return Config{}, err
-		}
-		if strings.TrimSpace(c.Storage.AppKey) == "" {
-			return Config{}, errors.New("配置了 gateway_client 时必须提供 storage 的 app_key（或设置 MOOX_STORAGE_PRIMARY_AUTH_SECRET）")
-		}
-		if strings.TrimSpace(c.Storage.ViewAppKey) == "" {
-			return Config{}, errors.New("配置了 gateway_client 时必须提供 storage 的 view_app_key（或设置 MOOX_STORAGE_VIEW_AUTH_SECRET）")
 		}
 	}
 	if c.Factor.Timeout == 0 {
@@ -194,6 +201,24 @@ func Load(path string) (Config, error) {
 		return Config{}, errors.New("replay 的 chunk_bars、page_size 与 missing_price_liquidate_bars 必须大于 0")
 	}
 	return c, nil
+}
+
+// OpenGateway 打开访问 Storage、FactorMgr 与 Trade 的网关客户端。部署身份与 Storage 的两把角色密钥都必须具备；
+// 只加载配置（Load）不读取签名密钥，也不访问目录。
+func (c Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c.sourcePath == "" {
+		return nil, errors.New("strategy 网关客户端需要先加载模块配置")
+	}
+	if c.GatewayClient.Caller != "strategy" {
+		return nil, errors.New("gateway_client.caller 必须是 strategy")
+	}
+	if strings.TrimSpace(c.Storage.AppKey) == "" {
+		return nil, errors.New("必须提供 storage 的 app_key（或设置 MOOX_STORAGE_PRIMARY_AUTH_SECRET）")
+	}
+	if strings.TrimSpace(c.Storage.ViewAppKey) == "" {
+		return nil, errors.New("必须提供 storage 的 view_app_key（或设置 MOOX_STORAGE_VIEW_AUTH_SECRET）")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database), onRefreshError)
 }
 
 func serviceAuthKey(secret, appID string) string {

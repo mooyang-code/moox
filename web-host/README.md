@@ -46,7 +46,7 @@ web-host/
 - `make clean` - 清理构建产物
 - `make deps` - 下载和整理依赖
 - `make lint` - `go vet ./...`
-- `make deploy` - 按 `moox.toml` 的部署表重新部署 web-host（`moox-cli setup deploy-service --component web-host`）
+- `make deploy SERVER=user@host` - 通过 `scripts/deploy/deploy-moox.sh` 发布 web-host
 
 ## 开发流程
 
@@ -55,16 +55,18 @@ web-host/
 3. 再运行 `make build`
 4. 生成在仓库根目录的 `bin/moox-web-host` 二进制文件包含了所有前端资源
 
-部署命令使用当前已嵌入的静态资源，所以前端更新后要先完成前两步，再部署：
+仓库发布脚本默认会重新构建前端并生成 statik 资源：
 
 ```bash
 cd ..
-moox-cli setup deploy-service --component web-host
+./scripts/deploy/deploy-moox.sh --target user@host --build-web-assets
 ```
 
 ## API 访问方式
 
-Web Host 只负责提供前端静态资源，不代理 API 请求。浏览器只访问控制台代理（Caddy）`https://{当前hostname}:9527`：页面请求转发到 web-host `127.0.0.1:9528`，`/api/admin/*` 转发到管理后台的控制台 API `127.0.0.1:11000`。浏览器不直连其他服务。
+Web Host 只负责提供前端静态资源，不代理 API 请求。浏览器只访问 Caddy `https://{当前hostname}:9527`：站点路由由 Caddy 转发到 web-host `127.0.0.1:9528`，`/api/admin/*` 由 Caddy 转发到 Admin control `127.0.0.1:11000`。浏览器不直连 Admin，前端代码禁止调用 `/api/service/*`。
+
+后台/SCF 使用独立 Caddy service edge `https://<host>:11001/api/service/*`，携带 service HMAC 并验证 Caddy CA；流量不经过 web-host 或 browser edge。
 
 `web-host` 收到 `/api/*` 请求会返回 404，用于暴露错误的代理依赖。
 

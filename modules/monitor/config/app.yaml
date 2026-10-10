@@ -1,12 +1,9 @@
-# MooX Monitor service configuration.
-
-# Monitor 访问 Storage 等组件统一经本机主机网关
 gateway_client:
-  mode: local
   caller: monitor
-  key_file: ../secrets/caller-monitor.key
-  ca_file: ../certs/moox-ca.crt
-  cache_dir: ./data/monitor/gatewayclient
+  key_id: ""
+  key_file: ../../secrets/caller-monitor.key
+
+# MooX Monitor service configuration.
 
 database:
   type: sqlite
@@ -29,9 +26,11 @@ scheduler:
   result_retention_days: 14
   max_concurrency: 16
 
-# 按 SysDeploy 的部署（placement:<主机>:<组件>）生成健康检查，探测方式取自组件目录。
-placement_checks:
+placement:
   enabled: true
+  # 部署工具按实际入口生成 console-proxy 的 HTTPS 页面探测配置。
+  # internal 同时提供 ca_file 与经过部署核验的 ca_baseline；public 使用系统信任。
+  https: {}
 
 alert:
   send_timeout_seconds: 10
@@ -90,7 +89,6 @@ metrics:
   dataset_health_policy_path: ../../config/setup/dataset-health-policy.yaml
   no_data_intervals: 2
   storage:
-    app_id: monitor
     space_id: mooxsys
     dataset_id: dataset_mooxsys_service_metrics
     frequency: 30s
@@ -98,7 +96,6 @@ metrics:
     write_batch_size: 1000
   host_storage:
     enabled: true
-    app_id: monitor
     space_id: mooxsys
     frequency: 1m
     write_timeout: 5s

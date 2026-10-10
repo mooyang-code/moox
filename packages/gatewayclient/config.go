@@ -3,180 +3,158 @@ package gatewayclient
 import (
 	"errors"
 	"fmt"
-	"net"
-	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 )
 
-// Mode 是 gatewayclient 的使用方式（设计文档 3.6）。
-type Mode string
-
-const (
-	// ModeLocal 供 MooX 主机上的组件使用：从本机主机网关取服务目录，本机目标走 127.0.0.1:11002，
-	// 其他主机走 <主机>:11003（TLS，校验 MooX 私有 CA）。
-	ModeLocal Mode = "local"
-	// ModeAccess 供外部调用方使用：所有请求发往固定的外部接入，明文 + 签名，没有服务目录。
-	ModeAccess Mode = "access"
-	// ModeTunnel 供 moox-cli 使用：经 SSH 隧道从 control 取服务目录，再经隧道连目标主机的 127.0.0.1:11002。
-	ModeTunnel Mode = "tunnel"
-)
-
-const (
-	// DefaultLocalAddress 是本机主机网关的本机入口。
-	DefaultLocalAddress = "127.0.0.1:11002"
-	// RemotePort 是主机网关的跨主机入口端口。
-	RemotePort = "11003"
-)
-
-// 外部调用方（SCF）的环境变量，由 Collector 经 CloudNode 写入函数配置。
-const (
-	EnvAccessAddress = "MOOX_ACCESS_ADDRESS"
-	EnvAccessID      = "MOOX_ACCESS_ID"
-	EnvCaller        = "MOOX_CALLER"
-	EnvCallerKey     = "MOOX_CALLER_KEY"
-)
-
-// Config 是各模块 config/app.yaml 中的 gateway_client 段。
-type Config struct {
-	Mode   Mode   `yaml:"mode"`
-	Caller string `yaml:"caller"`
-	// KeyFile 是调用方签名密钥文件（JSON，0600）。
+// FileConfig contains a caller's public identity and private key location.
+// KeyID is assigned by Admin; it is independent from the caller name.
+type FileConfig struct {
+	Caller  string `yaml:"caller"`
+	KeyID   string `yaml:"key_id"`
 	KeyFile string `yaml:"key_file"`
-	// CAFile 是 MooX 私有 CA 证书，内部方式跨主机调用时校验主机网关。
-	CAFile string `yaml:"ca_file"`
-	// CacheDir 是服务目录的落盘缓存目录，内部方式使用。
-	CacheDir string `yaml:"cache_dir"`
-	// LocalAddress 是本机主机网关的本机入口，默认 127.0.0.1:11002。
-	LocalAddress string `yaml:"local_address"`
-	// AccessAddress、AccessID 是外部方式固定使用的外部接入地址和实例 ID（access@<主机>）。
-	AccessAddress string `yaml:"access_address"`
-	AccessID      string `yaml:"access_id"`
 }
 
-// Validate 按使用方式检查必填项。
-func (c Config) Validate() error {
-	if strings.TrimSpace(c.Caller) == "" {
-		return errors.New("gateway_client.caller 不能为空")
-	}
-	switch c.Mode {
-	case ModeLocal:
-		if err := validateCAFileValue(c.CAFile); err != nil {
-			return err
-		}
-		if strings.TrimSpace(c.CacheDir) == "" {
-			return errors.New("内部方式必须配置 gateway_client.cache_dir")
-		}
-		if c.LocalAddress != "" {
-			if err := validateLoopbackAddress(c.LocalAddress); err != nil {
-				return fmt.Errorf("gateway_client.local_address: %w", err)
-			}
-		}
-		if c.AccessAddress != "" || c.AccessID != "" {
-			return errors.New("内部方式不能配置 access_address、access_id")
-		}
-	case ModeAccess:
-		if _, _, err := net.SplitHostPort(strings.TrimSpace(c.AccessAddress)); err != nil {
-			return fmt.Errorf("外部方式必须配置合法的 gateway_client.access_address: %w", err)
-		}
-		if err := ValidateAccessID(c.AccessID); err != nil {
-			return err
-		}
-	case ModeTunnel:
-		if c.AccessAddress != "" || c.AccessID != "" {
-			return errors.New("隧道方式不能配置 access_address、access_id")
-		}
-	default:
-		return fmt.Errorf("gateway_client.mode %q 无效，可选 local、access、tunnel", c.Mode)
-	}
-	return nil
+// ExternalFileConfig selects one fixed Access instance, without directory
+// discovery or host gateway configuration. Credentials belong to an external
+// principal; KeyID is assigned by Admin independently from Caller.
+type ExternalFileConfig struct {
+	Address    string `yaml:"access_address"`
+	InstanceID string `yaml:"access_id"`
+	Caller     string `yaml:"caller"`
+	KeyID      string `yaml:"key_id"`
+	KeyFile    string `yaml:"key_file"`
 }
 
-// validateCAFileValue 要求 ca_file 是一个真实的证书文件路径。tRPC 把字面值 none 当作"不校验服务端证书"、root 当作
-// "使用系统根证书"、用冒号分隔的列表当作多个信任根，这些都会绕过"只信任 MooX 私有 CA"，所以一律拒绝。
-func validateCAFileValue(value string) error {
-	value = strings.TrimSpace(value)
-	switch {
-	case value == "":
-		return errors.New("内部方式必须配置 gateway_client.ca_file")
-	case value == "none" || value == "root":
-		return fmt.Errorf("gateway_client.ca_file 不能是 %q，必须是 MooX 私有 CA 证书文件的路径", value)
-	case strings.Contains(value, ":"):
-		return errors.New("gateway_client.ca_file 只能是一个证书文件的路径")
-	}
-	return nil
-}
-
-// ResolvePaths 返回把 key_file、ca_file、cache_dir 解析后的配置：开头的 ~/ 展开为用户主目录，
-// 其余相对路径按 base 解析；base 为空时相对路径保持不变，即按进程工作目录解析。
-func (c Config) ResolvePaths(base string) (Config, error) {
-	for _, path := range []*string{&c.KeyFile, &c.CAFile, &c.CacheDir} {
-		resolved, err := resolvePath(base, *path)
-		if err != nil {
-			return Config{}, err
-		}
-		*path = resolved
-	}
-	return c, nil
-}
-
-func resolvePath(base, path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return "", nil
-	}
-	if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("展开 %s: %w", path, err)
-		}
-		return filepath.Join(home, rest), nil
-	}
-	if base == "" || filepath.IsAbs(path) {
-		return path, nil
-	}
-	return filepath.Join(base, path), nil
-}
-
-// ValidateAccessID 检查外部接入实例 ID 的格式：access@<主机 ID>。
-func ValidateAccessID(id string) error {
-	host, ok := strings.CutPrefix(strings.TrimSpace(id), "access@")
-	if !ok || host == "" || strings.ContainsAny(host, "@ \t") {
-		return fmt.Errorf("外部接入实例 ID %q 必须是 access@<主机 ID>", id)
-	}
-	return nil
-}
-
-// AccessConfigFromEnv 从 SCF 环境变量组装外部方式的配置和签名凭据。
-func AccessConfigFromEnv() (Config, gatewayauth.Credentials, error) {
-	config := Config{
-		Mode:          ModeAccess,
-		Caller:        strings.TrimSpace(os.Getenv(EnvCaller)),
-		AccessAddress: strings.TrimSpace(os.Getenv(EnvAccessAddress)),
-		AccessID:      strings.TrimSpace(os.Getenv(EnvAccessID)),
-	}
-	if err := config.Validate(); err != nil {
-		return Config{}, gatewayauth.Credentials{}, fmt.Errorf("外部接入环境变量不完整: %w", err)
-	}
-	credentials, err := gatewayauth.ParseCallerKeyValue(config.Caller, os.Getenv(EnvCallerKey))
-	if err != nil {
-		return Config{}, gatewayauth.Credentials{}, fmt.Errorf("%s: %w", EnvCallerKey, err)
-	}
-	return config, credentials, nil
-}
-
-func validateLoopbackAddress(address string) error {
-	host, port, err := net.SplitHostPort(address)
+// Validate checks the public configuration without opening private files.
+// An unset KeyID permits offline commands; OpenInternal requires it.
+func (c FileConfig) Validate() error {
+	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
 	}
-	if port == "" {
-		return errors.New("缺少端口")
+	component, ok := catalog.Component(c.Caller)
+	if !ok || component.ID == "host-gateway" {
+		return errors.New("gateway_client.caller must identify an internal component")
 	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("%q 不是本机回环地址", host)
+	return validateCredentialFile(c.KeyID, c.KeyFile, false)
+}
+
+func validateCredentialFile(keyID, keyFile string, required bool) error {
+	if required && keyID == "" {
+		return errors.New("gateway_client.key_id is required")
+	}
+	if len(keyID) > 128 || strings.ContainsAny(keyID, "/\\") || strings.ContainsFunc(keyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return errors.New("gateway_client.key_id must be a bounded credential identifier")
+	}
+	if keyFile == "" || keyFile != strings.TrimSpace(keyFile) || strings.ContainsAny(keyFile, "\x00\r\n") {
+		return errors.New("gateway_client.key_file is required")
 	}
 	return nil
+}
+
+// Validate checks public fields without reading the signing key. External
+// clients require their assigned KeyID even before opening a connection.
+func (c ExternalFileConfig) Validate() error {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	if err := validateExternalIdentity(catalog, c.Caller, c.Address, c.InstanceID); err != nil {
+		return err
+	}
+	return validateCredentialFile(c.KeyID, c.KeyFile, true)
+}
+
+func validateExternalIdentity(catalog servicecatalog.Catalog, caller, address, instanceID string) error {
+	if !validAddress(address) || !strings.HasPrefix(instanceID, "access@") || !hostID.MatchString(strings.TrimPrefix(instanceID, "access@")) {
+		return errors.New("external client requires an access address and access@host instance ID")
+	}
+	for _, principal := range catalog.Principals {
+		if principal.ID == caller {
+			return nil
+		}
+	}
+	return errors.New("unknown external principal")
+}
+
+func fileCredentials(configPath, caller, keyID, keyFile string) (gatewayauth.Credentials, error) {
+	keyPath := keyFile
+	if !filepath.IsAbs(keyPath) {
+		keyPath = filepath.Join(filepath.Dir(configPath), keyPath)
+	}
+	secret, err := gatewayauth.ReadSigningSecret(keyPath)
+	if err != nil {
+		return gatewayauth.Credentials{}, fmt.Errorf("load gateway signing key: %w", err)
+	}
+	return gatewayauth.Credentials{Caller: caller, KeyID: keyID, Secret: secret}, nil
+}
+
+// OpenExternal resolves key_file relative to the component configuration and
+// owns the resulting client's connections. It never reads environment values,
+// local host configuration, a directory cache, or SSH settings. The caller
+// must close the client at the end of the process or invocation.
+func (c ExternalFileConfig) OpenExternal(moduleConfigPath string) (*Client, error) {
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	if moduleConfigPath == "" {
+		return nil, errors.New("external gateway client requires a configuration path")
+	}
+	configPath, err := filepath.Abs(moduleConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	credentials, err := fileCredentials(configPath, c.Caller, c.KeyID, c.KeyFile)
+	if err != nil {
+		return nil, err
+	}
+	return New(Config{Mode: External, Credentials: credentials, AccessAddress: c.Address, AccessInstanceID: c.InstanceID})
+}
+
+// OpenInternal uses the canonical release layout: <root>/<module>/config/app.yaml
+// and <root>/host-gateway/config/app.yaml. Host identity, loopback address and CA
+// come from the host gateway configuration. The key path is relative to the
+// module configuration; the directory cache belongs to the module data directory.
+func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefreshError func(error)) (*Client, error) {
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	if c.KeyID == "" || moduleConfigPath == "" || dataDirectory == "" {
+		return nil, errors.New("gateway client requires key_id, module configuration path and data directory")
+	}
+	configPath, err := filepath.Abs(moduleConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	credentials, err := fileCredentials(configPath, c.Caller, c.KeyID, c.KeyFile)
+	if err != nil {
+		return nil, err
+	}
+	hostPath := filepath.Join(filepath.Dir(configPath), "..", "..", "host-gateway", "config", "app.yaml")
+	// Business units may live on a different mount and expose the independently
+	// installed host unit through a directory symlink. Relative CA paths belong
+	// to that host unit, rather than to the business release containing the view.
+	hostPath, err = filepath.EvalSymlinks(hostPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve local host gateway configuration: %w", err)
+	}
+	host, err := hostgatewayconfig.Load(hostPath)
+	if err != nil {
+		return nil, fmt.Errorf("load local host gateway configuration: %w", err)
+	}
+	cachePath, err := filepath.Abs(filepath.Join(dataDirectory, "gatewayclient", "directory.json"))
+	if err != nil {
+		return nil, err
+	}
+	return New(Config{
+		Mode: Internal, Credentials: credentials,
+		LocalHostID: host.Host.ID, LocalAddress: host.Server.LocalAddr, CAFile: host.TLS.CAFile,
+		CachePath: cachePath, OnRefreshError: onRefreshError,
+	})
 }

@@ -15,9 +15,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-// adminCaller 是 Admin 内部任务（例如每日垃圾回收）调用其他组件时的调用方身份，即 Admin 的组件 ID。
-const adminCaller = "admin"
-
 // Initialize 初始化应用
 // 这是应用启动的统一入口，完成所有初始化工作
 func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
@@ -36,6 +33,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "启动后台服务失败: %v", err)
 		return nil, err
 	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			services.closeGateways()
+		}
+	}()
 
 	// 3. 注册TRPC服务
 	if err := RegisterTRPCServices(s, cfg, services); err != nil {
@@ -49,21 +52,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.Placements)); err != nil {
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB())); err != nil {
 		return nil, err
 	}
-	// Admin 内部任务以 admin 身份调用其他组件；没有配置 admin_key_file 时只清理 Admin 自己的历史。
-	adminGateway, err := newGatewayClient(cfg.App.GatewayClient, adminCaller, cfg.App.GatewayClient.AdminKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("创建 admin 身份的 gatewayclient: %w", err)
-	}
-	var cloudNode garbage.CloudNodeGarbage
-	if adminGateway != nil {
-		cloudNode = adminGateway
-	} else {
-		log.Warn("没有配置 gateway_client.admin_key_file：每日垃圾回收不会清理 CloudNode")
-	}
-	collector, err := garbage.NewCollector(services.DBManager.GetDB(), cloudNode)
+	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.machineGateway)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +68,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")
+	s.RegisterOnShutdown(services.closeGateways)
+	initialized = true
 	return s, nil
 }
 
@@ -148,9 +142,19 @@ func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch 
 	if service == nil {
 		return fmt.Errorf("certificate watch timer service %q is not configured", certificateWatchTimerService)
 	}
-	if err := watch.Validate(ctx); err != nil {
+	job, err := timerjob.New("admin_certificate_watch", certificateWatchTimeout, watch.Validate)
+	if err != nil {
 		return err
 	}
-	timer.RegisterHandlerService(service, watch.Validate)
+	// Other registered hosts may not have completed their first deployment yet.
+	// Report findings while allowing the control plane to start so deployment
+	// and certificate renewal can proceed.
+	if err := job.Handle(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.WarnContextf(ctx, "initial certificate watch reported a problem: %v", err)
+	}
+	timer.RegisterHandlerService(service, job.Handle)
 	return nil
 }

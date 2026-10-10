@@ -63,8 +63,7 @@ type DatasetSource struct {
 }
 
 // GetTag loads the tag definition when the backing metadata client exposes the
-// catalog API. It is intentionally an optional capability so older test and
-// embedded metadata clients can continue to provide dataset subject expansion.
+// catalog API. Small planner fixtures may provide only subject expansion.
 func (s *DatasetSource) GetTag(ctx context.Context, spaceID, tagID string) (*storagepb.Tag, error) {
 	client, ok := s.metadata.(tagMetadataClient)
 	if !ok {
@@ -174,9 +173,7 @@ func (s *DatasetSource) ResolveSubjects(ctx context.Context, spaceID string, tag
 	return items, nil
 }
 
-// ListSubjects is retained as a compatibility adapter for the resample
-// planner. It derives the list from the Dataset's tags and never reads a
-// source-side symbol mapping.
+// ListSubjects derives the resample planner input from Dataset tags.
 func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID, datasetID, _ string) ([]domain.DatasetSubject, error) {
 	dataset, err := s.GetDataset(ctx, spaceID, datasetID)
 	if err != nil {
@@ -201,9 +198,10 @@ func (s *DatasetSource) ListResampleSubjectsForTask(ctx context.Context, spaceID
 	return s.ListSubjects(ctx, spaceID, datasetID, "")
 }
 
-// NewDatasetSource 创建经给定 tRPC 客户端选项（gatewayclient）访问 Storage Metadata 的数据集来源。
-func NewDatasetSource(options []client.Option) *DatasetSource {
-	return &DatasetSource{metadata: storagepb.NewMetadataClientProxy(options...)}
+// NewDatasetSource uses the caller-owned Metadata adapter. Routing, cancellation
+// and read retries are handled by the shared gateway client.
+func NewDatasetSource(metadata metadataClient) *DatasetSource {
+	return &DatasetSource{metadata: metadata}
 }
 
 func ensureStorageOK(action string, ret *storagepb.RetInfo) error {

@@ -24,12 +24,12 @@ describe("shared collector task instances", () => {
     const template = document.querySelector("template") as HTMLTemplateElement;
     const table = template.content.querySelector("a-table")!;
     const columns = table.querySelector("template") as HTMLTemplateElement;
-    const widths = Array.from(columns.content.querySelectorAll("a-table-column"), (column) =>
-      Number(column.getAttribute(":width")),
+    const widths = Array.from(columns.content.querySelectorAll("a-table-column"), column =>
+      Number(column.getAttribute(":width"))
     );
 
     expect(widths).toHaveLength(11);
-    expect(widths.every((width) => Number.isFinite(width) && width > 0)).toBe(true);
+    expect(widths.every(width => Number.isFinite(width) && width > 0)).toBe(true);
     const totalWidth = widths.reduce((total, width) => total + width, 0);
     expect(totalWidth).toBe(1600);
     expect(table.getAttribute(":scroll")).toBe(`{ x: ${totalWidth} }`);

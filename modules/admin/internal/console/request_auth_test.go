@@ -68,7 +68,7 @@ func setupRequestAuthTest(t *testing.T) (*fakeRequestAuthStore, string, string, 
 	require.NoError(t, err)
 	store := &fakeRequestAuthStore{sessions: map[string]authmodel.RequestSigningSession{sid: {SessionID: sid, UserID: "u1", EncryptedSecret: encrypted, ExpiresAt: time.Now().Add(time.Hour)}}, nonces: map[string]bool{}, tickets: map[string]authmodel.RawSessionTicket{}}
 	SetRequestAuthStore(store)
-	SetConfig(&Config{JWT: JWTConfig{SecretKey: secret}, Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetLoginSalt", "/api/admin/auth/Login"}}})
+	SetConfig(&Config{JWT: JWTConfig{SecretKey: secret}, Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/auth/GetLoginSalt", "/api/admin/auth/Login"}}})
 	return store, secret, key, sid
 }
 

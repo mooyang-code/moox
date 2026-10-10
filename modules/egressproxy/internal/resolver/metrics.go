@@ -6,7 +6,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics 记录 DNS 解析的健康状况，不放进 RPC 响应。可选：单元测试不需要 Prometheus。
+// Metrics exposes resolver health without putting resolver internals into the
+// RPC payload. It is optional so unit tests and disabled local egress installations
+// do not need a Prometheus registry.
 type Metrics struct {
 	Requests       prometheus.Counter
 	Failures       prometheus.Counter
@@ -16,40 +18,41 @@ type Metrics struct {
 	ProbeDuration  prometheus.Histogram
 }
 
-// NewMetrics 创建并注册出口代理的 DNS 解析指标。
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	if registerer == nil {
 		registerer = prometheus.DefaultRegisterer
 	}
 	m := &Metrics{
 		Requests: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "moox_egress_dns_requests_total",
-			Help: "出口代理收到的 ResolveDomains 请求数。",
+			Name: "moox_egress_dns_resolver_requests_total",
+			Help: "DNS resolver RPC requests received by the egress proxy.",
 		}),
 		Failures: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "moox_egress_dns_failures_total",
-			Help: "整个请求失败的 ResolveDomains 次数。",
+			Name: "moox_egress_dns_resolver_failures_total",
+			Help: "DNS resolver request-level failures.",
 		}),
 		Unresolved: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "moox_egress_dns_unresolved_domains_total",
-			Help: "没有得到可用地址的域名数。",
+			Name: "moox_egress_dns_resolver_unresolved_domains_total",
+			Help: "Configured domains that could not produce a usable IP.",
 		}),
 		ProbeFailures: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "moox_egress_dns_probe_failures_total",
-			Help: "候选地址 TCP 探测失败的次数。",
+			Name: "moox_egress_dns_resolver_probe_failures_total",
+			Help: "Candidate IP TCP probe failures.",
 		}),
 		LookupDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "moox_egress_dns_lookup_duration_seconds",
-			Help: "出口代理所在主机上的 DNS 查询耗时。",
+			Name: "moox_egress_dns_resolver_lookup_duration_seconds",
+			Help: "DNS lookup duration at the egress proxy.",
 		}),
 		ProbeDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "moox_egress_dns_probe_duration_seconds",
-			Help: "一批候选地址 TCP 探测的耗时。",
+			Name: "moox_egress_dns_resolver_probe_duration_seconds",
+			Help: "TCP probe batch duration at the egress proxy.",
 		}),
 	}
-	for _, collector := range []prometheus.Collector{
-		m.Requests, m.Failures, m.Unresolved, m.ProbeFailures, m.LookupDuration, m.ProbeDuration,
-	} {
+	collectors := []prometheus.Collector{
+		m.Requests, m.Failures, m.Unresolved, m.ProbeFailures,
+		m.LookupDuration, m.ProbeDuration,
+	}
+	for _, collector := range collectors {
 		if err := registerer.Register(collector); err != nil {
 			return nil, err
 		}

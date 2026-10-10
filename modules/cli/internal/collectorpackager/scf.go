@@ -212,10 +212,10 @@ func ValidateSCFPackageZip(zipPath string) error {
 }
 
 var scfBinaryPrivateMaterial = regexp.MustCompile(`-----BEGIN (?:(?:[A-Z0-9]+ )?PRIVATE KEY|NATS USER JWT|USER NKEY SEED)-----[\r\n]`)
-var scfBinaryCredentialAssignment = regexp.MustCompile(`(?mi)(?:^|[\x00\r\n])[ \t]*(?:MOOX_STORAGE_PRIMARY_AUTH_SECRET|MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON|MOOX_EVENTBUS_NATS_PASSWORD|MOOX_CALLER_KEY|TENCENTCLOUD_SECRET_KEY|TENCENT_SECRET_KEY)[ \t]*[:=][ \t]*[^\x00\r\n \t]`)
+var scfBinaryCredentialAssignment = regexp.MustCompile(`(?mi)(?:^|[\x00\r\n])[ \t]*(?:MOOX_STORAGE_PRIMARY_AUTH_SECRET|MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON|MOOX_EVENTBUS_NATS_PASSWORD|MOOX_GATEWAY_SERVICE_SECRET_KEY|MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY|TENCENTCLOUD_SECRET_KEY|TENCENT_SECRET_KEY)[ \t]*[:=][ \t]*[^\x00\r\n \t]`)
 var scfYAMLNATSPrivateMaterial = regexp.MustCompile(`(?i)-----BEGIN (?:NATS USER JWT|USER NKEY SEED)-----`)
-var scfYAMLCredentialAssignment = regexp.MustCompile(`(?im)(^|[^A-Za-z0-9_])["']?(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY|CALLER_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))["']?[ \t]*[:=][ \t]*`)
-var scfYAMLCredentialEnvironmentName = regexp.MustCompile(`(?i)^(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY|CALLER_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))$`)
+var scfYAMLCredentialAssignment = regexp.MustCompile(`(?im)(^|[^A-Za-z0-9_])["']?(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))["']?[ \t]*[:=][ \t]*`)
+var scfYAMLCredentialEnvironmentName = regexp.MustCompile(`(?i)^(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))$`)
 
 func validateSCFMain(file *zip.File) error {
 	if !file.Mode().IsRegular() || file.Mode().Perm()&0o111 == 0 {

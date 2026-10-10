@@ -1,5 +1,3 @@
-// Package publishlease 是 CloudNode 调用 Admin 发布租约服务的客户端：校验 Collector 发布租约、认领发布操作，
-// 以及恢复任务自己申请的租约。经 gatewayclient 以 cloudnode 身份发送 tRPC 请求。
 package publishlease
 
 import (
@@ -9,7 +7,8 @@ import (
 	"strings"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -28,58 +27,35 @@ type Validator interface {
 	Validate(context.Context, string, string, int64) error
 }
 
-// leaseAPI 是 CloudNode 用到的 CollectorPublishLease 方法。
-type leaseAPI interface {
-	ValidateCollectorPublishLease(context.Context, *adminpb.ValidateCollectorPublishLeaseReq, ...client.Option) (*adminpb.ValidateCollectorPublishLeaseRsp, error)
-	BeginCollectorPublishOperation(context.Context, *adminpb.BeginCollectorPublishOperationReq, ...client.Option) (*adminpb.CollectorPublishOperationRsp, error)
-	RenewCollectorPublishOperation(context.Context, *adminpb.CollectorPublishOperationReq, ...client.Option) (*adminpb.CollectorPublishOperationRsp, error)
-	EndCollectorPublishOperation(context.Context, *adminpb.CollectorPublishOperationReq, ...client.Option) (*adminpb.CollectorPublishOperationRsp, error)
-	AcquireCollectorPublishLease(context.Context, *adminpb.AcquireCollectorPublishLeaseReq, ...client.Option) (*adminpb.CollectorPublishLeaseRsp, error)
-	RenewCollectorPublishLease(context.Context, *adminpb.RenewCollectorPublishLeaseReq, ...client.Option) (*adminpb.CollectorPublishLeaseRsp, error)
-	ReleaseCollectorPublishLease(context.Context, *adminpb.ReleaseCollectorPublishLeaseReq, ...client.Option) (*adminpb.ReleaseCollectorPublishLeaseRsp, error)
-}
+// Client borrows CloudNode's process gateway. Mutations are sent once.
+type Client struct{ gateway gatewayclient.Invoker }
 
-type Client struct {
-	api leaseAPI
-}
-
-// New 用给定的 tRPC 客户端选项（gatewayclient）创建客户端。
-func New(options []client.Option) *Client {
-	return &Client{api: adminpb.NewCollectorPublishLeaseClientProxy(options...)}
-}
-
-func (c *Client) ready() error {
-	if c == nil || c.api == nil {
-		return fmt.Errorf("collector publish lease validator is unavailable")
-	}
-	return nil
-}
+func New(gateway gatewayclient.Invoker) *Client { return &Client{gateway: gateway} }
 
 func (c *Client) Validate(ctx context.Context, spaceID, leaseID string, fencingToken int64) error {
-	if err := c.ready(); err != nil {
-		return err
-	}
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(leaseID) == "" || fencingToken < 1 {
 		return fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	result, err := c.api.ValidateCollectorPublishLease(ctx, &adminpb.ValidateCollectorPublishLeaseReq{SpaceId: spaceID, LeaseId: leaseID, FencingToken: fencingToken})
-	if err != nil {
-		return fmt.Errorf("send collector publish lease validation: %w", err)
+	var response adminpb.ValidateCollectorPublishLeaseRsp
+	if err := c.invoke(ctx, spaceID, "ValidateCollectorPublishLease", &adminpb.ValidateCollectorPublishLeaseReq{
+		SpaceId: spaceID, LeaseId: leaseID, FencingToken: fencingToken,
+	}, &response); err != nil {
+		return err
 	}
-	if result.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || !result.GetValid() || result.GetCurrentFencingToken() != fencingToken {
-		return fmt.Errorf("collector publish lease is no longer current")
+	if err := leaseResponseError(response.GetRetInfo()); err != nil {
+		return err
+	}
+	if !response.GetValid() || response.GetCurrentFencingToken() != fencingToken {
+		return ErrLeaseStale
 	}
 	return nil
 }
 
 func (c *Client) BeginOperation(ctx context.Context, spaceID, leaseID string, fencingToken int64, operationID string) error {
-	if err := c.ready(); err != nil {
-		return err
-	}
-	response, err := c.api.BeginCollectorPublishOperation(ctx, &adminpb.BeginCollectorPublishOperationReq{
+	var response adminpb.CollectorPublishOperationRsp
+	if err := c.operation(ctx, spaceID, "BeginCollectorPublishOperation", &adminpb.BeginCollectorPublishOperationReq{
 		SpaceId: spaceID, LeaseId: leaseID, FencingToken: fencingToken, OperationId: operationID,
-	})
-	if err := operationError(response, err); err != nil {
+	}, &response); err != nil {
 		return err
 	}
 	if !response.GetActive() {
@@ -89,11 +65,10 @@ func (c *Client) BeginOperation(ctx context.Context, spaceID, leaseID string, fe
 }
 
 func (c *Client) RenewOperation(ctx context.Context, spaceID, operationID string, fencingToken int64) error {
-	if err := c.ready(); err != nil {
-		return err
-	}
-	response, err := c.api.RenewCollectorPublishOperation(ctx, &adminpb.CollectorPublishOperationReq{SpaceId: spaceID, OperationId: operationID, FencingToken: fencingToken})
-	if err := operationError(response, err); err != nil {
+	var response adminpb.CollectorPublishOperationRsp
+	if err := c.operation(ctx, spaceID, "RenewCollectorPublishOperation", &adminpb.CollectorPublishOperationReq{
+		SpaceId: spaceID, OperationId: operationID, FencingToken: fencingToken,
+	}, &response); err != nil {
 		return err
 	}
 	if !response.GetActive() {
@@ -103,75 +78,80 @@ func (c *Client) RenewOperation(ctx context.Context, spaceID, operationID string
 }
 
 func (c *Client) EndOperation(ctx context.Context, spaceID, operationID string, fencingToken int64) error {
-	if err := c.ready(); err != nil {
-		return err
-	}
-	response, err := c.api.EndCollectorPublishOperation(ctx, &adminpb.CollectorPublishOperationReq{SpaceId: spaceID, OperationId: operationID, FencingToken: fencingToken})
-	return operationError(response, err)
-}
-
-func operationError(response *adminpb.CollectorPublishOperationRsp, err error) error {
-	if err != nil {
-		return fmt.Errorf("send collector publish lease request: %w", err)
-	}
-	return leaseResponseError(response.GetRetInfo())
+	var response adminpb.CollectorPublishOperationRsp
+	return c.operation(ctx, spaceID, "EndCollectorPublishOperation", &adminpb.CollectorPublishOperationReq{
+		SpaceId: spaceID, OperationId: operationID, FencingToken: fencingToken,
+	}, &response)
 }
 
 func (c *Client) AcquireLease(ctx context.Context, spaceID, holderID string, expectedFencingToken int64) (*Lease, error) {
-	if err := c.ready(); err != nil {
+	var response adminpb.CollectorPublishLeaseRsp
+	if err := c.invoke(ctx, spaceID, "AcquireCollectorPublishLease", &adminpb.AcquireCollectorPublishLeaseReq{
+		SpaceId: spaceID, HolderId: holderID, ExpectedFencingToken: expectedFencingToken,
+	}, &response); err != nil {
 		return nil, err
-	}
-	response, err := c.api.AcquireCollectorPublishLease(ctx, &adminpb.AcquireCollectorPublishLeaseReq{SpaceId: spaceID, HolderId: holderID, ExpectedFencingToken: expectedFencingToken})
-	if err != nil {
-		return nil, fmt.Errorf("send collector publish lease acquisition: %w", err)
 	}
 	if err := leaseResponseError(response.GetRetInfo()); err != nil {
 		return nil, err
 	}
-	if response.GetSpaceId() == "" || response.GetLeaseId() == "" || response.GetFencingToken() < 1 {
-		return nil, fmt.Errorf("collector publish lease acquisition returned an incomplete lease")
+	if response.GetSpaceId() != spaceID || spaceID == "" || response.GetLeaseId() == "" || response.GetFencingToken() < 1 {
+		return nil, fmt.Errorf("collector publish lease acquisition returned an incomplete or inconsistent lease")
 	}
-	return &Lease{SpaceID: response.GetSpaceId(), LeaseID: response.GetLeaseId(), FencingToken: response.GetFencingToken()}, nil
+	return &Lease{SpaceID: spaceID, LeaseID: response.GetLeaseId(), FencingToken: response.GetFencingToken()}, nil
 }
 
 func (c *Client) RenewLease(ctx context.Context, lease *Lease) error {
-	if err := c.ready(); err != nil {
-		return err
-	}
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	response, err := c.api.RenewCollectorPublishLease(ctx, &adminpb.RenewCollectorPublishLeaseReq{SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken})
-	if err != nil {
-		return fmt.Errorf("send collector publish lease renewal: %w", err)
+	var response adminpb.CollectorPublishLeaseRsp
+	if err := c.invoke(ctx, lease.SpaceID, "RenewCollectorPublishLease", &adminpb.RenewCollectorPublishLeaseReq{
+		SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken,
+	}, &response); err != nil {
+		return err
 	}
 	if err := leaseResponseError(response.GetRetInfo()); err != nil {
 		return err
 	}
-	if response.GetLeaseId() != lease.LeaseID || response.GetFencingToken() != lease.FencingToken {
+	if response.GetSpaceId() != lease.SpaceID || response.GetLeaseId() != lease.LeaseID || response.GetFencingToken() != lease.FencingToken {
 		return ErrLeaseStale
 	}
 	return nil
 }
 
 func (c *Client) ReleaseLease(ctx context.Context, lease *Lease) error {
-	if err := c.ready(); err != nil {
-		return err
-	}
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	response, err := c.api.ReleaseCollectorPublishLease(ctx, &adminpb.ReleaseCollectorPublishLeaseReq{SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken})
-	if err != nil {
-		return fmt.Errorf("send collector publish lease release: %w", err)
+	var response adminpb.ReleaseCollectorPublishLeaseRsp
+	if err := c.invoke(ctx, lease.SpaceID, "ReleaseCollectorPublishLease", &adminpb.ReleaseCollectorPublishLeaseReq{
+		SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken,
+	}, &response); err != nil {
+		return err
 	}
-	if response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
-		return leaseResponseError(response.GetRetInfo())
+	if err := leaseResponseError(response.GetRetInfo()); err != nil {
+		return err
 	}
 	if !response.GetReleased() {
 		return ErrLeaseStale
 	}
 	return nil
+}
+
+func (c *Client) operation(ctx context.Context, spaceID, method string, request proto.Message, response *adminpb.CollectorPublishOperationRsp) error {
+	if err := c.invoke(ctx, spaceID, method, request, response); err != nil {
+		return err
+	}
+	return leaseResponseError(response.GetRetInfo())
+}
+
+func (c *Client) invoke(ctx context.Context, spaceID, method string, request, response proto.Message) error {
+	if c == nil || c.gateway == nil {
+		return fmt.Errorf("collector publish lease requires the process gateway client")
+	}
+	metadata := gatewayclient.CallMetadataFromContext(ctx)
+	metadata.SpaceID = spaceID
+	return c.gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), "trpc.moox.admin.CollectorPublishLease", method, request, response)
 }
 
 func leaseResponseError(retInfo *adminpb.RetInfo) error {

@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
 func main() {
@@ -32,21 +30,13 @@ func run(
 	if err != nil {
 		return err
 	}
-	// gateway_client 的相对路径按组件目录（配置文件所在目录的上一级）解析，与服务进程一致。
-	absConfig, err := filepath.Abs(options.Config)
+	gateway, err := cfg.OpenGateway(nil)
 	if err != nil {
 		return err
-	}
-	gatewayConfig, err := cfg.GatewayClient.ResolvePaths(filepath.Dir(filepath.Dir(absConfig)))
-	if err != nil {
-		return err
-	}
-	gateway, err := gatewayclient.New(gatewayclient.Options{Config: gatewayConfig})
-	if err != nil {
-		return fmt.Errorf("创建 gatewayclient: %w", err)
 	}
 	defer gateway.Close()
-	value, err := secretclient.New(gateway, 10*time.Second).GetExchangeSecret(ctx, options.SecretID)
+	secrets := secretclient.New(gateway)
+	value, err := secrets.GetExchangeSecret(ctx, options.SecretID)
 	if err != nil {
 		return fmt.Errorf("GetSecretValue(%s): %w", options.SecretID, err)
 	}

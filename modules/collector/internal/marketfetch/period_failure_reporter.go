@@ -40,7 +40,7 @@ type periodFailureReceiptStorage interface {
 // independently of scheduling and CloudNode availability.
 type PeriodFailureReporter struct {
 	retries         periodFailureReportStore
-	storage         StorageFactory
+	storage         func(string, string) (Storage, error)
 	spaceID         string
 	metrics         *Metrics
 	pageSize        int
@@ -54,7 +54,7 @@ type PeriodFailureReporter struct {
 	wake            chan struct{}
 }
 
-func NewPeriodFailureReporter(retries *store.FetchRetryRepository, storage StorageFactory, spaceID string) *PeriodFailureReporter {
+func NewPeriodFailureReporter(retries *store.FetchRetryRepository, storage func(string, string) (Storage, error), spaceID string) *PeriodFailureReporter {
 	return &PeriodFailureReporter{
 		retries: retries, storage: storage, spaceID: strings.TrimSpace(spaceID),
 		pageSize: periodFailureReportPageSize, maxRows: periodFailureReportMaxRows,
@@ -490,13 +490,20 @@ func logPeriodFailureReportScanError(ctx context.Context, spaceID string, err er
 }
 
 func StartPeriodFailureReporter(ctx context.Context, reporter *PeriodFailureReporter, spaceID string, interval time.Duration) error {
+	_, err := StartPeriodFailureReporterWithDone(ctx, reporter, spaceID, interval)
+	return err
+}
+
+func StartPeriodFailureReporterWithDone(ctx context.Context, reporter *PeriodFailureReporter, spaceID string, interval time.Duration) (<-chan struct{}, error) {
 	if reporter == nil {
-		return fmt.Errorf("period failure reporter is required")
+		return nil, fmt.Errorf("period failure reporter is required")
 	}
 	if interval <= 0 {
 		interval = periodFailureReportInterval
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -509,5 +516,5 @@ func StartPeriodFailureReporter(ctx context.Context, reporter *PeriodFailureRepo
 			}
 		}
 	}()
-	return nil
+	return done, nil
 }

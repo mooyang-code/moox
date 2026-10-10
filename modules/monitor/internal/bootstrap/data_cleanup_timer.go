@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -83,7 +84,20 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 			return err
 		}
 		ops.pruneSeries = func(ctx context.Context, now time.Time) error {
-			_, err := runtime.MetricStores.Messages.PruneRetiredSeries(ctx, now)
+			var registered []monmetrics.ReporterPlacement
+			if runtime.Repositories != nil && runtime.Repositories.Topology != nil {
+				snapshot, err := runtime.Repositories.Topology.Snapshot(ctx)
+				if err != nil {
+					return err
+				}
+				if snapshot != nil {
+					registered = make([]monmetrics.ReporterPlacement, 0, len(snapshot.Placements))
+					for _, placement := range snapshot.Placements {
+						registered = append(registered, monmetrics.ReporterPlacement{NodeID: placement.HostID, ServiceName: placement.ComponentID})
+					}
+				}
+			}
+			_, err := runtime.MetricStores.Messages.PruneRetiredSeries(ctx, now, registered)
 			return err
 		}
 	}

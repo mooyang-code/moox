@@ -34,9 +34,16 @@ type Client struct {
 }
 
 // NewClient 创建币安客户端
-func NewClient() *Client {
+func NewClient(clients ...*httpclient.HTTPClient) *Client {
+	var http *httpclient.HTTPClient
+	if len(clients) > 0 {
+		http = clients[0]
+	}
+	if http == nil {
+		http = httpclient.NewHTTPClient()
+	}
 	return &Client{
-		HTTPClient:  httpclient.NewHTTPClient(),
+		HTTPClient:  http,
 		spotDomains: []string{SpotDomain},
 		swapDomains: []string{SwapDomain},
 	}

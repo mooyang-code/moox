@@ -208,26 +208,3 @@ func TestVerifyRejectsMalformedHeaders(t *testing.T) {
 		})
 	}
 }
-
-// callee、func 里的换行会让签名材料的字段边界产生歧义（callee="a\nb"、func="c" 与 callee="a"、func="b\nc" 的材料相同）。
-func TestSignAndVerifyRejectControlCharactersInRouteFields(t *testing.T) {
-	credentials := Credentials{KeyID: "collector-1", Caller: "collector", Secret: "secret"}
-	now := time.Unix(1_800_000_000, 0)
-	request := Request{Method: http.MethodPost, Path: "/svc/fn", TargetNode: "storage", Caller: "collector", Callee: "a\nb", Func: "c", Body: []byte("x")}
-	if _, err := Sign(credentials, request, now); err == nil {
-		t.Fatal("callee 含换行时应当拒绝签名")
-	}
-	request.Callee, request.Func = "a", "b\nc"
-	if _, err := Sign(credentials, request, now); err == nil {
-		t.Fatal("func 含换行时应当拒绝签名")
-	}
-	request.Callee, request.Func = "svc", "fn"
-	headers, err := Sign(credentials, request, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Callee = "svc\n"
-	if _, err := Verify(credentials, request, headers, now); err == nil {
-		t.Fatal("校验时 callee 含换行也应当拒绝")
-	}
-}

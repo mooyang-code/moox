@@ -1,4 +1,4 @@
-.PHONY: build build-host-gateway build-storage-linux check-boundaries check-gateway-terms check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-matrix test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-runtime-scripts package-skill clean proto
+.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -14,10 +14,6 @@ check-boundaries: check-module-boundaries check-package-boundaries check-factor-
 
 check-factor-split:
 	./scripts/check/check-factor-split.sh
-
-# 旧网关名称、已删除的组件与配置键不能回到代码、配置、脚本、文档和 skills 里（需要 ripgrep）。
-check-gateway-terms:
-	./scripts/check/check-gateway-terms.sh
 
 check-module-boundaries:
 	./scripts/check/check-module-boundaries.sh
@@ -53,6 +49,10 @@ test-storage-view-series-capacity:
 test-collector-period-universe-e2e:
 	bash scripts/test/e2e/test-collector-period-universe-e2e.sh
 
+.PHONY: test-host-gateway-control-e2e
+test-host-gateway-control-e2e:
+	bash scripts/test/gates/test-host-gateway-control-e2e.sh
+
 test-kline-resample:
 	bash scripts/test/e2e/test-kline-resample.sh
 
@@ -78,13 +78,26 @@ test-greenfield-contract:
 release:
 	./scripts/release/release.sh
 
+release-binaries:
+	./scripts/build/build-release-binaries.sh
+
 release-matrix:
 	./scripts/release/release-matrix.sh
+
+deploy:
+	./scripts/deploy/deploy-moox.sh $(ARGS)
+
+publish-release-binaries:
+	./scripts/release/publish-release-binaries.sh $(ARGS)
 
 test: test-go test-web
 
 test-go:
 	./scripts/test/contract/test-go-workspace.sh
+
+.PHONY: test-console-proxy
+test-console-proxy:
+	cd modules/consoleproxy && go test -count=1 ./... && go vet ./...
 
 test-web:
 	CI=true pnpm --dir web install --frozen-lockfile
@@ -98,9 +111,13 @@ proto-check:
 	$(MAKE) proto
 	@test -z "$$(git status --porcelain)"
 
-verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+.PHONY: check-go-module-graph
+check-go-module-graph:
+	bash scripts/ci/check-go-module-graph.sh
 
-verify: verify-pr check-boundaries check-gateway-terms test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-runtime-scripts test-caddy test-skill-contracts
+verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+
+verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
@@ -108,12 +125,18 @@ verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
 	(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
+	bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
+	bash scripts/test/contract/test-deploy-moox-control-profile.sh
+	bash scripts/test/contract/test-deploy-moox-storage-profile.sh
+	bash scripts/test/contract/test-deploy-moox-storage-view.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 
 test-caddy:
-	(cd modules/cli && go test -count=1 ./internal/setup/release -run 'Caddy|TLSMode')
+	bash scripts/test/contract/test-caddy-config.sh
+	bash scripts/test/contract/test-deploy-moox-https.sh
 	bash scripts/test/contract/test-install-caddy-ca.sh
+	bash skills/moox/scripts/test-caddy-prerequisite.sh
 	bash skills/moox/scripts/test-caddy-ca.sh
 
 test-collector-scf-package-contract:
@@ -127,48 +150,96 @@ test-skill-contracts:
 	bash skills/moox/scripts/test-data-query-contract.sh
 	bash skills/moox/scripts/test-custom-setup-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
+	bash skills/moox/scripts/test-hostagent-deploy.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
-	bash skills/moox/scripts/test-caddy-ca.sh
-	bash skills/moox/scripts/test-cls-query.sh
-	bash skills/moox/scripts/test-firewall-script.sh
 
 test-script-e2e:
 	@set -e; for script in scripts/test/e2e/*.sh; do bash "$$script"; done
 
 test-scripts: test-script-contracts test-script-e2e
 
-# 主机运行脚本（安装器、启停、暂停、健康检查）的契约测试，需要 Linux。
-test-runtime-scripts:
-	bash scripts/test/contract/test-runtime-scripts.sh
+test-gateway-deploy:
+	bash scripts/test/contract/test-deploy-moox-host-gateway.sh
 
-# 部署渲染（G13 快照）与运行脚本。
-test-gateway-deploy: test-runtime-scripts
-	(cd modules/cli && go test -count=1 ./internal/setup/...)
+test-strategy-deploy:
+	bash scripts/test/contract/test-deploy-moox-strategy.sh
+
+test-strategy-deploy-e2e:
+	bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh
 
 package-skill:
 	./scripts/build/package-skill.sh
 
 proto:
 	$(MAKE) -C packages/commonpb all
+	$(MAKE) -C packages/gatewayroute/proto all
 	$(MAKE) -C packages/metricspb all
 	$(MAKE) -C packages/hostmetricpb all
 	$(MAKE) -C packages/tradeeventpb all
 	$(MAKE) -C packages/storagepb generate
 	$(MAKE) -C packages/events all
 	$(MAKE) -C packages/marketfetchpb all
-	$(MAKE) -C packages/gatewayroute/proto all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all
 	$(MAKE) -C modules/collector/proto all
+	$(MAKE) -C modules/egressproxy/proto all
 	$(MAKE) -C modules/factor/proto all
 	$(MAKE) -C modules/cloudnode/proto all
 	$(MAKE) -C modules/monitor/proto all
 	$(MAKE) -C modules/eventbus/proto all
 	$(MAKE) -C modules/hostagent/proto all
 	$(MAKE) -C modules/strategy/proto all
-	$(MAKE) -C modules/egressproxy/proto all
 
 clean:
 	rm -rf bin release dist
 	find modules -type d \( -name bin -o -name release -o -name .cache \) -prune -exec rm -rf {} +
+
+.PHONY: test-deployment-packages test-unit-package-linux
+test-deployment-packages:
+	go test ./modules/cli/internal/setup/unitpackage ./modules/cli/internal/command -run 'TestUnit|TestSetupPackage'
+	bash scripts/test/contract/test-deployment-package-boundaries.sh
+
+test-unit-package-linux:
+	bash scripts/test/gates/test-unit-package-linux.sh
+
+.PHONY: test-host-placement-deployment
+test-host-placement-deployment:
+	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostPlacements|TestDoctorPlacements|TestEventBusURL|TestServiceRegistry|TestControlDeployOptions'
+
+.PHONY: test-host-identity-bundles test-unit-bundle-linux
+test-host-identity-bundles:
+	go test ./modules/admin/cmd/cli ./modules/admin/internal/pki ./packages/gatewayclient ./packages/servicecatalog/hostgatewayconfig -run 'TestBootstrap|TestHostBundle|TestInfo|TestPersistentCA|TestFileConfig'
+	go test ./modules/cli/internal/setup/unitbundle
+
+test-unit-bundle-linux:
+	bash scripts/test/gates/test-unit-bundle-linux.sh
+
+.PHONY: test-unit-runtime test-unit-runtime-linux
+.PHONY: test-unit-install test-unit-install-linux
+.PHONY: test-unit-bootstrap test-unit-bootstrap-linux
+.PHONY: test-unit-core test-unit-core-linux
+verify-pr: test-unit-core
+test-unit-core:
+	go test ./modules/cli/internal/setup/unitdeploy
+
+test-unit-core-linux:
+	bash scripts/test/gates/test-unit-core-linux.sh
+
+test-unit-bootstrap:
+	go test ./modules/cli/internal/setup/unitbootstrap
+
+test-unit-bootstrap-linux:
+	bash scripts/test/gates/test-unit-bootstrap-linux.sh
+
+test-unit-install:
+	go test ./modules/cli/internal/setup/unitinstall
+
+test-unit-install-linux:
+	bash scripts/test/gates/test-unit-install-linux.sh
+
+test-unit-runtime:
+	go test ./modules/cli/internal/setup/unitruntime ./modules/cli/cmd/moox-runtime
+
+test-unit-runtime-linux:
+	bash scripts/test/gates/test-unit-runtime-linux.sh

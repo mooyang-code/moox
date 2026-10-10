@@ -13,13 +13,11 @@ eventbus:
   connect_timeout: 3s
   publish_timeout: 10s
   consumer_name: strategy_view_data_ready_v1
-# 访问 Storage 与 FactorMgr 统一经本机主机网关
+# 访问 Storage、FactorMgr 与 Trade 统一经本机主机网关（strategy 身份）
 gateway_client:
-  mode: local
   caller: strategy
-  key_file: ../secrets/caller-strategy.key
-  ca_file: ../certs/moox-ca.crt
-  cache_dir: ./data/gatewayclient
+  key_id: ""
+  key_file: ../../secrets/caller-strategy.key
 factor:
   app_id: strategy
   timeout: 5s

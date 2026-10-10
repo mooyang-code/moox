@@ -4,30 +4,29 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"net/http"
 	"strconv"
 	"strings"
-
-	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const minGzipForwardResponseBytes = 1024
 
-// setForwardCommonHeaders 设置响应的公共头（CORS，并暴露 trpc 错误头供前端读取）。
+// setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
 func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 	w.Header().Set("Content-Type", "application/json")
 	applyCORSHeaders(w, origin)
 }
 
-// writeForwardResponse 原样写回目标服务的 JSON 响应。
-func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers consoleHeaders) {
-	setForwardCommonHeaders(w, headers.origin)
-	if headers.traceID != "" {
-		w.Header().Set("X-Trace-Id", headers.traceID)
+// writeForwardResponse 写入透传成功响应（原样返回 JSON body，暴露 trpc-ret header 供前端读取）。
+func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers map[string]string) {
+	setForwardCommonHeaders(w, headers["origin"])
+	if traceID := headers["trace_id"]; traceID != "" {
+		w.Header().Set("X-Trace-Id", traceID)
 	}
-	if shouldGzipForwardResponse(respBody, headers.acceptEncoding) {
+	if shouldGzipForwardResponse(respBody, headers["accept_encoding"]) {
 		w.Header().Set("Content-Encoding", "gzip")
 		addVaryHeader(w, "Accept-Encoding")
 		zw := gzip.NewWriter(w)
@@ -35,7 +34,7 @@ func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers consol
 		_ = zw.Close()
 		return
 	}
-	_, _ = w.Write(respBody)
+	w.Write(respBody)
 }
 
 func shouldGzipForwardResponse(respBody []byte, acceptEncoding string) bool {
@@ -64,21 +63,27 @@ func addVaryHeader(w http.ResponseWriter, value string) {
 	w.Header().Set("Vary", current+", "+value)
 }
 
-// writeForwardError 把 tRPC 错误转写为前端可读的响应：HTTP 200 + trpc-ret（框架码）+ trpc-func-ret（消息），
-// 同时写入与业务错误同结构的 JSON（ret_info），避免前端拿到空响应体。
-func writeForwardError(ctx context.Context, w http.ResponseWriter, err error, headers consoleHeaders) {
-	setForwardCommonHeaders(w, headers.origin)
-	if headers.traceID != "" {
-		w.Header().Set("X-Trace-Id", headers.traceID)
+// writeForwardError 把 trpc 框架错误转写为前端可读的响应。
+// 与 trpc-go 有协议 http 服务端错误协议一致：HTTP 200 + trpc-ret(框架码) + trpc-func-ret(业务码)，
+// 同时写入与业务错误同结构的 JSON body（ret_info），避免前端拿到空 body 无法识别错误。
+func writeForwardError(ctx context.Context, w http.ResponseWriter, err error, headers map[string]string) {
+	setForwardCommonHeaders(w, headers["origin"])
+	if traceID := headers["trace_id"]; traceID != "" {
+		w.Header().Set("X-Trace-Id", traceID)
 	}
 	code := errs.Code(err)
 	msg := errs.Msg(err)
 	w.Header().Set("trpc-ret", strconv.Itoa(int(code)))
 	if msg != "" {
-		// trpc-func-ret 头不允许换行
+		// trpc-func-ret 头不允许换行，扁平化
 		w.Header().Set("trpc-func-ret", strings.ReplaceAll(msg, "\n", " "))
 	}
-	log.WarnContextf(ctx, "控制台转发错误: code=%d msg=%s err=%v", code, msg, err)
+	log.WarnContextf(ctx, "console RPC 错误: code=%d msg=%s err=%v", code, msg, err)
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(middlewareResp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode(code), Msg: msg}})
+	_ = json.NewEncoder(w).Encode(middlewareResp{
+		RetInfo: &pb.RetInfo{
+			Code: pb.ErrorCode(code),
+			Msg:  msg,
+		},
+	})
 }

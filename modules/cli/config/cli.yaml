@@ -1,6 +1,5 @@
-# doctor 经本机主机网关以 moox-cli 身份调用 Monitor 与 SysDeploy；
-# 密钥和 CA 取自发布根目录下的 secrets/caller-moox-cli.key 与 certs/moox-ca.crt。
 doctor:
   node_id: ""
   release_root: "."
+  seed_path: "config/setup/service-deployments.yaml"
   dataset_health_policy_path: "config/setup/dataset-health-policy.yaml"

@@ -258,25 +258,21 @@ func pathWithin(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-// remoteSetupFactor 经 SSH 隧道以 moox-cli 身份调用 FactorMgr。
 type remoteSetupFactor struct {
-	client factorJSONClient
-	close  func()
+	gateway commandGateway
+	client  factorJSONClient
 }
 
 type factorJSONClient interface {
-	CallJSON(ctx context.Context, servicePath, method string, body, response any) error
+	CallGatewayJSON(context.Context, string, string, any, any) error
 }
 
-func defaultOpenSetupFactor(_ context.Context, snapshot *setupconfig.Snapshot) (setupInitFactor, error) {
-	if snapshot == nil {
-		return nil, fmt.Errorf("factor_setup_invalid")
-	}
-	client, closeControl, err := useControlClient(nil, snapshot, "", "")
+func defaultOpenSetupFactor(ctx context.Context, snapshot *setupconfig.Snapshot) (setupInitFactor, error) {
+	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
-		return nil, fmt.Errorf("factor_gateway_unavailable: %w", err)
+		return nil, err
 	}
-	return &remoteSetupFactor{client: client, close: closeControl}, nil
+	return &remoteSetupFactor{gateway: gateway, client: &adminclient.Client{Gateway: gateway}}, nil
 }
 
 type factorAPIRetInfo struct {
@@ -311,10 +307,10 @@ type factorAPIInfo struct {
 }
 
 type factorAPIResponse struct {
-	RetInfo   factorAPIRetInfo `json:"ret_info"`
-	Factor    factorAPIDef     `json:"factor"`
-	Usages    []factorAPIUsage `json:"usages"`
-	Factors   []factorAPIInfo  `json:"factors"`
+	RetInfo   *factorAPIRetInfo `json:"ret_info"`
+	Factor    factorAPIDef      `json:"factor"`
+	Usages    []factorAPIUsage  `json:"usages"`
+	Factors   []factorAPIInfo   `json:"factors"`
 	FactorSet struct {
 		SetID           string   `json:"set_id"`
 		SpaceID         string   `json:"space_id"`
@@ -327,6 +323,9 @@ type factorAPIResponse struct {
 }
 
 func (r factorAPIResponse) err(method string) error {
+	if r.RetInfo == nil {
+		return fmt.Errorf("FactorMgr %s failed: missing ret_info", method)
+	}
 	if r.RetInfo.Code == 0 || r.RetInfo.Code == 200 {
 		return nil
 	}
@@ -334,7 +333,10 @@ func (r factorAPIResponse) err(method string) error {
 }
 
 func (r *remoteSetupFactor) call(ctx context.Context, method string, body any, response *factorAPIResponse) error {
-	if err := r.client.CallJSON(ctx, adminclient.ServiceFactorMgr, method, body, response); err != nil {
+	if r == nil || r.client == nil {
+		return fmt.Errorf("FactorMgr requires the operator SSH gateway")
+	}
+	if err := r.client.CallGatewayJSON(ctx, "trpc.moox.factor.FactorMgr", method, body, response); err != nil {
 		return err
 	}
 	return response.err(method)
@@ -446,8 +448,8 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 }
 
 func factorAPINotFound(response factorAPIResponse) bool {
-	return response.RetInfo.Code == 9 || response.RetInfo.Code == 5 ||
-		(response.RetInfo.Code == 4 && strings.Contains(strings.ToLower(response.RetInfo.Msg), "not found"))
+	return response.RetInfo != nil && (response.RetInfo.Code == 9 || response.RetInfo.Code == 5 ||
+		(response.RetInfo.Code == 4 && strings.Contains(strings.ToLower(response.RetInfo.Msg), "not found")))
 }
 
 func sameFactorContract(got factorAPIDef, want setupFactorDefinition) bool {
@@ -487,8 +489,8 @@ func canonicalJSON(raw string) string {
 }
 
 func (r *remoteSetupFactor) Close() error {
-	if r != nil && r.close != nil {
-		r.close()
+	if r == nil || r.gateway == nil {
+		return nil
 	}
-	return nil
+	return r.gateway.Close()
 }

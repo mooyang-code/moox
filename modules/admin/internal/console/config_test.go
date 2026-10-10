@@ -1,13 +1,14 @@
 package console
 
 import (
+	"github.com/gorilla/mux"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSetConfig_GetConfig_RoundTrip_ShouldWork(t *testing.T) {
@@ -34,7 +35,7 @@ func TestLoadConfig_ValidYAML_ShouldParse(t *testing.T) {
 	require.NoError(t, os.MkdirAll(configDir, 0o755))
 	content := `jwt:
   secret_key: test-secret
-gateway:
+console:
   debug: true
 cors:
   allowed_origins:
@@ -53,7 +54,7 @@ rate_limit:
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "test-secret", cfg.JWT.SecretKey)
-	assert.True(t, cfg.Gateway.Debug)
+	assert.True(t, cfg.Console.Debug)
 	assert.Equal(t, 100, cfg.RateLimit.DefaultQPS)
 }
 
@@ -66,4 +67,32 @@ func TestLoadConfig_MissingFile_ShouldError(t *testing.T) {
 
 	_, err = LoadConfig()
 	require.Error(t, err)
+}
+
+func TestAdminRouterKeepsBrowserRoutesAndRejectsMachineSurfaces(t *testing.T) {
+	hr := newTestRouter(t, nil, nil)
+	router := hr.buildControlRouter()
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/admin/health", "/api/gateway-control/routes", "/api/gateway-control/status"} {
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("admin router exposed %s: %d", path, rr.Code)
+		}
+	}
+
+	for _, path := range []string{
+		"/api/admin/auth/GetLoginSalt",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		match := &mux.RouteMatch{}
+		if !router.Match(request, match) {
+			t.Fatalf("admin router did not register %s", path)
+		}
+	}
+
+	machineRR := httptest.NewRecorder()
+	router.ServeHTTP(machineRR, httptest.NewRequest(http.MethodPost, "/api/service/monitor/GetPeerSnapshot", nil))
+	if machineRR.Code != http.StatusNotFound {
+		t.Fatalf("admin router machine service status=%d, want 404", machineRR.Code)
+	}
 }

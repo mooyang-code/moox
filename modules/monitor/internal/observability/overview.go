@@ -11,13 +11,11 @@ import (
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 const (
@@ -26,16 +24,23 @@ const (
 	maxOverviewMetricNames      = 2000
 )
 
-// ReporterNeverReported 是已登记的部署从未上报运行指标时的上报状态。
-const ReporterNeverReported = "never_reported"
-
-// ServiceStatus 是一个组件实例的状态：NodeID 是主机 ID，ServiceName 是组件 ID。ReporterStatus 为 healthy、stale、
-// never_reported，只做健康探测的组件为空；Version 和 ReportedAt 是上报实例的版本和最近上报时间。
 type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
-	ReporterStatus, Version                         string
-	ReportedAt                                      time.Time
+	ReporterStatus                                  string
+	Enabled                                         bool
+	ProbeStatus, ProbeReason, ProbeRawError         string
+	ProbeCheckedAt                                  time.Time
+	Instances                                       []ReporterInstance
+	ProbeURL                                        string
+	ProbeHistory                                    []domain.CheckResult
+}
+
+type HostStatus struct {
+	HostID, AgentID, Hostname, Status, Reason                      string
+	LastSeenAt                                                     time.Time
+	CPUPercent, MemoryPercent, FilesystemMaxPercent                float64
+	MemoryAvailable, DiskAvailable, MetricsAvailable, CPUAvailable bool
 }
 
 type DatasetFrequencyStatus struct {
@@ -50,30 +55,30 @@ type DatasetFrequencyStatus struct {
 	LagSeconds                          int64
 }
 
-// BusinessStatus 是一项业务检查。Kind 为 market_fetch（行情采集协调）、canary（行情探针）、data_delivery（数据投递）
-// 或 balance（账户余额同步）；Name 是中文名称。
 type BusinessStatus struct {
-	SpaceID, Kind, Name, Module, Status, Reason string
-	LastCheckedAt                               time.Time
+	SpaceID, Kind, Module, Status, Reason string
+	CheckID, RawError                     string
+	LastCheckedAt                         time.Time
 }
 
 type Overview struct {
 	GeneratedAt    time.Time
 	Services       []ServiceStatus
+	Unregistered   []ServiceStatus
+	TopologyKnown  bool
+	Topology       *domain.TopologySnapshot
+	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
-	// GatewayHosts 是各主机的主机网关状态；GatewayHostsErr 不为空时表示 SysDeploy 暂时读不到，调用方应保留上一次的判断。
-	GatewayHosts    []GatewayHostStatus
-	GatewayHostsErr error
-	// Unregistered 是在上报运行指标、但没有登记部署的进程。
-	Unregistered []monmetrics.UnregisteredProducer
+	GatewaySignals []GatewaySignal
 }
 
 type Builder struct {
 	Metrics                    *monmetrics.QueryService
-	GatewayHosts               HostGatewaySource
-	Unregistered               *monmetrics.UnregisteredProducers
+	Hosts                      *hostmetrics.Store
 	Checks                     *store.CheckRepository
+	Topology                   *store.TopologyRepository
+	Gateways                   *store.GatewayRepository
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
 	BalanceDifferenceThreshold float64
@@ -102,7 +107,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out := Overview{GeneratedAt: now}
 	var err error
-	if out.Services, err = b.buildServices(ctx, spaceID, now); err != nil {
+	if out.Services, out.Unregistered, out.Topology, err = b.buildServices(ctx, now); err != nil {
+		return Overview{}, err
+	}
+	out.TopologyKnown = out.Topology != nil
+	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
 		return Overview{}, err
 	}
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
@@ -126,8 +135,10 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, delivery...)
-	out.GatewayHosts, out.GatewayHostsErr = b.buildGatewayHosts(ctx, now)
-	out.Unregistered = b.Unregistered.List(now)
+	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = uniqueBusinessChecks(out.BusinessChecks)
 	sortOverview(&out)
 	return out, nil
 }
@@ -185,176 +196,45 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 		reason = fmt.Sprintf("正在投递 %.0f 条数据变更", pending)
 	}
 	return []BusinessStatus{{
-		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Name: "数据投递队列", Module: "storage_outbox",
+		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Module: "storage_outbox",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
 
-// neverReportedGrace 是新部署登记之后等待首次上报的宽限：检查由 Monitor 的部署同步定时器建出（最长一分钟），
-// 在此之前指标上报会被拒收；宽限内不判为"从未上报"，免得每次新增部署或主机都触发一次告警再恢复。
-const neverReportedGrace = 5 * time.Minute
-
-func (b Builder) buildServices(ctx context.Context, spaceID string, now time.Time) ([]ServiceStatus, error) {
-	services := make(map[string]ServiceStatus)
-	reporterServices := expectedReporterServices()
-	if b.Metrics != nil && b.Metrics.Catalog() != nil {
-		rows, total, err := b.Metrics.Catalog().ListServices(ctx, spaceID, 0, 500)
-		if err != nil {
-			return nil, err
-		}
-		if total > maxOverviewServices {
-			return nil, fmt.Errorf("observability services exceed limit %d", maxOverviewServices)
-		}
-		if total > int64(len(rows)) {
-			more, _, err := b.Metrics.Catalog().ListServices(ctx, spaceID, len(rows), int(total)-len(rows))
-			if err != nil {
-				return nil, err
-			}
-			rows = append(rows, more...)
-		}
-		for _, row := range rows {
-			key := serviceInstanceKey(row.NodeID, row.ServiceName, row.InstanceID)
-			if current, exists := services[key]; exists && !row.LastSeenAt.After(current.LastSeenAt) {
-				continue
-			}
-			status, reason := "healthy", "reporter fresh"
-			if row.LastSeenAt.IsZero() {
-				status, reason = "unknown", "尚未上报"
-			} else if row.IsStale {
-				status, reason = "stale", "producer stale"
-			}
-			services[key] = ServiceStatus{
-				NodeID: row.NodeID, ServiceName: row.ServiceName, InstanceID: row.InstanceID,
-				Status: status, ReporterStatus: status, Reason: reason, LastSeenAt: row.LastSeenAt.UTC(),
-				Version: row.Version, ReportedAt: row.LastSeenAt.UTC(),
-			}
-		}
+func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, error) {
+	if b.Hosts == nil {
+		return []HostStatus{}, nil
 	}
-
-	checks, err := b.listEnabledPlacementChecks(ctx, spaceID)
+	rows, err := b.Hosts.ListAgentsAt(ctx, now)
 	if err != nil {
 		return nil, err
 	}
-	for _, check := range checks {
-		labels, err := placement.ParseLabels(check.Labels)
-		if err != nil {
-			return nil, fmt.Errorf("部署检查 %q 的标签无效: %w", check.CheckID, err)
+	out := make([]HostStatus, 0, len(rows))
+	for _, row := range rows {
+		status, reason := "healthy", "agent reachable"
+		if !row.Reachable {
+			status, reason = "down", "agent unreachable"
 		}
-		nodeID, serviceName := labels.HostID, labels.ComponentID
-		matched := make([]string, 0, 1)
-		for key, item := range services {
-			if item.NodeID == nodeID && item.ServiceName == serviceName {
-				matched = append(matched, key)
+		item := HostStatus{HostID: row.HostID, AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
+		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
+		if snapshot := row.Snapshot; snapshot != nil {
+			item.MetricsAvailable = true
+			if snapshot.GetCpu() != nil && snapshot.GetCpu().GetUsageAvailable() {
+				item.CPUAvailable = true
+				item.CPUPercent = snapshot.GetCpu().GetUsagePercent()
+			}
+			if snapshot.GetMemory() != nil {
+				item.MemoryAvailable = true
+				item.MemoryPercent = snapshot.GetMemory().GetUsagePercent()
+			}
+			item.DiskAvailable = len(snapshot.GetFilesystems()) > 0
+			for _, filesystem := range snapshot.GetFilesystems() {
+				item.FilesystemMaxPercent = max(item.FilesystemMaxPercent, filesystem.GetUsagePercent())
 			}
 		}
-		if len(matched) == 0 {
-			key := serviceInstanceKey(nodeID, serviceName, "")
-			service := ServiceStatus{NodeID: nodeID, ServiceName: serviceName, Status: "unknown", Reason: "health not checked"}
-			if reporterServices[serviceName] && now.Sub(check.CreatedAt) >= neverReportedGrace {
-				// 已登记的部署从未上报运行指标（或已超过 24 小时没有上报，上报目录已清理）。
-				service.ReporterStatus = ReporterNeverReported
-				service.Reason = "从未上报运行指标"
-			}
-			services[key] = service
-			matched = append(matched, key)
-		}
-		var latest *domain.CheckResult
-		if b.Results != nil {
-			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
-			if err != nil {
-				return nil, err
-			}
-			if len(results) > 0 {
-				latest = &results[0]
-			}
-		}
-		for _, key := range matched {
-			services[key] = mergeServiceHealth(services[key], latest)
-		}
-	}
-
-	out := make([]ServiceStatus, 0, len(services))
-	for _, item := range services {
 		out = append(out, item)
 	}
 	return out, nil
-}
-
-// expectedReporterServices 返回应当经 EventBus 上报指标的组件。
-func expectedReporterServices() map[string]bool {
-	catalog := servicecatalog.Default()
-	out := make(map[string]bool, len(catalog.Components))
-	for _, component := range catalog.Components {
-		if component.Observability.Transport == servicecatalog.TransportReporter {
-			out[component.ID] = true
-		}
-	}
-	return out
-}
-
-func serviceInstanceKey(nodeID, serviceName, instanceID string) string {
-	return strings.Join([]string{nodeID, serviceName, instanceID}, "\x00")
-}
-
-func (b Builder) listEnabledPlacementChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
-	if b.Checks == nil {
-		return []domain.Check{}, nil
-	}
-	enabled := true
-	out := make([]domain.Check, 0, 500)
-	for page := 1; len(out) < maxOverviewServices; page++ {
-		rows, err := b.Checks.List(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
-			Page: store.Page{Page: page, PageSize: 500},
-		})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rows...)
-		if len(rows) < 500 {
-			break
-		}
-	}
-	if len(out) >= maxOverviewServices {
-		total, err := b.Checks.Count(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if total > maxOverviewServices {
-			return nil, fmt.Errorf("部署检查超过上限 %d", maxOverviewServices)
-		}
-	}
-	return out, nil
-}
-
-func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) ServiceStatus {
-	healthStatus, healthReason := "unknown", "health not checked"
-	if result != nil {
-		service.LastSeenAt = maxTime(service.LastSeenAt, result.CheckedAt.UTC())
-		switch {
-		case !result.Success:
-			healthStatus, healthReason = "down", strings.TrimSpace(result.ErrorMessage)
-			if healthReason == "" {
-				healthReason = "health check failed"
-			}
-		case result.Status == domain.CheckStatusDegraded:
-			healthStatus, healthReason = "degraded", "health check degraded"
-		default:
-			healthStatus, healthReason = "healthy", "health check ok"
-		}
-	}
-	if service.ReporterStatus == "" {
-		service.Status = healthStatus
-		service.Reason = healthReason
-		return service
-	}
-	if statusRank(healthStatus) < statusRank(service.Status) {
-		service.Status = healthStatus
-	}
-	service.Reason = strings.Join([]string{service.Reason, healthReason}, "; ")
-	return service
 }
 
 type datasetKey struct {
@@ -822,39 +702,22 @@ func parseOverviewFrequency(raw string) time.Duration {
 	return parsed.NominalDuration()
 }
 
-// canaryCheckPrefix 是行情探针检查 ID 的前缀。
-const canaryCheckPrefix = "market_canary:"
-
-// marketFetchName 是行情采集协调类业务检查的中文名称。
-func marketFetchName(module string) string {
-	switch {
-	case module == "scf_timer":
-		return "行情采集 · SCF 定时协调"
-	case module == "provider_feed":
-		return "行情采集 · 行情源"
-	case strings.HasPrefix(module, "provider_feed:"):
-		return "行情采集 · 行情源 " + strings.TrimPrefix(module, "provider_feed:")
-	case strings.HasPrefix(module, "instrument_snapshot:"):
-		return "行情采集 · 标的快照 " + strings.TrimPrefix(module, "instrument_snapshot:")
-	default:
-		return "行情采集 · " + module
-	}
-}
-
 func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
 	out := make([]BusinessStatus, 0)
 	if b.Checks != nil && b.Results != nil {
-		enabled := true
-		checks, err := b.Checks.List(ctx, store.ListChecksOptions{SpaceID: spaceID, Enabled: &enabled, Page: store.Page{PageSize: 500}})
+		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page"}, 1501)
 		if err != nil {
 			return nil, err
 		}
+		if len(checks) > 1500 {
+			return nil, fmt.Errorf("business checks exceed 1500 items")
+		}
 		for _, check := range checks {
-			target, ok := strings.CutPrefix(check.CheckID, canaryCheckPrefix)
-			if !ok {
+			kind := businessKind(check)
+			if kind == "" {
 				continue
 			}
-			item := BusinessStatus{SpaceID: check.SpaceID, Kind: "canary", Name: check.Name, Module: target, Status: "unknown", Reason: "尚未上报"}
+			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报"}
 			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
 			if err != nil {
 				return nil, err
@@ -863,6 +726,7 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 				item.LastCheckedAt = results[0].CheckedAt.UTC()
 				item.Status = strings.ToLower(string(results[0].Status))
 				item.Reason = results[0].ErrorMessage
+				item.RawError = results[0].RawError
 				if item.Reason == "" {
 					item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
 				}
@@ -935,8 +799,7 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 			status, reason = "down", "balance sync stale"
 		}
 		out = append(out, BusinessStatus{
-			SpaceID: "crypto", Kind: "balance", Name: "账户余额同步 · " + alerttext.Service(successValue.serviceName),
-			Module: successValue.serviceName, Status: status,
+			SpaceID: "crypto", Kind: "balance", Module: successValue.serviceName, Status: status,
 			Reason: reason, LastCheckedAt: lastCheckedAt,
 		})
 	}
@@ -1097,10 +960,10 @@ func (b Builder) buildStockCNFeedHealth(ctx context.Context, now time.Time) ([]B
 		} else if rate := state.failures / state.requests; rate > threshold {
 			status, reason = "down", fmt.Sprintf("%s Provider Feed 最近 %s 失败率 %.1f%%，超过 %.1f%%", provider, window, rate*100, threshold*100)
 		}
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Name: marketFetchName("provider_feed:" + provider), Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed:" + provider, Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	if len(out) == 0 {
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Name: marketFetchName("provider_feed"), Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stockcn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "provider_feed", Status: "down", Reason: fmt.Sprintf("stockcn Provider Feed 最近 %s 没有新指标", window), LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1211,7 +1074,7 @@ func (b Builder) buildStockCNInstrumentHealth(ctx context.Context, now time.Time
 				}
 			}
 		}
-		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Name: marketFetchName("instrument_snapshot:" + state.provider), Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: "stockcn", Kind: "market_fetch", Module: "instrument_snapshot:" + state.provider, Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1521,19 +1384,19 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			if state.failureReasons["submit_timeout"] {
 				reason = "Timer 配置提交超时，正在自动重试"
 			}
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if state.hasCapacityTotal && state.hasCapacityRequired && state.capacityRequired > state.capacityTotal {
 			shortfall := state.capacityRequired - state.capacityTotal
 			reason := fmt.Sprintf("Timer SCF 容量不足：需要 %.0f 个节点，当前仅有 %.0f 个，缺口 %.0f 个", state.capacityRequired, state.capacityTotal, shortfall)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if state.hasConfiguredGroupsExpected && state.hasConfiguredGroupsActual &&
 			state.configuredGroupsExpected != state.configuredGroupsActual {
 			reason := fmt.Sprintf("stockcn Group 数量不一致：期望 %.0f，实际 %.0f", state.configuredGroupsExpected, state.configuredGroupsActual)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if state.hasHealth && state.healthy <= 0 {
@@ -1552,12 +1415,12 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			case state.failureReasons["capacity"] && state.hasRequired && state.required > state.active:
 				reason = fmt.Sprintf("Timer 分片节点不足：需要 %.0f 个，当前仅分配 %.0f 个", state.required, state.active)
 			}
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if !state.hasRequired || state.required <= 0 {
 			if state.staleSeries && !collectorReporterFresh {
-				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调指标已停止上报", LastCheckedAt: now})
+				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调指标已停止上报", LastCheckedAt: now})
 			}
 			continue
 		}
@@ -1577,7 +1440,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		case currentSpace == "stockcn" && state.hasConfiguredGroupsExpected:
 			status, reason = validateConfiguredGroupIDs(now, state, thresholds.CoordinationStaleAfter)
 		}
-		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Name: marketFetchName("scf_timer"), Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
 }
@@ -1645,12 +1508,69 @@ func (b Builder) balanceMetricValues(ctx context.Context, metricName string) (ma
 	return out, nil
 }
 
+func businessKind(check domain.Check) string {
+	kind, _, ok := strings.Cut(check.CheckID, ":")
+	if !ok {
+		return ""
+	}
+	switch kind {
+	case "market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page":
+		return kind
+	default:
+		return ""
+	}
+}
+
+func businessModule(checkID string) string {
+	kind, id, _ := strings.Cut(checkID, ":")
+	switch kind {
+	case "console-page":
+		return "console-proxy"
+	case "market_canary", "subject_tag", "kline_freshness":
+		return "collector"
+	case "balance":
+		return "trade"
+	case "module":
+		for _, check := range report.BuiltInModuleHealthChecks() {
+			if check.ID == id {
+				return check.Module
+			}
+		}
+	}
+	return ""
+}
+
+// Live metric facts supersede the cached external check for the same identity.
+func uniqueBusinessChecks(items []BusinessStatus) []BusinessStatus {
+	indexes := make(map[string]int, len(items))
+	out := make([]BusinessStatus, 0, len(items))
+	for _, item := range items {
+		if item.CheckID == "" {
+			item.CheckID = item.Kind + ":" + item.Module
+		}
+		key := item.SpaceID + "\x00" + item.CheckID
+		if i, exists := indexes[key]; exists {
+			out[i] = item
+			continue
+		}
+		indexes[key] = len(out)
+		out = append(out, item)
+	}
+	return out
+}
+
 func sortOverview(out *Overview) {
 	sort.Slice(out.Services, func(i, j int) bool {
 		if statusRank(out.Services[i].Status) != statusRank(out.Services[j].Status) {
 			return statusRank(out.Services[i].Status) < statusRank(out.Services[j].Status)
 		}
-		return out.Services[i].ServiceName < out.Services[j].ServiceName
+		return strings.Join([]string{out.Services[i].ServiceName, out.Services[i].NodeID, out.Services[i].InstanceID}, "\x00") < strings.Join([]string{out.Services[j].ServiceName, out.Services[j].NodeID, out.Services[j].InstanceID}, "\x00")
+	})
+	sort.Slice(out.Hosts, func(i, j int) bool {
+		if statusRank(out.Hosts[i].Status) != statusRank(out.Hosts[j].Status) {
+			return statusRank(out.Hosts[i].Status) < statusRank(out.Hosts[j].Status)
+		}
+		return out.Hosts[i].Hostname < out.Hosts[j].Hostname
 	})
 	sort.Slice(out.Datasets, func(i, j int) bool {
 		if statusRank(out.Datasets[i].Status) != statusRank(out.Datasets[j].Status) {

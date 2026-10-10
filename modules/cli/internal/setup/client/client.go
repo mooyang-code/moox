@@ -1,35 +1,24 @@
-// Package client 经 gatewayclient 以 moox-cli 身份调用 Admin：初始化（Setup）与部署记录同步（SysDeploy）。
 package client
 
 import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
 
 const (
-	setupService     = "trpc.moox.admin.Setup"
-	sysDeployService = "trpc.moox.ops.SysDeploy"
+	maxResponseBytes      = 1 << 20
+	TradeGatewayHTTPSPort = 11001
 )
 
-// Invoker 是 setup 客户端用到的 gatewayclient 能力。
-type Invoker interface {
-	Invoke(ctx context.Context, servicePath, method string, req, rsp any, opts ...gatewayclient.CallOption) error
-}
-
-// Client 经 gatewayclient 以 moox-cli 身份调用 Admin 的 Setup 和 SysDeploy。
 type Client struct {
-	gateway Invoker
-	timeout time.Duration
+	gateway gatewayclient.Invoker
 }
 
 type Space struct {
@@ -63,25 +52,28 @@ type StatusResult struct {
 	Conflicts int    `json:"conflicts"`
 }
 
-// New 创建 setup 客户端；单次调用超时与组件目录中 Setup 的超时一致。
-func New(gateway Invoker) *Client {
-	return &Client{gateway: gateway, timeout: 2 * time.Minute}
+func New(gateway gatewayclient.Invoker) *Client {
+	return &Client{gateway: gateway}
 }
 
 func (c *Client) Apply(ctx context.Context, snapshot *setupconfig.Snapshot) (ApplyResult, error) {
 	return c.ApplyWithSpaces(ctx, snapshot, nil)
 }
 
-// ApplyWithSpaces 写入初始用户、云凭据、SSH 主机和业务空间。
-func (c *Client) ApplyWithSpaces(ctx context.Context, snapshot *setupconfig.Snapshot, spaces []Space) (ApplyResult, error) {
+func (c *Client) ApplyWithSpaces(
+	ctx context.Context,
+	snapshot *setupconfig.Snapshot,
+	spaces []Space,
+) (ApplyResult, error) {
 	if snapshot == nil || c.gateway == nil {
 		return ApplyResult{}, fmt.Errorf("setup_client_invalid")
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
 		return ApplyResult{}, fmt.Errorf("config_changed")
 	}
+	request := applyRequest(snapshot.Manifest, spaces)
 	response := &pb.ApplySetupRsp{}
-	if err := c.call(ctx, setupService, "ApplySetup", applyRequest(snapshot.Manifest, spaces), response); err != nil {
+	if err := c.forwardedPost(ctx, "ApplySetup", request, response); err != nil {
 		return ApplyResult{}, err
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
@@ -102,16 +94,20 @@ func (c *Client) Status(ctx context.Context, snapshot *setupconfig.Snapshot) (St
 	return c.StatusWithSpaces(ctx, snapshot, nil)
 }
 
-// StatusWithSpaces 检查初始化记录是否与 moox.toml 一致。
-func (c *Client) StatusWithSpaces(ctx context.Context, snapshot *setupconfig.Snapshot, spaces []Space) (StatusResult, error) {
+func (c *Client) StatusWithSpaces(
+	ctx context.Context,
+	snapshot *setupconfig.Snapshot,
+	spaces []Space,
+) (StatusResult, error) {
 	if snapshot == nil || c.gateway == nil {
 		return StatusResult{}, fmt.Errorf("setup_client_invalid")
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
 		return StatusResult{}, fmt.Errorf("config_changed")
 	}
+	request := statusRequest(snapshot.Manifest, spaces)
 	response := &pb.GetSetupStatusRsp{}
-	if err := c.call(ctx, setupService, "GetSetupStatus", statusRequest(snapshot.Manifest, spaces), response); err != nil {
+	if err := c.forwardedPost(ctx, "GetSetupStatus", request, response); err != nil {
 		return StatusResult{}, err
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
@@ -127,39 +123,19 @@ func (c *Client) StatusWithSpaces(ctx context.Context, snapshot *setupconfig.Sna
 	}, nil
 }
 
-// SyncHostPlacements 按部署表同步一台主机及其完整组件列表（SysDeploy.SyncHostPlacements）：缺少的部署补上并启用，
-// 列表里已经没有的部署删除，已有部署的启用状态保持不变。
-func (c *Client) SyncHostPlacements(ctx context.Context, host setupconfig.Host, components []string) error {
-	request := &pb.SyncHostPlacementsReq{
-		Host: &pb.DeployHostSpec{
-			HostId: host.ID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
-		},
-		Components: append([]string{}, components...),
-	}
-	response := &pb.SyncHostPlacementsRsp{}
-	if err := c.call(ctx, sysDeployService, "SyncHostPlacements", request, response); err != nil {
-		return err
-	}
-	if response.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return fmt.Errorf("同步部署记录被拒绝：%s", response.GetRetInfo().GetMsg())
-	}
-	return nil
+func (c *Client) forwardedPost(ctx context.Context, method string, request, response proto.Message) error {
+	return c.invoke(ctx, "trpc.moox.admin.Setup", method, request, response)
 }
 
-// call 以 PB 序列化经 gatewayclient 调用 service/method。错误只返回固定的错误码，不带远端细节，
-// 避免把请求中的口令等内容带进输出。
-func (c *Client) call(ctx context.Context, service, method string, request, response proto.Message) error {
+func (c *Client) invoke(ctx context.Context, service, method string, request, response proto.Message) error {
 	if c == nil || c.gateway == nil {
-		return fmt.Errorf("setup_not_reachable")
+		return fmt.Errorf("setup requires the operator's SSH gateway client")
 	}
-	if err := c.gateway.Invoke(ctx, service, method, request, response, gatewayclient.WithTimeout(c.timeout)); err != nil {
-		switch errs.Code(err) {
-		case errs.RetClientConnectFail, errs.RetClientNetErr, errs.RetClientTimeout, errs.RetClientFullLinkTimeout,
-			gatewayroute.RetServiceNotHere, gatewayroute.RetHostDisabled:
-			return fmt.Errorf("setup_not_reachable")
-		default:
-			return fmt.Errorf("setup_remote_failed")
+	if err := c.gateway.Invoke(ctx, service, method, request, response); err != nil {
+		if errs.Code(err) == errs.RetClientDecodeFail {
+			return fmt.Errorf("setup_response_invalid")
 		}
+		return fmt.Errorf("setup_not_reachable")
 	}
 	return nil
 }
@@ -180,43 +156,23 @@ func checkRetInfo(retInfo *pb.RetInfo) error {
 }
 
 func applyRequest(manifest setupconfig.Manifest, spaces []Space) *pb.ApplySetupReq {
-	control, others := setupHosts(manifest)
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		ControlHost:  control,
-		OtherHosts:   others,
+		ControlHost:  hostToPB(manifest.ControlHost()),
+		OtherHosts:   hostsToPB(manifest.OtherHosts()),
 		Spaces:       spacesToPB(spaces),
 	}
 }
 
 func statusRequest(manifest setupconfig.Manifest, spaces []Space) *pb.GetSetupStatusReq {
-	control, others := setupHosts(manifest)
 	return &pb.GetSetupStatusReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		ControlHost:  control,
-		OtherHosts:   others,
+		ControlHost:  hostToPB(manifest.ControlHost()),
+		OtherHosts:   hostsToPB(manifest.OtherHosts()),
 		Spaces:       spacesToPB(spaces),
 	}
-}
-
-// setupHosts 把 moox.toml 的主机写成管理台 SSH 主机：control 一台，其余按主机 ID 排序。
-func setupHosts(manifest setupconfig.Manifest) (*pb.SetupHost, []*pb.SetupHost) {
-	var control *pb.SetupHost
-	others := []*pb.SetupHost{}
-	for _, host := range manifest.HostList() {
-		item := &pb.SetupHost{
-			Name: host.ID, Address: host.Address, Port: int32(host.SSH.Port),
-			Username: host.SSH.Username, Password: host.SSH.Password,
-		}
-		if host.ID == servicecatalog.ControlHostID {
-			control = item
-		} else {
-			others = append(others, item)
-		}
-	}
-	return control, others
 }
 
 func spacesToPB(spaces []Space) []*pb.SetupSpace {
@@ -229,4 +185,19 @@ func spacesToPB(spaces []Space) []*pb.SetupSpace {
 		})
 	}
 	return result
+}
+
+func hostsToPB(hosts []setupconfig.Host) []*pb.SetupHost {
+	result := make([]*pb.SetupHost, 0, len(hosts))
+	for _, host := range hosts {
+		result = append(result, hostToPB(host))
+	}
+	return result
+}
+
+func hostToPB(host setupconfig.Host) *pb.SetupHost {
+	return &pb.SetupHost{
+		Name: host.Name, Address: host.Address, Port: int32(host.Port),
+		Username: host.Username, Password: host.Password,
+	}
 }

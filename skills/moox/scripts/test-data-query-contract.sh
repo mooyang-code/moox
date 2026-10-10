@@ -23,7 +23,7 @@ done
 
 grep -Fq 'loaded `SKILL.md`' "${REFERENCE}" || fail "reference does not derive the wrapper path from the loaded skill"
 grep -Fq '/scripts/data-kline.sh' "${REFERENCE}" || fail "reference does not use the bundled wrapper"
-if grep -Eq '"\$(CLI|CONFIG)"|(^|[[:space:]])moox-cli data kline get|/opt/' "${REFERENCE}"; then
+if grep -Eq '"\$(CLI|CONFIG)"|(^|[[:space:]])moox-cli data skill kline get|/opt/' "${REFERENCE}"; then
   fail "reference still relies on cross-block CLI/config shell variables"
 fi
 meta_assignment="SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'"
@@ -32,7 +32,7 @@ meta_assignment="SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'"
 for summary_field in 'data type' 'exchange' 'symbol' 'interval' 'row count' 'returned time range'; do
   grep -Fq "${summary_field}" "${REFERENCE}" || fail "reference summary is missing ${summary_field}"
 done
-grep -Fq 'Never include the moox-skill signing key' "${REFERENCE}" || fail "reference does not prohibit credential disclosure"
+grep -Fq 'Never include Gateway secrets' "${REFERENCE}" || fail "reference does not prohibit credential disclosure"
 
 SKILL_ROOT="${TEST_ROOT}/install/skills/moox"
 mkdir -p "${SKILL_ROOT}/scripts" "${SKILL_ROOT}/config" "${TEST_ROOT}/path-bin"
@@ -40,7 +40,7 @@ cp "${WRAPPER_SOURCE}" "${SKILL_ROOT}/scripts/data-kline.sh"
 chmod +x "${SKILL_ROOT}/scripts/data-kline.sh"
 CONFIG="${SKILL_ROOT}/config/data-access.yaml"
 SECRET_SENTINEL='WRAPPER_TEST_SECRET_DO_NOT_PRINT_9vQ3'
-printf 'gateway:\n  secret: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
+printf 'storage:\n  app_key: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
 chmod 0600 "${CONFIG}"
 EXPECTED_CONFIG="$(cd "${SKILL_ROOT}/config" && pwd -P)/data-access.yaml"
 
@@ -80,13 +80,13 @@ for index in "${!example_files[@]}"; do
   expected_args="${TEST_ROOT}/example-$((index + 1)).expected"
   case "${index}" in
     0|1)
-      printf '%s\n' data kline get --config "${EXPECTED_CONFIG}" --data-type crypto --symbol BTC-USDT --interval 1m >"${expected_args}"
+      printf '%s\n' data skill kline get --config "${EXPECTED_CONFIG}" --data-type crypto --symbol BTC-USDT --interval 1m >"${expected_args}"
       ;;
     2)
-      printf '%s\n' data kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --limit 20 >"${expected_args}"
+      printf '%s\n' data skill kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --limit 20 >"${expected_args}"
       ;;
     3)
-      printf '%s\n' data kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z >"${expected_args}"
+      printf '%s\n' data skill kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z >"${expected_args}"
       ;;
   esac
   cmp -s "${expected_args}" "${TEST_ROOT}/example-$((index + 1)).args" || fail "example $((index + 1)) mapped unexpected flags"
@@ -97,10 +97,11 @@ CLI_ARGS_LOG="${TEST_ROOT}/path.args" CLI_MARKER_LOG="${TEST_ROOT}/path.marker" 
   --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --limit 20
 expected_config="${EXPECTED_CONFIG}"
 [[ "$(sed -n '1p' "${TEST_ROOT}/path.args")" == data ]] || fail "wrapper did not invoke data command"
-[[ "$(sed -n '2p' "${TEST_ROOT}/path.args")" == kline ]] || fail "wrapper did not invoke kline command"
-[[ "$(sed -n '3p' "${TEST_ROOT}/path.args")" == get ]] || fail "wrapper did not invoke get command"
-[[ "$(sed -n '4p' "${TEST_ROOT}/path.args")" == --config ]] || fail "wrapper did not inject --config"
-[[ "$(sed -n '5p' "${TEST_ROOT}/path.args")" == "${expected_config}" ]] || fail "wrapper config path is not absolute"
+[[ "$(sed -n '2p' "${TEST_ROOT}/path.args")" == skill ]] || fail "wrapper did not invoke skill command"
+[[ "$(sed -n '3p' "${TEST_ROOT}/path.args")" == kline ]] || fail "wrapper did not invoke kline command"
+[[ "$(sed -n '4p' "${TEST_ROOT}/path.args")" == get ]] || fail "wrapper did not invoke get command"
+[[ "$(sed -n '5p' "${TEST_ROOT}/path.args")" == --config ]] || fail "wrapper did not inject --config"
+[[ "$(sed -n '6p' "${TEST_ROOT}/path.args")" == "${expected_config}" ]] || fail "wrapper config path is not absolute"
 grep -qx -- '--data-type' "${TEST_ROOT}/path.args" || fail "wrapper did not forward data type"
 grep -qx -- 'BTC-USDT' "${TEST_ROOT}/path.args" || fail "wrapper did not preserve symbol"
 
@@ -128,13 +129,13 @@ if output="$(PATH="${TEST_ROOT}/path-bin:${PATH}" CLI_ARGS_LOG="${TEST_ROOT}/ove
   "${SKILL_ROOT}/scripts/data-kline.sh" --config /tmp/evil --data-type crypto --symbol BTC-USDT 2>&1)"; then
   fail "wrapper accepted caller --config"
 fi
-grep -Fq 'caller must not override --config' <<<"${output}" || fail "--config rejection is unclear"
+grep -Fq 'caller must not override packaged configuration' <<<"${output}" || fail "--config rejection is unclear"
 
 if output="$(PATH="${TEST_ROOT}/path-bin:${PATH}" CLI_ARGS_LOG="${TEST_ROOT}/override-eq.args" CLI_MARKER_LOG="${TEST_ROOT}/override-eq.marker" CLI_MARKER=path \
   "${SKILL_ROOT}/scripts/data-kline.sh" --config=/tmp/evil --data-type crypto --symbol BTC-USDT 2>&1)"; then
   fail "wrapper accepted caller --config=value"
 fi
-grep -Fq 'caller must not override --config' <<<"${output}" || fail "--config=value rejection is unclear"
+grep -Fq 'caller must not override packaged configuration' <<<"${output}" || fail "--config=value rejection is unclear"
 
 rm "${CONFIG}"
 if output="$(PATH="${TEST_ROOT}/path-bin:${PATH}" "${SKILL_ROOT}/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT 2>&1)"; then
@@ -143,7 +144,7 @@ fi
 grep -Fq 'packaged data-access config is missing or unsafe' <<<"${output}" || fail "missing config error is unclear"
 grep -Fq "${SECRET_SENTINEL}" <<<"${output}" && fail "config error leaked credential content"
 
-printf 'gateway:\n  secret: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
+printf 'storage:\n  app_key: %s\n' "${SECRET_SENTINEL}" >"${CONFIG}"
 chmod 0644 "${CONFIG}"
 if output="$(PATH="${TEST_ROOT}/path-bin:${PATH}" "${SKILL_ROOT}/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT 2>&1)"; then
   fail "wrapper accepted a non-0600 packaged config"
@@ -152,7 +153,7 @@ grep -Fq 'packaged data-access config must have permission 0600' <<<"${output}" 
 grep -Fq "${SECRET_SENTINEL}" <<<"${output}" && fail "config mode error leaked credential content"
 
 rm "${CONFIG}"
-printf 'gateway:\n  secret: %s\n' "${SECRET_SENTINEL}" >"${TEST_ROOT}/linked-config.yaml"
+printf 'storage:\n  app_key: %s\n' "${SECRET_SENTINEL}" >"${TEST_ROOT}/linked-config.yaml"
 chmod 0600 "${TEST_ROOT}/linked-config.yaml"
 ln -s "${TEST_ROOT}/linked-config.yaml" "${CONFIG}"
 if output="$(PATH="${TEST_ROOT}/path-bin:${PATH}" "${SKILL_ROOT}/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT 2>&1)"; then
@@ -161,17 +162,17 @@ fi
 grep -Fq 'packaged data-access config is missing or unsafe' <<<"${output}" || fail "symlink config error is unclear"
 grep -Fq "${SECRET_SENTINEL}" <<<"${output}" && fail "symlink config error leaked credential content"
 
-help="$(cd "${ROOT}/modules/cli" && go run ./cmd/moox-cli data kline get --help)"
+help="$(cd "${ROOT}/modules/cli" && go run ./cmd/moox-cli data skill kline get --help)"
 for flag in --config --data-type --exchange --symbol --interval --limit --start-time --end-time --timeout --output; do
   grep -Fq -- "${flag}" <<<"${help}" || fail "CLI help is missing ${flag}"
 done
 
-if missing_data_type="$(cd "${ROOT}/modules/cli" && go run ./cmd/moox-cli data kline get --symbol BTC-USDT 2>&1)"; then
+if missing_data_type="$(cd "${ROOT}/modules/cli" && go run ./cmd/moox-cli data skill kline get --symbol BTC-USDT 2>&1)"; then
   fail "CLI accepted a query without data-type"
 fi
 grep -Fq 'required flag(s) "data-type" not set' <<<"${missing_data_type}" || fail "CLI did not require data-type"
 
-if missing_symbol="$(cd "${ROOT}/modules/cli" && go run ./cmd/moox-cli data kline get --data-type crypto 2>&1)"; then
+if missing_symbol="$(cd "${ROOT}/modules/cli" && go run ./cmd/moox-cli data skill kline get --data-type crypto 2>&1)"; then
   fail "CLI accepted a query without symbol"
 fi
 grep -Fq 'required flag(s) "symbol" not set' <<<"${missing_symbol}" || fail "CLI did not require symbol"

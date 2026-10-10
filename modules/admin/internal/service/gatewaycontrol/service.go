@@ -1,169 +1,154 @@
-// Package gatewaycontrol 实现网关控制（trpc.moox.admin.GatewayControl）：向每台主机网关下发快照
-// （本机路由、全局服务目录、校验密钥），并接收心跳。只允许 host-gateway@<同一主机> 调用。
+// Package gatewaycontrol serves authenticated per-host configuration and
+// persists runtime heartbeats. Admin startup never seeds topology or keys here.
 package gatewaycontrol
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
-	"fmt"
-	"net"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/placement"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	trpc "trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/codec"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// Service 实现 GatewayControl。
+var instancePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+type NonceConsumer interface {
+	ConsumeGatewayControlNonce(context.Context, string, string, time.Duration) (bool, error)
+}
+
 type Service struct {
-	pb.UnimplementedGatewayControl
-	placements *placement.Service
-	keys       *keys.Service
-	now        func() time.Time
+	db            *gorm.DB
+	controlHostID string
+	master        string
+	keys          *keys.Store
+	nonces        NonceConsumer
+	now           func() time.Time
 }
 
-// NewService 创建网关控制服务。
-func NewService(placements *placement.Service, keys *keys.Service) *Service {
-	return &Service{placements: placements, keys: keys, now: func() time.Time { return time.Now().UTC() }}
-}
+func (*Service) String() string     { return "GatewayControl{per-host authenticated snapshots}" }
+func (s *Service) GoString() string { return s.String() }
 
-// Snapshot 是一台主机网关的完整快照，以及它的校验密钥范围。
-type Snapshot struct {
-	Proto   *pb.HostSnapshot
-	Callers []string
-}
-
-// Build 按当前部署编译一台主机的快照。
-func (s *Service) Build(ctx context.Context, hostID string) (Snapshot, error) {
-	compiled, err := s.placements.Compile(ctx)
+func NewService(db *gorm.DB, controlHostID, encryptionKey string, nonces NonceConsumer) (*Service, error) {
+	if !servicecatalog.ValidHostID(controlHostID) || nonces == nil {
+		return nil, errors.New("gateway control requires canonical control host and durable nonce store")
+	}
+	store, err := keys.NewStore(db, encryptionKey)
 	if err != nil {
-		return Snapshot{}, err
+		return nil, err
 	}
-	config, ok := compiled.HostConfig(hostID)
-	if !ok {
-		return Snapshot{}, fmt.Errorf("%w: 主机 %s", placement.ErrNotFound, hostID)
-	}
-	routeSnapshot, err := gatewayroute.NormalizeAndHashState(hostID, config.Disabled, config.Routes)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("编译主机 %s 的路由: %w", hostID, err)
-	}
-	verification, err := s.keys.VerificationKeys(ctx, keys.CategoryCaller, config.Callers)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	stateKeys := make([]gatewayroute.VerificationKey, 0, len(verification))
-	protoKeys := make([]*pb.VerificationKey, 0, len(verification))
-	for _, key := range verification {
-		stateKeys = append(stateKeys, gatewayroute.VerificationKey{KeyID: key.KeyID, Caller: key.Caller, Secret: key.Secret})
-		protoKeys = append(protoKeys, &pb.VerificationKey{KeyId: key.KeyID, Caller: key.Caller, Secret: key.Secret})
-	}
-	hash, err := gatewayroute.StateHash(routeSnapshot.RouteHash, compiled.Directory.Version, stateKeys)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	snapshot := &pb.HostSnapshot{
-		HostId: hostID, Hash: hash, GeneratedAt: s.now().Format(time.RFC3339Nano), Disabled: config.Disabled,
-		Directory: gatewayclient.DirectoryToProto(compiled.Directory), Keys: protoKeys,
-	}
-	for _, route := range routeSnapshot.Routes {
-		snapshot.Routes = append(snapshot.Routes, RouteToProto(route))
-	}
-	return Snapshot{Proto: snapshot, Callers: config.Callers}, nil
+	return &Service{db: db, controlHostID: controlHostID, master: encryptionKey, keys: store, nonces: nonces, now: time.Now}, nil
 }
 
-// RouteToProto 把路由转换为下发结构。
-func RouteToProto(route gatewayroute.Route) *pb.HostRoute {
-	return &pb.HostRoute{
-		ComponentId: route.ServiceID, ServicePath: route.ServicePath, Address: route.Address,
-		TimeoutMs: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes,
-		Methods: append([]string(nil), route.AllowedMethods...), Callers: append([]string(nil), route.AllowedCallers...),
-	}
+type verifiedCaller struct{}
+
+func sameHost(ctx context.Context, hostID string) bool {
+	caller, _ := ctx.Value(verifiedCaller{}).(string)
+	return servicecatalog.ValidHostID(hostID) && caller == "host-gateway@"+hostID
 }
 
-// PullSnapshot 按哈希返回变化：与主机网关当前的哈希相同时只返回 changed=false。
+func validHash(value string) bool {
+	raw, err := hex.DecodeString(value)
+	return err == nil && len(raw) == 32 && value == strings.ToLower(value)
+}
+
+func success() *pb.RetInfo { return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS} }
+
+func result(err error) *pb.RetInfo {
+	if err == nil {
+		return success()
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND, Msg: "主机不存在"}
+	}
+	return &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "网关控制状态读写失败"}
+}
+
 func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*pb.PullSnapshotRsp, error) {
-	hostID := strings.TrimSpace(req.GetHostId())
-	if err := authorize(ctx, hostID); err != nil {
-		return &pb.PullSnapshotRsp{RetInfo: retError(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	if !sameHost(ctx, req.GetHostId()) {
+		return nil, errors.New("gateway control caller must match request host")
 	}
-	snapshot, err := s.Build(ctx, hostID)
+	if req.GetCurrentHash() != "" && !validHash(req.GetCurrentHash()) {
+		return &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "current_hash 必须为 SHA-256"}}, nil
+	}
+	dao, err := sysdeploy.NewTopologyDAO(s.db, s.controlHostID)
 	if err != nil {
-		return &pb.PullSnapshotRsp{RetInfo: placementError(err)}, nil
+		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
 	}
-	if err := s.placements.SetExpectedHash(ctx, hostID, snapshot.Proto.GetHash()); err != nil {
-		return &pb.PullSnapshotRsp{RetInfo: placementError(err)}, nil
+	_, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId(), s.master)
+	if err != nil {
+		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
 	}
-	if req.GetCurrentHash() == snapshot.Proto.GetHash() {
-		return &pb.PullSnapshotRsp{RetInfo: retOK()}, nil
+	if snapshot.Hash == req.GetCurrentHash() {
+		return &pb.PullSnapshotRsp{RetInfo: success()}, nil
 	}
-	return &pb.PullSnapshotRsp{RetInfo: retOK(), Changed: true, Snapshot: snapshot.Proto}, nil
+	return &pb.PullSnapshotRsp{RetInfo: success(), Changed: true, Snapshot: snapshot}, nil
 }
 
-// ReportStatus 记录心跳，区分实例替换与冲突。
+func validReport(req *pb.ReportStatusReq) bool {
+	return instancePattern.MatchString(req.GetInstanceId()) &&
+		req.GetVersion() != "" && len(req.GetVersion()) <= 128 && utf8.ValidString(req.GetVersion()) &&
+		req.GetVersion() == strings.TrimSpace(req.GetVersion()) && !strings.ContainsFunc(req.GetVersion(), unicode.IsControl) &&
+		(req.GetAppliedHash() == "" || validHash(req.GetAppliedHash())) &&
+		req.GetRouteCount() >= 0 && req.GetRouteCount() <= 10000 &&
+		len(req.GetError()) <= 4096 && utf8.ValidString(req.GetError())
+}
+
 func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*pb.ReportStatusRsp, error) {
-	hostID := strings.TrimSpace(req.GetHostId())
-	if err := authorize(ctx, hostID); err != nil {
-		return &pb.ReportStatusRsp{RetInfo: retError(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	if !sameHost(ctx, req.GetHostId()) {
+		return nil, errors.New("gateway control caller must match request host")
 	}
-	report := placement.GatewayReport{
-		HostID: hostID, InstanceID: strings.TrimSpace(req.GetInstanceId()), Version: strings.TrimSpace(req.GetVersion()),
-		AppliedHash: strings.TrimSpace(req.GetAppliedHash()), RouteCount: req.GetRouteCount(), LastError: req.GetLastError(),
+	if !validReport(req) {
+		return &pb.ReportStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "无效的网关心跳"}}, nil
 	}
-	if raw := strings.TrimSpace(req.GetCertificateNotAfter()); raw != "" {
-		notAfter, err := time.Parse(time.RFC3339, raw)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Serialize read/modify/write with all live/offline topology and key
+		// writers. ExpectedHash and status describe the same database state.
+		if err := tx.Exec("UPDATE t_host_gateway_status SET c_host_id = c_host_id WHERE 0").Error; err != nil {
+			return err
+		}
+		dao, err := sysdeploy.NewTopologyDAO(tx, s.controlHostID)
 		if err != nil {
-			return &pb.ReportStatusRsp{RetInfo: retError(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("证书到期时间 %q 不是 RFC3339: %w", raw, err))}, nil
+			return err
 		}
-		report.CertificateNotAfter = &notAfter
-	}
-	_, err := s.placements.RecordGatewayReport(ctx, report)
-	if err != nil {
-		return &pb.ReportStatusRsp{RetInfo: placementError(err)}, nil
-	}
-	return &pb.ReportStatusRsp{RetInfo: retOK()}, nil
-}
-
-// authorize 只允许 host-gateway@<请求中的主机> 调用。调用方身份由主机网关在转发时写入；
-// control 的主机网关直连本机端口时自己写入同一个元数据。
-func authorize(ctx context.Context, hostID string) error {
-	if hostID == "" {
-		return errors.New("缺少主机 ID")
-	}
-	// 网关控制只在本机回环上提供：对端不是回环地址说明监听配置漂移到了外部地址，此时元数据没有任何可信度。
-	if remote := codec.Message(ctx).RemoteAddr(); remote != nil {
-		if host, _, err := net.SplitHostPort(remote.String()); err == nil {
-			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-				return fmt.Errorf("网关控制只接受本机回环地址的调用，对端是 %s", remote)
-			}
+		_, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId(), s.master)
+		if err != nil {
+			return err
 		}
-	}
-	caller := strings.TrimSpace(string(trpc.GetMetaData(ctx, gatewayroute.MetadataVerifiedCaller)))
-	if want := servicecatalog.HostGatewayIdentity(hostID); caller != want {
-		return fmt.Errorf("调用方 %q 不能代表主机 %s，只允许 %s", caller, hostID, want)
-	}
-	return nil
+		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId()}
+		err = tx.Where("c_host_id = ?", req.GetHostId()).First(&status).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		now := s.now().UTC()
+		updateInstance(&status, req.GetInstanceId(), now)
+		status.Version, status.ExpectedHash, status.AppliedHash = req.GetVersion(), snapshot.Hash, req.GetAppliedHash()
+		status.RouteCount, status.LastError, status.LastSeenAt = int64(req.GetRouteCount()), req.GetError(), &now
+		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, UpdateAll: true}).Create(&status).Error
+	})
+	return &pb.ReportStatusRsp{RetInfo: result(err)}, nil
 }
 
-func retOK() *pb.RetInfo { return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "ok"} }
-
-func retError(code pb.ErrorCode, err error) *pb.RetInfo {
-	return &pb.RetInfo{Code: code, Msg: err.Error()}
-}
-
-// placementError 把部署相关的错误转换为返回码。
-func placementError(err error) *pb.RetInfo {
-	switch {
-	case errors.Is(err, placement.ErrNotFound):
-		return retError(pb.ErrorCode_NOT_FOUND, err)
-	case errors.Is(err, placement.ErrInvalid):
-		return retError(pb.ErrorCode_INVALID_PARAM, err)
-	default:
-		return retError(pb.ErrorCode_INNER_ERR, err)
+func updateInstance(status *sysdeploy.HostGatewayStatus, instance string, now time.Time) {
+	status.ClearExpiredConflict(now)
+	if status.InstanceID == "" {
+		status.InstanceID = instance
+		return
 	}
+	if status.InstanceID == instance {
+		return
+	}
+	if status.PreviousInstanceID == instance && status.ReplacedAt != nil && now.Before(status.ReplacedAt.Add(sysdeploy.GatewayConflictWindow)) {
+		status.ConflictInstanceID, status.ConflictSeenAt = status.InstanceID, &now
+	}
+	status.PreviousInstanceID, status.ReplacedAt, status.InstanceID = status.InstanceID, &now, instance
 }

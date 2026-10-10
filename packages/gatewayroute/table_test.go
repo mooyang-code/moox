@@ -13,14 +13,14 @@ func TestTableReplaceRejectsHashMismatchWithoutChangingCurrentSnapshot(t *testin
 	}
 	bad := good
 	bad.RouteHash = "not-the-hash"
-	bad.Routes = []Route{{ServiceID: "storage", Address: "127.0.0.1:8081", ServicePath: "trpc.moox.Storage", AllowedMethods: []string{"SearchRecordRows"}, AllowedCallers: []string{"console"}}}
+	bad.Routes = []Route{{ServiceID: "storage", Address: "127.0.0.1:8081", ServicePath: "trpc.moox.Storage", AllowedMethods: []string{"SearchRecordRows"}, AllowedCallers: []string{"admin-gateway"}}}
 	if err := table.Replace(bad); err == nil {
 		t.Fatal("Replace accepted a bad hash")
 	}
-	if _, _, ok := table.ResolveRPC("/trpc.moox.Admin/Login"); !ok {
+	if _, ok := table.Resolve("admin"); !ok {
 		t.Fatal("failed Replace changed current snapshot")
 	}
-	if _, _, ok := table.ResolveRPC("/trpc.moox.Storage/SearchRecordRows"); ok {
+	if _, ok := table.Resolve("storage"); ok {
 		t.Fatal("failed Replace partially installed routes")
 	}
 }
@@ -40,7 +40,7 @@ func TestTableReplaceRejectsAnInvalidRouteWithoutChangingCurrentSnapshot(t *test
 	if err := table.Replace(invalid); err == nil {
 		t.Fatal("Replace accepted a non-loopback route")
 	}
-	route, _, ok := table.ResolveRPC("/trpc.moox.Admin/Login")
+	route, ok := table.Resolve("admin")
 	if !ok || route.Address != "127.0.0.1:8080" {
 		t.Fatalf("failed Replace changed current route: %+v, %v", route, ok)
 	}
@@ -56,14 +56,14 @@ func TestTableReplaceAndResolveAreImmutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Routes[0].Address = "127.0.0.1:9999"
-	route, _, ok := table.ResolveRPC("/trpc.moox.Admin/Login")
+	route, ok := table.Resolve("admin")
 	if !ok || route.Address != "127.0.0.1:8080" {
-		t.Fatalf("ResolveRPC = %+v, %v", route, ok)
+		t.Fatalf("Resolve = %+v, %v", route, ok)
 	}
 	route.Address = "127.0.0.1:7777"
-	again, _, _ := table.ResolveRPC("/trpc.moox.Admin/Login")
+	again, _ := table.Resolve("admin")
 	if again.Address != "127.0.0.1:8080" {
-		t.Fatalf("ResolveRPC exposed live route: %+v", again)
+		t.Fatalf("Resolve exposed live route: %+v", again)
 	}
 }
 
@@ -83,8 +83,8 @@ func TestTableAllowsEmptySnapshotAndHonorsDisabled(t *testing.T) {
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := table.ResolveRPC("/trpc.moox.Admin/Login"); ok {
-		t.Fatal("ResolveRPC returned a route from a disabled snapshot")
+	if _, ok := table.Resolve("admin"); ok {
+		t.Fatal("Resolve returned a route from a disabled snapshot")
 	}
 }
 
@@ -102,7 +102,7 @@ func TestTableAcceptsStateAwareEnabledAndDisabledHashes(t *testing.T) {
 }
 
 func TestTableDeepCopiesAllowedMethods(t *testing.T) {
-	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"*"}}})
+	snapshot, err := NormalizeAndHash("node-1", []Route{{ServiceID: "sysdeploy", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListPlacements"}, AllowedCallers: []string{"*"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,14 +111,32 @@ func TestTableDeepCopiesAllowedMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Routes[0].AllowedMethods[0] = "DeleteHost"
-	route, _, ok := table.ResolveRPC("/trpc.moox.ops.SysDeploy/ListHosts")
-	if !ok || !route.AllowsMethod("ListHosts") || route.AllowsMethod("DeleteHost") {
+	route, ok := table.Resolve("sysdeploy")
+	if !ok || !route.AllowsMethod("ListPlacements") || route.AllowsMethod("DeleteHost") {
 		t.Fatalf("table methods mutated: %+v", route)
 	}
-	route.AllowedMethods[0] = "CreateGatewayNode"
-	again, _, _ := table.ResolveRPC("/trpc.moox.ops.SysDeploy/ListHosts")
-	if !again.AllowsMethod("ListHosts") {
+	route.AllowedMethods[0] = "SyncHostPlacements"
+	again, _ := table.Resolve("sysdeploy")
+	if !again.AllowsMethod("ListPlacements") {
 		t.Fatalf("resolved method slice was live: %+v", again)
+	}
+}
+
+func TestTableResolveMethodSelectsDisjointServiceRoute(t *testing.T) {
+	snapshot, err := NormalizeAndHash("node-1", []Route{
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20200", ServicePath: "trpc.moox.storage.Metadata", AllowedMethods: []string{"GetSpace"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "storage-primary", Address: "127.0.0.1:20201", ServicePath: "trpc.moox.storage.PrimaryStore", AllowedMethods: []string{"ReadTimeSeriesRows"}, AllowedCallers: []string{"storage-view"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table Table
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	route, ok := table.ResolveMethod("storage-primary", "ReadTimeSeriesRows")
+	if !ok || route.Address != "127.0.0.1:20201" {
+		t.Fatalf("ResolveMethod = %+v, %v", route, ok)
 	}
 }
 
@@ -145,8 +163,8 @@ func TestTableResolveRPCUsesServicePathAndMethodAllowlist(t *testing.T) {
 
 func TestTableResolveRPCForCallerSelectsDisjointNativeRoute(t *testing.T) {
 	snapshot, err := NormalizeAndHash("node-1", []Route{
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"console"}},
-		{ServiceID: "trade-owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
+		{ServiceID: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
+		{ServiceID: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +173,7 @@ func TestTableResolveRPCForCallerSelectsDisjointNativeRoute(t *testing.T) {
 	if err := table.Replace(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct{ caller, service string }{{"console", "trade"}, {"strategy", "trade-owner"}} {
+	for _, test := range []struct{ caller, service string }{{"admin-gateway", "trade_console"}, {"strategy", "trade_owner"}} {
 		route, method, ok := table.ResolveRPCForCaller("/trpc.moox.trade.TradeConsoleService/GetLogicalAccount", test.caller)
 		if !ok || method != "GetLogicalAccount" || route.ServiceID != test.service {
 			t.Fatalf("caller %q resolved route=%+v method=%q ok=%v", test.caller, route, method, ok)

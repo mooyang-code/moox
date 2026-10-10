@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -11,11 +10,10 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
+	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -59,23 +57,15 @@ func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, dom
 	}
 }
 
-// newPlacementSource 返回经 gatewayclient 读取 SysDeploy 主机与部署的来源；运行时没有 gatewayclient 时返回 nil。
-func newPlacementSource(runtime *Runtime) placement.Source {
-	if runtime == nil || runtime.Gateway == nil {
-		return nil
-	}
-	return placement.NewClientSource(runtime.Gateway.ClientOptions(gatewayclient.WithTimeout(10 * time.Second)))
-}
-
 func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
 	if cfg == nil || runtime == nil {
 		return nil
 	}
-	if !cfg.PlacementChecks.Enabled {
+	if !cfg.Placement.Enabled {
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := placement.NewSyncer(runtime.Repositories.Checks, newPlacementSource(runtime), nil)
+	syncer := monitorplacement.NewSyncer(runtime.Repositories.Topology, monitorplacement.NewClientSource(runtime.Gateway), cfg.Placement.HTTPS, runtime.Repositories.Gateways)
 	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
 		count, err := syncer.Sync(syncCtx)
 		if err != nil {
@@ -97,15 +87,12 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 	return syncFunc
 }
 
-// placementTimerService 是按部署同步健康检查的定时器。
-const placementTimerService = "trpc.moox.monitor.placement.timer"
-
 func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) error) {
 	if s == nil {
 		log.Warn("monitor placement timer server is unavailable, skip register")
 		return
 	}
-	service := s.Service(placementTimerService)
+	service := s.Service("trpc.moox.monitor.placement.timer")
 	if service == nil {
 		log.Warn("monitor placement timer service is not configured, skip register")
 		return

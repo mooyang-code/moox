@@ -3,348 +3,263 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/mooyang-code/moox/modules/egressproxy/internal/resolver"
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 )
 
-// testProxy 启动一个 HTTPS 目标，返回把所有域名都连到这个目标的出口代理。
-func testProxy(t *testing.T, maxBody int64, handler http.HandlerFunc) (*Server, *atomic.Int32) {
+func tlsFixture(t *testing.T, handler http.HandlerFunc) (*Proxy, *http.Transport) {
 	t.Helper()
-	var calls atomic.Int32
-	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		handler(w, r)
-	}))
-	t.Cleanup(backend.Close)
-	transport := backend.Client().Transport.(*http.Transport).Clone()
-	address := backend.Listener.Addr().String()
+	upstream := httptest.NewTLSServer(handler)
+	t.Cleanup(upstream.Close)
+	endpoint, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+	transport := upstream.Client().Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig.ServerName = endpoint.Hostname()
+	transport.DisableCompression = true
 	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, address)
+		return (&net.Dialer{}).DialContext(ctx, network, endpoint.Host)
 	}
-	// httptest 的证书签给 example.com，用它校验目标证书。
-	transport.TLSClientConfig.ServerName = "example.com"
-	server, err := New(Config{
-		Domains: []string{"*.binance.com", "data-api.binance.vision"}, MaxResponseBytes: maxBody, Transport: transport,
-	}, nil, nil)
+	handlerProxy, err := New(Options{Domains: []string{"*.binance.com"}, HTTPClient: &http.Client{Transport: transport}})
 	require.NoError(t, err)
-	return server, &calls
+	t.Cleanup(handlerProxy.Close)
+	return handlerProxy, transport
 }
 
-func TestNewRejectsEmptyWhitelist(t *testing.T) {
-	_, err := New(Config{}, nil, nil)
-	require.ErrorContains(t, err, "白名单不能为空")
+func request() *egresspb.DoReq {
+	return &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/api/v3/exchangeInfo", Query: "symbol=A%2FB&empty=&plus=a+b", TimeoutMs: 1000}
 }
 
-func TestDoForwardsAllowedRequestAndFiltersHeaders(t *testing.T) {
-	server, calls := testProxy(t, 0, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "/fapi/v1/exchangeInfo", r.URL.Path)
-		require.Equal(t, "symbol=BTCUSDT&limit=2", r.URL.RawQuery)
-		require.Equal(t, "fapi.binance.com", r.Host, "请求发往调用方指定的域名")
-		require.Equal(t, "moox-collector", r.Header.Get("User-Agent"))
-		require.Empty(t, r.Header.Get("Authorization"), "白名单之外的请求头不转发")
-		require.Empty(t, r.Header.Get("Cookie"))
-		w.Header().Set("X-Mbx-Used-Weight-1m", "12")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"symbols":[]}`)
-	})
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{
-		Method: "get", Host: "FAPI.binance.com", Path: "/fapi/v1/exchangeInfo", Query: "symbol=BTCUSDT&limit=2",
-		Headers: map[string]string{"user-agent": "moox-collector", "Authorization": "secret", "Cookie": "c=1"},
-	})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.EqualValues(t, http.StatusOK, rsp.GetStatus())
-	require.Equal(t, `{"symbols":[]}`, string(rsp.GetBody()))
-	require.Equal(t, "12", rsp.GetHeaders()["X-Mbx-Used-Weight-1m"])
-	require.EqualValues(t, 1, calls.Load())
-}
-
-func TestDoRejectsDomainOutsideAllowlist(t *testing.T) {
-	server, calls := testProxy(t, 0, func(http.ResponseWriter, *http.Request) {})
-	for _, host := range []string{"evil.example.com", "binance.com", "fapi.binance.com.evil.io"} {
-		rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: host, Path: "/"})
-		require.NoError(t, err)
-		require.Equal(t, commonpb.ErrorCode_NO_PERMISSION, rsp.GetRetInfo().GetCode(), host)
-	}
-	require.Zero(t, calls.Load(), "白名单之外的域名不能发出请求")
-}
-
-func TestDoPassesThroughUpstreamErrorStatus(t *testing.T) {
-	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusInternalServerError} {
-		server, _ := testProxy(t, 0, func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Retry-After", "3")
-			w.WriteHeader(status)
-			_, _ = io.WriteString(w, `{"code":-1003}`)
-		})
-		rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/api/v3/klines"})
-		require.NoError(t, err)
-		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "目标返回的 HTTP 错误不是代理错误")
-		require.EqualValues(t, status, rsp.GetStatus())
-		require.Equal(t, "3", rsp.GetHeaders()["Retry-After"])
-		require.Equal(t, `{"code":-1003}`, string(rsp.GetBody()))
-	}
-}
-
-func TestDoDecompressesAndBoundsResponse(t *testing.T) {
-	payload := strings.Repeat("k", 4096)
-	server, _ := testProxy(t, 8192, func(w http.ResponseWriter, r *http.Request) {
-		require.Contains(t, r.Header.Get("Accept-Encoding"), "gzip", "出口代理自己请求压缩")
-		w.Header().Set("Content-Encoding", "gzip")
-		writer := gzip.NewWriter(w)
-		_, _ = io.WriteString(writer, payload)
-		_ = writer.Close()
-	})
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/api/v3/exchangeInfo"})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, payload, string(rsp.GetBody()), "返回解压后的响应")
-	require.NotContains(t, rsp.GetHeaders(), "Content-Encoding")
-
-	large, _ := testProxy(t, 1024, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, strings.Repeat("x", 2048))
-	})
-	rsp, err = large.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/big"})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "超过 1024 字节")
-	require.Empty(t, rsp.GetBody())
-}
-
-func TestDoDoesNotFollowRedirects(t *testing.T) {
-	server, calls := testProxy(t, 0, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "https://evil.example.com/steal", http.StatusFound)
-	})
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/moved"})
-	require.NoError(t, err)
-	require.EqualValues(t, http.StatusFound, rsp.GetStatus(), "重定向原样返回给调用方")
-	require.Equal(t, "https://evil.example.com/steal", rsp.GetHeaders()["Location"])
-	require.EqualValues(t, 1, calls.Load())
-}
-
-func TestDoPostsBodyAndRejectsInvalidRequests(t *testing.T) {
-	server, calls := testProxy(t, 0, func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		_, _ = w.Write(body)
-	})
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{
-		Method: "POST", Host: "api.binance.com", Path: "/echo", Body: []byte(`{"a":1}`), Headers: map[string]string{"Content-Type": "application/json"},
-	})
-	require.NoError(t, err)
-	require.Equal(t, `{"a":1}`, string(rsp.GetBody()))
-	require.EqualValues(t, 1, calls.Load())
-
-	for name, req := range map[string]*egresspb.DoReq{
-		"nil":            nil,
-		"method":         {Method: "PUT", Host: "api.binance.com", Path: "/"},
-		"port":           {Method: "GET", Host: "api.binance.com:443", Path: "/"},
-		"ip":             {Method: "GET", Host: "1.2.3.4", Path: "/"},
-		"relative path":  {Method: "GET", Host: "api.binance.com", Path: "api/v3"},
-		"path query":     {Method: "GET", Host: "api.binance.com", Path: "/a?b=1"},
-		"crlf query":     {Method: "GET", Host: "api.binance.com", Path: "/a", Query: "a=1\r\nX: y"},
-		"timeout":        {Method: "GET", Host: "api.binance.com", Path: "/", TimeoutMs: 60001},
-		"get with body":  {Method: "GET", Host: "api.binance.com", Path: "/", Body: []byte("x")},
-		"bad path utf-8": {Method: "GET", Host: "api.binance.com", Path: "/%zz"},
-	} {
-		rsp, err := server.Do(context.Background(), req)
-		require.NoError(t, err, name)
-		require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), name)
-	}
-	require.EqualValues(t, 1, calls.Load(), "无效请求不能发出")
-}
-
-func TestDoReportsTransportFailureAndTimeout(t *testing.T) {
-	server, err := New(Config{Domains: []string{"api.binance.com"}, Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("connection refused")
-	})}, nil, nil)
-	require.NoError(t, err)
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/"})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "connection refused")
-	require.Zero(t, rsp.GetStatus())
-
-	slow, _ := testProxy(t, 0, func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-		case <-time.After(2 * time.Second):
+func TestHTTPSPreservesStatusBodyAndFiltersHeaders(t *testing.T) {
+	for _, status := range []int{200, 429, 500, 503} {
+		for _, encoding := range []string{"identity", "gzip", "deflate", "br"} {
+			t.Run(http.StatusText(status)+"/"+encoding, func(t *testing.T) {
+				capturedRequests := make(chan *http.Request, 1)
+				payload := []byte(`{"symbols":["BTCUSDT"]}`)
+				p, _ := tlsFixture(t, func(w http.ResponseWriter, r *http.Request) {
+					capturedRequests <- r.Clone(context.Background())
+					w.Header().Set("Content-Encoding", encoding)
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Retry-After", "3")
+					w.Header().Set("X-Mbx-Used-Weight-1m", "9")
+					w.Header().Set("Set-Cookie", "private=value")
+					w.Header().Set("Connection", "keep-alive")
+					w.WriteHeader(status)
+					writer := io.Writer(w)
+					var closer io.Closer
+					switch encoding {
+					case "gzip":
+						zipper := gzip.NewWriter(w)
+						writer, closer = zipper, zipper
+					case "deflate":
+						zipper := zlib.NewWriter(w)
+						writer, closer = zipper, zipper
+					case "br":
+						zipper := brotli.NewWriter(w)
+						writer, closer = zipper, zipper
+					}
+					_, _ = writer.Write(payload)
+					if closer != nil {
+						_ = closer.Close()
+					}
+				})
+				req := request()
+				req.Method, req.Body = "POST", []byte("input")
+				req.Headers = map[string]string{"Accept": "application/json", "Content-Type": "application/json", "Authorization": "secret", "Cookie": "secret", "X-Space-Id": "space", "Host": "evil.test", "Accept-Encoding": "evil", "Connection": "upgrade"}
+				rsp, err := p.Do(context.Background(), req)
+				require.NoError(t, err)
+				require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+				require.Equal(t, int32(status), rsp.Status)
+				require.Equal(t, payload, rsp.Body)
+				captured := <-capturedRequests
+				require.Equal(t, "api.binance.com", captured.Host)
+				require.Equal(t, req.Path+"?"+req.Query, captured.RequestURI)
+				require.Equal(t, "application/json", captured.Header.Get("Accept"))
+				require.Equal(t, "gzip, deflate, br", captured.Header.Get("Accept-Encoding"))
+				for _, header := range []string{"Authorization", "Cookie", "X-Space-Id", "Connection"} {
+					require.Empty(t, captured.Header.Get(header), header)
+				}
+				require.Equal(t, "3", rsp.Headers["Retry-After"])
+				require.Equal(t, "9", rsp.Headers["X-Mbx-Used-Weight-1m"])
+				for _, header := range []string{"Content-Encoding", "Content-Length", "Set-Cookie", "Connection"} {
+					require.NotContains(t, rsp.Headers, header)
+				}
+			})
 		}
-	})
-	rsp, err = slow.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/slow", TimeoutMs: 100})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode(), "超时是代理错误")
+	}
 }
 
-func TestNewRejectsUnsafeConfiguration(t *testing.T) {
-	_, err := New(Config{Domains: []string{"api.binance.com"}, Headers: []string{"Accept-Encoding"}}, nil, nil)
-	require.Error(t, err, "压缩由出口代理处理，不能转发调用方的 Accept-Encoding")
-	_, err = New(Config{Domains: []string{"api.binance.com"}, DefaultTimeout: 2 * time.Minute}, nil, nil)
-	require.Error(t, err)
-	_, err = New(Config{}, nil, nil)
-	require.Error(t, err)
-}
-
-// 以下与交易服务原 DNSResolverServer 的测试一致，确认迁移后结果不变。
-
-func TestResolveDomainsMapsResultsAndUnresolvedDomains(t *testing.T) {
-	service := dnsServer(t, resolver.New(resolver.Config{
-		Domains: []string{"good.example.com", "bad.example.com"},
-		LookupHost: func(_ context.Context, domain string) ([]string, error) {
-			if domain == "bad.example.com" {
-				return nil, errors.New("lookup failed")
-			}
-			return []string{"8.8.8.8"}, nil
-		},
-		DialContext: func(context.Context, string, string) (net.Conn, error) { return &fakeConn{}, nil },
-	}))
-	rsp, err := service.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{
-		Domains: []string{"good.example.com", "bad.example.com"}, MaxIpsPerDomain: 1,
+func TestRejectsRequestsBeforeSendingAndDoesNotFollowRedirects(t *testing.T) {
+	var calls atomic.Int32
+	p, _ := tlsFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Location", "http://127.0.0.1/private")
+		w.WriteHeader(http.StatusFound)
 	})
+	invalid := []func(*egresspb.DoReq){
+		func(r *egresspb.DoReq) { r.Method = "CONNECT" },
+		func(r *egresspb.DoReq) { r.Host = "api.binance.com.evil" },
+		func(r *egresspb.DoReq) { r.Host = "api.binance.com:443" },
+		func(r *egresspb.DoReq) { r.Host = "127.0.0.1" },
+		func(r *egresspb.DoReq) { r.Path = "https://api.binance.com/x" },
+		func(r *egresspb.DoReq) { r.Path = "//evil.test/x" },
+		func(r *egresspb.DoReq) { r.Path = "/x?y=z" },
+		func(r *egresspb.DoReq) { r.Query = "x=%XX" },
+		func(r *egresspb.DoReq) { r.Query = "x=1#hidden" },
+		func(r *egresspb.DoReq) { r.Headers = map[string]string{"Accept": "x\r\nInjected: yes"} },
+		func(r *egresspb.DoReq) { r.Headers = map[string]string{"Accept": "a", "accept": "b"} },
+		func(r *egresspb.DoReq) { r.TimeoutMs = 60001 },
+		func(r *egresspb.DoReq) { r.Body = make([]byte, MaxRequestBytes+1) },
+	}
+	for _, mutate := range invalid {
+		req := request()
+		mutate(req)
+		rsp, err := p.Do(context.Background(), req)
+		require.NoError(t, err)
+		require.NotEqual(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+		require.Empty(t, rsp.Body)
+	}
+	require.Zero(t, calls.Load())
+	rsp, err := p.Do(context.Background(), request())
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Len(t, rsp.GetResolutions(), 1)
-	require.Equal(t, "good.example.com", rsp.GetResolutions()[0].GetDomain())
-	require.Equal(t, "8.8.8.8", rsp.GetResolutions()[0].GetIps()[0].GetIp())
-	require.GreaterOrEqual(t, rsp.GetResolutions()[0].GetIps()[0].GetTcpConnectLatencyMs(), uint32(1))
-	require.Equal(t, []string{"bad.example.com"}, rsp.GetUnresolvedDomains())
+	require.Equal(t, int32(http.StatusFound), rsp.Status)
+	require.Equal(t, int32(1), calls.Load())
 }
 
-func TestResolveDomainsMapsInvalidAndDisabled(t *testing.T) {
-	service := dnsServer(t, resolver.New(resolver.Config{Domains: []string{"good.example.com"}}))
-	rsp, err := service.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"https://good.example.com"}})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-
-	rsp, err = service.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"good.example.com"}, MaxIpsPerDomain: 5})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "每个域名最多 4 个地址")
-
-	disabled := dnsServer(t, nil)
-	rsp, err = disabled.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"good.example.com"}})
-	require.NoError(t, err)
-	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-
-	rsp, err = service.ResolveDomains(context.Background(), nil)
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func dnsServer(t *testing.T, dns *resolver.Resolver) *Server {
-	t.Helper()
-	server, err := New(Config{Domains: []string{"api.binance.com"}}, dns, nil)
-	require.NoError(t, err)
-	return server
-}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
-type fakeConn struct{}
-
-func (*fakeConn) Read([]byte) (int, error)         { return 0, errors.New("not implemented") }
-func (*fakeConn) Write([]byte) (int, error)        { return 0, errors.New("not implemented") }
-func (*fakeConn) Close() error                     { return nil }
-func (*fakeConn) LocalAddr() net.Addr              { return fakeAddr("local") }
-func (*fakeConn) RemoteAddr() net.Addr             { return fakeAddr("remote") }
-func (*fakeConn) SetDeadline(time.Time) error      { return nil }
-func (*fakeConn) SetReadDeadline(time.Time) error  { return nil }
-func (*fakeConn) SetWriteDeadline(time.Time) error { return nil }
-
-type fakeAddr string
-
-func (a fakeAddr) Network() string { return "tcp" }
-func (a fakeAddr) String() string  { return string(a) }
-
-// 失败信息里不能带 query：以后若用于带签名的请求，签名会随错误写进日志、返回给调用方。
-func TestDoFailureMessageOmitsQuery(t *testing.T) {
-	server, err := New(Config{Domains: []string{"api.binance.com"}, Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("connection refused")
-	})}, nil, nil)
-	require.NoError(t, err)
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/api", Query: "signature=SECRETSIG&timestamp=1"})
-	require.NoError(t, err)
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "connection refused")
-	require.NotContains(t, rsp.GetRetInfo().GetMsg(), "SECRETSIG")
-}
-
-// 并发请求数有上限：超过时直接拒绝，不让重试风暴占满 compute-1。
-func TestDoRejectsWhenTooManyRequestsAreInflight(t *testing.T) {
-	release := make(chan struct{})
-	started := make(chan struct{}, maxInflight)
-	server, err := New(Config{Domains: []string{"api.binance.com"}, Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-		started <- struct{}{}
-		<-release
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}, Request: r}, nil
-	})}, nil, nil)
-	require.NoError(t, err)
-	done := make(chan struct{}, maxInflight)
-	for i := 0; i < maxInflight; i++ {
-		go func() {
-			_, _ = server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/"})
-			done <- struct{}{}
-		}()
-	}
-	for i := 0; i < maxInflight; i++ {
-		<-started
-	}
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/"})
+func TestTLSVerificationAndContextDeadline(t *testing.T) {
+	p, transport := tlsFixture(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
+	transport.TLSClientConfig.RootCAs = x509.NewCertPool()
+	rsp, err := p.Do(context.Background(), request())
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "繁忙")
-	close(release)
-	for i := 0; i < maxInflight; i++ {
-		<-done
+	var deadline time.Duration
+	client, err := New(Options{Domains: []string{"*.binance.com"}, HTTPClient: &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+		limit, ok := r.Context().Deadline()
+		if ok {
+			deadline = time.Until(limit)
+		}
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}})
+	require.NoError(t, err)
+	t.Cleanup(client.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	rsp, err = client.Do(ctx, request())
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.Positive(t, deadline)
+	require.LessOrEqual(t, deadline, 20*time.Millisecond)
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+func TestDecodedLimitRejectsCompressedExpansionAndMalformedEncoding(t *testing.T) {
+	var compressed bytes.Buffer
+	zipper := gzip.NewWriter(&compressed)
+	_, err := io.CopyN(zipper, zeroReader{}, MaxResponseBytes+1)
+	require.NoError(t, err)
+	require.NoError(t, zipper.Close())
+	for _, fixture := range []struct {
+		encoding string
+		body     []byte
+	}{
+		{"gzip", compressed.Bytes()}, {"gzip", []byte("broken")}, {"deflate", []byte("broken")}, {"unknown", []byte("data")},
+	} {
+		response := &http.Response{Header: http.Header{"Content-Encoding": []string{fixture.encoding}}, Body: io.NopCloser(bytes.NewReader(fixture.body))}
+		body, err := decodedBody(response)
+		require.Error(t, err)
+		require.Empty(t, body)
 	}
+	body, err := decodedBody(&http.Response{Header: http.Header{}, Body: io.NopCloser(io.LimitReader(zeroReader{}, MaxResponseBytes))})
+	require.NoError(t, err)
+	require.Len(t, body, MaxResponseBytes)
 }
 
-func TestDoCompressesLargeResponseForTransfer(t *testing.T) {
-	payload := strings.Repeat(`{"symbol":"BTCUSDT"},`, 20000)
-	server, _ := testProxy(t, 8<<20, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, payload)
-	})
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/api/v3/exchangeInfo"})
+func TestDNSRPCPreservesSortedResultsCacheAndUnresolvedDomains(t *testing.T) {
+	var lookups atomic.Int32
+	dns := resolver.New(resolver.Config{Domains: []string{"api.binance.com"}, LookupHost: func(context.Context, string) ([]string, error) {
+		lookups.Add(1)
+		return []string{"8.8.4.4", "127.0.0.1", "8.8.8.8", "8.8.4.4"}, nil
+	}, DialContext: func(context.Context, string, string) (net.Conn, error) {
+		left, right := net.Pipe()
+		_ = right.Close()
+		return left, nil
+	}})
+	p, err := New(Options{Resolver: dns})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, "gzip", rsp.GetHeaders()[BodyEncodingHeader])
-	require.Less(t, len(rsp.GetBody()), len(payload)/5, "大响应压缩后才跨地域传输")
-	reader, err := gzip.NewReader(bytes.NewReader(rsp.GetBody()))
+	t.Cleanup(p.Close)
+	for i := 0; i < 2; i++ {
+		rsp, err := p.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"missing.test", "API.BINANCE.COM.", "api.binance.com"}, MaxIpsPerDomain: 1})
+		require.NoError(t, err)
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+		require.Equal(t, []string{"missing.test"}, rsp.UnresolvedDomains)
+		require.Len(t, rsp.Resolutions, 1)
+		require.Equal(t, "api.binance.com", rsp.Resolutions[0].Domain)
+		require.Len(t, rsp.Resolutions[0].Ips, 1)
+		require.Contains(t, []string{"8.8.4.4", "8.8.8.8"}, rsp.Resolutions[0].Ips[0].Ip)
+	}
+	require.Equal(t, int32(1), lookups.Load())
+	rsp, err := p.ResolveDomains(context.Background(), &egresspb.ResolveDomainsReq{Domains: []string{"127.0.0.1"}})
 	require.NoError(t, err)
-	plain, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	require.Equal(t, payload, string(plain))
-
-	small, _ := testProxy(t, 8<<20, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `{"ok":true}`)
-	})
-	rsp, err = small.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/small"})
-	require.NoError(t, err)
-	require.NotContains(t, rsp.GetHeaders(), BodyEncodingHeader, "小响应不压缩")
-	require.Equal(t, `{"ok":true}`, string(rsp.GetBody()))
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestDoDropsForgedBodyEncodingHeader(t *testing.T) {
-	server, _ := testProxy(t, 8<<20, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(BodyEncodingHeader, "gzip")
-		_, _ = io.WriteString(w, `{"ok":true}`)
-	})
-	rsp, err := server.Do(context.Background(), &egresspb.DoReq{Method: "GET", Host: "api.binance.com", Path: "/small"})
+func TestPublicDialChecksAddressesOnceAndNeverDialsPrivateIPs(t *testing.T) {
+	var lookups, calls int
+	lookup := func(context.Context, string) ([]string, error) {
+		lookups++
+		return []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "203.0.113.9", "::1", "2001:db8::1", "8.8.8.8"}, nil
+	}
+	dial := func(_ context.Context, network, address string) (net.Conn, error) {
+		calls++
+		require.Equal(t, "tcp", network)
+		require.Equal(t, "8.8.8.8:443", address)
+		left, right := net.Pipe()
+		_ = right.Close()
+		return left, nil
+	}
+	conn, err := publicDialer(lookup, dial)(context.Background(), "tcp", "api.binance.com:443")
 	require.NoError(t, err)
-	require.NotContains(t, rsp.GetHeaders(), BodyEncodingHeader)
-	require.Equal(t, `{"ok":true}`, string(rsp.GetBody()))
+	_ = conn.Close()
+	require.Equal(t, 1, lookups)
+	require.Equal(t, 1, calls)
+	_, err = publicDialer(lookup, dial)(context.Background(), "tcp", "api.binance.com:80")
+	require.Error(t, err)
+	require.Equal(t, 1, lookups)
+	_, err = publicDialer(func(context.Context, string) ([]string, error) { return strings.Split("127.0.0.1,::1", ","), nil }, dial)(context.Background(), "tcp", "api.binance.com:443")
+	require.Error(t, err)
+	require.Equal(t, 1, calls)
+	var attempts int
+	_, err = publicDialer(func(context.Context, string) ([]string, error) {
+		return strings.Fields(strings.Repeat("8.8.8.8 ", 30)), nil
+	}, func(context.Context, string, string) (net.Conn, error) {
+		attempts++
+		return nil, errors.New("unreachable")
+	})(context.Background(), "tcp", "api.binance.com:443")
+	require.Error(t, err)
+	require.Equal(t, 16, attempts)
 }

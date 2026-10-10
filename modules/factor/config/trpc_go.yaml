@@ -19,11 +19,13 @@ server:
       port: 11403
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 120000
     - name: trpc.moox.factor.FactorEngine
       ip: 127.0.0.1
       port: 11405
       network: tcp
+      transport: go-net
       protocol: trpc
       timeout: 60000
     - name: trpc.moox.factor.Health
@@ -51,7 +53,7 @@ plugins:
           - traceparent
           - tracestate
           - x-moox-trace-id
-          - x-space-id
+          - x-moox-space-id
   metrics:
     prometheus:
       ip: 127.0.0.1

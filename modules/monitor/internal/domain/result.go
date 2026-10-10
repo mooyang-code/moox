@@ -20,6 +20,7 @@ type CheckResult struct {
 	Connected    bool      `gorm:"column:c_connected"`
 	LatencyMS    int64     `gorm:"column:c_latency_ms"`
 	ErrorMessage string    `gorm:"column:c_error_message"`
+	RawError     string    `gorm:"column:c_raw_error"`
 	BodyExcerpt  string    `gorm:"column:c_body_excerpt"`
 	CheckedAt    time.Time `gorm:"column:c_checked_at"`
 	CreatedAt    time.Time `gorm:"column:c_ctime"`

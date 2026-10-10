@@ -1,5 +1,3 @@
-// Package scfinvoker 是 Collector 调用 CloudNode（SCF 节点管理、函数调用）和 Admin 发布租约的客户端，
-// 经 gatewayclient 以 collector 身份发送 tRPC 请求。
 package scfinvoker
 
 import (
@@ -12,12 +10,15 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
-	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/log"
 )
+
+type Config struct {
+	Gateway gatewayclient.Invoker
+}
 
 const listMarketFetchersPageSize = 500
 
@@ -26,30 +27,9 @@ var (
 	ErrCollectorPublishLeaseStale     = errors.New("collector publish lease is expired or fenced")
 )
 
-// cloudNodeAPI 是 Collector 用到的 CloudNodeMgr 方法。
-type cloudNodeAPI interface {
-	GetNodeList(context.Context, *cloudnodepb.GetNodeListReq, ...client.Option) (*cloudnodepb.GetNodeListRsp, error)
-	SubmitUpdateNodeRuntimeConfigs(context.Context, *cloudnodepb.BatchUpdateNodeRuntimeConfigsReq, ...client.Option) (*cloudnodepb.SubmitNodeBatchRsp, error)
-	GetNodeBatchChange(context.Context, *cloudnodepb.GetNodeBatchChangeReq, ...client.Option) (*cloudnodepb.GetNodeBatchChangeRsp, error)
-	InvokeFunction(context.Context, *cloudnodepb.InvokeFunctionReq, ...client.Option) (*cloudnodepb.InvokeFunctionRsp, error)
-}
-
-// publishLeaseAPI 是 Collector 用到的 Admin 发布租约方法。
-type publishLeaseAPI interface {
-	AcquireCollectorPublishLease(context.Context, *adminpb.AcquireCollectorPublishLeaseReq, ...client.Option) (*adminpb.CollectorPublishLeaseRsp, error)
-	RenewCollectorPublishLease(context.Context, *adminpb.RenewCollectorPublishLeaseReq, ...client.Option) (*adminpb.CollectorPublishLeaseRsp, error)
-	ReleaseCollectorPublishLease(context.Context, *adminpb.ReleaseCollectorPublishLeaseReq, ...client.Option) (*adminpb.ReleaseCollectorPublishLeaseRsp, error)
-}
-
-// Client 调用 CloudNodeMgr 与 CollectorPublishLease。
+// Client borrows the process gateway for CloudNode and Admin publish leases.
 type Client struct {
-	cloudnode cloudNodeAPI
-	leases    publishLeaseAPI
-}
-
-// New 用给定的 tRPC 客户端选项（gatewayclient）创建客户端。
-func New(options []client.Option) *Client {
-	return &Client{cloudnode: cloudnodepb.NewCloudNodeMgrClientProxy(options...), leases: adminpb.NewCollectorPublishLeaseClientProxy(options...)}
+	gateway gatewayclient.Invoker
 }
 
 type Node struct {
@@ -83,16 +63,8 @@ type CollectorPublishLease struct {
 	ExpiresAt    time.Time
 }
 
-// spaceOption 把 space 写入 tRPC 元数据，CloudNode 从中取得调用所属的 space。
-func spaceOption(spaceID string) client.Option {
-	return client.WithMetaData(gatewayroute.MetadataSpaceID, []byte(spaceID))
-}
-
-func (c *Client) ready() error {
-	if c == nil || c.cloudnode == nil || c.leases == nil {
-		return errors.New("SCF invoker is not configured")
-	}
-	return nil
+func New(cfg Config) *Client {
+	return &Client{gateway: cfg.Gateway}
 }
 
 func (c *Client) ListMarketFetchers(ctx context.Context, spaceID string) ([]Node, error) {
@@ -107,19 +79,15 @@ func (c *Client) ListTimerMarketFetchers(ctx context.Context, spaceID string) ([
 }
 
 func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType string) ([]Node, error) {
-	if err := c.ready(); err != nil {
-		return nil, err
-	}
 	if strings.TrimSpace(spaceID) == "" {
 		return nil, fmt.Errorf("space_id is required")
 	}
 	var all []Node
 	for page := uint32(1); ; page++ {
-		rsp, err := c.cloudnode.GetNodeList(ctx, &cloudnodepb.GetNodeListReq{
-			BizType: "market_fetcher", TriggerType: triggerType, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize},
-		}, spaceOption(spaceID))
-		if err != nil {
-			return nil, fmt.Errorf("list market fetchers: %w", err)
+		request := &cloudnodepb.GetNodeListReq{BizType: "market_fetcher", TriggerType: triggerType, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize}}
+		var rsp cloudnodepb.GetNodeListRsp
+		if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeList", request, &rsp, false); err != nil {
+			return nil, err
 		}
 		if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
 			return nil, fmt.Errorf("list market fetchers: %s", rsp.GetRetInfo().GetMsg())
@@ -165,21 +133,13 @@ func nodeFromProto(item *cloudnodepb.CloudNode) Node {
 
 // SubmitRuntimeConfigs persists one asynchronous CloudNode reconciliation job.
 func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patches []*cloudnodepb.NodeRuntimeConfigPatch) (string, error) {
-	if err := c.ready(); err != nil {
-		return "", err
-	}
 	if len(patches) == 0 {
 		return "", fmt.Errorf("runtime config patches are required")
 	}
-	rsp, err := c.cloudnode.SubmitUpdateNodeRuntimeConfigs(ctx, &cloudnodepb.BatchUpdateNodeRuntimeConfigsReq{Nodes: patches}, spaceOption(spaceID))
-	if err != nil {
-		if requestNotSent(err) {
-			return "", fmt.Errorf("submit runtime configs: %w", err)
-		}
-		return "", fmt.Errorf("%w: SubmitUpdateNodeRuntimeConfigs: %v", ErrRuntimeConfigSubmissionUnknown, err)
-	}
-	if rsp == nil || rsp.GetRetInfo() == nil {
-		return "", fmt.Errorf("%w: SubmitUpdateNodeRuntimeConfigs returned an empty response", ErrRuntimeConfigSubmissionUnknown)
+	request := &cloudnodepb.BatchUpdateNodeRuntimeConfigsReq{Nodes: patches}
+	var rsp cloudnodepb.SubmitNodeBatchRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "SubmitUpdateNodeRuntimeConfigs", request, &rsp, true); err != nil {
+		return "", err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
 		return "", fmt.Errorf("submit runtime configs: %s", rsp.GetRetInfo().GetMsg())
@@ -191,33 +151,18 @@ func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patch
 	return jobID, nil
 }
 
-// requestNotSent 判断错误是否说明请求没有到达 CloudNode：连接失败、编码失败，或主机网关在转发前拒绝。
-// 其他错误（超时、连接中断、服务端错误）都可能发生在 CloudNode 已经接受之后。
-func requestNotSent(err error) bool {
-	switch errs.Code(err) {
-	case errs.RetClientConnectFail, errs.RetClientEncodeFail, errs.RetClientRouteErr, errs.RetClientValidateFail,
-		gatewayroute.RetUnauthenticated, gatewayroute.RetForbidden, gatewayroute.RetServiceNotHere,
-		gatewayroute.RetBodyTooLarge, gatewayroute.RetHostDisabled:
-		return true
-	default:
-		return false
-	}
-}
-
 // GetRuntimeConfigBatchStatus is used by Collector to distinguish an
 // accepted asynchronous job from a configuration that actually reached every
 // Tencent function. Runtime reconciliation must not report success before
 // CloudNode's durable worker finishes.
 func (c *Client) GetRuntimeConfigBatchStatus(ctx context.Context, spaceID, jobID string) (*cloudnodepb.NodeBatchSummary, error) {
-	if err := c.ready(); err != nil {
-		return nil, err
-	}
 	if strings.TrimSpace(jobID) == "" {
 		return nil, fmt.Errorf("job_id is required")
 	}
-	rsp, err := c.cloudnode.GetNodeBatchChange(ctx, &cloudnodepb.GetNodeBatchChangeReq{JobId: jobID}, spaceOption(spaceID))
-	if err != nil {
-		return nil, fmt.Errorf("get runtime config batch: %w", err)
+	request := &cloudnodepb.GetNodeBatchChangeReq{JobId: jobID}
+	var rsp cloudnodepb.GetNodeBatchChangeRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeBatchChange", request, &rsp, false); err != nil {
+		return nil, err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
 		return nil, fmt.Errorf("get runtime config batch: %s", rsp.GetRetInfo().GetMsg())
@@ -229,82 +174,70 @@ func (c *Client) GetRuntimeConfigBatchStatus(ctx context.Context, spaceID, jobID
 }
 
 func (c *Client) AcquireCollectorPublishLease(ctx context.Context, spaceID, holderID string) (*CollectorPublishLease, error) {
-	if err := c.ready(); err != nil {
-		return nil, err
-	}
 	spaceID, holderID = strings.TrimSpace(spaceID), strings.TrimSpace(holderID)
 	if spaceID == "" || holderID == "" {
 		return nil, fmt.Errorf("space_id and holder_id are required")
 	}
-	rsp, err := c.leases.AcquireCollectorPublishLease(ctx, &adminpb.AcquireCollectorPublishLeaseReq{SpaceId: spaceID, HolderId: holderID}, spaceOption(spaceID))
-	if err != nil {
-		return nil, fmt.Errorf("acquire collector publish lease: %w", err)
+	var response adminpb.CollectorPublishLeaseRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease",
+		&adminpb.AcquireCollectorPublishLeaseReq{SpaceId: spaceID, HolderId: holderID}, &response, false); err != nil {
+		return nil, err
 	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		return nil, fmt.Errorf("acquire collector publish lease: %s", rsp.GetRetInfo().GetMsg())
-	}
-	if rsp.GetLeaseId() == "" || rsp.GetFencingToken() < 1 {
-		return nil, fmt.Errorf("collector publish lease response is incomplete")
-	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, rsp.GetExpiresAt())
-	if err != nil {
-		return nil, fmt.Errorf("decode collector publish lease expiry: %w", err)
-	}
-	return &CollectorPublishLease{SpaceID: rsp.GetSpaceId(), LeaseID: rsp.GetLeaseId(), HolderID: holderID, FencingToken: rsp.GetFencingToken(), ExpiresAt: expiresAt}, nil
+	return collectorLeaseFromResponse(spaceID, holderID, &response)
 }
 
 func (c *Client) RenewCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease) (*CollectorPublishLease, error) {
-	if err := c.ready(); err != nil {
-		return nil, err
-	}
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return nil, fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	rsp, err := c.leases.RenewCollectorPublishLease(ctx, &adminpb.RenewCollectorPublishLeaseReq{
-		SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken,
-	}, spaceOption(lease.SpaceID))
+	var response adminpb.CollectorPublishLeaseRsp
+	if err := c.invoke(ctx, lease.SpaceID, "trpc.moox.admin.CollectorPublishLease", "RenewCollectorPublishLease",
+		&adminpb.RenewCollectorPublishLeaseReq{SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken}, &response, false); err != nil {
+		return nil, err
+	}
+	if response.GetRetInfo().GetCode() == adminpb.ErrorCode_CONFLICT {
+		return nil, fmt.Errorf("%w: %s", ErrCollectorPublishLeaseStale, response.GetRetInfo().GetMsg())
+	}
+	renewed, err := collectorLeaseFromResponse(lease.SpaceID, lease.HolderID, &response)
 	if err != nil {
-		return nil, fmt.Errorf("RenewCollectorPublishLease: %w", err)
+		return nil, err
 	}
-	if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
-		if code == commonpb.ErrorCode_CONFLICT {
-			return nil, fmt.Errorf("%w: %s", ErrCollectorPublishLeaseStale, rsp.GetRetInfo().GetMsg())
-		}
-		return nil, fmt.Errorf("RenewCollectorPublishLease: %s", rsp.GetRetInfo().GetMsg())
-	}
-	if rsp.GetLeaseId() != lease.LeaseID || rsp.GetFencingToken() != lease.FencingToken {
+	if renewed.LeaseID != lease.LeaseID || renewed.FencingToken != lease.FencingToken {
 		return nil, fmt.Errorf("RenewCollectorPublishLease returned a different lease identity")
 	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, rsp.GetExpiresAt())
-	if err != nil {
-		return nil, fmt.Errorf("decode collector publish lease expiry: %w", err)
-	}
-	return &CollectorPublishLease{SpaceID: lease.SpaceID, LeaseID: lease.LeaseID, HolderID: lease.HolderID, FencingToken: lease.FencingToken, ExpiresAt: expiresAt}, nil
+	return renewed, nil
 }
 
 func (c *Client) ReleaseCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease) error {
-	if err := c.ready(); err != nil {
-		return err
-	}
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	rsp, err := c.leases.ReleaseCollectorPublishLease(ctx, &adminpb.ReleaseCollectorPublishLeaseReq{
-		SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken,
-	}, spaceOption(lease.SpaceID))
-	if err != nil {
-		return fmt.Errorf("release collector publish lease: %w", err)
+	var response adminpb.ReleaseCollectorPublishLeaseRsp
+	if err := c.invoke(ctx, lease.SpaceID, "trpc.moox.admin.CollectorPublishLease", "ReleaseCollectorPublishLease",
+		&adminpb.ReleaseCollectorPublishLeaseReq{SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken}, &response, false); err != nil {
+		return err
 	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS || !rsp.GetReleased() {
-		return fmt.Errorf("release collector publish lease rejected: %s", rsp.GetRetInfo().GetMsg())
+	if response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || !response.GetReleased() {
+		return fmt.Errorf("release collector publish lease rejected: %s", response.GetRetInfo().GetMsg())
 	}
 	return nil
 }
 
-func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (InvocationResult, error) {
-	if err := c.ready(); err != nil {
-		return InvocationResult{}, err
+func collectorLeaseFromResponse(spaceID, holderID string, response *adminpb.CollectorPublishLeaseRsp) (*CollectorPublishLease, error) {
+	if response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+		return nil, fmt.Errorf("collector publish lease rejected: %s", response.GetRetInfo().GetMsg())
 	}
+	if response.GetSpaceId() != spaceID || strings.TrimSpace(response.GetLeaseId()) == "" || response.GetFencingToken() < 1 {
+		return nil, fmt.Errorf("collector publish lease response identity is incomplete or inconsistent")
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, response.GetExpiresAt())
+	if err != nil {
+		return nil, fmt.Errorf("decode collector publish lease expiry: %w", err)
+	}
+	return &CollectorPublishLease{SpaceID: spaceID, LeaseID: response.GetLeaseId(), HolderID: holderID, FencingToken: response.GetFencingToken(), ExpiresAt: expiresAt}, nil
+}
+
+func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (InvocationResult, error) {
 	if strings.TrimSpace(nodeID) == "" {
 		return InvocationResult{}, fmt.Errorf("node_id is required")
 	}
@@ -312,9 +245,10 @@ func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[s
 	if err != nil {
 		return InvocationResult{}, fmt.Errorf("build invoke event: %w", err)
 	}
-	rsp, err := c.cloudnode.InvokeFunction(ctx, &cloudnodepb.InvokeFunctionReq{NodeId: nodeID, EventData: value, ScfInvokeType: invokeType}, spaceOption(spaceID))
-	if err != nil {
-		return InvocationResult{}, fmt.Errorf("invoke market fetcher: %w", err)
+	request := &cloudnodepb.InvokeFunctionReq{NodeId: nodeID, EventData: value, ScfInvokeType: invokeType}
+	var rsp cloudnodepb.InvokeFunctionRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "InvokeFunction", request, &rsp, false); err != nil {
+		return InvocationResult{}, err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
 		return InvocationResult{}, fmt.Errorf("invoke market fetcher: %s", rsp.GetRetInfo().GetMsg())
@@ -331,6 +265,22 @@ func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[s
 		resultMap = result.GetResult().AsMap()
 	}
 	return InvocationResult{RequestID: result.GetRequestId(), Code: result.GetCode(), Message: result.GetMessage(), Result: resultMap, DurationMS: result.GetDuration(), BillDuration: result.GetBillDuration()}, nil
+}
+
+func (c *Client) invoke(ctx context.Context, spaceID, service, method string, request, response proto.Message, unknownAfterSend bool) error {
+	if c == nil || c.gateway == nil {
+		return errors.New("SCF control requires the process gateway client")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	metadata := gatewayclient.CallMetadataFromContext(ctx)
+	metadata.SpaceID = spaceID
+	err := c.gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), service, method, request, response)
+	if err != nil && unknownAfterSend {
+		return fmt.Errorf("%w: CloudNode %s: %w", ErrRuntimeConfigSubmissionUnknown, method, err)
+	}
+	return err
 }
 
 func (c *Client) LogNode(node Node) {

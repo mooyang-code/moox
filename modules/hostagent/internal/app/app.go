@@ -27,7 +27,7 @@ type Agent struct {
 	publisherMu                            sync.Mutex
 	publisher                              eventpublisher.Publisher
 	newPublisher                           func(context.Context) (eventpublisher.Publisher, error)
-	hostID, hostname, bootID, version      string
+	hostname, bootID, version              string
 	latestMu                               sync.RWMutex
 	latest                                 *hostmetricpb.HostSnapshot
 	lastCollect, lastPublish               time.Time
@@ -47,10 +47,6 @@ func New(ctx context.Context, cfg *config.Config, version string) (*Agent, error
 	if cfg == nil {
 		return nil, fmt.Errorf("hostagent config is nil")
 	}
-	hostID := strings.TrimSpace(os.Getenv("MOOX_NODE_ID"))
-	if hostID == "" {
-		return nil, fmt.Errorf("缺少环境变量 MOOX_NODE_ID（主机 ID）")
-	}
 	id, err := identity.LoadOrCreate(cfg.IdentityPath)
 	if err != nil {
 		return nil, err
@@ -61,7 +57,7 @@ func New(ctx context.Context, cfg *config.Config, version string) (*Agent, error
 	if b, readErr := os.ReadFile("/proc/sys/kernel/random/boot_id"); readErr == nil {
 		boot = strings.TrimSpace(string(b))
 	}
-	return &Agent{cfg: cfg, id: id, collector: collector.New(), hostID: hostID, hostname: hostname, bootID: boot, version: version}, nil
+	return &Agent{cfg: cfg, id: id, collector: collector.New(), hostname: hostname, bootID: boot, version: version}, nil
 }
 
 func resolveHostName(systemName, configuredName string) string {
@@ -107,7 +103,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		a.recordError(err)
 		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
 	}
-	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{AgentId: a.id.AgentID, HostId: a.hostID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
+	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{HostId: a.cfg.HostID, AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
 	if err != nil {
 		a.dropped.Add(1)
 		a.recordError(err)

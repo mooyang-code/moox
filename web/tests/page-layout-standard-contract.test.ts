@@ -109,7 +109,7 @@ describe("page layout standards", () => {
     const taskInstances = read("collector/task-instances/task-instances.vue");
     const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
     const taskResults = read("collector/task-results/index.vue");
-    const deploymentServices = read("ops/deployments/services-tab.vue");
+    const deployments = read("ops/deployments/index.vue");
     const storage = read("ops/storage/index.vue");
     const storageNodes = read("ops/storage/nodes.vue");
     const storageArchive = read("ops/storage/archive.vue");
@@ -123,8 +123,8 @@ describe("page layout standards", () => {
     expect(taskResults).toContain('class="moox-page task-results-page"');
     expect(taskResults).toContain('class="moox-inner"');
 
-    expectMargin(deploymentServices, ".toolbar", "margin-bottom", 8);
-    expect(deploymentServices).not.toContain('class="page-head"');
+    expectMargin(deployments, ".deployments-content", "margin-top", 12);
+    expectMargin(deployments, ".filters", "margin-bottom", 8);
 
     expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
@@ -222,7 +222,7 @@ describe("page layout standards", () => {
   it("keeps dashboard page boundaries on the compact spacing rhythm", () => {
     const theme = readStyle("var/global-theme.scss");
     const globalStyle = readStyle("index.scss");
-    const monitor = read("ops/monitor/index.vue");
+    const healthMonitor = read("ops/monitor/index.vue");
     const dataImport = read("data/import/index.vue");
     const strategyOverview = read("strategy/overview/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
@@ -232,9 +232,8 @@ describe("page layout standards", () => {
     expect(theme).toMatch(/\$space-4:\s*16px;/);
     expect(globalStyle).toContain("--moox-space-2: #{$space-2};");
     expect(globalStyle).toContain("--moox-space-4: #{$space-4};");
-    expect(monitor).toContain("<h2>监控告警</h2>");
-    expectMargin(monitor, ".page-head", "margin-bottom", 8);
-    expectMargin(monitor, ".monitor-section", "margin-top", 20);
+    expect(healthMonitor).toContain("监控告警");
+    expect(healthMonitor).toMatch(/\.health-section\s*\{[\s\S]*?margin-top:\s*24px;/);
 
     expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);

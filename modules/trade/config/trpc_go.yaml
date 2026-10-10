@@ -7,6 +7,7 @@ server:
     - recovery
     - validation
     - masking
+    - spacectx
     - prometheus
   timeout: 10000
   admin:
@@ -27,7 +28,7 @@ server:
       port: 11200
       network: tcp
       protocol: trpc
-      timeout: 30000
+      timeout: 15000
 
     - name: trpc.moox.trade.metrics.timer
       port: 11210

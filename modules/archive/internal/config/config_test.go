@@ -1,13 +1,11 @@
 package config
 
 import (
+	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestLoadDefaultsAndMarketSources(t *testing.T) {
@@ -41,10 +39,25 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	}
 }
 
-func TestDefaultGatewayClientFollowsDeploymentLayout(t *testing.T) {
+func TestLoadRejectsRemovedStorageGatewayFields(t *testing.T) {
+	for _, key := range []string{"gateway_target", "gateway_node_id", "hmac_key_file"} {
+		path := filepath.Join(t.TempDir(), "app.yaml")
+		if err := os.WriteFile(path, []byte("archive:\n  storage_rpc:\n    "+key+": legacy\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(path)
+		if err == nil {
+			t.Fatalf("accepted removed field %s", key)
+		}
+	}
+}
+
+func TestGatewayIdentityIsArchiveAndPathsAreExplicit(t *testing.T) {
 	cfg := Default()
-	require.NoError(t, cfg.GatewayClient.Validate())
 	assert.Equal(t, "archive", cfg.GatewayClient.Caller)
+	assert.Equal(t, "../../secrets/caller-archive.key", cfg.GatewayClient.KeyFile)
+	cfg.GatewayClient.Caller = "console"
+	assert.ErrorContains(t, cfg.Validate(), "must be archive")
 }
 
 func TestValidateRejectsOverlappingRootAndState(t *testing.T) {

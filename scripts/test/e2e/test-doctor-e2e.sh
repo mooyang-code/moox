@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 storage_worktree_before="$(git -C "${ROOT}" status --short -- modules/storage)"
 
 (cd "${ROOT}/modules/monitor" && go test -count=1 ./internal/doctor ./internal/rpc ./test)
-(cd "${ROOT}/modules/cli" && go test -count=1 ./internal/doctor ./internal/command ./test -run 'StorageDatasetActivation|DoctorBootstrap|StorageMetadataClient|TestDoctor|TestValidateDoctorFlags|Bootstrap|LocalHealth')
+(cd "${ROOT}/modules/cli" && go test -count=1 ./internal/doctor ./internal/command ./test -run 'StorageDatasetActivation|DoctorBootstrap|StorageMetadataClient|TestDoctor|TestValidateDoctorFlags')
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
 (cd "${ROOT}/packages/report" && go test -count=1 ./...)
 
@@ -16,9 +16,14 @@ if rg -n 'ActivateDataset\(' "${ROOT}/modules/cli/internal/doctor/storage_activa
   exit 1
 fi
 
-# 部署时每个组件都带上身份环境变量（Doctor 按它关联上报与部署）。
-grep -Fq '"MOOX_SERVICE_NAME=" + id' "${ROOT}/modules/cli/internal/setup/release/components.go"
-grep -Fq '"MOOX_INSTANCE_ID=" + id + "@" + r.host.ID' "${ROOT}/modules/cli/internal/setup/release/components.go"
+bash -n "${ROOT}/scripts/deploy/deploy-moox.sh"
+grep -q 'MOOX_SERVICE_NAME=${service_name}' "${ROOT}/scripts/deploy/deploy-moox.sh"
+# Catalog/Doctor and release-byte identity are checked by packages/doctor.
+# The deployment inventory migrates to HostPlacements in the gateway plan.
+if [[ -e "${ROOT}/packages/doctor/components.yaml" ]]; then
+  echo "Doctor must not retain a duplicate component catalog" >&2
+  exit 1
+fi
 
 storage_worktree_after="$(git -C "${ROOT}" status --short -- modules/storage)"
 if [[ "${storage_worktree_after}" != "${storage_worktree_before}" ]]; then

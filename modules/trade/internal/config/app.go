@@ -7,6 +7,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,11 +18,11 @@ import (
 
 // AppConfig Trade 应用配置。
 type AppConfig struct {
-	Database DatabaseConfig `yaml:"database"`
-	// GatewayClient 是 Trade 调用 Admin SecretMgr 使用的 gatewayclient 配置（trade 身份）。
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	EventBus      EventBusConfig       `yaml:"eventbus"`
-	Runtime       RuntimeConfig        `yaml:"runtime"`
+	Database      DatabaseConfig           `yaml:"database"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath    string                   `yaml:"-"`
+	EventBus      EventBusConfig           `yaml:"eventbus"`
+	Runtime       RuntimeConfig            `yaml:"runtime"`
 }
 
 // DatabaseConfig 数据库配置（当前仅支持 sqlite）。
@@ -49,32 +50,28 @@ func DefaultConfig() *AppConfig {
 		Database: DatabaseConfig{
 			Path: "./data/moox_trade.db",
 		},
-		Runtime: RuntimeConfig{},
-		// 与部署布局一致：密钥和 CA 在安装根目录，目录缓存在组件的数据目录。
-		GatewayClient: gatewayclient.Config{
-			Mode: gatewayclient.ModeLocal, Caller: "trade", KeyFile: "../secrets/caller-trade.key",
-			CAFile: "../certs/moox-ca.crt", CacheDir: "./data/gatewayclient",
-		},
-		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
+		Runtime:       RuntimeConfig{},
+		GatewayClient: gatewayclient.FileConfig{Caller: "trade", KeyFile: "../../secrets/caller-trade.key"},
+		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
 	}
 }
 
 // Load 从文件加载配置，叠加默认值与环境变量覆盖。
 func Load(configPath string) (*AppConfig, error) {
 	cfg := DefaultConfig()
-	if configPath != "" {
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to read config file: %w", err)
-			}
-		} else {
-			decoder := yaml.NewDecoder(bytes.NewReader(data))
-			decoder.KnownFields(true)
-			if err := decoder.Decode(cfg); err != nil {
-				return nil, fmt.Errorf("failed to parse config file: %w", err)
-			}
-		}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+	cfg.sourcePath = configPath
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("trade config must contain exactly one YAML document")
 	}
 	if err := cfg.applyEnv(); err != nil {
 		return nil, fmt.Errorf("invalid environment: %w", err)
@@ -104,6 +101,15 @@ func (c *AppConfig) applyEnv() error {
 
 // Validate 校验配置并创建所需目录。
 func (c *AppConfig) Validate() error {
+	if c == nil {
+		return fmt.Errorf("trade config is required")
+	}
+	if c.GatewayClient.Caller != "trade" {
+		return fmt.Errorf("gateway_client.caller must be trade")
+	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
+	}
 	if c.Database.Path == "" {
 		return fmt.Errorf("database path is required")
 	}
@@ -119,5 +125,16 @@ func (c *AppConfig) Validate() error {
 			return fmt.Errorf("eventbus target consumer is required")
 		}
 	}
-	return c.GatewayClient.Validate()
+	return nil
+}
+
+// OpenGateway creates the process client used by Admin secret reads.
+func (c *AppConfig) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("trade gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "trade" {
+		return nil, fmt.Errorf("gateway_client.caller must be trade")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

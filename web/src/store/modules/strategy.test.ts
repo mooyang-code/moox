@@ -81,7 +81,14 @@ describe("strategy store", () => {
   });
 
   it("keeps the full strategy catalog when a late paged list response arrives", async () => {
-    const definition = (id: string) => ({ strategy_id: id, name: id, dsl_yaml: "", dsl_hash: "h", created_at: "", updated_at: "" });
+    const definition = (id: string) => ({
+      strategy_id: id,
+      name: id,
+      dsl_yaml: "",
+      dsl_hash: "h",
+      created_at: "",
+      updated_at: ""
+    });
     const all = Array.from({ length: 21 }, (_, index) => definition(`s${index}`));
     const latePage = deferred<{ items: unknown[]; page: { total: number } }>();
     api.listStrategies.mockImplementation((params: { page?: number; page_size?: number }) =>
@@ -99,9 +106,18 @@ describe("strategy store", () => {
   });
 
   it("invalidates the cached catalog and ignores an in-flight catalog request", async () => {
-    const definition = (id: string) => ({ strategy_id: id, name: id, dsl_yaml: "", dsl_hash: "h", created_at: "", updated_at: "" });
+    const definition = (id: string) => ({
+      strategy_id: id,
+      name: id,
+      dsl_yaml: "",
+      dsl_hash: "h",
+      created_at: "",
+      updated_at: ""
+    });
     const pending = deferred<{ items: unknown[]; page: { total: number } }>();
-    api.listStrategies.mockReturnValueOnce(Promise.resolve({ items: [definition("s1")], page: { total: 1 } })).mockReturnValueOnce(pending.promise);
+    api.listStrategies
+      .mockReturnValueOnce(Promise.resolve({ items: [definition("s1")], page: { total: 1 } }))
+      .mockReturnValueOnce(pending.promise);
     const store = useStrategyStore();
     await store.loadAllStrategies(200);
     expect(store.strategiesComplete).toBe(true);

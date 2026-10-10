@@ -1,295 +1,165 @@
-// Package servicecatalog 是 MooX 的组件目录：组件、端口、tRPC 服务、ACL、健康检查和外部调用方白名单。
-//
-// 目录写在代码里（内嵌 catalog.yaml），数据库只记录「哪个组件部署在哪台主机、是否启用」。
-// 管理后台、监控、CLI、主机网关和外部接入内嵌同一份目录，因此必须同版本发布。
+// Package servicecatalog owns the shared component, method and permission
+// definitions. It has no database, network or deployment side effects.
 package servicecatalog
 
 import (
 	"bytes"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"fmt"
-	"strings"
-	"sync"
+	"io"
 
 	"gopkg.in/yaml.v3"
 )
 
-// ControlHostID 是 control 主机的固定 ID：「control」范围的组件只能部署在这里，它本身也受保护。
-const ControlHostID = "control"
-
-// HostGatewayCaller 是主机网关的调用方身份前缀，完整身份为 host-gateway@<主机 ID>。
-const HostGatewayCaller = "host-gateway"
-
-// AccessCaller 是外部接入向主机网关转发外部调用方请求时使用的调用方身份。
-const AccessCaller = "access"
-
-// ConsoleCaller 是控制台转发浏览器请求时使用的调用方身份。
-const ConsoleCaller = "console"
-
-// MooxCLICaller 是操作员机器上 moox-cli 的调用方身份，经 SSH 隧道访问各主机网关。
-const MooxCLICaller = "moox-cli"
-
-// Scope 是组件的部署范围。
-type Scope string
-
 const (
-	// ScopeHost 表示每台主机自动部署一份，不能编辑。
-	ScopeHost Scope = "host"
-	// ScopeControl 表示只能部署在 control 主机。
-	ScopeControl Scope = "control"
-	// ScopeAny 表示可以部署到任意主机。
-	ScopeAny Scope = "any"
+	ScopeHost                 = "host"
+	ScopeControl              = "control"
+	ScopeAny                  = "any"
+	Single                    = "single"
+	Multi                     = "multi"
+	Enabled                   = "enabled"
+	Disabled                  = "disabled"
+	GatewayControlPath        = "trpc.moox.admin.GatewayControl"
+	DefaultTimeoutMS    int64 = 5000
+	DefaultMaxBodyBytes int64 = 4 << 20
 )
 
-// Replicas 是所有主机加起来最多允许几条启用的部署。
-type Replicas string
-
-const (
-	// ReplicasPerHost 只用于「主机」范围的组件：每台主机一份。
-	ReplicasPerHost Replicas = "per_host"
-	// ReplicasSingle 表示全局最多一条启用的部署。
-	ReplicasSingle Replicas = "single"
-	// ReplicasMulti 表示允许多条启用的部署。
-	ReplicasMulti Replicas = "multi"
-)
-
-// HealthKind 是监控对组件的探测方式。
-type HealthKind string
-
-const (
-	// HealthReadyz 表示带 health HMAC 请求健康端口的 /readyz。
-	HealthReadyz HealthKind = "readyz"
-	// HealthHTTPS 表示请求 https://<主机>:<端口>/，2xx 或 3xx 即视为正常。
-	HealthHTTPS HealthKind = "https"
-	// HealthNone 表示不探测，界面显示「不探测」。
-	HealthNone HealthKind = "none"
-)
-
-// Transport 是组件向 Monitor 提供运行事实的方式。
-type Transport string
-
-const (
-	// TransportReporter 表示组件经 EventBus 定时上报运行指标。
-	TransportReporter Transport = "reporter"
-	// TransportHostSnapshot 表示组件上报主机快照（主机采集器）。
-	TransportHostSnapshot Transport = "host_snapshot"
-	// TransportHealthOnly 表示组件不上报，只做健康探测。
-	TransportHealthOnly Transport = "health_only"
-)
-
-// Functional 说明组件是否上报业务进度（最近成功、最近错误、水位）。
-type Functional string
-
-const (
-	// FunctionalActive 表示组件上报业务进度，Monitor 据此判断业务是否正常。
-	FunctionalActive Functional = "active"
-	// FunctionalDeferred 表示业务进度暂未接入，只看健康探测和上报。
-	FunctionalDeferred Functional = "deferred"
-	// FunctionalNotApplicable 表示组件没有业务进度可言，例如网关、消息总线。
-	FunctionalNotApplicable Functional = "not_applicable"
-)
-
-// Catalog 是解析并校验过的组件目录。字段只读，调用方不要修改。
 type Catalog struct {
-	Version    int         `yaml:"version"`
-	Callers    []Caller    `yaml:"callers"`
-	Components []Component `yaml:"components"`
-	Principals []Principal `yaml:"principals"`
-
-	checksum     string
-	components   map[string]*Component
-	services     map[string]*Service
-	serviceOwner map[string]string
-	// acl 为每个 service path 下每个方法展开后的调用方集合（已排序）。
-	acl map[string]map[string][]string
-	// consoleRoutes 为每个 console_name 下每个放行 console 的方法所属的 service path。
-	consoleRoutes map[string]map[string]string
-	principals    map[string]map[string]map[string]bool
+	Version    int         `yaml:"version" json:"version"`
+	Components []Component `yaml:"components" json:"components"`
+	Principals []Principal `yaml:"principals" json:"principals"`
 }
 
-// Caller 是组件 ID 之外的调用方身份，例如 console、moox-cli。
-type Caller struct {
-	ID          string `yaml:"id"`
-	Description string `yaml:"description"`
-}
-
-// Component 是一种 MooX 进程。
 type Component struct {
-	ID        string   `yaml:"id"`
-	Name      string   `yaml:"name"`
-	Binary    string   `yaml:"binary"`
-	Scope     Scope    `yaml:"scope"`
-	Replicas  Replicas `yaml:"replicas"`
-	Protected bool     `yaml:"protected"`
-	Health    Health   `yaml:"health"`
-	// Observability 是 Monitor 观测组件的方式。
-	Observability Observability `yaml:"observability"`
-	Ports         []Port        `yaml:"ports"`
-	Services      []Service     `yaml:"services"`
+	ID        string `yaml:"id" json:"id"`
+	Name      string `yaml:"name" json:"name"`
+	Binary    string `yaml:"binary" json:"binary"`
+	Scope     string `yaml:"scope" json:"scope"`
+	Replicas  string `yaml:"replicas" json:"replicas"`
+	Protected bool   `yaml:"protected" json:"protected"`
+	// Ports reserves listeners which are not forwarded RPC services, such as
+	// the browser entrypoint, NATS and Storage's private runtime endpoints.
+	Ports    []int     `yaml:"ports,omitempty" json:"ports,omitempty"`
+	Health   Health    `yaml:"health" json:"health"`
+	Services []Service `yaml:"services,omitempty" json:"services,omitempty"`
+	Doctor   Doctor    `yaml:"doctor" json:"doctor"`
 }
 
-// Observability 是 Monitor 观测组件的方式。
-type Observability struct {
-	Transport  Transport  `yaml:"transport"`
-	Functional Functional `yaml:"functional"`
-}
-
-// Health 是组件的健康探测定义。
 type Health struct {
-	Kind HealthKind `yaml:"kind"`
-	Port int        `yaml:"port"`
+	Kind      string `yaml:"kind" json:"kind"`
+	Port      int    `yaml:"port,omitempty" json:"port,omitempty"`
+	Loopback  bool   `yaml:"loopback,omitempty" json:"loopback,omitempty"`
+	ReadyBody string `yaml:"ready_body,omitempty" json:"ready_body,omitempty"`
 }
 
-// Port 是组件监听、但不经主机网关路由的端口，只用于端口冲突校验和展示。
-type Port struct {
-	Name string `yaml:"name"`
-	Port int    `yaml:"port"`
-}
-
-// Service 是组件对外提供、经主机网关路由的一个 tRPC 服务。
 type Service struct {
-	Path string `yaml:"path"`
-	Port int    `yaml:"port"`
-	// ConsoleName 是浏览器侧的服务名（/api/admin/<console_name>/<方法>）；为空表示浏览器不可调用。
-	ConsoleName  string    `yaml:"console_name"`
-	TimeoutMS    int64     `yaml:"timeout_ms"`
-	MaxBodyBytes int64     `yaml:"max_body_bytes"`
-	RPCs         []string  `yaml:"rpcs"`
-	ReadOnly     []string  `yaml:"read_only"`
-	ACL          []ACLRule `yaml:"acl"`
+	Path            string   `yaml:"path" json:"path"`
+	Port            int      `yaml:"port" json:"port"`
+	ConsoleName     string   `yaml:"console_name,omitempty" json:"console_name,omitempty"`
+	TimeoutMS       int64    `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
+	MaxBodyBytes    int64    `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
+	Methods         []string `yaml:"methods" json:"methods"`
+	ReadOnlyMethods []string `yaml:"read_only_methods,omitempty" json:"read_only_methods,omitempty"`
+	ACL             []Grant  `yaml:"acl" json:"acl"`
 }
 
-// ACLRule 放行一组方法给一组调用方。methods 与 all 二选一；except 只能与 all 一起使用。
-type ACLRule struct {
-	Methods []string `yaml:"methods"`
-	All     bool     `yaml:"all"`
-	Except  []string `yaml:"except"`
-	Callers []string `yaml:"callers"`
+type Grant struct {
+	Methods []string `yaml:"methods" json:"methods"`
+	Callers []string `yaml:"callers" json:"callers"`
 }
 
-// Principal 是外部调用方（SCF 采集函数、因子引擎、moox-skill），只能经外部接入访问白名单里的方法。
 type Principal struct {
-	ID          string           `yaml:"id"`
-	Description string           `yaml:"description"`
-	Allow       []PrincipalGrant `yaml:"allow"`
+	ID    string       `yaml:"id" json:"id"`
+	Allow []Permission `yaml:"allow" json:"allow"`
 }
 
-// PrincipalGrant 是外部调用方在一个服务上被允许的方法。
-type PrincipalGrant struct {
-	Service string   `yaml:"service"`
-	Methods []string `yaml:"methods"`
+type Permission struct {
+	Service string   `yaml:"service" json:"service"`
+	Methods []string `yaml:"methods" json:"methods"`
+}
+
+// Doctor keeps the diagnostics metadata in the same source of truth without
+// making this package depend on Doctor or a service implementation.
+type Doctor struct {
+	Role                     string   `yaml:"role" json:"role"`
+	Description              string   `yaml:"description" json:"description"`
+	Duties                   []string `yaml:"duties" json:"duties"`
+	Inputs                   []string `yaml:"inputs" json:"inputs"`
+	Outputs                  []string `yaml:"outputs" json:"outputs"`
+	Dependencies             []string `yaml:"dependencies" json:"dependencies"`
+	Transport                string   `yaml:"transport" json:"transport"`
+	FunctionalObservability  string   `yaml:"functional_observability" json:"functional_observability"`
+	ConfigPaths              []string `yaml:"config_paths" json:"config_paths"`
+	WritablePaths            []string `yaml:"writable_paths" json:"writable_paths"`
+	RecoveryActionIDs        []string `yaml:"recovery_action_ids" json:"recovery_action_ids"`
+	RequiredInDefaultProfile bool     `yaml:"required_in_default_profile" json:"required_in_default_profile"`
 }
 
 //go:embed catalog.yaml
-var embeddedCatalog []byte
+var embedded []byte
 
-var (
-	defaultOnce    sync.Once
-	defaultCatalog *Catalog
-	defaultErr     error
-)
+func LoadEmbedded() (Catalog, error) { return Decode(bytes.NewReader(embedded)) }
 
-// Default 返回内嵌的组件目录。目录在单测中校验，运行时解析失败说明构建产物损坏。
-func Default() *Catalog {
-	defaultOnce.Do(func() {
-		defaultCatalog, defaultErr = Parse(embeddedCatalog)
-	})
-	if defaultErr != nil {
-		panic(fmt.Sprintf("内嵌组件目录无效: %v", defaultErr))
+// EmbeddedYAML returns an owned copy for release identity checks. Mutating it
+// does not change the catalog loaded by this package.
+func EmbeddedYAML() []byte { return bytes.Clone(embedded) }
+
+func Decode(r io.Reader) (Catalog, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, (2<<20)+1))
+	if err != nil {
+		return Catalog{}, fmt.Errorf("read catalog: %w", err)
 	}
-	return defaultCatalog
-}
-
-// Embedded 返回内嵌 catalog.yaml 的原始字节，供发布包拷贝和校验和比对使用。
-func Embedded() []byte { return append([]byte(nil), embeddedCatalog...) }
-
-// Parse 解析并校验一份组件目录。
-func Parse(raw []byte) (*Catalog, error) {
+	if len(raw) > 2<<20 {
+		return Catalog{}, fmt.Errorf("catalog exceeds 2 MiB")
+	}
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
-	var catalog Catalog
-	if err := decoder.Decode(&catalog); err != nil {
-		return nil, fmt.Errorf("解析组件目录: %w", err)
+	var c Catalog
+	if err := decoder.Decode(&c); err != nil {
+		return Catalog{}, fmt.Errorf("decode catalog: %w", err)
 	}
-	sum := sha256.Sum256(raw)
-	catalog.checksum = "sha256:" + hex.EncodeToString(sum[:])
-	if err := catalog.build(); err != nil {
-		return nil, err
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return Catalog{}, fmt.Errorf("catalog must contain one YAML document")
 	}
-	return &catalog, nil
+	if err := c.Validate(); err != nil {
+		return Catalog{}, err
+	}
+	return c, nil
 }
 
-// Checksum 返回目录原始字节的 sha256 校验和。
-func (c *Catalog) Checksum() string { return c.checksum }
-
-// Component 按 ID 查找组件。
-func (c *Catalog) Component(id string) (*Component, bool) {
-	component, ok := c.components[id]
-	return component, ok
-}
-
-// Service 按 tRPC service path 查找服务及其所属组件。
-func (c *Catalog) Service(path string) (*Service, *Component, bool) {
-	service, ok := c.services[path]
-	if !ok {
-		return nil, nil, false
-	}
-	return service, c.components[c.serviceOwner[path]], true
-}
-
-// IsReadOnly 判断方法是否为幂等读：只有这类方法允许失败后重试。
-func (s *Service) IsReadOnly(method string) bool {
-	for _, name := range s.ReadOnly {
-		if name == method {
-			return true
+func (c Catalog) Component(id string) (Component, bool) {
+	for _, component := range c.Components {
+		if component.ID == id {
+			return component, true
 		}
 	}
-	return false
+	return Component{}, false
 }
 
-// IsReadOnly 判断某个服务的方法是否为幂等读。
-func (c *Catalog) IsReadOnly(servicePath, method string) bool {
-	service, ok := c.services[servicePath]
-	return ok && service.IsReadOnly(method)
-}
-
-// ConsoleTarget 把浏览器侧的 /api/admin/<console_name>/<方法> 映射到 tRPC 服务。
-// 只返回放行 console 的方法。
-func (c *Catalog) ConsoleTarget(consoleName, method string) (string, bool) {
-	path, ok := c.consoleRoutes[consoleName][method]
-	return path, ok
-}
-
-// Principal 按 ID 查找外部调用方。
-func (c *Catalog) Principal(id string) (*Principal, bool) {
-	for i := range c.Principals {
-		if c.Principals[i].ID == id {
-			return &c.Principals[i], true
+func (c Catalog) Service(path string) (Service, bool) {
+	for _, component := range c.Components {
+		for _, service := range component.Services {
+			if service.Path == path {
+				return service, true
+			}
 		}
 	}
-	return nil, false
+	return Service{}, false
 }
 
-// PrincipalAllowed 判断外部调用方是否被允许调用这个方法。外部接入和路由编译共用这一份白名单。
-func (c *Catalog) PrincipalAllowed(principal, servicePath, method string) bool {
-	return c.principals[principal][servicePath][method]
-}
-
-// MethodCallers 返回某个方法展开后的调用方（已排序，host-gateway 保持为前缀形式）。
-func (c *Catalog) MethodCallers(servicePath, method string) []string {
-	return append([]string(nil), c.acl[servicePath][method]...)
-}
-
-// HostGatewayIdentity 返回某台主机的主机网关调用方身份。
-func HostGatewayIdentity(hostID string) string { return HostGatewayCaller + "@" + hostID }
-
-// HostOfGatewayIdentity 从 host-gateway@<主机> 中取出主机 ID。
-func HostOfGatewayIdentity(caller string) (string, bool) {
-	host, ok := strings.CutPrefix(caller, HostGatewayCaller+"@")
-	if !ok || !identifierPattern.MatchString(host) {
-		return "", false
+// Storage exposes Metadata, PrimaryStore and DataView under one browser name.
+// Resolve the pair, checking console permission before choosing the service.
+func (c Catalog) ConsoleService(name, method string) (Service, bool) {
+	if name == "" {
+		return Service{}, false
 	}
-	return host, true
+	for _, component := range c.Components {
+		for _, service := range component.Services {
+			if service.ConsoleName == name && c.Allowed("console", service.Path, method) {
+				return service, true
+			}
+		}
+	}
+	return Service{}, false
 }

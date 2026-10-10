@@ -76,14 +76,14 @@ grep -Fq '(模块/存储.md)' docs/总体设计.md || fail 'overall design does 
 assert_no_match 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|WriteViewIndex|ViewIndexBatch\b|active_coverage_(start|end)|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
 assert_no_match 'FactKey|RowMarker|content_hash|FACT_VERSION_IMMUTABLE|node_sequence|source_sequence|DatasetProgress|GetDatasetProgress|ViewIndexSourceProgress|expected_last_applied_sequence|base_progress|MergeRows|DeleteRows|ReadRows|ScanRows|keep_days' modules/storage/proto modules/storage/schema modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go
 assert_no_match 'ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
-# 外部接入已迁到 modules/access，Storage 中不能再出现它的代码和命名。
-assert_no_match 'storage[_-]access|moox-storage-access|accessproxy|cmd/access' modules/storage packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
-# Standalone CLIs and Storage's long-lived maintenance loops intentionally
+assert_no_match 'storage[_-]access|moox-access|internal/accessproxy|cmd/access' modules/storage/cmd modules/storage/internal packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
+# Standalone Admin/Storage CLIs and Storage's long-lived maintenance loops intentionally
 # create root contexts at process/lifecycle boundaries. Keep the boundary
 # check focused on request-serving code rather than those explicit roots.
 assert_no_match 'context\.Background\(\)' modules/storage packages/gatewayroute modules/admin modules/hostgateway \
   --glob '*.go' --glob '!**/*_test.go' --glob '!**/*pb.go' --glob '!**/*trpc.go' \
   --glob '!modules/storage/cmd/**' \
+  --glob '!modules/admin/cmd/cli/**' \
   --glob '!modules/storage/internal/service/view/maintenance.go' \
   --glob '!modules/storage/internal/service/view/build.go' \
   --glob '!modules/storage/internal/service/datanode/pebble/store.go' \

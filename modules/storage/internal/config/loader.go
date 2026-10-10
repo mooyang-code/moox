@@ -20,9 +20,8 @@ type ConfigLoader struct {
 
 // RuntimeConfig 保存运行时加载出的完整业务配置。
 type RuntimeConfig struct {
-	// GatewayClient 是 storage-view 访问 Metadata、PrimaryStore 使用的 gatewayclient 配置（storage-view 身份）。
-	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
-	Storage       StorageConfig        `yaml:"storage"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	Storage       StorageConfig            `yaml:"storage"`
 }
 
 // StorageConfig 保存 storage.yaml 中的业务配置。
@@ -70,14 +69,11 @@ const (
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName     string `yaml:"metadata_service_name"`
-	PrimaryStoreServiceName string `yaml:"primary_store_service_name"`
-	IndexServiceName        string `yaml:"index_service_name"`
-	BatchSize               int    `yaml:"batch_size"`
-	BatchWaitMS             int    `yaml:"batch_wait_ms"`
-	FetchBatch              int    `yaml:"fetch_batch"`
-	MaxWorkers              int    `yaml:"max_workers"`
-	Ordering                string `yaml:"ordering"`
+	BatchSize   int    `yaml:"batch_size"`
+	BatchWaitMS int    `yaml:"batch_wait_ms"`
+	FetchBatch  int    `yaml:"fetch_batch"`
+	MaxWorkers  int    `yaml:"max_workers"`
+	Ordering    string `yaml:"ordering"`
 	// BackfillPageSize bounds each Primary history page during a View rebuild.
 	// Smaller pages reduce the instantaneous point-read and index-write burst.
 	BackfillPageSize        uint32                         `yaml:"backfill_page_size"`
@@ -318,10 +314,7 @@ func validConsumerName(value string) bool {
 func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
 func (v StorageView) HasRebuildIdleChecksSetting() bool { return v.rebuildIdleChecksSet }
 
-// UnmarshalYAML remembers whether max_view_file_bytes was explicitly present.
-// This lets defaults preserve omitted legacy configuration while allowing the
-// server to reject an explicit zero/negative value instead of silently
-// replacing it with the default watermark.
+// UnmarshalYAML distinguishes omitted rebuild limits from explicit zero values.
 func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	type plain StorageView
 	var decoded plain
@@ -362,6 +355,12 @@ type StorageHealth struct {
 }
 
 func (c *RuntimeConfig) ApplyDefaults() {
+	if c.GatewayClient.Caller == "" {
+		c.GatewayClient.Caller = "storage-view"
+	}
+	if c.GatewayClient.KeyFile == "" {
+		c.GatewayClient.KeyFile = "../../secrets/caller-storage-view.key"
+	}
 	c.Storage.ApplyDefaults()
 }
 
@@ -416,15 +415,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Primary.Outbox.BackoffMaxMS <= 0 {
 		c.Primary.Outbox.BackoffMaxMS = 30000
-	}
-	if c.View.MetadataServiceName == "" {
-		c.View.MetadataServiceName = "trpc.moox.storage.Metadata"
-	}
-	if c.View.PrimaryStoreServiceName == "" {
-		c.View.PrimaryStoreServiceName = "trpc.moox.storage.PrimaryStore"
-	}
-	if c.View.IndexServiceName == "" {
-		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"
 	}
 	if c.View.BatchSize <= 0 {
 		c.View.BatchSize = 500
@@ -556,14 +546,19 @@ func (c *ConfigLoader) LoadConfig(filename string, config interface{}) error {
 
 func validateStorageSubtreeStrict(raw []byte, config interface{}) error {
 	var document map[interface{}]interface{}
-	if err := yaml.Unmarshal(raw, &document); err != nil {
+	if err := yaml.UnmarshalStrict(raw, &document); err != nil {
 		return err
 	}
-	storage, exists := document["storage"]
-	if !exists {
+	public := map[interface{}]interface{}{}
+	for _, key := range []string{"storage", "gateway_client"} {
+		if value, exists := document[key]; exists {
+			public[key] = value
+		}
+	}
+	if len(public) == 0 {
 		return nil
 	}
-	subtree, err := yaml.Marshal(map[interface{}]interface{}{"storage": storage})
+	subtree, err := yaml.Marshal(public)
 	if err != nil {
 		return err
 	}

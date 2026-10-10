@@ -29,9 +29,8 @@ func TestStockInvokeBudgetMatchesActiveRoute(t *testing.T) {
 func TestStockSCFBudgetUsesIndependentTimerAndInvokeChains(t *testing.T) {
 	base := SCFFetcherSpace{SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 60,
 		TimerFunctionCount: 1, MeasuredSafeGroupSize: 40,
-		RealtimeBatchSize:   30,
-		MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
+		AccessAddress: "storage.example:11004", RealtimeBatchSize: 30,
+		MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
 	require.NoError(t, validateSCFFetcherSpace(&base, "stock"))
 	require.GreaterOrEqual(t, base.InvokeTimeoutSeconds, 90)
 	require.GreaterOrEqual(t, SCFColdCompletionReserveMilliseconds, 13000)
@@ -61,8 +60,8 @@ func TestStockTimerBudgetIncludesBestEffortNameReadAtTimeoutBoundary(t *testing.
 	require.Equal(t, 59996, MarketFetchBudgetMS(40, 10, 1, 4, 2156, 5000, true))
 	require.Equal(t, 60012, MarketFetchBudgetMS(40, 10, 1, 4, 2157, 5000, true))
 	space := SCFFetcherSpace{SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 60, InvokeTimeoutSeconds: 200,
-		TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 2156, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
+		TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, AccessAddress: "storage.example:11004",
+		RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 2156, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
 	require.NoError(t, validateSCFFetcherSpace(&space, "stock"))
 	space.RequestTimeoutMS++
 	require.ErrorContains(t, validateSCFFetcherSpace(&space, "stock"), "Timer")

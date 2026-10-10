@@ -2,11 +2,45 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 )
 
 func main() {
+	if isHostBundleCommand(os.Args) {
+		if err := runHostBundleCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isBootstrapCommand(os.Args) {
+		if err := runBootstrapCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isTopologyRecoveryCommand(os.Args) {
+		if err := runTopologyRecoveryCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isPKICommand(os.Args) {
+		if err := runPKICommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isKeysCommand(os.Args) {
+		if err := runKeysCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if isAdminUserCommand(os.Args) {
 		if err := runAdminUserCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 			printInitError(os.Stderr, err)
@@ -28,25 +62,9 @@ func main() {
 		}
 		return
 	}
-	for _, command := range []struct {
-		match func([]string) bool
-		run   func([]string, io.Writer, io.Writer) error
-	}{
-		{isPKICommand, runPKICommand},
-		{isKeysCommand, runKeysCommand},
-		{isBootstrapCommand, runBootstrapCommand},
-		{isPlacementCommand, runPlacementCommand},
-	} {
-		if command.match(os.Args) {
-			if err := command.run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-				printInitError(os.Stderr, err)
-				os.Exit(1)
-			}
-			return
-		}
-	}
+
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("未知命令，可用的命令：init、user、random-secret、eventbus-credentials、pki、keys、bootstrap、placement、host"))
+		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, host, placement, init, user, random-secret, eventbus-credentials, keys, pki"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

@@ -7,7 +7,7 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
-	"trpc.group/trpc-go/trpc-go/client"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
 type TencentCredential struct {
@@ -20,13 +20,18 @@ type Resolver struct {
 	getValue func(context.Context, *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error)
 }
 
-// New 用给定的 tRPC 客户端选项（gatewayclient，cloudnode 身份）经 SecretMgr 读取云账号凭据。
-// GetSecretValue 是只读方法，连接中断时 gatewayclient 会重试一次。
-func New(options []client.Option) *Resolver {
-	secrets := adminpb.NewSecretMgrClientProxy(options...)
+// New borrows the process gateway; every resolution reads the current secret.
+func New(gateway gatewayclient.Invoker) (*Resolver, error) {
+	if gateway == nil {
+		return nil, fmt.Errorf("cloud credential resolver requires the process gateway client")
+	}
 	return &Resolver{getValue: func(ctx context.Context, req *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
-		return secrets.GetSecretValue(ctx, req)
-	}}
+		var response adminpb.GetSecretValueRsp
+		if err := gateway.Invoke(ctx, "trpc.moox.ops.SecretMgr", "GetSecretValue", req, &response); err != nil {
+			return nil, err
+		}
+		return &response, nil
+	}}, nil
 }
 
 func (r *Resolver) Resolve(ctx context.Context, account store.CloudAccount) (TencentCredential, error) {
@@ -40,7 +45,7 @@ func (r *Resolver) Resolve(ctx context.Context, account store.CloudAccount) (Ten
 	if err != nil {
 		return TencentCredential{}, fmt.Errorf("getValue cloud credential: %w", err)
 	}
-	if response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || response.GetSecret() == nil {
+	if response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || response.GetSecret() == nil {
 		return TencentCredential{}, fmt.Errorf("getValue cloud credential rejected")
 	}
 	secret := response.GetSecret()

@@ -2,32 +2,22 @@ package garbage
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/schema"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-// fakeCloudNode 记录转发参数并返回预设的 JSON 响应（与 tRPC JSON 序列化的输出格式一致）。
-type fakeCloudNode struct {
-	calls int
-	rsp   string
-	err   error
-}
+type gatewayFunc func(context.Context, string, string, any, any) error
 
-func (f *fakeCloudNode) Forward(_ context.Context, servicePath, method string, serialization int, _ []byte, _ ...gatewayclient.CallOption) ([]byte, error) {
-	f.calls++
-	if servicePath != "trpc.moox.cloudnode.CloudNodeMgr" || method != "CollectGarbage" || serialization != codec.SerializationTypeJSON {
-		return nil, errors.New("unexpected forward " + servicePath + "/" + method)
-	}
-	return []byte(f.rsp), f.err
+func (f gatewayFunc) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	return f(ctx, service, method, req, rsp)
 }
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -53,13 +43,22 @@ func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
 		require.NoError(t, db.Exec(`INSERT INTO t_ssh_session (c_session_id, c_host_id, c_host_address, c_connect_time, c_close_time) VALUES (?, 1, 'h', ?, ?)`,
 			string(rune('a'+i)), row.connect, row.close).Error)
 	}
-	cloudNode := &fakeCloudNode{rsp: `{"ret_info":{"code":0,"msg":""},"packages":2,"cos_objects":0,"cos_bytes":"250","deleted_nodes":0,"node_batches":0,"skipped":[]}`}
-	collector, err := NewCollector(db, cloudNode)
+	calls := 0
+	collector, err := NewCollector(db, gatewayFunc(func(_ context.Context, service, method string, req, rsp any) error {
+		calls++
+		require.Equal(t, "trpc.moox.cloudnode.CloudNodeMgr", service)
+		require.Equal(t, "CollectGarbage", method)
+		raw, err := json.Marshal(req)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"dry_run":false}`, string(raw))
+		rsp.(*cloudNodeGarbageSummary).Packages = 2
+		return nil
+	}))
 	require.NoError(t, err)
 	collector.now = func() time.Time { return now }
 
 	require.NoError(t, collector.Run(context.Background()))
-	require.Equal(t, 1, cloudNode.calls)
+	require.Equal(t, 1, calls)
 	var logins, sessions int64
 	require.NoError(t, db.Table("t_login_history").Count(&logins).Error)
 	require.NoError(t, db.Table("t_ssh_session").Count(&sessions).Error)
@@ -70,7 +69,11 @@ func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
 func TestCollectorReportsCloudNodeFailureAfterTrimmingHistory(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Exec(`INSERT INTO t_login_history (c_user_id, c_username, c_client_ip, c_login_result, c_ctime) VALUES ('u1', 'admin', '127.0.0.1', 'success', '2026-01-01 00:00:00')`).Error)
-	collector, err := NewCollector(db, &fakeCloudNode{rsp: `{"ret_info":{"code":999,"msg":"list cloud accounts: boom"}}`})
+	collector, err := NewCollector(db, gatewayFunc(func(_ context.Context, _, _ string, _, rsp any) error {
+		rsp.(*cloudNodeGarbageSummary).RetInfo.Code = 999
+		rsp.(*cloudNodeGarbageSummary).RetInfo.Msg = "list cloud accounts: boom"
+		return nil
+	}))
 	require.NoError(t, err)
 
 	err = collector.Run(context.Background())
@@ -80,20 +83,13 @@ func TestCollectorReportsCloudNodeFailureAfterTrimmingHistory(t *testing.T) {
 	require.Zero(t, logins)
 }
 
-func TestCollectorReportsMissingGatewayClient(t *testing.T) {
-	collector, err := NewCollector(newTestDB(t), nil)
+func TestCollectorRequiresAdminGatewayAndReportsRoutingFailure(t *testing.T) {
+	db := newTestDB(t)
+	_, err := NewCollector(db, nil)
+	require.ErrorContains(t, err, "admin gateway")
+	collector, err := NewCollector(db, gatewayFunc(func(context.Context, string, string, any, any) error {
+		return errors.New("no active CloudNode placement")
+	}))
 	require.NoError(t, err)
-	require.ErrorContains(t, collector.Run(context.Background()), "gateway_client 没有配置")
-}
-
-func TestCollectorRejectsResponseWithoutReturnCode(t *testing.T) {
-	collector, err := NewCollector(newTestDB(t), &fakeCloudNode{rsp: `{"ret_info":null}`})
-	require.NoError(t, err)
-	require.ErrorContains(t, collector.Run(context.Background()), "缺少返回码")
-}
-
-func TestCollectorReportsCloudNodeTransportError(t *testing.T) {
-	collector, err := NewCollector(newTestDB(t), &fakeCloudNode{err: errors.New("服务 trpc.moox.cloudnode.CloudNodeMgr 没有已启用的部署")})
-	require.NoError(t, err)
-	require.ErrorContains(t, collector.Run(context.Background()), "没有已启用的部署")
+	require.ErrorContains(t, collector.Run(context.Background()), "no active CloudNode placement")
 }

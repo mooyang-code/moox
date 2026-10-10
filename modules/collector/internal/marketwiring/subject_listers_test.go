@@ -7,12 +7,12 @@ import (
 )
 
 func TestNewSubjectListersIncludesBinanceProducts(t *testing.T) {
-	listers, err := NewSubjectListers(nil)
+	listers, err := NewSubjectListers()
 	require.NoError(t, err)
 	require.Equal(t, []string{"spot", "swap"}, listers.Supported()["binance"])
 }
 func TestNewSubjectListersCoversBuiltInTagSources(t *testing.T) {
-	listers, err := NewSubjectListers(nil)
+	listers, err := NewSubjectListers()
 	require.NoError(t, err)
 	supported := listers.Supported()
 	require.ElementsMatch(t, []string{"spot", "swap"}, supported["binance"])

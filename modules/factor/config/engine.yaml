@@ -4,15 +4,15 @@ engine:
   id: ""
   heartbeat_interval: 10s
 
-# 经外部接入访问 MooX：调用 moox-factor-mgr 的 FactorEngine 服务、读写 Storage 都以 factor-engine 身份签名
+# Storage 与 Factor Manager 共用同一固定 Access 及外部身份。
+# key_file 相对本配置文件；其余运行文件相对安装根目录。
 gateway_client:
-  mode: access
-  caller: factor-engine
-  key_file: ./secrets/caller-factor-engine.key
-  access_address: 127.0.0.1:11004
+  access_address: access.example.test:11004
   access_id: access@storage
+  caller: factor-engine
+  key_id: ""
+  key_file: ../secrets/access-factor-engine.key
 
-# 调用 FactorEngine 服务的超时
 manager:
   timeout: 30s
 
@@ -22,7 +22,7 @@ catalog_sync:
   offset: 45s
   state_file: ./data/engine/catalog.json
 
-# Storage Primary 的密钥，用来签名因子引擎的 AppID
+# Storage 请求体内的角色签名独立于 Access 身份。
 storage:
   auth_secret_file: ./secrets/storage-primary-auth.secret
 

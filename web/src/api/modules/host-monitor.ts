@@ -61,6 +61,7 @@ export interface NetworkSpeed {
 
 export interface HostMetrics {
   host_id: string;
+  deployment_host_id?: string;
   host_name: string;
   address: string;
   status: "online" | "offline" | "error";
@@ -122,6 +123,7 @@ interface HostSnapshot {
 type WireNumber = number | string;
 
 interface HostAgent {
+  host_id?: string;
   agent_id?: string;
   hostname?: string;
   last_seen_at?: string;
@@ -171,6 +173,7 @@ export const toHostMetrics = (agent: HostAgent, storageAvailable = true): HostMe
   const memory = snapshot.memory ?? {};
   return {
     host_id: agent.agent_id ?? "",
+    ...(agent.host_id ? { deployment_host_id: agent.host_id } : {}),
     host_name: agent.hostname ?? agent.agent_id ?? "unknown",
     address: agent.agent_id ?? "",
     status: agent.archived ? "offline" : isFresh(agent.last_seen_at) ? "online" : "offline",

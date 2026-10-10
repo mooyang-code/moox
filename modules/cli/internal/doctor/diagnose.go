@@ -528,10 +528,12 @@ func healthCheckIDs(config []report.ModuleHealthCheck) []string {
 }
 
 // componentModule maps a component id to the module name used by module
-// health checks; moox_factor_mgr reports its metrics as module "factor".
-// componentModule 是组件上报模块指标时使用的模块名：factor-mgr 的模块名是 factor，其余与组件 ID 相同。
+// health checks; factor-mgr reports its metrics as module "factor".
 func componentModule(componentID string) string {
-	return strings.TrimSuffix(componentID, "-mgr")
+	if componentID == "factor-mgr" {
+		return "factor"
+	}
+	return componentID
 }
 
 func moduleFreshnessEnabled(config []report.ModuleHealthCheck, module string) bool {

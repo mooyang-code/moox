@@ -16,3 +16,5 @@ go test -count=1 ./modules/factor/...
 ## 配置
 
 管理端 `config/app.yaml`、`config/trpc_go.yaml`；引擎 `config/engine.yaml`、`config/trpc_go.engine.yaml`；Python worker 在 `pyworker/`，因子库在 `factors/`。
+
+FactorMgr 仅监听 loopback 原生 tRPC 11403；控制台与 CLI 经主机网关访问。FactorEngine 的 11405 调用迁移留到外部客户端阶段。

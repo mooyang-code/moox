@@ -1,6 +1,9 @@
 package command
 
 import (
+	"context"
+	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	"testing"
 
 	core "github.com/mooyang-code/moox/packages/doctor"
@@ -38,10 +41,18 @@ func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {
 }
 
 func TestStorageMetadataClientUsesReadOnlySignedIdentity(t *testing.T) {
-	client := newSignedStorageMetadataClient(nil, "storage-secret")
+	client := newSignedStorageMetadataClient(storageGatewayCall(func(context.Context, string, string, any, any) error { return nil }), "storage-secret")
 	signed, ok := client.(*signedStorageMetadataClient)
 	require.True(t, ok)
 	require.Equal(t, "storage-metadata", signed.auth.GetAppId())
 	require.Len(t, signed.auth.GetAppKey(), 64)
-	require.NotNil(t, signed.proxy)
+	require.NotNil(t, signed.gateway)
+}
+
+func TestDoctorRejectsInvalidLocalConfigBeforeOpeningGateway(t *testing.T) {
+	failure := errors.New("invalid Doctor configuration")
+	cmd := newDoctorModeCommand("diagnose", doctorCommandDeps{loadConfig: func() (*config.Config, error) { return nil, failure }})
+	cmd.SetArgs([]string{})
+	cmd.SetContext(t.Context())
+	require.ErrorIs(t, cmd.Execute(), failure)
 }

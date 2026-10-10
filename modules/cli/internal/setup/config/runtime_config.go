@@ -3,34 +3,55 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// RenderCollectorRuntimeConfig 用 moox.toml 渲染 Collector app.yaml 中由部署决定的段落：出口代理、SCF 地域
-// 黑名单、运行数据保留和 stockcn 容量，其余设置保持原样。
+// RenderEgressConfig writes the independent HTTP and DNS upstream policy.
+func RenderEgressConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("runtime_config: snapshot is required")
+	}
+	cfg := snapshot.Manifest.EgressProxy
+	dns := cfg.DNS
+	raw, err := replaceYAMLMapping(existing, "domains", valueNode(normalizedDomains(cfg.HTTPDomains)))
+	if err != nil {
+		return nil, err
+	}
+	return replaceYAMLMapping(raw, "dns", orderedMapping(
+		mappingField{"domains", normalizedDomains(dns.Domains)},
+		mappingField{"lookup_timeout_ms", dns.LookupTimeoutMS},
+		mappingField{"probe_timeout_ms", dns.ProbeTimeoutMS},
+		mappingField{"probe_port", dns.ProbePort},
+		mappingField{"cache_ttl_seconds", dns.CacheTTLSeconds},
+		mappingField{"max_ips_per_domain", dns.MaxIPsPerDomain},
+	))
+}
+
+// RenderCollectorRuntimeConfig also preserves the Admin-assigned SCF identity.
 func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	if snapshot == nil {
-		return nil, fmt.Errorf("runtime_config: 缺少 moox.toml 快照")
+		return nil, fmt.Errorf("runtime_config: snapshot is required")
 	}
-	egress := snapshot.Manifest.EgressProxy
-	resolver := egress.DNS
-	httpDomains, dnsDomains := []string{}, []string{}
-	// 没有部署出口代理时，Collector 的请求全部直连。
-	if len(snapshot.Manifest.HostsOf("egress-proxy")) > 0 {
-		httpDomains = append(httpDomains, egress.HTTPDomains...)
-		dnsDomains = normalizedDomains(resolver.Domains)
-	}
+	cfg := snapshot.Manifest.EgressProxy
+	dns := cfg.DNS
 	rendered, err := replaceYAMLMapping(existing, "egress_proxy", orderedMapping(
-		mappingField{"domains", httpDomains},
+		mappingField{"domains", normalizedDomains(cfg.HTTPDomains)},
 		mappingField{"dns", orderedMapping(
-			mappingField{"domains", dnsDomains},
-			mappingField{"refresh_interval", durationSeconds(resolver.RefreshIntervalSeconds)},
-			mappingField{"request_timeout", durationMilliseconds(resolver.RequestTimeoutMS)},
-			mappingField{"cache_ttl", durationSeconds(resolver.CacheTTLSeconds)},
+			mappingField{"domains", normalizedDomains(dns.Domains)},
+			mappingField{"refresh_interval", durationSeconds(dns.RefreshIntervalSeconds)},
+			mappingField{"request_timeout", durationMilliseconds(dns.RequestTimeoutMS)},
+			mappingField{"cache_ttl", durationSeconds(dns.CacheTTLSeconds)},
 		)},
 	))
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = replaceYAMLMapping(rendered, "dns_resolver", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -39,6 +60,40 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 		blacklists = append(blacklists, mappingField{space.SpaceID, append([]string{}, space.RegionBlacklist...)})
 	}
 	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", orderedMapping(blacklists...))
+	if err != nil {
+		return nil, err
+	}
+	access, routes, err := SCFAccessRoutes(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	var prior map[string]any
+	if len(existing) > 0 {
+		if err := yaml.Unmarshal(existing, &prior); err != nil {
+			return nil, err
+		}
+	}
+	if values, ok := prior["scf_access"].(map[string]any); ok {
+		if keyID, ok := values["key_id"].(string); ok {
+			access["key_id"] = keyID
+		}
+	}
+	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", nil)
+	if err != nil {
+		return nil, err
+	}
+	if storage, ok := prior["storage"].(map[string]any); ok {
+		delete(storage, "gateway_target")
+		rendered, err = replaceYAMLMapping(rendered, "storage", valueNode(storage))
+		if err != nil {
+			return nil, err
+		}
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_access", valueNode(access))
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_access_routes", valueNode(routes))
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +125,11 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 		return replaceYAMLMapping(rendered, "stockcn", stockFields)
 	}
 	return rendered, nil
+}
+
+// WriteRenderedRuntimeConfig atomically writes already-rendered YAML.
+func WriteRenderedRuntimeConfig(path string, rendered []byte) error {
+	return writeRenderedBytes(path, rendered)
 }
 
 func normalizedDomains(domains []string) []string {
@@ -114,11 +174,17 @@ func replaceYAMLMapping(existing []byte, key string, value *yaml.Node) ([]byte, 
 	root := document.Content[0]
 	for index := 0; index+1 < len(root.Content); index += 2 {
 		if root.Content[index].Value == key {
-			root.Content[index+1] = value
+			if value == nil {
+				root.Content = append(root.Content[:index], root.Content[index+2:]...)
+			} else {
+				root.Content[index+1] = value
+			}
 			return encodeYAML(document)
 		}
 	}
-	root.Content = append(root.Content, scalarNode(key), value)
+	if value != nil {
+		root.Content = append(root.Content, scalarNode(key), value)
+	}
 	return encodeYAML(document)
 }
 
@@ -140,9 +206,6 @@ func scalarNode(value string) *yaml.Node {
 }
 
 func valueNode(value any) *yaml.Node {
-	if node, ok := value.(*yaml.Node); ok {
-		return node
-	}
 	data, err := yaml.Marshal(value)
 	if err != nil {
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
@@ -152,4 +215,77 @@ func valueNode(value any) *yaml.Node {
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
 	}
 	return document.Content[0]
+}
+
+func writeRenderedBytes(path string, rendered []byte) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("runtime_config: output path is required")
+	}
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("runtime_config: create %s: %w", dir, err)
+	}
+	temporary, err := os.CreateTemp(dir, ".moox-runtime-config-*")
+	if err != nil {
+		return fmt.Errorf("runtime_config: create temporary file: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return fmt.Errorf("runtime_config: chmod temporary file: %w", err)
+	}
+	if _, err := temporary.Write(rendered); err != nil {
+		temporary.Close()
+		return fmt.Errorf("runtime_config: write temporary file: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return fmt.Errorf("runtime_config: sync temporary file: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("runtime_config: close temporary file: %w", err)
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return fmt.Errorf("runtime_config: replace %s: %w", path, err)
+	}
+	return nil
+}
+
+// SCFAccessRoutes emits fixed external endpoints independently of internal
+// Collector routing. Regional endpoint identities must agree across Spaces.
+func SCFAccessRoutes(snapshot *Snapshot) (map[string]string, map[string]map[string]string, error) {
+	base := map[string]string{"caller": "scf-collector", "key_id": "", "key_file": "../../secrets/caller-scf-collector.key"}
+	routes := map[string]map[string]string{}
+	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
+		if space.AccessAddress != "" {
+			if base["access_address"] != "" && (base["access_address"] != space.AccessAddress || base["access_id"] != space.AccessID) {
+				return nil, nil, fmt.Errorf("config_invalid: SCF Access default identity must agree across Spaces")
+			}
+			base["access_address"], base["access_id"] = space.AccessAddress, space.AccessID
+		}
+		for region, address := range space.AccessAddresses {
+			identity := space.AccessIDForRegion(region)
+			if old, ok := routes[region]; ok && (old["access_address"] != address || old["access_id"] != identity) {
+				return nil, nil, fmt.Errorf("config_invalid: SCF Access routes for %s must agree across Spaces", region)
+			}
+			routes[region] = map[string]string{"access_address": address, "access_id": identity}
+		}
+	}
+	if base["access_address"] == "" {
+		host := snapshot.Manifest.StorageHost()
+		if host.Address == "" {
+			host = snapshot.Manifest.ControlHost()
+		}
+		if host.Address != "" {
+			base["access_address"] = net.JoinHostPort(host.Address, "11004")
+			base["access_id"] = "access@" + host.Name
+		}
+	}
+	return base, routes, nil
 }

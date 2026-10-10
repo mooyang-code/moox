@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,42 +13,40 @@ import (
 	"syscall"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// PlacementClient 读取一台主机上的部署（SysDeploy v2）。
-type PlacementClient interface {
-	ListPlacements(context.Context, string) ([]*adminpb.DeployPlacement, error)
+type DeploymentClient interface {
+	ListPlacements(context.Context, string) ([]Placement, error)
 }
 
 type DoctorContextClient interface {
 	GetDoctorContext(context.Context, *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error)
 }
 
-// BootstrapOptions 是本机部署检查的输入。NodeID 是主机 ID；组件定义取自组件目录，部署取自 SysDeploy。
 type BootstrapOptions struct {
 	NodeID, LocalNodeID, ReleaseRoot, DatasetHealthPolicyPath string
 	CheckIDs                                                  []string
-	Client                                                    PlacementClient
+	Client                                                    DeploymentClient
 	MonitorClient                                             DoctorContextClient
 	StorageActivation                                         StorageActivationClient
 	Prober                                                    HTTPProber
 	Now                                                       func() time.Time
+	ProbeWritable                                             func(context.Context, string, string) error
 	ProcessAlive                                              func(string) bool
 }
 
 type bootstrapRunner struct {
 	options                BootstrapOptions
 	manifest               core.Manifest
-	placements             map[string]*adminpb.DeployPlacement
+	deployments            map[string]Placement
 	loadErr                error
 	datasetHealthPolicy    report.DatasetHealthPolicy
 	datasetHealthPolicyErr error
 	healthChecks           []report.ModuleHealthCheck
+	manifestErr            error
 	delivery               *monitorpb.GetDoctorContextRsp
 	deliveryErr            error
 }
@@ -65,16 +62,26 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if err != nil {
 		return core.Report{}, err
 	}
-	runner := &bootstrapRunner{options: options, manifest: manifest, placements: map[string]*adminpb.DeployPlacement{}}
+	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]Placement{}}
+	if options.ReleaseRoot == "" {
+		runner.manifestErr = fmt.Errorf("release root is required")
+	} else {
+		releaseManifest, manifestErr := core.LoadManifestFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml"))
+		runner.manifestErr = manifestErr
+		if manifestErr == nil && releaseManifest.Checksum != manifest.Checksum {
+			runner.manifestErr = fmt.Errorf("release manifest checksum %s does not match embedded checksum %s", releaseManifest.Checksum, manifest.Checksum)
+		}
+		if runner.manifestErr == nil {
+			runner.manifestErr = validateManifestChecksumFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml.sha256"), manifest.Checksum)
+		}
+	}
 	if options.Client == nil {
-		runner.loadErr = fmt.Errorf("SysDeploy 客户端不可用")
+		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
 	} else {
 		rows, loadErr := options.Client.ListPlacements(ctx, options.NodeID)
 		runner.loadErr = loadErr
 		for _, row := range rows {
-			if row != nil {
-				runner.placements[row.GetComponentId()] = row
-			}
+			runner.deployments[row.ComponentID] = row
 		}
 	}
 	runner.healthChecks = report.BuiltInModuleHealthChecks()
@@ -118,6 +125,7 @@ func bootstrapSpecs(manifest core.Manifest, nodeID string) []core.CheckSpec {
 		specs = append(specs,
 			core.CheckSpec{ID: "bootstrap.service_identity:" + scope, RequiredDependencies: inventory},
 			core.CheckSpec{ID: "bootstrap.network:" + scope, RequiredDependencies: inventory},
+			core.CheckSpec{ID: "bootstrap.path_permissions:" + scope, RequiredDependencies: inventory},
 			core.CheckSpec{ID: "bootstrap.service_autostart:" + scope, RequiredDependencies: inventory},
 			core.CheckSpec{ID: "service.health:" + scope, RequiredDependencies: inventory},
 		)
@@ -140,21 +148,32 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 	result := core.CheckResult{ID: spec.ID}
 	switch spec.ID {
 	case "bootstrap.release_contract":
-		if r.options.ReleaseRoot == "" {
-			return checkResult(spec.ID, core.StatusFail, "release root is not configured", nil, "run_bootstrap")
+		contractErr := r.manifestErr
+		if contractErr == nil {
+			contractErr = r.datasetHealthPolicyErr
 		}
-		if r.datasetHealthPolicyErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "Dataset health policy is unavailable", r.datasetHealthPolicyErr, "run_bootstrap")
+		if contractErr != nil {
+			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_placements")
 		}
-		return checkResult(spec.ID, core.StatusPass, "release root and Dataset health policy are available", nil)
+		return checkResult(spec.ID, core.StatusPass, "release catalog, checksum, and Dataset health policy are available", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "SysDeploy placements are unavailable", r.loadErr, "sync_host_placements")
+			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_placements")
 		}
-		if len(r.placements) == 0 {
-			return checkResult(spec.ID, core.StatusFail, "host has no placements in SysDeploy", nil, "sync_host_placements")
+		missing := []string{}
+		required := []string{"host-gateway", "host-agent"}
+		if _, control := r.deployments["admin"]; control {
+			required = append(required, "admin", "console-proxy", "web-host")
 		}
-		return checkResult(spec.ID, core.StatusPass, "host placements are registered in SysDeploy", nil)
+		for _, id := range required {
+			if _, exists := r.deployments[id]; !exists {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "sync_host_placements")
+		}
+		return checkResult(spec.ID, core.StatusPass, "host placements match the component catalog", nil)
 	}
 	if spec.ID == "monitor.metrics_delivery" {
 		if r.deliveryErr != nil || r.delivery == nil {
@@ -183,19 +202,16 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 	if !ok {
 		return checkResult(spec.ID, core.StatusFail, "unknown bootstrap check", nil)
 	}
-	placement := r.placements[component.ComponentID]
-	if placement == nil || placement.GetStatus() != "enabled" {
-		return checkResult(spec.ID, core.StatusSkipped, "component is disabled or not placed on this host", nil)
-	}
-	if kind != "service_autostart" && component.HealthKind != servicecatalog.HealthReadyz {
-		return checkResult(spec.ID, core.StatusSkipped, "component is not probed over /readyz", nil)
+	deployment, placed := r.deployments[component.ComponentID]
+	if !placed || deployment.Status != "enabled" {
+		return checkResult(spec.ID, core.StatusSkipped, "component is disabled or not expected on this node", nil)
 	}
 	switch kind {
 	case "service_identity":
-		if component.Functional == servicecatalog.FunctionalDeferred || component.Transport != servicecatalog.TransportReporter {
-			return checkResult(spec.ID, core.StatusSkipped, "identity extension is not part of the active contract", nil)
+		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.Transport != core.TransportReporter {
+			return checkResult(spec.ID, core.StatusSkipped, "identity extension is not part of the active V1 contract", nil)
 		}
-		probe, err := r.options.Prober.Get(ctx, localHealthURL(component, component.HealthPath))
+		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, component.HealthPath))
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service identity probe failed", err, "verify_service_identity")
 		}
@@ -209,28 +225,42 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if err := json.Unmarshal(probe.Body, &identity); err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service identity response is invalid", err, "verify_service_identity")
 		}
-		want := component.ComponentID + "@" + r.options.NodeID
-		identityMismatch := identity.Service != component.ComponentID ||
+		want := component.ServiceName + "@" + r.options.NodeID
+		identityMismatch := identity.Service != component.ServiceName ||
 			identity.InstanceID != want ||
 			identity.NodeID != r.options.NodeID ||
 			identity.BootID == ""
-		policyMismatch := component.ComponentID == "monitor" &&
+		policyMismatch := component.ServiceName == "monitor" &&
 			r.datasetHealthPolicy.Checksum != "" &&
 			identity.DatasetHealthPolicyHash != r.datasetHealthPolicy.Checksum
 		if identityMismatch || policyMismatch {
-			return checkResult(spec.ID, core.StatusFail, "service identity conflicts with canonical component@host identity", nil, "verify_service_identity")
+			return checkResult(spec.ID, core.StatusFail, "service identity conflicts with canonical service@node identity", nil, "verify_service_identity")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service identity matches the canonical contract", nil)
 		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "signed identity response", Digest: probe.Digest}}
 		return result
 	case "network", "health":
-		probe, err := r.options.Prober.Get(ctx, localHealthURL(component, component.HealthPath))
+		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, component.HealthPath))
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service health endpoint is unavailable", err, "restart_service_manually")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service health endpoint responded", nil)
 		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "signed health response", Digest: probe.Digest}}
 		return result
+	case "path_permissions":
+		if len(component.WritablePaths) == 0 {
+			return checkResult(spec.ID, core.StatusSkipped, "component declares no writable paths", nil)
+		}
+		for _, path := range component.WritablePaths {
+			probeWritable := r.options.ProbeWritable
+			if probeWritable == nil {
+				probeWritable = ProbeWritablePath
+			}
+			if err := probeWritable(ctx, r.options.ReleaseRoot, path); err != nil {
+				return checkResult(spec.ID, core.StatusFail, "writable path probe failed", err, "repair_path_permissions")
+			}
+		}
+		return checkResult(spec.ID, core.StatusPass, "declared writable paths accept bounded temporary probes", nil)
 	case "service_autostart":
 		pidPath := filepath.Join(r.options.ReleaseRoot, "run", component.ComponentID+".pid")
 		isAlive := r.options.ProcessAlive
@@ -242,16 +272,16 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		}
 		return checkResult(spec.ID, core.StatusWarn, "service PID is not active; verify the configured service manager", nil, "restart_service_manually")
 	case "reporter_coverage":
-		if component.Functional == servicecatalog.FunctionalDeferred || component.Functional == servicecatalog.FunctionalNotApplicable {
-			if component.Functional == servicecatalog.FunctionalNotApplicable {
+		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
+			if component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
 				return checkResult(spec.ID, core.StatusSkipped, "functional_observability_not_applicable", nil)
 			}
 			return checkResult(spec.ID, core.StatusSkipped, "storage_observability_deferred", nil)
 		}
-		if component.Transport != servicecatalog.TransportReporter {
+		if component.Transport != core.TransportReporter {
 			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
 		}
-		probe, err := r.options.Prober.Get(ctx, localHealthURL(component, "/metrics"))
+		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, "/metrics"))
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "Reporter metrics endpoint is unavailable", err, "verify_eventbus_credentials")
 		}
@@ -306,7 +336,7 @@ func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, 
 			return component, "reporter_coverage", true
 		}
 		suffix := ":" + component.ComponentID + "@" + r.options.NodeID
-		for _, kind := range []string{"service_identity", "network", "service_autostart"} {
+		for _, kind := range []string{"service_identity", "network", "path_permissions", "service_autostart"} {
 			if id == "bootstrap."+kind+suffix {
 				return component, kind, true
 			}
@@ -318,10 +348,19 @@ func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, 
 	return core.Component{}, "", false
 }
 
-// localHealthURL 是本机组件健康端口上的地址；doctor bootstrap 只检查本机。
-func localHealthURL(component core.Component, path string) string {
-	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(component.HealthPort)) + path
+func validateManifestChecksumFile(path, want string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read doctor manifest checksum: %w", err)
+	}
+	value := strings.TrimSpace(string(raw))
+	if value != want && value != strings.TrimPrefix(want, "sha256:") {
+		return fmt.Errorf("doctor manifest checksum file contains %q, want %s", value, want)
+	}
+	return nil
 }
+
+func healthURL(placement Placement, path string) string { return placement.HealthAddress + path }
 
 func checkResult(id string, status core.CheckStatus, summary string, err error, actions ...string) core.CheckResult {
 	result := core.CheckResult{ID: id, Status: status, Summary: summary, RecoveryActionIDs: actions}

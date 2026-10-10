@@ -1,19 +1,18 @@
-# 主机网关配置示例（compute-1）。部署工具按主机渲染这个文件，相对路径按本文件所在目录解析。
 host:
-  id: compute-1
+  id: storage
 server:
-  remote_addr: 0.0.0.0:11003      # 跨主机入口，TLS
-  local_addr: 127.0.0.1:11002     # 本机入口与服务目录，只能监听回环地址
-  health_addr: 0.0.0.0:11012      # 健康检查与指标，经 MOOX_HEALTH_AUTH_* 鉴权
+  remote_addr: 0.0.0.0:11003
+  local_addr: 127.0.0.1:11002
+  health_addr: 0.0.0.0:11012
 tls:
   cert_file: ../../certs/host-gateway/server.crt
   key_file: ../../certs/host-gateway/server.key
   ca_file: ../../certs/moox-ca.crt
 control:
-  # 其他主机经 control 的 11003 访问网关控制，并用自己的调用方密钥签名；
-  # control 主机上填 127.0.0.1:11112，并且不配置 key_file。
-  target: 106.53.107.122:11003
-  caller: host-gateway@compute-1
+  host_id: control
+  target: 192.0.2.1:11003
+  caller: host-gateway@storage
+  key_id: replace-with-issued-key-id
   key_file: ../../secrets/caller-host-gateway.key
 store:
-  path: ../../data/host-gateway   # 快照（路由、目录、校验密钥）与 nonce 的缓存，文件权限 0600
+  path: ../../data/host-gateway

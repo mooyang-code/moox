@@ -36,12 +36,12 @@
           </transition>
         </div>
 
-        <div class="health-score-card">
-          <span class="score-label">系统健康度</span>
-          <strong>{{ healthScore }}</strong>
-          <small>/100 · {{ healthScore >= 80 ? "运行健康" : healthScore >= 60 ? "需要关注" : "存在风险" }}</small>
+        <div class="health-score-card" :class="`tone-${serviceSummary.tone}`">
+          <span class="score-label">组件健康率</span>
+          <strong>{{ fmt(healthScore) }}</strong>
+          <small>% · {{ serviceSummary.note }}</small>
           <div class="score-bar">
-            <span :style="{ width: `${healthScore}%` }"></span>
+            <span :style="{ width: `${healthScore || 0}%` }"></span>
           </div>
         </div>
       </section>
@@ -68,10 +68,10 @@
         <section class="dash-card health-breakdown-card">
           <div class="dash-card-head">
             <div>
-              <h2>健康度评分拆解</h2>
-              <p>数据新鲜度权重最高，先发现断流，再看服务。</p>
+              <h2>组件健康统计</h2>
+              <p>按主机与组件的实际健康观测统计。</p>
             </div>
-            <span class="dash-chip">A 权重方案</span>
+            <span class="dash-chip">Monitor</span>
           </div>
           <div class="score-breakdown">
             <div v-for="item in healthBreakdown" :key="item.key" class="score-line" :class="`tone-${item.tone}`">
@@ -80,7 +80,7 @@
                 <span>{{ item.note }}</span>
               </div>
               <div class="score-line-meter">
-                <span :style="{ width: `${Math.round((item.score / item.max) * 100)}%` }"></span>
+                <span :style="{ width: `${Math.round((item.max ? item.score / item.max : 0) * 100)}%` }"></span>
               </div>
               <b>{{ item.score }}/{{ item.max }}</b>
             </div>
@@ -93,8 +93,9 @@
               <h2>数据新鲜度</h2>
               <p>最近入库与延迟监控</p>
             </div>
-            <span class="dash-chip warn">6m 延迟</span>
+            <span class="dash-chip">链路观测</span>
           </div>
+          <p v-if="!stalenessItems.length" class="muted">暂无数据链路观测</p>
           <div class="freshness-list">
             <button
               v-for="item in stalenessItems"
@@ -108,7 +109,7 @@
                 <small>{{ item.dataset }}</small>
               </span>
               <b>{{ item.delay }}</b>
-              <em>{{ statusLabel(item.status) }}</em>
+              <em>{{ healthStatusLabel(item.status) }}</em>
             </button>
           </div>
         </section>
@@ -121,6 +122,7 @@
             </div>
             <span class="dash-chip danger">{{ incidentItems.length }} 项</span>
           </div>
+          <p v-if="!incidentItems.length" class="muted">暂无可展示告警</p>
           <div class="incident-table">
             <button
               v-for="item in incidentItems"
@@ -156,9 +158,9 @@
           <div class="dash-card-head compact">
             <div>
               <h2>执行账户摘要</h2>
-              <p>连接、订单与持仓状态</p>
+              <p>已登记账户；实时状态请查看账户页面</p>
             </div>
-            <span class="dash-chip ok">{{ tradeSummary.online }}/{{ tradeSummary.total }} 可用</span>
+            <span class="dash-chip">{{ fmt(tradeSummary.total) }} 个账户</span>
           </div>
           <div class="trade-metrics">
             <div v-for="item in tradeMetrics" :key="item.label">
@@ -166,36 +168,7 @@
               <strong>{{ item.value }}</strong>
             </div>
           </div>
-          <div class="account-lines">
-            <button
-              v-for="account in tradeAccounts"
-              :key="account.name"
-              class="account-line"
-              :class="`tone-${account.tone}`"
-              @click="go('/trading/accounts')"
-            >
-              <span>{{ account.name }}</span>
-              <b>{{ statusLabel(account.status) }}</b>
-              <em>{{ account.detail }}</em>
-            </button>
-          </div>
-        </section>
-
-        <section class="dash-card span-2 collector-card">
-          <div class="dash-card-head">
-            <div>
-              <h2>采集任务脉搏</h2>
-              <p>用任务实例和最近执行状态判断链路是否在工作。</p>
-            </div>
-            <a-button size="small" @click="go('/collector/tasks?tab=instances')">查看任务</a-button>
-          </div>
-          <div class="pulse-bars">
-            <div v-for="bar in taskPulse" :key="bar.label" class="pulse-bar">
-              <span>{{ bar.label }}</span>
-              <div><i :style="{ height: `${bar.value}%` }"></i></div>
-              <b>{{ bar.value }}</b>
-            </div>
-          </div>
+          <a-button type="text" @click="go('/trading/accounts')">查看账户</a-button>
         </section>
 
         <section class="dash-card ops-card">
@@ -205,34 +178,34 @@
               <p>网关、服务、主机资源</p>
             </div>
           </div>
+          <p v-if="healthError" class="muted">{{ healthError }}</p>
+          <p v-else-if="!healthOverview" class="muted">健康数据加载中</p>
           <div class="service-lines">
             <button
               v-for="dep in visibleDeployments"
               :key="dep.key"
               class="service-line"
               :class="`tone-${dep.tone}`"
-              @click="go('/ops/deployments')"
+              @click="go(dep.path)"
             >
               <span>{{ dep.name }}</span>
-              <b>{{ dep.label }}</b>
-              <em>{{ dep.host }}</em>
+              <b>{{ healthStatusLabel(dep.status) }}</b>
+              <em>{{ dep.addr }}</em>
             </button>
-            <span v-if="healthLoaded && !visibleDeployments.length" class="resource-caption">暂无部署的健康数据</span>
           </div>
           <div class="resource-lines">
             <span class="resource-caption">资源负载</span>
             <button
               v-for="host in visibleHosts"
-              :key="host.name"
+              :key="host.key"
               class="resource-line"
               :class="`tone-${host.tone}`"
-              @click="go('/ops/hosts?tab=monitor')"
+              @click="go(host.path)"
             >
               <span>{{ host.name }}</span>
               <b>CPU {{ host.cpu }}</b>
               <em>MEM {{ host.memory }}</em>
             </button>
-            <span v-if="hostsLoaded && !visibleHosts.length" class="resource-caption">暂无主机监控数据</span>
           </div>
         </section>
 
@@ -265,7 +238,7 @@ import { useUserInfoStore } from "@/store/modules/user-info";
 import { listFactorSets } from "@/api/factor";
 import { listDataSources, listDatasets, listSubjects, listViews } from "@/api/storage/metadata";
 import type { Dataset, PageResult, View } from "@/api/storage/types";
-import { pageResultTotal, statusLabel } from "@/views/data/shared/metadata-utils";
+import { pageResultTotal } from "@/views/data/shared/metadata-utils";
 import {
   datasetMatchesAttribution,
   isLikelyFactorResultDataset,
@@ -273,10 +246,12 @@ import {
   viewMatchesAttribution
 } from "@/views/data/shared/module-attribution";
 import { callControl } from "@/api/admin/http";
-import { monitorApi, type HealthComponent } from "@/api/monitor";
-import { isAttention, statusLabel as healthStatusLabel } from "@/views/ops/monitor/monitor-display";
+import { monitorApi, type HealthOverview } from "@/api/monitor";
+import { alertHref } from "@/views/ops/monitor/health-display";
+import { statusLabel as healthStatusLabel } from "@/views/ops/monitor/health-display";
+import { serviceHealth } from "./service-health";
 import { listTradingAccounts } from "@/api/trade";
-import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
+
 import { getNodeList } from "@/api/cloud-node";
 import { RequestGate } from "@/utils/request-gate";
 
@@ -401,19 +376,10 @@ const setupSteps = [
 ];
 
 const nodesTotal = ref<number | null>(null);
-// 服务健康来自 Monitor 的健康概览：每个部署（组件@主机）一条。
-const healthComponents = ref<HealthComponent[]>([]);
-const healthLoaded = ref(false);
-// Monitor 不可用时不能显示成"全部正常"。
-const healthFailed = ref(false);
-const hosts = ref<HostMetrics[]>([]);
-const hostsLoaded = ref(false);
-const serviceHealth = computed(() => {
-  const enabled = healthComponents.value.filter(item => item.status !== "disabled");
-  const healthy = enabled.filter(item => item.status === "healthy").length;
-  const attention = enabled.filter(item => isAttention(item.status)).length;
-  return { total: enabled.length, healthy, attention };
-});
+const healthOverview = ref<HealthOverview>();
+const healthError = ref("");
+const globalLoadGate = new RequestGate();
+const serviceSummary = computed(() => serviceHealth(healthOverview.value, healthError.value));
 
 const nodesNote = computed(() => {
   if (nodesTotal.value === null) return "加载中";
@@ -421,66 +387,69 @@ const nodesNote = computed(() => {
   return "已登记云函数节点";
 });
 
-const healthBreakdown = computed(() => [
-  { key: "freshness", label: "数据新鲜度", score: 26, max: 30, tone: "ok", note: "主力 K 线 6 分钟前入库" },
-  { key: "collector", label: "采集任务健康", score: 16, max: 20, tone: "warn", note: "7 个任务需要处理" },
-  { key: "nodes", label: "云节点登记", score: 15, max: 15, tone: "ok", note: "已登记云函数节点" },
-  { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务已启用" },
-  { key: "assets", label: "基础数据完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
-  { key: "trade", label: "执行账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
-]);
-
-const healthScore = computed(() => healthBreakdown.value.reduce((sum, item) => sum + item.score, 0));
-
-function countOrFallback(v: number | null | undefined, fallback: number): number {
-  return v === null || v === undefined ? fallback : v;
-}
-
+const healthBreakdown = computed(() => {
+  const summary = serviceSummary.value;
+  const counts = summary.counts;
+  if (!counts) return [];
+  const total = summary.total + (counts.disabled_count || 0);
+  return [
+    { key: "healthy", label: "正常组件", score: counts.healthy_count || 0, max: total, tone: "ok", note: "主动探测与上报观测" },
+    { key: "attention", label: "需要关注", score: counts.attention_count || 0, max: total, tone: "danger", note: "异常或降级" },
+    { key: "unknown", label: "未知组件", score: counts.unknown_count || 0, max: total, tone: "neutral", note: "尚无可靠观测" },
+    {
+      key: "unchecked",
+      label: "不探测",
+      score: counts.unchecked_count || 0,
+      max: total,
+      tone: "neutral",
+      note: "目录未配置主动探测"
+    },
+    {
+      key: "disabled",
+      label: "已停用",
+      score: counts.disabled_count || 0,
+      max: total,
+      tone: "neutral",
+      note: "不计入已启用组件的健康率"
+    }
+  ];
+});
+const healthScore = computed(() => serviceSummary.value.percent);
 const dashboardKpis = computed(() => [
   {
     key: "health",
-    label: "系统健康度",
-    value: String(healthScore.value),
-    unit: "/100",
-    note: "数据与采集优先",
-    delta: "+4 vs 昨日",
-    tone: "ok",
-    path: "/home"
-  },
-  {
-    key: "freshness",
-    label: "数据新鲜度",
-    value: "6m",
-    unit: "",
-    note: "最新 K 线延迟",
-    delta: "APT-USDT",
-    tone: "ok",
-    path: "/collector/tasks?tab=results"
+    label: "组件健康率",
+    value: fmt(healthScore.value),
+    unit: "%",
+    note: serviceSummary.value.note,
+    delta: "Monitor 观测",
+    tone: serviceSummary.value.tone,
+    path: "/ops/monitor"
   },
   {
     key: "tasks",
-    label: "今日采集任务",
-    value: fmt(taskCountLabel.value ?? counts.tasks ?? 443),
+    label: "采集任务实例",
+    value: fmt(taskCountLabel.value ?? counts.tasks),
     unit: "",
-    note: "任务展开实例",
-    delta: "运行中 18",
+    note: "已登记任务实例",
+    delta: "查看实例",
     tone: "neutral",
     path: "/collector/tasks?tab=instances"
   },
   {
     key: "incidents",
-    label: "异常任务",
-    value: "7",
+    label: "当前告警",
+    value: fmt(healthError.value ? undefined : healthOverview.value?.summary?.alert_count),
     unit: "",
-    note: "失败 / 超时",
-    delta: "需处理",
-    tone: "danger",
-    path: "/collector/tasks?tab=instances"
+    note: "组件、业务与主机",
+    delta: "查看告警",
+    tone: healthOverview.value?.summary?.alert_count && !healthError.value ? "danger" : "neutral",
+    path: "/ops/monitor"
   },
   {
     key: "nodes",
     label: "云节点",
-    value: String(countOrFallback(nodesTotal.value, 0)),
+    value: fmt(nodesTotal.value),
     unit: "",
     note: nodesNote.value,
     delta: "已登记",
@@ -490,116 +459,66 @@ const dashboardKpis = computed(() => [
   {
     key: "services",
     label: "服务在线",
-    value: healthLoaded.value && !healthFailed.value ? String(serviceHealth.value.healthy) : "—",
-    unit: healthLoaded.value && !healthFailed.value ? `/${serviceHealth.value.total}` : "",
-    note: "健康的部署 / 启用的部署",
-    delta: !healthLoaded.value
-      ? "加载中"
-      : healthFailed.value
-        ? "暂不可用"
-        : serviceHealth.value.attention
-          ? `${serviceHealth.value.attention} 个需关注`
-          : serviceHealth.value.total
-            ? "全部正常"
-            : "暂无部署",
-    tone: healthFailed.value || (healthLoaded.value && serviceHealth.value.attention) ? "warn" : "ok",
-    path: "/ops/deployments"
+    value: fmt(serviceSummary.value.healthy),
+    unit: "",
+    note: serviceSummary.value.note,
+    delta: "组件健康统计",
+    tone: serviceSummary.value.tone,
+    path: "/ops/monitor"
   }
 ]);
 
-const stalenessItems = [
-  { name: "APT-USDT", dataset: "BINANCE spot / 1m kline", delay: "6m", status: "fresh", tone: "ok" },
-  { name: "BTC-USDT", dataset: "BINANCE spot / ticker", delay: "2m", status: "fresh", tone: "ok" },
-  { name: "ETH-USDT", dataset: "OKX spot / 5m kline", delay: "18m", status: "watch", tone: "warn" },
-  { name: "factor.momentum", dataset: "daily factor view", delay: "48m", status: "late", tone: "danger" }
-];
-
-const incidentItems = [
-  {
-    level: "P1",
-    title: "factor.momentum 今日未刷新",
-    meta: "因子结果延迟 48m",
-    action: "打开结果",
-    path: "/factor/tasks?tab=results",
-    tone: "danger"
-  },
-  {
-    level: "P2",
-    title: "7 个采集实例失败",
-    meta: "交易所限频 / 网络超时",
-    action: "处理任务",
-    path: "/collector/tasks?tab=instances",
-    tone: "warn"
-  },
-  {
-    level: "P3",
-    title: "1 个执行账户同步较慢",
-    meta: "Binance futures 14m 未更新",
-    action: "账户摘要",
-    path: "/trading/accounts",
-    tone: "neutral"
-  }
-];
-
-const tradeSummary = computed(() => ({
-  total: countOrFallback(counts.accounts, 6),
-  online: 5,
-  ordersToday: 128,
-  failedOrders: 2,
-  positions: 11,
-  lastFill: "19:28:41"
-}));
-
-const tradeMetrics = computed(() => [
-  { label: "账户", value: `${tradeSummary.value.online}/${tradeSummary.value.total}` },
-  { label: "今日订单", value: String(tradeSummary.value.ordersToday) },
-  { label: "失败订单", value: String(tradeSummary.value.failedOrders) },
-  { label: "持仓", value: String(tradeSummary.value.positions) }
-]);
-
-const tradeAccounts = [
-  { name: "Binance Spot", status: "online", detail: "现货 / 最近成交 19:28", tone: "ok" },
-  { name: "OKX Spot", status: "online", detail: "现货 / 余额同步 3m", tone: "ok" },
-  { name: "Binance Futures", status: "watch", detail: "合约 / 同步延迟 14m", tone: "warn" }
-];
-
-const taskPulse = [
-  { label: "09:00", value: 42 },
-  { label: "10:00", value: 66 },
-  { label: "11:00", value: 58 },
-  { label: "12:00", value: 74 },
-  { label: "13:00", value: 81 },
-  { label: "14:00", value: 63 },
-  { label: "15:00", value: 88 },
-  { label: "16:00", value: 71 },
-  { label: "17:00", value: 93 },
-  { label: "18:00", value: 78 },
-  { label: "19:00", value: 84 },
-  { label: "20:00", value: 69 }
-];
-
-// 需关注的部署排在前面，最多显示 5 个。
-const visibleDeployments = computed(() =>
-  healthComponents.value
-    .filter(item => item.status !== "disabled")
-    .slice()
-    .sort((left, right) => Number(isAttention(right.status)) - Number(isAttention(left.status)))
-    .slice(0, 5)
-    .map(item => ({
-      key: `${item.host_id}:${item.component_id}`,
-      name: item.name || item.component_id || "",
-      label: healthStatusLabel(item.status),
-      host: item.host_id || "",
-      tone: isAttention(item.status) ? "warn" : "ok"
-    }))
+const stalenessItems = computed(() =>
+  healthError.value
+    ? []
+    : (healthOverview.value?.pipeline || []).flatMap(stage =>
+        (stage.datasets || []).map(item => ({
+          name: `${item.producer}/${item.space_id}/${item.dataset_id}/${item.freq}`,
+          dataset: `${stage.name} · ${item.dataset_id} · ${item.freq || ""}`,
+          delay: item.lag_seconds === undefined ? "暂无" : `${item.lag_seconds}s`,
+          status: item.status,
+          tone: item.status === "healthy" ? "ok" : item.status === "down" || item.status === "degraded" ? "warn" : "neutral"
+        }))
+      )
 );
-
+const incidentItems = computed(() =>
+  healthError.value
+    ? []
+    : (healthOverview.value?.alerts || []).map(item => ({
+        level: item.severity || "告警",
+        title: item.title || item.id || "",
+        meta: item.reason || "",
+        action: "定位",
+        path: alertHref(item).replace(/^#/, ""),
+        tone: "danger"
+      }))
+);
+const tradeSummary = computed(() => ({ total: counts.accounts }));
+const tradeMetrics = computed(() => [{ label: "已登记账户", value: fmt(tradeSummary.value.total) }]);
+const visibleDeployments = computed(() =>
+  (healthOverview.value?.components || []).slice(0, 5).map(item => ({
+    key: `${item.host_id}/${item.component_id}`,
+    name: item.name || item.component_id,
+    status: healthError.value ? "unknown" : item.status,
+    addr: item.host_id,
+    path: `/ops/deployments?tab=services&host_id=${encodeURIComponent(item.host_id || "")}&component_id=${encodeURIComponent(item.component_id || "")}`,
+    tone: healthError.value
+      ? "neutral"
+      : item.status === "healthy"
+        ? "ok"
+        : item.status === "down" || item.status === "degraded"
+          ? "warn"
+          : "neutral"
+  }))
+);
 const visibleHosts = computed(() =>
-  hosts.value.slice(0, 3).map(host => ({
-    name: host.host_name || host.address,
-    cpu: formatPercent(host.cpu?.usage),
-    memory: formatPercent(host.memory?.percent),
-    tone: host.status === "online" && (host.cpu?.usage ?? 0) < 80 && (host.memory?.percent ?? 0) < 85 ? "ok" : "warn"
+  (healthOverview.value?.hosts || []).slice(0, 3).map(host => ({
+    key: host.host_id || host.agent_id,
+    name: host.hostname || host.host_id || host.agent_id,
+    cpu: !healthError.value && host.cpu_available ? formatPercent(host.cpu_percent) : "暂无",
+    memory: !healthError.value && host.memory_available ? formatPercent(host.memory_percent) : "暂无",
+    tone: !healthError.value && host.status === "healthy" ? "ok" : "neutral",
+    path: `/ops/hosts?tab=monitor&host_id=${encodeURIComponent(host.host_id || "")}&agent_id=${encodeURIComponent(host.agent_id || "")}`
   }))
 );
 
@@ -733,31 +652,15 @@ function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Datase
 }
 
 async function loadGlobal() {
-  await Promise.allSettled([
-    monitorApi
-      .getOverview()
-      .then(rsp => {
-        healthComponents.value = rsp.overview?.components ?? [];
-        healthFailed.value = false;
-      })
-      .catch(() => {
-        healthComponents.value = [];
-        healthFailed.value = true;
-      })
-      .finally(() => {
-        healthLoaded.value = true;
-      }),
-    getCurrentMetrics()
-      .then(rsp => {
-        hosts.value = (rsp.metrics ?? []).slice(0, 4);
-      })
-      .catch(() => {
-        hosts.value = [];
-      })
-      .finally(() => {
-        hostsLoaded.value = true;
-      })
-  ]);
+  const token = globalLoadGate.next();
+  try {
+    const result = await monitorApi.getOverview({ space_id: selectedSpaceId.value || undefined });
+    if (!globalLoadGate.isCurrent(token)) return;
+    healthOverview.value = result.overview;
+    healthError.value = result.overview ? "" : "Monitor 未返回健康概览";
+  } catch (error) {
+    if (globalLoadGate.isCurrent(token)) healthError.value = error instanceof Error ? error.message : String(error);
+  }
 }
 
 async function refreshAll() {
@@ -774,18 +677,22 @@ function resetCounts() {
 
 watch(selectedSpaceId, () => {
   resetCounts();
-  loadSpaceScoped();
+  healthOverview.value = undefined;
+  healthError.value = "";
+  void refreshAll();
 });
 
 onMounted(() => {
   refreshAll();
   bannerTimer = setInterval(() => {
     activeSloganIndex.value = pickRandomSloganIndex(activeSloganIndex.value);
+    void loadGlobal();
   }, 15000);
 });
 
 onBeforeUnmount(() => {
   spaceLoadGate.next();
+  globalLoadGate.next();
   if (bannerTimer) {
     clearInterval(bannerTimer);
     bannerTimer = null;
@@ -2001,7 +1908,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 .score-breakdown,
 .freshness-list,
 .incident-table,
-.account-lines,
 .service-lines,
 .resource-lines {
   display: grid;
@@ -2072,7 +1978,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .freshness-row,
 .incident-row,
-.account-line,
 .service-line,
 .resource-line {
   display: grid;
@@ -2098,7 +2003,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .freshness-row:hover,
 .incident-row:hover,
-.account-line:hover,
 .service-line:hover,
 .resource-line:hover,
 .action-tile:hover,
@@ -2109,7 +2013,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 
 .freshness-row b,
 .incident-row b,
-.account-line b,
 .service-line b,
 .resource-line b {
   color: var(--tone, var(--dash-blue));
@@ -2120,7 +2023,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
 }
 
 .freshness-row em,
-.account-line em,
 .service-line em,
 .resource-line em {
   overflow: hidden;
@@ -2229,13 +2131,11 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   font-variant-numeric: tabular-nums;
 }
 
-.account-line,
 .service-line,
 .resource-line {
   grid-template-columns: minmax(0, 1fr) 58px minmax(0, 1fr);
 }
 
-.account-line span,
 .service-line span,
 .resource-line span {
   overflow: hidden;
@@ -2244,50 +2144,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.pulse-bars {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: var(--moox-space-2);
-  align-items: end;
-  min-height: 176px;
-  padding: var(--moox-space-2) 2px 0;
-}
-
-.pulse-bar {
-  display: grid;
-  gap: 6px;
-  align-items: end;
-  justify-items: center;
-  min-width: 0;
-}
-
-.pulse-bar span,
-.pulse-bar b {
-  color: var(--dash-muted);
-  font-family: $mono;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-.pulse-bar div {
-  position: relative;
-  width: 100%;
-  max-width: 28px;
-  height: 112px;
-  overflow: hidden;
-  border-radius: 6px 6px 3px 3px;
-  background: linear-gradient(180deg, rgba(219, 234, 254, 42%) 0 1px, transparent 1px 25%), var(--dash-surface-soft);
-}
-
-.pulse-bar i {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  border-radius: inherit;
-  background: linear-gradient(180deg, var(--dash-blue), var(--dash-green));
 }
 
 .resource-lines {
@@ -2352,7 +2208,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   .kpi-card,
   .freshness-row,
   .incident-row,
-  .account-line,
   .service-line,
   .resource-line,
   .pipeline-step,
@@ -2410,10 +2265,6 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   .incident-row b {
     grid-column: 2;
   }
-
-  .pulse-bars {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 640px) {
@@ -2452,14 +2303,12 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   }
 
   .freshness-row,
-  .account-line,
   .service-line,
   .resource-line {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .freshness-row em,
-  .account-line em,
   .service-line em,
   .resource-line em {
     grid-column: 1 / -1;
@@ -2478,5 +2327,18 @@ $display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-
   .action-grid {
     grid-template-columns: 1fr;
   }
+}
+.health-score-card.tone-neutral {
+  background: var(--color-fill-2);
+  border-color: var(--color-border-2);
+}
+.health-score-card.tone-neutral .score-bar span {
+  background: var(--color-text-3);
+}
+.health-score-card.tone-danger {
+  border-color: rgb(var(--danger-6));
+}
+.health-score-card.tone-danger .score-bar span {
+  background: rgb(var(--danger-6));
 }
 </style>

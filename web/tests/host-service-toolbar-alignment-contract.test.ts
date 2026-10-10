@@ -20,14 +20,11 @@ describe("host and service toolbar alignment", () => {
     expect(hostWorkbench).toMatch(/\.workbench-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
   });
 
-  it("keeps the deployment toolbars compact without create actions", () => {
-    const services = read("ops/deployments/services-tab.vue");
-    const routes = read("ops/deployments/routes-tab.vue");
-
-    expect(services).toContain('class="toolbar"');
-    expect(services.indexOf('placeholder="搜索组件、主机或服务"')).toBeLessThan(services.indexOf('aria-label="状态筛选"'));
-    expect(services).not.toContain("新增");
-    expect(routes.indexOf('placeholder="选择主机"')).toBeLessThan(routes.indexOf('placeholder="调用方"'));
-    expect(routes).not.toContain("新增");
+  it("keeps deployment filters compact without a create action", () => {
+    const deployments = read("ops/deployments/index.vue");
+    expect(deployments).toContain('class="filters"');
+    expect(deployments).not.toContain("新增节点");
+    expect(deployments).not.toContain("新增实例");
+    expect(deployments).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
   });
 });

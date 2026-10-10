@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -14,49 +15,46 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
-	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
 const (
 	klineGatewayNode   = "gateway-kline-e2e"
-	klineAccessKeyID   = "access-kline-e2e"
-	klineAccessSecret  = "access-kline-e2e-secret"
-	klineSkillKeyID    = "moox-skill-e2e"
-	klineSkillSecret   = "skill-kline-e2e-secret"
+	klineGatewayKeyID  = "moox-skill-e2e"
+	klineGatewaySecret = "gateway-kline-e2e-secret-0123456789"
 	klineStorageAppID  = "moox-skill"
 	klineStorageAppKey = "storage-kline-e2e-app-key"
 )
 
-// TestKlineRPCGoesThroughAccess 验证 moox-skill 的完整读取链路：moox-cli data kline（外部方式）→ 外部接入（校验
-// moox-skill 的签名和白名单）→ 主机网关（以 access 身份）→ Storage；白名单之外的写方法在外部接入处被拒绝。
-func TestKlineRPCGoesThroughAccess(t *testing.T) {
+func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	storageAddress := startKlineStorage(t, storage)
 	gatewayTarget := startKlineNativeGateway(t, storageAddress)
-	accessAddress := startAccessProcess(t, buildAccessBinary(t), strings.TrimPrefix(gatewayTarget, "ip://"),
-		gatewayauth.CallerKey{Caller: "access", KeyID: klineAccessKeyID, Secret: klineAccessSecret},
-		gatewayauth.CallerKey{Caller: "moox-skill", KeyID: klineSkillKeyID, Secret: klineSkillSecret},
-	)
-	configPath := writeKlineConfig(t, accessAddress)
+	configPath := writeKlineConfig(t)
+	operatorHome, manifestPath := writeKlineOperator(t, gatewayTarget)
 
 	binary := buildMooxCLI(t)
 	command := exec.Command(binary, "data", "kline", "get",
 		"--config", configPath,
+		"--file", manifestPath,
 		"--data-type", "crypto",
 		"--symbol", "BTC-USDT",
 		"--interval", "1m",
 		"--limit", "1",
 	)
-	output, err := command.CombinedOutput()
-	require.NoError(t, err, "kline CLI output: %s", output)
-	require.NotContains(t, string(output), klineSkillSecret)
+	command.Env = append(os.Environ(), "HOME="+operatorHome)
+	var diagnostics bytes.Buffer
+	command.Stderr = &diagnostics
+	output, err := command.Output()
+	require.NoError(t, err, "kline CLI diagnostics: %s", diagnostics.String())
+	require.NotContains(t, diagnostics.String(), klineGatewaySecret)
+	require.NotContains(t, diagnostics.String(), klineStorageAppKey)
+	require.NotContains(t, string(output), klineGatewaySecret)
 	require.NotContains(t, string(output), klineStorageAppKey)
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
@@ -78,43 +76,42 @@ func TestKlineRPCGoesThroughAccess(t *testing.T) {
 		t.Fatal("storage did not receive ReadTimeSeriesRows")
 	}
 
-	credentials := gatewayauth.Credentials{KeyID: klineSkillKeyID, Caller: "moox-skill", Secret: klineSkillSecret}
-	skill, err := gatewayclient.New(gatewayclient.Options{
-		Config: gatewayclient.Config{
-			Mode: gatewayclient.ModeAccess, Caller: "moox-skill", AccessAddress: accessAddress, AccessID: "access@" + klineGatewayNode,
-		},
-		Credentials: &credentials,
-	})
-	require.NoError(t, err)
-	defer skill.Close()
-	proxy := pb.NewPrimaryStoreClientProxy(skill.ClientOptions()...)
+	credentials := gatewayauth.Credentials{KeyID: klineGatewayKeyID, Caller: "moox-skill", Secret: klineGatewaySecret}
+	proxy := pb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(gatewayTarget, klineGatewayNode, credentials)...)
 	writeContext, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelWrite()
 	_, err = proxy.UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: klineStorageAppID, AppKey: klineStorageAppKey},
 	})
 	require.Error(t, err)
-	require.Equal(t, gatewayroute.RetForbidden, int(errs.Code(err)), "moox-skill 的白名单不含写方法: %v", err)
-	require.Equal(t, int32(0), storage.writeCalls.Load(), "写请求必须在到达 Storage 之前被拒绝")
+	// An external principal cannot borrow the operator signing identity.
+	require.NotContains(t, err.Error(), klineGatewaySecret)
+	require.Equal(t, int32(0), storage.writeCalls.Load(), "write RPC must be rejected before reaching Storage")
 }
 
 func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 	helper := buildGatewayE2EHelper(t)
 	readyFile := filepath.Join(t.TempDir(), "never.ready")
-	process := startGatewayHelperProcess(t, helper, klineHelperArgs("not-an-address", readyFile, filepath.Join(t.TempDir(), "nonces"))...)
+	process := startGatewayHelperProcess(t, helper,
+		"--mode", "kline-native",
+		"--node-id", klineGatewayNode,
+		"--upstream-addr", "not-an-address",
+		"--ready-file", readyFile,
+		"--nonce-dir", filepath.Join(t.TempDir(), "nonces"),
+		"--key-id", klineGatewayKeyID,
+	)
 
 	select {
 	case <-process.waitDone:
 	case <-time.After(10 * time.Second):
-		t.Fatal("参数无效的 e2e-helper 没有退出")
+		t.Fatal("invalid helper did not exit")
 	}
 	firstErr := process.waitError()
 	require.Error(t, firstErr)
-	const invalidUpstream = "的上游必须是本机回环地址 host:port"
-	require.Contains(t, process.logs.String(), invalidUpstream)
+	require.Contains(t, process.logs.String(), "fixture upstream must be literal loopback")
 	_, readyErr := process.waitForReady(readyFile, 2*time.Second)
 	require.ErrorContains(t, readyErr, firstErr.Error())
-	require.ErrorContains(t, readyErr, invalidUpstream)
+	require.ErrorContains(t, readyErr, "fixture upstream must be literal loopback")
 
 	cleanupDone := make(chan struct{})
 	go func() {
@@ -185,7 +182,14 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	tempDir := t.TempDir()
 	helper := buildGatewayE2EHelper(t)
 	readyFile := filepath.Join(tempDir, "gateway.ready")
-	process := startGatewayHelperProcess(t, helper, klineHelperArgs(upstreamAddress, readyFile, filepath.Join(tempDir, "nonces"))...)
+	process := startGatewayHelperProcess(t, helper,
+		"--mode", "kline-native",
+		"--node-id", klineGatewayNode,
+		"--upstream-addr", upstreamAddress,
+		"--ready-file", readyFile,
+		"--nonce-dir", filepath.Join(tempDir, "nonces"),
+		"--key-id", klineGatewayKeyID,
+	)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
 			t.Errorf("gateway helper required kill: %s", process.logs.String())
@@ -196,21 +200,11 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 	return target
 }
 
-// klineHelperArgs 让主机网关向外部接入（access）开放 PrimaryStore 的读写方法，与生产一致：access 代 scf-collector
-// 写入、代 moox-skill 读取，外部调用方能调用哪些方法由外部接入按组件目录的白名单限制。
-func klineHelperArgs(upstreamAddress, readyFile, nonceDir string) []string {
-	return []string{
-		"-host-id", klineGatewayNode,
-		"-route", "trpc.moox.storage.PrimaryStore=" + upstreamAddress,
-		"-callers", "access",
-		"-methods", "ReadTimeSeriesRows,UpsertFields",
-		"-ready-file", readyFile,
-		"-nonce-dir", nonceDir,
-	}
-}
-
 func buildGatewayE2EHelper(t *testing.T) string {
 	t.Helper()
+	if binary := prebuiltE2EBinary(t, "MOOX_CLI_GATEWAY_HELPER_BINARY"); binary != "" {
+		return binary
+	}
 	helper := filepath.Join(t.TempDir(), "gateway-e2e-helper")
 	build := exec.Command("go", "build", "-o", helper, "./cmd/e2e-helper")
 	build.Dir = filepath.Join("..", "..", "hostgateway")
@@ -229,17 +223,11 @@ type gatewayHelperProcess struct {
 
 func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gatewayHelperProcess {
 	t.Helper()
-	return startGatewayHelperProcessWithKeys(t, helper, "access:"+klineAccessKeyID+":"+klineAccessSecret, args...)
-}
-
-// startGatewayHelperProcessWithKeys 启动 e2e-helper；keys 是 caller:key_id:secret，多个用逗号分隔。
-func startGatewayHelperProcessWithKeys(t *testing.T, helper, keys string, args ...string) *gatewayHelperProcess {
-	t.Helper()
 	process := &gatewayHelperProcess{
 		command:  exec.Command(helper, args...),
 		waitDone: make(chan struct{}),
 	}
-	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_KEYS="+keys)
+	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+klineGatewaySecret)
 	process.command.Stdout = &process.logs
 	process.command.Stderr = &process.logs
 	require.NoError(t, process.command.Start())
@@ -322,15 +310,10 @@ func (buffer *lockedBuffer) String() string {
 	return buffer.content.String()
 }
 
-func writeKlineConfig(t *testing.T, accessAddress string) string {
+func writeKlineConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
 	content := fmt.Sprintf(`version: 1
-access:
-  address: %q
-  id: "access@%s"
-  caller: moox-skill
-  key: "%s:%s"
 storage:
   app_id: %q
   app_key: %q
@@ -343,7 +326,24 @@ data_types:
         series_tag: venue:binance
         kline_datasets:
           1m: dataset_binance_kline_1m
-`, accessAddress, klineGatewayNode, klineSkillKeyID, klineSkillSecret, klineStorageAppID, klineStorageAppKey)
+`, klineStorageAppID, klineStorageAppKey)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
+}
+
+func writeKlineOperator(t *testing.T, gatewayTarget string) (string, string) {
+	t.Helper()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	directory := filepath.Join(home, ".config", "moox")
+	require.NoError(t, os.MkdirAll(directory, 0700))
+	knownHosts := filepath.Join(directory, "known_hosts")
+	require.NoError(t, os.WriteFile(knownHosts, nil, 0600))
+	host := testfixture.GatewaySSH(t, klineGatewayNode, strings.TrimPrefix(gatewayTarget, "ip://"), knownHosts)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller-moox-cli.key"), []byte(klineGatewaySecret+"\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: "+klineGatewayKeyID+"\nkey_file: caller-moox-cli.key\n"), 0600))
+	manifest := filepath.Join(home, "moox.toml")
+	raw := fmt.Sprintf("[admin]\nusername='admin'\npassword='admin-test'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-test'\n[eventbus]\nport=4222\ntls_enabled=true\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\npassword='%s'\n[placements]\n%s=['admin','console-proxy','web-host','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.Password, host.Name)
+	require.NoError(t, os.WriteFile(manifest, []byte(raw), 0600))
+	return home, manifest
 }

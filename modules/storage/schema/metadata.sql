@@ -272,7 +272,7 @@ BEGIN
     UPDATE t_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 标签：Subject 的分组；auto 标签成员由 Collector 的标的同步按 cron 维护
+-- 标签：Subject 的分组；auto 标签成员由 moox-collector 按 cron 同步
 CREATE TABLE IF NOT EXISTS t_tags (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,

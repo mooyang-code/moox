@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
@@ -29,25 +28,31 @@ func TestSpaceContext_FromContext_MissingValue_ShouldReturnFalse(t *testing.T) {
 	assert.Empty(t, got)
 }
 
-func withMetadataSpace(spaceID string) context.Context {
-	ctx, msg := codec.WithNewMessage(context.Background())
-	msg.WithServerMetaData(codec.MetaData{gatewayroute.MetadataSpaceID: []byte(spaceID)})
-	return ctx
-}
-
-func TestSpaceContext_FromContext_ReadsTRPCMetadata(t *testing.T) {
-	got, ok := FromContext(withMetadataSpace("crypto"))
-	assert.True(t, ok)
-	assert.Equal(t, "crypto", got)
-}
-
-func TestSpaceContext_FromContext_PrefersExplicitSpaceID(t *testing.T) {
-	got, ok := FromContext(WithSpaceID(withMetadataSpace("wrong"), "crypto"))
-	assert.True(t, ok)
-	assert.Equal(t, "crypto", got)
-}
-
-func TestSpaceContext_FromContext_RejectsBlankMetadata(t *testing.T) {
-	_, ok := FromContext(withMetadataSpace("   "))
-	assert.False(t, ok)
+func TestNativeSpaceMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		metadata codec.MetaData
+		want     string
+		ok       bool
+	}{
+		{"canonical", codec.MetaData{"X-Space-Id": []byte("crypto")}, "crypto", true},
+		{"case and whitespace", codec.MetaData{"x-space-id": []byte(" crypto ")}, "crypto", true},
+		{"identical aliases", codec.MetaData{"X-Space-Id": []byte("crypto"), "x-space-id": []byte("crypto")}, "crypto", true},
+		{"conflicting aliases", codec.MetaData{"X-Space-Id": []byte("crypto"), "x-space-id": []byte("another")}, "", false},
+		{"empty", codec.MetaData{"X-Space-Id": []byte(" ")}, "", false},
+		{"missing", nil, "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, message := codec.WithNewMessage(context.Background())
+			defer codec.PutBackMessage(message)
+			message.WithServerMetaData(test.metadata)
+			_, err := spaceServerFilter(ctx, nil, func(ctx context.Context, _ interface{}) (interface{}, error) {
+				got, ok := FromContext(ctx)
+				assert.Equal(t, test.want, got)
+				assert.Equal(t, test.ok, ok)
+				return nil, nil
+			})
+			assert.NoError(t, err)
+		})
+	}
 }

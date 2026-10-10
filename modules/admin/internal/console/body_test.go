@@ -29,6 +29,14 @@ func TestReadBoundedBodyRejectsMoreThanFourMiB(t *testing.T) {
 	assert.True(t, errors.Is(err, errRequestBodyTooLarge))
 }
 
+func TestReadRequestBodyWithRawPreservesPayloadTooLargeCause(t *testing.T) {
+	req := httptest.NewRequest("POST", "/api/admin/test/Write", bytes.NewReader(bytes.Repeat([]byte("a"), maxRequestBodyBytes+1)))
+
+	_, _, err := NewHTTPRequestHandler().readRequestBodyWithRaw(req)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errRequestBodyTooLarge)
+}
+
 func TestReadAndRestoreBodyPreservesExactBytes(t *testing.T) {
 	want := []byte("{\"message\":\"signed bytes\"}")
 	req := httptest.NewRequest("POST", "/api/admin/test/Write", bytes.NewReader(want))

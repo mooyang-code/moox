@@ -33,7 +33,7 @@ func TestEnsureDefaultCheckAlertRulesSkipsDisabledChecks(t *testing.T) {
 		t.Fatalf("kept 1m collector rule: %v", err)
 	}
 	if _, err := repositories.Alerts.GetRule(ctx, "", "default:placement:control:storage-view"); !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("disabled placement rule = %v, want not found", err)
+		t.Fatalf("disabled sysdeploy rule = %v, want not found", err)
 	}
 }
 

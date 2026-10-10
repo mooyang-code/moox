@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
@@ -15,7 +15,10 @@ import (
 
 type clsPrepareOptions struct {
 	File              string
+	ControlURL        string
 	CloudAccountID    string
+	ServiceAccessKey  string
+	ServiceSecretKey  string
 	CredentialsOutput string
 }
 
@@ -42,11 +45,6 @@ func (e trustedCLSPrepareError) Unwrap() error { return e.err }
 
 var clsPrepareRunner prepareRunner = realPrepareRunner{}
 
-// clsPrepareOpenControl 打开访问控制面的客户端，测试替换它。
-var clsPrepareOpenControl = func(manifestFile string) (*adminclient.Client, func(), error) {
-	return useControlClient(nil, nil, manifestFile, "")
-}
-
 func newCLSPrepareCommand() *cobra.Command {
 	var opts clsPrepareOptions
 	cmd := &cobra.Command{
@@ -57,25 +55,31 @@ func newCLSPrepareCommand() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&opts.File, "file", "", "moox.toml；访问控制面所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
+	f.StringVar(&opts.File, "file", "./moox.toml", "可信 SSH 主机配置")
+	f.StringVar(&opts.ControlURL, "control-url", "", "目标机 Admin service gateway 地址")
 	f.StringVar(&opts.CloudAccountID, "cloud-account-id", "", "腾讯云账户 ID；缺省选择列表第一项")
+	f.StringVar(&opts.ServiceAccessKey, "service-access-key", "", "后台服务鉴权 AccessKey")
+	f.StringVar(&opts.ServiceSecretKey, "service-secret-key", "", "后台服务鉴权 SecretKey")
 	f.StringVar(&opts.CredentialsOutput, "credentials-output", "", "写入 0600 cls.env 的路径")
+	_ = cmd.MarkFlagRequired("control-url")
 	_ = cmd.MarkFlagRequired("credentials-output")
 	return cmd
 }
 
 func runCLSPrepare(cmd *cobra.Command, opts clsPrepareOptions) error {
+	opts.ControlURL = strings.TrimSpace(opts.ControlURL)
 	opts.CloudAccountID = strings.TrimSpace(opts.CloudAccountID)
 	opts.CredentialsOutput = strings.TrimSpace(opts.CredentialsOutput)
-	if opts.CredentialsOutput == "" {
-		return fmt.Errorf("--credentials-output is required")
+	if opts.ControlURL == "" || opts.CredentialsOutput == "" {
+		return fmt.Errorf("--control-url and --credentials-output are required")
 	}
 
-	client, closeControl, err := clsPrepareOpenControl(opts.File)
-	if err != nil {
-		return err
+	gateway, gatewayErr := openCommandGateway(cmd.Context(), opts.File, nil)
+	if gatewayErr != nil {
+		return gatewayErr
 	}
-	defer closeControl()
+	defer gateway.Close()
+	client := &adminclient.Client{Gateway: gateway}
 	factory := func(secretID, secretKey string) (tencent.CLSAPI, error) {
 		return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
 			SecretID:  secretID,

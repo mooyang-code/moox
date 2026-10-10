@@ -11,7 +11,6 @@ import (
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 const timerClaimTimeout = 3 * time.Second
@@ -20,20 +19,21 @@ type TimerRuntimeClient interface {
 	ClaimTimerBatch(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error)
 }
 
-type timerRuntimeRPCClient struct {
-	proxy collectorpb.MarketFetchRuntimeClientProxy
-}
+type timerRuntimeRPCClient struct{ gateway gatewayclient.Invoker }
 
-// NewTimerRuntimeClient 返回经 gatewayclient 领取 Timer 批次的客户端。SCF 用外部方式，经外部接入调用 Collector。
-func NewTimerRuntimeClient(gateway *gatewayclient.Client) TimerRuntimeClient {
-	return &timerRuntimeRPCClient{proxy: collectorpb.NewMarketFetchRuntimeClientProxy(gateway.ClientOptions()...)}
+func newTimerRuntimeRPCClient(gateway gatewayclient.Invoker) TimerRuntimeClient {
+	return &timerRuntimeRPCClient{gateway: gateway}
 }
 
 func (c *timerRuntimeRPCClient) ClaimTimerBatch(ctx context.Context, request *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("collector runtime client is not configured")
 	}
-	return c.proxy.ClaimTimerBatch(ctx, request, client.WithTimeout(timerClaimTimeout))
+	response := new(collectorpb.ClaimTimerBatchRsp)
+	if err := c.gateway.Invoke(ctx, "trpc.moox.collector.MarketFetchRuntime", "ClaimTimerBatch", request, response); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func claimTimerRequest(ctx context.Context, client TimerRuntimeClient, invocation TimerInvocation) (Request, bool, error) {

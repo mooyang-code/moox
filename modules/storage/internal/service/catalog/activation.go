@@ -15,6 +15,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 const (
@@ -49,6 +50,7 @@ func (rpcNodeStateChecker) GetNodeState(ctx context.Context, target string, req 
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 	)
 	return proxy.GetNodeState(ctx, req)
 }

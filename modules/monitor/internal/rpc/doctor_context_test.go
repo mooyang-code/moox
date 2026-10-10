@@ -2,35 +2,57 @@ package rpc
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-type doctorPlacementSource struct{ rows []*adminpb.DeployPlacement }
+type doctorDeploymentSource struct{ rows []*adminpb.ComponentPlacement }
 
-func (s doctorPlacementSource) Hosts(context.Context) ([]*adminpb.DeployHost, error) {
-	return []*adminpb.DeployHost{{HostId: "node-a", Address: "203.0.113.10", Status: "enabled"}}, nil
-}
-
-func (s doctorPlacementSource) Placements(context.Context) ([]*adminpb.DeployPlacement, error) {
-	return s.rows, nil
+func (s doctorDeploymentSource) Snapshot(context.Context) (placement.Snapshot, error) {
+	catalog, _ := servicecatalog.LoadEmbedded()
+	return placement.Snapshot{Catalog: catalog, Hosts: []*adminpb.DeploymentHost{{HostId: "node-a", Address: "node-a.example.test", Status: "enabled"}}, Placements: s.rows}, nil
 }
 
 func TestGetDoctorContextReturnsBoundedFacts(t *testing.T) {
-	builder := &monitordoctor.Builder{Placements: doctorPlacementSource{rows: []*adminpb.DeployPlacement{{HostId: "node-a", ComponentId: "monitor", Status: "enabled"}}}}
+	builder := &monitordoctor.Builder{Deployments: doctorDeploymentSource{rows: []*adminpb.ComponentPlacement{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}}}}
 	service := &Service{doctorContext: builder}
-	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{NodeId: "node-a", ComponentIds: []string{"monitor"}})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Len(t, rsp.GetExpectedComponents(), 1)
-	require.True(t, rsp.GetExpectedComponents()[0].GetExpected())
+	rpc := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTransport(transport.NewServerTransport()))
+	monitorpb.RegisterMonitorMgrService(rpc, service)
+	done := make(chan error, 1)
+	go func() { done <- rpc.Serve() }()
+	t.Cleanup(func() {
+		_ = rpc.Close(nil)
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("Monitor native listener did not stop")
+		}
+	})
+	for _, serialization := range []int{codec.SerializationTypePB, codec.SerializationTypeJSON} {
+		proxy := monitorpb.NewMonitorMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithSerializationType(serialization), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
+		rsp, err := proxy.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{NodeId: "node-a", ComponentIds: []string{"monitor"}})
+		require.NoError(t, err)
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+		require.Len(t, rsp.GetExpectedComponents(), 1)
+		require.True(t, rsp.GetExpectedComponents()[0].GetExpected())
+	}
 }
 
 func TestDoctorContextUsesHealthCheckWireNames(t *testing.T) {

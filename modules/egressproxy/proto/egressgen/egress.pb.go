@@ -27,19 +27,13 @@ type DoReq struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	// method 只支持 GET 和 POST。
-	Method string `protobuf:"bytes,1,opt,name=method,proto3" json:"method,omitempty"`
-	// host 是目标域名，必须在白名单内，例如 fapi.binance.com。
-	Host string `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`
-	// path 是请求路径，例如 /fapi/v1/exchangeInfo。
-	Path string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
-	// query 是已编码的查询参数，不含开头的 ?。
-	Query string `protobuf:"bytes,4,opt,name=query,proto3" json:"query,omitempty"`
-	// headers 只转发白名单内的请求头。
-	Headers map[string]string `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	Body    []byte            `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
-	// timeout_ms 是本次请求的超时，不超过 60000；不填时使用默认超时。
-	TimeoutMs int32 `protobuf:"varint,7,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	Method    string            `protobuf:"bytes,1,opt,name=method,proto3" json:"method,omitempty"`
+	Host      string            `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`
+	Path      string            `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	Query     string            `protobuf:"bytes,4,opt,name=query,proto3" json:"query,omitempty"`
+	Headers   map[string]string `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	Body      []byte            `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
+	TimeoutMs int32             `protobuf:"varint,7,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
 }
 
 func (x *DoReq) Reset() {
@@ -129,10 +123,9 @@ type DoRsp struct {
 	unknownFields protoimpl.UnknownFields
 
 	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-	// status 是目标返回的 HTTP 状态码。
 	Status  int32             `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
 	Headers map[string]string `protobuf:"bytes,3,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	// body 已解压，不超过 32MB。
+	// 已解压，最多 32 MiB；HTTP 错误状态仍是代理成功响应。
 	Body []byte `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
 }
 

@@ -3,12 +3,16 @@ package command
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -19,20 +23,25 @@ type timeSeriesReader interface {
 }
 
 type dataKlineDeps struct {
+	external   bool
 	loadConfig func(string) (dataAccessConfig, error)
-	// newReader 返回读取时序数据的客户端和释放它的函数。
-	newReader func(dataAccessConfig) (timeSeriesReader, func(), error)
+	newReader  func(context.Context, string, dataAccessConfig, string) (timeSeriesReader, io.Closer, error)
 }
 
 func defaultDataKlineDeps() dataKlineDeps {
 	return dataKlineDeps{
 		loadConfig: loadDataAccessConfig,
-		newReader: func(cfg dataAccessConfig) (timeSeriesReader, func(), error) {
-			gateway, err := cfg.newGateway()
+		newReader: func(ctx context.Context, file string, _ dataAccessConfig, _ string) (timeSeriesReader, io.Closer, error) {
+			snapshot, err := setupconfig.Load(file, filepath.Dir(file))
 			if err != nil {
 				return nil, nil, err
 			}
-			return pb.NewPrimaryStoreClientProxy(gateway.ClientOptions()...), gateway.Close, nil
+			defer clearSetupSecrets(snapshot)
+			gateway, err := gatewayio.Open(ctx, snapshot)
+			if err != nil {
+				return nil, nil, err
+			}
+			return storageGateway{gateway: gateway}, gateway, nil
 		},
 	}
 }
@@ -40,6 +49,7 @@ func defaultDataKlineDeps() dataKlineDeps {
 func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 	var (
 		configPath string
+		file       string
 		dataType   string
 		exchange   string
 		symbol     string
@@ -83,6 +93,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			if err := rejectInputOutputCollision(resolveDataAccessConfigPath(configPath), output); err != nil {
 				return fmt.Errorf("write kline response: %w", err)
 			}
+			if err := rejectInputOutputCollision(file, output); err != nil {
+				return fmt.Errorf("write kline response: %w", err)
+			}
 			selection, err := cfg.resolveKline(dataType, exchange, interval)
 			if err != nil {
 				return err
@@ -106,13 +119,15 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 				SpaceId:   selection.SpaceID,
 				DatasetId: selection.DatasetID,
 			}
-			reader, closeReader, err := deps.newReader(cfg)
-			if err != nil {
-				return err
-			}
-			defer closeReader()
 			rpcCtx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
+			reader, owner, err := deps.newReader(gatewayclient.WithCallMetadata(rpcCtx, gatewayclient.CallMetadata{SpaceID: selection.SpaceID}), file, cfg, resolveDataAccessConfigPath(configPath))
+			if err != nil {
+				return fmt.Errorf("open data gateway: %w", err)
+			}
+			if owner != nil {
+				defer owner.Close()
+			}
 			rsp, err := reader.ReadTimeSeriesRows(rpcCtx, req)
 			if err != nil {
 				return fmt.Errorf("PrimaryStore/ReadTimeSeriesRows RPC failed: %w", err)
@@ -125,6 +140,9 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			}
 			return writeKlineResponse(cmd, rsp, output)
 		},
+	}
+	if !deps.external {
+		cmd.Flags().StringVar(&file, "file", defaultSetupFile, "SSH 主机配置文件")
 	}
 	cmd.Flags().StringVar(&configPath, "config", "", "独立数据访问配置；默认读取 MOOX_SKILL_CONFIG 或 config/data-access.yaml")
 	cmd.Flags().StringVar(&dataType, "data-type", "", "数据类型，例如 crypto")
@@ -228,4 +246,22 @@ var dataKlineCmd = &cobra.Command{
 func init() {
 	dataCmd.AddCommand(dataKlineCmd)
 	dataKlineCmd.AddCommand(newDataKlineGetCmd(defaultDataKlineDeps()))
+	skill := &cobra.Command{Use: "skill", Short: "Skill 外部数据读取"}
+	kline := &cobra.Command{Use: "kline", Short: "K 线数据读取"}
+	kline.AddCommand(newDataKlineGetCmd(defaultSkillDataKlineDeps()))
+	skill.AddCommand(kline)
+	dataCmd.AddCommand(skill)
+}
+
+func defaultSkillDataKlineDeps() dataKlineDeps {
+	return dataKlineDeps{external: true, loadConfig: loadDataAccessConfig, newReader: func(_ context.Context, _ string, cfg dataAccessConfig, path string) (timeSeriesReader, io.Closer, error) {
+		if err := cfg.validateSkill(); err != nil {
+			return nil, nil, err
+		}
+		gateway, err := cfg.GatewayClient.OpenExternal(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		return storageGateway{gateway: gateway}, gateway, nil
+	}}
 }

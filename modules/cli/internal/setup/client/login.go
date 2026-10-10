@@ -19,9 +19,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// maxResponseBytes 是登录接口响应体的上限。
-const maxResponseBytes = 1 << 20
-
 type LoginResult struct {
 	LoginAPI string `json:"login_api"`
 }

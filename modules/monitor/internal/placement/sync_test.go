@@ -2,217 +2,155 @@ package placement
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-func testRepositories(t *testing.T) *store.Repositories {
+type memorySource struct {
+	snapshot Snapshot
+	err      error
+}
+
+func (s *memorySource) Snapshot(context.Context) (Snapshot, error) { return s.snapshot, s.err }
+
+func testSnapshot(t *testing.T) Snapshot {
 	t.Helper()
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
-	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	return mgr.Repositories()
-}
-
-func productionHosts() []*adminpb.DeployHost {
-	return []*adminpb.DeployHost{
-		{HostId: "control", Address: "106.53.107.122", Status: StatusEnabled},
-		{HostId: "storage", Address: "146.56.196.204", PrivateAddress: "10.206.0.5", Status: StatusEnabled},
-		{HostId: "compute-1", Address: "43.132.204.177", Status: StatusEnabled},
-	}
-}
-
-func placementRow(host, component, status string) *adminpb.DeployPlacement {
-	return &adminpb.DeployPlacement{HostId: host, ComponentId: component, Status: status}
-}
-
-func checkState(t *testing.T, repos *store.Repositories, host, component string) (*domain.Check, bool) {
-	t.Helper()
-	check, err := repos.Checks.Get(context.Background(), "", CheckID(host, component))
-	if err != nil {
-		return nil, false
-	}
-	return check, true
-}
-
-func TestSyncerAddsDisablesAndDeletesChecksWithPlacements(t *testing.T) {
-	repos := testRepositories(t)
-	syncer := NewSyncer(repos.Checks, nil, nil)
-	ctx := context.Background()
-	steps := []struct {
-		name       string
-		hosts      []*adminpb.DeployHost
-		placements []*adminpb.DeployPlacement
-		want       map[string]bool // 检查 ID → 是否启用；不在表里的检查应当不存在
-	}{
-		{
-			name:  "部署启用时增加检查",
-			hosts: productionHosts(),
-			placements: []*adminpb.DeployPlacement{
-				placementRow("control", "monitor", StatusEnabled),
-				placementRow("storage", "storage-view", StatusEnabled),
-				placementRow("compute-1", "egress-proxy", StatusEnabled),
-			},
-			want: map[string]bool{"placement:control:monitor": true, "placement:storage:storage-view": true, "placement:compute-1:egress-proxy": true},
+	return Snapshot{Catalog: catalog,
+		Hosts: []*adminpb.DeploymentHost{
+			{HostId: "control", Address: "control.example.test", Status: "enabled"},
+			{HostId: "storage", Address: "storage.example.test", PrivateAddress: "2001:db8::2", Status: "enabled"},
 		},
-		{
-			name:  "部署停用时停用检查",
-			hosts: productionHosts(),
-			placements: []*adminpb.DeployPlacement{
-				placementRow("control", "monitor", StatusEnabled),
-				placementRow("storage", "storage-view", "disabled"),
-				placementRow("compute-1", "egress-proxy", StatusEnabled),
-			},
-			want: map[string]bool{"placement:control:monitor": true, "placement:storage:storage-view": false, "placement:compute-1:egress-proxy": true},
-		},
-		{
-			name: "主机停用时停用它上面的检查",
-			hosts: []*adminpb.DeployHost{
-				{HostId: "control", Address: "106.53.107.122", Status: StatusEnabled},
-				{HostId: "storage", Address: "146.56.196.204", Status: StatusEnabled},
-				{HostId: "compute-1", Address: "43.132.204.177", Status: "disabled"},
-			},
-			placements: []*adminpb.DeployPlacement{
-				placementRow("control", "monitor", StatusEnabled),
-				placementRow("storage", "storage-view", "disabled"),
-				placementRow("compute-1", "egress-proxy", StatusEnabled),
-			},
-			want: map[string]bool{"placement:control:monitor": true, "placement:storage:storage-view": false, "placement:compute-1:egress-proxy": false},
-		},
-		{
-			name:  "部署删除时删除检查",
-			hosts: productionHosts(),
-			placements: []*adminpb.DeployPlacement{
-				placementRow("control", "monitor", StatusEnabled),
-			},
-			want: map[string]bool{"placement:control:monitor": true},
+		Placements: []*adminpb.ComponentPlacement{
+			{HostId: "control", ComponentId: "console-proxy", Status: "enabled"},
+			{HostId: "storage", ComponentId: "storage-primary", Status: "enabled"},
 		},
 	}
-	for _, step := range steps {
-		_, err := syncer.SyncPlacements(ctx, step.hosts, step.placements)
-		require.NoError(t, err, step.name)
-		checks, err := repos.Checks.ListBySource(ctx, domain.CheckSourcePlacement)
-		require.NoError(t, err, step.name)
-		got := map[string]bool{}
-		for _, check := range checks {
-			got[check.CheckID] = check.Enabled
+}
+
+func TestChecksUseCatalogHealthAndPreserveProxyLoopback(t *testing.T) {
+	snapshot := testSnapshot(t)
+	checks, err := Checks(snapshot, map[string]domain.HTTPSConfig{"console-proxy": {
+		URL: "https://console.example.test:9527/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public",
+	}})
+	require.NoError(t, err)
+	require.Len(t, checks, 3)
+	require.Equal(t, "placement:control:console-proxy", checks[0].CheckID)
+	require.Equal(t, "http://127.0.0.1:19528/readyz", checks[0].URL)
+	require.Equal(t, `"ready":true`, checks[0].BodyContains)
+	require.Equal(t, domain.CheckSourcePlacement, checks[0].Source)
+	require.Equal(t, "console-page:control:console-proxy", checks[1].CheckID)
+	require.Equal(t, "127.0.0.1:9527", checks[1].ConnectAddress)
+	require.Equal(t, "200-399", checks[1].ExpectedStatus)
+	require.Empty(t, checks[1].BodyContains)
+	require.Equal(t, "http://[2001:db8::2]:20210/readyz", checks[2].URL)
+
+	for index := range snapshot.Catalog.Components {
+		if snapshot.Catalog.Components[index].ID == "storage-primary" {
+			snapshot.Catalog.Components[index].Health = servicecatalog.Health{Kind: "none"}
 		}
-		require.Equal(t, step.want, got, step.name)
 	}
+	checks, err = Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Len(t, checks, 2, "health:none does not create an unknown probe")
 }
 
-func TestSyncerDeletesRulesAndResultsOfRemovedPlacement(t *testing.T) {
-	repos := testRepositories(t)
-	ctx := context.Background()
-	syncer := NewSyncer(repos.Checks, nil, nil)
-	_, err := syncer.SyncPlacements(ctx, productionHosts(), []*adminpb.DeployPlacement{placementRow("storage", "storage-view", StatusEnabled)})
+func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
-	checkID := CheckID("storage", "storage-view")
-	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + checkID, CheckID: checkID, FailureThreshold: 3, SuccessThreshold: 2, Enabled: true}))
-	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + checkID, CheckID: checkID, Status: domain.AlertStatusFiring, DedupeKey: "default:" + checkID}))
-	require.NoError(t, repos.Results.Insert(ctx, &domain.CheckResult{ResultID: "r1", CheckID: checkID, Status: domain.CheckStatusDown}))
-
-	_, err = syncer.SyncPlacements(ctx, productionHosts(), nil)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	source := &memorySource{snapshot: testSnapshot(t)}
+	syncer := NewSyncer(repos.Topology, source, testHTTPS(), nil)
+	_, err = syncer.Sync(t.Context())
 	require.NoError(t, err)
-	_, exists := checkState(t, repos, "storage", "storage-view")
-	require.False(t, exists)
-	rules, err := repos.Alerts.ListRulesForCheck(ctx, "", checkID)
+	id := CheckID("control", "console-proxy")
+	checkedAt := time.Now().UTC().Add(-time.Minute)
+	nextAt := checkedAt.Add(time.Hour)
+	require.NoError(t, repos.Checks.MarkChecked(t.Context(), "", id, checkedAt, nextAt))
+	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "probe", CheckID: id, CheckedAt: checkedAt, Status: "ok", Success: true}))
+	_, err = syncer.Sync(t.Context())
 	require.NoError(t, err)
-	require.Empty(t, rules, "删除检查时连同告警规则一起删除，否则告警会一直挂着")
-	state, err := repos.Alerts.GetState(ctx, "", "default:"+checkID, checkID)
-	require.Error(t, err, "告警状态也应删除: %+v", state)
-	results, err := repos.Results.Recent(ctx, "", checkID, 10)
+	check, err := repos.Checks.Get(t.Context(), "", id)
 	require.NoError(t, err)
-	require.Empty(t, results)
-}
+	require.WithinDuration(t, nextAt, *check.NextCheckAt, time.Millisecond)
+	require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{RuleID: "default:" + id, CheckID: id, Enabled: true}))
+	require.NoError(t, repos.Alerts.UpsertState(t.Context(), &domain.AlertState{RuleID: "default:" + id, CheckID: id, Status: domain.AlertStatusFiring}))
 
-func TestSyncerBuildsProbeFromCatalogHealth(t *testing.T) {
-	repos := testRepositories(t)
-	syncer := NewSyncer(repos.Checks, nil, nil)
-	_, err := syncer.SyncPlacements(context.Background(), productionHosts(), []*adminpb.DeployPlacement{
-		placementRow("control", "monitor", StatusEnabled),
-		placementRow("control", "console-proxy", StatusEnabled),
-		placementRow("storage", "storage-primary", StatusEnabled),
-		placementRow("storage", "host-gateway", StatusEnabled),
-	})
-	require.NoError(t, err)
-
-	monitor, ok := checkState(t, repos, "control", "monitor")
-	require.True(t, ok)
-	require.Equal(t, "http://127.0.0.1:11409/readyz", monitor.URL, "control 上的组件走回环地址")
-	require.Equal(t, `"ready":true`, monitor.BodyContains)
-	require.Equal(t, domain.CheckSourcePlacement, monitor.Source)
-	require.Equal(t, `{"host_id":"control","component_id":"monitor"}`, monitor.Labels)
-	require.Contains(t, monitor.Name, "（control）")
-
-	proxy, ok := checkState(t, repos, "control", "console-proxy")
-	require.True(t, ok)
-	require.Equal(t, "https://106.53.107.122:9527/", proxy.URL, "https 方式按公网地址访问，证书签给公网地址")
-	require.Equal(t, "200-399", proxy.ExpectedStatus)
-	require.Empty(t, proxy.BodyContains)
-
-	primary, ok := checkState(t, repos, "storage", "storage-primary")
-	require.True(t, ok)
-	require.Equal(t, "http://146.56.196.204:20210/readyz", primary.URL, "其他主机按公网地址探测")
-
-	gateway, ok := checkState(t, repos, "storage", "host-gateway")
-	require.True(t, ok)
-	require.Equal(t, "http://146.56.196.204:11012/readyz", gateway.URL, "主机网关本身也是一条部署，一并探测")
-}
-
-func TestSyncerKeepsCheckWhenDefinitionIsTemporarilyInvalid(t *testing.T) {
-	repos := testRepositories(t)
-	ctx := context.Background()
-	syncer := NewSyncer(repos.Checks, nil, nil)
-	_, err := syncer.SyncPlacements(ctx, productionHosts(), []*adminpb.DeployPlacement{placementRow("storage", "storage-view", StatusEnabled)})
-	require.NoError(t, err)
-	// 主机记录暂时缺失：报告错误，但不能把检查当作已删除。
-	_, err = syncer.SyncPlacements(ctx, nil, []*adminpb.DeployPlacement{placementRow("storage", "storage-view", StatusEnabled)})
-	require.ErrorContains(t, err, "主机不存在")
-	_, exists := checkState(t, repos, "storage", "storage-view")
-	require.True(t, exists)
-
-	_, err = syncer.SyncPlacements(ctx, productionHosts(), []*adminpb.DeployPlacement{placementRow("storage", "unknown-component", StatusEnabled)})
-	require.ErrorContains(t, err, "不在组件目录中")
-}
-
-func TestCheckIDRoundTrip(t *testing.T) {
-	host, component, ok := ParseCheckID(CheckID("compute-1", "egress-proxy"))
-	require.True(t, ok)
-	require.Equal(t, "compute-1", host)
-	require.Equal(t, "egress-proxy", component)
-	for _, id := range []string{"sysdeploy:control:monitor", "placement:control", "placement::monitor", "kline_freshness:x"} {
-		_, _, ok := ParseCheckID(id)
-		require.False(t, ok, id)
+	for _, disableHost := range []bool{false, true} {
+		if disableHost {
+			source.snapshot.Hosts[0].Status = "disabled"
+		} else {
+			source.snapshot.Placements[0].Status = "disabled"
+		}
+		_, err = syncer.Sync(t.Context())
+		require.NoError(t, err)
+		check, err = repos.Checks.Get(t.Context(), "", id)
+		require.NoError(t, err)
+		require.False(t, check.Enabled)
+		_, err = repos.Alerts.GetRule(t.Context(), "", "default:"+id)
+		require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+		source.snapshot.Hosts[0].Status, source.snapshot.Placements[0].Status = "enabled", "enabled"
+		_, err = syncer.Sync(t.Context())
+		require.NoError(t, err)
+		check, err = repos.Checks.Get(t.Context(), "", id)
+		require.NoError(t, err)
+		require.True(t, check.Enabled)
+		require.Nil(t, check.NextCheckAt, "enabled deployment must be checked immediately")
 	}
+
+	// An incomplete API response must not remove checks or the authoritative topology.
+	previousTopology, err := repos.Topology.Snapshot(t.Context())
+	require.NoError(t, err)
+	source.err = errors.New("directory temporarily unavailable")
+	_, err = syncer.Sync(t.Context())
+	require.Error(t, err)
+	preservedTopology, topologyErr := repos.Topology.Snapshot(t.Context())
+	require.NoError(t, topologyErr)
+	require.Equal(t, previousTopology, preservedTopology)
+	source.err = nil
+	source.snapshot.Placements[0].ComponentId = "unknown-component"
+	_, err = syncer.Sync(t.Context())
+	require.Error(t, err)
+	_, err = repos.Checks.Get(t.Context(), "", id)
+	require.NoError(t, err)
+	source.snapshot.Placements = source.snapshot.Placements[1:]
+	_, err = syncer.Sync(t.Context())
+	require.NoError(t, err)
+	_, err = repos.Checks.Get(t.Context(), "", id)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	history, err := repos.Results.Recent(t.Context(), "", id, 10)
+	require.NoError(t, err)
+	require.Empty(t, history)
 }
 
-// 旧版按服务部署记录生成的检查没有调度方：同步时连同告警规则、状态和结果一并删除。
-func TestSyncerRemovesLegacySysdeployChecks(t *testing.T) {
-	repos := testRepositories(t)
-	ctx := context.Background()
-	legacyID := "sysdeploy:storage-node:storage-view"
-	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{
-		CheckID: legacyID, Name: legacyID, Source: "sysdeploy", Enabled: true, IntervalSeconds: 30, TimeoutMS: 3000,
-	}))
-	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + legacyID, CheckID: legacyID, FailureThreshold: 3, SuccessThreshold: 2, Enabled: true}))
-	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + legacyID, CheckID: legacyID, Status: domain.AlertStatusFiring, DedupeKey: "default:" + legacyID}))
+func testHTTPS() map[string]domain.HTTPSConfig {
+	return map[string]domain.HTTPSConfig{"console-proxy": {URL: "https://console.example.test:9527/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public"}}
+}
 
-	syncer := NewSyncer(repos.Checks, nil, nil)
-	_, err := syncer.SyncPlacements(ctx, productionHosts(), []*adminpb.DeployPlacement{placementRow("storage", "storage-view", StatusEnabled)})
+func TestSyncRollsBackAllDefinitionsOnOwnershipCollision(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
-
-	_, err = repos.Checks.Get(ctx, "", legacyID)
-	require.Error(t, err, "旧检查应当被删除")
-	_, err = repos.Alerts.GetState(ctx, "", "default:"+legacyID, legacyID)
-	require.Error(t, err, "旧检查的告警状态也应删除，否则健康概览会一直显示一条不会恢复的告警")
-	_, exists := checkState(t, repos, "storage", "storage-view")
-	require.True(t, exists, "新的部署检查不受影响")
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: CheckID("storage", "storage-primary"), Source: domain.CheckSourceObservability}))
+	syncer := NewSyncer(repos.Topology, &memorySource{snapshot: testSnapshot(t)}, testHTTPS(), nil)
+	count, err := syncer.Sync(t.Context())
+	require.ErrorContains(t, err, "collides")
+	require.Zero(t, count)
+	_, err = repos.Checks.Get(t.Context(), "", CheckID("control", "console-proxy"))
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "earlier upserts must roll back")
 }

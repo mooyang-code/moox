@@ -38,10 +38,6 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 		if strings.HasPrefix(check.CheckID, "kline_freshness:") {
 			failureThreshold, successThreshold = 2, 2
 		}
-		// 部署检查每分钟一次：连续失败两次（约两分钟）告警，部署停掉后两分钟内就要看到告警。
-		if strings.HasPrefix(check.CheckID, "placement:") {
-			failureThreshold, successThreshold = 2, 2
-		}
 		rule := &domain.AlertRule{
 			SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
 			FailureThreshold: failureThreshold, SuccessThreshold: successThreshold,

@@ -839,6 +839,18 @@ func TestCompleteWithEffectsRejectsInvalidAssociationsWithoutSideEffects(t *test
 			},
 		},
 		{
+			name: "same batch ID in another space",
+			setup: func(t *testing.T, s *Store, batch *domain.BatchInvocation, _ []domain.WriteTarget) FetchCompletionEffects {
+				other := *batch
+				other.ID, other.SpaceID, other.Status = 0, "research", domain.BatchStatusPlanned
+				created, err := s.FetchBatches().CreatePlanned(context.Background(), &other)
+				require.NoError(t, err)
+				require.True(t, created)
+				require.NoError(t, s.FetchBatches().UpsertItems(context.Background(), other.SpaceID, other.BatchID, []string{"foreign-instance"}))
+				return FetchCompletionEffects{Retries: []*domain.RetryItem{{SpaceID: "research", RetryKey: "foreign-retry", InstanceID: "foreign-instance", Status: "pending"}}}
+			},
+		},
+		{
 			name: "space mismatch",
 			setup: func(_ *testing.T, _ *Store, _ *domain.BatchInvocation, targets []domain.WriteTarget) FetchCompletionEffects {
 				return FetchCompletionEffects{WriteTargetUpdates: []WriteTargetStatusEffect{{SpaceID: "research", InstanceID: "instance-a", WriteTargetID: targets[0].ID, DatasetID: targets[0].DatasetID, Status: "succeeded"}}}
@@ -867,6 +879,32 @@ func TestCompleteWithEffectsRejectsInvalidAssociationsWithoutSideEffects(t *test
 			assertCompletionRolledBack(t, s, batch.BatchID, targetID)
 		})
 	}
+}
+
+func TestCompletionRetryChunksRollBackTogether(t *testing.T) {
+	s := newCollectorStore(t)
+	batch, instance, targets := seedCompletionAtomicityTest(t, s, false)
+	ctx := context.Background()
+	// Fail after the first bounded INSERT has succeeded inside the outer
+	// completion transaction. No retry, target update or terminal CAS may leak.
+	require.NoError(t, s.db.Exec(`CREATE TRIGGER fail_retry_chunk BEFORE INSERT ON t_collector_fetch_retry_items WHEN NEW.c_retry_key = 'chunk-45' BEGIN SELECT RAISE(ABORT, 'later retry chunk failed'); END`).Error)
+	effects := FetchCompletionEffects{WriteTargetUpdates: []WriteTargetStatusEffect{{SpaceID: "crypto", InstanceID: instance.InstanceID, WriteTargetID: targets[0].ID, DatasetID: targets[0].DatasetID, Status: "succeeded"}}}
+	for i := 0; i < 72; i++ {
+		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: "crypto", RetryKey: fmt.Sprintf("chunk-%02d", i), SourceBatchID: batch.BatchID, InstanceID: instance.InstanceID, Status: "pending"})
+	}
+	updated, err := s.FetchBatches().CompleteWithEffects(ctx, batch, effects)
+	require.ErrorContains(t, err, "later retry chunk failed")
+	require.False(t, updated)
+	assertCompletionRolledBack(t, s, batch.BatchID, targets[0].ID)
+	var count int64
+	require.NoError(t, s.db.Model(&domain.RetryItem{}).Count(&count).Error)
+	require.Zero(t, count)
+	require.NoError(t, s.db.Exec("DROP TRIGGER fail_retry_chunk").Error)
+	updated, err = s.FetchBatches().CompleteWithEffects(ctx, batch, effects)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NoError(t, s.db.Model(&domain.RetryItem{}).Count(&count).Error)
+	require.EqualValues(t, 72, count)
 }
 
 func TestCompleteWithEffectsRollsBackAllEffectsOnMidTransactionFailure(t *testing.T) {
@@ -981,4 +1019,38 @@ func TestCompleteWithEffectsRechecksTerminalRetrySourceAtomically(t *testing.T) 
 	storedInstance, err := s.TaskInstances().Get(ctx, "crypto", instance.InstanceID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.InstanceStatusSuccess, storedInstance.LastExecStatus)
+}
+
+func TestMarkRetryBatchDispatchedProbesRetryIdentities(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "indexed-dispatch", ScheduleID: "indexed-dispatch", Status: domain.BatchStatusPlanned}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	keys := make([]string, 40)
+	for index := range keys {
+		keys[index] = fmt.Sprintf("indexed-%02d", index)
+		require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: keys[index], Status: "pending", TargetDataTime: now}))
+	}
+	var query string
+	var arguments []any
+	require.NoError(t, s.db.Callback().Update().After("gorm:update").Register("test:retry_dispatch_plan", func(tx *gorm.DB) {
+		if strings.Contains(tx.Statement.SQL.String(), "t_collector_fetch_retry_items") {
+			query = tx.Statement.SQL.String()
+			arguments = append([]any(nil), tx.Statement.Vars...)
+		}
+	}))
+	t.Cleanup(func() { _ = s.db.Callback().Update().Remove("test:retry_dispatch_plan") })
+	updated, err := s.FetchBatches().MarkRetryBatchDispatched(ctx, "crypto", batch.BatchID, "accepted", now.Add(time.Minute), "region", "node", "function", keys)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NotEmpty(t, query)
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+query, arguments...).Scan(&plan).Error)
+	require.Contains(t, fmt.Sprint(plan), "idx_collector_fetch_retry (")
+	require.NotContains(t, fmt.Sprint(plan), "SCAN t_collector_fetch_retry_items")
 }

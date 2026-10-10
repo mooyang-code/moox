@@ -45,8 +45,8 @@ type fakeSSHChecker struct {
 func (f *fakeSSHChecker) Check(_ context.Context, host setupconfig.Host) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, host.ID)
-	return f.errs[host.ID]
+	f.calls = append(f.calls, host.Name)
+	return f.errs[host.Name]
 }
 
 func validationSnapshot(t *testing.T) *setupconfig.Snapshot {
@@ -66,14 +66,21 @@ tls_enabled = true
 
 [hosts.control]
 address = "eventbus.example.test"
-ssh = { username = "ubuntu", password = "recognizable-control-password" }
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "recognizable-control-password"
 
 [hosts.compute-1]
 address = "192.0.2.11"
-ssh = { username = "ubuntu", password = "recognizable-compute-password" }
+[hosts.compute-1.ssh]
+port = 22
+username = "ubuntu"
+password = "recognizable-compute-password"
 
 [placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor"]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute-1 = []
 `
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
@@ -97,6 +104,40 @@ func TestRunChecksIdentityThenHosts(t *testing.T) {
 	}, result.Checks)
 	assert.Equal(t, 1, identity.calls)
 	assert.Equal(t, []string{"control", "compute-1"}, sshChecker.calls)
+}
+
+func TestRunSSHSkipsTencentIdentityValidation(t *testing.T) {
+	snapshot := validationSnapshot(t)
+	identity := &fakeIdentity{err: fmt.Errorf("tencent credentials must not be used")}
+	sshChecker := &fakeSSHChecker{errs: map[string]error{}}
+
+	result, err := RunSSHHosts(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker}, snapshot.Manifest.Hosts())
+	require.NoError(t, err)
+	assert.Equal(t, []Check{
+		{Name: "config", Status: "valid"},
+		{Name: "host:control", Status: "valid"},
+		{Name: "host:compute-1", Status: "valid"},
+	}, result.Checks)
+	assert.Zero(t, identity.calls)
+	assert.Equal(t, []string{"control", "compute-1"}, sshChecker.calls)
+}
+
+func TestRunSSHHostsOnlyChecksDeploymentTargets(t *testing.T) {
+	snapshot := validationSnapshot(t)
+	sshChecker := &fakeSSHChecker{errs: map[string]error{
+		"compute-1": fmt.Errorf("unrelated host is unavailable"),
+	}}
+
+	result, err := RunSSHHosts(context.Background(), snapshot, Dependencies{
+		Identity: &fakeIdentity{err: fmt.Errorf("Tencent STS must not be called")},
+		SSH:      sshChecker,
+	}, []setupconfig.Host{snapshot.Manifest.ControlHost()})
+	require.NoError(t, err)
+	assert.Equal(t, []Check{
+		{Name: "config", Status: "valid"},
+		{Name: "host:control", Status: "valid"},
+	}, result.Checks)
+	assert.Equal(t, []string{"control"}, sshChecker.calls)
 }
 
 func TestRunStopsBeforeSSHWhenIdentityFails(t *testing.T) {

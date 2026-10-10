@@ -10,15 +10,14 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
 
 type businessFreshnessItem struct {
-	spaceID, checkID, name, reason, diagnostic string
-	success                                    bool
+	spaceID, checkID, name, reason, diagnostic, rawError string
+	success                                              bool
 }
 
 func unixSeconds(value time.Time) float64 {
@@ -51,8 +50,28 @@ func buildBusinessFreshnessReporterWithInterval(
 		if err != nil {
 			return err
 		}
+		if overview.TopologyKnown {
+			states := make([]domain.ComponentHealthState, 0, len(overview.Services))
+			for _, item := range overview.Services {
+				states = append(states, domain.ComponentHealthState{HostID: item.NodeID, ComponentID: item.ServiceName, Status: domain.HealthStatus(item.Status)})
+			}
+			if err := repositories.ComponentHealth.Reconcile(ctx, states, overview.GeneratedAt); err != nil {
+				return err
+			}
+		}
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
+		frozenGateway := make(map[string]bool)
+		for _, signal := range overview.GatewaySignals {
+			checkID := "gateway:" + signal.HostID + ":" + signal.Kind
+			key := monmetrics.InternalMetricSpaceID + "\x00" + checkID
+			if signal.Status == "unknown" {
+				frozenGateway[key] = true
+				continue
+			}
+			names := map[string]string{"heartbeat": "网关心跳", "instance_conflict": "网关实例", "route_sync": "网关路由同步"}
+			items[key] = businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: checkID, name: names[signal.Kind] + "（" + signal.HostID + "）", success: signal.Status == "healthy", reason: signal.Reason, rawError: signal.RawError}
+		}
 		klineEvaluationRan := len(klineEvaluators) == 0 || klineEvaluators[0] == nil
 		klineEvaluated := make(map[string]struct{})
 		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil &&
@@ -104,16 +123,10 @@ func buildBusinessFreshnessReporterWithInterval(
 			if service.ReporterStatus == "" {
 				continue
 			}
-			expected, err := reporterDeploymentExpected(ctx, repositories.Checks, service)
-			if err != nil {
-				return err
-			}
-			if !expected {
+			if !service.Enabled {
 				continue
 			}
-			checkID := strings.Join([]string{
-				"reporter", service.NodeID, service.ServiceName, service.InstanceID,
-			}, ":")
+			checkID := strings.Join([]string{"reporter", service.NodeID, service.ServiceName}, ":")
 			item := businessFreshnessItem{
 				spaceID: monmetrics.InternalMetricSpaceID,
 				checkID: checkID,
@@ -122,16 +135,6 @@ func buildBusinessFreshnessReporterWithInterval(
 				reason:  reporterReasonText(service.ReporterStatus),
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
-		}
-		gatewayEvaluated := overview.GatewayHostsErr == nil
-		if gatewayEvaluated {
-			for _, host := range overview.GatewayHosts {
-				item := businessFreshnessItem{
-					spaceID: monmetrics.InternalMetricSpaceID, checkID: gatewayCheckID(host.HostID),
-					name: "主机网关（" + host.HostID + "）· 心跳与路由同步", success: host.Healthy, reason: host.Reason,
-				}
-				items[item.spaceID+"\x00"+item.checkID] = item
-			}
 		}
 		factorExpected, factorExpectedKnown := false, false
 		storageScopes := make(map[string]struct{})
@@ -163,7 +166,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			if dataset.Producer == "factor" {
 				if !factorExpectedKnown {
-					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "factor-mgr")
+					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Topology, "factor-mgr")
 					if err != nil {
 						return err
 					}
@@ -198,10 +201,13 @@ func buildBusinessFreshnessReporterWithInterval(
 			if spaceID == "" {
 				spaceID = "crypto"
 			}
-			item := businessFreshnessItem{
-				spaceID: spaceID, checkID: business.Kind + ":" + business.Module, name: business.Name,
-				success: business.Status == "healthy", reason: business.Reason,
+			checkID, name := "balance:"+business.Module, "账户余额同步 "+business.Module
+			if business.Kind == "market_fetch" {
+				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
+			} else if business.Kind == "data_delivery" {
+				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
 			}
+			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		moduleItems, err := moduleHealthItems(ctx, builder.Metrics, report.BuiltInModuleHealthChecks(), overview.GeneratedAt)
@@ -245,10 +251,6 @@ func buildBusinessFreshnessReporterWithInterval(
 			if strings.HasPrefix(check.CheckID, "market_canary:") {
 				continue
 			}
-			if strings.HasPrefix(check.CheckID, gatewayCheckPrefix) && !gatewayEvaluated {
-				// SysDeploy 暂时读不到时保留主机网关检查上一次的状态，不当作已恢复。
-				continue
-			}
 			if strings.HasPrefix(check.CheckID, "kline_freshness:") {
 				if !klineEvaluationRan {
 					continue
@@ -263,6 +265,17 @@ func buildBusinessFreshnessReporterWithInterval(
 				continue
 			}
 			key := check.SpaceID + "\x00" + check.CheckID
+			if frozenGateway[key] {
+				continue
+			}
+			if strings.HasPrefix(check.CheckID, "gateway:") || strings.HasPrefix(check.CheckID, "reporter:") {
+				if _, expected := items[key]; !expected {
+					if err := disableCheckAndDeleteRules(ctx, repositories, &check); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if _, frozen := suppressed[key]; frozen {
 				// Suppression avoids duplicating a producer-stale signal, but the
 				// old business check still needs a successful result so its alert
@@ -290,8 +303,15 @@ func buildBusinessFreshnessReporterWithInterval(
 			switch {
 			case err == nil:
 				if !check.Enabled {
-					delete(items, key)
-					continue
+					if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") {
+						check.Enabled = true
+						if err := repositories.Checks.Update(ctx, check); err != nil {
+							return err
+						}
+					} else {
+						delete(items, key)
+						continue
+					}
 				}
 				if item.name != "" && check.Name != item.name {
 					check.Name = item.name
@@ -341,7 +361,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				ResultID: fmt.Sprintf("%s-%d", item.checkID, now.UnixNano()),
 				SpaceID:  item.spaceID, CheckID: item.checkID, InstanceID: "monitor",
 				Success: item.success, Connected: item.success, Status: status,
-				ErrorMessage: item.reason, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
+				ErrorMessage: item.reason, RawError: item.rawError, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
 			}
 			inserted, err := repositories.Results.InsertIfAbsent(ctx, &result)
 			if err != nil {
@@ -396,66 +416,28 @@ func storageViewDatasetIDs(spaceID, viewID, primaryDatasetID string) []string {
 	return ids
 }
 
-// serviceDeploymentExpected 判断组件是否仍有启用的部署：有部署但全部停用时返回 false；完全没有部署检查时返回
-// true（还没同步过部署时不压制告警）。
-func serviceDeploymentExpected(
-	ctx context.Context,
-	checks *store.CheckRepository,
-	componentID string,
-) (bool, error) {
-	if checks == nil || strings.TrimSpace(componentID) == "" {
-		return true, nil
+func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepository, componentID string) (bool, error) {
+	if topology == nil {
+		return false, nil
 	}
-	rows, err := checks.ListBySource(ctx, domain.CheckSourcePlacement)
-	if err != nil {
+	snapshot, err := topology.Snapshot(ctx)
+	if err != nil || snapshot == nil {
 		return false, err
 	}
-	found := false
-	for _, check := range rows {
-		if _, component, ok := placement.ParseCheckID(check.CheckID); ok && component == componentID {
-			found = true
-			if check.Enabled {
-				return true, nil
-			}
+	hosts := make(map[string]bool, len(snapshot.Hosts))
+	for _, host := range snapshot.Hosts {
+		hosts[host.HostID] = host.Status == "enabled"
+	}
+	for _, placement := range snapshot.Placements {
+		if placement.ComponentID == componentID && placement.Status == "enabled" && hosts[placement.HostID] {
+			return true, nil
 		}
 	}
-	return !found, nil
-}
-
-// externalProducers 是没有部署记录、从 MooX 主机之外上报指标的组件（组件目录中的外部调用方）。
-var externalProducers = map[string]struct{}{
-	"scf-collector": {},
-}
-
-func reporterDeploymentExpected(
-	ctx context.Context,
-	checks *store.CheckRepository,
-	service monitorobservability.ServiceStatus,
-) (bool, error) {
-	if checks == nil || strings.TrimSpace(service.NodeID) == "" || strings.TrimSpace(service.ServiceName) == "" {
-		return true, nil
-	}
-	check, err := checks.Get(ctx, "", placement.CheckID(service.NodeID, service.ServiceName))
-	switch {
-	case err == nil:
-		return check.Enabled, nil
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		// 外部上报方（例如 SCF 采集函数）没有部署检查，上报中断照常告警；其余组件查不到检查说明部署已经删除，
-		// 目录里残留的旧上报行不能再触发告警。
-		_, external := externalProducers[service.ServiceName]
-		return external, nil
-	default:
-		return false, err
-	}
+	return false, nil
 }
 
 // noLongerExpected resolves a check whose subject was disabled or removed.
 const noLongerExpected = "已停用或移除，不再检查"
-
-// gatewayCheckPrefix 是主机网关状态检查 ID 的前缀，检查 ID 为 host_gateway:<主机>。
-const gatewayCheckPrefix = "host_gateway:"
-
-func gatewayCheckID(hostID string) string { return gatewayCheckPrefix + hostID }
 
 func hostMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
 	for _, id := range []string{dataset.DatasetID, dataset.PrimaryDatasetID} {

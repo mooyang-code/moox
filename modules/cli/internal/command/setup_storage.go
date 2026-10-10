@@ -1,0 +1,1489 @@
+package command
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/security"
+	"github.com/spf13/cobra"
+	"trpc.group/trpc-go/trpc-go/client"
+)
+
+const (
+	storageBrowserRemoteAddress = "127.0.0.1:9527"
+	storageLocalProvenanceFile  = "release/storage-artifacts/build-provenance.json"
+	storageReleaseManifestFile  = "artifacts/storage-datanode-release-sha256.txt"
+	storageE2ESpec              = "tests/storage-datanode-management.remote.e2e.spec.ts"
+	storageDeploymentNodeID     = "storage-node-0"
+	storageBrowserFixtureOwner  = "storage-browser-e2e"
+	storageBrowserFixtureMaxAge = time.Hour
+)
+
+type storageVerifyResult struct {
+	Status        string                      `json:"status"`
+	Commit        string                      `json:"commit"`
+	Components    map[string]storageComponent `json:"components"`
+	BinaryHashes  map[string]string           `json:"binary_hashes"`
+	SchemaVersion int                         `json:"schema_version"`
+	DataNode      storageDataNodeIdentity     `json:"data_node"`
+	NodeCount     int                         `json:"node_count"`
+	DatasetCount  int                         `json:"dataset_count"`
+}
+
+type storageComponent struct {
+	Status string `json:"status"`
+}
+
+type storageDataNodeIdentity struct {
+	NodeID string `json:"node_id"`
+	Status string `json:"status"`
+}
+
+type storageE2EResult struct {
+	Status     string   `json:"status"`
+	Namespace  string   `json:"namespace"`
+	Assertions []string `json:"assertions"`
+	Skipped    []string `json:"skipped,omitempty"`
+	Cleanup    string   `json:"cleanup"`
+}
+
+type storageBrowserResult struct {
+	Status  string `json:"status"`
+	Desktop string `json:"desktop"`
+	Mobile  string `json:"mobile"`
+}
+
+type storageBrowserFixture struct {
+	Namespace   string `json:"namespace"`
+	SpaceID     string `json:"space_id"`
+	SpaceName   string `json:"space_name"`
+	SourceID    string `json:"data_source_id"`
+	DatasetID   string `json:"dataset_id"`
+	DatasetName string `json:"dataset_name"`
+	DataNodeID  string `json:"data_node_id"`
+}
+
+type storageBuildProvenance struct {
+	SchemaVersion int               `json:"schema_version"`
+	Commit        string            `json:"commit"`
+	Dirty         bool              `json:"dirty"`
+	BinaryHashes  map[string]string `json:"binary_hashes"`
+}
+
+type storageReleaseArtifact struct {
+	SchemaVersion int
+	Commit        string
+	Archive       string
+	ArchiveSHA256 string
+	BinaryHashes  map[string]string
+}
+
+type storageMetadataAPI interface {
+	CreateSpace(context.Context, *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error)
+	UpdateSpace(context.Context, *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error)
+	DeleteSpace(context.Context, *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error)
+	ListSpaces(context.Context, *storagepb.ListSpacesReq) (*storagepb.ListSpacesRsp, error)
+	CreateDataSource(context.Context, *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error)
+	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq) (*storagepb.UpdateDataSourceRsp, error)
+	DeleteDataSource(context.Context, *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error)
+	CreateDataset(context.Context, *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error)
+	GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
+	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
+	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
+	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
+	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error)
+	RegisterDataNode(context.Context, *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error)
+	UpdateDataNode(context.Context, *storagepb.UpdateDataNodeReq) (*storagepb.UpdateDataNodeRsp, error)
+	RebindDatasetDataNode(context.Context, *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error)
+	DeleteDataNode(context.Context, *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error)
+	ListDataNodes(context.Context, *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error)
+	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
+	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
+}
+
+type storageAdminSpaceAPI interface {
+	CreateSpace(context.Context, *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error)
+	DeleteSpace(context.Context, *adminpb.DeleteSpaceReq) (*adminpb.DeleteSpaceRsp, error)
+	ListSpaces(context.Context, *adminpb.ListSpacesReq) (*adminpb.ListSpacesRsp, error)
+}
+
+type storageAdminSpaceProxy struct{ gateway commandGateway }
+
+func (c *storageAdminSpaceProxy) CreateSpace(ctx context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
+	rsp := &adminpb.CreateSpaceRsp{}
+	err := c.gateway.Invoke(ctx, "trpc.moox.admin.SpaceMgr", "CreateSpace", req, rsp)
+	return rsp, err
+}
+
+func (c *storageAdminSpaceProxy) DeleteSpace(ctx context.Context, req *adminpb.DeleteSpaceReq) (*adminpb.DeleteSpaceRsp, error) {
+	rsp := &adminpb.DeleteSpaceRsp{}
+	err := c.gateway.Invoke(ctx, "trpc.moox.admin.SpaceMgr", "DeleteSpace", req, rsp)
+	return rsp, err
+}
+
+func (c *storageAdminSpaceProxy) ListSpaces(ctx context.Context, req *adminpb.ListSpacesReq) (*adminpb.ListSpacesRsp, error) {
+	rsp := &adminpb.ListSpacesRsp{}
+	err := c.gateway.Invoke(ctx, "trpc.moox.admin.SpaceMgr", "ListSpaces", req, rsp)
+	return rsp, err
+}
+
+type storagePrimaryAPI interface {
+	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error)
+	ReadFields(context.Context, *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error)
+}
+
+type storageRuntimeAPI interface {
+	GetNodeState(context.Context, *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error)
+}
+
+type storageMetadataProxy struct{ gateway commandGateway }
+
+func (c *storageMetadataProxy) CreateSpace(ctx context.Context, req *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error) {
+	rsp := &storagepb.CreateSpaceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CreateSpace", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) UpdateSpace(ctx context.Context, req *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error) {
+	rsp := &storagepb.UpdateSpaceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateSpace", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) DeleteSpace(ctx context.Context, req *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error) {
+	rsp := &storagepb.DeleteSpaceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteSpace", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) ListSpaces(ctx context.Context, req *storagepb.ListSpacesReq) (*storagepb.ListSpacesRsp, error) {
+	rsp := &storagepb.ListSpacesRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListSpaces", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) CreateDataSource(ctx context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
+	rsp := &storagepb.CreateDataSourceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CreateDataSource", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) UpdateDataSource(ctx context.Context, req *storagepb.UpdateDataSourceReq) (*storagepb.UpdateDataSourceRsp, error) {
+	rsp := &storagepb.UpdateDataSourceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateDataSource", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) DeleteDataSource(ctx context.Context, req *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error) {
+	rsp := &storagepb.DeleteDataSourceRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataSource", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
+	rsp := &storagepb.CreateDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CreateDataset", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+	rsp := &storagepb.GetDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "GetDataset", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	rsp := &storagepb.UpdateDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateDataset", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) DeleteDataset(ctx context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
+	rsp := &storagepb.DeleteDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataset", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	rsp := &storagepb.UpsertDatasetColumnRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpsertDatasetColumn", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
+	rsp := &storagepb.ListDatasetColumnsRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDatasetColumns", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) RegisterDataNode(ctx context.Context, req *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error) {
+	rsp := &storagepb.RegisterDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "RegisterDataNode", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) UpdateDataNode(ctx context.Context, req *storagepb.UpdateDataNodeReq) (*storagepb.UpdateDataNodeRsp, error) {
+	rsp := &storagepb.UpdateDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "UpdateDataNode", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) RebindDatasetDataNode(ctx context.Context, req *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error) {
+	rsp := &storagepb.RebindDatasetDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "RebindDatasetDataNode", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) DeleteDataNode(ctx context.Context, req *storagepb.DeleteDataNodeReq) (*storagepb.DeleteDataNodeRsp, error) {
+	rsp := &storagepb.DeleteDataNodeRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataNode", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) ListDataNodes(ctx context.Context, req *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error) {
+	rsp := &storagepb.ListDataNodesRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDataNodes", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
+	rsp := &storagepb.CheckDatasetActivationRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CheckDatasetActivation", req, rsp)
+	return rsp, err
+}
+
+func (c *storageMetadataProxy) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
+	rsp := &storagepb.ActivateDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ActivateDataset", req, rsp)
+	return rsp, err
+}
+
+type storageRuntimeProxy struct {
+	proxy   storagepb.DataNodeRuntimeClientProxy
+	options []client.Option
+}
+
+type storagePrimaryProxy struct{ gateway commandGateway }
+
+func (c *storagePrimaryProxy) UpsertFields(ctx context.Context, req *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error) {
+	rsp := &storagepb.PrimaryUpsertFieldsRsp{}
+	err := postStorageRaw(ctx, c.gateway, accessServiceName, "UpsertFields", req, rsp)
+	return rsp, err
+}
+
+func (c *storagePrimaryProxy) ReadFields(ctx context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
+	rsp := &storagepb.PrimaryReadFieldsRsp{}
+	err := postStorageRaw(ctx, c.gateway, accessServiceName, "ReadFields", req, rsp)
+	return rsp, err
+}
+
+func (c *storageRuntimeProxy) GetNodeState(ctx context.Context, req *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error) {
+	return c.proxy.GetNodeState(ctx, req, c.options...)
+}
+
+type remoteStorageSession struct {
+	transport   setupssh.Client
+	gateway     commandGateway
+	metadata    storageMetadataAPI
+	primary     storagePrimaryAPI
+	auth        *storagepb.AuthInfo
+	nodeAuth    *storagepb.AuthInfo
+	primaryAuth *storagepb.AuthInfo
+}
+
+func (s *remoteStorageSession) Close() {
+	if s != nil && s.gateway != nil {
+		_ = s.gateway.Close()
+	}
+}
+
+func newRemoteStorageSession(transport setupssh.Client, gateway commandGateway, secret, primarySecret string) (*remoteStorageSession, error) {
+	if transport == nil || gateway == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(primarySecret) == "" {
+		return nil, errors.New("storage_verification_unavailable")
+	}
+	return &remoteStorageSession{
+		transport: transport, gateway: gateway,
+		metadata: &storageMetadataProxy{gateway: gateway}, primary: &storagePrimaryProxy{gateway: gateway},
+		auth:        &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		nodeAuth:    &storagepb.AuthInfo{AppId: "storage-deployer", AppKey: security.HMACSHA256Hex(secret, []byte("storage-deployer"))},
+		primaryAuth: &storagepb.AuthInfo{AppId: "storage-e2e", AppKey: security.HMACSHA256Hex(primarySecret, []byte("storage-e2e"))},
+	}, nil
+}
+
+func (s *remoteStorageSession) runtime(ctx context.Context, node *storagepb.DataNode) (storageRuntimeAPI, func(), error) {
+	if s == nil || node == nil {
+		return nil, func() {}, errors.New("storage_node_unavailable")
+	}
+	address, err := storageTargetAddress(node.GetServiceTarget())
+	if err != nil {
+		return nil, func() {}, errors.New("storage_node_target_invalid")
+	}
+	forwardContext, cancel := context.WithCancel(ctx)
+	listener, err := s.transport.ForwardLocal(forwardContext, address)
+	if err != nil {
+		cancel()
+		return nil, func() {}, errors.New("storage_node_unreachable")
+	}
+	target := "ip://" + listener.Addr().String()
+	options := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+	closeFn := func() {
+		_ = listener.Close()
+		cancel()
+	}
+	return &storageRuntimeProxy{proxy: storagepb.NewDataNodeRuntimeClientProxy(options...), options: options}, closeFn, nil
+}
+
+func newSetupVerifyStorageCommand(deps setupDeps) *cobra.Command {
+	var file, host string
+	cmd := &cobra.Command{Use: "verify-storage", Short: "验证远端 Storage 健康、Schema 和 DataNode 身份", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		result, err := deps.verifyStorage(cmd.Context(), snapshot, host)
+		if err != nil {
+			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, result)
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
+	_ = cmd.MarkFlagRequired("host")
+	return cmd
+}
+
+func newSetupE2EStorageCommand(deps setupDeps) *cobra.Command {
+	var file, host, namespace string
+	cmd := &cobra.Command{Use: "e2e-storage", Short: "运行隔离的 Storage 元数据生命周期验证", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		result, err := deps.e2eStorage(cmd.Context(), snapshot, host, namespace)
+		if err != nil {
+			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, result)
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
+	cmd.Flags().StringVar(&namespace, "namespace", "", "隔离 E2E 数据命名空间")
+	_ = cmd.MarkFlagRequired("host")
+	_ = cmd.MarkFlagRequired("namespace")
+	return cmd
+}
+
+func newSetupBrowserE2EStorageCommand(deps setupDeps) *cobra.Command {
+	var file, host, repoRoot string
+	var defaultSpaces bool
+	cmd := &cobra.Command{Use: "browser-e2e-storage", Short: "运行远端 Storage 管理台浏览器验证", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		result, err := deps.browserE2EStorage(cmd.Context(), snapshot, host, repoRoot, defaultSpaces)
+		if err != nil {
+			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, result)
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&host, "host", "", "Storage/Admin 目标主机名称")
+	cmd.Flags().StringVar(&repoRoot, "repo-root", "", "仓库根目录")
+	cmd.Flags().BoolVar(&defaultSpaces, "default-spaces", false, "额外验证 stockcn 和 crypto 业务 Space")
+	_ = cmd.MarkFlagRequired("host")
+	_ = cmd.MarkFlagRequired("repo-root")
+	return cmd
+}
+
+func defaultSetupVerifyStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string) (storageVerifyResult, error) {
+	_, transport, session, root, err := openRemoteStorage(ctx, snapshot, name)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	defer transport.Close()
+	defer session.Close()
+	return verifyRemoteStorage(ctx, transport, session, root, snapshot.Manifest.Paths.Resolved().StorageRoot)
+}
+
+func defaultSetupE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, namespace string) (storageE2EResult, error) {
+	_, transport, session, _, err := openRemoteStorage(ctx, snapshot, name)
+	if err != nil {
+		return storageE2EResult{}, err
+	}
+	defer transport.Close()
+	defer session.Close()
+	return runStorageLifecycle(ctx, session, namespace)
+}
+
+func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string) (setupconfig.Host, setupssh.Client, *remoteStorageSession, string, error) {
+	if snapshot == nil {
+		return setupconfig.Host{}, nil, nil, "", errors.New("storage_verification_invalid")
+	}
+	host, err := resolveStorageDeploymentHost(snapshot.Manifest, name)
+	if err != nil {
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	transport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	storageRoot := snapshot.Manifest.Paths.Resolved().StorageRoot
+	secret, err := readRemoteStorageSecret(ctx, transport, storageRoot)
+	if err != nil {
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	primarySecret, err := readRemoteStoragePrimarySecret(ctx, transport, storageRoot)
+	if err != nil {
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	gateway, err := openCommandGateway(ctx, "", snapshot)
+	if err != nil {
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	session, err := newRemoteStorageSession(transport, gateway, secret, primarySecret)
+	if err != nil {
+		_ = gateway.Close()
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", err
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		session.Close()
+		_ = transport.Close()
+		return setupconfig.Host{}, nil, nil, "", errors.New("storage_verification_invalid")
+	}
+	return host, transport, session, root, nil
+}
+
+func readRemoteStorageSecret(ctx context.Context, transport setupssh.Client, storageRoot string) (string, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+secret_file="$1/secrets/storage-node-auth.env"
+value=$(sed -n 's/^MOOX_STORAGE_NODE_AUTH_SECRET=//p' "$secret_file" | head -n 1)
+test -n "$value"
+case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
+printf '%s' "$value"`, "moox-storage-node-auth", storageRoot}, nil)
+	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail != "" {
+			return "", fmt.Errorf("storage_verification_auth_unavailable: %s", strings.Join(strings.Fields(detail), " "))
+		}
+		return "", errors.New("storage_verification_auth_unavailable")
+	}
+	return strings.TrimSpace(result.Stdout), nil
+}
+
+func readRemoteStoragePrimarySecret(ctx context.Context, transport setupssh.Client, storageRoot string) (string, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+secret_file="$1/secrets/storage-internal-auth.env"
+value=$(sed -n 's/^MOOX_STORAGE_PRIMARY_AUTH_SECRET=//p' "$secret_file" | head -n 1)
+test -n "$value"
+case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
+printf '%s' "$value"`, "moox-storage-primary-auth", storageRoot}, nil)
+	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail != "" {
+			return "", fmt.Errorf("storage_primary_auth_unavailable: %s", strings.Join(strings.Fields(detail), " "))
+		}
+		return "", errors.New("storage_primary_auth_unavailable")
+	}
+	return strings.TrimSpace(result.Stdout), nil
+}
+
+func verifyRemoteStorage(ctx context.Context, transport setupssh.Client, session *remoteStorageSession, root, storageRoot string) (storageVerifyResult, error) {
+	components, err := readStorageComponents(ctx, transport, storageRoot)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	currentCommit, err := readCurrentGitCommit(root)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	expectedArtifact, err := readLocalStorageReleaseArtifact(root, currentCommit)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	localProvenance, err := readLocalStorageBuildProvenance(root)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	remoteProvenance, err := readRemoteStorageBuildProvenance(ctx, transport, storageRoot)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	hashes, err := readStorageBinaryHashes(ctx, transport, storageRoot)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	if err := validateStorageReleaseArtifact(expectedArtifact, localProvenance, remoteProvenance, hashes); err != nil {
+		return storageVerifyResult{}, err
+	}
+	if err := verifyStockCNKlineColumns(ctx, session.metadata, session.auth); err != nil {
+		return storageVerifyResult{}, err
+	}
+	schemaVersion, err := readStorageSchemaVersion(ctx, transport, storageRoot)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	items, err := listAllStorageDataNodes(ctx, session.metadata, session.auth)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	var datasetCount int
+	var selected *storagepb.DataNode
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		datasetCount += len(item.GetDatasets())
+	}
+	selected, err = selectDeploymentDataNode(items)
+	if err != nil {
+		return storageVerifyResult{}, err
+	}
+	runtime, closeRuntime, err := session.runtime(ctx, selected)
+	if err != nil {
+		return storageVerifyResult{}, errors.New("storage_verification_failed")
+	}
+	defer closeRuntime()
+	state, err := runtime.GetNodeState(ctx, &storagepb.GetNodeStateReq{AuthInfo: session.auth, NodeId: selected.GetNodeId()})
+	if err != nil || state == nil || state.GetRetInfo() == nil || state.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || state.GetNodeId() != selected.GetNodeId() || state.GetStatus() != "READY" {
+		return storageVerifyResult{}, errors.New("storage_verification_failed")
+	}
+	return storageVerifyResult{
+		Status:        "passed",
+		Commit:        remoteProvenance.Commit,
+		Components:    components,
+		BinaryHashes:  hashes,
+		SchemaVersion: schemaVersion,
+		DataNode:      storageDataNodeIdentity{NodeID: state.GetNodeId(), Status: state.GetStatus()},
+		NodeCount:     len(items),
+		DatasetCount:  datasetCount,
+	}, nil
+}
+
+func verifyStockCNKlineColumns(ctx context.Context, metadata storageMetadataAPI, auth *storagepb.AuthInfo) error {
+	response, err := metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
+		AuthInfo: auth, SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m",
+		Page: &commonpb.Page{Page: 1, Size: 100},
+	})
+	if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return errors.New("stockcn_columns_unavailable")
+	}
+	columns := make(map[string]struct{}, len(response.GetColumns()))
+	for _, column := range response.GetColumns() {
+		if column != nil {
+			columns[column.GetColumnName()] = struct{}{}
+		}
+	}
+	for _, required := range []string{"open", "high", "low", "close", "volume", "amount", "provider_id", "source_id"} {
+		if _, ok := columns[required]; !ok {
+			return fmt.Errorf("stockcn_columns_missing: %s", required)
+		}
+	}
+	return nil
+}
+
+func readLocalStorageBuildProvenance(root string) (storageBuildProvenance, error) {
+	if strings.TrimSpace(root) == "" {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, storageLocalProvenanceFile))
+	if err != nil {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	return decodeStorageBuildProvenance(raw)
+}
+
+func readLocalStorageReleaseArtifact(root, currentCommit string) (storageBuildProvenance, error) {
+	raw, err := os.ReadFile(filepath.Join(root, storageReleaseManifestFile))
+	if err != nil {
+		return storageBuildProvenance{}, errors.New("storage_release_artifact_unavailable")
+	}
+	artifact, err := decodeStorageReleaseArtifact(raw)
+	if err != nil || artifact.Commit != strings.ToLower(currentCommit) {
+		return storageBuildProvenance{}, errors.New("storage_release_artifact_stale")
+	}
+	archivePath := filepath.Join(root, filepath.Clean(artifact.Archive))
+	rootPath, _ := filepath.Abs(root)
+	absArchive, _ := filepath.Abs(archivePath)
+	if rootPath == "" || absArchive == "" || !strings.HasPrefix(absArchive, rootPath+string(os.PathSeparator)) {
+		return storageBuildProvenance{}, errors.New("storage_release_artifact_invalid")
+	}
+	digest, err := sha256File(absArchive)
+	if err != nil || digest != artifact.ArchiveSHA256 {
+		return storageBuildProvenance{}, errors.New("storage_release_artifact_mismatch")
+	}
+	return storageBuildProvenance{SchemaVersion: artifact.SchemaVersion, Commit: artifact.Commit, Dirty: false, BinaryHashes: artifact.BinaryHashes}, nil
+}
+
+func decodeStorageReleaseArtifact(raw []byte) (storageReleaseArtifact, error) {
+	artifact := storageReleaseArtifact{BinaryHashes: make(map[string]string)}
+	for _, line := range strings.Split(string(raw), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		switch parts[0] {
+		case "schema_version":
+			artifact.SchemaVersion, _ = strconv.Atoi(parts[1])
+		case "commit":
+			artifact.Commit = strings.ToLower(parts[1])
+		case "archive":
+			artifact.Archive = parts[1]
+		case "archive_sha256":
+			artifact.ArchiveSHA256 = strings.ToLower(parts[1])
+		case "moox-storage-primary", "moox-storage-node", "moox-storage-view":
+			artifact.BinaryHashes[parts[0]] = strings.ToLower(parts[1])
+		}
+	}
+	if artifact.SchemaVersion != 1 || !validStorageCommit(artifact.Commit) || artifact.Archive == "" || !validStorageSHA256(artifact.ArchiveSHA256) {
+		return storageReleaseArtifact{}, errors.New("storage_release_artifact_invalid")
+	}
+	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
+		if !validStorageSHA256(artifact.BinaryHashes[name]) {
+			return storageReleaseArtifact{}, errors.New("storage_release_artifact_invalid")
+		}
+	}
+	return artifact, nil
+}
+
+func sha256File(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func readCurrentGitCommit(root string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", errors.New("storage_provenance_unavailable")
+	}
+	output, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	commit := strings.TrimSpace(string(output))
+	if err != nil || !validStorageCommit(commit) {
+		return "", errors.New("storage_provenance_unavailable")
+	}
+	return strings.ToLower(commit), nil
+}
+
+func selectDeploymentDataNode(items []*storagepb.DataNodeListItem) (*storagepb.DataNode, error) {
+	for _, item := range items {
+		if item == nil || item.GetNode() == nil || item.GetNode().GetNodeId() != storageDeploymentNodeID {
+			continue
+		}
+		node := item.GetNode()
+		if node.GetStatus() != "active" || strings.TrimSpace(node.GetServiceTarget()) == "" {
+			return nil, errors.New("storage_deployment_node_unavailable")
+		}
+		return node, nil
+	}
+	return nil, errors.New("storage_deployment_node_missing")
+}
+
+func readRemoteStorageBuildProvenance(ctx context.Context, transport setupssh.Client, storageRoot string) (storageBuildProvenance, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+provenance_file="$1/build-provenance.json"
+test -f "$provenance_file"
+cat "$provenance_file"`, "moox-storage-provenance", storageRoot}, nil)
+	if err != nil {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	return decodeStorageBuildProvenance([]byte(result.Stdout))
+}
+
+func decodeStorageBuildProvenance(raw []byte) (storageBuildProvenance, error) {
+	var provenance storageBuildProvenance
+	if err := json.Unmarshal(raw, &provenance); err != nil {
+		return storageBuildProvenance{}, errors.New("storage_provenance_unavailable")
+	}
+	return provenance, nil
+}
+
+func validateStorageBuildProvenance(local, remote storageBuildProvenance, actual map[string]string) error {
+	if local.SchemaVersion != 1 || remote.SchemaVersion != 1 {
+		return errors.New("storage_provenance_mismatch: schema version")
+	}
+	if (local.Dirty || remote.Dirty) && os.Getenv("MOOX_ALLOW_DIRTY_STORAGE_RELEASE") != "1" {
+		return errors.New("storage_provenance_mismatch: dirty build")
+	}
+	if !validStorageCommit(local.Commit) || local.Commit != remote.Commit {
+		return errors.New("storage_provenance_mismatch: commit")
+	}
+	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
+		localHash := strings.ToLower(strings.TrimSpace(local.BinaryHashes[name]))
+		remoteHash := strings.ToLower(strings.TrimSpace(remote.BinaryHashes[name]))
+		actualHash := strings.ToLower(strings.TrimSpace(actual[name]))
+		if !validStorageSHA256(localHash) || localHash != remoteHash || localHash != actualHash {
+			return fmt.Errorf("storage_provenance_mismatch: binary hash %s", name)
+		}
+	}
+	return nil
+}
+
+func validateStorageReleaseArtifact(expected, local, remote storageBuildProvenance, actual map[string]string) error {
+	if expected.SchemaVersion != 1 || expected.Dirty || !validStorageCommit(expected.Commit) || local.Commit != expected.Commit {
+		return errors.New("storage_provenance_mismatch")
+	}
+	if err := validateStorageBuildProvenance(expected, remote, actual); err != nil {
+		return err
+	}
+	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
+		if strings.ToLower(local.BinaryHashes[name]) != strings.ToLower(expected.BinaryHashes[name]) {
+			return errors.New("storage_provenance_mismatch")
+		}
+	}
+	return nil
+}
+
+func validStorageCommit(value string) bool {
+	value = strings.TrimSpace(value)
+	return len(value) == 40 && validStorageHex(value)
+}
+
+func validStorageSHA256(value string) bool {
+	return len(value) == 64 && validStorageHex(value)
+}
+
+func validStorageHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func readStorageComponents(ctx context.Context, transport setupssh.Client, storageRoot string) (map[string]storageComponent, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+for name in storage-primary storage-node storage-view; do
+  if "$1/status.sh" "$name" >/dev/null 2>&1; then printf '%s ready\n' "$name"; else printf '%s unhealthy\n' "$name"; fi
+done`, "moox-storage-status", storageRoot}, nil)
+	if err != nil {
+		return nil, errors.New("storage_component_unavailable")
+	}
+	components := make(map[string]storageComponent, 3)
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && (fields[1] == "ready" || fields[1] == "unhealthy") {
+			components[fields[0]] = storageComponent{Status: fields[1]}
+		}
+	}
+	for _, name := range []string{"storage-primary", "storage-node", "storage-view"} {
+		if components[name].Status != "ready" {
+			return nil, errors.New("storage_component_unavailable")
+		}
+	}
+	return components, nil
+}
+
+func readStorageBinaryHashes(ctx context.Context, transport setupssh.Client, storageRoot string) (map[string]string, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", storageBinaryHashCommand(), "moox-storage-binary-hashes", storageRoot}, nil)
+	if err != nil {
+		if detail := strings.TrimSpace(result.Stderr); detail != "" {
+			return nil, fmt.Errorf("storage_binary_unavailable: %s", strings.Join(strings.Fields(detail), " "))
+		}
+		return nil, errors.New("storage_binary_unavailable")
+	}
+	hashes := make(map[string]string, 3)
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || len(fields[1]) != 64 {
+			continue
+		}
+		if _, err := hex.DecodeString(fields[1]); err != nil {
+			continue
+		}
+		hashes[fields[0]] = strings.ToLower(fields[1])
+	}
+	for _, name := range []string{"moox-storage-primary", "moox-storage-node", "moox-storage-view"} {
+		if len(hashes[name]) != 64 {
+			return nil, fmt.Errorf("storage_binary_unavailable: missing %s", name)
+		}
+	}
+	return hashes, nil
+}
+
+func storageBinaryHashCommand() string {
+	return `set -eu
+storage_root="$1"
+for name in moox-storage-primary moox-storage-node moox-storage-view; do
+  hash=$(sha256sum "$storage_root/bin/$name" | awk '{print $1}')
+  printf '%s %s\n' "$name" "$hash"
+done`
+}
+
+func readStorageSchemaVersion(ctx context.Context, transport setupssh.Client, storageRoot string) (int, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", storageSchemaVersionCommand(), "moox-storage-schema", storageRoot}, nil)
+	if err != nil {
+		return 0, errors.New("storage_schema_unavailable")
+	}
+	version, err := strconv.Atoi(strings.TrimSpace(result.Stdout))
+	if err != nil || version != currentStorageMetadataSchemaVersion {
+		return 0, errors.New("storage_schema_incompatible")
+	}
+	return version, nil
+}
+
+const currentStorageMetadataSchemaVersion = 13
+
+func storageSchemaVersionCommand() string {
+	return `set -eu
+storage_root="$1"
+db="$storage_root/data/storage/metadata/storage_metadata.db"
+if command -v sqlite3 >/dev/null 2>&1; then
+  version=$(sqlite3 -readonly "$db" "SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version';")
+else
+  version=$(python3 - "$db" <<'PY'
+import sqlite3
+import sys
+with sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True) as db:
+    row = db.execute("SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'").fetchone()
+if row is None:
+    raise SystemExit(1)
+print(row[0], end="")
+PY
+  )
+fi
+printf '%s' "$version"`
+}
+
+func storageTargetAddress(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "ip" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", errors.New("invalid service target")
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return "", errors.New("invalid service target")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", errors.New("invalid service target")
+	}
+	return net.JoinHostPort(host, strconv.Itoa(portNumber)), nil
+}
+
+func listAllStorageDataNodes(ctx context.Context, api storageMetadataAPI, auth *storagepb.AuthInfo) ([]*storagepb.DataNodeListItem, error) {
+	if api == nil {
+		return nil, errors.New("storage_metadata_unavailable")
+	}
+	var all []*storagepb.DataNodeListItem
+	for page := uint32(1); ; page++ {
+		response, err := api.ListDataNodes(ctx, &storagepb.ListDataNodesReq{AuthInfo: auth, Page: &storagepb.Page{Page: page, Size: 500}})
+		if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return nil, errors.New("storage_metadata_unavailable")
+		}
+		all = append(all, response.GetItems()...)
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			return all, nil
+		}
+		if page >= 10000 {
+			return nil, errors.New("storage_metadata_unavailable")
+		}
+	}
+}
+
+func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, namespace string) (result storageE2EResult, returnErr error) {
+	if session == nil || session.metadata == nil || session.primary == nil {
+		return storageE2EResult{}, errors.New("storage_e2e_unavailable")
+	}
+	if err := validateStorageNamespace(namespace); err != nil {
+		return storageE2EResult{}, err
+	}
+	result = storageE2EResult{Status: "running", Namespace: namespace, Assertions: []string{}, Cleanup: "pending"}
+	idToken := strings.ReplaceAll(namespace, "-", "_")
+	spaceID := idToken + "_space"
+	sourceID := idToken + "_source"
+	datasetID := "dataset_" + idToken
+	var space *storagepb.Space
+	var source *storagepb.DataSource
+	var dataset *storagepb.Dataset
+	var rowKey *storagepb.RowKey
+	var cleanupErr error
+	result.Skipped = []string{"second_data_node_runtime", "empty_disabled_node_delete"}
+	defer func() {
+		cleanupErr = cleanupStorageLifecycle(ctx, session, space, source, []*storagepb.Dataset{dataset})
+		if cleanupErr != nil {
+			result.Cleanup = "failed"
+			if returnErr == nil {
+				returnErr = errors.New("storage_e2e_cleanup_failed")
+			}
+		} else {
+			result.Cleanup = "completed"
+		}
+		if returnErr == nil {
+			result.Status = "passed"
+		}
+	}()
+
+	items, err := listAllStorageDataNodes(ctx, session.metadata, session.auth)
+	if err != nil {
+		return result, errors.New("storage_e2e_metadata_unavailable")
+	}
+	deployedNode, err := selectDeploymentDataNode(items)
+	if err != nil {
+		return result, err
+	}
+	space = &storagepb.Space{SpaceId: spaceID, Name: "E2E 临时空间", Owner: "storage-e2e", Status: "active"}
+	spaceResponse, err := session.metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{AuthInfo: session.auth, Space: space})
+	if err != nil || spaceResponse == nil || spaceResponse.GetRetInfo() == nil || spaceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_space_failed")
+	}
+	result.Assertions = append(result.Assertions, "space_created")
+	source = &storagepb.DataSource{SpaceId: spaceID, DataSourceId: sourceID, Name: "E2E 临时来源", Kind: "internal", Status: "active"}
+	sourceResponse, err := session.metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{AuthInfo: session.auth, DataSource: source})
+	if err != nil || sourceResponse == nil || sourceResponse.GetRetInfo() == nil || sourceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		if err != nil {
+			return result, fmt.Errorf("storage_e2e_data_source_failed: %w", err)
+		}
+		if sourceResponse != nil && sourceResponse.GetRetInfo() != nil {
+			return result, fmt.Errorf("storage_e2e_data_source_failed: %s", sourceResponse.GetRetInfo().GetMsg())
+		}
+		return result, errors.New("storage_e2e_data_source_failed")
+	}
+	result.Assertions = append(result.Assertions, "data_source_created")
+	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: "E2E 临时集", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "disabled", DataNodeId: deployedNode.GetNodeId()}
+	datasetResponse, err := session.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: session.auth, Dataset: dataset})
+	if err != nil || datasetResponse == nil || datasetResponse.GetRetInfo() == nil || datasetResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || datasetResponse.GetDataset() == nil {
+		return result, errors.New("storage_e2e_dataset_failed")
+	}
+	dataset = datasetResponse.GetDataset()
+	result.Assertions = append(result.Assertions, "dataset_created_disabled")
+	columnResponse, err := session.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: session.auth, Column: &storagepb.DatasetColumn{
+		SpaceId: spaceID, DatasetId: datasetID, ColumnName: "value", OriginId: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", Attributes: map[string]string{"display_name": "数值"},
+	}})
+	if err != nil || columnResponse == nil || columnResponse.GetRetInfo() == nil || columnResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_dataset_column_failed")
+	}
+	result.Assertions = append(result.Assertions, "dataset_column_created")
+	rowKey = &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "row-1", Version: "1"}}}
+	row := &storagepb.RowFieldUpsert{Key: rowKey, Fields: []*storagepb.FieldValue{{FieldId: "value", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "row-value"}}}}}
+	disabledWrite, err := session.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
+	if err != nil || disabledWrite == nil || disabledWrite.GetRetInfo() == nil || disabledWrite.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_disabled_write_accepted")
+	}
+	result.Assertions = append(result.Assertions, "disabled_write_rejected")
+	checkResponse, err := session.metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: session.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil || checkResponse == nil || checkResponse.GetRetInfo() == nil || checkResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || !checkResponse.GetReady() {
+		return result, errors.New("storage_e2e_activation_check_failed")
+	}
+	result.Assertions = append(result.Assertions, "activation_checks_passed")
+	staleRevision := checkResponse.GetDatasetRevision()
+	if staleRevision > 0 {
+		staleRevision--
+	}
+	staleActivation, err := session.metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: session.auth, SpaceId: spaceID, DatasetId: datasetID, ExpectedRevision: staleRevision})
+	if err != nil || staleActivation == nil || staleActivation.GetRetInfo() == nil || staleActivation.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_stale_revision_accepted")
+	}
+	result.Assertions = append(result.Assertions, "stale_revision_rejected")
+	activated, err := session.metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: session.auth, SpaceId: spaceID, DatasetId: datasetID, ExpectedRevision: checkResponse.GetDatasetRevision()})
+	if err != nil || activated == nil || activated.GetRetInfo() == nil || activated.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || activated.GetDataset() == nil || activated.GetDataset().GetStatus() != "active" || !activated.GetDataset().GetBindingLocked() {
+		return result, errors.New("storage_e2e_activation_failed")
+	}
+	dataset = activated.GetDataset()
+	result.Assertions = append(result.Assertions, "dataset_activated_locked")
+	writeResponse, err := session.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
+	if err != nil || writeResponse == nil || writeResponse.GetRetInfo() == nil || writeResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(writeResponse.GetKeys()) != 1 {
+		if err != nil {
+			return result, fmt.Errorf("storage_e2e_write_failed: %w", err)
+		}
+		if writeResponse != nil && writeResponse.GetRetInfo() != nil {
+			return result, fmt.Errorf("storage_e2e_write_failed: %s", writeResponse.GetRetInfo().GetMsg())
+		}
+		return result, errors.New("storage_e2e_write_failed")
+	}
+	result.Assertions = append(result.Assertions, "row_written")
+	readResponse, err := session.primary.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{AuthInfo: session.primaryAuth, Keys: []*storagepb.RowKey{rowKey}, FieldIds: []string{"value"}})
+	if err != nil || readResponse == nil || readResponse.GetRetInfo() == nil || readResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(readResponse.GetRows()) != 1 || len(readResponse.GetRows()[0].GetFields()) != 1 || readResponse.GetRows()[0].GetFields()[0].GetValue().GetStringValue() != "row-value" {
+		return result, errors.New("storage_e2e_read_failed")
+	}
+	result.Assertions = append(result.Assertions, "row_read_back")
+	rebindResponse, err := session.metadata.RebindDatasetDataNode(ctx, &storagepb.RebindDatasetDataNodeReq{AuthInfo: session.auth, SpaceId: spaceID, DatasetId: datasetID, DataNodeId: namespace + "_unregistered_node", ExpectedRevision: dataset.GetRevision()})
+	if err != nil || rebindResponse == nil || rebindResponse.GetRetInfo() == nil || rebindResponse.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_locked_rebind_accepted")
+	}
+	result.Assertions = append(result.Assertions, "locked_rebind_rejected")
+	activeDelete, err := session.metadata.DeleteDataNode(ctx, &storagepb.DeleteDataNodeReq{AuthInfo: session.auth, NodeId: deployedNode.GetNodeId()})
+	if err != nil || activeDelete == nil || activeDelete.GetRetInfo() == nil || activeDelete.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+		return result, errors.New("storage_e2e_active_node_delete_accepted")
+	}
+	result.Assertions = append(result.Assertions, "active_node_delete_rejected")
+	return result, nil
+}
+
+func cleanupStorageLifecycle(ctx context.Context, session *remoteStorageSession, space *storagepb.Space, source *storagepb.DataSource, datasets []*storagepb.Dataset) error {
+	if session == nil {
+		return errors.New("storage_e2e_cleanup_failed")
+	}
+	var first error
+	for _, dataset := range datasets {
+		if dataset == nil {
+			continue
+		}
+		if err := deleteStorageDataset(ctx, session, dataset); err != nil && first == nil {
+			first = err
+		}
+	}
+	if source != nil {
+		response, err := session.metadata.DeleteDataSource(ctx, &storagepb.DeleteDataSourceReq{AuthInfo: session.auth, SpaceId: source.GetSpaceId(), DataSourceId: source.GetDataSourceId()})
+		if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			if first == nil {
+				first = errors.New("data source cleanup failed")
+			}
+		}
+	}
+	if space != nil {
+		response, err := session.metadata.DeleteSpace(ctx, &storagepb.DeleteSpaceReq{AuthInfo: session.auth, SpaceId: space.GetSpaceId()})
+		if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			if first == nil {
+				first = errors.New("space cleanup failed")
+			}
+		}
+	}
+	return first
+}
+
+func deleteStorageDataset(ctx context.Context, session *remoteStorageSession, dataset *storagepb.Dataset) error {
+	response, err := session.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: session.auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return errors.New("dataset cleanup failed")
+	}
+	return nil
+}
+
+func validateStorageNamespace(namespace string) error {
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" || len(namespace) > 18 {
+		return errors.New("storage_e2e_namespace_invalid")
+	}
+	for index, r := range namespace {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			if index == 0 && (r == '_' || r == '-') {
+				return errors.New("storage_e2e_namespace_invalid")
+			}
+			continue
+		}
+		return errors.New("storage_e2e_namespace_invalid")
+	}
+	return nil
+}
+
+func newStorageBrowserNamespace() string {
+	suffix := strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
+	if len(suffix) > 8 {
+		suffix = suffix[len(suffix)-8:]
+	}
+	return "br" + suffix
+}
+
+func mustMarshalStorageBrowserFixture(fixture storageBrowserFixture) string {
+	raw, err := json.Marshal(fixture)
+	if err != nil {
+		panic("storage browser fixture is not marshalable")
+	}
+	return string(raw)
+}
+
+func storageBrowserEnvironment(environ []string, defaultSpaces bool) []string {
+	filtered := make([]string, 0, len(environ)+1)
+	for _, entry := range environ {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && name == "MOOX_REMOTE_DEFAULT_SETUP" {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	defaultSpacesValue := "0"
+	if defaultSpaces {
+		defaultSpacesValue = "1"
+	}
+	return append(filtered, "MOOX_REMOTE_DEFAULT_SETUP="+defaultSpacesValue)
+}
+
+func storageBrowserBaseURL(publicHost, localAddress string) (string, error) {
+	publicHost = strings.TrimSpace(publicHost)
+	if publicHost == "" {
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	for _, r := range publicHost {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			continue
+		}
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	_, port, err := net.SplitHostPort(localAddress)
+	if err != nil {
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	return "https://" + net.JoinHostPort(publicHost, port), nil
+}
+
+func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSession, adminSpaces storageAdminSpaceAPI) (fixture storageBrowserFixture, cleanup func() error, returnErr error) {
+	if session == nil || session.metadata == nil || adminSpaces == nil {
+		return storageBrowserFixture{}, nil, errors.New("browser_e2e_fixture_unavailable")
+	}
+	if err := cleanupAbandonedStorageBrowserFixtures(ctx, session, adminSpaces); err != nil {
+		return storageBrowserFixture{}, nil, err
+	}
+	namespace := newStorageBrowserNamespace()
+	spaceID := namespace + "_space"
+	spaceName := "浏览器隔离空间 " + namespace
+	sourceID := namespace + "_source"
+	datasetID := "dataset_" + namespace
+	fixture = storageBrowserFixture{
+		Namespace: namespace, SpaceID: spaceID, SpaceName: spaceName,
+		SourceID: sourceID, DatasetID: datasetID, DatasetName: "浏览器验证集",
+	}
+	var adminSpace *adminpb.Space
+	var storageSpace *storagepb.Space
+	var source *storagepb.DataSource
+	var dataset *storagepb.Dataset
+	cleanup = func() error {
+		var first error
+		if err := cleanupStorageLifecycle(ctx, session, storageSpace, source, []*storagepb.Dataset{dataset}); err != nil {
+			first = err
+		}
+		if adminSpace != nil {
+			response, err := adminSpaces.DeleteSpace(ctx, &adminpb.DeleteSpaceReq{SpaceId: adminSpace.GetSpaceId()})
+			if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+				if first == nil {
+					first = errors.New("browser_e2e_admin_space_cleanup_failed")
+				}
+			}
+		}
+		return first
+	}
+	defer func() {
+		if returnErr != nil && cleanup != nil {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				returnErr = fmt.Errorf("%w (browser_e2e_fixture_cleanup_failed)", returnErr)
+			}
+		}
+	}()
+
+	adminResponse, err := adminSpaces.CreateSpace(ctx, &adminpb.CreateSpaceReq{Space: &adminpb.Space{
+		SpaceId: spaceID, Name: spaceName, Owner: storageBrowserFixtureOwner, Status: "active",
+	}})
+	if err != nil || adminResponse == nil || adminResponse.GetRetInfo() == nil || adminResponse.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || adminResponse.GetSpace() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_admin_space_create_failed")
+	}
+	adminSpace = adminResponse.GetSpace()
+	spaceResponse, err := session.metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{AuthInfo: session.auth, Space: &storagepb.Space{
+		SpaceId: spaceID, Name: spaceName, Owner: storageBrowserFixtureOwner, Status: "active",
+	}})
+	if err != nil || spaceResponse == nil || spaceResponse.GetRetInfo() == nil || spaceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || spaceResponse.GetSpace() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_storage_space_create_failed")
+	}
+	storageSpace = spaceResponse.GetSpace()
+	source = &storagepb.DataSource{SpaceId: spaceID, DataSourceId: sourceID, Name: "浏览器隔离来源", Kind: "internal", Status: "active"}
+	sourceResponse, err := session.metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{AuthInfo: session.auth, DataSource: source})
+	if err != nil || sourceResponse == nil || sourceResponse.GetRetInfo() == nil || sourceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || sourceResponse.GetDataSource() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_data_source_create_failed")
+	}
+	source = sourceResponse.GetDataSource()
+	dataset = &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataSourceId: sourceID, Name: fixture.DatasetName, DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "disabled", DataNodeId: storageDeploymentNodeID}
+	items, err := listAllStorageDataNodes(ctx, session.metadata, session.auth)
+	if err != nil {
+		return fixture, cleanup, errors.New("browser_e2e_data_node_list_failed")
+	}
+	node, err := selectDeploymentDataNode(items)
+	if err != nil {
+		return fixture, cleanup, err
+	}
+	fixture.DataNodeID = node.GetNodeId()
+	dataset.DataNodeId = node.GetNodeId()
+	datasetResponse, err := session.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: session.auth, Dataset: dataset})
+	if err != nil || datasetResponse == nil || datasetResponse.GetRetInfo() == nil || datasetResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || datasetResponse.GetDataset() == nil {
+		return fixture, cleanup, errors.New("browser_e2e_dataset_create_failed")
+	}
+	dataset = datasetResponse.GetDataset()
+	columnResponse, err := session.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: session.auth, Column: &storagepb.DatasetColumn{
+		SpaceId: spaceID, DatasetId: datasetID, ColumnName: "value", OriginId: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active",
+		Attributes: map[string]string{"display_name": "数值"},
+	}})
+	if err != nil || columnResponse == nil || columnResponse.GetRetInfo() == nil || columnResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return fixture, cleanup, errors.New("browser_e2e_dataset_column_create_failed")
+	}
+	return fixture, cleanup, nil
+}
+
+func cleanupAbandonedStorageBrowserFixtures(
+	ctx context.Context,
+	session *remoteStorageSession,
+	adminSpaces storageAdminSpaceAPI,
+) error {
+	now := time.Now().UTC()
+	storageSpaces, err := listStorageBrowserSpaces(ctx, session)
+	if err != nil {
+		return err
+	}
+	for _, space := range storageSpaces {
+		if !abandonedStorageBrowserSpace(
+			space.GetSpaceId(),
+			space.GetName(),
+			space.GetCreatedAt(),
+			now,
+		) {
+			continue
+		}
+		response, deleteErr := session.metadata.DeleteSpace(ctx, &storagepb.DeleteSpaceReq{
+			AuthInfo: session.auth,
+			SpaceId:  space.GetSpaceId(),
+		})
+		if deleteErr != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+	}
+
+	adminSpacesList, err := listAdminBrowserSpaces(ctx, adminSpaces)
+	if err != nil {
+		return err
+	}
+	for _, space := range adminSpacesList {
+		if !abandonedStorageBrowserSpace(
+			space.GetSpaceId(),
+			space.GetName(),
+			space.GetCreatedAt(),
+			now,
+		) {
+			continue
+		}
+		response, deleteErr := adminSpaces.DeleteSpace(ctx, &adminpb.DeleteSpaceReq{SpaceId: space.GetSpaceId()})
+		if deleteErr != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+			return errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+	}
+	return nil
+}
+
+func listStorageBrowserSpaces(
+	ctx context.Context,
+	session *remoteStorageSession,
+) ([]*storagepb.Space, error) {
+	const pageSize = 200
+	var spaces []*storagepb.Space
+	for pageNo := uint32(1); ; pageNo++ {
+		response, err := session.metadata.ListSpaces(ctx, &storagepb.ListSpacesReq{
+			AuthInfo: session.auth,
+			Owner:    storageBrowserFixtureOwner,
+			Page:     &commonpb.Page{Page: pageNo, Size: pageSize},
+		})
+		if err != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return nil, errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+		spaces = append(spaces, response.GetSpaces()...)
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			return spaces, nil
+		}
+	}
+}
+
+func listAdminBrowserSpaces(
+	ctx context.Context,
+	adminSpaces storageAdminSpaceAPI,
+) ([]*adminpb.Space, error) {
+	const pageSize = 200
+	var spaces []*adminpb.Space
+	for pageNo := uint32(1); ; pageNo++ {
+		response, err := adminSpaces.ListSpaces(ctx, &adminpb.ListSpacesReq{
+			Owner: storageBrowserFixtureOwner,
+			Page:  &commonpb.Page{Page: pageNo, Size: pageSize},
+		})
+		if err != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+			return nil, errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+		spaces = append(spaces, response.GetSpaces()...)
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			return spaces, nil
+		}
+	}
+}
+
+func abandonedStorageBrowserSpace(spaceID, name, createdAt string, now time.Time) bool {
+	const namespaceLength = 10
+	if !strings.HasSuffix(spaceID, "_space") {
+		return false
+	}
+	namespace := strings.TrimSuffix(spaceID, "_space")
+	if len(namespace) != namespaceLength || !strings.HasPrefix(namespace, "br") ||
+		name != "浏览器隔离空间 "+namespace {
+		return false
+	}
+	for _, char := range namespace[2:] {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'z') {
+			return false
+		}
+	}
+	created, ok := parseStorageBrowserTime(createdAt)
+	if !ok || created.After(now) {
+		return false
+	}
+	return now.Sub(created) >= storageBrowserFixtureMaxAge
+}
+
+func parseStorageBrowserTime(value string) (time.Time, bool) {
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		parsed, err := time.Parse(layout, strings.TrimSpace(value))
+		if err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, repoRoot string, defaultSpaces bool) (storageBrowserResult, error) {
+	if snapshot == nil || strings.TrimSpace(repoRoot) == "" {
+		return storageBrowserResult{}, errors.New("browser_e2e_invalid")
+	}
+	host, err := resolveStorageBrowserHost(snapshot.Manifest, name)
+	if err != nil {
+		return storageBrowserResult{}, err
+	}
+	_, storageTransport, storageSession, _, err := openRemoteStorage(ctx, snapshot, name)
+	if err != nil {
+		return storageBrowserResult{}, err
+	}
+	defer storageTransport.Close()
+	defer storageSession.Close()
+	controlTransport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
+	}
+	defer controlTransport.Close()
+	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
+	if _, err := controlTransport.Run(ctx, []string{"sh", "-lc", `set -eu
+root="$1"
+"$root/status.sh" admin >/dev/null
+"$root/status.sh" gateway >/dev/null
+"$root/status.sh" web-host >/dev/null
+curl -kfsS https://127.0.0.1:9527/ >/dev/null`, "moox-browser-e2e", controlRoot}, nil); err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
+	}
+	gateway, err := openCommandGateway(ctx, "", snapshot)
+	if err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
+	}
+	defer gateway.Close()
+	adminSpaces := &storageAdminSpaceProxy{gateway: gateway}
+	fixture, cleanup, err := createStorageBrowserFixture(ctx, storageSession, adminSpaces)
+	if err != nil {
+		return storageBrowserResult{}, err
+	}
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				// Cleanup errors are returned by the caller below; this defer is only a
+				// last-resort guard for early command failures.
+				_ = cleanupErr
+			}
+		}
+	}()
+	forwardContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	listener, err := controlTransport.ForwardLocal(forwardContext, storageBrowserRemoteAddress)
+	if err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_unreachable")
+	}
+	defer listener.Close()
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_invalid")
+	}
+	command := exec.CommandContext(ctx, "pnpm", "--dir", "web", "exec", "playwright", "test", storageE2ESpec, "--project=chromium")
+	command.Dir = root
+	baseURL, err := storageBrowserBaseURL(host.Address, listener.Addr().String())
+	if err != nil {
+		return storageBrowserResult{}, err
+	}
+	command.Env = append(storageBrowserEnvironment(os.Environ(), defaultSpaces),
+		"MOOX_REMOTE_PLAYWRIGHT=1",
+		"MOOX_REMOTE_BASE_URL="+baseURL,
+		"MOOX_REMOTE_FORWARD_HOST="+strings.TrimSpace(host.Address),
+		"MOOX_REMOTE_STORAGE_FIXTURE="+mustMarshalStorageBrowserFixture(fixture),
+		"MOOX_REMOTE_TRACE=off",
+		"MOOX_REMOTE_VIDEO=off",
+	)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_invalid")
+	}
+	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		return storageBrowserResult{}, errors.New("browser_e2e_start_failed")
+	}
+	credentials := map[string]string{"base_url": baseURL, "username": snapshot.Manifest.Admin.Username, "password": snapshot.Manifest.Admin.Password}
+	encodeErr := json.NewEncoder(stdin).Encode(credentials)
+	_ = stdin.Close()
+	waitErr := command.Wait()
+	cleanupErr := cleanup()
+	cleaned = true
+	if encodeErr != nil || waitErr != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_failed")
+	}
+	if cleanupErr != nil {
+		return storageBrowserResult{}, errors.New("browser_e2e_cleanup_failed")
+	}
+	return storageBrowserResult{Status: "passed", Desktop: "passed", Mobile: "passed"}, nil
+}
+
+func resolveStorageBrowserHost(manifest setupconfig.Manifest, requestedStorageHost string) (setupconfig.Host, error) {
+	if _, err := findSetupHost(manifest, requestedStorageHost); err != nil {
+		return setupconfig.Host{}, err
+	}
+	control := manifest.ControlHost()
+	if strings.TrimSpace(control.Name) == "" || strings.TrimSpace(control.Address) == "" {
+		return setupconfig.Host{}, errors.New("browser_e2e_control_unavailable")
+	}
+	return control, nil
+}

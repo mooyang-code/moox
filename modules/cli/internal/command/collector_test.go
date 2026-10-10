@@ -1,11 +1,13 @@
 package command
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"debug/elf"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -22,14 +24,15 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
 func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions, packageID string) adminclient.NodeCreateItem {
@@ -100,7 +103,20 @@ func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 	setCollectorCLSTestCredentials(t)
 	t.Setenv("MOOX_CLS_ENDPOINT", "ap-guangzhou.cls.tencentyun.com")
 	t.Setenv("MOOX_CLS_TOPIC_ID", "topic-test")
+	t.Setenv("MOOX_ACCESS_ADDRESS", "storage.example:11004")
+	t.Setenv("MOOX_ACCESS_ID", "access@storage")
+	t.Setenv("MOOX_CALLER_KEY_ID", "assigned-scf-key-17")
+	t.Setenv("MOOX_CALLER_KEY", strings.Repeat("a", 64))
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
+	gatewayCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 	dir := t.TempDir()
+	gatewayCAFile := filepath.Join(dir, "gateway-ca.pem")
+	require.NoError(t, os.WriteFile(gatewayCAFile, gatewayCA, 0o600))
+	t.Setenv("MOOX_GATEWAY_CA_FILE", gatewayCAFile)
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_FILE", gatewayCAFile)
+
 	eventBusCAFile := filepath.Join(dir, "eventbus-ca.pem")
 	require.NoError(t, os.WriteFile(eventBusCAFile, mustTestEventBusCAPEM(t), 0o600))
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "test-primary-secret")
@@ -113,31 +129,18 @@ func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 
 const collectorTestStorageAppKeysJSON = `{"moox-collector":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 
-const collectorTestCallerKey = "scf-collector-1:test-scf-collector-secret"
-
-// collectorTestAccessRoute 返回某个地域经 access@storage 公网地址访问外部接入的路由。
-func collectorTestAccessRoute(region string) *privatenet.SCFAccessRoute {
-	return &privatenet.SCFAccessRoute{
-		Region: region, Network: "public", AccessHostID: "storage", AccessID: "access@storage", AccessAddress: "192.0.2.20:11004",
-	}
-}
-
-func TestCollectorFunctionEnvironmentUsesResolvedControlTrustMaterial(t *testing.T) {
+func TestCollectorAccessEnvironmentOmitsHTTPGatewayTrust(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{
-		EventBusCredential: &jetstream.CredentialFile{
-			URLs:     []string{"tls://203.0.113.10:4222"},
-			Username: "publisher",
-			Password: "publisher-secret",
-			CAFile:   "ca.pem",
-		},
-		collectorPackageOptions: collectorPackageOptions{EventBusCAPEM: mustTestEventBusCAPEM(t)},
-		AccessRoute:             collectorTestAccessRoute("ap-singapore"), CallerKey: collectorTestCallerKey,
-		StorageAppKeysJSON: collectorTestStorageAppKeysJSON,
-	}, "package-control")
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "missing-peer.pem")
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "stale")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{AccessAddress: "storage.example:11004", RuntimeServiceKeyID: "assigned-scf-key-17", RuntimeServiceSecretKey: strings.Repeat("a", 64)})
 	require.NoError(t, err)
-	assert.Equal(t, "certs/eventbus-ca.pem", env["MOOX_EVENTBUS_NATS_TLS_CA_FILE"])
-	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+	require.Equal(t, "storage.example:11004", env["MOOX_ACCESS_ADDRESS"])
+	require.Equal(t, "assigned-scf-key-17", env["MOOX_CALLER_KEY_ID"])
+	require.Equal(t, "scf-collector", env["MOOX_CALLER"])
+	for _, key := range []string{"MOOX_GATEWAY_CA_FILE", "MOOX_GATEWAY_CA_PEM_B64", "MOOX_SERVICE_GATEWAY_CA_FILE", "MOOX_SERVICE_GATEWAY_CA_PEM_B64", "MOOX_GATEWAY_CALLER", "MOOX_GATEWAY_SERVICE_SECRET_KEY"} {
+		require.NotContains(t, env, key)
+	}
 }
 
 func TestPreflightCollectorSCFEventBusCredentialUsesManifestPublicEndpoint(t *testing.T) {
@@ -150,7 +153,7 @@ func TestPreflightCollectorSCFEventBusCredentialUsesManifestPublicEndpoint(t *te
 			CAFile:   "ca.pem",
 		},
 		ca,
-		eventBusManifest("eventbus.example.test", 4333, true),
+		setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4333, TLSEnabled: true},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"tls://eventbus.example.test:4333"}, credential.URLs)
@@ -168,14 +171,14 @@ func TestPreflightCollectorSCFEventBusCredentialRejectsUnsafeManifest(t *testing
 	validCA := mustTestEventBusCAPEM(t)
 	tests := []struct {
 		name     string
-		eventBus setupconfig.Manifest
+		eventBus setupconfig.EventBus
 		ca       []byte
 		want     string
 	}{
-		{name: "loopback public address", eventBus: eventBusManifest("127.0.0.1", 4222, true), ca: validCA, want: "公网地址"},
-		{name: "unspecified public address", eventBus: eventBusManifest("0.0.0.0", 4222, true), ca: validCA, want: "公网地址"},
-		{name: "tls disabled", eventBus: eventBusManifest("eventbus.example.test", 4222, false), ca: validCA, want: "tls_enabled"},
-		{name: "missing ca", eventBus: eventBusManifest("eventbus.example.test", 4222, true), want: "CA material"},
+		{name: "loopback public address", eventBus: setupconfig.EventBus{PublicAddress: "127.0.0.1", Port: 4222, TLSEnabled: true}, ca: validCA, want: "non-loopback"},
+		{name: "unspecified public address", eventBus: setupconfig.EventBus{PublicAddress: "0.0.0.0", Port: 4222, TLSEnabled: true}, ca: validCA, want: "non-loopback"},
+		{name: "tls disabled", eventBus: setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4222}, ca: validCA, want: "tls_enabled"},
+		{name: "missing ca", eventBus: setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4222, TLSEnabled: true}, want: "CA material"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -183,15 +186,6 @@ func TestPreflightCollectorSCFEventBusCredentialRejectsUnsafeManifest(t *testing
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 		})
-	}
-}
-
-// eventBusManifest 返回消息总线部署在 control（地址为 address）上的部署表。
-func eventBusManifest(address string, port int, tlsEnabled bool) setupconfig.Manifest {
-	return setupconfig.Manifest{
-		EventBus:   setupconfig.EventBus{Port: port, TLSEnabled: tlsEnabled},
-		Hosts:      map[string]setupconfig.Host{"control": {ID: "control", Address: address}},
-		Placements: map[string][]string{"control": {"eventbus"}},
 	}
 }
 
@@ -230,20 +224,36 @@ func TestCollectorPublicationDerivesOnlyAllowedBindingAppIDs(t *testing.T) {
 	require.ErrorContains(t, err, "allowed")
 }
 
-func TestCollectorEnvironmentUsesAccessRouteAndCallerKey(t *testing.T) {
+func TestCollectorZipUploadRejectsCredentialsBeforeControlAccess(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{
-		TriggerType: "timer", AccessRoute: collectorTestAccessRoute("ap-singapore"), CallerKey: collectorTestCallerKey,
-		StorageAppKeysJSON: collectorTestStorageAppKeysJSON,
-	}, "pkg-timer")
+	t.Setenv("MOOX_CLS_TOPIC_ID", "test-topic")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "storage-node")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "test-service-secret")
+	zipPath := filepath.Join(t.TempDir(), "external.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{"sources/market/extra.yaml": "password: leaked-test-password\n", "main": "binary", "certs/eventbus-ca.pem": string(mustTestEventBusCAPEM(t))})
+	called := 0
+	server := newControlFixtureServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
+	defer server.Close()
+	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{ControlURL: server.URL, SpaceID: "stockcn", AccessAddress: "storage.example:11004", CloudAccountID: "account", Region: "ap-singapore", NodeCount: 1, AccessToken: "test-token", ZipPath: zipPath})
+	require.ErrorContains(t, err, "password")
+	require.NotContains(t, err.Error(), "leaked-test-password")
+	require.Zero(t, called)
+	_, err = deployCollectorFunction(context.Background(), collectorDeployOptions{ControlURL: server.URL, CloudAccountID: "account", NodeID: "node", ZipPath: zipPath})
+	require.Error(t, err)
+	require.Zero(t, called)
+}
+
+func TestCollectorTimerEnvironmentOmitsUnrelatedHTTPSCAs(t *testing.T) {
+	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
+	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{TriggerType: "timer", AccessAddress: "storage:11004"}, "pkg-timer")
 	require.NoError(t, err)
-	assert.Equal(t, "192.0.2.20:11004", env["MOOX_ACCESS_ADDRESS"])
-	assert.Equal(t, "access@storage", env["MOOX_ACCESS_ID"])
-	assert.Equal(t, "scf-collector", env["MOOX_CALLER"])
-	assert.Equal(t, collectorTestCallerKey, env["MOOX_CALLER_KEY"])
-	for key := range env {
-		assert.False(t, strings.Contains(key, "GATEWAY") || strings.HasPrefix(key, "MOOX_COLLECTOR_"), "旧的网关环境变量 %s 不能再写入函数", key)
-	}
+	assert.Equal(t, "storage:11004", env["MOOX_ACCESS_ADDRESS"])
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
+	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
 }
 
 func TestCollectorTimerEnvironmentIncludesDurableCredentialsAndCAPath(t *testing.T) {
@@ -251,8 +261,7 @@ func TestCollectorTimerEnvironmentIncludesDurableCredentialsAndCAPath(t *testing
 	ca := mustTestEventBusCAPEM(t)
 	opts := collectorPublishOptions{
 		TriggerType: "timer", BizType: "market_fetcher", SpaceID: "stockcn",
-		AccessRoute: collectorTestAccessRoute("ap-guangzhou"), CallerKey: collectorTestCallerKey,
-		StorageAppKeysJSON:      `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
+		AccessAddress: "storage:11004", StorageAppKeysJSON: `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
 		EventBusCredential:      &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "publisher", Password: "test-password"},
 		collectorPackageOptions: collectorPackageOptions{EventBusCAPEM: ca},
 	}
@@ -264,10 +273,10 @@ func TestCollectorTimerEnvironmentIncludesDurableCredentialsAndCAPath(t *testing
 	require.NotContains(t, env, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	require.NotContains(t, env, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	require.Equal(t, "60", env["MOOX_FETCH_TIMEOUT_SECONDS"])
-	require.Equal(t, "192.0.2.20:11004", env["MOOX_ACCESS_ADDRESS"])
-	require.Equal(t, "access@storage", env["MOOX_ACCESS_ID"])
+	require.Equal(t, "storage:11004", env["MOOX_ACCESS_ADDRESS"])
+	require.Equal(t, "scf-collector", env["MOOX_CALLER"])
 	require.LessOrEqual(t, tencent.SCFEnvironmentBytes(env), 4096)
-	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_STORAGE_PRIMARY_AUTH_SECRET", "MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY"} {
+	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_STORAGE_PRIMARY_AUTH_SECRET", "MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE"} {
 		opts.Env = []string{key + "=forbidden-value"}
 		_, err := collectorFunctionEnvironment(opts, "pkg-timer")
 		require.ErrorContains(t, err, "managed key "+key)
@@ -278,35 +287,33 @@ func TestCollectorTimerEnvironmentIncludesDurableCredentialsAndCAPath(t *testing
 	require.NotContains(t, err.Error(), "private-value")
 }
 
-func TestCollectorEnvironmentFollowsRegionalAccessRoute(t *testing.T) {
-	setCollectorCLSTestCredentials(t)
-	plan := privatenet.SCFRoutePlan{Routes: []privatenet.SCFAccessRoute{
-		{Region: "ap-nanjing", Network: "vpc", AccessHostID: "storage", AccessID: "access@storage", AccessAddress: "10.206.0.5:11004", VpcID: "vpc-nj", SubnetID: "subnet-nj"},
-		{Region: "ap-hongkong", Network: "vpc", AccessHostID: "compute-1", AccessID: "access@compute-1", AccessAddress: "172.19.32.13:11004", VpcID: "vpc-hk", SubnetID: "subnet-hk"},
-		{Region: "ap-singapore", Network: "public", AccessHostID: "storage", AccessID: "access@storage", AccessAddress: "146.56.196.204:11004"},
-	}}
-	for _, route := range plan.Routes {
-		opts, err := applyCollectorAccessRoute(collectorPublishOptions{TriggerType: "timer", Region: route.Region, CallerKey: collectorTestCallerKey, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}, plan)
-		require.NoError(t, err)
+func TestCollectorEnvironmentUsesPublicStorageTargetForAllSCF(t *testing.T) {
+	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
+	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
+	opts := collectorPublishOptions{
+		TriggerType:          "timer",
+		AccessAddress:        "146.56.196.204:11004",
+		AccessPrivateAddress: "10.206.0.5:11004",
+	}
+	for _, region := range []string{"ap-guangzhou", "ap-shanghai", "ap-hongkong", "ap-singapore"} {
+		opts.Region = region
 		env, err := collectorFunctionEnvironment(opts, "pkg-timer")
 		require.NoError(t, err)
-		assert.Equal(t, route.AccessAddress, env["MOOX_ACCESS_ADDRESS"], route.Region)
-		assert.Equal(t, route.AccessID, env["MOOX_ACCESS_ID"], route.Region)
+		assert.Equal(t, "146.56.196.204:11004", env["MOOX_ACCESS_ADDRESS"], region)
 	}
-	_, err := applyCollectorAccessRoute(collectorPublishOptions{Region: "ap-tokyo"}, plan)
-	require.ErrorContains(t, err, "没有外部接入路由")
 }
 
-func TestCollectorInvokeMarketFetcherKeepsEventBus(t *testing.T) {
+func TestCollectorInvokeMarketFetcherKeepsEventBusButOmitsHTTPSCAs(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{
-		TriggerType: "invoke", BizType: "market_fetcher", AccessRoute: collectorTestAccessRoute("ap-singapore"), CallerKey: collectorTestCallerKey,
-		StorageAppKeysJSON:      collectorTestStorageAppKeysJSON,
+		TriggerType: "invoke", BizType: "market_fetcher", AccessAddress: "storage:11004",
 		EventBusCredential:      &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "worker", Password: "secret"},
 		collectorPackageOptions: collectorPackageOptions{EventBusCAPEM: mustTestEventBusCAPEM(t)},
 	}, "pkg-invoke")
 	require.NoError(t, err)
 	assert.Equal(t, "tls://eventbus.example:4222", env["MOOX_EVENTBUS_NATS_URL"])
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
+	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
 }
 
 func TestLoadCollectorSCFFetcherConfigSelectsOnlyRequestedSpace(t *testing.T) {
@@ -324,13 +331,6 @@ region = "ap-guangzhou"
 [eventbus]
 port = 4222
 tls_enabled = true
-
-[hosts.control]
-address = "192.0.2.10"
-ssh = { username = "ubuntu", password = "password" }
-
-[placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector"]
 
 [scf_fetcher]
 enabled = true
@@ -355,7 +355,6 @@ realtime_batch_size = 10
 max_inflight_requests = 5
 request_timeout_ms = 1500
 http_max_attempts = 4
-storage_max_attempts = 1
 storage_timeout_ms = 5000
 
 [[scf_fetcher.spaces.regions]]
@@ -376,13 +375,30 @@ realtime_batch_size = 10
 max_inflight_requests = 5
 request_timeout_ms = 1500
 http_max_attempts = 4
-storage_max_attempts = 1
 storage_timeout_ms = 5000
 
 [[scf_fetcher.spaces.regions]]
 region = "ap-guangzhou"
 enabled = true
 function_count = 1
+
+[hosts.control]
+address = "192.0.2.10"
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "password"
+
+[hosts.storage]
+address = "106.53.107.122"
+[hosts.storage.ssh]
+port = 22
+username = "ubuntu"
+password = "password"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+storage = ["access"]
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
@@ -399,14 +415,14 @@ function_count = 1
 }
 
 func TestEnsureCollectorSpaceCloudAccountsRegistersOnlyMissingAccount(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/CreateCloudAccount", r.URL.Path)
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/CreateCloudAccount", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"account":{"account_id":"tencent-scf-singapore","cos_region":"ap-singapore","cos_bucket":"moox-scf-singapore-1255382561"}}`))
 	}))
 	defer server.Close()
 
 	accounts := map[string]adminclient.CloudAccount{}
-	err := ensureCollectorSpaceCloudAccounts(context.Background(), admintest.Client(server.URL), &setupconfig.SCFFetcherSpace{
+	err := ensureCollectorSpaceCloudAccounts(context.Background(), collectorTestClient(server), &setupconfig.SCFFetcherSpace{
 		SpaceID: "crypto",
 		Regions: []setupconfig.SCFFetcherRegion{{
 			Region: "ap-singapore", Enabled: true, CloudAccountID: "tencent-scf-singapore",
@@ -555,6 +571,14 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 	assert.True(t, found, "default stockcn 1m task should exist and remain disabled until explicit activation")
 }
 
+func TestCollectorAccessRejectsExplicitHostCAPaths(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	for _, key := range []string{"MOOX_GATEWAY_CA_FILE", "MOOX_SERVICE_GATEWAY_CA_FILE"} {
+		_, err := collectorFunctionEnvironment(collectorPublishOptions{Env: []string{key + "=/host/peer.pem"}})
+		require.Error(t, err)
+	}
+}
+
 func TestCollectorFunctionEnvironmentDoesNotRequireOrInjectCLSCredentials(t *testing.T) {
 	t.Setenv("MOOX_CLS_SECRET_ID", "")
 	t.Setenv("MOOX_CLS_SECRET_KEY", "")
@@ -605,17 +629,16 @@ func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing
 	require.ErrorContains(t, err, "managed key")
 }
 
-func TestCollectorFunctionEnvironmentIgnoresOperatorGatewayEnvironment(t *testing.T) {
+func TestCollectorAccessIdentityComesFromAssignedPublicationCredential(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
-	t.Setenv("MOOX_ACCESS_ADDRESS", "203.0.113.99:11004")
-	t.Setenv("MOOX_CALLER_KEY", "moox-cli-1:operator-secret")
-
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{AccessRoute: collectorTestAccessRoute("ap-singapore"), CallerKey: collectorTestCallerKey})
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "moox-cli")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "cli-secret")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{AccessID: "access@storage", AccessAddress: "storage.example:11004", RuntimeServiceKeyID: "assigned-scf-key-17", RuntimeServiceSecretKey: strings.Repeat("a", 64)})
 	require.NoError(t, err)
-	assert.Equal(t, "192.0.2.20:11004", env["MOOX_ACCESS_ADDRESS"], "外部接入地址只来自路由计划，不读操作员环境")
-	assert.Equal(t, collectorTestCallerKey, env["MOOX_CALLER_KEY"], "签名密钥只来自 control 主机")
-	assert.Equal(t, "scf-collector", env["MOOX_CALLER"])
-	assert.Equal(t, "10", env["MOOX_FETCH_MAX_INFLIGHT_REQUESTS"])
+	require.Equal(t, "access@storage", env["MOOX_ACCESS_ID"])
+	require.Equal(t, "assigned-scf-key-17", env["MOOX_CALLER_KEY_ID"])
+	require.Equal(t, "scf-collector", env["MOOX_CALLER"])
+	require.NotContains(t, env, "MOOX_GATEWAY_SERVICE_SECRET_KEY")
 }
 
 type collectorCLSAPI struct{}
@@ -639,25 +662,28 @@ func (collectorCLSAPI) CreateIndex(context.Context, string) (string, error) {
 }
 
 func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testing.T) {
+	setCollectorFleetRuntimeTestEnvironment(t)
 	t.Setenv("MOOX_CLS_ENDPOINT", "ap-guangzhou.cls.tencentyun.com")
 	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
 	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
 	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
-		AccessRoute: collectorTestAccessRoute("ap-guangzhou"), CallerKey: collectorTestCallerKey,
 		collectorPackageOptions: collectorPackageOptions{
 			CLSLogsetID: "logset-unified",
 			CLSTopicID:  "topic-unified",
 		},
-		CloudAccountID: "account-a",
-		SpaceID:        "crypto",
-
-		Runtime:     "CustomRuntime",
-		Handler:     "main",
-		Region:      "ap-guangzhou",
-		PackageName: "moox-collector",
-		BizType:     "market_fetcher",
-		NodeType:    "scf-event",
-		Env:         []string{"MOOX_ENV=prod"},
+		CloudAccountID:   "account-a",
+		SpaceID:          "crypto",
+		ServiceAccessKey: "svc-ak",
+		ServiceSecretKey: "svc-sk",
+		Runtime:          "CustomRuntime",
+		Handler:          "main",
+		Region:           "ap-guangzhou",
+		PackageName:      "moox-collector",
+		BizType:          "market_fetcher",
+		NodeType:         "scf-event",
+		Env:              []string{"MOOX_ENV=prod"},
 	}, "moox-collector_dev")
 
 	if item.CloudAccountID != "account-a" || item.Region != "ap-guangzhou" || item.PackageID != "moox-collector_dev" {
@@ -675,10 +701,9 @@ func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testi
 	if item.Environment["MOOX_SPACE_ID"] != "crypto" {
 		t.Fatalf("space env = %#v", item.Environment)
 	}
-	assert.Equal(t, "scf-collector", item.Environment["MOOX_CALLER"])
-	assert.Equal(t, collectorTestCallerKey, item.Environment["MOOX_CALLER_KEY"])
-	assert.Equal(t, "192.0.2.20:11004", item.Environment["MOOX_ACCESS_ADDRESS"])
-	assert.Equal(t, "access@storage", item.Environment["MOOX_ACCESS_ID"])
+	if item.Environment["MOOX_CALLER_KEY_ID"] != "assigned-scf-key-17" || item.Environment["MOOX_CALLER_KEY"] != strings.Repeat("a", 64) {
+		t.Fatalf("service auth env = %#v", item.Environment)
+	}
 	assert.Equal(t, "ap-guangzhou.cls.tencentyun.com", item.Environment["MOOX_CLS_ENDPOINT"])
 	assert.Equal(t, "logset-unified", item.Environment["MOOX_CLS_LOGSET_ID"])
 	assert.Equal(t, "topic-unified", item.Environment["MOOX_CLS_TOPIC_ID"])
@@ -694,27 +719,27 @@ func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testi
 	assert.NotContains(t, item.Environment, "MOOX_COLLECTOR_JOB_TYPES")
 }
 
-func TestApplyCollectorAccessRouteBindsVPCForSameRegionAccess(t *testing.T) {
-	setCollectorCLSTestCredentials(t)
-	plan := privatenet.SCFRoutePlan{Routes: []privatenet.SCFAccessRoute{{
-		Region: "ap-hongkong", Network: "vpc", AccessHostID: "compute-1", AccessID: "access@compute-1",
-		AccessAddress: "172.19.32.13:11004", VpcID: "vpc-hk", SubnetID: "subnet-hk",
-	}}}
-	opts, err := applyCollectorAccessRoute(collectorPublishOptions{Region: "ap-hongkong", CallerKey: collectorTestCallerKey, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}, plan)
-	require.NoError(t, err)
+func TestApplyCollectorStorageRouteUsesPrivateVPCForSameRegion(t *testing.T) {
+	route := privatenet.SCFStorageRoute{
+		Region: "ap-nanjing", SameRegion: true, Network: "vpc",
+		Target: "10.206.0.5:11004", VpcID: "vpc-storage", SubnetID: "subnet-storage",
+	}
+	opts := applyCollectorStorageRoute(collectorPublishOptions{Region: "ap-nanjing"}, map[string]privatenet.SCFStorageRoute{"ap-nanjing": route}, &setupconfig.SCFFetcherSpace{AccessAddress: "146.56.196.204:11004"}, false)
+	assert.Equal(t, "10.206.0.5:11004", opts.AccessAddress)
+	assert.Equal(t, "vpc-storage", opts.StorageVPCID)
+	assert.Equal(t, "subnet-storage", opts.StorageSubnetID)
+	assert.True(t, opts.StorageRouteResolved)
 	item := mustBuildCollectorCreateNodeItem(t, opts, "pkg")
-	assert.Equal(t, "vpc-hk", item.Config["vpc_id"])
-	assert.Equal(t, "subnet-hk", item.Config["subnet_id"])
-	assert.NotContains(t, item.Config, "clear_vpc")
-	assert.Equal(t, "172.19.32.13:11004", item.Environment["MOOX_ACCESS_ADDRESS"])
-	assert.Equal(t, "access@compute-1", item.Environment["MOOX_ACCESS_ID"])
+	assert.Equal(t, "vpc-storage", item.Config["vpc_id"])
+	assert.Equal(t, "subnet-storage", item.Config["subnet_id"])
+	assert.Equal(t, "10.206.0.5:11004", item.Environment["MOOX_ACCESS_ADDRESS"])
 }
 
-func TestApplyCollectorAccessRouteClearsVPCForPublicAccess(t *testing.T) {
-	setCollectorCLSTestCredentials(t)
-	plan := privatenet.SCFRoutePlan{Routes: []privatenet.SCFAccessRoute{*collectorTestAccessRoute("ap-singapore")}}
-	opts, err := applyCollectorAccessRoute(collectorPublishOptions{Region: "ap-singapore", CallerKey: collectorTestCallerKey, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}, plan)
-	require.NoError(t, err)
+func TestApplyCollectorStorageRouteUsesPublicForCrossRegion(t *testing.T) {
+	route := privatenet.SCFStorageRoute{Region: "ap-hongkong", Network: "public", Target: "146.56.196.204:11004"}
+	opts := applyCollectorStorageRoute(collectorPublishOptions{Region: "ap-hongkong"}, map[string]privatenet.SCFStorageRoute{"ap-hongkong": route}, &setupconfig.SCFFetcherSpace{AccessAddress: "146.56.196.204:11004"}, false)
+	assert.Equal(t, "146.56.196.204:11004", opts.AccessAddress)
+	assert.True(t, opts.StorageRouteResolved)
 	item := mustBuildCollectorCreateNodeItem(t, opts, "pkg")
 	assert.NotContains(t, item.Config, "vpc_id")
 	assert.NotContains(t, item.Config, "subnet_id")
@@ -741,8 +766,6 @@ func TestBuildCollectorFleetCreateItemsAreUniqueAndDeepCloned(t *testing.T) {
 		NodeCount:              50,
 		EventBusCredentialFile: credentialFile,
 		StorageAppKeysJSON:     collectorTestStorageAppKeysJSON,
-		AccessRoute:            collectorTestAccessRoute("ap-guangzhou"),
-		CallerKey:              collectorTestCallerKey,
 	}, "pkg-new")
 	require.NoError(t, err)
 	require.Len(t, items, 50)
@@ -776,8 +799,6 @@ func TestBuildCollectorFleetCreateItemsContinuesOverflowIndexes(t *testing.T) {
 		IndexOffset:            49,
 		EventBusCredentialFile: credentialFile,
 		StorageAppKeysJSON:     collectorTestStorageAppKeysJSON,
-		AccessRoute:            collectorTestAccessRoute("ap-guangzhou"),
-		CallerKey:              collectorTestCallerKey,
 	}, "pkg-new")
 	require.NoError(t, err)
 	require.Len(t, items, 11)
@@ -823,28 +844,37 @@ func TestBuildCollectorFleetCreateItemsRequiresCompleteRuntimeEnvironment(t *tes
 		SpaceID:   "crypto",
 		NodeCount: 50,
 	}, "pkg-new")
-	require.ErrorContains(t, err, "采集函数的环境变量缺少")
+	require.ErrorContains(t, err, "collector fleet runtime environment requires")
 }
 
-func TestCollectorFleetRequiresAccessRouteAndCallerKey(t *testing.T) {
+func TestCollectorTimerRequiresUsableAccessRoute(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
-	opts := collectorPublishOptions{SpaceID: "stockcn", NodeCount: 1, EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON, CallerKey: collectorTestCallerKey}
+	opts := collectorPublishOptions{SpaceID: "stockcn", NodeCount: 1, EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}
+	for _, tc := range []struct{ name, target, node string }{
+		{"missing target", "", "access@storage"},
+		{"missing node", "storage.example:11004", ""},
+		{"invalid node", "storage.example:11004", "bad node"},
+		{"loopback", "127.0.0.1:11004", "access@storage"},
+		{"http", "https://storage.example:11004", "access@storage"},
+		{"invalid port", "storage.example:70000", "access@storage"},
+		{"path", "storage.example:11004/path", "access@storage"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MOOX_ACCESS_ADDRESS", tc.target)
+			t.Setenv("MOOX_ACCESS_ID", tc.node)
+			_, err := buildCollectorFleetCreateItems(opts, "pkg")
+			require.ErrorContains(t, err, "MOOX_ACCESS_")
+		})
+	}
+	t.Setenv("MOOX_ACCESS_ADDRESS", "storage.example:11004")
+	t.Setenv("MOOX_ACCESS_ID", "access@storage")
 	_, err := buildCollectorFleetCreateItems(opts, "pkg")
-	require.ErrorContains(t, err, "MOOX_ACCESS_ADDRESS", "没有外部接入路由时不能发布")
-	opts.AccessRoute, opts.CallerKey = collectorTestAccessRoute("ap-guangzhou"), ""
-	_, err = buildCollectorFleetCreateItems(opts, "pkg")
-	require.ErrorContains(t, err, "MOOX_CALLER_KEY", "没有 scf-collector 的签名密钥时不能发布")
-	opts.CallerKey = collectorTestCallerKey
-	_, err = buildCollectorFleetCreateItems(opts, "pkg")
 	require.NoError(t, err)
 }
 
 func TestCollectorTimerRequiresEventBusEnvironment(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
-	environment, err := collectorFunctionEnvironment(collectorPublishOptions{
-		SpaceID: "stockcn", TriggerType: "timer", EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON,
-		AccessRoute: collectorTestAccessRoute("ap-guangzhou"), CallerKey: collectorTestCallerKey,
-	}, "pkg")
+	environment, err := collectorFunctionEnvironment(collectorPublishOptions{SpaceID: "stockcn", TriggerType: "timer", EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}, "pkg")
 	require.NoError(t, err)
 	for _, key := range []string{"MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_NATS_TLS_CA_FILE"} {
 		t.Run(key, func(t *testing.T) {
@@ -853,7 +883,7 @@ func TestCollectorTimerRequiresEventBusEnvironment(t *testing.T) {
 				partial[name] = value
 			}
 			delete(partial, key)
-			require.ErrorContains(t, tencent.ValidateCollectorMarketFetchEnvironment(partial), key)
+			require.ErrorContains(t, validateCollectorFleetRuntimeEnvironment(partial, true), key)
 		})
 	}
 }
@@ -974,8 +1004,8 @@ func TestCollectorPublishStatusCommandExists(t *testing.T) {
 }
 
 func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", r.URL.Path)
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/admin/cloudnode/GetNodeList", r.URL.Path)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ret_info": map[string]any{"code": 0},
 			"items": []adminclient.CloudNode{
@@ -988,10 +1018,10 @@ func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		control:   admintest.Client(server.URL),
-		SpaceID:   "crypto",
-		Namespace: "default",
-		DryRun:    true,
+		ControlURL: server.URL,
+		SpaceID:    "crypto",
+		Namespace:  "default",
+		DryRun:     true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "default", summary.Namespace)
@@ -1001,13 +1031,13 @@ func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
 
 func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
 	var calls []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fetcher-1","node_type":"scf-event","biz_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
-		case "/trpc.moox.admin.CollectorPublishLease/AcquireCollectorPublishLease":
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"1","expires_at":"2026-10-03T12:02:00Z"}`))
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
@@ -1017,7 +1047,7 @@ func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
 	defer server.Close()
 
 	_, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		control: admintest.Client(server.URL), SpaceID: "crypto", Confirm: true, Wait: false,
+		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: false,
 	})
 	require.ErrorContains(t, err, "requires --wait")
 	assert.Empty(t, calls, "the command must reject non-waiting deletion before reading targets or acquiring a lease")
@@ -1026,17 +1056,17 @@ func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
 func TestDeleteCollectorFunctionsAcquiresLeaseBeforeTargetSnapshot(t *testing.T) {
 	var calls []string
 	leaseHeld := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.admin.CollectorPublishLease/AcquireCollectorPublishLease":
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			leaseHeld = true
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			assert.True(t, leaseHeld, "target snapshot must be read inside the publish lease")
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
-		case "/trpc.moox.admin.CollectorPublishLease/ReleaseCollectorPublishLease":
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
 			leaseHeld = false
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
 		default:
@@ -1047,14 +1077,14 @@ func TestDeleteCollectorFunctionsAcquiresLeaseBeforeTargetSnapshot(t *testing.T)
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		control: admintest.Client(server.URL), SpaceID: "crypto", Confirm: true, Wait: true,
+		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "nothing_to_delete", summary.Status)
 	assert.Equal(t, []string{
-		"/trpc.moox.admin.CollectorPublishLease/AcquireCollectorPublishLease",
-		"/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList",
-		"/trpc.moox.admin.CollectorPublishLease/ReleaseCollectorPublishLease",
+		"/api/admin/publishlease/AcquireCollectorPublishLease",
+		"/api/admin/cloudnode/GetNodeList",
+		"/api/admin/publishlease/ReleaseCollectorPublishLease",
 	}, calls, "even an empty snapshot is protected and released under the lease")
 }
 
@@ -1062,11 +1092,11 @@ func TestCleanupUnknownCanarySubmissionDoesNotTreatEmptyInventoryAsComplete(t *t
 	var calls []string
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
 			cancel()
 		default:
@@ -1075,7 +1105,7 @@ func TestCleanupUnknownCanarySubmissionDoesNotTreatEmptyInventoryAsComplete(t *t
 		}
 	}))
 	defer server.Close()
-	client := admintest.Client(server.URL)
+	client := collectorTestClient(server)
 
 	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, client, collectorPublishOptions{
 		SpaceID: "crypto", CloudAccountID: "account-1", Region: "ap-singapore", Namespace: "canary",
@@ -1083,21 +1113,21 @@ func TestCleanupUnknownCanarySubmissionDoesNotTreatEmptyInventoryAsComplete(t *t
 		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
 	}, "", false, true)
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
-	assert.Equal(t, []string{"/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList"}, calls, "an empty inventory is not proof that an ambiguous create job is settled; the prefix remains unsettled until caller cancellation")
+	assert.Equal(t, []string{"/api/admin/cloudnode/GetNodeList"}, calls, "an empty inventory is not proof that an ambiguous create job is settled; the prefix remains unsettled until caller cancellation")
 }
 
 func TestDeleteCollectorFunctionsHoldsLeaseUntilNodeBatchCompletes(t *testing.T) {
 	statusReads := 0
 	var sawFence bool
 	var released bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fetcher-1","node_type":"scf-event","biz_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
-		case "/trpc.moox.admin.CollectorPublishLease/AcquireCollectorPublishLease":
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
+		case "/api/admin/cloudnode/SubmitDeleteNodes":
 			var request struct {
 				LeaseID string `json:"collector_publish_lease_id"`
 				Token   int64  `json:"collector_publish_fencing_token"`
@@ -1105,14 +1135,14 @@ func TestDeleteCollectorFunctionsHoldsLeaseUntilNodeBatchCompletes(t *testing.T)
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			sawFence = request.LeaseID == "lease-1" && request.Token == 17
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-1","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			statusReads++
 			status := "NODE_BATCH_STATUS_RUNNING"
 			if statusReads > 1 {
 				status = "NODE_BATCH_STATUS_SUCCESS"
 			}
 			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":"delete-1","operation":"NODE_BATCH_OPERATION_DELETE_NODES","status":%q,"success_count":1,"total_count":1},"items":[]}`, status)
-		case "/trpc.moox.admin.CollectorPublishLease/ReleaseCollectorPublishLease":
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
 			released = true
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
 		default:
@@ -1123,7 +1153,7 @@ func TestDeleteCollectorFunctionsHoldsLeaseUntilNodeBatchCompletes(t *testing.T)
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		control: admintest.Client(server.URL), SpaceID: "crypto", Confirm: true, Wait: true,
+		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "NODE_BATCH_STATUS_SUCCESS", summary.Status)
@@ -1140,14 +1170,14 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 	var submittedSizes []int
 	var statusReads = map[string]int{}
 	var released bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": nodes, "page": map[string]any{"has_more": false}})
-		case "/trpc.moox.admin.CollectorPublishLease/AcquireCollectorPublishLease":
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"stockcn","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
+		case "/api/admin/cloudnode/SubmitDeleteNodes":
 			var request struct {
 				NodeIDs []string `json:"node_ids"`
 			}
@@ -1155,7 +1185,7 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 			submittedSizes = append(submittedSizes, len(request.NodeIDs))
 			jobID := fmt.Sprintf("delete-%d", len(submittedSizes))
 			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job_id":%q,"operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":%d}`, jobID, len(request.NodeIDs))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			var request struct {
 				JobID string `json:"job_id"`
 			}
@@ -1171,7 +1201,7 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 				success = 0
 			}
 			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":%q,"operation":"NODE_BATCH_OPERATION_DELETE_NODES","status":%q,"success_count":%d,"failed_count":%d,"total_count":%d},"items":[]}`, request.JobID, status, success, failed, total)
-		case "/trpc.moox.admin.CollectorPublishLease/ReleaseCollectorPublishLease":
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
 			released = true
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
 		default:
@@ -1182,7 +1212,7 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		control: admintest.Client(server.URL), SpaceID: "stockcn", Confirm: true, Wait: true,
+		ControlURL: server.URL, SpaceID: "stockcn", Confirm: true, Wait: true,
 	})
 	require.ErrorContains(t, err, "delete-1 finished with status NODE_BATCH_STATUS_FAILED")
 	assert.Equal(t, []int{100, 70}, submittedSizes)
@@ -1297,7 +1327,7 @@ func TestPublishSubmitRetainsAcceptedJobWhenLaterSubmissionIsAmbiguous(t *testin
 
 func TestWaitCollectorBatchChecksEveryJobAfterTerminalFailure(t *testing.T) {
 	var checked []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			JobID string `json:"job_id"`
 		}
@@ -1311,7 +1341,7 @@ func TestWaitCollectorBatchChecksEveryJobAfterTerminalFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := waitCollectorBatch(context.Background(), admintest.Client(server.URL), "job-failed,job-success")
+	err := waitCollectorBatch(context.Background(), collectorTestClient(server), "job-failed,job-success")
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, errCollectorBatchOutcomeUnknown)
@@ -1321,7 +1351,7 @@ func TestWaitCollectorBatchChecksEveryJobAfterTerminalFailure(t *testing.T) {
 func TestWaitCollectorBatchCanceledReturnsUnknownOutcome(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := waitCollectorBatch(ctx, admintest.Client("http://127.0.0.1:1"), "job-pending")
+	err := waitCollectorBatch(ctx, &adminclient.Client{}, "job-pending")
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
 }
 
@@ -1331,6 +1361,9 @@ func TestCollectorPublishUnknownSubmissionErrorsAreAmbiguous(t *testing.T) {
 		err  error
 		want bool
 	}{
+		{name: "native network loss", err: errs.NewFrameError(errs.RetClientNetErr, "lost response"), want: true},
+		{name: "native server timeout", err: errs.NewFrameError(errs.RetServerTimeout, "timed out"), want: true},
+		{name: "native authentication", err: errs.NewFrameError(errs.RetServerAuthFail, "denied"), want: false},
 		{name: "gateway 503", err: fmt.Errorf("control returned HTTP 503 Service Unavailable"), want: true},
 		{name: "service 500", err: fmt.Errorf("SubmitCreateNodes: code 500: internal error"), want: true},
 		{name: "missing job id", err: fmt.Errorf("SubmitCreateNodes: empty job_id"), want: true},
@@ -1344,15 +1377,68 @@ func TestCollectorPublishUnknownSubmissionErrorsAreAmbiguous(t *testing.T) {
 	}
 }
 
+func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	uploadCalled := false
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/ListCloudAccounts":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a"}]}`))
+		case "/api/admin/cloudnode/GetNodeList":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-50","biz_type":"market_fetcher","trigger_type":"timer","metadata":{"function_name_prefix":"fleet","index":50}}],"page":{"has_more":false}}`))
+		case "/api/admin/cloudnode/InitPackageUpload":
+			uploadCalled = true
+			t.Fatal("partial fleet must fail before upload")
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{
+		collectorPackageOptions: collectorPackageOptions{CollectorRoot: filepath.Join("..", "..", "..", "collector")},
+		ControlURL:              server.URL,
+		AccessToken:             "token",
+		SpaceID:                 "crypto",
+		CloudAccountID:          "account-a",
+		Region:                  "ap-guangzhou",
+		NodeCount:               50,
+		FunctionNamePrefix:      "fleet",
+		EventBusCredentialFile:  credentialFile,
+	})
+	require.ErrorContains(t, err, `fleet prefix "fleet" has invalid index metadata`)
+	assert.False(t, uploadCalled)
+}
+
+func TestPublishSubmitRejectsNodeCountAboveBatchLimitBeforeControlPlaneAccess(t *testing.T) {
+	controlPlaneCalled := false
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		controlPlaneCalled = true
+		t.Fatalf("node count validation must run before control-plane access: %s", r.URL.Path)
+	}))
+	defer server.Close()
+
+	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{
+		ControlURL:     server.URL,
+		AccessToken:    "token",
+		SpaceID:        "crypto",
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		NodeCount:      maxCollectorPublishNodeCount + 1,
+	})
+
+	require.ErrorContains(t, err, "--node-count must be between 1 and 100")
+	assert.False(t, controlPlaneCalled)
+}
+
 func TestPublishStatusPrintsJobAndItems(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange", r.URL.Path)
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/admin/cloudnode/GetNodeBatchChange", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"node-batch-1","status":"NODE_BATCH_STATUS_PARTIAL","total_count":2},"items":[{"item_id":"item-1","node_id":"node-1","status":"NODE_BATCH_ITEM_STATUS_SUCCESS"},{"item_id":"item-2","node_id":"node-2","status":"NODE_BATCH_ITEM_STATUS_FAILED","error_message":"failed"}]}`))
 	}))
 	defer server.Close()
 	status, err := publishCollectorFunctionStatus(context.Background(), collectorPublishStatusOptions{
-		control: admintest.Client(server.URL),
-		JobID:   "node-batch-1",
+		ControlURL: server.URL,
+		JobID:      "node-batch-1",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "node-batch-1", status.Job.JobID)
@@ -1372,12 +1458,12 @@ func TestCollectorCLSCredentialsPreferDedicatedRuntimeIdentity(t *testing.T) {
 }
 
 func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/trpc.moox.ops.SecretMgr/GetSecretValue", r.URL.Path)
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/admin/secret/GetSecretValue", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_id":"secret-shanghai","category":"cloud","provider":"tencent","status":"active","key_id":"shanghai-id","secret_value":"shanghai-key"}}`))
 	}))
 	defer server.Close()
-	client := admintest.Client(server.URL)
+	client := collectorTestClient(server)
 	previous := newCollectorCLSAPI
 	defer func() { newCollectorCLSAPI = previous }()
 	var gotID, gotKey, gotRegion string
@@ -1450,7 +1536,7 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInvokeTimeoutOnlyForInvoke(t
 		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
 		InvokeTimeoutSeconds: 60,
 		RealtimeBatchSize:    10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+		HTTPMaxAttempts: 4, StorageTimeoutMS: 5000,
 	}
 	timer := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "timer", FetcherConfig: fetcher,
@@ -1477,7 +1563,7 @@ func TestBuildCollectorCreateNodeItemUsesLongCryptoInvokeTimeout(t *testing.T) {
 	fetcher := &setupconfig.SCFFetcherSpace{
 		SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
 		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
+		HTTPMaxAttempts: 4, StorageTimeoutMS: 5000,
 	}
 
 	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
@@ -1584,7 +1670,7 @@ func TestCollectorTimerAssignmentsMatchFenceSnapshot(t *testing.T) {
 func TestHandoffCollectorPublishLeaseWaitsForAssignmentAndReacquiresHigherFence(t *testing.T) {
 	server, state := newStockCNHandoffTestServer(t, "assignment-a", "assignment-a", "assignment-a")
 	defer server.Close()
-	client := admintest.Client(server.URL)
+	client := collectorTestClient(server)
 	baseCtx := context.Background()
 	_, guard, err := acquireCollectorPublishLease(baseCtx, client, "stockcn")
 	require.NoError(t, err)
@@ -1608,7 +1694,7 @@ func TestHandoffCollectorPublishLeaseWaitsForAssignmentAndReacquiresHigherFence(
 func TestHandoffCollectorPublishLeaseRejectsChangedAssignmentWithoutRollbackAuthority(t *testing.T) {
 	server, _ := newStockCNHandoffTestServer(t, "assignment-a", "assignment-a", "assignment-b")
 	defer server.Close()
-	client := admintest.Client(server.URL)
+	client := collectorTestClient(server)
 	baseCtx := context.Background()
 	_, guard, err := acquireCollectorPublishLease(baseCtx, client, "stockcn")
 	require.NoError(t, err)
@@ -1634,23 +1720,23 @@ type stockCNHandoffTestState struct {
 func newStockCNHandoffTestServer(t *testing.T, assignmentHashes ...string) (*httptest.Server, *stockCNHandoffTestState) {
 	t.Helper()
 	state := &stockCNHandoffTestState{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/trpc.moox.admin.CollectorPublishLease/AcquireCollectorPublishLease":
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			state.acquireCount++
 			if state.acquireCount == 2 {
 				state.firstLeaseReleasedBeforeSecondAcquire = state.releasedLeaseID == "lease-1"
 			}
 			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"space_id":"stockcn","lease_id":"lease-%d","fencing_token":"%d","expires_at":"2026-10-03T20:02:00Z"}`, state.acquireCount, state.acquireCount)
-		case "/trpc.moox.admin.CollectorPublishLease/ReleaseCollectorPublishLease":
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
 			var request struct {
 				LeaseID string `json:"lease_id"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			state.releasedLeaseID = request.LeaseID
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
+		case "/api/admin/cloudnode/GetNodeList":
 			state.listCount++
 			index := min(state.listCount-1, len(assignmentHashes)-1)
 			assignmentHash := assignmentHashes[index]
@@ -1666,7 +1752,7 @@ func newStockCNHandoffTestServer(t *testing.T, assignmentHashes ...string) (*htt
 
 func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T) {
 	batchSizes := make([]int, 0, 3)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Nodes []collectorRuntimeConfigPatch `json:"nodes"`
 		}
@@ -1680,7 +1766,7 @@ func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T)
 		patches[index] = collectorRuntimeConfigPatch{NodeID: fmt.Sprintf("node-%03d", index)}
 	}
 
-	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), admintest.Client(server.URL), patches)
+	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), collectorTestClient(server), patches)
 
 	require.NoError(t, err)
 	assert.Equal(t, []int{100, 100, 1}, batchSizes)
@@ -1689,18 +1775,16 @@ func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T)
 
 func TestSubmitCollectorTimerRuntimeConfigsRetainsAcceptedChunkOnAmbiguousNextChunk(t *testing.T) {
 	var submitCount, statusCount int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs":
+		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
 			submitCount++
 			if submitCount == 2 {
-				conn, _, err := w.(http.Hijacker).Hijack()
-				require.NoError(t, err)
-				_ = conn.Close()
+				http.Error(w, "response lost after submission", http.StatusBadGateway)
 				return
 			}
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"timer-job-1"}`))
-		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
+		case "/api/admin/cloudnode/GetNodeBatchChange":
 			statusCount++
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"timer-job-1","status":"NODE_BATCH_STATUS_SUCCESS"}}`))
 		default:
@@ -1714,7 +1798,7 @@ func TestSubmitCollectorTimerRuntimeConfigsRetainsAcceptedChunkOnAmbiguousNextCh
 		patches[index] = collectorRuntimeConfigPatch{NodeID: fmt.Sprintf("node-%03d", index)}
 	}
 
-	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), admintest.Client(server.URL), patches)
+	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), collectorTestClient(server), patches)
 
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
 	assert.Equal(t, []string{"timer-job-1"}, jobs)
@@ -1745,10 +1829,11 @@ func TestBuildCollectorCreateNodeItemRejectsMalformedRuntimeOverride(t *testing.
 func TestCollectorFunctionEnvironmentRejectsManagedGatewayOverride(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
-		CloudAccountID: "account-a",
-		SpaceID:        "crypto",
-
-		Region: "ap-guangzhou",
+		CloudAccountID:   "account-a",
+		SpaceID:          "crypto",
+		ServiceAccessKey: "svc-ak",
+		ServiceSecretKey: "svc-sk",
+		Region:           "ap-guangzhou",
 		Env: []string{
 			"MOOX_SPACE_ID=override-space",
 			"MOOX_GATEWAY_SERVICE_KEY_ID=override-ak",
@@ -1768,12 +1853,123 @@ func TestCollectorFunctionEnvironmentRejectsManagedSpaceOverride(t *testing.T) {
 	require.ErrorContains(t, err, "managed key MOOX_SPACE_ID")
 }
 
-func TestCollectorFunctionEnvironmentRejectsCallerOverride(t *testing.T) {
+func TestCollectorFunctionEnvironmentRejectsGatewayCallerOverride(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	_, err := collectorFunctionEnvironment(collectorPublishOptions{
-		Env: []string{"MOOX_CALLER=moox-cli"},
+		Env: []string{"MOOX_GATEWAY_CALLER=moox-cli"},
 	})
-	require.ErrorContains(t, err, "managed key MOOX_CALLER")
+	require.ErrorContains(t, err, "managed key MOOX_GATEWAY_CALLER")
+}
+
+func writeMinimalSCFZip(t *testing.T, zipPath string, files map[string]string) {
+	t.Helper()
+	out, err := os.Create(zipPath)
+	require.NoError(t, err)
+	zw := zip.NewWriter(out)
+	if len(files) == 0 {
+		files = map[string]string{"main": "binary"}
+	}
+	for name, content := range files {
+		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		header.SetMode(0o644)
+		if name == "main" {
+			header.SetMode(0o755)
+			if content == "binary" {
+				content = string(testfixture.LinuxExecutable(elf.EM_X86_64))
+			}
+		}
+		writer, err := zw.CreateHeader(header)
+		require.NoError(t, err)
+		_, err = writer.Write([]byte(content))
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	require.NoError(t, out.Close())
+}
+
+func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
+	require.NoError(t, err)
+	zipPath := filepath.Join(t.TempDir(), "collector.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
+
+	var requests int
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		t.Errorf("canary-blocked deployment made unexpected control-plane request: %s", r.URL.Path)
+		http.Error(w, "control-plane request must be blocked", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	_, err = deployCollectorFunction(context.Background(), collectorDeployOptions{
+		ControlURL:             server.URL,
+		SpaceID:                "stockcn",
+		CloudAccountID:         "account-a",
+		NodeID:                 "node-1",
+		ZipPath:                zipPath,
+		EventBusCredentialFile: credentialFile,
+	})
+	require.ErrorContains(t, err, "canary verification contract is unavailable")
+	require.Zero(t, requests, "deployment must stop before package upload or node mutation")
+}
+
+func TestDeployCollectorFunctionBudgetAndMissingMasterFailBeforeUpload(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
+	require.NoError(t, err)
+	zipPath := filepath.Join(t.TempDir(), "collector.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
+	called := 0
+	server := newControlFixtureServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
+	defer server.Close()
+	opts := collectorDeployOptions{ControlURL: server.URL, CloudAccountID: "account", NodeID: "node", ZipPath: zipPath, EventBusCredentialFile: credentialFile}
+	require.NoError(t, os.WriteFile(credentialFile, []byte("version: 1\nurls: [tls://203.0.113.10:4222]\nusername: publisher\npassword: "+strings.Repeat("private-value", 400)+"\nca_file: eventbus-ca.pem\n"), 0o600))
+	_, err = deployCollectorFunction(context.Background(), opts)
+	require.ErrorContains(t, err, "4096")
+	require.NotContains(t, err.Error(), "private-value")
+	require.Zero(t, called)
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
+	t.Setenv("HOME", t.TempDir())
+	_, err = deployCollectorFunction(context.Background(), opts)
+	require.ErrorContains(t, err, "Storage Primary auth secret")
+	require.Zero(t, called)
+}
+
+func TestCollectorPackageIDBudgetCheckedBeforeUpload(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	t.Setenv("MOOX_SPACE_ID", "stockcn")
+	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector.example:11003")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector")
+	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
+	require.NoError(t, err)
+	zipPath := filepath.Join(t.TempDir(), "collector.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
+	base := collectorPublishOptions{SpaceID: "stockcn", TriggerType: "timer", BizType: "market_fetcher", ZipPath: zipPath, EventBusCredentialFile: credentialFile}
+	require.NoError(t, prepareCollectorPublicationTrust(&base))
+	env, err := collectorFunctionEnvironment(base, "preflight-package-id")
+	require.NoError(t, err)
+	// Only the realistic package name/version/UUID pushes the final map over 4096.
+	name := strings.Repeat("n", 4096-tencent.SCFEnvironmentBytes(env)+len("preflight-package-id"))
+	called := 0
+	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		http.Error(w, "unexpected control access", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	_, err = deployCollectorFunction(context.Background(), collectorDeployOptions{
+		collectorPackageOptions: collectorPackageOptions{Version: "release"}, PackageName: name,
+		SpaceID: "stockcn", ControlURL: server.URL, CloudAccountID: "account", NodeID: "node", ZipPath: zipPath, EventBusCredentialFile: credentialFile,
+	})
+	require.ErrorContains(t, err, "4096")
+	require.Zero(t, called)
+	_, err = publishCollectorFunction(context.Background(), collectorPublishOptions{
+		collectorPackageOptions: collectorPackageOptions{Version: "release"}, PackageName: name,
+		SpaceID: "stockcn", ControlURL: server.URL, AccessToken: "token", CloudAccountID: "account", Region: "ap-singapore", NodeCount: 1, ZipPath: zipPath, EventBusCredentialFile: credentialFile,
+	})
+	require.ErrorContains(t, err, "4096")
+	require.Zero(t, called)
 }
 
 func TestCollectorPreflightPackageIDMatchesCloudNodeSanitization(t *testing.T) {
@@ -1788,10 +1984,7 @@ func TestCollectorRegionalPreflightChecksInvokeAndOverflowShards(t *testing.T) {
 	fetcher := defaultCollectorSCFFetcherSpace()
 	fetcher.SpaceID = "stockcn"
 	fetcher.InvokeTimeoutSeconds = 900
-	opts := collectorPublishOptions{
-		SpaceID: "stockcn", TriggerType: "timer", BizType: "market_fetcher", FetcherConfig: fetcher, EventBusCredentialFile: credentialFile,
-		StorageAppKeysJSON: collectorTestStorageAppKeysJSON, AccessRoute: collectorTestAccessRoute("ap-guangzhou"), CallerKey: collectorTestCallerKey,
-	}
+	opts := collectorPublishOptions{SpaceID: "stockcn", TriggerType: "timer", BizType: "market_fetcher", FetcherConfig: fetcher, EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}
 	base, err := buildCollectorCreateNodeItem(opts, collectorPreflightPackageID(opts))
 	require.NoError(t, err)
 	opts.Env = []string{"PADDING=" + strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(base.Environment)-len("PADDING")-2)}
@@ -1800,6 +1993,21 @@ func TestCollectorRegionalPreflightChecksInvokeAndOverflowShards(t *testing.T) {
 	require.ErrorContains(t, err, "moox-stockcn-ns2 Invoke")
 	require.ErrorContains(t, err, "4096")
 	require.NotContains(t, err.Error(), "xxx")
+}
+
+func TestDeployCollectorFunctionRejectsPlaceholderAuth(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "collector.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{
+		"main":                        "binary",
+		"sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info:\n        app_id: \"moox-collector\"\n        app_key: \"binance-spot-collector\"\n",
+	})
+	_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{
+		ControlURL:     "http://127.0.0.1:1",
+		CloudAccountID: "account-a",
+		NodeID:         "node-1",
+		ZipPath:        zipPath,
+	})
+	require.ErrorContains(t, err, "nonempty credential field app_key")
 }
 
 func TestResolveCollectorRootMissing(t *testing.T) {

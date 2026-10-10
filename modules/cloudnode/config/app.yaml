@@ -1,12 +1,9 @@
 # MooX CloudNode service configuration.
 
-# 调用 Admin（发布租约、SecretMgr）经本机主机网关
 gateway_client:
-  mode: local
   caller: cloudnode
-  key_file: ../secrets/caller-cloudnode.key
-  ca_file: ../certs/moox-ca.crt
-  cache_dir: ./data/gatewayclient
+  key_id: ""
+  key_file: ../../secrets/caller-cloudnode.key
 
 database:
   type: sqlite

@@ -289,9 +289,9 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 			},
 			Spaces: []SCFFetcherSpace{{
 				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
+				AccessAddress:       "106.53.107.122:11004",
 				MaxInflightRequests: 32, RequestTimeoutMS: 1500,
-				HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
-				Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+				HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
 			}},
 		}
 	}
@@ -322,12 +322,12 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		assert.Contains(t, err.Error(), "between 1 and 64")
 	})
 
-	t.Run("caps aggregate Storage retries at three attempts", func(t *testing.T) {
+	t.Run("requires the fixed HTTP attempt budget", func(t *testing.T) {
 		cfg := base()
-		cfg.Spaces[0].StorageMaxAttempts = 4
+		cfg.Spaces[0].HTTPMaxAttempts = 3
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "request/storage attempts")
+		assert.Contains(t, err.Error(), "request timeout or HTTP attempts")
 	})
 
 	t.Run("allows a 30-item realtime batch for fleet fanout", func(t *testing.T) {
@@ -383,8 +383,8 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
 		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
 	}, Spaces: []SCFFetcherSpace{{
-		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, AccessAddress: "106.53.107.122:11004",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
 	require.Error(t, err)
@@ -395,6 +395,15 @@ func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
 	require.NoError(t, validateSCFFetcher(&cfg))
 }
 
+func TestValidateSCFAccessInstanceIDs(t *testing.T) {
+	for _, id := range []string{"access@storage", "access@regional-sg"} {
+		require.True(t, validAccessInstanceID(id))
+	}
+	for _, id := range []string{"storage", "access@bad_node", "access@Bad", "access@"} {
+		require.False(t, validAccessInstanceID(id))
+	}
+}
+
 func TestValidateSCFFetcherNormalizesMarketPublicNetworkStatus(t *testing.T) {
 	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
 		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
@@ -402,9 +411,8 @@ func TestValidateSCFFetcherNormalizesMarketPublicNetworkStatus(t *testing.T) {
 	}, Spaces: []SCFFetcherSpace{{
 		SpaceID: "crypto", Entrypoint: "market_data", MarketID: "crypto", InstrumentType: "spot",
 		ProviderID: "binance", SourceID: "spot_http", PublicNetStatus: "enable",
-		MemorySize: 64, TimeoutSeconds: 15,
-		RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf"}},
+		AccessAddress: "106.53.107.122:11004", MemorySize: 64, TimeoutSeconds: 15,
+		RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf"}},
 	}}}
 
 	require.NoError(t, validateSCFFetcher(&cfg))
@@ -421,8 +429,8 @@ func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
 		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
 	}, Spaces: []SCFFetcherSpace{{
 		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, MarketID: "stockcn", InstrumentType: "equity",
-		ProviderID: "tdx", SourceID: "normal_7709", MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+		ProviderID: "tdx", SourceID: "normal_7709", AccessAddress: "106.53.107.122:11004",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
 	}}}
 	err := validateSCFFetcher(&cfg)
 	require.ErrorContains(t, err, "tdx_host")
@@ -439,9 +447,9 @@ func TestValidateSCFFetcherCopiesOneCloudAccountToEveryRegion(t *testing.T) {
 			AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
 		},
 		Spaces: []SCFFetcherSpace{{
-			SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000,
-			HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-			Regions: []SCFFetcherRegion{
+			SpaceID: "crypto", AccessAddress: "106.53.107.122:11004",
+			MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000,
+			HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{
 				{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1},
 				{Region: "ap-shanghai", Enabled: true, FunctionCount: 1},
 			},
@@ -520,9 +528,9 @@ func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {
 func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
 	base := SCFFetcherSpace{
 		SpaceID: "stockcn", TimerFunctionCount: 192, MemorySize: 64, TimeoutSeconds: 15,
-		MeasuredSafeGroupSize: 30, RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"}},
+		MeasuredSafeGroupSize: 30, AccessAddress: "106.53.107.122:11004",
+		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"}},
 	}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
 
@@ -537,9 +545,9 @@ func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
 func TestValidateSCFFetcherRejectsUnsafeStockStaggerRate(t *testing.T) {
 	base := SCFFetcherSpace{SpaceID: "stockcn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
 		MeasuredSafeGroupSize: 30, StaggerStartSecond: 5, StaggerWindowSeconds: 35, StaggerMaxStartsPerSecond: 5,
-		RealtimeBatchSize: 10, RealtimeBarLimit: 10,
+		AccessAddress: "106.53.107.122:11004", RealtimeBatchSize: 10, RealtimeBarLimit: 10,
 		CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
+		HTTPMaxAttempts: 4, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 200, CloudAccountID: "gz"}}}
 	err := validateSCFFetcherSpace(&base, "stockcn")
 	require.ErrorContains(t, err, "requires up to 6 starts per second")
@@ -571,6 +579,7 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(recommended), string(examplePolicy))
 	manifest.SCFFetcher.Enabled = true
+	require.NoError(t, resolveManifestReferences(&manifest))
 	require.NoError(t, validateSCFFetcher(&manifest.SCFFetcher))
 
 	for _, space := range manifest.SCFFetcher.Spaces {
@@ -607,9 +616,9 @@ func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
 		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
 		TimerFunctionCount:    192,
 		MeasuredSafeGroupSize: 30,
+		AccessAddress:         "106.53.107.122:11004",
 		RealtimeBatchSize:     10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
-		Regions: []SCFFetcherRegion{
+		HTTPMaxAttempts: 4, Regions: []SCFFetcherRegion{
 			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"},
 			{Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"},
 			{Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"},
@@ -627,14 +636,21 @@ func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
 
 func TestValidateSCFTimerClaimCompletionBudget(t *testing.T) {
 	base := SCFFetcherSpace{SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 60,
-		RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 3, StorageTimeoutMS: 5000,
+		AccessAddress: "storage.example:11004", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
+		HTTPMaxAttempts: 4, StorageTimeoutMS: 5000,
 		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
 	base.RequestTimeoutMS = 4000
 	// 3 waves * 4 attempts * 4 seconds + Claim + Storage + Completion +
 	// CLS/metrics/final reserves exceeds 60 seconds.
 	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "reserves")
+}
+
+func TestValidateSCFAccessAddress(t *testing.T) {
+	require.NoError(t, validateAccessAddress("storage.example:11004", "scf"))
+	for _, value := range []string{"ip://storage.example:11004", "https://storage.example", "storage.example:0", "storage.example:11004/path"} {
+		require.Error(t, validateAccessAddress(value, "scf"))
+	}
 }
 
 const validManifest = `[admin]
@@ -649,16 +665,19 @@ secret_key = "secret-key"
 port = 4222
 tls_enabled = true
 
+[hosts.control]
+address = "192.0.2.10"
+[hosts.control.ssh]
+port = 22
+username = "ubuntu"
+password = "control-password"
+
 [notification]
 channel_type = "wecom"
 webhook_url = ""
 
-[hosts.control]
-address = "192.0.2.10"
-ssh = { username = "ubuntu", password = "control-password" }
-
 [placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor"]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
 `
 
 func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
@@ -667,6 +686,153 @@ func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
 	require.NoError(t, os.WriteFile(path, []byte(body), mode))
 	require.NoError(t, os.Chmod(path, mode))
 	return path
+}
+
+func TestLoadValidManifest(t *testing.T) {
+	root := t.TempDir()
+	path := writeManifest(t, root, validManifest, 0o600)
+
+	snapshot, err := Load(path, root)
+	require.NoError(t, err)
+	assert.Equal(t, "admin", snapshot.Manifest.Admin.Username)
+	assert.Equal(t, "192.0.2.10", snapshot.Manifest.EventBus.PublicAddress)
+	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
+	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
+	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
+	assert.Equal(t, DefaultDeployRoot, snapshot.Manifest.Paths.DeployRoot)
+	assert.Equal(t, DefaultControlRoot, snapshot.Manifest.Paths.ControlRoot)
+	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
+	assert.Equal(t, "1m", snapshot.Manifest.StorageView.MaintenanceCheckInterval)
+	assert.Equal(t, "1h", snapshot.Manifest.StorageView.CapacityCheckInterval)
+	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
+	assert.Equal(t, int64(1<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
+	policy := snapshot.Manifest.StoragePolicy()
+	assert.Equal(t, storagepolicy.Default().Retention, policy.Retention, "an omitted [storage_retention] uses the recommended retention")
+	assert.Equal(t, uint64(5000), policy.View.Bars)
+	assert.Equal(t, uint64(6000), policy.View.TrimBars)
+	require.NoError(t, policy.Validate())
+	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
+	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
+	assert.Equal(t, 22, snapshot.Manifest.ControlHost().Port)
+	assert.Empty(t, snapshot.Manifest.Notification.WebhookURL)
+	assert.Empty(t, snapshot.Manifest.OtherHosts())
+	require.NoError(t, snapshot.VerifyUnchanged())
+}
+
+func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+storage = ["storage-primary", "storage-node", "storage-view"]
+[hosts.storage]
+address = "192.0.2.20"
+provider = "Tencent"
+ssh = { username = "ubuntu", password = "storage-password" }
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, "storage", snapshot.Manifest.StorageHost().Name)
+	require.Equal(t, "storage", snapshot.Manifest.ViewHost().Name)
+	require.Equal(t, snapshot.Manifest.StorageHost(), snapshot.Manifest.ViewHost())
+	assert.Equal(t, "ubuntu", snapshot.Manifest.StorageHost().Username)
+	assert.Equal(t, "storage-password", snapshot.Manifest.ViewHost().Password)
+	assert.Equal(t, "tencent", snapshot.Manifest.StorageHost().Provider)
+	assert.Len(t, snapshot.Manifest.Hosts(), 2)
+}
+
+func TestLoadDerivesAccessFromPlacement(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, `"web-host", "eventbus"`, `"web-host", "eventbus", "access"`, 1) + `
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Manifest.SCFFetcher.Spaces, 1)
+	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "control", space.AccessHost)
+	assert.Equal(t, "access@control", space.AccessID)
+	assert.Equal(t, "192.0.2.10:11004", space.AccessAddress)
+	assert.Empty(t, space.AccessPrivateAddress)
+}
+
+func TestLoadDerivesRegionalAccessTargets(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+storage = ["storage-primary", "access"]
+compute = ["access"]
+[hosts.storage]
+address = "192.0.2.20"
+region = "AP-NANJING"
+ssh = { username = "ubuntu" }
+[hosts.compute]
+address = "192.0.2.21"
+region = "ap-hongkong"
+ssh = { username = "ubuntu" }
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+[[scf_fetcher.spaces.regions]]
+region = "ap-nanjing"
+[[scf_fetcher.spaces.regions]]
+region = "ap-hongkong"
+[[scf_fetcher.spaces.regions]]
+region = "ap-guangzhou"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "storage", space.AccessHost)
+	assert.Equal(t, "192.0.2.20:11004", space.AccessAddressForRegion("ap-nanjing"))
+	assert.Equal(t, "192.0.2.21:11004", space.AccessAddressForRegion("ap-hongkong"))
+	assert.Equal(t, "192.0.2.20:11004", space.AccessAddressForRegion("ap-guangzhou"))
+	assert.Equal(t, "access@storage", space.AccessIDForRegion("ap-nanjing"))
+	assert.Equal(t, "access@compute", space.AccessIDForRegion("ap-hongkong"))
+}
+
+func TestLoadKeepsPrivateAccessCandidateUntilNetworkVerification(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+storage = ["storage-primary", "access"]
+[hosts.storage]
+address = "192.0.2.20"
+private_address = "10.206.0.5"
+region = "ap-nanjing"
+ssh = { username = "ubuntu" }
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+[[scf_fetcher.spaces.regions]]
+region = "ap-nanjing"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "10.206.0.5:11004", space.AccessPrivateAddress)
+	assert.Equal(t, "192.0.2.20:11004", space.AccessAddressForRegion("ap-nanjing"))
+}
+
+func TestLoadSupportsIPv6HostsAndAccess(t *testing.T) {
+	root := t.TempDir()
+	body := strings.ReplaceAll(validManifest, "192.0.2.10", "2001:db8::10")
+	body = strings.Replace(body, `"web-host", "eventbus"`, `"web-host", "eventbus", "access"`, 1) + `
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "2001:db8::10", snapshot.Manifest.EventBus.PublicAddress)
+	assert.Equal(t, "[2001:db8::10]:11004", snapshot.Manifest.SCFFetcher.Spaces[0].AccessAddress)
+}
+
+func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
+	paths := &Paths{
+		DeployRoot:  "/data/moox",
+		ControlRoot: "/data/moox/prod",
+		StorageRoot: "/data/moox/prod/storage",
+	}
+	require.ErrorContains(t, validatePaths(paths), "must not overlap")
+	paths.StorageRoot = "/data/moox"
+	require.ErrorContains(t, validatePaths(paths), "must not overlap")
+	paths.StorageRoot = "/data/moox/storage"
+	require.NoError(t, validatePaths(paths))
 }
 
 func TestLoadLocalLogRotationFromManifest(t *testing.T) {
@@ -694,6 +860,45 @@ func TestLoadRejectsInvalidLocalLogRotation(t *testing.T) {
 			require.Contains(t, err.Error(), "local_logs")
 		})
 	}
+}
+
+func TestLoadPathsFromManifest(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/custom"
+control_root = "/data/custom/control"
+storage_root = "/data/custom/storage"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
+}
+
+func TestLoadAllowsStorageRootOnSeparateHostMount(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/moox"
+control_root = "/data/moox/prod"
+storage_root = "/home/ubuntu/moox/storage"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "/home/ubuntu/moox/storage", snapshot.Manifest.Paths.StorageRoot)
+}
+
+func TestLoadRejectsPathsOutsideDeployRoot(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/moox"
+control_root = "/var/lib/moox"
+storage_root = "/data/moox/storage"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "paths.control_root")
 }
 
 func TestLoadStorageRetentionFromManifest(t *testing.T) {
@@ -1035,6 +1240,185 @@ func TestLoadTencentCloudRegion(t *testing.T) {
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, "ap-shanghai", snapshot.Manifest.TencentCloud.Region)
+}
+
+func TestLoadDefaultsHostPortsAndAllowsSSHKeyAuthentication(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, `password = "control-password"`, "", 1) + `
+[hosts.compute]
+address = "192.0.2.11"
+ssh = { username = "ubuntu" }
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, 22, snapshot.Manifest.ControlHost().Port)
+	assert.Empty(t, snapshot.Manifest.ControlHost().Password)
+	require.Len(t, snapshot.Manifest.OtherHosts(), 1)
+	assert.Equal(t, 22, snapshot.Manifest.OtherHosts()[0].Port)
+}
+
+func TestLoadEgressProxyConfiguration(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest+`
+[egress_proxy]
+http_domains = ["*.binance.com", "data-api.binance.vision"]
+[egress_proxy.dns]
+domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
+`, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, snapshot.Manifest.EgressProxy.DNS.Domains)
+	for name, mutate := range map[string]func(*EgressProxy){
+		"duplicate domain": func(c *EgressProxy) { c.DNS.Domains = []string{"api.binance.com", "API.BINANCE.COM."} },
+		"wildcard DNS":     func(c *EgressProxy) { c.DNS.Domains = []string{"*.binance.com"} },
+		"invalid interval": func(c *EgressProxy) { c.DNS.RequestTimeoutMS = 0 },
+		"invalid port":     func(c *EgressProxy) { c.DNS.ProbePort = 70000 },
+		"invalid cap":      func(c *EgressProxy) { c.DNS.MaxIPsPerDomain = 5 },
+		"too many domains": func(c *EgressProxy) { c.DNS.Domains = make([]string, 17) },
+		"invalid HTTP":     func(c *EgressProxy) { c.HTTPDomains = []string{"https://binance.com"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := snapshot.Manifest.EgressProxy
+			mutate(&cfg)
+			require.Error(t, validateEgressProxy(&cfg))
+		})
+	}
+}
+func TestPlacementsRejectAmbiguousOrInvalidComponents(t *testing.T) {
+	m := Manifest{HostCatalog: map[string]HostDefinition{
+		"control": {Address: "192.0.2.10"}, "compute": {Address: "192.0.2.11"},
+	}}
+	for _, placements := range []map[string][]string{
+		{"missing": {"trade"}}, {"compute": {"missing"}}, {"compute": {"trade", "trade"}},
+		{"control": {"admin", "console-proxy", "web-host", "trade"}, "compute": {"trade"}},
+		{"compute": {"host-gateway"}}, {"compute": {"admin"}}, {"compute": {"web-host"}},
+	} {
+		if _, ok := placements["control"]; !ok {
+			placements["control"] = []string{"admin", "console-proxy", "web-host", "eventbus"}
+		}
+		m.Placements = placements
+		require.Error(t, validatePlacements(&m))
+	}
+	m.Placements = map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "compute": {"trade", "egress-proxy"}}
+	require.NoError(t, validatePlacements(&m))
+	require.Equal(t, "compute", m.PlacementHost("trade"))
+}
+
+func TestLoadOptionalCompileHost(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[hosts.compile]
+address = "192.0.2.20"
+ssh = { username = "builder" }
+[compile_host]
+host = "compile"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.HasCompileHost())
+	assert.Equal(t, "compile", snapshot.Manifest.CompileHost().Name)
+	assert.Equal(t, 22, snapshot.Manifest.CompileHost().Port)
+	assert.Len(t, snapshot.Manifest.Hosts(), 1)
+	topology, err := snapshot.Manifest.Topology()
+	require.NoError(t, err)
+	assert.Len(t, topology.Hosts, 1)
+	// An explicit empty placement includes a build host in the deployment.
+	body = strings.Replace(body, "[hosts.compile]", "compile = []\n[hosts.compile]", 1)
+	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Len(t, snapshot.Manifest.Hosts(), 2)
+}
+
+func TestLoadOptionalStrategyHost(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+strategy = ["strategy"]
+[hosts.strategy]
+address = "192.0.2.21"
+ssh = { username = "ubuntu" }
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.HasStrategyHost())
+	assert.Equal(t, "strategy", snapshot.Manifest.StrategyHost().Name)
+	assert.Equal(t, 22, snapshot.Manifest.StrategyHost().Port)
+	require.Len(t, snapshot.Manifest.Hosts(), 2)
+	assert.Equal(t, "strategy", snapshot.Manifest.Hosts()[1].Name)
+}
+
+func TestLoadRejectsInvalidManifest(t *testing.T) {
+	tests := []struct{ name, body, want string }{
+		{"missing admin password", strings.Replace(validManifest, `password = "admin-password"`, `password = ""`, 1), "admin.password"},
+		{"bcrypt password too long", strings.Replace(validManifest, "admin-password", strings.Repeat("x", 73), 1), "72 bytes"},
+		{"missing secret id", strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), "tencent_cloud.secret_id"},
+		{"missing secret key", strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), "tencent_cloud.secret_key"},
+		{"empty region", strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \" \"", 1), "tencent_cloud.region"},
+		{"missing address", strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), "hosts.control.address"},
+		{"address with scheme", strings.ReplaceAll(validManifest, "192.0.2.10", "tls://192.0.2.10"), "hosts.control.address"},
+		{"address with path", strings.ReplaceAll(validManifest, "192.0.2.10", "192.0.2.10/nats"), "hosts.control.address"},
+		{"address with port", strings.ReplaceAll(validManifest, "192.0.2.10", "192.0.2.10:4222"), "hosts.control.address"},
+		{"invalid private address", strings.Replace(validManifest, "[hosts.control]", "[hosts.control]\nprivate_address = \"http://private\"", 1), "hosts.control.private_address"},
+		{"invalid host id", strings.ReplaceAll(validManifest, "hosts.control", "hosts.Uppercase"), "canonical host IDs"},
+		{"missing SSH username", strings.Replace(validManifest, `username = "ubuntu"`, `username = ""`, 1), "hosts.control.ssh.username"},
+		{"explicit zero SSH port", strings.Replace(validManifest, "port = 22", "port = 0", 1), "hosts.control.ssh.port"},
+		{"invalid SSH port", strings.Replace(validManifest, "port = 22", "port = 70000", 1), "hosts.control.ssh.port"},
+		{"invalid TLS mode", strings.Replace(validManifest, "[hosts.control]", "[hosts.control]\ntls_mode = \"bad\"", 1), "hosts.control.tls_mode"},
+		{"eventbus explicit zero port", strings.Replace(validManifest, "port = 4222", "port = 0", 1), "eventbus.port"},
+		{"eventbus invalid port", strings.Replace(validManifest, "port = 4222", "port = 70000", 1), "eventbus.port"},
+		{"eventbus tls disabled", strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), "eventbus.tls_enabled"},
+		{"missing eventbus placement", strings.Replace(validManifest, `, "eventbus"`, "", 1), "placements must include eventbus"},
+		{"protected component missing", strings.Replace(validManifest, `"console-proxy", `, "", 1), "protected component"},
+		{"unknown placement", validManifest + "unknown = [\"trade\"]\n", "placements host ID"},
+		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "automatic component"},
+		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
+		{"unknown compile host", validManifest + "[compile_host]\nhost = \"missing\"\n", "compile_host.host"},
+		{"duplicate address", validManifest + "[hosts.compute]\naddress = \"192.0.2.10\"\nssh = { username = \"ubuntu\" }\n", "duplicates hosts."},
+	}
+	for _, hook := range []string{"http://example.test/hook", "not-a-url", "https://open.feishu.cn/hook", "https://example.invalid/hook"} {
+		tests = append(tests, struct{ name, body, want string }{"invalid webhook " + hook, strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "`+hook+`"`, 1), "notification.webhook_url"})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, tt.body, 0o600), root)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+			assert.NotContains(t, err.Error(), "admin-password")
+			assert.NotContains(t, err.Error(), "secret-key")
+		})
+	}
+}
+
+func TestLoadRejectsRetiredDeploymentKeys(t *testing.T) {
+	for _, section := range []string{"control_host", "storage_host", "view_host", "strategy_host", "other_hosts"} {
+		t.Run(section, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, validManifest+"["+section+"]\nname = \"control\"\n", 0o600), root)
+			require.ErrorContains(t, err, "[hosts.<host-id>]")
+			require.ErrorContains(t, err, "[placements]")
+		})
+	}
+	for _, field := range []string{"access_id", "access_host", "access_private_host", "access_addresses", "access_ids", "storage_gateway_host", "storage_access_targets", "storage_access_target_nodes", "collector_rpc_gateway_target", "collector_gateway_target_node"} {
+		t.Run(field, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + "[[scf_fetcher.spaces]]\nspace_id = \"crypto\"\n" + field + " = \"secret-retired-value\"\n"
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.ErrorContains(t, err, "derived")
+			assert.NotContains(t, err.Error(), "secret-retired-value")
+		})
+	}
+	for name, body := range map[string]string{
+		"IP catalog key":  strings.ReplaceAll(validManifest, "hosts.control", `hosts."192.0.2.10"`),
+		"flat SSH fields": validManifest + "[hosts.compute]\naddress = \"192.0.2.11\"\nusername = \"secret-retired-value\"\n",
+		"eventbus host":   strings.Replace(validManifest, "[eventbus]", "[eventbus]\nhost = \"secret-retired-value\"", 1),
+		"compile name":    validManifest + "[compile_host]\nname = \"secret-retired-value\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "secret-retired-value")
+		})
+	}
 }
 
 func TestLoadRejectsInsecureFile(t *testing.T) {

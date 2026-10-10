@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,13 +16,8 @@ import (
 	"strings"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
-	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
-	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayroute/proto/directorypb"
 	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
@@ -29,18 +25,18 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
 
 func run(arguments []string, output io.Writer) int {
 	if len(arguments) == 0 {
-		return fail(output, errors.New("缺少命令：check-config、snapshot、health"))
+		return fail(output, errors.New("command is required"))
 	}
 	var err error
 	switch arguments[0] {
 	case "check-config":
 		err = checkConfig(arguments[1:], output)
-	case "snapshot":
-		err = printSnapshot(arguments[1:], output)
+	case "routes":
+		err = printRoutes(arguments[1:], output)
 	case "health":
 		err = checkHealth(arguments[1:], output)
 	default:
-		err = fmt.Errorf("未知命令 %q，可选 check-config、snapshot、health", arguments[0])
+		err = fmt.Errorf("unknown command %q", arguments[0])
 	}
 	if err != nil {
 		return fail(output, err)
@@ -51,82 +47,71 @@ func run(arguments []string, output io.Writer) int {
 func checkConfig(arguments []string, output io.Writer) error {
 	flags := flag.NewFlagSet("check-config", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	path := flags.String("config", "config/app.yaml", "主机网关配置文件")
+	path := flags.String("config", "config/app.yaml", "gateway configuration")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("check-config 不接受位置参数")
+		return errors.New("check-config accepts no positional arguments")
 	}
 	cfg, err := config.Load(*path)
 	if err != nil {
 		return err
 	}
-	// 上线前的自检要覆盖进程启动时会失败的那些检查：证书必须由 MooX 私有 CA 签发并包含本机主机 ID，
-	// 非 control 主机的调用方密钥必须可读，快照缓存目录的权限必须正确。
-	if _, err := tlsconfig.LoadServer(cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.CAFile, cfg.Host.ID, time.Now()); err != nil {
+	if _, _, err := config.LoadIdentity(cfg); err != nil {
 		return err
 	}
-	if cfg.Control.KeyFile != "" {
-		if _, err := gatewayauth.LoadCallerKey(cfg.Control.KeyFile); err != nil {
-			return fmt.Errorf("读取调用方密钥 %s: %w", cfg.Control.KeyFile, err)
-		}
-	}
-	if _, err := store.NewSnapshots(cfg.Store.Path).Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("快照缓存目录 %s 不可用: %w", cfg.Store.Path, err)
-	}
-	_, _ = fmt.Fprintln(output, "配置有效")
+	_, _ = fmt.Fprintln(output, "configuration valid")
 	return nil
 }
 
-func printSnapshot(arguments []string, output io.Writer) error {
-	flags := flag.NewFlagSet("snapshot", flag.ContinueOnError)
+func printRoutes(arguments []string, output io.Writer) error {
+	flags := flag.NewFlagSet("routes", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	path := flags.String("config", "config/app.yaml", "主机网关配置文件")
+	path := flags.String("config", "config/app.yaml", "gateway configuration")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("snapshot 不接受位置参数")
+		return errors.New("routes accepts no positional arguments")
 	}
 	cfg, err := config.Load(*path)
 	if err != nil {
 		return err
 	}
-	cached, err := store.NewSnapshots(cfg.Store.Path).Load()
+	view, err := store.NewSnapshots(cfg.Store.Path, cfg.Host.ID).Load()
 	if err != nil {
 		return err
-	}
-	applied, err := snapshot.Validate(cfg.Host.ID, cached)
-	if err != nil {
-		return err
-	}
-	// 只输出路由与目录，不输出校验密钥。
-	summary := struct {
-		HostID    string                         `json:"host_id"`
-		Hash      string                         `json:"hash"`
-		Disabled  bool                           `json:"disabled"`
-		Routes    []*adminpb.HostRoute           `json:"routes"`
-		Directory *directorypb.DirectorySnapshot `json:"directory"`
-		Callers   []string                       `json:"callers"`
-	}{HostID: applied.HostID, Hash: applied.Hash, Disabled: applied.Disabled, Routes: cached.GetRoutes(), Directory: cached.GetDirectory()}
-	for _, key := range cached.GetKeys() {
-		summary.Callers = append(summary.Callers, key.GetCaller()+"/"+key.GetKeyId())
 	}
 	encoder := json.NewEncoder(output)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(summary)
+	return encoder.Encode(map[string]any{"host_id": view.HostID(), "hash": view.Hash(), "disabled": view.Disabled(), "routes": view.Proto().Routes, "directory": view.Directory()})
 }
 
 func checkHealth(arguments []string, output io.Writer) error {
 	flags := flag.NewFlagSet("health", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	endpoint := flags.String("url", "http://127.0.0.1:11012/readyz", "readiness URL")
+	endpoint := flags.String("url", "", "readiness URL, defaults to configured health listener")
+	configPath := flags.String("config", "config/app.yaml", "host gateway configuration")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("health accepts no positional arguments")
+	}
+	if *endpoint == "" {
+		cfg, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		host, port, _ := net.SplitHostPort(cfg.Server.HealthAddr)
+		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+			host = "127.0.0.1"
+			if ip.To4() == nil {
+				host = "::1"
+			}
+		}
+		*endpoint = "http://" + net.JoinHostPort(host, port) + "/readyz"
 	}
 	parsed, err := url.Parse(*endpoint)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -147,7 +132,7 @@ func checkHealth(arguments []string, output io.Writer) error {
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("主机网关未就绪: HTTP %d", response.StatusCode)
+		return fmt.Errorf("gateway is not ready: HTTP %d", response.StatusCode)
 	}
 	_, _ = fmt.Fprintln(output, "ready")
 	return nil

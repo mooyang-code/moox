@@ -17,6 +17,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"google.golang.org/protobuf/proto"
@@ -26,10 +27,8 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	// NewStorage 按市场类型和写入来源创建 Storage 客户端；生产环境经外部接入访问 Storage。
-	NewStorage func(marketType, writeSource string) (Storage, error)
-	Publish    func(context.Context, Request, proto.Message) error
-	// TimerRuntimeClient 为空时经外部接入领取 Timer 批次。
+	NewStorage         func(string, string) (Storage, error)
+	Publish            func(context.Context, Request, proto.Message) error
 	TimerRuntimeClient TimerRuntimeClient
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
@@ -69,13 +68,29 @@ const (
 )
 
 func NewHandler() *Handler {
-	return &Handler{NewStorage: func(market, writeSource string) (Storage, error) {
-		gateway, err := scfGateway()
-		if err != nil {
-			return nil, err
+	return &Handler{Publish: publishCompletion}
+}
+
+// prepareInvocation owns one Access connection for both the Claim and Storage
+// adapters. Injected library adapters remain borrowed by the invocation.
+func (h *Handler) prepareInvocation(timer bool) (*Handler, func(), error) {
+	invocation := *h
+	if invocation.NewStorage != nil && (!timer || invocation.TimerRuntimeClient != nil) {
+		return &invocation, func() {}, nil
+	}
+	gateway, err := newSCFAccessClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	if invocation.NewStorage == nil {
+		invocation.NewStorage = func(market, source string) (Storage, error) {
+			return NewMarketStorageForMarket(gateway, market, source)
 		}
-		return NewMarketStorageForMarket(gateway.ClientOptions(), market, writeSource)
-	}, Publish: publishCompletion}
+	}
+	if timer && invocation.TimerRuntimeClient == nil {
+		invocation.TimerRuntimeClient = newTimerRuntimeRPCClient(gateway)
+	}
+	return &invocation, func() { _ = gateway.Close() }, nil
 }
 
 // HandleWithFunctionName binds an Invoke request to the function identity
@@ -103,14 +118,13 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	runtimeClient := h.TimerRuntimeClient
-	if runtimeClient == nil {
-		gateway, gatewayErr := scfGateway()
-		if gatewayErr != nil {
-			return &model.Response{Success: false, Message: gatewayErr.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-		}
-		runtimeClient = NewTimerRuntimeClient(gateway)
+	invocationHandler, closeGateway, err := h.prepareInvocation(true)
+	if err != nil {
+		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
+	defer closeGateway()
+	budgetCtx = gatewayclient.WithCallMetadata(budgetCtx, gatewayclient.CallMetadata{SpaceID: invocation.Claim.GetSpaceId(), TraceID: requestID})
+	runtimeClient := invocationHandler.TimerRuntimeClient
 	req, claimed, err := claimTimerRequest(budgetCtx, runtimeClient, invocation)
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
@@ -121,7 +135,7 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	if h.Publish == nil {
 		return &model.Response{Success: false, Message: "completion publisher is not configured", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	return h.handleRequest(budgetCtx, req, true)
+	return invocationHandler.handleRequest(budgetCtx, req, true)
 }
 
 func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, publish bool, runtimeFunctionName string) (*model.Response, error) {
@@ -160,8 +174,17 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if req.Concurrency == 0 {
 		req.Concurrency = envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	}
+	if h.NewStorage == nil && !req.RequirePeriodCommit {
+		return nil, fmt.Errorf("SCF requests must require period commit")
+	}
+	invocationHandler, closeGateway, err := h.prepareInvocation(false)
+	if err != nil {
+		return nil, err
+	}
+	defer closeGateway()
+	ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{SpaceID: req.SpaceID, TraceID: req.RequestID})
 	defer h.reportMetrics(ctx)
-	return h.handleRequest(ctx, req, publish)
+	return invocationHandler.handleRequest(ctx, req, publish)
 }
 
 // mergeDNSRoutes puts the preferred route map first and appends unique
@@ -209,6 +232,9 @@ func mergeDNSRoutes(preferred, fallback map[string]sources.DNSResolution) map[st
 }
 
 func (h *Handler) handleRequest(ctx context.Context, req Request, publish bool) (*model.Response, error) {
+	if h.NewStorage == nil {
+		return nil, fmt.Errorf("market Storage factory is required")
+	}
 	if publish && h.Publish == nil {
 		return nil, fmt.Errorf("completion publisher is not configured")
 	}

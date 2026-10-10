@@ -423,5 +423,5 @@ func isMarketFetcherFunction(name, spaceID string, environment map[string]string
 	if space != "" && strings.HasPrefix(name, "moox-fetcher-"+space) {
 		return true
 	}
-	return strings.TrimSpace(environment["MOOX_FETCH_TIMEOUT_SECONDS"]) != "" && strings.TrimSpace(environment[tencent.EnvCaller]) == tencent.SCFCollectorCaller
+	return strings.TrimSpace(environment["MOOX_FETCH_TIMEOUT_SECONDS"]) != "" && strings.TrimSpace(environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]) != ""
 }

@@ -68,6 +68,9 @@ import HostMonitorMasterDetail from "./host-monitor-master-detail.vue";
 import HostMonitorDetail from "./host-monitor-detail.vue";
 import { buildHostMonitorRows, normalizeMonitorViewMode, type MonitorViewMode } from "./host-monitor-mapping";
 
+const route = useRoute();
+const requestedAgentID = computed(() => (typeof route.query.agent_id === "string" ? route.query.agent_id : ""));
+const requestedHostID = computed(() => (typeof route.query.host_id === "string" ? route.query.host_id : ""));
 const AUTO_REFRESH_MS = 15_000;
 const VIEW_MODE_KEY = "moox.host-monitor.view-mode";
 const loading = ref(false);
@@ -82,14 +85,8 @@ const historyRefreshKey = ref(0);
 const viewMode = ref<MonitorViewMode>(normalizeMonitorViewMode(localStorage.getItem(VIEW_MODE_KEY)));
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let requestID = 0;
-let requestApplied = false;
 
-const route = useRoute();
 const rows = computed(() => buildHostMonitorRows(monitors.value, sshHosts.value));
-// 从监控告警页「定位」过来时（?agent=<主机采集器 ID>）选中对应的主机。
-const requestedKey = computed(() =>
-  typeof route.query.agent === "string" && route.query.agent ? `monitor:${route.query.agent}` : ""
-);
 const selectedRow = computed(() => rows.value.find(row => row.key === selectedKey.value) || null);
 const onlineCount = computed(() => rows.value.filter(row => row.state === "online").length);
 const attentionCount = computed(() => rows.value.filter(row => row.attention || row.state === "offline").length);
@@ -131,19 +128,16 @@ function stopAutoRefresh() {
 function manualRefresh() {
   return refreshData(true);
 }
-watch(rows, value => {
-  if (!value.length) selectedKey.value = "";
-  else if (requestedKey.value && value.some(row => row.key === requestedKey.value) && !requestApplied) {
-    selectedKey.value = requestedKey.value;
-    requestApplied = true;
-  } else if (!value.some(row => row.key === selectedKey.value)) selectedKey.value = value[0].key;
-});
-watch(requestedKey, value => {
-  requestApplied = false;
-  if (value && rows.value.some(row => row.key === value)) {
-    selectedKey.value = value;
-    requestApplied = true;
-  }
+watch([rows, requestedAgentID, requestedHostID], ([value, agentID, hostID]) => {
+  const requested = agentID
+    ? value.find(row => row.monitor?.host_id === agentID)
+    : hostID
+      ? value.find(row => row.monitor?.deployment_host_id === hostID)
+      : undefined;
+  if (requested) selectedKey.value = requested.key;
+  else if (agentID || hostID) selectedKey.value = "";
+  else if (!value.length) selectedKey.value = "";
+  else if (!value.some(row => row.key === selectedKey.value)) selectedKey.value = value[0].key;
 });
 watch(viewMode, value => localStorage.setItem(VIEW_MODE_KEY, value));
 watch(autoRefresh, value => (value ? startAutoRefresh() : stopAutoRefresh()));

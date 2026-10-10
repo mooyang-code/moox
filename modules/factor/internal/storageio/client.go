@@ -44,11 +44,6 @@ func NewClient(primary PrimaryStoreClient, metadata MetadataClient, auth *common
 	return &Client{primary: primary, metadata: metadata, auth: auth}
 }
 
-// NewClientWithOptions 创建经给定 tRPC 客户端选项访问 Storage 的客户端：FactorMgr 传入 gatewayclient 的选项。
-func NewClientWithOptions(options []client.Option, auth *commonpb.AuthInfo) *Client {
-	return NewClient(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), auth)
-}
-
 type Frame struct {
 	SubjectID string
 	Columns   []string

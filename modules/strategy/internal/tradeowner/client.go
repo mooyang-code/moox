@@ -11,7 +11,6 @@ import (
 
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -45,14 +44,14 @@ type Client struct {
 }
 
 // New 构造客户端；gateway 为空时客户端不可用，调用会返回错误。
-func New(cfg Config, gateway *gatewayclient.Client) *Client {
+func New(cfg Config, gateway gatewayclient.Invoker) *Client {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
 	client := &Client{timeout: timeout}
 	if gateway != nil {
-		client.proxy = tradepb.NewTradeConsoleServiceClientProxy(gateway.ClientOptions()...)
+		client.proxy = &gatewayProxy{gateway: gateway}
 	}
 	return client
 }
@@ -238,11 +237,9 @@ func (c *Client) call(ctx context.Context, spaceID string) (context.Context, con
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	return callCtx, cancel, []client.Option{
-		client.WithMetaData(gatewayroute.MetadataSpaceID, []byte(spaceID)),
-		client.WithTimeout(timeout),
-	}, nil
+	// 空间经调用元数据交给网关客户端：它决定转发给 Trade 的可信空间，不能由请求体自行声明。
+	callCtx, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{SpaceID: spaceID}), timeout)
+	return callCtx, cancel, nil, nil
 }
 
 // TransportError 表示与 Trade 通信失败、结果未知。Error 只给出中文概述；原始错误经 Unwrap 保留给日志，

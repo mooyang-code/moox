@@ -93,7 +93,8 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录")
-	cmd.Flags().StringVar(&storageHost, "storage-host", "", "部署了存储主服务的主机 ID，默认取部署表中的存储主机")
+	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
+	_ = cmd.MarkFlagRequired("storage-host")
 	return cmd
 }
 
@@ -104,9 +105,12 @@ func runSetupInit(
 	file, configDir, storageHost string,
 	bundle setupInitBundle,
 ) (setupInitSummary, error) {
-	// 写入 Admin 和元数据之前先只读地生成 SCF 访问外部接入的路由计划，发布采集函数时使用同一份计划。
+	// Resolve the Storage placement before mutating Admin/metadata. This is a
+	// read-only preflight: collector publication later consumes the same plan
+	// and applies private routing only to SCF functions in Storage's Tencent
+	// region.
 	var scfRoutes *privatenet.SCFRoutePlan
-	if snapshot.Manifest.SCFFetcher.Enabled && len(snapshot.Manifest.HostsOf("access")) > 0 {
+	if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost().Provider), "tencent") {
 		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")
 		if routeErr != nil {
 			return setupInitSummary{}, fmt.Errorf("scf-network: %w", routeErr)
@@ -226,12 +230,12 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 		return nil, nil
 	}
 
-	client, closeControl, err := useControlClient(nil, snapshot, "", "")
+	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
-		return nil, fmt.Errorf("cloud_accounts: %w", err)
+		return nil, fmt.Errorf("cloud_accounts: open gateway: %w", err)
 	}
-	defer closeControl()
-
+	defer gateway.Close()
+	client := &adminclient.Client{Gateway: gateway}
 	existingAccounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return nil, fmt.Errorf("cloud_accounts: list Tencent cloud accounts: %w", err)
@@ -625,7 +629,7 @@ func defaultOpenSetupInitStorage(
 	snapshot *setupconfig.Snapshot,
 	host string,
 ) (setupInitStorage, error) {
-	transport, session, err := openRemoteStorage(ctx, snapshot, host)
+	_, transport, session, _, err := openRemoteStorage(ctx, snapshot, host)
 	if err != nil {
 		return nil, err
 	}

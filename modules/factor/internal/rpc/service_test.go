@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -10,20 +11,44 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 func TestCreateFactorWithoutSetSucceeds(t *testing.T) {
 	catalog := &catalogFake{}
-	svc := NewService(catalog, &recalcFake{})
+	svc := nativeFactorManager(t, NewService(catalog, &recalcFake{}))
 
-	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{
-		Factor: &factorpb.FactorDef{FactorId: "rolling_mean", Name: "Rolling mean"},
-	})
+	for i, serialization := range []int{codec.SerializationTypePB, codec.SerializationTypeJSON} {
+		rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{
+			Factor: &factorpb.FactorDef{FactorId: "rolling_mean", Name: "Rolling mean"},
+		}, client.WithSerializationType(serialization))
+		require.NoError(t, err)
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+		require.Equal(t, i+1, catalog.createFactorCalls)
+		require.Equal(t, "rolling_mean", rsp.GetFactor().GetFactorId())
+	}
+}
 
+func nativeFactorManager(t *testing.T, service *Service) factorpb.FactorMgrClientProxy {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, 1, catalog.createFactorCalls)
-	require.Equal(t, "rolling_mean", rsp.GetFactor().GetFactorId())
+	rpc := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTransport(transport.NewServerTransport()))
+	factorpb.RegisterFactorMgrService(rpc, service)
+	done := make(chan error, 1)
+	go func() { done <- rpc.Serve() }()
+	t.Cleanup(func() {
+		require.NoError(t, rpc.Close(nil))
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("FactorMgr native listener did not stop")
+		}
+	})
+	return factorpb.NewFactorMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
 }
 
 func TestCreateFactorRequiresFactorID(t *testing.T) {

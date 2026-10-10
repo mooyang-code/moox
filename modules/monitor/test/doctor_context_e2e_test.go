@@ -6,27 +6,34 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
-type doctorContextPlacements struct{ rows []*adminpb.DeployPlacement }
+type doctorContextDeployments struct{ rows []*adminpb.ComponentPlacement }
 
-func (s doctorContextPlacements) Hosts(context.Context) ([]*adminpb.DeployHost, error) {
-	return []*adminpb.DeployHost{{HostId: "node-a", Address: "203.0.113.10", Status: "enabled"}}, nil
-}
-
-func (s doctorContextPlacements) Placements(context.Context) ([]*adminpb.DeployPlacement, error) {
-	return s.rows, nil
+func (s doctorContextDeployments) Snapshot(context.Context) (placement.Snapshot, error) {
+	catalog, _ := servicecatalog.LoadEmbedded()
+	hosts := map[string]bool{}
+	snapshot := placement.Snapshot{Catalog: catalog, Placements: s.rows}
+	for _, row := range s.rows {
+		if !hosts[row.GetHostId()] {
+			hosts[row.GetHostId()] = true
+			snapshot.Hosts = append(snapshot.Hosts, &adminpb.DeploymentHost{HostId: row.GetHostId(), Address: row.GetHostId() + ".example.test", Status: "enabled"})
+		}
+	}
+	return snapshot, nil
 }
 
 func TestDoctorContextEndToEndDisabledAndDeferredFacts(t *testing.T) {
-	builder := &monitordoctor.Builder{Placements: doctorContextPlacements{rows: []*adminpb.DeployPlacement{
-		{HostId: "node-a", ComponentId: "factor-mgr", Status: "disabled"},
-		{HostId: "node-a", ComponentId: "storage-primary", Status: "enabled"},
+	builder := &monitordoctor.Builder{Deployments: doctorContextDeployments{rows: []*adminpb.ComponentPlacement{
+		{ComponentId: "factor-mgr", HostId: "node-a", Status: "disabled"},
+		{ComponentId: "storage-primary", HostId: "node-a", Status: "enabled"},
 	}}}
 	service := rpc.New(nil, rpc.Options{DoctorContext: builder})
 	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{NodeId: "node-a", ComponentIds: []string{"factor-mgr", "storage-primary"}})

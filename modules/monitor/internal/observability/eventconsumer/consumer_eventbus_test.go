@@ -230,7 +230,7 @@ func publishAllObservabilityEvents(t *testing.T, ctx context.Context, publisher 
 	publishMetric(t, ctx, publisher, "metric-route")
 	agentID := "aB3x"
 	_, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
-		AgentId: agentID, HostId: "storage", Hostname: "host-a", Snapshot: &hostmetricpb.HostSnapshot{},
+		AgentId: agentID, Hostname: "host-a", Snapshot: &hostmetricpb.HostSnapshot{},
 	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: agentID})
 	if err != nil {
 		t.Fatal(err)

@@ -1,5 +1,7 @@
-// moox-factor-engine 消费采集周期事件，用 Python worker 池计算因子并写回 Storage。它只发起出站连接：
-// 经外部接入访问因子管理服务和 Storage，以及连接 EventBus。
+// moox-factor-engine consumes collector period events, computes factors with
+// a Python worker pool and writes results to Storage. It only dials out: to
+// moox-factor-mgr through the service gateway, to EventBus and to
+// access.
 package main
 
 import (
@@ -74,8 +76,6 @@ func serve(args []string) (err error) {
 		return err
 	}
 	trpc.ServerConfigPath = *framework
-	// 组件目录里 FactorEngine 声明的请求体上限是 32 MiB，tRPC 默认单帧只有 10 MiB；与 gatewayclient 的取值一致。
-	trpc.DefaultMaxFrameSize = 40 * 1024 * 1024
 	s := trpc.NewServer()
 	trpclog.InstallServiceName("factor-engine")
 	ctx, cancel := context.WithCancel(trpc.BackgroundContext())

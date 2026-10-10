@@ -26,14 +26,12 @@ import (
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Dependencies contains external service endpoints used by CollectMgr.
 type Dependencies struct {
-	// StorageOptions 是访问 Storage Metadata 的 tRPC 客户端选项（gatewayclient）。
-	StorageOptions             []client.Option
+	DatasetSource              datasetSource
 	RealtimeInventory          RealtimeInventory
 	DefaultResampleSettleDelay time.Duration
 	ResultManager              *taskresult.Manager
@@ -120,7 +118,7 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 		persistence:                persistence,
 		taskRepo:                   persistence.Tasks(),
 		instanceRepo:               persistence.TaskInstances(),
-		datasetSrc:                 storagesource.NewDatasetSource(deps.StorageOptions),
+		datasetSrc:                 deps.DatasetSource,
 		inventory:                  deps.RealtimeInventory,
 		defaultResampleSettleDelay: settleDelay,
 		resultManager:              deps.ResultManager,

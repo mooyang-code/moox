@@ -2,6 +2,7 @@ package subjectsync
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ func TestStorageClientHostAuthPreservesMasterSecretDerivation(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "")
 	require.NoError(t, os.Unsetenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"))
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "subject-sync-test-secret")
-	storage, err := NewStorageClient(nil)
+	storage, err := NewStorageClient(subjectGatewayFunc(func(context.Context, string, string, any, any) error { return nil }))
 	require.NoError(t, err)
 	require.Equal(t, "moox-collector", storage.auth.AppId)
 	require.Equal(t, mooxsecurity.HMACSHA256Hex("subject-sync-test-secret", []byte("moox-collector")), storage.auth.AppKey)
@@ -33,16 +34,11 @@ func TestStorageClientHostAuthPreservesMasterSecretDerivation(t *testing.T) {
 func TestStorageClientManagedAuthErrorsBeforeProxyCreation(t *testing.T) {
 	setSubjectSyncStorageConfig(t)
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "subject-sync-test-secret")
-	oldFactory := storagepb.NewMetadataClientProxy
-	t.Cleanup(func() { storagepb.NewMetadataClientProxy = oldFactory })
 	proxyCalls := 0
-	storagepb.NewMetadataClientProxy = func(...client.Option) storagepb.MetadataClientProxy {
-		proxyCalls++
-		return nil
-	}
+	gateway := subjectGatewayFunc(func(context.Context, string, string, any, any) error { proxyCalls++; return nil })
 	for _, raw := range []string{"", "null", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`} {
 		t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", raw)
-		storage, err := NewStorageClient(nil)
+		storage, err := NewStorageClient(gateway)
 		require.Error(t, err)
 		require.Nil(t, storage)
 		require.NotContains(t, err.Error(), "subject-sync-test-secret")
@@ -148,4 +144,52 @@ func TestStorageClientListTagsStopsAtExactFullPage(t *testing.T) {
 
 func storageSuccess() *storagepb.RetInfo {
 	return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
+}
+
+type subjectGatewayFunc func(context.Context, string, string, any, any) error
+
+func (f subjectGatewayFunc) Invoke(ctx context.Context, service, method string, request, response any) error {
+	return f(ctx, service, method, request, response)
+}
+
+func TestRegisterSubjectListingUsesSharedGatewayAndPreservesAttributes(t *testing.T) {
+	setSubjectSyncStorageConfig(t)
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"`+strings.Repeat("a", 64)+`"}`)
+	updates := map[string]*storagepb.DataSource{}
+	calls := 0
+	gateway := subjectGatewayFunc(func(_ context.Context, service, method string, request, response any) error {
+		calls++
+		require.Equal(t, "trpc.moox.storage.Metadata", service)
+		switch method {
+		case "GetDataSource":
+			req := request.(*storagepb.GetDataSourceReq)
+			require.Equal(t, "moox-collector", req.AuthInfo.AppId)
+			rsp := response.(*storagepb.GetDataSourceRsp)
+			rsp.RetInfo = storageSuccess()
+			rsp.DataSource = &storagepb.DataSource{SpaceId: req.SpaceId, DataSourceId: req.DataSourceId, Attributes: map[string]string{"keep": "value"}}
+		case "UpdateDataSource":
+			req := request.(*storagepb.UpdateDataSourceReq)
+			require.Equal(t, "moox-collector", req.AuthInfo.AppId)
+			updates[req.DataSource.DataSourceId] = req.DataSource
+			response.(*storagepb.UpdateDataSourceRsp).RetInfo = storageSuccess()
+		default:
+			t.Fatalf("unexpected metadata method %s", method)
+		}
+		return nil
+	})
+	storage, err := NewStorageClient(gateway)
+	require.NoError(t, err)
+	require.NoError(t, storage.RegisterSubjectListing(context.Background(), map[string][]string{
+		"binance": {"spot", "swap"}, "eastmoney": {"equity"}, "unknown": {"equity"},
+	}))
+	require.Equal(t, 4, calls)
+	require.Len(t, updates, 2)
+	for source, want := range map[string][]string{"binance": {"spot", "swap"}, "eastmoney": {"equity"}} {
+		require.Equal(t, "value", updates[source].Attributes["keep"])
+		var listing struct {
+			Types []string `json:"instrument_types"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(updates[source].Attributes["subject_listing"]), &listing))
+		require.Equal(t, want, listing.Types)
+	}
 }

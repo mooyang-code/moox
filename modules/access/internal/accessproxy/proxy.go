@@ -1,5 +1,3 @@
-// Package accessproxy 是外部接入的转发入口：校验外部调用方（SCF、因子引擎、moox-skill）的签名，按组件目录中
-// 外部调用方的白名单放行，再以 access 身份经本机主机网关把请求原样转发给目标服务。
 package accessproxy
 
 import (
@@ -12,226 +10,177 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/gatewayroute"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/codec"
-	"trpc.group/trpc-go/trpc-go/errs"
-	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-// AccessServiceName 是外部接入入口（11004）的 tRPC 服务名。
 const AccessServiceName = "trpc.moox.access.Access"
 
-const (
-	defaultMaxBodyBytes = 32 << 20
-	defaultTimeout      = 30 * time.Second
-	nonceNamespace      = "access"
-	// unknownPrincipal 是签名未通过时指标中使用的调用方名。
-	unknownPrincipal = "unknown"
-)
-
-// 拒绝原因，用作指标标签。
-const (
-	ReasonUnauthenticated = "unauthenticated"
-	ReasonForbidden       = "forbidden"
-	ReasonReplayed        = "replayed"
-	ReasonTooLarge        = "too_large"
-	ReasonUnavailable     = "unavailable"
-)
-
-// NonceStore 持久化入站 nonce，进程重启后重放窗口不会重新打开。
+// NonceStore persists inbound nonces across process restarts.
 type NonceStore interface {
 	Consume(context.Context, string, string, time.Duration) (bool, error)
 }
 
-// Upstream 是外部接入用到的 gatewayclient 能力：从服务目录取本机主机 ID，并以 access 身份转发请求。
-type Upstream interface {
-	Directory(ctx context.Context) (gatewayclient.View, error)
-	Forward(ctx context.Context, servicePath, method string, serialization int, body []byte, opts ...gatewayclient.CallOption) ([]byte, error)
+// Forwarder borrows the process-owned internal gateway client. The client
+// signs as access and selects the destination using the current directory.
+type Forwarder interface {
+	Forward(context.Context, string, string, int, []byte) ([]byte, error)
 }
 
-// Metrics 记录拒绝与转发结果。
-type Metrics interface {
-	Rejected(principal, reason string)
-	Forwarded(principal, servicePath, method string, code int, elapsed time.Duration)
-}
-
-// Options 是转发入口的依赖。
 type Options struct {
-	Registry     *gatewayauth.CredentialRegistry
-	Catalog      *servicecatalog.Catalog
-	Upstream     Upstream
-	Nonces       NonceStore
-	Metrics      Metrics
-	MaxBodyBytes int64
-	Timeout      time.Duration
-	Now          func() time.Time
+	HostID      string
+	Credentials *gatewayauth.CredentialRegistry
+	Gateway     Forwarder
+	Nonces      NonceStore
+	Registerer  prometheus.Registerer
+	Now         func() time.Time
 }
 
-// Proxy 是外部接入的转发实现。
 type Proxy struct {
-	registry     *gatewayauth.CredentialRegistry
-	catalog      *servicecatalog.Catalog
-	upstream     Upstream
-	nonces       NonceStore
-	metrics      Metrics
-	maxBodyBytes int64
-	timeout      time.Duration
-	now          func() time.Time
+	options Options
+	catalog servicecatalog.Catalog
+	denials *prometheus.CounterVec
 }
 
-// New 校验依赖并创建转发入口。
 func New(options Options) (*Proxy, error) {
-	if options.Registry == nil {
-		return nil, errors.New("外部接入缺少外部调用方的校验密钥")
+	if !servicecatalog.ValidHostID(options.HostID) || options.Credentials == nil || options.Gateway == nil || options.Nonces == nil {
+		return nil, errors.New("access requires a canonical host ID, credential registry, internal gateway and durable nonce store")
 	}
-	if options.Upstream == nil {
-		return nil, errors.New("外部接入缺少上游 gatewayclient")
-	}
-	if options.Nonces == nil {
-		return nil, errors.New("外部接入缺少 nonce 存储")
-	}
-	proxy := &Proxy{
-		registry: options.Registry, catalog: options.Catalog, upstream: options.Upstream, nonces: options.Nonces,
-		metrics: options.Metrics, maxBodyBytes: options.MaxBodyBytes, timeout: options.Timeout, now: options.Now,
-	}
-	if proxy.catalog == nil {
-		proxy.catalog = servicecatalog.Default()
-	}
-	if proxy.maxBodyBytes <= 0 {
-		proxy.maxBodyBytes = defaultMaxBodyBytes
-	}
-	if proxy.timeout <= 0 {
-		proxy.timeout = defaultTimeout
-	}
-	if proxy.now == nil {
-		proxy.now = time.Now
-	}
-	return proxy, nil
-}
-
-// Forward 校验外部调用方并把 PB 字节原样转发；返回的错误带网关错误码（4401、4403、4413、4503）或上游的错误码。
-func (p *Proxy) Forward(ctx context.Context, request *codec.Body) (*codec.Body, error) {
-	started := time.Now()
-	principal, servicePath, method := unknownPrincipal, "", ""
-	response, err := p.forward(ctx, request, &principal, &servicePath, &method)
-	if p.metrics != nil && servicePath != "" {
-		p.metrics.Forwarded(principal, servicePath, method, int(errs.Code(err)), time.Since(started))
-	}
-	return response, err
-}
-
-func (p *Proxy) forward(ctx context.Context, request *codec.Body, principal, servicePath, method *string) (*codec.Body, error) {
-	if request == nil {
-		return nil, errs.New(errs.RetServerDecodeFail, "外部接入请求体为空")
-	}
-	msg := codec.Message(ctx)
-	service, rpc, ok := splitRPCName(msg.ServerRPCName())
-	if !ok {
-		return nil, errs.New(gatewayroute.RetServiceNotHere, fmt.Sprintf("无效的 RPC 名 %q", msg.ServerRPCName()))
-	}
-	if int64(len(request.Data)) > p.maxBodyBytes {
-		p.rejected(*principal, ReasonTooLarge)
-		return nil, errs.New(gatewayroute.RetBodyTooLarge, fmt.Sprintf("请求体超过 %d 字节", p.maxBodyBytes))
-	}
-	view, err := p.upstream.Directory(ctx)
-	if err != nil || strings.TrimSpace(view.LocalHostID) == "" {
-		p.rejected(*principal, ReasonUnavailable)
-		return nil, errs.New(gatewayroute.RetHostDisabled, "外部接入还没有拿到本机的服务目录")
-	}
-	instanceID := servicecatalog.AccessCaller + "@" + view.LocalHostID
-	metadata := msg.ServerMetaData()
-	headers := make(http.Header, len(metadata))
-	for key, value := range metadata {
-		headers.Add(key, string(value))
-	}
-	claims, err := p.registry.Verify(gatewayauth.Request{
-		Method: http.MethodPost, Path: "/" + service + "/" + rpc, TargetNode: instanceID,
-		Callee: service, Func: rpc, Body: request.Data,
-	}, headers, p.now())
+	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
-		// 校验失败的原因（未知 KeyID、时间窗、签名不符）不返回给未认证的调用方，免得被用来枚举密钥。
-		log.Warnf("外部接入签名校验失败: %v", err)
-		p.rejected(*principal, ReasonUnauthenticated)
-		return nil, errs.New(gatewayroute.RetUnauthenticated, "外部调用方签名校验失败")
-	}
-	*principal = claims.Caller
-	if !p.catalog.PrincipalAllowed(claims.Caller, service, rpc) {
-		p.rejected(*principal, ReasonForbidden)
-		return nil, errs.New(gatewayroute.RetForbidden, fmt.Sprintf("外部调用方 %s 不能调用 %s/%s", claims.Caller, service, rpc))
-	}
-	// 指标的服务名和方法名只在通过白名单之后才使用：未认证的请求可以带任意 RPC 名，直接作标签会无限增加序列。
-	*servicePath, *method = service, rpc
-	consumed, err := p.nonces.Consume(ctx, nonceNamespace, claims.Nonce, claims.TTL)
-	if err != nil {
-		log.Errorf("外部接入无法登记 nonce: %v", err)
-		return nil, errs.New(errs.RetServerSystemErr, "外部接入无法登记 nonce")
-	}
-	if !consumed {
-		p.rejected(*principal, ReasonReplayed)
-		return nil, errs.New(gatewayroute.RetUnauthenticated, "请求被重放")
-	}
-
-	timeout := p.timeout
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
-		timeout = time.Until(deadline)
-	}
-	opts := []gatewayclient.CallOption{
-		gatewayclient.WithTimeout(timeout),
-		gatewayclient.WithMetadata(gatewayroute.MetadataAccessPrincipal, []byte(claims.Caller)),
-	}
-	for key, value := range metadata {
-		// 入站的签名头（x-moox-*）由 gatewayclient 丢弃，上游只认外部接入自己的 access 签名。
-		if key == gatewayroute.MetadataAccessPrincipal {
-			continue
-		}
-		opts = append(opts, gatewayclient.WithMetadata(key, value))
-	}
-	out, err := p.upstream.Forward(ctx, service, rpc, msg.SerializationType(), request.Data, opts...)
-	if err != nil {
-		// 框架层的错误（连接被拒、超时）带着内网地址和端口，不能原样返回给外部调用方；网关与服务自己的错误码照常透传。
-		var frameworkErr *errs.Error
-		if errors.As(err, &frameworkErr) && frameworkErr.Type == errs.ErrorTypeFramework {
-			log.Warnf("外部接入访问 %s/%s 失败: %v", service, rpc, err)
-			return nil, errs.New(errs.RetServerSystemErr, "外部接入访问上游失败")
-		}
 		return nil, err
 	}
-	if int64(len(out)) > p.maxBodyBytes {
-		return nil, errs.New(gatewayroute.RetBodyTooLarge, fmt.Sprintf("响应体超过 %d 字节", p.maxBodyBytes))
+	if options.Now == nil {
+		options.Now = time.Now
 	}
-	return &codec.Body{Data: out}, nil
-}
-
-func (p *Proxy) rejected(principal, reason string) {
-	if p.metrics != nil {
-		p.metrics.Rejected(principal, reason)
+	if options.Registerer == nil {
+		options.Registerer = prometheus.DefaultRegisterer
 	}
+	denials := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "moox_access_denials_total", Help: "External Access requests rejected before forwarding.",
+	}, []string{"caller", "service", "method", "reason"})
+	if err := options.Registerer.Register(denials); err != nil {
+		return nil, fmt.Errorf("register access metrics: %w", err)
+	}
+	return &Proxy{options: options, catalog: catalog, denials: denials}, nil
 }
 
-func splitRPCName(rpcName string) (string, string, bool) {
-	value := strings.TrimPrefix(strings.TrimSpace(rpcName), "/")
-	servicePath, method, ok := strings.Cut(value, "/")
-	return servicePath, method, ok && servicePath != "" && method != "" && !strings.Contains(method, "/")
+func (p *Proxy) deny(caller, service, method, reason, message string) (*codec.Body, error) {
+	known := false
+	for _, principal := range p.catalog.Principals {
+		known = known || principal.ID == caller
+	}
+	if !known {
+		caller = "unknown"
+	}
+	spec, ok := p.catalog.Service(service)
+	if !ok {
+		service, method = "unknown", "unknown"
+	} else {
+		found := false
+		for _, registered := range spec.Methods {
+			found = found || registered == method
+		}
+		if !found {
+			method = "unknown"
+		}
+	}
+	p.denials.WithLabelValues(caller, service, method, reason).Inc()
+	return nil, errors.New(message)
 }
 
-// AccessServiceDesc 是通配方法的服务描述：请求的 PB 字节不解码，原样转发。
+// Forward verifies the fixed access@host signature and catalog grant before
+// passing the original PB/JSON bytes to the internal gateway client. External
+// user IDs and roles are not trusted application authorization context.
+func (p *Proxy) Forward(ctx context.Context, body *codec.Body) (*codec.Body, error) {
+	if p == nil {
+		return nil, errors.New("access proxy is unavailable")
+	}
+	message := codec.Message(ctx)
+	if body == nil || message == nil {
+		return p.deny("", "", "", "request", "access requires a tRPC message and body")
+	}
+	path := message.ServerRPCName()
+	service, method, ok := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	if !ok || path != "/"+service+"/"+method || service == "" || method == "" || strings.Contains(method, "/") {
+		return p.deny("", "", "", "request", "invalid access RPC path")
+	}
+	serialization := message.SerializationType()
+	if serialization != codec.SerializationTypePB && serialization != codec.SerializationTypeJSON {
+		return p.deny("", service, method, "serialization", "access requires PB or JSON serialization")
+	}
+	spec, exists := p.catalog.Service(service)
+	limit := int64(servicecatalog.DefaultMaxBodyBytes)
+	if exists && spec.MaxBodyBytes != 0 {
+		limit = spec.MaxBodyBytes
+	}
+	if int64(len(body.Data)) > limit {
+		return p.deny("", service, method, "request_limit", "access request exceeds service body limit")
+	}
+	headers := make(http.Header, len(message.ServerMetaData()))
+	for key, value := range message.ServerMetaData() {
+		headers.Add(key, string(value))
+	}
+	claims, err := p.options.Credentials.Verify(gatewayauth.Request{
+		Method: http.MethodPost, Path: path, TargetNode: "access@" + p.options.HostID,
+		Callee: service, Func: method, Body: body.Data,
+	}, headers, p.options.Now())
+	if err != nil {
+		return p.deny("", service, method, "authentication", "access authentication failed")
+	}
+	if !p.catalog.PrincipalAllowed(claims.Caller, service, method) {
+		return p.deny(claims.Caller, service, method, "permission", "access caller is not allowed for this method")
+	}
+	consumed, err := p.options.Nonces.Consume(ctx, "access:"+p.options.HostID+":"+claims.KeyID, claims.Nonce, claims.TTL)
+	if err != nil {
+		return p.deny(claims.Caller, service, method, "nonce_store", "access replay store unavailable")
+	}
+	if !consumed {
+		return p.deny(claims.Caller, service, method, "replay", "access request replayed")
+	}
+	metadata := gatewayclient.CallMetadata{}
+	for name, output := range map[string]*string{"X-Space-Id": &metadata.SpaceID, "X-Trace-Id": &metadata.TraceID} {
+		values := headers.Values(name)
+		if len(values) > 1 || len(values) == 1 && (len(values[0]) > 512 || strings.ContainsAny(values[0], "\x00\r\n")) {
+			return p.deny(claims.Caller, service, method, "metadata", "invalid access application metadata")
+		}
+		if len(values) == 1 {
+			*output = values[0]
+		}
+	}
+	timeout := spec.TimeoutMS
+	if timeout == 0 {
+		timeout = servicecatalog.DefaultTimeoutMS
+	}
+	upstream, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(ctx, metadata), time.Duration(timeout)*time.Millisecond)
+	defer cancel()
+	response, err := p.options.Gateway.Forward(upstream, service, method, serialization, body.Data)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(response)) > limit {
+		return nil, errors.New("access response exceeds service body limit")
+	}
+	return &codec.Body{Data: response}, nil
+}
+
+// AccessServiceDesc exposes a wildcard service so the request protobuf is
+// never decoded and re-encoded at the regional boundary.
 var AccessServiceDesc = server.ServiceDesc{
 	ServiceName: AccessServiceName,
 	HandlerType: ((*AccessServer)(nil)),
 	Methods:     []server.Method{{Name: "*", Func: accessForwardHandler}},
 }
 
-// AccessServer 是转发入口的接口。
 type AccessServer interface {
 	Forward(context.Context, *codec.Body) (*codec.Body, error)
 }
 
-// RegisterAccessService 把转发入口注册到外部接入的监听上。
 func RegisterAccessService(s server.Service, impl AccessServer) error {
 	if s == nil {
-		return errors.New("外部接入服务未配置")
+		return errors.New("access service is unavailable")
 	}
 	return s.Register(&AccessServiceDesc, impl)
 }
@@ -245,7 +194,7 @@ func accessForwardHandler(svr interface{}, ctx context.Context, f server.FilterF
 	handle := func(ctx context.Context, req interface{}) (interface{}, error) {
 		body, ok := req.(*codec.Body)
 		if !ok {
-			return nil, errs.New(errs.RetServerDecodeFail, "外部接入请求体无效")
+			return nil, errors.New("access request body is invalid")
 		}
 		return svr.(AccessServer).Forward(ctx, body)
 	}

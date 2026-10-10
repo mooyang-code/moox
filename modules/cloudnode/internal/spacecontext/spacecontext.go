@@ -1,5 +1,4 @@
-// Package spacecontext 取得 CloudNode 请求所属的 space：调用方（控制台、Collector）把它写在 tRPC 元数据
-// x-space-id 中，进程内调用（测试、后台任务）可以直接放进 context。
+// Package spacecontext reads the space identity forwarded by the native gateway.
 package spacecontext
 
 import (
@@ -7,13 +6,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mooyang-code/moox/packages/gatewayroute"
-	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
+
+// SpaceIDHeader is the metadata key used by gateway forwarding.
+const SpaceIDHeader = "X-Space-Id"
 
 type ctxKey struct{}
 
-// WithSpaceID 把 space_id 放进 context，优先于 tRPC 元数据。
+// WithSpaceID stores space_id in context.
 func WithSpaceID(ctx context.Context, spaceID string) context.Context {
 	if spaceID == "" {
 		return ctx
@@ -21,20 +22,32 @@ func WithSpaceID(ctx context.Context, spaceID string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, spaceID)
 }
 
-// FromContext 读取 space_id：先看 context，再看 tRPC 元数据。
+// FromContext reads space_id from context.
 func FromContext(ctx context.Context) (string, bool) {
-	if v, ok := ctx.Value(ctxKey{}).(string); ok {
+	v, ok := ctx.Value(ctxKey{}).(string)
+	if ok {
 		spaceID := strings.TrimSpace(v)
 		return spaceID, spaceID != ""
 	}
-	spaceID := strings.TrimSpace(string(trpc.GetMetaData(ctx, gatewayroute.MetadataSpaceID)))
+	var spaceID string
+	var found bool
+	for key, value := range codec.Message(ctx).ServerMetaData() {
+		if !strings.EqualFold(key, SpaceIDHeader) {
+			continue
+		}
+		candidate := strings.TrimSpace(string(value))
+		if found && candidate != spaceID {
+			return "", false
+		}
+		spaceID, found = candidate, true
+	}
 	return spaceID, spaceID != ""
 }
 
-// MustFromContext 读取 space_id，缺失时返回错误。
+// MustFromContext reads space_id or returns an error.
 func MustFromContext(ctx context.Context) (string, error) {
 	spaceID, ok := FromContext(ctx)
-	if !ok {
+	if !ok || spaceID == "" {
 		return "", fmt.Errorf("space_id is required but not set in context")
 	}
 	return spaceID, nil

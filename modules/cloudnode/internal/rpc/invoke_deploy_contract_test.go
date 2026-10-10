@@ -73,7 +73,7 @@ func TestMarketFetcherInvokeDeployValidatesBasicEnvironmentWithoutTimerRules(t *
 		{"missing EventBus", "MOOX_EVENTBUS_NATS_PASSWORD", "", true},
 		{"missing caller", "MOOX_CALLER", "", true},
 		{"wrong caller", "MOOX_CALLER", "strategy", true},
-		{"valid Invoke needs no Timer timeout", "", "", false},
+		{"valid Invoke shares Access without Timer timeout", "", "", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))

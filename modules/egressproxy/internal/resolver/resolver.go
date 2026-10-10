@@ -1,5 +1,3 @@
-// Package resolver 解析白名单域名，返回经过 TCP 探测的公网 IPv4 地址，供 Collector 生成 SCF 的 DNS 快照。
-// 从交易服务迁入出口代理，行为不变。
 package resolver
 
 import (
@@ -14,16 +12,13 @@ import (
 	"time"
 )
 
-// ErrInvalidDomain 表示请求中的域名不合法，或域名数量、每个域名的地址数超出上限。
-var ErrInvalidDomain = errors.New("域名无效")
+var ErrInvalidDomain = errors.New("invalid domain")
 
-// ResolvedIP 是一个探测可达的地址及其 TCP 连接延迟。
 type ResolvedIP struct {
 	IP                  string
 	TCPConnectLatencyMS uint32
 }
 
-// Resolution 是一个域名的解析结果；Unresolved 时 Reason 说明原因。
 type Resolution struct {
 	Domain     string
 	IPs        []ResolvedIP
@@ -31,7 +26,6 @@ type Resolution struct {
 	Reason     string
 }
 
-// Config 是解析器的配置；LookupHost、DialContext 供测试替换。
 type Config struct {
 	Domains         []string
 	LookupTimeout   time.Duration
@@ -49,7 +43,6 @@ type cacheEntry struct {
 	expiresAt  time.Time
 }
 
-// Resolver 只解析白名单内的域名，结果按 CacheTTL 缓存。
 type Resolver struct {
 	mu      sync.Mutex
 	cfg     Config
@@ -57,7 +50,6 @@ type Resolver struct {
 	cache   map[string]cacheEntry
 }
 
-// New 创建解析器，未设置的参数使用默认值。
 func New(cfg Config) *Resolver {
 	if cfg.LookupTimeout <= 0 {
 		cfg.LookupTimeout = 1500 * time.Millisecond
@@ -89,23 +81,15 @@ func New(cfg Config) *Resolver {
 	return &Resolver{cfg: cfg, allowed: allowed, cache: make(map[string]cacheEntry)}
 }
 
-// Resolve 解析一批域名：最多 16 个，每个最多返回 maxIPs（不超过 4）个地址。
 func (r *Resolver) Resolve(ctx context.Context, domains []string, maxIPs int) ([]Resolution, error) {
 	if r == nil {
-		return nil, errors.New("解析器未初始化")
+		return nil, errors.New("resolver is nil")
 	}
 	if r.cfg.Metrics != nil && r.cfg.Metrics.Requests != nil {
 		r.cfg.Metrics.Requests.Inc()
 	}
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	// 先看数量再规范化：满帧的唯一域名列表规范化一遍就是上百兆的临时内存。
-	if len(domains) > 16 {
-		if r.cfg.Metrics != nil && r.cfg.Metrics.Failures != nil {
-			r.cfg.Metrics.Failures.Inc()
-		}
-		return nil, ErrInvalidDomain
 	}
 	normalized, err := normalizeDomains(domains)
 	if err != nil {
@@ -176,8 +160,10 @@ func (r *Resolver) resolveOne(ctx context.Context, domain string, maxIPs int) Re
 	if len(ips) == 0 {
 		return Resolution{Domain: domain, Unresolved: true, Reason: "no_ipv4"}
 	}
-	// 探测的候选地址多于返回上限，避免前面一批不可达的地址挡住后面可用的地址；同时限制数量，
-	// 防止恶意的 DNS 响应引发无限制的出站探测。
+	// Probe more candidates than the response limit so an early group of
+	// dead addresses cannot hide a later healthy address. The allowlisted
+	// public domains are still bounded to keep a malicious DNS response from
+	// creating unbounded outbound probes.
 	if len(ips) > 16 {
 		ips = ips[:16]
 	}
@@ -316,7 +302,8 @@ func isReservedIPv4(ip net.IP) bool {
 	if len(ip) != net.IPv4len {
 		return true
 	}
-	// RFC 6598 共享地址、文档地址、基准测试地址和其他特殊用途地址都不能作为 SCF 的连接目标。
+	// RFC 6598 shared space, documentation ranges, benchmarking range and
+	// the special-use blocks are not safe SCF dial targets.
 	first, second, third := ip[0], ip[1], ip[2]
 	return first == 0 || first >= 224 ||
 		(first == 100 && second >= 64 && second <= 127) ||

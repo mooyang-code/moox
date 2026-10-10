@@ -1,6 +1,8 @@
 package database
 
 import (
+	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -13,11 +15,6 @@ func TestMinInt(t *testing.T) {
 	assert.Equal(t, 1, minInt(2, 1))
 	assert.Equal(t, -3, minInt(-3, 0))
 	assert.Equal(t, 5, minInt(5, 5))
-}
-
-// 写事务必须一开始就取写锁，否则并发的先读后写事务会在升级写锁时失败（SQLITE_BUSY_SNAPSHOT）。
-func TestBuildSQLiteDSNUsesImmediateTransactions(t *testing.T) {
-	assert.Contains(t, buildSQLiteDSN("/tmp/admin.db"), "_txlock=immediate")
 }
 
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
@@ -37,12 +34,44 @@ func TestInitializeDoesNotCreateSchema(t *testing.T) {
 SELECT count(*)
 FROM sqlite_master
 WHERE type = 'table'
-  AND name IN ('t_spaces', 't_users', 't_ssh_host', 't_secrets')
+  AND name IN ('t_spaces', 't_users', 't_ssh_host', 't_secrets', 't_hosts', 't_placements', 't_host_gateway_status')
 `).Scan(&count).Error; err != nil {
 		t.Fatalf("query table count: %v", err)
 	}
 	if count != 0 {
 		t.Fatalf("Initialize() created %d admin tables, want 0", count)
+	}
+}
+
+func TestInitializeEnforcesForeignKeysOnEveryConnection(t *testing.T) {
+	mgr := NewManager()
+	if err := mgr.Initialize(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "admin.db")}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := mgr.GetDB().DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Keep both leases open so the pool must create distinct connections.
+	first, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	for _, conn := range []*sql.Conn{first, second} {
+		var enabled int
+		if err := conn.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&enabled); err != nil || enabled != 1 {
+			t.Fatalf("foreign keys = %d, error = %v", enabled, err)
+		}
+		if err := conn.QueryRowContext(context.Background(), "PRAGMA synchronous").Scan(&enabled); err != nil || enabled != 2 {
+			t.Fatalf("synchronous = %d, error = %v; want FULL on every connection", enabled, err)
+		}
 	}
 }
 

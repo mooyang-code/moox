@@ -13,51 +13,24 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // historyRetention bounds the login and SSH session audit history.
 const historyRetention = 90 * 24 * time.Hour
 
-// cloudNodeMgrService 是 CloudNode 管理服务的 tRPC 服务名。
-const cloudNodeMgrService = "trpc.moox.cloudnode.CloudNodeMgr"
-
-// CloudNodeGarbage 是 Admin 用到的 gatewayclient 能力：以 admin 身份转发 CloudNodeMgr.CollectGarbage。
-// 请求和响应都用 JSON 序列化，Admin 因此不必引用 CloudNode 的协议包。
-type CloudNodeGarbage interface {
-	Forward(ctx context.Context, servicePath, method string, serialization int, body []byte, opts ...gatewayclient.CallOption) ([]byte, error)
-}
-
-// collectGarbageRsp 是 CollectGarbage 响应中用到的字段。tRPC 的 JSON 序列化输出 proto 字段名、枚举数值，
-// 64 位整数输出为字符串。
-type collectGarbageRsp struct {
-	RetInfo *struct {
-		Code *int   `json:"code"`
-		Msg  string `json:"msg"`
-	} `json:"ret_info"`
-	Packages     uint32      `json:"packages"`
-	CosObjects   uint32      `json:"cos_objects"`
-	CosBytes     json.Number `json:"cos_bytes"`
-	DeletedNodes uint32      `json:"deleted_nodes"`
-	NodeBatches  uint32      `json:"node_batches"`
-	Skipped      []string    `json:"skipped"`
-}
-
-// Collector removes system garbage once per timer invocation.
+// Collector borrows the process gateway signed as admin.
 type Collector struct {
-	db        *gorm.DB
-	cloudNode CloudNodeGarbage
-	now       func() time.Time
+	db      *gorm.DB
+	gateway gatewayclient.Invoker
+	now     func() time.Time
 }
 
-// NewCollector returns a Collector over the Admin database. cloudNode 为空时（没有配置 admin 身份的
-// gateway_client）只清理 Admin 自己的历史，并在每次运行时报告 CloudNode 未清理。
-func NewCollector(db *gorm.DB, cloudNode CloudNodeGarbage) (*Collector, error) {
-	if db == nil {
-		return nil, errors.New("garbage collector requires the admin database")
+func NewCollector(db *gorm.DB, gateway gatewayclient.Invoker) (*Collector, error) {
+	if db == nil || gateway == nil {
+		return nil, errors.New("garbage collector requires database and admin gateway client")
 	}
-	return &Collector{db: db, cloudNode: cloudNode, now: time.Now}, nil
+	return &Collector{db: db, gateway: gateway, now: time.Now}, nil
 }
 
 // Run trims Admin history and collects CloudNode garbage. One failing part
@@ -83,24 +56,29 @@ func (c *Collector) trimHistory(ctx context.Context) error {
 }
 
 func (c *Collector) collectCloudNode(ctx context.Context) error {
-	if c.cloudNode == nil {
-		return errors.New("collect CloudNode garbage: admin 身份的 gateway_client 没有配置")
-	}
-	raw, err := c.cloudNode.Forward(ctx, cloudNodeMgrService, "CollectGarbage", codec.SerializationTypeJSON, []byte("{}"))
-	if err != nil {
+	var summary cloudNodeGarbageSummary
+	if err := c.gateway.Invoke(ctx, "trpc.moox.cloudnode.CloudNodeMgr", "CollectGarbage", struct {
+		DryRun bool `json:"dry_run"`
+	}{}, &summary); err != nil {
 		return fmt.Errorf("collect CloudNode garbage: %w", err)
 	}
-	var rsp collectGarbageRsp
-	if err := json.Unmarshal(raw, &rsp); err != nil {
-		return fmt.Errorf("collect CloudNode garbage: 解析响应: %w", err)
+	if summary.RetInfo.Code != 0 {
+		return fmt.Errorf("collect CloudNode garbage: %s", summary.RetInfo.Msg)
 	}
-	if rsp.RetInfo == nil || rsp.RetInfo.Code == nil {
-		return errors.New("collect CloudNode garbage: 响应缺少返回码")
-	}
-	if *rsp.RetInfo.Code != 0 {
-		return fmt.Errorf("collect CloudNode garbage: %s", rsp.RetInfo.Msg)
-	}
-	log.InfoContextf(ctx, "[Garbage] cloudnode packages=%d cos_objects=%d cos_bytes=%s deleted_nodes=%d node_batches=%d skipped=%v",
-		rsp.Packages, rsp.CosObjects, rsp.CosBytes, rsp.DeletedNodes, rsp.NodeBatches, rsp.Skipped)
+	log.InfoContextf(ctx, "[Garbage] cloudnode packages=%d cos_objects=%d cos_bytes=%s deleted_nodes=%d node_batches=%d skipped=%v", summary.Packages, summary.COSObjects, summary.COSBytes, summary.DeletedNodes, summary.NodeBatches, summary.Skipped)
 	return nil
+}
+
+// Admin keeps business modules behind the generic native gateway boundary.
+type cloudNodeGarbageSummary struct {
+	RetInfo struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	} `json:"ret_info"`
+	Packages     uint32      `json:"packages"`
+	COSObjects   uint32      `json:"cos_objects"`
+	COSBytes     json.Number `json:"cos_bytes"`
+	DeletedNodes uint32      `json:"deleted_nodes"`
+	NodeBatches  uint32      `json:"node_batches"`
+	Skipped      []string    `json:"skipped"`
 }

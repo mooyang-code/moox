@@ -1,12 +1,8 @@
-# MooX Collector control-plane service configuration.
-
-# Collector 调用 Storage、CloudNode、出口代理等组件统一经 gatewayclient（本机主机网关 + 服务目录）。
 gateway_client:
-  mode: local
   caller: collector
-  key_file: ../secrets/caller-collector.key
-  ca_file: ../certs/moox-ca.crt
-  cache_dir: ./data/gatewayclient
+  key_id: ""
+  key_file: ../../secrets/caller-collector.key
+# MooX Collector control-plane service configuration.
 
 database:
   type: sqlite
@@ -15,11 +11,6 @@ database:
   max_open_conns: 1
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
-
-cloudnode:
-  # 本地开发默认值；生产部署应通过 t_service_deployments / SysDeploy active 部署信息解析依赖服务。
-  address: 127.0.0.1:11401
-  service_path: trpc.moox.cloudnode.CloudNodeMgr
 
 storage:
   result_data_node_id: storage-node-0
@@ -71,19 +62,14 @@ dns:
   resolve_timeout: 5s
   # nameservers: ["119.29.29.29", "1.1.1.1"]
 
-# 出口代理部署在香港，经主机网关调用；部署时由 CLI 按 moox.toml 渲染。
 egress_proxy:
-  # 走出口代理的 HTTP 域名，支持 "*." 前缀；为空时所有请求直连。
-  domains: []
+  domains: ["*.binance.com", "data-api.binance.vision"]
   dns:
-    # 由出口代理解析的域名，结果写入 SCF 的 DNS 快照；为空时只用上面的本机解析。
     domains: []
     refresh_interval: 5m
     request_timeout: 3s
     cache_ttl: 5m
 
-# 标的同步：标签同步每分钟第 30 秒检查一次，按各标签在管理台设置的计划同步自动标签的成员；
-# 属性同步每分钟第 45 秒检查一次，执行本分钟内到点的任务（计划带时区，与主机时区无关）。
 subject_sync:
   fetch_timeout: 2m
   attributes:
@@ -97,3 +83,12 @@ subject_sync:
       instrument_type: spot
       cron: "10 8 * * *"
       timezone: Asia/Shanghai
+
+# 外部 SCF 身份由 Admin 分配；按地域的地址由发布器根据 VPC 路由生成。
+scf_access:
+  access_address: access.example.test:11004
+  access_id: access@storage
+  caller: scf-collector
+  key_id: ""
+  key_file: ../../secrets/caller-scf-collector.key
+scf_access_routes: {}

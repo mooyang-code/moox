@@ -10,7 +10,9 @@ export interface ResampleBackfillSummary {
 }
 
 export function parseFixedFrequencyMinutes(raw: string): number {
-  const match = String(raw || "").trim().match(/^(\d+)(m|h|d)$/i);
+  const match = String(raw || "")
+    .trim()
+    .match(/^(\d+)(m|h|d)$/i);
   if (!match) return 0;
   const count = Number(match[1]);
   if (!Number.isSafeInteger(count) || count <= 0) return 0;
@@ -41,7 +43,8 @@ export function countBackfillBuckets(startRaw: string, endRaw: string, frequency
   if (span % size !== 0) return 0;
   const alignedStart = floorToEpochBucket(start, frequency);
   const alignedEnd = floorToEpochBucket(end, frequency);
-  if (!alignedStart || !alignedEnd || alignedStart.getTime() !== start.getTime() || alignedEnd.getTime() !== end.getTime()) return 0;
+  if (!alignedStart || !alignedEnd || alignedStart.getTime() !== start.getTime() || alignedEnd.getTime() !== end.getTime())
+    return 0;
   const count = span / size;
   return Number.isSafeInteger(count) && count > 0 ? count : 0;
 }

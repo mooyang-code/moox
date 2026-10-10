@@ -137,7 +137,9 @@ describe("factor pages contract", () => {
 
   it("lays out the definitions toolbar like the collector task toolbar", () => {
     const toolbar = definitionsPage.slice(definitionsPage.indexOf('class="task-toolbar"'), definitionsPage.indexOf("<a-table"));
-    const positions = ["新增因子", 'v-model="filters.keyword"', 'v-model="filters.type"', 'v-model="filters.usage"', "查询"].map(text => toolbar.indexOf(text));
+    const positions = ["新增因子", 'v-model="filters.keyword"', 'v-model="filters.type"', 'v-model="filters.usage"', "查询"].map(
+      text => toolbar.indexOf(text)
+    );
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
     expect(definitionsPage).toContain('<a-space class="task-toolbar" wrap>');

@@ -21,11 +21,11 @@ type TagStore interface {
 	ReportTagRunFailure(context.Context, string, string, time.Time, string) error
 }
 
-// TagRunner 同步自动标签的成员。每个标签的同步周期在管理台按标签单独设置，存放在 Storage 中。
 type TagRunner struct {
 	Store        TagStore
 	Listers      Listers
 	FetchTimeout time.Duration
+	Now          func() time.Time
 	Metrics      *Metrics
 }
 
@@ -67,16 +67,24 @@ func tagDue(tag *pb.Tag, now time.Time) (bool, error) {
 	return !schedule.Next(lastRun.In(loc)).After(now), nil
 }
 
-// RunDue 从 Storage 读出全部标签，只同步到期的自动标签。是否到期由标签自己的 cron 和上次运行时间决定，上次运行时间
-// 存在 Storage 里，进程重启后不会漏跑。返回本次失败的汇总，失败已经上报给 Storage。
-func (r *TagRunner) RunDue(ctx context.Context, now time.Time) error {
+func (r *TagRunner) RunOnce(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tags, err := r.Store.ListTags(ctx)
 	if err != nil {
-		return fmt.Errorf("读取标签失败: %w", err)
+		log.ErrorContextf(ctx, "list tags: %v", err)
+		return err
 	}
-	now = now.UTC()
-	var errs []error
+	now := time.Now().UTC()
+	if r.Now != nil {
+		now = r.Now().UTC()
+	}
+	var failures error
 	for _, tag := range tags {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
 		if r.Metrics != nil {
 			r.Metrics.observeTagInventory(tag)
 		}
@@ -85,23 +93,21 @@ func (r *TagRunner) RunDue(ctx context.Context, now time.Time) error {
 		}
 		due, err := tagDue(tag, now)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("标签 %s/%s 的计划无效: %w", tag.GetSpaceId(), tag.GetTagId(), err))
+			log.ErrorContextf(ctx, "tag %s/%s schedule: %v", tag.GetSpaceId(), tag.GetTagId(), err)
+			failures = errors.Join(failures, err)
 			continue
 		}
-		if !due {
-			continue
-		}
-		if err := r.runTag(ctx, tag, now); err != nil {
-			errs = append(errs, fmt.Errorf("标签 %s/%s 同步失败: %w", tag.GetSpaceId(), tag.GetTagId(), err))
+		if due {
+			failures = errors.Join(failures, r.runTag(ctx, tag, now))
 		}
 	}
-	return errors.Join(errs...)
+	return failures
 }
 
 func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) error {
 	timeout := r.FetchTimeout
 	if timeout <= 0 {
-		timeout = DefaultFetchTimeout
+		timeout = 2 * time.Minute
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -121,7 +127,7 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) er
 		}
 		if reportErr := r.Store.ReportTagRunFailure(ctx, tag.GetSpaceId(), tag.GetTagId(), runAt, err.Error()); reportErr != nil {
 			log.ErrorContextf(ctx, "report tag %s/%s failure: %v", tag.GetSpaceId(), tag.GetTagId(), reportErr)
-			return errors.Join(err, fmt.Errorf("向 Storage 上报失败时出错: %w", reportErr))
+			err = errors.Join(err, reportErr)
 		}
 		return err
 	}

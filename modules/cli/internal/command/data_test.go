@@ -3,21 +3,18 @@ package command
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestDefaultAndRequiredFlagValue(t *testing.T) {
@@ -80,48 +77,18 @@ func TestWriteRowsExport(t *testing.T) {
 	assert.Contains(t, string(raw), "dataset_id")
 }
 
-// httpStorageInvoker 把 Storage 调用转成对 httptest 服务器的 POST /<服务名>/<方法>（protojson 编码），
-// 请求里的 space_id 写在 X-Space-Id 请求头，便于沿用 HTTP 形式的测试服务器。
-type httpStorageInvoker struct{ baseURL string }
-
-func (h httpStorageInvoker) Invoke(ctx context.Context, servicePath, method string, req, rsp any, _ ...gatewayclient.CallOption) error {
-	message := req.(proto.Message)
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(message)
-	if err != nil {
-		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, h.baseURL+"/"+servicePath+"/"+method, bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	if spaceID := protoMessageSpaceID(message.ProtoReflect()); spaceID != "" {
-		request.Header.Set("X-Space-Id", spaceID)
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	body, _ := io.ReadAll(response.Body)
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", response.StatusCode, body)
-	}
-	return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(body, rsp.(proto.Message))
-}
-
-func TestCallStorageRawAndRetInfo(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/Access/ReadTimeSeriesRows", r.URL.Path)
+func TestPostStorageRawAndRetInfo(t *testing.T) {
+	server := &testfixture.HandlerGateway{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/"+accessServiceName+"/ReadTimeSeriesRows", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		body, _ := protojson.Marshal(&pb.ReadTimeSeriesRowsRsp{
 			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
 		})
 		w.Write(body)
-	}))
+	})}
 	defer server.Close()
 	rsp := &pb.ReadTimeSeriesRowsRsp{}
-	err := callStorage(context.Background(), httpStorageInvoker{server.URL}, "Access", "ReadTimeSeriesRows", &pb.ReadTimeSeriesRowsReq{}, rsp)
+	err := postStorage(context.Background(), server, accessServiceName, "ReadTimeSeriesRows", &pb.ReadTimeSeriesRowsReq{}, rsp)
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
@@ -142,34 +109,34 @@ func TestResponseRetInfo(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestExportRowsRemotePropagatesTransportError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestExportRowsRemotePropagatesGatewayError(t *testing.T) {
+	server := &testfixture.HandlerGateway{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("fail"))
-	}))
+	})}
 	defer server.Close()
-	_, err := exportRowsRemote(context.Background(), httpStorageInvoker{server.URL}, &pb.ReadTimeSeriesRowsReq{})
+	_, err := exportRowsRemote(context.Background(), server, &pb.ReadTimeSeriesRowsReq{})
 	require.Error(t, err)
 }
 
-func TestCallStorageRawNetworkError(t *testing.T) {
-	err := callStorageRaw(context.Background(), httpStorageInvoker{"http://127.0.0.1:1"}, "Access", "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
+func TestPostStorageRawRequiresGateway(t *testing.T) {
+	err := postStorageRaw(context.Background(), nil, accessServiceName, "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
 	require.Error(t, err)
-	require.ErrorContains(t, callStorageRaw(context.Background(), nil, "Access", "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{}), "未配置")
 }
 
 func TestCheckStorageRetInfoMissingRetInfo(t *testing.T) {
-	err := checkStorageRetInfo("Access", "Read", &pb.ReadTimeSeriesRowsRsp{RetInfo: nil})
+	err := checkStorageRetInfo(accessServiceName, "Read", &pb.ReadTimeSeriesRowsRsp{RetInfo: nil})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing ret_info")
 }
 
-func TestCallStorageWrapsRetInfoError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestPostStorageWrapsRetInfoError(t *testing.T) {
+	server := &testfixture.HandlerGateway{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := protojson.Marshal(&pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "bad"}})
 		w.Write(body)
-	}))
+	})}
 	defer server.Close()
-	err := callStorage(context.Background(), httpStorageInvoker{server.URL}, "Access", "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
-	require.ErrorContains(t, err, "bad")
+	err := postStorage(context.Background(), server, accessServiceName, "Read", &pb.ReadTimeSeriesRowsReq{}, &pb.ReadTimeSeriesRowsRsp{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bad")
 }

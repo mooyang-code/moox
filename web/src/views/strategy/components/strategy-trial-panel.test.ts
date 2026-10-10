@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { validateStrategy } = vi.hoisted(() => ({ validateStrategy: vi.fn() }));
 vi.mock("@/api/strategy", () => ({ validateStrategy }));
-vi.mock("@/api/storage/metadata", () => ({ listViews: vi.fn().mockResolvedValue({ views: [], page_result: { has_more: false } }) }));
+vi.mock("@/api/storage/metadata", () => ({
+  listViews: vi.fn().mockResolvedValue({ views: [], page_result: { has_more: false } })
+}));
 
 import TrialPanel from "./strategy-trial-panel.vue";
 
@@ -17,7 +19,7 @@ const stubs = {
   ResultItems: true,
   ResolvedTable: true,
   "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
-  "a-alert": { template: "<div class=\"alert\"><slot /></div>" }
+  "a-alert": { template: '<div class="alert"><slot /></div>' }
 };
 
 function passed(message: string) {

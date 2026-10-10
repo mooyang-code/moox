@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,28 +15,24 @@ import (
 	"github.com/glebarez/sqlite"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type collectorTaskPurgeFlags struct {
-	File                  string
-	DBPath                string
-	SpaceID               string
-	StopCommand           string
-	BackupDir             string
-	SeedFile              string
-	CollectorInitBin      string
-	MetadataTarget        string
-	MetadataServiceKey    string
-	MetadataServiceSecret string
-	Apply                 bool
-	DryRun                bool
-	DryRunSet             bool
-	Confirm               bool
+	AuthFile         string
+	File             string
+	DBPath           string
+	SpaceID          string
+	StopCommand      string
+	BackupDir        string
+	SeedFile         string
+	CollectorInitBin string
+	Apply            bool
+	DryRun           bool
+	DryRunSet        bool
+	Confirm          bool
 }
 
 type collectorTaskResultRef struct {
@@ -90,32 +88,27 @@ type collectorStorageMetadataClient interface {
 }
 
 type collectorStorageMetadataProxy struct {
-	proxy   storagepb.MetadataClientProxy
-	primary storagepb.PrimaryStoreClientProxy
-	options []client.Option
+	gateway gatewayclient.Invoker
 	auth    *storagepb.AuthInfo
 }
 
-var newCollectorStorageMetadataClient = func(target, accessKey, secret string) collectorStorageMetadataClient {
-	accessKey = firstNonEmpty(strings.TrimSpace(accessKey), "storage-metadata")
-	options := []client.Option{
-		client.WithTarget(target),
-		client.WithNetwork("tcp"),
-		client.WithProtocol("trpc"),
+var newCollectorStorageMetadataClient = func(ctx context.Context, file string, snapshot *setupconfig.Snapshot, authFile string) (collectorStorageMetadataClient, io.Closer, error) {
+	if snapshot == nil && strings.TrimSpace(file) == "" {
+		return nil, nil, fmt.Errorf("Storage inventory requires --file with the operator SSH gateway manifest")
 	}
-	return &collectorStorageMetadataProxy{
-		proxy:   storagepb.NewMetadataClientProxy(options...),
-		primary: storagepb.NewPrimaryStoreClientProxy(options...),
-		options: options,
-		auth: &storagepb.AuthInfo{
-			AppId:  accessKey,
-			AppKey: security.HMACSHA256Hex(secret, []byte(accessKey)),
-		},
+	auth, err := storagePrimaryRoleAuth(authFile, "moox-collector")
+	if err != nil {
+		return nil, nil, err
 	}
+	gateway, err := openCommandGateway(ctx, file, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &collectorStorageMetadataProxy{gateway: gateway, auth: auth}, gateway, nil
 }
 
 func (c *collectorStorageMetadataProxy) ListDatasets(ctx context.Context, req *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("storage metadata client is unavailable")
 	}
 	request := &storagepb.ListDatasetsReq{}
@@ -123,11 +116,13 @@ func (c *collectorStorageMetadataProxy) ListDatasets(ctx context.Context, req *s
 		request = proto.Clone(req).(*storagepb.ListDatasetsReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.ListDatasets(ctx, request, c.options...)
+	rsp := &storagepb.ListDatasetsRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDatasets", request, rsp)
+	return rsp, err
 }
 
 func (c *collectorStorageMetadataProxy) ListViews(ctx context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("storage metadata client is unavailable")
 	}
 	request := &storagepb.ListViewsReq{}
@@ -135,11 +130,13 @@ func (c *collectorStorageMetadataProxy) ListViews(ctx context.Context, req *stor
 		request = proto.Clone(req).(*storagepb.ListViewsReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.ListViews(ctx, request, c.options...)
+	rsp := &storagepb.ListViewsRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListViews", request, rsp)
+	return rsp, err
 }
 
 func (c *collectorStorageMetadataProxy) DeleteDataset(ctx context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("storage metadata client is unavailable")
 	}
 	request := &storagepb.DeleteDatasetReq{}
@@ -147,11 +144,13 @@ func (c *collectorStorageMetadataProxy) DeleteDataset(ctx context.Context, req *
 		request = proto.Clone(req).(*storagepb.DeleteDatasetReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.DeleteDataset(ctx, request, c.options...)
+	rsp := &storagepb.DeleteDatasetRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteDataset", request, rsp)
+	return rsp, err
 }
 
 func (c *collectorStorageMetadataProxy) DeleteView(ctx context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("storage metadata client is unavailable")
 	}
 	request := &storagepb.DeleteViewReq{}
@@ -159,11 +158,13 @@ func (c *collectorStorageMetadataProxy) DeleteView(ctx context.Context, req *sto
 		request = proto.Clone(req).(*storagepb.DeleteViewReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.DeleteView(ctx, request, c.options...)
+	rsp := &storagepb.DeleteViewRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteView", request, rsp)
+	return rsp, err
 }
 
 func (c *collectorStorageMetadataProxy) DeleteDatasetRows(ctx context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	if c == nil || c.primary == nil {
+	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("storage primary client is unavailable")
 	}
 	request := &storagepb.PrimaryDeleteDatasetRowsReq{}
@@ -171,7 +172,9 @@ func (c *collectorStorageMetadataProxy) DeleteDatasetRows(ctx context.Context, r
 		request = proto.Clone(req).(*storagepb.PrimaryDeleteDatasetRowsReq)
 	}
 	request.AuthInfo = c.auth
-	return c.primary.DeleteDatasetRows(ctx, request, c.options...)
+	rsp := &storagepb.PrimaryDeleteDatasetRowsRsp{}
+	err := postStorageRaw(ctx, c.gateway, accessServiceName, "DeleteDatasetRows", request, rsp)
+	return rsp, err
 }
 
 var collectorTaskCmd = &cobra.Command{
@@ -204,18 +207,14 @@ func init() {
 	collectorTaskCmd.AddCommand(collectorTaskPurgeCmd)
 
 	flags := collectorTaskPurgeCmd.Flags()
-	flags.StringVar(&collectorTaskPurgeFlagsValue.File, "file", "", "部署配置文件；用于解析数据库路径")
+	flags.StringVar(&collectorTaskPurgeFlagsValue.File, "file", "./moox.toml", "部署配置文件；用于解析数据库路径和操作员 SSH 网关")
+	flags.StringVar(&collectorTaskPurgeFlagsValue.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.DBPath, "db-path", "", "Collector SQLite 数据库路径；默认取 MOOX_COLLECTOR_DB_PATH 或 ./data/moox_collector.db")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SpaceID, "space-id", "", "只清理指定空间；留空表示清理全部空间")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.StopCommand, "stop-command", "", "执行 apply 时首先停止 Collector 写入的本地命令")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.BackupDir, "backup-dir", "", "备份目录；默认写入数据库所在目录")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SeedFile, "seed-file", "", "重建 Schema 后使用的 Collector 任务种子文件")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.CollectorInitBin, "collector-init-bin", "moox-collector-cli", "Collector CLI 初始化程序路径")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataTarget, "metadata-target", "", "Storage Metadata 的 tRPC 地址（ip://host:port）；不指定时只清点本地数据")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataServiceKey, "metadata-service-key", "", "Storage Metadata AuthInfo app_id；默认 storage-metadata")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataServiceSecret, "metadata-service-secret", "", "Storage Metadata AuthInfo secret；默认取 MOOX_STORAGE_NODE_AUTH_SECRET")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataServiceKey, "metadata-service-access-key", "", "Storage Metadata AuthInfo app_id；--metadata-service-key 的别名")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.MetadataServiceSecret, "metadata-service-secret-key", "", "Storage Metadata AuthInfo secret；--metadata-service-secret 的别名")
 	flags.BoolVar(&collectorTaskPurgeFlagsValue.Apply, "apply", false, "执行删除；必须同时指定 --confirm")
 	flags.BoolVar(&collectorTaskPurgeFlagsValue.DryRun, "dry-run", false, "只输出清单，不修改文件或远端；默认行为")
 	flags.BoolVar(&collectorTaskPurgeFlagsValue.Confirm, "confirm", false, "确认执行破坏性重置")
@@ -234,11 +233,8 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 			return nil, fmt.Errorf("load collector purge config: %w", err)
 		}
 		if dbPath == "" {
-			host, err := collectorHost(snapshot.Manifest)
-			if err != nil {
-				return nil, err
-			}
-			dbPath = filepath.Join(host.Root, "data", "collector", "moox_collector.db")
+			paths := snapshot.Manifest.Paths.Resolved()
+			dbPath = filepath.Join(paths.ControlRoot, "data", "moox_collector.db")
 		}
 	}
 	if dbPath == "" {
@@ -274,26 +270,18 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 		return summary, err
 	}
 
-	metadataTarget := strings.TrimSpace(flags.MetadataTarget)
-	var metadataClient collectorStorageMetadataClient
-	if metadataTarget == "" {
-		summary.StorageInventoryReason = "no --metadata-target was supplied"
-	} else {
-		metadataSecret := firstNonEmpty(
-			strings.TrimSpace(flags.MetadataServiceSecret),
-			os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"),
-		)
-		metadataKey := firstNonEmpty(
-			strings.TrimSpace(flags.MetadataServiceKey),
-			"storage-metadata",
-		)
-		metadataClient = newCollectorStorageMetadataClient(metadataTarget, metadataKey, metadataSecret)
-		if err := inspectCollectorStorageInventory(ctx, metadataClient, summary); err != nil {
-			resetCollectorStorageInventory(summary)
-			summary.StorageInventoryStatus = "unavailable"
-			summary.StorageInventoryReason = err.Error()
-		}
+	metadataClient, closer, err := newCollectorStorageMetadataClient(ctx, flags.File, snapshot, flags.AuthFile)
+	if closer != nil {
+		defer closer.Close()
 	}
+	if err != nil {
+		summary.StorageInventoryReason = err.Error()
+	} else if err := inspectCollectorStorageInventory(ctx, metadataClient, summary); err != nil {
+		resetCollectorStorageInventory(summary)
+		summary.StorageInventoryStatus = "unavailable"
+		summary.StorageInventoryReason = err.Error()
+	}
+
 	if !flags.Apply {
 		if summary.StorageInventoryStatus != "available" && summary.StorageInventoryReason == "" {
 			summary.StorageInventoryReason = "metadata inventory was not configured"
@@ -552,7 +540,7 @@ func validateCollectorTaskPurgeApply(flags collectorTaskPurgeFlags, summary *col
 		return fmt.Errorf("collector task purge summary is nil")
 	}
 	if summary.StorageInventoryStatus != "available" {
-		return fmt.Errorf("collector task purge apply requires a complete Storage-owned View/Dataset inventory; run dry-run with Metadata target and fix: %s", summary.StorageInventoryReason)
+		return fmt.Errorf("collector task purge apply requires a complete Storage-owned View/Dataset inventory; run dry-run with the operator SSH gateway and fix: %s", summary.StorageInventoryReason)
 	}
 	if err := validateCollectorTaskPurgeRefs(summary.TaskIDs); err != nil {
 		return err
@@ -560,6 +548,7 @@ func validateCollectorTaskPurgeApply(flags collectorTaskPurgeFlags, summary *col
 	if strings.TrimSpace(flags.StopCommand) == "" {
 		return fmt.Errorf("collector task purge apply requires --stop-command to stop Collector writes")
 	}
+
 	if strings.TrimSpace(flags.SpaceID) == "" {
 		initBin := strings.TrimSpace(flags.CollectorInitBin)
 		if initBin == "" {

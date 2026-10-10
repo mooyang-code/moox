@@ -18,6 +18,9 @@ import (
 func TestHandlerRoutesTimerToClaimedMarketFetch(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
+	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
 	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
@@ -71,15 +74,16 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	// never the source of execution membership.
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "kline")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage-runtime:12004")
 
 	published := 0
-	storageCreated := 0
 	var observed marketfetch.Request
+	var observedMarket string
 	handler := &Handler{
 		NewMarketFetch: func() *marketfetch.Handler {
 			return &marketfetch.Handler{
-				NewStorage: func(_, _ string) (marketfetch.Storage, error) {
-					storageCreated++
+				NewStorage: func(market, _ string) (marketfetch.Storage, error) {
+					observedMarket = market
 					return timerStorage{}, nil
 				},
 				Publish: func(_ context.Context, request marketfetch.Request, _ proto.Message) error {
@@ -114,7 +118,7 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	require.True(t, response.(*model.Response).Success)
 	require.Equal(t, 1, published, "durable scheduler invokes must publish BatchCompleted")
 	require.Equal(t, "batch-shared", observed.BatchID)
-	require.Equal(t, 1, storageCreated, "Storage 客户端按函数环境变量中的外部接入创建，调用载荷不携带地址")
+	require.Equal(t, "spot", observedMarket)
 }
 
 func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {

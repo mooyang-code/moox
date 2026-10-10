@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -31,7 +32,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := applySchema(dbPath, adminschema.AdminSQL()); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--nats-url", "tls://203.0.113.10:4222"}
+	seedEventBusDeployment(t, dbPath)
+	args := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"}
 	var out bytes.Buffer
 	if err := runEventBusCredentialsCommand(args, &out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -87,13 +89,14 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	keyPath := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(keyPath, []byte("test-encryption-key-for-eventbus"), 0o600))
 	require.NoError(t, applySchema(dbPath, adminschema.AdminSQL()))
+	seedEventBusDeployment(t, dbPath)
 
-	ensureArgs := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--nats-url", "tls://203.0.113.10:4222"}
+	ensureArgs := []string{"eventbus-credentials", "ensure", "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"}
 	var out bytes.Buffer
 	require.NoError(t, runEventBusCredentialsCommand(ensureArgs, &out, &bytes.Buffer{}))
 
 	exportDir := filepath.Join(dir, "out")
-	exportArgs := []string{"eventbus-credentials", "export", "--db-path", dbPath, "--encryption-key-file", keyPath, "--output-dir", exportDir, "--nats-url", "tls://203.0.113.10:4222"}
+	exportArgs := []string{"eventbus-credentials", "export", "--db-path", dbPath, "--encryption-key-file", keyPath, "--output-dir", exportDir, "--node-id", "gateway-node-1"}
 	out.Reset()
 	require.NoError(t, runEventBusCredentialsCommand(exportArgs, &out, &bytes.Buffer{}))
 	assert.FileExists(t, filepath.Join(exportDir, "users.yaml"))
@@ -308,6 +311,16 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 	assert.Contains(t, text, "strategy-token")
 	assert.Contains(t, text, "factor-token")
 	assert.Contains(t, text, "trade-token")
+}
+
+func seedEventBusDeployment(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	defer closeAdminCLIDB(db)
+	dao, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
+	require.NoError(t, err)
+	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host", "eventbus"}}}))
 }
 
 func eventBusACLBlock(yaml, username string) string {
@@ -541,4 +554,23 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.NoError(t, factorConsumer.Close())
+}
+
+func TestEventBusURLFollowsRemotePlacementAndRejectsDisabledHost(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "admin.db")), &gorm.Config{})
+	require.NoError(t, err)
+	defer closeAdminCLIDB(db)
+	require.NoError(t, db.Exec(adminschema.AdminSQL()).Error)
+	dao, err := sysdeploy.NewTopologyDAO(db, "control")
+	require.NoError(t, err)
+	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{
+		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host"}},
+		{HostID: "bus", Address: "bus.example.test", Components: []string{"eventbus"}},
+	}))
+	address, err := eventBusNATSURL(db, "control")
+	require.NoError(t, err)
+	require.Equal(t, "tls://bus.example.test:4222", address)
+	require.NoError(t, dao.SetHostStatus(t.Context(), "bus", "disabled"))
+	_, err = eventBusNATSURL(db, "control")
+	require.ErrorContains(t, err, "active EventBus placement not found")
 }

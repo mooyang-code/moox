@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
@@ -67,13 +65,12 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	} else if interrupted > 0 {
 		log.Infof("进程重启：%d 个运行中的回放已标记为 failed(interrupted)", interrupted)
 	}
-	var gateway *gatewayclient.Client
-	if cfg.DependenciesConfigured() {
-		if gateway, err = gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient}); err != nil {
-			return nil, nil, fmt.Errorf("创建 strategy 的 gatewayclient: %w", err)
-		}
-		closers = append(closers, func() error { gateway.Close(); return nil })
+	// 访问 Storage、FactorMgr 与 Trade 统一经本机主机网关（strategy 身份）；网关客户端由本进程持有，各适配器只借用。
+	gateway, err := cfg.OpenGateway(func(err error) { log.Warnf("strategy 网关目录刷新失败：%v", err) })
+	if err != nil {
+		return nil, nil, fmt.Errorf("打开 strategy 的网关客户端：%w", err)
 	}
+	closers = append(closers, gateway.Close)
 	eventRuntime, err := newEventBusRuntime(db, cfg)
 	if err != nil {
 		return nil, nil, err
@@ -81,18 +78,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	closers = append(closers, eventRuntime.Close)
 
 	// 实时与回放共用 Storage/Factor 适配；回放按 replay.page_size 分页读取较长的区间。
-	var inputClient, replayClient input.Client
-	if cfg.DependenciesConfigured() {
-		live := newInputClient(cfg, gateway)
-		inputClient = live
-		ranged := *live
-		ranged.PageSize = uint32(cfg.Replay.PageSize)
-		replayClient = &ranged
-	}
+	live := newInputClient(cfg, gateway)
+	var inputClient input.Client = live
+	ranged := *live
+	ranged.PageSize = uint32(cfg.Replay.PageSize)
+	var replayClient input.Client = &ranged
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient}}
-	if gateway != nil {
-		service.Owner = tradeowner.New(cfg.Trade, gateway)
-	}
+	service.Owner = tradeowner.New(cfg.Trade, gateway)
 	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
@@ -108,10 +100,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	reconcileCtx, cancelReconcile := context.WithTimeout(ctx, startupReconcileTimeout)
 	if err := service.ReconcileDisabledInstances(reconcileCtx); err != nil {
 		log.Warnf("启动对账：已停用实例的 Trade 释放未完成，稍后自动重试：%v%s", err, tradeDetail(err))
-	}
-	if err := requireExecutionDependencies(ctx, db, cfg); err != nil {
-		cancelReconcile()
-		return nil, nil, err
 	}
 	if err := service.ReconcileEnabledInstances(reconcileCtx); err != nil {
 		log.Warnf("启动对账：%v%s", err, tradeDetail(err))
@@ -185,21 +173,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return errors.Join(closeErr, db.Close())
 	}
 	return s, closeFn, nil
-}
-
-// requireExecutionDependencies 防止重启后启用实例与其 Trade 授权继续存在、却没有可用的求值路径。
-func requireExecutionDependencies(ctx context.Context, repo *store.Store, cfg Config) error {
-	enabled := true
-	instances, err := repo.ListInstances(ctx, "", &enabled)
-	if err != nil {
-		return fmt.Errorf("检查启用实例失败：%w", err)
-	}
-	for _, instance := range instances {
-		if !cfg.DependenciesConfigured() {
-			return fmt.Errorf("存在启用实例 %s，但未配置 gateway_client（Factor、Storage 与 Trade 的访问入口）", instance.InstanceID)
-		}
-	}
-	return nil
 }
 
 func reconcileLoop(ctx context.Context, service *rpc.Service) {
@@ -326,16 +299,11 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 }
 
 // newInputClient 构造 Storage（Metadata、DataView）与 Factor 的窄适配，调用经 gatewayclient 发往本机主机网关。
-func newInputClient(cfg Config, gateway *gatewayclient.Client) *input.RPCClient {
-	storageOptions := gateway.ClientOptions(gatewayclient.WithTimeout(cfg.Storage.Timeout))
-	factorOptions := gateway.ClientOptions(gatewayclient.WithTimeout(cfg.Factor.Timeout))
-	return &input.RPCClient{
-		Metadata: storagepb.NewMetadataClientProxy(storageOptions...),
-		DataView: storagepb.NewDataViewClientProxy(storageOptions...),
-		Factor:   factorpb.NewFactorMgrClientProxy(factorOptions...),
-		Auth:     &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.AppKey, Operator: "strategy"},
-		ViewAuth: &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.ViewAppKey, Operator: "strategy"},
-	}
+func newInputClient(cfg Config, gateway gatewayclient.Invoker) *input.RPCClient {
+	client := input.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
+	client.Auth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.AppKey, Operator: "strategy"}
+	client.ViewAuth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.ViewAppKey, Operator: "strategy"}
+	return client
 }
 
 func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {

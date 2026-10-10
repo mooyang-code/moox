@@ -442,7 +442,7 @@ func (x *GetSecretRsp) GetSecret() *Secret {
 	return nil
 }
 
-// GetSecretValue 仅供后台服务经 gatewayclient 签名调用（组件目录的 ACL 只放行需要的调用方），
+// GetSecretValue 仅供后台服务通过 /api/service/secret/GetSecretValue 调用，
 // 返回明文 secret_value。管理台 /api/admin 路径不得调用此接口。
 type GetSecretValueReq struct {
 	state         protoimpl.MessageState

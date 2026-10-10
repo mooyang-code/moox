@@ -16,7 +16,7 @@ type SecretMaterial struct {
 }
 
 func (c *Client) GetSecretValue(ctx context.Context, secretID string) (*SecretMaterial, error) {
-	raw, err := c.call(ctx, ServiceSecretMgr, "GetSecretValue", map[string]any{"secret_id": secretID})
+	raw, err := c.gatewayJSON(ctx, "trpc.moox.ops.SecretMgr", "GetSecretValue", map[string]any{"secret_id": secretID})
 	if err != nil {
 		return nil, err
 	}

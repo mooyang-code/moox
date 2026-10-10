@@ -119,7 +119,7 @@ func startObservabilityConsumer(
 		return
 	}
 	if cfg.Metrics.Enabled && storage == nil {
-		storage = newMetricsStorage(runtime, cfg)
+		storage = monmetrics.NewStorageAdapter(runtime.StorageGateway, runtime.StorageGateway, cfg.Metrics.Storage)
 	}
 	var messageStore *monmetrics.MetricMessageStore
 	if runtime.MetricStores != nil {
@@ -134,12 +134,8 @@ func startObservabilityConsumer(
 		return
 	}
 	routes := observabilityconsumer.Routes{
-		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{
-			Checks: runtime.Repositories.Checks,
-			// SCF 采集函数（组件目录中的外部调用方 scf-collector）没有部署记录；其余上报方都必须是已登记的部署。
-			ExternalProducers: externalProducers,
-		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
-		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
+		Metrics: metricsObservabilityRoute(storage, messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
+		Host:    hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 	}
 	runtime.Go(func() {
 		for ctx.Err() == nil {
@@ -212,7 +208,6 @@ func startObservabilityConsumer(
 func metricsObservabilityRoute(
 	storage *monmetrics.StorageAdapter,
 	messageStore *monmetrics.MetricMessageStore,
-	authorizer monmetrics.ProducerAuthorizer,
 	moduleMetrics *report.ModuleMetrics,
 	runtime *Runtime,
 	enabled bool,
@@ -226,18 +221,6 @@ func metricsObservabilityRoute(
 		}
 		if message.GetSpaceId() != monmetrics.InternalMetricSpaceID {
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
-		}
-		if authorizer != nil {
-			registered, err := authorizer.IsRegistered(ctx, metricReport.GetServiceName(), metricReport.GetNodeId())
-			if err != nil {
-				return fmt.Errorf("authorize metric producer: %w", err)
-			}
-			if !registered {
-				if runtime != nil {
-					runtime.Unregistered.Record(metricReport.GetServiceName(), metricReport.GetNodeId(), metricReport.GetInstanceId(), metricReport.GetServiceVersion(), message.GetOccurredAt().AsTime())
-				}
-				return observabilityconsumer.Permanent(fmt.Errorf("unregistered metric producer %s/%s", metricReport.GetServiceName(), metricReport.GetNodeId()))
-			}
 		}
 		observed := message.GetOccurredAt().AsTime()
 		samples, err := monmetrics.ParseSnapshot(metricReport.GetSnapshot(), monmetrics.Envelope{

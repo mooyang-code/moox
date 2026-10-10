@@ -14,12 +14,8 @@ describe("page toolbar cleanup contract", () => {
     expect(hostMonitor).not.toContain("formatAge");
 
     const deployments = read("ops/deployments/index.vue");
+    expect(deployments).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(deployments).toMatch(/\.deployments-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
-    for (const tab of ["ops/deployments/services-tab.vue", "ops/deployments/routes-tab.vue"]) {
-      const source = read(tab);
-      expect(source, tab).toContain("InfoTip");
-      expect(source, tab).toMatch(/\.toolbar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-    }
 
     const secrets = read("settings/secrets/index.vue");
     expect(secrets).not.toContain("统一管理 admin 本地秘钥");
