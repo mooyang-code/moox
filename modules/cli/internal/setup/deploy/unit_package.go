@@ -99,7 +99,7 @@ func schemaAsset(module, component string) unitAsset {
 }
 
 var unitSpecs = map[string]unitComponentSpec{
-	"host-gateway": {[]string{"moox-host-gateway-cli"}, []unitAsset{configAsset("hostgateway", "host-gateway")}},
+	"host-gateway": {[]string{"moox-host-gateway-cli", "moox-runtime"}, []unitAsset{configAsset("hostgateway", "host-gateway")}},
 	"host-agent": {[]string{"moox-host-agent-cli"}, []unitAsset{
 		{"modules/hostagent/config/app.yaml", "host-agent/config/app.yaml", false},
 		{"modules/hostagent/config/trpc_go.yaml", "host-agent/config/trpc_go.yaml", false},

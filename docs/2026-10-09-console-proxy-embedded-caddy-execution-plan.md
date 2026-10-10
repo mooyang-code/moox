@@ -131,6 +131,10 @@ D3 首批清理删除已无生产调用方的 CLI Admin HTTP 客户端、旧认�
 
 主计划 G5 的身份材料生产端已接入：离线 bootstrap 与普通 `host-bundle` 共用私密包格式，主机叶证书每次重签，调用方 KeyID/密钥、CA/主密钥和启停状态保留。普通导出按目标放置限定身份，Access 附独立外部验证表，操作员身份仅在 control bootstrap 中单独导出；文件均为 0600、目录 0700，元数据记录逐文件摘要，CA 私钥和主密钥留在 control。运行配置路径统一为 `host-gateway/config/app.yaml`，共享客户端可通过业务根的目录链接访问独立主机包并正确解析相对 CA。62 个受影响测试包全量 race/vet、13 个本机构建测试制品在 Linux 全量执行、真实 Linux Admin CLI 的空库离线 bootstrap/重跑/三目标导出通过；Linux 未编译，部署组件未启动。格式/边界/模块图/文档/质量、新身份/打包/登记与 CGO 构建契约、15 份空库 schema 通过。部署端传输、注入、操作员本机安装和实际五步 bootstrap 尚待 G2/G3/G5～G7/G11 接通，G5 仍不标完成；最终新 Agent 审查与正式验收继续保留。
 
+主计划 G6 的共用运行层已实现：host 软件包携带纯 Go `moox-runtime`，统一私密运行计划、维护锁及继承 FD、跨发布暂停标记、PID/排空记录与正逆序启停。Linux pidfd 核验实际进程；启动屏障保证先登记再 exec，中断可恢复。健康探针使用共享 HMAC 并绑定制品摘要与本次 boot ID，守护依据 liveness，not-ready 或错误身份不自动重启。console-proxy 的停止预算保存实际三阶段之和，旧发布预算不被新配置缩短；取消后保留排空状态，强杀后确认退出。实际安装脚本、回滚、`setup pause/resume` 和 bootstrap 接线仍待 G2/G3/G6/G7/G11 完成，本共用层不代表代理已经正式部署。
+
+G6 本批验证：本机 CLI 16 包全量 race/vet；两个架构的助手、真实代理和三个测试制品均关闭 CGO 在 macOS 构建。Linux 完整门禁十组必跑场景无跳过通过，含真实 HTTPS 长请求排空、暂停保护、恢复后 CA 保持和启动中断恢复；另外运行命令与部署包全包测试通过。实际 host 包在本机/Linux 摘要核对一致，包含两项主机服务与共用助手；格式/边界/854 模块图/文档/质量、相关软件包/身份/登记与 CGO 构建契约、15 份空库 schema 通过。Linux 未编译，正式环境未切换；生成脚本、WebSocket/SFTP/HTTP3、公开 ACME、最终新 Agent 审查和正式验收仍保留。
+
 ## 1. 目标与已确定的决策
 
 将 Caddy 作为 Go 库集成到 `moox-console-proxy`，由同一二进制、同一进程承担控制台 HTTPS 和前端反向代理。部署端不再安装、下载或管理独立的 Caddy 可执行文件。

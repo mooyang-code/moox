@@ -128,7 +128,7 @@ binary_names=(
   moox-archive moox-archive-cli
 )
 if [[ "${TARGET_GOOS}" == "linux" ]]; then
-  binary_names+=(moox-host-agent moox-host-agent-cli)
+  binary_names+=(moox-host-agent moox-host-agent-cli moox-runtime)
 fi
 if [[ "${TARGET_GOOS}/${TARGET_GOARCH}" == "linux/amd64" ]]; then
   binary_names+=(moox-collector-scf)

@@ -119,6 +119,7 @@ build_collector_market_data_scf() {
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
+    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
     build_go modules/admin ./cmd/server moox-admin 0
     build_go modules/admin ./cmd/cli moox-admin-cli 0
     build_go modules/hostgateway ./cmd/server moox-host-gateway 0
@@ -149,6 +150,10 @@ case "${TARGET_MODULE}" in
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
     ;;
+  runtime)
+    [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-runtime supports linux only" >&2; exit 1; }
+    build_go modules/cli ./cmd/moox-runtime moox-runtime 0
+    ;;
   admin)
     build_go modules/admin ./cmd/server moox-admin 0
     build_go modules/admin ./cmd/cli moox-admin-cli 0
@@ -159,6 +164,7 @@ case "${TARGET_MODULE}" in
   host-gateway)
     build_go modules/hostgateway ./cmd/server moox-host-gateway 0
     build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
+    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
     ;;
   eventbus)
     build_go modules/eventbus ./cmd/server moox-eventbus 0
