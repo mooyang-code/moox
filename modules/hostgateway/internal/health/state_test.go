@@ -123,3 +123,22 @@ func assertStatus(t *testing.T, handler http.Handler, path string, want int) {
 		t.Fatalf("%s status = %d, want %d", path, recorder.Code, want)
 	}
 }
+
+// Monitor 的部署检查按响应体里的 "ready":true 判定就绪，主机网关的 /readyz 要和其他组件一致。
+func TestReadyzBodyMatchesMonitorProbe(t *testing.T) {
+	state := NewState()
+	read := func() (int, string) {
+		recorder := httptest.NewRecorder()
+		state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		return recorder.Code, recorder.Body.String()
+	}
+	if code, body := read(); code != http.StatusServiceUnavailable || !strings.Contains(body, `"ready":false`) {
+		t.Fatalf("未就绪时 = %d %q", code, body)
+	}
+	state.ApplyRoutes("hash", 1, false)
+	state.RouteSyncSucceeded(time.Now())
+	state.RouteReportSucceeded(time.Now())
+	if code, body := read(); code != http.StatusOK || !strings.Contains(body, `"ready":true`) {
+		t.Fatalf("就绪时 = %d %q", code, body)
+	}
+}

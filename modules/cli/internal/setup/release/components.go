@@ -399,6 +399,8 @@ func renderFactorMgr(r *renderer, c *Component) error {
 	c.SecretEnv = append(c.SecretEnv, secretStorageInternalAuth)
 	c.SharedSecrets = append(c.SharedSecrets, secretStorageInternalAuth)
 	c.EventBusFiles = append(c.EventBusFiles, "factor-eventbus.yaml", eventBusCA)
+	// 启动时要读 Storage 里的数据集并核对因子集：Storage 还没有切换完成或元数据还没导入时起不来。
+	c.NeedsMetadata = true
 	db := r.dataPath("factor-mgr", "factor.db")
 	c.Env = append(c.Env, "MOOX_FACTOR_DB_PATH="+db)
 	// 创建或修改因子定义时会试加载源码，需要带 pandas 和 numpy 的 python3。

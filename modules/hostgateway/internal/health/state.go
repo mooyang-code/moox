@@ -183,13 +183,16 @@ func (state *State) Handler() http.Handler {
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write([]byte("ok\n"))
 	})
+	// 响应体与其他组件一致（{"ready":true}）：Monitor 的部署检查按这个内容判定就绪。
 	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
 		if !state.Ready() {
-			http.Error(response, "control plane sync or heartbeat is stale", http.StatusServiceUnavailable)
+			response.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = response.Write([]byte(`{"ready":false,"details":{"reason":"控制面同步或心跳已过期"}}` + "\n"))
 			return
 		}
 		response.WriteHeader(http.StatusOK)
-		_, _ = response.Write([]byte("ready\n"))
+		_, _ = response.Write([]byte(`{"ready":true}` + "\n"))
 	})
 	mux.HandleFunc("GET /metrics", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

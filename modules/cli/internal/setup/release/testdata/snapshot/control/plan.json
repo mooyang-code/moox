@@ -533,7 +533,7 @@
         "URL": ""
       },
       "StartupGrace": 60,
-      "NeedsMetadata": false,
+      "NeedsMetadata": true,
       "StopTimeout": 30,
       "DataDirs": [
         "data/factor-mgr"
