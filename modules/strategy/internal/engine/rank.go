@@ -289,6 +289,22 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			raw[id] = base[id].String()
 			outcome.fresh[id] = struct{}{}
 		}
+		if rule.Rule.Weight.HasCap {
+			// cap 在建仓时就按批次份额落实并保存：份额的上限是 cap / total，各批次叠加后不会超过 cap。延续期间只移除缺数份额、
+			// 其余持仓保持原份额；若每期都对剩余份额重新套 cap，被裁剪的余量会重新分给延续的持仓，等于缺数份额没有留作现金。
+			shares := make(map[string]quant.Decimal, len(raw))
+			for id, value := range raw {
+				share, err := quant.Parse(value)
+				if err != nil {
+					return outcome, fmt.Errorf("%s 的基准权重无效：%w", id, err)
+				}
+				shares[id] = share
+			}
+			shares = applyCap(sortedIDs(shares), shares, rule.Rule.Weight.Cap.Div(rule.Rule.Weight.Total))
+			for id, share := range shares {
+				raw[id] = share.String()
+			}
+		}
 		for _, target := range rebuild {
 			// 补建与首次建立的批次把建仓序号记为它最近一个应建仓的 bar（offset 对齐），而不是本期：节奏不随补建漂移。
 			established := frame.BarIndex - ((frame.BarIndex-int64(target))%int64(holding.Bars)+int64(holding.Bars))%int64(holding.Bars)

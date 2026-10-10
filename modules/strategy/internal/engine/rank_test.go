@@ -519,6 +519,45 @@ rules:
 	if decision.State.Targets["A"] != "1" {
 		t.Fatalf("跳过时应沿用前序：%+v", decision.State)
 	}
+	// 求值出错导致跳过时，解释明细仍覆盖全部 E(r)，每个标的恰好一条。
+	if len(decision.Items) != 2 || findItem(t, decision, "r", "A").Stage != StageIdle || findItem(t, decision, "r", "B").Reason != "period_skipped" {
+		t.Fatalf("跳过时每个标的应有一条明细：%+v", decision.Items)
+	}
+}
+
+// 多条规则时，出错的规则与排在它后面的规则都补齐明细；前面已完成的规则保持自己的明细，不重复。
+func TestRuleErrorSkipExplainsEveryRule(t *testing.T) {
+	program := compile(t, `name: broken2
+rules:
+  - id: good
+    type: rank
+    score: "x"
+    select: {top: 1}
+    weight: {total: 0.5}
+  - id: bad
+    type: rank
+    score: "x / y"
+    select: {top: 1}
+    weight: {total: 0.25}
+  - id: later
+    type: rank
+    score: "x"
+    select: {top: 1}
+    weight: {total: 0.25}
+`, "x", "y")
+	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("x", 1, "y", 0), "B": values("x", 2, "y", 0)}), State{})
+	assertSkipped(t, decision, SkipConfigError)
+	seen := map[string]int{}
+	for _, item := range decision.Items {
+		seen[item.RuleID+"/"+item.InstrumentID]++
+	}
+	for _, rule := range []string{"good", "bad", "later"} {
+		for _, id := range []string{"A", "B"} {
+			if seen[rule+"/"+id] != 1 {
+				t.Fatalf("规则 %s 下 %s 应恰有一条明细：%d（%+v）", rule, id, seen[rule+"/"+id], decision.Items)
+			}
+		}
+	}
 }
 
 // buffer 按全样本名次（与解释明细一致）判断"前 N+B 名"：select.where 剔除第 1 名后，名次 3 的上期持仓不在前 2 名。
@@ -539,5 +578,41 @@ portfolio:
 	assertWeights(t, decision, map[string]string{"B": "1"})
 	if item := findItem(t, decision, "r", "C"); item.Rank != 3 || item.Reason != "not_selected" {
 		t.Fatalf("C 的全样本名次为 3，超出 buffer：%+v", item)
+	}
+}
+
+// holding 延续期间缺数只移除该标的的份额并留现金，cap 在建仓时落实：其余持仓的权重不能因为每期重新套 cap
+// 而收到被裁剪的余量。
+func TestHoldingCapMissingKeepsOtherHoldingsUnchanged(t *testing.T) {
+	program := compile(t, `name: holdcap
+rules:
+  - id: h
+    type: rank
+    score: "m"
+    select: {top: 3}
+    weight: {total: 0.9, method: rank, cap: 0.4}
+    holding: {bars: 10, offsets: [0]}
+portfolio:
+  max_missing: 1
+`, "m")
+	bar0 := frameOf(program, map[string]Row{"A": values("m", 3), "B": values("m", 2), "C": values("m", 1)})
+	bar0.BarIndex = 0
+	first := evaluate(t, program, bar0, State{})
+	assertOK(t, first)
+	before := first.State.Targets
+
+	bar1 := frameOf(program, map[string]Row{"A": values("m", 3), "C": values("m", 1)})
+	bar1.BarIndex = 1
+	bar1.Expected["h"] = []string{"A", "B", "C"}
+	second := evaluate(t, program, bar1, first.State)
+	assertOK(t, second)
+	after := second.State.Targets
+	if _, held := after["B"]; held {
+		t.Fatalf("缺数的 B 不应继续持有：%v", after)
+	}
+	for _, id := range []string{"A", "C"} {
+		if after[id] != before[id] {
+			t.Fatalf("%s 的权重应保持 %s，实际 %s（缺数份额应留现金而不是加仓）", id, before[id], after[id])
+		}
 	}
 }

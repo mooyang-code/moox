@@ -72,6 +72,10 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
 		}
 		if err != nil {
+			// 出错的规则与排在它后面的规则都还没有产出明细：补齐可用标的，使每条规则的解释仍覆盖全部 E(r)。
+			for j := i; j < len(program.Rules); j++ {
+				decision.Items = append(decision.Items, partitions[j].unevaluated(program.Rules[j].Rule.ID)...)
+			}
 			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err))
 		}
 		allocated := quant.Zero()
