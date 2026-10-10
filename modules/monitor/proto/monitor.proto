@@ -115,6 +115,10 @@ message HealthBusinessCheck {
 message HealthGatewaySignal {
   string kind = 1;
   HealthSignal signal = 2;
+  // Persisted first observation of the current desired/applied mismatch.
+  string pending_since = 3;
+  string expected_hash = 4;
+  string applied_hash = 5;
 }
 message HealthHost {
   string host_id = 1;

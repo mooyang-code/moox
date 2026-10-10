@@ -30,73 +30,93 @@ export interface Space {
   updated_at?: string;
 }
 
-export interface ServiceDeployment {
-  id?: number;
-  service_name: string;
-  service_kind: string;
-  protocol: string;
-  host: string;
-  port: number;
-  base_url?: string;
-  rpc_address?: string;
-  gateway_path?: string;
-  scope: string;
-  status: string;
+export type DeploymentStatus = "enabled" | "disabled";
+export interface DeploymentHost {
+  host_id: string;
+  address: string;
+  private_address?: string;
+  region?: string;
+  status: DeploymentStatus;
   description?: string;
-  extra_config?: string;
   created_at?: string;
   updated_at?: string;
-  node_id: string;
-  gateway_service_id: string;
-  gateway_enabled: boolean;
 }
-
-export type ServiceDeploymentInput = Pick<
-  ServiceDeployment,
-  | "service_name"
-  | "service_kind"
-  | "protocol"
-  | "host"
-  | "port"
-  | "gateway_path"
-  | "scope"
-  | "status"
-  | "description"
-  | "extra_config"
-  | "node_id"
-  | "gateway_service_id"
-  | "gateway_enabled"
->;
-
-export interface GatewayNode {
-  node_id: string;
-  host_id: number;
+export interface ComponentPlacement {
+  host_id: string;
+  component_id: string;
+  status: DeploymentStatus;
+  created_at?: string;
+  updated_at?: string;
+}
+export interface CatalogGrant {
+  methods: string[];
+  callers: string[];
+}
+export interface CatalogService {
+  path: string;
+  port: number;
+  methods: string[];
+  acl: CatalogGrant[];
+  timeout_ms?: number;
+  max_body_bytes?: number;
+  console_name?: string;
+  read_only_methods?: string[];
+}
+export interface CatalogComponent {
+  id: string;
   name: string;
-  public_address: string;
-  status: string;
-  route_hash?: string;
-  applied_route_hash?: string;
-  route_count?: number;
+  binary: string;
+  scope: "host" | "control" | "any";
+  replicas: "single" | "multi";
+  protected: boolean;
+  ports?: number[];
+  health: { kind: string; port?: number; loopback?: boolean; ready_body?: string };
+  services?: CatalogService[];
+  doctor?: Record<string, unknown>;
+}
+export interface ComponentCatalog {
+  version: number;
+  components: CatalogComponent[];
+  principals: { id: string; allow: { service: string; methods: string[] }[] }[];
+}
+export interface CatalogResponse {
+  catalog_yaml: string;
+  sha256: string;
+  control_host_id: string;
+}
+export interface HostGatewayRuntimeStatus {
+  instance_id?: string;
+  version?: string;
+  expected_hash?: string;
+  applied_hash?: string;
+  route_count?: number | string;
   last_seen_at?: string;
   last_error?: string;
-  created_at?: string;
-  updated_at?: string;
+  previous_instance_id?: string;
+  replaced_at?: string;
+  conflict_instance_id?: string;
+  conflict_seen_at?: string;
 }
-
-export type GatewayNodeInput = Pick<GatewayNode, "node_id" | "host_id" | "name" | "public_address" | "status">;
-
-export interface GatewayRoute {
-  service_id: string;
-  address: string;
+export interface HostGatewayRoute {
+  component_id: string;
   service_path: string;
-  timeout_ms: number;
-  max_body_bytes: number;
-  allowed_methods?: string[];
+  method: string;
+  address: string;
+  timeout_ms?: number | string;
+  max_body_bytes?: number | string;
+  callers?: string[];
+  read_only?: boolean;
 }
-
-export interface ServiceDeploymentWarning {
-  code: string;
-  message: string;
-  service_name?: string;
-  related_endpoint?: string;
+export interface HostRoutesResponse {
+  host_id: string;
+  definition_hash: string;
+  routes?: HostGatewayRoute[];
+  gateway_status?: HostGatewayRuntimeStatus;
+  snapshot_schema_version: number;
+  compiled_at: string;
+}
+export interface ServiceDirectory {
+  version?: string;
+  services?: Record<string, { host_ids?: string[] }>;
+  hosts?: Record<string, { address?: string; private_address?: string; region?: string }>;
 }

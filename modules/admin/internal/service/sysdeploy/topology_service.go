@@ -50,7 +50,7 @@ func topologyPage(page *pb.Page, total int) (start, end int, result *pb.PageResu
 func (s *ServiceImpl) GetCatalog(context.Context, *pb.GetCatalogReq) (*pb.GetCatalogRsp, error) {
 	raw := servicecatalog.EmbeddedYAML()
 	sum := sha256.Sum256(raw)
-	return &pb.GetCatalogRsp{RetInfo: retOK(), CatalogYaml: string(raw), Sha256: hex.EncodeToString(sum[:])}, nil
+	return &pb.GetCatalogRsp{RetInfo: retOK(), CatalogYaml: string(raw), Sha256: hex.EncodeToString(sum[:]), ControlHostId: s.adminNodeID}, nil
 }
 
 func (s *ServiceImpl) ListHosts(ctx context.Context, req *pb.ListDeploymentHostsReq) (*pb.ListDeploymentHostsRsp, error) {
@@ -122,6 +122,7 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
 	compiled, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId(), encryptionKey)
+	compiledAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
@@ -135,7 +136,7 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	// Always show the current desired snapshot, including rotations/withdrawals
 	// since the latest heartbeat. The gateway cannot choose its expected hash.
 	status.ExpectedHash = snapshot.Hash
-	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, DefinitionHash: compiled.Hash, GatewayStatus: statusToProto(status)}
+	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, DefinitionHash: compiled.Hash, GatewayStatus: statusToProto(status), SnapshotSchemaVersion: snapshot.SchemaVersion, CompiledAt: compiledAt}
 	for _, route := range compiled.Routes {
 		response.Routes = append(response.Routes, routeToProto(route))
 	}

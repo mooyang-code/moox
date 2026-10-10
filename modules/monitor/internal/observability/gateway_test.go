@@ -22,6 +22,10 @@ func TestGatewaySignalsDistinguishReplacementConflictAndTwoMinuteGrace(t *testin
 	require.Equal(t, "down", gatewayObservationSignals(base, status, now)[1].Status)
 	status.ConflictInstanceId = ""
 	base.AppliedHash, base.HashMismatchSince = "old", &mismatch
+	routeSignal := gatewayObservationSignals(base, status, now)[2]
+	require.Equal(t, mismatch, routeSignal.PendingSince)
+	require.Equal(t, "expected", routeSignal.ExpectedHash)
+	require.Equal(t, "old", routeSignal.AppliedHash)
 	require.Equal(t, "unknown", gatewayObservationSignals(base, status, now)[2].Status, "exactly two minutes remains inside grace")
 	require.Equal(t, "down", gatewayObservationSignals(base, status, now.Add(time.Nanosecond))[2].Status)
 	status.LastSeenAt = mismatch.Format(time.RFC3339Nano)
@@ -42,6 +46,7 @@ func TestGatewaySignalsKeepUnknownStatusOnDiscoveryFailure(t *testing.T) {
 	require.Equal(t, "down", signals[0].Status, "last verified heartbeat still proves silence")
 	require.Equal(t, "unknown", signals[1].Status)
 	require.Equal(t, "unknown", signals[2].Status)
+	require.True(t, signals[2].PendingSince.IsZero(), "failed reads must not label an unverified snapshot with a pending timestamp")
 	for _, signal := range signals {
 		require.Contains(t, signal.RawError, "connection refused")
 	}

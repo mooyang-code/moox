@@ -15,6 +15,8 @@ const gatewayGrace = 2 * time.Minute
 type GatewaySignal struct {
 	HostID, Kind, Status, Reason, RawError string
 	CheckedAt                              time.Time
+	PendingSince                           time.Time
+	ExpectedHash, AppliedHash              string
 }
 
 func (b Builder) gatewaySignals(ctx context.Context, now time.Time) ([]GatewaySignal, error) {
@@ -45,6 +47,7 @@ func gatewayObservationSignals(row domain.GatewayObservation, status *adminpb.Ho
 		{HostID: row.HostID, Kind: "route_sync", Status: "healthy", Reason: "主机网关路由已同步", CheckedAt: now},
 	}
 	heartbeat, conflict, routes := &signals[0], &signals[1], &signals[2]
+	routes.ExpectedHash, routes.AppliedHash = row.ExpectedHash, row.AppliedHash
 	seen, _ := time.Parse(time.RFC3339Nano, status.GetLastSeenAt())
 	if seen.IsZero() {
 		start := row.HostEnabledAt
@@ -80,6 +83,9 @@ func gatewayObservationSignals(row domain.GatewayObservation, status *adminpb.Ho
 	if row.ExpectedHash == "" {
 		routes.Status, routes.Reason = "unknown", "尚未取得主机网关的期望路由快照"
 	} else if row.ExpectedHash != row.AppliedHash {
+		if row.HashMismatchSince != nil {
+			routes.PendingSince = *row.HashMismatchSince
+		}
 		routes.Status, routes.Reason = "unknown", "主机网关正在同步新的路由快照"
 		if row.HashMismatchSince != nil && now.Sub(*row.HashMismatchSince) > gatewayGrace {
 			routes.Status, routes.Reason = "down", "主机网关超过 2 分钟未应用期望路由快照"

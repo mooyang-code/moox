@@ -241,6 +241,8 @@ message GetCatalogRsp {
   // Exact embedded shared catalog bytes, including Doctor metadata.
   string catalog_yaml = 2;
   string sha256 = 3;
+  // Authoritative protected host; browsers must not infer it from its name.
+  string control_host_id = 4;
 }
 
 // ListHostsReq/Rsp already belong to Ssh in this protobuf package.
@@ -277,6 +279,10 @@ message GetHostRoutesRsp {
   string definition_hash = 3;
   repeated trpc.moox.admin.HostGatewayRoute routes = 4;
   HostGatewayRuntimeStatus gateway_status = 5;
+  uint32 snapshot_schema_version = 6;
+  // Time this response's desired snapshot was actually compiled, not a
+  // gateway application time or a persisted configuration revision time.
+  string compiled_at = 7;
 }
 
 message GetDirectoryReq {}

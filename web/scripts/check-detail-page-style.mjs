@@ -8,7 +8,7 @@ const root = path.resolve(scriptDir, "..");
 const pageShellFiles = [
   "src/views/settings/spaces/index.vue",
   "src/views/settings/secrets/index.vue",
-  "src/views/settings/service-deployments/index.vue",
+  "src/views/ops/deployments/index.vue",
   "src/views/data/sources/index.vue",
   "src/views/data/subjects/index.vue",
   "src/views/data/fields/index.vue",

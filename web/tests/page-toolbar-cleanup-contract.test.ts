@@ -13,13 +13,9 @@ describe("page toolbar cleanup contract", () => {
     expect(hostMonitor).not.toContain("lastRefreshAt");
     expect(hostMonitor).not.toContain("formatAge");
 
-    const services = read("settings/service-deployments/index.vue");
-    expect(services).not.toContain('class="top-alert"');
-    expect(services).not.toContain("<icon-refresh />");
-    expect(services).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-
-    const serviceManagement = read("ops/service-management/index.vue");
-    expect(serviceManagement).toMatch(/\.management-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
+    const deployments = read("ops/deployments/index.vue");
+    expect(deployments).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    expect(deployments).toMatch(/\.deployments-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
 
     const secrets = read("settings/secrets/index.vue");
     expect(secrets).not.toContain("统一管理 admin 本地秘钥");
@@ -44,9 +40,7 @@ describe("page toolbar cleanup contract", () => {
       "collector/task-instances/task-instances.vue": ['@click="reset"'],
       "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],
-      "ops/service-management/gateway-nodes.vue": ['aria-label="刷新节点状态"'],
       "settings/secrets/index.vue": ['<a-button @click="load">'],
-      "settings/service-deployments/index.vue": ['<a-button @click="load">'],
       "settings/spaces/index.vue": ['<a-button @click="load">'],
       "trading/account-overview/account-overview.vue": ['<a-button @click="loadAccounts">'],
       "trading/trade-record/trade-record.vue": [

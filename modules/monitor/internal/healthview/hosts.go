@@ -40,7 +40,7 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 			if signal.HostID != host.HostId {
 				continue
 			}
-			host.GatewaySignals = append(host.GatewaySignals, &pb.HealthGatewaySignal{Kind: signal.Kind, Signal: &pb.HealthSignal{Status: domain.HealthStatus(signal.Status), Reason: signal.Reason, RawError: signal.RawError, CheckedAt: stamp(signal.CheckedAt)}})
+			host.GatewaySignals = append(host.GatewaySignals, &pb.HealthGatewaySignal{Kind: signal.Kind, PendingSince: stamp(signal.PendingSince), ExpectedHash: signal.ExpectedHash, AppliedHash: signal.AppliedHash, Signal: &pb.HealthSignal{Status: domain.HealthStatus(signal.Status), Reason: signal.Reason, RawError: signal.RawError, CheckedAt: stamp(signal.CheckedAt)}})
 			if host.Status == "disabled" {
 				continue
 			}

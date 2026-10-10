@@ -75,22 +75,13 @@ assert(dataCollection.path === "/data/sources", "compute-collector default path 
 assert(factorCompute.parentId === "0", "factor-compute must be a root menu");
 assert(factorCompute.sort > dataCollection.sort, "factor-compute must appear after data collection");
 assert(factorCompute.sort < trading.sort, "factor-compute must appear before trading");
-assert(ops.path === "/ops/hosts", "ops default path must be /ops/hosts");
-const services = findMenu("ops-services");
+assert(ops.path === "/ops/monitor", "ops default path must be /ops/monitor");
+const monitor = findMenu("ops-monitor");
+const deployments = findMenu("ops-deployments");
 const hosts = findMenu("ops-hosts");
-assert(services.parentId === ops.id, "ops-services must be under ops");
-assert(hosts.parentId === ops.id, "ops-hosts must be under ops");
-assert(hosts.sort < services.sort, "host workbench must appear before service management");
-assert(
-  !staticMenu.includes('menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 1, {'),
-  "ops-hosts must not have a custom icon"
-);
-assert(
-  !staticMenu.includes(
-    'menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 2, {'
-  ),
-  "ops-services must not have a custom icon"
-);
+for (const item of [monitor, deployments, hosts]) assert(item.parentId === ops.id, `${item.menuName} must be under ops`);
+assert(monitor.sort < deployments.sort && deployments.sort < hosts.sort, "monitor, deployments and hosts must keep their intended order");
+assert(!staticMenu.includes("ops-services"), "retired service management menu must be absent");
 assert(staticMenu.includes('svgIcon: "experiment"'), "factor icon must be unique");
 assert(staticMenu.includes('svgIcon: "mind-mapping"'), "strategy icon must be unique");
 assert(!staticMenu.includes('menu("0600", "06", "/ops/service-monitor"'), "legacy service monitor must not remain visible");

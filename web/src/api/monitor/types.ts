@@ -80,6 +80,9 @@ export interface HealthBusinessCheck {
 export interface HealthGatewaySignal {
   kind?: string;
   signal?: HealthSignal;
+  pending_since?: string;
+  expected_hash?: string;
+  applied_hash?: string;
 }
 export interface HealthHost {
   host_id?: string;

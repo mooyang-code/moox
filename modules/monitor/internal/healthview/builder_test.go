@@ -132,3 +132,16 @@ func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.
 	require.Equal(t, "disabled", view.Hosts[0].Status)
 	require.Empty(t, view.Alerts)
 }
+
+func TestGatewayPendingTimeKeepsItsSnapshotIdentity(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	pending := now.Add(-time.Minute)
+	facts := observability.Overview{GeneratedAt: now, TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "route_sync", Status: "unknown", PendingSince: pending, ExpectedHash: "new", AppliedHash: "old", CheckedAt: now}}}
+	hosts := projectHosts(facts)
+	require.Len(t, hosts, 1)
+	require.Len(t, hosts[0].GatewaySignals, 1)
+	signal := hosts[0].GatewaySignals[0]
+	require.Equal(t, pending.Format(time.RFC3339Nano), signal.PendingSince)
+	require.Equal(t, "new", signal.ExpectedHash)
+	require.Equal(t, "old", signal.AppliedHash)
+}

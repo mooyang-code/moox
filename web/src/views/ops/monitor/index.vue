@@ -2,7 +2,7 @@
   <div class="moox-page health-monitor-page">
     <div class="moox-inner">
       <div class="health-toolbar">
-        <div v-if="!props.embedded">
+        <div>
           <h2>监控告警</h2>
           <p class="muted">按部署主机、组件和数据链路查看当前状态</p>
         </div>
@@ -304,10 +304,9 @@ import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive,
 import { Message, Modal } from "@arco-design/web-vue";
 import { monitorApi, type HealthAlert, type HealthComponent, type HealthOverview } from "@/api/monitor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { formatDuration, formatCheckedAt, statusColor, statusLabel } from "./health-display";
+import { formatDuration, formatCheckedAt, statusColor, statusLabel, hostHref, alertHref } from "./health-display";
 import RawError from "./raw-error.vue";
 
-const props = defineProps<{ embedded?: boolean }>();
 const overview = ref<HealthOverview>({});
 const loading = ref(false);
 const error = ref("");
@@ -350,26 +349,6 @@ const matrix = computed(() => {
   }
   return { hosts, rows: [...rows.values()].sort((a, b) => a.id.localeCompare(b.id)) };
 });
-function hostHref(agentID?: string, hostID?: string) {
-  return (
-    "#/ops/hosts?" +
-    new URLSearchParams({ tab: "monitor", ...(agentID ? { agent_id: agentID } : {}), ...(hostID ? { host_id: hostID } : {}) })
-  );
-}
-function alertHref(item: HealthAlert) {
-  const object = item.object;
-  if (object?.type === "host") return hostHref(object.agent_id, object.host_id);
-  if (object?.type === "dataset")
-    return object.producer === "factor" ? "#/factor/tasks?tab=results" : "#/collector/tasks?tab=results";
-  return (
-    "#/ops/deployments?" +
-    new URLSearchParams({
-      tab: "services",
-      ...(object?.host_id ? { host_id: object.host_id } : {}),
-      ...(object?.component_id ? { component_id: object.component_id } : {})
-    })
-  );
-}
 async function refresh() {
   const request = refreshGuard.begin();
   loading.value = true;
