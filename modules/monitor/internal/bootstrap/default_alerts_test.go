@@ -46,7 +46,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if serviceRule.FailureThreshold != 3 || serviceRule.SuccessThreshold != 2 {
+	if serviceRule.FailureThreshold != 2 || serviceRule.SuccessThreshold != 2 {
 		t.Fatalf("service rule = %+v", serviceRule)
 	}
 	canaryRule, err := repositories.Alerts.GetRule(ctx, "crypto", "default:market_canary:kline:BTC-USDT:1m")
