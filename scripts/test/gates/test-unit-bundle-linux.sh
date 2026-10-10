@@ -53,6 +53,8 @@ from pathlib import Path
 import re,sys
 log=Path(sys.argv[1]).read_text()
 required=[
+    'TestHostMaterialInjectsOnlySelectedUnitIdentities',
+    'TestHostMaterialInjectionRejectsUnrelatedUnitsAndUnsafeDestinations',
     'TestHostMaterialSeparatesTargetAndOperatorIdentities',
     'TestHostMaterialRejectsWrongTopologyAndTrust',
     'TestHostMaterialRejectsInvalidContentsWithMatchingInventory',
@@ -67,5 +69,5 @@ for name in required:
         raise SystemExit('required host bundle scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('host bundle Linux gate must not skip or fail a scenario')
-print('host bundle Linux gate passed: 8 required consumer/real-producer scenarios, no compilation')
+print('host bundle Linux gate passed: 10 required consumer/real-producer scenarios, no compilation')
 PY

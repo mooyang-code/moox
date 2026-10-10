@@ -724,3 +724,5 @@ TARGET_GOOS=linux TARGET_GOARCH=arm64 ./scripts/build/build.sh console-proxy
 - [Caddy 官方 main](https://github.com/caddyserver/caddy/blob/v2.11.4/cmd/caddy/main.go)：标准模块及 tzdata 的引入方式。
 
 上游约束按固定 tag 核对，不能把最新 Caddy 文档的工具链要求直接套到 v2.11.4，也不能仅固定 Caddy tag 而忽略共享工作区实际选中的传递依赖。
+
+主计划的发布准备层现已连接软件、身份和运行助手：`unitinstall` 在维护锁下完成所选组件身份投影、配置注入、私密运行计划与环境、七个生命周期脚本，验证后原子发布新候选。host TLS、Access 外部身份和操作员材料的边界保持独立；业务单元使用同主机包的目录视图。`inspect-release` 在切换前逐项核对软件、配置、身份和脚本的摘要/大小/权限，拒绝发布后改动。该进展不切换 current、不复制运行数据、不代表完整安装，激活/回滚、五步 bootstrap、I/J、最终 Agent 审查和正式部署验收继续保留。

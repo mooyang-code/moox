@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 )
@@ -38,6 +39,25 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "inspect-release" {
+		flags := flag.NewFlagSet("moox-runtime inspect-release", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		directory := flags.String("directory", "", "physical prepared release directory")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *directory == "" || flags.NArg() != 0 {
+			return errors.New("inspect-release requires --directory and no positional arguments")
+		}
+		prepared, err := unitinstall.ReadPrepared(ctx, *directory)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(prepared)
+	}
+	if len(args) > 0 && args[0] == "prepare" {
+		return prepare(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "inspect-bundle" {
 		return inspectBundle(ctx, args[1:], stdout, stderr)
 	}
@@ -69,6 +89,31 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		ids = strings.Split(components, ",")
 	}
 	result, err := unitruntime.Execute(ctx, plan, args[0], ids, options)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(result)
+}
+
+func prepare(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime prepare", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var request string
+	var lock unitruntime.Options
+	flags.StringVar(&request, "request", "", "generated private preparation request")
+	flags.BoolVar(&lock.MaintenanceLockHeld, "maintenance-lock-held", false, "reuse a verified inherited maintenance lock")
+	flags.IntVar(&lock.MaintenanceLockFD, "maintenance-lock-fd", 3, "inherited maintenance descriptor")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if request == "" || flags.NArg() != 0 {
+		return errors.New("prepare requires --request and no positional arguments")
+	}
+	options, err := unitinstall.ReadPrepareRequest(request)
+	if err != nil {
+		return err
+	}
+	result, err := unitinstall.Prepare(ctx, options, lock)
 	if err != nil {
 		return err
 	}

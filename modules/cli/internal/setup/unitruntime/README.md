@@ -58,4 +58,4 @@ MOOX_RUNTIME_PROXY_BINARY=/absolute/path/moox-console-proxy \
 make test-unit-runtime-linux
 ```
 
-门禁要求十一组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。实际生成的安装、回滚、start/stop/healthcheck 脚本和 `setup pause/resume` 仍须由 G2/G3/G6/G11 接线；本助手本身不代表软件包已经可安装或正式环境已经发布。
+门禁要求十二组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。[发布准备层](../unitinstall/README.md) 已生成七个生命周期包装脚本，并在同一维护锁下写入身份、私密运行计划和环境；`prepare --request PATH` 准备新发布，`inspect-release --directory PATH` 核验尚未启动的候选目录。实际安装切换、数据复制、回滚、bootstrap 和 `setup pause/resume` 仍须由 G2/G3/G6/G11 接线；这些进展不代表完整安装或正式发布已经完成。

@@ -1,0 +1,82 @@
+package unitruntime
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+)
+
+// Maintenance scopes installation work and lifecycle calls to one host/root.
+// It is valid only during WithMaintenance's callback. A lifecycle call reuses
+// the same open lock description, including kernel validation of the descriptor.
+type Maintenance struct {
+	mu           sync.Mutex
+	lock         *os.File
+	hostID, root string
+}
+
+func WithMaintenance(ctx context.Context, deploymentRoot, hostID string, options Options, work func(*Maintenance) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if work == nil || !servicecatalog.ValidHostID(hostID) {
+		return errors.New("maintenance requires a canonical host and callback")
+	}
+	if err := physicalDirectory(deploymentRoot); err != nil {
+		return err
+	}
+	state, err := openRuntime(Plan{HostID: hostID, DeploymentRoot: deploymentRoot})
+	if err != nil {
+		return err
+	}
+	defer state.close()
+	lock, _, err := acquireLock(ctx, state.run, options.MaintenanceLockHeld, options.MaintenanceLockFD, false)
+	if err != nil {
+		return err
+	}
+	guard := &Maintenance{lock: lock, hostID: hostID, root: deploymentRoot}
+	defer func() { guard.mu.Lock(); defer guard.mu.Unlock(); guard.lock.Close(); guard.lock = nil }()
+	if err := state.ensureHostIdentity(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return work(guard)
+}
+
+func (m *Maintenance) Execute(ctx context.Context, planPath, operation string, ids []string) (Result, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lock == nil {
+		return Result{}, errors.New("maintenance callback has ended")
+	}
+	plan, err := LoadPlan(planPath)
+	if err != nil {
+		return Result{}, err
+	}
+	if plan.HostID != m.hostID || plan.DeploymentRoot != m.root {
+		return Result{}, errors.New("maintenance lifecycle cannot cross its host or deployment root")
+	}
+	return Execute(ctx, planPath, operation, ids, Options{MaintenanceLockHeld: true, MaintenanceLockFD: int(m.lock.Fd())})
+}
+
+func (s *runtimeState) ensureHostIdentity() error {
+	var identity struct {
+		HostID string `json:"host_id"`
+	}
+	if err := privateJSON(filepath.Join(s.run.Name(), "host.json"), &identity); os.IsNotExist(err) {
+		identity.HostID = s.plan.HostID
+		return writeState(s.run, "host.json", identity)
+	} else if err != nil {
+		return err
+	}
+	if identity.HostID != s.plan.HostID {
+		return errors.New("runtime deployment root belongs to a different host identity")
+	}
+	return nil
+}

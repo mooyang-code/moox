@@ -20,6 +20,16 @@ func TestRuntimeCommandReportsVersionWithoutOperatorConfiguration(t *testing.T) 
 }
 
 func TestRuntimeCommandRejectsMissingFlagsAndUnknownOperations(t *testing.T) {
+	for _, args := range [][]string{{"inspect-release"}, {"inspect-release", "--unknown"}, {"inspect-release", "--directory", "missing", "unexpected"}, {"inspect-release", "--directory", "missing"}} {
+		var stdout, stderr bytes.Buffer
+		require.Error(t, run(context.Background(), args, &stdout, &stderr))
+		require.Empty(t, stdout.String())
+	}
+	for _, args := range [][]string{{"prepare"}, {"prepare", "--unknown"}, {"prepare", "--request", "missing", "unexpected"}, {"prepare", "--request", "missing"}} {
+		var stdout, stderr bytes.Buffer
+		require.Error(t, run(context.Background(), args, &stdout, &stderr))
+		require.Empty(t, stdout.String())
+	}
 	for _, args := range [][]string{nil, {"start"}, {"start", "--plan", "missing", "unexpected"}, {"start", "--unknown"}, {"unknown", "--plan", "missing"}, {"extract"}, {"extract", "--unknown"}, {"extract", "unexpected"}, {"extract", "--archive", "missing", "--profile", "access", "--destination", "/tmp/unused", "--sha256", "invalid"}} {
 		var stdout, stderr bytes.Buffer
 		require.Error(t, run(context.Background(), args, &stdout, &stderr))

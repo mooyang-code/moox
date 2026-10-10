@@ -97,18 +97,8 @@ func Execute(ctx context.Context, planPath, operation string, ids []string, opts
 		return result, nil
 	}
 	defer lock.Close()
-	var identity struct {
-		HostID string `json:"host_id"`
-	}
-	if err := privateJSON(filepath.Join(state.run.Name(), "host.json"), &identity); os.IsNotExist(err) {
-		identity.HostID = plan.HostID
-		if err := writeState(state.run, "host.json", identity); err != nil {
-			return result, err
-		}
-	} else if err != nil {
+	if err := state.ensureHostIdentity(); err != nil {
 		return result, err
-	} else if identity.HostID != plan.HostID {
-		return result, errors.New("runtime deployment root belongs to a different host identity")
 	}
 	if operation == "restart" {
 		stopping := slices.Clone(components)
