@@ -38,7 +38,7 @@
               </a-form-item>
               <a-form-item v-if="form.source === 'definition'" label="策略定义" required>
                 <a-select v-model="form.strategy_id" allow-search placeholder="选择定义">
-                  <a-option v-for="item in strategyStore.strategies" :key="item.strategy_id" :value="item.strategy_id"
+                  <a-option v-for="item in strategyStore.strategyCatalog" :key="item.strategy_id" :value="item.strategy_id"
                     >{{ item.name }}（{{ item.strategy_id }}）</a-option
                   >
                 </a-select>
@@ -446,7 +446,7 @@ function barDetail(bar: ReplayBar) {
 /** 回放对象的说明：定义名称（或 ID），或未保存的 DSL 文本。 */
 function sourceLabel(replay: Replay): string {
   if (!replay.strategy_id) return "DSL 文本（草稿）";
-  const definition = strategyStore.strategies.find((item: Strategy) => item.strategy_id === replay.strategy_id);
+  const definition = strategyStore.strategyCatalog.find((item: Strategy) => item.strategy_id === replay.strategy_id);
   return definition ? `${definition.name}（${replay.strategy_id}）` : replay.strategy_id;
 }
 const tablePagination = computed(() => ({ current: tablePage.value, pageSize: tablePageSize, total: tableTotal.value }));

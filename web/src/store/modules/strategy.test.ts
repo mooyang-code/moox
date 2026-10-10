@@ -80,6 +80,24 @@ describe("strategy store", () => {
     expect(store.totalResults).toBe(0);
   });
 
+  it("keeps the full strategy catalog when a late paged list response arrives", async () => {
+    const definition = (id: string) => ({ strategy_id: id, name: id, dsl_yaml: "", dsl_hash: "h", created_at: "", updated_at: "" });
+    const all = Array.from({ length: 21 }, (_, index) => definition(`s${index}`));
+    const latePage = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listStrategies.mockImplementation((params: { page?: number; page_size?: number }) =>
+      params.page_size === 200 ? Promise.resolve({ items: all, page: { total: 21 } }) : latePage.promise
+    );
+    const store = useStrategyStore();
+    await store.loadAllStrategies(200);
+    expect(store.strategyCatalog).toHaveLength(21);
+    const paged = store.loadStrategies({ page: 1, page_size: 20 });
+    latePage.resolve({ items: all.slice(0, 20), page: { total: 21 } });
+    await paged;
+    expect(store.strategies).toHaveLength(20);
+    expect(store.strategyCatalog).toHaveLength(21);
+    expect(store.strategiesComplete).toBe(true);
+  });
+
   it("applies a fast target response without waiting for slow history", async () => {
     const targets = deferred<{ targets: []; session_id: string; bar_end_time: string; valid_until: string; result_id: string }>();
     const results = deferred<{ items: []; page: { total: number } }>();

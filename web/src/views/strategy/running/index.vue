@@ -20,7 +20,7 @@
       >
       <div class="filters">
         <a-select v-model="filters.strategy_id" allow-clear allow-search placeholder="策略定义" @change="reloadFirst"
-          ><a-option v-for="item in store.strategies" :key="item.strategy_id" :value="item.strategy_id"
+          ><a-option v-for="item in store.strategyCatalog" :key="item.strategy_id" :value="item.strategy_id"
             >{{ item.name }}（{{ item.strategy_id }}）</a-option
           ></a-select
         ><a-select v-model="filters.enabled" allow-clear placeholder="启用状态" @change="reloadFirst"
@@ -77,7 +77,7 @@
       <a-empty v-if="!store.listLoading && !store.error && !store.instances.length" description="暂无策略实例" />
       <StrategyInstanceCreate
         v-model:visible="createVisible"
-        :strategies="store.strategies"
+        :strategies="store.strategyCatalog"
         :space-id="spaceStore.selectedSpaceId"
         @created="created"
       />
@@ -106,7 +106,7 @@ const pagination = reactive({ current: 1, pageSize: 20, total: computed(() => st
 async function refresh() {
   await Promise.all([
     store.loadInstances({ ...filters, page: pagination.current, page_size: pagination.pageSize }),
-    store.strategiesComplete ? Promise.resolve() : store.loadAllStrategies(200)
+    store.strategyCatalogComplete ? Promise.resolve() : store.loadAllStrategies(200)
   ]).catch(() => undefined);
 }
 function reloadFirst() {
@@ -121,7 +121,7 @@ function openDetail(instanceId: string) {
   router.push({ name: "strategy-detail", params: { instanceId } });
 }
 function strategyName(id: string) {
-  return store.strategies.find((item: Strategy) => item.strategy_id === id)?.name || "定义已删除或未加载";
+  return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || "定义已删除或未加载";
 }
 function created(instanceId: string) {
   createVisible.value = false;
