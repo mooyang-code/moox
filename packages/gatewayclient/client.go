@@ -305,10 +305,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 	}
 	timeout := c.config.Timeout
 	if timeout == 0 {
-		timeout = time.Duration(spec.TimeoutMS) * time.Millisecond
-	}
-	if timeout == 0 {
-		timeout = time.Duration(servicecatalog.DefaultTimeoutMS) * time.Millisecond
+		timeout = time.Duration(spec.TimeoutFor(method)) * time.Millisecond
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

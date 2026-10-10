@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -124,7 +125,8 @@ func (p *Proxy) handle(_ interface{}, ctx context.Context, decode server.FilterF
 		route, ok := view.Resolve(service, method)
 		if !ok {
 			status = http.StatusNotFound
-			return nil, errors.New("service/method is not deployed on this host")
+			// 使用框架级“服务不存在”错误码，调用方据此刷新服务目录并对只读请求重试到新主机。
+			return nil, errs.NewFrameError(errs.RetServerNoService, "service/method is not deployed on this host")
 		}
 		labelService, labelMethod = route.ComponentID, method
 		if !p.catalog.Allowed(claims.Caller, service, method) || !slices.Contains(route.Callers, claims.Caller) {

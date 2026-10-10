@@ -81,7 +81,7 @@ func (d *LocalDispatcher) Forward(ctx context.Context, service, method string, s
 	if int64(len(body)) > spec.MaxBodyBytes {
 		return nil, errRequestBodyTooLarge
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(spec.TimeoutMS)*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(spec.TimeoutFor(method))*time.Millisecond)
 	defer cancel()
 	ctx, message := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(message)

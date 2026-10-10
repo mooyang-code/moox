@@ -12,16 +12,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type fakeTradeSpaceAuthorizer struct {
+type fakeSpaceAuthorizer struct {
 	err        error
 	userID     string
 	spaceID    string
-	method     string
+	mutates    bool
 	globalRole int32
 }
 
-func (a *fakeTradeSpaceAuthorizer) AuthorizeTradeRequest(_ context.Context, userID, spaceID, method string, globalRole int32) error {
-	a.userID, a.spaceID, a.method, a.globalRole = userID, spaceID, method, globalRole
+func (a *fakeSpaceAuthorizer) AuthorizeSpaceRequest(_ context.Context, userID, spaceID string, mutates bool, globalRole int32) error {
+	a.userID, a.spaceID, a.mutates, a.globalRole = userID, spaceID, mutates, globalRole
 	return a.err
 }
 

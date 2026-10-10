@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -41,4 +42,11 @@ func TestLoadRateLimitConfig_WithPartialConfig_ShouldBackfillDefaults(t *testing
 	assert.Equal(t, 20, cfg.DefaultQPS)
 	assert.Equal(t, 20, cfg.DefaultBurst)
 	assert.Contains(t, cfg.MethodLimits, "/api/admin/auth/Login")
+}
+
+// resetRateLimitManagerForTest 让测试从全新的限流桶开始，并在结束后恢复，避免单例状态串扰。
+func resetRateLimitManagerForTest(t *testing.T) {
+	t.Helper()
+	rateLimitManager, rateLimitOnce = nil, sync.Once{}
+	t.Cleanup(func() { rateLimitManager, rateLimitOnce = nil, sync.Once{} })
 }

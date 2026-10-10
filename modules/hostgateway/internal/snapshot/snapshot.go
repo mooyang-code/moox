@@ -128,10 +128,7 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 				service = candidate
 			}
 		}
-		timeout, limit := service.TimeoutMS, service.MaxBodyBytes
-		if timeout == 0 {
-			timeout = servicecatalog.DefaultTimeoutMS
-		}
+		timeout, limit := service.TimeoutFor(route.Method), service.MaxBodyBytes
 		if limit == 0 {
 			limit = servicecatalog.DefaultMaxBodyBytes
 		}

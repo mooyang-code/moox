@@ -3,6 +3,7 @@ package console
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/requestauth"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -28,7 +30,14 @@ func (f forwardFunc) Forward(ctx context.Context, service, method string, serial
 	return f(ctx, service, method, serialization, body)
 }
 
-func newTestRouter(t *testing.T, local *LocalDispatcher, gateway RPCForwarder, authorizers ...TradeSpaceAuthorizer) *HTTPRouter {
+func catalogReadOnly(t *testing.T, path, method string) bool {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	return catalog.ReadOnly(path, method)
+}
+
+func newTestRouter(t *testing.T, local *LocalDispatcher, gateway RPCForwarder, authorizers ...SpaceAuthorizer) *HTTPRouter {
 	t.Helper()
 	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, authorizers...)
 	require.NoError(t, err)
@@ -73,11 +82,24 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 				require.Equal(t, tc.path, service)
 				require.Equal(t, tc.method, method)
 				require.Equal(t, codec.SerializationTypeJSON, serialization)
-				require.Equal(t, body, raw)
+				if tc.name == "storage" {
+					var got map[string]any
+					require.NoError(t, json.Unmarshal(raw, &got))
+					auth := got["auth_info"].(map[string]any)
+					require.Equal(t, "admin-gateway", auth["app_id"])
+					secretEnv := "primary-secret"
+					if tc.path == storageViewServicePath {
+						secretEnv = "view-secret"
+					}
+					require.Equal(t, storageServiceAuthKey(secretEnv, "admin-gateway"), auth["app_key"])
+					require.Equal(t, "space-1", got["space_id"])
+				} else {
+					require.Equal(t, body, raw)
+				}
 				require.Equal(t, gatewayclient.CallMetadata{SpaceID: "space-1", UserID: "u1", UserRole: "2", TraceID: "trace-1"}, gatewayclient.CallMetadataFromContext(ctx))
 				return response, nil
 			})
-			authorizer := &fakeTradeSpaceAuthorizer{}
+			authorizer := &fakeSpaceAuthorizer{}
 			router := newTestRouter(t, nil, gateway, authorizer).buildControlRouter()
 			r := browserRequest(t, secret, key, sid, "/api/admin/"+tc.name+"/"+tc.method, "space-1", body)
 			r.Header.Set("X-Trace-Id", "trace-1")
@@ -91,7 +113,7 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 			if isSpaceScopedService(tc.name) {
 				require.Equal(t, "u1", authorizer.userID)
 				require.Equal(t, "space-1", authorizer.spaceID)
-				require.Equal(t, tc.method, authorizer.method)
+				require.Equal(t, !catalogReadOnly(t, tc.path, tc.method), authorizer.mutates)
 				require.Equal(t, int32(2), authorizer.globalRole)
 			}
 		})
@@ -176,7 +198,7 @@ func TestConsoleRetainsSpaceAuthorizationAndRejectsNestedSpaceMismatch(t *testin
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, secret, key, sid := setupRequestAuthTest(t)
-			authorizer := &fakeTradeSpaceAuthorizer{}
+			authorizer := &fakeSpaceAuthorizer{}
 			if tc.denied {
 				authorizer.err = errors.New("space membership denied")
 			}
@@ -292,4 +314,108 @@ func TestConsoleRawRouteCannotBypassTicketThroughNoAuthConfiguration(t *testing.
 	rr := httptest.NewRecorder()
 	newTestRouter(t, nil, nil).buildControlRouter().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/admin/ssh/WsConnect?session_id=ssh-1", nil))
 	require.Equal(t, http.StatusUnauthorized, rr.Code)
+}
+
+// 普通用户不能改全局部署状态；管理员可以。
+func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
+	for _, tc := range []struct {
+		path   string
+		role   int
+		status int
+	}{
+		{"/api/admin/sysdeploy/SetPlacementStatus", 1, http.StatusForbidden},
+		{"/api/admin/sysdeploy/SetHostStatus", 1, http.StatusForbidden},
+		{"/api/admin/sysdeploy/SetPlacementStatus", 2, http.StatusOK},
+		{"/api/admin/sysdeploy/ListPlacements", 1, http.StatusOK},
+	} {
+		_, secret, key, sid := setupRequestAuthTest(t)
+		testTokenRole = tc.role
+		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
+		rr := httptest.NewRecorder()
+		router := newTestRouter(t, nil, gateway).buildControlRouter()
+		router.ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, "", []byte(`{}`)))
+		if tc.status == http.StatusForbidden {
+			require.Equal(t, tc.status, rr.Code, "%s role=%d", tc.path, tc.role)
+		} else {
+			require.NotEqual(t, http.StatusForbidden, rr.Code, "%s role=%d", tc.path, tc.role)
+		}
+	}
+}
+
+// Storage / Factor 请求同样受空间成员资格约束，无空间的请求只允许全局管理员。
+func TestConsoleStorageAndFactorAreSpaceAuthorized(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		path   string
+		space  string
+		body   string
+		role   int
+		deny   bool
+		status int
+	}{
+		{"member reads own space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, false, http.StatusOK},
+		{"member blocked by authorizer", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, true, http.StatusForbidden},
+		{"body space without header is authorized", "/api/admin/storage/ListDatasets", "", `{"space_id":"space-2"}`, 1, true, http.StatusForbidden},
+		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, 1, false, http.StatusBadRequest},
+		{"member without space", "/api/admin/storage/ListDatasets", "", `{}`, 1, false, http.StatusForbidden},
+		{"admin without space", "/api/admin/storage/ListDataNodes", "", `{}`, 2, false, http.StatusOK},
+		{"factor member blocked", "/api/admin/factor-mgr/DeleteFactorSet", "space-1", `{}`, 1, true, http.StatusForbidden},
+		{"factor member without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, 1, false, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, secret, key, sid := setupRequestAuthTest(t)
+			testTokenRole = tc.role
+			authorizer := &fakeSpaceAuthorizer{}
+			if tc.deny {
+				authorizer.err = errors.New("space membership denied")
+			}
+			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
+			rr := httptest.NewRecorder()
+			newTestRouter(t, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, tc.space, []byte(tc.body)))
+			require.Equal(t, tc.status, rr.Code, rr.Body.String())
+		})
+	}
+}
+
+// Collector 的只读方法对空间普通成员是只读授权，写方法才要求 owner/admin。
+func TestConsoleCatalogReadOnlyDrivesSpaceMutationClass(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		mutates bool
+	}{
+		{"/api/admin/collector/GetTaskList", false},
+		{"/api/admin/cloudnode/GetNodeList", false},
+		{"/api/admin/collector/CreateTask", true},
+	} {
+		_, secret, key, sid := setupRequestAuthTest(t)
+		testTokenRole = 1
+		authorizer := &fakeSpaceAuthorizer{}
+		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
+		rr := httptest.NewRecorder()
+		newTestRouter(t, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, "space-1", []byte(`{}`)))
+		require.Equal(t, http.StatusOK, rr.Code, tc.path)
+		require.Equal(t, tc.mutates, authorizer.mutates, tc.path)
+	}
+}
+
+// 限流接入真实 HTTP 路由：登录接口超过突发额度后返回 429，且不到达转发层。
+func TestConsoleRateLimitsConfiguredMethodsOnRealRoute(t *testing.T) {
+	_, secret, key, sid := setupRequestAuthTest(t)
+	resetRateLimitManagerForTest(t)
+	calls := 0
+	gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { calls++; return []byte(`{}`), nil })
+	router := newTestRouter(t, nil, gateway).buildControlRouter()
+	codes := map[int]int{}
+	for i := 0; i < 8; i++ {
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/auth/GetLoginSalt", "", []byte(`{}`)))
+		codes[rr.Code]++
+	}
+	require.NotZero(t, codes[http.StatusTooManyRequests], "超额请求必须被限流: %v", codes)
+	// 未配置接口级限额的方法不被限流。
+	for i := 0; i < 40; i++ {
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/monitor/GetHealthOverview", "", []byte(`{}`)))
+		require.NotEqual(t, http.StatusTooManyRequests, rr.Code)
+	}
 }

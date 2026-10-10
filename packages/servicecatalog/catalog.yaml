@@ -1269,6 +1269,9 @@ components:
         port: 20102
         console_name: storage
         timeout_ms: 5000
+        # WaitViewSyncPoint 服务端最多等待 30 秒，路由预算要大于它并留出传输余量。
+        method_timeouts_ms:
+          WaitViewSyncPoint: 35000
         max_body_bytes: 33554432
         methods:
           - UpsertFields

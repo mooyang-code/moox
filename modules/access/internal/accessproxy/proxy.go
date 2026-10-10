@@ -150,10 +150,7 @@ func (p *Proxy) Forward(ctx context.Context, body *codec.Body) (*codec.Body, err
 			*output = values[0]
 		}
 	}
-	timeout := spec.TimeoutMS
-	if timeout == 0 {
-		timeout = servicecatalog.DefaultTimeoutMS
-	}
+	timeout := spec.TimeoutFor(method)
 	upstream, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(ctx, metadata), time.Duration(timeout)*time.Millisecond)
 	defer cancel()
 	response, err := p.options.Gateway.Forward(upstream, service, method, serialization, body.Data)

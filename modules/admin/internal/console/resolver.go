@@ -2,9 +2,8 @@ package console
 
 import "context"
 
-// TradeSpaceAuthorizer is the Admin-side policy gate for the browser Trade
-// console.  The request header is untrusted; implementations must verify the
-// user is allowed to act in the requested Space and method.
-type TradeSpaceAuthorizer interface {
-	AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method string, globalRole int32) error
+// SpaceAuthorizer 是 Admin 侧的空间授权策略。请求头里的空间不可信，实现必须核对
+// 用户是否有权在该空间执行请求；mutates 为 true 的写操作要求空间 owner/admin。
+type SpaceAuthorizer interface {
+	AuthorizeSpaceRequest(ctx context.Context, userID, spaceID string, mutates bool, globalRole int32) error
 }

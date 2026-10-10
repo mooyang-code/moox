@@ -2,7 +2,6 @@ package console
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -61,10 +60,10 @@ type HTTPRouter struct {
 	catalog         servicecatalog.Catalog
 	local           *LocalDispatcher
 	gateway         RPCForwarder
-	tradeAuthorizer TradeSpaceAuthorizer
+	spaceAuthorizer SpaceAuthorizer
 }
 
-func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, authorizers ...TradeSpaceAuthorizer) (*HTTPRouter, error) {
+func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, authorizers ...SpaceAuthorizer) (*HTTPRouter, error) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
@@ -72,14 +71,14 @@ func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCFo
 	if console == nil {
 		return nil, errors.New("console handle is required")
 	}
-	var authorizer TradeSpaceAuthorizer
+	var authorizer SpaceAuthorizer
 	if len(authorizers) > 0 {
 		authorizer = authorizers[0]
 	}
-	return &HTTPRouter{console: console, catalog: catalog, local: local, gateway: gateway, tradeAuthorizer: authorizer}, nil
+	return &HTTPRouter{console: console, catalog: catalog, local: local, gateway: gateway, spaceAuthorizer: authorizer}, nil
 }
 
-func RegisterConsoleHTTPHandlers(s *server.Server, local *LocalDispatcher, gateway RPCForwarder, authorizers ...TradeSpaceAuthorizer) error {
+func RegisterConsoleHTTPHandlers(s *server.Server, local *LocalDispatcher, gateway RPCForwarder, authorizers ...SpaceAuthorizer) error {
 	router, err := NewHTTPRouter(GetConsoleHandleInstance(), local, gateway, authorizers...)
 	if err != nil {
 		return err
@@ -123,6 +122,11 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		log.ErrorContextf(ctx, "解析请求参数失败: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// 限流先于鉴权：免登录的 Login、GetLoginSalt 也必须受限。
+	if !getRateLimitManager().allowConfiguredMethod(ctx, apiAdminPathPrefix+serviceID+"/"+method) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 	// RPC aliases and permissions come only from the shared catalog. SSH
@@ -179,14 +183,6 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	if isSpaceScopedService(serviceID) {
-		if err := hr.authorizeSpaceRequest(ctx, r, method); err != nil {
-			log.WarnContextf(ctx, "space-scoped request denied: %v", err)
-			http.Error(w, "space access denied", http.StatusForbidden)
-			return
-		}
-	}
-
 	// 提取HTTP头部信息
 	headers := handler.extractGatewayHeaders(r)
 	// user_id 由 authorize filter 从 JWT 解析后写入 ctx（model.CtxUserID），
@@ -216,11 +212,15 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		writeRequestBodyError(w, err)
 		return
 	}
-	if isSpaceScopedService(serviceID) {
-		if err := validateSpaceScopedBody(r.Header.Get("X-Space-Id"), body); err != nil {
-			writeForwardError(ctx, w, err, headers)
-			return
+	readOnly := hr.catalog.ReadOnly(spec.Path, method)
+	if status, err := hr.authorizeRequest(ctx, r, serviceID, readOnly, body); err != nil {
+		log.WarnContextf(ctx, "console request denied service=%s method=%s: %v", serviceID, method, err)
+		if status == http.StatusBadRequest {
+			http.Error(w, err.Error(), status)
+		} else {
+			http.Error(w, "access denied", status)
 		}
+		return
 	}
 	var target RPCForwarder = hr.gateway
 	admin, _ := hr.catalog.Component("admin")
@@ -238,6 +238,14 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		writeForwardError(ctx, w, errors.New("console gateway is unavailable"), headers)
 		return
 	}
+	if serviceID == "storage" {
+		signed, err := signStorageBody(spec.Path, body)
+		if err != nil {
+			writeForwardError(ctx, w, err, headers)
+			return
+		}
+		body = signed
+	}
 	response, err := target.Forward(ctx, spec.Path, method, codec.SerializationTypeJSON, body)
 	if err != nil {
 		writeForwardError(ctx, w, err, headers)
@@ -246,68 +254,42 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	writeForwardResponse(w, response, headers)
 }
 
-func isSpaceScopedService(serviceID string) bool {
-	switch serviceID {
-	case "trade", "strategy", "collector", "cloudnode":
-		return true
-	default:
-		return false
+// authorizeRequest 在转发前完成用户级授权：全局状态的写操作只允许全局管理员，
+// 空间内服务按空间成员资格与只读/写区分授权。返回的状态码用于响应。
+func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, serviceID string, readOnly bool, body []byte) (int, error) {
+	role, _ := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
+	if adminOnlyWriteService(serviceID) && !readOnly && role < globalAdminRole {
+		return http.StatusForbidden, errors.New("administrator role required")
 	}
-}
-
-// validateSpaceScopedBody prevents a caller from authenticating one space in
-// the header while placing another space in a nested protobuf-JSON request.
-// Collector requests use both top-level and nested space_id fields.
-func validateSpaceScopedBody(header string, body []byte) error {
-	header = strings.TrimSpace(header)
-	if header == "" || len(strings.TrimSpace(string(body))) == 0 {
-		return nil
+	if !isSpaceScopedService(serviceID) {
+		return 0, nil
 	}
-	var value any
-	if err := json.Unmarshal(body, &value); err != nil {
-		return fmt.Errorf("invalid space-scoped request body: %w", err)
+	spaceID, err := effectiveSpaceID(r.Header.Get("X-Space-Id"), body)
+	if err != nil {
+		return http.StatusBadRequest, err
 	}
-	var walk func(any) error
-	walk = func(item any) error {
-		switch node := item.(type) {
-		case map[string]any:
-			for key, child := range node {
-				if strings.EqualFold(key, "space_id") || strings.EqualFold(key, "spaceId") {
-					if value, ok := child.(string); ok && strings.TrimSpace(value) != "" && strings.TrimSpace(value) != header {
-						return fmt.Errorf("space_id %q does not match X-Space-Id %q", value, header)
-					}
-				}
-				if err := walk(child); err != nil {
-					return err
-				}
-			}
-		case []any:
-			for _, child := range node {
-				if err := walk(child); err != nil {
-					return err
-				}
-			}
+	if spaceID == "" {
+		if requiresSpaceHeader(serviceID) {
+			return http.StatusForbidden, errors.New("space_id is required")
 		}
-		return nil
+		// Storage、Factor 的无空间请求属于全局运维接口。
+		if role < globalAdminRole {
+			return http.StatusForbidden, errors.New("administrator role required for requests without a space")
+		}
+		return 0, nil
 	}
-	return walk(value)
-}
-
-func (hr *HTTPRouter) authorizeSpaceRequest(ctx context.Context, r *http.Request, method string) error {
-	if hr.tradeAuthorizer == nil {
-		return errors.New("trade space authorizer is unavailable")
+	if hr.spaceAuthorizer == nil {
+		return http.StatusForbidden, errors.New("space authorizer is unavailable")
 	}
 	userID, _ := ctx.Value(authmodel.CtxUserID).(string)
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		return errors.New("authenticated user is required")
+		return http.StatusForbidden, errors.New("authenticated user is required")
 	}
-	spaceID := strings.TrimSpace(r.Header.Get("X-Space-Id"))
-	if spaceID == "" {
-		return errors.New("space_id is required")
+	if err := hr.spaceAuthorizer.AuthorizeSpaceRequest(ctx, userID, spaceID, !readOnly, int32(role)); err != nil {
+		return http.StatusForbidden, err
 	}
-	role, _ := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
-	return hr.tradeAuthorizer.AuthorizeTradeRequest(ctx, userID, spaceID, method, int32(role))
+	return 0, nil
 }
 
 // ============================================================================

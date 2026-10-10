@@ -184,10 +184,7 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 		}
 		dir.Services[service.Path] = []string{hostID}
 		addresses[service.Path] = selected.Address
-		timeout, limit := service.TimeoutMS, service.MaxBodyBytes
-		if timeout == 0 {
-			timeout = servicecatalog.DefaultTimeoutMS
-		}
+		limit := service.MaxBodyBytes
 		if limit == 0 {
 			limit = servicecatalog.DefaultMaxBodyBytes
 		}
@@ -199,7 +196,7 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 				return errors.New("fixture caller/method absent from catalog")
 			}
 			raw.Routes = append(raw.Routes, &pb.HostGatewayRoute{ComponentId: componentID, ServicePath: service.Path, Method: method,
-				Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMs: timeout, MaxBodyBytes: limit, ReadOnly: catalog.ReadOnly(service.Path, method), Callers: []string{internalCaller}})
+				Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMs: service.TimeoutFor(method), MaxBodyBytes: limit, ReadOnly: catalog.ReadOnly(service.Path, method), Callers: []string{internalCaller}})
 		}
 	}
 	dir.Version, err = dir.VersionHash()

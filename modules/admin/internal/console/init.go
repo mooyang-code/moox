@@ -6,7 +6,7 @@ import (
 )
 
 // InitConsoleServices registers browser routes after both dispatchers are ready.
-func InitConsoleServices(s *server.Server, local *LocalDispatcher, gateway RPCForwarder, authorizers ...TradeSpaceAuthorizer) error {
+func InitConsoleServices(s *server.Server, local *LocalDispatcher, gateway RPCForwarder, authorizers ...SpaceAuthorizer) error {
 	if GetConfig() == nil {
 		return fmt.Errorf("控制台配置未初始化")
 	}

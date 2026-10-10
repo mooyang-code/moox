@@ -53,14 +53,16 @@ type Health struct {
 }
 
 type Service struct {
-	Path            string   `yaml:"path" json:"path"`
-	Port            int      `yaml:"port" json:"port"`
-	ConsoleName     string   `yaml:"console_name,omitempty" json:"console_name,omitempty"`
-	TimeoutMS       int64    `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
-	MaxBodyBytes    int64    `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
-	Methods         []string `yaml:"methods" json:"methods"`
-	ReadOnlyMethods []string `yaml:"read_only_methods,omitempty" json:"read_only_methods,omitempty"`
-	ACL             []Grant  `yaml:"acl" json:"acl"`
+	Path        string `yaml:"path" json:"path"`
+	Port        int    `yaml:"port" json:"port"`
+	ConsoleName string `yaml:"console_name,omitempty" json:"console_name,omitempty"`
+	TimeoutMS   int64  `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
+	// MethodTimeoutsMS 覆盖个别长等待方法的超时，未列出的方法使用 TimeoutMS。
+	MethodTimeoutsMS map[string]int64 `yaml:"method_timeouts_ms,omitempty" json:"method_timeouts_ms,omitempty"`
+	MaxBodyBytes     int64            `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
+	Methods          []string         `yaml:"methods" json:"methods"`
+	ReadOnlyMethods  []string         `yaml:"read_only_methods,omitempty" json:"read_only_methods,omitempty"`
+	ACL              []Grant          `yaml:"acl" json:"acl"`
 }
 
 type Grant struct {
@@ -162,4 +164,15 @@ func (c Catalog) ConsoleService(name, method string) (Service, bool) {
 		}
 	}
 	return Service{}, false
+}
+
+// TimeoutFor 返回方法的路由超时（毫秒）：方法级覆盖优先，其次服务级，最后默认值。
+func (s Service) TimeoutFor(method string) int64 {
+	if timeout := s.MethodTimeoutsMS[method]; timeout > 0 {
+		return timeout
+	}
+	if s.TimeoutMS > 0 {
+		return s.TimeoutMS
+	}
+	return DefaultTimeoutMS
 }

@@ -111,7 +111,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		hash    string
 	}{
 		"control":   {143, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "225eeb73570ab6727d7d11c5f207d7a59fe68c32f81fed86716739847b85dcf9"},
-		"storage":   {99, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "2b873a8c7b08124a2cb89084f298644989acba91232ed1527fa8c71b23589fd3"},
+		"storage":   {99, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "44078249aa820a51a8955d443c9c90e51e4aff5bbe668e8297804f21615d0dac"},
 		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "e59decf268b23179b384d5f21ced98ed2fde3c9e1113aed38153c7a14356da7a"},
 	}
 	for _, host := range p.Hosts {
@@ -288,5 +288,27 @@ func TestDisabledHostAndPlacementWithdrawRoutes(t *testing.T) {
 	}
 	if _, err := c.Compile(p, "unknown"); err == nil {
 		t.Fatal("unknown host compiled")
+	}
+}
+
+// 长等待方法使用方法级超时，不被服务级 5 秒预算截断。
+func TestRouteTimeoutUsesMethodOverride(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	compiled, err := c.Compile(p, "storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, route := range compiled.Routes {
+		if route.ServicePath == "trpc.moox.storage.PrimaryStore" && (route.Method == "WaitViewSyncPoint" || route.Method == "ReadFields") {
+			got[route.Method] = route.TimeoutMS
+		}
+	}
+	if got["WaitViewSyncPoint"] != 35000 || got["ReadFields"] != 5000 {
+		t.Fatalf("unexpected route timeouts: %v", got)
+	}
+	service, _ := c.Service("trpc.moox.storage.PrimaryStore")
+	if service.TimeoutFor("WaitViewSyncPoint") != 35000 || service.TimeoutFor("ReadFields") != 5000 {
+		t.Fatal("TimeoutFor does not honor the method override")
 	}
 }

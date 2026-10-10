@@ -137,10 +137,10 @@ func (d *DAO) ListSpaceMembers(ctx context.Context, spaceID string, offset int, 
 	return rows, total, nil
 }
 
-// AuthorizeTradeRequest enforces the Admin BFF's Space boundary. Global
+// AuthorizeSpaceRequest enforces the Admin BFF's Space boundary. Global
 // administrators may operate any active Space; ordinary users must have an
-// active membership, and mutating Trade operations require owner/admin role.
-func (d *DAO) AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method string, globalRole int32) error {
+// active membership, and mutating operations require owner/admin role.
+func (d *DAO) AuthorizeSpaceRequest(ctx context.Context, userID, spaceID string, mutates bool, globalRole int32) error {
 	userID, spaceID = strings.TrimSpace(userID), strings.TrimSpace(spaceID)
 	if userID == "" || spaceID == "" {
 		return fmt.Errorf("user_id and space_id are required")
@@ -162,25 +162,13 @@ func (d *DAO) AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method
 		}
 		return err
 	}
-	if tradeMethodMutates(method) {
+	if mutates {
 		role := strings.ToLower(strings.TrimSpace(member.Role))
 		if role != "owner" && role != "admin" {
-			return fmt.Errorf("trade mutation requires space owner or admin role")
+			return fmt.Errorf("mutation requires space owner or admin role")
 		}
 	}
 	return nil
-}
-
-func tradeMethodMutates(method string) bool {
-	method = strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(strings.TrimSpace(method)))
-	switch method {
-	case "gettradingaccount", "listtradingaccounts", "getlogicalaccount", "listlogicalaccounts", "getoperatoraction", "getlogicalaccounttarget", "getorder", "listorders", "listfills", "listpositions", "getexecutioncapabilities", "queryequitycurve", "listholdings", "getstrategy", "liststrategies", "getrunner", "listrunners", "liststrategyresults", "getstrategyresult", "liststrategytargets", "getstrategyinstance", "liststrategyinstances", "getreplay", "listreplays", "listreplaybars":
-		return false
-	default:
-		// Mutations are deny-by-default for ordinary Space members. Keeping a
-		// read-only allowlist avoids silently exposing a newly added Trade RPC.
-		return true
-	}
 }
 
 func (d *DAO) spaceExists(ctx context.Context, spaceID string) (bool, error) {

@@ -227,7 +227,7 @@ type rejectingLeaseAuthorizer struct {
 	err error
 }
 
-func (a rejectingLeaseAuthorizer) AuthorizeTradeRequest(context.Context, string, string, string, int32) error {
+func (a rejectingLeaseAuthorizer) AuthorizeSpaceRequest(context.Context, string, string, bool, int32) error {
 	return a.err
 }
 

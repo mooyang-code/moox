@@ -183,6 +183,7 @@ func TestProxyAppliesCallerChangesWithoutRestart(t *testing.T) {
 	applySnapshot(t, state, removed)
 	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "collector", "ReadTimeSeriesRows", nil))
 	require.ErrorContains(t, err, "not deployed")
+	require.Equal(t, errs.RetServerNoService, errs.Code(err), "客户端依赖该错误码刷新目录并重试")
 }
 
 func TestProxyBodyLimitsDeadlinesAndReplayStoreFailure(t *testing.T) {

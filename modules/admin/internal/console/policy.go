@@ -1,0 +1,89 @@
+package console
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// globalAdminRole 是全局管理员的角色值。
+const globalAdminRole = 2
+
+// 第一组服务必须携带 X-Space-Id；第二组（Storage、Factor）既有空间内数据，
+// 也有全局运维接口，请求里没有空间时按全局运维处理。
+func requiresSpaceHeader(serviceID string) bool {
+	switch serviceID {
+	case "trade", "strategy", "collector", "cloudnode":
+		return true
+	}
+	return false
+}
+
+func spaceOptional(serviceID string) bool {
+	return serviceID == "storage" || serviceID == "factor-mgr"
+}
+
+func isSpaceScopedService(serviceID string) bool {
+	return requiresSpaceHeader(serviceID) || spaceOptional(serviceID)
+}
+
+// adminOnlyWriteService 的写方法没有空间归属，只允许全局管理员，普通登录用户不能改全局状态。
+func adminOnlyWriteService(serviceID string) bool {
+	switch serviceID {
+	case "ssh", "secret", "sysdeploy", "setup", "monitor":
+		return true
+	}
+	return false
+}
+
+// bodySpaceIDs 收集请求体（含嵌套对象）里出现的 space_id。
+func bodySpaceIDs(body []byte) ([]string, error) {
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return nil, nil
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return nil, fmt.Errorf("invalid space-scoped request body: %w", err)
+	}
+	var ids []string
+	var walk func(any)
+	walk = func(item any) {
+		switch node := item.(type) {
+		case map[string]any:
+			for key, child := range node {
+				if strings.EqualFold(key, "space_id") || strings.EqualFold(key, "spaceId") {
+					if text, ok := child.(string); ok && strings.TrimSpace(text) != "" {
+						ids = append(ids, strings.TrimSpace(text))
+					}
+				}
+				walk(child)
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return ids, nil
+}
+
+// effectiveSpaceID 返回请求授权所针对的空间：请求头优先；没有请求头时取请求体里
+// 唯一的 space_id。请求体里出现与授权空间不一致的 space_id 一律拒绝。
+func effectiveSpaceID(header string, body []byte) (string, error) {
+	header = strings.TrimSpace(header)
+	ids, err := bodySpaceIDs(body)
+	if err != nil {
+		return "", err
+	}
+	space := header
+	for _, id := range ids {
+		if space == "" {
+			space = id
+		}
+		if id != space {
+			return "", fmt.Errorf("space_id %q does not match authorized space %q", id, space)
+		}
+	}
+	return space, nil
+}

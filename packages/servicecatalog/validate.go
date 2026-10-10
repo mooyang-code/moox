@@ -85,6 +85,11 @@ func (c Catalog) Validate() error {
 			if err := declaredMethods(service.ReadOnlyMethods, methods); err != nil {
 				return fmt.Errorf("service %q read-only methods: %w", service.Path, err)
 			}
+			for method, timeout := range service.MethodTimeoutsMS {
+				if !methods[method] || timeout <= 0 {
+					return fmt.Errorf("service %q has invalid method timeout for %q", service.Path, method)
+				}
+			}
 			for _, grant := range service.ACL {
 				if len(grant.Methods) == 0 || len(grant.Callers) == 0 {
 					return fmt.Errorf("service %q has empty ACL grant", service.Path)

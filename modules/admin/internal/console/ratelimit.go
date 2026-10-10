@@ -120,6 +120,17 @@ func (m *RateLimitManager) checkRateLimit(ctx context.Context, method string) bo
 	return true
 }
 
+// allowConfiguredMethod 只对配置了接口级限额的方法限流（登录、盐值等免登录或敏感接口）。
+// 未配置的方法不共用全局桶，避免一个用户的浏览把所有人的请求挤掉。
+func (m *RateLimitManager) allowConfiguredMethod(ctx context.Context, method string) bool {
+	limiter, exists := m.methodLimiters[method]
+	if !exists || limiter.Allow() {
+		return true
+	}
+	log.WarnContextf(ctx, "接口 [%s] 超过流量限制", method)
+	return false
+}
+
 // RateLimit 流量控制中间件
 func RateLimit() filter.ServerFilter {
 	return func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {

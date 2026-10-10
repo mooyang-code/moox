@@ -201,10 +201,7 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 				if len(callers) == 0 {
 					continue
 				}
-				timeout, limit := service.TimeoutMS, service.MaxBodyBytes
-				if timeout == 0 {
-					timeout = DefaultTimeoutMS
-				}
+				timeout, limit := service.TimeoutFor(method), service.MaxBodyBytes
 				if limit == 0 {
 					limit = DefaultMaxBodyBytes
 				}
