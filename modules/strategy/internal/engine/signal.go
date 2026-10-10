@@ -68,7 +68,7 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 			weight = weight.Neg()
 		}
 		weights[id] = weight
-		result.items = append(result.items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageWeighted, Weight: weight.String()})
+		result.items = append(result.items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageWeighted, Weight: truncateWeight(weight).String()})
 	}
 	result.weights = weights
 	result.state.Held = held

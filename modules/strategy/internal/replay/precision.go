@@ -14,7 +14,12 @@ func roundPlaces(value float64, places int) float64 {
 		return value
 	}
 	factor := math.Pow(10, float64(places))
-	rounded := math.Round(value*factor) / factor
+	scaled := value * factor
+	// 放大后超过 2^52 时浮点的分辨率已经粗于所需的小数精度（取整不改变值），而且很大的值放大会溢出成 Inf：原样返回。
+	if math.IsInf(scaled, 0) || math.Abs(scaled) >= 1<<52 {
+		return value
+	}
+	rounded := math.Round(scaled) / factor
 	if rounded == 0 {
 		return 0 // 避免 -0
 	}

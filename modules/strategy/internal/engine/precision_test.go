@@ -52,3 +52,63 @@ func TestDecimalTruncateAndRound(t *testing.T) {
 		}
 	}
 }
+
+// 合法的高精度配置值不能被取整进到网格点之外：total = leverage = 0.9999999999999 时，权重截断为 0.9999，整期不应因 gross 超杠杆被跳过；
+// max_weight = 0.4999999999999 裁剪后不能变成 0.5。
+func TestPrecisionNeverExceedsConfiguredLimits(t *testing.T) {
+	leverage := compile(t, `name: tight
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 0.9999999999999}
+portfolio:
+  leverage: 0.9999999999999
+  max_missing: 1
+`, "m")
+	decision := evaluate(t, leverage, frameOf(leverage, map[string]Row{"A": values("m", 1)}), State{})
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"A": "0.9999"})
+
+	capped := compile(t, `name: capped
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 1}
+portfolio:
+  max_weight: 0.4999999999999
+  max_missing: 1
+`, "m")
+	decision = evaluate(t, capped, frameOf(capped, map[string]Row{"A": values("m", 1)}), State{})
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"A": "0.4999"})
+}
+
+// signal 的解释明细与目标、Allocated 使用同一精度，明细可以复算已分配金额。
+func TestSignalItemsFollowWeightPrecision(t *testing.T) {
+	program := compile(t, `name: sig_precision
+rules:
+  - id: s
+    type: signal
+    pool: [A, B, C]
+    entry: "m > 0"
+    exit: "m < 0"
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`, "m")
+	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 1), "B": values("m", 1), "C": values("m", 1)}), State{})
+	assertOK(t, decision)
+	total := quant.Zero()
+	for _, id := range []string{"A", "B", "C"} {
+		item := findItem(t, decision, "s", id)
+		if item.Weight != "0.3333" {
+			t.Fatalf("%s 的明细权重应为 0.3333：%q", id, item.Weight)
+		}
+		total = total.Add(quant.Must(item.Weight))
+	}
+	assertDecimal(t, "allocated", decision.Summary.Rules["s"].Allocated, total.String())
+}

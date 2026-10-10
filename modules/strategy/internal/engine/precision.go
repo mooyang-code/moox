@@ -16,12 +16,17 @@ const (
 	ScoreDigits = 6
 )
 
-// noisePlaces 是定点运算（除法、按比例再分配）留下的舍入噪声的量级：先取整到这一位再截断，免得 0.4 因为 0.39999…99 被截成 0.3999。
-const noisePlaces = 12
+// noise 是定点运算（除法、按比例再分配）留下的舍入噪声的上界：截断前把绝对值加上它，免得 0.4 因为 0.39999…99 被截成 0.3999。
+// 只向外加这么一点点再截断（而不是先四舍五入到某一位）：四舍五入会把 0.9999999999999 这样合法的配置值进到 1，突破预算、
+// 杠杆与单标的上限；加上 1e-15 的噪声后，离网格点 1e-15 以上的值仍然被截到网格下面。
+var noise = quant.Must("0.000000000000001")
 
-// truncateWeight 把权重向零截断到 WeightPlaces 位小数（先消去 1e-12 以下的定点噪声）。
+// truncateWeight 把权重向零截断到 WeightPlaces 位小数（先容忍 1e-15 以内的定点噪声）。
 func truncateWeight(value quant.Decimal) quant.Decimal {
-	return value.RoundTo(noisePlaces).TruncateTo(WeightPlaces)
+	if value.IsNegative() {
+		return value.Sub(noise).TruncateTo(WeightPlaces)
+	}
+	return value.Add(noise).TruncateTo(WeightPlaces)
 }
 
 // formatScore 把分数格式化为 ScoreDigits 位有效数字。
