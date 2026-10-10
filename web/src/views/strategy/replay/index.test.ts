@@ -874,6 +874,223 @@ describe("strategy replay page", () => {
     expect((wrapper.vm as any).tableRows).toHaveLength(35);
   });
 
+  it("keeps retrying the table refresh when the refresh at the end of a replay fails", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const fresh = { items: Array.from({ length: 20 }, () => bar()), page: { total: 70 } };
+    let tableCalls = 0;
+    api.listReplayBars.mockImplementation((_id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(bars);
+      tableCalls += 1;
+      return tableCalls === 1 ? Promise.reject(new Error("网络中断")) : Promise.resolve(fresh);
+    });
+    // 轮询看到回放结束，同一轮的表格刷新失败；之后回放是终态、列表里也没有运行中的回放，只靠待刷新继续重试。
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":70,"ok_bars":70,"limitations":[]}'));
+    await pollOnce();
+    expect(tableCalls).toBe(1);
+    expect((wrapper.vm as any).tableRows).toHaveLength(1);
+    await pollOnce();
+    expect(tableCalls).toBe(2);
+    expect((wrapper.vm as any).tableTotal).toBe(70);
+    expect((wrapper.vm as any).tableRows).toHaveLength(20);
+    // 刷新成功后不再轮询。
+    api.getReplay.mockClear();
+    await pollOnce();
+    expect(api.getReplay).not.toHaveBeenCalled();
+    expect(tableCalls).toBe(2);
+  });
+
+  it("still refreshes once after a manual page load fails", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const manual = deferred<unknown>();
+    api.listReplayBars.mockImplementation((_id: string, params: any) => (params?.brief ? Promise.resolve(bars) : manual.promise));
+    (wrapper.vm as any).changeTablePage(2);
+    await nextTick();
+    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'));
+    await pollOnce();
+    // 手动请求失败后仍补一次静默刷新（回放已结束，轮询不会再刷新表格）；补刷新读到最新数据，错误随之清除。
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      Promise.resolve(params?.brief ? bars : { items: [bar(), bar()], page: { total: 2 } })
+    );
+    manual.reject(new Error("超时"));
+    await flushPromises();
+    expect(api.listReplayBars.mock.calls.filter(call => !call[1]?.brief && call[2]?.silent)).toHaveLength(1);
+    expect((wrapper.vm as any).tableRows).toHaveLength(2);
+    expect((wrapper.vm as any).errors.table).toBe("");
+  });
+
+  it("shows the failure of the follow-up refresh and keeps retrying it", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const manual = deferred<unknown>();
+    api.listReplayBars.mockImplementation((_id: string, params: any) => (params?.brief ? Promise.resolve(bars) : manual.promise));
+    (wrapper.vm as any).changeTablePage(2);
+    await nextTick();
+    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'));
+    await pollOnce();
+    // 手动请求成功（读到的是旧快照，错误已清除），补刷新失败：表格上提示，并继续待刷新。
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      params?.brief ? Promise.resolve(bars) : Promise.reject(new Error("超时"))
+    );
+    manual.resolve({ items: [bar()], page: { total: 1 } });
+    await flushPromises();
+    expect((wrapper.vm as any).errors.table).toContain("周期记录加载失败");
+    // 恢复后下一轮轮询把表格补上，错误随之清除。
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      Promise.resolve(params?.brief ? bars : { items: [bar(), bar()], page: { total: 2 } })
+    );
+    await pollOnce();
+    expect((wrapper.vm as any).tableRows).toHaveLength(2);
+    expect((wrapper.vm as any).errors.table).toBe("");
+  });
+
+  it("retries a failed refresh even while the user is on an earlier page of a long replay", async () => {
+    // 曲线有 3 页（120 根），用户停在第 1 页：状态没有变化时本来不刷新表格，但失败的刷新记为待刷新，要继续重试。
+    const long = {
+      items: Array.from({ length: 120 }, (_, index) => ({
+        ...bar(),
+        bar_end_time: new Date(Date.UTC(2026, 8, 1, index)).toISOString()
+      })),
+      page: { total: 120 }
+    };
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "running"));
+    let tableCalls = 0;
+    const handle = (_id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(long);
+      tableCalls += 1;
+      if (tableCalls === 1) return Promise.resolve({ items: [bar()], page: { total: 120 } });
+      return tableCalls === 2
+        ? Promise.reject(new Error("网络中断"))
+        : Promise.resolve({ items: [bar(), bar()], page: { total: 120 } });
+    };
+    api.listReplayBars.mockImplementation(handle);
+    const wrapper = mountPage();
+    await flushPromises();
+    expect((wrapper.vm as any).tablePage).toBe(1);
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":120,"ok_bars":120,"limitations":[]}'));
+    await pollOnce();
+    expect(tableCalls).toBe(2);
+    await pollOnce();
+    expect(tableCalls).toBe(3);
+    expect((wrapper.vm as any).tableRows).toHaveLength(2);
+  });
+
+  it("does not refresh a replay that is no longer shown when its manual page load finishes", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "running" : "done")));
+    const wrapper = mountPage();
+    await flushPromises();
+    const manual = deferred<unknown>();
+    api.listReplayBars.mockImplementation((id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(bars);
+      return id === "r1" && params?.page === 2 ? manual.promise : Promise.resolve(bars);
+    });
+    (wrapper.vm as any).changeTablePage(2);
+    await nextTick();
+    api.getReplay.mockImplementation((id: string) =>
+      Promise.resolve(replay(id, "done", '{"bars":1,"ok_bars":1,"limitations":[]}'))
+    );
+    await pollOnce();
+    // 用户切到另一个回放，它的详情还在加载（还没发出表格请求）时，旧回放的手动请求返回：不再为旧回放补刷新。
+    const detail = deferred<unknown>();
+    api.getReplay.mockImplementation((id: string) => (id === "r2" ? detail.promise : Promise.resolve(replay(id, "done"))));
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    api.listReplayBars.mockClear();
+    manual.resolve({ items: [bar()], page: { total: 60 } });
+    await flushPromises();
+    expect(api.listReplayBars.mock.calls.filter(call => call[0] === "r1")).toHaveLength(0);
+    detail.resolve(replay("r2", "done"));
+    await flushPromises();
+    expect((wrapper.vm as any).selectedId).toBe("r2");
+  });
+
+  it("does not carry a pending refresh over to a later selection of the same replay", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "running" : "done")));
+    const wrapper = mountPage();
+    await flushPromises();
+    const manual = deferred<unknown>();
+    api.listReplayBars.mockImplementation((id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(bars);
+      return id === "r1" && params?.page === 2 ? manual.promise : Promise.resolve(bars);
+    });
+    (wrapper.vm as any).changeTablePage(2);
+    await nextTick();
+    api.getReplay.mockImplementation((id: string) =>
+      Promise.resolve(replay(id, "done", '{"bars":1,"ok_bars":1,"limitations":[]}'))
+    );
+    await pollOnce();
+    // 切走再切回 r1：选择自己的表格加载已经读到最新数据，不再多发一次后台刷新。
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    manual.resolve({ items: [bar()], page: { total: 60 } });
+    await flushPromises();
+    api.listReplayBars.mockClear();
+    await wrapper.findAll("button.replay-row")[0].trigger("click");
+    await flushPromises();
+    const tableCalls = api.listReplayBars.mock.calls.filter(call => call[0] === "r1" && !call[1]?.brief);
+    expect(tableCalls).toHaveLength(1);
+    expect(tableCalls[0][2]).toEqual({ silent: false });
+  });
+
+  it("returns the page number to the last shown page when a manual page flip fails", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    expect(vm.tablePage).toBe(1);
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      params?.brief ? Promise.resolve(bars) : Promise.reject(new Error("超时"))
+    );
+    vm.changeTablePage(2);
+    await flushPromises();
+    // 页码回到仍然显示着数据的第 1 页，分页组件才能再次触发翻页重试。
+    expect(vm.tablePage).toBe(1);
+    expect(vm.errors.table).toContain("周期记录加载失败");
+    expect(vm.tableRows).toHaveLength(1);
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      Promise.resolve(params?.brief ? bars : { items: [bar(), bar()], page: { total: 102 } })
+    );
+    vm.changeTablePage(2);
+    await flushPromises();
+    expect(vm.tablePage).toBe(2);
+    expect(vm.tableRows).toHaveLength(2);
+    expect(vm.errors.table).toBe("");
+  });
+
+  it("selects a replay started from an empty list only once", async () => {
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.startReplay.mockResolvedValue({ replay: replay("r9", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.getReplay.mockResolvedValue(replay("r9", "pending"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.strategy_id = "s1";
+    vm.form.view_id = "view_a";
+    await nextTick();
+    api.listReplays.mockResolvedValue({ items: [replay("r9", "pending")], page: { total: 1 } });
+    await wrapper
+      .findAll("button")
+      .find(button => button.text() === "开始回放")!
+      .trigger("click");
+    await flushPromises();
+    expect(vm.selectedId).toBe("r9");
+    expect(api.getReplay.mock.calls.filter(call => call[0] === "r9")).toHaveLength(1);
+  });
+
   it("counts the wait for a directly opened cancelled replay from the cancel time", async () => {
     const cancelledAt = Date.now() - 100_000;
     const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });

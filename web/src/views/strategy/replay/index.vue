@@ -409,8 +409,11 @@ let listApplied = 0;
 let listLoadingSeq = 0;
 // userPicks 是用户在列表里手动选择的次数：发起回放等待列表期间用户另选过，就不再切到新回放。
 let userPicks = 0;
-// tableRefreshPending 是手动表格请求在途时被跳过的后台刷新所属的回放：手动请求结束后补一次。
+// tableRefreshPending 是表格落后于服务端、需要再静默刷新一次的回放：手动请求在途时被跳过的后台刷新、失败的后台刷新
+// 都记在这里；之后任何一次对它的表格请求发出时清除（读到的数据是此刻之后的），请求失败或又被跳过会重新记下。
 let tableRefreshPending = "";
+// tableLoadedPage 是表格当前显示的数据所属的页（0 表示还没有读到）：手动翻页失败时页码回到它。
+let tableLoadedPage = 0;
 
 const metrics = computed(() => parseMetrics(selected.value?.metrics_json));
 const partialMetrics = computed(() => selected.value?.status === "cancelled" || selected.value?.status === "failed");
@@ -548,23 +551,31 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
   // 轮询刷新不显示加载遮罩：运行中的回放停在末页时，每 5 秒闪一次会很干扰。
   const loadingId = silent ? 0 : ++tableLoadingRequest;
   const live = () => isCurrent() && requestId === tableRequest;
+  if (tableRefreshPending === replayId) tableRefreshPending = "";
+  const page = tablePage.value;
   if (!silent) tableLoading.value = true;
   try {
-    const result = await listReplayBars(replayId, { page: tablePage.value, page_size: tablePageSize }, { silent });
+    const result = await listReplayBars(replayId, { page, page_size: tablePageSize }, { silent });
     if (!live()) return;
     tableRows.value = result.items;
     tableTotal.value = result.page.total;
+    tableLoadedPage = page;
     errors.table = "";
   } catch (err) {
     if (!live()) return;
-    if (silent) throw err;
+    if (silent) {
+      // 后台刷新失败：回放可能已是终态、轮询不再刷新表格，记下待刷新让轮询继续重试（连续失败由轮询计数提示）。
+      tableRefreshPending = replayId;
+      throw err;
+    }
+    // 手动翻页失败：页码回到上一次成功显示的页。Arco 的分页只在页码变化时触发翻页，页码停在失败的那一页就点不动了。
+    if (tableLoadedPage > 0) tablePage.value = tableLoadedPage;
     errors.table = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
     if (!silent && loadingId === tableLoadingRequest) {
       tableLoading.value = false;
       // 手动请求在途时跳过了后台刷新：回放可能已经结束、轮询不会再刷新表格，这里补一次，免得表格停在手动请求读到的旧快照上。
       if (tableRefreshPending === replayId && isCurrent()) {
-        tableRefreshPending = "";
         void loadTablePage(replayId, isCurrent, true).catch(err => {
           errors.table = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
         });
@@ -610,6 +621,7 @@ async function select(replayId: string, options: { observedCancel?: boolean; kee
   const isCurrent = () => requestId === selectRequest && gen === generation;
   const page = options.keepTablePage && selectedId.value === replayId ? tablePage.value : 1;
   // 立即清掉上一个回放的详情与错误：加载期间不能显示旧回放，取消等操作也不能作用在旧回放上。
+  tableLoadedPage = 0;
   selectedId.value = replayId;
   selected.value = null;
   errors.detail = "";
@@ -648,11 +660,16 @@ function changeTablePage(page: number) {
   void loadTablePage(replayId, () => requestId === selectRequest && gen === generation && selectedId.value === replayId);
 }
 
-/** 所选回放是否还需要轮询：排队或运行中，或刚取消、部分指标尚未写入（最多等 2 分钟）。 */
+/** 所选回放是否还需要轮询：排队或运行中，或刚取消、部分指标尚未写入（最多等 2 分钟），或表格落后、待刷新。 */
 function selectedNeedsRefresh(): boolean {
   const current = selected.value;
   if (!current || current.replay_id !== selectedId.value) return false;
-  return current.status === "pending" || current.status === "running" || awaitingShown.value;
+  return (
+    current.status === "pending" ||
+    current.status === "running" ||
+    awaitingShown.value ||
+    tableRefreshPending === current.replay_id
+  );
 }
 
 /** 轮询只刷新需要刷新的所选回放：曲线增量追加并就地更新，表格停在末页时一并刷新。 */
@@ -674,14 +691,14 @@ async function refreshSelected() {
   }
   maybeAwaitMetrics(replay, current.status === "pending" || current.status === "running");
   const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
-  if (tablePage.value < lastPage - 1 && replay.status === current.status) return;
+  // 表格没有落后、停在较早的页、状态也没变化时不用刷新。
+  if (tableRefreshPending !== replayId && tablePage.value < lastPage - 1 && replay.status === current.status) return;
   // 用户正在手动翻页（遮罩还在）时不做后台刷新：后台请求会把还没返回的手动请求作废，失败时表格就停在旧页的数据上。
   // 记下待刷新，由手动请求结束时补上。
   if (tableLoading.value) {
     tableRefreshPending = replayId;
     return;
   }
-  tableRefreshPending = "";
   await loadTablePage(replayId, isCurrent, true);
 }
 
@@ -768,7 +785,8 @@ async function start() {
     await loadReplays();
     // 等待期间用户在列表里另选了回放：尊重用户的选择，不再切到新回放。
     if (gen !== generation || userPicks !== picks) return;
-    await select(started.replay.replay_id);
+    // 列表原先为空时，列表加载会自动选中第一条（就是新回放），已经在加载，不必再选一次。
+    if (selectedId.value !== started.replay.replay_id) await select(started.replay.replay_id);
   } catch (err) {
     if (gen === generation) errors.start = `回放发起失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
@@ -836,7 +854,6 @@ watch(
     generation += 1;
     selectRequest += 1;
     tableRequest += 1;
-    tableRefreshPending = "";
     selectedId.value = "";
     selected.value = null;
     detailLoading.value = false;
