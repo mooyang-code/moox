@@ -234,7 +234,7 @@ const RetiredSeriesAfter = 24 * time.Hour
 // before now, together with their latest values, and the reporter instances
 // that went silent in the same window. Dropping a reporter lets its freshness
 // check resolve as no longer expected, so a renamed or removed service does not
-// keep alerting; SysDeploy probes still cover a registered service that is down.
+// keep alerting; Placement probes still cover a registered service that is down.
 func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("message store is not initialized")

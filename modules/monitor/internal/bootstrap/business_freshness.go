@@ -396,13 +396,13 @@ func serviceDeploymentExpected(
 		pageSize  = 500
 		maxChecks = 1500
 	)
-	opts := store.ListChecksOptions{Source: domain.CheckSourceSysDeploy}
+	opts := store.ListChecksOptions{Source: domain.CheckSourcePlacement}
 	total, err := checks.Count(ctx, opts)
 	if err != nil {
 		return false, err
 	}
 	if total > maxChecks {
-		return false, fmt.Errorf("sysdeploy checks exceed limit %d", maxChecks)
+		return false, fmt.Errorf("placement checks exceed limit %d", maxChecks)
 	}
 	found := false
 	for page := 1; int64((page-1)*pageSize) < total; page++ {
@@ -434,13 +434,13 @@ func reporterDeploymentExpected(
 	if checks == nil || strings.TrimSpace(service.NodeID) == "" || strings.TrimSpace(service.ServiceName) == "" {
 		return true, nil
 	}
-	checkID := strings.Join([]string{"sysdeploy", service.NodeID, service.ServiceName}, ":")
+	checkID := strings.Join([]string{"placement", service.NodeID, service.ServiceName}, ":")
 	check, err := checks.Get(ctx, "", checkID)
 	switch {
 	case err == nil:
 		return check.Enabled, nil
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		// External reporters, such as SCF nodes, do not have SysDeploy checks.
+		// External reporters, such as SCF nodes, do not have placement checks.
 		return true, nil
 	default:
 		return false, err

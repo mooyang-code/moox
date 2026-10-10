@@ -222,16 +222,19 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 		}
 	}
 
-	checks, err := b.listEnabledSysDeployChecks(ctx, spaceID)
+	checks, err := b.listEnabledPlacementChecks(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
 	for _, check := range checks {
+		if !strings.HasPrefix(check.CheckID, "placement:") {
+			continue
+		}
 		labels, err := serviceCheckLabels(check.Labels)
 		if err != nil {
-			return nil, fmt.Errorf("sysdeploy check %q labels: %w", check.CheckID, err)
+			return nil, fmt.Errorf("placement check %q labels: %w", check.CheckID, err)
 		}
-		nodeID, serviceName := labels["node_id"], labels["service_name"]
+		nodeID, serviceName := labels["host_id"], labels["component_id"]
 		matched := make([]string, 0, 1)
 		for key, item := range services {
 			if item.NodeID == nodeID && item.ServiceName == serviceName {
@@ -288,7 +291,7 @@ func serviceInstanceKey(nodeID, serviceName, instanceID string) string {
 	return strings.Join([]string{nodeID, serviceName, instanceID}, "\x00")
 }
 
-func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
+func (b Builder) listEnabledPlacementChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
 	if b.Checks == nil {
 		return []domain.Check{}, nil
 	}
@@ -296,7 +299,7 @@ func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string)
 	out := make([]domain.Check, 0, 500)
 	for page := 1; len(out) < maxOverviewServices; page++ {
 		rows, err := b.Checks.List(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
+			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
 			Page: store.Page{Page: page, PageSize: 500},
 		})
 		if err != nil {
@@ -309,13 +312,13 @@ func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string)
 	}
 	if len(out) >= maxOverviewServices {
 		total, err := b.Checks.Count(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
+			SpaceID: spaceID, Source: domain.CheckSourcePlacement, Enabled: &enabled,
 		})
 		if err != nil {
 			return nil, err
 		}
 		if total > maxOverviewServices {
-			return nil, fmt.Errorf("sysdeploy checks exceed limit %d", maxOverviewServices)
+			return nil, fmt.Errorf("placement checks exceed limit %d", maxOverviewServices)
 		}
 	}
 	return out, nil
@@ -326,7 +329,7 @@ func serviceCheckLabels(raw string) (map[string]string, error) {
 	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
 		return nil, err
 	}
-	for _, key := range []string{"node_id", "service_name"} {
+	for _, key := range []string{"host_id", "component_id"} {
 		labels[key] = strings.TrimSpace(labels[key])
 		if labels[key] == "" {
 			return nil, fmt.Errorf("%s is required", key)

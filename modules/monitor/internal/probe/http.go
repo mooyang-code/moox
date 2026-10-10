@@ -50,7 +50,7 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	for k, v := range parseHeaders(check.Headers) {
 		req.Header.Set(k, v)
 	}
-	if r.HealthSigner != nil && check.Source == domain.CheckSourceSysDeploy && isHealthPath(req.URL) {
+	if r.HealthSigner != nil && check.Source == domain.CheckSourcePlacement && check.TrustMode == "" && isHealthPath(req.URL) {
 		now := time.Now
 		if r.Now != nil {
 			now = r.Now
@@ -72,14 +72,26 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
-	resp, err := client.Do(req)
+	if check.TrustMode != "" {
+		var closeClient func()
+		client, closeClient, err = httpsClient(check, timeout)
+		if err != nil {
+			return failResult(check, 0, err.Error())
+		}
+		defer closeClient()
+	}
+	owned := *client
+	owned.CheckRedirect = stopRedirect
+	resp, err := owned.Do(req)
 	latency := time.Since(start)
 	if err != nil {
-		return failResult(check, latency, connectFailureText(err, timeout))
+		result := failResult(check, latency, connectFailureText(err, timeout))
+		result.RawError = err.Error()
+		return result
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyExcerptBytes+1))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyExcerptBytes+1))
 	excerpt := string(body)
 	if len(body) > maxBodyExcerptBytes {
 		excerpt = string(body[:maxBodyExcerptBytes])
@@ -88,11 +100,17 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	result.HTTPStatus = resp.StatusCode
 	result.Connected = true
 	result.BodyExcerpt = excerpt
+	if readErr != nil {
+		result.ErrorMessage = "读取健康接口响应失败"
+		result.RawError = readErr.Error()
+		return result
+	}
 
 	if !matchStatus(resp.StatusCode) {
 		result.Success = false
 		result.Status = domain.CheckStatusDown
 		result.ErrorMessage = fmt.Sprintf("健康接口返回异常状态码 %d：服务未就绪或出错", resp.StatusCode)
+		result.RawError = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, excerpt)
 		if reason := healthFailureReason(req.URL, excerpt); reason != "" {
 			result.ErrorMessage = reason
 		}
@@ -108,6 +126,7 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 		result.Success = false
 		result.Status = domain.CheckStatusDown
 		result.ErrorMessage = "健康接口返回内容表明服务未就绪"
+		result.RawError = "expected response body to contain " + check.BodyContains + ": " + excerpt
 		return result
 	}
 	result.Success = true

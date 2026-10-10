@@ -28,5 +28,5 @@ func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, 
 	if _, ok := a.ExternalProducers[serviceName]; ok {
 		return true, nil
 	}
-	return a.Checks.IsSysDeployRegistered(ctx, serviceName, nodeID)
+	return a.Checks.IsPlacementRegistered(ctx, serviceName, nodeID)
 }

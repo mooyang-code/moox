@@ -508,7 +508,7 @@ func TestBuilderDoesNotTreatUnknownTimerReadbackAsUnavailable(t *testing.T) {
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
 }
 
-func TestBuilderSysDeployFailureOverridesFreshReporter(t *testing.T) {
+func TestBuilderPlacementFailureOverridesFreshReporter(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, repositories := openOverviewState(t, func(db *gorm.DB) {
 		if err := db.Create(&monmetrics.MetricService{
@@ -519,10 +519,10 @@ func TestBuilderSysDeployFailureOverridesFreshReporter(t *testing.T) {
 		}
 	})
 	check := domain.Check{
-		SpaceID: "mooxsys", CheckID: "sysdeploy:node-a:moox_storage",
+		SpaceID: "mooxsys", CheckID: "placement:node-a:moox_storage",
 		Name: "moox_storage@node-a", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourceSysDeploy, Enabled: true,
-		Labels: `{"node_id":"node-a","service_name":"moox_storage"}`,
+		Source: domain.CheckSourcePlacement, Enabled: true,
+		Labels: `{"host_id":"node-a","component_id":"moox_storage"}`,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
 		t.Fatal(err)
@@ -546,13 +546,13 @@ func TestBuilderSysDeployFailureOverridesFreshReporter(t *testing.T) {
 	}
 }
 
-func TestBuilderIncludesSysDeployServiceWithoutReporter(t *testing.T) {
+func TestBuilderIncludesPlacementServiceWithoutReporter(t *testing.T) {
 	query, repositories := openOverviewState(t, func(*gorm.DB) {})
 	check := domain.Check{
-		SpaceID: "mooxsys", CheckID: "sysdeploy:node-b:factor-mgr",
+		SpaceID: "mooxsys", CheckID: "placement:node-b:factor-mgr",
 		Name: "factor-mgr@node-b", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourceSysDeploy, Enabled: true,
-		Labels: `{"node_id":"node-b","service_name":"factor-mgr"}`,
+		Source: domain.CheckSourcePlacement, Enabled: true,
+		Labels: `{"host_id":"node-b","component_id":"factor-mgr"}`,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
 		t.Fatal(err)
@@ -579,10 +579,10 @@ func TestBuilderIncludesSysDeployServiceWithoutReporter(t *testing.T) {
 func TestBuilderDoesNotRequireReporterFromHealthOnlyService(t *testing.T) {
 	query, repositories := openOverviewState(t, func(*gorm.DB) {})
 	check := domain.Check{
-		SpaceID: "mooxsys", CheckID: "sysdeploy:node-b:web-host",
+		SpaceID: "mooxsys", CheckID: "placement:node-b:web-host",
 		Name: "web-host@node-b", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourceSysDeploy, Enabled: true,
-		Labels: `{"node_id":"node-b","service_name":"web-host"}`,
+		Source: domain.CheckSourcePlacement, Enabled: true,
+		Labels: `{"host_id":"node-b","component_id":"web-host"}`,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
 		t.Fatal(err)

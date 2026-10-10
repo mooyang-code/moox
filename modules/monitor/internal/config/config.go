@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -21,7 +22,7 @@ type Config struct {
 	HealthAuth     HealthAuthConfig         `yaml:"health_auth"`
 	Instance       InstanceConfig           `yaml:"instance"`
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
-	SysDeploy      SysDeployConfig          `yaml:"sysdeploy"`
+	Placement      PlacementConfig          `yaml:"placement"`
 	Alert          AlertConfig              `yaml:"alert"`
 	Observability  ObservabilityConfig      `yaml:"observability"`
 	Metrics        MetricsConfig            `yaml:"metrics"`
@@ -58,8 +59,9 @@ type SchedulerConfig struct {
 	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
-type SysDeployConfig struct {
-	Enabled bool `yaml:"enabled"`
+type PlacementConfig struct {
+	Enabled bool                          `yaml:"enabled"`
+	HTTPS   map[string]domain.HTTPSConfig `yaml:"https"`
 }
 
 type AlertConfig struct {
@@ -172,6 +174,14 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
+	for id, target := range cfg.Placement.HTTPS {
+		for _, path := range []*string{&target.CAFile, &target.CABaseline} {
+			if *path != "" && !filepath.IsAbs(*path) {
+				*path = filepath.Join(filepath.Dir(absolutePath), *path)
+			}
+		}
+		cfg.Placement.HTTPS[id] = target
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -200,7 +210,7 @@ func Default() *Config {
 			ResultRetentionDays: 14,
 			MaxConcurrency:      16,
 		},
-		SysDeploy: SysDeployConfig{Enabled: true},
+		Placement: PlacementConfig{Enabled: true},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
@@ -481,8 +491,13 @@ func (c *Config) Validate() error {
 	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
 		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
 	}
-	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
-		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")
+	for id, target := range c.Placement.HTTPS {
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("placement.https.%s: %w", id, err)
+		}
+	}
+	if c.Placement.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
+		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when placement monitoring is enabled")
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage

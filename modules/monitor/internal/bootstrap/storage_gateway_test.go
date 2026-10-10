@@ -5,7 +5,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -21,9 +23,9 @@ import (
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
-	"github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
@@ -174,7 +176,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "monitor")
-	raw := "sysdeploy:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-monitor.key\n"
+	raw := "placement:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-monitor.key\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
@@ -192,21 +194,19 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "generation-1"})
 	require.NoError(t, err)
 	require.Equal(t, "generation-1", inventoryResponse.GetSnapshotId())
-	source := sysdeploy.NewClientSource(runtime.Gateway)
-	deployments, err := source.DesiredDeployments(t.Context())
+	source := placement.NewClientSource(runtime.Gateway)
+	snapshot, err := source.Snapshot(t.Context())
 	require.NoError(t, err)
-	require.Len(t, deployments, 1)
-	hosts, err := source.NodeHosts(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, "control.example.test", hosts["control"])
-	var forbidden adminpb.UpdateServiceDeploymentRsp
-	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment", &adminpb.UpdateServiceDeploymentReq{}, &forbidden))
+	require.Len(t, snapshot.Placements, 1)
+	require.Equal(t, "control.example.test", snapshot.Hosts[0].GetAddress())
+	var forbidden adminpb.SetPlacementStatusRsp
+	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetPlacementStatus", &adminpb.SetPlacementStatusReq{}, &forbidden))
 	wire.mu.Lock()
 	reads, writes, nonces, refreshes := wire.reads, wire.writes, len(wire.nonces), wire.refreshes
 	wire.mu.Unlock()
 	require.Equal(t, 2, reads)
 	require.Equal(t, 1, writes)
-	require.Equal(t, 6, nonces)
+	require.Equal(t, 7, nonces)
 	require.GreaterOrEqual(t, refreshes, 2)
 	_, err = runtime.StorageGateway.GetSpace(t.Context(), &storagepb.GetSpaceReq{SpaceId: "mooxsys"}, client.WithTarget("ip://192.0.2.99:20200"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
@@ -226,15 +226,23 @@ type monitorSysDeployWire struct {
 	wire *monitorGatewayWire
 }
 
-func (w monitorSysDeployWire) ListServiceDeployments(ctx context.Context, req *adminpb.ListServiceDeploymentsReq) (*adminpb.ListServiceDeploymentsRsp, error) {
-	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListServiceDeployments", req); err != nil {
+func (w monitorSysDeployWire) GetCatalog(ctx context.Context, req *adminpb.GetCatalogReq) (*adminpb.GetCatalogRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "GetCatalog", req); err != nil {
 		return nil, err
 	}
-	return &adminpb.ListServiceDeploymentsRsp{RetInfo: &adminpb.RetInfo{}, Deployments: []*adminpb.ServiceDeployment{{NodeId: "control", ServiceName: "admin"}}}, nil
+	raw := servicecatalog.EmbeddedYAML()
+	hash := sha256.Sum256(raw)
+	return &adminpb.GetCatalogRsp{RetInfo: &adminpb.RetInfo{}, CatalogYaml: string(raw), Sha256: hex.EncodeToString(hash[:])}, nil
 }
-func (w monitorSysDeployWire) ListGatewayNodes(ctx context.Context, req *adminpb.ListGatewayNodesReq) (*adminpb.ListGatewayNodesRsp, error) {
-	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", req); err != nil {
+func (w monitorSysDeployWire) ListHosts(ctx context.Context, req *adminpb.ListDeploymentHostsReq) (*adminpb.ListDeploymentHostsRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListHosts", req); err != nil {
 		return nil, err
 	}
-	return &adminpb.ListGatewayNodesRsp{RetInfo: &adminpb.RetInfo{}, Nodes: []*adminpb.GatewayNode{{NodeId: "control", PublicAddress: "https://control.example.test:11001"}}}, nil
+	return &adminpb.ListDeploymentHostsRsp{RetInfo: &adminpb.RetInfo{}, Hosts: []*adminpb.DeploymentHost{{HostId: "control", Address: "control.example.test", Status: "enabled"}}}, nil
+}
+func (w monitorSysDeployWire) ListPlacements(ctx context.Context, req *adminpb.ListPlacementsReq) (*adminpb.ListPlacementsRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListPlacements", req); err != nil {
+		return nil, err
+	}
+	return &adminpb.ListPlacementsRsp{RetInfo: &adminpb.RetInfo{}, Placements: []*adminpb.ComponentPlacement{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
 }

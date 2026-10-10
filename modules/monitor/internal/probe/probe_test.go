@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestHTTPProbeSignsSysDeployHealthPathsWithFreshNonce(t *testing.T) {
+func TestHTTPProbeSignsPlacementHealthPathsWithFreshNonce(t *testing.T) {
 	authenticator, err := healthz.NewAuthenticator(healthz.AuthConfig{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"})
 	require.NoError(t, err)
 	var headers []string
@@ -29,7 +29,7 @@ func TestHTTPProbeSignsSysDeployHealthPathsWithFreshNonce(t *testing.T) {
 	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
 
 	for i := 0; i < 2; i++ {
-		result := runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/readyz?full=1", Headers: `{"X-Custom":"keep"}`})
+		result := runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, URL: srv.URL + "/readyz?full=1", Headers: `{"X-Custom":"keep"}`})
 		require.True(t, result.Success, result.ErrorMessage)
 	}
 	require.Len(t, headers, 2)
@@ -45,7 +45,7 @@ func TestHTTPProbeLeavesManualAndNonHealthChecksUnsigned(t *testing.T) {
 	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
 
 	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceObservability, URL: srv.URL + "/readyz"})
-	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/status"})
+	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, URL: srv.URL + "/status"})
 	require.Equal(t, []string{"", ""}, headers)
 }
 
@@ -104,7 +104,7 @@ func TestHTTPProbe(t *testing.T) {
 		defer srv.Close()
 
 		result := HTTPRunner{}.Run(context.Background(), domain.Check{
-			Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy,
+			Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement,
 			URL: srv.URL + "/readyz", ExpectedStatus: "200-299",
 		})
 		require.False(t, result.Success)

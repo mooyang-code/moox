@@ -138,7 +138,7 @@ func startObservabilityConsumer(
 			Checks: runtime.Repositories.Checks,
 			ExternalProducers: map[string]struct{}{
 				"moox_collector_scf": {},
-				// No sysdeploy check registers these producers on every node they
+				// No placement check registers these producers on every node they
 				// run on: storage-node has no deployment, and moox_gateway also
 				// runs on nodes (such as Storage) without a deployment row of its
 				// own. Their EventBus credentials are still scoped to this control

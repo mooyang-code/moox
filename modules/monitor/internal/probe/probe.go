@@ -89,5 +89,6 @@ func failResult(check domain.Check, latency time.Duration, msg string) domain.Ch
 	result.Success = false
 	result.Status = domain.CheckStatusDown
 	result.ErrorMessage = msg
+	result.RawError = msg
 	return result
 }

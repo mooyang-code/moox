@@ -10,9 +10,9 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
-	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -61,11 +61,11 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 	if cfg == nil || runtime == nil {
 		return nil
 	}
-	if !cfg.SysDeploy.Enabled {
+	if !cfg.Placement.Enabled {
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(runtime.Gateway))
+	syncer := monitorplacement.NewSyncer(runtime.Repositories.Checks, monitorplacement.NewClientSource(runtime.Gateway), cfg.Placement.HTTPS)
 	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
 		count, err := syncer.Sync(syncCtx)
 		if err != nil {
@@ -89,12 +89,12 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 
 func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) error) {
 	if s == nil {
-		log.Warn("monitor sysdeploy timer server is unavailable, skip register")
+		log.Warn("monitor placement timer server is unavailable, skip register")
 		return
 	}
-	service := s.Service("trpc.moox.monitor.sysdeploy.timer")
+	service := s.Service("trpc.moox.monitor.placement.timer")
 	if service == nil {
-		log.Warn("monitor sysdeploy timer service is not configured, skip register")
+		log.Warn("monitor placement timer service is not configured, skip register")
 		return
 	}
 	if handler == nil {
@@ -120,11 +120,11 @@ func monitorSyncHandler(syncFunc func(context.Context) (int, error)) func(contex
 	return func(ctx context.Context) error {
 		n, err := syncFunc(ctx)
 		if err != nil {
-			log.WarnContextf(ctx, "monitor sysdeploy sync failed: %v", err)
+			log.WarnContextf(ctx, "monitor placement sync failed: %v", err)
 			return err
 		}
 		if n > 0 {
-			log.InfoContextf(ctx, "monitor sysdeploy sync updated %d checks", n)
+			log.InfoContextf(ctx, "monitor placement sync updated %d checks", n)
 		}
 		return nil
 	}

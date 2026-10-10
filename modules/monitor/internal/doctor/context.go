@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
@@ -27,12 +27,8 @@ const (
 	MaxSeries       = 256
 )
 
-type DeploymentSource interface {
-	DesiredDeployments(context.Context) ([]*adminpb.ServiceDeployment, error)
-}
-
 type Builder struct {
-	Deployments         DeploymentSource
+	Deployments         placement.Source
 	Checks              *store.CheckRepository
 	Results             *store.ResultRepository
 	Alerts              *store.AlertRepository
@@ -94,31 +90,40 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 		now = b.Now().UTC()
 	}
 	out := Context{GeneratedAt: now.Format(time.RFC3339Nano), ManifestChecksum: manifest.Checksum, Forecasts: map[string][]hostmetrics.DiskForecast{}}
-	deployments, deploymentErr := b.loadDeployments(ctx)
-	byService := make(map[string]*adminpb.ServiceDeployment, len(deployments))
-	for _, deployment := range deployments {
-		if deployment != nil && (nodeID == "" || deployment.GetNodeId() == nodeID) {
-			byService[deployment.GetServiceName()] = deployment
-		}
+	snapshot, deploymentErr := b.loadDeployments(ctx)
+	hosts := make(map[string]bool, len(snapshot.Hosts))
+	for _, host := range snapshot.Hosts {
+		hosts[host.GetHostId()] = host.GetStatus() == "enabled"
 	}
 	for _, component := range components {
-		deployment := byService[component.ServiceName]
-		expected := component.RequiredInDefaultProfile
-		status, foundNode, healthURL := "missing", nodeID, ""
-		if deployment != nil {
-			status, foundNode = deployment.GetStatus(), deployment.GetNodeId()
-			expected = deployment.GetStatus() == "active"
-			healthURL = deploymentHealthURL(deployment)
+		found := false
+		for _, deployed := range snapshot.Placements {
+			if deployed.GetComponentId() != component.ComponentID || (nodeID != "" && deployed.GetHostId() != nodeID) {
+				continue
+			}
+			found = true
+			healthURL := ""
+			if b.Checks != nil {
+				check, err := b.Checks.Get(ctx, "", placement.CheckID(deployed.GetHostId(), component.ComponentID))
+				if err == nil {
+					healthURL = check.URL
+				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+					return Context{}, err
+				}
+			}
+			out.ExpectedComponents = append(out.ExpectedComponents, ExpectedComponent{
+				ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: deployed.GetHostId(),
+				Expected: hosts[deployed.GetHostId()] && deployed.GetStatus() == "enabled", DeploymentStatus: deployed.GetStatus(),
+				Transport: string(component.Transport), FunctionalObservability: string(component.FunctionalObservability),
+				HealthURL: healthURL, DeploymentCreatedAt: parseTimestamp(deployed.GetCreatedAt()),
+			})
 		}
-		out.ExpectedComponents = append(out.ExpectedComponents, ExpectedComponent{
-			ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: foundNode,
-			Expected: expected, DeploymentStatus: status, Transport: string(component.Transport),
-			FunctionalObservability: string(component.FunctionalObservability), HealthURL: healthURL,
-			DeploymentCreatedAt: parseTimestamp(deployment.GetCreatedAt()),
-		})
+		if !found {
+			out.ExpectedComponents = append(out.ExpectedComponents, ExpectedComponent{ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: nodeID, DeploymentStatus: "missing", Transport: string(component.Transport), FunctionalObservability: string(component.FunctionalObservability)})
+		}
 	}
 	if deploymentErr != nil {
-		out.MissingObservations = append(out.MissingObservations, Observation{Kind: "sysdeploy", Status: "UNKNOWN", Summary: "SysDeploy facts unavailable"})
+		out.MissingObservations = append(out.MissingObservations, Observation{Kind: "placement", Status: "UNKNOWN", Summary: "部署事实暂不可用：" + deploymentErr.Error()})
 	}
 	if err := b.addHealth(ctx, components, now, &out); err != nil {
 		return Context{}, err
@@ -147,11 +152,11 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 	return out, nil
 }
 
-func (b Builder) loadDeployments(ctx context.Context) ([]*adminpb.ServiceDeployment, error) {
+func (b Builder) loadDeployments(ctx context.Context) (placement.Snapshot, error) {
 	if b.Deployments == nil {
-		return nil, fmt.Errorf("sysdeploy source is unavailable")
+		return placement.Snapshot{}, fmt.Errorf("placement source is unavailable")
 	}
-	return b.Deployments.DesiredDeployments(ctx)
+	return b.Deployments.Snapshot(ctx)
 }
 
 func (b Builder) addHealth(ctx context.Context, components []doctor.Component, now time.Time, out *Context) error {
@@ -160,10 +165,10 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 	}
 	componentByService := componentMap(components)
 	for _, expected := range out.ExpectedComponents {
-		if !expected.Expected {
+		if !expected.Expected || componentByService[expected.ServiceName].HealthPath == "" {
 			continue
 		}
-		checkID := sysDeployCheckID(expected.NodeID, expected.ServiceName)
+		checkID := placement.CheckID(expected.NodeID, expected.ComponentID)
 		check, err := b.Checks.Get(ctx, "", checkID)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health check is not registered"})
@@ -223,10 +228,6 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 	return nil
 }
 
-func sysDeployCheckID(nodeID, serviceName string) string {
-	return "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
-}
-
 func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, healthCheckIDs []string, now time.Time, out *Context) error {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil
@@ -246,7 +247,8 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		if !ok || (nodeID != "" && service.NodeID != nodeID) {
 			continue
 		}
-		active[service.ServiceName] = append(active[service.ServiceName], service)
+		key := service.ServiceName + "\x00" + service.NodeID
+		active[key] = append(active[key], service)
 		age := observationAge(now, service.LastSeenAt)
 		status := "FRESH"
 		if service.LastSeenAt.IsZero() || age > 120 {
@@ -256,7 +258,8 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		}
 		out.ReporterObservations = append(out.ReporterObservations, Observation{Kind: "reporter", ComponentID: component.ComponentID, ServiceName: service.ServiceName, InstanceID: service.InstanceID, NodeID: service.NodeID, BootID: service.BootID, Status: status, ObservedAt: service.LastSeenAt, Stale: status != "FRESH", AgeSeconds: age, IntervalSeconds: 30, Summary: "latest Reporter snapshot"})
 	}
-	for serviceName, rows := range active {
+	for _, rows := range active {
+		serviceName, hostID := rows[0].ServiceName, rows[0].NodeID
 		fresh := 0
 		for _, row := range rows {
 			if observationAge(now, row.LastSeenAt) <= 60 {
@@ -265,8 +268,8 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		}
 		if fresh > 1 {
 			component := componentByService[serviceName]
-			markReporterConflict(out, component.ComponentID)
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "identity", ComponentID: component.ComponentID, ServiceName: serviceName, NodeID: nodeID, Status: "CONFLICT", Conflict: true, Summary: "multiple fresh Reporter identities"})
+			markReporterConflict(out, component.ComponentID, hostID)
+			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "identity", ComponentID: component.ComponentID, ServiceName: serviceName, NodeID: hostID, Status: "CONFLICT", Conflict: true, Summary: "multiple fresh Reporter identities"})
 		}
 	}
 	for _, expected := range out.ExpectedComponents {
@@ -274,7 +277,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		if !expected.Expected || expected.Transport != string(doctor.TransportReporter) {
 			continue
 		}
-		rows := active[expected.ServiceName]
+		rows := active[expected.ServiceName+"\x00"+expected.NodeID]
 		if len(rows) == 0 {
 			age := observationAge(now, expected.DeploymentCreatedAt)
 			status := "WARN"
@@ -290,7 +293,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		for _, row := range rows {
 			wantInstance := row.ServiceName + "@" + row.NodeID
 			if row.NodeID == "" || row.BootID == "" || row.InstanceID != wantInstance {
-				markReporterConflict(out, component.ComponentID)
+				markReporterConflict(out, component.ComponentID, row.NodeID)
 				out.MissingObservations = append(out.MissingObservations, Observation{Kind: "identity", ComponentID: component.ComponentID, ServiceName: row.ServiceName, InstanceID: row.InstanceID, NodeID: row.NodeID, BootID: row.BootID, Status: "CONFLICT", Conflict: true, Summary: "Reporter identity does not match the canonical service@node contract"})
 			}
 		}
@@ -429,14 +432,6 @@ func stringSelection(values []string) map[string]bool {
 	return out
 }
 
-func deploymentHealthURL(deployment *adminpb.ServiceDeployment) string {
-	var extra struct {
-		HealthURL string `json:"health_url"`
-	}
-	_ = json.Unmarshal([]byte(deployment.GetExtraConfig()), &extra)
-	return extra.HealthURL
-}
-
 func parseTimestamp(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
 	return parsed
@@ -462,10 +457,10 @@ func observationAge(now, observedAt time.Time) int64 {
 	return int64(now.Sub(observedAt) / time.Second)
 }
 
-func markReporterConflict(out *Context, componentID string) {
+func markReporterConflict(out *Context, componentID, hostID string) {
 	for i := range out.ReporterObservations {
 		observation := &out.ReporterObservations[i]
-		if observation.ComponentID == componentID {
+		if observation.ComponentID == componentID && observation.NodeID == hostID {
 			observation.Status = "CONFLICT"
 			observation.Conflict = true
 			observation.Summary = "Reporter identity conflict"

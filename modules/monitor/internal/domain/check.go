@@ -7,7 +7,7 @@ const (
 	CheckKindTCP      = "tcp"
 	CheckKindExternal = "external"
 
-	CheckSourceSysDeploy     = "sysdeploy"
+	CheckSourcePlacement     = "placement"
 	CheckSourceObservability = "observability"
 )
 
@@ -19,6 +19,11 @@ type Check struct {
 	GroupName       string     `gorm:"column:c_group_name"`
 	Kind            string     `gorm:"column:c_kind"`
 	URL             string     `gorm:"column:c_url"`
+	ConnectAddress  string     `gorm:"column:c_connect_address"`
+	ServerName      string     `gorm:"column:c_server_name"`
+	TrustMode       string     `gorm:"column:c_trust_mode"`
+	CAFile          string     `gorm:"column:c_ca_file"`
+	CABaseline      string     `gorm:"column:c_ca_baseline"`
 	Method          string     `gorm:"column:c_method"`
 	Headers         string     `gorm:"column:c_headers"`
 	Body            string     `gorm:"column:c_body"`

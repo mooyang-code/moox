@@ -60,7 +60,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 			"database":          map[bool]string{true: "ok", false: "error"}[databaseReady],
 			"scheduler_ok":      schedulerReady,
 			"active_checks":     activeChecks,
-			"sysdeploy_enabled": cfg.SysDeploy.Enabled,
+			"placement_enabled": cfg.Placement.Enabled,
 		}
 		metricsReady := !cfg.Metrics.Enabled
 		metricsReason := "metrics ingestion disabled"

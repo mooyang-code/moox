@@ -25,7 +25,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	repositories := manager.Repositories()
 	ctx := context.Background()
 	for _, check := range []domain.Check{
-		{CheckID: "sysdeploy:node-a:moox_collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, Enabled: true},
+		{CheckID: "placement:node-a:moox_collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, Enabled: true},
 		{SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 		{SpaceID: "crypto", CheckID: "kline_freshness:crypto:view:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 	} {
@@ -42,7 +42,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serviceRule, err := repositories.Alerts.GetRule(ctx, "", "default:sysdeploy:node-a:moox_collector")
+	serviceRule, err := repositories.Alerts.GetRule(ctx, "", "default:placement:node-a:moox_collector")
 	if err != nil {
 		t.Fatal(err)
 	}

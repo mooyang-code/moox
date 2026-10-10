@@ -21,9 +21,9 @@ func TestCheckProducerAuthorizerRequiresMatchingNode(t *testing.T) {
 	}
 	checks := manager.Repositories().Checks
 	if err := checks.Create(context.Background(), &domain.Check{
-		CheckID: "sysdeploy:node-a:moox_collector",
+		CheckID: "placement:node-a:moox_collector",
 		Enabled: true,
-		Source:  domain.CheckSourceSysDeploy,
+		Source:  domain.CheckSourcePlacement,
 	}); err != nil {
 		t.Fatal(err)
 	}

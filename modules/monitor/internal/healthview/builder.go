@@ -340,7 +340,7 @@ func alertTitle(checkID string) string {
 		}
 		return "主机 " + parts[1] + " · " + metric
 	}
-	if len(parts) >= 2 && parts[0] == "sysdeploy" {
+	if len(parts) >= 2 && parts[0] == "placement" {
 		name, _ := serviceName(parts[len(parts)-1])
 		if name == "因子计算" {
 			return "因子计算服务"

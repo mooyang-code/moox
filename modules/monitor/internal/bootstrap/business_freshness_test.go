@@ -593,8 +593,8 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
 		{
-			CheckID: "sysdeploy:control:moox_factor_mgr", Name: "moox_factor_mgr@control",
-			Source: domain.CheckSourceSysDeploy, Enabled: false, IntervalSeconds: 30,
+			CheckID: "placement:control:moox_factor_mgr", Name: "moox_factor_mgr@control",
+			Source: domain.CheckSourcePlacement, Enabled: false, IntervalSeconds: 30,
 		},
 		{
 			SpaceID: monmetrics.InternalMetricSpaceID,
@@ -663,8 +663,8 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
 		{
-			CheckID: "sysdeploy:control:moox_factor_mgr", Name: "moox_factor_mgr@control",
-			Source: domain.CheckSourceSysDeploy, Enabled: false, IntervalSeconds: 30,
+			CheckID: "placement:control:moox_factor_mgr", Name: "moox_factor_mgr@control",
+			Source: domain.CheckSourcePlacement, Enabled: false, IntervalSeconds: 30,
 		},
 		{
 			SpaceID: "crypto", CheckID: "dataset:factor:factor_output:1m",
@@ -705,8 +705,8 @@ func TestServiceDeploymentExpectedAcceptsConfiguredLimit(t *testing.T) {
 	rows := make([]domain.Check, 1500)
 	for i := range rows {
 		rows[i] = domain.Check{
-			CheckID: "sysdeploy:node-" + fmt.Sprint(i) + ":service-" + fmt.Sprint(i),
-			Source:  domain.CheckSourceSysDeploy, Enabled: false, IntervalSeconds: 30,
+			CheckID: "placement:node-" + fmt.Sprint(i) + ":service-" + fmt.Sprint(i),
+			Source:  domain.CheckSourcePlacement, Enabled: false, IntervalSeconds: 30,
 		}
 	}
 	if _, err := store.WithDatabase(manager, func(db *gorm.DB) struct{} {
