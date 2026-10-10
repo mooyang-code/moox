@@ -17,6 +17,8 @@ func TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget(t *testing.T) {
 	root, err := privateRoot(directory)
 	require.NoError(t, err)
 	defer root.Close()
+	var missing hostOperation
+	require.True(t, os.IsNotExist(readJSON(root, "operation.json", 4096, &missing)), "an absent checkpoint must be distinguishable from invalid private material")
 	host := setupconfig.Host{Name: "control", Address: "192.0.2.1"}
 	initial, err := loadIdentity(root, host, "/data/moox")
 	require.NoError(t, err)
@@ -61,4 +63,28 @@ func TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	require.Contains(t, string(raw), "npm|0|linux|arm64|unset|ci")
 	require.Contains(t, string(raw), "make|0|linux|arm64|unset|statik")
 	require.Contains(t, string(raw), "build.sh host-gateway")
+}
+
+func TestHostBuildUsesOnlyLocalPureGoTools(t *testing.T) {
+	root := t.TempDir()
+	tools := filepath.Join(root, "tools")
+	require.NoError(t, os.Mkdir(tools, 0o700))
+	log := filepath.Join(root, "host-build.log")
+	script := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' \"$CGO_ENABLED\" \"$TARGET_GOOS\" \"$TARGET_GOARCH\" \"${GOOS-unset}\" \"$*\" >> \"$MOOX_TEST_BUILD_LOG\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tools, "bash"), []byte(script), 0o700))
+	t.Setenv("PATH", tools)
+	t.Setenv("MOOX_TEST_BUILD_LOG", log)
+	t.Setenv("CGO_ENABLED", "1")
+	t.Setenv("GOOS", "windows")
+	t.Setenv("GOARCH", "386")
+	require.NoError(t, buildHostLocally(t.Context(), root, filepath.Join(root, "bin"), "arm64", nil))
+	raw, err := os.ReadFile(log)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	require.Len(t, lines, 2)
+	for _, line := range lines {
+		require.Contains(t, line, "0|linux|arm64|unset|")
+	}
+	require.Contains(t, lines[0], "build.sh host-gateway")
+	require.Contains(t, lines[1], "build.sh hostagent")
 }

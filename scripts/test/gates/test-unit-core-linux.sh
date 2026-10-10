@@ -13,7 +13,7 @@ export MOOX_RUNTIME_BINARY MOOX_BOOTSTRAP_HOST_ARCHIVE MOOX_BOOTSTRAP_CONTROL_AR
 export MOOX_CORE_SOURCE_ROOT
 task_root="$(mktemp -d "${TMPDIR:-/tmp}/moox-native-core-gate.XXXXXXXX")"
 trap 'rm -rf "${task_root}"' EXIT
-"${MOOX_CORE_TEST_BINARY}" -test.v -test.count=1 -test.timeout=6m | tee "${task_root}/tests.log"
+"${MOOX_CORE_TEST_BINARY}" -test.v -test.count=1 -test.timeout=12m | tee "${task_root}/tests.log"
 python3 - "${task_root}/tests.log" <<'PY'
 from pathlib import Path
 import re,sys
@@ -22,11 +22,12 @@ required=[
     'TestNativeCoreBootstrapOverVerifiedSSHWithFullFleetTopology',
     'TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget',
     'TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools',
+    'TestHostBuildUsesOnlyLocalPureGoTools',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):
         raise SystemExit('required native core scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('native core Linux gate must not skip or fail a scenario')
-print('native core Linux gate passed: verified SSH/SFTP, actual core services, complete topology, immutable retry, local build policy; no compilation')
+print('native core/host Linux gate passed: verified SSH/SFTP, actual core and host deployment, export recovery, pause and repair, fresh candidate after rollback, local build policy; no compilation')
 PY

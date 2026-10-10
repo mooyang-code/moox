@@ -38,41 +38,8 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return errors.New("config_changed")
 			}
-			if source == "" {
-				source, err = os.Getwd()
-			}
-			if err != nil {
+			if err := resolveSetupUnitOptions(snapshot, source, &options); err != nil {
 				return err
-			}
-			options.RepositoryRoot, err = filepath.Abs(source)
-			if err != nil {
-				return err
-			}
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return err
-			}
-			if options.StateDirectory == "" {
-				binding := snapshot.Manifest.ControlHost().Name + "\x00" + snapshot.Manifest.ControlHost().Address + "\x00" + snapshot.Manifest.Paths.DeployRoot
-				digest := sha256.Sum256([]byte(binding))
-				options.StateDirectory = filepath.Join(home, ".local", "state", "moox", "setup", hex.EncodeToString(digest[:16]))
-			}
-			if options.OperatorDirectory == "" {
-				options.OperatorDirectory = filepath.Join(home, ".config", "moox")
-			}
-			options.StateDirectory, err = filepath.Abs(options.StateDirectory)
-			if err != nil {
-				return err
-			}
-			options.OperatorDirectory, err = filepath.Abs(options.OperatorDirectory)
-			if err != nil {
-				return err
-			}
-			if options.BinaryDirectory != "" {
-				options.BinaryDirectory, err = filepath.Abs(options.BinaryDirectory)
-				if err != nil {
-					return err
-				}
 			}
 			options.Log = command.ErrOrStderr()
 			result, err := deps.bootstrapCore(command.Context(), snapshot, options)
@@ -89,4 +56,45 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录；重试必须使用原目录")
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	return command
+}
+
+func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, options *unitdeploy.CoreOptions) error {
+	var err error
+	if source == "" {
+		source, err = os.Getwd()
+	}
+	if err != nil {
+		return err
+	}
+	options.RepositoryRoot, err = filepath.Abs(source)
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	if options.StateDirectory == "" {
+		binding := snapshot.Manifest.ControlHost().Name + "\x00" + snapshot.Manifest.ControlHost().Address + "\x00" + snapshot.Manifest.Paths.DeployRoot
+		digest := sha256.Sum256([]byte(binding))
+		options.StateDirectory = filepath.Join(home, ".local", "state", "moox", "setup", hex.EncodeToString(digest[:16]))
+	}
+	if options.OperatorDirectory == "" {
+		options.OperatorDirectory = filepath.Join(home, ".config", "moox")
+	}
+	options.StateDirectory, err = filepath.Abs(options.StateDirectory)
+	if err != nil {
+		return err
+	}
+	options.OperatorDirectory, err = filepath.Abs(options.OperatorDirectory)
+	if err != nil {
+		return err
+	}
+	if options.BinaryDirectory != "" {
+		options.BinaryDirectory, err = filepath.Abs(options.BinaryDirectory)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

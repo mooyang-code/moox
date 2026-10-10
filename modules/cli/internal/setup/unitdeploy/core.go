@@ -218,6 +218,9 @@ func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options 
 		return result, err
 	}
 	result.Stage, result.OperatorConfig = "core-ready", filepath.Join(options.OperatorDirectory, "gateway-client.yaml")
+	if err := saveJSON(root, "core-ready.json", result, true); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 

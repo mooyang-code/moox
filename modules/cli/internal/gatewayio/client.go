@@ -39,6 +39,11 @@ func Open(ctx context.Context, snapshot *setupconfig.Snapshot) (*Client, error) 
 	return open(ctx, snapshot, filepath.Join(home, ".config", "moox", "gateway-client.yaml"), setupssh.Options{Timeout: 5 * time.Second})
 }
 
+// OpenWithIdentity uses an explicitly selected native operator identity.
+func OpenWithIdentity(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath string, options setupssh.Options) (*Client, error) {
+	return open(ctx, snapshot, identityPath, options)
+}
+
 func open(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath string, options setupssh.Options) (*Client, error) {
 	if snapshot == nil || ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("gateway tunnel requires a live context and setup configuration")

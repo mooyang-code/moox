@@ -18,6 +18,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// OperatorPin is the public CA binding installed by the core bootstrap.
+type OperatorPin struct {
+	ControlHostID string `json:"control_host_id"`
+	CA            string `json:"ca_sha256"`
+}
+
+func ReadOperatorPin(directory string) (OperatorPin, error) {
+	var pin OperatorPin
+	root, err := fsutil.OpenPhysicalRoot(directory, true)
+	if err != nil {
+		return pin, err
+	}
+	defer root.Close()
+	raw, err := fsutil.ReadPrivate(root, "gateway-bootstrap.json", 4096)
+	if err != nil {
+		return pin, err
+	}
+	if err := canonical(raw, &pin); err != nil {
+		return pin, err
+	}
+	if pin.ControlHostID == "" || !validHash(pin.CA) {
+		return pin, errors.New("operator bootstrap pin is invalid")
+	}
+	return pin, nil
+}
+
 // FetchMetadata reads only the bounded public inventory through verified SSH.
 func FetchMetadata(ctx context.Context, download Download, directory string, options Options) (hostbundle.Metadata, error) {
 	var metadata hostbundle.Metadata

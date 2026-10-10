@@ -25,3 +25,5 @@
 代理首次 internal CA 必须由请求的 `proxy_ca.create` 显式授权，或以 `proxy_ca.import_directory` 提供关闭后的规范源树；源树只需 `console-proxy/data` 和 `console-proxy/certs`，必须包含原始发布的根证书和指纹。创建和导入互斥，常规服务配置不接受初始化权限。`identity/console-proxy/receipt.json` 先记录 pending，完整材料在同级 `material/` 同步并原子发布后记录 ready；该目录独立于发布快照和候选清理。未发布的生成阶段可恢复，消费后材料丢失、损坏或主机不匹配则拒绝自动重新生成。升级复制最新关闭发布的状态，同时校验根身份与持久凭据一致；public-only 不生成多余 internal CA。
 
 EventBus 角色和 TLS 身份保存在 Admin 的加密 secret 表，重跑复用；CA/服务端证书丢失一半或端点不匹配时拒绝替换，损坏证书在导出前拒绝。两个 EventBus 子进程与离线 bootstrap 使用相同的锁继承和父进程死亡约束。真实部署场景要求无角色客户端被拒绝，并核对升级前后的角色令牌和 EventBus CA 保持一致。
+
+`ExportHost` / `moox-runtime export-host --request PATH` 已接入原生 `setup deploy-host`。它在控制机维护锁内验证持久运行身份和当前 Admin，调用现有 Admin CLI 导出目标身份与所选 EventBus 客户端角色。请求、主机导出、客户端导出及最终结果分别持久化；恢复复用已发布字节，拒绝不同原始请求，不停止运行中的 Admin，不导出操作员密钥或任何 CA 签名私钥。完整业务与外层 bootstrap 编排继续保留。

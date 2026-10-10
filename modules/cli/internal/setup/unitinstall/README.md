@@ -46,3 +46,5 @@ Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建
 门禁启动真实 Web Host 和 Console Proxy，占用合成健康端口。Linux 主机已有业务时，使用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-install-linux.sh` 隔离网络，不停止现有业务。
 
 复合初始化使用 `ReadActivation` 检查单元阶段、`Abort` 撤销日志指定的候选，可撤销首次安装但不会删除退役数据；普通 `Rollback` 仍拒绝没有旧快照的首次安装。`CopyOfflineState` 是关闭后状态的独立复制接口，调用者必须持有维护锁并保证所有写入者已退出，不提供在线数据库备份。
+
+`Deploy` / `moox-runtime deploy --request PATH` 当前负责 host 单元。请求摘要绑定软件、实际身份与 EventBus 清单以及配置覆盖字节；`deployment.json` 在准备和激活前持久记录候选。中断激活先恢复旧快照，回滚后以同一原始请求准备新候选，保留退役候选。完成请求修复缺失进程，保留用户暂停；旧完成请求不能重新接管已变更的 current。原生 `setup deploy-host` 已调用此流程，业务单元与整个发布的回滚仍须外层编排。

@@ -22,6 +22,8 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -76,6 +78,41 @@ func nativeSSH(t *testing.T) (setupssh.Target, string) {
 				var sessions sync.WaitGroup
 				defer sessions.Wait()
 				for incoming := range channels {
+					if incoming.ChannelType() == "direct-tcpip" {
+						var destination struct {
+							Address    string
+							Port       uint32
+							Origin     string
+							OriginPort uint32
+						}
+						if xssh.Unmarshal(incoming.ExtraData(), &destination) != nil {
+							incoming.Reject(xssh.ConnectionFailed, "invalid destination")
+							continue
+						}
+						upstream, err := net.Dial("tcp", net.JoinHostPort(destination.Address, strconv.Itoa(int(destination.Port))))
+						if err != nil {
+							incoming.Reject(xssh.ConnectionFailed, "unreachable")
+							continue
+						}
+						channel, requests, err := incoming.Accept()
+						if err != nil {
+							upstream.Close()
+							continue
+						}
+						go xssh.DiscardRequests(requests)
+						sessions.Add(1)
+						go func() {
+							defer sessions.Done()
+							done := make(chan struct{}, 2)
+							go func() { io.Copy(upstream, channel); done <- struct{}{} }()
+							go func() { io.Copy(channel, upstream); done <- struct{}{} }()
+							<-done
+							channel.Close()
+							upstream.Close()
+							<-done
+						}()
+						continue
+					}
 					if incoming.ChannelType() != "session" {
 						incoming.Reject(xssh.UnknownChannelType, "unsupported")
 						continue
@@ -222,6 +259,7 @@ compute1 = ["access","egress-proxy","trade"]
 	})
 	initial, err := BootstrapCore(t.Context(), snapshot, options)
 	require.NoError(t, err)
+	t.Log("actual core services ready")
 	require.Equal(t, "core-ready", initial.Stage)
 	status := func(directory string) unitruntime.Result {
 		output, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "status", "--plan", filepath.Join(directory, "runtime.json")).CombinedOutput()
@@ -277,4 +315,90 @@ compute1 = ["access","egress-proxy","trade"]
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "synthetic-admin-password")
 	require.NotContains(t, string(encoded), "synthetic-ssh-password")
+	// Exercise the native host entry against the running control host. Other
+	// hosts remain registered; this test does not claim multi-host acceptance.
+	_, err = DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	require.ErrorContains(t, err, "original core state")
+	options.StateDirectory = filepath.Join(root, "operator-state")
+	deployed, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	require.NoError(t, err)
+	t.Log("native host deployment ready")
+	require.Equal(t, "host-ready", deployed.Stage)
+	require.NotEqual(t, initial.Bootstrap.HostDirectory, deployed.Deployment.Directory)
+	host = status(deployed.Deployment.Directory)
+	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
+	state, err := privateRoot(filepath.Join(options.StateDirectory, "hosts/control"))
+	require.NoError(t, err)
+	var operation hostOperation
+	require.NoError(t, readJSON(state, "operation.json", 2<<20, &operation))
+	state.Close()
+	exported, err := unitbootstrap.ExportHost(t.Context(), operation.Source)
+	require.NoError(t, err)
+	require.Equal(t, *operation.Export, exported)
+	// Losing only the final public checkpoint resumes the already issued
+	// host and EventBus exports without changing certificates or role tokens.
+	exportFile := filepath.Join(deployment, "material-exports", operation.Source.ExportID, "export.json")
+	require.NoError(t, os.Remove(exportFile))
+	exported, err = unitbootstrap.ExportHost(t.Context(), operation.Source)
+	require.NoError(t, err)
+	require.Equal(t, *operation.Export, exported)
+	changed := operation.Source
+	changed.Roles = []string{"metrics-publisher"}
+	_, err = unitbootstrap.ExportHost(t.Context(), changed)
+	require.ErrorContains(t, err, "original request")
+	t.Log("source export checkpoints reused without credential changes")
+	for _, component := range host.Components {
+		require.True(t, component.Ready)
+		require.Positive(t, component.PID)
+	}
+	retry, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	require.NoError(t, err)
+	require.Equal(t, deployed, retry)
+	require.Equal(t, host, status(deployed.Deployment.Directory))
+	plan := filepath.Join(deployed.Deployment.Directory, "runtime.json")
+	lifecycle := func(operation string) {
+		t.Helper()
+		output, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), operation, "--plan", plan, "--components", "host-agent").CombinedOutput()
+		require.NoError(t, err, "%s", output)
+	}
+	lifecycle("pause")
+	paused, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	require.NoError(t, err)
+	require.Equal(t, "host-paused", paused.Stage)
+	for _, component := range paused.Deployment.Components {
+		if component.ID == "host-agent" {
+			require.Equal(t, "paused", component.State)
+		} else {
+			require.Equal(t, host.Components[0].PID, component.PID)
+		}
+	}
+	lifecycle("resume")
+	lifecycle("stop")
+	repaired, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	require.NoError(t, err)
+	require.Equal(t, "host-ready", repaired.Stage)
+	require.Equal(t, deployed.Deployment.Directory, repaired.Deployment.Directory)
+	require.Equal(t, host.Components[0].PID, repaired.Deployment.Components[0].PID)
+	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
+	unit, err := privateRoot(filepath.Join(deployment, "host"))
+	require.NoError(t, err)
+	var receipt unitinstall.Deployment
+	require.NoError(t, readJSON(unit, "deployment.json", 128<<10, &receipt))
+	receipt.Phase = "activating"
+	require.NoError(t, saveJSON(unit, "deployment.json", receipt, true))
+	resumed, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	require.NoError(t, err)
+	require.Equal(t, repaired.Deployment.Directory, resumed.Deployment.Directory)
+	require.Equal(t, repaired.Deployment.Components, resumed.Deployment.Components)
+	rollbackOutput, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "rollback", "--unit-root", filepath.Join(deployment, "host")).CombinedOutput()
+	require.NoError(t, err, "%s", rollbackOutput)
+	receipt.Phase = "rolled-back"
+	require.NoError(t, saveJSON(unit, "deployment.json", receipt, true))
+	unit.Close()
+	fresh, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	require.NoError(t, err)
+	require.Equal(t, "host-ready", fresh.Stage)
+	require.NotEqual(t, resumed.Deployment.Directory, fresh.Deployment.Directory)
+	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
+	t.Log("activation checkpoint recovery and fresh candidate after rollback passed")
 }

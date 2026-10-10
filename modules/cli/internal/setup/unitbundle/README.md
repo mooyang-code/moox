@@ -33,3 +33,5 @@ Linux 门禁强制十组消费/身份投影场景全部通过且无跳过，并�
 操作员配置、签名密钥与公开 CA，核对原始字节摘要、分配的 KeyID、单一有效 CA 和
 原控制机绑定，再以不可变密钥文件及原子配置切换安装。网关 TLS 私钥和其他服务私钥
 不经过该接口传回本机；相同身份重试复用，其他 CA 的身份不能覆盖既有绑定。
+
+EventBus 客户端转移使用 `FetchEventBusClients`，只接受明确选择的角色 YAML、公共 `ca.pem` 与规范 `clients.json`。逐文件大小/摘要、角色集合和自签 CA 有效期在私密目录发布前核对；server/CA 私钥和 broker ACL 不在清单中。目标 `Prepare` 再校验角色凭据并重写为实际 catalog TLS 端点。缓存保留源清单路径，`LoadEventBusClientsAt` 用于核验本机或目标机的独立副本。

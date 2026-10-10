@@ -64,17 +64,21 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	}
 	fs := flag.NewFlagSet("eventbus-credentials", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dbPath, keyFile, nodeID, outputDir, credential := "./data/admin.db", "", "", "", ""
+	dbPath, keyFile, nodeID, outputDir, credential, roles := "./data/admin.db", "", "", "", "", ""
 	confirm := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&keyFile, "encryption-key-file", "", "0600 encryption key file")
-	fs.StringVar(&nodeID, "node-id", "", "gateway node ID containing the EventBus deployment")
+	fs.StringVar(&nodeID, "node-id", "", "registered control host containing the EventBus deployment")
 	fs.StringVar(&outputDir, "output-dir", "", "credential output directory")
 	fs.StringVar(&credential, "credential", "", "role token to rotate")
+	fs.StringVar(&roles, "roles", "", "comma-separated canonical client roles for export-clients")
 	fs.BoolVar(&confirm, "confirm", false, "confirm rotation and immediate invalidation")
 	sub := args[1]
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
+	}
+	if roles != "" && sub != "export-clients" {
+		return errors.New("--roles is only valid for export-clients")
 	}
 	// A control-plane reset removes admin.db, while an externally managed
 	// EventBus keeps its role files. Reconcile only users.yaml from those
@@ -96,6 +100,8 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	defer closeAdminCLIDB(db)
 	secretDAO := dao.NewSecretDAO(db)
 	switch sub {
+	case "export-clients":
+		return exportEventBusClients(context.Background(), db, nodeID, outputDir, roles, stdout)
 	case "ensure":
 		natsURL, err := eventBusNATSURL(db, nodeID)
 		if err != nil {

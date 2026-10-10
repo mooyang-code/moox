@@ -40,6 +40,46 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "export-host" {
+		flags := flag.NewFlagSet("moox-runtime export-host", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		filename := flags.String("request", "", "generated private host export JSON request")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *filename == "" || flags.NArg() != 0 {
+			return errors.New("export-host requires --request and no positional arguments")
+		}
+		request, err := unitbootstrap.ReadExportRequest(*filename)
+		if err != nil {
+			return err
+		}
+		result, err := unitbootstrap.ExportHost(ctx, request)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(result)
+	}
+	if len(args) > 0 && args[0] == "deploy" {
+		flags := flag.NewFlagSet("moox-runtime deploy", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		filename := flags.String("request", "", "generated private deployment JSON request")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *filename == "" || flags.NArg() != 0 {
+			return errors.New("deploy requires --request and no positional arguments")
+		}
+		request, err := unitinstall.ReadPrepareRequest(*filename)
+		if err != nil {
+			return err
+		}
+		result, err := unitinstall.Deploy(ctx, request)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(result)
+	}
 	if len(args) > 0 && args[0] == "bootstrap" {
 		flags := flag.NewFlagSet("moox-runtime bootstrap", flag.ContinueOnError)
 		flags.SetOutput(stderr)

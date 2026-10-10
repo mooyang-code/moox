@@ -50,6 +50,17 @@ type File struct {
 	Size   int64  `json:"size"`
 }
 
+// ClientMetadata inventories an immutable EventBus client-only export.
+// CA is the SHA256 of the original public ca.pem bytes, not a signing key.
+type ClientMetadata struct {
+	Version   int      `json:"version"`
+	Status    string   `json:"status"`
+	OutputDir string   `json:"output_dir"`
+	Roles     []string `json:"roles"`
+	CA        string   `json:"ca_sha256"`
+	Files     []File   `json:"files"`
+}
+
 type Metadata struct {
 	Version          int             `json:"version"`
 	HostID           string          `json:"host_id"`
