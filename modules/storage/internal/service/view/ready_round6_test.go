@@ -57,7 +57,7 @@ func TestReadyFenceFollowsIndexSwitch(t *testing.T) {
 				t.Fatal(err)
 			}
 			reloaded := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-b"})
-			if err := reloaded.OpenReadyFence(dir); err != nil {
+			if err := reloaded.openReadyFence(dir); err != nil {
 				t.Fatal(err)
 			}
 			if seq := reloaded.appliedSequence("quant", "source-view", "source-view-b", "node-a", "store-a"); seq != 12 {
@@ -95,7 +95,7 @@ func TestAppliedFencePersistsOnlyWhenDirty(t *testing.T) {
 		t.Fatalf("有新的更新时应落盘：%v", err)
 	}
 	reloaded := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a"})
-	if err := reloaded.OpenReadyFence(service.readyFenceDir); err != nil {
+	if err := reloaded.openReadyFence(service.readyFenceDir); err != nil {
 		t.Fatal(err)
 	}
 	if seq := reloaded.appliedSequence("quant", "source-view", "source-view-a", "node-a", "store-a"); seq != 6 {
@@ -112,7 +112,7 @@ func TestOpenReadyFenceRemovesLeftoverTempFiles(t *testing.T) {
 		}
 	}
 	service := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a"})
-	if err := service.OpenReadyFence(dir); err != nil {
+	if err := service.openReadyFence(dir); err != nil {
 		t.Fatal(err)
 	}
 	if matches, _ := filepath.Glob(filepath.Join(dir, "*.tmp-*")); len(matches) != 0 {

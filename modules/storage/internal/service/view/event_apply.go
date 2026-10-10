@@ -202,7 +202,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 					activeWatermarkRows[activeID] = append(activeWatermarkRows[activeID], writtenRows...)
 				}
 			} else if nextID != "" {
-				log.Printf("storage view active index failed while replacement is ready; routing to replacement space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
+				log.Printf("storage view 活动索引不可用而替换索引已就绪，改写替换索引 space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
 				activeFailure = err
 				activeReady, activeErr = false, nil
 			} else {
@@ -221,30 +221,24 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		if activeErr == nil && activeReady {
 			writtenRows, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
 			if err != nil {
-				log.Printf("storage view active index write failed space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
+				log.Printf("storage view 活动索引写入失败 space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
 				if nextID == "" {
 					runtime.mu.Unlock()
 					return err
 				}
-				// A lightweight existence check only proves that the index path is
-				// present. If the active index is corrupt or otherwise unwritable,
-				// preserve the row in the replacement before keeping this delivery
-				// pending for activation.
+				// 轻量的存在检查只能证明索引目录在；活动索引损坏或不可写时，先把这一行写进替换索引，
+				// 本次投递保持未确认，等替换索引激活。
 				activeFailure = err
 				activeReady = false
 			} else if len(writtenRows) > 0 {
 				activeWatermarkRows[activeID] = append(activeWatermarkRows[activeID], writtenRows...)
 			}
 		} else if activeErr == nil {
-			// A stale active pointer can survive a crash while the replacement
-			// index is being prepared. Do not ACK the row by writing nowhere;
-			// continue with the healthy replacement so activation can drain the
-			// consumer and preserve the row-before-marker fence.
-			log.Printf("storage view active index unavailable; applying live row to replacement space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
+			// 准备替换索引期间崩溃，可能留下失效的活动指针。不能什么都没写就确认这一行：继续写健康的替换索引，
+			// 激活时排空消费者，保持“先行后标记”的顺序。
+			log.Printf("storage view 活动索引不可用，实时行写入替换索引 space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
 		}
-		// Publish the successful active-index watermark before touching the
-		// replacement. A replacement failure must not hide data already committed
-		// by the authoritative index from freshness monitoring.
+		// 先发布活动索引已写成功的水位，再处理替换索引：替换索引失败不能让新鲜度监控看不到权威索引已提交的数据。
 		for indexID, writtenRows := range activeWatermarkRows {
 			s.observeViewWatermark(indexID, datasetID, writtenRows, false)
 		}
@@ -554,7 +548,7 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 			SpaceID: spaceID, ViewID: viewID, DatasetID: datasetID, SubjectID: key.subjectID,
 			Frequency: key.frequency, SeriesTag: key.seriesTag, DataTime: dataTime,
 		}); err != nil {
-			log.Printf("storage view dataset output observation failed space=%s view=%s dataset=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, datasetID, key.subjectID, key.frequency, key.seriesTag, err)
+			log.Printf("storage view 数据集输出观测失败 space=%s view=%s dataset=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, datasetID, key.subjectID, key.frequency, key.seriesTag, err)
 		}
 	}
 }

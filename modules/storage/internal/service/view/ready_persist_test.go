@@ -16,6 +16,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// openReadyFence 让测试中的第二个服务实例从同一目录载入就绪队列与写入围栏，模拟进程重启。
+func (s *Service) openReadyFence(dir string) error {
+	s.readyFenceDir = strings.TrimSpace(dir)
+	if s.appliedFence == nil {
+		s.appliedFence = make(map[appliedFenceKey]uint64)
+	}
+	return s.loadReadyFence()
+}
+
 // readyGatedPublisher 让第一条发布立即成功，之后的发布挂起直到 release 关闭。
 type readyGatedPublisher struct {
 	calls   atomic.Int32

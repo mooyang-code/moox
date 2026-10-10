@@ -79,7 +79,7 @@ func TestAppliedFencePersistsSafelyUnderConcurrentWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	reloaded := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a"})
-	if err := reloaded.OpenReadyFence(service.readyFenceDir); err != nil {
+	if err := reloaded.openReadyFence(service.readyFenceDir); err != nil {
 		t.Fatal(err)
 	}
 	for writer := 0; writer < 32; writer++ {
@@ -102,7 +102,7 @@ func TestOpenReadyFenceSetsAsideCorruptFiles(t *testing.T) {
 		}
 	}
 	service := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a"})
-	if err := service.OpenReadyFence(dir); err != nil {
+	if err := service.openReadyFence(dir); err != nil {
 		t.Fatalf("文件损坏时应按空状态启动：%v", err)
 	}
 	for _, name := range []string{"applied.json", "pending.json"} {

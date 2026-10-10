@@ -156,7 +156,7 @@ func TestViewDataReadySurvivesRestart(t *testing.T) {
 	first := newPeriodTestService(metadata, firstPublisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	if err := first.OpenReadyFence(dir); err != nil {
+	if err := first.openReadyFence(dir); err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
@@ -173,7 +173,7 @@ func TestViewDataReadySurvivesRestart(t *testing.T) {
 	second := newPeriodTestService(metadata, secondPublisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	if err := second.OpenReadyFence(dir); err != nil {
+	if err := second.openReadyFence(dir); err != nil {
 		t.Fatal(err)
 	}
 	second.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)

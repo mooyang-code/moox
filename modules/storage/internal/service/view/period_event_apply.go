@@ -89,9 +89,8 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 			return err
 		}
 		if recorded := rsp.GetState(); recorded != nil && recorded.GetEventId() != message.GetEventId() {
-			// The period was already decided by an earlier report, which also
-			// published its readiness; this re-report changes nothing.
-			log.Printf("storage view ignored duplicate period report space=%s view=%s dataset=%s freq=%s period=%d event=%s recorded_event=%s",
+			// 该周期已由更早的上报决定并发布了就绪，这次重复上报不改变任何东西。
+			log.Printf("storage view 忽略重复的周期上报 space=%s view=%s dataset=%s freq=%s period=%d event=%s recorded_event=%s",
 				message.GetSpaceId(), view.GetViewId(), completion.datasetID, completion.frequency, completion.periodTime, message.GetEventId(), recorded.GetEventId())
 			continue
 		}

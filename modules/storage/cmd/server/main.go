@@ -412,7 +412,6 @@ func runViewRole() error {
 		Interval:                    rebuildCheckInterval,
 		Bars:                        policy.View.Bars,
 		TrimBars:                    policy.View.TrimBars,
-		Grace:                       time.Minute,
 		MaxViewFileBytes:            policy.View.MaxViewFileBytes,
 		CapacityCheckInterval:       capacityCheckInterval,
 		CapacityCheckJitter:         capacityCheckJitter,

@@ -3,6 +3,7 @@
 package view
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -18,13 +19,13 @@ func TestAttachActiveViewInheritsAppliedFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "prices", ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "a", Engine: "bleve", Status: "active"}
-	if err := svc.AttachActiveView(old); err != nil {
+	if err := svc.AttachActiveView(context.Background(), old); err != nil {
 		t.Fatal(err)
 	}
 	svc.NoteAppliedPosition("space", "prices", "prices-a", "node-a", "store-a", 12)
 	activeIDs, _ := json.Marshal([]string{"prices"})
 	updated := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "prices", ActiveIndexId: "prices-b", ActiveViewRevision: 2, DesiredViewRevision: 2, ActiveViewSchemaHash: "b", Engine: "bleve", Status: "active", Attributes: map[string]string{activeDatasetIDsAttr: string(activeIDs), activePrimaryDatasetAttr: "prices"}}
-	if err := svc.AttachActiveView(updated); err != nil {
+	if err := svc.AttachActiveView(context.Background(), updated); err != nil {
 		t.Fatal(err)
 	}
 	if seq := svc.appliedSequence("space", "prices", "prices-b", "node-a", "store-a"); seq != 12 {

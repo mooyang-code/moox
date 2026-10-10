@@ -49,17 +49,6 @@ type persistedApplied struct {
 	Sequence uint64 `json:"sequence"`
 }
 
-func (s *Service) OpenReadyFence(dir string) error {
-	if s == nil {
-		return errors.New("View 服务未初始化")
-	}
-	s.readyFenceDir = strings.TrimSpace(dir)
-	if s.appliedFence == nil {
-		s.appliedFence = make(map[appliedFenceKey]uint64)
-	}
-	return s.loadReadyFence()
-}
-
 func (s *Service) loadReadyFence() error {
 	if s == nil || strings.TrimSpace(s.readyFenceDir) == "" {
 		return nil
@@ -108,7 +97,7 @@ func (s *Service) flushAppliedFence() error {
 	s.appliedFenceMu.Unlock()
 	raw, err := json.Marshal(items)
 	if err == nil {
-		err = replaceFile(filepath.Join(s.readyFenceDir, "applied.json"), raw, true)
+		err = replaceFile(filepath.Join(s.readyFenceDir, "applied.json"), raw)
 	}
 	if err != nil {
 		s.appliedFenceMu.Lock()
@@ -193,7 +182,7 @@ func (s *Service) persistPendingReadyLocked() error {
 	if err != nil {
 		return err
 	}
-	return replaceFile(filepath.Join(s.readyFenceDir, "pending.json"), raw, true)
+	return replaceFile(filepath.Join(s.readyFenceDir, "pending.json"), raw)
 }
 
 func (s *Service) loadPendingReady() error {
@@ -263,8 +252,8 @@ func (s *Service) appliedSequence(spaceID, viewID, indexID, nodeID, storeID stri
 }
 
 // replaceFile 先写同目录下的唯一临时文件，再改名替换：并发的写者不会互相截断，读者只会看到完整的旧文件或新文件。
-// durable 为 true 时改名前后都 fsync，断电后也不会丢掉已确认的内容（就绪队列）；写入围栏丢了只会晚放行，不付这个代价。
-func replaceFile(path string, raw []byte, durable bool) error {
+// 改名前后都 fsync，断电后也不会丢掉已确认的内容（就绪队列与写入围栏）。
+func replaceFile(path string, raw []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -282,10 +271,8 @@ func replaceFile(path string, raw []byte, durable bool) error {
 	if _, err := tmp.Write(raw); err != nil {
 		return cleanup(err)
 	}
-	if durable {
-		if err := tmp.Sync(); err != nil {
-			return cleanup(err)
-		}
+	if err := tmp.Sync(); err != nil {
+		return cleanup(err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(name)
@@ -298,9 +285,6 @@ func replaceFile(path string, raw []byte, durable bool) error {
 	if err := os.Rename(name, path); err != nil {
 		_ = os.Remove(name)
 		return err
-	}
-	if !durable {
-		return nil
 	}
 	if handle, err := os.Open(dir); err == nil {
 		_ = handle.Sync()

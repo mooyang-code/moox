@@ -627,7 +627,7 @@ func (s *Service) StatViewIndex(ctx context.Context, req *pb.StatViewIndexReq) (
 
 func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexReq) (*pb.RemoveViewIndexRsp, error) {
 	if req == nil || req.GetIndexId() == "" {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id is required"))}, nil
+		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("index_id 不能为空"))}, nil
 	}
 	if err := s.authorize(req.GetAuthInfo()); err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
@@ -638,11 +638,15 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 	}
 	s.mu.RLock()
 	viewKey, hasView := s.indexView[req.GetIndexId()]
-	runtime := s.views[viewKey]
+	var runtime *viewRuntime
+	if hasView {
+		runtime = s.views[viewKey]
+	}
 	engineName := normalizedEngine(s.indexEngine[req.GetIndexId()])
 	generation := s.indexGeneration[req.GetIndexId()]
 	s.mu.RUnlock()
-	if hasView && runtime != nil {
+	// 整个删除过程持有 View 的运行时锁：与切换、挂载串行，结束时在同一把锁内清掉指向该索引的 active/next。
+	if runtime != nil {
 		runtime.mu.Lock()
 		defer runtime.mu.Unlock()
 	}
@@ -652,7 +656,7 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 	}
 	defer release()
 	if generation, preparing := s.preparingGeneration(req.GetIndexId()); preparing {
-		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("view index %q generation %d is being prepared", req.GetIndexId(), generation))}, nil
+		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("View 索引 %q 的第 %d 代正在准备，不能删除", req.GetIndexId(), generation))}, nil
 	}
 	if err := engine.Remove(ctx, req.GetIndexId()); err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -674,7 +678,6 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 	}
 	s.mu.Unlock()
 	if runtime != nil {
-		runtime.mu.Lock()
 		if runtime.active == req.GetIndexId() {
 			runtime.active = ""
 			runtime.publishReadStateLocked()
@@ -682,7 +685,6 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 		if runtime.next == req.GetIndexId() {
 			runtime.next = ""
 		}
-		runtime.mu.Unlock()
 	}
 	return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
