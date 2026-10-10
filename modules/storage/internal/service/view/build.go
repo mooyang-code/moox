@@ -1077,7 +1077,7 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 	s.mu.Lock()
 	runtime := s.views[viewKey]
 	if runtime == nil {
-		runtime = &viewRuntime{}
+		runtime = newViewRuntime()
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()
@@ -1233,7 +1233,7 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	s.mu.Lock()
 	runtime := s.views[viewKey]
 	if runtime == nil {
-		runtime = &viewRuntime{}
+		runtime = newViewRuntime()
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()

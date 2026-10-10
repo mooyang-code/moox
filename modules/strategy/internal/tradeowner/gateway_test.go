@@ -36,4 +36,9 @@ func TestGatewayDecodesUnknownFieldsAndReportsUnreadableResponses(t *testing.T) 
 	if !strings.Contains(err.Error(), "Trade 网关响应无法解析") || strings.Contains(err.Error(), "不可达") || errors.Unwrap(err) == nil {
 		t.Fatalf("说明应写响应无法解析、不能说不可达，原文留在 Unwrap 里：%v", err)
 	}
+	// 未知的错误码不能被读成 SUCCESS（DiscardUnknown 会把未知枚举值丢成零值）。
+	body = `{"ret_info":{"code":"SOME_NEW_ERROR","msg":"boom"},"logical_account":{"logical_account_id":"acc","space_id":"space","owner_instance_id":"i1","owner_session_id":"s1"}}`
+	if err := owner.ValidateSession(ctx, "space", "acc", "i1", "s1"); !errors.As(err, &transport) || !transport.Unreadable {
+		t.Fatalf("未知的错误码应按无法解析处理：%v", err)
+	}
 }

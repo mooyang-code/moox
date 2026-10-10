@@ -569,7 +569,10 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
       throw err;
     }
     // 手动翻页失败：页码回到上一次成功显示的页。Arco 的分页只在页码变化时触发翻页，页码停在失败的那一页就点不动了。
-    if (tableLoadedPage > 0) tablePage.value = tableLoadedPage;
+    // 还没有成功显示过任何页（首次加载失败）时回到第 1 页。
+    tablePage.value = tableLoadedPage || 1;
+    // 表格停在旧快照：记为待刷新，结尾补一次静默刷新，之后由轮询继续重试（回放已是终态时也一样）。
+    tableRefreshPending = replayId;
     errors.table = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
     if (!silent && loadingId === tableLoadingRequest) {

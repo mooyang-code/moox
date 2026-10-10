@@ -3,6 +3,7 @@ package tradeowner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -130,6 +132,21 @@ func (g *gateway) post(ctx context.Context, method string, request, response pro
 	// 忽略当前协议没有的字段：Trade 先于 Strategy 升级、响应多出新字段时照常解析，不能让全部 Trade 调用都失败。
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(data, response); err != nil {
 		return &decodeError{cause: err}
+	}
+	// DiscardUnknown 也会丢掉未知的枚举值，字段留零值：未知的错误码会被读成 SUCCESS。错误码必须是已知的。
+	var head struct {
+		RetInfo *struct {
+			Code json.RawMessage `json:"code"`
+		} `json:"ret_info"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return &decodeError{cause: err}
+	}
+	if head.RetInfo != nil {
+		var name string
+		if json.Unmarshal(head.RetInfo.Code, &name) == nil && tradepb.ErrorCode_SUCCESS.Descriptor().Values().ByName(protoreflect.Name(name)) == nil {
+			return &decodeError{cause: fmt.Errorf("未知的错误码 %q", name)}
+		}
 	}
 	return nil
 }

@@ -354,7 +354,8 @@ describe("strategy replay page", () => {
     await flushPromises();
     expect(wrapper.text()).not.toContain("后台暂时无法访问");
     // 翻页失败后再翻页成功：周期记录的错误清除。
-    api.listReplayBars.mockRejectedValueOnce(new Error("超时"));
+    // 手动失败后会立即静默重试一次，这里让重试也失败，错误才保留在页面上。
+    api.listReplayBars.mockRejectedValueOnce(new Error("超时")).mockRejectedValueOnce(new Error("超时"));
     (wrapper.vm as any).changeTablePage(2);
     await flushPromises();
     expect(wrapper.text()).toContain("周期记录加载失败：超时");
@@ -1069,6 +1070,71 @@ describe("strategy replay page", () => {
     expect(vm.tablePage).toBe(2);
     expect(vm.tableRows).toHaveLength(2);
     expect(vm.errors.table).toBe("");
+  });
+
+  it("keeps retrying after a manual page flip fails on a finished replay", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    let failing = true;
+    api.listReplayBars.mockImplementation((_id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(bars);
+      return failing ? Promise.reject(new Error("net")) : Promise.resolve({ items: [bar(), bar()], page: { total: 2 } });
+    });
+    vm.changeTablePage(2);
+    await flushPromises();
+    failing = false;
+    await pollOnce();
+    expect(vm.tableRows).toHaveLength(2);
+    expect(vm.errors.table).toBe("");
+  });
+
+  it("retries a failed first table load of a finished replay and returns to page 1", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      Promise.resolve(params?.brief ? bars : { items: [bar()], page: { total: 150 } })
+    );
+    vm.changeTablePage(3);
+    await flushPromises();
+    expect(vm.tablePage).toBe(3);
+    let failing = true;
+    api.listReplayBars.mockImplementation((_id: string, params: any) => {
+      if (params?.brief) return Promise.resolve(bars);
+      return failing ? Promise.reject(new Error("net")) : Promise.resolve({ items: [bar(), bar()], page: { total: 2 } });
+    });
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    expect(vm.tablePage).toBe(1);
+    failing = false;
+    await pollOnce();
+    expect(vm.tableRows).toHaveLength(2);
+    expect(vm.errors.table).toBe("");
+  });
+
+  it("returns to page 1 when the table reload after a cancel fails", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      Promise.resolve(params?.brief ? bars : { items: [bar()], page: { total: 150 } })
+    );
+    vm.changeTablePage(3);
+    await flushPromises();
+    expect(vm.tablePage).toBe(3);
+    api.listReplayBars.mockImplementation((_id: string, params: any) =>
+      params?.brief ? Promise.resolve(bars) : Promise.reject(new Error("net"))
+    );
+    await vm.select("r1", { keepTablePage: true });
+    await flushPromises();
+    expect(vm.tablePage).toBe(1);
   });
 
   it("selects a replay started from an empty list only once", async () => {

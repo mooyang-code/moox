@@ -146,6 +146,14 @@ type runtimeReadState struct {
 	stats        viewindex.ViewIndexStats
 }
 
+// newViewRuntime 创建运行时并立即发布一份空的查询路径副本：没有发布过副本的运行时在读取 active 时要等运行时锁，
+// 首次构建期间整段索引写入都持有它，会拖住持有全局串行锁的就绪刷新。
+func newViewRuntime() *viewRuntime {
+	runtime := &viewRuntime{}
+	runtime.publishReadStateLocked()
+	return runtime
+}
+
 // publishReadStateLocked republishes the query-path copy; call it with mu held
 // after changing active, statsIndexID or stats.
 func (r *viewRuntime) publishReadStateLocked() {
@@ -512,7 +520,7 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	s.mu.Lock()
 	runtime := s.views[viewKey]
 	if runtime == nil {
-		runtime = &viewRuntime{}
+		runtime = newViewRuntime()
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()
