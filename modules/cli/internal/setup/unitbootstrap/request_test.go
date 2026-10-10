@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
+	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +19,7 @@ func TestBootstrapRequestRejectsUnsafeAndAmbiguousPrivateInput(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Chmod(root, 0o700))
 	filename := filepath.Join(root, "request.json")
-	request := Request{Version: 1, Control: Unit{Environment: map[string]map[string]string{"admin": {"MOOX_TEST_SECRET": "private-bootstrap-test-value"}}}}
+	request := Request{Version: 1, InitialAdmin: &AdminUser{Username: "admin", Password: "private-bootstrap-password"}, Control: Unit{Environment: map[string]map[string]string{"admin": {"MOOX_TEST_SECRET": "private-bootstrap-test-value"}}}}
 	raw, err := json.Marshal(request)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filename, append(raw, '\n'), 0o600))
@@ -25,6 +27,7 @@ func TestBootstrapRequestRejectsUnsafeAndAmbiguousPrivateInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, request, read)
 	require.NotContains(t, fmt.Sprintf("%#v", request), "private-bootstrap-test-value")
+	require.NotContains(t, fmt.Sprintf("%#v", request.InitialAdmin), "private-bootstrap-password")
 	for _, bad := range [][]byte{raw, append(append([]byte(nil), raw...), []byte("\n{}\n")...), []byte("{\"version\":1,\"version\":2,\"secret\":\"private-bootstrap-test-value\"}\n")} {
 		require.NoError(t, os.WriteFile(filename, bad, 0o600))
 		_, err := ReadRequest(filename)
@@ -40,6 +43,15 @@ func TestBootstrapRequestRejectsUnsafeAndAmbiguousPrivateInput(t *testing.T) {
 	require.NoError(t, os.Symlink(filename, link))
 	_, err = ReadRequest(link)
 	require.Error(t, err)
+}
+
+func TestInitialAdministratorRejectsUnusableCredentialsBeforeEffects(t *testing.T) {
+	require.NoError(t, (AdminUser{Username: "Admin123", Password: strings.Repeat("a", 72)}).Validate())
+	for _, user := range []AdminUser{{}, {Username: "admin-user", Password: "synthetic-password"}, {Username: strings.Repeat("a", 21), Password: "synthetic-password"}, {Username: "admin", Password: strings.Repeat("密", 25)}, {Username: "admin", Password: "synthetic\x00password"}} {
+		_, err := validate(t.Context(), Request{Version: 1, Topology: hostbundle.Topology{Version: 1}, InitialAdmin: &user})
+		require.ErrorContains(t, err, "initial administrator")
+		require.NotContains(t, err.Error(), "synthetic")
+	}
 }
 
 func TestBootstrapPublicOutputBoundAndJournalIdentities(t *testing.T) {

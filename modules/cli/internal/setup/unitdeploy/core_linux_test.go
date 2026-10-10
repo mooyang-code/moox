@@ -3,6 +3,7 @@
 package unitdeploy
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
@@ -27,10 +31,14 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/require"
 	xssh "golang.org/x/crypto/ssh"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 )
 
 // This server uses real SSH authentication, host keys, SFTP, and target shell
@@ -222,7 +230,7 @@ ssh = {username="fixture",password="synthetic-ssh-password"}
 control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudnode","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-node","storage-view"]
 storage = ["access"]
 compute1 = ["access"]
-`, deployment, filepath.Join(deployment, "control"), filepath.Join(deployment, "storage"), target.Port)
+`, deployment, filepath.Join(deployment, "units", "prod"), filepath.Join(deployment, "storage"), target.Port)
 	configPath := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
 	snapshot, err := setupconfig.Load(configPath, root)
@@ -249,8 +257,8 @@ compute1 = ["access"]
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		for _, name := range []string{"trade", "egress-proxy", "access", "storage", "control", "host"} {
-			plan := filepath.Join(deployment, name, "current", "runtime.json")
+		for _, directory := range []string{filepath.Join(deployment, "trade"), filepath.Join(deployment, "egress-proxy"), filepath.Join(deployment, "access"), filepath.Join(deployment, "storage"), snapshot.Manifest.Paths.ControlRoot, filepath.Join(deployment, "host")} {
+			plan := filepath.Join(directory, "current", "runtime.json")
 			if _, err := os.Stat(plan); err == nil {
 				output, err := exec.CommandContext(ctx, os.Getenv("MOOX_RUNTIME_BINARY"), "stop", "--plan", plan).CombinedOutput()
 				require.NoError(t, err, "%s", output)
@@ -261,6 +269,12 @@ compute1 = ["access"]
 	require.NoError(t, err)
 	t.Log("actual core services ready")
 	require.Equal(t, "core-ready", initial.Stage)
+	require.Equal(t, filepath.Join(snapshot.Manifest.Paths.ControlRoot, "releases"), filepath.Dir(initial.Bootstrap.ControlDirectory))
+	_, err = os.Stat(filepath.Join(deployment, "control"))
+	require.True(t, os.IsNotExist(err), "custom control root must not create a second default unit")
+	passwordHash := nativeAdminPasswordHash(t, initial.Bootstrap.ControlDirectory, snapshot.Manifest.Admin.Username)
+	require.True(t, mooxsecurity.VerifyPassword(snapshot.Manifest.Admin.Password, passwordHash))
+	nativeAdminLogin(t, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
 	status := func(directory string) unitruntime.Result {
 		output, err := exec.CommandContext(t.Context(), os.Getenv("MOOX_RUNTIME_BINARY"), "status", "--plan", filepath.Join(directory, "runtime.json")).CombinedOutput()
 		require.NoError(t, err, "%s", output)
@@ -300,6 +314,7 @@ compute1 = ["access"]
 	repeated, err := BootstrapCore(t.Context(), snapshot, options)
 	require.NoError(t, err)
 	require.Equal(t, initial, repeated)
+	require.Equal(t, passwordHash, nativeAdminPasswordHash(t, repeated.Bootstrap.ControlDirectory, snapshot.Manifest.Admin.Username), "a completed retry must not rehash or reset the administrator password")
 	require.Equal(t, host, status(initial.Bootstrap.HostDirectory))
 	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 	// Losing native state cannot replace credentials or restart a healthy
@@ -430,4 +445,56 @@ compute1 = ["access"]
 	} else {
 		t.Fatal("native business Linux gate requires MOOX_BUSINESS_BINARY_DIRECTORY")
 	}
+}
+
+func nativeAdminPasswordHash(t *testing.T, release, username string) string {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(release, "admin/data/admin.db")+"?mode=ro"), &gorm.Config{})
+	require.NoError(t, err)
+	connection, err := db.DB()
+	require.NoError(t, err)
+	defer connection.Close()
+	var user struct {
+		Hash   string `gorm:"column:c_password_hash"`
+		Role   int    `gorm:"column:c_role"`
+		Status int    `gorm:"column:c_status"`
+	}
+	result := db.Raw("SELECT c_password_hash, c_role, c_status FROM t_users WHERE c_username = ? AND c_is_deleted = 0", username).Scan(&user)
+	require.NoError(t, result.Error)
+	require.EqualValues(t, 1, result.RowsAffected)
+	require.Equal(t, 3, user.Role)
+	require.Equal(t, 1, user.Status)
+	return user.Hash
+}
+
+func nativeAdminLogin(t *testing.T, username, password string) {
+	t.Helper()
+	client := http.Client{Timeout: 10 * time.Second}
+	call := func(method string, request, response proto.Message) {
+		raw, err := protojson.Marshal(request)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:11000/api/admin/auth/"+method, bytes.NewReader(raw))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		result, err := client.Do(req)
+		require.NoError(t, err)
+		defer result.Body.Close()
+		require.Equal(t, http.StatusOK, result.StatusCode)
+		body, err := io.ReadAll(io.LimitReader(result.Body, 128<<10))
+		require.NoError(t, err)
+		require.NoError(t, protojson.Unmarshal(body, response), "Admin login response must follow its protocol")
+	}
+	var salt adminpb.GetLoginSaltRsp
+	call("GetLoginSalt", &adminpb.GetLoginSaltReq{Username: username}, &salt)
+	require.NotNil(t, salt.GetRetInfo())
+	require.Zero(t, salt.GetRetInfo().GetCode())
+	require.NotEmpty(t, salt.GetSalt())
+	encrypted, err := mooxsecurity.Encrypt(password, salt.GetSalt()+strconv.FormatInt(salt.GetTimestamp(), 10))
+	require.NoError(t, err)
+	var login adminpb.LoginRsp
+	call("Login", &adminpb.LoginReq{Username: username, PasswordHash: encrypted, Salt: salt.GetSalt(), Timestamp: salt.GetTimestamp(), DeviceId: "native-core-gate"}, &login)
+	require.NotNil(t, login.GetRetInfo())
+	require.Zero(t, login.GetRetInfo().GetCode(), "the initialized administrator must be able to log in")
+	require.NotEmpty(t, login.GetAccessToken())
+	require.NotEmpty(t, login.GetRequestSigningKey())
 }

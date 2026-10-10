@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
@@ -36,6 +37,28 @@ type Request struct {
 	Host           Unit                 `json:"host"`
 	Control        Unit                 `json:"control"`
 	ProxyCA        ProxyCAAuthorization `json:"proxy_ca"`
+	InitialAdmin   *AdminUser           `json:"initial_admin,omitempty"`
+}
+
+// AdminUser is a private, create-only seed. It never resets an existing user's
+// password. Native bootstrap supplies it from the unchanged setup snapshot.
+type AdminUser struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func (AdminUser) String() string     { return "MooXInitialAdmin{private inputs omitted}" }
+func (a AdminUser) GoString() string { return a.String() }
+
+func (a AdminUser) Validate() error {
+	validUsername := len(a.Username) > 0 && len(a.Username) <= 20
+	for _, c := range a.Username {
+		validUsername = validUsername && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9')
+	}
+	if !validUsername || a.Password == "" || len(a.Password) > 72 || strings.ContainsRune(a.Password, '\x00') {
+		return errors.New("initial administrator requires a username of 1 to 20 ASCII letters or digits and a password of 1 to 72 bytes")
+	}
+	return nil
 }
 
 // ProxyCAAuthorization is consumed outside release snapshots. ImportDirectory
@@ -95,6 +118,14 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	if request.Version != 1 || request.Topology.Version != 1 {
 		return result, errors.New("bootstrap requires request and topology version 1")
 	}
+	if request.InitialAdmin != nil {
+		if err := request.InitialAdmin.Validate(); err != nil {
+			return result, err
+		}
+	}
+	if err := fsutil.ValidateUnitRoots(request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot); err != nil {
+		return result, err
+	}
 	if request.ProxyCA.Create && request.ProxyCA.ImportDirectory != "" {
 		return result, errors.New("proxy CA creation and trusted import are mutually exclusive")
 	}
@@ -146,20 +177,12 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	if !slices.Contains(result.components, "console-proxy") && (request.ProxyCA.Create || request.ProxyCA.ImportDirectory != "") {
 		return result, errors.New("proxy CA authorization requires a selected console-proxy")
 	}
-	if request.Host.UnitRoot == request.Control.UnitRoot {
-		return result, errors.New("bootstrap requires separate host and control units")
-	}
 	for _, name := range []string{request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot} {
 		root, err := fsutil.OpenPhysicalRoot(name, false)
 		if err != nil {
 			return result, err
 		}
 		root.Close()
-	}
-	for _, name := range []string{request.Host.UnitRoot, request.Control.UnitRoot} {
-		if filepath.Dir(name) != request.DeploymentRoot || filepath.Base(name) == "bootstrap" || filepath.Base(name) == "identity" || filepath.Base(name) == "run" {
-			return result, errors.New("bootstrap unit roots must be separate direct children of deployment root")
-		}
 	}
 	available, err := unitpackage.Components("control")
 	if err != nil {

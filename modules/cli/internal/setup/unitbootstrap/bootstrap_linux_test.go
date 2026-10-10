@@ -20,6 +20,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -50,6 +51,7 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 	components := []string{"admin", "eventbus", "web-host", "console-proxy"}
 	request := Request{Version: 1, DeploymentRoot: deployment, Topology: hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{{HostID: "control", Address: "127.0.0.1", Description: "initial", Components: components}}}, Host: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_HOST_SHA256"), UnitRoot: filepath.Join(deployment, "host"), Environment: map[string]map[string]string{"host-gateway": health(), "host-agent": health()}, Overrides: map[string]string{}}, Control: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_CONTROL_SHA256"), UnitRoot: filepath.Join(deployment, "control"), Environment: map[string]map[string]string{}, Overrides: map[string]string{}}}
 	request.ProxyCA.Create = true
+	request.InitialAdmin = &AdminUser{Username: "admin", Password: "synthetic-initial-admin-password"}
 	for _, id := range components {
 		request.Control.Environment[id] = health()
 	}
@@ -107,6 +109,19 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	initial, err := runBootstrap(t, request, root)
 	require.NoError(t, err)
 	require.Equal(t, "complete", initial.Phase)
+	adminHash := func(directory string) string {
+		db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(directory, "admin/data/admin.db")+"?mode=ro"), &gorm.Config{})
+		require.NoError(t, err)
+		connection, err := db.DB()
+		require.NoError(t, err)
+		defer connection.Close()
+		var value string
+		require.NoError(t, db.Raw("SELECT c_password_hash FROM t_users WHERE c_username = ?", "admin").Scan(&value).Error)
+		require.NotEmpty(t, value)
+		return value
+	}
+	initialPasswordHash := adminHash(initial.ControlDirectory)
+	require.True(t, mooxsecurity.VerifyPassword(request.InitialAdmin.Password, initialPasswordHash))
 	busCA := filepath.Join(initial.ControlDirectory, "eventbus/secrets/eventbus/ca.pem")
 	unauthenticated, err := jetstream.Connect(t.Context(), jetstream.Config{URLs: []string{"tls://127.0.0.1:4222"}, TLSCAFile: busCA, ConnectTimeout: 2 * time.Second})
 	if unauthenticated != nil {
@@ -162,10 +177,12 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	request.Topology.Hosts[0].Description = "rerun"
+	request.InitialAdmin = &AdminUser{Username: "admin", Password: "synthetic-new-password-must-not-reset"}
 	upgraded, err := runBootstrap(t, request, root)
 	require.NoError(t, err)
 	require.NotEqual(t, initial.ControlDirectory, upgraded.ControlDirectory)
 	require.Equal(t, initial.CAFingerprint, upgraded.CAFingerprint)
+	require.Equal(t, initialPasswordHash, adminHash(upgraded.ControlDirectory), "offline upgrades must preserve an existing administrator password")
 	upgradedRole, err := jetstream.LoadCredentialFile(filepath.Join(upgraded.HostDirectory, "host-agent/config/eventbus.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, initialRole.EventBusToken, upgradedRole.EventBusToken, "offline reruns reuse issued EventBus role tokens")

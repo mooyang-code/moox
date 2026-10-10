@@ -105,6 +105,18 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage"}, options.Profile) {
 		return result, errors.New("unsupported native deployment unit")
 	}
+	unitRoot := path.Join(manifest.Paths.DeployRoot, options.Profile)
+	if options.Profile == "storage" {
+		unitRoot = manifest.Paths.StorageRoot
+	}
+	if err := fsutil.ValidateUnitRoots(manifest.Paths.DeployRoot, path.Join(manifest.Paths.DeployRoot, "host"), manifest.Paths.ControlRoot); err != nil {
+		return result, err
+	}
+	if options.Profile != "host" {
+		if err := fsutil.ValidateUnitRoots(manifest.Paths.DeployRoot, path.Join(manifest.Paths.DeployRoot, "host"), manifest.Paths.ControlRoot, unitRoot); err != nil {
+			return result, err
+		}
+	}
 	components, err := unitComponents(manifest, options.HostID, options.Profile)
 	if err != nil {
 		return result, err
@@ -132,6 +144,9 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.HostID != control.Name || ready.Bootstrap.Phase != "complete" {
 		return result, errors.New("unit deployment requires the original core state directory and completed core receipt")
 	}
+	if !insideState(manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
+		return result, errors.New("unit deployment requires the control and host roots from its original core receipt")
+	}
 	identity, err := loadIdentity(root, control, manifest.Paths.DeployRoot)
 	if err != nil {
 		return result, err
@@ -152,7 +167,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	host := manifest.HostByID(options.HostID)
 	material := unitbundle.Options{HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address, Components: slices.Clone(manifest.Placements[host.Name]), ExpectedCA: pin.CA}
 	slices.Sort(material.Components)
-	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: path.Join(manifest.Paths.DeployRoot, "control"), RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: unitinstall.EventBusRoles(components)}
+	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: manifest.Paths.ControlRoot, RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: unitinstall.EventBusRoles(components)}
 	stateDirectory := filepath.Join(root.Name(), "units", host.Name, options.Profile)
 	if options.Profile == "host" {
 		stateDirectory = filepath.Join(root.Name(), "hosts", host.Name)
@@ -294,10 +309,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		return result, err
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
-	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: path.Join(manifest.Paths.DeployRoot, options.Profile), HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: "tls://" + net.JoinHostPort(control.Address, "4222")}
-	if options.Profile == "storage" {
-		prepare.UnitRoot = manifest.Paths.StorageRoot
-	}
+	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: "tls://" + net.JoinHostPort(control.Address, "4222")}
 	overrideHashes := map[string]string{}
 	if len(configuration) > 0 {
 		local := filepath.Join(state.Name(), "configuration.yaml")

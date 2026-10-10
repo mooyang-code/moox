@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
@@ -59,6 +60,30 @@ func offlineEventBus(ctx context.Context, binary, database, master, hostID, outp
 		if decoder.Decode(&metadata) != nil || decoder.Decode(new(any)) != io.EOF || metadata.Status != "ok" || len(metadata.Roles) == 0 || operation == "export" && metadata.OutputDir != output || operation == "ensure" && !metadata.TLS {
 			return errors.New("offline EventBus issuance returned invalid public metadata")
 		}
+	}
+	return nil
+}
+
+func offlineAdminUser(ctx context.Context, binary, database, master string, user AdminUser, lock unitruntime.Options) error {
+	if err := user.Validate(); err != nil {
+		return err
+	}
+	command := exec.CommandContext(ctx, binary, "user", "ensure", "--db-path", database, "--username", user.Username, "--password-stdin")
+	command.Stdin = strings.NewReader(user.Password + "\n")
+	raw, err := runOffline(ctx, command, master, lock)
+	if err != nil {
+		return err
+	}
+	var metadata struct {
+		Status   string `json:"status"`
+		Command  string `json:"command"`
+		Action   string `json:"action"`
+		Username string `json:"username"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&metadata) != nil || decoder.Decode(new(any)) != io.EOF || metadata.Status != "ok" || metadata.Command != "user.ensure" || metadata.Action != "created" && metadata.Action != "unchanged" || metadata.Username != user.Username {
+		return errors.New("offline administrator initialization returned invalid public metadata")
 	}
 	return nil
 }

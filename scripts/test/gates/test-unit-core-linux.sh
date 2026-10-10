@@ -23,6 +23,7 @@ log=Path(sys.argv[1]).read_text()
 required=[
     'TestNativeCoreBootstrapOverVerifiedSSHWithFullFleetTopology',
     'TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget',
+    'TestCoreRequestUsesConfiguredControlRootAndPrivateAdministrator',
     'TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools',
     'TestHostBuildUsesOnlyLocalPureGoTools',
     'TestBusinessUnitSelectionAndExportRolesFollowActualPlacements',
@@ -33,5 +34,5 @@ for name in required:
         raise SystemExit('required native core scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('native core Linux gate must not skip or fail a scenario')
-print('native core/host/business Linux gate passed: verified SSH/SFTP, actual services including CGO Storage initialization, immutable retries, export recovery, pause and repair, fresh candidate after rollback, local build policy; no compilation')
+print('native core/host/business Linux gate passed: verified SSH/SFTP, configured nested control root, real administrator login, actual services including CGO Storage initialization, immutable retries, export recovery, pause and repair, fresh candidate after rollback, local build policy; no compilation')
 PY

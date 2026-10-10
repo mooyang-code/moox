@@ -6,6 +6,16 @@
 包内的纯 Go 组件均在本机构建，强制 `CGO_ENABLED=0`；该构建器没有远端编译能力。
 只有 Storage CGO 构建使用 `setup build-linux` 和 `compile_host`。
 
+核心请求从同一可信快照携带初始管理员，离线建表和身份签发后通过 stdin 调用
+`moox-admin-cli user ensure`，密码不进入 argv、环境或公开收据。已有用户名只保留原密码，
+完成重试也不重复初始化帐号。用户名须满足实际登录接口的 1～20 位 ASCII 字母/数字限制，
+密码按 bcrypt 的 72 字节上限校验，非法输入在 SSH 和本机私密状态创建前拒绝。
+
+部署、材料导出与恢复统一采用 `paths.control_root`，可位于部署根下的嵌套目录。host 与
+control 必须相互独立，且不能占用 `bootstrap`、`bootstrap-input`、`identity`、`run` 状态
+命名空间；使用自定义路径不会额外创建硬编码的 `control/`。Storage 根仍须位于部署根下，
+其跨部署根布局与跨主机角色路由继续由 G13 完成。
+
 核心阶段保留全部主机、放置和签名身份，只安装控制机的 Admin、EventBus、Host Gateway、
 Host Agent。输出 `stage=core-ready`，不能据此认定完整部署成功。待 Storage、Access、
 出口代理、交易和计算依赖就绪后，外层流程才升级完整 control 放置并激活 Console Proxy。

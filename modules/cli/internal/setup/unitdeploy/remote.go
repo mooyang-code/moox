@@ -67,7 +67,6 @@ try:
         for unit in units:
             if not os.path.isabs(unit) or os.path.normpath(unit)!=unit or os.path.commonpath([root,unit])!=root or unit==root: raise ValueError('unit')
         mkdir(root,False)
-        for child in ('host','control'): mkdir(os.path.join(root,child),False)
         for unit in units: mkdir(unit,False)
         mkdir(os.path.join(root,'bootstrap-input'))
         print('{}')

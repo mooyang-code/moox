@@ -63,8 +63,11 @@ func ReadExportRequest(filename string) (ExportRequest, error) {
 // the Admin CLI takes a consistent database transaction for each export.
 func ExportHost(ctx context.Context, request ExportRequest) (ExportResult, error) {
 	var result ExportResult
-	if request.Version != 1 || request.Target.AllowOperator || request.Target.ExpectedHash != "" || !validAttempt(request.ExportID) || !validDigest(request.RuntimeSHA256) || len(request.Roles) == 0 || len(request.Roles) > 16 || filepath.Dir(request.ControlUnitRoot) != request.DeploymentRoot {
+	if request.Version != 1 || request.Target.AllowOperator || request.Target.ExpectedHash != "" || !validAttempt(request.ExportID) || !validDigest(request.RuntimeSHA256) || len(request.Roles) == 0 || len(request.Roles) > 16 {
 		return result, errors.New("host export requires normalized target identity and a client-only role selection")
+	}
+	if err := fsutil.ValidateUnitRoots(request.DeploymentRoot, request.ControlUnitRoot); err != nil {
+		return result, err
 	}
 	for _, role := range request.Roles {
 		if !validAttempt(role) || strings.Contains(role, ".") {

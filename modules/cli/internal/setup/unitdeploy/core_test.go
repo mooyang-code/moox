@@ -7,8 +7,60 @@ import (
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCoreRequestUsesConfiguredControlRootAndPrivateAdministrator(t *testing.T) {
+	manifest := setupconfig.Manifest{Admin: setupconfig.Admin{Username: "admin", Password: "synthetic-bootstrap-password"}, Paths: setupconfig.Paths{DeployRoot: "/data/moox", ControlRoot: "/data/moox/units/prod"}}
+	request := coreRequest(manifest, runtimeIdentity{}, unitpackage.Result{}, unitpackage.Result{})
+	require.Equal(t, manifest.Paths.ControlRoot, request.Control.UnitRoot)
+	require.Equal(t, "/data/moox/host", request.Host.UnitRoot)
+	require.Equal(t, manifest.Admin.Username, request.InitialAdmin.Username)
+	require.Equal(t, manifest.Admin.Password, request.InitialAdmin.Password)
+}
+
+func TestUnitDeploymentRejectsReceiptForDifferentRootsBeforeSSH(t *testing.T) {
+	const fixture = `[admin]
+username = "admin"
+password = "synthetic-password"
+[tencent_cloud]
+secret_id = "synthetic-id"
+secret_key = "synthetic-key"
+[eventbus]
+port = 4222
+tls_enabled = true
+[hosts.control]
+address = "192.0.2.10"
+ssh = {username="fixture"}
+[placements]
+control = ["admin","eventbus","console-proxy","web-host"]
+`
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "moox.toml"), []byte(fixture), 0o600))
+	snapshot, err := setupconfig.Load(filepath.Join(directory, "moox.toml"), directory)
+	require.NoError(t, err)
+	state, err := privateRoot(filepath.Join(directory, "state"))
+	require.NoError(t, err)
+	defer state.Close()
+	control := snapshot.Manifest.ControlHost()
+	_, err = loadIdentity(state, control, snapshot.Manifest.Paths.DeployRoot)
+	require.NoError(t, err)
+	ready := CoreResult{Stage: "core-ready", Bootstrap: unitbootstrap.Result{HostID: control.Name, Phase: "complete", HostDirectory: filepath.Join(snapshot.Manifest.Paths.DeployRoot, "host", "releases", "initial"), ControlDirectory: filepath.Join(snapshot.Manifest.Paths.ControlRoot, "releases", "initial")}}
+	for _, changed := range []string{"host", "control"} {
+		invalid := ready
+		if changed == "host" {
+			invalid.Bootstrap.HostDirectory = filepath.Join(snapshot.Manifest.Paths.DeployRoot, "unrelated", "releases", "initial")
+		} else {
+			invalid.Bootstrap.ControlDirectory = filepath.Join(snapshot.Manifest.Paths.ControlRoot+"-other", "releases", "initial")
+		}
+		require.NoError(t, saveJSON(state, "core-ready.json", invalid, true))
+		_, err := DeployUnit(t.Context(), snapshot, UnitOptions{CoreOptions: CoreOptions{StateDirectory: state.Name()}, HostID: control.Name, Profile: "host"})
+		require.ErrorContains(t, err, "roots from its original core receipt")
+	}
+}
 
 func TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget(t *testing.T) {
 	directory, err := filepath.EvalSymlinks(t.TempDir())

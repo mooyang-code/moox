@@ -260,6 +260,11 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 		return err
 	}
 	eventBusDirectory := filepath.Join(attempt.Name(), "eventbus")
+	if request.InitialAdmin != nil {
+		if err := offlineAdminUser(ctx, filepath.Join(extracted.Directory, "bin/moox-admin-cli"), filepath.Join(checkpoint, "admin/data/admin.db"), master, *request.InitialAdmin, lock); err != nil {
+			return err
+		}
+	}
 	if err := offlineEventBus(ctx, filepath.Join(extracted.Directory, "bin/moox-admin-cli"), filepath.Join(checkpoint, "admin/data/admin.db"), master, j.HostID, eventBusDirectory, lock); err != nil {
 		return err
 	}

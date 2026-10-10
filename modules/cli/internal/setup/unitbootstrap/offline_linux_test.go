@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -50,6 +51,33 @@ func TestMain(m *testing.M) {
 		return
 	}
 	os.Exit(m.Run())
+}
+
+func TestOfflineAdministratorUsesStdinAndRedactsPrivateChildFailures(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Chmod(root, 0o700))
+	binary := filepath.Join(root, "admin-cli")
+	user := AdminUser{Username: "admin", Password: "synthetic-private-password"}
+	// The child rejects a missing inherited lock, password arguments or extra
+	// environment entries. Only stdin contains the supplied password.
+	script := "#!/bin/sh\nset -eu\n[ -e /proc/self/fd/3 ]\n[ \"$#\" -eq 7 ]\n[ \"$1 $2 $3 $4 $5 $6 $7\" = 'user ensure --db-path closed.db --username admin --password-stdin' ]\nIFS= read -r password\n[ \"$password\" = 'synthetic-private-password' ]\n[ \"$(env | wc -l)\" -le 3 ]\nprintf '%s\\n' '{\"status\":\"ok\",\"command\":\"user.ensure\",\"action\":\"created\",\"username\":\"admin\"}'\n"
+	require.NoError(t, os.WriteFile(binary, []byte(script), 0o700))
+	withLock := func(run func(unitruntime.Options) error) error {
+		return unitruntime.WithMaintenance(t.Context(), root, "control", unitruntime.Options{}, func(guard *unitruntime.Maintenance) error {
+			return guard.UseLock(t.Context(), run)
+		})
+	}
+	require.NoError(t, withLock(func(lock unitruntime.Options) error {
+		return offlineAdminUser(t.Context(), binary, "closed.db", filepath.Join(root, "master.key"), user, lock)
+	}))
+	for _, failure := range []string{"printf '%s' '" + user.Password + "'; exit 1", "printf '%s' '" + user.Password + "'"} {
+		require.NoError(t, os.WriteFile(binary, []byte("#!/bin/sh\n"+failure+"\n"), 0o700))
+		err := withLock(func(lock unitruntime.Options) error {
+			return offlineAdminUser(t.Context(), binary, "closed.db", filepath.Join(root, "master.key"), user, lock)
+		})
+		require.Error(t, err)
+		require.False(t, strings.Contains(err.Error(), user.Password))
+	}
 }
 
 func TestBootstrapLinuxOfflineChildHoldsLockAndDiesWithParent(t *testing.T) {

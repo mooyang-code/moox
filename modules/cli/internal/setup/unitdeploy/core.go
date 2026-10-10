@@ -121,6 +121,8 @@ func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, 
 		return unitbootstrap.Unit{Archive: path.Join(manifest.Paths.DeployRoot, "bootstrap-input/packages", strings.TrimPrefix(result.SHA256, "sha256:"), name+".tar.gz"), SHA256: result.SHA256, UnitRoot: path.Join(manifest.Paths.DeployRoot, name), Environment: env, Overrides: map[string]string{}, Components: components}
 	}
 	request := unitbootstrap.Request{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, Topology: topology, Host: unit(host, "host", []string{"host-gateway", "host-agent"}), Control: unit(control, "control", []string{"admin", "eventbus"})}
+	request.Control.UnitRoot = manifest.Paths.ControlRoot
+	request.InitialAdmin = &unitbootstrap.AdminUser{Username: manifest.Admin.Username, Password: manifest.Admin.Password}
 	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
 	return request
 }
@@ -132,6 +134,12 @@ func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options 
 	var result CoreResult
 	if snapshot == nil || snapshot.VerifyUnchanged() != nil {
 		return result, errors.New("bootstrap requires an unchanged private setup snapshot")
+	}
+	if err := fsutil.ValidateUnitRoots(snapshot.Manifest.Paths.DeployRoot, path.Join(snapshot.Manifest.Paths.DeployRoot, "host"), snapshot.Manifest.Paths.ControlRoot); err != nil {
+		return result, err
+	}
+	if err := (unitbootstrap.AdminUser{Username: snapshot.Manifest.Admin.Username, Password: snapshot.Manifest.Admin.Password}).Validate(); err != nil {
+		return result, err
 	}
 	root, err := privateRoot(options.StateDirectory)
 	if err != nil {
@@ -182,7 +190,7 @@ func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options 
 	if err := snapshot.VerifyUnchanged(); err != nil {
 		return result, errors.New("config_changed")
 	}
-	if err := prepareTarget(ctx, transport, request.DeploymentRoot); err != nil {
+	if err := prepareTarget(ctx, transport, request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot); err != nil {
 		return result, err
 	}
 	for i, unit := range []unitbootstrap.Unit{request.Host, request.Control} {
