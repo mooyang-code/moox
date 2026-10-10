@@ -36,9 +36,6 @@ type TLS struct {
 	StorageRoot  string `yaml:"storage_root"`
 	CABaseline   string `yaml:"ca_baseline"`
 	CAPublishDir string `yaml:"ca_publish_dir"`
-	// InitializeCA is an explicit first-install decision. Installers clear it
-	// after activation; missing files alone never authorize CA regeneration.
-	InitializeCA bool   `yaml:"initialize_ca"`
 	Email        string `yaml:"email"`
 	ACMECA       string `yaml:"acme_ca"`
 }

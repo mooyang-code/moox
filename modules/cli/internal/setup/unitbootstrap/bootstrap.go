@@ -152,7 +152,12 @@ func privateDirectory(root *os.Root, name string) error {
 	if err != nil || !info.IsDir() || !fsutil.Owned(info) || info.Mode().Perm() != 0o700 {
 		return errors.New("bootstrap work directories must be owned physical 0700 directories")
 	}
-	return nil
+	parent, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	return parent.Sync()
 }
 
 func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock unitruntime.Options) error {
@@ -230,6 +235,9 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 	if err := offlineEventBus(ctx, filepath.Join(extracted.Directory, "bin/moox-admin-cli"), filepath.Join(checkpoint, "admin/data/admin.db"), master, j.HostID, eventBusDirectory, lock); err != nil {
 		return err
 	}
+	if err := fsutil.SyncPrivateTree(ctx, checkpointRoot); err != nil {
+		return err
+	}
 	control := request.Topology.Hosts[slices.IndexFunc(request.Topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == j.HostID })]
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -305,6 +313,10 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 			}
 		}
 	}
+	proxySource, err := proxyCheckpoint(ctx, input, j, prepared[1], attempt, lock)
+	if err != nil {
+		return err
+	}
 	controlRoot, err := fsutil.OpenPhysicalRoot(request.Control.UnitRoot, false)
 	if err != nil {
 		return err
@@ -325,7 +337,14 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 	if err := unitinstall.CopyOfflineState(ctx, checkpoint, seedDirectory, []string{"admin/data"}); err != nil {
 		return err
 	}
-	seed, err := unitinstall.SealState(ctx, unitinstall.SealStateOptions{Directory: seedDirectory, ReleaseDirectory: prepared[1].Directory, PreviousDirectory: j.Control.Previous, Paths: []string{"admin/data"}}, lock)
+	seedPaths := []string{"admin/data"}
+	if proxySource != "" {
+		if err := unitinstall.CopyOfflineState(ctx, proxySource, seedDirectory, proxyPaths); err != nil {
+			return err
+		}
+		seedPaths = append(seedPaths, proxyPaths...)
+	}
+	seed, err := unitinstall.SealState(ctx, unitinstall.SealStateOptions{Directory: seedDirectory, ReleaseDirectory: prepared[1].Directory, PreviousDirectory: j.Control.Previous, Paths: seedPaths}, lock)
 	if err != nil {
 		return err
 	}

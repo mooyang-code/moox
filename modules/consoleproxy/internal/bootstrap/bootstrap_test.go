@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/consoleproxy/internal/config"
+	"github.com/mooyang-code/moox/modules/consoleproxy/internal/engine"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/requestauth"
 )
@@ -82,7 +83,9 @@ func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
 	cfg.TLS.StorageRoot = filepath.Join(dir, "data", "caddy", "caddy")
 	cfg.TLS.CABaseline = filepath.Join(dir, "data", "caddy", "internal-ca.sha256")
 	cfg.TLS.CAPublishDir = filepath.Join(dir, "certs", "caddy")
-	cfg.TLS.InitializeCA = true
+	if _, err := engine.InitializeState(context.Background(), cfg, false); err != nil {
+		t.Fatal(err)
+	}
 	cfg.Lifecycle.DrainTimeout, cfg.Lifecycle.EngineStopTimeout = 3*time.Second, 2*time.Second
 	cfg.Lifecycle.CleanupMargin, cfg.Lifecycle.StartupTimeout = time.Second, 5*time.Second
 	ctx, cancel := context.WithCancel(context.Background())

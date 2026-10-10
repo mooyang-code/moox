@@ -118,10 +118,9 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 		}
 		proxy := slices.Contains(candidate.Components, "console-proxy")
 		previousProxy := proxy && slices.Contains(previous.Components, "console-proxy")
-		seededProxy := proxy && (slices.Contains(seed.Paths, "console-proxy/data") || slices.Contains(seed.Paths, "console-proxy/certs"))
 		previousCA := ""
 		if proxy {
-			if err := validateProxyPaths(candidate, previousProxy); err != nil {
+			if err := validateProxyPaths(candidate); err != nil {
 				return err
 			}
 		}
@@ -196,7 +195,7 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 		if _, err := ReadInstalled(ctx, candidate.Directory); err != nil {
 			return fail(err)
 		}
-		if previousProxy || seededProxy {
+		if proxy {
 			copiedCA, err := proxyState(ctx, candidate)
 			if err != nil || (previousProxy && copiedCA != previousCA) {
 				return fail(errors.New("copied/imported proxy CA identity failed validation"))

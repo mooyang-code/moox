@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -50,6 +49,7 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 	}
 	components := []string{"admin", "eventbus", "web-host", "console-proxy"}
 	request := Request{Version: 1, DeploymentRoot: deployment, Topology: hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{{HostID: "control", Address: "127.0.0.1", Description: "initial", Components: components}}}, Host: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_HOST_SHA256"), UnitRoot: filepath.Join(deployment, "host"), Environment: map[string]map[string]string{"host-gateway": health(), "host-agent": health()}, Overrides: map[string]string{}}, Control: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_CONTROL_SHA256"), UnitRoot: filepath.Join(deployment, "control"), Environment: map[string]map[string]string{}, Overrides: map[string]string{}}}
+	request.ProxyCA.Create = true
 	for _, id := range components {
 		request.Control.Environment[id] = health()
 	}
@@ -60,7 +60,7 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 		return filename
 	}
 	request.Control.Overrides["admin/config/console.yaml"] = write("console.yaml", "jwt:\n  secret_key: ''\n  access_expired: 24h\nconsole:\n  debug: false\ncors:\n  allowed_origins: [https://localhost:9527]\n")
-	request.Control.Overrides["console-proxy/config/app.yaml"] = write("proxy.yaml", "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: 9527\n  http3: false\ntls:\n  mode: internal\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\n  initialize_ca: true\nupstreams:\n  admin: 127.0.0.1:11000\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 2s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 15s\n")
+	request.Control.Overrides["console-proxy/config/app.yaml"] = write("proxy.yaml", "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: 9527\n  http3: false\ntls:\n  mode: internal\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: 127.0.0.1:11000\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 2s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 15s\n")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -152,10 +152,6 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	response.Body.Close()
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	proxy := request.Control.Overrides["console-proxy/config/app.yaml"]
-	config, err := os.ReadFile(proxy)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(proxy, []byte(strings.ReplaceAll(string(config), "initialize_ca: true", "initialize_ca: false")), 0o600))
 	request.Topology.Hosts[0].Description = "rerun"
 	upgraded, err := runBootstrap(t, request, root)
 	require.NoError(t, err)
@@ -225,6 +221,8 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	exit, ok := err.(*exec.ExitError)
 	require.True(t, ok)
 	require.Equal(t, syscall.SIGKILL, exit.Sys().(syscall.WaitStatus).Signal())
+	issuedProxyCA, err := os.ReadFile(filepath.Join(captured.Control.Candidate, "console-proxy/certs/caddy/root.crt"))
+	require.NoError(t, err)
 	issuedRole, err := jetstream.LoadCredentialFile(filepath.Join(captured.Host.Candidate, "host-agent/config/eventbus.yaml"))
 	require.NoError(t, err)
 	issuedBusCA, err := os.ReadFile(filepath.Join(captured.Control.Candidate, "eventbus/secrets/eventbus/ca.pem"))
@@ -253,6 +251,9 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	recoveredBusCA, err := os.ReadFile(filepath.Join(recovered.ControlDirectory, "eventbus/secrets/eventbus/ca.pem"))
 	require.NoError(t, err)
 	require.Equal(t, issuedBusCA, recoveredBusCA, "SIGKILL recovery must retain the EventBus TLS identity")
+	recoveredProxyCA, err := os.ReadFile(filepath.Join(recovered.ControlDirectory, "console-proxy/certs/caddy/root.crt"))
+	require.NoError(t, err)
+	require.Equal(t, issuedProxyCA, recoveredProxyCA, "SIGKILL recovery must retain the one-time proxy CA")
 	require.NotEqual(t, captured.Control.Candidate, recovered.ControlDirectory)
 	for _, directory := range []string{recovered.HostDirectory, recovered.ControlDirectory} {
 		for _, status := range runtimeStatus(t, directory).Components {

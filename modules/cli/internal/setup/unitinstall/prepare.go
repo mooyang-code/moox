@@ -206,6 +206,12 @@ func Prepare(ctx context.Context, options PrepareOptions, lockOptions unitruntim
 		if err := renderConfigurations(root, options, components, projection, destination); err != nil {
 			return err
 		}
+		if slices.Contains(components, "console-proxy") {
+			raw, err := runProxyValidation(ctx, stagePath, "validate")
+			if err != nil || string(raw) != "console-proxy configuration valid\n" {
+				return errors.New("proxy configuration failed its offline preparation check")
+			}
+		}
 		for _, id := range components {
 			raw, err := json.Marshal(options.Environment[id])
 			if err != nil {

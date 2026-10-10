@@ -33,7 +33,7 @@
 
 封存结果仅输出源目录和收据摘要。`activate --directory DIR --state-seed SOURCE --state-seed-sha256 SHA256` 在停机前核对收据、逐文件内容、目标发布和预期旧 current；复制后再次核对新发布里的全部导入字节。导入目录替代相应旧状态，其余状态仍从停机后的旧发布独立复制。源或 current 变化都会拒绝，失败恢复不依赖源目录；升级前快照保持独立。重复激活已完成发布可复用原摘要，不能用不同摘要替换已激活的数据。Admin 主密钥、MooX CA 私钥和操作员材料继续存放在各自的持久私密目录，不通过状态导入扩散到发布。目标主机 `unitbootstrap` 已串联停止、关闭数据库的独立复制、离线初始化、封存及分阶段激活；原生 CLI 部署入口仍须接通。
 
-代理升级拒绝仍开启 initialize_ca 的候选，将状态路径限制在可复制的组件 data/certs 内；使用真实 `moox-console-proxy check-state` 在停机前后、复制后和启动后校验 CA 指纹，首次导入代理状态即使不启动也必须通过只读检查。检查命令不生成证书或写入旧基线。历史 CA 迁移编排、首次初始化授权的一次性持久消费，以及正式部署流程仍属于后续 G7/G11 接线。
+代理配置不接受 initialize_ca，状态路径固定为组件内 `data/caddy/caddy`、`data/caddy/internal-ca.sha256`、`certs/caddy`。使用真实 `moox-console-proxy check-state` 在停机前后、复制后和启动后校验 CA 指纹；首次激活即使不启动也须携带有效的离线状态。检查命令不生成证书或写入旧基线。首次授权的持久消费与规范历史状态导入由 `unitbootstrap` 负责，原生 CLI/SSH、生产历史目录归档和正式部署仍须完成。
 
 验证入口：
 

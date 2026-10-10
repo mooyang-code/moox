@@ -13,7 +13,7 @@ import (
 
 func offlineProcess(command *exec.Cmd, lock unitruntime.Options) (func(), error) {
 	if !lock.MaintenanceLockHeld || lock.MaintenanceLockFD < 3 {
-		return nil, errors.New("offline Admin requires the coordinator's inherited maintenance lock")
+		return nil, errors.New("offline operation requires the coordinator's inherited maintenance lock")
 	}
 	fd, err := syscall.Dup(lock.MaintenanceLockFD)
 	if err != nil {

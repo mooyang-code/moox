@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestRuntimeLinuxRealProxyDrainsHTTPSAndPreservesCAWhilePaused(t *testing.T)
 		"public": map[string]any{"host": "localhost", "bind": "127.0.0.1", "port": port, "http3": false},
 		"tls": map[string]any{
 			"mode": "internal", "storage_root": filepath.Join(plan.ReleaseRoot, "data", "caddy"),
-			"ca_baseline": filepath.Join(plan.ReleaseRoot, "data", "internal-ca.sha256"), "ca_publish_dir": filepath.Join(plan.ReleaseRoot, "certs", "caddy"), "initialize_ca": true,
+			"ca_baseline": filepath.Join(plan.ReleaseRoot, "data", "internal-ca.sha256"), "ca_publish_dir": filepath.Join(plan.ReleaseRoot, "certs", "caddy"),
 		},
 		"upstreams": map[string]string{"admin": strings.TrimPrefix(admin.URL, "http://"), "web": strings.TrimPrefix(web.URL, "http://")},
 		"health":    map[string]string{"listen": "127.0.0.1:19528"},
@@ -75,6 +76,8 @@ func TestRuntimeLinuxRealProxyDrainsHTTPSAndPreservesCAWhilePaused(t *testing.T)
 		require.NoError(t, os.WriteFile(filepath.Join(plan.ReleaseRoot, "console-proxy", "config", "app.yaml"), raw, 0o600))
 	}
 	writeConfig()
+	initialization, err := exec.CommandContext(t.Context(), binary, "initialize-state", "--config", filepath.Join(plan.ReleaseRoot, "console-proxy/config/app.yaml")).CombinedOutput()
+	require.NoError(t, err, "%s", initialization)
 	cleanupRuntime(t, path)
 	started := runRuntime(t, path, "start")
 	require.True(t, started.Components[0].Ready)
@@ -105,8 +108,6 @@ func TestRuntimeLinuxRealProxyDrainsHTTPSAndPreservesCAWhilePaused(t *testing.T)
 	require.Equal(t, "completed\n", string(remaining))
 	require.Equal(t, "paused", runRuntime(t, path, "healthcheck").Components[0].State)
 	require.Equal(t, "paused", runRuntime(t, path, "start").Components[0].State)
-	config["tls"].(map[string]any)["initialize_ca"] = false
-	writeConfig()
 	resumed := runRuntime(t, path, "resume")
 	require.True(t, resumed.Components[0].Ready)
 	require.NotEqual(t, started.Components[0].PID, resumed.Components[0].PID)

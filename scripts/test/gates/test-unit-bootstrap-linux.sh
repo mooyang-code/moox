@@ -26,11 +26,12 @@ required=[
     'TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether',
     'TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost',
     'TestBootstrapLinuxOfflineChildHoldsLockAndDiesWithParent',
+    'TestBootstrapLinuxProxyCAConsumesAuthorizationAndImportsTrustedLegacy',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):
         raise SystemExit('required bootstrap scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('bootstrap Linux gate must not skip or fail a scenario')
-print('bootstrap Linux gate passed: 5 required actual initialization/recovery/private-input scenarios, no compilation')
+print('bootstrap Linux gate passed: 6 required actual initialization/recovery/CA/private-input scenarios, no compilation')
 PY

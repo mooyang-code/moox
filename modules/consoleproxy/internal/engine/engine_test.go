@@ -44,7 +44,6 @@ func testConfig(t *testing.T, admin, web string) config.Config {
 	c.Health.Listen = net.JoinHostPort("127.0.0.1", strconv.Itoa(port(t)))
 	dir := t.TempDir()
 	c.TLS.StorageRoot, c.TLS.CABaseline, c.TLS.CAPublishDir = filepath.Join(dir, "data", "caddy", "caddy"), filepath.Join(dir, "data", "caddy", "internal-ca.sha256"), filepath.Join(dir, "certs", "caddy")
-	c.TLS.InitializeCA = true
 	c.Upstreams.Admin, c.Upstreams.Web = strings.TrimPrefix(admin, "http://"), strings.TrimPrefix(web, "http://")
 	c.Lifecycle.StartupTimeout = 10 * time.Second
 	c.Lifecycle.DrainTimeout = 250 * time.Millisecond
@@ -55,6 +54,11 @@ func testConfig(t *testing.T, admin, web string) config.Config {
 
 func start(t *testing.T, c config.Config) (*Engine, *http.Client, string) {
 	t.Helper()
+	if _, err := os.Stat(filepath.Join(caDir(c), "root.crt")); os.IsNotExist(err) {
+		if _, err := InitializeState(context.Background(), c, false); err != nil {
+			t.Fatal(err)
+		}
+	}
 	e, err := Start(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +136,10 @@ func TestStateCheckDoesNotProvisionOrWriteLegacyBaseline(t *testing.T) {
 	if err := os.Remove(c.TLS.CABaseline); err != nil {
 		t.Fatal(err)
 	}
-	got, err := CheckState(c)
+	if _, err := CheckState(c); err == nil {
+		t.Fatal("serving-state check accepted a missing persistent baseline")
+	}
+	got, err := CheckImportState(c)
 	if err != nil || got != want {
 		t.Fatalf("trusted legacy state failed read-only check: %v", err)
 	}
@@ -220,7 +227,6 @@ func TestHTTPSRoutesTrustAndCAContinuity(t *testing.T) {
 	if err := e.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	c.TLS.InitializeCA = false
 	// Reading lower-case colon-free fingerprints must not report a rotation.
 	if err := os.WriteFile(c.TLS.CABaseline, []byte(strings.ToLower(strings.ReplaceAll(string(before), ":", ""))), 0600); err != nil {
 		t.Fatal(err)
@@ -357,14 +363,12 @@ func TestStreamingAndWebSocketDrain(t *testing.T) {
 
 func TestFirstInstallRequiresExplicitStateDecision(t *testing.T) {
 	c := testConfig(t, "http://127.0.0.1:11000", "http://127.0.0.1:9528")
-	c.TLS.InitializeCA = false
 	if _, err := Start(context.Background(), c); err == nil {
 		t.Fatal("missing CA treated as first install")
 	}
 	if _, err := os.Stat(c.TLS.StorageRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("failed preflight changed state")
 	}
-	c.TLS.InitializeCA = true
 	if err := os.MkdirAll(caDir(c), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +379,7 @@ func TestFirstInstallRequiresExplicitStateDecision(t *testing.T) {
 
 func TestPublicOnlyStateRemainsWithoutInternalCA(t *testing.T) {
 	c := testConfig(t, "http://127.0.0.1:11000", "http://127.0.0.1:9528")
-	c.TLS.Mode, c.TLS.InitializeCA = "public", false
+	c.TLS.Mode = "public"
 	previous, err := prepareCA(c)
 	if err != nil || previous != nil {
 		t.Fatalf("public first install required an internal CA: %v", err)
@@ -399,6 +403,9 @@ func TestPublicOnlyStateRemainsWithoutInternalCA(t *testing.T) {
 
 func TestFailedStartupReleasesListenerAndOwnership(t *testing.T) {
 	c := testConfig(t, "http://127.0.0.1:11000", "http://127.0.0.1:9528")
+	if _, err := InitializeState(context.Background(), c, false); err != nil {
+		t.Fatal(err)
+	}
 	occupied, err := net.Listen("tcp", net.JoinHostPort(c.Public.Bind, strconv.Itoa(c.Public.Port)))
 	if err != nil {
 		t.Fatal(err)
@@ -410,13 +417,7 @@ func TestFailedStartupReleasesListenerAndOwnership(t *testing.T) {
 	if err := occupied.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// A rejected Load may have provisioned state but did not publish a trusted
-	// baseline. Retrying with fresh candidate state verifies ownership cleanup
-	// without treating that unfinished installation as a legacy CA import.
-	publicPort := c.Public.Port
-	c = testConfig(t, "http://127.0.0.1:11000", "http://127.0.0.1:9528")
-	c.Public.Port = publicPort
-	c.Public.Host = "retry-" + c.Public.Host
+	// A failed listener must release ownership without replacing the CA.
 	e, err := Start(context.Background(), c)
 	if err != nil {
 		t.Fatalf("failed startup leaked engine ownership: %v", err)

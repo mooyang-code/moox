@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 )
 
-func validateProxyPaths(prepared Prepared, upgrading bool) error {
+func validateProxyPaths(prepared Prepared) error {
 	root, err := fsutil.OpenPhysicalRoot(prepared.Directory, true)
 	if err != nil {
 		return err
@@ -33,16 +33,12 @@ func validateProxyPaths(prepared Prepared, upgrading bool) error {
 			StorageRoot  string `yaml:"storage_root"`
 			CABaseline   string `yaml:"ca_baseline"`
 			CAPublishDir string `yaml:"ca_publish_dir"`
-			InitializeCA bool   `yaml:"initialize_ca"`
 		} `yaml:"tls"`
 	}
 	if document.Decode(&fields) != nil {
 		return errors.New("proxy state configuration is invalid")
 	}
-	if upgrading && fields.TLS.InitializeCA {
-		return errors.New("proxy upgrades must disable first-install CA initialization")
-	}
-	for _, bound := range []struct{ value, directory string }{{fields.TLS.StorageRoot, "data"}, {fields.TLS.CABaseline, "data"}, {fields.TLS.CAPublishDir, "certs"}} {
+	for _, bound := range []struct{ value, path string }{{fields.TLS.StorageRoot, "data/caddy/caddy"}, {fields.TLS.CABaseline, "data/caddy/internal-ca.sha256"}, {fields.TLS.CAPublishDir, "certs/caddy"}} {
 		if bound.value == "" {
 			return errors.New("proxy state paths must be explicit")
 		}
@@ -50,9 +46,9 @@ func validateProxyPaths(prepared Prepared, upgrading bool) error {
 		if !filepath.IsAbs(resolved) {
 			resolved = filepath.Join(prepared.Directory, "console-proxy/config", resolved)
 		}
-		base := filepath.Join(prepared.Directory, "console-proxy", bound.directory)
-		if filepath.Clean(resolved) != base && !strings.HasPrefix(filepath.Clean(resolved), base+string(filepath.Separator)) {
-			return errors.New("proxy state paths must stay inside their copied component state")
+		base := filepath.Join(prepared.Directory, "console-proxy", bound.path)
+		if filepath.Clean(resolved) != base {
+			return errors.New("proxy state paths must use the canonical copied component layout")
 		}
 	}
 	return nil
@@ -70,24 +66,17 @@ func (b *boundedOutput) Write(raw []byte) (int, error) {
 func (b *boundedOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 func proxyState(ctx context.Context, prepared Prepared) (string, error) {
-	if err := validateProxyPaths(prepared, false); err != nil {
+	if err := validateProxyPaths(prepared); err != nil {
 		return "", err
 	}
-	command := exec.CommandContext(ctx, filepath.Join(prepared.Directory, "bin/moox-console-proxy"), "check-state", "--config", filepath.Join(prepared.Directory, "console-proxy/config/app.yaml"))
-	command.Dir = filepath.Join(prepared.Directory, "console-proxy")
-	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + command.Dir}
-	var output boundedOutput
-	command.Stdout, command.Stderr = &output, io.Discard
-	if err := command.Run(); err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		return "", errors.New("persisted proxy CA state failed validation")
+	raw, err := runProxyValidation(ctx, prepared.Directory, "check-state")
+	if err != nil {
+		return "", err
 	}
 	var result struct {
 		CA string `json:"ca_sha256"`
 	}
-	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&result) != nil || decoder.Decode(new(any)) != io.EOF {
 		return "", errors.New("proxy state checker returned invalid public metadata")
@@ -99,4 +88,19 @@ func proxyState(ctx context.Context, prepared Prepared) (string, error) {
 		}
 	}
 	return result.CA, nil
+}
+
+func runProxyValidation(ctx context.Context, directory, operation string) ([]byte, error) {
+	command := exec.CommandContext(ctx, filepath.Join(directory, "bin/moox-console-proxy"), operation, "--config", filepath.Join(directory, "console-proxy/config/app.yaml"))
+	command.Dir = filepath.Join(directory, "console-proxy")
+	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + command.Dir}
+	var output boundedOutput
+	command.Stdout, command.Stderr = &output, io.Discard
+	if err := command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("proxy offline validation failed; private output omitted")
+	}
+	return output.Bytes(), nil
 }

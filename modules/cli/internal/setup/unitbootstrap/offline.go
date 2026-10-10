@@ -18,7 +18,7 @@ type boundedOutput struct{ buffer bytes.Buffer }
 
 func (b *boundedOutput) Write(raw []byte) (int, error) {
 	if len(raw) > 128<<10-b.buffer.Len() {
-		return 0, errors.New("offline Admin output exceeds public metadata limit")
+		return 0, errors.New("offline operation output exceeds public metadata limit")
 	}
 	return b.buffer.Write(raw)
 }
@@ -81,7 +81,7 @@ func runOffline(ctx context.Context, command *exec.Cmd, master string, lock unit
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, errors.New("offline Admin operation failed; private child output omitted")
+		return nil, errors.New("offline operation failed; private child output omitted")
 	}
 	return stdout.buffer.Bytes(), nil
 }

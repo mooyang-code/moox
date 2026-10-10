@@ -10,7 +10,6 @@ tls:
   storage_root: ../data/caddy/caddy
   ca_baseline: ../data/caddy/internal-ca.sha256
   ca_publish_dir: ../certs/caddy
-  initialize_ca: false
 upstreams:
   admin: 127.0.0.1:11000
   web: 127.0.0.1:9528

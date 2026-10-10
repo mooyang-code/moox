@@ -60,6 +60,10 @@ func readCA(dir, name string) (*x509.Certificate, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	block, rest := pem.Decode(crt)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, nil, errors.New("persisted CA requires exactly one PEM certificate")
+	}
 	keyPath := filepath.Join(dir, name+".key")
 	info, err := os.Stat(keyPath)
 	if err != nil {
@@ -93,13 +97,17 @@ func caDir(c config.Config) string {
 // prepareCA is called before Caddy Load, so corrupt/missing existing state
 // cannot be silently replaced by Caddy's automatic CA creation.
 func prepareCA(c config.Config) (*x509.Certificate, error) {
-	return verifyCA(c, true)
+	cert, err := verifyCA(c, false)
+	if err == nil && cert != nil {
+		err = checkFingerprint(c.TLS.CABaseline, cert)
+	}
+	return cert, err
 }
 
 // CheckState validates persisted keys, certificates and the existing trust
 // baseline without creating files, issuing certificates or starting listeners.
 func CheckState(c config.Config) (string, error) {
-	cert, err := verifyCA(c, false)
+	cert, err := prepareCA(c)
 	if err != nil {
 		return "", err
 	}
@@ -108,6 +116,22 @@ func CheckState(c config.Config) (string, error) {
 			return "", errors.New("internal CA state is absent")
 		}
 		return "", nil
+	}
+	return strings.TrimSpace(fingerprint(cert)), nil
+}
+
+// CheckImportState requires the original published certificate and fingerprint
+// even when a copied baseline exists. It never writes the closed source tree.
+func CheckImportState(c config.Config) (string, error) {
+	cert, err := verifyCA(c, false)
+	if err != nil {
+		return "", err
+	}
+	if cert == nil {
+		return "", errors.New("trusted import requires existing CA state")
+	}
+	if err := checkPublishedCA(c, cert); err != nil {
+		return "", err
 	}
 	return strings.TrimSpace(fingerprint(cert)), nil
 }
@@ -122,8 +146,8 @@ func verifyCA(c config.Config, allowImport bool) (*x509.Certificate, error) {
 				return nil, errors.New("incomplete existing CA state; refusing automatic replacement")
 			}
 		}
-		if c.TLS.Mode == "internal" && !c.TLS.InitializeCA {
-			return nil, errors.New("CA is missing; only an explicitly confirmed first install may initialize_ca")
+		if c.TLS.Mode == "internal" {
+			return nil, errors.New("CA is missing; initialize or import state offline before serving")
 		}
 		return nil, nil
 	}
@@ -183,8 +207,8 @@ func checkPublishedCA(c config.Config, cert *x509.Certificate) error {
 	if err != nil {
 		return err
 	}
-	block, _ := pem.Decode(raw)
-	if block == nil || block.Type != "CERTIFICATE" || !bytes.Equal(block.Bytes, cert.Raw) {
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 || !bytes.Equal(block.Bytes, cert.Raw) {
 		return errors.New("published CA does not match persistent CA")
 	}
 	return checkFingerprint(filepath.Join(c.TLS.CAPublishDir, "root.sha256"), cert)
@@ -239,5 +263,13 @@ func atomicWrite(path string, data []byte, mode os.FileMode) (err error) {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	if err = os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

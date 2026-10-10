@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,18 +41,42 @@ func TestUnitActivationLinuxActualProxyDrainsAndPreservesCA(t *testing.T) {
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
 	require.NoError(t, listener.Close())
-	config := "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: " + strconv.Itoa(port) + "\n  http3: false\ntls:\n  mode: internal\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\n  initialize_ca: true\nupstreams:\n  admin: " + upstream.Listener.Addr().String() + "\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 3s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 10s\n"
+	config := "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: " + strconv.Itoa(port) + "\n  http3: false\ntls:\n  mode: internal\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: " + upstream.Listener.Addr().String() + "\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 3s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 10s\n"
 	override := filepath.Join(privateParent(t), "proxy.yaml")
 	require.NoError(t, os.WriteFile(override, []byte(config), 0o600))
 	options.Components = []string{"console-proxy", "web-host"}
 	options.Environment["web-host"]["MOOX_WEB_HOST_ADDR"] = "127.0.0.1:9528"
 	options.Environment["console-proxy"] = healthEnvironment()
 	options.Overrides = map[string]string{"console-proxy/config/app.yaml": override}
+	options.ReleaseID = "empty-proxy"
+	empty, err := prepareWithHelper(t, options)
+	require.NoError(t, err)
+	_, err = activationCommand(t, "activate", "--directory", empty.Directory, "--no-start")
+	require.Error(t, err, "even an inactive first release must carry valid offline CA state")
+	_, err = os.Lstat(filepath.Join(options.UnitRoot, "current"))
+	require.True(t, os.IsNotExist(err))
+	options.ReleaseID = "first-proxy"
 	first, err := prepareWithHelper(t, options)
 	require.NoError(t, err)
 	require.Equal(t, []string{"web-host", "console-proxy"}, first.Components)
 	cleanupActivation(t, first)
-	_, err = activationCommand(t, "activate", "--directory", first.Directory)
+	source := privateParent(t)
+	for _, name := range []string{"console-proxy/data", "console-proxy/certs"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(source, name), 0o700))
+	}
+	offlineConfig := strings.ReplaceAll(config, "../data/", filepath.Join(source, "console-proxy/data")+"/")
+	offlineConfig = strings.ReplaceAll(offlineConfig, "../certs/", filepath.Join(source, "console-proxy/certs")+"/")
+	configPath := filepath.Join(source, "proxy.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(offlineConfig), 0o600))
+	output, err := exec.CommandContext(t.Context(), filepath.Join(first.Directory, "bin/moox-console-proxy"), "initialize-state", "--config", configPath).CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	seedDirectory := filepath.Join(options.UnitRoot, "state-imports/proxy-first")
+	require.NoError(t, os.MkdirAll(seedDirectory, 0o700))
+	paths := []string{"console-proxy/certs", "console-proxy/data"}
+	require.NoError(t, CopyOfflineState(t.Context(), source, seedDirectory, paths))
+	seed, err := sealWithHelper(t, SealStateOptions{Directory: seedDirectory, ReleaseDirectory: first.Directory, Paths: paths})
+	require.NoError(t, err)
+	_, err = activationCommand(t, "activate", "--directory", first.Directory, "--state-seed", seed.Directory, "--state-seed-sha256", seed.SHA256)
 	require.NoError(t, err)
 	oldCA, err := proxyState(t.Context(), first)
 	require.NoError(t, err)
@@ -64,12 +89,10 @@ func TestUnitActivationLinuxActualProxyDrainsAndPreservesCA(t *testing.T) {
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	options.ReleaseID = "unsafe-initialize"
-	unsafe, err := prepareWithHelper(t, options)
-	require.NoError(t, err)
-	_, err = activationCommand(t, "activate", "--directory", unsafe.Directory)
-	require.Error(t, err)
+	require.NoError(t, os.WriteFile(override, []byte(strings.Replace(config, "mode: internal", "mode: internal\n  initialize_ca: true", 1)), 0o600))
+	_, err = prepareWithHelper(t, options)
+	require.Error(t, err, "service configuration must reject reusable initialization permission")
 	require.Equal(t, first.Directory, currentTarget(t, options.UnitRoot))
-	config = strings.ReplaceAll(config, "initialize_ca: true", "initialize_ca: false")
 	config = strings.ReplaceAll(config, "drain_timeout: 3s", "drain_timeout: 100ms")
 	config = strings.ReplaceAll(config, "engine_stop_timeout: 1s", "engine_stop_timeout: 100ms")
 	config = strings.ReplaceAll(config, "cleanup_margin: 1s", "cleanup_margin: 100ms")

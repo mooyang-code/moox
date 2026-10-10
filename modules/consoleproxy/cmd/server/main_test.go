@@ -36,12 +36,25 @@ func TestValidateDoesNotProvisionOrCreateState(t *testing.T) {
 	if out.String() != "45\n" {
 		t.Fatalf("unexpected script stop budget %q", out.String())
 	}
-	for _, args := range [][]string{{}, {"reload"}, {"serve", "extra"}, {"validate", "--config", path, "extra"}} {
+	for _, args := range [][]string{{}, {"reload"}, {"serve", "extra"}, {"validate", "--config", path, "extra"}, {"serve", "--import-existing"}, {"serve", "--for-import"}, {"initialize-state", "--for-import"}} {
 		if err := run(context.Background(), args, &out); err == nil {
 			t.Fatalf("accepted unsupported command %v", args)
 		}
 	}
 	if strings.Contains(out.String(), "private") {
 		t.Fatal("sensitive state included in command output")
+	}
+}
+
+func TestConfigurationCannotRetainCAInitializationPermission(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxy.yaml")
+	for _, value := range []string{"true", "false"} {
+		if err := os.WriteFile(path, []byte("tls:\n  initialize_ca: "+value+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := run(context.Background(), []string{"validate", "--config", path}, &out); err == nil || out.Len() != 0 {
+			t.Fatal("service configuration accepted a reusable CA generation permission")
+		}
 	}
 }

@@ -29,11 +29,19 @@ type Unit struct {
 }
 
 type Request struct {
-	Version        int                 `json:"version"`
-	DeploymentRoot string              `json:"deployment_root"`
-	Topology       hostbundle.Topology `json:"topology"`
-	Host           Unit                `json:"host"`
-	Control        Unit                `json:"control"`
+	Version        int                  `json:"version"`
+	DeploymentRoot string               `json:"deployment_root"`
+	Topology       hostbundle.Topology  `json:"topology"`
+	Host           Unit                 `json:"host"`
+	Control        Unit                 `json:"control"`
+	ProxyCA        ProxyCAAuthorization `json:"proxy_ca"`
+}
+
+// ProxyCAAuthorization is consumed outside release snapshots. ImportDirectory
+// names a normalized, closed snapshot containing console-proxy/data and certs.
+type ProxyCAAuthorization struct {
+	Create          bool   `json:"create"`
+	ImportDirectory string `json:"import_directory"`
 }
 
 func (Request) String() string     { return "MooXBootstrapRequest{private inputs omitted}" }
@@ -86,6 +94,16 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	if request.Version != 1 || request.Topology.Version != 1 {
 		return result, errors.New("bootstrap requires request and topology version 1")
 	}
+	if request.ProxyCA.Create && request.ProxyCA.ImportDirectory != "" {
+		return result, errors.New("proxy CA creation and trusted import are mutually exclusive")
+	}
+	if request.ProxyCA.ImportDirectory != "" {
+		root, err := fsutil.OpenPhysicalRoot(request.ProxyCA.ImportDirectory, true)
+		if err != nil {
+			return result, err
+		}
+		root.Close()
+	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return result, err
@@ -109,6 +127,9 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	// Host Agent needs EventBus before it can become ready on an empty host.
 	if !slices.Contains(result.components, "admin") || !slices.Contains(result.components, "eventbus") {
 		return result, errors.New("control bootstrap requires Admin and EventBus on the control host")
+	}
+	if !slices.Contains(result.components, "console-proxy") && (request.ProxyCA.Create || request.ProxyCA.ImportDirectory != "") {
+		return result, errors.New("proxy CA authorization requires a selected console-proxy")
 	}
 	if request.Host.UnitRoot == request.Control.UnitRoot {
 		return result, errors.New("bootstrap requires separate host and control units")
