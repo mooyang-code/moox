@@ -25,6 +25,7 @@ const (
 	reasonNotSelected   = "not_selected"
 	reasonNotRebalanced = "not_rebalanced"
 	reasonNotExpected   = "not_expected"
+	reasonPeriodSkipped = "period_skipped"
 )
 
 // explanation 收集一条规则的解释明细，保证每个标的只有一条。

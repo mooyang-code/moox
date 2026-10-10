@@ -52,6 +52,9 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		}
 	}
 	if skipReason != "" {
+		for i := range program.Rules {
+			decision.Items = append(decision.Items, partitions[i].unevaluated(program.Rules[i].Rule.ID)...)
+		}
 		return skipped(decision, previous, skipReason, skipNote)
 	}
 	// 第二遍：逐规则求值。

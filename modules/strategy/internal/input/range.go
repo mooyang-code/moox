@@ -268,6 +268,9 @@ type RangeLoader struct {
 	View     ViewInfo
 	Subjects []Subject
 	Columns  []string
+	// ExpectedRevision 非零时固定读取的索引修订号（取自同一段主数据读取返回的修订号）：修订号变化时不退避重读，
+	// 直接返回 *RevisionChangedError，由调用方连同主数据一起重读，保证同一段的两次读取来自同一修订号。
+	ExpectedRevision uint64
 	// Abort 在每次退避重读之前调用，返回非空错误时放弃读取并原样返回它（例如回放已被取消）；可以为空。
 	Abort func(context.Context) error
 }
@@ -277,7 +280,17 @@ type RangeLoader struct {
 type RangeRows struct {
 	Bars      map[int64]map[string]Row
 	Ambiguous map[int64]map[string]string
+	// Revision 是这段读取时服务端返回的索引修订号，供同一段的其他读取固定到同一修订号。
+	Revision uint64
 }
+
+// RevisionChangedError 表示固定了修订号的读取遇到修订号变化：这段读取与它所依赖的主数据已不是同一修订号。
+type RevisionChangedError struct{ raw error }
+
+func (e *RevisionChangedError) Error() string {
+	return "View 的索引修订号在两次读取之间发生了变化，需要整体重读"
+}
+func (e *RevisionChangedError) Unwrap() error { return e.raw }
 
 // Load 读取 [start, end) 内全部标的的行。读取期间只是有新的写入（修订号变化、代次不变）时退避后重读，直到
 // rangeStaleBudget 用完；活动索引换了一代返回 *IndexChangedError；ctx 结束返回 ctx 的错误。
@@ -285,14 +298,16 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 	transportRetries, staleRetries := 0, 0
 	deadline := time.Now().Add(rangeStaleBudget)
 	for {
-		rows, _, err := l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID})
+		rows, revision, err := l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
 		if err == nil {
 			// A/B 槽位名在重建时复用，按槽位名固定的读取在两段之间重建两次（A→B→A）后会直接成功：读完还要确认代次没变。
 			// 代次不会重复，读完仍是同一代，说明这段读取期间一直是它。
 			if err := l.checkGeneration(ctx); err != nil {
 				return RangeRows{}, err
 			}
-			return groupRange(rows), nil
+			grouped := groupRange(rows)
+			grouped.Revision = revision
+			return grouped, nil
 		}
 		// 长回放有数百次分段读取：一次传输失败不应让整个回放失败，退避后重读同一段。
 		var transportErr *TransportError
@@ -308,6 +323,9 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 		}
 		if err := l.checkGeneration(ctx); err != nil {
 			return RangeRows{}, err
+		}
+		if l.ExpectedRevision != 0 {
+			return RangeRows{}, &RevisionChangedError{raw: err}
 		}
 		// 同一代索引，只是读取期间有新的写入：写入集中在 bar 边界，立即重读多半还会撞上同一批写入，退避（带抖动）后重读。
 		wait := staleBackoff(staleRetries)

@@ -27,7 +27,10 @@ type fakeClient struct {
 	ambiguous   map[int]bool            // 小时 → 标的 A 在该小时有两个序列
 	panicOnRows bool
 	queries     int
-	onQuery     func(query input.Query)
+	// revision 是服务端当前的索引修订号（零按 1）；bumpBeforeProbe 为真时，第一次年龄探针读取之前修订号升到 2（模拟两次读取之间的原地补算）。
+	revision        uint64
+	bumpBeforeProbe bool
+	onQuery         func(query input.Query)
 	// failQuery 返回非空错误时本次读取失败；unknownCoverage 模拟索引统计暂时未知。
 	failQuery       func(query input.Query) error
 	unknownCoverage bool
@@ -145,6 +148,16 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 	if query.ExpectedIndexID != "" && query.ExpectedIndexID != f.currentIndex() {
 		return nil, 0, input.ErrStale
 	}
+	if f.bumpBeforeProbe && len(query.Columns) == 1 && query.Columns[0] == "close" {
+		f.bumpBeforeProbe, f.revision = false, 2
+	}
+	served := f.revision
+	if served == 0 {
+		served = 1
+	}
+	if query.ExpectedRevision != 0 && query.ExpectedRevision != served {
+		return nil, 0, input.ErrStale
+	}
 	if f.onQuery != nil {
 		f.onQuery(query)
 	}
@@ -170,7 +183,7 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 			}
 		}
 	}
-	return rows, 1, nil
+	return rows, served, nil
 }
 
 func (f *fakeClient) GetFactor(context.Context, string) (input.FactorInfo, error) {
@@ -635,5 +648,62 @@ func TestReplayRunsWithUnknownCoverageAtExecution(t *testing.T) {
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 4 {
 		t.Fatalf("覆盖范围暂时未知时应按保存的区间执行：%+v", done)
+	}
+}
+
+// D1：终态写入遇到临时错误（数据库暂时只读）时要退避重试，恢复后任务落到终态，不能永久停在 running。
+func TestReplayFinishRetriesTransientWriteErrors(t *testing.T) {
+	repo := openStore(t)
+	job := startReplay(t, repo, "p1", replayDSL, 4)
+	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+		t.Fatal(err)
+	}
+	restored := make(chan struct{})
+	go func() {
+		defer close(restored)
+		time.Sleep(60 * time.Millisecond)
+		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+			t.Error(err)
+		}
+	}()
+	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot", panicOnRows: true}, FinishRetryDelay: 20 * time.Millisecond}
+	runner.Execute(context.Background(), job)
+	<-restored
+	failed, err := repo.GetReplay(context.Background(), "p1")
+	if err != nil || failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "执行异常") {
+		t.Fatalf("终态写入应在数据库恢复后成功：%+v err=%v", failed, err)
+	}
+}
+
+// D2：年龄探针固定到主数据读到的修订号。两次读取之间同一代索引发生原地补算时，丢弃整段后连同主数据一起重读，
+// 不能让主数据来自旧修订号、年龄集合来自新修订号。
+func TestReplayAgeProbeSharesRevisionWithMainRead(t *testing.T) {
+	repo := openStore(t)
+	client := &fakeClient{marketType: "spot", bumpBeforeProbe: true}
+	probeRevisions, mainRevisions := []uint64{}, []uint64{}
+	client.onQuery = func(query input.Query) {
+		if len(query.Columns) == 1 && query.Columns[0] == "close" {
+			probeRevisions = append(probeRevisions, query.ExpectedRevision)
+		} else {
+			mainRevisions = append(mainRevisions, query.ExpectedRevision)
+		}
+	}
+	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
+	job := startReplay(t, repo, "p1", aged, 4)
+	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v", done)
+	}
+	if len(probeRevisions) == 0 {
+		t.Fatal("应有年龄探针读取")
+	}
+	for _, revision := range probeRevisions {
+		if revision == 0 {
+			t.Fatalf("年龄探针必须固定修订号：%v", probeRevisions)
+		}
+	}
+	// 修订号在第一次探针前升到 2：第一次主读取读到 1，探针固定 1 后被拒；整段重读，第二次主读取读到 2，探针固定 2。
+	if len(mainRevisions) < 2 || probeRevisions[len(probeRevisions)-1] != 2 {
+		t.Fatalf("应整段重读到新修订号：main=%v probe=%v", mainRevisions, probeRevisions)
 	}
 }

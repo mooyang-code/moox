@@ -71,6 +71,10 @@ func missingReason(id string, row Row, columns, previousColumns []string, failed
 		}
 	}
 	for _, column := range previousColumns {
+		// 经 bars[-1] 引用的因子同样属于该规则引用的因子：本期上游对该标的失败，整条规则对它视为缺数。
+		if reason, failedSubject := failed[column][id]; failedSubject {
+			return reason + ":bars[-1]." + column
+		}
 		if _, ok := row.Previous[column]; !ok {
 			return "missing:bars[-1]." + column
 		}
@@ -89,6 +93,15 @@ func (s ruleSets) items(ruleID string) []Item {
 		if reason, missing := s.missing[id]; missing {
 			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageMissing, Reason: reason})
 		}
+	}
+	return items
+}
+
+// unevaluated 为整期守门跳过时尚未求值的可用标的生成明细，使每条规则的解释仍覆盖全部 E(r)。
+func (s ruleSets) unevaluated(ruleID string) []Item {
+	items := make([]Item, 0, len(s.available))
+	for _, id := range s.available {
+		items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageIdle, Reason: reasonPeriodSkipped})
 	}
 	return items
 }
