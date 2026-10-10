@@ -1356,6 +1356,15 @@ func (s *Service) activateViewBuild(ctx context.Context, opts MaintenanceOptions
 		return activationRetry{cause: errViewBuildFailed}
 	}
 	runtime.status = "ready"
+	if runtime.active != "" && runtime.active != indexID {
+		// 激活提交之后进程随时可能退出：新索引的围栏必须在 Metadata 切换活动索引之前就已经落盘，否则重启后活动索引已经是
+		// 新索引，落盘的围栏却只有旧索引的，要求旧位置的周期事件会一直等下去（行不再写入时永远不发布）。落盘失败时保持旧索引，重试。
+		s.inheritAppliedFence(runtime.active, indexID)
+		if err := s.flushAppliedFence(); err != nil {
+			runtime.mu.Unlock()
+			return activationRetry{cause: fmt.Errorf("激活前持久化写入围栏失败：%w", err)}
+		}
+	}
 	activated, callErr := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, OwnerId: opts.OwnerID,
 	})
