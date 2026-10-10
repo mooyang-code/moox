@@ -227,7 +227,7 @@ func upstreamError(route gatewayroute.Route, method string, err error) error {
 	var frameErr *errs.Error
 	if errors.As(err, &frameErr) && frameErr.IsTimeout(errs.ErrorTypeFramework) {
 		return errs.NewFrameError(errs.RetClientTimeout, fmt.Sprintf(
-			"主机网关上游 %s/%s 在 %dms 内没有响应: %s", route.ServicePath, method, route.TimeoutMS, frameErr.Msg))
+			"主机网关上游 %s/%s 超时没有响应（路由上限 %dms，调用方设置了更短期限时以其为准）: %s", route.ServicePath, method, route.TimeoutMS, frameErr.Msg))
 	}
 	return err
 }
