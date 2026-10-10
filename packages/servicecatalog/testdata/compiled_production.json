@@ -968,10 +968,15 @@
           "max_body_bytes": 33554432,
           "allowed_methods": [
             "AddTagMembers",
+            "CreateDevice",
+            "DeleteDataSource",
             "DeleteSpace",
             "DeleteTag",
+            "GetDevice",
+            "ListDevices",
             "RemoveTagMembers",
             "SetTagMemberStatus",
+            "UpdateDevice",
             "UpsertTag"
           ],
           "allowed_callers": [

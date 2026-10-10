@@ -272,6 +272,8 @@ func renderMonitor(r *renderer, c *Component) error {
 	c.SecretEnv = append(c.SecretEnv, secretStorageInternalAuth, secretNotification)
 	c.SharedSecrets = append(c.SharedSecrets, secretStorageInternalAuth)
 	c.EventBusFiles = append(c.EventBusFiles, "monitor-observability.yaml", eventBusCA)
+	// 就绪要求 Storage 里已有 mooxsys 空间和监控数据集：空环境里要等 setup init 之后才能就绪。
+	c.NeedsMetadata = true
 	db := r.dataPath("monitor", "monitor.db")
 	policy := r.currentPath("monitor", "config", "dataset-health-policy.yaml")
 	// 策略文件和它的校验和一起交给 Monitor：校验和不一致或缺失时 Monitor 拒绝启动，防止策略被悄悄改动。
@@ -336,6 +338,12 @@ func renderCollector(r *renderer, c *Component) error {
 	if err := r.copyTree("modules/collector/configs/sources/market", "collector/config/sources/market"); err != nil {
 		return err
 	}
+	// A 股各数据源（sina、eastmoney 等）的接口配置：单独一个目录（其中的 binance.yaml 与上面的加密货币绑定同名，不能混放），
+	// 用环境变量告诉 Collector。
+	if err := r.copyTree("modules/collector/configs/scf/stockcn/sources/market", "collector/config/sources/stockcn"); err != nil {
+		return err
+	}
+	c.Env = append(c.Env, "MOOX_STOCK_CN_SOURCE_CONFIG_DIR="+r.currentPath("collector", "config", "sources", "stockcn"))
 	raw, err := r.readRepositoryFile("modules/collector/config/app.yaml")
 	if err != nil {
 		return err

@@ -124,9 +124,10 @@ func (p Plan) ComponentIDs() []string {
 // startOrder 是组件在一台主机上的启动顺序：消息总线和管理后台先于主机网关（control 的主机网关直连本机的网关控制），
 // 主机网关先于其他组件（它们经主机网关调用别的组件），存储按数据节点、主服务、视图的顺序，控制台代理最后。
 var startOrder = []string{
-	"eventbus", "admin", "host-gateway", "host-agent", "web-host", "monitor",
+	"eventbus", "admin", "host-gateway", "host-agent", "web-host",
 	"storage-node", "storage-primary", "storage-view", "access", "egress-proxy",
-	"cloudnode", "collector", "factor-mgr", "strategy", "trade", "archive", "console-proxy",
+	// Monitor 启动时要从 Storage 读被监控的标签，所以排在存储之后。
+	"monitor", "cloudnode", "collector", "factor-mgr", "strategy", "trade", "archive", "console-proxy",
 }
 
 // Render 渲染一台主机的发布内容：每台主机自动部署的主机组件，加上部署表中的业务组件。

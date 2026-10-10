@@ -372,6 +372,9 @@ components:
                       UpdateFieldGroup, CreateField, UpdateField, BatchUpdateFields, DeleteFieldGroup,
                       UpsertDatasetColumn, UpdateDataNode, DeleteDataNode]
             callers: [console, collector, factor-mgr, moox-cli, storage-view]
+          # 设备和数据源删除：管理台与 moox-cli 使用（metadata apply 要读写设备）。
+          - methods: [CreateDevice, UpdateDevice, GetDevice, ListDevices, DeleteDataSource]
+            callers: [console, moox-cli]
           # 归档文件登记只属于归档服务。
           - methods: [RegisterArchiveFile]
             callers: [console, archive, moox-cli]
