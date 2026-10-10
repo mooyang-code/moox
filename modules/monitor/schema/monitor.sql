@@ -60,6 +60,20 @@ CREATE INDEX IF NOT EXISTS idx_monitor_results_recent
 ON t_monitor_check_results (c_space_id, c_check_id, c_checked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at ON t_monitor_check_results (c_checked_at);
 
+-- Non-secret gateway status and durable route convergence deadlines.
+CREATE TABLE IF NOT EXISTS t_monitor_gateway_observations (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_host_enabled_at DATETIME NOT NULL,
+    c_first_observed_at DATETIME NOT NULL,
+    c_observed_at DATETIME,
+    c_last_attempt_at DATETIME NOT NULL,
+    c_status_json TEXT NOT NULL DEFAULT '',
+    c_expected_hash TEXT NOT NULL DEFAULT '',
+    c_applied_hash TEXT NOT NULL DEFAULT '',
+    c_hash_mismatch_since DATETIME,
+    c_read_error TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_agent_id TEXT PRIMARY KEY,
     c_hostname TEXT NOT NULL,

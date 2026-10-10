@@ -199,6 +199,9 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, snapshot.Placements, 1)
 	require.Equal(t, "control.example.test", snapshot.Hosts[0].GetAddress())
+	gatewayStatus, err := source.GatewayStatus(t.Context(), "control")
+	require.NoError(t, err)
+	require.Equal(t, "control-instance", gatewayStatus.GetInstanceId())
 	var forbidden adminpb.SetPlacementStatusRsp
 	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetPlacementStatus", &adminpb.SetPlacementStatusReq{}, &forbidden))
 	wire.mu.Lock()
@@ -206,7 +209,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	wire.mu.Unlock()
 	require.Equal(t, 2, reads)
 	require.Equal(t, 1, writes)
-	require.Equal(t, 7, nonces)
+	require.Equal(t, 8, nonces)
 	require.GreaterOrEqual(t, refreshes, 2)
 	_, err = runtime.StorageGateway.GetSpace(t.Context(), &storagepb.GetSpaceReq{SpaceId: "mooxsys"}, client.WithTarget("ip://192.0.2.99:20200"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
@@ -233,6 +236,13 @@ func (w monitorSysDeployWire) GetCatalog(ctx context.Context, req *adminpb.GetCa
 	raw := servicecatalog.EmbeddedYAML()
 	hash := sha256.Sum256(raw)
 	return &adminpb.GetCatalogRsp{RetInfo: &adminpb.RetInfo{}, CatalogYaml: string(raw), Sha256: hex.EncodeToString(hash[:])}, nil
+}
+
+func (w monitorSysDeployWire) GetHostRoutes(ctx context.Context, req *adminpb.GetHostRoutesReq) (*adminpb.GetHostRoutesRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "GetHostRoutes", req); err != nil {
+		return nil, err
+	}
+	return &adminpb.GetHostRoutesRsp{RetInfo: &adminpb.RetInfo{}, HostId: req.GetHostId(), GatewayStatus: &adminpb.HostGatewayRuntimeStatus{InstanceId: "control-instance"}}, nil
 }
 func (w monitorSysDeployWire) ListHosts(ctx context.Context, req *adminpb.ListDeploymentHostsReq) (*adminpb.ListDeploymentHostsRsp, error) {
 	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListHosts", req); err != nil {

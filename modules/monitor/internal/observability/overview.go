@@ -60,12 +60,14 @@ type Overview struct {
 	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
+	GatewaySignals []GatewaySignal
 }
 
 type Builder struct {
 	Metrics                    *monmetrics.QueryService
 	Hosts                      *hostmetrics.Store
 	Checks                     *store.CheckRepository
+	Gateways                   *store.GatewayRepository
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
 	BalanceDifferenceThreshold float64
@@ -121,6 +123,9 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, delivery...)
+	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
+		return Overview{}, err
+	}
 	sortOverview(&out)
 	return out, nil
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -15,13 +16,15 @@ import (
 )
 
 type Syncer struct {
-	checks *store.CheckRepository
-	source Source
-	https  map[string]domain.HTTPSConfig
+	checks   *store.CheckRepository
+	source   Source
+	https    map[string]domain.HTTPSConfig
+	gateways *store.GatewayRepository
+	now      func() time.Time
 }
 
-func NewSyncer(checks *store.CheckRepository, source Source, https map[string]domain.HTTPSConfig) *Syncer {
-	return &Syncer{checks: checks, source: source, https: https}
+func NewSyncer(checks *store.CheckRepository, source Source, https map[string]domain.HTTPSConfig, gateways *store.GatewayRepository) *Syncer {
+	return &Syncer{checks: checks, source: source, https: https, gateways: gateways, now: time.Now}
 }
 
 func CheckID(hostID, componentID string) string { return "placement:" + hostID + ":" + componentID }
@@ -38,7 +41,11 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return s.checks.ReconcilePlacements(ctx, checks)
+	count, err := s.checks.ReconcilePlacements(ctx, checks)
+	if err != nil {
+		return count, err
+	}
+	return count, s.syncGateways(ctx, snapshot)
 }
 
 // Checks validates the complete discovery result before any database mutation.

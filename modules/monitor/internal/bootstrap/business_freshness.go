@@ -16,8 +16,8 @@ import (
 )
 
 type businessFreshnessItem struct {
-	spaceID, checkID, name, reason, diagnostic string
-	success                                    bool
+	spaceID, checkID, name, reason, diagnostic, rawError string
+	success                                              bool
 }
 
 func unixSeconds(value time.Time) float64 {
@@ -52,6 +52,17 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
+		frozenGateway := make(map[string]bool)
+		for _, signal := range overview.GatewaySignals {
+			checkID := "gateway:" + signal.HostID + ":" + signal.Kind
+			key := monmetrics.InternalMetricSpaceID + "\x00" + checkID
+			if signal.Status == "unknown" {
+				frozenGateway[key] = true
+				continue
+			}
+			names := map[string]string{"heartbeat": "网关心跳", "instance_conflict": "网关实例", "route_sync": "网关路由同步"}
+			items[key] = businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: checkID, name: names[signal.Kind] + "（" + signal.HostID + "）", success: signal.Status == "healthy", reason: signal.Reason, rawError: signal.RawError}
+		}
 		klineEvaluationRan := len(klineEvaluators) == 0 || klineEvaluators[0] == nil
 		klineEvaluated := make(map[string]struct{})
 		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil &&
@@ -251,6 +262,17 @@ func buildBusinessFreshnessReporterWithInterval(
 				continue
 			}
 			key := check.SpaceID + "\x00" + check.CheckID
+			if frozenGateway[key] {
+				continue
+			}
+			if strings.HasPrefix(check.CheckID, "gateway:") {
+				if _, expected := items[key]; !expected {
+					if err := disableCheckAndDeleteRules(ctx, repositories, &check); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if _, frozen := suppressed[key]; frozen {
 				// Suppression avoids duplicating a producer-stale signal, but the
 				// old business check still needs a successful result so its alert
@@ -278,8 +300,15 @@ func buildBusinessFreshnessReporterWithInterval(
 			switch {
 			case err == nil:
 				if !check.Enabled {
-					delete(items, key)
-					continue
+					if strings.HasPrefix(item.checkID, "gateway:") {
+						check.Enabled = true
+						if err := repositories.Checks.Update(ctx, check); err != nil {
+							return err
+						}
+					} else {
+						delete(items, key)
+						continue
+					}
 				}
 				if item.name != "" && check.Name != item.name {
 					check.Name = item.name
@@ -329,7 +358,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				ResultID: fmt.Sprintf("%s-%d", item.checkID, now.UnixNano()),
 				SpaceID:  item.spaceID, CheckID: item.checkID, InstanceID: "monitor",
 				Success: item.success, Connected: item.success, Status: status,
-				ErrorMessage: item.reason, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
+				ErrorMessage: item.reason, RawError: item.rawError, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
 			}
 			inserted, err := repositories.Results.InsertIfAbsent(ctx, &result)
 			if err != nil {

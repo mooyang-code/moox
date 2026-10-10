@@ -130,5 +130,8 @@ func (s *ClientSource) GatewayStatus(ctx context.Context, hostID string) (*admin
 	if err := responseError(response.GetRetInfo()); err != nil {
 		return nil, err
 	}
+	if response.GetHostId() != hostID {
+		return nil, fmt.Errorf("gateway status host does not match %s", hostID)
+	}
 	return response.GetGatewayStatus(), nil
 }

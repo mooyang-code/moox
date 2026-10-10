@@ -73,7 +73,7 @@ func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	source := &memorySource{snapshot: testSnapshot(t)}
-	syncer := NewSyncer(repos.Checks, source, testHTTPS())
+	syncer := NewSyncer(repos.Checks, source, testHTTPS(), nil)
 	_, err = syncer.Sync(t.Context())
 	require.NoError(t, err)
 	id := CheckID("control", "console-proxy")
@@ -142,7 +142,7 @@ func TestSyncRollsBackAllDefinitionsOnOwnershipCollision(t *testing.T) {
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: CheckID("storage", "storage-primary"), Source: domain.CheckSourceObservability}))
-	syncer := NewSyncer(repos.Checks, &memorySource{snapshot: testSnapshot(t)}, testHTTPS())
+	syncer := NewSyncer(repos.Checks, &memorySource{snapshot: testSnapshot(t)}, testHTTPS(), nil)
 	count, err := syncer.Sync(t.Context())
 	require.ErrorContains(t, err, "collides")
 	require.Zero(t, count)
