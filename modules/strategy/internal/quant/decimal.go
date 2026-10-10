@@ -2,8 +2,10 @@ package quant
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -11,12 +13,54 @@ const scaleDigits = 18
 
 var decimalPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
-var ErrInvalidDecimal = errors.New("strategy: invalid decimal")
+var ErrInvalidDecimal = errors.New("无效的定点数")
 
 var scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDigits), nil)
 
 type Decimal struct {
 	units *big.Int
+}
+
+// literalPattern 是 DSL 数字字面量允许的写法：可选符号、整数或小数（可省略整数部分）、可选指数（第 3 组）。
+var literalPattern = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE]([+-]?\d+))?$`)
+
+// DSL 数字字面量的量级限制：权重、杠杆等取值远小于这个范围；不加限制时 1e999999 会展开成百万位整数拖垮进程。
+const (
+	maxLiteralLength        = 64
+	maxLiteralExponent      = 30
+	maxLiteralIntegerDigits = 9
+)
+
+var maxLiteralUnits = new(big.Int).Mul(new(big.Int).Exp(big.NewInt(10), big.NewInt(maxLiteralIntegerDigits), nil), scale)
+
+// ParseLiteral 解析 DSL 中的数字字面量：除 Parse 接受的写法外，还接受 YAML 合法的 .5、+0.5、2e-1 等；
+// 精度不能超过定点小数位数，绝对值必须小于 10^9。
+func ParseLiteral(raw string) (Decimal, error) {
+	raw = strings.TrimSpace(raw)
+	if len(raw) > maxLiteralLength {
+		return Decimal{}, fmt.Errorf("%w：数字写法不能超过 %d 个字符", ErrInvalidDecimal, maxLiteralLength)
+	}
+	match := literalPattern.FindStringSubmatch(raw)
+	if match == nil {
+		return Decimal{}, ErrInvalidDecimal
+	}
+	if exponent := match[3]; exponent != "" {
+		if value, err := strconv.Atoi(exponent); err != nil || value > maxLiteralExponent || value < -maxLiteralExponent {
+			return Decimal{}, fmt.Errorf("%w：指数的绝对值不能超过 %d", ErrInvalidDecimal, maxLiteralExponent)
+		}
+	}
+	value, ok := new(big.Rat).SetString(raw)
+	if !ok {
+		return Decimal{}, ErrInvalidDecimal
+	}
+	units := value.Mul(value, new(big.Rat).SetInt(scale))
+	if !units.IsInt() {
+		return Decimal{}, fmt.Errorf("%w：小数位数不能超过 %d 位", ErrInvalidDecimal, scaleDigits)
+	}
+	if new(big.Int).Abs(units.Num()).Cmp(maxLiteralUnits) >= 0 {
+		return Decimal{}, fmt.Errorf("%w：绝对值必须小于 10^%d", ErrInvalidDecimal, maxLiteralIntegerDigits)
+	}
+	return Decimal{units: new(big.Int).Set(units.Num())}, nil
 }
 
 func Parse(raw string) (Decimal, error) {
@@ -77,16 +121,14 @@ func (d Decimal) Sub(other Decimal) Decimal {
 	return Decimal{units: new(big.Int).Sub(d.normalized(), other.normalized())}
 }
 
-// Mul multiplies two fixed-scale decimals and truncates the result back to the
-// strategy scale. All operands are copied, so callers can safely reuse them.
+// Mul 计算两个定点数的乘积并截断回策略的小数位数；操作数都会被复制，调用方可以安全复用。
 func (d Decimal) Mul(other Decimal) Decimal {
 	product := new(big.Int).Mul(d.normalized(), other.normalized())
 	product.Quo(product, scale)
 	return Decimal{units: product}
 }
 
-// Div divides two fixed-scale decimals and truncates toward zero. A zero
-// divisor returns zero; callers that need to reject it should check first.
+// Div 计算两个定点数的商并向零截断；除数为 0 时返回 0，需要拒绝时由调用方先检查。
 func (d Decimal) Div(other Decimal) Decimal {
 	divisor := other.normalized()
 	if divisor.Sign() == 0 {
@@ -124,6 +166,88 @@ func (d Decimal) String() string {
 	result := whole.String() + "." + fraction
 	if negative {
 		return "-" + result
+	}
+	return result
+}
+
+// TruncateTo 向零截断到 places 位小数（0 到 scaleDigits）：绝对值只会变小。目标权重用它保存精度规范：截断不会让权重之和、
+// 杠杆、单标的上限等约束从满足变成不满足，多出来的零头留作现金。
+func (d Decimal) TruncateTo(places int) Decimal {
+	step := d.placeStep(places)
+	if step == nil {
+		return d
+	}
+	units := d.normalized()
+	return Decimal{units: new(big.Int).Mul(new(big.Int).Quo(units, step), step)}
+}
+
+// RoundTo 四舍五入（远离零）到 places 位小数，用于不参与约束的展示量（例如换手）。
+func (d Decimal) RoundTo(places int) Decimal {
+	step := d.placeStep(places)
+	if step == nil {
+		return d
+	}
+	units := d.normalized()
+	half := new(big.Int).Rsh(step, 1)
+	rounded := new(big.Int).Abs(units)
+	rounded.Add(rounded, half)
+	rounded.Quo(rounded, step)
+	rounded.Mul(rounded, step)
+	if units.Sign() < 0 {
+		rounded.Neg(rounded)
+	}
+	return Decimal{units: rounded}
+}
+
+// placeStep 返回 places 位小数对应的最小单位（以内部定点单位计）；places 超出 0..scaleDigits 时返回 nil 表示不处理。
+func (d Decimal) placeStep(places int) *big.Int {
+	if places < 0 || places >= scaleDigits {
+		return nil
+	}
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDigits-places)), nil)
+}
+
+// Rat 返回精确的有理数值，供需要连续多步运算而不想逐步截断的调用方使用。
+func (d Decimal) Rat() *big.Rat { return new(big.Rat).SetFrac(d.normalized(), scale) }
+
+// FromRat 把有理数向零截断到定点精度。
+func FromRat(value *big.Rat) Decimal {
+	units := new(big.Int).Mul(value.Num(), scale)
+	units.Quo(units, value.Denom())
+	return Decimal{units: units}
+}
+
+// DivideProportional 按整数份数 parts 把 total 分给 orderedKeys：每份先向零取整，剩下的最小单位按顺序逐个补给前面的键，
+// 所以各份之和恰好等于 total（不会因为逐份截断而少掉零头）。parts 与 orderedKeys 等长且为正数。
+func DivideProportional(total Decimal, orderedKeys []string, parts []int64) map[string]Decimal {
+	result := make(map[string]Decimal, len(orderedKeys))
+	if len(orderedKeys) == 0 || len(parts) != len(orderedKeys) {
+		return result
+	}
+	sum := new(big.Int)
+	for _, part := range parts {
+		sum.Add(sum, big.NewInt(part))
+	}
+	if sum.Sign() <= 0 {
+		return result
+	}
+	totalUnits := total.normalized()
+	assigned := new(big.Int)
+	shares := make([]*big.Int, len(orderedKeys))
+	for i, part := range parts {
+		share := new(big.Int).Mul(totalUnits, big.NewInt(part))
+		share.Quo(share, sum)
+		shares[i] = share
+		assigned.Add(assigned, share)
+	}
+	leftover := new(big.Int).Sub(totalUnits, assigned)
+	one := big.NewInt(1)
+	for i := 0; leftover.Sign() > 0 && i < len(shares); i++ {
+		shares[i].Add(shares[i], one)
+		leftover.Sub(leftover, one)
+	}
+	for i, key := range orderedKeys {
+		result[key] = Decimal{units: shares[i]}
 	}
 	return result
 }

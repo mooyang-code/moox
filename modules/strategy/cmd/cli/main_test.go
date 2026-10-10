@@ -1,40 +1,50 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestValidateDSL(t *testing.T) {
+func writeDSL(t *testing.T, content string) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "strategy.yaml")
-	if err := os.WriteFile(path, []byte(`name: momentum
-triggers: {event: {name: ViewDataReady}}
-data: {bar: 1h, calendar: crypto_24x7}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestValidateDSL(t *testing.T) {
+	path := writeDSL(t, `name: momentum
 rules:
-  main: {pool: [BTC-USDT-SPOT], score: close, select: {top: 1}, weight: 1}
-`), 0o600); err != nil {
+  - id: main
+    type: rank
+    score: "rank(bias_q_20)"
+    select: {top: 1}
+    weight: {total: 1}
+`)
+	var out, errOut bytes.Buffer
+	if err := runCLI([]string{"validate", path}, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
-	out, errOut := mustTempFiles(t)
-	if err := runCLI([]string{"validate", "--space-id", "space-1", path}, out, errOut); err != nil {
-		t.Fatal(err)
-	}
-	if raw, err := os.ReadFile(out.Name()); err != nil || !strings.Contains(string(raw), "name=momentum") || strings.Contains(string(raw), "hash=") {
-		t.Fatalf("validate output = %s, err=%v", raw, err)
+	text := out.String()
+	for _, want := range []string{"name=momentum", "dsl_hash=sha256:", "main(rank)", "bias_q_20"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("输出缺少 %q：%s", want, text)
+		}
 	}
 }
 
-func mustTempFiles(t *testing.T) (*os.File, *os.File) {
-	t.Helper()
-	out, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatal(err)
+func TestValidateRejectsInvalidDSL(t *testing.T) {
+	path := writeDSL(t, "name: broken\nrules: []\nunknown: 1\n")
+	var out, errOut bytes.Buffer
+	if err := runCLI([]string{"validate", path}, &out, &errOut); err == nil {
+		t.Fatal("未知字段应被拒绝")
 	}
-	errOut, err := os.CreateTemp(t.TempDir(), "stderr")
-	if err != nil {
-		t.Fatal(err)
+	if err := runCLI([]string{"check"}, &out, &errOut); err == nil || !strings.Contains(err.Error(), "用法") {
+		t.Fatalf("未知子命令应提示用法：%v", err)
 	}
-	return out, errOut
 }

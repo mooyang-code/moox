@@ -219,6 +219,13 @@ func (r *Relay) flush(ctx context.Context) error {
 				confirmed = append(confirmed, entry.ID)
 				continue
 			}
+			if pebble.IsInvalidOutboxEvent(err) {
+				// 永久无效：隔离并告警，继续投递其后的事件。
+				log.Printf("Storage 出站队列隔离无法通过契约校验的事件 %d：%v", entry.ID, err)
+				r.metrics.IncOutboxPublishError()
+				confirmed = append(confirmed, entry.ID)
+				continue
+			}
 			if errors.Is(err, pebble.ErrOutboxEntryNotFound) {
 				continue
 			}

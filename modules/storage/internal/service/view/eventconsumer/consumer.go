@@ -40,7 +40,6 @@ type Config struct {
 	ErrorReporter        jetstream.ErrorReporter
 	Metrics              *observability.ViewMetrics
 	BeforeProcess        func(context.Context, *jetstream.Delivery) error
-	Lease                DeliveryLease
 	BoundReporter        func(bool)
 }
 

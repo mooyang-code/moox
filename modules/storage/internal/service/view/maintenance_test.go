@@ -1042,7 +1042,7 @@ func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
 		t.Fatalf("prepare: rsp=%v err=%v", prepared, err)
 	}
 	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", DatasetId: "records", ActiveIndexId: "records-a", ActiveViewRevision: 1, DesiredViewRevision: 2, Engine: "bleve", ActiveColumns: columns}, activateErr: errors.New("response lost")}
-	gotErr := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns)
+	gotErr := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view"}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns)
 	if gotErr == nil {
 		t.Fatal("expected activation retry when readback does not commit")
 	}
@@ -1050,7 +1050,7 @@ func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
 	// committed it. Simulate the Metadata transaction having committed before
 	// the response was lost and retry.
 	metadata.view.ActiveIndexId = indexID
-	if err := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns); err != nil {
+	if err := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view"}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns); err != nil {
 		t.Fatalf("readback activation: %v", err)
 	}
 	svc.mu.RLock()

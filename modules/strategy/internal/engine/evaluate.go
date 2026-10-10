@@ -1,0 +1,129 @@
+package engine
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
+)
+
+// Evaluate 对一帧输入求值。只有编程错误（空程序）返回 error；配置或数据问题以 skipped 决策表达。
+// 流程：按规则划分集合并守门 → 逐规则求值 → 组合合成与约束 → 解释明细排序。
+func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, error) {
+	if program == nil {
+		return Decision{}, errors.New("策略程序为空")
+	}
+	decision := evaluateFrame(program, frame, previous)
+	sortItems(program, decision.Items)
+	return decision, nil
+}
+
+func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
+	decision := Decision{
+		Status:  StatusOK,
+		State:   State{Rules: make(map[string]RuleState, len(program.Rules)), Targets: map[string]string{}},
+		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
+	}
+	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
+	partitions := make([]ruleSets, len(program.Rules))
+	skipReason, skipNote := "", ""
+	if len(frame.Universe) == 0 {
+		skipReason, skipNote = SkipNoData, "本期基础集合为空：没有任何标的的数据"
+	}
+	for i := range program.Rules {
+		rule := &program.Rules[i]
+		sets := partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held)
+		partitions[i] = sets
+		decision.Summary.Rules[rule.Rule.ID] = RuleSummary{
+			Expected:  len(sets.expected),
+			AgedOut:   len(sets.agedOut),
+			Available: len(sets.available),
+			Missing:   len(sets.missing),
+			Budget:    rule.Rule.Weight.Total.String(),
+		}
+		decision.Items = append(decision.Items, sets.items(rule.Rule.ID)...)
+		if skipReason != "" {
+			continue
+		}
+		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets); reason != "" {
+			skipReason = reason
+			skipNote = fmt.Sprintf("规则 %s：预期 %d、年龄剔除 %d、可用 %d、缺数 %d", rule.Rule.ID, len(sets.expected), len(sets.agedOut), len(sets.available), len(sets.missing))
+		}
+	}
+	if skipReason != "" {
+		for i := range program.Rules {
+			decision.Items = append(decision.Items, partitions[i].unevaluated(program.Rules[i].Rule.ID)...)
+		}
+		return skipped(decision, previous, skipReason, skipNote)
+	}
+	// 第二遍：逐规则求值。
+	tolerance := quantizationTolerance(program)
+	contributions := make(map[string]quant.Decimal)
+	for i := range program.Rules {
+		rule := &program.Rules[i]
+		var result ruleResult
+		var err error
+		switch rule.Rule.Type {
+		case dsl.RuleTypeRank:
+			result, err = evaluateRank(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
+		case dsl.RuleTypeSignal:
+			result, err = evaluateSignal(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
+		default:
+			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
+		}
+		if err != nil {
+			// 出错的规则与排在它后面的规则都还没有产出明细：补齐可用标的，使每条规则的解释仍覆盖全部 E(r)。
+			for j := i; j < len(program.Rules); j++ {
+				decision.Items = append(decision.Items, partitions[j].unevaluated(program.Rules[j].Rule.ID)...)
+			}
+			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err))
+		}
+		allocated := quant.Zero()
+		for id, weight := range result.weights {
+			contributions[id] = contributions[id].Add(weight)
+			allocated = allocated.Add(abs(truncateWeightWith(weight, tolerance)))
+		}
+		summary := decision.Summary.Rules[rule.Rule.ID]
+		summary.Filtered, summary.Scored, summary.Selected, summary.Weighted = result.filtered, result.scored, result.selected, len(result.weights)
+		summary.Allocated = allocated.String()
+		decision.Summary.Rules[rule.Rule.ID] = summary
+		decision.State.Rules[rule.Rule.ID] = result.state
+		decision.Items = append(decision.Items, result.items...)
+		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
+	}
+	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, previous, tolerance); err != nil {
+		return skipped(decision, previous, SkipConfigError, err.Error())
+	}
+	return decision
+}
+
+// skipped 把决策改为跳过：无目标、状态沿用前序，并追加说明。
+func skipped(decision Decision, previous State, reason, note string) Decision {
+	decision.Status = StatusSkipped
+	decision.SkipReason = reason
+	decision.Targets = nil
+	decision.State = previous
+	if note != "" {
+		decision.Summary.Notes = append(decision.Summary.Notes, note)
+	}
+	return decision
+}
+
+// guard 是规则的守门，任一规则不通过都整期跳过，空候选与大面积缺数不能当作"选不出标的"或"退出"去清仓：
+// rank 规则没有可评估的候选（预期集合为空或全部年龄剔除）、进入 filter 的可用标的少于 min_universe 时
+// 记 universe_too_small；rank 与 signal 规则的缺数占（预期 − 年龄剔除）的比例超过 max_missing 时记
+// too_many_missing。signal 规则的池是显式的，不受 min_universe 约束，池为空时不守门。
+func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets) string {
+	denominator := len(sets.expected) - len(sets.agedOut)
+	if ruleType == dsl.RuleTypeRank && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
+		return SkipUniverseTooSmall
+	}
+	if denominator > 0 && len(sets.missing) > 0 {
+		ratio := quant.Must(fmt.Sprint(len(sets.missing))).Div(quant.Must(fmt.Sprint(denominator)))
+		if ratio.Cmp(portfolio.MaxMissing) > 0 {
+			return SkipTooManyMissing
+		}
+	}
+	return ""
+}

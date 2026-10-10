@@ -101,7 +101,7 @@ func (s *Service) extendFactorResultSchema(ctx context.Context, opts Maintenance
 		s.mu.Lock()
 		runtime = s.views[viewKey]
 		if runtime == nil {
-			runtime = &viewRuntime{}
+			runtime = newViewRuntime()
 			s.views[viewKey] = runtime
 		}
 		s.mu.Unlock()

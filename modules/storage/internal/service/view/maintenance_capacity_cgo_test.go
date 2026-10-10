@@ -63,7 +63,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 		}
 	}
 	prepare("prices-a")
-	if err := svc.AttachActiveView(&pb.View{
+	if err := svc.AttachActiveView(context.Background(), &pb.View{
 		SpaceId: "space", ViewId: "prices", DatasetId: "prices",
 		Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: schemaHash,
 		Status: "active",
@@ -139,7 +139,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	svc.consumerState = func(context.Context) (jetstream.ConsumerState, error) { return jetstream.ConsumerState{}, nil }
 	checkNow := base.Add(24 * time.Hour)
 	maintainOpts := MaintenanceOptions{
-		Metadata: metadata, Primary: &primaryHistoryFieldReader{}, PrimaryRange: primary, OwnerID: "owner", Grace: 0,
+		Metadata: metadata, Primary: &primaryHistoryFieldReader{}, PrimaryRange: primary, OwnerID: "owner",
 		BackfillPageSize: 10000,
 		TrimBars:         6000, Bars: 5000,
 		CapacityCheckInterval: time.Hour, CapacityCheckJitter: time.Hour,

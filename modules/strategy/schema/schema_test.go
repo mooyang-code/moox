@@ -9,122 +9,112 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestAllSQLCreatesExactlyStrategyTables(t *testing.T) {
+func openMemory(t *testing.T) *gorm.DB {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec(AllSQL()).Error; err != nil {
-		t.Fatalf("load strategy schema: %v", err)
+		t.Fatalf("载入策略 schema 失败：%v", err)
 	}
+	return db
+}
 
+func TestAllSQLCreatesExactlyStrategyTables(t *testing.T) {
+	db := openMemory(t)
 	var tables []string
-	if err := db.Raw(`
-		SELECT name
-		FROM sqlite_master
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-		ORDER BY name
-	`).Scan(&tables).Error; err != nil {
+	if err := db.Raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).Scan(&tables).Error; err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		"t_strategies",
+		"t_strategy_def_versions",
+		"t_strategy_defs",
 		"t_strategy_instances",
+		"t_strategy_replay_bars",
+		"t_strategy_replays",
+		"t_strategy_result_items",
 		"t_strategy_results",
+		"t_strategy_sessions",
 	}
 	if !reflect.DeepEqual(tables, want) {
-		t.Fatalf("strategy tables = %v, want %v", tables, want)
+		t.Fatalf("表 = %v，期望 %v", tables, want)
 	}
 }
 
-func TestStrategySchemaUsesInstanceAndResultColumns(t *testing.T) {
-	sql := AllSQL()
-	for _, column := range []string{
-		"strategy_name",
-		"dsl_yaml",
-		"instance_id",
-		"logical_account_id",
-		"input_bindings_json",
-		"enabled",
-		"session_id",
-		"result_id",
-		"bar_end_time",
-		"valid_until",
-		"snapshot_json",
-		"targets_json",
-		"rule_states_json",
-		"event_data",
-		"publish_status",
-	} {
-		if !strings.Contains(sql, column) {
-			t.Errorf("strategy schema does not contain column %q", column)
-		}
-	}
-	for _, indexPart := range []string{
-		"CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_instances_enabled_account",
-		"ON t_strategy_instances (space_id, logical_account_id)",
-		"WHERE enabled = 1 AND logical_account_id IS NOT NULL",
-		"CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_results_session_bar",
-		"ON t_strategy_results (instance_id, session_id, bar_end_time)",
-		"CREATE INDEX IF NOT EXISTS ix_strategy_results_pending",
-		"ON t_strategy_results (created_at, result_id)",
-		"WHERE publish_status = 'pending'",
-	} {
-		if !strings.Contains(sql, indexPart) {
-			t.Errorf("strategy schema does not contain %q", indexPart)
-		}
-	}
-}
-
-func TestStrategySchemaHasNoStateOrDataRevisionColumns(t *testing.T) {
-	sql := strings.ToLower(AllSQL())
-	for _, obsolete := range []string{
-		"state_revision",
-		"state_json",
-		"state_schema_version",
-		"previous_state_revision",
-		"data_revision",
-	} {
-		if strings.Contains(sql, obsolete) {
-			t.Errorf("strategy schema still contains obsolete column %q", obsolete)
-		}
-	}
-}
-
-func TestStrategySchemaHasExactly25Columns(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(AllSQL()).Error; err != nil {
-		t.Fatalf("load strategy schema: %v", err)
-	}
+func TestStrategySchemaColumns(t *testing.T) {
+	db := openMemory(t)
 	want := map[string][]string{
-		"t_strategies": {
-			"strategy_id", "strategy_name", "dsl_yaml", "created_at", "updated_at",
-		},
-		"t_strategy_instances": {
-			"instance_id", "strategy_id", "space_id", "input_bindings_json",
-			"logical_account_id", "enabled", "session_id", "created_at", "updated_at",
-		},
-		"t_strategy_results": {
-			"result_id", "instance_id", "session_id", "bar_end_time", "valid_until",
-			"snapshot_json", "targets_json", "rule_states_json", "event_data",
-			"publish_status", "created_at",
-		},
+		"t_strategy_defs":         {"c_strategy_id", "c_name", "c_dsl_yaml", "c_dsl_hash", "c_deleted_at", "c_ctime", "c_mtime"},
+		"t_strategy_def_versions": {"c_dsl_hash", "c_dsl_yaml", "c_ctime"},
+		"t_strategy_instances":    {"c_instance_id", "c_strategy_id", "c_space_id", "c_view_id", "c_logical_account_id", "c_enabled", "c_session_id", "c_resolved_json", "c_health", "c_deleted_at", "c_ctime", "c_mtime"},
+		"t_strategy_sessions":     {"c_session_id", "c_instance_id", "c_dsl_hash", "c_resolved_json", "c_ctime", "c_closed_at"},
+		"t_strategy_results":      {"c_result_id", "c_instance_id", "c_session_id", "c_bar_end_time", "c_valid_until", "c_status", "c_skip_reason", "c_dsl_hash", "c_input_json", "c_targets_json", "c_rule_states_json", "c_summary_json", "c_event_data", "c_publish_status", "c_ctime"},
+		"t_strategy_result_items": {"c_result_id", "c_rule_id", "c_instrument_id", "c_stage", "c_score", "c_rank", "c_weight", "c_reason", "c_ctime"},
+		"t_strategy_replays":      {"c_replay_id", "c_strategy_id", "c_instance_id", "c_session_id", "c_dsl_yaml", "c_dsl_hash", "c_view_generation", "c_calendar", "c_space_id", "c_view_id", "c_start_time", "c_end_time", "c_fee_bps", "c_factors_json", "c_status", "c_progress_time", "c_metrics_json", "c_error", "c_ctime", "c_mtime"},
+		"t_strategy_replay_bars":  {"c_replay_id", "c_bar_end_time", "c_status", "c_targets_json", "c_positions_json", "c_summary_json", "c_return", "c_equity", "c_turnover", "c_fee", "c_holdings", "c_frozen", "c_skip_reason", "c_unfilled", "c_liquidated"},
 	}
-	count := 0
 	for table, columns := range want {
 		var got []string
 		if err := db.Raw(`SELECT name FROM pragma_table_info(?) ORDER BY cid`, table).Scan(&got).Error; err != nil {
-			t.Fatalf("inspect %s: %v", table, err)
+			t.Fatalf("读取 %s 列失败：%v", table, err)
 		}
 		if !reflect.DeepEqual(got, columns) {
-			t.Errorf("%s columns = %v, want %v", table, got, columns)
+			t.Errorf("%s 列 = %v，期望 %v", table, got, columns)
 		}
-		count += len(got)
 	}
-	if count != 25 {
-		t.Fatalf("strategy schema column count = %d, want 25", count)
+}
+
+func TestStrategySchemaIndexesAndConstraints(t *testing.T) {
+	sql := AllSQL()
+	for _, part := range []string{
+		"CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account",
+		"ON t_strategy_instances (c_space_id, c_logical_account_id)",
+		"WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS idx_t_strategy_results_instance_bar ON t_strategy_results (c_instance_id, c_bar_end_time);",
+		"CREATE INDEX IF NOT EXISTS idx_t_strategy_results_pending",
+		"ON t_strategy_results (c_ctime, c_result_id)",
+		"WHERE c_publish_status = 'pending'",
+		"CHECK (c_status IN ('ok', 'skipped'))",
+		"CHECK (c_publish_status IN ('none', 'pending', 'sent', 'cancelled'))",
+		"UNIQUE (c_instance_id, c_session_id, c_bar_end_time)",
+		"ON DELETE CASCADE",
+	} {
+		if !strings.Contains(sql, part) {
+			t.Errorf("schema 缺少 %q", part)
+		}
+	}
+	for _, obsolete := range []string{"state_json", "data_revision", "input_bindings_json", "snapshot_json", "c_topic", "c_payload"} {
+		if strings.Contains(strings.ToLower(sql), obsolete) {
+			t.Errorf("schema 仍包含过时列 %q", obsolete)
+		}
+	}
+}
+
+func TestResultItemsCascadeOnResultDelete(t *testing.T) {
+	db := openMemory(t)
+	if err := db.Exec(`PRAGMA foreign_keys = ON`).Error; err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`INSERT INTO t_strategy_defs (c_strategy_id, c_name, c_dsl_yaml, c_dsl_hash) VALUES ('s', 'n', 'name: n', 'h')`,
+		`INSERT INTO t_strategy_def_versions (c_dsl_hash, c_dsl_yaml) VALUES ('h', 'name: n')`,
+		`INSERT INTO t_strategy_instances (c_instance_id, c_strategy_id, c_space_id, c_view_id) VALUES ('i', 's', 'sp', 'v')`,
+		`INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json) VALUES ('se', 'i', 'h', '{}')`,
+		`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json) VALUES ('r', 'i', 'se', 1, 2, 'ok', 'h', '{}', '[]', '{}', '{}')`,
+		`INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_stage, c_ctime) VALUES ('r', 'rule', 'BTC-USDT', 'weighted', '2026-10-01 00:00:00')`,
+		`DELETE FROM t_strategy_results WHERE c_result_id = 'r'`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatalf("%s：%v", statement, err)
+		}
+	}
+	var count int64
+	if err := db.Raw(`SELECT COUNT(*) FROM t_strategy_result_items`).Scan(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("解释明细应随结果级联删除，剩余 %d", count)
 	}
 }

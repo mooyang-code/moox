@@ -2,20 +2,20 @@ package view
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 )
-
-type appliedKey struct {
-	indexID string
-	nodeID  string
-	storeID string
-}
 
 type pendingViewReady struct {
 	spaceID  string
@@ -25,37 +25,69 @@ type pendingViewReady struct {
 	opts     events.PublishOptions
 }
 
+// NoteAppliedPosition 记录某个索引已写入到的来源位置。只改内存并标脏：后台循环每 appliedPersistInterval 合并落盘一次，
+// 停止消费时再落盘一次，不必为每条行事件同步落盘（那会让所有分区排队等 fsync）。代价是崩溃时丢失最近一次落盘之后的
+// 更新：这些行已经 ACK、不会重投，对应的就绪事件要等同一来源的下一次行写入才放行，日线来源会晚一个交易日。
 func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID string, sequence uint64) {
 	if s == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || strings.TrimSpace(indexID) == "" || strings.TrimSpace(nodeID) == "" || strings.TrimSpace(storeID) == "" || sequence == 0 {
 		return
 	}
 	key := appliedFenceKey{spaceID: spaceID, viewID: viewID, indexID: indexID, nodeID: nodeID, storeID: storeID}
 	s.appliedFenceMu.Lock()
+	defer s.appliedFenceMu.Unlock()
 	if s.appliedFence == nil {
 		s.appliedFence = make(map[appliedFenceKey]uint64)
 	}
 	if sequence > s.appliedFence[key] {
 		s.appliedFence[key] = sequence
-	}
-	s.appliedFenceMu.Unlock()
-	_ = s.persistAppliedFence()
-	s.mu.RLock()
-	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
-	s.mu.RUnlock()
-	if runtime == nil {
-		return
-	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.applied == nil {
-		runtime.applied = make(map[appliedKey]uint64)
-	}
-	applied := appliedKey{indexID: indexID, nodeID: nodeID, storeID: storeID}
-	if current := runtime.applied[applied]; sequence > current {
-		runtime.applied[applied] = sequence
+		s.appliedDirty = true
 	}
 }
 
+// inheritAppliedFence 在活动索引从 from 切换到 to 时，把 from 的写入围栏并入 to（逐个来源取较大值）。to 在开始双写
+// 之后才从 Primary 回填，行事件又在 Primary 提交之后才发出，所以 from 在那之前写入的行 to 的回填都有，此后的行两边都
+// 写；不并入的话，行在切换前写入、周期完成事件在切换后才到的就绪事件，要等同一来源的下一次行写入才放行（日线要等一个
+// 交易日）。例外：回填时 Primary 超时被跳过的标的（记日志）在 to 里缺行，并入与否都缺，并入只是不再拖延放行。索引 ID
+// 内含空间与 View，按索引 ID 匹配即可。A/B 槽位名在重建时复用：to 上一代留下的旧键不会大于 from 继承来的值，不影响结果。
+func (s *Service) inheritAppliedFence(from, to string) {
+	if from == "" || to == "" || from == to {
+		return
+	}
+	s.appliedFenceMu.Lock()
+	defer s.appliedFenceMu.Unlock()
+	for key, seq := range s.appliedFence {
+		if key.indexID != from {
+			continue
+		}
+		target := key
+		target.indexID = to
+		if seq > s.appliedFence[target] {
+			s.appliedFence[target] = seq
+			s.appliedDirty = true
+		}
+	}
+}
+
+// readyPublishTimeout 限制单条就绪事件的发布等待。不设截止时间的 JetStream 发布在确认丢失（EventBus 重启、
+// 断网）时会一直挂起；刷新持有串行锁，挂起会让所有 View 的投递排在后面。
+var readyPublishTimeout = 10 * time.Second
+
+// readyRetryBackoff 是发布因连接问题失败后的退避：期间刷新直接跳过，不再每次都付出一次超时；重连在后台进行。
+var readyRetryBackoff = 5 * time.Second
+
+// orphanReadyAge 是就绪事件所属 View 已不在目录中（被删除或停用）时的保留时长：超过后隔离，不永久占着队列。
+const orphanReadyAge = 24 * time.Hour
+
+// permanentReadyPublishError 报告发布错误是否是确定性的：消息无法通过发布前校验或超过 EventBus 的最大消息长度，
+// 原样重试不会成功，只能隔离。
+func permanentReadyPublishError(err error) bool {
+	return errors.Is(err, jetstream.ErrInvalidMessage) || errors.Is(err, nats.ErrMaxPayload)
+}
+
+// FlushViewDataReady 按入队顺序发布已满足写入围栏的就绪事件。刷新串行执行：并发刷新会互相越过，
+// 打乱同一 View 的周期顺序（下游会把较早的周期记为乱序）。事件只在发布成功（或因无法通过契约校验而隔离）
+// 后才移出内存队列，每次刷新结束时落盘一次：进程在发布途中退出不会丢事件，重启后重复发布由 Msg-Id 去重。
+// 发布失败时失败项与其后的项按原顺序留在队首；连接问题导致的失败进入退避并在后台重连。
 func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string) error {
 	if s == nil {
 		return nil
@@ -64,40 +96,198 @@ func (s *Service) FlushViewDataReady(ctx context.Context, spaceID, viewID string
 	if publisher == nil {
 		return nil
 	}
+	s.readyFlushMu.Lock()
+	defer s.readyFlushMu.Unlock()
+	if s.inReadyBackoff() {
+		return nil
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
 	s.pendingReadyMu.Lock()
 	pending := append([]pendingViewReady(nil), s.pendingReady...)
-	s.pendingReady = s.pendingReady[:0]
 	s.pendingReadyMu.Unlock()
-	remaining := make([]pendingViewReady, 0, len(pending))
+	removed, published := false, false
+	defer func() {
+		if removed {
+			if err := s.persistPendingReady(); err != nil {
+				log.Printf("View 就绪队列落盘失败：%v", err)
+			}
+		}
+	}()
 	for _, item := range pending {
 		if spaceID != "" && (item.spaceID != spaceID || (viewID != "" && item.viewID != viewID)) {
-			remaining = append(remaining, item)
 			continue
 		}
 		view := s.viewSnapshot(item.spaceID, item.viewID)
-		if view == nil || !s.positionsApplied(view, item.required) {
-			remaining = append(remaining, item)
+		if view == nil {
+			if !item.opts.OccurredAt.IsZero() && time.Since(item.opts.OccurredAt) > orphanReadyAge {
+				log.Printf("View 就绪队列隔离所属 View 已不存在的事件 %s（%s/%s）", item.opts.EventID, item.spaceID, item.viewID)
+				s.removePending(item.opts.EventID)
+				removed = true
+			}
 			continue
 		}
-		if _, err := publisher.Publish(ctx, events.ViewDataReady, item.payload, item.opts); err != nil {
+		if !s.positionsApplied(view, item.required) {
+			continue
+		}
+		if _, err := registry.Encode(events.ViewDataReady, item.payload, item.opts); err != nil {
+			log.Printf("View 就绪队列隔离无法通过契约校验的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
+			s.removePending(item.opts.EventID)
+			removed = true
+			continue
+		}
+		publishCtx, cancel := context.WithTimeout(ctx, readyPublishTimeout)
+		_, err := publisher.Publish(publishCtx, events.ViewDataReady, item.payload, item.opts)
+		cancel()
+		if err != nil {
+			// 调用方已结束（进程关闭、消费者重启）不是连接故障：不退避，也不重连一条健康的连接。
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if s.metrics != nil {
 				s.metrics.ObserveReadyPublishRetry(item.viewID, "view_data_ready")
 			}
-			remaining = append(remaining, item)
-			s.restorePending(remaining)
-			if persistErr := s.persistPendingReady(); persistErr != nil {
-				return persistErr
+			if permanentReadyPublishError(err) {
+				log.Printf("View 就绪队列隔离无法发布的事件 %s（%s/%s）：%v", item.opts.EventID, item.spaceID, item.viewID, err)
+				s.removePending(item.opts.EventID)
+				removed = true
+				continue
+			}
+			if errors.Is(err, jetstream.ErrPublishTimeout) || errors.Is(err, jetstream.ErrConnection) || errors.Is(err, jetstream.ErrClosed) {
+				s.startReadyBackoff(err)
 			}
 			return err
 		}
+		s.removePending(item.opts.EventID)
+		removed, published = true, true
 	}
-	s.restorePending(remaining)
-	return s.persistPendingReady()
+	// 只有本次真正发布成功过、或队列已经空了，才算发布恢复：按空间过滤后一条都没发的刷新证明不了 EventBus 已恢复。
+	if published || !s.hasPendingReady() {
+		s.readyResolved(readyIssuePublish, "View 就绪事件发布已恢复")
+	}
+	return nil
 }
 
-func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.CommittedPosition, payload *storagepb.ViewDataReady, message *eventpb.EventMessage, eventID string) {
-	if view == nil || payload == nil || message == nil || strings.TrimSpace(eventID) == "" {
+// 就绪队列异常的类别：各自去重、各自恢复，交替出现的两类异常不会互相顶掉去重记录。
+const (
+	readyIssuePublish   = "publish"
+	readyIssueReconnect = "reconnect"
+	readyIssueFence     = "fence"
+)
+
+// readyIssue 记录就绪队列的一条异常；与同类的上一条相同则不重复记录，避免持续故障时每 5 秒一行。
+func (s *Service) readyIssue(kind, format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	s.readyLogMu.Lock()
+	if s.readyIssues == nil {
+		s.readyIssues = make(map[string]string)
+	}
+	repeated := s.readyIssues[kind] == message
+	s.readyIssues[kind] = message
+	s.readyLogMu.Unlock()
+	if !repeated {
+		log.Print(message)
+	}
+}
+
+// readyResolved 在一类异常确实恢复后记录一次恢复；这类异常没有发生过时不记。
+func (s *Service) readyResolved(kind, message string) {
+	s.readyLogMu.Lock()
+	_, had := s.readyIssues[kind]
+	delete(s.readyIssues, kind)
+	s.readyLogMu.Unlock()
+	if had {
+		log.Print(message)
+	}
+}
+
+func (s *Service) inReadyBackoff() bool {
+	s.mu.RLock()
+	until := s.readyBackoffUntil
+	s.mu.RUnlock()
+	backoff := time.Now().Before(until)
+	if !backoff && s.metrics != nil {
+		s.metrics.SetReadyPublishBackoff(false)
+	}
+	return backoff
+}
+
+// startReadyBackoff 进入退避，并在刷新锁之外重连就绪发布器的专用连接：连接可能已静默断开或已被关闭，
+// 等心跳发现要几分钟，被关闭的连接则永远不会自行恢复。
+func (s *Service) startReadyBackoff(cause error) {
+	s.mu.Lock()
+	s.readyBackoffUntil = time.Now().Add(readyRetryBackoff)
+	reconnect := s.readyReconnect
+	s.mu.Unlock()
+	if s.metrics != nil {
+		s.metrics.SetReadyPublishBackoff(true)
+	}
+	s.readyIssue(readyIssuePublish, "View 就绪事件发布失败，进入 %s 退避：%v", readyRetryBackoff, cause)
+	if reconnect == nil || !s.readyReconnecting.CompareAndSwap(false, true) {
 		return
+	}
+	go func() {
+		defer s.readyReconnecting.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), readyPublishTimeout)
+		defer cancel()
+		if err := reconnect(ctx); err != nil {
+			s.readyIssue(readyIssueReconnect, "View 就绪事件发布器重连 EventBus 失败：%v", err)
+			return
+		}
+		s.readyResolved(readyIssueReconnect, "View 就绪事件发布器已重新连接 EventBus")
+	}()
+}
+
+// removePending 把已发布或已隔离的事件移出内存队列；落盘由刷新结束时统一完成。
+func (s *Service) removePending(eventID string) {
+	s.pendingReadyMu.Lock()
+	defer s.pendingReadyMu.Unlock()
+	for i, item := range s.pendingReady {
+		if item.opts.EventID == eventID {
+			s.pendingReady = append(s.pendingReady[:i], s.pendingReady[i+1:]...)
+			s.observeReadyQueueLocked()
+			return
+		}
+	}
+}
+
+// observeReadyQueueLocked 上报就绪队列的深度与最老事件的时间；调用方持有 pendingReadyMu。
+func (s *Service) observeReadyQueueLocked() {
+	if s.metrics == nil {
+		return
+	}
+	var oldest time.Time
+	for _, item := range s.pendingReady {
+		if at := item.opts.OccurredAt; !at.IsZero() && (oldest.IsZero() || at.Before(oldest)) {
+			oldest = at
+		}
+	}
+	s.metrics.SetReadyQueue(len(s.pendingReady), oldest)
+}
+
+// hasPendingReady 报告就绪队列里是否还有待发布的事件。
+func (s *Service) hasPendingReady() bool {
+	s.pendingReadyMu.Lock()
+	defer s.pendingReadyMu.Unlock()
+	return len(s.pendingReady) > 0
+}
+
+// SetSeriesBars 设置时序 View 每个序列保留的根数（0 表示默认值），随查询响应告知调用方；关闭维护时也要设置。
+func (s *Service) SetSeriesBars(bars uint64) {
+	if bars == 0 {
+		bars = defaultViewBars
+	}
+	s.mu.Lock()
+	s.seriesBars = bars
+	s.mu.Unlock()
+}
+
+// enqueueViewDataReady 把就绪事件放入队列并落盘；落盘失败时返回错误，调用方不 ACK 周期事件，由重投再次入队。
+func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.CommittedPosition, payload *storagepb.ViewDataReady, message *eventpb.EventMessage, eventID string) error {
+	if view == nil || payload == nil || message == nil || strings.TrimSpace(eventID) == "" {
+		return nil
 	}
 	occurredAt := message.GetOccurredAt()
 	if payload.GetReadyAt() != nil {
@@ -114,32 +304,15 @@ func (s *Service) enqueueViewDataReady(view *pb.View, required []*storagepb.Comm
 	defer s.pendingReadyMu.Unlock()
 	for _, existing := range s.pendingReady {
 		if existing.opts.EventID == eventID {
-			return
+			return nil
 		}
 	}
 	s.pendingReady = append(s.pendingReady, item)
-	_ = s.persistPendingReadyLocked()
-}
-
-func (s *Service) restorePending(items []pendingViewReady) {
-	if len(items) == 0 {
-		return
+	s.observeReadyQueueLocked()
+	if err := s.persistPendingReadyLocked(); err != nil {
+		return fmt.Errorf("View 就绪队列落盘失败：%w", err)
 	}
-	s.pendingReadyMu.Lock()
-	defer s.pendingReadyMu.Unlock()
-	for _, item := range items {
-		dup := false
-		for _, existing := range s.pendingReady {
-			if existing.opts.EventID == item.opts.EventID {
-				dup = true
-				break
-			}
-		}
-		if !dup {
-			s.pendingReady = append(s.pendingReady, item)
-		}
-	}
-	_ = s.persistPendingReadyLocked()
+	return nil
 }
 
 func (s *Service) persistPendingReady() error {
@@ -162,12 +335,12 @@ func (s *Service) positionsApplied(view *pb.View, required []*storagepb.Committe
 	runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
 	s.mu.RUnlock()
 	indexID := view.GetActiveIndexId()
+	// 活动索引取查询路径上的无锁副本：运行时锁在整段索引写入（可达秒级）与激活的元数据调用期间被持有，刷新持有全局的
+	// 串行锁，在这里等某个 View 的锁会让所有 View 的就绪发布排在后面。
 	if runtime != nil {
-		runtime.mu.Lock()
-		if runtime.active != "" {
-			indexID = runtime.active
+		if active := runtime.queryState().active; active != "" {
+			indexID = active
 		}
-		runtime.mu.Unlock()
 	}
 	if indexID == "" {
 		return false
@@ -216,12 +389,11 @@ func (s *Service) viewSnapshot(spaceID, viewID string) *pb.View {
 		return nil
 	}
 	clone := proto.Clone(view).(*pb.View)
+	// 同 positionsApplied：读无锁副本，不等运行时锁。
 	if runtime != nil {
-		runtime.mu.Lock()
-		if runtime.active != "" {
-			clone.ActiveIndexId = runtime.active
+		if active := runtime.queryState().active; active != "" {
+			clone.ActiveIndexId = active
 		}
-		runtime.mu.Unlock()
 	}
 	return clone
 }

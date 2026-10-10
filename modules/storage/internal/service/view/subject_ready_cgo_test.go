@@ -47,7 +47,7 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	// write against the activated index publishes, and that row is already
 	// queryable inside the publisher callback.
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
-	require.NoError(t, svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
+	require.NoError(t, svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
 	svc.readyPublisher = subjectPublisherFunc(func(ctx context.Context, _ events.Event, _ proto.Message, _ events.PublishOptions) (*jetstream.PublishAck, error) {
 		rows, err := svc.query(ctx, "prices-a", []*pb.RowKey{row.Key}, nil)
 		require.NoError(t, err)

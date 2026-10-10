@@ -71,6 +71,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		computation.Results[factor.FactorID] = make(map[string]pyexec.ItemResult)
 		computation.FactorStates[factor.FactorID] = storageio.FactorState{
 			FactorID: factor.FactorID, Status: status, FailedSubjects: failed, SourceHash: factor.SourceHash,
+			DefinitionHash: domain.DefinitionHash(factor),
 		}
 	}
 	addResult := func(factorID, key string, item pyexec.ItemResult) {

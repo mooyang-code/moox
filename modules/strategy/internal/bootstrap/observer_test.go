@@ -1,0 +1,143 @@
+package bootstrap
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
+
+func TestDatasetKeyDerivation(t *testing.T) {
+	expectation, ok := datasetKey(store.Instance{InstanceID: "3f2a6c1e-0b7d-4a51-9c2e-111111111111", SpaceID: "crypto"}, "1h")
+	if !ok || expectation.Key.DatasetID != "strategy_3f2a6c1e-0b7d-4a51-9c2e-111111111111" || expectation.Key.Freq != "1h" || expectation.Interval != time.Hour {
+		t.Fatalf("数据集标识不符：%+v ok=%v", expectation, ok)
+	}
+	hashed, ok := datasetKey(store.Instance{InstanceID: "My Instance/with spaces and a very long name that exceeds limits", SpaceID: "crypto"}, "4h")
+	if !ok || !strings.HasPrefix(hashed.Key.DatasetID, "strategy_") || len(hashed.Key.DatasetID) != len("strategy_")+16 || hashed.Interval != 4*time.Hour {
+		t.Fatalf("不合法的实例 ID 应改用哈希：%+v", hashed)
+	}
+	if _, ok := datasetKey(store.Instance{InstanceID: "i1", SpaceID: "Bad Space"}, "1h"); ok {
+		t.Fatal("不合法的空间 ID 应跳过")
+	}
+	if _, ok := datasetKey(store.Instance{InstanceID: "i1", SpaceID: "crypto"}, "7x"); ok {
+		t.Fatal("不合法的周期应跳过")
+	}
+}
+
+func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := observer.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(observer.expected) != 1 {
+		t.Fatalf("应登记 1 个启用实例：%+v", observer.expected)
+	}
+	instance, err := repo.GetInstance(context.Background(), "i1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	barEnd := time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC)
+	observer.ObservePeriod(instance, "1h", barEnd, store.StatusOK, "")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(time.Hour), store.StatusSkipped, "factor_missing")
+	if got := testutil.ToFloat64(observer.periods.WithLabelValues("i1", "ok", "")); got != 1 {
+		t.Fatalf("ok 计数不符：%v", got)
+	}
+	if got := testutil.ToFloat64(observer.periods.WithLabelValues("i1", "skipped", "factor_missing")); got != 1 {
+		t.Fatalf("skipped 计数不符：%v", got)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, family := range families {
+		found[family.GetName()] = true
+	}
+	for _, name := range []string{"moox_strategy_dataset_enabled", "moox_strategy_dataset_last_success_timestamp_seconds", "moox_strategy_dataset_output_watermark_timestamp_seconds", "moox_strategy_period_total", "moox_strategy_runs_total"} {
+		if !found[name] {
+			t.Fatalf("缺少指标 %s", name)
+		}
+	}
+	// 新启用、尚未刷新清单的实例在首次观测时自动登记。
+	seedEnabled(t, repo, "i2", nil, resolvedJSON)
+	second, err := repo.GetInstance(context.Background(), "i2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.ObservePeriod(second, "1h", barEnd, store.StatusOK, "")
+	if len(observer.expected) != 2 {
+		t.Fatalf("首次观测应登记新实例：%+v", observer.expected)
+	}
+	// 停用后刷新清单即移出。
+	session := "i1-session"
+	if err := repo.DisableInstance(context.Background(), "i1", &session, nil, "", seedTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := observer.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := observer.expected["i1"]; ok || len(observer.expected) != 1 {
+		t.Fatalf("停用实例应移出清单：%+v", observer.expected)
+	}
+}
+
+// 新启用、从未处理过周期的实例登记后立即有一次“空”运行，起点是启用（会话创建）时刻：Monitor 不会在首个事件到达之前把它判为
+// “尚未上报”，输出水位不推进，首期没有结果时仍会在容忍的间隔数之后告警；进程重启后重新登记不会把宽限重新开始。
+func TestInstanceObserverGivesNewInstanceFirstPeriodGrace(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	instance, err := repo.GetInstance(context.Background(), "i1")
+	if err != nil || instance.SessionID == nil {
+		t.Fatalf("读取实例失败：%+v %v", instance, err)
+	}
+	session, err := repo.GetSession(context.Background(), *instance.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabledAt := session.CreatedAt.UTC().Unix()
+	registerAt := func(now time.Time) func(string) (float64, bool) {
+		registry := prometheus.NewRegistry()
+		observer, err := newInstanceObserver(repo, registry, t.Logf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observer.now = func() time.Time { return now }
+		if err := observer.refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return func(name string) (float64, bool) {
+			families, err := registry.Gather()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, family := range families {
+				if family.GetName() == name && len(family.GetMetric()) > 0 {
+					return family.GetMetric()[0].GetGauge().GetValue(), true
+				}
+			}
+			return 0, false
+		}
+	}
+	value := registerAt(session.CreatedAt.Add(5 * time.Minute))
+	if got, ok := value("moox_strategy_dataset_last_success_timestamp_seconds"); !ok || int64(got) != enabledAt {
+		t.Fatalf("登记后应有首期宽限（最近成功=启用时刻）：%v ok=%v", got, ok)
+	}
+	if got, ok := value("moox_strategy_dataset_output_watermark_timestamp_seconds"); ok && got != 0 {
+		t.Fatalf("宽限不能推进输出水位：%v", got)
+	}
+	// 实例久未产出、进程重启后重新登记：起点仍是启用时刻，不会重新开始等待。
+	restarted := registerAt(session.CreatedAt.Add(30 * time.Hour))
+	if got, _ := restarted("moox_strategy_dataset_last_success_timestamp_seconds"); int64(got) != enabledAt {
+		t.Fatalf("重启后宽限起点不应后移：%v，期望 %d", got, enabledAt)
+	}
+}

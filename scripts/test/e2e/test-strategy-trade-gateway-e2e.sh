@@ -32,7 +32,7 @@ build_test_binary() {
 }
 build_test_binary modules/trade ./test "$WORK/trade.test" "${MOOX_TRADE_OWNER_E2E_BINARY:-}"
 build_test_binary modules/hostgateway ./internal/router "$WORK/gateway.test" "${MOOX_GATEWAY_OWNER_E2E_BINARY:-}"
-build_test_binary modules/strategy ./internal/bootstrap "$WORK/strategy.test" "${MOOX_STRATEGY_OWNER_E2E_BINARY:-}"
+build_test_binary modules/strategy ./internal/tradeowner "$WORK/strategy.test" "${MOOX_STRATEGY_OWNER_E2E_BINARY:-}"
 
 wait_ready() {
   local file=$1 pid=$2 log=$3

@@ -24,8 +24,8 @@ func TestFactorPeriodComputedMarkerRoundTripPreservesFactors(t *testing.T) {
 		DatasetId: "result", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "degraded", UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
 		Factors: []*pb.FactorPeriodState{
-			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, SourceHash: "hash-z"},
-			{FactorId: "a-factor", Status: "complete", SourceHash: "hash-a"},
+			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, SourceHash: "hash-z", DefinitionHash: "def-z"},
+			{FactorId: "a-factor", Status: "complete", SourceHash: "hash-a", DefinitionHash: "def-a"},
 		},
 		TriggerEventId: "source-ready", ComputedAt: timestamppb.New(time.Unix(1786032001, 0)),
 	}
@@ -76,7 +76,7 @@ func TestFactorPeriodComputedMarkerRoundTripPreservesFactors(t *testing.T) {
 			require.Equal(t, marker.GetFailedSubjects(), payload.GetFailedSubjects())
 			require.Len(t, payload.GetFactors(), len(marker.GetFactors()))
 			for i, state := range marker.GetFactors() {
-				want := &storageeventpb.FactorPeriodState{FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: state.GetFailedSubjects(), SourceHash: state.GetSourceHash()}
+				want := &storageeventpb.FactorPeriodState{FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: state.GetFailedSubjects(), SourceHash: state.GetSourceHash(), DefinitionHash: state.GetDefinitionHash()}
 				require.True(t, proto.Equal(want, payload.GetFactors()[i]), "factor %d changed in outbox", i)
 			}
 			changed := proto.Clone(marker).(*pb.FactorPeriodComputedMarker)
@@ -98,7 +98,7 @@ func TestFactorPeriodComputedMarkerRejectsInvalidFactorsWithoutOutbox(t *testing
 	base := &pb.FactorPeriodComputedMarker{
 		DatasetId: "result", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "complete", UniverseSubjectIds: []string{"ETH"},
-		Factors:        []*pb.FactorPeriodState{{FactorId: "factor", Status: "complete", SourceHash: "hash"}},
+		Factors:        []*pb.FactorPeriodState{{FactorId: "factor", Status: "complete", SourceHash: "hash", DefinitionHash: "def"}},
 		TriggerEventId: "source-ready", ComputedAt: timestamppb.New(time.Unix(1786032001, 0)),
 	}
 	for _, tc := range []struct {

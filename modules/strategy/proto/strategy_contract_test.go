@@ -28,7 +28,7 @@ func TestStrategyProtoUsesInstanceAndResultVocabulary(t *testing.T) {
 		"rpc ListStrategyTargets",
 	} {
 		if !strings.Contains(source, required) {
-			t.Errorf("strategy.proto does not contain %q", required)
+			t.Errorf("strategy.proto 缺少 %q", required)
 		}
 	}
 	for _, obsolete := range []string{
@@ -37,7 +37,7 @@ func TestStrategyProtoUsesInstanceAndResultVocabulary(t *testing.T) {
 		`\bTargetPosition\b`, `\btarget_quantity\b`,
 	} {
 		if regexp.MustCompile(obsolete).MatchString(source) {
-			t.Errorf("strategy.proto still contains obsolete symbol %q", obsolete)
+			t.Errorf("strategy.proto 仍包含已废弃的符号 %q", obsolete)
 		}
 	}
 }

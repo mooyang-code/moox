@@ -1,26 +1,39 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
 import {
+  deleteInstance,
+  deleteStrategy,
   getInstance,
   getStrategy,
+  getStrategyResult,
   listInstances,
   listStrategies,
   listStrategyResults,
   listStrategyTargets,
   setInstanceEnabled
 } from "@/api/strategy";
-import type { Strategy, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type {
+  Strategy,
+  StrategyInstance,
+  StrategyResult,
+  StrategyResultDetail,
+  StrategyTargetSnapshot
+} from "@/api/strategy-types";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
 export const useStrategyStore = defineStore("strategy", () => {
+  // strategies 是定义页当前页的分页列表；strategyCatalog 是完整目录（运行页、回放页的下拉与名称查找）。两者各有请求序号，
+  // 迟到的分页响应不能覆盖完整目录。
   const strategies = ref<Strategy[]>([]);
+  const strategyCatalog = ref<Strategy[]>([]);
   const instances = ref<StrategyInstance[]>([]);
   const instance = ref<StrategyInstance | null>(null);
   const strategy = ref<Strategy | null>(null);
   const results = ref<StrategyResult[]>([]);
+  const resultDetails = ref<Record<string, StrategyResultDetail>>({});
   const targetSnapshot = ref<StrategyTargetSnapshot | null>(null);
   const totalStrategies = ref(0);
   const strategiesComplete = ref(false);
@@ -36,6 +49,7 @@ export const useStrategyStore = defineStore("strategy", () => {
   let detailRequest = 0;
   let resultRequest = 0;
   let strategiesRequest = 0;
+  let catalogRequest = 0;
   let instancesRequest = 0;
 
   async function loadStrategies(params: Parameters<typeof listStrategies>[0] = {}) {
@@ -47,7 +61,6 @@ export const useStrategyStore = defineStore("strategy", () => {
       if (requestId !== strategiesRequest) return;
       strategies.value = result.items;
       totalStrategies.value = result.page.total;
-      strategiesComplete.value = result.items.length >= result.page.total;
     } catch (err) {
       if (requestId === strategiesRequest) error.value = errorMessage(err, "策略定义加载失败");
       throw err;
@@ -57,30 +70,34 @@ export const useStrategyStore = defineStore("strategy", () => {
   }
 
   async function loadAllStrategies(pageSize = 200) {
-    const requestId = ++strategiesRequest;
+    const requestId = ++catalogRequest;
     listLoading.value = true;
     error.value = "";
     try {
       const items: Strategy[] = [];
-      let page = 1;
       let total = 0;
-      do {
+      for (let page = 1; ; page += 1) {
         const response = await listStrategies({ page, page_size: pageSize });
-        if (requestId !== strategiesRequest) return;
+        if (requestId !== catalogRequest) return;
         items.push(...response.items);
         total = response.page.total;
         if (!response.items.length || items.length >= total) break;
-        page += 1;
-      } while (true);
-      strategies.value = items;
-      totalStrategies.value = total || items.length;
+      }
+      strategyCatalog.value = items;
       strategiesComplete.value = true;
     } catch (err) {
-      if (requestId === strategiesRequest) error.value = errorMessage(err, "策略定义加载失败");
+      if (requestId === catalogRequest) error.value = errorMessage(err, "策略定义加载失败");
       throw err;
     } finally {
-      if (requestId === strategiesRequest) listLoading.value = false;
+      if (requestId === catalogRequest) listLoading.value = false;
     }
+  }
+
+  /** 定义有新增或修改后作废完整目录：在途的目录请求不再写入，下次进入运行页、回放页时重新读取。 */
+  function invalidateStrategyCatalog() {
+    catalogRequest += 1;
+    strategiesComplete.value = false;
+    listLoading.value = false;
   }
 
   async function loadInstances(params: Parameters<typeof listInstances>[0] = {}) {
@@ -100,19 +117,19 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
+  /** 读取实例详情：实例 → 定义 → 最新目标；历史结果异步加载，不阻塞目标显示。 */
   async function loadInstanceDetail(instanceId: string, page = 1, pageSize = 20, allHistory = false) {
     const requestId = ++detailRequest;
     const resultRequestId = ++resultRequest;
     detailLoading.value = true;
     detailError.value = "";
     try {
-      const instanceResponse = await getInstance(instanceId);
+      const current = await getInstance(instanceId);
       if (requestId !== detailRequest) return false;
-      const current = instanceResponse.instance;
       instance.value = current;
-      const strategyResponse = await getStrategy(current.strategy_id);
+      const definition = await getStrategy(current.strategy_id).catch(() => null);
       if (requestId !== detailRequest) return false;
-      strategy.value = strategyResponse.strategy;
+      strategy.value = definition;
       const resultTask =
         current.session_id || allHistory
           ? listStrategyResults(instanceId, {
@@ -122,24 +139,21 @@ export const useStrategyStore = defineStore("strategy", () => {
             })
           : Promise.resolve(null);
       void resultTask
-        .then(resultResponse => {
+        .then(response => {
           if (requestId !== detailRequest || resultRequestId !== resultRequest) return;
-          results.value = resultResponse?.items ?? [];
-          totalResults.value = resultResponse?.page.total ?? 0;
+          results.value = response?.items ?? [];
+          totalResults.value = response?.page.total ?? 0;
         })
         .catch(err => {
-          if (requestId === detailRequest && resultRequestId === resultRequest) {
+          if (requestId === detailRequest && resultRequestId === resultRequest)
             detailError.value = errorMessage(err, "策略结果加载失败");
-          }
         });
-      const targetResponse = await listStrategyTargets(instanceId);
+      const targets = await listStrategyTargets(instanceId);
       if (requestId !== detailRequest) return false;
-      targetSnapshot.value = targetResponse;
+      targetSnapshot.value = targets;
       return true;
     } catch (err) {
-      if (requestId === detailRequest) {
-        detailError.value = errorMessage(err, "实例详情加载失败");
-      }
+      if (requestId === detailRequest) detailError.value = errorMessage(err, "实例详情加载失败");
       throw err;
     } finally {
       if (requestId === detailRequest) detailLoading.value = false;
@@ -149,6 +163,8 @@ export const useStrategyStore = defineStore("strategy", () => {
   async function loadResultPage(page: number, pageSize = 20, allHistory = false) {
     if (!instance.value) return;
     if (!allHistory && !instance.value.session_id) {
+      // 使在途的“全部历史”请求作废：迟到的响应不能把旧结果填进无会话的“本次启用”表格。
+      resultRequest += 1;
       results.value = [];
       totalResults.value = 0;
       detailError.value = "";
@@ -171,10 +187,42 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
+  /** 读取一个结果的解释明细；同一结果只请求一次。 */
+  async function loadResultDetail(resultId: string): Promise<StrategyResultDetail> {
+    const cached = resultDetails.value[resultId];
+    if (cached) return cached;
+    const detail = await getStrategyResult(resultId);
+    resultDetails.value = { ...resultDetails.value, [resultId]: detail };
+    return detail;
+  }
+
   async function changeEnabled(instanceId: string, enabled: boolean) {
     operationLoading.value = true;
     try {
-      await setInstanceEnabled(instanceId, enabled);
+      return await setInstanceEnabled(instanceId, enabled);
+    } finally {
+      operationLoading.value = false;
+    }
+  }
+
+  async function removeInstance(instanceId: string) {
+    operationLoading.value = true;
+    try {
+      await deleteInstance(instanceId);
+      instances.value = instances.value.filter(item => item.instance_id !== instanceId);
+      totalInstances.value = Math.max(0, totalInstances.value - 1);
+    } finally {
+      operationLoading.value = false;
+    }
+  }
+
+  async function removeStrategy(strategyId: string) {
+    operationLoading.value = true;
+    try {
+      await deleteStrategy(strategyId);
+      strategies.value = strategies.value.filter(item => item.strategy_id !== strategyId);
+      strategyCatalog.value = strategyCatalog.value.filter(item => item.strategy_id !== strategyId);
+      totalStrategies.value = Math.max(0, totalStrategies.value - 1);
     } finally {
       operationLoading.value = false;
     }
@@ -201,21 +249,24 @@ export const useStrategyStore = defineStore("strategy", () => {
 
   function clearDetail() {
     detailRequest += 1;
+    resultRequest += 1;
     instance.value = null;
     strategy.value = null;
     results.value = [];
+    resultDetails.value = {};
     targetSnapshot.value = null;
     totalResults.value = 0;
-    resultRequest += 1;
     detailError.value = "";
   }
 
   return {
     strategies,
+    strategyCatalog,
     instances,
     instance,
     strategy,
     results,
+    resultDetails,
     targetSnapshot,
     totalStrategies,
     strategiesComplete,
@@ -228,10 +279,14 @@ export const useStrategyStore = defineStore("strategy", () => {
     detailError,
     loadStrategies,
     loadAllStrategies,
+    invalidateStrategyCatalog,
     loadInstances,
     loadInstanceDetail,
     loadResultPage,
+    loadResultDetail,
     changeEnabled,
+    removeInstance,
+    removeStrategy,
     startPolling,
     stopPolling,
     clearDetail

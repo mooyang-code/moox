@@ -85,7 +85,6 @@ type MaintenanceOptions struct {
 	capacityCheckJitterSource func(time.Duration) time.Duration
 	capacityCheckNow          func() time.Time
 	OwnerID                   string
-	Grace                     time.Duration
 	// MaxViewFileBytes triggers an A/B rebuild of a time-series View, which
 	// keeps a bounded number of bars. A record View keeps every row, so an
 	// over-limit record View is reported instead of rebuilt.
@@ -264,6 +263,7 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 	if opts.BackfillPageSize == 0 {
 		opts.BackfillPageSize = viewBackfillBatchSize
 	}
+	s.SetSeriesBars(opts.Bars)
 	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
 		s.mu.Lock()
 		s.periodMetadata = periodMetadata
@@ -506,7 +506,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 					// maintenance can rebuild it, and keep restoring others.
 					log.Printf("storage view skip stale active index on restore space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
 					s.recordFailedRebuild(ctx, opts, auth, view, pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID, err, stats)
-				} else if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
+				} else if err := s.AttachActiveView(ctx, view); err != nil {
 					return err
 				}
 			}
@@ -754,7 +754,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 					activeInvalidErr = err
 				}
 			} else {
-				if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
+				if err := s.AttachActiveView(ctx, view); err != nil {
 					return err
 				}
 				if extended, err := s.extendActiveFactorResultSchema(ctx, opts, auth, view, engine); err != nil {
@@ -1653,9 +1653,8 @@ func (s *Service) discardFailedBuild(ctx context.Context, spaceID, viewID, index
 			runtime.next = ""
 			runtime.status = "active"
 		} else if runtime.active == indexID {
-			runtime.active = ""
+			runtime.clearActiveLocked()
 			runtime.status = "failed"
-			runtime.publishReadStateLocked()
 		}
 		runtime.mu.Unlock()
 	}

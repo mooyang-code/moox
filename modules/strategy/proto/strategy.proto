@@ -6,49 +6,104 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/strategy/proto/strategygen;strategypb";
 
-message InstrumentTarget {
-  string instrument_id = 1;
-  // quantity is retained for legacy Strategy clients. New Strategy results
-  // use target_weight on a distinct field number.
-  string quantity = 2;
-  string target_weight = 3;
-}
-
+// Strategy 是一份策略定义：DSL 文本及其内容哈希。
 message Strategy {
   string strategy_id = 1;
   string name = 2;
-  string manifest_yaml = 3;
-  string source_code = 4;
-  string source_hash = 5;
-  string created_at = 6;
-  string kind = 7;
-  string compiled_json = 8;
-  string dsl_yaml = 9;
-  string strategy_name = 10;
+  string dsl_yaml = 3;
+  string dsl_hash = 4;
+  string created_at = 5;
+  string updated_at = 6;
 }
 
+// StrategyInstance 把定义绑定到一个空间、一个 View 和可选的组合账户。
 message StrategyInstance {
   string instance_id = 1;
   string strategy_id = 2;
   string space_id = 3;
-  string input_bindings_json = 4;
+  string view_id = 4;
   string logical_account_id = 5;
   bool enabled = 6;
   string session_id = 7;
-  string created_at = 8;
-  string updated_at = 9;
+  // 启用时固化的解析结果（只读）：bar、日历、市场类型、每列的 origin_factor_id 与 definition_hash
+  string resolved_json = 8;
+  string health = 9;                     // ok | degraded
+  string created_at = 10;
+  string updated_at = 11;
 }
 
+message InstrumentTarget {
+  string instrument_id = 1;
+  string target_weight = 2;
+}
+
+// StrategyResult 是一个处理过的周期：ok 带目标，skipped 带原因。
 message StrategyResult {
   string result_id = 1;
-  string created_at = 10;
-  string period_time = 11;
-  repeated InstrumentTarget targets = 12;
-  string instance_id = 14;
-  string session_id = 15;
-  string valid_until = 16;
-  string publish_status = 17;
-  string rule_states_json = 18;
+  string instance_id = 2;
+  string session_id = 3;
+  string bar_end_time = 4;
+  string valid_until = 5;
+  string status = 6;                     // ok | skipped
+  string skip_reason = 7;
+  string dsl_hash = 8;
+  repeated InstrumentTarget targets = 9;
+  string summary_json = 10;              // |U|、各规则 |E|、|G|、|A|、|M|、各阶段数量、gross、net、换手、现金
+  string input_json = 11;                // view_id、bar_start、事件 ID、各因子 definition_hash
+  string rule_states_json = 12;
+  string publish_status = 13;            // none | pending | sent | cancelled
+  string created_at = 14;
+}
+
+// StrategyResultItem 是一条规则下一个标的的解释。
+message StrategyResultItem {
+  string rule_id = 1;
+  string instrument_id = 2;
+  string stage = 3;                      // aged_out | missing | filtered | scored | idle | weighted | dropped
+  string score = 4;
+  int32 rank = 5;
+  string weight = 6;
+  string reason = 7;
+}
+
+// Replay 是一次基于 View 的研究回放任务。
+message Replay {
+  string replay_id = 1;
+  string strategy_id = 2;
+  string dsl_yaml = 3;
+  string space_id = 4;
+  string view_id = 5;
+  string start_time = 6;
+  string end_time = 7;
+  double fee_bps = 8;
+  string status = 9;                     // pending | running | done | failed | cancelled
+  string progress_time = 10;
+  string metrics_json = 11;              // 累计收益、年化、最大回撤、平均换手、平均持仓数、跳过周期数、局限性标注
+  string error = 12;
+  string created_at = 13;
+  string updated_at = 14;
+  string dsl_hash = 15;                  // 被回放的 DSL 版本
+  string instance_id = 16;               // 从实例发起时的来源实例
+  string session_id = 17;                // 从实例发起时固化 DSL 的会话
+  string calendar = 18;                  // 回放所用的日历（crypto_24x7 | cn_stock）；cn_stock 的区间按上海日期解释
+}
+
+// ReplayBar 是回放中一个周期的记录。
+message ReplayBar {
+  string bar_end_time = 1;
+  string status = 2;
+  repeated InstrumentTarget targets = 3;
+  string positions_json = 4;             // 理论持仓账本：数量、估值、现金、估值是否陈旧
+  string summary_json = 5;
+  double bar_return = 6;
+  double equity = 7;
+  double turnover = 8;
+  double fee = 9;
+  int32 holdings = 10;                   // 持仓数（含冻结）
+  int32 frozen = 11;                     // 缺价冻结的持仓数
+  string skip_reason = 12;
+  int32 unfilled = 13;                   // 目标未达成的标的数
+  int32 liquidated = 14;                 // 本期清算的标的数
 }
 
 message PageRequest {
@@ -56,100 +111,100 @@ message PageRequest {
   int32 page_size = 2;
 }
 
-message CreateStrategyReq {
-  Strategy strategy = 1;
-}
+message CreateStrategyReq { Strategy strategy = 1; }
+message CreateStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
+message UpdateStrategyReq { string strategy_id = 1; string dsl_yaml = 2; }
+message UpdateStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
+message GetStrategyReq { string strategy_id = 1; }
+message GetStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
+message ListStrategiesReq { PageRequest page = 1; }
+message ListStrategiesRsp { common.RetInfo ret_info = 1; repeated Strategy strategies = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message DeleteStrategyReq { string strategy_id = 1; }
+message DeleteStrategyRsp { common.RetInfo ret_info = 1; }
 
-message CreateStrategyRsp {
+message ValidateStrategyReq {
+  string dsl_yaml = 1;
+  string view_id = 2;                    // 可选；给出时做列解析并在最新周期试算
+}
+message ValidateStrategyRsp {
   common.RetInfo ret_info = 1;
-  Strategy strategy = 2;
-}
-
-message UpdateStrategyReq {
-  string strategy_id = 1;
-  string dsl_yaml = 2;
-}
-
-message UpdateStrategyRsp {
-  common.RetInfo ret_info = 1;
-  Strategy strategy = 2;
-}
-
-message GetStrategyReq {
-  string strategy_id = 1;
-}
-
-message GetStrategyRsp {
-  common.RetInfo ret_info = 1;
-  Strategy strategy = 2;
-}
-
-message ListStrategiesReq {
-  PageRequest page = 1;
-}
-
-message ListStrategiesRsp {
-  common.RetInfo ret_info = 1;
-  repeated Strategy strategies = 2;
-  int64 total = 3;
-  int32 page = 4;
-  int32 page_size = 5;
-}
-
-message ListStrategyResultsReq {
-  PageRequest page = 1;
-  string instance_id = 3;
-  string session_id = 4;
-}
-
-message ListStrategyResultsRsp {
-  common.RetInfo ret_info = 1;
-  repeated StrategyResult results = 2;
-  int64 total = 3;
-  int32 page = 4;
-  int32 page_size = 5;
-}
-
-message GetStrategyResultReq {
-  string result_id = 1;
-}
-
-message GetStrategyResultRsp {
-  common.RetInfo ret_info = 1;
-  StrategyResult result = 2;
-}
-
-message ListStrategyTargetsReq {
-  string instance_id = 2;
-}
-
-message ListStrategyTargetsRsp {
-  common.RetInfo ret_info = 1;
-  repeated InstrumentTarget targets = 2;
-  string session_id = 4;
-  string bar_end_time = 5;
-  string valid_until = 6;
+  repeated string diagnostics = 2;
+  string resolved_json = 3;
+  StrategyResult trial = 4;              // 试算结果，不落库
+  repeated StrategyResultItem trial_items = 5;
 }
 
 message CreateStrategyInstanceReq { StrategyInstance instance = 1; }
 message CreateStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
+message UpdateStrategyInstanceReq { StrategyInstance instance = 1; }
+message UpdateStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
 message GetStrategyInstanceReq { string instance_id = 1; }
 message GetStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
 message ListStrategyInstancesReq { PageRequest page = 1; string strategy_id = 2; string space_id = 3; optional bool enabled = 4; }
 message ListStrategyInstancesRsp { common.RetInfo ret_info = 1; repeated StrategyInstance instances = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
 message SetStrategyInstanceEnabledReq { string instance_id = 1; bool enabled = 2; }
 message SetStrategyInstanceEnabledRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
+message DeleteStrategyInstanceReq { string instance_id = 1; }
+message DeleteStrategyInstanceRsp { common.RetInfo ret_info = 1; }
+
+message ListStrategyResultsReq { PageRequest page = 1; string instance_id = 2; string session_id = 3; }
+message ListStrategyResultsRsp { common.RetInfo ret_info = 1; repeated StrategyResult results = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message GetStrategyResultReq { string result_id = 1; }
+message GetStrategyResultRsp {
+  common.RetInfo ret_info = 1;
+  StrategyResult result = 2;
+  repeated StrategyResultItem items = 3;
+  string dsl_yaml = 4;                   // 该结果所属会话固化的 DSL 版本
+  string resolved_json = 5;              // 该结果所属会话固化的绑定解析
+}
+message ListStrategyTargetsReq { string instance_id = 1; }
+message ListStrategyTargetsRsp {
+  common.RetInfo ret_info = 1;
+  repeated InstrumentTarget targets = 2;
+  string session_id = 3;
+  string bar_end_time = 4;
+  string valid_until = 5;
+  string result_id = 6;
+}
+
+message StartReplayReq {
+  string strategy_id = 1;                // strategy_id、dsl_yaml、instance_id 三选一：定义当前的 DSL、给定文本或实例当前会话固化的 DSL
+  string dsl_yaml = 2;
+  string view_id = 3;
+  string start_time = 4;
+  string end_time = 5;
+  double fee_bps = 6;
+  string instance_id = 7;
+}
+message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; int32 bar_count = 3; string first_bar_end = 4; string last_bar_end = 5; }
+message GetReplayReq { string replay_id = 1; }
+message GetReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
+message ListReplaysReq { PageRequest page = 1; }
+message ListReplaysRsp { common.RetInfo ret_info = 1; repeated Replay replays = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message ListReplayBarsReq { string replay_id = 1; PageRequest page = 2; bool brief = 3; }  // brief 只返回曲线与摘要字段，不含目标、持仓与摘要 JSON
+message ListReplayBarsRsp { common.RetInfo ret_info = 1; repeated ReplayBar bars = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message CancelReplayReq { string replay_id = 1; }
+message CancelReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
 
 service StrategyMgr {
   rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
   rpc UpdateStrategy(UpdateStrategyReq) returns (UpdateStrategyRsp);
   rpc GetStrategy(GetStrategyReq) returns (GetStrategyRsp);
   rpc ListStrategies(ListStrategiesReq) returns (ListStrategiesRsp);
-  rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
-  rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);
-  rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);
+  rpc DeleteStrategy(DeleteStrategyReq) returns (DeleteStrategyRsp);
+  rpc ValidateStrategy(ValidateStrategyReq) returns (ValidateStrategyRsp);
   rpc CreateStrategyInstance(CreateStrategyInstanceReq) returns (CreateStrategyInstanceRsp);
+  rpc UpdateStrategyInstance(UpdateStrategyInstanceReq) returns (UpdateStrategyInstanceRsp);
   rpc GetStrategyInstance(GetStrategyInstanceReq) returns (GetStrategyInstanceRsp);
   rpc ListStrategyInstances(ListStrategyInstancesReq) returns (ListStrategyInstancesRsp);
   rpc SetStrategyInstanceEnabled(SetStrategyInstanceEnabledReq) returns (SetStrategyInstanceEnabledRsp);
+  rpc DeleteStrategyInstance(DeleteStrategyInstanceReq) returns (DeleteStrategyInstanceRsp);
+  rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
+  rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);
+  rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);
+  rpc StartReplay(StartReplayReq) returns (StartReplayRsp);
+  rpc GetReplay(GetReplayReq) returns (GetReplayRsp);
+  rpc ListReplays(ListReplaysReq) returns (ListReplaysRsp);
+  rpc ListReplayBars(ListReplayBarsReq) returns (ListReplayBarsRsp);
+  rpc CancelReplay(CancelReplayReq) returns (CancelReplayRsp);
 }

@@ -10,7 +10,9 @@
           <span>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</span>
         </div>
         <div class="page-actions">
-          <a-switch v-model="autoRefresh" size="small" /><span class="muted">自动刷新</span
+          <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" /><span class="muted" aria-hidden="true"
+            >自动刷新</span
+          ><a-button :disabled="!store.instance" @click="openReplay">回放</a-button
           ><a-button :loading="store.detailLoading" aria-label="刷新实例详情" @click="refresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
@@ -21,17 +23,26 @@
         }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
       >
       <template v-if="store.instance">
-        <a-descriptions :column="{ xs: 1, sm: 3 }" bordered class="summary"
-          ><a-descriptions-item label="实例状态"
-            ><StatusBadge :enabled="store.instance.enabled" :uncertain="controlUncertain" /></a-descriptions-item
-          ><a-descriptions-item label="模式"
+        <a-descriptions :column="{ xs: 1, sm: 3 }" bordered class="summary">
+          <a-descriptions-item label="实例状态"
+            ><StatusBadge :enabled="store.instance.enabled" :uncertain="controlUncertain" :health="store.instance.health"
+          /></a-descriptions-item>
+          <a-descriptions-item label="模式"
             ><a-tag :color="store.instance.logical_account_id ? 'orange' : 'blue'">{{
               store.instance.logical_account_id ? "交易模式" : "仅计算"
             }}</a-tag></a-descriptions-item
-          ><a-descriptions-item label="策略 ID">{{ store.instance.strategy_id }}</a-descriptions-item
-          ><a-descriptions-item label="运行会话"
+          >
+          <a-descriptions-item label="策略定义"
+            >{{ store.strategy?.name || "定义已删除" }} ·
+            <span class="mono">{{ store.instance.strategy_id }}</span></a-descriptions-item
+          >
+          <a-descriptions-item label="View"
+            ><span class="mono">{{ store.instance.view_id }}</span></a-descriptions-item
+          >
+          <a-descriptions-item label="运行会话"
             ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
-          ><a-descriptions-item label="逻辑账户"
+          >
+          <a-descriptions-item label="组合账户"
             ><a-link
               v-if="store.instance.logical_account_id"
               @click="
@@ -42,12 +53,13 @@
               "
               >{{ store.instance.logical_account_id }}</a-link
             ><span v-else>未关联账户</span></a-descriptions-item
-          ><a-descriptions-item label="更新时间">{{
-            formatStrategyTime(store.instance.updated_at)
-          }}</a-descriptions-item></a-descriptions
-        >
+          >
+        </a-descriptions>
         <a-alert v-if="!store.instance.enabled && store.instance.session_id" type="warning" show-icon class="top-alert"
-          >实例已经停用，但会话仍存在。后台账户释放或控制操作可能尚未完成，请不要将旧目标当作当前有效仓位。</a-alert
+          >实例已经停用，但会话仍存在。后台账户释放可能尚未完成，请不要将旧目标当作当前有效仓位。</a-alert
+        >
+        <a-alert v-if="store.instance.health === 'degraded'" type="error" show-icon class="top-alert"
+          >最近一期因配置问题跳过（例如列被删除或 View 失效）。请检查后停用并重新启用实例。</a-alert
         >
         <OperationPanel
           :instance-id="instanceId"
@@ -70,11 +82,9 @@
               :scope="resultScope"
               @page="loadResults"
           /></a-tab-pane>
-          <a-tab-pane key="bindings" title="输入绑定">
-            <pre class="code-block">{{ prettyBindings }}</pre>
-          </a-tab-pane>
+          <a-tab-pane key="bindings" title="输入绑定"><ResolvedTable :resolved-json="store.instance.resolved_json" /></a-tab-pane>
           <a-tab-pane key="definition" title="DSL 定义">
-            <pre class="code-block">{{ store.strategy?.dsl_yaml || "{}" }}</pre>
+            <pre class="code-block">{{ store.strategy?.dsl_yaml || "定义已删除；历史结果的解释里保留了当时的 DSL 版本" }}</pre>
           </a-tab-pane>
         </a-tabs>
       </template>
@@ -89,10 +99,12 @@ import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import OperationPanel from "@/views/strategy/components/strategy-operation-panel.vue";
+import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultTimeline from "@/views/strategy/components/strategy-result-table.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import TargetTable from "@/views/strategy/components/strategy-target-table.vue";
-import { deriveTargetState, formatStrategyTime } from "@/views/strategy/model";
+import { deriveTargetState } from "@/views/strategy/model";
+import { useNowClock } from "@/views/strategy/use-now-clock";
 
 defineOptions({ name: "StrategyDetail" });
 const route = useRoute();
@@ -106,16 +118,11 @@ const resultPageSize = 20;
 const resultScope = ref<"session" | "all">("session");
 const controlUncertain = ref(false);
 const autoRefresh = ref(true);
+// 目标有效期要随时间流逝重算：关闭自动刷新后页面不再请求数据，只读 Date.now() 的 computed 不会自己更新。
+const nowMs = useNowClock();
 const targetState = computed(() =>
-  store.instance && !controlUncertain.value ? deriveTargetState(store.instance, store.targetSnapshot) : "unknown"
+  store.instance && !controlUncertain.value ? deriveTargetState(store.instance, store.targetSnapshot, nowMs.value) : "unknown"
 );
-const prettyBindings = computed(() => {
-  try {
-    return JSON.stringify(JSON.parse(store.instance?.input_bindings_json || "{}"), null, 2);
-  } catch {
-    return store.instance?.input_bindings_json || "{}";
-  }
-});
 async function load(reconcileControlState = false) {
   try {
     const applied = await store.loadInstanceDetail(
@@ -133,7 +140,7 @@ async function load(reconcileControlState = false) {
     }
     if (reconcileControlState && applied && !store.detailError) controlUncertain.value = false;
   } catch {
-    /* error is rendered by the store */
+    /* 错误由 store 展示 */
   }
 }
 async function refresh() {
@@ -142,7 +149,7 @@ async function refresh() {
 async function loadResults(page: number, scope: "session" | "all") {
   resultPage.value = page;
   resultScope.value = scope;
-  await store.loadResultPage(page, resultPageSize, scope === "all");
+  await store.loadResultPage(page, resultPageSize, scope === "all").catch(() => undefined);
 }
 async function reconcileControl() {
   await load(true);
@@ -152,6 +159,10 @@ function handleControlStarted() {
 }
 function handleControlFailed() {
   controlUncertain.value = true;
+}
+function openReplay() {
+  if (store.instance)
+    router.push({ name: "strategy-replay", query: { instance_id: store.instance.instance_id, view_id: store.instance.view_id } });
 }
 onMounted(() => {
   load();

@@ -63,6 +63,7 @@ func DefToPB(factor domain.FactorDef) *factorpb.FactorDef {
 		ParamsJson:           factor.ParamsJSON,
 		LookbackPeriods:      int32(factor.LookbackPeriods),
 		AllowPartialUniverse: factor.AllowPartialUniverse,
+		DefinitionHash:       domain.DefinitionHash(factor),
 		CreatedAt:            FormatTime(factor.CreatedAt),
 		UpdatedAt:            FormatTime(factor.UpdatedAt),
 	}
@@ -104,6 +105,7 @@ func RunSummaryToPB(summary domain.SetRunSummary) *factorpb.SetRunSummary {
 			Status:         factor.Status,
 			FailedSubjects: CloneStrings(factor.FailedSubjects),
 			SourceHash:     factor.SourceHash,
+			DefinitionHash: factor.DefinitionHash,
 		})
 	}
 	return &factorpb.SetRunSummary{
@@ -122,6 +124,7 @@ func RunSummaryFromPB(pb *factorpb.SetRunSummary) domain.SetRunSummary {
 		factors = append(factors, domain.FactorPeriodState{
 			FactorID: factor.GetFactorId(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SourceHash: factor.GetSourceHash(),
+			DefinitionHash: factor.GetDefinitionHash(),
 		})
 	}
 	return domain.SetRunSummary{

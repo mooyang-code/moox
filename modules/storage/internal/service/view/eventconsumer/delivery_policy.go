@@ -119,15 +119,7 @@ func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliverie
 	}
 	retryCount := 0
 	for ctx.Err() == nil {
-		if c.config.Lease != nil {
-			if err := c.config.Lease.Acquire(ctx); err != nil {
-				return errors.Join(err, batchHeartbeatError(heartbeats))
-			}
-		}
 		err := apply(ctx)
-		if c.config.Lease != nil {
-			c.config.Lease.Release()
-		}
 		if err == nil {
 			settled = true
 			acked := make([]bool, len(deliveries))
@@ -267,15 +259,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 	defer func() { heartbeat.stop() }()
 	retryCount := 0
 	for ctx.Err() == nil {
-		if c.config.Lease != nil {
-			if err := c.config.Lease.Acquire(ctx); err != nil {
-				return errors.Join(err, heartbeat.err())
-			}
-		}
 		err := apply(ctx, delivery)
-		if c.config.Lease != nil {
-			c.config.Lease.Release()
-		}
 		if err == nil || IsDeferred(err) {
 			settled = true
 			// Applying an event is deliberately separate from ACK retry:

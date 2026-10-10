@@ -6,16 +6,28 @@ const source = readFileSync(resolve(process.cwd(), "src/views/strategy/editor/in
 
 describe("strategy DSL editor contract", () => {
   it("keeps create and update as definition-only operations", () => {
-    expect(source).toContain("createStrategy({ strategy_id: strategyId.value.trim(), dsl_yaml: source.value })");
-    expect(source).toContain("updateStrategy(strategyId.value.trim(), source.value)");
+    expect(source).toContain("createStrategy({ strategy_id: strategyId.value.trim() || undefined, dsl_yaml: submitted })");
+    expect(source).toContain("updateStrategy(strategyId.value.trim(), submitted)");
     expect(source).not.toContain("createInstance(");
     expect(source).not.toContain("enabled: true");
   });
 
-  it("protects a dirty draft when leaving or replacing a template", () => {
+  it("protects a dirty draft and offers a server-side trial", () => {
     expect(source).toContain("当前 DSL 尚未保存，确认替换？");
     expect(source).toContain("当前 DSL 尚未保存，确认离开？");
     expect(source).toContain("onBeforeRouteLeave");
     expect(source).toContain("onBeforeRouteUpdate");
+    expect(source).toContain("<TrialPanel");
+  });
+
+  it("marks only the submitted snapshot as saved and locks the text while saving", () => {
+    expect(source).toContain("const submitted = source.value;");
+    expect(source).toContain("original.value = submitted;");
+    expect(source).not.toContain("original.value = source.value;\n    Message.success");
+    expect(source).toContain(':readonly="saving"');
+  });
+
+  it("invalidates the cached definition catalog after a successful save", () => {
+    expect(source).toContain("strategyStore.invalidateStrategyCatalog();");
   });
 });

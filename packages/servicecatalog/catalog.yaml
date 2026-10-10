@@ -878,34 +878,56 @@ components:
           - UpdateStrategy
           - GetStrategy
           - ListStrategies
-          - ListStrategyResults
-          - GetStrategyResult
-          - ListStrategyTargets
+          - DeleteStrategy
+          - ValidateStrategy
           - CreateStrategyInstance
+          - UpdateStrategyInstance
           - GetStrategyInstance
           - ListStrategyInstances
           - SetStrategyInstanceEnabled
-        read_only_methods:
-          - GetStrategy
-          - ListStrategies
+          - DeleteStrategyInstance
           - ListStrategyResults
           - GetStrategyResult
           - ListStrategyTargets
+          - StartReplay
+          - GetReplay
+          - ListReplays
+          - ListReplayBars
+          - CancelReplay
+        read_only_methods:
+          - GetStrategy
+          - ListStrategies
+          - ValidateStrategy
           - GetStrategyInstance
           - ListStrategyInstances
+          - ListStrategyResults
+          - GetStrategyResult
+          - ListStrategyTargets
+          - GetReplay
+          - ListReplays
+          - ListReplayBars
         acl:
           - methods:
               - CreateStrategy
               - UpdateStrategy
               - GetStrategy
               - ListStrategies
-              - ListStrategyResults
-              - GetStrategyResult
-              - ListStrategyTargets
+              - DeleteStrategy
+              - ValidateStrategy
               - CreateStrategyInstance
+              - UpdateStrategyInstance
               - GetStrategyInstance
               - ListStrategyInstances
               - SetStrategyInstanceEnabled
+              - DeleteStrategyInstance
+              - ListStrategyResults
+              - GetStrategyResult
+              - ListStrategyTargets
+              - StartReplay
+              - GetReplay
+              - ListReplays
+              - ListReplayBars
+              - CancelReplay
             callers:
               - console
               - moox-cli

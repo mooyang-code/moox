@@ -74,7 +74,7 @@ func TestFactorResultColumnAddDoesNotRebuild(t *testing.T) {
 			activePrimaryDatasetAttr: datasetID,
 		},
 	}}}
-	if err := svc.AttachActiveViewWithGrace(ctx, metadata.view, 0); err != nil {
+	if err := svc.AttachActiveView(ctx, metadata.view); err != nil {
 		t.Fatalf("attach active view: %v", err)
 	}
 	newFieldEvent := &pb.RowFieldUpsert{
