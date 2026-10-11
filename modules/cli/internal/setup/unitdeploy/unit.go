@@ -44,6 +44,9 @@ func unitConfiguration(snapshot *setupconfig.Snapshot, profile string) ([]byte, 
 	return nil, nil
 }
 
+// storageNodeID 是单个存储节点的固定 ID：元数据种子、Collector 与 Storage 的默认值都使用它。
+const storageNodeID = "storage-node-0"
+
 func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {
 	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
 	environment := make(map[string]map[string]string, len(components))
@@ -87,7 +90,8 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			return nil, errors.New("native Storage requires primary, node and view on one host; split-role RPC routing is not configured")
 		}
 		if id == "storage-node" {
-			values["MOOX_STORAGE_NODE_ID"] = hostID + "-storage-node"
+			// 元数据种子、Collector 与 Storage 默认值都使用 storage-node-0；单个存储节点沿用该 ID。
+			values["MOOX_STORAGE_NODE_ID"] = storageNodeID
 		}
 	}
 	return environment, nil

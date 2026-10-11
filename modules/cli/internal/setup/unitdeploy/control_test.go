@@ -55,7 +55,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	require.Equal(t, "../../console-proxy/data/caddy/internal-ca.sha256", https["ca_baseline"])
 	require.Equal(t, 7, monitor["metrics"].(map[string]any)["no_data_intervals"])
 	require.Equal(t, "config/dataset-health-policy.yaml", monitor["metrics"].(map[string]any)["dataset_health_policy_path"])
-	require.Equal(t, "storage1-storage-node", collector["storage"].(map[string]any)["result_data_node_id"])
+	require.Equal(t, "storage-node-0", collector["storage"].(map[string]any)["result_data_node_id"])
 	require.Equal(t, "original-scf-id", collector["scf_access"].(map[string]any)["key_id"])
 	require.Equal(t, "7m", collector["period_readiness"].(map[string]any)["grace"])
 	require.Equal(t, 19, collector["collector_retention"].(map[string]any)["max_rows_per_pass"])

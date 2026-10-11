@@ -156,7 +156,8 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			if node == "" {
 				return nil, errors.New("Collector requires a registered Storage node placement")
 			}
-			storage["result_data_node_id"] = node + "-storage-node"
+			// 与 unit.go 里 Storage 节点的固定 ID 一致（元数据种子也使用该 ID）。
+			storage["result_data_node_id"] = storageNodeID
 		case "factor-mgr":
 			if python == "" || !path.IsAbs(python) || path.Clean(python) != python || strings.ContainsAny(python, "\x00\r\n") {
 				return nil, errors.New("Factor requires a verified prepared target Python interpreter")
