@@ -311,6 +311,9 @@ func TestKlineFreshnessEvaluatorTruncatedLaggingListDoesNotKeepAlertingForRetire
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
-	require.True(t, reports[0].Success, reports[0].Diagnostic)
+	// 名单被截断，只能推出“落后数下界为零”：不能宣告健康，也不误报过期，本轮按无法判定跳过
+	require.True(t, reports[0].Skipped, reports[0].Diagnostic)
+	require.False(t, reports[0].Success)
+	require.Equal(t, "lagging_subjects_truncated", reports[0].Reason)
 	require.Zero(t, reports[0].StaleCount)
 }

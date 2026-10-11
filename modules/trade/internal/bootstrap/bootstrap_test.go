@@ -52,7 +52,7 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	}
 	for _, service := range config.Server.Service {
 		if service.Name == "trpc.moox.trade.equity.timer" {
-			require.Equal(t, "0 * * * * *", service.Network)
+			require.Equal(t, "*/20 * * * * *", service.Network, "采样周期必须短于权益有效期，否则策略目标转换会出现固定空档")
 		}
 	}
 }

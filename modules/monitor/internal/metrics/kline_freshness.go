@@ -496,6 +496,7 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 		}
 	}
 	report.StaleCount = max(summary.lagging-inactive, 0)
+	namesTruncated := active != nil && summary.lagging > len(summary.laggingSubjects)
 	trackingMoved := !summary.trackedSince.IsZero() && !summary.latest.Before(summary.trackedSince.Add(bar))
 	if active != nil && summary.lagging > len(summary.laggingSubjects) {
 		// 落后对象名单被截断（只上报最落后的若干个）：名单只能用于展示，不能用来扣减完整计数，
@@ -518,6 +519,12 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 		report.Reason = "fresh"
 	} else {
 		report.Reason = "business_data_stale"
+	}
+	if namesTruncated && report.StaleCount == 0 {
+		// 名单被截断，只能推出“落后数下界为零”：无法确认活跃对象是否都在更新，不能据此宣告健康（也不触发新告警）。
+		// 按“无法判定”跳过本轮，已有告警保持，等名单不再截断或有确定结论。
+		report.Skipped, report.Success = true, false
+		report.Reason = "lagging_subjects_truncated"
 	}
 	report.Diagnostic = formatKlineDiagnostic(*report)
 }
