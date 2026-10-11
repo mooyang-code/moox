@@ -846,14 +846,15 @@ function startPolling() {
 }
 
 onMounted(() => {
-  loadStrategies();
+  // 策略定义按空间授权：空间尚未初始化时请求会被拒绝，由下面的空间监听在就绪后补载。
+  if (spaceStore.selectedSpaceId) loadStrategies();
   loadViews();
   loadReplays();
   startPolling();
 });
 watch(
   () => spaceStore.selectedSpaceId,
-  () => {
+  next => {
     generation += 1;
     selectRequest += 1;
     tableRequest += 1;
@@ -861,8 +862,9 @@ watch(
     selected.value = null;
     detailLoading.value = false;
     awaitingMetrics.value = null;
-    // 定义列表与空间无关、只在挂载时加载：它的错误保留，其余来源的错误随空间切换清空。
-    for (const key of Object.keys(errors) as (keyof typeof errors)[]) if (key !== "strategies") errors[key] = "";
+    // 策略定义按空间授权，随空间切换重新加载；各来源的错误随空间切换清空。
+    for (const key of Object.keys(errors) as (keyof typeof errors)[]) errors[key] = "";
+    if (next) void loadStrategies();
     replays.value = [];
     replayTotal.value = 0;
     series.value = [];

@@ -727,16 +727,30 @@ describe("strategy replay page", () => {
     await flushPromises();
   });
 
-  it("keeps the definition list error across space switches", async () => {
+  it("reloads the definition list when the space switches and clears its previous error", async () => {
     api.loadAllStrategies.mockRejectedValueOnce(new Error("定义服务不可用"));
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     const wrapper = mountPage();
     await flushPromises();
     expect(wrapper.text()).toContain("策略定义加载失败：定义服务不可用");
+    const before = api.loadAllStrategies.mock.calls.length;
     api.space!.selectedSpaceId = "stock";
     await nextTick();
     await flushPromises();
-    expect(wrapper.text()).toContain("策略定义加载失败：定义服务不可用");
+    expect(api.loadAllStrategies.mock.calls.length).toBe(before + 1);
+    expect(wrapper.text()).not.toContain("策略定义加载失败");
+  });
+
+  it("waits for the selected space before loading definitions", async () => {
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.space!.selectedSpaceId = "";
+    mountPage();
+    await flushPromises();
+    expect(api.loadAllStrategies).not.toHaveBeenCalled();
+    api.space!.selectedSpaceId = "crypto";
+    await nextTick();
+    await flushPromises();
+    expect(api.loadAllStrategies).toHaveBeenCalledTimes(1);
   });
 
   it("does not show the table mask while polling", async () => {

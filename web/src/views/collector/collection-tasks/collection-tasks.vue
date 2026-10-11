@@ -1155,6 +1155,11 @@ function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
 }
 
 async function loadDataNodes() {
+  // DataNode 列表是全局运维接口，只有全局管理员可读；普通成员使用系统默认节点。
+  if (!account.value.user?.admin) {
+    dataNodes.value = [];
+    return;
+  }
   loadingDataNodes.value = true;
   try {
     const nodes: DataNode[] = [];
@@ -1297,7 +1302,10 @@ watch(selectedSpaceId, () => {
   if (outputFieldsVisible.value) void loadOutputFieldCatalog();
   pagination.current = 1;
   // 空间初始化完成或切换后重新加载；数据类型配置同样按空间授权，不能只在挂载时请求一次。
-  if (selectedSpaceId.value) void getDataTypeConfigs();
+  if (selectedSpaceId.value) {
+    void getDataTypeConfigs();
+    void loadDataNodes();
+  }
   void getTaskList();
   void loadSources();
   void loadTags();
