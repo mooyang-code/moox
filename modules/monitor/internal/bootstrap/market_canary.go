@@ -232,14 +232,7 @@ func buildMonitorMarketCanary(
 						continue
 					}
 					checkID := subjectTagCheckID(spaceID, tag.GetTagId())
-					check, getErr := runtime.Repositories.Checks.Get(runCtx, spaceID, checkID)
-					if errors.Is(getErr, gorm.ErrRecordNotFound) {
-						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "采集对象标签 · " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
-						getErr = runtime.Repositories.Checks.Create(runCtx, check)
-					} else if getErr == nil && check.Name != "Subject tag "+tag.GetTagName() {
-						check.Name = "Subject tag " + tag.GetTagName()
-						getErr = runtime.Repositories.Checks.Update(runCtx, check)
-					}
+					check, getErr := ensureSubjectTagCheck(runCtx, runtime.Repositories, spaceID, tag)
 					if getErr != nil {
 						err = errors.Join(err, getErr)
 						continue
@@ -268,6 +261,26 @@ func buildMonitorMarketCanary(
 		}
 	}
 	return run, probe, nil
+}
+
+// ensureSubjectTagCheck 创建或修复标签检查：探针曾被关闭而退役（Enabled=false）后重新启用，必须恢复检查，
+// 默认告警规则随周期同步重建。
+func ensureSubjectTagCheck(ctx context.Context, repositories *store.Repositories, spaceID string, tag *storagepb.Tag) (*domain.Check, error) {
+	checkID := subjectTagCheckID(spaceID, tag.GetTagId())
+	check, err := repositories.Checks.Get(ctx, spaceID, checkID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "采集对象标签 · " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
+		return check, repositories.Checks.Create(ctx, check)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if check.Name != "Subject tag "+tag.GetTagName() || !check.Enabled {
+		check.Name = "Subject tag " + tag.GetTagName()
+		check.Enabled = true
+		return check, repositories.Checks.Update(ctx, check)
+	}
+	return check, nil
 }
 
 func firstNonEmptyString(values ...string) string {

@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -157,4 +158,28 @@ func TestRetireUnconfiguredMarketCanariesMatchesBySpaceAndCheckID(t *testing.T) 
 	require.True(t, kept.Enabled)
 	_, err = repositories.Alerts.GetRule(ctx, "space-b", "default:"+checkID)
 	require.NoError(t, err)
+}
+
+func TestEnsureSubjectTagCheckReenablesCheckRetiredByDisabledCanary(t *testing.T) {
+	repositories := openMonitorTestRepositories(t)
+	ctx := t.Context()
+	tag := &storagepb.Tag{TagId: "binance_spot", TagName: "币安现货"}
+	created, err := ensureSubjectTagCheck(ctx, repositories, "crypto", tag)
+	require.NoError(t, err)
+	require.True(t, created.Enabled)
+
+	// 探针关闭并重启：检查被退役（停用）
+	cfg := &config.Config{}
+	require.NoError(t, retireObsoleteBusinessChecks(ctx, repositories, cfg))
+	retired, err := repositories.Checks.Get(ctx, "crypto", created.CheckID)
+	require.NoError(t, err)
+	require.False(t, retired.Enabled)
+
+	// 重新启用后的采样必须恢复检查
+	restored, err := ensureSubjectTagCheck(ctx, repositories, "crypto", tag)
+	require.NoError(t, err)
+	require.True(t, restored.Enabled)
+	stored, err := repositories.Checks.Get(ctx, "crypto", created.CheckID)
+	require.NoError(t, err)
+	require.True(t, stored.Enabled)
 }

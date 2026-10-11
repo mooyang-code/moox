@@ -82,9 +82,11 @@ func (s *Syncer) RunDueTags(ctx context.Context) error {
 
 // RunDueAttributes is the scheduled entry point for attribute jobs.
 func (s *Syncer) RunDueAttributes(ctx context.Context) error {
+	// 触发时间在等待锁之前固定：等待手动同步期间跨过计划分钟时仍按触发时刻判断到期
+	triggeredAt := s.Attributes.Current()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Attributes.RunOnce(ctx)
+	return s.Attributes.RunOnceAt(ctx, triggeredAt)
 }
 
 // SyncNow runs the selected tags (and optionally attribute jobs) immediately.

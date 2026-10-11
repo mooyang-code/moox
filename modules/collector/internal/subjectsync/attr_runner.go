@@ -26,11 +26,22 @@ type AttributeRunner struct {
 	Metrics      *Metrics
 }
 
-func (r *AttributeRunner) RunOnce(ctx context.Context) error {
-	now := time.Now().UTC()
+// Current 返回调度判断使用的当前时间。
+func (r *AttributeRunner) Current() time.Time {
 	if r.Now != nil {
-		now = r.Now().UTC()
+		return r.Now().UTC()
 	}
+	return time.Now().UTC()
+}
+
+func (r *AttributeRunner) RunOnce(ctx context.Context) error {
+	return r.RunOnceAt(ctx, r.Current())
+}
+
+// RunOnceAt 以给定的触发时间判断任务是否到期。定时回调应在等待共享同步锁之前固定触发时间，
+// 否则锁被手动同步占用跨过计划分钟时，获得锁后再取时间会让当次任务落在窗口之外被跳过。
+func (r *AttributeRunner) RunOnceAt(ctx context.Context, now time.Time) error {
+	now = now.UTC()
 	var failures error
 	for _, job := range r.Jobs {
 		if err := ctx.Err(); err != nil {

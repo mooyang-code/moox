@@ -131,3 +131,28 @@ func TestSyncNowRefusesWhileAnotherSyncRuns(t *testing.T) {
 		t.Fatalf("manual sync after the scheduled one finished: %v", err)
 	}
 }
+
+func TestRunDueAttributesUsesTriggerTimeCapturedBeforeWaitingForLock(t *testing.T) {
+	syncer, _, attributes := newTestSyncer(t)
+	var clockMu sync.Mutex
+	current := time.Date(2026, 9, 25, 3, 0, 45, 0, time.UTC) // 计划 03:00 的回调在 03:00:45 进入
+	syncer.Attributes.Now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return current
+	}
+	syncer.mu.Lock() // 手动同步占锁
+	done := make(chan error, 1)
+	go func() { done <- syncer.RunDueAttributes(context.Background()) }()
+	time.Sleep(50 * time.Millisecond) // 让回调先固定触发时间并开始等锁
+	clockMu.Lock()
+	current = time.Date(2026, 9, 25, 3, 1, 30, 0, time.UTC) // 获得锁时已过计划分钟窗口
+	clockMu.Unlock()
+	syncer.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if attributes.calls != 1 {
+		t.Fatalf("attribute calls = %d, want 1: 持锁跨过计划分钟不能漏跑", attributes.calls)
+	}
+}
