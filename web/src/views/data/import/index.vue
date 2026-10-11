@@ -136,6 +136,7 @@ import type { Dataset, DatasetColumn, FieldValue, FieldValueType, RowFieldUpsert
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
+import { parseInt64 } from "./int64";
 
 defineOptions({ name: "DataImport" });
 
@@ -312,7 +313,7 @@ function validateHeaders() {
 }
 
 function typedValue(valueType: FieldValueType, raw: string): TypedValue {
-  if (valueType === "FIELD_VALUE_TYPE_INT" || valueType === 2) return { int_value: raw ? Number(raw) : 0 };
+  if (valueType === "FIELD_VALUE_TYPE_INT" || valueType === 2) return { int_value: parseInt64(raw) };
   if (valueType === "FIELD_VALUE_TYPE_DOUBLE" || valueType === 3) return { double_value: raw ? Number(raw) : 0 };
   if (valueType === "FIELD_VALUE_TYPE_BOOL" || valueType === 4) return { bool_value: raw === "true" || raw === "1" };
   if (valueType === "FIELD_VALUE_TYPE_TIME" || valueType === 5) return { time_value: raw };
@@ -353,6 +354,14 @@ async function dryRun() {
     headers.value = parsed.headers;
     parsedRows.value = parsed.rows;
     errors.value = validateHeaders();
+    if (errors.value.length === 0) {
+      // 逐行转换一次：整数格式或 INT64 范围错误在校验阶段暴露，而不是导入时才失败
+      try {
+        parsedRows.value.forEach(row => rowFields(row));
+      } catch (error) {
+        errors.value = [error instanceof Error ? error.message : "CSV 值转换失败"];
+      }
+    }
     if (errors.value.length === 0) {
       dryRunSummary.value = `校验通过：${parsedRows.value.length} 行，${headers.value.length} 列`;
     }

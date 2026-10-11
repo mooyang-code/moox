@@ -454,3 +454,29 @@ func testInstrument() exchange.Instrument {
 func must(value string) shared.Decimal {
 	return shared.MustDecimal(value)
 }
+
+func TestPrivateHandshakeTimesOutWhenServerNeverAcknowledges(t *testing.T) {
+	previous := privateHandshakeTimeout
+	privateHandshakeTimeout = 100 * time.Millisecond
+	defer func() { privateHandshakeTimeout = previous }()
+	release := make(chan struct{})
+	defer close(release)
+	server := httptest.NewServer(websocket.Handler(func(connection *websocket.Conn) {
+		var ignored []byte
+		_ = websocket.Message.Receive(connection, &ignored)
+		<-release
+	}))
+	defer server.Close()
+	config, err := websocket.NewConfig("ws"+strings.TrimPrefix(server.URL, "http"), "http://localhost")
+	require.NoError(t, err)
+	connection, err := websocket.DialConfig(config)
+	require.NoError(t, err)
+	defer connection.Close()
+
+	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	started := time.Now()
+	_, err = adapter.privateHandshake(connection)
+	require.Error(t, err)
+	require.True(t, exchange.IsKind(err, exchange.ErrorTransportUnknown), "error = %v", err)
+	require.Less(t, time.Since(started), 2*time.Second)
+}

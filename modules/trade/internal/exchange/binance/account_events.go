@@ -28,6 +28,9 @@ type spotSubscriptionRequest struct {
 	Params map[string]any `json:"params"`
 }
 
+// privateHandshakeTimeout 是私有流拨号、登录与订阅确认阶段的统一期限。
+var privateHandshakeTimeout = 15 * time.Second
+
 func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
 	if handler == nil {
 		return typedRejected("private event handler is required", nil)
@@ -56,6 +59,20 @@ func (a *Adapter) subscribeSpotPrivate(
 		_ = connection.Close()
 	}()
 
+	if err := a.spotSubscribeHandshake(connection); err != nil {
+		return err
+	}
+	_ = connection.SetWriteDeadline(time.Time{})
+	handler.OnSubscribed()
+	return a.receivePrivate(ctx, connection, handler)
+}
+
+// spotSubscribeHandshake 发送签名订阅请求并等待 ACK，整个过程受 privateHandshakeTimeout 约束。
+func (a *Adapter) spotSubscribeHandshake(connection *websocket.Conn) error {
+	// 订阅 ACK 阶段设置统一期限：服务端保持连接但不应答时不能一直阻塞，需要返回错误进入重连
+	handshakeDeadline := time.Now().Add(privateHandshakeTimeout)
+	_ = connection.SetWriteDeadline(handshakeDeadline)
+	_ = connection.SetReadDeadline(handshakeDeadline)
 	request := a.newSpotSubscriptionRequest(time.Now().UnixMilli())
 	if err := connection.WriteJSON(request); err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
@@ -77,8 +94,7 @@ func (a *Adapter) subscribeSpotPrivate(
 			acknowledgement.Error,
 		)
 	}
-	handler.OnSubscribed()
-	return a.receivePrivate(ctx, connection, handler)
+	return nil
 }
 
 func classifySpotSubscriptionError(status int, raw json.RawMessage) error {

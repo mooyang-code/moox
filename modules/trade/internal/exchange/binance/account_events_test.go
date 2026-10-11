@@ -227,3 +227,36 @@ func TestDispatchPrivateFuturesAccountUsesTransactionTime(t *testing.T) {
 		t.Fatalf("accounts = %+v", handler.accounts)
 	}
 }
+
+func TestSpotSubscribeHandshakeTimesOutWhenServerNeverAcknowledges(t *testing.T) {
+	previous := privateHandshakeTimeout
+	privateHandshakeTimeout = 100 * time.Millisecond
+	defer func() { privateHandshakeTimeout = previous }()
+	release := make(chan struct{})
+	defer close(release)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		_, _, _ = connection.ReadMessage()
+		<-release
+	}))
+	defer server.Close()
+	connection, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	started := time.Now()
+	err = testAdapter(exchange.MarketTypeSpot, "http://unused").spotSubscribeHandshake(connection)
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("error = %v", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatalf("握手超时未生效：%s", time.Since(started))
+	}
+}
