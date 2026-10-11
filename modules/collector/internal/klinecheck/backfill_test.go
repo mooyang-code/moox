@@ -29,6 +29,8 @@ type healingInvoker struct {
 	events []map[string]any
 	err    error
 	fail   bool
+	// noWrite 让函数“成功”却不写入任何行，模拟行情源本身没有这根 K 线。
+	noWrite bool
 }
 
 func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
@@ -40,6 +42,9 @@ func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string
 	}
 	if h.fail {
 		return scfinvoker.InvocationResult{Result: map[string]any{"success": false, "message": "provider error"}}, nil
+	}
+	if h.noWrite {
+		return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
 	}
 	data := event["data"].(map[string]any)
 	item := data["items"].([]any)[0].(map[string]any)
@@ -228,4 +233,27 @@ func TestCheckRejectsOversizedRanges(t *testing.T) {
 	backfiller, _, _, base := newBackfillFixture(t)
 	_, err := backfiller.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.AddDate(20, 0, 0)})
 	require.ErrorContains(t, err, "narrow")
+}
+
+func TestBackfillTreatsBarsMissingAtTheSourceAsDoneAndDoesNotResubmitThem(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	ctx := context.Background()
+	invoker.noWrite = true
+	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status, "the function ran and wrote nothing wrong; what stays missing is absent at the source")
+	require.Equal(t, 2, status.Counts[store.BackfillSucceeded])
+
+	// 手动补采仍会重新尝试；自动补采不再重复提交已知行情源没有的 K 线。
+	manual, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.NotEmpty(t, manual)
+	auto, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "auto")
+	require.NoError(t, err)
+	require.Empty(t, auto)
 }

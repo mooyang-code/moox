@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"fmt"
+	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 	_ "modernc.org/sqlite"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -141,7 +143,9 @@ func Open(opts *Options) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: buildSQLiteDSN(dbPath)}, &gorm.Config{})
+	// 查不到记录是调用方用 ErrRecordNotFound 判断的正常结果，不能每次都当成错误打日志。
+	quiet := gormlogger.New(stdlog.New(os.Stderr, "\r\n", stdlog.LstdFlags), gormlogger.Config{SlowThreshold: 200 * time.Millisecond, LogLevel: gormlogger.Warn, IgnoreRecordNotFoundError: true})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: buildSQLiteDSN(dbPath)}, &gorm.Config{Logger: quiet})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

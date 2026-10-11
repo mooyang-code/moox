@@ -101,8 +101,19 @@ type Backfiller struct {
 
 	mu       sync.Mutex
 	lastScan map[string]time.Time
-	workers  sync.WaitGroup
+	// absent 记录“补采成功后行情源仍然没有”的 K 线（例如冷门标的某分钟没有成交）。
+	// 它们不再被自动补采重复提交；只存在于内存，到期或重启后会重新尝试一次。
+	absent  map[absentKey]time.Time
+	workers sync.WaitGroup
 }
+
+type absentKey struct {
+	datasetID, frequency, subjectID string
+	barStart                        int64
+}
+
+// absentTTL 是“行情源没有这根 K 线”的记忆时长。
+const absentTTL = 6 * time.Hour
 
 func (b *Backfiller) now() time.Time {
 	if b.Now != nil {
@@ -159,6 +170,9 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force})
 	if err != nil {
 		return "", 0, err
+	}
+	if source == "auto" {
+		result.Gaps = b.dropAbsent(result.Gaps)
 	}
 	if len(result.Gaps) == 0 {
 		return "", 0, nil
@@ -440,13 +454,81 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(fmt.Errorf("verify chunk: %w", err))
 		return
 	}
+	note := ""
+	rows := bars(chunk)
 	if check.Missing > 0 {
-		fail(fmt.Errorf("%d bars are still missing after the backfill", check.Missing))
-		return
+		// 函数已成功执行且写入没有出错，复查仍缺的 K 线是行情源本身没有的（没有成交的分钟等）。
+		// 记下来不再重复补，分块按成功结束，缺口数写进说明。
+		b.markAbsent(chunk, check.Gaps)
+		rows -= check.Missing
+		note = fmt.Sprintf("%d bars are absent at the source", check.Missing)
+		log.InfoContextf(ctx, "collector backfill chunk finished with source gaps space=%s chunk=%s missing=%d", spaceID, chunk.ChunkID, check.Missing)
 	}
-	if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, bars(chunk), ""); err != nil {
+	if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, rows, note); err != nil {
 		log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, err)
 	}
+}
+
+// markAbsent 记住补采成功后仍缺的 K 线。
+func (b *Backfiller) markAbsent(chunk store.BackfillChunk, gaps []Gap) {
+	frequency, err := marketdata.ParseFrequency(chunk.Frequency)
+	if err != nil {
+		return
+	}
+	now := b.now()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.absent == nil {
+		b.absent = map[absentKey]time.Time{}
+	}
+	for key, at := range b.absent {
+		if now.Sub(at) > absentTTL {
+			delete(b.absent, key)
+		}
+	}
+	for _, gap := range gaps {
+		for t := gap.From; t.Before(gap.To); t = frequency.BarEnd(t) {
+			b.absent[absentKey{datasetID: chunk.DatasetID, frequency: chunk.Frequency, subjectID: chunk.SubjectID, barStart: t.Unix()}] = now
+		}
+	}
+}
+
+// dropAbsent 去掉缺口里已知行情源没有的 K 线，剩下的拆成连续的小缺口。
+func (b *Backfiller) dropAbsent(gaps []Gap) []Gap {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.absent) == 0 {
+		return gaps
+	}
+	now := b.now()
+	var kept []Gap
+	for _, gap := range gaps {
+		frequency, err := marketdata.ParseFrequency(gap.Frequency)
+		if err != nil {
+			kept = append(kept, gap)
+			continue
+		}
+		var open *Gap
+		for t := gap.From; t.Before(gap.To); t = frequency.BarEnd(t) {
+			at, known := b.absent[absentKey{datasetID: gap.DatasetID, frequency: gap.Frequency, subjectID: gap.SubjectID, barStart: t.Unix()}]
+			if known && now.Sub(at) <= absentTTL {
+				if open != nil {
+					kept = append(kept, *open)
+					open = nil
+				}
+				continue
+			}
+			if open == nil {
+				open = &Gap{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: t}
+			}
+			open.To = frequency.BarEnd(t)
+			open.Missing++
+		}
+		if open != nil {
+			kept = append(kept, *open)
+		}
+	}
+	return kept
 }
 
 func bars(chunk store.BackfillChunk) int {
