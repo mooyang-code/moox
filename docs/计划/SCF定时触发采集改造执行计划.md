@@ -280,7 +280,7 @@ scf_markets:                              # 每个空间、市场使用的地域
     a_share: [ap-nanjing]
 ```
 
-  替换现有 `scf_access`/`scf_access_routes`、`scf_region_blacklists`。`moox.toml` 的 `region_blacklist` 改为 `regions`，`timer_function_count` 删除（函数数由标的数与每函数标的数算出）。
+  实施时：`scf_regions` 只放各地域的 VPC/子网；Access 私网入口放 `scf_plan.access_routes`（旧链路的 `scf_access_routes` 在 6b 之前继续服务旧 Invoke 函数）；其余部署参数在 `scf_plan`（云账号、代码包、命名空间、内存、基础环境文件、每函数标的数、拉取参数）。6b 时删除 `scf_access_routes`、`scf_region_blacklists`。`moox.toml` 的 `region_blacklist` 改为 `regions`，`timer_function_count` 删除（函数数由标的数与每函数标的数算出）。
 - setup 生成配置时用现有 `privatenet` 主机查询拿到 VPC 与子网；地域没有同地域 Access 主机时报错。
 
 ### 4.3 计划计算（替换 `assignment.go` 中 crypto 与 stockcn 的分配）
@@ -288,7 +288,7 @@ scf_markets:                              # 每个空间、市场使用的地域
 输入：本空间启用的采集任务、各标签当前成员（Storage `ResolveSubjects`，每空间一次）、`scf_markets`、`symbols_per_function`。
 
 1. 按任务得出每个数据集（含频率）的完整标的列表，用共享包计算 hash 与序号。
-2. 按“市场 + 标的 + 频率”合并，按市场分组；每组标的按规范顺序切成每份 ≤ `symbols_per_function` 的分片；分片映射到函数名（`moox-fetch-<space>-<market>-<region>-<N>`），数量变化时增删函数。
+2. 按“市场 + 标的 + 频率”合并，按市场分组；每组标的按规范顺序切成每份 ≤ `symbols_per_function` 的分片；分片映射到函数名（`moox-fetch-plan-<space>-<market>-<region>-<NNN>`；名称含 `-plan-`，旧节点池据此排除；补采函数 `moox-fetch-plan-backfill-<space>-<market>-<region>`），数量变化时增删函数。
 3. 生成每个函数的计划环境（只含本函数的标的及其在各数据集中的序号）与 cron（服务频率集合的并集；只有 1h 时用整点 cron）。
 4. 容量校验（设计 8.1）：计划环境大小、函数数量配额、`symbols_per_function` 上限；不通过则本轮报错、不下发。
 
@@ -501,3 +501,17 @@ CREATE INDEX IF NOT EXISTS idx_t_activity_logs_category_time ON t_activity_logs 
 - 代码：阶段 1～8 各自的提交；schema 变更与格式校验通过。
 - 文档：设计文档第 14.2 节补充 canary 结果；各模块文档同步更新。
 - 运维：新的 setup 配置（`scf_regions`、`scf_markets`）、CLI 命令说明、回滚包（旧代码包、函数与触发器清单、数据库快照）。
+
+
+## 12. 实施记录（与原计划的差异和补充）
+
+1. **分配算法**：同一市场的全部标的按规范顺序“稳定分配”——标的尽量留在原函数，新增标的填入有空位的函数，超出容量的移走；任何数据集在某函数上的内容（hash、总数、序号、标的集）变化都会被识别并按两份过渡。同一空间内市场类型相同的不同数据源会让函数名冲突，对账直接报错。
+2. **P 的提前量**：2 分钟；计划里含需要新建的函数时为 6 分钟。首次登记且来自旧链路交接边界的数据集，P 直接取边界（边界已过则顺延并告警，期间缺口由自动补采补回）。
+3. **回退**：任务保持 `timer` 并设置 `invoke_from_period=T'` 时，数据集按“不再采集”处理，新份起点取 T'（空标的），旧份服务到 T'；之后再 `--mode invoke`。CLI 在回退到 invoke 时强制要求下界，在 T 未过时拒绝清除 `invoke_until_period`。
+4. **停用定时器**：CloudNode 预检要求 cron 非空，停用时用占位 cron 并设 `enabled=false`。
+5. **空间管理**：对账管理器每分钟取 Admin 中启用的空间（配置的空间 ∩ 启用空间），新增则启动协程；停用或删除则先停用该空间全部函数定时器，确认后退出协程。
+6. **读回**：每小时读回；云端缺失的函数按已生效计划重建；Access 入口与调用方密钥纳入漂移判断；逐项结果，部分失败不推进读回时间。未生效计划存在期间不读回（由计划自身的下发与重试负责）。
+7. **补采**：函数名含 `-plan-` 以便旧节点池排除；创建补采函数用独立的发布租约并串行，补采函数暂不可用不算分块失败；自动补采的水位只在作业全部成功后推进，窗口内分块过多时对半缩小；检查与补采的范围按（标的×时间点）总数设上限。
+8. **新增命令**：`collector fetch-plan`、`collector task fetch-mode`（交接/回退）、`collector function upload`（只上传代码包）。函数代码包不再强制携带 EventBus CA。
+9. **Storage**：登记快照的 P 上界为 7 天；日、周、月频率至少要求整分钟；同一 (subject_id, series_tag) 不能重复；缺少数据集允许迟到属性时打告警。
+10. **未做/延后**：阶段 6b（需七天回退窗口）；Monitor 中依赖 Storage 计数器的新规则（因迟到被拒、hash 不一致被拒、429、内存峰值）延后到 canary 观察后补；新形式周期缺快照时仍宽松读取。
