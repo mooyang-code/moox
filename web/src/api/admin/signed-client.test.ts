@@ -48,6 +48,41 @@ describe("installSpaceAwareSignedClient", () => {
     expect(window.location.hash).toBe("#/login");
   });
 
+  function responseErrorHandler() {
+    let handler: ((error: unknown) => Promise<unknown>) | undefined;
+    const client = {
+      interceptors: {
+        request: { use: () => undefined },
+        response: { use: (_ok: unknown, onError: (error: unknown) => Promise<unknown>) => (handler = onError) }
+      }
+    };
+    installSpaceAwareSignedClient(client as never);
+    return handler!;
+  }
+
+  it("keeps the new login when a late 401 belongs to a replaced session", async () => {
+    localStorage.setItem("user-info", JSON.stringify({ token: "new", sessionId: "session-2" }));
+    window.location.hash = "#/collector/tasks";
+    const onError = responseErrorHandler();
+
+    const lateError = { response: { status: 401 }, config: { authSessionId: "session-1" } };
+    await expect(onError(lateError)).rejects.toBe(lateError);
+
+    expect(localStorage.getItem("user-info")).not.toBeNull();
+    expect(window.location.hash).toBe("#/collector/tasks");
+  });
+
+  it("expires the browser session when the 401 belongs to the current session", async () => {
+    localStorage.setItem("user-info", JSON.stringify({ token: "t", sessionId: "session-1" }));
+    const onError = responseErrorHandler();
+
+    const error = { response: { status: 401 }, config: { authSessionId: "session-1" } };
+    await expect(onError(error)).rejects.toBe(error);
+
+    expect(localStorage.getItem("user-info")).toBeNull();
+    expect(window.location.hash).toBe("#/login");
+  });
+
   function spaceHandler() {
     const handlers: Array<(config: InternalAxiosRequestConfig) => Promise<InternalAxiosRequestConfig>> = [];
     const client = {

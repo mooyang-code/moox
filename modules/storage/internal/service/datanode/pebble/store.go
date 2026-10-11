@@ -827,7 +827,10 @@ func (s *Store) PublishOutboxPublication(ctx context.Context, id uint64, publish
 	if spaceID == "" || datasetID == "" {
 		return fmt.Errorf("outbox entry %d has no dataset scope", id)
 	}
-	unlock := s.lockOutboxDatasetPublication(spaceID, datasetID)
+	unlock, err := s.lockOutboxDatasetPublication(ctx, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	data, err = s.PrepareOutboxPublication(ctx, id, time.Time{})
 	if err != nil {
@@ -839,11 +842,13 @@ func (s *Store) PublishOutboxPublication(ctx context.Context, id uint64, publish
 type outboxDatasetScope struct{ spaceID, datasetID string }
 
 type outboxPublicationLock struct {
-	mu   sync.Mutex
+	// slot 容量为 1 的信号量：与 sync.Mutex 不同，等待者可以响应 context 取消
+	slot chan struct{}
 	refs int
 }
 
-func (s *Store) lockOutboxDatasetPublication(spaceID, datasetID string) func() {
+// lockOutboxDatasetPublication 获取 Dataset 级发布锁；等待期间 ctx 取消立即返回并回收引用。
+func (s *Store) lockOutboxDatasetPublication(ctx context.Context, spaceID, datasetID string) (func(), error) {
 	scope := outboxDatasetScope{spaceID: spaceID, datasetID: datasetID}
 	s.outboxPublicationMu.Lock()
 	if s.outboxPublicationLocks == nil {
@@ -851,15 +856,13 @@ func (s *Store) lockOutboxDatasetPublication(spaceID, datasetID string) func() {
 	}
 	lock := s.outboxPublicationLocks[scope]
 	if lock == nil {
-		lock = &outboxPublicationLock{}
+		lock = &outboxPublicationLock{slot: make(chan struct{}, 1)}
 		s.outboxPublicationLocks[scope] = lock
 	}
 	lock.refs++
 	s.outboxPublicationMu.Unlock()
 
-	lock.mu.Lock()
-	return func() {
-		lock.mu.Unlock()
+	release := func() {
 		s.outboxPublicationMu.Lock()
 		lock.refs--
 		if lock.refs == 0 {
@@ -867,6 +870,16 @@ func (s *Store) lockOutboxDatasetPublication(spaceID, datasetID string) func() {
 		}
 		s.outboxPublicationMu.Unlock()
 	}
+	select {
+	case lock.slot <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
+	return func() {
+		<-lock.slot
+		release()
+	}, nil
 }
 
 func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) ([]byte, error) {

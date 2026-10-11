@@ -148,7 +148,10 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	unlockPublication := s.lockOutboxDatasetPublication(spaceID, datasetID)
+	unlockPublication, err := s.lockOutboxDatasetPublication(ctx, spaceID, datasetID)
+	if err != nil {
+		return 0, err
+	}
 	defer unlockPublication()
 	// Stop history backfill and all writes while the dataset ranges are
 	// removed. Otherwise a concurrent write could repopulate the result after
@@ -161,6 +164,10 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	defer s.periodMu.Unlock()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
+	// 取得全部锁后再确认请求仍然有效：等待期间到期的删除不能继续物理清理
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 
 	batch := s.db.NewBatch()
 	defer batch.Close()
@@ -247,6 +254,10 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	// cleanup. A writer that was already admitted before this lock was taken
 	// can no longer publish after the delete commits.
 	if err := batch.Set(datasetDeletedKey(spaceID, datasetID), []byte("1"), s.writeOptions); err != nil {
+		return 0, err
+	}
+	// 提交前最后一次检查：批次尚未落盘时取消仍可完整放弃
+	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {

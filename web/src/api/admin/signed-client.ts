@@ -54,6 +54,7 @@ async function signConfig(config: InternalAxiosRequestConfig): Promise<InternalA
     timestamp,
     nonce
   });
+  config.authSessionId = auth.sessionId; // 记录请求所属会话，迟到的旧会话 401 不能清除新登录的会话
   config.headers.Authorization = auth.token;
   config.headers["X-Access-Token"] = auth.token;
   config.headers["X-Moox-Timestamp"] = String(timestamp);
@@ -62,10 +63,17 @@ async function signConfig(config: InternalAxiosRequestConfig): Promise<InternalA
   return config;
 }
 
+/** 请求发出时的会话已经被重新登录替换：它的 401 只说明旧会话失效，不能清除当前会话。 */
+function belongsToReplacedSession(config: { authSessionId?: string } | undefined): boolean {
+  const requestSession = config?.authSessionId;
+  const currentSession = readPersistedAuth().sessionId;
+  return Boolean(requestSession && currentSession && requestSession !== currentSession);
+}
+
 export function installSignedClient(client: AxiosInstance): void {
   client.interceptors.request.use(signConfig);
   client.interceptors.response.use(undefined, async error => {
-    if (error?.response?.status === 401) {
+    if (error?.response?.status === 401 && !belongsToReplacedSession(error?.config)) {
       await expireBrowserSession();
     }
     return Promise.reject(error);
@@ -116,6 +124,8 @@ async function ensureSpaceSelected(): Promise<void> {
 
 declare module "axios" {
   interface AxiosRequestConfig {
+    /** 签名时记录的登录会话 ID。 */
+    authSessionId?: string;
     /** 请求拦截器自动注入 X-Space-Id 时记录的空间；调用方显式指定空间的请求不带这个标记。 */
     injectedSpaceId?: string;
     /** 与 injectedSpaceId 同时记录的空间代次，用来识别 A→B→A 之后返回的旧请求。 */

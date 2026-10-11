@@ -464,3 +464,40 @@ func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
 	_, err := manager.Ensure(context.Background(), "crypto", "missing-tag", "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: []string{"unknown"}})
 	require.Error(t, err)
 }
+
+func (f *resultMetadataFake) ListViews(_ context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	rsp := &storagepb.ListViewsRsp{RetInfo: resultOK()}
+	for _, view := range f.views {
+		if view.GetDatasetId() == req.GetDatasetId() {
+			rsp.Views = append(rsp.Views, view)
+		}
+	}
+	return rsp, nil
+}
+
+func TestDeleteRefusesWhenExtraViewReferencesResultDatasetAndKeepsData(t *testing.T) {
+	fake := newResultMetadataFake()
+	taskID := "builtin-binance-spot-kline-1m"
+	ids := ResultIDs("crypto", taskID)
+	attrs := map[string]string{"owner_module": "collector", "collector_task_id": taskID}
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
+	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: attrs}
+	fake.views["manual-view"] = &storagepb.View{ViewId: "manual-view", DatasetId: ids.DatasetID}
+	cleaner := &countingCleaner{}
+	manager := &Manager{metadata: fake, cleaner: cleaner, auth: &storagepb.AuthInfo{AppId: "collector"}}
+	err := manager.Delete(context.Background(), "crypto", ids)
+	require.ErrorIs(t, err, ErrResultContract)
+	require.Contains(t, err.Error(), "manual-view")
+	require.Zero(t, cleaner.calls, "存在额外 View 时不得物理清理数据")
+}
+
+type countingCleaner struct{ calls int }
+
+func (c *countingCleaner) DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
+	c.calls++
+	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: resultOK()}, nil
+}
+
+func (c *countingCleaner) RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
+	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: resultOK()}, nil
+}

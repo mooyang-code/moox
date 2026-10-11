@@ -3,7 +3,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"time"
 )
+
+// txCleanupTimeout 是取消后回滚事务的独立期限：请求 context 已取消时仍必须真正执行 ROLLBACK。
+const txCleanupTimeout = 5 * time.Second
 
 // immediateTx pins a connection and starts the write transaction explicitly.
 // database/sql does not expose SQLite's BEGIN IMMEDIATE through TxOptions.
@@ -42,19 +47,30 @@ func (tx *immediateTx) Commit() error {
 	if tx == nil || tx.closed {
 		return nil
 	}
-	_, err := tx.conn.ExecContext(tx.ctx, "COMMIT")
-	closeErr := tx.close()
-	if err != nil {
+	if _, err := tx.conn.ExecContext(tx.ctx, "COMMIT"); err != nil {
+		// 提交失败（含请求取消）：事务可能仍处于打开状态，必须回滚后才能归还连接
+		_ = tx.rollbackDetached()
 		return err
 	}
-	return closeErr
+	return tx.close()
 }
 
 func (tx *immediateTx) Rollback() error {
 	if tx == nil || tx.closed {
 		return nil
 	}
-	_, err := tx.conn.ExecContext(tx.ctx, "ROLLBACK")
+	return tx.rollbackDetached()
+}
+
+// rollbackDetached 用不受请求取消影响的有界 context 执行 ROLLBACK；
+// 回滚失败时底层连接状态未知，必须废弃而不是归还连接池。
+func (tx *immediateTx) rollbackDetached() error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(tx.ctx), txCleanupTimeout)
+	defer cancel()
+	_, err := tx.conn.ExecContext(cleanupCtx, "ROLLBACK")
+	if err != nil {
+		_ = tx.conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
 	closeErr := tx.close()
 	if err != nil {
 		return err

@@ -372,6 +372,7 @@ type metadataFake struct {
 	deleteRsps       []*storagepb.DeleteDatasetRsp
 	subjectPages     []*storagepb.ListDatasetSubjectsRsp
 	updateRequests   []*storagepb.UpdateDatasetReq
+	views            []*storagepb.View
 }
 
 func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
@@ -545,4 +546,26 @@ func TestListDatasetSubjectsPagesActiveSubjects(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC", "ETH"}, subjects)
+}
+
+func (f *metadataFake) ListViews(_ context.Context, _ *storagepb.ListViewsReq, _ ...client.Option) (*storagepb.ListViewsRsp, error) {
+	return &storagepb.ListViewsRsp{RetInfo: successRet(), Views: f.views}, nil
+}
+
+func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_x", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
+		views:          []*storagepb.View{{ViewId: "view_x"}, {ViewId: "manual-view"}},
+	}
+	primary := &primaryFake{}
+	c := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+
+	err := c.DeleteDataset(context.Background(), "crypto", "dataset_x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "manual-view")
+	require.Empty(t, primary.deleteRowsRequests, "存在额外 View 时不得物理清理数据")
+	require.Empty(t, metadata.deleteRequests)
 }

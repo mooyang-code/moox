@@ -11,6 +11,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 const (
@@ -368,6 +369,10 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	}
 	purgeRows := current.GetDataset().GetAttributes()["dataset_role"] == DatasetRoleFactorResult
 	if purgeRows {
+		// 物理清理不可逆：先确认没有默认 View 之外的引用，否则数据清空后元数据删除会被外键拒绝
+		if err := c.ensureNoExtraViews(ctx, spaceID, datasetID); err != nil {
+			return err
+		}
 		if err := c.primaryReady("delete factor result rows"); err != nil {
 			return err
 		}
@@ -394,6 +399,36 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	}
 	if err := responseError("delete dataset", rsp.GetRetInfo()); err != nil {
 		return err
+	}
+	return nil
+}
+
+// ensureNoExtraViews 拒绝删除仍被默认 View 之外的 View 引用的结果 Dataset，此时数据必须完整保留。
+func (c *Client) ensureNoExtraViews(ctx context.Context, spaceID, datasetID string) error {
+	lister, ok := c.metadata.(interface {
+		ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
+	})
+	if !ok {
+		return nil
+	}
+	rsp, err := lister.ListViews(ctx, &storagepb.ListViewsReq{
+		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID,
+		Page: &commonpb.Page{Page: 1, Size: 200},
+	})
+	if err != nil {
+		return rpcError("list dataset views before delete", err)
+	}
+	if rsp == nil {
+		return fmt.Errorf("%w: list dataset views before delete returned an empty response", ErrInfra)
+	}
+	if err := responseError("list dataset views before delete", rsp.GetRetInfo()); err != nil {
+		return err
+	}
+	defaultViewID := "view_" + strings.TrimPrefix(datasetID, "dataset_")
+	for _, view := range rsp.GetViews() {
+		if view.GetViewId() != defaultViewID {
+			return fmt.Errorf("结果 Dataset %s 仍被 View %s 引用，请先删除该 View 后重试", datasetID, view.GetViewId())
+		}
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"google.golang.org/protobuf/proto"
 )
@@ -145,6 +146,19 @@ type metadataProxy struct{ client MetadataClient }
 func (p metadataProxy) GetTag(ctx context.Context, req *storagepb.GetTagReq) (*storagepb.GetTagRsp, error) {
 	return p.client.GetTag(ctx, req)
 }
+
+// ListViews 透传给底层客户端；测试替身等不支持该方法的客户端返回 errListViewsUnsupported。
+func (p metadataProxy) ListViews(ctx context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	lister, ok := p.client.(interface {
+		ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
+	})
+	if !ok {
+		return nil, errListViewsUnsupported
+	}
+	return lister.ListViews(ctx, req)
+}
+
+var errListViewsUnsupported = errors.New("metadata client does not support ListViews")
 
 func (p metadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	return p.client.GetDataset(ctx, req)
@@ -1192,6 +1206,10 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	if _, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID}); err != nil {
 		return fmt.Errorf("get result dataset: %w", err)
 	}
+	// 物理清理不可逆：先确认没有结果自身 View 之外的引用，否则数据清空后元数据删除会被外键拒绝
+	if err := m.ensureNoExtraViews(ctx, spaceID, ids); err != nil {
+		return err
+	}
 	if m.cleaner != nil {
 		physical, err := m.cleaner.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 		if err != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
@@ -1210,6 +1228,32 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	removed, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil || !resultDeleteAccepted(retInfoDatasetDelete(removed)) {
 		return metadataError("delete result dataset", err, retInfoDatasetDelete(removed))
+	}
+	return nil
+}
+
+// ensureNoExtraViews 拒绝删除仍被其他 View 引用的结果 Dataset，此时数据必须完整保留。
+func (m *Manager) ensureNoExtraViews(ctx context.Context, spaceID string, ids IDs) error {
+	lister, ok := m.metadata.(interface {
+		ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
+	})
+	if !ok {
+		return nil
+	}
+	rsp, err := lister.ListViews(ctx, &storagepb.ListViewsReq{
+		AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID,
+		Page: &commonpb.Page{Page: 1, Size: 200},
+	})
+	if errors.Is(err, errListViewsUnsupported) {
+		return nil
+	}
+	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return metadataError("list result dataset views", err, rsp.GetRetInfo())
+	}
+	for _, view := range rsp.GetViews() {
+		if view.GetViewId() != ids.ViewID {
+			return fmt.Errorf("%w: 结果 Dataset %s 仍被 View %s 引用，请先删除该 View 后重试", ErrResultContract, ids.DatasetID, view.GetViewId())
+		}
 	}
 	return nil
 }
