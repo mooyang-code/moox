@@ -3,11 +3,14 @@ package bootstrap
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 )
 
@@ -22,8 +25,11 @@ type SCFPlanConfig struct {
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`
 	// MaxConcurrentOperations 限制各空间同时进行的 SCF 配置操作。
-	MaxConcurrentOperations int                `yaml:"max_concurrent_operations"`
-	Fetch                   SCFPlanFetchConfig `yaml:"fetch"`
+	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
+	// AccessRoutes 是采集计划函数访问 Access 的私网入口（按地域）。与旧链路的 scf_access_routes 分开：
+	// 旧 Invoke 函数不在 VPC 内，仍走公网入口，直到 6b 清理。
+	AccessRoutes map[string]SCFAccessEndpoint `yaml:"access_routes"`
+	Fetch        SCFPlanFetchConfig           `yaml:"fetch"`
 }
 
 // SCFPlanFetchConfig 是下发给函数的拉取参数（按数据源）。
@@ -52,16 +58,7 @@ func (c SCFPlanConfig) planFetch() marketfetch.PlanFetch {
 }
 
 // defaultLatenessSeconds 是空间的允许迟到时间默认值。
-func defaultLatenessSeconds(spaceID string) int {
-	switch strings.ToLower(strings.TrimSpace(spaceID)) {
-	case "crypto":
-		return 15
-	case marketfetch.StockCNSpaceID:
-		return 90
-	default:
-		return 60
-	}
-}
+func defaultLatenessSeconds(spaceID string) int { return domain.DefaultAllowedLatenessSeconds(spaceID) }
 
 // fetchPlanSpaces 返回配置了 SCF 市场地域、由采集计划对账管理的空间。
 func (c *Config) fetchPlanSpaces(spaceIDs []string) []string {
@@ -100,8 +97,8 @@ func (c *Config) validateSCFPlan() error {
 				if !ok || network.VPCID == "" || network.SubnetID == "" {
 					return fmt.Errorf("scf_markets[%s][%s] region %s has no VPC and subnet in scf_regions", space, market, region)
 				}
-				if _, ok := c.SCFAccessRoutes[region]; !ok {
-					return fmt.Errorf("scf_markets[%s][%s] region %s has no same-region Access route in scf_access_routes", space, market, region)
+				if _, ok := plan.AccessRoutes[region]; !ok {
+					return fmt.Errorf("scf_markets[%s][%s] region %s has no same-region Access route in scf_plan.access_routes", space, market, region)
 				}
 			}
 		}
@@ -127,4 +124,30 @@ func (c *Config) fetchPlanDeploy() (marketfetch.PlanDeploy, error) {
 		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.PackageID, Namespace: c.SCFPlan.Namespace, MemoryMB: c.SCFPlan.MemoryMB,
 		BaseEnvironment: environment, Networks: c.SCFRegions,
 	}, nil
+}
+
+// scfPlanAccessEnvironment 返回采集计划函数在某地域使用的 Access 环境：私网入口与调用方密钥。
+func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, error) {
+	route, ok := c.SCFPlan.AccessRoutes[strings.ToLower(strings.TrimSpace(region))]
+	if !ok {
+		return nil, fmt.Errorf("region %s has no Access route in scf_plan.access_routes", region)
+	}
+	config := c.SCFAccess
+	config.Address, config.InstanceID = route.Address, route.InstanceID
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("scf_plan.access_routes[%s]: %w", region, err)
+	}
+	keyPath := config.KeyFile
+	if !filepath.IsAbs(keyPath) {
+		keyPath = filepath.Join(filepath.Dir(c.sourcePath), keyPath)
+	}
+	secret, err := gatewayauth.ReadSigningSecret(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("SCF Access signing key: %w", err)
+	}
+	compression := config.Compression
+	if compression == "" {
+		compression = gatewayclient.CompressionNone
+	}
+	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret, "MOOX_GATEWAY_COMPRESSION": compression}, nil
 }

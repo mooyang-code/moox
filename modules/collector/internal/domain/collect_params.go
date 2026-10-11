@@ -492,3 +492,15 @@ func formatDurationCanonical(value time.Duration) string {
 	}
 	return fmt.Sprintf("%dm", int(value/time.Minute))
 }
+
+// DefaultAllowedLatenessSeconds 返回空间的允许迟到时间默认值：crypto 15 秒，stockcn 90 秒，其余 60 秒。
+func DefaultAllowedLatenessSeconds(spaceID string) int {
+	switch strings.ToLower(strings.TrimSpace(spaceID)) {
+	case "crypto":
+		return 15
+	case "stockcn":
+		return 90
+	default:
+		return 60
+	}
+}

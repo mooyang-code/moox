@@ -78,6 +78,9 @@ func runCollectorTaskFetchMode(ctx context.Context, out io.Writer, flags collect
 			return err
 		}
 	}
+	if until != "" && from != "" && until <= from {
+		return errors.New("--until must be later than --from")
+	}
 	for _, boundary := range []string{until, from} {
 		if boundary != "" && !strings.HasSuffix(boundary, ":00:00Z") {
 			return fmt.Errorf("boundary %s must be on the hour", boundary)
@@ -89,6 +92,12 @@ func runCollectorTaskFetchMode(ctx context.Context, out io.Writer, flags collect
 	}
 	defer gateway.Close()
 	results := make([]map[string]any, 0, len(flags.TaskIDs))
+	defer func() {
+		// 中途失败时也输出已更新的任务，操作员能看到改到了哪里。
+		if len(results) > 0 && len(results) < len(flags.TaskIDs) {
+			_ = printJSON(out, map[string]any{"status": "partial", "tasks": results})
+		}
+	}()
 	for _, taskID := range flags.TaskIDs {
 		detail := &collectorpb.GetTaskDetailRsp{}
 		if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "GetTaskDetail", &collectorpb.GetTaskDetailReq{SpaceId: flags.SpaceID, TaskId: taskID}, detail); err != nil {
@@ -99,6 +108,12 @@ func runCollectorTaskFetchMode(ctx context.Context, out io.Writer, flags collect
 		}
 		task := detail.GetTask()
 		params := task.GetCollectParams().AsMap()
+		if flags.Mode == "invoke" {
+			// 回退到旧链路必须先有下界，否则旧调度会接管全部周期，与仍在运行的定时函数双采。
+			if _, hasFrom := params["invoke_from_period"]; !hasFrom && from == "" {
+				return fmt.Errorf("task %s: switching back to invoke requires --from (or an existing invoke_from_period); no task was changed after this one", taskID)
+			}
+		}
 		if flags.Mode != "" {
 			params["fetch_mode"] = flags.Mode
 		}
@@ -129,7 +144,11 @@ func runCollectorTaskFetchMode(ctx context.Context, out io.Writer, flags collect
 		if err := collectorRetError("update task "+taskID, rsp.GetRetInfo()); err != nil {
 			return err
 		}
-		results = append(results, map[string]any{"task_id": taskID, "fetch_mode": params["fetch_mode"], "invoke_until_period": params["invoke_until_period"], "invoke_from_period": params["invoke_from_period"]})
+		mode := "invoke"
+		if value, ok := params["fetch_mode"].(string); ok && value != "" {
+			mode = value
+		}
+		results = append(results, map[string]any{"task_id": taskID, "fetch_mode": mode, "invoke_until_period": params["invoke_until_period"], "invoke_from_period": params["invoke_from_period"]})
 	}
 	return printJSON(out, map[string]any{"status": "updated", "tasks": results})
 }

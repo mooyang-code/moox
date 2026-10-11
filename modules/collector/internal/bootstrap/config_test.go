@@ -369,7 +369,7 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	valid := func() *Config {
 		cfg := Default()
 		cfg.SCFRegions = map[string]marketfetch.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
-		cfg.SCFAccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
+		cfg.SCFPlan.AccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
 		cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-nanjing"}}}
 		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
 		return cfg
@@ -378,7 +378,7 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	require.Equal(t, []string{"crypto"}, valid().fetchPlanSpaces([]string{"stockcn", "crypto"}))
 
 	noRoute := valid()
-	noRoute.SCFAccessRoutes = nil
+	noRoute.SCFPlan.AccessRoutes = nil
 	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region Access route")
 	noNetwork := valid()
 	noNetwork.SCFRegions = nil

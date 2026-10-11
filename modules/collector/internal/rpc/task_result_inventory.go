@@ -397,14 +397,7 @@ func allowedLatenessSeconds(params *domain.CollectParams, spaceID string) int {
 	if params != nil && params.AllowedLatenessSeconds > 0 {
 		return params.AllowedLatenessSeconds
 	}
-	switch strings.ToLower(strings.TrimSpace(spaceID)) {
-	case "crypto":
-		return 15
-	case "stockcn":
-		return 90
-	default:
-		return 60
-	}
+	return domain.DefaultAllowedLatenessSeconds(spaceID)
 }
 
 func taskResultMarketCalendar(marketID string) (calendarID, timezone string, sessions []string) {

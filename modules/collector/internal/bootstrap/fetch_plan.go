@@ -67,7 +67,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 					Tasks: dbm.Tasks(), Symbols: source, ResolveSourceID: marketwiring.DefaultSourceID, ResolveSymbol: marketwiring.ResolveSymbol,
 					TaskFilter: func(params *domain.CollectParams) bool { return params.TimerManaged() },
 				},
-				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfAccessEnvironment, Lateness: results,
+				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
 				Activity: invoker, Metrics: metrics, Operations: operations,
 			}
 			reconcilers.Store(spaceID, reconciler)
