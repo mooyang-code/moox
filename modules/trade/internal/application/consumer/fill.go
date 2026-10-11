@@ -369,6 +369,16 @@ func projectSwapPosition(
 	priceScale int,
 ) error {
 	exchangeSymbol := record.ExchangeSymbol
+	// 迟到成交：权威持仓快照（含确认为空仓而删除留下的墓碑）已经覆盖到比这笔成交更晚的时间，成交数量已体现在快照里，
+	// 不能再叠加（成交仍照常入账本）。不晚于覆盖时间即跳过（含同毫秒）：持仓版本时间就是最后一次变更（通常正是这笔成交）的时间，同毫秒的成交绝大多数已体现在快照里；
+	// 极少数同毫秒多笔成交的误差由下一次权威快照校正。
+	covered, coveredErr := tx.PositionSnapshotCoveredUntil(record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet))
+	if coveredErr != nil {
+		return coveredErr
+	}
+	if covered > 0 && fill.TradedAt.UnixMilli() <= covered {
+		return nil
+	}
 	positionRecord, found, err := tx.GetPosition(
 		record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet),
 	)
@@ -402,15 +412,6 @@ func projectSwapPosition(
 			UsedMargin: "0", LiquidationPrice: "0",
 			UnrealizedPnL: "0", RealizedPnL: "0",
 		}
-	}
-	// 迟到成交：权威持仓快照（含确认为空仓而删除留下的墓碑）已经覆盖到比这笔成交更晚的时间，成交数量已体现在快照里，
-	// 不能再叠加（成交仍照常入账本）。严格早于才跳过：同毫秒无法判断是否已包含，仍按成交叠加，由下一次权威快照校正。
-	covered, coveredErr := tx.PositionSnapshotCoveredUntil(record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet))
-	if coveredErr != nil {
-		return coveredErr
-	}
-	if covered > 0 && fill.TradedAt.UnixMilli() < covered {
-		return nil
 	}
 	current, err := shared.ParseDecimal(positionRecord.SignedQuantity)
 	if err != nil {

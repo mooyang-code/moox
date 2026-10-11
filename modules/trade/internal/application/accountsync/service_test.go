@@ -1732,8 +1732,53 @@ func (emptyAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, stri
 	return nil, "", nil
 }
 
-// 空仓快照先到、平仓成交后到：快照确认空仓而删除持仓时留下墓碑，迟到的平仓成交不能从零叠加出反向持仓。
+// 空仓快照先到、平仓成交后到：快照确认空仓而删除持仓时留下墓碑，迟到的平仓成交（含与快照同毫秒的）不能从零叠加出反向持仓。
 func TestFlatSnapshotThenLateClosingFillDoesNotCreateReversePosition(t *testing.T) {
+	for name, fillAt := range map[string]int64{"earlier than snapshot": 1_500, "same millisecond as snapshot": 2_000} {
+		t.Run(name, func(t *testing.T) { flatSnapshotThenLateClosingFill(t, fillAt) })
+	}
+}
+
+// 本地没有配置该品种杠杆（REST 持仓自带杠杆）时，已被快照覆盖的迟到成交也必须能入账：覆盖检查要先于杠杆查询。
+func TestCoveredLateFillIsLedgeredEvenWithoutConfiguredLeverage(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.DBForTest().Exec(
+		"UPDATE t_trading_accounts SET c_leverage_settings_json = '{}' WHERE c_space_id = ? AND c_trading_account_id = ?", "space-1", "account-1").Error)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", ExchangeSymbol: "BTC-USDT", PositionSide: "NET",
+			SignedQuantity: "1", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS",
+			UsedMargin: "0", LiquidationPrice: "0", UnrealizedPnL: "0", RealizedPnL: "0", ExchangeUpdatedAt: 1_000,
+		})
+	}))
+	base := &syncAdapter{}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: emptyAdapter{base}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	order := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1", ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
+		FilledQuantity: shared.MustDecimal("1"), AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+	}
+	closing := exchange.Fill{
+		ExchangeTradeID: "trade-close", ExchangeOrderID: "order-1", ClientOrderID: "client-1", ExchangeSymbol: "BTC-USDT",
+		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
+		Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+	}
+	service.Adapters = syncAdapterSource{adapter: lateFillAdapter{base, closing, order}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+}
+
+func flatSnapshotThenLateClosingFill(t *testing.T, fillAt int64) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -1765,7 +1810,7 @@ func TestFlatSnapshotThenLateClosingFillDoesNotCreateReversePosition(t *testing.
 		ExchangeTradeID: "trade-close", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
 		ExchangeSymbol: "BTC-USDT", Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("100"),
-		SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(fillAt),
 	}
 	service.Adapters = syncAdapterSource{adapter: lateFillAdapter{base, closing, order}}
 	result, err := service.SyncAccount(context.Background(), "account-1") // 迟到的平仓成交补录

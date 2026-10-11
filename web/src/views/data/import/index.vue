@@ -209,14 +209,24 @@ async function onDatasetChange() {
   await loadColumns();
 }
 
+// 文件读取序号：连续改选文件时读取可能乱序完成，只有最新一次选择的读取结果才能写入
+let fileReadToken = 0;
+
 async function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
-  file.value = input.files?.[0] || undefined;
-  fileText.value = file.value ? await file.value.text() : "";
+  const token = ++fileReadToken;
+  const selected = input.files?.[0] || undefined;
+  // 选择文件的同一时刻就清空旧内容与校验结果：读取期间不能拿上一个文件的内容去校验或导入
+  file.value = selected;
+  fileText.value = "";
   headers.value = [];
   parsedRows.value = [];
   errors.value = [];
   dryRunSummary.value = "";
+  if (!selected) return;
+  const text = await selected.text();
+  if (token !== fileReadToken) return;
+  fileText.value = text;
 }
 
 function parseCsvLine(line: string) {
