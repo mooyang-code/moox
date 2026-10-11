@@ -4,121 +4,168 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
-func TestHandlerRoutesTimerToClaimedMarketFetch(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stockcn")
-	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
-	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
-	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
-	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
-
-	var observed marketfetch.Request
-	period := "2026-09-01T07:59:00Z"
-	claimed, err := json.Marshal(marketfetch.Request{
-		BatchID: "claimed-batch", BatchKind: domain.BatchKindRealtime, SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m",
-		Frequency: "1m", Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", FunctionName: "function-1",
-		GroupID: 0, GroupCount: 1, BindingHash: "binding-hash", RequirePeriodCommit: true,
-		Items:   []domain.CollectionItem{{InstanceID: "instance-1", SubjectID: "600000.XSHG", Symbol: "600000", Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline_1m", Frequency: "1m", TargetDataTime: period, SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true}},
-		Targets: []domain.WriteTarget{{ID: "target-1", SpaceID: "stockcn", InstanceID: "instance-1", TaskID: "task-1", DatasetID: "dataset_stockcn_equity_kline_1m", SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, Frequency: "1m", TargetDataTime: period}},
-	})
-	require.NoError(t, err)
-	handler := &Handler{
-		NewMarketFetch: func() *marketfetch.Handler {
-			return &marketfetch.Handler{
-				TimerRuntimeClient: serverlessTimerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
-					return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: claimed}, nil
-				}),
-				NewStorage: func(string, string) (marketfetch.Storage, error) {
-					return timerStorage{}, nil
-				},
-				Publish: func(context.Context, marketfetch.Request, proto.Message) error { return nil },
-				Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
-					observed = request
-					return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil
-				},
-			}
+func testPlanEnv(t *testing.T) string {
+	t.Helper()
+	encoded, err := marketfetch.EncodePlan(&marketfetch.Plan{
+		V:      1,
+		Market: marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
+		Fetch:  marketfetch.PlanFetch{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10},
+		Datasets: []marketfetch.PlanDataset{
+			{DatasetID: "bars_1m", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h1", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "BTC-USDT", Index: 0}, {ID: "ETH-USDT", Index: 1}}}}},
+			{DatasetID: "bars_1h", Frequency: "1h", LatenessS: 15, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h2", Count: 1, Subjects: []marketfetch.PlanSubject{{ID: "BTC-USDT", Index: 0}}}}},
 		},
-	}
-
-	raw, err := json.Marshal(model.CloudFunctionEvent{
-		Type: "Timer", TriggerName: "moox-market-fetch-timer",
-		Time: "2026-09-01T08:00:00Z", Message: "market_fetch_timer_v1",
-		RequestID: "request-1",
 	})
 	require.NoError(t, err)
-	response, err := handler.HandleRequest(context.Background(), raw)
-	require.NoError(t, err)
-	require.True(t, response.(*model.Response).Success)
-	require.Equal(t, "tencent", observed.Provider)
-	require.Equal(t, "stockcn_http", observed.SourceID)
-	require.Equal(t, "stockcn_http", observed.Items[0].SourceID)
-	require.Equal(t, "claimed-batch", observed.BatchID)
+	return encoded
 }
 
-func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "crypto")
-	// The static binding identifies a managed Timer-capable node; subjects are
-	// never the source of execution membership.
-	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
-	t.Setenv("MOOX_MARKET_FETCH_MODE", "kline")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage-runtime:12004")
+func timerEvent(at string) json.RawMessage {
+	raw, _ := json.Marshal(model.CloudFunctionEvent{Type: "Timer", TriggerName: "moox-market-fetch-timer", Time: at, Message: "market_fetch_timer_v1", RequestID: "request-1"})
+	return raw
+}
 
+func planHandler(observed *[]marketfetch.Request, published *int, now *time.Time) *Handler {
+	return &Handler{NewMarketFetch: func() *marketfetch.Handler {
+		return &marketfetch.Handler{
+			Now:        func() time.Time { return *now },
+			NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+			Publish:    func(context.Context, marketfetch.Request, proto.Message) error { *published++; return nil },
+			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+				*observed = append(*observed, request)
+				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
+			},
+		}
+	}}
+}
+
+func TestHandlerTimerBuildsRequestsFromThePlanWithoutClaimOrCompletion(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
+	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
+	var observed []marketfetch.Request
+	published := 0
+	now := time.Date(2026, 10, 11, 13, 0, 3, 0, time.UTC)
+	handler := planHandler(&observed, &published, &now)
+
+	// 整点：1m 与 1h 同时到期，各执行一次，目标周期是刚收盘的那根 K 线的开始时间。
+	response, err := handler.HandleRequest(context.Background(), timerEvent("2026-10-11T13:00:00Z"))
+	require.NoError(t, err)
+	require.True(t, response.(*model.Response).Success, response.(*model.Response).Message)
+	require.Zero(t, published, "新链路不发布批次完成事件")
+	require.Len(t, observed, 2)
+	byFrequency := map[string]marketfetch.Request{}
+	for _, request := range observed {
+		byFrequency[request.Frequency] = request
+	}
+	minute, hour := byFrequency["1m"], byFrequency["1h"]
+	require.Equal(t, "2026-10-11T12:59:00Z", minute.Items[0].TargetDataTime)
+	require.Equal(t, "2026-10-11T12:00:00Z", hour.Items[0].TargetDataTime)
+	require.True(t, minute.RequirePeriodCommit)
+	require.True(t, minute.WriteIDByContent)
+	require.Len(t, minute.Items, 2)
+	require.Len(t, minute.Targets, 2)
+	require.Equal(t, "h1", minute.Targets[0].SeriesHash)
+	require.EqualValues(t, 2, minute.Targets[0].ExpectedCount)
+	require.Len(t, hour.Items, 1)
+
+	// 非整点：只有 1m 到期。
+	observed = nil
+	now = time.Date(2026, 10, 11, 13, 1, 8, 0, time.UTC)
+	response, err = handler.HandleRequest(context.Background(), timerEvent("2026-10-11T13:01:07Z"))
+	require.NoError(t, err)
+	require.True(t, response.(*model.Response).Success)
+	require.Len(t, observed, 1)
+	require.Equal(t, "1m", observed[0].Frequency)
+	require.Equal(t, "2026-10-11T13:00:00Z", observed[0].Items[0].TargetDataTime)
+}
+
+func TestHandlerTimerRejectsMissingOrInvalidScheduledTime(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
+	var observed []marketfetch.Request
+	published := 0
+	now := time.Date(2026, 10, 11, 13, 0, 3, 0, time.UTC)
+	handler := planHandler(&observed, &published, &now)
+	for _, at := range []string{"", "not-a-time"} {
+		response, err := handler.HandleRequest(context.Background(), timerEvent(at))
+		require.NoError(t, err)
+		require.False(t, response.(*model.Response).Success)
+		require.Contains(t, response.(*model.Response).Message, "invalid_timer_event")
+	}
+	require.Empty(t, observed, "非法计划时间不得回退到当前时间执行")
+}
+
+func TestHandlerTimerSkipsDatasetsWhoseFirstCopyHasNotStarted(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
+	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
+	var observed []marketfetch.Request
+	published := 0
+	now := time.Date(2026, 10, 11, 13, 0, 3, 0, time.UTC)
+	handler := planHandler(&observed, &published, &now)
+	// 计划的生效起点是 1970-01-01T00:16:40Z（1000 秒），更早的周期没有可用的份。
+	response, err := handler.HandleRequest(context.Background(), timerEvent("1970-01-01T00:16:00Z"))
+	require.NoError(t, err)
+	require.True(t, response.(*model.Response).Success)
+	require.Equal(t, "no_work", response.(*model.Response).Message)
+	require.Empty(t, observed)
+}
+
+func TestHandlerTimerExpiredEventIsNotFetched(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
+	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
+	var observed []marketfetch.Request
+	published := 0
+	now := time.Date(2026, 10, 11, 13, 1, 20, 0, time.UTC) // 13:01 的周期截止是 13:01:15
+	handler := planHandler(&observed, &published, &now)
+	response, err := handler.HandleRequest(context.Background(), timerEvent("2026-10-11T13:01:00Z"))
+	require.NoError(t, err)
+	require.False(t, response.(*model.Response).Success)
+	require.Empty(t, observed, "迟到到截止之后的事件不再抓取，数据交给补采")
+}
+
+func TestHandlerManualInvokeDoesNotPublishCompletion(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
 	published := 0
 	var observed marketfetch.Request
-	var observedMarket string
-	handler := &Handler{
-		NewMarketFetch: func() *marketfetch.Handler {
-			return &marketfetch.Handler{
-				NewStorage: func(market, _ string) (marketfetch.Storage, error) {
-					observedMarket = market
-					return timerStorage{}, nil
-				},
-				Publish: func(_ context.Context, request marketfetch.Request, _ proto.Message) error {
-					published++
-					observed = request
-					return nil
-				},
-				Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
-					observed = request
-					return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
-				},
-			}
-		},
-	}
-
+	handler := &Handler{NewMarketFetch: func() *marketfetch.Handler {
+		return &marketfetch.Handler{
+			NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+			Publish:    func(context.Context, marketfetch.Request, proto.Message) error { published++; return nil },
+			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+				observed = request
+				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
+			},
+		}
+	}}
 	req := marketfetch.Request{
-		BatchID: "batch-shared", BatchKind: "realtime", SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m",
+		BatchID: "backfill-1", BatchKind: domain.BatchKindGapRepair, SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m",
 		Provider: "binance", SourceID: "spot_http", MarketType: "spot",
-		Items: []domain.CollectionItem{{InstanceID: "instance-1", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", BarLimit: 1}},
+		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", StartTime: "2026-10-11T00:00:00Z", BarLimit: 100}},
 	}
 	rawReq, err := json.Marshal(req)
 	require.NoError(t, err)
 	var data map[string]any
 	require.NoError(t, json.Unmarshal(rawReq, &data))
-	raw, err := json.Marshal(model.CloudFunctionEvent{
-		Action: model.EventActionMarketFetch, Source: model.EventSourceCollectorScheduler,
-		RequestID: "request-shared", Data: data,
-	})
+	raw, err := json.Marshal(model.CloudFunctionEvent{Action: model.EventActionMarketFetch, Source: "moox_backfill", RequestID: "request-backfill", Data: data})
 	require.NoError(t, err)
 	response, err := handler.HandleRequest(context.Background(), raw)
 	require.NoError(t, err)
 	require.True(t, response.(*model.Response).Success)
-	require.Equal(t, 1, published, "durable scheduler invokes must publish BatchCompleted")
-	require.Equal(t, "batch-shared", observed.BatchID)
-	require.Equal(t, "spot", observedMarket)
+	require.Zero(t, published, "补采与手动调用只写行，不发布完成事件")
+	require.Equal(t, "backfill-1", observed.BatchID)
 }
 
 func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {
@@ -136,9 +183,3 @@ func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {
 type timerStorage struct{}
 
 func (timerStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }
-
-type serverlessTimerRuntimeClientFunc func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error)
-
-func (f serverlessTimerRuntimeClientFunc) ClaimTimerBatch(ctx context.Context, req *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
-	return f(ctx, req)
-}

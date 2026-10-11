@@ -103,13 +103,27 @@ func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 		TimestampMode:     marketdata.TimestampModeOpen,
 		History:           marketdata.KlineHistoryCapability{SupportsArbitraryRange: true},
 		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 5,
-			Burst:             5,
-			MaxConcurrent:     1,
+			RequestsPerSecond: configuredFeedLimit("MOOX_FETCH_RPS", 5),
+			Burst:             int(configuredFeedLimit("MOOX_FETCH_BURST", 5)),
+			MaxConcurrent:     int(configuredFeedLimit("MOOX_FETCH_FEED_CONCURRENCY", 1)),
 			Cooldown:          time.Second,
 			RequestTimeout:    configuredKlineRequestTimeout(),
 		},
 	}
+}
+
+// configuredFeedLimit 读取限流参数（速率、突发、并发）。默认值保持保守；SCF 的计划按数据源下发更大的值，
+// 每个函数有自己的出口，币安限流按出口每分钟计权重，单函数每分钟几十个请求远低于上限。
+func configuredFeedLimit(name string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 || value > 1000 {
+		return fallback
+	}
+	return value
 }
 
 func configuredKlineRequestTimeout() time.Duration {

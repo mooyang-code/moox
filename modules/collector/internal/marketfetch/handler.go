@@ -174,8 +174,9 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if req.Concurrency == 0 {
 		req.Concurrency = envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	}
-	if h.NewStorage == nil && !req.RequirePeriodCommit {
-		return nil, fmt.Errorf("SCF requests must require period commit")
+	// 实时批次必须走周期提交；补采（历史批次）只写行，不涉及周期状态。
+	if h.NewStorage == nil && !req.RequirePeriodCommit && !isHistoricalBatchKind(req.BatchKind) {
+		return nil, fmt.Errorf("SCF realtime requests must require period commit")
 	}
 	invocationHandler, closeGateway, err := h.prepareInvocation(false)
 	if err != nil {

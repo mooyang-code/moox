@@ -2,6 +2,9 @@ package marketfetch
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -342,10 +345,10 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				if !ok {
 					err = fmt.Errorf("dataset %s requires CommitTimeSeriesBatch but storage client does not support period commits", datasetID)
 				} else {
-					err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, sourceEventID(req))
+					err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, writeEventID(req, datasetRows))
 				}
 			} else if storage, ok := p.Storage.(sourceStorage); ok {
-				err = storage.UpsertFieldsWithSource(ctx, datasetRows, sourceEventID(req))
+				err = storage.UpsertFieldsWithSource(ctx, datasetRows, writeEventID(req, datasetRows))
 			} else {
 				err = p.Storage.UpsertFields(ctx, datasetRows)
 			}
@@ -666,6 +669,39 @@ func metricKlineResult(err error) string {
 	default:
 		return "no_candidate"
 	}
+}
+
+// writeEventID 返回写入使用的来源 ID。WriteIDByContent 时附加本次内容的摘要，
+// 使同一内容的重试幂等、内容变化的重新提交不会被整组跳过。
+func writeEventID(req Request, rows []*storagepb.RowFieldUpsert) string {
+	base := sourceEventID(req)
+	if !req.WriteIDByContent {
+		return base
+	}
+	digest := sha256.New()
+	marshal := proto.MarshalOptions{Deterministic: true}
+	ordered := append([]*storagepb.RowFieldUpsert(nil), rows...)
+	sort.Slice(ordered, func(i, j int) bool {
+		left, right := ordered[i].GetKey().GetTimeSeries(), ordered[j].GetKey().GetTimeSeries()
+		if left.GetSubjectId() != right.GetSubjectId() {
+			return left.GetSubjectId() < right.GetSubjectId()
+		}
+		if left.GetSeriesTag() != right.GetSeriesTag() {
+			return left.GetSeriesTag() < right.GetSeriesTag()
+		}
+		return left.GetDataTime() < right.GetDataTime()
+	})
+	for _, row := range ordered {
+		raw, err := marshal.Marshal(row)
+		if err != nil {
+			continue
+		}
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(raw)))
+		_, _ = digest.Write(size[:])
+		_, _ = digest.Write(raw)
+	}
+	return base + "#" + hex.EncodeToString(digest.Sum(nil)[:8])
 }
 
 func sourceEventID(req Request) string {

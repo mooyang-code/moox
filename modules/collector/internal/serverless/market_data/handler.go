@@ -50,23 +50,17 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
 	}
-	timerMode := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MODE")))
-	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_BINDING_HASH")) != "" || timerMode != ""
 	timerEnvelope := event.Type != "" || event.TriggerName != "" || event.Message != ""
+	var scheduled time.Time
 	if timerEnvelope {
-		if err := validateTimerEvent(event); err != nil {
+		var err error
+		if scheduled, err = validateTimerEvent(event); err != nil {
 			return failure("invalid_timer_event", err.Error()), nil
 		}
-		if timerConfigured {
-			expectedAction := timerAction(timerMode)
-			if event.Action == "" {
-				event.Action = expectedAction
-			} else if event.Action != expectedAction {
-				return failure("invalid_timer_mode", "timer action does not match MOOX_MARKET_FETCH_MODE"), nil
-			}
-		} else if event.Action == "" {
-			event.Action = timerAction(timerMode)
+		if event.Action != "" && event.Action != model.EventActionMarketFetch {
+			return failure("invalid_timer_event", "timer event action must be market_fetch"), nil
 		}
+		event.Action = model.EventActionMarketFetch
 		event.Source = "tencent_timer"
 	}
 	functionName := strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
@@ -95,21 +89,12 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	}
 	switch event.Action {
 	case model.EventActionMarketFetch:
-		if timerConfigured && isTimerAction(event.Action) {
-			if !timerEnvelope && len(event.Data) == 0 {
-				return failure("invalid_timer_event", "timer event identity or action data is required"), nil
-			}
-			if timerEnvelope {
-				return runtimeHandler.HandleTimerAt(ctx, event.RequestID, functionName, timerNow(event))
-			}
-			if strings.EqualFold(strings.TrimSpace(event.Source), model.EventSourceCollectorScheduler) {
-				return runtimeHandler.HandleWithFunctionName(ctx, event, functionName)
-			}
-			// Keep ad-hoc validation/canary invokes completion-free so they do
-			// not mutate durable scheduler state.
-			return runtimeHandler.HandleWithFunctionNameWithoutCompletion(ctx, event, functionName)
+		if timerEnvelope {
+			// 定时触发：按环境里的采集计划与事件的计划时间执行，周期由计划时间决定。
+			return runtimeHandler.HandlePlanTimer(ctx, event.RequestID, functionName, scheduled)
 		}
-		return runtimeHandler.HandleWithFunctionName(ctx, event, functionName)
+		// 手动调用与补采：只写行，不发布完成事件，不涉及周期状态。
+		return runtimeHandler.HandleWithFunctionNameWithoutCompletion(ctx, event, functionName)
 	case model.EventActionEgressProbe:
 		if spaceID == "stockcn" {
 			return marketfetch.StockEgressIdentityProbe(ctx)
@@ -120,40 +105,26 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	}
 }
 
-func timerNow(event model.CloudFunctionEvent) time.Time {
-	now := time.Now().UTC()
-	if parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(event.Time)); parseErr == nil {
-		return parsed.UTC()
-	}
-	return now
-}
-
-func timerAction(mode string) model.EventAction {
-	_ = mode
-	return model.EventActionMarketFetch
-}
-
-func isTimerAction(action model.EventAction) bool {
-	return action == model.EventActionMarketFetch
-}
-
-func validateTimerEvent(event model.CloudFunctionEvent) error {
+// validateTimerEvent 校验定时事件并返回事件携带的计划时间。缺失或非法的时间直接拒绝，
+// 不回退到当前时间：延迟投递或重试的旧事件不能冒充当前周期。
+func validateTimerEvent(event model.CloudFunctionEvent) (time.Time, error) {
 	if !strings.EqualFold(strings.TrimSpace(event.Type), "Timer") {
-		return fmt.Errorf("timer event type must be Timer")
+		return time.Time{}, fmt.Errorf("timer event type must be Timer")
 	}
 	if strings.TrimSpace(event.TriggerName) != timerTriggerName {
-		return fmt.Errorf("timer trigger name is not recognized")
+		return time.Time{}, fmt.Errorf("timer trigger name is not recognized")
 	}
 	if strings.TrimSpace(event.Message) != timerTriggerMessage {
-		return fmt.Errorf("timer trigger message is not recognized")
+		return time.Time{}, fmt.Errorf("timer trigger message is not recognized")
 	}
 	if strings.TrimSpace(event.Time) == "" {
-		return fmt.Errorf("timer event time is required")
+		return time.Time{}, fmt.Errorf("timer event time is required")
 	}
-	if _, err := time.Parse(time.RFC3339, strings.TrimSpace(event.Time)); err != nil {
-		return fmt.Errorf("timer event time is invalid: %w", err)
+	scheduled, err := time.Parse(time.RFC3339, strings.TrimSpace(event.Time))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("timer event time is invalid: %w", err)
 	}
-	return nil
+	return scheduled.UTC(), nil
 }
 
 func failure(code, message string) *model.Response {
