@@ -519,8 +519,11 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 			return nil, fmt.Errorf("read public EventBus CA file: %w", err)
 		}
 	}
-	if err := collectorpackager.ValidateEventBusCAPEM(opts.EventBusCAPEM); err != nil {
-		return nil, fmt.Errorf("public EventBus CA is required before SCF build: %w", err)
+	// EventBus CA 可选：采集计划函数不连 EventBus，只有旧链路的包才携带。
+	if len(opts.EventBusCAPEM) > 0 {
+		if err := collectorpackager.ValidateEventBusCAPEM(opts.EventBusCAPEM); err != nil {
+			return nil, fmt.Errorf("public EventBus CA is invalid: %w", err)
+		}
 	}
 	collectorRoot, err := resolveCollectorRoot(opts.CollectorRoot)
 	if err != nil {

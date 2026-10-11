@@ -295,8 +295,26 @@ func TestBuildSCFPackageDoesNotLeaveInvalidOutput(t *testing.T) {
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "failed validation must not leave a publishable ZIP")
 }
 
-func TestValidateSCFPackageZipRequiresCA(t *testing.T) {
-	require.ErrorContains(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"main": testfixture.LinuxExecutable(elf.EM_X86_64)})), "certs/eventbus-ca.pem")
+// 采集计划函数不连 EventBus，包里不需要 CA。
+func TestValidateSCFPackageZipAllowsMissingCA(t *testing.T) {
+	require.NoError(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"main": testfixture.LinuxExecutable(elf.EM_X86_64)})))
+}
+
+func TestBuildSCFPackageWithoutCAOmitsCertificate(t *testing.T) {
+	tmp := t.TempDir()
+	binary, config := filepath.Join(tmp, "main"), filepath.Join(tmp, "config")
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
+	opts := BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: filepath.Join(tmp, "package.zip")}
+	_, err := BuildSCFPackage(opts)
+	require.NoError(t, err)
+	reader, err := zip.OpenReader(opts.OutPath)
+	require.NoError(t, err)
+	defer reader.Close()
+	for _, file := range reader.File {
+		require.NotEqual(t, "certs/eventbus-ca.pem", file.Name)
+	}
+	require.NoError(t, ValidateSCFPackageZip(opts.OutPath))
 }
 
 func TestBuildSCFPackageIncludesExactPublicCA(t *testing.T) {
@@ -325,7 +343,7 @@ func TestBuildSCFPackageIncludesExactPublicCA(t *testing.T) {
 		}
 	}
 	require.True(t, found)
-	for _, invalid := range [][]byte{nil, []byte("not PEM"), append(append([]byte{}, ca...), []byte("password: test-password")...)} {
+	for _, invalid := range [][]byte{[]byte("not PEM"), append(append([]byte{}, ca...), []byte("password: test-password")...)} {
 		opts.EventBusCAPEM = invalid
 		_, err := BuildSCFPackage(opts)
 		require.Error(t, err)

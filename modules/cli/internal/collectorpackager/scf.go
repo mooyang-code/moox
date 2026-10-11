@@ -54,8 +54,11 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	if configInfo.Mode()&os.ModeSymlink != 0 || !configInfo.IsDir() {
 		return nil, fmt.Errorf("config dir must be a directory and not a symlink")
 	}
-	if err := validatePublicCA(opts.EventBusCAPEM); err != nil {
-		return nil, err
+	// 函数不再连 EventBus：CA 可选，仅旧链路的函数包需要携带。
+	if len(opts.EventBusCAPEM) > 0 {
+		if err := validatePublicCA(opts.EventBusCAPEM); err != nil {
+			return nil, err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o755); err != nil {
 		return nil, err
@@ -74,10 +77,12 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	zw := zip.NewWriter(out)
 
 	var entries []string
-	if err := addZipBytes(zw, opts.EventBusCAPEM, "certs/eventbus-ca.pem", 0o644); err != nil {
-		return nil, err
+	if len(opts.EventBusCAPEM) > 0 {
+		if err := addZipBytes(zw, opts.EventBusCAPEM, "certs/eventbus-ca.pem", 0o644); err != nil {
+			return nil, err
+		}
+		entries = append(entries, "certs/eventbus-ca.pem")
 	}
-	entries = append(entries, "certs/eventbus-ca.pem")
 	addFile := func(src, dst string) error {
 		if err := addZipFile(zw, src, dst); err != nil {
 			return err
@@ -155,7 +160,6 @@ func ValidateSCFPackageZip(zipPath string) error {
 	}
 	defer reader.Close()
 	seen := make(map[string]bool)
-	validCA := false
 	validMain := false
 	for _, file := range reader.File {
 		name := file.Name
@@ -197,13 +201,9 @@ func ValidateSCFPackageZip(zipPath string) error {
 			if err := validatePublicCA(content); err != nil {
 				return err
 			}
-			validCA = true
 		} else if err := validateCredentialFreeYAML(content); err != nil {
 			return fmt.Errorf("scf package entry %s: %w", name, err)
 		}
-	}
-	if !validCA {
-		return fmt.Errorf("scf package requires certs/eventbus-ca.pem")
 	}
 	if !validMain {
 		return fmt.Errorf("scf package requires an executable Linux main")
