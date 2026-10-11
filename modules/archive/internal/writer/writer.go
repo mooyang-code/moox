@@ -86,7 +86,13 @@ func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (d
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	sort.SliceStable(pending, func(i, j int) bool { return pending[i].Seq < pending[j].Seq })
+	// 按事件写入时间排序（相同时间按日志序号）：重投的旧事件可能以更大的日志序号入队，按序号合并会让旧值盖掉新值。
+	sort.SliceStable(pending, func(i, j int) bool {
+		if !pending[i].Patch.WrittenAt.Equal(pending[j].Patch.WrittenAt) {
+			return pending[i].Patch.WrittenAt.Before(pending[j].Patch.WrittenAt)
+		}
+		return pending[i].Seq < pending[j].Seq
+	})
 	for _, item := range pending {
 		row, ok := rows[item.RowID]
 		if !ok {

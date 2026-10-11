@@ -60,3 +60,33 @@ func TestSortedColumnNames(t *testing.T) {
 }
 
 func ptrFloat(v float64) *float64 { return &v }
+
+// 重投的旧事件越过了新事件：旧补丁不能覆盖或删除新值，只能补上缺失的字段；行写入时间保持较新的那个。
+func TestMergePatchStalePatchNeverOverwritesNewerValues(t *testing.T) {
+	newer := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+	older := newer.Add(-time.Minute)
+	partition := PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}
+	base := ArchiveRow{
+		WrittenAt:  newer,
+		Attributes: map[string]string{"source": "live"},
+		Columns:    map[string]Scalar{"close": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: ptrFloat(2.0)}},
+	}
+	stale := RowPatch{
+		Partition: partition, DataTime: newer, WrittenAt: older,
+		Attributes: map[string]string{"source": "old", "batch": "1"},
+		Columns: map[string]Scalar{
+			"close":  {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: ptrFloat(1.0)},
+			"volume": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: ptrFloat(9.0)},
+		},
+	}
+	merged := MergePatch(base, stale)
+	assert.InDelta(t, 2.0, *merged.Columns["close"].Double, 0.001, "旧补丁不能覆盖已有值")
+	assert.InDelta(t, 9.0, *merged.Columns["volume"].Double, 0.001, "旧补丁可以补上缺失的字段")
+	assert.Equal(t, "live", merged.Attributes["source"])
+	assert.Equal(t, "1", merged.Attributes["batch"])
+	assert.True(t, merged.WrittenAt.Equal(newer))
+
+	deleting := RowPatch{Partition: partition, DataTime: newer, WrittenAt: older, Columns: map[string]Scalar{"close": {Null: true}}}
+	kept := MergePatch(base, deleting)
+	assert.Contains(t, kept.Columns, "close", "旧补丁不能删除新值")
+}

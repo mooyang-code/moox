@@ -179,16 +179,24 @@ func (s Scalar) clone() Scalar {
 	return out
 }
 
+// MergePatch 把增量补丁合并进行。补丁的写入时间早于行上已有的写入时间时（重投的旧事件越过了新事件），它是过期补丁：
+// 只补上行里还没有的字段与属性，不覆盖、不删除已有值，行的写入时间保持较新的那个，旧值不会盖掉新值。
 func MergePatch(base ArchiveRow, patch RowPatch) ArchiveRow {
 	out := base
 	out.DataTime = patch.DataTime
 	out.Partition = patch.Partition
-	out.WrittenAt = patch.WrittenAt
+	stale := !base.WrittenAt.IsZero() && patch.WrittenAt.Before(base.WrittenAt)
+	if !stale {
+		out.WrittenAt = patch.WrittenAt
+	}
 	out.Attributes = cloneStrings(base.Attributes)
 	if out.Attributes == nil {
 		out.Attributes = map[string]string{}
 	}
 	for k, v := range patch.Attributes {
+		if _, exists := out.Attributes[k]; stale && exists {
+			continue
+		}
 		out.Attributes[k] = v
 	}
 	out.Columns = cloneScalars(base.Columns)
@@ -196,6 +204,13 @@ func MergePatch(base ArchiveRow, patch RowPatch) ArchiveRow {
 		out.Columns = map[string]Scalar{}
 	}
 	for k, v := range patch.Columns {
+		if stale {
+			if _, exists := out.Columns[k]; exists || v.Null {
+				continue
+			}
+			out.Columns[k] = v.clone()
+			continue
+		}
 		if v.Null {
 			delete(out.Columns, k)
 			continue

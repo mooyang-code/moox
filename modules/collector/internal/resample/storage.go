@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,21 +91,23 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subject
 	// PrimaryStore requires at least one field ID even when only an attribute
 	// is needed. Request the canonical K-line fields alongside source_hash;
 	// this remains a single bounded read and keeps the idempotency check valid.
-	existing, err := s.Primary.ReadFields(ctx, []*storagepb.RowKey{targetKey}, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, []string{"source_hash"})
+	existing, err := s.Primary.ReadFields(ctx, []*storagepb.RowKey{targetKey}, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, []string{"source_hash", "resample_revision"})
 	if err != nil {
 		return Result{}, false, err
 	}
 	if len(existing) > 0 && typedString(existing[0].GetAttributes()["source_hash"]) == result.SourceHash {
 		return result, false, nil
 	}
-	row := resultRowWithSpec(result, spec)
-	// 事件 ID 要包含这次修订所基于的上一个版本（现存目标行的 source_hash）：只用内容哈希时，源数据 A→B→A 的第三次写入会得到
-	// 与第一次相同的 ID，被 Storage 的去重记录吞掉，结果停在 B。同一次修订的崩溃重试基于同一个旧版本，ID 不变，仍然幂等。
-	previousHash := ""
+	// 事件 ID 要包含这次修订所基于的版本序号（现存目标行的 resample_revision）：只用内容哈希（或前后哈希）时，源数据
+	// A→B→A→B 的第四次写入会得到与第二次相同的 ID，被 Storage 的去重记录吞掉，结果停在 A。序号每次修订递增，
+	// 同一次修订的崩溃重试基于同一个旧序号与同一个新哈希，ID 不变，仍然幂等。
+	previousRevision := int64(0)
 	if len(existing) > 0 {
-		previousHash = typedString(existing[0].GetAttributes()["source_hash"])
+		previousRevision, _ = strconv.ParseInt(typedString(existing[0].GetAttributes()["resample_revision"]), 10, 64)
 	}
-	eventID := sourceEventID(spec.InstanceID, targetKey, previousHash, result.SourceHash)
+	row := resultRowWithSpec(result, spec)
+	row.Attributes["resample_revision"] = stringValue(strconv.FormatInt(previousRevision+1, 10))
+	eventID := sourceEventID(spec.InstanceID, targetKey, strconv.FormatInt(previousRevision, 10), result.SourceHash)
 	if err := s.Primary.UpsertFieldsWithSource(ctx, []*storagepb.RowFieldUpsert{row}, eventID); err != nil {
 		return Result{}, false, err
 	}
@@ -155,13 +158,13 @@ func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 	return row
 }
 
-func sourceEventID(instanceID string, key *storagepb.RowKey, previousHash, hash string) string {
+func sourceEventID(instanceID string, key *storagepb.RowKey, previousRevision, hash string) string {
 	keyText := ""
 	if key != nil && key.GetTimeSeries() != nil {
 		k := key.GetTimeSeries()
 		keyText = strings.Join([]string{key.GetSpaceId(), key.GetDatasetId(), k.GetSubjectId(), k.GetFreq(), k.GetDataTime(), k.GetSeriesTag()}, "\x00")
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{instanceID, keyText, previousHash, hash}, "\x00")))
+	sum := sha256.Sum256([]byte(strings.Join([]string{instanceID, keyText, previousRevision, hash}, "\x00")))
 	return "resample-" + hex.EncodeToString(sum[:])[:32]
 }
 

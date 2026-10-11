@@ -336,11 +336,17 @@ async function dryRun() {
 }
 
 async function importRows() {
+  // 导入固定在发起时的空间与 Dataset：校验期间切换空间不能把原来的 CSV 写进新空间。
+  const space_id = spaceStore.requireSpaceId();
+  const datasetId = form.dataset_id;
   await dryRun();
+  if (spaceStore.selectedSpaceId !== space_id || form.dataset_id !== datasetId) {
+    Message.warning("空间或 Dataset 已变化，已取消导入，请重新校验后再导入");
+    return;
+  }
   if (!canImport.value) return;
   loading.value = true;
   try {
-    const space_id = spaceStore.requireSpaceId();
     if (isTimeSeriesDataset.value) {
       const rows: RowFieldUpsert[] = parsedRows.value.map(row => ({
         key: {
@@ -376,7 +382,16 @@ async function importRows() {
   }
 }
 
-watch(selectedSpaceId, loadDatasets);
+// 切换空间：旧空间的 Dataset、字段映射与已解析的 CSV 都不再有效，清空后重新加载。
+watch(selectedSpaceId, () => {
+  form.dataset_id = "";
+  columns.value = [];
+  parsedRows.value = [];
+  headers.value = [];
+  errors.value = [];
+  dryRunSummary.value = "";
+  void loadDatasets();
+});
 onMounted(loadDatasets);
 </script>
 

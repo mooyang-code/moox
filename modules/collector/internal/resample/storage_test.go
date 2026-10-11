@@ -112,11 +112,11 @@ func TestBucketStorageRejectsOversizedSourceWindow(t *testing.T) {
 // 同一次修订（同一个旧版本、同一个新哈希）的崩溃重试 ID 不变，仍然幂等。
 func TestSourceEventIDDistinguishesRevisionsThatRestoreAnEarlierValue(t *testing.T) {
 	key := rowKey("crypto", "target", "BTC-USDT", "5m", time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC), "")
-	first := sourceEventID("task", key, "", "A")
-	second := sourceEventID("task", key, "A", "B")
-	third := sourceEventID("task", key, "B", "A")
+	first := sourceEventID("task", key, "0", "A")
+	second := sourceEventID("task", key, "1", "B")
+	third := sourceEventID("task", key, "2", "A")
 	require.NotEqual(t, first, third, "A→B→A 的第三次不能与第一次相同")
 	require.NotEqual(t, first, second)
 	require.NotEqual(t, second, third)
-	require.Equal(t, third, sourceEventID("task", key, "B", "A"), "同一次修订的重试 ID 必须稳定")
+	require.Equal(t, third, sourceEventID("task", key, "2", "A"), "同一次修订的重试 ID 必须稳定")
 }
