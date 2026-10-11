@@ -170,6 +170,7 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
@@ -317,8 +318,10 @@ async function submitBatchAdd(): Promise<boolean> {
     Message.warning("请输入至少一个对象 ID");
     return false;
   }
+  const submission = batchScope.begin();
   await addTagMembers(props.spaceId, selectedTagId.value, ids);
   Message.success(`已加入 ${ids.length} 个对象`);
+  if (!submission.isCurrent()) return false;
   batchVisible.value = false;
   await load();
   return true;
@@ -393,8 +396,10 @@ async function submitSubject(): Promise<boolean> {
     Message.warning("请补全对象 ID、对象类型和名称");
     return false;
   }
+  const submission = subjectScope.begin();
   await upsertSubject({ ...subjectForm, space_id: props.spaceId });
   Message.success("数据对象已保存");
+  if (!submission.isCurrent()) return false;
   subjectVisible.value = false;
   await reload();
   return true;
@@ -440,6 +445,14 @@ watch(
   },
   { immediate: true }
 );
+
+// 提交作用域：batchVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const batchScope = createSubmitScope();
+watch(batchVisible, () => batchScope.invalidate());
+
+// 提交作用域：subjectVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const subjectScope = createSubmitScope();
+watch(subjectVisible, () => subjectScope.invalidate());
 </script>
 
 <style scoped>

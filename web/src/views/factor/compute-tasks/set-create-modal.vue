@@ -24,7 +24,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { createSubmitScope } from "@/utils/submit-scope";
+import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createFactorSet } from "@/api/factor";
 import type { SubjectMode } from "@/api/factor/types";
@@ -95,8 +96,10 @@ async function submit() {
     Message.warning("指定对象模式至少需要一个对象 ID");
     return false;
   }
+  const submission = createScope.begin();
   const submitGeneration = selectedSpaceGeneration();
-  const stale = () => spaceStore.selectedSpaceId !== spaceId || selectedSpaceGeneration() !== submitGeneration;
+  const stale = () =>
+    !submission.isCurrent() || spaceStore.selectedSpaceId !== spaceId || selectedSpaceGeneration() !== submitGeneration;
   submitting.value = true;
   try {
     const created = await createFactorSet({
@@ -108,8 +111,8 @@ async function submit() {
     });
     if (stale()) {
       // 创建请求属于原空间：不在新空间发出 created（父页面会刷新新空间列表并把原空间的任务 ID 写入详情路由）
-      Message.info(`计算任务 ${created.set_id} 已在原空间创建；当前空间已切换`);
-      return true;
+      Message.info(`计算任务 ${created.set_id} 已创建；弹窗已关闭/重新打开或空间已切换，不再打开详情`);
+      return false;
     }
     Message.success(`计算任务已创建：${created.set_id}`);
     emit("created", created.set_id);
@@ -119,7 +122,14 @@ async function submit() {
     Message.error(error instanceof Error ? error.message : "创建计算任务失败");
     return false;
   } finally {
-    submitting.value = false;
+    if (submission.isCurrent()) submitting.value = false;
   }
 }
+
+// 提交作用域：弹窗打开/关闭都会使进行中的创建失效，旧响应不能再发出 created 或关闭新弹窗
+const createScope = createSubmitScope();
+watch(visible, () => {
+  createScope.invalidate();
+  submitting.value = false;
+});
 </script>

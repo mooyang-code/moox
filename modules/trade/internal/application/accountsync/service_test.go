@@ -1448,3 +1448,45 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, account.BalancePendingUntil)
 }
+
+type noPositionsAdapter struct{ *syncAdapter }
+
+func (noPositionsAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
+	return nil, nil
+}
+
+// 持仓列表先于成交读取、余额快照后于成交读取：本轮补录成交投影出的持仓不能被“空持仓列表”删除。
+func TestFullSyncKeepsPositionProjectedFromFillBackfilledInTheSameRound(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	base := &syncAdapter{
+		order: exchange.Order{
+			ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
+			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+		},
+		fill: exchange.Fill{
+			ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+			SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+		},
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: noPositionsAdapter{base}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	var positions int64
+	require.NoError(t, tradeStore.DBForTest().Raw(
+		"SELECT COUNT(*) FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ?", "space-1", "account-1",
+	).Scan(&positions).Error)
+	require.Equal(t, int64(1), positions, "本轮补录成交投影出的持仓不能被先取的空持仓列表删除")
+}

@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createDataSource, listDataSources, updateDataSource } from "@/api/storage/metadata";
@@ -198,9 +199,11 @@ async function submit() {
     return;
   }
   const payload = { ...form, space_id: spaceId, config_json: jsonText(form.config_json) };
+  const submission = sourceScope.begin();
   if (editing.value) await updateDataSource(payload);
   else await createDataSource(payload);
   Message.success("数据源已保存");
+  if (!submission.isCurrent()) return;
   visible.value = false;
   await load();
 }
@@ -222,6 +225,10 @@ watch(selectedSpaceId, () => {
   load();
 });
 onMounted(load);
+
+// 提交作用域：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const sourceScope = createSubmitScope();
+watch(visible, () => sourceScope.invalidate());
 </script>
 
 <style scoped>

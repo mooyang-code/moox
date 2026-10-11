@@ -300,7 +300,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from "vue";
+import { createSubmitScope } from "@/utils/submit-scope";
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { monitorApi, type HealthAlert, type HealthComponent, type HealthOverview } from "@/api/monitor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -413,12 +414,18 @@ async function saveNotification() {
   await persistNotification();
 }
 async function persistNotification() {
+  const submission = notificationScope.begin();
   try {
     const rsp = await monitorApi.updateNotification({
       channel_type: notification.channel_type,
       webhook_url: notification.clear_url ? "" : notification.webhook_url
     });
     overview.value.notification = rsp.channel;
+    // 配置已保存；但弹窗已被关闭/重新打开时，不能清空用户在新表单里刚输入的 Webhook，也不能关闭新弹窗
+    if (!submission.isCurrent()) {
+      Message.success("通知配置已保存");
+      return;
+    }
     notification.masked = rsp.channel?.masked_url || "";
     notification.webhook_url = "";
     notification.clear_url = false;
@@ -455,6 +462,10 @@ onActivated(() => {
 });
 onDeactivated(stopPolling);
 onUnmounted(stopPolling);
+
+// 提交作用域：notificationVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const notificationScope = createSubmitScope({ global: true });
+watch(notificationVisible, () => notificationScope.invalidate());
 </script>
 
 <style scoped lang="scss">

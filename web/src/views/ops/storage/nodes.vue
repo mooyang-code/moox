@@ -213,7 +213,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { createSubmitScope } from "@/utils/submit-scope";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
 import { deleteDataNode, listDataNodes, updateDataNode } from "@/api/storage/metadata";
@@ -300,14 +301,16 @@ async function submit() {
     Message.warning("名称不能为空");
     return;
   }
+  const submission = nodeScope.begin();
   submitting.value = true;
   try {
     await updateDataNode({ node_id: form.node_id, name: form.name.trim(), status: form.status });
     Message.success("数据节点已保存");
+    if (!submission.isCurrent()) return;
     visible.value = false;
     await load();
   } finally {
-    submitting.value = false;
+    if (submission.isCurrent()) submitting.value = false;
   }
 }
 
@@ -337,6 +340,10 @@ function onPageSizeChange(pageSize: number) {
 }
 
 onMounted(load);
+
+// 提交作用域：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const nodeScope = createSubmitScope({ global: true });
+watch(visible, () => nodeScope.invalidate());
 </script>
 
 <style scoped>

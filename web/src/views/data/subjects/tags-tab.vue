@@ -143,6 +143,7 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
@@ -268,6 +269,7 @@ async function submit(): Promise<boolean> {
       return false;
     }
   }
+  const submission = tagScope.begin();
   try {
     await upsertTag(toTagPayload(spaceId, form), !editing.value);
   } catch (error) {
@@ -283,6 +285,7 @@ async function submit(): Promise<boolean> {
     throw error;
   }
   Message.success("标签已保存");
+  if (!submission.isCurrent()) return false; // 已保存，但表单已被关闭/重新打开或空间已切换：不操作当前表单
   visible.value = false;
   await load();
   return true;
@@ -327,6 +330,10 @@ watch(
 );
 
 onMounted(() => void load());
+
+// 提交作用域：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const tagScope = createSubmitScope();
+watch(visible, () => tagScope.invalidate());
 </script>
 
 <style scoped>

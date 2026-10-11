@@ -150,8 +150,9 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch, onBeforeUnmount } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { createFactor, getFactor, updateFactor } from "@/api/factor";
@@ -341,19 +342,23 @@ async function save() {
   sourceCheck.value = "unchecked";
   if (readOnly.value || checklistBlockers(checklist.value).length) return;
   saving.value = true;
+  const submission = saveScope.begin();
   try {
     const payload = buildFactorPayload(form);
     if (editing.value) await updateFactor(payload);
     else await createFactor(payload);
     committed.value = true;
     Message.success(editing.value ? "因子已保存" : "因子已创建，到计算任务里添加并启用");
+    // 保存期间用户已确认离开页面或切换了因子：因子已保存，但不能再把用户带回列表
+    if (!submission.isCurrent()) return;
     await router.push("/factor/definitions");
   } catch (error) {
+    if (!submission.isCurrent()) return;
     const message = error instanceof Error ? error.message : "保存因子失败";
     saveError.value = message;
     if (/source|源码|compute|load/i.test(message)) sourceCheck.value = "failed";
   } finally {
-    saving.value = false;
+    if (submission.isCurrent()) saving.value = false;
   }
 }
 
@@ -387,6 +392,11 @@ onMounted(() => {
   void load();
   void loadReferenceDatasets();
 });
+
+// 保存作用域：页面卸载或切换因子都会使进行中的保存失效，迟到的响应不能再导航
+const saveScope = createSubmitScope({ global: true });
+onBeforeUnmount(() => saveScope.invalidate());
+watch(factorId, () => saveScope.invalidate());
 </script>
 
 <style scoped lang="scss">

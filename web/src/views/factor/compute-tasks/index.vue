@@ -242,6 +242,8 @@ async function onCreated(setId: string) {
   await store.reload({ silent: false });
   if (spaceStore.selectedSpaceId !== createdSpaceId || selectedSpaceGeneration() !== createdGeneration) return;
   if (!store.sets.some((item: FactorSetInfo) => item.factor_set.set_id === setId)) return;
+  // 刷新期间用户又打开了新的创建弹窗：跳转会按 route.fullPath 重建页面，销毁正在填写的新草稿
+  if (createVisible.value) return;
   openDetail(setId);
 }
 

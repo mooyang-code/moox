@@ -63,8 +63,9 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { createStrategy, getStrategy, updateStrategy } from "@/api/strategy";
@@ -131,6 +132,7 @@ async function save() {
   saving.value = true;
   // 保存的是点击时的文本快照：只把这份快照标记为已保存，请求期间若文本变了，变化仍算未保存的草稿。
   const submitted = source.value;
+  const submission = saveScope.begin();
   try {
     if (editing.value) await updateStrategy(strategyId.value.trim(), submitted);
     else await createStrategy({ strategy_id: strategyId.value.trim() || undefined, dsl_yaml: submitted });
@@ -138,11 +140,14 @@ async function save() {
     // 新建或修改了定义：运行页、回放页缓存的完整目录已过期，作废后下次进入时重新读取。
     strategyStore.invalidateStrategyCatalog();
     Message.success("策略定义已保存");
+    // 保存期间用户已确认离开页面或切换了策略定义：定义已保存，但不能再把用户带回列表
+    if (!submission.isCurrent()) return;
     router.push({ name: "strategy-overview" });
   } catch (err) {
+    if (!submission.isCurrent()) return;
     error.value = err instanceof Error ? err.message : "策略定义保存失败";
   } finally {
-    saving.value = false;
+    if (submission.isCurrent()) saving.value = false;
   }
 }
 function leave() {
@@ -182,6 +187,11 @@ watch(
     if (next && editing.value && !loaded.value) void load();
   }
 );
+
+// 保存作用域：页面卸载或切换策略定义都会使进行中的保存失效，迟到的响应不能再导航
+const saveScope = createSubmitScope({ global: true });
+onBeforeUnmount(() => saveScope.invalidate());
+watch(strategyId, () => saveScope.invalidate());
 </script>
 
 <style scoped>

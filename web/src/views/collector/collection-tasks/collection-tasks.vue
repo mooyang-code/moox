@@ -437,6 +437,7 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
@@ -939,22 +940,28 @@ async function validateEditor() {
 
 async function handleOk(): Promise<boolean> {
   if (!(await validateEditor())) return false;
+  // 提交快照：预检（getDataset）等待期间用户可能取消并重新打开表单，旧提交只能用它自己的输入，
+  // 不能把旧输入与新表单的任务名称、结果配置混合提交，也不能关闭新窗口。
+  const submission = editorScope.begin();
+  const editorSnapshot = { ...editor };
+  const resultSnapshot = { ...resultConfig };
   submitLoading.value = true;
   try {
     if (editorMode.value === "create") {
       const input = currentTaskInput();
       if (!input.subjectTags?.length && input.dataType === "kline_resample" && input.sourceId) {
-        const sourceDataset = await getDataset({ space_id: editor.space_id, dataset_id: input.sourceId });
+        const sourceDataset = await getDataset({ space_id: editorSnapshot.space_id, dataset_id: input.sourceId });
+        if (!submission.isCurrent()) return false;
         input.subjectTags = (sourceDataset.dataset?.subject_tags || []).slice();
         subjectTagIds.value = input.subjectTags;
       }
       const task = buildCollectionTaskPayload(
         input,
         {
-          task_name: editor.task_name,
-          description: editor.description,
-          space_id: editor.space_id,
-          creator: editor.creator || account.value?.user?.userName || "",
+          task_name: editorSnapshot.task_name,
+          description: editorSnapshot.description,
+          space_id: editorSnapshot.space_id,
+          creator: editorSnapshot.creator || account.value?.user?.userName || "",
           enabled: true
         },
         undefined
@@ -962,35 +969,38 @@ async function handleOk(): Promise<boolean> {
       await CreateTask({
         task,
         result_config: {
-          data_node_id: resultConfig.data_node_id.trim(),
-          description: resultConfig.description.trim()
+          data_node_id: resultSnapshot.data_node_id.trim(),
+          description: resultSnapshot.description.trim()
         }
       });
       Message.success(`采集任务“${task.task_name}”已创建，将从下一采集周期开始生效`);
     } else {
       const input = currentTaskInput();
       const mutableTask = {
-        task_id: editor.task_id,
-        task_name: editor.task_name.trim(),
-        description: editor.description.trim(),
-        enabled: editor.enabled,
+        task_id: editorSnapshot.task_id,
+        task_name: editorSnapshot.task_name.trim(),
+        description: editorSnapshot.description.trim(),
+        enabled: editorSnapshot.enabled,
         collect_params: buildCollectionTaskParamsForUpdate(input)
       };
       await UpdateTask({
-        space_id: editor.space_id,
-        task_id: editor.task_id,
+        space_id: editorSnapshot.space_id,
+        task_id: editorSnapshot.task_id,
         task: mutableTask as Parameters<typeof UpdateTask>[0]["task"]
       });
       Message.success("变更成功，将从下一采集周期开始生效");
     }
+    // 任务已保存；表单已被取消/重新打开或空间已切换时，不关闭当前窗口
+    if (!submission.isCurrent()) return false;
     editorVisible.value = false;
     await getTaskList();
     return true;
   } catch (error) {
+    if (!submission.isCurrent()) return false;
     Message.error(error instanceof Error ? error.message : "保存任务失败");
     return false;
   } finally {
-    submitLoading.value = false;
+    if (submission.isCurrent()) submitLoading.value = false;
   }
 }
 
@@ -1338,6 +1348,13 @@ onMounted(() => {
   void loadSources();
   void loadTags();
   void loadDataNodes();
+});
+
+// 提交作用域：编辑窗口打开/关闭都会使进行中的保存失效
+const editorScope = createSubmitScope();
+watch(editorVisible, () => {
+  editorScope.invalidate();
+  submitLoading.value = false;
 });
 </script>
 

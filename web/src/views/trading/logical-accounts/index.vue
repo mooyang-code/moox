@@ -370,6 +370,7 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { useWindowSize } from "@vueuse/core";
 import { Message, Modal } from "@arco-design/web-vue";
@@ -552,11 +553,13 @@ async function create() {
     Message.warning("请填写所有必填字段");
     return false;
   }
+  const submission = createScope.begin();
   await createLogicalAccount({
     ...createForm,
     name: createForm.name.trim(),
     settlement_asset: createForm.settlement_asset.trim().toUpperCase()
   });
+  if (!submission.isCurrent()) return false;
   createVisible.value = false;
   await load();
   return true;
@@ -717,7 +720,10 @@ async function addMember() {
     Message.warning("请选择执行账户");
     return false;
   }
-  await addLogicalAccountMember({ logical_account_id: selected.value.logical_account_id, ...memberForm });
+  const submission = memberScope.begin();
+  const memberAccountId = selected.value.logical_account_id;
+  await addLogicalAccountMember({ logical_account_id: memberAccountId, ...memberForm });
+  if (!submission.isCurrent() || selected.value?.logical_account_id !== memberAccountId) return false;
   memberVisible.value = false;
   await reloadDetail();
   await load();
@@ -929,6 +935,14 @@ watch(
     void load();
   }
 );
+
+// 提交作用域：createVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const createScope = createSubmitScope();
+watch(createVisible, () => createScope.invalidate());
+
+// 提交作用域：memberVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const memberScope = createSubmitScope();
+watch(memberVisible, () => memberScope.invalidate());
 </script>
 
 <style scoped>
