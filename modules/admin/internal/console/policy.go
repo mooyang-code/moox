@@ -41,7 +41,13 @@ func adminOnlyWriteService(serviceID string) bool {
 // 普通用户不能看到、也不能间接使用。
 // adminOnlyMethods 是会让服务端执行用户提供代码的方法：因子源码保存前会被 Python 子进程导入校验，子进程继承 factor-mgr 的
 // 系统用户权限和服务凭据，所以空间管理员也不能调用，只允许全局管理员。
-var adminOnlyMethods = map[string]bool{"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true}
+//
+// 云账户没有空间归属（表里没有 space 字段，按 account_id 全局定位），创建是 UPSERT，空间管理员改它会影响其他空间共用的账户，
+// 所以写方法同样只允许全局管理员。
+var adminOnlyMethods = map[string]bool{
+	"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true,
+	"cloudnode/CreateCloudAccount": true, "cloudnode/UpdateCloudAccount": true, "cloudnode/DeleteCloudAccount": true,
+}
 
 func adminOnlyMethod(serviceID, method string) bool { return adminOnlyMethods[serviceID+"/"+method] }
 

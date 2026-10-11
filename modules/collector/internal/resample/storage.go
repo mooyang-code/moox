@@ -98,7 +98,13 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subject
 		return result, false, nil
 	}
 	row := resultRowWithSpec(result, spec)
-	eventID := sourceEventID(spec.InstanceID, targetKey, result.SourceHash)
+	// 事件 ID 要包含这次修订所基于的上一个版本（现存目标行的 source_hash）：只用内容哈希时，源数据 A→B→A 的第三次写入会得到
+	// 与第一次相同的 ID，被 Storage 的去重记录吞掉，结果停在 B。同一次修订的崩溃重试基于同一个旧版本，ID 不变，仍然幂等。
+	previousHash := ""
+	if len(existing) > 0 {
+		previousHash = typedString(existing[0].GetAttributes()["source_hash"])
+	}
+	eventID := sourceEventID(spec.InstanceID, targetKey, previousHash, result.SourceHash)
 	if err := s.Primary.UpsertFieldsWithSource(ctx, []*storagepb.RowFieldUpsert{row}, eventID); err != nil {
 		return Result{}, false, err
 	}
@@ -149,13 +155,13 @@ func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 	return row
 }
 
-func sourceEventID(instanceID string, key *storagepb.RowKey, hash string) string {
+func sourceEventID(instanceID string, key *storagepb.RowKey, previousHash, hash string) string {
 	keyText := ""
 	if key != nil && key.GetTimeSeries() != nil {
 		k := key.GetTimeSeries()
 		keyText = strings.Join([]string{key.GetSpaceId(), key.GetDatasetId(), k.GetSubjectId(), k.GetFreq(), k.GetDataTime(), k.GetSeriesTag()}, "\x00")
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{instanceID, keyText, hash}, "\x00")))
+	sum := sha256.Sum256([]byte(strings.Join([]string{instanceID, keyText, previousHash, hash}, "\x00")))
 	return "resample-" + hex.EncodeToString(sum[:])[:32]
 }
 

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -586,6 +587,10 @@ func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, f
 	if len(keys) > 10000 || (len(keys)*(len(fieldIDs)+len(attributeKeys))) > 100000 {
 		return nil, nil, invalid("read request exceeds key/field limit")
 	}
+	// 一次读取使用同一个快照：成组字段（如 open/high/low/close）由一次提交原子写入，逐字段用各自当时的可见序号
+	// 读取会读到不属于任何一次提交的混合值。版本解析、存在性检查、字段与属性读取都走这个快照。
+	snapshot := s.db.NewSnapshot()
+	defer snapshot.Close()
 	result := make([]*pb.RowFieldValues, 0, len(keys))
 	existing := make([]*pb.RowKey, 0, len(keys))
 	for _, key := range keys {
@@ -596,13 +601,13 @@ func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, f
 		if key != nil {
 			if rec := key.GetRecord(); rec != nil && rec.GetVersion() == "" {
 				var err error
-				resolved, err = s.resolveMaxRecordVersion(key)
+				resolved, err = s.resolveMaxRecordVersion(snapshot, key)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		}
-		present, err := s.rowExists(resolved)
+		present, err := s.rowExists(snapshot, resolved)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -615,7 +620,7 @@ func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, f
 			if err != nil {
 				return nil, nil, err
 			}
-			data, closer, err := s.db.Get(physical)
+			data, closer, err := snapshot.Get(physical)
 			if errors.Is(err, cpebble.ErrNotFound) {
 				continue
 			}
@@ -635,7 +640,7 @@ func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, f
 			if err != nil {
 				return nil, nil, err
 			}
-			data, closer, err := s.db.Get(physical)
+			data, closer, err := snapshot.Get(physical)
 			if errors.Is(err, cpebble.ErrNotFound) {
 				continue
 			}
@@ -658,13 +663,19 @@ func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, f
 	return result, existing, nil
 }
 
-func (s *Store) rowExists(key *pb.RowKey) (bool, error) {
+// pebbleReader 是 *pebble.DB 与 *pebble.Snapshot 共有的只读接口。
+type pebbleReader interface {
+	Get(key []byte) ([]byte, io.Closer, error)
+	NewIter(o *cpebble.IterOptions) (*cpebble.Iterator, error)
+}
+
+func (s *Store) rowExists(reader pebbleReader, key *pb.RowKey) (bool, error) {
 	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
 		prefix, err := encodeNamespacePrefix(namespace, key, s.bucketDuration)
 		if err != nil {
 			return false, err
 		}
-		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
+		iter, err := reader.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
 		if err != nil {
 			return false, err
 		}
@@ -681,7 +692,7 @@ func (s *Store) rowExists(key *pb.RowKey) (bool, error) {
 	return false, nil
 }
 
-func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
+func (s *Store) resolveMaxRecordVersion(reader pebbleReader, key *pb.RowKey) (*pb.RowKey, error) {
 	// The tuple codec preserves UTF-8 byte order, so the last key under each
 	// namespace prefix contains that namespace's largest record version.
 	base, err := recordBasePrefix(key)
@@ -690,7 +701,7 @@ func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
 	}
 	max := ""
 	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
-		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: append([]byte{namespace}, base...), UpperBound: nextPrefix(append([]byte{namespace}, base...))})
+		iter, err := reader.NewIter(&cpebble.IterOptions{LowerBound: append([]byte{namespace}, base...), UpperBound: nextPrefix(append([]byte{namespace}, base...))})
 		if err != nil {
 			return nil, err
 		}
