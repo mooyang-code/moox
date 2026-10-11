@@ -70,6 +70,50 @@ func subjectTagCheckID(spaceID, tagID string) string {
 	return tagCheckPrefix + strings.TrimSpace(spaceID) + ":" + strings.TrimSpace(tagID)
 }
 
+// marketCanaryCheckKey 是行情探针检查的完整身份：MarketCanaryCheckID 不含空间。
+type marketCanaryCheckKey struct{ spaceID, checkID string }
+
+// retireUnconfiguredMarketCanaries 退役不在当前配置中的探针检查（按 空间+CheckID 匹配）。
+func retireUnconfiguredMarketCanaries(ctx context.Context, repositories *store.Repositories, configured map[marketCanaryCheckKey]struct{}) error {
+	// Canary identity includes the symbol. When configuration moves from an
+	// inactive symbol to an active one, leave no enabled check behind for the
+	// old identity; otherwise its last failed result remains visible forever in
+	// the business overview and can continue to drive a stale alert.
+	checks, err := repositories.Checks.List(ctx, store.ListChecksOptions{
+		Source: domain.CheckSourceObservability,
+		Page:   store.Page{PageSize: 500},
+	})
+	if err != nil {
+		return err
+	}
+	for index := range checks {
+		check := &checks[index]
+		if !strings.HasPrefix(check.CheckID, "market_canary:") {
+			continue
+		}
+		if _, keep := configured[marketCanaryCheckKey{check.SpaceID, check.CheckID}]; keep {
+			continue
+		}
+		rules, err := repositories.Alerts.ListRulesForCheck(ctx, check.SpaceID, check.CheckID)
+		if err != nil {
+			return err
+		}
+		// Remove obsolete rules instead of merely disabling them. DeleteRule also
+		// removes a previously firing AlertState, so a retired symbol cannot keep
+		// contributing a stale alert to the availability overview.
+		for index := range rules {
+			if err := repositories.Alerts.DeleteRule(ctx, rules[index].SpaceID, rules[index].RuleID); err != nil {
+				return err
+			}
+		}
+		check.Enabled = false
+		if err := repositories.Checks.Update(ctx, check); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func buildMonitorMarketCanary(
 	ctx context.Context,
 	cfg *config.Config,
@@ -90,7 +134,8 @@ func buildMonitorMarketCanary(
 	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
 	tagSpaces := make([]string, 0, len(cfg.MarketCanary.Subjects))
 	seenTagSpaces := make(map[string]struct{})
-	configuredCheckIDs := make(map[string]struct{}, len(cfg.MarketCanary.Subjects))
+	// 检查身份是 (空间, CheckID)：MarketCanaryCheckID 不含空间，把探针从 A 空间迁到 B 空间时旧空间的检查必须被退役
+	configuredCheckIDs := make(map[marketCanaryCheckKey]struct{}, len(cfg.MarketCanary.Subjects))
 	for _, subject := range cfg.MarketCanary.Subjects {
 		if spaceID := strings.TrimSpace(subject.SpaceID); spaceID != "" {
 			if _, ok := seenTagSpaces[spaceID]; !ok {
@@ -113,7 +158,7 @@ func buildMonitorMarketCanary(
 			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability,
 			Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
 		}
-		configuredCheckIDs[check.CheckID] = struct{}{}
+		configuredCheckIDs[marketCanaryCheckKey{check.SpaceID, check.CheckID}] = struct{}{}
 		existing, getErr := runtime.Repositories.Checks.Get(ctx, check.SpaceID, check.CheckID)
 		switch {
 		case getErr == nil:
@@ -132,41 +177,8 @@ func buildMonitorMarketCanary(
 			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
 		})
 	}
-	// Canary identity includes the symbol. When configuration moves from an
-	// inactive symbol to an active one, leave no enabled check behind for the
-	// old identity; otherwise its last failed result remains visible forever in
-	// the business overview and can continue to drive a stale alert.
-	checks, err := runtime.Repositories.Checks.List(ctx, store.ListChecksOptions{
-		Source: domain.CheckSourceObservability,
-		Page:   store.Page{PageSize: 500},
-	})
-	if err != nil {
+	if err := retireUnconfiguredMarketCanaries(ctx, runtime.Repositories, configuredCheckIDs); err != nil {
 		return nil, nil, err
-	}
-	for index := range checks {
-		check := &checks[index]
-		if !strings.HasPrefix(check.CheckID, "market_canary:") {
-			continue
-		}
-		if _, keep := configuredCheckIDs[check.CheckID]; keep {
-			continue
-		}
-		rules, err := runtime.Repositories.Alerts.ListRulesForCheck(ctx, check.SpaceID, check.CheckID)
-		if err != nil {
-			return nil, nil, err
-		}
-		// Remove obsolete rules instead of merely disabling them. DeleteRule also
-		// removes a previously firing AlertState, so a retired symbol cannot keep
-		// contributing a stale alert to the availability overview.
-		for index := range rules {
-			if err := runtime.Repositories.Alerts.DeleteRule(ctx, rules[index].SpaceID, rules[index].RuleID); err != nil {
-				return nil, nil, err
-			}
-		}
-		check.Enabled = false
-		if err := runtime.Repositories.Checks.Update(ctx, check); err != nil {
-			return nil, nil, err
-		}
 	}
 	run := func(runCtx context.Context) error {
 		var errs []error

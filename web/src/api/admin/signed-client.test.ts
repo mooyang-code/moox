@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { selectedSpaceGeneration, setSelectedSpaceIdCache } from "./space-header";
 import { StaleSpaceRequestError } from "./stale-space";
 import { AuthSessionExpiredError } from "./auth-errors";
+import { saveSigningSession } from "@/utils/request-signing";
 import { expireBrowserSession, installSpaceAwareSignedClient, setSpaceInitializer } from "./signed-client";
 
 afterEach(() => {
@@ -81,6 +82,31 @@ describe("installSpaceAwareSignedClient", () => {
 
     expect(localStorage.getItem("user-info")).toBeNull();
     expect(window.location.hash).toBe("#/login");
+  });
+
+  it("re-signs with the new session instead of expiring it when the user logs in again during signing", async () => {
+    const handlers: Array<(config: InternalAxiosRequestConfig) => Promise<InternalAxiosRequestConfig>> = [];
+    const client = {
+      interceptors: { request: { use: (handler: never) => handlers.push(handler) }, response: { use: () => undefined } }
+    };
+    installSpaceAwareSignedClient(client as never);
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    // 新会话的签名密钥已就绪；旧会话 session-1 没有密钥，读取期间用户登录成了 session-2
+    await saveSigningSession({ sessionId: "session-2", rawKeyHex: "00".repeat(32), expiresAt });
+    localStorage.setItem("user-info", JSON.stringify({ token: "old", sessionId: "session-1", expiresAt }));
+    window.location.hash = "#/collector/tasks";
+    const pending = handlers[0]({
+      headers: new AxiosHeaders(),
+      url: "/api/admin/x/Get",
+      method: "post"
+    } as InternalAxiosRequestConfig);
+    localStorage.setItem("user-info", JSON.stringify({ token: "new", sessionId: "session-2", expiresAt }));
+
+    const prepared = await pending;
+
+    expect(prepared.headers.Authorization).toBe("new");
+    expect(window.location.hash).toBe("#/collector/tasks");
+    expect(localStorage.getItem("user-info")).not.toBeNull();
   });
 
   function spaceHandler() {

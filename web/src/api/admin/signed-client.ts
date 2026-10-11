@@ -33,6 +33,8 @@ async function signConfig(config: InternalAxiosRequestConfig): Promise<InternalA
   const auth = readPersistedAuth();
   const now = Math.floor(Date.now() / 1000);
   const session = auth.sessionId ? await loadSigningSession(auth.sessionId) : null;
+  // 等待签名密钥期间用户可能已经重新登录：旧会话的读取结果不能用来清除或签署新会话，改用最新会话重来
+  if (readPersistedAuth().sessionId !== auth.sessionId) return signConfig(config);
   if (!auth.token || !auth.sessionId || !auth.expiresAt || auth.expiresAt <= now || !session) {
     throw await expireBrowserSession();
   }

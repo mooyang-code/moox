@@ -114,6 +114,7 @@ type metadataAPI interface {
 	CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error)
 	UpdateView(context.Context, *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error)
+	ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error)
 	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
@@ -130,6 +131,7 @@ type MetadataClient interface {
 	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
 	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
+	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
 	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
@@ -147,18 +149,9 @@ func (p metadataProxy) GetTag(ctx context.Context, req *storagepb.GetTagReq) (*s
 	return p.client.GetTag(ctx, req)
 }
 
-// ListViews 透传给底层客户端；测试替身等不支持该方法的客户端返回 errListViewsUnsupported。
 func (p metadataProxy) ListViews(ctx context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
-	lister, ok := p.client.(interface {
-		ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
-	})
-	if !ok {
-		return nil, errListViewsUnsupported
-	}
-	return lister.ListViews(ctx, req)
+	return p.client.ListViews(ctx, req)
 }
-
-var errListViewsUnsupported = errors.New("metadata client does not support ListViews")
 
 func (p metadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	return p.client.GetDataset(ctx, req)
@@ -1234,19 +1227,10 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 
 // ensureNoExtraViews 拒绝删除仍被其他 View 引用的结果 Dataset，此时数据必须完整保留。
 func (m *Manager) ensureNoExtraViews(ctx context.Context, spaceID string, ids IDs) error {
-	lister, ok := m.metadata.(interface {
-		ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
-	})
-	if !ok {
-		return nil
-	}
-	rsp, err := lister.ListViews(ctx, &storagepb.ListViewsReq{
+	rsp, err := m.metadata.ListViews(ctx, &storagepb.ListViewsReq{
 		AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID,
 		Page: &commonpb.Page{Page: 1, Size: 200},
 	})
-	if errors.Is(err, errListViewsUnsupported) {
-		return nil
-	}
 	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 		return metadataError("list result dataset views", err, rsp.GetRetInfo())
 	}

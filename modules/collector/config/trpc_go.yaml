@@ -19,7 +19,7 @@ server:
       port: 11402
       network: tcp
       protocol: trpc
-      timeout: 30000
+      timeout: 180000
     - name: trpc.moox.collector.MarketFetchRuntime.native
       ip: 127.0.0.1
       port: 11422

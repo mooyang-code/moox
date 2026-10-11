@@ -45,6 +45,8 @@ type CollectMgrService interface {
 	CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq) (*CancelKlineResampleBackfillRsp, error)
 
 	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error)
+	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
+	SyncSubjects(ctx context.Context, req *SyncSubjectsReq) (*SyncSubjectsRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -281,6 +283,24 @@ func CollectMgrService_GetKlineResampleBackfill_Handler(svr interface{}, ctx con
 	return rsp, nil
 }
 
+func CollectMgrService_SyncSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncSubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).SyncSubjects(ctx, reqbody.(*SyncSubjectsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -337,6 +357,10 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/GetKlineResampleBackfill",
 			Func: CollectMgrService_GetKlineResampleBackfill_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/SyncSubjects",
+			Func: CollectMgrService_SyncSubjects_Handler,
 		},
 	},
 }
@@ -439,6 +463,11 @@ func (s *UnimplementedCollectMgr) GetKlineResampleBackfill(ctx context.Context, 
 	return nil, errors.New("rpc GetKlineResampleBackfill of service CollectMgr is not implemented")
 }
 
+// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
+func (s *UnimplementedCollectMgr) SyncSubjects(ctx context.Context, req *SyncSubjectsReq) (*SyncSubjectsRsp, error) {
+	return nil, errors.New("rpc SyncSubjects of service CollectMgr is not implemented")
+}
+
 type UnimplementedMarketFetchRuntime struct{}
 
 func (s *UnimplementedMarketFetchRuntime) ClaimTimerBatch(ctx context.Context, req *ClaimTimerBatchReq) (*ClaimTimerBatchRsp, error) {
@@ -479,6 +508,8 @@ type CollectMgrClientProxy interface {
 	CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq, opts ...client.Option) (rsp *CancelKlineResampleBackfillRsp, err error)
 
 	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq, opts ...client.Option) (rsp *GetKlineResampleBackfillRsp, err error)
+	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
+	SyncSubjects(ctx context.Context, req *SyncSubjectsReq, opts ...client.Option) (rsp *SyncSubjectsRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -744,6 +775,26 @@ func (c *CollectMgrClientProxyImpl) GetKlineResampleBackfill(ctx context.Context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetKlineResampleBackfillRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) SyncSubjects(ctx context.Context, req *SyncSubjectsReq, opts ...client.Option) (*SyncSubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/SyncSubjects")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("SyncSubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SyncSubjectsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

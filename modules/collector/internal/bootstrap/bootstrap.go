@@ -172,9 +172,11 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
 	registerDNSRefreshSchedule(s, dnsSnapshot, process)
-	if err := registerSubjectSyncRuntime(s, cfg, process); err != nil {
+	subjectSyncer, err := registerSubjectSyncRuntime(s, cfg, process)
+	if err != nil {
 		return nil, err
 	}
+	svc.SetSubjectSyncer(subjectSyncer)
 	registerMarketFetchSchedule(ctx, s, cfg, dbm, dnsSnapshot, marketFetchMetrics, process)
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err

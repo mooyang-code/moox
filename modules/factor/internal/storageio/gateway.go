@@ -86,6 +86,10 @@ func (c *gatewayStorageClient) DeleteDataset(ctx context.Context, request *stora
 	return invokeStorage[storagepb.DeleteDatasetRsp](ctx, c.gateway, "Metadata", "DeleteDataset", request, options)
 }
 
+func (c *gatewayStorageClient) ListViews(ctx context.Context, request *storagepb.ListViewsReq, options ...client.Option) (*storagepb.ListViewsRsp, error) {
+	return invokeStorage[storagepb.ListViewsRsp](ctx, c.gateway, "Metadata", "ListViews", request, options)
+}
+
 func (c *gatewayStorageClient) UpdateDataset(ctx context.Context, request *storagepb.UpdateDatasetReq, options ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
 	return invokeStorage[storagepb.UpdateDatasetRsp](ctx, c.gateway, "Metadata", "UpdateDataset", request, options)
 }

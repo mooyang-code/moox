@@ -561,6 +561,9 @@ components:
         port: 11402
         console_name: collector
         timeout_ms: 5000
+        # SyncSubjects 在服务端最多等 170 秒（交易所标的清单约 17MB），路由预算要大于它。
+        method_timeouts_ms:
+          SyncSubjects: 180000
         max_body_bytes: 4194304
         methods:
           - GetTaskList
@@ -576,6 +579,7 @@ components:
           - StartKlineResampleBackfill
           - CancelKlineResampleBackfill
           - GetKlineResampleBackfill
+          - SyncSubjects
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -601,6 +605,10 @@ components:
               - GetKlineResampleBackfill
             callers:
               - console
+              - moox-cli
+          - methods:
+              - SyncSubjects
+            callers:
               - moox-cli
           - methods:
               - GetTaskResultInventory

@@ -98,13 +98,14 @@ func (r *TagRunner) RunOnce(ctx context.Context) error {
 			continue
 		}
 		if due {
-			failures = errors.Join(failures, r.runTag(ctx, tag, now))
+			_, runErr := r.runTag(ctx, tag, now)
+			failures = errors.Join(failures, runErr)
 		}
 	}
 	return failures
 }
 
-func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) error {
+func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (int, error) {
 	timeout := r.FetchTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -112,6 +113,7 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) er
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	instruments, err := FetchSnapshot(fetchCtx, r.Listers, []string{tag.GetSource()}, tag.GetMarketType())
+	subjects := 0
 	if err == nil {
 		items := make([]*pb.TagSnapshotItem, 0, len(instruments))
 		for _, item := range instruments {
@@ -119,6 +121,7 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) er
 		}
 		log.InfoContextf(ctx, "tag %s/%s applying snapshot subjects=%d", tag.GetSpaceId(), tag.GetTagId(), len(items))
 		err = r.Store.ApplyTagSnapshot(ctx, tag.GetSpaceId(), tag.GetTagId(), runAt, items)
+		subjects = len(items)
 	}
 	if err != nil {
 		log.WarnContextf(ctx, "tag %s/%s run failed: %v", tag.GetSpaceId(), tag.GetTagId(), err)
@@ -129,12 +132,51 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) er
 			log.ErrorContextf(ctx, "report tag %s/%s failure: %v", tag.GetSpaceId(), tag.GetTagId(), reportErr)
 			err = errors.Join(err, reportErr)
 		}
-		return err
+		return 0, err
 	}
 	if r.Metrics != nil {
 		r.Metrics.observeTagSuccess(tag, runAt)
 	}
-	return nil
+	return subjects, nil
+}
+
+// SyncTags synchronizes the matching auto tags right now, whether or not they
+// are due. An empty filter field matches everything. Every selected tag gets a
+// result, so a caller can tell a failed tag from one that was not selected.
+func (r *TagRunner) SyncTags(ctx context.Context, filter Filter) ([]TagResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tags, err := r.Store.ListTags(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+	runAt := time.Now().UTC()
+	if r.Now != nil {
+		runAt = r.Now().UTC()
+	}
+	var results []TagResult
+	for _, tag := range tags {
+		if !filter.matchTag(tag) {
+			continue
+		}
+		result := TagResult{SpaceID: tag.GetSpaceId(), TagID: tag.GetTagId()}
+		switch {
+		case !probing(tag):
+			result.Status, result.Message = StatusSkipped, "not an auto tag with a source and market type"
+		case ctx.Err() != nil:
+			result.Status, result.Message = StatusFailed, ctx.Err().Error()
+		default:
+			subjects, runErr := r.runTag(ctx, tag, runAt)
+			if runErr != nil {
+				result.Status, result.Message = StatusFailed, runErr.Error()
+			} else {
+				result.Status, result.Subjects = StatusSuccess, subjects
+			}
+		}
+		results = append(results, result)
+	}
+	return results, nil
 }
 
 func snapshotItem(tag *pb.Tag, item marketdata.Instrument) *pb.TagSnapshotItem {

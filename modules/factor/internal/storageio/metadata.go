@@ -11,7 +11,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/proto"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 const (
@@ -405,13 +404,7 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 
 // ensureNoExtraViews 拒绝删除仍被默认 View 之外的 View 引用的结果 Dataset，此时数据必须完整保留。
 func (c *Client) ensureNoExtraViews(ctx context.Context, spaceID, datasetID string) error {
-	lister, ok := c.metadata.(interface {
-		ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
-	})
-	if !ok {
-		return nil
-	}
-	rsp, err := lister.ListViews(ctx, &storagepb.ListViewsReq{
+	rsp, err := c.metadata.ListViews(ctx, &storagepb.ListViewsReq{
 		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID,
 		Page: &commonpb.Page{Page: 1, Size: 200},
 	})

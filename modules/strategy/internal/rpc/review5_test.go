@@ -70,7 +70,6 @@ func TestStartReplayChecksActiveLimitFirst(t *testing.T) {
 	}
 }
 
-
 // 测试辅助：不带期限地取得定义锁（测试里用它模拟后台长时间持锁）。
 func mustLockStrategy(s *Service, id string) func() {
 	unlock, err := s.lockStrategy(context.Background(), id)

@@ -28,6 +28,10 @@ func retireObsoleteBusinessChecks(ctx context.Context, repositories *store.Repos
 			// identities until a successful inventory evaluation can resolve them.
 			retire = cfg == nil || !cfg.KlineFreshness.Enabled
 		}
+		// 行情探针关闭后不再有采样能使其告警恢复：退役探针检查及其拥有的标签检查，清理规则与活动状态
+		if strings.HasPrefix(check.CheckID, "market_canary:") || strings.HasPrefix(check.CheckID, tagCheckPrefix) {
+			retire = cfg == nil || !cfg.MarketCanary.Enabled
+		}
 		if !retire {
 			continue
 		}

@@ -105,3 +105,56 @@ func openMonitorTestRepositories(t *testing.T) *store.Repositories {
 	}
 	return manager.Repositories()
 }
+
+func TestRetireObsoleteBusinessChecksRetiresMarketCanaryWhenDisabled(t *testing.T) {
+	repositories := openMonitorTestRepositories(t)
+	ctx := t.Context()
+	for _, check := range []domain.Check{
+		{SpaceID: "crypto", CheckID: "market_canary:crypto:dataset:BTC:1m", Name: "canary", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
+		{SpaceID: "crypto", CheckID: tagCheckPrefix + "crypto:tag-1", Name: "tag", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
+	} {
+		check := check
+		require.NoError(t, repositories.Checks.Create(ctx, &check))
+		require.NoError(t, repositories.Alerts.CreateRule(ctx, &domain.AlertRule{
+			SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
+			FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
+		}))
+	}
+	cfg := &config.Config{}
+	cfg.KlineFreshness.Enabled = true // MarketCanary.Enabled 为 false
+	require.NoError(t, retireObsoleteBusinessChecks(ctx, repositories, cfg))
+	for _, checkID := range []string{"market_canary:crypto:dataset:BTC:1m", tagCheckPrefix + "crypto:tag-1"} {
+		got, err := repositories.Checks.Get(ctx, "crypto", checkID)
+		require.NoError(t, err)
+		require.False(t, got.Enabled, checkID)
+		_, err = repositories.Alerts.GetRule(ctx, "crypto", "default:"+checkID)
+		require.ErrorIs(t, err, gorm.ErrRecordNotFound, checkID)
+	}
+}
+
+func TestRetireUnconfiguredMarketCanariesMatchesBySpaceAndCheckID(t *testing.T) {
+	repositories := openMonitorTestRepositories(t)
+	ctx := t.Context()
+	const checkID = "market_canary:dataset:BTC:1m" // 不含空间：两个空间可以同名
+	for _, space := range []string{"space-a", "space-b"} {
+		check := domain.Check{SpaceID: space, CheckID: checkID, Name: space, Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true}
+		require.NoError(t, repositories.Checks.Create(ctx, &check))
+		require.NoError(t, repositories.Alerts.CreateRule(ctx, &domain.AlertRule{
+			SpaceID: space, RuleID: "default:" + checkID, CheckID: checkID, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
+		}))
+	}
+	// 探针从 space-a 迁到 space-b：只配置 space-b
+	configured := map[marketCanaryCheckKey]struct{}{{spaceID: "space-b", checkID: checkID}: {}}
+	require.NoError(t, retireUnconfiguredMarketCanaries(ctx, repositories, configured))
+
+	retired, err := repositories.Checks.Get(ctx, "space-a", checkID)
+	require.NoError(t, err)
+	require.False(t, retired.Enabled)
+	_, err = repositories.Alerts.GetRule(ctx, "space-a", "default:"+checkID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	kept, err := repositories.Checks.Get(ctx, "space-b", checkID)
+	require.NoError(t, err)
+	require.True(t, kept.Enabled)
+	_, err = repositories.Alerts.GetRule(ctx, "space-b", "default:"+checkID)
+	require.NoError(t, err)
+}

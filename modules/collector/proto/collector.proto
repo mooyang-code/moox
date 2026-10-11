@@ -340,6 +340,37 @@ message GetKlineResampleBackfillRsp {
   uint64 canceled = 14;
 }
 
+message SyncSubjectsReq {
+  // 为空表示所有空间。
+  string space_id = 1;
+  // 为空表示所选空间内的所有标签；指定时必须同时指定 space_id。
+  string tag_id = 2;
+  // 同时刷新标的属性（忽略各任务的 cron 窗口）。
+  bool include_attributes = 3;
+}
+
+message SubjectTagSyncResult {
+  string space_id = 1;
+  string tag_id = 2;
+  // success / failed / skipped（非自动同步的标签）。
+  string status = 3;
+  uint32 subjects = 4;
+  // failed / skipped 时的原因。
+  string message = 5;
+}
+
+message SubjectAttributeSyncResult {
+  string space_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message SyncSubjectsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SubjectTagSyncResult tags = 2;
+  repeated SubjectAttributeSyncResult attributes = 3;
+}
+
 // ClaimTimerBatchReq binds one Timer invocation to its durable period batch.
 // Work membership is derived from Collector's persisted manifest, never from
 // client-submitted items or tag names.
@@ -379,6 +410,8 @@ service CollectMgr {
   rpc StartKlineResampleBackfill(StartKlineResampleBackfillReq) returns (StartKlineResampleBackfillRsp);
   rpc CancelKlineResampleBackfill(CancelKlineResampleBackfillReq) returns (CancelKlineResampleBackfillRsp);
   rpc GetKlineResampleBackfill(GetKlineResampleBackfillReq) returns (GetKlineResampleBackfillRsp);
+  // 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
+  rpc SyncSubjects(SyncSubjectsReq) returns (SyncSubjectsRsp);
 }
 
 service MarketFetchRuntime {

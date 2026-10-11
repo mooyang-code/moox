@@ -60,6 +60,7 @@ type Service struct {
 	inventorySnapshotBuilds    map[string]int
 	createTaskMu               sync.Mutex
 	taskMutationLocks          keyedTaskLocker
+	subjectSyncer              SubjectSyncer
 }
 
 type keyedTaskLocker struct {

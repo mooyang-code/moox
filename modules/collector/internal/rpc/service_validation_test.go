@@ -1101,3 +1101,15 @@ func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T
 	require.NoError(t, err)
 	require.True(t, stored.Enabled, "preflight rejection must leave the task enabled")
 }
+
+func (f *taskResultMetadataFake) ListViews(_ context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rsp := &storagepb.ListViewsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}
+	for _, view := range f.views {
+		if view.GetDatasetId() == req.GetDatasetId() {
+			rsp.Views = append(rsp.Views, view)
+		}
+	}
+	return rsp, nil
+}

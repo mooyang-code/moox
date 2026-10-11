@@ -110,3 +110,22 @@ func attributes(spaceID string, item marketdata.Instrument) map[string]string {
 		return nil
 	}
 }
+
+// SyncAttributes refreshes the matching attribute jobs right now, ignoring
+// their cron windows. An empty filter space matches every job.
+func (r *AttributeRunner) SyncAttributes(ctx context.Context, filter Filter) []AttributeResult {
+	var results []AttributeResult
+	for _, job := range r.Jobs {
+		if filter.SpaceID != "" && filter.SpaceID != job.SpaceID {
+			continue
+		}
+		result := AttributeResult{SpaceID: job.SpaceID, Status: StatusSuccess}
+		if err := ctx.Err(); err != nil {
+			result.Status, result.Message = StatusFailed, err.Error()
+		} else if err := r.runJob(ctx, job); err != nil {
+			result.Status, result.Message = StatusFailed, err.Error()
+		}
+		results = append(results, result)
+	}
+	return results
+}

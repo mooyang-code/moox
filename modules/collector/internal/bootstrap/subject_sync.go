@@ -20,19 +20,19 @@ const (
 	subjectSyncTimeout            = 10 * time.Minute
 )
 
-func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime) error {
+func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime) (*subjectsync.Syncer, error) {
 	http, err := httpclient.NewEgressHTTPClient(process.gateway, cfg.EgressProxy.Domains)
 	if err != nil {
-		return fmt.Errorf("initialize subject HTTP client: %w", err)
+		return nil, fmt.Errorf("initialize subject HTTP client: %w", err)
 	}
 	process.beforeClose = append(process.beforeClose, func() error { http.Close(); return nil })
 	listers, err := marketwiring.NewSubjectListers(http)
 	if err != nil {
-		return fmt.Errorf("initialize subject listers: %w", err)
+		return nil, fmt.Errorf("initialize subject listers: %w", err)
 	}
 	storage, err := subjectsync.NewStorageClient(process.gateway)
 	if err != nil {
-		return fmt.Errorf("initialize subject storage: %w", err)
+		return nil, fmt.Errorf("initialize subject storage: %w", err)
 	}
 	for _, job := range cfg.SubjectSync.Attributes {
 		kind := job.InstrumentType
@@ -41,19 +41,23 @@ func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime)
 		}
 		for _, source := range job.Sources {
 			if listers[subjectsync.ListerKey{Source: source, InstrumentType: kind}] == nil {
-				return fmt.Errorf("subject_sync source %s does not support %s subject listing", source, kind)
+				return nil, fmt.Errorf("subject_sync source %s does not support %s subject listing", source, kind)
 			}
 		}
 	}
 	registrationCtx, cancel := context.WithTimeout(process.ctx, cfg.SubjectSync.FetchTimeout)
 	defer cancel()
 	if err := storage.RegisterSubjectListing(registrationCtx, listers.Supported()); err != nil {
-		return fmt.Errorf("register subject listing: %w", err)
+		return nil, fmt.Errorf("register subject listing: %w", err)
 	}
 	metrics := subjectsync.NewMetrics(prometheus.DefaultRegisterer)
 	tags := &subjectsync.TagRunner{Store: storage, Listers: listers, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
 	attributes := &subjectsync.AttributeRunner{Store: storage, Listers: listers, Jobs: cfg.SubjectSync.Attributes, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
-	return registerSubjectSyncTimers(s, process, tags.RunOnce, attributes.RunOnce)
+	syncer := &subjectsync.Syncer{Tags: tags, Attributes: attributes}
+	if err := registerSubjectSyncTimers(s, process, syncer.RunDueTags, syncer.RunDueAttributes); err != nil {
+		return nil, err
+	}
+	return syncer, nil
 }
 
 func subjectSyncJob(name string, process *Runtime, run func(context.Context) error) (*timerjob.Job, error) {
