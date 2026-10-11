@@ -275,6 +275,9 @@ func planConfig(ctx context.Context, deps configDeps, file string, only []string
 			}
 			hosts[target.Host.Name] = host
 		}
+		if err := rejectNativeLayout(ctx, host, snapshot.Manifest.Paths.Resolved().DeployRoot); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", target.ID, err)
+		}
 		plan, err := planConfigTarget(ctx, host, target)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", target.ID, err)
@@ -282,6 +285,27 @@ func planConfig(ctx context.Context, deps configDeps, file string, only []string
 		plans = append(plans, plan)
 	}
 	return plans, coverage, nil
+}
+
+// nativeLayoutProbe 判断目标主机是否是原生部署（`<部署根>/run/host.json` 由原生 bootstrap/deploy-host 创建）。
+const nativeLayoutProbe = `if [ -f "$1/run/host.json" ]; then exit 0; else exit 4; fi`
+
+var errNativeLayout = errors.New("target host uses the native deployment layout (releases/current); the legacy in-place tooling (config publish, deploy-control, deploy-storage, deploy-service, rebuild-storage) cannot operate on it. Update moox.toml and rerun setup deploy-unit (or bootstrap) so a new immutable release is rendered, verified and activated under the native maintenance lock")
+
+// rejectNativeLayout 在写任何文件、停任何服务之前拒绝原生部署的主机：原生发布不可变，配置在 releases/<ID> 内，维护锁与重启入口
+// 都不同于旧布局；旧路径会读不到配置，或改到并存的旧目录副本，且不与原生安装器互斥。
+func rejectNativeLayout(ctx context.Context, host configHost, deployRoot string) error {
+	result, err := host.Run(ctx, []string{"sh", "-c", nativeLayoutProbe, "moox-native-probe", deployRoot}, nil)
+	switch {
+	case err == nil && result.ExitCode == 0:
+		return errNativeLayout
+	case result.ExitCode == 4:
+		return nil
+	case err != nil && result.ExitCode == 0:
+		return fmt.Errorf("probe native layout: %w", err)
+	default:
+		return fmt.Errorf("probe native layout: exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
 }
 
 func planConfigTarget(ctx context.Context, host configHost, target configTarget) (configTargetPlan, error) {

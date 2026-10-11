@@ -66,6 +66,9 @@ func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventM
 		return err
 	}
 	s.noteAppliedFromPayload(message.GetSpaceId(), payload)
+	if err := s.makeAppliedDurableForPending(message.GetSpaceId(), payload); err != nil {
+		return fmt.Errorf("View 写入围栏落盘失败，行事件稍后重投：%w", err)
+	}
 	s.flushReadyAfterRows(ctx, message.GetSpaceId())
 	return nil
 }
@@ -111,8 +114,13 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	if err := s.applyDatasetEvent(ctx, spaceID, datasetID, rows); err != nil {
 		return err
 	}
+	payloads := make([]*storagepb.DatasetRowsUpserted, 0, len(items))
 	for _, item := range items {
 		s.noteAppliedFromPayload(spaceID, item.Payload)
+		payloads = append(payloads, item.Payload)
+	}
+	if err := s.makeAppliedDurableForPending(spaceID, payloads...); err != nil {
+		return fmt.Errorf("View 写入围栏落盘失败，行事件稍后重投：%w", err)
 	}
 	s.flushReadyAfterRows(ctx, spaceID)
 	return nil

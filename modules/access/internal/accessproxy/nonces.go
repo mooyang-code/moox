@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -15,7 +16,14 @@ import (
 
 type SQLiteNonces struct {
 	db *sql.DB
+	// lastPrune 是上次清理过期记录的时间（UnixNano）：清理按间隔、分批进行，不在每次请求的串行事务里删除全部过期记录。
+	lastPrune atomic.Int64
 }
+
+const (
+	noncePruneInterval = time.Second
+	noncePruneBatch    = 500
+)
 
 func OpenSQLiteNonces(path string) (*SQLiteNonces, error) {
 	path = strings.TrimSpace(path)
@@ -85,10 +93,16 @@ func (n *SQLiteNonces) Consume(ctx context.Context, namespace, nonce string, ttl
 	}
 	defer tx.Rollback()
 	now := time.Now().UnixNano()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM gateway_nonces WHERE expires_at <= ?`, now); err != nil {
-		return false, fmt.Errorf("prune expired nonces: %w", err)
+	// 过期记录按间隔、每次最多一批地清理，删除不再随每个请求发生；未清掉的过期记录由下面的插入语句直接复用。
+	if last := n.lastPrune.Load(); now-last >= int64(noncePruneInterval) && n.lastPrune.CompareAndSwap(last, now) {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM gateway_nonces WHERE rowid IN (SELECT rowid FROM gateway_nonces WHERE expires_at <= ? LIMIT ?)`, now, noncePruneBatch); err != nil {
+			return false, fmt.Errorf("prune expired nonces: %w", err)
+		}
 	}
-	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO gateway_nonces(namespace, nonce, expires_at) VALUES(?, ?, ?)`, namespace, nonce, time.Now().Add(ttl).UnixNano())
+	// 同一个 nonce 仅在旧记录已过期时才可再次使用；仍有效的记录冲突后不更新（影响行数为 0，即重放）。
+	result, err := tx.ExecContext(ctx, `INSERT INTO gateway_nonces(namespace, nonce, expires_at) VALUES(?, ?, ?)
+		ON CONFLICT(namespace, nonce) DO UPDATE SET expires_at = excluded.expires_at WHERE gateway_nonces.expires_at <= ?`,
+		namespace, nonce, time.Now().Add(ttl).UnixNano(), now)
 	if err != nil {
 		return false, fmt.Errorf("insert nonce: %w", err)
 	}

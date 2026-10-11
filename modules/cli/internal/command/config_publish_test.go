@@ -23,11 +23,17 @@ type fakeConfigHost struct {
 	files       map[string][]byte
 	restarts    []string
 	failRestart bool
+	native      bool
 }
 
 func (h *fakeConfigHost) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	script := argv[2]
 	switch {
+	case script == nativeLayoutProbe:
+		if h.native {
+			return setupssh.Result{}, nil
+		}
+		return setupssh.Result{ExitCode: 4}, errors.New("ssh_command_failed: Process exited with status 4")
 	case strings.Contains(script, "exit 3"):
 		raw, ok := h.files[argv[4]]
 		if !ok {
@@ -265,4 +271,16 @@ func configJSON(t *testing.T, value any) string {
 	raw, err := json.Marshal(value)
 	require.NoError(t, err)
 	return string(raw)
+}
+
+// 原生部署的主机（releases/current 布局）不能走旧的就地改文件发布：写文件、停服务之前就必须拒绝。
+func TestConfigPublishRejectsNativeLayoutBeforeTouchingHosts(t *testing.T) {
+	deps, hosts, file := newConfigTestDeps(t, "")
+	hosts["control"].native = true
+	for _, args := range [][]string{{"plan"}, {"publish", "--yes"}} {
+		_, err := configCommand(t, deps, file, args...)
+		require.ErrorContains(t, err, "native deployment layout", args)
+	}
+	require.Empty(t, hosts["control"].restarts, "拒绝发生在重启任何服务之前")
+	require.Empty(t, hosts["storage"].restarts)
 }

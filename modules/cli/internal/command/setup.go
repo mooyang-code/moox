@@ -1606,7 +1606,25 @@ func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (
 }
 
 func defaultSetupValidateDeployment(ctx context.Context, snapshot *setupconfig.Snapshot, hosts []setupconfig.Host) (setupvalidate.Result, error) {
-	return setupvalidate.RunSSHHosts(ctx, snapshot, setupvalidate.Dependencies{SSH: commandSSHChecker{}}, hosts)
+	result, err := setupvalidate.RunSSHHosts(ctx, snapshot, setupvalidate.Dependencies{SSH: commandSSHChecker{}}, hosts)
+	if err != nil {
+		return result, err
+	}
+	// 旧的 deploy-control/deploy-storage/deploy-service 走 deploy-moox.sh 的旧布局与旧网关字段，不能写到原生部署的主机上：
+	// 在它们改任何文件、停任何服务之前拒绝。
+	deployRoot := snapshot.Manifest.Paths.Resolved().DeployRoot
+	for _, host := range hosts {
+		client, dialErr := dialSetupHost(ctx, host)
+		if dialErr != nil {
+			return result, dialErr
+		}
+		probeErr := rejectNativeLayout(ctx, client, deployRoot)
+		_ = client.Close()
+		if probeErr != nil {
+			return result, fmt.Errorf("%s: %w", host.Name, probeErr)
+		}
+	}
+	return result, nil
 }
 
 type commandSSHChecker struct{}
