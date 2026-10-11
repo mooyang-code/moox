@@ -39,6 +39,8 @@ type Metadata interface {
 
 // Primary is the Storage surface used by Collector's internal workers.
 type Primary interface {
+	RegisterSeriesSnapshot(context.Context, *storagepb.PrimaryRegisterSeriesSnapshotReq, ...client.Option) (*storagepb.PrimaryRegisterSeriesSnapshotRsp, error)
+	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 	EnsureDatasetPeriod(context.Context, *storagepb.PrimaryEnsureDatasetPeriodReq, ...client.Option) (*storagepb.PrimaryEnsureDatasetPeriodRsp, error)
 	GetDatasetPeriodStatus(context.Context, *storagepb.PrimaryGetDatasetPeriodStatusReq, ...client.Option) (*storagepb.PrimaryGetDatasetPeriodStatusRsp, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq, ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error)
@@ -160,6 +162,14 @@ func (c *Client) UpdateDataSource(ctx context.Context, request *storagepb.Update
 
 func (c *Client) ListSubjects(ctx context.Context, request *storagepb.ListSubjectsReq, options ...client.Option) (*storagepb.ListSubjectsRsp, error) {
 	return invoke[storagepb.ListSubjectsRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ListSubjects", request, options)
+}
+
+func (c *Client) RegisterSeriesSnapshot(ctx context.Context, request *storagepb.PrimaryRegisterSeriesSnapshotReq, options ...client.Option) (*storagepb.PrimaryRegisterSeriesSnapshotRsp, error) {
+	return invoke[storagepb.PrimaryRegisterSeriesSnapshotRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "RegisterSeriesSnapshot", request, options)
+}
+
+func (c *Client) ReadTimeSeriesRows(ctx context.Context, request *storagepb.ReadTimeSeriesRowsReq, options ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	return invoke[storagepb.ReadTimeSeriesRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", request, options)
 }
 
 func (c *Client) EnsureDatasetPeriod(ctx context.Context, request *storagepb.PrimaryEnsureDatasetPeriodReq, options ...client.Option) (*storagepb.PrimaryEnsureDatasetPeriodRsp, error) {

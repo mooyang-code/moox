@@ -492,6 +492,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	}
 	nodes := append(append([]scfinvoker.Node(nil), invokeNodes...), timerNodes...)
 	nodes, _ = filterSCFRegions(nodes, spaceID, s.SCFRegionBlacklists)
+	nodes = excludePlanFleetNodes(nodes)
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].Region != nodes[j].Region {
 			return nodes[i].Region < nodes[j].Region
@@ -561,6 +562,10 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 			target, err := targetDataTime(now, frequency)
 			if err != nil {
 				log.WarnContextf(ctx, "skip task=%s frequency=%s: %v", task.TaskID, frequency, err)
+				continue
+			}
+			// 与定时链路按目标周期交接：旧链路只负责自己的周期区间。
+			if taskParams, paramsErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType); paramsErr == nil && !taskParams.InvokeOwnsPeriod(target) {
 				continue
 			}
 			items, err := s.expandTaskForPeriod(ctx, task, frequency, target)
@@ -1113,9 +1118,31 @@ func filterMarketFetchTasks(tasks []domain.CollectionTask) []domain.CollectionTa
 		if dataType == "kline_resample" {
 			continue
 		}
+		// 定时模式的任务由采集计划对账管理，旧调度只保留回退窗口内仍归它的任务。
+		if params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType); err == nil && !params.InvokeParticipates() {
+			continue
+		}
 		filtered = append(filtered, task)
 	}
 	return filtered
+}
+
+// PlanFleetMarker 标记由采集计划对账管理的定时函数（名称中包含该片段）。旧的 Invoke 与 Timer 节点池不得选用它们。
+const PlanFleetMarker = "-plan-"
+
+// IsPlanFleetNode 判断节点是否属于采集计划函数组。
+func IsPlanFleetNode(node scfinvoker.Node) bool {
+	return strings.Contains(strings.ToLower(node.FunctionName), PlanFleetMarker)
+}
+
+func excludePlanFleetNodes(nodes []scfinvoker.Node) []scfinvoker.Node {
+	kept := make([]scfinvoker.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if !IsPlanFleetNode(node) {
+			kept = append(kept, node)
+		}
+	}
+	return kept
 }
 
 func filterSCFRegions(nodes []scfinvoker.Node, spaceID string, blacklists map[string][]string) (allowed, blocked []scfinvoker.Node) {

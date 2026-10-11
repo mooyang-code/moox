@@ -39,6 +39,68 @@ type CollectParams struct {
 	Alignment       string          `json:"alignment,omitempty"`
 	SettleDelayMS   *int64          `json:"settle_delay_ms,omitempty"`
 	HistoryPolicy   *HistoryPolicy  `json:"history_policy,omitempty"`
+	// FetchMode 决定实时采集的归属：invoke（默认，由 Collector 派发）或 timer（由 SCF 定时器按环境里的采集计划执行）。
+	FetchMode string `json:"fetch_mode,omitempty"`
+	// SymbolsPerFunction 是定时模式下每个函数负责的标的数；0 表示使用默认值。
+	SymbolsPerFunction int `json:"symbols_per_function,omitempty"`
+	// InvokeUntilPeriod 与 InvokeFromPeriod 用于新旧链路按目标周期（K 线开始时间，RFC3339）交接，
+	// 迁移期间使用，迁移完成后清除：旧链路只处理目标周期 < until 且 ≥ from 的周期。
+	InvokeUntilPeriod string `json:"invoke_until_period,omitempty"`
+	InvokeFromPeriod  string `json:"invoke_from_period,omitempty"`
+}
+
+const (
+	FetchModeInvoke = "invoke"
+	FetchModeTimer  = "timer"
+)
+
+// invokeBound 解析一个交接边界；空串返回零值。
+func invokeBound(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
+}
+
+// InvokeUntil 返回旧链路的上界（不含）；零值表示没有上界。
+func (p *CollectParams) InvokeUntil() time.Time { return invokeBound(p.InvokeUntilPeriod) }
+
+// InvokeFrom 返回旧链路的下界（含）；零值表示没有下界。
+func (p *CollectParams) InvokeFrom() time.Time { return invokeBound(p.InvokeFromPeriod) }
+
+// TimerManaged 表示该任务由新对账管理：定时模式，或旧模式但正在向定时模式交接（设置了上界）。
+func (p *CollectParams) TimerManaged() bool {
+	return p.FetchMode == FetchModeTimer || !p.InvokeUntil().IsZero()
+}
+
+// InvokeOwnsPeriod 判断旧的 Invoke 链路是否负责该目标周期。
+func (p *CollectParams) InvokeOwnsPeriod(period time.Time) bool {
+	period = period.UTC()
+	if p.FetchMode == FetchModeTimer {
+		// 定时模式下，只有回退窗口（设置了下界）内的周期交给旧链路。
+		from := p.InvokeFrom()
+		return !from.IsZero() && !period.Before(from)
+	}
+	if until := p.InvokeUntil(); !until.IsZero() && !period.Before(until) {
+		return false
+	}
+	if from := p.InvokeFrom(); !from.IsZero() && period.Before(from) {
+		return false
+	}
+	return true
+}
+
+// InvokeParticipates 表示旧链路在某些周期上仍可能负责该任务（用于任务过滤）。
+func (p *CollectParams) InvokeParticipates() bool {
+	if p.FetchMode == FetchModeTimer {
+		return !p.InvokeFrom().IsZero()
+	}
+	return true
 }
 
 type HistoryPolicy struct {
@@ -106,7 +168,30 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 		return nil, err
 	}
 	params.Normalize(fallbackProvider, fallbackMarketType, fallbackDataType)
+	if err := params.validateFetchMode(); err != nil {
+		return nil, err
+	}
 	return &params, nil
+}
+
+func (p *CollectParams) validateFetchMode() error {
+	switch p.FetchMode {
+	case "", FetchModeInvoke, FetchModeTimer:
+	default:
+		return fmt.Errorf("parse collect params: fetch_mode must be invoke or timer")
+	}
+	if p.SymbolsPerFunction < 0 || p.SymbolsPerFunction > 200 {
+		return fmt.Errorf("parse collect params: symbols_per_function must be between 0 and 200")
+	}
+	for name, raw := range map[string]string{"invoke_until_period": p.InvokeUntilPeriod, "invoke_from_period": p.InvokeFromPeriod} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339, strings.TrimSpace(raw)); err != nil {
+			return fmt.Errorf("parse collect params: %s must be RFC3339: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // Normalize canonicalizes the standard collect params shape.
@@ -120,6 +205,9 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	p.SubjectTags = normalizeTags(p.SubjectTags)
 	p.OutputFields = normalizeOutputFields(p.OutputFields)
 	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
+	p.FetchMode = strings.ToLower(strings.TrimSpace(p.FetchMode))
+	p.InvokeUntilPeriod = strings.TrimSpace(p.InvokeUntilPeriod)
+	p.InvokeFromPeriod = strings.TrimSpace(p.InvokeFromPeriod)
 	p.Frequency = strings.TrimSpace(p.Frequency)
 	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
 	p.SourceSeriesTag = strings.TrimSpace(p.SourceSeriesTag)

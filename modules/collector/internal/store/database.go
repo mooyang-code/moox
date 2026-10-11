@@ -28,6 +28,8 @@ type Store struct {
 	periodSeriesSnapshot *PeriodSeriesSnapshotRepository
 	periodStorageStates  *PeriodStorageStateRepository
 	timerPeriodBatches   *TimerPeriodBatchRepository
+	fetchPlans           *FetchPlanRepository
+	backfill             *BackfillRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -153,6 +155,8 @@ func Open(opts *Options) (*Store, error) {
 	s.periodSeriesSnapshot = NewPeriodSeriesSnapshotRepository(db)
 	s.periodStorageStates = NewPeriodStorageStateRepository(db)
 	s.timerPeriodBatches = NewTimerPeriodBatchRepository(db)
+	s.fetchPlans = NewFetchPlanRepository(db)
+	s.backfill = NewBackfillRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -212,6 +216,22 @@ func (s *Store) PeriodStorageStates() *PeriodStorageStateRepository {
 		return nil
 	}
 	return s.periodStorageStates
+}
+
+// FetchPlans returns the SCF fetch plan repository.
+func (s *Store) FetchPlans() *FetchPlanRepository {
+	if s == nil {
+		return nil
+	}
+	return s.fetchPlans
+}
+
+// Backfill returns the K-line backfill job repository.
+func (s *Store) Backfill() *BackfillRepository {
+	if s == nil {
+		return nil
+	}
+	return s.backfill
 }
 
 // TimerPeriodBatches returns the durable Timer period claim repository.

@@ -549,3 +549,95 @@ ON t_period_readiness_items (c_readiness_id, c_write_target_id, c_state);
 
 CREATE INDEX IF NOT EXISTS idx_period_readiness_items_write_target
 ON t_period_readiness_items (c_write_target_id, c_readiness_id);
+
+-- SCF 定时采集的采集计划：每个空间同一时间最多一份未生效的计划，最近一份已生效的计划即“已生效状态”。
+CREATE TABLE IF NOT EXISTS t_collector_fetch_plans (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_plan TEXT NOT NULL,
+    c_progress TEXT NOT NULL DEFAULT '{}',
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('pending', 'applying', 'applied'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_t_collector_fetch_plans_open
+ON t_collector_fetch_plans (c_space_id)
+WHERE c_status <> 'applied';
+CREATE INDEX IF NOT EXISTS idx_t_collector_fetch_plans_space ON t_collector_fetch_plans (c_space_id, c_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_fetch_plans_mtime
+AFTER UPDATE ON t_collector_fetch_plans
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+-- K 线补采作业：一个作业拆成若干（数据集、标的、时间段）分块。
+CREATE TABLE IF NOT EXISTS t_collector_backfill_jobs (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_job_id TEXT NOT NULL,
+    c_space_id TEXT NOT NULL,
+    c_source TEXT NOT NULL DEFAULT 'manual',
+    c_request TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_source IN ('manual', 'auto')),
+    CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
+    UNIQUE (c_job_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_jobs_space ON t_collector_backfill_jobs (c_space_id, c_status);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_backfill_jobs_mtime
+AFTER UPDATE ON t_collector_backfill_jobs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_backfill_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+CREATE TABLE IF NOT EXISTS t_collector_backfill_chunks (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_job_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_from DATETIME NOT NULL,
+    c_to DATETIME NOT NULL,
+    c_chunk_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_attempts INTEGER NOT NULL DEFAULT 0,
+    c_rows INTEGER NOT NULL DEFAULT 0,
+    c_started_at DATETIME,
+    c_latest_end_at DATETIME,
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
+    UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_chunks_job ON t_collector_backfill_chunks (c_job_id, c_status);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_backfill_chunks_mtime
+AFTER UPDATE ON t_collector_backfill_chunks
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_backfill_chunks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+-- 自动补采的扫描水位：已扫描到哪个时间点。
+CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_scanned_until DATETIME NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
+);
