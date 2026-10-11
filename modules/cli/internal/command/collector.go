@@ -3805,9 +3805,11 @@ func collectorFunctionEnvironmentValues(opts collectorPublishOptions, packageIDs
 	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", firstNonEmpty(opts.CLSSecretID, defaultCLSSecretID))
 	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", firstNonEmpty(opts.CLSSecretKey, defaultCLSSecretKey))
 	setDefaultEnv(env, "MOOX_CALLER", "scf-collector")
+	setDefaultEnv(env, "MOOX_GATEWAY_COMPRESSION", firstNonEmpty(fetcher.GatewayCompression, "none"))
 	overrides := parseCollectorOverrides(opts.Env)
 	managed := map[string]struct{}{
 		"MOOX_ACCESS_ADDRESS": {}, "MOOX_ACCESS_ID": {}, "MOOX_CALLER": {}, "MOOX_CALLER_KEY_ID": {}, "MOOX_CALLER_KEY": {},
+		"MOOX_GATEWAY_COMPRESSION":                {},
 		"MOOX_EVENTBUS_NATS_TLS_CA_FILE":          {},
 		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": {},
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET":        {},

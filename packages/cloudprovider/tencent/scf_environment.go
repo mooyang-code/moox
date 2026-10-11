@@ -43,6 +43,9 @@ func ValidateCollectorAccessEnvironment(values map[string]string) error {
 	if err := validateCollectorRuntimeEndpoint("MOOX_ACCESS_ADDRESS", "ip://"+values["MOOX_ACCESS_ADDRESS"], "ip"); err != nil {
 		return err
 	}
+	if compression := values["MOOX_GATEWAY_COMPRESSION"]; compression != "" && compression != "none" && compression != "gzip" {
+		return fmt.Errorf("collector Access environment has invalid MOOX_GATEWAY_COMPRESSION")
+	}
 	keyID := values["MOOX_CALLER_KEY_ID"]
 	if len(keyID) > 128 || strings.ContainsAny(keyID, "/\\") || strings.ContainsFunc(keyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY_ID")

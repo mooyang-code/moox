@@ -344,8 +344,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 				}
 				accessByRegion[assignment.Region] = access
 			}
-			for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
-				environment[key] = access[key]
+			for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY", "MOOX_GATEWAY_COMPRESSION"} {
+				if value, ok := access[key]; ok {
+					environment[key] = value
+				}
 			}
 			if environmentBytes(environment) > managedBudget {
 				return r.fail(spaceID, "environment", fmt.Errorf("timer assignment environment is %d bytes after Access routing (managed budget %d)", environmentBytes(environment), managedBudget))
@@ -382,7 +384,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		}
 		environment["MOOX_FETCH_TIMEOUT_SECONDS"] = strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)
 		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(desiredTimerEnabled) + "\x00" + cron
-		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + environment["MOOX_ACCESS_ADDRESS"] + "\x00" + environment["MOOX_ACCESS_ID"] + "\x00" + environment["MOOX_CALLER"] + "\x00" + environment["MOOX_CALLER_KEY_ID"] + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"] + "\x00" + environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
+		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + environment["MOOX_ACCESS_ADDRESS"] + "\x00" + environment["MOOX_ACCESS_ID"] + "\x00" + environment["MOOX_CALLER"] + "\x00" + environment["MOOX_CALLER_KEY_ID"] + "\x00" + environment["MOOX_GATEWAY_COMPRESSION"] + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"] + "\x00" + environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
 		if !r.shouldPatch(assignment, nodes, fingerprint, desiredTimerEnabled) {
 			continue
 		}
@@ -1459,7 +1461,7 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 		}
 		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], storedDNSHash, metadata["timer_enabled"], metadata["timer_cron"])
 		if strings.Count(fingerprint, "\x00") > 3 {
-			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "access_address") + "\x00" + metadataStringValue(metadata, "access_id") + "\x00" + metadataStringValue(metadata, "access_caller") + "\x00" + metadataStringValue(metadata, "access_key_id") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds") + "\x00" + fmt.Sprint(metadata["assignment_count"])
+			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "access_address") + "\x00" + metadataStringValue(metadata, "access_id") + "\x00" + metadataStringValue(metadata, "access_caller") + "\x00" + metadataStringValue(metadata, "access_key_id") + "\x00" + metadataStringValue(metadata, "gateway_compression") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds") + "\x00" + fmt.Sprint(metadata["assignment_count"])
 		}
 		if stored == fingerprint {
 			if timerTriggerNeedsRepair(assignment, metadata, wantTimerEnabled) {

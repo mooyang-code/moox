@@ -715,16 +715,18 @@ type SCFFetcherSpace struct {
 	// TimerFunctionCount is retained as the manifest field name for fleet capacity.
 	// It is a Timer count for stockcn and an Invoke-pool count for crypto. stockcn
 	// must set it explicitly; other Spaces may use the built-in default.
-	TimerFunctionCount        int    `toml:"timer_function_count"`
-	MeasuredSafeGroupSize     int    `toml:"measured_safe_group_size"`
-	StaggerStartSecond        int    `toml:"stagger_start_second"`
-	StaggerWindowSeconds      int    `toml:"stagger_window_seconds"`
-	StaggerMaxStartsPerSecond int    `toml:"stagger_max_starts_per_second"`
-	AccessID                  string `toml:"-"`
-	AccessHost                string `toml:"-"`
-	AccessAddress             string `toml:"-"`
-	AccessPrivateHost         string `toml:"-"`
-	AccessPrivateAddress      string `toml:"-"`
+	TimerFunctionCount        int `toml:"timer_function_count"`
+	MeasuredSafeGroupSize     int `toml:"measured_safe_group_size"`
+	StaggerStartSecond        int `toml:"stagger_start_second"`
+	StaggerWindowSeconds      int `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond int `toml:"stagger_max_starts_per_second"`
+	// GatewayCompression 控制 SCF 到 Access 的请求/响应是否 gzip 压缩：空或 none 不压缩。
+	GatewayCompression   string `toml:"gateway_compression"`
+	AccessID             string `toml:"-"`
+	AccessHost           string `toml:"-"`
+	AccessAddress        string `toml:"-"`
+	AccessPrivateHost    string `toml:"-"`
+	AccessPrivateAddress string `toml:"-"`
 	// AccessAddresses contains regional candidates derived from placements.
 	// Deployment verifies VPC membership before selecting private endpoints.
 	AccessAddresses map[string]string `toml:"-"`
@@ -1744,6 +1746,9 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	}
 	if cfg.TimeoutSeconds != DefaultSCFTimerTimeoutSeconds {
 		return fmt.Errorf("config_invalid: %s.timeout_seconds must be %d", path, DefaultSCFTimerTimeoutSeconds)
+	}
+	if c := cfg.GatewayCompression; c != "" && c != "none" && c != "gzip" {
+		return fmt.Errorf("config_invalid: %s.gateway_compression must be none or gzip", path)
 	}
 	stockCN := strings.EqualFold(cfg.SpaceID, "stockcn")
 	if stockCN {

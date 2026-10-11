@@ -22,5 +22,7 @@ func newSCFAccessClient() (*gatewayclient.Client, error) {
 		Mode:          gatewayclient.External,
 		AccessAddress: os.Getenv("MOOX_ACCESS_ADDRESS"), AccessInstanceID: os.Getenv("MOOX_ACCESS_ID"),
 		Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: os.Getenv("MOOX_CALLER_KEY_ID"), Secret: os.Getenv("MOOX_CALLER_KEY")},
+		// 未设置或 none 表示不压缩；gzip 压缩经公网发往 Access 的请求与响应。
+		Compression: os.Getenv("MOOX_GATEWAY_COMPRESSION"),
 	})
 }

@@ -123,7 +123,7 @@ func (p *rpcPool) invoke(ctx context.Context, ep endpoint, service, method strin
 		options = append(options, client.WithTimeout(remaining), client.WithDialTimeout(remaining))
 	}
 	if ep.compress && len(body) >= minCompressBytes {
-		options = append(options, client.WithCurrentCompressType(codec.CompressTypeGzip))
+		options = append(options, client.WithCompressType(codec.CompressTypeGzip))
 	}
 	if ep.caFile != "" {
 		options = append(options, client.WithTLS("", "", ep.caFile, ep.serverName))
