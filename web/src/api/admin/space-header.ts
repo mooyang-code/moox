@@ -7,10 +7,20 @@ export function selectedSpaceGeneration(): number {
   return spaceGeneration;
 }
 
+const generationListeners = new Set<() => void>();
+
+/** 空间实际切换（代次递增）时同步通知；返回取消订阅函数。 */
+export function onSpaceGenerationChange(listener: () => void): () => void {
+  generationListeners.add(listener);
+  return () => generationListeners.delete(listener);
+}
+
 export function setSelectedSpaceIdCache(spaceId: string): void {
   const next = spaceId || "";
-  if (next !== readSelectedSpaceId()) spaceGeneration += 1;
+  const changed = next !== readSelectedSpaceId();
+  if (changed) spaceGeneration += 1;
   selectedSpaceIdCache = next;
+  if (changed) generationListeners.forEach(listener => listener());
 }
 
 export function readSelectedSpaceId(): string {

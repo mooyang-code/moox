@@ -21,7 +21,10 @@ vi.mock("@/hooks/usePolling", () => ({ usePolling: hoisted.usePolling }));
 vi.mock("@/api/factor", () => ({ listFactorSets: vi.fn(), getFactorStatus: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/api/storage/metadata", () => ({ listDatasets: vi.fn() }));
 vi.mock("@/api/admin/spaces", () => ({ listSpaces: vi.fn() }));
-vi.mock("@/api/admin/space-header", () => ({ setSelectedSpaceIdCache: vi.fn() }));
+vi.mock("@/api/admin/space-header", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/api/admin/space-header")>()),
+  setSelectedSpaceIdCache: vi.fn()
+}));
 
 import { listFactorSets } from "@/api/factor";
 import { listDatasets } from "@/api/storage/metadata";

@@ -150,6 +150,7 @@
 </template>
 
 <script setup lang="ts">
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
@@ -249,7 +250,10 @@ async function load() {
     resetForm(formFromDefinition(rsp.factor));
     usages.value = rsp.usages || [];
   } catch (error) {
-    if (loadGate.isCurrent(token)) loadError.value = error instanceof Error ? error.message : "因子加载失败";
+    // 切换空间造成的取消不是失败：空间监听会重新加载
+    if (loadGate.isCurrent(token) && !(error instanceof StaleSpaceRequestError)) {
+      loadError.value = error instanceof Error ? error.message : "因子加载失败";
+    }
   } finally {
     if (loadGate.isCurrent(token)) loading.value = false;
   }
@@ -372,6 +376,8 @@ watch(
   (spaceId, oldSpaceId) => {
     if (spaceId === oldSpaceId) return;
     referenceGuard.invalidate();
+    // 定义读取若被切换取消（仍在加载或失败），在新空间下重新加载；已成功加载的定义（可能含未保存修改）不动
+    if (editing.value && (loading.value || loadError.value)) void load();
     referenceDatasets.value = [];
     clearReferenceSelection();
     void loadReferenceDatasets();

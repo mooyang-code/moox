@@ -7,7 +7,8 @@ import { useSpaceStore } from "./space";
 vi.mock("@/api/admin/spaces", () => ({
   listSpaces: vi.fn()
 }));
-vi.mock("@/api/admin/space-header", () => ({
+vi.mock("@/api/admin/space-header", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/api/admin/space-header")>()),
   setSelectedSpaceIdCache: vi.fn()
 }));
 

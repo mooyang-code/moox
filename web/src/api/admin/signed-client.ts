@@ -1,7 +1,8 @@
 import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from "@/utils/request-signing";
-import { readSelectedSpaceId, selectedSpaceGeneration } from "./space-header";
+import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "./space-header";
 import { AuthSessionExpiredError } from "./auth-errors";
+import { StaleSpaceRequestError } from "./stale-space";
 
 interface PersistedAuth {
   token?: string;
@@ -87,6 +88,9 @@ function independentOfSelectedSpace(url: string | undefined): boolean {
   return /\/api\/admin\/(auth|space)\//.test(url || "");
 }
 
+/** 与空间无关的全局服务（仅全局管理员可用，没有空间归属）：不参与“切换空间即取消”，否则全局单例读取会被无故打断。 */
+const GLOBAL_SERVICE = /\/api\/admin\/(auth|space|ssh|secret|sysdeploy|setup|monitor)\//;
+
 let lastSpaceInitFinished = 0;
 let spaceInitInflight: Promise<void> | null = null;
 
@@ -115,26 +119,57 @@ declare module "axios" {
     injectedSpaceId?: string;
     /** 与 injectedSpaceId 同时记录的空间代次，用来识别 A→B→A 之后返回的旧请求。 */
     injectedSpaceGeneration?: number;
+    /** 切换空间时可被取消的在途读取登记项。 */
+    spaceReadHandle?: SpaceReadHandle;
   }
 }
 
 /** 只读调用：方法名以查询类动词开头。写入类调用的响应必须交给调用方，不能丢。 */
 const READ_METHOD = /\/(Get|List|Query|Search|Check|Describe|Count|Validate|Preview|Export)[A-Za-z0-9]*$/;
 
-function isStaleSpaceRead(config: InternalAxiosRequestConfig | undefined): boolean {
-  const injected = config?.injectedSpaceId;
-  if (!injected || !READ_METHOD.test(config?.url || "")) return false;
-  return readSelectedSpaceId() !== injected || selectedSpaceGeneration() !== config?.injectedSpaceGeneration;
+interface SpaceReadHandle {
+  controller: AbortController;
+  aborted: boolean;
 }
 
-/** 永不落定的 Promise：旧空间的只读响应（含错误）整体丢弃，页面既不会收到旧数据，也不会弹出多余的错误提示；
- *  新空间的请求由页面自己重新发起并管理 loading 状态。 */
-const neverSettles = <T>() => new Promise<T>(() => {});
+const inflightSpaceReads = new Set<SpaceReadHandle>();
+
+// 切换空间的同一时刻主动取消所有在途的空间读取：旧请求立刻以 StaleSpaceRequestError 结束，
+// 调用方的 finally（loading、防重入标志、在途缓存清理）照常执行，且早于新空间的任何响应。
+onSpaceGenerationChange(() => {
+  for (const handle of [...inflightSpaceReads]) {
+    handle.aborted = true;
+    handle.controller.abort();
+  }
+  inflightSpaceReads.clear();
+});
+
+function isSpaceScopedRead(config: InternalAxiosRequestConfig | undefined): boolean {
+  return Boolean(config?.injectedSpaceId) && READ_METHOD.test(config?.url || "") && !GLOBAL_SERVICE.test(config?.url || "");
+}
+
+function isStaleSpaceRead(config: InternalAxiosRequestConfig | undefined): boolean {
+  if (!isSpaceScopedRead(config)) return false;
+  return readSelectedSpaceId() !== config?.injectedSpaceId || selectedSpaceGeneration() !== config?.injectedSpaceGeneration;
+}
+
+function finishSpaceRead(config: InternalAxiosRequestConfig | undefined): SpaceReadHandle | undefined {
+  const handle = config?.spaceReadHandle;
+  if (handle) inflightSpaceReads.delete(handle);
+  return handle;
+}
 
 export function installSpaceAwareSignedClient(client: AxiosInstance): void {
   client.interceptors.response.use(
-    response => (isStaleSpaceRead(response.config) ? neverSettles() : response),
-    error => (isStaleSpaceRead(error?.config) ? neverSettles() : Promise.reject(error))
+    response => {
+      finishSpaceRead(response.config);
+      return isStaleSpaceRead(response.config) ? Promise.reject(new StaleSpaceRequestError()) : response;
+    },
+    error => {
+      const handle = finishSpaceRead(error?.config);
+      if (handle?.aborted || isStaleSpaceRead(error?.config)) return Promise.reject(new StaleSpaceRequestError());
+      return Promise.reject(error);
+    }
   );
   // Axios executes request interceptors in reverse registration order.
   installSignedClient(client);
@@ -145,6 +180,13 @@ export function installSpaceAwareSignedClient(client: AxiosInstance): void {
       config.headers.set("X-Space-Id", spaceId);
       config.injectedSpaceId = spaceId;
       config.injectedSpaceGeneration = selectedSpaceGeneration();
+      if (isSpaceScopedRead(config)) {
+        const controller = new AbortController();
+        (config.signal as AbortSignal | undefined)?.addEventListener("abort", () => controller.abort(), { once: true });
+        config.signal = controller.signal;
+        config.spaceReadHandle = { controller, aborted: false };
+        inflightSpaceReads.add(config.spaceReadHandle);
+      }
     }
     return config;
   });

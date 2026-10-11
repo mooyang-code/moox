@@ -63,6 +63,7 @@
 </template>
 
 <script setup lang="ts">
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
@@ -104,7 +105,10 @@ async function load() {
     original.value = source.value;
     loaded.value = true;
   } catch (err) {
-    if (requestId === loadRequest) error.value = err instanceof Error ? err.message : "策略定义加载失败";
+    // 切换空间造成的取消不是失败：空间监听会重新加载
+    if (requestId === loadRequest && !(err instanceof StaleSpaceRequestError)) {
+      error.value = err instanceof Error ? err.message : "策略定义加载失败";
+    }
   } finally {
     if (requestId === loadRequest) loading.value = false;
   }
@@ -174,7 +178,8 @@ onMounted(() => {
 watch(
   () => spaceStore.selectedSpaceId,
   next => {
-    if (next && editing.value && !loaded.value && !loading.value) void load();
+    // 在途的定义读取已随切换取消；load 自带请求序号，旧请求不会覆盖新结果
+    if (next && editing.value && !loaded.value) void load();
   }
 );
 </script>

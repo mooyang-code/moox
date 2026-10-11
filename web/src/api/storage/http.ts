@@ -5,7 +5,7 @@ import { isRetInfoSuccess } from "../ret-info";
 import { getStorageAuthInfo } from "./auth";
 import type { RetInfo } from "./types";
 import { installSpaceAwareSignedClient, readPersistedAuth } from "../admin/signed-client";
-import { readSelectedSpaceId, selectedSpaceGeneration } from "../admin/space-header";
+import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "../admin/space-header";
 
 const storageClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -131,6 +131,8 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
 export { callStorage };
 
 installSpaceAwareSignedClient(storageClient);
+// 切换空间后旧代次的缓存与在途条目不会再被命中，立即回收，避免随浏览累计。
+onSpaceGenerationChange(invalidateStorageReadCache);
 
 storageClient.interceptors.response.use(
   rsp => {

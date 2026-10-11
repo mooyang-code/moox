@@ -5,6 +5,7 @@ import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import type { ControlResponse } from "./types";
 import { expireBrowserSession, installSpaceAwareSignedClient } from "./signed-client";
+import { StaleSpaceRequestError } from "./stale-space";
 
 declare module "axios" {
   interface AxiosRequestConfig {
@@ -45,6 +46,7 @@ export class ControlRequestError<T = unknown> extends Error {
 }
 
 export function reportControlError(error: unknown) {
+  if (error instanceof StaleSpaceRequestError) return;
   if (typeof error === "object" && error !== null && reportedErrors.has(error)) return;
   const message = error instanceof Error ? error.message : String(error || "Control 请求失败");
   Message.error(message);

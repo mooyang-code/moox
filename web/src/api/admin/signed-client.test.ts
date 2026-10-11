@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
 import { afterEach, describe, expect, it } from "vitest";
 import { selectedSpaceGeneration, setSelectedSpaceIdCache } from "./space-header";
+import { StaleSpaceRequestError } from "./stale-space";
 import { AuthSessionExpiredError } from "./auth-errors";
 import { expireBrowserSession, installSpaceAwareSignedClient, setSpaceInitializer } from "./signed-client";
 
@@ -113,7 +114,7 @@ describe("installSpaceAwareSignedClient", () => {
     setSelectedSpaceIdCache("");
   });
 
-  it("drops read responses that arrive after the selected Space changed, but keeps writes and explicit Space requests", async () => {
+  it("rejects stale space reads (late response or aborted) with StaleSpaceRequestError, keeps writes, global services and explicit Space requests", async () => {
     type ResponseOk = (response: { config: Record<string, unknown>; data: string }) => unknown;
     type ResponseErr = (error: { config: Record<string, unknown> }) => unknown;
     let onOk: ResponseOk = () => undefined;
@@ -124,7 +125,7 @@ describe("installSpaceAwareSignedClient", () => {
         request: { use: () => undefined },
         response: {
           use: (ok?: ResponseOk, err?: ResponseErr) => {
-            // 只记录第一个登记的响应拦截器（空间过期丢弃），后面登记的是签名层自己的
+            // 只记录第一个登记的响应拦截器（空间过期处理），后面登记的是签名层自己的
             if (captured) return;
             captured = true;
             if (ok) onOk = ok;
@@ -135,36 +136,73 @@ describe("installSpaceAwareSignedClient", () => {
     };
     installSpaceAwareSignedClient(client as never);
     setSelectedSpaceIdCache("space-b");
-    const settled = async (value: unknown) =>
-      Promise.race([Promise.resolve(value).then(() => "settled"), new Promise(r => setTimeout(() => r("pending"), 20))]);
+    const gen = selectedSpaceGeneration();
 
-    const staleRead = { config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-a" }, data: "A" };
-    expect(await settled(onOk(staleRead))).toBe("pending");
-    expect(await settled(onErr({ config: staleRead.config }))).toBe("pending");
+    const staleRead = {
+      config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-a", injectedSpaceGeneration: gen - 1 },
+      data: "A"
+    };
+    await expect(Promise.resolve().then(() => onOk(staleRead))).rejects.toBeInstanceOf(StaleSpaceRequestError);
+    await expect(Promise.resolve().then(() => onErr({ config: staleRead.config }))).rejects.toBeInstanceOf(
+      StaleSpaceRequestError
+    );
+    // A→B→A：空间 ID 相同但代次已变
+    const roundTrip = {
+      config: { url: "/api/admin/collector/GetTask", injectedSpaceId: "space-b", injectedSpaceGeneration: gen - 1 },
+      data: "R"
+    };
+    await expect(Promise.resolve().then(() => onOk(roundTrip))).rejects.toBeInstanceOf(StaleSpaceRequestError);
 
     const sameSpace = {
-      config: {
-        url: "/api/admin/collector/GetTaskInstanceList",
-        injectedSpaceId: "space-b",
-        injectedSpaceGeneration: selectedSpaceGeneration()
-      },
+      config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-b", injectedSpaceGeneration: gen },
       data: "B"
     };
     expect(onOk(sameSpace)).toBe(sameSpace);
-    const staleWrite = { config: { url: "/api/admin/collector/CreateTask", injectedSpaceId: "space-a" }, data: "W" };
-    expect(onOk(staleWrite)).toBe(staleWrite);
-    // A→B→A：空间 ID 相同但代次已变，旧请求同样要丢弃
-    const roundTrip = {
-      config: {
-        url: "/api/admin/collector/GetTask",
-        injectedSpaceId: "space-b",
-        injectedSpaceGeneration: selectedSpaceGeneration() - 1
-      },
-      data: "R"
+    const staleWrite = {
+      config: { url: "/api/admin/collector/CreateTask", injectedSpaceId: "space-a", injectedSpaceGeneration: gen - 1 },
+      data: "W"
     };
-    expect(await settled(onOk(roundTrip))).toBe("pending");
+    expect(onOk(staleWrite)).toBe(staleWrite);
+    const globalRead = {
+      config: { url: "/api/admin/sysdeploy/GetCatalog", injectedSpaceId: "space-a", injectedSpaceGeneration: gen - 1 },
+      data: "G"
+    };
+    expect(onOk(globalRead)).toBe(globalRead);
     const explicit = { config: { url: "/api/admin/collector/GetTask" }, data: "E" };
     expect(onOk(explicit)).toBe(explicit);
+    setSelectedSpaceIdCache("");
+  });
+
+  it("aborts in-flight space reads the moment the Space changes, so finally blocks run", async () => {
+    setSelectedSpaceIdCache("space-a");
+    const handlers: Array<
+      (config: InternalAxiosRequestConfig) => InternalAxiosRequestConfig | Promise<InternalAxiosRequestConfig>
+    > = [];
+    const client = {
+      interceptors: {
+        request: { use: (handler: (typeof handlers)[number]) => handlers.push(handler) },
+        response: { use: () => undefined }
+      }
+    };
+    installSpaceAwareSignedClient(client as never);
+    const spaceHandler = handlers[handlers.length - 1];
+    const read = await spaceHandler({
+      url: "/api/admin/collector/GetTask",
+      headers: new AxiosHeaders()
+    } as InternalAxiosRequestConfig);
+    const global = await spaceHandler({
+      url: "/api/admin/sysdeploy/GetCatalog",
+      headers: new AxiosHeaders()
+    } as InternalAxiosRequestConfig);
+    const write = await spaceHandler({
+      url: "/api/admin/collector/CreateTask",
+      headers: new AxiosHeaders()
+    } as InternalAxiosRequestConfig);
+    expect(read.signal?.aborted).toBe(false);
+    setSelectedSpaceIdCache("space-b");
+    expect(read.signal?.aborted).toBe(true);
+    expect(global.signal).toBeUndefined();
+    expect(write.signal).toBeUndefined();
     setSelectedSpaceIdCache("");
   });
 });
