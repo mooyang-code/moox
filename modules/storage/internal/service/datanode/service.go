@@ -301,6 +301,10 @@ func errorCode(err error) pb.ErrorCode {
 	if errors.As(err, &periodConflict) {
 		return pb.ErrorCode_CONFLICT
 	}
+	var staleEffectiveFrom pebble.StaleEffectiveFromError
+	if errors.As(err, &staleEffectiveFrom) {
+		return pb.ErrorCode_CONFLICT
+	}
 	var hashMismatch pebble.PeriodHashMismatchError
 	if errors.As(err, &hashMismatch) {
 		return pb.ErrorCode_CONFLICT

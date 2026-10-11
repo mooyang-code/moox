@@ -677,9 +677,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 			return err
 		}
 	}
-	// Keep the submitted Timer timeout authoritative from initial creation.
+	// 行情定时函数内存默认 64MB，可由 config.memory_size 指定。
 	if isMarketFetchNode(node) && node.TriggerType == "timer" {
-		memorySize = 64
+		memorySize = configInt64(config, "memory_size", 64)
 	}
 	metadata["runtime"] = firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
 	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")

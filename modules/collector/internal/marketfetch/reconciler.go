@@ -79,7 +79,9 @@ type Reconciler struct {
 	// DisableTimerTriggers keeps the published timer-node fleet available for
 	// explicit Scheduler Invoke while preventing a second, static acquisition
 	// path from bypassing Run/TaskInstance/WriteTarget dedupe.
-	DisableTimerTriggers        bool
+	DisableTimerTriggers bool
+	// TaskFilter 非空时只处理它返回 true 的任务（采集计划对账只处理由定时模式管理的任务）。
+	TaskFilter                  func(*domain.CollectParams) bool
 	Now                         func() time.Time
 	mu                          sync.Mutex
 	reconcileMu                 sync.Mutex
@@ -1201,6 +1203,9 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		if params.Collector.DataType != "kline" {
 			continue
 		}
+		if r.TaskFilter != nil && !r.TaskFilter(params) {
+			continue
+		}
 		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID); datasetErr != nil {
 			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, params.Target.DatasetID, datasetErr)
 			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
@@ -1356,6 +1361,8 @@ func (r *Reconciler) taskGroupsForRoute(ctx context.Context, task domain.Collect
 			SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID,
 			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
 			Subjects: symbolIDs, ExternalSymbols: externalSymbols,
+			SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
+			StartAt: unixOrZero(params.InvokeUntil()),
 		})
 	}
 	return result, nil
@@ -1395,6 +1402,9 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		current.DatasetID, current.Frequency = group.DatasetID, group.Frequency
 		current.OutputFields = append([]string(nil), group.OutputFields...)
 		current.Subjects = append(current.Subjects, group.Subjects...)
+		current.SymbolsPerFunction = minPositive(current.SymbolsPerFunction, group.SymbolsPerFunction)
+		current.AllowedLatenessSeconds = minPositive(current.AllowedLatenessSeconds, group.AllowedLatenessSeconds)
+		current.StartAt = minPositive64(current.StartAt, group.StartAt)
 		if group.ExternalSymbols != nil {
 			if current.ExternalSymbols == nil {
 				current.ExternalSymbols = make(map[string]string)
@@ -1518,4 +1528,29 @@ func timerTriggerNeedsRepair(assignment NodeAssignment, metadata map[string]any,
 		desiredCron = "0 * * * * * *"
 	}
 	return strings.TrimSpace(fmt.Sprint(metadata["timer_actual_cron"])) != desiredCron
+}
+
+func unixOrZero(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.Unix()
+}
+
+// minPositive 返回两个值中较小的正数；都不为正返回 0。
+func minPositive(left, right int) int {
+	return int(minPositive64(int64(left), int64(right)))
+}
+
+func minPositive64(left, right int64) int64 {
+	switch {
+	case left <= 0:
+		return max(right, 0)
+	case right <= 0:
+		return left
+	case right < left:
+		return right
+	default:
+		return left
+	}
 }

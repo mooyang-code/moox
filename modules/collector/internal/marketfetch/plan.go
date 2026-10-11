@@ -195,7 +195,8 @@ func (p *Plan) Validate() error {
 				return fmt.Errorf("plan datasets[%d].copies must have strictly increasing positive from", index)
 			}
 			previous = copy.From
-			if strings.TrimSpace(copy.Hash) == "" || copy.Count == 0 || len(copy.Subjects) == 0 {
+			// 后一份允许没有标的：标的移到别的函数、或数据集不再采集时，从该份起本函数不再抓取。
+			if strings.TrimSpace(copy.Hash) == "" || copy.Count == 0 || (copyIndex == 0 && len(copy.Subjects) == 0) {
 				return fmt.Errorf("plan datasets[%d].copies[%d] requires hash, count and subjects", index, copyIndex)
 			}
 			subjects := make(map[string]struct{}, len(copy.Subjects))

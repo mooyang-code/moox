@@ -151,6 +151,66 @@ func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patch
 	return jobID, nil
 }
 
+// SubmitCreateNodes 提交一批函数创建任务，返回异步作业 ID。
+func (c *Client) SubmitCreateNodes(ctx context.Context, spaceID string, items []*cloudnodepb.NodeCreateItem) (string, error) {
+	if len(items) == 0 {
+		return "", fmt.Errorf("create node items are required")
+	}
+	request := &cloudnodepb.BatchCreateNodesReq{Nodes: items}
+	var rsp cloudnodepb.SubmitNodeBatchRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "SubmitCreateNodes", request, &rsp, true); err != nil {
+		return "", err
+	}
+	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
+		return "", fmt.Errorf("submit create nodes: %s", rsp.GetRetInfo().GetMsg())
+	}
+	jobID := strings.TrimSpace(rsp.GetJobId())
+	if jobID == "" {
+		return "", fmt.Errorf("%w: SubmitCreateNodes returned no job_id", ErrRuntimeConfigSubmissionUnknown)
+	}
+	return jobID, nil
+}
+
+// BatchItemResult 是批量作业中一个节点的结果。
+type BatchItemResult struct {
+	NodeID  string
+	Success bool
+	Failed  bool
+	Message string
+}
+
+// GetBatchResults 返回批量作业的汇总与逐节点结果。
+func (c *Client) GetBatchResults(ctx context.Context, spaceID, jobID string) (*cloudnodepb.NodeBatchSummary, []BatchItemResult, error) {
+	if strings.TrimSpace(jobID) == "" {
+		return nil, nil, fmt.Errorf("job_id is required")
+	}
+	var rsp cloudnodepb.GetNodeBatchChangeRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeBatchChange", &cloudnodepb.GetNodeBatchChangeReq{JobId: jobID}, &rsp, false); err != nil {
+		return nil, nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS || rsp.GetJob() == nil {
+		return nil, nil, fmt.Errorf("get node batch: %s", rsp.GetRetInfo().GetMsg())
+	}
+	items := make([]BatchItemResult, 0, len(rsp.GetItems()))
+	for _, item := range rsp.GetItems() {
+		status := item.GetStatus()
+		items = append(items, BatchItemResult{
+			NodeID: item.GetNodeId(), Success: status == cloudnodepb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_SUCCESS,
+			Failed: status == cloudnodepb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_FAILED, Message: firstNonBlank(item.GetErrorMessage(), item.GetResultSummary()),
+		})
+	}
+	return rsp.GetJob(), items, nil
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // GetRuntimeConfigBatchStatus is used by Collector to distinguish an
 // accepted asynchronous job from a configuration that actually reached every
 // Tencent function. Runtime reconciliation must not report success before

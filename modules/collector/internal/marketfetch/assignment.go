@@ -28,6 +28,11 @@ type TaskGroup struct {
 	OutputFields    []string
 	Subjects        []string
 	ExternalSymbols map[string]string
+	// 以下为定时采集计划使用：每函数标的数（0 为默认）、允许迟到时间（0 为空间默认）、
+	// 新数据集的首份起点（Unix 秒，0 表示按当前时间选取）。
+	SymbolsPerFunction     int
+	AllowedLatenessSeconds int
+	StartAt                int64
 }
 
 // NodeAssignment is the deterministic desired state for one SCF node.

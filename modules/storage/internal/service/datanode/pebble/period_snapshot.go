@@ -49,6 +49,12 @@ func (e PeriodDeadlinePassedError) Error() string {
 	return fmt.Sprintf("dataset period deadline %d has passed before the period was created", e.Deadline)
 }
 
+// StaleEffectiveFromError 表示生效周期 P 已不在未来（或其后已有周期），且该 P 尚未登记；
+// 调用方（Collector）可据此重新选择 P。错误文本以 effective_from_stale 开头，供客户端识别。
+type StaleEffectiveFromError struct{ Reason string }
+
+func (e StaleEffectiveFromError) Error() string { return "effective_from_stale: " + e.Reason }
+
 func snapshotScope(spaceID, datasetID, frequency string) string {
 	return hex.EncodeToString([]byte(spaceID)) + "/" + hex.EncodeToString([]byte(datasetID)) + "/" + hex.EncodeToString([]byte(frequency)) + "/"
 }
@@ -132,16 +138,16 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 		return RegisterSnapshotResult{}, err
 	}
 	if hasLast && effectiveFrom <= lastFrom {
-		return RegisterSnapshotResult{}, invalid("effective_from must be strictly later than the last registered effective period")
+		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be strictly later than the last registered effective period"}
 	}
 	if effectiveFrom <= s.periodNow().UTC().Unix() && hasLast {
-		return RegisterSnapshotResult{}, invalid("effective_from must be in the future")
+		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be in the future"}
 	}
 	// P 之后不能已有周期：已建立的周期不可更换快照。
 	if has, err := s.hasPeriodAtOrAfter(spaceID, datasetID, frequency, effectiveFrom); err != nil {
 		return RegisterSnapshotResult{}, err
 	} else if has {
-		return RegisterSnapshotResult{}, invalid("a dataset period at or after effective_from already exists")
+		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "a dataset period at or after effective_from already exists"}
 	}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {

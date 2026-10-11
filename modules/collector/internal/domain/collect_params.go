@@ -43,6 +43,8 @@ type CollectParams struct {
 	FetchMode string `json:"fetch_mode,omitempty"`
 	// SymbolsPerFunction 是定时模式下每个函数负责的标的数；0 表示使用默认值。
 	SymbolsPerFunction int `json:"symbols_per_function,omitempty"`
+	// AllowedLatenessSeconds 是结果数据集的允许迟到时间；0 表示使用空间默认值（crypto 15 秒，stockcn 90 秒）。
+	AllowedLatenessSeconds int `json:"allowed_lateness_seconds,omitempty"`
 	// InvokeUntilPeriod 与 InvokeFromPeriod 用于新旧链路按目标周期（K 线开始时间，RFC3339）交接，
 	// 迁移期间使用，迁移完成后清除：旧链路只处理目标周期 < until 且 ≥ from 的周期。
 	InvokeUntilPeriod string `json:"invoke_until_period,omitempty"`
@@ -182,6 +184,9 @@ func (p *CollectParams) validateFetchMode() error {
 	}
 	if p.SymbolsPerFunction < 0 || p.SymbolsPerFunction > 200 {
 		return fmt.Errorf("parse collect params: symbols_per_function must be between 0 and 200")
+	}
+	if p.AllowedLatenessSeconds < 0 || p.AllowedLatenessSeconds > 3600 {
+		return fmt.Errorf("parse collect params: allowed_lateness_seconds must be between 0 and 3600")
 	}
 	for name, raw := range map[string]string{"invoke_until_period": p.InvokeUntilPeriod, "invoke_from_period": p.InvokeFromPeriod} {
 		if strings.TrimSpace(raw) == "" {

@@ -146,3 +146,21 @@ func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, prog
 	}
 	return nil
 }
+
+// SavePlan 更新计划内容（重新选择生效周期时使用）。
+func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan string) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("fetch plan repository is not initialized")
+	}
+	if strings.TrimSpace(plan) == "" {
+		return fmt.Errorf("plan is required")
+	}
+	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_plan": plan, "c_mtime": time.Now().UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
