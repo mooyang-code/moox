@@ -51,6 +51,7 @@ export default {
     ["ops-deployments"]: "服务部署",
     ["ops-hosts"]: "主机工作台",
     ["ops-storage"]: "存储配置",
+    ["ops-activity"]: "活动日志",
     ["settings"]: "系统设置",
     ["settings-spaces"]: "空间管理",
     ["settings-secrets"]: "秘钥管理"

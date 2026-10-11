@@ -51,6 +51,7 @@ export default {
     ["ops-deployments"]: "service deployments",
     ["ops-hosts"]: "host workbench",
     ["ops-storage"]: "storage",
+    ["ops-activity"]: "activity log",
     ["settings"]: "settings",
     ["settings-spaces"]: "spaces",
     ["settings-secrets"]: "secrets"

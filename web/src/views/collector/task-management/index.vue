@@ -25,7 +25,7 @@ type CollectorTaskTab = "tasks" | "instances" | "executors" | "results";
 
 const tabs = [
   { key: "tasks", label: "采集任务" },
-  { key: "instances", label: "任务实例" },
+  { key: "instances", label: "采集实例" },
   { key: "executors", label: "执行器" },
   { key: "results", label: "采集结果" }
 ] as const;

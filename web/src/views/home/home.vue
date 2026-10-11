@@ -346,7 +346,7 @@ const workflowLinks = [
   },
   {
     title: "采集实例",
-    description: "任务执行状态与失败明细",
+    description: "函数分配、标的变更与补采作业",
     path: "/collector/tasks?tab=instances",
     icon: "T",
     tint: "rgba(13, 148, 136, 12%)"

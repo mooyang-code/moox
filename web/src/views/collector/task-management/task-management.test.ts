@@ -8,7 +8,7 @@ describe("collector task management workbench", () => {
   it("keeps the four tabs in tasks, instances, executors, results order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["采集任务", "任务实例", "执行器", "采集结果"].map(label => normalized.indexOf(`label:"${label}"`));
+    const positions = ["采集任务", "采集实例", "执行器", "采集结果"].map(label => normalized.indexOf(`label:"${label}"`));
 
     expect(source).toContain("PageTitleTabs");
     expect(source).toContain('aria-label="采集任务"');

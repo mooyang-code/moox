@@ -117,7 +117,7 @@ describe("page layout standards", () => {
 
     expectMargin(subjects, ".subjects-content", "margin-top", 12);
     expectMargin(taskManagement, ".task-management-content", "margin-top", 12);
-    expectMargin(taskInstances, ".task-toolbar", "margin-bottom", 8);
+    expectMargin(taskInstances, ".block-header", "margin-bottom", 8);
     expect(collectorTasks).toContain('class="task-toolbar"');
     expectMargin(collectorTasks, ".task-toolbar", "margin-bottom", 5);
     expect(taskResults).toContain('class="moox-page task-results-page"');

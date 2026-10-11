@@ -138,6 +138,12 @@ export const staticRoutes = [
         meta: { title: "collector-cloudnodes" }
       },
       {
+        path: "/ops/activity",
+        name: "ops-activity",
+        component: () => import("@/views/ops/activity/index.vue"),
+        meta: { title: "ops-activity" }
+      },
+      {
         path: "/collector/tasks",
         name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),
