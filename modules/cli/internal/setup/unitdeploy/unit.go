@@ -47,6 +47,9 @@ func unitConfiguration(snapshot *setupconfig.Snapshot, profile string) ([]byte, 
 // storageNodeID 是单个存储节点的固定 ID：元数据种子、Collector 与 Storage 的默认值都使用它。
 const storageNodeID = "storage-node-0"
 
+// defaultSpaceID 是 Collector 行情调度的默认空间（与 deploy-moox.sh 的默认值一致）。
+const defaultSpaceID = "crypto"
+
 func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {
 	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
 	environment := make(map[string]map[string]string, len(components))
@@ -62,6 +65,11 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			if id == "strategy" || id == "admin" {
 				values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
 			}
+		}
+		if id == "collector" {
+			// Collector 的行情调度必须有目标空间；与旧部署脚本一致，默认 crypto。
+			values["MOOX_SPACE_ID"] = defaultSpaceID
+			values["MOOX_SPACE_IDS"] = defaultSpaceID
 		}
 		if !slices.Contains([]string{"storage-primary", "storage-node", "storage-view"}, id) {
 			continue
