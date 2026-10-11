@@ -69,6 +69,8 @@ async function prepare() {
   form.source_dataset_id = "";
   form.subject_mode = "all";
   subjects.value = [];
+  // 打开时先清空：上一次（可能属于其他空间）的选项不能在新空间加载失败后继续可选
+  sourceDatasets.value = [];
   const spaceId = spaceStore.selectedSpaceId;
   if (!spaceId) return;
   datasetsLoading.value = true;

@@ -109,7 +109,31 @@ async function ensureSpaceSelected(): Promise<void> {
   await spaceInitInflight;
 }
 
+declare module "axios" {
+  interface AxiosRequestConfig {
+    /** 请求拦截器自动注入 X-Space-Id 时记录的空间；调用方显式指定空间的请求不带这个标记。 */
+    injectedSpaceId?: string;
+  }
+}
+
+/** 只读调用：方法名以查询类动词开头。写入类调用的响应必须交给调用方，不能丢。 */
+const READ_METHOD = /\/(Get|List|Query|Search|Check|Describe|Count|Validate|Preview|Export)[A-Za-z0-9]*$/;
+
+function isStaleSpaceRead(config: InternalAxiosRequestConfig | undefined): boolean {
+  const injected = config?.injectedSpaceId;
+  if (!injected || !READ_METHOD.test(config?.url || "")) return false;
+  return readSelectedSpaceId() !== injected;
+}
+
+/** 永不落定的 Promise：旧空间的只读响应（含错误）整体丢弃，页面既不会收到旧数据，也不会弹出多余的错误提示；
+ *  新空间的请求由页面自己重新发起并管理 loading 状态。 */
+const neverSettles = <T>() => new Promise<T>(() => {});
+
 export function installSpaceAwareSignedClient(client: AxiosInstance): void {
+  client.interceptors.response.use(
+    response => (isStaleSpaceRead(response.config) ? neverSettles() : response),
+    error => (isStaleSpaceRead(error?.config) ? neverSettles() : Promise.reject(error))
+  );
   // Axios executes request interceptors in reverse registration order.
   installSignedClient(client);
   client.interceptors.request.use(async config => {
@@ -117,6 +141,7 @@ export function installSpaceAwareSignedClient(client: AxiosInstance): void {
     const spaceId = readSelectedSpaceId();
     if (spaceId && !config.headers.get("X-Space-Id")) {
       config.headers.set("X-Space-Id", spaceId);
+      config.injectedSpaceId = spaceId;
     }
     return config;
   });

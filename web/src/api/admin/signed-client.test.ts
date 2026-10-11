@@ -112,4 +112,42 @@ describe("installSpaceAwareSignedClient", () => {
     setSpaceInitializer(null);
     setSelectedSpaceIdCache("");
   });
+
+  it("drops read responses that arrive after the selected Space changed, but keeps writes and explicit Space requests", async () => {
+    type ResponseOk = (response: { config: Record<string, unknown>; data: string }) => unknown;
+    type ResponseErr = (error: { config: Record<string, unknown> }) => unknown;
+    let onOk: ResponseOk = () => undefined;
+    let onErr: ResponseErr = () => undefined;
+    let captured = false;
+    const client = {
+      interceptors: {
+        request: { use: () => undefined },
+        response: {
+          use: (ok?: ResponseOk, err?: ResponseErr) => {
+            // 只记录第一个登记的响应拦截器（空间过期丢弃），后面登记的是签名层自己的
+            if (captured) return;
+            captured = true;
+            if (ok) onOk = ok;
+            if (err) onErr = err;
+          }
+        }
+      }
+    };
+    installSpaceAwareSignedClient(client as never);
+    setSelectedSpaceIdCache("space-b");
+    const settled = async (value: unknown) =>
+      Promise.race([Promise.resolve(value).then(() => "settled"), new Promise(r => setTimeout(() => r("pending"), 20))]);
+
+    const staleRead = { config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-a" }, data: "A" };
+    expect(await settled(onOk(staleRead))).toBe("pending");
+    expect(await settled(onErr({ config: staleRead.config }))).toBe("pending");
+
+    const sameSpace = { config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-b" }, data: "B" };
+    expect(onOk(sameSpace)).toBe(sameSpace);
+    const staleWrite = { config: { url: "/api/admin/collector/CreateTask", injectedSpaceId: "space-a" }, data: "W" };
+    expect(onOk(staleWrite)).toBe(staleWrite);
+    const explicit = { config: { url: "/api/admin/collector/GetTask" }, data: "E" };
+    expect(onOk(explicit)).toBe(explicit);
+    setSelectedSpaceIdCache("");
+  });
 });
