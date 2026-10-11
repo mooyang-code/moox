@@ -340,8 +340,27 @@ func TestSubmitUnknownQueriesExchangeBeforeRetry(t *testing.T) {
 	require.Zero(t, adapter.placeCalls)
 }
 
+// liveQuoteAdapter 给测试适配器配一个随测试时钟走的实时报价，供“确认不存在后重试”取新鲜报价。
+type liveQuoteAdapter struct {
+	*adapterStub
+	now   func() time.Time
+	price string
+}
+
+func (a *liveQuoteAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	price := shared.MustDecimal(a.price)
+	return execution.MarketQuote{Bid: price, Ask: price, Last: price, SourceTime: a.now()}, nil
+}
+
+func useLiveQuote(service *Service, adapter *adapterStub, price string) *liveQuoteAdapter {
+	live := &liveQuoteAdapter{adapterStub: adapter, now: func() time.Time { return service.now() }, price: price}
+	service.Adapters = errorBoundarySource{adapter: live}
+	return live
+}
+
 func TestSubmitUnknownResetsToPendingOnlyAfterConfirmedAbsentAndWindowExpired(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
+	useLiveQuote(service, adapter, "100")
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
 	require.NoError(t, err)
 	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
@@ -649,6 +668,7 @@ func TestConfirmedAbsentRetryRefreshesReducePositionOnly(t *testing.T) {
 	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	positions := &positionSourceStub{}
 	service.Validator.Positions = positions
+	useLiveQuote(service, adapter, "100")
 	now := time.Unix(1_700_000_000, 0)
 	service.Now = func() time.Time { return now }
 	service.Validator.Now = func() time.Time { return now }
@@ -1305,4 +1325,28 @@ func setStoredOrderState(
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpdateOrder(record, expected)
 	}))
+}
+
+
+// 确认不存在后的市价单重试必须按新鲜报价重新校验限额：旧报价折算的名义金额在价格大幅上涨后不再成立。
+func TestConfirmedAbsentMarketRetryRevalidatesLimitsWithFreshQuote(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	live := useLiveQuote(service, adapter, "100")
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	service.UnknownLookupWindow = time.Minute
+	service.Now = func() time.Time { return time.Unix(1_700_000_061, 0) }
+	service.Validator.Now = service.Now
+	expired, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Pending, expired.State)
+
+	// 下单量按旧报价刚好在限额内；报价涨到 10 倍后名义金额远超限额
+	service.Validator.MaxChildNotional = pending.Spec.Quantity.Mul(pending.Spec.ReferencePrice).Mul(shared.MustDecimal("2"))
+	live.price = "1000"
+	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.ErrorIs(t, err, ErrNotionalLimit)
+	require.Zero(t, adapter.placeCalls, "超限的重试不能提交到交易所")
 }

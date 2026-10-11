@@ -389,6 +389,8 @@ const emit = defineEmits<{
 // 响应式数据
 const spaceStore = useSpaceStore();
 const listGuard = createLatestRequestGuard();
+// 上传提交序号：取消/关闭/重新打开上传弹窗、切换空间都会使进行中的提交失效
+let uploadSubmitToken = 0;
 const packageManageMode = computed(() => props.mode || "page");
 const standalone = computed(() => packageManageMode.value === "page");
 const visible = ref(standalone.value ? true : props.modelValue);
@@ -480,6 +482,7 @@ watch(visible, newVal => {
 
 // 关闭弹窗或切换空间：作废在途请求，清空列表与详情，避免组件常驻时重新打开看到其他空间的数据
 function resetForSpace() {
+  uploadSubmitToken += 1;
   listGuard.invalidate();
   detailGuard.invalidate();
   loading.value = false;
@@ -587,6 +590,7 @@ const onAdd = () => {
   // 清除版本验证状态
   versionValidationStatus.value = undefined;
   versionFeedback.value = "";
+  uploadSubmitToken += 1; // 重新打开视为新的提交，旧提交作废
   uploadVisible.value = true;
 };
 
@@ -729,6 +733,7 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
 
 // 上传取消
 const handleUploadCancel = () => {
+  uploadSubmitToken += 1; // 取消即作废进行中的提交（版本检查、表单校验返回后不得再继续上传）
   // 清除版本验证状态
   versionValidationStatus.value = undefined;
   versionFeedback.value = "";
@@ -811,7 +816,11 @@ const handleUploadOk = async () => {
   // 点击时固定发起空间与代次：之后任何一步 await 返回时若空间已切换（含 A→B→A），整个提交作废，不能改传到新空间
   const submitSpaceId = spaceStore.selectedSpaceId;
   const submitGeneration = selectedSpaceGeneration();
-  const submitStale = () => spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
+  const submitToken = ++uploadSubmitToken;
+  const submitStale = () =>
+    submitToken !== uploadSubmitToken ||
+    spaceStore.selectedSpaceId !== submitSpaceId ||
+    selectedSpaceGeneration() !== submitGeneration;
   // 检查版本是否重复
   if (versionValidationStatus.value === "error") {
     Message.error({

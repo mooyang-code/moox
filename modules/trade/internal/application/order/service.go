@@ -790,6 +790,36 @@ func (s *Service) resolveUnknown(
 	return current, nil
 }
 
+// freshReference 取交易所新鲜报价并刷新订单的参考价；取不到或已过期都返回可重试错误。
+func (s *Service) freshReference(
+	ctx context.Context,
+	record store.OrderRecord,
+	spec orderdomain.OrderSpec,
+	maxAge time.Duration,
+) (orderdomain.OrderSpec, error) {
+	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
+	if err != nil {
+		return spec, accountExecutionError(record.TradingAccountID, "adapter", err)
+	}
+	marketData, ok := adapter.(execution.MarketDataSource)
+	if !ok {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
+	}
+	quote, err := marketData.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+	if err != nil {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
+	}
+	if !paperQuoteFresh(quote, s.now(), maxAge) {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
+	}
+	price, err := paperExecutablePrice(spec.Side, quote)
+	if err != nil {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
+	}
+	spec.ReferencePrice, spec.ReferencePriceAt = price, quote.SourceTime
+	return spec, nil
+}
+
 func (s *Service) resolveUnknownFound(
 	ctx context.Context,
 	record store.OrderRecord,
@@ -827,12 +857,19 @@ func (s *Service) submit(
 	}
 	validator := s.Validator
 	if record.SubmittedAt > 0 {
-		// A confirmed-absent retry reuses the already validated server quote.
-		// Revalidate account and instrument safety without making the unknown
-		// lookup window itself turn every controlled retry into a stale quote.
 		now := s.now()
 		validator.Now = func() time.Time { return now }
-		validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
+		if aggregate.Spec.Type == exchange.OrderTypeMarket {
+			// 确认不存在后的重试：市价单的限额按报价折算名义金额，旧报价可能已大幅偏离，
+			// 必须取新鲜报价后重新校验；取不到新鲜报价就不提交（保持待重试）。
+			aggregate.Spec, err = s.freshReference(ctx, record, aggregate.Spec, validator.MaxReferenceAge)
+			if err != nil {
+				return aggregate, false, err
+			}
+		} else {
+			// 限价单的名义金额来自限价而非报价：沿用已校验的报价，避免未知查询窗口让每次受控重试都变成过期报价。
+			validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
+		}
 	}
 	validation, err := validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
 	refreshedReference := false

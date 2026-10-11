@@ -201,4 +201,40 @@ describe("installSpaceAwareSignedClient", () => {
     for (const exempt of seen.slice(1)) expect(exempt.signal).toBeUndefined(); // 全局读取与写入不被取消
     setSelectedSpaceIdCache("");
   });
+
+  it("registers reads issued before the Space initialization finishes, so a later switch still cancels them", async () => {
+    setSelectedSpaceIdCache("");
+    let finishInit: () => void = () => {};
+    setSpaceInitializer(
+      () =>
+        new Promise<void>(resolve => {
+          finishInit = () => {
+            setSelectedSpaceIdCache("space-a");
+            resolve();
+          };
+        })
+    );
+    const seen: Array<{ signal?: AbortSignal }> = [];
+    const client = {
+      interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
+      post: (_url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
+        seen.push({ signal: config?.signal });
+        return new Promise(() => {});
+      }
+    };
+    installSpaceAwareSignedClient(client as never);
+    const read = client.post("/api/admin/collector/GetTask", {});
+    const outcome = read.then(
+      () => "resolved",
+      error => (error instanceof StaleSpaceRequestError ? "stale" : "other")
+    );
+    finishInit();
+    await new Promise(resolve => setTimeout(resolve, 0)); // 等初始化链走完，读取在 space-a 下登记
+    expect(seen).toHaveLength(1);
+    setSelectedSpaceIdCache("space-b");
+    expect(await outcome).toBe("stale");
+    expect(seen[0].signal?.aborted).toBe(true);
+    setSpaceInitializer(null);
+    setSelectedSpaceIdCache("");
+  });
 });

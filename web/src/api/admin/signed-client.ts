@@ -169,9 +169,22 @@ function hasExplicitSpace(config: AxiosRequestConfig | undefined): boolean {
 function runSpaceRead<T>(
   url: string,
   config: AxiosRequestConfig | undefined,
-  run: (config: AxiosRequestConfig) => Promise<T>
+  run: (config: AxiosRequestConfig) => Promise<T>,
+  afterInit = false
 ): Promise<T> {
   const spaceId = readSelectedSpaceId();
+  // 还没有选中空间：先等空间初始化，在确定有效空间之后再登记取消，避免初始化期间发起的读取漏登。
+  const target = config?.url ?? url;
+  if (
+    !spaceId &&
+    !afterInit &&
+    spaceInitializer &&
+    READ_METHOD.test(target) &&
+    !GLOBAL_SERVICE.test(target) &&
+    !hasExplicitSpace(config)
+  ) {
+    return ensureSpaceSelected().then(() => runSpaceRead(url, config, run, true));
+  }
   const tracked: AxiosRequestConfig = { ...config, url: config?.url ?? url } as AxiosRequestConfig;
   if (!spaceId || hasExplicitSpace(config) || !isSpaceScopedRead(Object.assign(tracked, { injectedSpaceId: spaceId }))) {
     return run(config as AxiosRequestConfig); // 原样透传，保持调用形态不变
