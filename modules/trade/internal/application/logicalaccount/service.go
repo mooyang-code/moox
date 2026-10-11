@@ -92,6 +92,38 @@ func (s *Service) Create(
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 }
 
+// lockMemberChange 按固定顺序取得成员变更需要的全部锁（逻辑账户 → 成员 → 执行 → 交易账户），全部带调用方期限；
+// 任何一把等待失败都会释放已取得的锁，返回的函数按相反顺序释放。
+func (s *Service) lockMemberChange(ctx context.Context, spaceID, logicalAccountID, tradingAccountID string) (func(), error) {
+	var releases []func()
+	release := func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}
+	unlock, err := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return nil, err
+	}
+	releases = append(releases, unlock)
+	if unlock, err = s.Store.LockLogicalAccountMembershipContext(ctx); err != nil {
+		release()
+		return nil, err
+	}
+	releases = append(releases, unlock)
+	if unlock, err = s.Store.LockLogicalAccountExecutionContext(ctx, spaceID, logicalAccountID); err != nil {
+		release()
+		return nil, err
+	}
+	releases = append(releases, unlock)
+	if unlock, err = s.Store.LockTradingAccountContext(ctx, tradingAccountID); err != nil {
+		release()
+		return nil, err
+	}
+	releases = append(releases, unlock)
+	return release, nil
+}
+
 func (s *Service) UpdateName(
 	ctx context.Context,
 	spaceID string,
@@ -101,7 +133,10 @@ func (s *Service) UpdateName(
 	if s == nil || s.Store == nil || strings.TrimSpace(name) == "" {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, lockErr
+	}
 	defer unlock()
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountName(
@@ -133,17 +168,12 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	if err := s.Syncer.SyncAccount(ctx, command.TradingAccountID); err != nil {
 		return err
 	}
-	unlock := s.Store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
-	defer unlock()
-	unlockMembership := s.Store.LockLogicalAccountMembership()
-	defer unlockMembership()
-	unlockExecution := s.Store.LockLogicalAccountExecution(
-		command.SpaceID,
-		command.LogicalAccountID,
-	)
-	defer unlockExecution()
-	unlockAccount := s.Store.LockTradingAccount(command.TradingAccountID)
-	defer unlockAccount()
+	// 全部带期限：任何一把锁等待超时都释放已取得的锁并返回，不占住全局成员锁
+	unlockAll, lockErr := s.lockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlockAll()
 	exposed, err := s.memberHasExposure(
 		ctx, command.SpaceID, command.TradingAccountID,
 	)
@@ -189,14 +219,11 @@ func (s *Service) RemoveMember(
 	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		return err
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
-	defer unlock()
-	unlockMembership := s.Store.LockLogicalAccountMembership()
-	defer unlockMembership()
-	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
-	defer unlockExecution()
-	unlockAccount := s.Store.LockTradingAccount(tradingAccountID)
-	defer unlockAccount()
+	unlockAll, lockErr := s.lockMemberChange(ctx, spaceID, logicalAccountID, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlockAll()
 	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return err
@@ -221,7 +248,10 @@ func (s *Service) ClaimOwner(
 		strings.TrimSpace(runnerID) == "" {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, lockErr
+	}
 	defer unlock()
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
@@ -297,7 +327,10 @@ func (s *Service) RebindOwner(
 	if s == nil || s.Store == nil || strings.TrimSpace(runnerID) == "" || strings.TrimSpace(rebindKey) == "" {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, lockErr
+	}
 	defer unlock()
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
@@ -363,7 +396,10 @@ func (s *Service) ReleaseOwner(
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	defer unlock()
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
@@ -407,7 +443,10 @@ func (s *Service) ClaimSession(
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, "", ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, "", lockErr
+	}
 	defer unlock()
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -437,7 +476,10 @@ func (s *Service) RebindSession(
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, "", ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, "", lockErr
+	}
 	defer unlock()
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -465,7 +507,10 @@ func (s *Service) ReleaseSession(
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	defer unlock()
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.ReleaseLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence); err != nil {
@@ -484,7 +529,10 @@ func (s *Service) Pause(
 	if s == nil || s.Store == nil || strings.TrimSpace(reason) == "" {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, lockErr
+	}
 	defer unlock()
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation(

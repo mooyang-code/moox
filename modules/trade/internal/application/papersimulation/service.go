@@ -145,15 +145,25 @@ func (s *Service) Close(ctx context.Context, spaceID, accountID string) error {
 	}
 	// Every lifecycle mutation uses the same lock order as target execution:
 	// logical account, logical execution, then trading account.
+	// 全部带调用方期限：等待超时释放已取得的锁并返回
 	unlockLogical := func() {}
 	unlockExecution := func() {}
 	if logicalID != "" {
-		unlockLogical = s.Store.LockLogicalAccount(spaceID, logicalID)
-		unlockExecution = s.Store.LockLogicalAccountExecution(spaceID, logicalID)
+		var lockErr error
+		if unlockLogical, lockErr = s.Store.LockLogicalAccountContext(ctx, spaceID, logicalID); lockErr != nil {
+			return lockErr
+		}
+		if unlockExecution, lockErr = s.Store.LockLogicalAccountExecutionContext(ctx, spaceID, logicalID); lockErr != nil {
+			unlockLogical()
+			return lockErr
+		}
 	}
 	defer unlockExecution()
 	defer unlockLogical()
-	unlockAccount := s.Store.LockTradingAccount(accountID)
+	unlockAccount, lockErr := s.Store.LockTradingAccountContext(ctx, accountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	defer unlockAccount()
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if account.SpaceID != spaceID {

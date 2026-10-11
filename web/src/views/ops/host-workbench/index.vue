@@ -50,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
@@ -123,21 +123,32 @@ function clearTerminal() {
   terminalHostId.value = undefined;
 }
 
+// 建连序号：连续点击不同主机时建连响应可能乱序；只有最新一次请求能更新弹窗与会话，页面卸载也使进行中的建连失效
+let fileManagerRequest = 0;
+
 async function openFileManager(hostId: number) {
+  const request = ++fileManagerRequest;
   fileManagerLoading.value = true;
   try {
     const response = await createSSHSession({ host_id: hostId });
     if (!response.session_id) throw new Error("无法获取 session_id");
+    if (request !== fileManagerRequest) {
+      // 迟到的响应：它创建的会话没有人使用，立即断开，避免遗留 SSH 会话，也不能覆盖当前操作的主机
+      void disconnectSSHSession(response.session_id).catch(() => undefined);
+      return;
+    }
     fileManagerSessionId.value = response.session_id;
     fileManagerVisible.value = true;
   } catch (error: any) {
+    if (request !== fileManagerRequest) return;
     Message.error(`打开文件管理失败：${error?.message || "未知错误"}`);
   } finally {
-    fileManagerLoading.value = false;
+    if (request === fileManagerRequest) fileManagerLoading.value = false;
   }
 }
 
 function closeFileManager() {
+  fileManagerRequest += 1; // 关闭使进行中的建连失效（其会话由迟到分支断开）
   const sessionId = fileManagerSessionId.value;
   fileManagerSessionId.value = "";
   if (sessionId) void disconnectSSHSession(sessionId).catch(() => undefined);
@@ -154,6 +165,10 @@ onMounted(async () => {
   await loadMonitorData();
   const hostId = Number(route.query.hostId);
   if (Number.isFinite(hostId) && hostId > 0) openTerminal(hostId);
+});
+
+onBeforeUnmount(() => {
+  fileManagerRequest += 1;
 });
 </script>
 

@@ -890,3 +890,40 @@ func setLogicalFixtureReady(
 		)
 	}))
 }
+
+// 目标执行或完整同步持锁时，带期限的逻辑账户业务调用必须按期限返回，并释放已取得的锁（尤其不能占住全局成员锁）。
+func TestLogicalAccountOperationsHonorDeadlineWhileLocksAreHeld(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	unlockExecution := tradeStore.LockLogicalAccountExecution("space-1", "logical-1")
+	defer unlockExecution()
+
+	for name, call := range map[string]func(context.Context) error{
+		"AddMember": func(ctx context.Context) error {
+			return service.AddMember(ctx, AddMemberCommand{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true})
+		},
+		"Resume": func(ctx context.Context) error {
+			_, _, err := service.Resume(ctx, "space-1", "logical-1")
+			return err
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		done := make(chan error, 1)
+		go func() { done <- call(ctx) }()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.DeadlineExceeded, name)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s kept waiting for a held lock past the deadline", name)
+		}
+		cancel()
+	}
+	// 超时返回后没有遗留逻辑账户锁/成员锁：其它调用可以立刻拿到
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	unlock, err := tradeStore.LockLogicalAccountContext(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	unlock()
+	unlockMembership, err := tradeStore.LockLogicalAccountMembershipContext(ctx)
+	require.NoError(t, err)
+	unlockMembership()
+}

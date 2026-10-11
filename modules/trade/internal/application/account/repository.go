@@ -34,7 +34,10 @@ func (r Repository) Get(ctx context.Context, id string) (tradingaccount.Account,
 }
 
 func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
-	unlock := r.Store.LockTradingAccount(command.TradingAccountID)
+	unlock, lockErr := r.Store.LockTradingAccountContext(ctx, command.TradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	defer unlock()
 	current, err := r.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
 	if err != nil {
@@ -65,7 +68,10 @@ func (r Repository) SetLeverage(
 	symbol string,
 	leverage shared.Decimal,
 ) error {
-	unlock := r.Store.LockTradingAccount(id)
+	unlock, lockErr := r.Store.LockTradingAccountContext(ctx, id)
+	if lockErr != nil {
+		return lockErr
+	}
 	defer unlock()
 	current, err := r.Store.GetTradingAccountByID(ctx, id)
 	if err != nil {
