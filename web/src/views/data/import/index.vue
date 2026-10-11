@@ -339,13 +339,17 @@ function rowFields(row: CsvRow): FieldValue[] {
 async function dryRun() {
   errors.value = [];
   dryRunSummary.value = "";
+  // 固定本次校验的文件序号与内容：等待 loadColumns 期间用户可能改选了别的文件，旧校验不能解析或写入新文件的状态
+  const readToken = fileReadToken;
+  const text = fileText.value;
   try {
-    if (!fileText.value) throw new Error("请选择本地 CSV 文件");
+    if (!text) throw new Error("请选择本地 CSV 文件");
     if (!form.dataset_id) throw new Error("请选择 Dataset");
     if (form.format !== "auto" && form.format !== "csv") throw new Error(`暂不支持格式：${form.format}`);
     if (isTimeSeriesDataset.value && (!form.subject_id || !form.freq)) throw new Error("TimeSeries 导入需要填写 Subject 和 Freq");
     await loadColumns();
-    const parsed = parseCsv(fileText.value);
+    if (readToken !== fileReadToken) return; // 已改选文件：这次校验作废，不写入任何结果
+    const parsed = parseCsv(text);
     headers.value = parsed.headers;
     parsedRows.value = parsed.rows;
     errors.value = validateHeaders();
@@ -353,6 +357,7 @@ async function dryRun() {
       dryRunSummary.value = `校验通过：${parsedRows.value.length} 行，${headers.value.length} 列`;
     }
   } catch (error) {
+    if (readToken !== fileReadToken) return;
     errors.value = [error instanceof Error ? error.message : "CSV 校验失败"];
   }
 }
@@ -361,9 +366,10 @@ async function importRows() {
   // 导入固定在发起时的空间与 Dataset：校验期间切换空间不能把原来的 CSV 写进新空间。
   const space_id = spaceStore.requireSpaceId();
   const datasetId = form.dataset_id;
+  const importFileToken = fileReadToken;
   await dryRun();
-  if (spaceStore.selectedSpaceId !== space_id || form.dataset_id !== datasetId) {
-    Message.warning("空间或 Dataset 已变化，已取消导入，请重新校验后再导入");
+  if (spaceStore.selectedSpaceId !== space_id || form.dataset_id !== datasetId || importFileToken !== fileReadToken) {
+    Message.warning("空间、Dataset 或文件已变化，已取消导入，请重新校验后再导入");
     return;
   }
   if (!canImport.value) return;
