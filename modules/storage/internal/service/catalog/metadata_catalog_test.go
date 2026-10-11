@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/snapshotcache"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -208,9 +209,24 @@ func TestActivateDatasetReportsCommittedPublicationFailureAndRetryIsIdempotent(t
 	require.True(t, first.GetDataset().GetBindingLocked())
 	require.Equal(t, uint64(8), first.GetDataset().GetRevision())
 
+	// 发布仍失败时，重试不能直接返回成功
+	stillPending, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, stillPending.GetRetInfo().GetCode())
+
+	// 进行中的刷新（ErrRefreshInProgress）不算发布完成，需等待后重新刷新
+	attempts := 0
+	svc.refreshOverride = func(context.Context) error {
+		attempts++
+		if attempts < 3 {
+			return snapshotcache.ErrRefreshInProgress
+		}
+		return nil
+	}
 	retry, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, retry.GetRetInfo().GetCode())
+	require.Equal(t, 3, attempts)
 	require.Equal(t, uint64(8), retry.GetDataset().GetRevision())
 	require.Equal(t, 1, store.commitCalls)
 }

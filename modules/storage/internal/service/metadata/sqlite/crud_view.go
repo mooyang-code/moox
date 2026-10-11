@@ -188,12 +188,18 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		}
 	}
 	for _, column := range columns {
-		if column.GetSpaceId() == "" {
-			column.SpaceId = next.GetSpaceId()
+		if column == nil {
+			continue
 		}
-		if column.GetViewId() == "" {
-			column.ViewId = next.GetViewId()
+		// 子列必须归属父 View：非空且不一致的身份不能被写入，否则会改动另一个 View 且不更新其版本
+		if column.GetSpaceId() != "" && column.GetSpaceId() != next.GetSpaceId() {
+			return nil, fmt.Errorf("视图列 %q 的 space_id %q 与视图 %q 不一致", column.GetColumnName(), column.GetSpaceId(), next.GetSpaceId())
 		}
+		if column.GetViewId() != "" && column.GetViewId() != next.GetViewId() {
+			return nil, fmt.Errorf("视图列 %q 的 view_id %q 与视图 %q 不一致", column.GetColumnName(), column.GetViewId(), next.GetViewId())
+		}
+		column.SpaceId = next.GetSpaceId()
+		column.ViewId = next.GetViewId()
 		if column.GetColumnName() != "" {
 			changed, err := upsertViewColumn(ctx, tx, column)
 			if err != nil {

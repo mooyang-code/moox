@@ -17,13 +17,15 @@ import (
 
 type Service struct {
 	pb.UnimplementedMetadata
-	metadata       metadata.Store
-	metadataCache  *metacache.Store
-	nodeAuthSecret string
-	operatorSecret string
-	viewAuthSecret string
-	nodeState      NodeStateChecker
-	retention      storagepolicy.Retention
+	metadata      metadata.Store
+	metadataCache *metacache.Store
+	// refreshOverride 仅供测试替换缓存刷新实现
+	refreshOverride func(context.Context) error
+	nodeAuthSecret  string
+	operatorSecret  string
+	viewAuthSecret  string
+	nodeState       NodeStateChecker
+	retention       storagepolicy.Retention
 }
 
 type Options struct {
@@ -102,20 +104,27 @@ func (s *Service) datasetRetention(dataset *pb.Dataset) (string, string) {
 }
 
 func (s *Service) refreshMetadataCache(ctx context.Context) error {
-	if s == nil || s.metadataCache == nil {
-		return nil
-	}
-	if err := s.metadataCache.Refresh(ctx); err != nil {
+	err := s.refreshMetadataCacheStrict(ctx)
+	if errors.Is(err, snapshotcache.ErrRefreshInProgress) {
 		// A committed mutation can race with the cache's periodic full refresh.
 		// The in-flight refresh will publish the latest committed metadata (or
 		// the next tick will retry it), so it must not turn a successful write
 		// into a false failure.
-		if errors.Is(err, snapshotcache.ErrRefreshInProgress) {
-			return nil
-		}
-		return err
+		return nil
 	}
-	return nil
+	return err
+}
+
+// refreshMetadataCacheStrict 不吞掉 ErrRefreshInProgress：进行中的刷新可能读取的是提交前的快照，
+// 需要同步发布点的调用方必须等它结束后重新刷新。
+func (s *Service) refreshMetadataCacheStrict(ctx context.Context) error {
+	if s != nil && s.refreshOverride != nil {
+		return s.refreshOverride(ctx)
+	}
+	if s == nil || s.metadataCache == nil {
+		return nil
+	}
+	return s.metadataCache.Refresh(ctx)
 }
 
 func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation string) {
@@ -130,12 +139,13 @@ func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation
 // active+locked terminal state is idempotent.
 func (s *Service) refreshMetadataCacheSynchronously(ctx context.Context, operation string) error {
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		if err = s.refreshMetadataCache(ctx); err == nil {
+	const attempts = 5
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err = s.refreshMetadataCacheStrict(ctx); err == nil {
 			return nil
 		}
-		if attempt < 2 {
-			timer := time.NewTimer(25 * time.Millisecond)
+		if attempt < attempts-1 {
+			timer := time.NewTimer(time.Duration(25<<attempt) * time.Millisecond)
 			select {
 			case <-ctx.Done():
 				timer.Stop()

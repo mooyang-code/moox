@@ -332,6 +332,13 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 		if err := s.ensureFactorResultDefaultView(ctx, dataset); err != nil {
 			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset is active but its default factor View is pending; retry activation")), Dataset: dataset}, nil
 		}
+		// 上一次激活可能已提交事务但缓存发布失败：幂等成功前必须确认元数据缓存已发布
+		if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
+			return &pb.ActivateDatasetRsp{
+				RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset is active but metadata publication is pending; retry activation")),
+				Dataset: s.withRetention(dataset),
+			}, nil
+		}
 		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(dataset)}, nil
 	}
 	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret, s.retention).checks(ctx, dataset)

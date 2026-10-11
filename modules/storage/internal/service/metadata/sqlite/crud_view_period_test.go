@@ -379,3 +379,36 @@ func openViewPeriodTestStore(t *testing.T, ctx context.Context) *Store {
 	}
 	return store
 }
+
+func TestUpsertViewRejectsColumnsOwnedByAnotherView(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	if _, err := store.UpsertView(ctx, &pb.View{
+		SpaceId: "space", ViewId: "other-view", Name: "Other view", DatasetId: "prices",
+		Columns: []*pb.ViewColumn{{ColumnName: "close"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetView(ctx, "space", "other-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "other-view", ColumnName: "close", SortOrder: 99}}
+	if _, err := store.UpsertView(ctx, source); err == nil {
+		t.Fatal("期望拒绝携带其他 view_id 的列")
+	}
+	if _, err := store.ReplaceViewColumns(ctx, source); err == nil {
+		t.Fatal("ReplaceViewColumns 期望拒绝携带其他 view_id 的列")
+	}
+	after, err := store.GetView(ctx, "space", "other-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GetColumns()[0].GetSortOrder() == 99 || after.GetDesiredViewRevision() != before.GetDesiredViewRevision() {
+		t.Fatalf("另一个 View 被改动: before=%v after=%v", before, after)
+	}
+}
