@@ -337,6 +337,10 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		// 因子源码会被服务端 Python 子进程导入校验：只有全局管理员可以保存。
 		{"/api/admin/factor-mgr/CreateFactor", 1, http.StatusForbidden},
 		{"/api/admin/factor-mgr/UpdateFactor", 1, http.StatusForbidden},
+		// 策略定义是全局的：空间管理员不能改被其他空间实例引用的定义；读取仍按空间授权。
+		{"/api/admin/strategy/CreateStrategy", 1, http.StatusForbidden},
+		{"/api/admin/strategy/UpdateStrategy", 1, http.StatusForbidden},
+		{"/api/admin/strategy/DeleteStrategy", 1, http.StatusForbidden},
 		{"/api/admin/cloudnode/CreateCloudAccount", 1, http.StatusForbidden},
 		{"/api/admin/cloudnode/UpdateCloudAccount", 1, http.StatusForbidden},
 		{"/api/admin/cloudnode/DeleteCloudAccount", 1, http.StatusForbidden},

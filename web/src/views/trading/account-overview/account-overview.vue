@@ -446,6 +446,7 @@ async function sync(account: TradingAccount) {
     else Message.success("账户同步完成");
     await loadAccounts();
   } catch (error) {
+    if (!request.isLatest()) return; // 切换空间使该同步作废：不展示属于原空间的失败
     Message.error(error instanceof Error ? error.message : "账户同步失败，请检查连接和 Secret 配置");
   } finally {
     if (request.isLatest()) syncingId.value = "";
@@ -698,6 +699,14 @@ watch(
   (next, previous) => {
     if (!next || next === previous) return;
     createSubmitToken += 1; // 空间切换使进行中的创建作废
+    // 同步与详情都属于原空间：失效在途请求，清空选中账户、详情与同步结果，避免用新空间身份继续查询原账户
+    syncRequests.invalidate();
+    detailRequests.invalidate();
+    syncingId.value = "";
+    detailVisible.value = false;
+    selectedAccount.value = null;
+    syncResult.value = null;
+    syncResultAccountId.value = "";
     pagination.current = 1;
     accounts.value = [];
     void loadAccounts();

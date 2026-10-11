@@ -687,7 +687,8 @@ async function submitReason() {
     submittedOrder.value = null;
     startActionPolling(rsp.action.action_id);
   }
-  reasonVisible.value = false;
+  // 同一空间同一账户重新打开了弹窗：操作本身仍然有效（状态与轮询照常更新），但不能关闭新打开的弹窗
+  if (openToken === reasonOpenToken) reasonVisible.value = false;
   await reloadDetail();
   await load();
   return true;

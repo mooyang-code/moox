@@ -69,7 +69,7 @@ func TestViewMetricsSummarizeSubjectsPerView(t *testing.T) {
 	// One bar plus the lag tolerance behind is still current.
 	observe("ETH-USDT", latest.Add(-time.Minute-viewSubjectLagTolerance))
 	for i := 0; i < ViewLaggingSubjectsReported+5; i++ {
-		observe(fmt.Sprintf("L%02d-USDT", i), latest.Add(-time.Hour+time.Duration(i)*time.Minute))
+		observe(fmt.Sprintf("L%02d-USDT", i), latest.Add(-time.Hour+time.Duration(i)*time.Second))
 	}
 	scope := map[string]string{"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "freq": "1m"}
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_latest_data_time_seconds", scope, float64(latest.Unix()))

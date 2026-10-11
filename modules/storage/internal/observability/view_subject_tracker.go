@@ -17,7 +17,7 @@ const (
 	maxViewDatasetMetricLabelBytes = 256
 	// ViewLaggingSubjectsReported caps the named lagging subjects per View;
 	// the count metric still covers all of them.
-	ViewLaggingSubjectsReported = 20
+	ViewLaggingSubjectsReported = 200
 	// viewSubjectLagTolerance is how far past one bar a subject may trail its
 	// View's latest bar before it counts as lagging. It matches Monitor's
 	// K-line stale_after, so a lagging subject is one Monitor would call stale

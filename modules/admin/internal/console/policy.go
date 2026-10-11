@@ -46,6 +46,8 @@ func adminOnlyWriteService(serviceID string) bool {
 // 所以写方法同样只允许全局管理员。
 var adminOnlyMethods = map[string]bool{
 	"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true,
+	// 策略定义没有空间归属（按全局 strategy_id 定位），实例与回放按空间授权：空间管理员改定义会影响其他空间已引用它的实例。
+	"strategy/CreateStrategy": true, "strategy/UpdateStrategy": true, "strategy/DeleteStrategy": true,
 	"cloudnode/CreateCloudAccount": true, "cloudnode/UpdateCloudAccount": true, "cloudnode/DeleteCloudAccount": true,
 }
 
