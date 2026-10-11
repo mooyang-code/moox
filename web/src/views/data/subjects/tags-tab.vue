@@ -338,9 +338,8 @@ onMounted(() => void load());
 
 // 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const tagScope = createSubmitScope();
-watch(visible, open => {
-  if (open) tagScope.invalidate();
-});
+// 该弹窗使用 @before-ok（等待提交完成后才关闭）：打开与关闭都使进行中的提交失效，取消但不重新打开也不能继续写入
+watch(visible, () => tagScope.invalidate());
 </script>
 
 <style scoped>

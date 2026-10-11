@@ -278,10 +278,17 @@ func (s *Service) Submit(
 		unlockExecution := func() {}
 		if record.OwnerType == string(orderdomain.OwnerTarget) &&
 			record.LogicalAccountID != "" {
-			unlockExecution = s.Store.LockLogicalAccountExecution(
+			// 完整同步可能长时间占着执行锁：等待必须响应调用方的期限，超时后返回可重试错误，
+			// 否则串行的目标 worker 会被一个账户卡住，后面的健康账户也得不到处理。
+			unlock, lockErr := s.Store.LockLogicalAccountExecutionContext(
+				ctx,
 				record.SpaceID,
 				record.LogicalAccountID,
 			)
+			if lockErr != nil {
+				return &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "submit_execution_lock", Err: lockErr}
+			}
+			unlockExecution = unlock
 		}
 		defer unlockExecution()
 

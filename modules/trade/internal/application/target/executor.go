@@ -90,7 +90,11 @@ func (e *Executor) Converge(
 	if e == nil || e.Store == nil || e.Orders == nil || e.Prices == nil {
 		return Result{}, ErrExecutorConfig
 	}
-	unlock := e.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	// 等待逻辑账户锁必须响应期限：被占用的账户超时后返回可重试错误，不能卡住后面的账户
+	unlock, lockErr := e.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return Result{}, lockErr
+	}
 	defer unlock()
 
 	logicalAccount, err := e.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)

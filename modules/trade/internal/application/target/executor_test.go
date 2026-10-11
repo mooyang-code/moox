@@ -909,3 +909,25 @@ func (f *targetFixture) executor() *Executor {
 		Now:    func() time.Time { return f.now },
 	}
 }
+
+// 逻辑账户锁被占用（例如完整同步正在持有）时，收敛必须按调用方的期限返回可重试错误，
+// 不能无限等待——目标 worker 串行处理账户，一个账户卡住会让后面的健康账户也得不到处理。
+func TestConvergeLockWaitHonorsDeadline(t *testing.T) {
+	f := newTargetFixture(t, exchange.MarketTypeSwap)
+	unlock := f.store.LockLogicalAccount("space-1", "logical-1")
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.executor().Converge(ctx, "space-1", "logical-1")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Converge kept waiting for the logical account lock past the deadline")
+	}
+}

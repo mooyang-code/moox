@@ -227,7 +227,11 @@ const onRowDblClick = (record: SftpFileItem) => {
 };
 
 // ---------- 新建目录 ----------
+// 新建目录的打开序号：@ok 会立刻关闭弹窗，进行中的提交只能收尾它自己那一次打开
+let mkdirToken = 0;
 const onMkdirClick = () => {
+  mkdirToken += 1;
+  mkdirLoading.value = false;
   newDirName.value = "";
   mkdirModalVisible.value = true;
 };
@@ -238,18 +242,23 @@ const onMkdirConfirm = async () => {
     Message.warning("请输入目录名称");
     return;
   }
+  const token = mkdirToken;
+  const sessionId = resolvedSessionId.value;
+  const parentDir = currentDir.value;
   mkdirLoading.value = true;
   try {
-    const targetPath = currentDir.value === "/" ? `/${name}` : `${currentDir.value}/${name}`;
-    await sftpMkdir(resolvedSessionId.value, targetPath);
+    const targetPath = parentDir === "/" ? `/${name}` : `${parentDir}/${name}`;
+    await sftpMkdir(sessionId, targetPath);
     Message.success("目录创建成功");
-    mkdirModalVisible.value = false;
-    refresh();
+    // 弹窗已被重新打开：不能关闭用户正在填写的新弹窗；目录已创建，仍然刷新当前会话的列表
+    if (token === mkdirToken) mkdirModalVisible.value = false;
+    if (sessionId === resolvedSessionId.value) refresh();
   } catch (error) {
+    if (token !== mkdirToken) return;
     console.error("创建目录失败:", error);
     Message.error("创建目录失败");
   } finally {
-    mkdirLoading.value = false;
+    if (token === mkdirToken) mkdirLoading.value = false;
   }
 };
 
