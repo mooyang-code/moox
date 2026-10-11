@@ -98,17 +98,17 @@ var storageGlobalMethods = map[string]bool{
 }
 
 // requestBodySpace 是空间内 Storage 方法实际作用的空间。请求体声明的空间必须唯一且与请求头一致；
-// 请求体完全没有声明时采用请求头的空间并要求调用方把它写入请求体（inject），否则后端会按空
+// 请求体完全没有声明且该方法的请求消息有顶层 space_id 时，采用请求头的空间并要求调用方写入请求体（inject），否则后端会按空
 // space_id 查询所有空间。请求头和请求体都没有空间则拒绝。
-func requestBodySpace(header string, body []byte) (space string, inject bool, err error) {
+func requestBodySpace(header string, body []byte, canInject bool) (space string, inject bool, err error) {
 	ids, err := bodySpaceIDs(body)
 	if err != nil {
 		return "", false, err
 	}
 	header = strings.TrimSpace(header)
 	if len(ids) == 0 {
-		if header == "" {
-			return "", false, errors.New("space_id is required")
+		if header == "" || !canInject {
+			return "", false, errors.New("space_id is required in the request body")
 		}
 		return header, true, nil
 	}
@@ -118,4 +118,19 @@ func requestBodySpace(header string, body []byte) (space string, inject bool, er
 		}
 	}
 	return ids[0], false, nil
+}
+
+// storageTopLevelSpaceMethods 是请求消息带顶层 space_id 的 Storage 方法，只有它们才能安全地回填请求头空间
+// （其余方法的空间在嵌套消息里，如 view.space_id，回填会被 ProtoJSON 当作未知字段拒绝）。
+// 清单由 TestStorageTopLevelSpaceMethodsMatchProto 对照 .proto 文件校验。
+var storageTopLevelSpaceMethods = map[string]bool{
+	"DeleteView": true, "RequestViewRebuild": true, "DeleteDataSource": true, "DeleteTag": true,
+	"AddTagMembers": true, "RemoveTagMembers": true, "SetTagMemberStatus": true, "DeleteDataset": true,
+	"ActivateDataset": true, "BatchUpdateFields": true, "DeleteFieldGroup": true, "GetSpace": true,
+	"GetView": true, "ListViews": true, "ListViewColumns": true, "ListViewRebuildLogs": true,
+	"GetDataSource": true, "ListDataSources": true, "GetSubject": true, "ListSubjects": true,
+	"GetTag": true, "ListTags": true, "ListTagMembers": true, "ResolveSubjects": true,
+	"GetDataset": true, "ListDatasets": true, "CheckDatasetActivation": true, "ListDatasetSubjects": true,
+	"GetFieldGroup": true, "ListFieldGroups": true, "GetField": true, "ListFields": true,
+	"ListDatasetColumns": true, "QueryTimeSeriesRows": true, "SearchRecordRows": true,
 }

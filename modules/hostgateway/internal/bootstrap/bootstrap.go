@@ -261,8 +261,16 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if shutdownErr != nil {
 		_ = healthServer.Close()
 	}
-	_ = remote.Close(nil)
-	_ = local.Close(nil)
+	// 两个入口并行排空，总等待不超过 DrainTimeout。
+	var draining sync.WaitGroup
+	for _, service := range []interface{ Close(chan struct{}) error }{remote, local} {
+		draining.Add(1)
+		go func() {
+			defer draining.Done()
+			_ = service.Close(nil)
+		}()
+	}
+	draining.Wait()
 	closeTimers()
 	for completed < 4 {
 		<-results

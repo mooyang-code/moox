@@ -3,6 +3,8 @@ global:
   env_name: egress-proxy
 
 server:
+  # 停止时等待已接纳的请求完成（毫秒），小于运行器的 2 分钟停止预算。
+  max_close_wait_time: 100000
   filter: [recovery]
   timeout: 120000
   service:

@@ -340,3 +340,33 @@ func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
 		require.Equal(t, agent.latest.GetCpu().GetLogicalCores(), snapshot.GetSnapshot().GetCpu().GetLogicalCores())
 	}
 }
+
+// EventBus 建连停滞时，健康检查不能被建连锁挡住（否则运行器 2 秒探测超时会重启 HostAgent）。
+func TestAgent_HealthStatusDoesNotWaitForBlockedPublisherConnect(t *testing.T) {
+	a := testAgent(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
+		close(entered)
+		<-release
+		return &fakeEventPublisher{ready: true}, nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = a.eventPublisher(context.Background())
+	}()
+	<-entered
+	status := make(chan struct{})
+	go func() {
+		defer close(status)
+		_, _ = a.GetStatus(context.Background(), nil)
+		_ = a.publisherReady()
+	}()
+	select {
+	case <-status:
+	case <-time.After(time.Second):
+		t.Fatal("健康状态读取被建连阻塞")
+	}
+	close(release)
+	<-done
+}

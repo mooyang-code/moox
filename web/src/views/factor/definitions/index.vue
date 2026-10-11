@@ -128,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onMounted, reactive, ref } from "vue";
+import { computed, onActivated, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { deleteFactor, listFactors } from "@/api/factor";
@@ -229,16 +229,21 @@ async function removeFactor(factorId: string) {
 }
 
 // 成员在计算任务里被添加 / 移除 / 启停后，使用情况会变化；切回本页（keep-alive 激活）时重新拉取。
-let fresh = false;
-onMounted(() => {
-  fresh = true;
-  void load();
-});
+let fresh = true;
+// 请求按空间授权：空间初始化完成（或切换）后才加载，避免无空间时被 403 且不再恢复。
+watch(
+  spaceId,
+  next => {
+    if (next) void load();
+  },
+  { immediate: true }
+);
 onActivated(() => {
   if (fresh) {
     fresh = false;
     return;
   }
+  if (!spaceId.value) return;
   void load();
   void store.reload();
 });

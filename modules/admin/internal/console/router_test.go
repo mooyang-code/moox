@@ -9,6 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -505,7 +508,59 @@ func TestConsoleInjectsHeaderSpaceIntoStorageBodyWhenAbsent(t *testing.T) {
 	rr := httptest.NewRecorder()
 	newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/storage/ListDatasets", "space-1", []byte(`{"page":{"page":1}}`)))
 	require.Equal(t, http.StatusOK, rr.Code)
+	// 空间在嵌套消息里的方法（view.space_id）不能回填顶层字段，缺省时直接 400。
+	_, secret, key, sid = setupRequestAuthTest(t) // 新的 nonce 存储，避免被当作重放
+	rr = httptest.NewRecorder()
+	newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/storage/UpdateView", "space-1", []byte(`{"view":{"view_id":"v1"}}`)))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	// ListSpaceMembers 同样要求请求体声明空间。
+	_, secret, key, sid = setupRequestAuthTest(t)
+	rr = httptest.NewRecorder()
+	newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/space/ListSpaceMembers", "space-1", []byte(`{}`)))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
 	require.Equal(t, "space-1", got["space_id"])
+}
+
+// 回填清单必须与 .proto 一致：只有请求消息带顶层 space_id 的方法才允许回填。
+func TestStorageTopLevelSpaceMethodsMatchProto(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "storage", "proto")
+	files, err := filepath.Glob(filepath.Join(root, "*.proto"))
+	require.NoError(t, err)
+	messages := map[string]bool{}
+	requests := map[string]string{}
+	messageStart := regexp.MustCompile(`message\s+(\w+)\s*\{`)
+	rpcRe := regexp.MustCompile(`rpc\s+(\w+)\s*\(\s*(\w+)\s*\)`)
+	spaceField := regexp.MustCompile(`\bspace_id\s*=\s*\d+`)
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		require.NoError(t, err)
+		text := string(raw)
+		for _, match := range messageStart.FindAllStringSubmatchIndex(text, -1) {
+			depth, top := 1, strings.Builder{}
+			for i := match[1]; i < len(text) && depth > 0; i++ {
+				switch text[i] {
+				case '{':
+					depth++
+				case '}':
+					depth--
+				default:
+					if depth == 1 {
+						top.WriteByte(text[i])
+					}
+				}
+			}
+			messages[text[match[2]:match[3]]] = spaceField.MatchString(top.String())
+		}
+		for _, match := range rpcRe.FindAllStringSubmatch(text, -1) {
+			requests[match[1]] = match[2]
+		}
+	}
+	for method, allowed := range storageTopLevelSpaceMethods {
+		require.True(t, allowed)
+		request, ok := requests[method]
+		require.True(t, ok, "%s 不在 storage proto 中", method)
+		require.True(t, messages[request], "%s 的请求消息 %s 没有顶层 space_id，不能回填", method, request)
+	}
 }

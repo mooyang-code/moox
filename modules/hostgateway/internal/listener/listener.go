@@ -60,6 +60,9 @@ func Open(ctx context.Context, cfg hostgatewayconfig.Config, material *tlsconfig
 	return listeners, nil
 }
 
+// DrainTimeout 是停止时等待在途请求完成的上限，需小于运行器的停止预算（默认 2 分钟）。
+const DrainTimeout = 100 * time.Second
+
 func (l *Listeners) Close() error {
 	if l.cancel != nil {
 		l.cancel()
@@ -79,6 +82,8 @@ func (l *Listeners) Close() error {
 // owned TLS listener in use on Linux, where the SDK defaults to tnet otherwise.
 func TRPC(opened net.Listener, serviceName string) server.Service {
 	return server.New(
+		// 关闭时停止接纳新连接，并等待已接纳的请求完成（写请求可能已在下游提交，不能直接断开）。
+		server.WithMaxCloseWaitTime(DrainTimeout),
 		server.WithTransport(transport.NewServerTransport()),
 		server.WithListener(opened), server.WithAddress(opened.Addr().String()),
 		server.WithNetwork("tcp"), server.WithProtocol("trpc"),

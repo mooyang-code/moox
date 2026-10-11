@@ -21,10 +21,13 @@ import (
 )
 
 type Agent struct {
-	cfg                                    *config.Config
-	id                                     identity.File
-	collector                              snapshotCollector
-	publisherMu                            sync.Mutex
+	cfg       *config.Config
+	id        identity.File
+	collector snapshotCollector
+	// connectMu 串行化建连（可能阻塞到超时）；stateMu 只保护 publisher 指针，持锁期间不做网络操作，
+	// 健康检查只读 stateMu，EventBus 建连停滞不会拖慢 /healthz。
+	connectMu                              sync.Mutex
+	stateMu                                sync.Mutex
 	publisher                              eventpublisher.Publisher
 	newPublisher                           func(context.Context) (eventpublisher.Publisher, error)
 	hostname, bootID, version              string
@@ -119,14 +122,19 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 }
 
 func (a *Agent) eventPublisher(ctx context.Context) (eventpublisher.Publisher, error) {
-	a.publisherMu.Lock()
-	defer a.publisherMu.Unlock()
-	if a.publisher != nil && a.publisher.Ready() {
-		return a.publisher, nil
+	a.connectMu.Lock()
+	defer a.connectMu.Unlock()
+	a.stateMu.Lock()
+	current := a.publisher
+	a.stateMu.Unlock()
+	if current != nil && current.Ready() {
+		return current, nil
 	}
-	if a.publisher != nil {
-		_ = a.publisher.Close()
+	if current != nil {
+		a.stateMu.Lock()
 		a.publisher = nil
+		a.stateMu.Unlock()
+		_ = current.Close()
 	}
 	factory := a.newPublisher
 	if factory == nil {
@@ -138,7 +146,9 @@ func (a *Agent) eventPublisher(ctx context.Context) (eventpublisher.Publisher, e
 	if err != nil {
 		return nil, err
 	}
+	a.stateMu.Lock()
 	a.publisher = publisher
+	a.stateMu.Unlock()
 	return publisher, nil
 }
 
@@ -154,20 +164,21 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 func (a *Agent) Close() error {
-	a.publisherMu.Lock()
-	defer a.publisherMu.Unlock()
-	if a.publisher == nil {
+	a.stateMu.Lock()
+	publisher := a.publisher
+	a.publisher = nil
+	a.stateMu.Unlock()
+	if publisher == nil {
 		return nil
 	}
-	err := a.publisher.Close()
-	a.publisher = nil
-	return err
+	return publisher.Close()
 }
 
 func (a *Agent) publisherReady() bool {
-	a.publisherMu.Lock()
-	defer a.publisherMu.Unlock()
-	return a.publisher != nil && a.publisher.Ready()
+	a.stateMu.Lock()
+	publisher := a.publisher
+	a.stateMu.Unlock()
+	return publisher != nil && publisher.Ready()
 }
 
 func (a *Agent) GetStatus(context.Context, *hostagentpb.GetStatusReq) (*hostagentpb.GetStatusRsp, error) {

@@ -294,7 +294,7 @@ func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, ser
 	var err error
 	switch {
 	case serviceID == "storage" || serviceID == "space":
-		spaceID, inject, err = requestBodySpace(r.Header.Get("X-Space-Id"), body)
+		spaceID, inject, err = requestBodySpace(r.Header.Get("X-Space-Id"), body, serviceID == "storage" && storageTopLevelSpaceMethods[method])
 	default:
 		spaceID, err = effectiveSpaceID(r.Header.Get("X-Space-Id"), body)
 	}
