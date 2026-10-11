@@ -180,3 +180,31 @@ func TestOldBootOfSameEngineCannotPullOrReportAfterTakeover(t *testing.T) {
 	_, err = hub.Report(context.Background(), restarted, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
 	require.NotErrorIs(t, err, ErrLeaseConflict, "新进程持有租约")
 }
+
+func TestReportStopsJobWhenMemberOrSetDisabledBetweenChunks(t *testing.T) {
+	for name, disable := range map[string]func(*store.Store){
+		"member": func(db *store.Store) {
+			require.NoError(t, db.SetMemberStatus(context.Background(), "set_a", "bias", domain.MemberStatusEnabled, domain.MemberStatusDisabled))
+		},
+		"set": func(db *store.Store) {
+			require.NoError(t, db.SetSetStatus(context.Background(), "set_a", domain.SetStatusEnabled, domain.SetStatusDisabled))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hub, db, _ := newTestHub(t)
+			seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
+			hub.SetResultReady("set_a", true)
+			seedJob(t, db, "job-1", "set_a")
+			leaseEngineA(t, hub)
+			job, _, _, err := hub.Pull(context.Background(), engineA)
+			require.NoError(t, err)
+
+			disable(db) // 第一块运行期间停用
+
+			updated, err := hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+			require.NoError(t, err)
+			require.Equal(t, store.RecalcStatusFailed, updated.Status, "后续分块必须停止")
+			require.NotEmpty(t, updated.Error)
+		})
+	}
+}

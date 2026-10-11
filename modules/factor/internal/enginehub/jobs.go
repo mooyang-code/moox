@@ -52,6 +52,18 @@ func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, lease
 	if !h.holdsLease(id, now) {
 		return store.RecalcJob{}, ErrLeaseConflict
 	}
+	if status == store.RecalcStatusRunning {
+		// 分块之间复核：停用因子成员或计算任务后，已领取的补算任务不能继续写入后续分块
+		job, err := h.store.GetRecalcJob(ctx, jobID)
+		if err != nil {
+			return store.RecalcJob{}, err
+		}
+		if job.LeaseToken == leaseToken && job.Status == store.RecalcStatusRunning {
+			if _, runnableErr := h.runnableSet(ctx, job); runnableErr != nil {
+				return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), now, h.jobTTL)
+			}
+		}
+	}
 	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, now, h.jobTTL)
 }
 

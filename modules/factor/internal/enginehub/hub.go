@@ -24,6 +24,7 @@ type Store interface {
 	ListMembers(ctx context.Context, setID, status string) ([]domain.SetMember, error)
 	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool) (store.RecalcJob, bool, error)
 	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, now time.Time, ttl time.Duration) (store.RecalcJob, error)
+	GetRecalcJob(ctx context.Context, jobID string) (store.RecalcJob, error)
 }
 
 const (
