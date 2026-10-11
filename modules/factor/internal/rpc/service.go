@@ -328,8 +328,12 @@ func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*f
 	if err != nil {
 		return &factorpb.GetFactorRsp{RetInfo: inner(err)}, nil
 	}
+	usages, err := s.scopeUsages(ctx, info.Usages)
+	if err != nil {
+		return &factorpb.GetFactorRsp{RetInfo: invalid(err)}, nil
+	}
 	// GetFactor is the one read that always carries the source code.
-	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(info.Factor), Usages: usagesToPB(info.Usages)}, nil
+	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(info.Factor), Usages: usagesToPB(usages)}, nil
 }
 
 func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq) (*factorpb.ListFactorsRsp, error) {
@@ -337,12 +341,27 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 	if req != nil {
 		setID, status, includeSource = req.GetSetId(), req.GetStatus(), req.GetIncludeSource()
 	}
+	if setID != "" {
+		if err := s.checkSetSpace(ctx, setID); err != nil {
+			return &factorpb.ListFactorsRsp{RetInfo: invalid(err)}, nil
+		}
+	}
 	factors, err := s.catalog.ListFactors(ctx, setID, status)
 	if err != nil {
 		return &factorpb.ListFactorsRsp{RetInfo: inner(err)}, nil
 	}
 	page, size := pageParams(pageFromFactorReq(req))
 	items, total := paginate(factors, page, size)
+	scoped := make([]domain.FactorInfo, len(items))
+	for i, info := range items {
+		usages, err := s.scopeUsages(ctx, info.Usages)
+		if err != nil {
+			return &factorpb.ListFactorsRsp{RetInfo: invalid(err)}, nil
+		}
+		info.Usages = usages
+		scoped[i] = info
+	}
+	items = scoped
 	return &factorpb.ListFactorsRsp{RetInfo: success(), Factors: factorInfosToPB(items, includeSource), PageResult: pageResult(page, size, total)}, nil
 }
 

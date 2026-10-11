@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+
 	"trpc.group/trpc-go/trpc-go/codec"
 )
 
@@ -59,4 +61,27 @@ func (s *Service) checkJobSpace(ctx context.Context, jobID string) error {
 		return err
 	}
 	return s.checkSetSpace(ctx, job.SetID)
+}
+
+// scopeUsages 把因子的引用关系裁剪到调用方空间：其他空间的任务 ID 与启停状态不对外暴露。
+// 因子定义本身是全局的，写入侧的“是否被引用”校验仍由 catalog 基于全量引用执行。
+func (s *Service) scopeUsages(ctx context.Context, usages []domain.FactorUsage) ([]domain.FactorUsage, error) {
+	space, scoped, err := callerSpace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !scoped {
+		return usages, nil
+	}
+	out := make([]domain.FactorUsage, 0, len(usages))
+	for _, usage := range usages {
+		set, _, err := s.catalog.GetSet(ctx, usage.SetID)
+		if err != nil {
+			return nil, err
+		}
+		if set.SpaceID == space {
+			out = append(out, usage)
+		}
+	}
+	return out, nil
 }

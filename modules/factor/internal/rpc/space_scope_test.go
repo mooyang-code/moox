@@ -55,3 +55,29 @@ func TestFactorSetOperationsAreScopedToTheCallerSpace(t *testing.T) {
 	created, _ := svc.CreateFactorSet(spaceCtx("crypto"), &factorpb.CreateFactorSetReq{FactorSet: &factorpb.FactorSet{SetId: "fset_new", SpaceId: "stockcn", SourceDatasetId: "d", Freq: "1m"}})
 	require.Equal(t, denied, created.GetRetInfo().GetCode(), "不能在请求空间之外创建任务")
 }
+
+// 因子定义是全局的，但引用关系（任务 ID、启停状态）属于各自空间：其他空间的调用方不能通过 GetFactor/ListFactors 看到。
+func TestFactorUsagesAreScopedToTheCallerSpace(t *testing.T) {
+	catalog := &catalogFake{
+		set: domain.FactorSet{SetID: "fset_b", SpaceID: "stockcn"},
+		infos: []domain.FactorInfo{{
+			Factor: domain.FactorDef{FactorID: "f1"},
+			Usages: []domain.FactorUsage{{SetID: "fset_b", Status: domain.MemberStatusEnabled}},
+		}},
+	}
+	svc := NewService(catalog, &recalcFake{})
+
+	other, _ := svc.GetFactor(spaceCtx("crypto"), &factorpb.GetFactorReq{FactorId: "f1"})
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, other.GetRetInfo().GetCode())
+	require.Empty(t, other.GetUsages(), "其他空间的引用关系不能外泄")
+	own, _ := svc.GetFactor(spaceCtx("stockcn"), &factorpb.GetFactorReq{FactorId: "f1"})
+	require.Len(t, own.GetUsages(), 1)
+	internal, _ := svc.GetFactor(spaceCtx(""), &factorpb.GetFactorReq{FactorId: "f1"})
+	require.Len(t, internal.GetUsages(), 1, "内部调用看到全量引用")
+
+	list, _ := svc.ListFactors(spaceCtx("crypto"), &factorpb.ListFactorsReq{})
+	require.Len(t, list.GetFactors(), 1)
+	require.Empty(t, list.GetFactors()[0].GetUsages())
+	byForeignSet, _ := svc.ListFactors(spaceCtx("crypto"), &factorpb.ListFactorsReq{SetId: "fset_b"})
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, byForeignSet.GetRetInfo().GetCode(), "不能按其他空间的任务查询成员")
+}

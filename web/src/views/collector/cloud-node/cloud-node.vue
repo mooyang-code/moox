@@ -693,6 +693,8 @@ const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
 const listGuard = createLatestRequestGuard();
+// 批量提交（新增/部署）的迟到响应守卫：切换空间或卸载后，旧空间的 job 不能再写路由或启动轮询
+const submitGuard = createLatestRequestGuard();
 const batchChangeProcessing = ref(false);
 const batchPollingTimedOut = ref(false);
 const currentBatchChangeStatus = ref<GetNodeBatchChangeResponse | null>(null);
@@ -853,6 +855,7 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   }
   // 切换空间：作废在途列表请求，并立即清空列表、分页与详情，避免旧空间数据残留
   listGuard.invalidate();
+  submitGuard.invalidate();
   loading.value = false;
   cloudNodeList.value = [];
   pagination.value.total = 0;
@@ -875,6 +878,8 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  submitGuard.invalidate();
+  listGuard.invalidate();
   batchPoller.dispose();
   currentBatchChangeStatus.value = null;
 });
@@ -950,6 +955,24 @@ const startBatchPolling = async (jobId: string) => {
       Message.warning("已停止自动查询任务进度，刷新页面可继续查询");
     }
   });
+};
+
+// 提交批量变更并跟踪进度。响应或错误到达时若空间已切换/页面已卸载（请求已过期），则静默丢弃，不改动页面状态；
+// 返回 true 表示成功提交并已开始跟踪。
+const submitAndTrack = async (
+  submit: () => Promise<SubmitNodeBatchResponse>,
+  onError: (error: any) => void
+): Promise<boolean> => {
+  const request = submitGuard.begin();
+  try {
+    const response = await submit();
+    if (!request.isLatest()) return false;
+    await beginBatchPolling(response);
+    return request.isLatest();
+  } catch (error: any) {
+    if (request.isLatest()) onError(error);
+    return false;
+  }
 };
 
 const beginBatchPolling = async (response: SubmitNodeBatchResponse) => {
@@ -1105,14 +1128,14 @@ const executeBatchAddChanges = async (batchChanges: Array<{ batchChangeType: str
     return;
   }
 
-  try {
-    batchChangeProcessing.value = true;
-    const response = await submitCloudNodeBatchChange(batchChanges);
-    await beginBatchPolling(response);
-  } catch (error: any) {
-    batchChangeProcessing.value = false;
-    Message.error(error?.message || "创建批量变更失败");
-  }
+  batchChangeProcessing.value = true;
+  await submitAndTrack(
+    () => submitCloudNodeBatchChange(batchChanges),
+    error => {
+      batchChangeProcessing.value = false;
+      Message.error(error?.message || "创建批量变更失败");
+    }
+  );
 };
 
 const executeBatchAddDirect = async () => {
@@ -1707,21 +1730,23 @@ const handleBatchDeployOk = async () => {
 
 // 执行批量部署
 const executeBatchDeploy = async () => {
-  try {
-    batchChangeProcessing.value = true;
-    const response = await submitDeployNodes({
-      node_ids: selectedKeys.value,
-      package_id: batchDeployForm.selectedPackageId
-    });
-    await beginBatchPolling(response);
-
+  batchChangeProcessing.value = true;
+  const ok = await submitAndTrack(
+    () =>
+      submitDeployNodes({
+        node_ids: selectedKeys.value,
+        package_id: batchDeployForm.selectedPackageId
+      }),
+    error => {
+      batchChangeProcessing.value = false;
+      console.error("创建批量部署变更失败:", error);
+      Message.error("创建批量部署变更失败: " + (error?.message || "未知错误"));
+    }
+  );
+  if (ok) {
     // 清理表单
     batchDeployForm.selectedPackageId = "";
     batchDeployForm.deployConfig = {};
-  } catch (error: any) {
-    batchChangeProcessing.value = false;
-    console.error("创建批量部署变更失败:", error);
-    Message.error("创建批量部署变更失败: " + (error?.message || "未知错误"));
   }
 };
 
@@ -1780,20 +1805,22 @@ const handleSingleDeployOk = async () => {
   // 关闭弹窗
   singleDeployVisible.value = false;
 
-  try {
-    batchChangeProcessing.value = true;
-    const response = await submitDeployNodes({
-      node_ids: [singleDeployForm.nodeId],
-      package_id: singleDeployForm.selectedPackageId
-    });
-    await beginBatchPolling(response);
-
+  batchChangeProcessing.value = true;
+  const ok = await submitAndTrack(
+    () =>
+      submitDeployNodes({
+        node_ids: [singleDeployForm.nodeId],
+        package_id: singleDeployForm.selectedPackageId
+      }),
+    error => {
+      batchChangeProcessing.value = false;
+      console.error("创建部署变更失败:", error);
+      Message.error("创建部署变更失败: " + (error?.message || "未知错误"));
+    }
+  );
+  if (ok) {
     // 清理表单
     singleDeployForm.selectedPackageId = "";
-  } catch (error: any) {
-    batchChangeProcessing.value = false;
-    console.error("创建部署变更失败:", error);
-    Message.error("创建部署变更失败: " + (error?.message || "未知错误"));
   }
 };
 </script>
