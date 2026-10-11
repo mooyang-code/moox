@@ -29,3 +29,20 @@ func TestExtraConfigRedactionAndMerge(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(changed), &next))
 	require.Equal(t, "new", next["passphrase"])
 }
+
+// 嵌套对象与数组里的敏感项同样脱敏，编辑保存往返后沿用原值。
+func TestExtraConfigRedactsNestedSensitiveValues(t *testing.T) {
+	stored := `{"credentials":{"password":"p-1","user":"u"},"accounts":[{"token":"t-1","name":"a"},{"name":"b","nested":{"api_secret":"s-1"}}],"limit":10}`
+	redacted := redactExtraConfig(stored)
+	for _, leaked := range []string{"p-1", "t-1", "s-1"} {
+		require.NotContains(t, redacted, leaked)
+	}
+	require.Contains(t, redacted, `"user":"u"`)
+	require.Contains(t, redacted, `"limit":10`)
+	merged := mergeExtraConfig(stored, redacted)
+	require.JSONEq(t, stored, merged)
+	edited := mergeExtraConfig(stored, `{"credentials":{"password":"new","user":"u"},"accounts":[{"token":"******","name":"a"},{"name":"b","nested":{"api_secret":"******"}}],"limit":10}`)
+	require.Contains(t, edited, `"password":"new"`)
+	require.Contains(t, edited, `"token":"t-1"`)
+	require.Contains(t, edited, `"api_secret":"s-1"`)
+}

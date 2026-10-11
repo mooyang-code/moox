@@ -390,21 +390,28 @@ func sensitiveExtraKey(key string) bool {
 	return false
 }
 
-// redactExtraConfig 把 extra_config 里敏感项（口令、密码、令牌等）的值替换为占位，只读接口不回显它们；
+// decodeExtraConfig 解析 extra_config（保留数字原样），顶层必须是 JSON 对象。
+func decodeExtraConfig(raw string) (map[string]any, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	var object map[string]any
+	if err := decoder.Decode(&object); err != nil || object == nil {
+		return nil, errors.New("extra_config 不是 JSON 对象")
+	}
+	return object, nil
+}
+
+// redactExtraConfig 把 extra_config 里敏感项（口令、密码、令牌等，含嵌套对象与数组里的）的值替换为占位，只读接口不回显它们；
 // 交易模块等机器调用方通过受 ACL 保护的 GetSecretValue 读取明文。无法解析为 JSON 对象时整体隐藏。
 func redactExtraConfig(raw string) string {
 	if strings.TrimSpace(raw) == "" {
 		return raw
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &object); err != nil || object == nil {
+	object, err := decodeExtraConfig(raw)
+	if err != nil {
 		return maskedExtraValue
 	}
-	for key := range object {
-		if sensitiveExtraKey(key) {
-			object[key] = json.RawMessage(`"` + maskedExtraValue + `"`)
-		}
-	}
+	redactValue(object)
 	redacted, err := json.Marshal(object)
 	if err != nil {
 		return maskedExtraValue
@@ -412,23 +419,59 @@ func redactExtraConfig(raw string) string {
 	return string(redacted)
 }
 
-// mergeExtraConfig 用提交的 extra_config 替换原值；提交值里仍是脱敏占位的敏感项沿用原值，避免保存时把口令改成占位。
-func mergeExtraConfig(existing, submitted string) string {
-	var next, previous map[string]json.RawMessage
-	if json.Unmarshal([]byte(submitted), &next) != nil || next == nil {
-		return submitted
-	}
-	_ = json.Unmarshal([]byte(existing), &previous)
-	for key, value := range next {
-		if sensitiveExtraKey(key) && string(value) == `"`+maskedExtraValue+`"` {
-			if old, ok := previous[key]; ok {
-				next[key] = old
+func redactValue(value any) {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			if sensitiveExtraKey(key) {
+				node[key] = maskedExtraValue
+				continue
 			}
+			redactValue(child)
+		}
+	case []any:
+		for _, child := range node {
+			redactValue(child)
 		}
 	}
+}
+
+// mergeExtraConfig 用提交的 extra_config 替换原值；提交值里仍是脱敏占位的敏感项（含嵌套位置）沿用原值，避免保存时把口令改成占位。
+func mergeExtraConfig(existing, submitted string) string {
+	next, err := decodeExtraConfig(submitted)
+	if err != nil {
+		return submitted
+	}
+	previous, _ := decodeExtraConfig(existing)
+	mergeValue(next, previous)
 	merged, err := json.Marshal(next)
 	if err != nil {
 		return submitted
 	}
 	return string(merged)
+}
+
+func mergeValue(next, previous any) {
+	switch node := next.(type) {
+	case map[string]any:
+		old, _ := previous.(map[string]any)
+		for key, child := range node {
+			if sensitiveExtraKey(key) {
+				if text, ok := child.(string); ok && text == maskedExtraValue {
+					if value, exists := old[key]; exists {
+						node[key] = value
+					}
+				}
+				continue
+			}
+			mergeValue(child, old[key])
+		}
+	case []any:
+		old, _ := previous.([]any)
+		for index, child := range node {
+			if index < len(old) {
+				mergeValue(child, old[index])
+			}
+		}
+	}
 }

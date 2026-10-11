@@ -175,6 +175,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatTimestamp, listTradingAccounts, listHoldings, listPositions, syncTradingAccount } from "@/api/trade";
 import type { TradingAccount, Holding, Position } from "@/api/trade/types";
@@ -340,6 +341,27 @@ watch(
   () => route.query.trading_account_id,
   () => {
     void applyRouteAccount();
+  }
+);
+
+// 切换空间：账户属于旧空间，必须清空账户、数据和路由里的账户参数，再加载新空间的账户。
+const spaceStore = useSpaceStore();
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!next || next === previous) return;
+    accountRequests.invalidate();
+    positionRequests.invalidate();
+    accounts.value = [];
+    accountsLoaded.value = false;
+    tradingAccountId.value = "";
+    positions.value = [];
+    holdings.value = [];
+    loading.value = false;
+    void (async () => {
+      if (route.query.trading_account_id) await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+      await refresh();
+    })();
   }
 );
 

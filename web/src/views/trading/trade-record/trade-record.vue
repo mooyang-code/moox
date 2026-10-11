@@ -154,6 +154,7 @@
 import { computed, onMounted, reactive, ref, toRef, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
@@ -368,6 +369,29 @@ watch(
       return;
     }
     await applyRouteAccount();
+  }
+);
+
+// 切换空间：账户、订单和详情都属于旧空间，清空后加载新空间的账户与订单（KeepAlive 恢复的页面同样走这条监听）。
+const spaceStore = useSpaceStore();
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!next || next === previous) return;
+    orderRequests.invalidate();
+    accountRequests.invalidate();
+    closeOrderDetail();
+    accounts.value = [];
+    accountsLoaded.value = false;
+    tradingAccountId.value = "";
+    orders.value = [];
+    loading.value = false;
+    resetPagination();
+    void (async () => {
+      if (route.query.trading_account_id) await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+      await loadAccounts();
+      await loadOrders();
+    })();
   }
 );
 
