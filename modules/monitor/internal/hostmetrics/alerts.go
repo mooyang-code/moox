@@ -162,6 +162,11 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 	} else if strings.TrimSpace(state.DedupeKey) == "" {
 		state.DedupeKey = rule.RuleID + ":" + rule.CheckID
 	}
+	// 重投去重必须随状态持久化：进程在 ACK 前退出后，内存里的已处理集合会丢失，重投的同一条样本不能再次推进连续计数。
+	if messageID != "" && state.LastMessageID == messageID {
+		return nil
+	}
+	state.LastMessageID = messageID
 	if failing {
 		state.FailureCount++
 		state.SuccessCount = 0

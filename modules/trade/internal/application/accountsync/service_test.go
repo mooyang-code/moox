@@ -1266,3 +1266,60 @@ func TestPrivateFillClosesAdmissionUntilFullSync(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, account.Ready, "完整同步确认余额后恢复")
 }
+
+// 成交后的完整同步若只拿到陈旧余额（被丢弃），余额仍是成交之前的值，准入必须保持关闭，直到余额追上。
+func TestStaleBalanceSnapshotKeepsAdmissionClosedAfterPrivateFill(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	current := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	fill := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
+	}
+	base := &syncAdapter{order: current, fill: fill}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	// 先做一次完整同步：余额快照（2_000）已被采用，账户就绪
+	_, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+
+	newFill := fill
+	newFill.ExchangeTradeID, newFill.TradedAt = "trade-2", time.UnixMilli(3_000)
+	applied, err := service.ApplyFill(context.Background(), "account-1", newFill)
+	require.NoError(t, err)
+	require.True(t, applied)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+
+	// 下一次完整同步拿到的余额快照比已采用的更旧：被丢弃，准入保持关闭
+	service.Adapters = syncAdapterSource{adapter: staleSnapshotAdapter{base}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.AccountSnapshotUpdated)
+	require.False(t, result.Ready)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready, "陈旧余额被丢弃时不能恢复准入")
+
+	// 余额追上之后恢复
+	service.Adapters = syncAdapterSource{adapter: base}
+	_, err = service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, account.Ready)
+}

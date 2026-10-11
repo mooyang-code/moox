@@ -397,6 +397,14 @@ func (s *Service) applySnapshot(
 	if snapshot.FillCursors == nil {
 		snapshot.FillCursors = account.FillCursors
 	}
+	// 私有成交已释放预留、正在等待余额确认：陈旧的余额快照被丢弃时，余额仍是成交之前的值，不能恢复准入。
+	readinessCause := ""
+	if snapshot.Ready && !result.AccountSnapshotUpdated && !account.Ready && account.LastError == awaitingBalanceReason {
+		snapshot.Ready = false
+		result.Ready = false
+		readinessCause = awaitingBalanceReason
+		result.Warnings = append(result.Warnings, "balance snapshot is not newer than the pending fill; admission stays closed")
+	}
 	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用时才能推进；
 	// 丢弃陈旧快照时保持原边界，否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
 	syncBoundary := now
@@ -419,7 +427,7 @@ func (s *Service) applySnapshot(
 			account.TradingAccountID,
 			snapshot.Ready,
 			now,
-			"",
+			readinessCause,
 		)
 	})
 	if err != nil {
@@ -473,6 +481,9 @@ func (s *Service) resolveUnknownOrders(
 	return result, nil
 }
 
+// awaitingBalanceReason 是私有成交释放预留后、余额快照尚未确认期间持久化的未就绪原因。
+const awaitingBalanceReason = "private fill awaiting balance sync"
+
 func (s *Service) ApplyFill(
 	ctx context.Context,
 	tradingAccountID string,
@@ -510,7 +521,7 @@ func (s *Service) ApplyFill(
 				account.TradingAccountID,
 				false,
 				s.now().UnixMilli(),
-				"private fill awaiting balance sync",
+				awaitingBalanceReason,
 			)
 		})
 	}

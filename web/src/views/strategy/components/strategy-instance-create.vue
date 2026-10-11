@@ -71,6 +71,7 @@
 </template>
 
 <script setup lang="ts">
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createInstance, getInstance, validateStrategy } from "@/api/strategy";
@@ -218,9 +219,12 @@ async function submit() {
     if (instanceId) {
       try {
         await getInstance(instanceId);
+        if (requestId !== submitRequest || props.spaceId !== spaceId) return; // 补查期间空间已切换
         error.value = "创建请求结果未知，但实例 ID 已存在，请返回列表确认，不要重复创建";
         return;
-      } catch {
+      } catch (lookupErr) {
+        // 补查被切换空间取消：当前表单属于新空间，不写入旧空间的错误，也不能当作“实例不存在”
+        if (lookupErr instanceof StaleSpaceRequestError || requestId !== submitRequest || props.spaceId !== spaceId) return;
         // 实例不存在，展示原始错误。
       }
     }

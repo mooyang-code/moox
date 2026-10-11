@@ -44,8 +44,10 @@ type AlertState struct {
 	ResolvedAt     *time.Time `gorm:"column:c_resolved_at"`
 	LastReminderAt *time.Time `gorm:"column:c_last_reminder_at"`
 	DedupeKey      string     `gorm:"column:c_dedupe_key"`
-	CreatedAt      time.Time  `gorm:"column:c_ctime"`
-	UpdatedAt      time.Time  `gorm:"column:c_mtime"`
+	// LastMessageID 是最后一次推进该状态的采样消息；EventBus 重投同一消息时据此跳过，计数不会重复累计。
+	LastMessageID string    `gorm:"column:c_last_message_id"`
+	CreatedAt     time.Time `gorm:"column:c_ctime"`
+	UpdatedAt     time.Time `gorm:"column:c_mtime"`
 }
 
 func (AlertState) TableName() string {

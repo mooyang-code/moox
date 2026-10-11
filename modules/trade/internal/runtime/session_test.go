@@ -192,6 +192,8 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
 		Fills: &consumer.Reducer{Store: tradeStore},
+		// 生产环境里同步服务的会话状态由 Manager 提供；激活前缓冲的持仓事件会让持久化状态等待排队的完整同步确认。
+		SessionState: readySessionState(true),
 	}
 	session := &ExchangeSession{
 		Account: account, Adapter: adapter, Sync: syncService,
@@ -321,12 +323,13 @@ func TestSessionHandlerPersistsReadyAfterLateBufferedPosition(t *testing.T) {
 	require.True(t, session.Ready())
 	stored, err := tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
 	require.NoError(t, err)
-	require.True(t, stored.Ready, "late buffered position must precede durable readiness")
+	require.False(t, stored.Ready, "激活前缓冲的持仓事件已使持久化状态进入等待完整同步，激活不能把它写回就绪")
+	session.Sync.SessionState = readySessionState(true)
 	_, err = session.Sync.SyncAccount(ctx, account.TradingAccountID)
 	require.NoError(t, err)
 	stored, err = tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
 	require.NoError(t, err)
-	require.True(t, stored.Ready, "queued sync without SessionState must retain readiness")
+	require.True(t, stored.Ready, "排队的完整同步确认后恢复就绪")
 }
 
 func TestSessionHandlerReadinessFailureReleasesEventGate(t *testing.T) {
@@ -418,3 +421,8 @@ func seedRuntimeAccount(
 	}))
 	return account
 }
+
+
+type readySessionState bool
+
+func (s readySessionState) Ready(string) bool { return bool(s) }
