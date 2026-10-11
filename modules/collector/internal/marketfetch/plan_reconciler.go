@@ -65,20 +65,11 @@ type PlanLatenessSetter interface {
 }
 
 // ActivityEntry 是写入全局活动日志的一条记录。
-type ActivityEntry struct {
-	SpaceID  string
-	Source   string
-	Category string
-	Level    string
-	Title    string
-	Detail   string
-	RefID    string
-	DedupKey string
-}
+type ActivityEntry = scfinvoker.ActivityEntry
 
 // ActivityLogger 写入全局活动日志；相同 DedupKey 的重放必须被忽略。
 type ActivityLogger interface {
-	Append(ctx context.Context, entries []ActivityEntry) error
+	AppendActivityLogs(ctx context.Context, spaceID string, entries []ActivityEntry) error
 }
 
 // PlanDeploy 是创建与配置函数所需的部署参数。
@@ -964,5 +955,5 @@ func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRec
 	if len(entries) == 0 {
 		return nil
 	}
-	return r.Activity.Append(ctx, entries)
+	return r.Activity.AppendActivityLogs(ctx, r.SpaceID, entries)
 }

@@ -383,6 +383,26 @@ components:
             callers:
               - admin
               - cloudnode
+      - path: trpc.moox.admin.ActivityLog
+        port: 11113
+        console_name: activity
+        timeout_ms: 5000
+        max_body_bytes: 4194304
+        methods:
+          - AppendActivityLogs
+          - ListActivityLogs
+        read_only_methods:
+          - ListActivityLogs
+        acl:
+          - methods:
+              - AppendActivityLogs
+            callers:
+              - collector
+          - methods:
+              - ListActivityLogs
+            callers:
+              - console
+              - moox-cli
       - path: trpc.moox.admin.GatewayControl
         port: 11112
         timeout_ms: 5000
@@ -725,6 +745,7 @@ components:
           - methods:
               - GetNodeList
               - InvokeFunction
+              - SubmitCreateNodes
               - GetNodeBatchChange
               - SubmitUpdateNodeRuntimeConfigs
             callers:

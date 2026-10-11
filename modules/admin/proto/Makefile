@@ -1,4 +1,4 @@
-PROTO_FILES := admin_service.proto ops_service.proto infra_service.proto secret_service.proto setup_service.proto sysdeploy_service.proto collector_publish_lease_service.proto gatewaycontrol.proto
+PROTO_FILES := admin_service.proto ops_service.proto infra_service.proto secret_service.proto setup_service.proto sysdeploy_service.proto collector_publish_lease_service.proto gatewaycontrol.proto activity_log_service.proto
 OUTPUT_DIR := ./admingen
 COMMON_PROTO_DIR := ../../../packages/commonpb
 DIRECTORY_PROTO_DIR := ../../../packages/gatewayroute/proto

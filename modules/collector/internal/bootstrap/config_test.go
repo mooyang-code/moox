@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -362,4 +363,28 @@ func TestLoadSubjectSyncFromCollectorConfig(t *testing.T) {
 		_, err = Load(writeCollectorConfig(t, raw))
 		require.Error(t, err, raw)
 	}
+}
+
+func TestSCFPlanConfigValidation(t *testing.T) {
+	valid := func() *Config {
+		cfg := Default()
+		cfg.SCFRegions = map[string]marketfetch.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
+		cfg.SCFAccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
+		cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-nanjing"}}}
+		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
+		return cfg
+	}
+	require.NoError(t, valid().validateSCFPlan())
+	require.Equal(t, []string{"crypto"}, valid().fetchPlanSpaces([]string{"stockcn", "crypto"}))
+
+	noRoute := valid()
+	noRoute.SCFAccessRoutes = nil
+	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region Access route")
+	noNetwork := valid()
+	noNetwork.SCFRegions = nil
+	require.ErrorContains(t, noNetwork.validateSCFPlan(), "VPC and subnet")
+	noDeploy := valid()
+	noDeploy.SCFPlan.PackageID = ""
+	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_id")
+	require.NoError(t, Default().validateSCFPlan(), "spaces without scf_markets keep the Invoke scheduler only")
 }

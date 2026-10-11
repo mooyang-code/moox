@@ -5,6 +5,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/activitylog"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/publishlease"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
@@ -41,6 +42,9 @@ type Services struct {
 
 	// Collector 发布租约由 Admin 控制面持久化与校验。
 	CollectorPublishLease *publishlease.Service
+
+	// 全局活动日志：各模块写入、用户可查询的展示日志。
+	ActivityLog *activitylog.Service
 
 	consoleGateway *gatewayclient.Client
 	machineGateway *gatewayclient.Client
@@ -133,6 +137,7 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		Setup:                 setupService,
 		SysDeploy:             sysDeployService,
 		CollectorPublishLease: collectorPublishLease,
+		ActivityLog:           activitylog.NewService(db, spaceService),
 	}
 
 	return services, nil

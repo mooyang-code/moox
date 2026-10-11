@@ -27,14 +27,18 @@ type Config struct {
 	Storage             StorageConfig                    `yaml:"storage"`
 	SCFAccess           gatewayclient.ExternalFileConfig `yaml:"scf_access"`
 	SCFAccessRoutes     map[string]SCFAccessEndpoint     `yaml:"scf_access_routes"`
-	CollectorRetention  CollectorRetentionConfig         `yaml:"collector_retention"`
-	StockCN             StockCNConfig                    `yaml:"stockcn"`
-	PeriodReadiness     PeriodReadinessConfig            `yaml:"period_readiness"`
-	KlineResample       KlineResampleConfig              `yaml:"kline_resample"`
-	Health              HealthConfig                     `yaml:"health"`
-	DNS                 DNSConfig                        `yaml:"dns"`
-	EgressProxy         EgressProxyConfig                `yaml:"egress_proxy"`
-	SubjectSync         subjectsync.Config               `yaml:"subject_sync"`
+	// SCFRegions 是各地域的函数网络；SCFMarkets 是每个空间、市场使用的地域；SCFPlan 是函数部署参数。
+	SCFRegions         map[string]marketfetch.PlanNetwork `yaml:"scf_regions"`
+	SCFMarkets         map[string]map[string][]string     `yaml:"scf_markets"`
+	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
+	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
+	StockCN            StockCNConfig                      `yaml:"stockcn"`
+	PeriodReadiness    PeriodReadinessConfig              `yaml:"period_readiness"`
+	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
+	Health             HealthConfig                       `yaml:"health"`
+	DNS                DNSConfig                          `yaml:"dns"`
+	EgressProxy        EgressProxyConfig                  `yaml:"egress_proxy"`
+	SubjectSync        subjectsync.Config                 `yaml:"subject_sync"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -192,6 +196,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateSCFAccess(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validateSCFPlan(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateKlineResample(); err != nil {
 		return nil, err
 	}
@@ -343,6 +350,7 @@ func Default() *Config {
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
 		Storage:     StorageConfig{ResultDataNodeID: "storage-node-0"},
+		SCFPlan:     defaultSCFPlan(),
 		SubjectSync: subjectsync.DefaultConfig(),
 		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		PeriodReadiness: PeriodReadinessConfig{

@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package trpc.moox.admin;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
+
+// ActivityLogEntry 是各模块写入、需要展示给用户的一条活动记录。
+message ActivityLogEntry {
+  // space_id 为空表示全局事件。
+  string space_id = 1;
+  string source = 2;
+  string category = 3;
+  // level 取值 info、warning、error，默认 info。
+  string level = 4;
+  string title = 5;
+  // detail 是 JSON 文本。
+  string detail = 6;
+  string ref_id = 7;
+  // dedup_key 非空时按它去重：重放返回成功且不重复写入。
+  string dedup_key = 8;
+}
+
+message AppendActivityLogsReq {
+  repeated ActivityLogEntry entries = 1;
+}
+
+message AppendActivityLogsRsp {
+  common.RetInfo ret_info = 1;
+  // inserted 是本次真正新写入的条数（去重命中的不计入）。
+  int32 inserted = 2;
+}
+
+message ActivityLogItem {
+  int64 id = 1;
+  string space_id = 2;
+  string source = 3;
+  string category = 4;
+  string level = 5;
+  string title = 6;
+  string detail = 7;
+  string ref_id = 8;
+  // created_at 是 RFC3339 UTC 时间。
+  string created_at = 9;
+}
+
+message ListActivityLogsReq {
+  string space_id = 1;
+  string source = 2;
+  string category = 3;
+  string ref_id = 4;
+  // since 与 until 是 RFC3339 时间，均可为空。
+  string since = 5;
+  string until = 6;
+  common.Page page = 7;
+}
+
+message ListActivityLogsRsp {
+  common.RetInfo ret_info = 1;
+  repeated ActivityLogItem items = 2;
+  common.PageResult page = 3;
+}
+
+service ActivityLog {
+  rpc AppendActivityLogs(AppendActivityLogsReq) returns (AppendActivityLogsRsp);
+  rpc ListActivityLogs(ListActivityLogsReq) returns (ListActivityLogsRsp);
+}

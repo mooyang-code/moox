@@ -306,3 +306,24 @@ AFTER UPDATE ON t_secrets
 BEGIN
     UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;
+
+-- 活动日志：各模块写入的、需要展示给用户的事件；永久保存，不清理
+CREATE TABLE IF NOT EXISTS t_activity_logs (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL DEFAULT '',
+    c_source TEXT NOT NULL,
+    c_category TEXT NOT NULL,
+    c_level TEXT NOT NULL DEFAULT 'info',
+    c_title TEXT NOT NULL,
+    c_detail TEXT NOT NULL DEFAULT '{}',
+    c_ref_id TEXT NOT NULL DEFAULT '',
+    c_dedup_key TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_level IN ('info', 'warning', 'error'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_t_activity_logs_dedup
+ON t_activity_logs (c_dedup_key)
+WHERE c_dedup_key <> '';
+CREATE INDEX IF NOT EXISTS idx_t_activity_logs_space_time ON t_activity_logs (c_space_id, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_t_activity_logs_category_time ON t_activity_logs (c_category, c_ctime);

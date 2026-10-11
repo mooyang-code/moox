@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"trpc.group/trpc-go/trpc-go/client"
 	"unicode"
@@ -677,6 +678,51 @@ func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID stri
 			}
 			return result.GetRetInfo()
 		}())
+	}
+	return nil
+}
+
+// AllowedLatenessAttribute 是数据集属性名：周期的允许迟到时间（秒），由 Storage 在建立周期时读取。
+const AllowedLatenessAttribute = "allowed_lateness_seconds"
+
+// EnsureAllowedLateness 保证结果数据集的允许迟到时间属性与任务设置一致；没有变化时不更新。
+func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID string, seconds int) error {
+	if m == nil || m.metadata == nil || m.auth == nil {
+		return fmt.Errorf("task result metadata manager is not configured")
+	}
+	if seconds <= 0 {
+		return fmt.Errorf("allowed lateness must be positive")
+	}
+	rsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return fmt.Errorf("get result dataset for allowed lateness: %w", err)
+	}
+	if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetDataset() == nil {
+		var ret *storagepb.RetInfo
+		if rsp != nil {
+			ret = rsp.GetRetInfo()
+		}
+		return metadataError("get result dataset for allowed lateness", nil, ret)
+	}
+	value := strconv.Itoa(seconds)
+	if rsp.GetDataset().GetAttributes()[AllowedLatenessAttribute] == value {
+		return nil
+	}
+	updated := proto.Clone(rsp.GetDataset()).(*storagepb.Dataset)
+	if updated.Attributes == nil {
+		updated.Attributes = map[string]string{}
+	}
+	updated.Attributes[AllowedLatenessAttribute] = value
+	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
+	if err != nil {
+		return fmt.Errorf("update result dataset allowed lateness: %w", err)
+	}
+	if result == nil || result.GetRetInfo() == nil || result.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		var ret *storagepb.RetInfo
+		if result != nil {
+			ret = result.GetRetInfo()
+		}
+		return metadataError("update result dataset allowed lateness", nil, ret)
 	}
 	return nil
 }

@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {144, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "70520192b39560795497a07651a2b1a2f3045c52a6d9ae7d8fe6c22d8a0f4f8b"},
-		"storage":   {100, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "c3f07d6036059a96796def168799486214144044e3f5b4f5986caecaabfb6b07"},
-		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "e59decf268b23179b384d5f21ced98ed2fde3c9e1113aed38153c7a14356da7a"},
+		"control":   {146, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "76ab043421bf09ea690335016c18bda732ca936ff61140ad2ccb4920108772e6"},
+		"storage":   {100, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "63b8b8eaa1511b728d3f9bce873a69ab056a3cc9526dd85325a34aeb6ceb76e1"},
+		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "13116fd8d4e94f3f035cf667687edf0772493735266edc97912e35a7e23ed148"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)

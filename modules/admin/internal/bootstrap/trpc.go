@@ -109,6 +109,9 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err := register(&adminpb.CollectorPublishLeaseServer_ServiceDesc, services.CollectorPublishLease); err != nil {
 		return err
 	}
+	if err := register(&adminpb.ActivityLogServer_ServiceDesc, services.ActivityLog); err != nil {
+		return err
+	}
 
 	gateway, err := newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "console")
 	if err != nil {

@@ -199,7 +199,7 @@ type fakeActivity struct {
 	entries  map[string]ActivityEntry
 }
 
-func (a *fakeActivity) Append(_ context.Context, entries []ActivityEntry) error {
+func (a *fakeActivity) AppendActivityLogs(_ context.Context, _ string, entries []ActivityEntry) error {
 	if a.failures > 0 {
 		a.failures--
 		return errors.New("admin unavailable")
@@ -563,4 +563,55 @@ func TestPlanReconcilerRejectsOversizedEnvironment(t *testing.T) {
 	r.Deploy.BaseEnvironment["PADDING"] = strings.Repeat("x", 3000)
 	require.Error(t, h.reconcile(r))
 	require.Empty(t, h.store.records, "no plan is saved when the environment cannot fit")
+}
+
+func TestPlanManagerRunsOneWorkerPerSpaceAndDisablesRemovedSpace(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	var mu sync.Mutex
+	spaces := []string{"crypto"}
+	created := 0
+	manager := &PlanManager{
+		Spaces: func(context.Context) ([]string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]string(nil), spaces...), nil
+		},
+		Factory: func(space string) (*PlanReconciler, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			created++
+			r := h.reconciler()
+			r.Now = time.Now
+			return r, nil
+		},
+		Interval: 40 * time.Millisecond, Offset: 5 * time.Millisecond, Timeout: time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	go func() { manager.Run(ctx); close(finished) }()
+
+	require.Eventually(t, func() bool {
+		record, _ := h.store.Open(context.Background(), "crypto")
+		return record != nil
+	}, 5*time.Second, 10*time.Millisecond, "the space worker creates a fetch plan")
+	time.Sleep(150 * time.Millisecond)
+	mu.Lock()
+	require.Equal(t, 1, created, "one reconciler per space")
+	spaces = nil
+	mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		return len(manager.workers) == 0
+	}, 5*time.Second, 10*time.Millisecond, "the worker exits only after timers are disabled")
+	cancel()
+	<-finished
+	disabled := 0
+	for _, patch := range h.cloud.patches {
+		if !patch.GetTimerEnabled() {
+			disabled++
+		}
+	}
+	require.Equal(t, 2, disabled, "every function of the removed space is disabled")
 }
