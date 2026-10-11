@@ -50,14 +50,15 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 		at    time.Time
 	}
 	candidates := make([]timerRefreshCandidate, 0)
-	if shouldRefreshTimerReadback(ctx, req) {
+	explicitRefresh := req.GetRefreshReadback()
+	if explicitRefresh || shouldRefreshTimerReadback(ctx, req) {
 		now := time.Now().UTC()
 		for index := range nodes {
 			if nodes[index].TriggerType != "timer" {
 				continue
 			}
 			last, _ := time.Parse(time.RFC3339Nano, metadataString(parseJSONMap(nodes[index].Metadata), "timer_last_readback_at"))
-			if !last.IsZero() && now.Sub(last) < timerReadbackInterval {
+			if !explicitRefresh && !last.IsZero() && now.Sub(last) < timerReadbackInterval {
 				continue
 			}
 			candidates = append(candidates, timerRefreshCandidate{index: index, at: last})
@@ -71,12 +72,13 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 			}
 			return candidates[i].at.Before(candidates[j].at)
 		})
-		if len(candidates) > timerReadbackBatchSize {
+		// 显式要求读回时不截断：调用方要对本页每个节点都拿到新的云端状态。
+		if !explicitRefresh && len(candidates) > timerReadbackBatchSize {
 			candidates = candidates[:timerReadbackBatchSize]
 		}
 	}
 	var refreshWG sync.WaitGroup
-	refreshSlots := make(chan struct{}, timerReadbackBatchSize)
+	refreshSlots := make(chan struct{}, timerReadbackBatchSize*2)
 	for _, candidate := range candidates {
 		index := candidate.index
 		refreshWG.Add(1)
@@ -181,6 +183,11 @@ func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID strin
 				patch["timer_status_error"] = functionErr.Error()
 			} else {
 				patch["managed_environment_budget_bytes"] = scfManagedEnvironmentBudget(function.Environment)
+				// 记录云端函数环境里实际生效的分配与访问入口，供 Collector 比对环境是否被手工改动。
+				patch["actual_assignment_hash"] = function.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
+				patch["actual_access_address"] = function.Environment["MOOX_ACCESS_ADDRESS"]
+				patch["actual_access_id"] = function.Environment["MOOX_ACCESS_ID"]
+				patch["actual_access_key_id"] = function.Environment["MOOX_CALLER_KEY_ID"]
 				if lookupErr != nil {
 					err = lookupErr
 					patch["timer_status_error"] = lookupErr.Error()

@@ -76,7 +76,7 @@ func TestRegisterSeriesSnapshotRejectsWhenLaterPeriodExists(t *testing.T) {
 	store := newPeriodReceiptStore(t, clock)
 	ctx := context.Background()
 	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	_, err := store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT"), period.Unix())
+	err := registerAtPeriod(store, clock, snapshotSeries("BTC-USDT"), period)
 	require.NoError(t, err)
 	clock.set(period.Add(61 * time.Second))
 	exp := snapshotExpectation(period, "BTC-USDT")
@@ -91,7 +91,7 @@ func TestCommitCreatesPeriodFromRegisteredSnapshot(t *testing.T) {
 	clock := newPeriodReceiptClock(period.Add(61 * time.Second))
 	store := newPeriodReceiptStore(t, clock)
 	ctx := context.Background()
-	_, err := store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), period.Unix())
+	err := registerAtPeriod(store, clock, snapshotSeries("BTC-USDT", "ETH-USDT"), period)
 	require.NoError(t, err)
 	exp := snapshotExpectation(period, "BTC-USDT", "ETH-USDT")
 
@@ -124,7 +124,7 @@ func TestLazyCommitRejectionsAndMissingList(t *testing.T) {
 	var missing SeriesSnapshotMissingError
 	require.ErrorAs(t, err, &missing, "快照未登记必须拒绝")
 
-	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), period.Unix())
+	err = registerAtPeriod(store, clock, snapshotSeries("BTC-USDT", "ETH-USDT"), period)
 	require.NoError(t, err)
 	wrong := exp
 	wrong.SeriesHash = "not-the-effective-hash"
@@ -166,7 +166,7 @@ func TestConcurrentLazyCommitsCreateOnePeriod(t *testing.T) {
 	store := newPeriodReceiptStore(t, clock)
 	ctx := context.Background()
 	subjects := []string{"A-USDT", "B-USDT", "C-USDT", "D-USDT"}
-	_, err := store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries(subjects...), period.Unix())
+	err := registerAtPeriod(store, clock, snapshotSeries(subjects...), period)
 	require.NoError(t, err)
 	exp := snapshotExpectation(period, subjects...)
 	var wg sync.WaitGroup
@@ -215,7 +215,7 @@ func TestLazyPeriodSurvivesReopen(t *testing.T) {
 	}
 	store := open()
 	ctx := context.Background()
-	_, err := store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), period.Unix())
+	err := registerAtPeriod(store, clock, snapshotSeries("BTC-USDT", "ETH-USDT"), period)
 	require.NoError(t, err)
 	exp := snapshotExpectation(period, "BTC-USDT", "ETH-USDT")
 	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "w1", "collector")
@@ -255,4 +255,13 @@ func TestRegisterSeriesSnapshotRejectsFarFutureAndAmbiguousSeries(t *testing.T) 
 	dup := append(snapshotSeries("BTC-USDT"), seriesset.Series{Provider: "okx", SourceID: "spot_http", MarketType: "spot", SubjectID: "BTC-USDT"})
 	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", dup, soon+600)
 	require.Error(t, err)
+}
+
+// registerAtPeriod 在 P 之前登记快照：首次登记同样要求 P 晚于 Storage 当前时间，登记后恢复时钟。
+func registerAtPeriod(store *Store, clock *periodReceiptClock, series []seriesset.Series, period time.Time) error {
+	restore := clock.now()
+	clock.set(period.Add(-time.Minute))
+	defer clock.set(restore)
+	_, err := store.RegisterSeriesSnapshot(context.Background(), "crypto", "bars", "1m", series, period.Unix())
+	return err
 }

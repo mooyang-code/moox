@@ -220,6 +220,19 @@ func normalizeStockCNSeriesTags(input []*pb.RowFieldUpsert) []*pb.RowFieldUpsert
 	return rows
 }
 
+// collectorWritableDataset 判断数据集是否归 Collector 所有：原始采集或重采样结果。
+func collectorWritableDataset(attrs map[string]string) bool {
+	if strings.TrimSpace(attrs["owner_module"]) != "collector" {
+		return false
+	}
+	switch strings.TrimSpace(attrs["dataset_role"]) {
+	case "raw_collection", "kline_resample_result":
+		return true
+	default:
+		return false
+	}
+}
+
 func isFactorAppID(appID string) bool {
 	switch strings.ToLower(strings.TrimSpace(appID)) {
 	case "factor", "moox-factor":
@@ -244,6 +257,12 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 		return nil
 	}
 	checked := make(map[routeKey]struct{})
+	keyHasTimeSeriesRows := make(map[routeKey]bool)
+	for _, row := range rows {
+		if row != nil && row.GetKey() != nil && row.GetKey().GetTimeSeries() != nil {
+			keyHasTimeSeriesRows[routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}] = true
+		}
+	}
 	for _, row := range rows {
 		if row == nil || row.GetKey() == nil {
 			continue
@@ -260,6 +279,11 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 		attrs := dataset.GetAttributes()
 		if attrs["dataset_role"] == "factor_result" {
 			return fmt.Errorf("dataset %s/%s requires WriteFactorRows", key.spaceID, key.datasetID)
+		}
+		// Collector 身份（含函数凭据）写时序行时，只能写自己拥有的采集与重采样数据集；
+		// 记录型数据（任务结果等）不受此限制。
+		if isOwnedAppID(auth.GetAppId(), "collector") && keyHasTimeSeriesRows[key] && !collectorWritableDataset(attrs) {
+			return fmt.Errorf("dataset %s/%s is not Collector-owned collection data", key.spaceID, key.datasetID)
 		}
 		if attrs["write_owner"] != "factor" {
 			continue

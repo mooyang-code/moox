@@ -50,6 +50,11 @@ type SCFPlanFetchConfig struct {
 type SCFPlanSpaceConfig struct {
 	SymbolsPerFunction int                 `yaml:"symbols_per_function"`
 	Fetch              *SCFPlanFetchConfig `yaml:"fetch"`
+	// PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
+	// 同时管理多个空间时每个空间必须有自己的代码包。
+	PackageID           string `yaml:"package_id"`
+	Namespace           string `yaml:"namespace"`
+	BaseEnvironmentFile string `yaml:"base_environment_file"`
 }
 
 // maxFunctionsPerNamespace 是腾讯云每个命名空间的函数数上限，超过后分到下一个命名空间。
@@ -109,6 +114,14 @@ func (c *Config) validateSCFPlan() error {
 	if plan.SymbolsPerFunction < 1 || plan.SymbolsPerFunction > 200 || plan.MemoryMB < 64 || plan.MaxConcurrentOperations < 1 {
 		return fmt.Errorf("scf_plan has an out-of-range symbols_per_function, memory_mb or max_concurrent_operations")
 	}
+	packages := map[string]string{}
+	for space := range c.SCFMarkets {
+		packageID := plan.packageIDFor(space)
+		if other, dup := packages[packageID]; dup && len(c.SCFMarkets) > 1 {
+			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_id in scf_plan.spaces", other, space, packageID)
+		}
+		packages[packageID] = space
+	}
 	for space, markets := range c.SCFMarkets {
 		if space != strings.ToLower(space) || len(markets) == 0 {
 			return fmt.Errorf("scf_markets[%s] requires a lowercase space id and at least one market", space)
@@ -131,22 +144,39 @@ func (c *Config) validateSCFPlan() error {
 	return nil
 }
 
-// fetchPlanDeploy 读取非受管环境文件并生成部署参数。
-func (c *Config) fetchPlanDeploy() (marketfetch.PlanDeploy, error) {
+func (c SCFPlanConfig) packageIDFor(spaceID string) string {
+	if override := c.Spaces[strings.ToLower(spaceID)].PackageID; override != "" {
+		return override
+	}
+	return c.PackageID
+}
+
+// fetchPlanDeploy 读取某个空间的非受管环境文件并生成部署参数。空间身份由对账器所属空间强制写入，
+// 不信任环境文件里的取值，避免一个空间的函数拿到另一个空间的身份。
+func (c *Config) fetchPlanDeploy(spaceID string) (marketfetch.PlanDeploy, error) {
+	override := c.SCFPlan.Spaces[strings.ToLower(spaceID)]
 	path := c.SCFPlan.BaseEnvironmentFile
+	if override.BaseEnvironmentFile != "" {
+		path = override.BaseEnvironmentFile
+	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(filepath.Dir(c.sourcePath), path)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return marketfetch.PlanDeploy{}, fmt.Errorf("read scf_plan.base_environment_file: %w", err)
+		return marketfetch.PlanDeploy{}, fmt.Errorf("read scf_plan.base_environment_file for space %s: %w", spaceID, err)
 	}
 	environment := map[string]string{}
 	if err := json.Unmarshal(raw, &environment); err != nil {
-		return marketfetch.PlanDeploy{}, fmt.Errorf("parse scf_plan.base_environment_file: %w", err)
+		return marketfetch.PlanDeploy{}, fmt.Errorf("parse scf_plan.base_environment_file for space %s: %w", spaceID, err)
+	}
+	environment["MOOX_SPACE_ID"] = strings.ToLower(spaceID)
+	namespace := c.SCFPlan.Namespace
+	if override.Namespace != "" {
+		namespace = override.Namespace
 	}
 	return marketfetch.PlanDeploy{
-		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.PackageID, Namespace: c.SCFPlan.Namespace, MemoryMB: c.SCFPlan.MemoryMB,
+		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.packageIDFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
 		BaseEnvironment: environment, Networks: c.SCFRegions, NamespaceCapacity: maxFunctionsPerNamespace,
 	}, nil
 }

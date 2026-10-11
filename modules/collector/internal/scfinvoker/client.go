@@ -44,6 +44,10 @@ type Node struct {
 	TriggerType  string
 	Workloads    []string
 	Metadata     map[string]any
+	// Ready 表示函数已创建完成并部署；未就绪的节点是创建预留（创建中或创建失败后的遗留）。
+	Ready bool
+	// ModifiedAt 是目录记录的最近修改时间，用于判断预留是否已超时。
+	ModifiedAt time.Time
 }
 
 type InvocationResult struct {
@@ -78,13 +82,33 @@ func (c *Client) ListTimerMarketFetchers(ctx context.Context, spaceID string) ([
 	return c.listMarketFetchers(ctx, spaceID, "timer")
 }
 
+// ListTimerMarketFetchersFresh 同步读回云端函数与定时器的实际状态后再返回，用于周期性云端校验。
+// 返回的节点元数据里 timer_last_readback_at 与 timer_status_error 说明这次读回是否成功。
+func (c *Client) ListTimerMarketFetchersFresh(ctx context.Context, spaceID string) ([]Node, error) {
+	return c.listMarketFetcherNodesWith(ctx, spaceID, "timer", true, true)
+}
+
 func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType string) ([]Node, error) {
+	return c.listMarketFetcherNodes(ctx, spaceID, triggerType, true)
+}
+
+// ListUnreadyMarketFetchers 返回目录中存在但尚未部署完成的采集函数节点（创建预留）。
+// 创建失败后预留会一直留在目录里，调用方据此识别并清理，才能重新创建同名函数。
+func (c *Client) ListUnreadyMarketFetchers(ctx context.Context, spaceID, triggerType string) ([]Node, error) {
+	return c.listMarketFetcherNodes(ctx, spaceID, triggerType, false)
+}
+
+func (c *Client) listMarketFetcherNodes(ctx context.Context, spaceID, triggerType string, ready bool) ([]Node, error) {
+	return c.listMarketFetcherNodesWith(ctx, spaceID, triggerType, ready, false)
+}
+
+func (c *Client) listMarketFetcherNodesWith(ctx context.Context, spaceID, triggerType string, ready, refreshReadback bool) ([]Node, error) {
 	if strings.TrimSpace(spaceID) == "" {
 		return nil, fmt.Errorf("space_id is required")
 	}
 	var all []Node
 	for page := uint32(1); ; page++ {
-		request := &cloudnodepb.GetNodeListReq{BizType: "market_fetcher", TriggerType: triggerType, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize}}
+		request := &cloudnodepb.GetNodeListReq{BizType: "market_fetcher", TriggerType: triggerType, RefreshReadback: refreshReadback, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize}}
 		var rsp cloudnodepb.GetNodeListRsp
 		if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeList", request, &rsp, false); err != nil {
 			return nil, err
@@ -93,7 +117,7 @@ func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType st
 			return nil, fmt.Errorf("list market fetchers: %s", rsp.GetRetInfo().GetMsg())
 		}
 		for _, item := range rsp.GetItems() {
-			if item == nil || item.GetIsDeleted() || !isDeployed(item) {
+			if item == nil || item.GetIsDeleted() || isDeployed(item) != ready {
 				continue
 			}
 			all = append(all, nodeFromProto(item))
@@ -128,7 +152,8 @@ func nodeFromProto(item *cloudnodepb.CloudNode) Node {
 	if item.GetMetadata() != nil {
 		metadata = item.GetMetadata().AsMap()
 	}
-	return Node{NodeID: item.GetNodeId(), FunctionName: item.GetFunctionName(), Region: item.GetRegion(), Namespace: item.GetNamespace(), PackageID: item.GetPackageId(), DeploymentID: item.GetDeploymentId(), BizType: item.GetBizType(), NodeType: item.GetNodeType(), TriggerType: item.GetTriggerType(), Metadata: metadata}
+	modifiedAt, _ := time.Parse(time.RFC3339Nano, item.GetModifyTime())
+	return Node{NodeID: item.GetNodeId(), FunctionName: item.GetFunctionName(), Region: item.GetRegion(), Namespace: item.GetNamespace(), PackageID: item.GetPackageId(), DeploymentID: item.GetDeploymentId(), BizType: item.GetBizType(), NodeType: item.GetNodeType(), TriggerType: item.GetTriggerType(), Metadata: metadata, Ready: isDeployed(item), ModifiedAt: modifiedAt}
 }
 
 // SubmitRuntimeConfigs persists one asynchronous CloudNode reconciliation job.
@@ -147,6 +172,29 @@ func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patch
 	jobID := strings.TrimSpace(rsp.GetJobId())
 	if jobID == "" {
 		return "", fmt.Errorf("%w: SubmitUpdateNodeRuntimeConfigs returned no job_id", ErrRuntimeConfigSubmissionUnknown)
+	}
+	return jobID, nil
+}
+
+// SubmitDeleteNodes 在发布租约保护下提交一批函数删除任务，返回异步作业 ID。
+func (c *Client) SubmitDeleteNodes(ctx context.Context, spaceID string, nodeIDs []string, lease *CollectorPublishLease) (string, error) {
+	if len(nodeIDs) == 0 {
+		return "", fmt.Errorf("node ids are required")
+	}
+	if lease == nil {
+		return "", fmt.Errorf("collector publish lease is required")
+	}
+	request := &cloudnodepb.BatchDeleteNodesReq{NodeIds: nodeIDs, CollectorPublishLeaseId: lease.LeaseID, CollectorPublishFencingToken: lease.FencingToken}
+	var rsp cloudnodepb.SubmitNodeBatchRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "SubmitDeleteNodes", request, &rsp, true); err != nil {
+		return "", err
+	}
+	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
+		return "", fmt.Errorf("submit delete nodes: %s", rsp.GetRetInfo().GetMsg())
+	}
+	jobID := strings.TrimSpace(rsp.GetJobId())
+	if jobID == "" {
+		return "", fmt.Errorf("%w: SubmitDeleteNodes returned no job_id", ErrRuntimeConfigSubmissionUnknown)
 	}
 	return jobID, nil
 }

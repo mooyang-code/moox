@@ -30,8 +30,9 @@ const (
 	planJobKindFinal      = "final"
 	// planFinalizeMargin 是旧份保留窗口结束后再多等的时间，让最后一批旧周期提交落地。
 	planFinalizeMargin = 5 * time.Second
-	// planVerifyInterval 是全量读回云端配置的间隔。
+	// planVerifyInterval 是全量读回云端配置的间隔；读回不完整时按 planVerifyRetry 重试。
 	planVerifyInterval = time.Hour
+	planVerifyRetry    = 5 * time.Minute
 	// planGoneDebounce 是“数据集消失但任务仍启用”被视为真实删除前需要连续观察到的轮数。
 	planGoneDebounce = 5
 )
@@ -46,7 +47,10 @@ type planStore interface {
 
 type planCloud interface {
 	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
+	ListTimerMarketFetchersFresh(context.Context, string) ([]scfinvoker.Node, error)
 	ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
+	ListUnreadyMarketFetchers(context.Context, string, string) ([]scfinvoker.Node, error)
+	SubmitDeleteNodes(context.Context, string, []string, *scfinvoker.CollectorPublishLease) (string, error)
 	SubmitCreateNodes(context.Context, string, []*cloudnodepb.NodeCreateItem) (string, error)
 	SubmitRuntimeConfigs(context.Context, string, []*cloudnodepb.NodeRuntimeConfigPatch) (string, error)
 	GetBatchResults(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, []scfinvoker.BatchItemResult, error)
@@ -437,6 +441,11 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if blocked, err := r.settlePending(ctx, record, progress); blocked || err != nil {
 		return err
 	}
+	ready, err := r.registerSnapshots(ctx, record, content, progress)
+	if err != nil || !ready {
+		return err
+	}
+	// 登记成功后才记“开始”日志：登记因 P 过期而重选时，日志里的生效周期必须是 Storage 确认的那个。
 	if !progress.LoggedStart {
 		if r.logPlan(ctx, record, content, false) == nil {
 			progress.LoggedStart = true
@@ -444,10 +453,6 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 				return err
 			}
 		}
-	}
-	ready, err := r.registerSnapshots(ctx, record, content, progress)
-	if err != nil || !ready {
-		return err
 	}
 	if record.Status == store.FetchPlanPending {
 		if err := r.saveProgress(ctx, record, progress, store.FetchPlanApplying, ""); err != nil {
@@ -660,6 +665,17 @@ func (r *PlanReconciler) ensureCreated(ctx context.Context, record *store.FetchP
 	for _, node := range nodes {
 		existing[node.NodeID] = struct{}{}
 	}
+	var absent []string
+	for _, name := range missing {
+		if _, ok := existing[name]; !ok {
+			absent = append(absent, name)
+		}
+	}
+	if cleared, err := r.clearStaleReservations(ctx, "timer", absent); err != nil {
+		return false, r.fail("cloudnode", err)
+	} else if !cleared {
+		return false, nil
+	}
 	var items []*cloudnodepb.NodeCreateItem
 	var names []string
 	for _, name := range missing {
@@ -698,6 +714,83 @@ func (r *PlanReconciler) ensureCreated(ctx context.Context, record *store.FetchP
 			return false, nil
 		}
 	}
+	return true, nil
+}
+
+// staleReservationAge 是创建预留的最长等待：超过后仍未就绪的预留视为创建失败后的遗留。
+const staleReservationAge = 15 * time.Minute
+
+// clearStaleReservations 清理要创建的函数名下遗留的创建预留（目录里有记录但没有部署完成）。
+// 创建失败后预留一直留在 CloudNode 目录里，不清理就无法重新创建同名函数。
+// 清理走受发布租约保护的删除作业；作业未结束时返回 false，下一轮再继续。
+func (r *PlanReconciler) clearStaleReservations(ctx context.Context, trigger string, names []string) (bool, error) {
+	if len(names) == 0 {
+		return true, nil
+	}
+	release, err := r.acquireOperation(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	return r.clearStale(ctx, trigger, names)
+}
+
+// clearStale 是 clearStaleReservations 的实现，调用方须已持有操作槽。
+func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names []string) (bool, error) {
+	unready, err := r.Cloud.ListUnreadyMarketFetchers(ctx, r.SpaceID, trigger)
+	if err != nil {
+		return false, fmt.Errorf("list unready market fetchers: %w", err)
+	}
+	wanted := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		wanted[name] = struct{}{}
+	}
+	inFlight := map[string]struct{}{}
+	for _, job := range r.pending {
+		for _, name := range job.functions {
+			inFlight[name] = struct{}{}
+		}
+	}
+	var stale []string
+	for _, node := range unready {
+		if _, ok := wanted[node.NodeID]; !ok {
+			continue
+		}
+		if _, busy := inFlight[node.NodeID]; busy {
+			continue
+		}
+		if !node.ModifiedAt.IsZero() && r.now().Sub(node.ModifiedAt) < staleReservationAge {
+			// 刚创建的预留可能仍在创建中，等待超时后再清理。
+			return false, nil
+		}
+		stale = append(stale, node.NodeID)
+	}
+	if len(stale) == 0 {
+		return true, nil
+	}
+	sort.Strings(stale)
+	lease, err := r.ensureLease(ctx)
+	if err != nil {
+		return false, fmt.Errorf("publish lease: %w", err)
+	}
+	jobID, err := r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, stale, lease)
+	if err != nil {
+		return false, fmt.Errorf("submit delete of stale reservations: %w", err)
+	}
+	items, terminal, err := r.waitJob(ctx, jobID)
+	if err != nil {
+		return false, err
+	}
+	if !terminal {
+		return false, nil
+	}
+	for _, item := range items {
+		if !item.Success {
+			return false, fmt.Errorf("delete stale reservation %s: %s", item.NodeID, item.Message)
+		}
+	}
+	log.Infof("collector fetch plan removed stale create reservations space=%s functions=%s", r.SpaceID, strings.Join(stale, ","))
+	r.releaseLease(ctx)
 	return true, nil
 }
 
@@ -957,7 +1050,8 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	if err != nil {
 		return err
 	}
-	nodes, err := r.Cloud.ListTimerMarketFetchers(ctx, r.SpaceID)
+	// 小时校验必须读回云端的真实状态，而不是目录缓存：直接在 SCF 删函数、停触发器、改环境都要能发现。
+	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
 	release()
 	if err != nil {
 		return r.fail("cloudnode", fmt.Errorf("list market fetchers: %w", err))
@@ -966,7 +1060,8 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	for _, node := range nodes {
 		byName[node.NodeID] = node
 	}
-	var drifted, missing []string
+	var drifted, missing, gone []string
+	unverified := 0
 	patches := map[string]*cloudnodepb.NodeRuntimeConfigPatch{}
 	names := make([]string, 0, len(applied))
 	for name := range applied {
@@ -985,15 +1080,32 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			missing = append(missing, name)
 			continue
 		}
-		if fmt.Sprint(node.Metadata["assignment_hash"]) != environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] || timerNeedsRepair(node.Metadata, function.Cron) || accessDrifted(node.Metadata, environment) {
+		switch readbackState(node.Metadata, r.now()) {
+		case readbackStale:
+			unverified++
+			continue
+		case readbackFailed:
+			unverified++
+			continue
+		case readbackGone:
+			gone = append(gone, name)
+			continue
+		}
+		if actualAssignmentHash(node.Metadata) != environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] || timerNeedsRepair(node.Metadata, function.Cron) || accessDrifted(node.Metadata, environment) {
 			drifted = append(drifted, name)
 		}
 	}
-	if len(drifted) == 0 && len(missing) == 0 {
+	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 {
+		if unverified > 0 {
+			// 有函数这次没读回成功：不能宣布全部核对完毕，几分钟后重试。
+			log.WarnContextf(ctx, "collector fetch plan cloud readback incomplete space=%s unverified=%d", r.SpaceID, unverified)
+			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
+			return nil
+		}
 		r.lastVerified = r.now()
 		return nil
 	}
-	log.WarnContextf(ctx, "collector fetch plan repairing space=%s drifted=%s missing=%s", r.SpaceID, strings.Join(drifted, ","), strings.Join(missing, ","))
+	log.WarnContextf(ctx, "collector fetch plan repairing space=%s drifted=%s missing=%s gone=%s", r.SpaceID, strings.Join(drifted, ","), strings.Join(missing, ","), strings.Join(gone, ","))
 	release, err = r.acquireOperation(ctx)
 	if err != nil {
 		return err
@@ -1004,6 +1116,29 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		return r.fail("publish_lease", err)
 	}
 	allOK := true
+	// 云端函数已不存在但目录里还有记录：先走受租约保护的删除清掉记录，才能重新创建。
+	if len(gone) > 0 {
+		sort.Strings(gone)
+		jobID, submitErr := r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, gone, lease)
+		if submitErr != nil {
+			return r.fail("cloudnode", submitErr)
+		}
+		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		if waitErr != nil {
+			return r.fail("cloudnode", waitErr)
+		}
+		removed := map[string]bool{}
+		for _, result := range results {
+			removed[result.NodeID] = result.Success
+		}
+		for _, name := range gone {
+			if terminal && removed[name] {
+				missing = append(missing, name)
+			} else {
+				allOK = false
+			}
+		}
+	}
 	// 云端缺失的函数（例如被手工删除）按已生效计划重建，再补推定时器。
 	for start := 0; start < len(missing); start += runtimeConfigBatchSize {
 		batch := missing[start:min(start+runtimeConfigBatchSize, len(missing))]
@@ -1067,6 +1202,11 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	}
 	if allOK {
 		r.releaseLease(ctx)
+		if unverified > 0 {
+			// 修复完成，但有函数这次没读回成功：几分钟后重新读回。
+			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
+			return nil
+		}
 		r.lastVerified = r.now()
 		return nil
 	}
@@ -1077,11 +1217,55 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 // accessDrifted 判断云端记录的 Access 入口与调用方身份是否与期望一致。
 func accessDrifted(metadata map[string]any, environment map[string]string) bool {
 	for metaKey, envKey := range map[string]string{"access_address": "MOOX_ACCESS_ADDRESS", "access_id": "MOOX_ACCESS_ID", "access_key_id": "MOOX_CALLER_KEY_ID"} {
-		if fmt.Sprint(metadata[metaKey]) != environment[envKey] {
+		// 读回得到的云端实际值优先；没有读回值时才用目录里记录的值。
+		actual, ok := metadata["actual_"+metaKey]
+		if !ok {
+			actual = metadata[metaKey]
+		}
+		if fmt.Sprint(actual) != environment[envKey] {
 			return true
 		}
 	}
 	return false
+}
+
+// actualAssignmentHash 返回云端函数环境里实际生效的分配 hash；没有读回值时用目录记录。
+func actualAssignmentHash(metadata map[string]any) string {
+	if actual, ok := metadata["actual_assignment_hash"]; ok {
+		return fmt.Sprint(actual)
+	}
+	return fmt.Sprint(metadata["assignment_hash"])
+}
+
+type readbackResult int
+
+const (
+	readbackFresh  readbackResult = iota // 刚读回成功
+	readbackStale                        // 没有新的读回时间
+	readbackFailed                       // 读回失败（云端暂时不可读）
+	readbackGone                         // 云端函数已不存在
+)
+
+// readbackMaxAge 是读回时间的有效期：超过说明这次列表没有真正读回云端。
+const readbackMaxAge = 10 * time.Minute
+
+// readbackState 判断节点元数据里的云端读回是否可信：必须是刚做的读回，失败要区分“不存在”和“读不到”。
+func readbackState(metadata map[string]any, now time.Time) readbackResult {
+	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(fmt.Sprint(metadata["timer_last_readback_at"])))
+	if err != nil || now.Sub(at) > readbackMaxAge {
+		return readbackStale
+	}
+	if message := strings.ToLower(strings.TrimSpace(fmt.Sprint(metadata["timer_status_error"]))); message != "" && message != "<nil>" {
+		if strings.Contains(message, "resourcenotfound") || strings.Contains(message, "not found") {
+			if strings.Contains(message, "function") {
+				return readbackGone
+			}
+			// 触发器不存在由 timerNeedsRepair 按元数据修复。
+			return readbackFresh
+		}
+		return readbackFailed
+	}
+	return readbackFresh
 }
 
 // timerNeedsRepair 判断云端读回的定时器是否与期望一致。
@@ -1182,6 +1366,11 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 			r.markBackfillReady(name)
 			return name, nil
 		}
+	}
+	if cleared, clearErr := r.clearStale(ctx, "invoke", []string{name}); clearErr != nil {
+		return "", clearErr
+	} else if !cleared {
+		return "", fmt.Errorf("backfill function %s has an unfinished create reservation", name)
 	}
 	network, ok := r.Deploy.Networks[region]
 	if !ok || network.VPCID == "" || network.SubnetID == "" {

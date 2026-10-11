@@ -158,6 +158,9 @@ message GetNodeListReq {
   string trigger_type = 8;
   string keyword = 9;
   common.Page page = 10;
+  // 为 true 时同步读回云端函数与定时器的实际状态（忽略读回间隔与 market_fetcher 的跳过规则），
+  // 供 Collector 的周期性云端校验使用；默认只返回目录记录。
+  bool refresh_readback = 11;
 }
 
 message GetNodeListRsp {

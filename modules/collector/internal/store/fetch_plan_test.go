@@ -85,7 +85,7 @@ func TestBackfillJobChunksClaimAndWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, again, 1, "运行中且未超时的分块不会被重复取出")
 
-	require.NoError(t, repo.FinishChunk(ctx, claimed[0].ID, BackfillSucceeded, 100, ""))
+	require.NoError(t, repo.FinishChunk(ctx, claimed[0].ID, claimed[0].Attempts, BackfillSucceeded, 100, ""))
 	counts, err := repo.ChunkStatusCounts(ctx, "job-1")
 	require.NoError(t, err)
 	require.Equal(t, 1, counts[BackfillSucceeded])

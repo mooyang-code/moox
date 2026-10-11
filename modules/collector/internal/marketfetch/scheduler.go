@@ -741,6 +741,10 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 				log.WarnContextf(ctx, "skip task=%s frequency=%s period=%s during shared planning: %v", task.TaskID, frequency, target.UTC().Format(time.RFC3339), periodErr)
 				continue
 			}
+			// 交接、回退边界之外的周期不属于旧链路：不预登记周期与写入目标。
+			if params != nil && !params.InvokeOwnsPeriod(target) {
+				continue
+			}
 			stateKey := task.TaskID + "\x00" + frequency
 			frequencyFingerprint := taskScheduleFingerprint(items, frequency, target, task.CollectParams)
 			state := s.planStates[stateKey]
@@ -1484,6 +1488,13 @@ func (s *Scheduler) planOneDeferred(ctx context.Context, task domain.CollectionT
 		if err != nil {
 			return false, fmt.Errorf("load enabled write targets before planning: %w", err)
 		}
+		if len(req.Items) > 0 {
+			if period, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.Items[0].TargetDataTime)); parseErr == nil {
+				if targets, err = s.invokeOwnedTargets(ctx, req.SpaceID, targets, period, map[string]*domain.CollectParams{}); err != nil {
+					return false, fmt.Errorf("check invoke ownership before planning: %w", err)
+				}
+			}
+		}
 		if len(targets) == 0 {
 			return false, nil
 		}
@@ -1625,6 +1636,34 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 		return
 	}
 	log.WarnContextf(ctx, "SCF market fetch invoke exhausted failover batch=%s original_node=%s", req.BatchID, node.NodeID)
+}
+
+// invokeOwnedTargets 只保留旧 Invoke 链路在目标周期上仍然负责的写入目标：
+// 交接、回退边界对预登记、普通派发与重试同样生效。cache 在一次扫描内复用任务参数。
+func (s *Scheduler) invokeOwnedTargets(ctx context.Context, spaceID string, targets []domain.WriteTarget, period time.Time, cache map[string]*domain.CollectParams) ([]domain.WriteTarget, error) {
+	if period.IsZero() || s == nil || s.Tasks == nil {
+		return targets, nil
+	}
+	owned := make([]domain.WriteTarget, 0, len(targets))
+	for _, target := range targets {
+		params, cached := cache[target.TaskID]
+		if !cached {
+			task, err := s.Tasks.GetByTaskID(ctx, spaceID, target.TaskID)
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, err
+			}
+			if task != nil {
+				if parsed, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType); parseErr == nil {
+					params = parsed
+				}
+			}
+			cache[target.TaskID] = params
+		}
+		if params == nil || params.InvokeOwnsPeriod(period) {
+			owned = append(owned, target)
+		}
+	}
+	return owned, nil
 }
 
 func (s *Scheduler) taskEnabled(ctx context.Context, spaceID, taskID string) (bool, error) {
@@ -1956,6 +1995,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		return err
 	}
 	groups := make([]retryDispatchGroup, 0, s.totalMaintenanceBatchLimit())
+	ownershipCache := make(map[string]*domain.CollectParams)
 	lastGroupByKey := make(map[string]int)
 	recentGroupCount, historicalGroupCount := 0, 0
 	for _, candidate := range candidates {
@@ -1969,6 +2009,13 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 				}
 			}
 			targets = filtered
+		}
+		if len(targets) > 0 {
+			owned, ownErr := s.invokeOwnedTargets(ctx, spaceID, targets, retry.TargetDataTime, ownershipCache)
+			if ownErr != nil {
+				return ownErr
+			}
+			targets = owned
 		}
 		if len(targets) == 0 {
 			if err := markPermanent(retry.RetryKey, "retry_target_unavailable", "no enabled write target remains"); err != nil {

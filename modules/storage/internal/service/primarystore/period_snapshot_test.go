@@ -19,7 +19,8 @@ func TestPrimarySnapshotRegistrationLazyPeriodAndKeyStatus(t *testing.T) {
 	ctx := context.Background()
 	period := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	var now atomic.Int64
-	now.Store(period.Add(61 * time.Second).UnixNano())
+	// 首次登记同样要求 P 晚于 Storage 当前时间：先在 P 之前登记，之后再把时钟推到 P 之后。
+	now.Store(period.Add(-time.Minute).UnixNano())
 	const secret = "snapshot-secret"
 	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: secret, Pebble: pebble.Options{
 		NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node"), PeriodNow: func() time.Time { return time.Unix(0, now.Load()).UTC() },
@@ -53,6 +54,7 @@ func TestPrimarySnapshotRegistrationLazyPeriodAndKeyStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, registered.GetRetInfo().GetCode(), "%v", registered.GetRetInfo())
 	require.Equal(t, set.Hash, registered.GetSeriesHash(), "Storage 重算的 hash 必须与共享包一致")
+	now.Store(period.Add(61 * time.Second).UnixNano())
 
 	// 周期还不存在：按周期键查询返回 found=false，而不是错误。
 	key := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix()}

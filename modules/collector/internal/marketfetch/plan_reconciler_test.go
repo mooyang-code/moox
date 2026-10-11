@@ -109,6 +109,9 @@ func (f *fakeRegistrar) RegisterSeriesSnapshot(_ context.Context, _, datasetID, 
 
 type fakePlanCloud struct {
 	nodes      map[string]scfinvoker.Node
+	clock      func() time.Time
+	unready    map[string]scfinvoker.Node
+	deleted    []string
 	jobs       map[string][]scfinvoker.BatchItemResult
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
 	created    []string
@@ -119,7 +122,7 @@ type fakePlanCloud struct {
 }
 
 func newFakePlanCloud() *fakePlanCloud {
-	return &fakePlanCloud{nodes: map[string]scfinvoker.Node{}, jobs: map[string][]scfinvoker.BatchItemResult{}, patches: map[string]*cloudnodepb.NodeRuntimeConfigPatch{}, failNodes: map[string]bool{}}
+	return &fakePlanCloud{nodes: map[string]scfinvoker.Node{}, unready: map[string]scfinvoker.Node{}, jobs: map[string][]scfinvoker.BatchItemResult{}, patches: map[string]*cloudnodepb.NodeRuntimeConfigPatch{}, failNodes: map[string]bool{}}
 }
 
 func (c *fakePlanCloud) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
@@ -130,8 +133,40 @@ func (c *fakePlanCloud) ListTimerMarketFetchers(context.Context, string) ([]scfi
 	return nodes, nil
 }
 
+func (c *fakePlanCloud) ListTimerMarketFetchersFresh(ctx context.Context, spaceID string) ([]scfinvoker.Node, error) {
+	nodes, err := c.ListTimerMarketFetchers(ctx, spaceID)
+	for index := range nodes {
+		metadata := map[string]any{}
+		for key, value := range nodes[index].Metadata {
+			metadata[key] = value
+		}
+		if _, set := metadata["timer_last_readback_at"]; !set && c.clock != nil {
+			metadata["timer_last_readback_at"] = c.clock().UTC().Format(time.RFC3339Nano)
+		}
+		nodes[index].Metadata = metadata
+	}
+	return nodes, err
+}
+
 func (c *fakePlanCloud) ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
 	return nil, nil
+}
+
+func (c *fakePlanCloud) ListUnreadyMarketFetchers(context.Context, string, string) ([]scfinvoker.Node, error) {
+	nodes := make([]scfinvoker.Node, 0, len(c.unready))
+	for _, node := range c.unready {
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
+}
+
+func (c *fakePlanCloud) SubmitDeleteNodes(_ context.Context, _ string, nodeIDs []string, _ *scfinvoker.CollectorPublishLease) (string, error) {
+	for _, id := range nodeIDs {
+		delete(c.unready, id)
+		delete(c.nodes, id)
+	}
+	c.deleted = append(c.deleted, nodeIDs...)
+	return c.newJob(nodeIDs), nil
 }
 
 func (c *fakePlanCloud) newJob(names []string) string {
@@ -272,6 +307,7 @@ func newPlanHarness(t *testing.T, subjectCount int) *planHarness {
 		t: t, store: &memPlanStore{}, registrar: &fakeRegistrar{}, cloud: newFakePlanCloud(), activity: &fakeActivity{}, lateness: &fakeLateness{},
 		symbols: &planSymbolsStub{}, now: time.Date(2026, 10, 12, 8, 30, 20, 0, time.UTC),
 	}
+	h.cloud.clock = func() time.Time { return h.now }
 	h.setSubjects(subjectCount)
 	h.tasks = &planTasksStub{tasks: []domain.CollectionTask{{
 		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline",
@@ -775,4 +811,109 @@ func TestStockCNPlanSkipsNonTradingPeriods(t *testing.T) {
 	}}
 	require.True(t, handler.PlanPeriodValid(PlanMarket{MarketID: "crypto"}, "1m", time.Now()))
 	require.False(t, handler.PlanPeriodValid(PlanMarket{MarketID: StockCNSpaceID}, "1m", time.Now()))
+}
+
+func TestPlanReconcilerClearsStaleCreateReservationsBeforeRecreating(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	state, _ := BuildDesiredState(testPlanOptions(), testGroups(60, "1m"), nil)
+	var name string
+	for fn := range state.Functions {
+		name = fn
+		break
+	}
+	// 创建失败后遗留的预留：目录里有记录但没有部署完成，且已超过等待时长。
+	h.cloud.unready[name] = scfinvoker.Node{NodeID: name, FunctionName: name, TriggerType: "timer", ModifiedAt: h.now.Add(-time.Hour)}
+	require.NoError(t, h.reconcile(r))
+	require.Contains(t, h.cloud.deleted, name, "the stale reservation is deleted before creating")
+	require.Contains(t, h.cloud.created, name)
+}
+
+func TestPlanReconcilerWaitsForFreshCreateReservations(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	state, _ := BuildDesiredState(testPlanOptions(), testGroups(60, "1m"), nil)
+	var name string
+	for fn := range state.Functions {
+		name = fn
+		break
+	}
+	h.cloud.unready[name] = scfinvoker.Node{NodeID: name, FunctionName: name, TriggerType: "timer", ModifiedAt: h.now.Add(-time.Minute)}
+	require.NoError(t, h.reconcile(r))
+	require.Empty(t, h.cloud.deleted, "a reservation that may still be in progress is left alone")
+	require.NotContains(t, h.cloud.created, name)
+}
+
+func TestPlanManagerDisablesConfiguredSpacesThatAreInactiveAtStartup(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r)) // 先让该空间有函数与计划，模拟停机前的状态
+	created := 0
+	var mu sync.Mutex
+	manager := &PlanManager{
+		Configured: []string{"crypto"},
+		Spaces:     func(context.Context) ([]string, error) { return nil, nil },
+		Factory: func(string) (*PlanReconciler, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			created++
+			reconciler := h.reconciler()
+			reconciler.Now = time.Now
+			return reconciler, nil
+		},
+		Interval: 40 * time.Millisecond, Offset: 5 * time.Millisecond, Timeout: time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	go func() { manager.Run(ctx); close(finished) }()
+	require.Eventually(t, func() bool {
+		for _, patch := range h.cloud.patches {
+			if patch.GetTimerEnabled() {
+				return false
+			}
+		}
+		return len(h.cloud.patches) > 0
+	}, 5*time.Second, 10*time.Millisecond, "timers of the inactive space are disabled after a restart")
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	<-finished
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, created, "a space that is already disabled is not wound down again")
+}
+
+func TestPlanReconcilerRecreatesFunctionsDeletedInTheCloudAndIgnoresFailedReadbacks(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	var names []string
+	for name, patch := range h.cloud.patches {
+		names = append(names, name)
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
+			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
+			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(),
+		}}
+	}
+	sort.Strings(names)
+	require.GreaterOrEqual(t, len(names), 2)
+	// 一个函数在云端已被删除（目录里还有记录），另一个这次读回失败（云端暂时读不到）。
+	deleted, unreadable := names[0], names[1]
+	node := h.cloud.nodes[deleted]
+	node.Metadata["timer_status_error"] = "ResourceNotFound.Function: function not found"
+	h.cloud.nodes[deleted] = node
+	node = h.cloud.nodes[unreadable]
+	node.Metadata["timer_status_error"] = "context deadline exceeded"
+	h.cloud.nodes[unreadable] = node
+
+	h.now = h.now.Add(2 * time.Hour)
+	h.cloud.created = nil
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, []string{deleted}, h.cloud.deleted, "only the function that is gone in the cloud is removed from the catalog")
+	require.Equal(t, []string{deleted}, h.cloud.created, "and is recreated afterwards")
+	require.True(t, r.lastVerified.Before(h.now), "an unreadable function keeps the verification open for a retry")
 }

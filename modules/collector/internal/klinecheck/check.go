@@ -40,8 +40,8 @@ type Checker struct {
 	Auth        *storagepb.AuthInfo
 	Now         func() time.Time
 	Concurrency int
-	// Calendar 非空时用于过滤非交易时间点（stockcn）；为空表示连续交易。
-	Calendar func(frequency string, barStart time.Time) bool
+	// Calendar 非空时用于过滤非交易时间点（按空间区分，stockcn 使用交易日历）；为空表示连续交易。
+	Calendar func(spaceID, frequency string, barStart time.Time) bool
 }
 
 // Request 是一次检查的范围。From 含、To 不含（K 线开始时间）。
@@ -126,7 +126,7 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 	for _, item := range jobs {
 		_, frequencyName, _ := strings.Cut(item.key, "|")
 		frequency, err := marketdata.ParseFrequency(frequencyName)
-		if err != nil || frequency.Duration() <= 0 {
+		if err != nil {
 			continue
 		}
 		from, to := request.From.UTC(), request.To.UTC()
@@ -137,11 +137,11 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			to = time.Unix(item.segment.To, 0).UTC()
 		}
 		if to.After(from) {
-			points += int64(to.Sub(from) / frequency.Duration())
+			points += int64(barCount(frequency, alignUp(frequency, from), to))
 		}
 	}
 	if points > MaxCheckPoints {
-		return nil, fmt.Errorf("the range covers about %d bars, above the limit %d; narrow the time range or the subject set", points, MaxCheckPoints)
+		return nil, fmt.Errorf("%w: the range covers about %d bars, above the limit %d; narrow the time range or the subject set", errTooManyChunks, points, MaxCheckPoints)
 	}
 	result := &Result{}
 	var mu sync.Mutex
@@ -196,20 +196,14 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 }
 
 // expectedBars 返回区间内已过截止时间、应当存在的 K 线开始时间。
-func (c *Checker) expectedBars(frequency marketdata.Frequency, frequencyName string, from, to time.Time, lateness time.Duration) []time.Time {
-	step := frequency.Duration()
-	if step <= 0 {
-		return nil
-	}
-	seconds := int64(step / time.Second)
-	start := time.Unix((from.Unix()+seconds-1)/seconds*seconds, 0).UTC()
+func (c *Checker) expectedBars(spaceID string, frequency marketdata.Frequency, frequencyName string, from, to time.Time, lateness time.Duration) []time.Time {
 	now := c.now()
 	var bars []time.Time
-	for t := start; t.Before(to); t = t.Add(step) {
+	for t := alignUp(frequency, from); t.Before(to); t = frequency.BarEnd(t) {
 		if frequency.BarEnd(t).Add(lateness).After(now) {
 			break
 		}
-		if c.Calendar != nil && !c.Calendar(frequencyName, t) {
+		if c.Calendar != nil && !c.Calendar(spaceID, frequencyName, t) {
 			continue
 		}
 		bars = append(bars, t)
@@ -232,7 +226,7 @@ func (c *Checker) checkSubject(ctx context.Context, request Request, datasetID, 
 	if !from.Before(to) {
 		return nil, 0, nil
 	}
-	bars := c.expectedBars(frequency, frequencyName, from, to, time.Duration(segment.LatenessS)*time.Second)
+	bars := c.expectedBars(request.SpaceID, frequency, frequencyName, from, to, time.Duration(segment.LatenessS)*time.Second)
 	if len(bars) == 0 {
 		return nil, 0, nil
 	}
@@ -257,6 +251,11 @@ func (c *Checker) checkSubject(ctx context.Context, request Request, datasetID, 
 				open = nil
 			}
 			continue
+		}
+		// 中间隔着非交易时段（日历跳过的 K 线）时拆成两段，补采分块不会跨休市区间。
+		if open != nil && !bar.Equal(open.To) {
+			gaps = append(gaps, *open)
+			open = nil
 		}
 		if open == nil {
 			open = &Gap{DatasetID: datasetID, Frequency: frequencyName, SubjectID: subject, From: bar}

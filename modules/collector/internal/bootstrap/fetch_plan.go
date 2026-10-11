@@ -29,9 +29,11 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	if len(spaces) == 0 {
 		return nil
 	}
-	deploy, err := cfg.fetchPlanDeploy()
-	if err != nil {
-		return err
+	// 启动时先逐个空间检查部署参数，配置错误尽早暴露。
+	for _, space := range spaces {
+		if _, err := cfg.fetchPlanDeploy(space); err != nil {
+			return err
+		}
 	}
 	registrar, err := marketstorage.NewGatewaySnapshotRegistrar(process.gateway, marketstorage.InstTypeSPOT)
 	if err != nil {
@@ -45,7 +47,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		return fmt.Errorf("resolve storage auth: %w", err)
 	}
 	var reconcilers sync.Map
-	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth}
+	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth, Calendar: stockCNCheckCalendar()}
 	backfiller := &klinecheck.Backfiller{
 		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx,
 		Functions: func(spaceID string) klinecheck.FunctionProvider {
@@ -58,6 +60,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
 	manager := &marketfetch.PlanManager{
+		Configured: spaces,
 		Spaces: func(ctx context.Context) ([]string, error) {
 			// 配置里的空间 ∩ Admin 中仍启用的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
 			active, err := invoker.ListActiveSpaceIDs(ctx)
@@ -80,6 +83,10 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			var preflight func(context.Context) error
 			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
 				preflight = stockCNCalendarPreflight
+			}
+			deploy, err := cfg.fetchPlanDeploy(spaceID)
+			if err != nil {
+				return nil, err
 			}
 			reconciler := &marketfetch.PlanReconciler{
 				Preflight: preflight,
@@ -123,6 +130,47 @@ func stockCNCalendarPreflight(ctx context.Context) error {
 		log.WarnContextf(ctx, "stockcn calendar coverage is running out: %v", err)
 	}
 	return nil
+}
+
+// stockCNCheckCalendar 返回完整性检查使用的交易日历过滤：与函数侧一致，stockcn 只在交易日历的
+// 交易分钟应有 K 线，其余空间连续交易。日历加载失败时按“没有应有 K 线”处理，检查会得到空结果而不是误报缺口。
+func stockCNCheckCalendar() func(spaceID, frequency string, barStart time.Time) bool {
+	var (
+		mu       sync.Mutex
+		calendar *stockmarket.Calendar
+		loadErr  error
+		loaded   bool
+		sessions = map[string]map[int64]struct{}{}
+	)
+	return func(spaceID, frequency string, barStart time.Time) bool {
+		if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+			return true
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !loaded {
+			calendar, loadErr = stockmarket.LoadCalendar(stockCNCalendarPath())
+			loaded = true
+		}
+		if loadErr != nil || calendar == nil || calendar.Location() == nil || !strings.EqualFold(frequency, "1m") {
+			return false
+		}
+		tradeDate := barStart.In(calendar.Location()).Format("2006-01-02")
+		bars, cached := sessions[tradeDate]
+		if !cached {
+			expected, err := calendar.ExpectedMinuteBars(tradeDate)
+			if err != nil {
+				return false
+			}
+			bars = make(map[int64]struct{}, len(expected))
+			for _, bar := range expected {
+				bars[bar.UTC().Unix()] = struct{}{}
+			}
+			sessions[tradeDate] = bars
+		}
+		_, ok := bars[barStart.UTC().Unix()]
+		return ok
+	}
 }
 
 func stockCNCalendarPath() string {

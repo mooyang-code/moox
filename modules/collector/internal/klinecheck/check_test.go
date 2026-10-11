@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -139,4 +140,51 @@ func mustJSON(value any) string {
 		panic(err)
 	}
 	return string(raw)
+}
+
+func TestCheckSplitsGapsAtNonTradingPeriods(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT")}
+	rows := &fakeRows{missing: map[string]map[int64]bool{"BTC-USDT": {}}}
+	for _, minute := range []int{2, 3, 4, 5, 6, 7} {
+		rows.missing["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
+	}
+	// 第 4、5 分钟不是交易分钟：它们既不应有、也不算缺口，两侧的缺口不能合并成一段。
+	calendar := func(_, _ string, barStart time.Time) bool {
+		minute := int(barStart.Sub(base) / time.Minute)
+		return minute != 4 && minute != 5
+	}
+	checker := &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }, Calendar: calendar}
+	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(10 * time.Minute)})
+	require.NoError(t, err)
+	require.Equal(t, 8, result.Expected)
+	require.Equal(t, 4, result.Missing)
+	require.Len(t, result.Gaps, 2)
+	require.Equal(t, base.Add(2*time.Minute), result.Gaps[0].From)
+	require.Equal(t, base.Add(4*time.Minute), result.Gaps[0].To)
+	require.Equal(t, base.Add(6*time.Minute), result.Gaps[1].From)
+	require.Equal(t, base.Add(8*time.Minute), result.Gaps[1].To)
+}
+
+func TestCheckRejectsTooManyPointsWithShrinkableError(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	subjects := make([]string, 0, 8)
+	for i := 0; i < 8; i++ {
+		subjects = append(subjects, fmt.Sprintf("S%d-USDT", i))
+	}
+	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), subjects...)}
+	checker := &Checker{Plans: fakePlans{records}, Rows: &fakeRows{}, Now: func() time.Time { return base.Add(24 * 365 * time.Hour) }}
+	_, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(24 * 365 * time.Hour)})
+	require.ErrorIs(t, err, errTooManyChunks)
+}
+
+func TestMonthlyBarsUseCalendarArithmetic(t *testing.T) {
+	month, err := marketdata.ParseFrequency("1M")
+	require.NoError(t, err)
+	from := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+	require.Equal(t, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), alignUp(month, from))
+	require.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), alignDown(month, from))
+	require.Equal(t, 3, barCount(month, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)))
+	parts := splitGap(Gap{From: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)}, month)
+	require.Len(t, parts, 1)
 }

@@ -154,7 +154,7 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 	if effectiveFrom > s.periodNow().UTC().Add(maxEffectiveFromLead).Unix() {
 		return RegisterSnapshotResult{}, invalid("effective_from is too far in the future")
 	}
-	if effectiveFrom <= s.periodNow().UTC().Unix() && hasLast {
+	if effectiveFrom <= s.periodNow().UTC().Unix() {
 		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be in the future"}
 	}
 	// P 之后不能已有周期：已建立的周期不可更换快照。

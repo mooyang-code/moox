@@ -75,7 +75,15 @@
               <a-button size="small" :loading="jobsLoading" @click="loadJobs">刷新</a-button>
             </a-space>
           </header>
-          <a-table row-key="job_id" size="small" :data="jobs" :pagination="false" :bordered="{ cell: true }" :loading="jobsLoading">
+          <a-table
+            row-key="job_id"
+            size="small"
+            :data="jobs"
+            :pagination="{ current: jobsPage, pageSize: jobsPageSize, total: jobsTotal, showTotal: true, size: 'small' }"
+            :bordered="{ cell: true }"
+            :loading="jobsLoading"
+            @page-change="onJobsPageChange"
+          >
             <template #columns>
               <a-table-column title="作业" :width="300">
                 <template #cell="{ record }"
@@ -181,6 +189,9 @@ const plans = ref<GetFetchPlansResponse>({});
 const plansLoading = ref(false);
 const jobs = ref<KlineBackfillJob[]>([]);
 const jobsLoading = ref(false);
+const jobsPage = ref(1);
+const jobsPageSize = 20;
+const jobsTotal = ref(0);
 
 const rangeVisible = ref(false);
 const rangeMode = ref<"check" | "backfill">("check");
@@ -221,14 +232,22 @@ async function loadJobs() {
   const request = jobsGuard.begin();
   jobsLoading.value = true;
   try {
-    const data = await listKlineBackfills(spaceId, 1, 20);
-    if (request.isLatest() && spaceId === (selectedSpaceId.value || "")) jobs.value = data.items || [];
+    const data = await listKlineBackfills(spaceId, jobsPage.value, jobsPageSize);
+    if (request.isLatest() && spaceId === (selectedSpaceId.value || "")) {
+      jobs.value = data.items || [];
+      jobsTotal.value = Number(data.page?.total || 0);
+    }
   } catch (error) {
     if (!request.isLatest()) return;
     console.error("获取补采作业失败:", error);
   } finally {
     if (request.isLatest()) jobsLoading.value = false;
   }
+}
+
+function onJobsPageChange(page: number) {
+  jobsPage.value = page;
+  loadJobs();
 }
 
 function openRange(mode: "check" | "backfill") {
@@ -284,6 +303,8 @@ watch(selectedSpaceId, () => {
   jobsGuard.invalidate();
   plans.value = {};
   jobs.value = [];
+  jobsPage.value = 1;
+  jobsTotal.value = 0;
   void loadPlans();
   void loadJobs();
 });

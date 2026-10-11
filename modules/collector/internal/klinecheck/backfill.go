@@ -69,7 +69,9 @@ type BackfillStore interface {
 	CancelJob(context.Context, string) error
 	ClaimChunks(context.Context, string, int, time.Time) ([]store.BackfillChunk, error)
 	InFlightChunks(context.Context, string) (int, error)
-	FinishChunk(context.Context, int64, string, int, string) error
+	FinishChunk(context.Context, int64, int, string, int, string) error
+	RenewChunk(context.Context, int64, int, time.Time) error
+	ReleaseChunk(context.Context, int64, int) error
 	ChunkStatusCounts(context.Context, string) (map[string]int, error)
 	Watermark(context.Context, string, string, string) (time.Time, error)
 	SetWatermark(context.Context, string, string, string, time.Time) error
@@ -120,13 +122,10 @@ func (b *Backfiller) maxInFlight() int {
 func (b *Backfiller) Wait() { b.workers.Wait() }
 
 // splitGap 把一段缺口拆成每块至多 MaxChunkBars 根的分块。
-func splitGap(gap Gap, step time.Duration) [][2]time.Time {
-	if step <= 0 {
-		return nil
-	}
+func splitGap(gap Gap, frequency marketdata.Frequency) [][2]time.Time {
 	var parts [][2]time.Time
 	for from := gap.From; from.Before(gap.To); {
-		to := from.Add(time.Duration(MaxChunkBars) * step)
+		to := advanceBars(frequency, from, MaxChunkBars)
 		if to.After(gap.To) {
 			to = gap.To
 		}
@@ -174,7 +173,7 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 		if err != nil {
 			return "", 0, err
 		}
-		for _, part := range splitGap(gap, frequency.Duration()) {
+		for _, part := range splitGap(gap, frequency) {
 			chunks = append(chunks, store.BackfillChunk{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: part[0], To: part[1], ChunkID: chunkID(jobID, gap.DatasetID, gap.Frequency, gap.SubjectID, part[0])})
 		}
 	}
@@ -293,13 +292,16 @@ func (b *Backfiller) baseContext() context.Context {
 	return context.Background()
 }
 
-// datasetMarket 从最近一份已生效计划里找到数据集所在的市场与交易所符号映射。
-func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, frequency string) (*marketfetch.Plan, error) {
+// datasetMarket 从采集计划里找到负责该标的的那份函数计划（市场与交易所符号映射）。
+// 例外符号只保存在负责该标的的函数计划里，所以必须按数据集、频率、标的与时间定位，不能借用同一数据集的其他分片。
+// 优先选择在 at 时已生效的计划份，找不到时退回最近一份包含该标的的计划。
+func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, frequency, subjectID string, at time.Time) (*marketfetch.Plan, error) {
 	records, err := b.Plans.ListAll(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
 	key := DatasetKey(datasetID, frequency)
+	var fallback *marketfetch.Plan
 	for i := len(records) - 1; i >= 0; i-- {
 		content, err := marketfetch.DecodeFetchPlanContent(records[i].Plan)
 		if err != nil {
@@ -307,21 +309,35 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		}
 		for _, name := range content.SortedFunctionNames() {
 			function := content.Functions[name]
-			plan := content.FinalPlan(function)
-			if plan == nil {
-				plan = content.TransitionalPlan(function)
-			}
-			if plan == nil {
-				continue
-			}
-			for _, dataset := range plan.Datasets {
-				if marketfetch.PlanDatasetKeyOf(dataset) == key {
-					return plan, nil
+			for _, plan := range []*marketfetch.Plan{content.FinalPlan(function), content.TransitionalPlan(function)} {
+				if plan == nil {
+					continue
+				}
+				for _, dataset := range plan.Datasets {
+					if marketfetch.PlanDatasetKeyOf(dataset) != key {
+						continue
+					}
+					for _, copyView := range dataset.Copies {
+						for _, subject := range copyView.Subjects {
+							if !strings.EqualFold(subject.ID, subjectID) {
+								continue
+							}
+							if copyView.From <= at.Unix() {
+								return plan, nil
+							}
+							if fallback == nil {
+								fallback = plan
+							}
+						}
+					}
 				}
 			}
 		}
 	}
-	return nil, fmt.Errorf("dataset %s %s is not part of any fetch plan", datasetID, frequency)
+	if fallback != nil {
+		return fallback, nil
+	}
+	return nil, fmt.Errorf("subject %s of dataset %s %s is not part of any fetch plan", subjectID, datasetID, frequency)
 }
 
 // chunkRequest 构造补采分块的调用请求：一个标的、一段连续时间，只写行，不涉及周期。
@@ -330,7 +346,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 	if err != nil {
 		return marketfetch.Request{}, err
 	}
-	bars := int(chunk.To.Sub(chunk.From) / frequency.Duration())
+	bars := barCount(frequency, chunk.From, chunk.To)
 	if bars < 1 || bars > MaxChunkBars {
 		return marketfetch.Request{}, fmt.Errorf("chunk spans %d bars", bars)
 	}
@@ -364,7 +380,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk) {
 	fail := func(err error) {
 		log.WarnContextf(ctx, "collector backfill chunk failed space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
-		if finishErr := b.Store.FinishChunk(ctx, chunk.ID, store.BackfillFailed, 0, err.Error()); finishErr != nil {
+		if finishErr := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillFailed, 0, err.Error()); finishErr != nil {
 			log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, finishErr)
 		}
 	}
@@ -372,7 +388,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(fmt.Errorf("gave up after %d attempts", chunk.Attempts-1))
 		return
 	}
-	plan, err := b.datasetMarket(ctx, spaceID, chunk.DatasetID, chunk.Frequency)
+	plan, err := b.datasetMarket(ctx, spaceID, chunk.DatasetID, chunk.Frequency, chunk.SubjectID, chunk.From)
 	if err != nil {
 		fail(err)
 		return
@@ -384,8 +400,11 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	}
 	functionName, err := provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
 	if err != nil {
-		// 补采函数暂时不可用（创建中、发布租约被占用）：不算分块失败，名额到期后重新认领。
+		// 补采函数暂时不可用（创建中、发布租约被占用）：不算执行失败，分块退回待认领并退回这次尝试。
 		log.WarnContextf(ctx, "collector backfill function is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
+		if releaseErr := b.Store.ReleaseChunk(ctx, chunk.ID, chunk.Attempts); releaseErr != nil {
+			log.WarnContextf(ctx, "collector backfill chunk release failed chunk=%s: %v", chunk.ChunkID, releaseErr)
+		}
 		return
 	}
 	request, err := chunkRequest(spaceID, functionName, plan, chunk)
@@ -399,6 +418,11 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	event["source"] = model.EventSourceCollectorBackfill
+	// 名额有效期从实际调用时起算：认领之后等待函数就绪的时间不能吃掉执行预算。
+	if err := b.Store.RenewChunk(ctx, chunk.ID, chunk.Attempts, b.now().Add(chunkInvokeLimit+chunkSafetyMargin)); err != nil {
+		log.WarnContextf(ctx, "collector backfill chunk is no longer owned space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
+		return
+	}
 	callCtx, cancel := context.WithTimeout(ctx, chunkInvokeLimit)
 	result, err := b.Invoker.Invoke(callCtx, spaceID, functionName, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
 	cancel()
@@ -420,17 +444,17 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(fmt.Errorf("%d bars are still missing after the backfill", check.Missing))
 		return
 	}
-	if err := b.Store.FinishChunk(ctx, chunk.ID, store.BackfillSucceeded, bars(chunk), ""); err != nil {
+	if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, bars(chunk), ""); err != nil {
 		log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, err)
 	}
 }
 
 func bars(chunk store.BackfillChunk) int {
 	frequency, err := marketdata.ParseFrequency(chunk.Frequency)
-	if err != nil || frequency.Duration() <= 0 {
+	if err != nil {
 		return 0
 	}
-	return int(chunk.To.Sub(chunk.From) / frequency.Duration())
+	return barCount(frequency, chunk.From, chunk.To)
 }
 
 // advanceWatermark 自动补采作业全部成功后才推进扫描水位；失败的作业不推进，下次扫描会重新覆盖同一窗口。
@@ -491,7 +515,7 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 			continue
 		}
 		lateness := time.Duration(segments[len(segments)-1].LatenessS) * time.Second
-		to := now.Add(-lateness - frequency.Duration()).Truncate(frequency.Duration())
+		to := alignDown(frequency, now.Add(-lateness-frequency.NominalDuration()))
 		watermark, err := b.Store.Watermark(ctx, spaceID, datasetID, frequencyName)
 		if err != nil {
 			return err
@@ -518,7 +542,7 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 			if submitErr == nil || !errors.Is(submitErr, errTooManyChunks) || windowTo.Sub(from) <= 10*time.Minute {
 				break
 			}
-			windowTo = from.Add(windowTo.Sub(from) / 2).Truncate(frequency.Duration())
+			windowTo = alignDown(frequency, from.Add(windowTo.Sub(from)/2))
 			if !windowTo.After(from) {
 				break
 			}

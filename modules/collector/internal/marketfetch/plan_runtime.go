@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -63,6 +64,8 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	if len(planned) == 0 {
 		return respond(true, "no_work", nil)
 	}
+	// 截止时间最近的先执行：整点同时到期多个频率时，短周期不能被长周期占去预算。
+	sort.SliceStable(planned, func(i, j int) bool { return planned[i].StorageDeadline.Before(planned[j].StorageDeadline) })
 	invocationHandler, closeGateway, err := h.prepareInvocation(false)
 	if err != nil {
 		return respond(false, err.Error(), nil)

@@ -231,12 +231,52 @@ func (r *BackfillRepository) InFlightChunks(ctx context.Context, spaceID string)
 	return int(count), err
 }
 
-// FinishChunk 记录分块的结果。
-func (r *BackfillRepository) FinishChunk(ctx context.Context, id int64, status string, rows int, lastError string) error {
+// ErrChunkLost 表示分块已被重新认领或取消，当前尝试不再拥有它。
+var ErrChunkLost = fmt.Errorf("backfill chunk is no longer owned by this attempt")
+
+// chunkOwned 限定只有仍持有该次尝试（尝试号一致且运行中）的调用才能改动分块，
+// 过期的旧尝试不会覆盖新尝试的状态。
+func (r *BackfillRepository) chunkOwned(ctx context.Context, id int64, attempt int) *gorm.DB {
+	return r.db.WithContext(ctx).Model(&backfillChunkRow{}).Where("c_id = ? AND c_attempts = ? AND c_status = ?", id, attempt, BackfillRunning)
+}
+
+// FinishChunk 记录分块的结果；分块已不属于该次尝试时返回 ErrChunkLost。
+func (r *BackfillRepository) FinishChunk(ctx context.Context, id int64, attempt int, status string, rows int, lastError string) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("backfill repository is not initialized")
 	}
-	return r.db.WithContext(ctx).Model(&backfillChunkRow{}).Where("c_id = ?", id).Updates(map[string]any{"c_status": status, "c_rows": rows, "c_last_error": lastError, "c_mtime": time.Now().UTC()}).Error
+	result := r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_status": status, "c_rows": rows, "c_last_error": lastError, "c_mtime": time.Now().UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrChunkLost
+	}
+	return nil
+}
+
+// RenewChunk 在真正调用函数之前把名额有效期续到新的最迟结束时间。
+func (r *BackfillRepository) RenewChunk(ctx context.Context, id int64, attempt int, latestEnd time.Time) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("backfill repository is not initialized")
+	}
+	result := r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_latest_end_at": latestEnd.UTC(), "c_mtime": time.Now().UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrChunkLost
+	}
+	return nil
+}
+
+// ReleaseChunk 把还没真正执行的分块放回待认领，并退回这次尝试（等待函数就绪不算执行失败）。
+func (r *BackfillRepository) ReleaseChunk(ctx context.Context, id int64, attempt int) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("backfill repository is not initialized")
+	}
+	result := r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_status": BackfillPending, "c_attempts": attempt - 1, "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": time.Now().UTC()})
+	return result.Error
 }
 
 // ChunkStatusCounts 返回作业各状态的分块数。

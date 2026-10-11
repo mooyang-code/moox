@@ -387,4 +387,29 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	noDeploy.SCFPlan.PackageID = ""
 	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_id")
 	require.NoError(t, Default().validateSCFPlan(), "spaces without scf_markets keep the Invoke scheduler only")
+
+	shared := valid()
+	shared.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
+	require.ErrorContains(t, shared.validateSCFPlan(), "share code package")
+	own := valid()
+	own.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
+	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	require.NoError(t, own.validateSCFPlan())
+}
+
+func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "env.json"), []byte(`{"MOOX_SPACE_ID":"crypto","OTHER":"x"}`), 0o600))
+	cfg := Default()
+	cfg.sourcePath = filepath.Join(dir, "app.yaml")
+	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "env.json"
+	cfg.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	deploy, err := cfg.fetchPlanDeploy("stockcn")
+	require.NoError(t, err)
+	require.Equal(t, "stockcn", deploy.BaseEnvironment["MOOX_SPACE_ID"])
+	require.Equal(t, "pkg-stockcn", deploy.PackageID)
+	cryptoDeploy, err := cfg.fetchPlanDeploy("crypto")
+	require.NoError(t, err)
+	require.Equal(t, "crypto", cryptoDeploy.BaseEnvironment["MOOX_SPACE_ID"])
+	require.Equal(t, "pkg", cryptoDeploy.PackageID)
 }

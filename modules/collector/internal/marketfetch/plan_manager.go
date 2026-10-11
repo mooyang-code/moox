@@ -98,6 +98,9 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 type PlanManager struct {
 	// Spaces 返回当前应当运行对账的空间。
 	Spaces func(ctx context.Context) ([]string, error)
+	// Configured 是配置了采集计划的全部空间。其中当前不在 Spaces 里的空间（停用或在停机期间被停用）
+	// 会先做一次停用收尾，确保旧的定时器不再运行；确认后不再重复。
+	Configured []string
 	// Factory 为空间创建对账器。
 	Factory  func(spaceID string) (*PlanReconciler, error)
 	Interval time.Duration
@@ -107,15 +110,18 @@ type PlanManager struct {
 	// AfterTick 在每轮对账之后调用（推进补采作业、自动补采扫描），错误只记录日志。
 	AfterTick func(ctx context.Context, spaceID string) error
 
-	mu      sync.Mutex
-	workers map[string]*planWorker
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	workers  map[string]*planWorker
+	disabled map[string]bool
+	wg       sync.WaitGroup
 }
 
 type planWorker struct {
 	cancel context.CancelFunc
 	stop   chan struct{}
 	done   chan struct{}
+	// disabled 在协程因停用收尾完成而退出时置位（done 关闭后读取）。
+	disabled bool
 }
 
 func (m *PlanManager) interval() time.Duration {
@@ -180,9 +186,18 @@ func (m *PlanManager) sync(ctx context.Context) {
 	if m.workers == nil {
 		m.workers = map[string]*planWorker{}
 	}
+	if m.disabled == nil {
+		m.disabled = map[string]bool{}
+	}
+	for space := range wanted {
+		delete(m.disabled, space)
+	}
 	for space, worker := range m.workers {
 		select {
 		case <-worker.done:
+			if worker.disabled {
+				m.disabled[space] = true
+			}
 			delete(m.workers, space)
 			continue
 		default:
@@ -194,20 +209,31 @@ func (m *PlanManager) sync(ctx context.Context) {
 			}
 		}
 	}
-	for space := range wanted {
+	start := func(space string, stopping bool) {
 		if _, running := m.workers[space]; running {
-			continue
+			return
 		}
 		reconciler, err := m.Factory(space)
 		if err != nil {
 			log.WarnContextf(ctx, "collector fetch plan reconciler for space %s is unavailable: %v", space, err)
-			continue
+			return
 		}
 		workerCtx, cancel := context.WithCancel(ctx)
 		worker := &planWorker{cancel: cancel, stop: make(chan struct{}, 1), done: make(chan struct{})}
+		if stopping {
+			worker.stop <- struct{}{}
+		}
 		m.workers[space] = worker
 		m.wg.Add(1)
 		go m.runSpace(workerCtx, space, reconciler, worker)
+	}
+	for space := range wanted {
+		start(space, false)
+	}
+	for _, space := range m.Configured {
+		if _, active := wanted[space]; !active && !m.disabled[space] {
+			start(space, true)
+		}
 	}
 }
 
@@ -237,6 +263,7 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 			}
 			if done {
 				log.InfoContextf(ctx, "collector fetch plan space stopped space=%s", space)
+				worker.disabled = true
 				return
 			}
 			continue

@@ -1487,3 +1487,41 @@ func (*testRequestSnapshot) GetDataNode(string) (*pb.DataNode, bool) {
 func (*testRequestSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
 }
+
+type attrsSnapshot map[string]map[string]string
+
+func (s attrsSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
+	attrs, ok := s[datasetID]
+	if !ok {
+		return nil, false
+	}
+	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataNodeId: "node-owner", Attributes: attrs}, true
+}
+
+func (attrsSnapshot) GetDataNode(string) (*pb.DataNode, bool) { return nil, false }
+
+func (attrsSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return nil, &pb.PageResult{}, nil
+}
+
+func TestCollectorIdentityWritesOnlyCollectorOwnedDatasets(t *testing.T) {
+	ctx := metadata.WithRequestSnapshot(context.Background(), attrsSnapshot{
+		"raw":      {"owner_module": "collector", "dataset_role": "raw_collection"},
+		"resample": {"owner_module": "collector", "dataset_role": "kline_resample_result"},
+		"strategy": {"owner_module": "strategy", "dataset_role": "signal"},
+		"foreign":  {"owner_module": "factor", "dataset_role": "raw_collection"},
+	})
+	rowFor := func(dataset string) []*pb.RowFieldUpsert {
+		return []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "space", DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "S", Freq: "1m", DataTime: "2026-10-12T00:00:00Z"}}}}}
+	}
+	for _, appID := range []string{"collector", "moox-collector"} {
+		auth := &pb.AuthInfo{AppId: appID}
+		require.NoError(t, validateDatasetWriteOwner(ctx, auth, rowFor("raw")), appID)
+		require.NoError(t, validateDatasetWriteOwner(ctx, auth, rowFor("resample")), appID)
+		require.ErrorContains(t, validateDatasetWriteOwner(ctx, auth, rowFor("strategy")), "not Collector-owned", appID)
+		require.ErrorContains(t, validateDatasetWriteOwner(ctx, auth, rowFor("foreign")), "not Collector-owned", appID)
+	}
+	require.NoError(t, validateDatasetWriteOwner(ctx, &pb.AuthInfo{AppId: "strategy"}, rowFor("strategy")), "other callers keep their existing behavior")
+	record := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "space", DatasetId: "strategy", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}}
+	require.NoError(t, validateDatasetWriteOwner(ctx, &pb.AuthInfo{AppId: "collector"}, record), "record rows such as task results are not time-series writes")
+}
