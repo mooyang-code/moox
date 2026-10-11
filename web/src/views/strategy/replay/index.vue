@@ -306,6 +306,7 @@
 </template>
 
 <script setup lang="ts">
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { default as VChart } from "@visactor/vchart";
@@ -464,6 +465,7 @@ async function loadStrategies() {
     await strategyStore.loadAllStrategies(200);
     errors.strategies = "";
   } catch (err) {
+    if (err instanceof StaleSpaceRequestError) return; // 切换空间造成的取消，空间监听会重新加载
     errors.strategies = `策略定义加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   }
 }

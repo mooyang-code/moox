@@ -1,4 +1,4 @@
-import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
+import { AxiosHeaders, type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from "axios";
 import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from "@/utils/request-signing";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "./space-header";
 import { AuthSessionExpiredError } from "./auth-errors";
@@ -89,7 +89,8 @@ function independentOfSelectedSpace(url: string | undefined): boolean {
 }
 
 /** 与空间无关的全局服务（仅全局管理员可用，没有空间归属）：不参与“切换空间即取消”，否则全局单例读取会被无故打断。 */
-const GLOBAL_SERVICE = /\/api\/admin\/(auth|space|ssh|secret|sysdeploy|setup|monitor)\//;
+const GLOBAL_SERVICE =
+  /\/api\/admin\/(?:(?:auth|space|ssh|secret|sysdeploy|setup|monitor)\/|storage\/(?:ListSpaces|GetDataNode|ListDataNodes)$|cloudnode\/(?:ListCloudAccounts|GetCloudAccount|ListCloudRegions)$)/;
 
 let lastSpaceInitFinished = 0;
 let spaceInitInflight: Promise<void> | null = null;
@@ -144,7 +145,7 @@ onSpaceGenerationChange(() => {
   inflightSpaceReads.clear();
 });
 
-function isSpaceScopedRead(config: InternalAxiosRequestConfig | undefined): boolean {
+function isSpaceScopedRead(config: Pick<AxiosRequestConfig, "url" | "injectedSpaceId"> | undefined): boolean {
   return Boolean(config?.injectedSpaceId) && READ_METHOD.test(config?.url || "") && !GLOBAL_SERVICE.test(config?.url || "");
 }
 
@@ -159,7 +160,59 @@ function finishSpaceRead(config: InternalAxiosRequestConfig | undefined): SpaceR
   return handle;
 }
 
+function hasExplicitSpace(config: AxiosRequestConfig | undefined): boolean {
+  return Boolean(config?.headers && new AxiosHeaders(config.headers as never).get("X-Space-Id"));
+}
+
+/** 发起时就登记并与取消信号竞速：切换空间的那一刻调用方立即收到 StaleSpaceRequestError，
+ *  不依赖请求内部（IndexedDB 读取、签名等）何时结束，也就不会晚于新空间的任何响应。 */
+function runSpaceRead<T>(
+  url: string,
+  config: AxiosRequestConfig | undefined,
+  run: (config: AxiosRequestConfig) => Promise<T>
+): Promise<T> {
+  const spaceId = readSelectedSpaceId();
+  const tracked: AxiosRequestConfig = { ...config, url: config?.url ?? url } as AxiosRequestConfig;
+  if (!spaceId || hasExplicitSpace(config) || !isSpaceScopedRead(Object.assign(tracked, { injectedSpaceId: spaceId }))) {
+    return run(config as AxiosRequestConfig); // 原样透传，保持调用形态不变
+  }
+  const controller = new AbortController();
+  const handle: SpaceReadHandle = { controller, aborted: false };
+  const userSignal = config?.signal as AbortSignal | undefined;
+  userSignal?.addEventListener("abort", () => controller.abort(), { once: true });
+  tracked.signal = controller.signal;
+  tracked.injectedSpaceId = spaceId;
+  tracked.injectedSpaceGeneration = selectedSpaceGeneration();
+  tracked.spaceReadHandle = handle;
+  inflightSpaceReads.add(handle);
+  const cancelled = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => handle.aborted && reject(new StaleSpaceRequestError()), { once: true });
+  });
+  const request = run(tracked);
+  void request.then(
+    () => inflightSpaceReads.delete(handle),
+    () => inflightSpaceReads.delete(handle)
+  );
+  return Promise.race([request, cancelled]);
+}
+
 export function installSpaceAwareSignedClient(client: AxiosInstance): void {
+  // 测试替身可能只实现拦截器；真实 Axios 实例才有这些方法
+  if (typeof client.post === "function") {
+    const post = client.post.bind(client);
+    client.post = ((url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      runSpaceRead(url, config, c => (c === undefined ? post(url, data) : post(url, data, c)))) as typeof client.post;
+  }
+  if (typeof client.get === "function") {
+    const get = client.get.bind(client);
+    client.get = ((url: string, config?: AxiosRequestConfig) =>
+      runSpaceRead(url, config, c => (c === undefined ? get(url) : get(url, c)))) as typeof client.get;
+  }
+  if (typeof client.request === "function") {
+    const request = client.request.bind(client);
+    client.request = ((config: AxiosRequestConfig) =>
+      runSpaceRead(config.url || "", config, c => request(c))) as typeof client.request;
+  }
   client.interceptors.response.use(
     response => {
       finishSpaceRead(response.config);
@@ -178,15 +231,9 @@ export function installSpaceAwareSignedClient(client: AxiosInstance): void {
     const spaceId = readSelectedSpaceId();
     if (spaceId && !config.headers.get("X-Space-Id")) {
       config.headers.set("X-Space-Id", spaceId);
-      config.injectedSpaceId = spaceId;
-      config.injectedSpaceGeneration = selectedSpaceGeneration();
-      if (isSpaceScopedRead(config)) {
-        const controller = new AbortController();
-        (config.signal as AbortSignal | undefined)?.addEventListener("abort", () => controller.abort(), { once: true });
-        config.signal = controller.signal;
-        config.spaceReadHandle = { controller, aborted: false };
-        inflightSpaceReads.add(config.spaceReadHandle);
-      }
+      // 调用点（下面的包装）已记录发起时的空间与代次；这里只补上没有经过包装的请求
+      config.injectedSpaceId ??= spaceId;
+      config.injectedSpaceGeneration ??= selectedSpaceGeneration();
     }
     return config;
   });

@@ -173,36 +173,32 @@ describe("installSpaceAwareSignedClient", () => {
     setSelectedSpaceIdCache("");
   });
 
-  it("aborts in-flight space reads the moment the Space changes, so finally blocks run", async () => {
+  it("rejects in-flight space reads the moment the Space changes, independent of signing/IndexedDB progress", async () => {
     setSelectedSpaceIdCache("space-a");
-    const handlers: Array<
-      (config: InternalAxiosRequestConfig) => InternalAxiosRequestConfig | Promise<InternalAxiosRequestConfig>
-    > = [];
+    const seen: Array<{ url: string; signal?: AbortSignal }> = [];
+    const hang = (url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
+      seen.push({ url, signal: config?.signal });
+      return new Promise(() => {});
+    };
     const client = {
-      interceptors: {
-        request: { use: (handler: (typeof handlers)[number]) => handlers.push(handler) },
-        response: { use: () => undefined }
-      }
+      interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
+      post: hang,
+      get: hang,
+      request: (config: { url?: string; signal?: AbortSignal }) => hang(config.url || "", undefined, config)
     };
     installSpaceAwareSignedClient(client as never);
-    const spaceHandler = handlers[handlers.length - 1];
-    const read = await spaceHandler({
-      url: "/api/admin/collector/GetTask",
-      headers: new AxiosHeaders()
-    } as InternalAxiosRequestConfig);
-    const global = await spaceHandler({
-      url: "/api/admin/sysdeploy/GetCatalog",
-      headers: new AxiosHeaders()
-    } as InternalAxiosRequestConfig);
-    const write = await spaceHandler({
-      url: "/api/admin/collector/CreateTask",
-      headers: new AxiosHeaders()
-    } as InternalAxiosRequestConfig);
-    expect(read.signal?.aborted).toBe(false);
+    const read = client.post("/api/admin/collector/GetTask", {});
+    void client.post("/api/admin/sysdeploy/GetCatalog", {});
+    void client.post("/api/admin/cloudnode/ListCloudAccounts", {});
+    void client.post("/api/admin/collector/CreateTask", {});
+    const outcome = read.then(
+      () => "resolved",
+      error => (error instanceof StaleSpaceRequestError ? "stale" : "other")
+    );
     setSelectedSpaceIdCache("space-b");
-    expect(read.signal?.aborted).toBe(true);
-    expect(global.signal).toBeUndefined();
-    expect(write.signal).toBeUndefined();
+    expect(await outcome).toBe("stale");
+    expect(seen[0].signal?.aborted).toBe(true);
+    for (const exempt of seen.slice(1)) expect(exempt.signal).toBeUndefined(); // 全局读取与写入不被取消
     setSelectedSpaceIdCache("");
   });
 });

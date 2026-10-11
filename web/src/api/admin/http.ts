@@ -96,6 +96,8 @@ adminClient.interceptors.response.use(
     return rsp;
   },
   error => {
+    // 切换空间造成的取消保持原类型，调用方按类型静默处理
+    if (error instanceof StaleSpaceRequestError) return Promise.reject(error);
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
     const message = data?.ret_info?.msg || error?.message || "Control 请求失败";
     const reportedError = new ControlRequestError(message, data);

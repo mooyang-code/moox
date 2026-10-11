@@ -148,8 +148,7 @@ export const completePackageUpload = async (
   return rsp.detail ?? null;
 };
 
-export const uploadFunctionPackage = async (data: UploadPackageRequest, file: File) => {
-  const spaceId = readSelectedSpaceId();
+export const uploadFunctionPackage = async (data: UploadPackageRequest, file: File, spaceId = readSelectedSpaceId()) => {
   const initRsp = await initPackageUpload({ ...data, original_filename: file.name }, spaceId);
   const putResp = await fetch(initRsp.upload_url, { method: "PUT", body: file });
   if (!putResp.ok) {
