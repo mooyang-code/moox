@@ -382,9 +382,15 @@ func (s *Service) applySnapshot(
 	}
 	result.PositionsUpdated = len(positionRecords)
 
-	if snapshot.Account.ExchangeUpdatedAt.UnixMilli() >= account.SnapshotSourceTime {
+	// 完整快照既不能早于已采用的完整快照，也不能早于私有余额更新已合并进来的时间：旧 REST 不得覆盖更新的字段。
+	snapshotTime := snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+	freshness := account.SnapshotSourceTime
+	if account.Snapshot.ExchangeUpdatedAt > freshness {
+		freshness = account.Snapshot.ExchangeUpdatedAt
+	}
+	if snapshotTime >= freshness {
 		account.Snapshot = snapshotRecord(snapshot.Account)
-		account.SnapshotSourceTime = snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+		account.SnapshotSourceTime = snapshotTime
 		result.AccountSnapshotUpdated = true
 	} else {
 		result.Warnings = append(
@@ -397,18 +403,21 @@ func (s *Service) applySnapshot(
 	if snapshot.FillCursors == nil {
 		snapshot.FillCursors = account.FillCursors
 	}
-	// 私有成交已释放预留、正在等待余额确认：陈旧的余额快照被丢弃时，余额仍是成交之前的值，不能恢复准入。
+	// 待确认水位：只有被采用且覆盖水位的完整余额快照才能清零并恢复准入；
+	// 否则余额仍是成交/私有更新之前的值，沿用旧的 LastSyncAt 抵扣边界并保持未就绪。
+	pending := account.BalancePendingUntil
+	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending
 	readinessCause := ""
-	if snapshot.Ready && !result.AccountSnapshotUpdated && !account.Ready && account.LastError == awaitingBalanceReason {
+	if pending > 0 && !clearPending {
 		snapshot.Ready = false
 		result.Ready = false
 		readinessCause = awaitingBalanceReason
-		result.Warnings = append(result.Warnings, "balance snapshot is not newer than the pending fill; admission stays closed")
+		result.Warnings = append(result.Warnings, "balance snapshot does not cover the pending fill or private update; admission stays closed")
 	}
-	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用时才能推进；
-	// 丢弃陈旧快照时保持原边界，否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
+	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
+	// 否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
 	syncBoundary := now
-	if !result.AccountSnapshotUpdated && account.LastSyncAt > 0 {
+	if (!result.AccountSnapshotUpdated || (pending > 0 && !clearPending)) && account.LastSyncAt > 0 {
 		syncBoundary = account.LastSyncAt
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -421,6 +430,11 @@ func (s *Service) applySnapshot(
 			syncBoundary,
 		); err != nil {
 			return err
+		}
+		if clearPending && pending > 0 {
+			if err := tx.ClearBalancePendingThrough(account.SpaceID, account.TradingAccountID, snapshotTime); err != nil {
+				return err
+			}
 		}
 		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
@@ -516,6 +530,9 @@ func (s *Service) ApplyFill(
 		// 成交已经释放订单的预留，但余额快照还没有反映这笔支出：在完整同步确认余额之前关闭准入，
 		// 否则同一笔资金可以再次通过本地资金检查。
 		err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, fill.TradedAt.UnixMilli()); err != nil {
+				return err
+			}
 			return tx.UpdateTradingAccountReadiness(
 				account.SpaceID,
 				account.TradingAccountID,
@@ -657,6 +674,10 @@ func (s *Service) ApplyAccountSnapshot(
 		); err != nil {
 			return err
 		}
+		// 私有更新只合并了部分字段：完整余额快照覆盖这个时间之前，不能恢复准入
+		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, snapshot.ExchangeUpdatedAt.UnixMilli()); err != nil {
+			return err
+		}
 		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
 			account.TradingAccountID,
@@ -705,6 +726,10 @@ func (s *Service) setReady(
 	lastError := ""
 	if cause != nil && !errors.Is(cause, context.Canceled) {
 		lastError = cause.Error()
+	}
+	if ready && account.BalancePendingUntil > 0 {
+		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
+		ready, lastError = false, awaitingBalanceReason
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountReadiness(

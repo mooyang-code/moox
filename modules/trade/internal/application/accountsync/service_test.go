@@ -1267,8 +1267,21 @@ func TestPrivateFillClosesAdmissionUntilFullSync(t *testing.T) {
 	require.True(t, account.Ready, "完整同步确认余额后恢复")
 }
 
-// 成交后的完整同步若只拿到陈旧余额（被丢弃），余额仍是成交之前的值，准入必须保持关闭，直到余额追上。
-func TestStaleBalanceSnapshotKeepsAdmissionClosedAfterPrivateFill(t *testing.T) {
+type snapshotAtAdapter struct {
+	*syncAdapter
+	at int64
+}
+
+func (a snapshotAtAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
+	return exchange.AccountSnapshot{
+		AvailableFunds:    shared.MustDecimal("900"),
+		Equity:            shared.MustDecimal("1000"),
+		ExchangeUpdatedAt: time.UnixMilli(a.at),
+	}, nil
+}
+
+// 成交后必须等到覆盖成交时间的完整余额快照才恢复准入：旧于成交、与已采用快照同时间、介于两者之间的快照都不行。
+func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	current := exchange.Order{
@@ -1292,8 +1305,7 @@ func TestStaleBalanceSnapshotKeepsAdmissionClosedAfterPrivateFill(t *testing.T) 
 		Fills:        &consumer.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
-	// 先做一次完整同步：余额快照（2_000）已被采用，账户就绪
-	_, err := service.SyncAccount(context.Background(), "account-1")
+	_, err := service.SyncAccount(context.Background(), "account-1") // 余额快照 2_000 已采用
 	require.NoError(t, err)
 
 	newFill := fill
@@ -1301,25 +1313,80 @@ func TestStaleBalanceSnapshotKeepsAdmissionClosedAfterPrivateFill(t *testing.T) 
 	applied, err := service.ApplyFill(context.Background(), "account-1", newFill)
 	require.NoError(t, err)
 	require.True(t, applied)
+	boundary := func() int64 {
+		account, getErr := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+		require.NoError(t, getErr)
+		return account.LastSyncAt
+	}
+	before := boundary()
+
+	for _, at := range []int64{1_500, 2_000, 2_900} { // 旧于已采用快照 / 与已采用快照同时间 / 介于旧余额与成交之间
+		service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, at}}
+		service.Now = func() time.Time { return time.UnixMilli(5_000 + at) }
+		result, syncErr := service.SyncAccount(context.Background(), "account-1")
+		require.NoError(t, syncErr)
+		require.False(t, result.Ready, "快照时间 %d 未覆盖成交 3_000", at)
+		account, getErr := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+		require.NoError(t, getErr)
+		require.False(t, account.Ready)
+		require.Equal(t, int64(3_000), account.BalancePendingUntil)
+		require.Equal(t, before, boundary(), "未覆盖成交的快照不能推进预留抵扣边界")
+	}
+
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 3_000}}
+	service.Now = func() time.Time { return time.UnixMilli(9_000) }
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, result.Ready)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
-	require.False(t, account.Ready)
+	require.True(t, account.Ready, "覆盖成交的快照恢复准入")
+	require.Zero(t, account.BalancePendingUntil)
+	require.Equal(t, int64(9_000), account.LastSyncAt)
+}
 
-	// 下一次完整同步拿到的余额快照比已采用的更旧：被丢弃，准入保持关闭
-	service.Adapters = syncAdapterSource{adapter: staleSnapshotAdapter{base}}
+// 私有余额更新（2_500）之后收到更旧的 REST 完整快照（2_200）：旧快照不能覆盖更新的字段，也不能完成余额确认。
+func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	base := &syncAdapter{
+		order: exchange.Order{
+			ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+		},
+		fill: exchange.Fill{
+			ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+			SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
+		},
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1") // 完整快照 2_000，可用资金 900
+	require.NoError(t, err)
+
+	private := exchange.AccountSnapshot{
+		AvailableFunds: shared.MustDecimal("100"), ExchangeUpdatedAt: time.UnixMilli(2_500),
+		Present: exchange.AccountSnapshotPresence{AvailableFunds: true},
+	}
+	require.NoError(t, service.ApplyAccountSnapshot(context.Background(), "account-1", private))
+
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 2_200}}
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, result.AccountSnapshotUpdated)
 	require.False(t, result.Ready)
-	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
-	require.False(t, account.Ready, "陈旧余额被丢弃时不能恢复准入")
-
-	// 余额追上之后恢复
-	service.Adapters = syncAdapterSource{adapter: base}
-	_, err = service.SyncAccount(context.Background(), "account-1")
-	require.NoError(t, err)
-	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
-	require.NoError(t, err)
-	require.True(t, account.Ready)
+	require.False(t, account.Ready)
+	require.Equal(t, "100", account.Snapshot.AvailableFunds, "更旧的 REST 不得把可用资金改回 900")
 }

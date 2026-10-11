@@ -297,6 +297,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useSpaceStore } from "@/store/modules/space";
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -458,8 +459,12 @@ function openCreate() {
   formErrors.value = "";
   syncResult.value = null;
   syncResultAccountId.value = "";
+  createSubmitToken += 1; // 重新打开视为新的创建，旧提交作废
   createVisible.value = true;
 }
+
+// 创建提交序号：切换空间、重新打开创建弹窗都会使进行中的创建作废（写请求不受只读取消机制保护，后续步骤必须自己校验）
+let createSubmitToken = 0;
 
 async function submitCreate() {
   const validation = validateAccountForm(form);
@@ -467,18 +472,31 @@ async function submitCreate() {
     formErrors.value = validation;
     return false;
   }
+  const token = ++createSubmitToken;
+  const submitSpaceId = spaceStore.selectedSpaceId;
+  const submitGeneration = selectedSpaceGeneration();
+  const submitStale = () =>
+    token !== createSubmitToken || spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
+  const abandoned = () => {
+    // 创建请求已经发出，但当前空间已不是发起空间：不再同步、不写表单，提示用户回原空间确认
+    Message.info("账户已提交创建，但当前空间已切换；请切回原空间确认账户并执行首次同步");
+    return false;
+  };
   try {
     if (form.execution_mode === 1) {
       const response = await createPaperSimulation(buildPaperSimulationRequest(form));
+      if (submitStale()) return abandoned();
       createdAccountId.value = response.account?.trading_account_id || "";
       createdLogicalAccountId.value = response.logical_account?.logical_account_id || "";
     } else {
       const response = await createTradingAccount(buildLiveRequest(form));
+      if (submitStale()) return abandoned();
       createdAccountId.value = response.account?.trading_account_id || "";
       createdLogicalAccountId.value = "";
       if (response.account?.trading_account_id) {
         try {
           const sync = await syncTradingAccount(response.account.trading_account_id);
+          if (submitStale()) return abandoned();
           syncResult.value = {
             fills_ingested: sync.fills_ingested,
             orders_updated: sync.orders_updated,
@@ -488,6 +506,7 @@ async function submitCreate() {
           };
           syncResultAccountId.value = response.account.trading_account_id;
         } catch {
+          if (submitStale()) return abandoned();
           Message.warning("真实账户已创建，但首次同步失败，请在详情中重试");
         }
       }
@@ -497,6 +516,7 @@ async function submitCreate() {
     await loadAccounts();
     return true;
   } catch (error) {
+    if (submitStale()) return false;
     formErrors.value = error instanceof Error ? error.message : "创建失败，请检查输入和服务端错误";
     return false;
   }
@@ -677,6 +697,7 @@ watch(
   () => spaceStore.selectedSpaceId,
   (next, previous) => {
     if (!next || next === previous) return;
+    createSubmitToken += 1; // 空间切换使进行中的创建作废
     pagination.current = 1;
     accounts.value = [];
     void loadAccounts();

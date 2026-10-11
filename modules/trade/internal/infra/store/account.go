@@ -51,11 +51,13 @@ type TradingAccountRecord struct {
 	FillCursors        FillCursors
 	Snapshot           TradingAccountSnapshot
 	SnapshotSourceTime int64
-	LastSyncAt         int64
-	LastReadyAt        int64
-	LastError          string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// BalancePendingUntil 是待余额确认的水位（毫秒）；0 表示没有待确认的成交或私有余额更新。
+	BalancePendingUntil int64
+	LastSyncAt          int64
+	LastReadyAt         int64
+	LastError           string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type tradingAccountRow struct {
@@ -76,6 +78,7 @@ type tradingAccountRow struct {
 	FillCursorsJSON      string    `gorm:"column:c_fill_cursors_json"`
 	SnapshotJSON         string    `gorm:"column:c_snapshot_json"`
 	SnapshotSourceTime   int64     `gorm:"column:c_snapshot_source_time"`
+	BalancePendingUntil  int64     `gorm:"column:c_balance_pending_until"`
 	LastSyncAt           int64     `gorm:"column:c_last_sync_at"`
 	LastReadyAt          int64     `gorm:"column:c_last_ready_at"`
 	LastError            string    `gorm:"column:c_last_error"`
@@ -361,6 +364,35 @@ func (tx *Tx) UpdateTradingAccountSnapshot(
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account snapshot")
 }
 
+// RaiseBalancePending 把待余额确认的水位抬到至少 until（毫秒，只升不降）。
+func (tx *Tx) RaiseBalancePending(spaceID, tradingAccountID string, until int64) error {
+	if blank(spaceID) || blank(tradingAccountID) || until <= 0 {
+		return fmt.Errorf("%w: incomplete balance pending watermark", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_trading_accounts
+		SET c_balance_pending_until = MAX(c_balance_pending_until, ?), c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+	`, until, spaceID, tradingAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "balance pending watermark")
+}
+
+// ClearBalancePendingThrough 在完整余额快照覆盖水位（快照时间 >= 水位）后清零；水位更高时保持不变。
+func (tx *Tx) ClearBalancePendingThrough(spaceID, tradingAccountID string, coveredUntil int64) error {
+	if blank(spaceID) || blank(tradingAccountID) {
+		return fmt.Errorf("%w: incomplete balance pending watermark", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_trading_accounts
+		SET c_balance_pending_until = 0, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_balance_pending_until <= ?
+	`, spaceID, tradingAccountID, coveredUntil)
+	if result.Error != nil {
+		return writeError(result.Error)
+	}
+	return nil
+}
+
 func (tx *Tx) UpdateTradingAccountReadiness(
 	spaceID string,
 	tradingAccountID string,
@@ -572,7 +604,7 @@ func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 		Ready:  row.Ready, SyncSymbols: syncSymbols,
 		LeverageSettings: leverage, FillCursors: fillCursors,
 		Snapshot:           snapshot,
-		SnapshotSourceTime: row.SnapshotSourceTime, LastSyncAt: row.LastSyncAt,
+		SnapshotSourceTime: row.SnapshotSourceTime, BalancePendingUntil: row.BalancePendingUntil, LastSyncAt: row.LastSyncAt,
 		LastReadyAt: row.LastReadyAt, LastError: row.LastError,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil

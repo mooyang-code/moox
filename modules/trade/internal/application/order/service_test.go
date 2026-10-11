@@ -1327,7 +1327,6 @@ func setStoredOrderState(
 	}))
 }
 
-
 // 确认不存在后的市价单重试必须按新鲜报价重新校验限额：旧报价折算的名义金额在价格大幅上涨后不再成立。
 func TestConfirmedAbsentMarketRetryRevalidatesLimitsWithFreshQuote(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)

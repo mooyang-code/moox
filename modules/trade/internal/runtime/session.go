@@ -678,7 +678,7 @@ func (h *sessionHandler) activate(
 
 func (h *sessionHandler) markDirty(events []privateEvent) {
 	for _, event := range events {
-		if event.kind == privateFill || event.kind == privatePosition {
+		if event.kind == privateFill || event.kind == privatePosition || event.kind == privateAccount {
 			h.mu.Lock()
 			h.dirty = true
 			h.mu.Unlock()

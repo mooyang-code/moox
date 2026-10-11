@@ -422,7 +422,33 @@ func seedRuntimeAccount(
 	return account
 }
 
-
 type readySessionState bool
 
 func (s readySessionState) Ready(string) bool { return bool(s) }
+
+// 激活前只缓冲了私有余额事件（没有成交或持仓）：余额事件只合并了部分字段，激活同样不能把持久化就绪写回 true。
+func TestSessionHandlerKeepsAdmissionClosedAfterBufferedAccountEvent(t *testing.T) {
+	ctx := context.Background()
+	tradeStore := openRuntimeStore(t)
+	account := seedRuntimeAccount(t, tradeStore)
+	session := &ExchangeSession{
+		Account: account,
+		Sync: &accountsync.Service{
+			Store: tradeStore, Adapters: sessionAdapterSource{adapter: &scriptedSessionAdapter{}},
+			Fills: &consumer.Reducer{Store: tradeStore},
+		},
+	}
+	handler := newSessionHandler(session.applyEvent)
+	require.NoError(t, handler.activate(ctx, func() error {
+		return session.Sync.SetReady(ctx, account.TradingAccountID, true, nil)
+	}))
+	require.NoError(t, handler.OnAccountSnapshot(ctx, exchange.AccountSnapshot{
+		AvailableFunds: shared.MustDecimal("100"), ExchangeUpdatedAt: time.UnixMilli(2_500),
+		Present: exchange.AccountSnapshotPresence{AvailableFunds: true},
+	}))
+	require.NoError(t, handler.finishActivation(ctx))
+	stored, err := tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
+	require.NoError(t, err)
+	require.False(t, stored.Ready, "缓冲的私有余额事件在完整同步前不得恢复准入")
+	require.Equal(t, int64(2_500), stored.BalancePendingUntil)
+}

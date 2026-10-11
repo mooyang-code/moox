@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     c_fill_cursors_json TEXT NOT NULL DEFAULT '{}',
     c_snapshot_json TEXT NOT NULL DEFAULT '{}',
     c_snapshot_source_time INTEGER NOT NULL DEFAULT 0,
+    -- 待余额确认的水位（交易所毫秒时间）：私有成交/余额事件抬高它，只有覆盖该水位的完整余额快照才能清零并恢复准入
+    c_balance_pending_until INTEGER NOT NULL DEFAULT 0,
     c_last_sync_at INTEGER NOT NULL DEFAULT 0,
     c_last_ready_at INTEGER NOT NULL DEFAULT 0,
     c_last_error TEXT NOT NULL DEFAULT '',
