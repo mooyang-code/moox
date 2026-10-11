@@ -483,6 +483,7 @@ watch(visible, newVal => {
 // 关闭弹窗或切换空间：作废在途请求，清空列表与详情，避免组件常驻时重新打开看到其他空间的数据
 function resetForSpace() {
   uploadSubmitToken += 1;
+  uploading.value = false;
   listGuard.invalidate();
   detailGuard.invalidate();
   loading.value = false;
@@ -591,6 +592,7 @@ const onAdd = () => {
   versionValidationStatus.value = undefined;
   versionFeedback.value = "";
   uploadSubmitToken += 1; // 重新打开视为新的提交，旧提交作废
+  uploading.value = false;
   uploadVisible.value = true;
 };
 
@@ -734,6 +736,7 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
 // 上传取消
 const handleUploadCancel = () => {
   uploadSubmitToken += 1; // 取消即作废进行中的提交（版本检查、表单校验返回后不得再继续上传）
+  uploading.value = false;
   // 清除版本验证状态
   versionValidationStatus.value = undefined;
   versionFeedback.value = "";
@@ -864,21 +867,24 @@ const handleUploadOk = async () => {
   uploading.value = true;
 
   try {
-    await handleUpload(submitSpaceId);
+    await handleUpload(submitSpaceId, submitStale);
   } catch (error: any) {
-    console.error("上传代码包失败:", error);
-    Message.error({
-      content: error?.message || "上传代码包失败",
-      duration: 5000 // 错误消息显示5秒
-    });
+    if (!submitStale()) {
+      console.error("上传代码包失败:", error);
+      Message.error({
+        content: error?.message || "上传代码包失败",
+        duration: 5000 // 错误消息显示5秒
+      });
+    }
     // 出错时不关闭弹窗，让用户可以修改后重新提交
   } finally {
-    uploading.value = false;
+    // 已作废的提交（取消/重新打开/切换空间）不回写新弹窗的 loading；这几处自己会重置 uploading
+    if (!submitStale()) uploading.value = false;
   }
 };
 
 // 统一上传处理（独立 cloudnode 服务）
-const handleUpload = async (spaceId: string) => {
+const handleUpload = async (spaceId: string, isStale: () => boolean) => {
   try {
     const originalFilename = fileList.value[0]?.file?.name || "";
     await uploadFunctionPackage(
@@ -891,10 +897,12 @@ const handleUpload = async (spaceId: string) => {
     );
 
     Message.success("上传成功！");
-    uploadVisible.value = false;
+    // 上传已经成功；只有提交仍然有效时才操作当前弹窗，已作废的提交不能关闭用户重新打开、正在填写的新弹窗
+    if (!isStale()) uploadVisible.value = false;
     await loadPackageList();
     emit("refresh");
   } catch (error: any) {
+    if (isStale()) return;
     console.error("上传代码包失败:", error);
 
     const errorMessage = error?.message || "上传代码包失败";

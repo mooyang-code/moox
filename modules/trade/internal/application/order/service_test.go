@@ -1350,3 +1350,53 @@ func TestConfirmedAbsentMarketRetryRevalidatesLimitsWithFreshQuote(t *testing.T)
 	require.ErrorIs(t, err, ErrNotionalLimit)
 	require.Zero(t, adapter.placeCalls, "超限的重试不能提交到交易所")
 }
+
+func expireUnknownOrder(t *testing.T, service *Service, tradeStore *store.Store, adapter *adapterStub) orderdomain.Order {
+	t.Helper()
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	service.UnknownLookupWindow = time.Minute
+	service.Now = func() time.Time { return time.Unix(1_700_000_061, 0) }
+	service.Validator.Now = service.Now
+	expired, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Pending, expired.State)
+	return pending
+}
+
+// 重试按新鲜报价重算资金需求：余额只够旧报价时，报价上涨后不能提交；订单的参考价保持原值（订单身份不变）。
+func TestConfirmedAbsentMarketRetryRechecksFundsWithFreshQuote(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	live := useLiveQuote(service, adapter, "100")
+	pending := expireUnknownOrder(t, service, tradeStore, adapter)
+
+	account := executableAccount(exchange.MarketTypeSpot)
+	account.Snapshot.Balances[0].Available = shared.MustDecimal("150")
+	service.Validator.Accounts = accountEligibilityStub{account: account}
+	live.price = "200"
+	_, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.ErrorIs(t, err, ErrInsufficientFunds)
+	require.Zero(t, adapter.placeCalls)
+	stored, getErr := tradeStore.GetOrder(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, getErr)
+	require.Equal(t, pending.Spec.ReferencePrice.String(), stored.ReferencePrice, "订单参考价不因重试而改变")
+}
+
+// 报价请求期间时钟推进：校验时间必须取报价返回之后，正常的新鲜报价不能被误判为过期。
+func TestConfirmedAbsentMarketRetryAcceptsQuoteStampedDuringRequest(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	useLiveQuote(service, adapter, "100")
+	pending := expireUnknownOrder(t, service, tradeStore, adapter)
+
+	tick := time.Unix(1_700_000_061, 0)
+	service.Now = func() time.Time {
+		tick = tick.Add(time.Millisecond)
+		return tick
+	}
+	submitted, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Open, submitted.State)
+	require.Equal(t, 1, adapter.placeCalls)
+}

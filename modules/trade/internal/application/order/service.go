@@ -856,22 +856,36 @@ func (s *Service) submit(
 		return orderdomain.Order{}, false, err
 	}
 	validator := s.Validator
+	retryRepriced := false
+	originalReference, originalReferenceAt := aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt
 	if record.SubmittedAt > 0 {
-		now := s.now()
-		validator.Now = func() time.Time { return now }
 		if aggregate.Spec.Type == exchange.OrderTypeMarket {
-			// 确认不存在后的重试：市价单的限额按报价折算名义金额，旧报价可能已大幅偏离，
-			// 必须取新鲜报价后重新校验；取不到新鲜报价就不提交（保持待重试）。
-			aggregate.Spec, err = s.freshReference(ctx, record, aggregate.Spec, validator.MaxReferenceAge)
-			if err != nil {
-				return aggregate, false, err
+			// 确认不存在后的重试：订单身份（参考价、数量）保持不变，但限额与资金预留都按报价折算，旧报价可能已大幅偏离。
+			// 取新鲜报价（取不到就不提交，保持待重试），校验与预留按新旧报价中较高者保守计算；
+			// 持久化的参考价仍是原值，只有预留金额按需增大。
+			fresh, freshErr := s.freshReference(ctx, record, aggregate.Spec, validator.MaxReferenceAge)
+			if freshErr != nil {
+				return aggregate, false, freshErr
 			}
+			if fresh.ReferencePrice.Cmp(originalReference) < 0 {
+				fresh.ReferencePrice = originalReference
+			}
+			aggregate.Spec = fresh
+			retryRepriced = true
+			// 校验时间取报价返回之后：报价请求期间产生的时间戳不能比冻结的校验时间更新。
+			now := s.now()
+			validator.Now = func() time.Time { return now }
 		} else {
 			// 限价单的名义金额来自限价而非报价：沿用已校验的报价，避免未知查询窗口让每次受控重试都变成过期报价。
+			now := s.now()
+			validator.Now = func() time.Time { return now }
 			validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
 		}
 	}
 	validation, err := validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
+	if retryRepriced {
+		aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt = originalReference, originalReferenceAt
+	}
 	refreshedReference := false
 	if errors.Is(err, orderdomain.ErrReferencePriceStale) && record.SubmittedAt == 0 &&
 		aggregate.Spec.Owner.Type == orderdomain.OwnerOperator {
@@ -964,7 +978,7 @@ func (s *Service) submit(
 			validation.ReservedQuantity = withFeeBuffer(notional, feeRate)
 		}
 	}
-	if releaseReservationForReduction || refreshedReference {
+	if releaseReservationForReduction || refreshedReference || retryRepriced {
 		record.ReservedAsset = validation.ReservedAsset
 		record.ReservedQuantity = validation.ReservedQuantity.String()
 		record.RemainingReservedQuantity = validation.ReservedQuantity.String()
@@ -982,7 +996,7 @@ func (s *Service) submit(
 					return err
 				}
 			}
-		} else if refreshedReference {
+		} else if refreshedReference || retryRepriced {
 			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.LastSyncAt.UnixMilli())
 			if err != nil {
 				return err
