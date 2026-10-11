@@ -13,6 +13,8 @@ const (
 	// It must publish MarketFetchBatchCompleted even when the SCF node also has
 	// timer-mode environment from an older/static assignment.
 	EventSourceCollectorScheduler = "collector_scheduler"
+	// EventSourceCollectorBackfill 标记 Collector 补采分块的同步调用：只写行，不发布完成事件。
+	EventSourceCollectorBackfill = "collector_backfill"
 )
 
 // CloudFunctionEvent is the complete invocation contract for a short-lived SCF.

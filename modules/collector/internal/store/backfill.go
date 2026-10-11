@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -133,11 +132,12 @@ func (r *BackfillRepository) GetJob(ctx context.Context, jobID string) (*Backfil
 		return nil, nil, fmt.Errorf("backfill repository is not initialized")
 	}
 	var row backfillJobRow
-	if err := r.db.WithContext(ctx).Where("c_job_id = ?", strings.TrimSpace(jobID)).Take(&row).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, nil
-		}
-		return nil, nil, err
+	result := r.db.WithContext(ctx).Where("c_job_id = ?", strings.TrimSpace(jobID)).Limit(1).Find(&row)
+	if result.Error != nil {
+		return nil, nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil, nil
 	}
 	var chunkRows []backfillChunkRow
 	if err := r.db.WithContext(ctx).Where("c_job_id = ?", row.JobID).Order("c_id ASC").Find(&chunkRows).Error; err != nil {
@@ -265,12 +265,12 @@ func (r *BackfillRepository) Watermark(ctx context.Context, spaceID, datasetID, 
 		return time.Time{}, fmt.Errorf("backfill repository is not initialized")
 	}
 	var row backfillWatermarkRow
-	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return time.Time{}, nil
+	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Limit(1).Find(&row)
+	if result.Error != nil {
+		return time.Time{}, result.Error
 	}
-	if err != nil {
-		return time.Time{}, err
+	if result.RowsAffected == 0 {
+		return time.Time{}, nil
 	}
 	return row.ScannedUntil, nil
 }

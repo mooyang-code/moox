@@ -60,12 +60,12 @@ func (r *FetchPlanRepository) Open(ctx context.Context, spaceID string) (*FetchP
 		return nil, fmt.Errorf("fetch plan repository is not initialized")
 	}
 	var row fetchPlanRow
-	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status <> ?", strings.TrimSpace(spaceID), FetchPlanApplied).Order("c_id DESC").Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status <> ?", strings.TrimSpace(spaceID), FetchPlanApplied).Order("c_id DESC").Limit(1).Find(&row)
+	if result.Error != nil {
+		return nil, result.Error
 	}
-	if err != nil {
-		return nil, err
+	if result.RowsAffected == 0 {
+		return nil, nil
 	}
 	return row.record(), nil
 }
@@ -76,12 +76,12 @@ func (r *FetchPlanRepository) LatestApplied(ctx context.Context, spaceID string)
 		return nil, fmt.Errorf("fetch plan repository is not initialized")
 	}
 	var row fetchPlanRow
-	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status = ?", strings.TrimSpace(spaceID), FetchPlanApplied).Order("c_id DESC").Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status = ?", strings.TrimSpace(spaceID), FetchPlanApplied).Order("c_id DESC").Limit(1).Find(&row)
+	if result.Error != nil {
+		return nil, result.Error
 	}
-	if err != nil {
-		return nil, err
+	if result.RowsAffected == 0 {
+		return nil, nil
 	}
 	return row.record(), nil
 }

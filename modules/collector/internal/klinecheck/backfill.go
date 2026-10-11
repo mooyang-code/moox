@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -397,6 +398,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(err)
 		return
 	}
+	event["source"] = model.EventSourceCollectorBackfill
 	callCtx, cancel := context.WithTimeout(ctx, chunkInvokeLimit)
 	result, err := b.Invoker.Invoke(callCtx, spaceID, functionName, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
 	cancel()
@@ -406,7 +408,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	if success, _ := result.Result["success"].(bool); !success {
-		fail(fmt.Errorf("function reported failure: %v", result.Result["message"]))
+		fail(fmt.Errorf("function reported failure: code=%d message=%q result=%v", result.Code, result.Message, result.Result))
 		return
 	}
 	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, From: chunk.From, To: chunk.To})
