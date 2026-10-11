@@ -161,3 +161,20 @@ func uploadFile(ctx context.Context, transport setupssh.Client, root, local, rem
 func uploadBytes(ctx context.Context, transport setupssh.Client, root string, raw []byte, remote string, mode fs.FileMode) error {
 	return uploadReader(ctx, transport, root, remote, sha(raw), mode, bytes.NewReader(raw), int64(len(raw)))
 }
+
+// helperDiagnostic 在显式设置 MOOX_SETUP_DEBUG_HELPER=1 时返回目标端助手的失败输出（截断），
+// 默认不输出，避免把目标端私有内容带到操作员日志。仅用于联调定位。
+func helperDiagnostic(err error, output setupssh.Result) string {
+	if os.Getenv("MOOX_SETUP_DEBUG_HELPER") != "1" {
+		return ""
+	}
+	text := ""
+	if err != nil {
+		text = err.Error()
+	}
+	text += " | " + output.Stderr + " | " + output.Stdout
+	if len(text) > 2000 {
+		text = text[:2000]
+	}
+	return " [debug: " + text + "]"
+}

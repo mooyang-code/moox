@@ -266,7 +266,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	if err != nil {
 		// SSH observation failure is not evidence that the target exited. Leave
 		// its journal and the exact request intact for a safe explicit retry.
-		return result, errors.New("bootstrap observation failed; retry with the original state directory and configuration; target journal retained and private output omitted")
+		return result, errors.New("bootstrap observation failed; retry with the original state directory and configuration; target journal retained and private output omitted" + helperDiagnostic(err, output))
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()

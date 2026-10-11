@@ -393,7 +393,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	}
 	output, err := target.Run(ctx, []string{remoteHelper, "deploy", "--request", remoteRequest}, nil)
 	if err != nil {
-		return result, errors.New("unit deployment observation failed; retry original state; target journal retained and private output omitted")
+		return result, errors.New("unit deployment observation failed; retry original state; target journal retained and private output omitted" + helperDiagnostic(err, output))
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()
