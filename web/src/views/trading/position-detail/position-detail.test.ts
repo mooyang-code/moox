@@ -166,4 +166,28 @@ describe("持仓页面", () => {
     expect(mocks.routerReplace).toHaveBeenCalledWith({ query: { trading_account_id: undefined } });
     expect(wrapper.text()).not.toContain("ETH-USDT-SPOT");
   });
+
+  it("ignores a sync result that returns after the Space switched", async () => {
+    let finishSync!: (value: { positions_updated: number }) => void;
+    mocks.syncTradingAccount.mockReset().mockReturnValue(
+      new Promise(resolve => {
+        finishSync = resolve;
+      })
+    );
+    const wrapper = mount(PositionDetail, {
+      global: { plugins: [ArcoVue], stubs: { "icon-refresh": true, "icon-sync": true, "icon-search": true } }
+    });
+    await flushPromises();
+    const syncButton = wrapper.findAll("button").find(button => button.text().includes("同步"));
+    expect(syncButton).toBeDefined();
+    await syncButton?.trigger("click");
+    mocks.spaceState!.selectedSpaceId = "space-2";
+    await flushPromises();
+    const accountCalls = mocks.listTradingAccounts.mock.calls.length;
+    const holdingCalls = mocks.listHoldings.mock.calls.length;
+    finishSync({ positions_updated: 3 });
+    await flushPromises();
+    expect(mocks.listTradingAccounts.mock.calls.length).toBe(accountCalls);
+    expect(mocks.listHoldings.mock.calls.length).toBe(holdingCalls);
+  });
 });

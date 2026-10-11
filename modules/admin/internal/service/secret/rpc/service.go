@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -186,7 +187,11 @@ func (s *Service) UpdateSecret(ctx context.Context, req *pb.UpdateSecretReq) (*p
 	}
 	if extraConfig := req.GetExtraConfig(); extraConfig != "" {
 		// 响应里敏感项（如 OKX passphrase）是脱敏占位，原样提交回来表示保持原值。
-		existing.ExtraConfig = mergeExtraConfig(existing.ExtraConfig, extraConfig)
+		merged, err := mergeExtraConfig(existing.ExtraConfig, extraConfig)
+		if err != nil {
+			return &pb.UpdateSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+		existing.ExtraConfig = merged
 	}
 	if category := req.GetCategory(); category != "" {
 		if !validCategories[category] {
@@ -436,42 +441,104 @@ func redactValue(value any) {
 	}
 }
 
-// mergeExtraConfig 用提交的 extra_config 替换原值；提交值里仍是脱敏占位的敏感项（含嵌套位置）沿用原值，避免保存时把口令改成占位。
-func mergeExtraConfig(existing, submitted string) string {
+var errUnresolvedMask = errors.New("extra_config 中的敏感项已脱敏且无法确定对应的原值，请重新填写这些凭据")
+
+// mergeExtraConfig 用提交的 extra_config 替换原值；提交值里仍是脱敏占位的敏感项沿用原值，避免保存时把口令改成占位。
+// 数组元素没有稳定标识：只有数组长度不变且元素的非敏感内容与原值逐项一致时才按位置沿用；删除、插入、重排后
+// 无法确定对应关系，返回错误让用户重新填写，不能把别的元素的凭据存进来。
+func mergeExtraConfig(existing, submitted string) (string, error) {
 	next, err := decodeExtraConfig(submitted)
 	if err != nil {
-		return submitted
+		return submitted, nil
 	}
 	previous, _ := decodeExtraConfig(existing)
-	mergeValue(next, previous)
+	if err := mergeValue(next, previous); err != nil {
+		return "", err
+	}
 	merged, err := json.Marshal(next)
 	if err != nil {
-		return submitted
+		return submitted, nil
 	}
-	return string(merged)
+	return string(merged), nil
 }
 
-func mergeValue(next, previous any) {
+func mergeValue(next, previous any) error {
 	switch node := next.(type) {
 	case map[string]any:
 		old, _ := previous.(map[string]any)
 		for key, child := range node {
 			if sensitiveExtraKey(key) {
 				if text, ok := child.(string); ok && text == maskedExtraValue {
-					if value, exists := old[key]; exists {
-						node[key] = value
+					value, exists := old[key]
+					if !exists {
+						return errUnresolvedMask
 					}
+					node[key] = value
 				}
 				continue
 			}
-			mergeValue(child, old[key])
+			if err := mergeValue(child, old[key]); err != nil {
+				return err
+			}
 		}
 	case []any:
 		old, _ := previous.([]any)
 		for index, child := range node {
-			if index < len(old) {
-				mergeValue(child, old[index])
+			if index < len(old) && len(node) == len(old) && reflect.DeepEqual(stripSensitive(child), stripSensitive(old[index])) {
+				if err := mergeValue(child, old[index]); err != nil {
+					return err
+				}
+				continue
+			}
+			if containsMask(child) {
+				return errUnresolvedMask
 			}
 		}
 	}
+	return nil
+}
+
+// stripSensitive 返回去掉敏感项（脱敏占位或明文）后的值，用来判断数组元素是否与原值是同一个元素。
+func stripSensitive(value any) any {
+	switch node := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(node))
+		for key, child := range node {
+			if !sensitiveExtraKey(key) {
+				out[key] = stripSensitive(child)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(node))
+		for index, child := range node {
+			out[index] = stripSensitive(child)
+		}
+		return out
+	}
+	return value
+}
+
+func containsMask(value any) bool {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			if sensitiveExtraKey(key) {
+				if text, ok := child.(string); ok && text == maskedExtraValue {
+					return true
+				}
+				continue
+			}
+			if containsMask(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range node {
+			if containsMask(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
