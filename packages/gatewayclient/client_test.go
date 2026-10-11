@@ -299,3 +299,44 @@ func TestInvokeSanitizesMalformedResponseAndDoesNotRetryDecode(t *testing.T) {
 	require.Equal(t, 1, calls)
 	require.Equal(t, fetches, source.calls)
 }
+
+// 目录已应用到内存但落盘失败后，即使版本不再变化，也要在磁盘恢复后补写缓存。
+func TestRefreshRetriesPersistingUnchangedDirectoryAfterCacheWriteFailure(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "a")}
+	config := tunnelConfig(source)
+	dir := filepath.Join(t.TempDir(), "gatewayclient")
+	config.CachePath = filepath.Join(dir, "directory.json")
+	c := newTestClient(t, config)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.Create(filepath.Join(dir, "probe")); err == nil {
+		t.Skip("目录权限不能阻止写入（可能以 root 运行）")
+	}
+	source.directory = testDirectory(t, "a", "b")
+	require.ErrorContains(t, c.Refresh(context.Background()), "persist directory")
+	require.Equal(t, source.directory.Version, c.Directory().Version, "新目录必须已生效")
+	require.NoError(t, os.Chmod(dir, 0o700))
+	require.NoError(t, c.Refresh(context.Background()))
+	cached, err := readCache(config.CachePath)
+	require.NoError(t, err)
+	require.Equal(t, source.directory.Version, cached.Version, "磁盘恢复后缓存应补写为当前目录")
+}
+
+// 主机网关验签失败（服务撤离同时撤销了调用方密钥）时，只读调用刷新目录并改投新主机。
+func TestReadRetryRefreshesOnGatewayAuthFailure(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "b", "a")}
+	c := newTestClient(t, tunnelConfig(source))
+	calls := 0
+	c.invoke = func(_ context.Context, ep endpoint, _, _ string, _ int, raw []byte, _ http.Header) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, errs.NewFrameError(errs.RetServerAuthFail, "host gateway authentication failed")
+		}
+		require.NotEqual(t, "a", ep.target)
+		return raw, nil
+	}
+	_, err := c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypeJSON, []byte(`{}`))
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+	require.GreaterOrEqual(t, source.calls, 2)
+}

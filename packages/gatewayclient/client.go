@@ -77,6 +77,8 @@ type Client struct {
 	ownedSource io.Closer
 	cancel      context.CancelFunc
 	done        chan struct{}
+	// unpersisted 记录目录已应用但缓存落盘失败；仅在 refresh 令牌持有期间读写。
+	unpersisted bool
 	closed      atomic.Bool
 }
 
@@ -207,6 +209,13 @@ func (c *Client) Refresh(ctx context.Context) error {
 		if current == "" || update.Directory.Version != current {
 			return fmt.Errorf("unchanged directory has an unexpected version")
 		}
+		// 上次落盘失败时，目录版本不变也要补写，否则缓存会一直停留在旧版本。
+		if c.unpersisted {
+			if err := writeCache(c.config.CachePath, c.Directory()); err != nil {
+				return fmt.Errorf("persist directory: %w", err)
+			}
+			c.unpersisted = false
+		}
 		return nil
 	}
 	if err := update.Directory.Validate(); err != nil {
@@ -218,8 +227,10 @@ func (c *Client) Refresh(ctx context.Context) error {
 	c.mu.Unlock()
 	// A disk failure must not keep a disabled host in the active in-memory map.
 	if err := writeCache(c.config.CachePath, directory); err != nil {
+		c.unpersisted = true
 		return fmt.Errorf("persist directory: %w", err)
 	}
+	c.unpersisted = false
 	return nil
 }
 
@@ -336,7 +347,8 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 			return response, nil
 		}
 		code := errs.Code(err)
-		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService
+		// 服务撤离后旧目录的调用方可能先在验签处失败（撤离同时撤销了调用方验证密钥），也需要刷新目录。
+		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService || code == errs.RetServerAuthFail
 		retry := refresh || code == errs.RetClientTimeout
 		if refresh && c.config.Mode != External {
 			if refreshErr := c.Refresh(ctx); refreshErr != nil {

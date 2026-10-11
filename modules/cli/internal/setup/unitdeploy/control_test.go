@@ -76,9 +76,13 @@ func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.
 	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32), StorageNodeSecret: strings.Repeat("n", 32)}
 	env, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"})
 	require.NoError(t, err)
-	for _, id := range []string{"admin", "eventbus", "console-proxy"} {
+	for _, id := range []string{"eventbus", "console-proxy"} {
 		require.NotContains(t, env[id], "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	}
+	// Admin 的 Console 代浏览器调用 Storage，需要 Primary 与 View 两个角色密钥。
+	require.Equal(t, identity.StoragePrimarySecret, env["admin"]["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
+	require.Equal(t, identity.StorageViewSecret, env["admin"]["MOOX_STORAGE_VIEW_AUTH_SECRET"])
+	require.NotContains(t, env["admin"], "MOOX_STORAGE_NODE_AUTH_SECRET")
 	for _, id := range []string{"monitor", "collector", "factor-mgr", "strategy"} {
 		require.Equal(t, identity.StoragePrimarySecret, env[id]["MOOX_STORAGE_PRIMARY_AUTH_SECRET"])
 		require.NotContains(t, env[id], "MOOX_STORAGE_NODE_AUTH_SECRET")

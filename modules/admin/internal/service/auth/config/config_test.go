@@ -107,3 +107,16 @@ func TestConfig_LoadConfig_InvalidYAML_ShouldReturnError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "解析YAML失败")
 }
+
+func TestConfig_LoadConfig_RejectsNonceTTLShorterThanSignatureWindow(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "config"), 0o755))
+	content := "jwt:\n  access_expired: 24h\nsecurity:\n  session_ttl: 24h\n  request_clock_skew: 60s\n  nonce_ttl: 5s\n  raw_ticket_ttl: 60s\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte(content), 0o644))
+	origWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	_, err = LoadConfig()
+	require.ErrorContains(t, err, "nonce_ttl")
+}

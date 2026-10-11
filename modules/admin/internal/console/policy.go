@@ -2,6 +2,7 @@ package console
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -30,7 +31,7 @@ func isSpaceScopedService(serviceID string) bool {
 // adminOnlyWriteService 的写方法没有空间归属，只允许全局管理员，普通登录用户不能改全局状态。
 func adminOnlyWriteService(serviceID string) bool {
 	switch serviceID {
-	case "ssh", "secret", "sysdeploy", "setup", "monitor":
+	case "ssh", "secret", "sysdeploy", "setup", "monitor", "space":
 		return true
 	}
 	return false
@@ -86,4 +87,35 @@ func effectiveSpaceID(header string, body []byte) (string, error) {
 		}
 	}
 	return space, nil
+}
+
+// storageGlobalMethods 没有空间归属（节点、归档、空间目录本身），读写都只允许全局管理员，
+// 不能靠请求头声明某个空间来获得授权。
+var storageGlobalMethods = map[string]bool{
+	"CreateSpace": true, "UpdateSpace": true, "DeleteSpace": true, "ListSpaces": true,
+	"UpdateDataNode": true, "DeleteDataNode": true, "GetDataNode": true, "ListDataNodes": true,
+	"RebindDatasetDataNode": true, "RegisterArchiveFile": true, "ListArchiveFiles": true,
+}
+
+// requestBodySpace 是空间内 Storage 方法实际作用的空间。请求体声明的空间必须唯一且与请求头一致；
+// 请求体完全没有声明时采用请求头的空间并要求调用方把它写入请求体（inject），否则后端会按空
+// space_id 查询所有空间。请求头和请求体都没有空间则拒绝。
+func requestBodySpace(header string, body []byte) (space string, inject bool, err error) {
+	ids, err := bodySpaceIDs(body)
+	if err != nil {
+		return "", false, err
+	}
+	header = strings.TrimSpace(header)
+	if len(ids) == 0 {
+		if header == "" {
+			return "", false, errors.New("space_id is required")
+		}
+		return header, true, nil
+	}
+	for _, id := range ids {
+		if id != ids[0] || header != "" && id != header {
+			return "", false, fmt.Errorf("space_id %q does not match authorized space %q", id, header)
+		}
+	}
+	return ids[0], false, nil
 }

@@ -117,7 +117,7 @@ binary_names=(
   moox-admin moox-admin-cli
   moox-host-gateway moox-host-gateway-cli
   moox-eventbus
-  moox-web-host
+  moox-web-host moox-console-proxy moox-egress-proxy
   moox-cloudnode moox-cloudnode-cli
   moox-collector moox-collector-cli
   moox-factor-mgr moox-factor-mgr-cli

@@ -116,7 +116,8 @@ func (p *Proxy) handle(_ interface{}, ctx context.Context, decode server.FilterF
 			if p.options.Metrics != nil {
 				p.options.Metrics.AuthFailed()
 			}
-			return nil, err
+			// 框架级鉴权失败码：调用方据此刷新目录（服务撤离会同时撤销调用方密钥）。
+			return nil, errs.NewFrameError(errs.RetServerAuthFail, err.Error())
 		}
 		if view.Disabled() {
 			status = http.StatusServiceUnavailable

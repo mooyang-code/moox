@@ -50,12 +50,13 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 	for _, id := range components {
 		values := maps.Clone(health)
 		environment[id] = values
-		if slices.Contains([]string{"monitor", "collector", "factor-mgr", "strategy"}, id) {
-			if len(identity.StoragePrimarySecret) < 32 || id == "strategy" && len(identity.StorageViewSecret) < 32 {
+		if slices.Contains([]string{"monitor", "collector", "factor-mgr", "strategy", "admin"}, id) {
+			if len(identity.StoragePrimarySecret) < 32 || (id == "strategy" || id == "admin") && len(identity.StorageViewSecret) < 32 {
 				return nil, errors.New("control Storage clients require the original persistent role secrets")
 			}
 			values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"] = identity.StoragePrimarySecret
-			if id == "strategy" {
+			// Admin 的 Console 代浏览器调用 Storage，需要 Primary 与 View 两个角色密钥。
+			if id == "strategy" || id == "admin" {
 				values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
 			}
 		}

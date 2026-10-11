@@ -213,7 +213,8 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	readOnly := hr.catalog.ReadOnly(spec.Path, method)
-	if status, err := hr.authorizeRequest(ctx, r, serviceID, readOnly, body); err != nil {
+	authorizedSpace, injectSpace, status, err := hr.authorizeRequest(ctx, r, serviceID, method, readOnly, body)
+	if err != nil {
 		log.WarnContextf(ctx, "console request denied service=%s method=%s: %v", serviceID, method, err)
 		if status == http.StatusBadRequest {
 			http.Error(w, err.Error(), status)
@@ -221,6 +222,14 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 			http.Error(w, "access denied", status)
 		}
 		return
+	}
+	// 请求头没有空间而由请求体声明时，把授权通过的空间写回下游元数据。
+	if authorizedSpace != "" && headers["space_id"] != authorizedSpace {
+		headers["space_id"] = authorizedSpace
+		ctx = spacecontext.InjectFromHeaders(ctx, headers)
+		ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{
+			SpaceID: authorizedSpace, UserID: headers["user_id"], UserRole: headers["user_role"], TraceID: headers["trace_id"],
+		})
 	}
 	var target RPCForwarder = hr.gateway
 	admin, _ := hr.catalog.Component("admin")
@@ -239,7 +248,15 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if serviceID == "storage" {
-		signed, err := signStorageBody(spec.Path, body)
+		spaceForBody := ""
+		if injectSpace {
+			spaceForBody = authorizedSpace
+		}
+		signed, err := signStorageBody(spec.Path, body, spaceForBody)
+		if errors.Is(err, errInvalidStorageBody) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err != nil {
 			writeForwardError(ctx, w, err, headers)
 			return
@@ -254,42 +271,58 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	writeForwardResponse(w, response, headers)
 }
 
-// authorizeRequest 在转发前完成用户级授权：全局状态的写操作只允许全局管理员，
-// 空间内服务按空间成员资格与只读/写区分授权。返回的状态码用于响应。
-func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, serviceID string, readOnly bool, body []byte) (int, error) {
+// authorizeRequest 在转发前完成用户级授权，返回最终授权的空间（可能来自请求体）：
+// 全局状态的写操作与 Storage 全局方法只允许全局管理员，空间内服务按空间成员资格与只读/写区分授权。
+func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, serviceID, method string, readOnly bool, body []byte) (string, bool, int, error) {
 	role, _ := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
-	if adminOnlyWriteService(serviceID) && !readOnly && role < globalAdminRole {
-		return http.StatusForbidden, errors.New("administrator role required")
+	isAdmin := role >= globalAdminRole
+	if adminOnlyWriteService(serviceID) && !readOnly && !isAdmin {
+		return "", false, http.StatusForbidden, errors.New("administrator role required")
 	}
-	if !isSpaceScopedService(serviceID) {
-		return 0, nil
+	if serviceID == "storage" && storageGlobalMethods[method] {
+		if !isAdmin {
+			return "", false, http.StatusForbidden, errors.New("administrator role required")
+		}
+		return "", false, 0, nil
 	}
-	spaceID, err := effectiveSpaceID(r.Header.Get("X-Space-Id"), body)
+	scoped := isSpaceScopedService(serviceID) || serviceID == "space" && method == "ListSpaceMembers"
+	if !scoped {
+		return "", false, 0, nil
+	}
+	var spaceID string
+	var inject bool
+	var err error
+	switch {
+	case serviceID == "storage" || serviceID == "space":
+		spaceID, inject, err = requestBodySpace(r.Header.Get("X-Space-Id"), body)
+	default:
+		spaceID, err = effectiveSpaceID(r.Header.Get("X-Space-Id"), body)
+	}
 	if err != nil {
-		return http.StatusBadRequest, err
+		return "", false, http.StatusBadRequest, err
 	}
 	if spaceID == "" {
 		if requiresSpaceHeader(serviceID) {
-			return http.StatusForbidden, errors.New("space_id is required")
+			return "", false, http.StatusForbidden, errors.New("space_id is required")
 		}
-		// Storage、Factor 的无空间请求属于全局运维接口。
-		if role < globalAdminRole {
-			return http.StatusForbidden, errors.New("administrator role required for requests without a space")
+		// Factor 的无空间请求属于全局运维接口。
+		if !isAdmin {
+			return "", false, http.StatusForbidden, errors.New("administrator role required for requests without a space")
 		}
-		return 0, nil
+		return "", false, 0, nil
 	}
 	if hr.spaceAuthorizer == nil {
-		return http.StatusForbidden, errors.New("space authorizer is unavailable")
+		return "", false, http.StatusForbidden, errors.New("space authorizer is unavailable")
 	}
 	userID, _ := ctx.Value(authmodel.CtxUserID).(string)
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		return http.StatusForbidden, errors.New("authenticated user is required")
+		return "", false, http.StatusForbidden, errors.New("authenticated user is required")
 	}
 	if err := hr.spaceAuthorizer.AuthorizeSpaceRequest(ctx, userID, spaceID, !readOnly, int32(role)); err != nil {
-		return http.StatusForbidden, err
+		return "", false, http.StatusForbidden, err
 	}
-	return 0, nil
+	return spaceID, inject, 0, nil
 }
 
 // ============================================================================

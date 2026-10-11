@@ -88,6 +88,10 @@ func verifyAdminRequest(r *http.Request, body []byte) (*accessClaims, error) {
 			nonceTTL = cfg.Security.NonceTTL
 		}
 	}
+	// nonce 至少保存到签名窗口结束（前后各 skew），配置更短时按窗口取整上调。
+	if minimum := 2*skew + time.Second; nonceTTL < minimum {
+		nonceTTL = minimum
+	}
 	requestTime := time.Unix(timestamp, 0)
 	if delta := time.Since(requestTime); delta > skew || delta < -skew {
 		return nil, errors.New("request timestamp outside allowed window")

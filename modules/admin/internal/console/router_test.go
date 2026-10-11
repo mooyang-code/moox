@@ -225,8 +225,8 @@ func TestConsoleAuthenticationPrecedesRemoteDispatch(t *testing.T) {
 	_, secret, key, sid := setupRequestAuthTest(t)
 	calls := 0
 	gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { calls++; return []byte(`{}`), nil })
-	router := newTestRouter(t, nil, gateway).buildControlRouter()
-	body := []byte(`{"offset":1}`)
+	router := newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter()
+	body := []byte(`{"space_id":"space-1","offset":1}`)
 	r := browserRequest(t, secret, key, sid, "/api/admin/storage/ListFields", "", body)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, r)
@@ -289,12 +289,12 @@ func TestConsoleManualViewRebuildStillRequiresAdministrator(t *testing.T) {
 			_, secret, key, sid := setupRequestAuthTest(t)
 			calls := 0
 			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { calls++; return []byte(`{}`), nil })
-			r := browserRequest(t, secret, key, sid, "/api/admin/storage/RequestViewRebuild", "", []byte(`{}`))
+			r := browserRequest(t, secret, key, sid, "/api/admin/storage/RequestViewRebuild", "", []byte(`{"space_id":"space-1"}`))
 			token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": role, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
 			require.NoError(t, err)
 			r.Header.Set("Authorization", token)
 			rr := httptest.NewRecorder()
-			newTestRouter(t, nil, gateway).buildControlRouter().ServeHTTP(rr, r)
+			newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, r)
 			if role < 2 {
 				require.Equal(t, http.StatusForbidden, rr.Code)
 				require.Zero(t, calls)
@@ -357,7 +357,7 @@ func TestConsoleStorageAndFactorAreSpaceAuthorized(t *testing.T) {
 		{"member blocked by authorizer", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, true, http.StatusForbidden},
 		{"body space without header is authorized", "/api/admin/storage/ListDatasets", "", `{"space_id":"space-2"}`, 1, true, http.StatusForbidden},
 		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, 1, false, http.StatusBadRequest},
-		{"member without space", "/api/admin/storage/ListDatasets", "", `{}`, 1, false, http.StatusForbidden},
+		{"member without space", "/api/admin/storage/ListDatasets", "", `{}`, 1, false, http.StatusBadRequest},
 		{"admin without space", "/api/admin/storage/ListDataNodes", "", `{}`, 2, false, http.StatusOK},
 		{"factor member blocked", "/api/admin/factor-mgr/DeleteFactorSet", "space-1", `{}`, 1, true, http.StatusForbidden},
 		{"factor member without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, 1, false, http.StatusForbidden},
@@ -418,4 +418,94 @@ func TestConsoleRateLimitsConfiguredMethodsOnRealRoute(t *testing.T) {
 		router.ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/monitor/GetHealthOverview", "", []byte(`{}`)))
 		require.NotEqual(t, http.StatusTooManyRequests, rr.Code)
 	}
+}
+
+// Storage 方法的授权空间必须由请求体声明，防止请求头授权 S 而后端按空 space_id 查询全部空间；
+// 节点等全局方法只允许全局管理员，不能借空间管理权限执行。
+func TestConsoleStorageBindsAuthorizedSpaceAndProtectsGlobalMethods(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, space, body string
+		role                    int
+		status                  int
+	}{
+		{"header space injected when body has none", "/api/admin/storage/ListDatasets", "space-1", `{}`, 1, http.StatusOK},
+		{"empty space id is replaced by header space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":""}`, 1, http.StatusOK},
+		{"body space ok", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, http.StatusOK},
+		{"node write needs admin even with space header", "/api/admin/storage/UpdateDataNode", "space-1", `{"space_id":"space-1","node_id":"n1"}`, 1, http.StatusForbidden},
+		{"node read needs admin", "/api/admin/storage/ListDataNodes", "", `{}`, 1, http.StatusForbidden},
+		{"admin node write", "/api/admin/storage/UpdateDataNode", "", `{"node_id":"n1"}`, 2, http.StatusOK},
+		{"space delete denied for member", "/api/admin/space/DeleteSpace", "", `{"space_id":"space-2"}`, 1, http.StatusForbidden},
+		{"space update denied for member", "/api/admin/space/UpdateSpace", "space-1", `{"space":{"space_id":"space-1"}}`, 1, http.StatusForbidden},
+		{"members need membership", "/api/admin/space/ListSpaceMembers", "", `{"space_id":"space-2"}`, 1, http.StatusForbidden},
+		{"null body", "/api/admin/storage/ListDatasets", "", `null`, 2, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, secret, key, sid := setupRequestAuthTest(t)
+			testTokenRole = tc.role
+			authorizer := &fakeSpaceAuthorizer{}
+			if tc.status == http.StatusForbidden && strings.Contains(tc.name, "members need") {
+				authorizer.err = errors.New("not a member")
+			}
+			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
+			rr := httptest.NewRecorder()
+			newTestRouter(t, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, tc.space, []byte(tc.body)))
+			if strings.HasPrefix(tc.path, "/api/admin/space/") && tc.status == http.StatusOK {
+				return
+			}
+			require.Equal(t, tc.status, rr.Code, rr.Body.String())
+		})
+	}
+}
+
+// 仅由请求体声明的空间，授权通过后必须传给下游元数据。
+func TestConsolePropagatesBodyDeclaredSpaceToDownstream(t *testing.T) {
+	_, secret, key, sid := setupRequestAuthTest(t)
+	var got gatewayclient.CallMetadata
+	gateway := forwardFunc(func(ctx context.Context, _, _ string, _ int, _ []byte) ([]byte, error) {
+		got = gatewayclient.CallMetadataFromContext(ctx)
+		return []byte(`{}`), nil
+	})
+	rr := httptest.NewRecorder()
+	newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/strategy/ListStrategyInstances", "", []byte(`{"space_id":"space-9"}`)))
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "space-9", got.SpaceID)
+}
+
+// Storage 鉴权注入对 camelCase 别名只输出一份凭据。
+func TestSignStorageBodyNormalizesProtoJSONAliases(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
+	for _, body := range []string{
+		`{"authInfo":{"appId":"browser","appKey":"x","operator":"op"},"spaceId":"s"}`,
+		`{"auth_info":{"appId":"browser","appKey":"x","operator":"op"},"spaceId":"s"}`,
+		`{"space_id":"s"}`,
+	} {
+		out, err := signStorageBody("trpc.moox.storage.Metadata", []byte(body), "")
+		require.NoError(t, err)
+		var got map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(out, &got))
+		require.NotContains(t, got, "authInfo")
+		var auth map[string]any
+		require.NoError(t, json.Unmarshal(got["auth_info"], &auth))
+		require.NotContains(t, auth, "appId")
+		require.NotContains(t, auth, "appKey")
+		require.Equal(t, "admin-gateway", auth["app_id"])
+		require.Equal(t, storageServiceAuthKey("primary-secret", "admin-gateway"), auth["app_key"])
+	}
+	_, err := signStorageBody("trpc.moox.storage.Metadata", []byte(`null`), "")
+	require.ErrorIs(t, err, errInvalidStorageBody)
+}
+
+func TestConsoleInjectsHeaderSpaceIntoStorageBodyWhenAbsent(t *testing.T) {
+	_, secret, key, sid := setupRequestAuthTest(t)
+	var raw []byte
+	gateway := forwardFunc(func(_ context.Context, _, _ string, _ int, body []byte) ([]byte, error) {
+		raw = body
+		return []byte(`{}`), nil
+	})
+	rr := httptest.NewRecorder()
+	newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/storage/ListDatasets", "space-1", []byte(`{"page":{"page":1}}`)))
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, "space-1", got["space_id"])
 }
