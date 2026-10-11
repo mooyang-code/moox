@@ -288,13 +288,21 @@ func (s *Service) ApplySnapshot(
 	if err := s.validate(); err != nil {
 		return Result{}, err
 	}
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return Result{}, err
+	}
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		unlockMembership()
 		return Result{}, err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		unlockExecution()
+		unlockMembership()
+		return Result{}, err
+	}
 	result, err := s.applySnapshot(ctx, tradingAccountID, snapshot)
 	unlock()
 	if err == nil && result.ExternalFactsImported {
@@ -533,14 +541,20 @@ func (s *Service) ApplyFill(
 	if err := s.validate(); err != nil {
 		return false, err
 	}
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlockMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
 	defer unlockExecution()
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -571,14 +585,20 @@ func (s *Service) ApplyOrder(
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlockMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	defer unlockExecution()
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		return err
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -603,7 +623,10 @@ func (s *Service) ApplyPosition(
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -662,7 +685,10 @@ func (s *Service) ApplyAccountSnapshot(
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -713,7 +739,10 @@ func (s *Service) SetReady(
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()

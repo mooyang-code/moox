@@ -1490,3 +1490,34 @@ func TestFullSyncKeepsPositionProjectedFromFillBackfilledInTheSameRound(t *testi
 	).Scan(&positions).Error)
 	require.Equal(t, int64(1), positions, "本轮补录成交投影出的持仓不能被先取的空持仓列表删除")
 }
+
+// 账户锁被长时间占用（例如下单正在做网络调用）时，带期限的入口（断线收尾的 SetReady、私有事件处理）必须按期限返回，
+// 而不是无限等锁：断线时给 SetReady 设置的 2 秒期限靠它才能真正生效。
+func TestAccountLockWaitHonorsCallerDeadline(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &consumer.Reducer{Store: tradeStore}}
+	unlock := tradeStore.LockTradingAccount("account-1")
+	defer unlock()
+
+	for name, call := range map[string]func(context.Context) error{
+		"SetReady": func(ctx context.Context) error { return service.SetReady(ctx, "account-1", false, nil) },
+		"ApplyPosition": func(ctx context.Context) error {
+			return service.ApplyPosition(ctx, "account-1", exchange.Position{ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet, ExchangeUpdatedAt: time.UnixMilli(1_000)})
+		},
+		"ApplyAccountSnapshot": func(ctx context.Context) error {
+			return service.ApplyAccountSnapshot(ctx, "account-1", exchange.AccountSnapshot{ExchangeUpdatedAt: time.UnixMilli(1_000)})
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		done := make(chan error, 1)
+		go func() { done <- call(ctx) }()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.DeadlineExceeded, name)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s kept waiting for the trading account lock past the deadline", name)
+		}
+		cancel()
+	}
+}

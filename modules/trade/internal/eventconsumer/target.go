@@ -139,7 +139,18 @@ func HandleTarget(
 	// venue selection through receipt acceptance. Otherwise a concurrent member
 	// removal can leave an immutable receipt pointing at a venue that no longer
 	// belongs to the logical account.
-	unlockAccount := opts.Store.LockLogicalAccount(message.GetSpaceId(), request.GetLogicalAccountId())
+	// 拿锁阶段也受处理预算约束：完整同步等长时间持锁的操作不能让串行消费的目标消息一直卡在这里，
+	// 超时按可重试处理，其他账户的消息才能继续。
+	lockBudget := opts.ResolveTimeout
+	if lockBudget <= 0 {
+		lockBudget = 10 * time.Second
+	}
+	lockCtx, cancelLock := context.WithTimeout(ctx, lockBudget)
+	unlockAccount, lockErr := opts.Store.LockLogicalAccountContext(lockCtx, message.GetSpaceId(), request.GetLogicalAccountId())
+	cancelLock()
+	if lockErr != nil {
+		return retryTarget(lockErr)
+	}
 	defer unlockAccount()
 	unsupportedInstrument, membersReady, err := unsupportedLogicalTargetInstrument(
 		ctx, opts.Store, message.GetSpaceId(), request,

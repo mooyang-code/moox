@@ -46,7 +46,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { createSubmitScope } from "@/utils/submit-scope";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addFactorToSet, listFactors } from "@/api/factor";
 import type { FactorDef, FactorSetInfo } from "@/api/factor/types";
@@ -157,7 +158,9 @@ async function submit() {
   // 批量添加固定发起空间与代次：每一项请求都按当前空间头发出，空间切换后继续提交会把旧任务的因子写到新空间
   const submitSpaceId = spaceStore.selectedSpaceId;
   const submitGeneration = selectedSpaceGeneration();
-  const stale = () => spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
+  const submission = addScope.begin();
+  const stale = () =>
+    !submission.isCurrent() || spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
   submitting.value = true;
   errors.value = {};
   const done: string[] = [];
@@ -168,6 +171,7 @@ async function submit() {
         await addFactorToSet(setId, factorId);
         done.push(factorId);
       } catch (error) {
+        if (stale()) break; // 弹窗已被关闭/重新打开：失败原因不能写进新弹窗的行
         errors.value = { ...errors.value, [factorId]: error instanceof Error ? error.message : "添加失败" };
       }
     }
@@ -175,7 +179,8 @@ async function submit() {
     if (!stale()) submitting.value = false;
   }
   if (stale()) {
-    if (done.length) Message.info(`空间已切换：已向原空间的计算任务添加 ${done.length} 个因子，其余未提交`);
+    // 弹窗已被关闭/重新打开或空间已切换：已添加的因子保留，其余未提交；不能改动新弹窗的状态、发出 added 或关闭它
+    if (done.length) Message.info(`弹窗已关闭或空间已切换：已向原计算任务添加 ${done.length} 个因子，其余未提交`);
     return;
   }
   if (done.length) {
@@ -190,6 +195,14 @@ async function submit() {
     Message.warning(`${done.length} 个已添加，${Object.keys(errors.value).length} 个失败，原因见对应行`);
   }
 }
+
+// 提交作用域：右上角关闭按钮/Esc 也能关闭弹窗，打开、关闭、卸载都使进行中的批量添加失效，新一轮打开重置提交状态
+const addScope = createSubmitScope();
+watch(visible, () => {
+  addScope.invalidate();
+  submitting.value = false;
+});
+onBeforeUnmount(() => addScope.invalidate());
 </script>
 
 <style scoped>

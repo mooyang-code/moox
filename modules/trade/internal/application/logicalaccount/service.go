@@ -504,7 +504,10 @@ func (s *Service) Resume(
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, "", ErrServiceConfig
 	}
-	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	unlock, err := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
 	defer unlock()
 	before, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
@@ -513,7 +516,10 @@ func (s *Service) Resume(
 	if before.ControlMode != "STRATEGY" {
 		return store.LogicalAccountRecord{}, "", ErrNotReady
 	}
-	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
+	unlockExecution, err := s.Store.LockLogicalAccountExecutionContext(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
 	defer unlockExecution()
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {

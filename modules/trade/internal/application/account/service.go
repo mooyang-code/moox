@@ -230,6 +230,12 @@ func applyUpdate(value *tradingaccount.Account, command UpdateCommand) {
 	}
 	if command.CredentialSecretID != nil {
 		value.CredentialSecretID = *command.CredentialSecretID
+		// 实盘账户的凭据同时存在于 Live 配置里，落库读取的是 Live 的值：两处必须一起更新，否则换凭据成功返回却仍保存旧凭据
+		if value.Live != nil {
+			live := *value.Live
+			live.CredentialSecretID = *command.CredentialSecretID
+			value.Live = &live
+		}
 	}
 	if command.SettlementAsset != nil {
 		value.SettlementAsset = *command.SettlementAsset

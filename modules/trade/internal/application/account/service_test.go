@@ -547,3 +547,18 @@ type fakeSessionState struct{ ready bool }
 
 func (f fakeSessionState) ReadyFor(tradingaccount.Account) bool { return f.ready }
 func (f fakeSessionState) Invalidate(string)                    {}
+
+
+// 实盘账户的凭据同时存在于外层字段与 Live 配置里，落库读取 Live 的值：更换凭据必须两处一起更新。
+func TestApplyUpdateReplacesLiveCredentialUsedByPersistence(t *testing.T) {
+	value := validAccount()
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentTestnet
+	value.CredentialSecretID = "secret-a"
+	value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-a"}
+	next := "secret-b"
+	applyUpdate(&value, UpdateCommand{CredentialSecretID: &next})
+	if got := credentialSecret(value); got != "secret-b" {
+		t.Fatalf("persisted credential = %q, want secret-b", got)
+	}
+}
