@@ -51,7 +51,10 @@ func (w *Writer) SetPartitionLocker(locks *partitionlock.Locker) {
 }
 
 func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (domain.Manifest, error) {
-	unlock := w.locks.Lock(domain.PartitionID(key))
+	unlock, err := w.locks.Lock(ctx, domain.PartitionID(key))
+	if err != nil {
+		return domain.Manifest{}, fmt.Errorf("wait partition lock %s: %w", domain.PartitionID(key), err)
+	}
 	defer unlock()
 	attempt, err := w.journal.BeginMaterialization(ctx, key)
 	if err != nil {

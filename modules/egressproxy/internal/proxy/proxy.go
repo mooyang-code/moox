@@ -165,7 +165,31 @@ func (p *Proxy) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, e
 		}
 		rspHeaders[canonical] = value
 	}
-	return &egresspb.DoRsp{RetInfo: ret(commonpb.ErrorCode_SUCCESS, ""), Status: int32(response.StatusCode), Headers: rspHeaders, Body: body}, nil
+	rsp := &egresspb.DoRsp{RetInfo: ret(commonpb.ErrorCode_SUCCESS, ""), Status: int32(response.StatusCode), Headers: rspHeaders, Body: body}
+	if req.GzipResponse && len(body) > 0 {
+		compressed, err := gzipBytes(body)
+		if err != nil {
+			return doError(commonpb.ErrorCode_INNER_ERR, "egress response compression failed")
+		}
+		rsp.Body, rsp.BodyGzip = compressed, true
+	}
+	return rsp, nil
+}
+
+// gzipBytes 用于出口主机上行带宽受限时压缩回传内容。
+func gzipBytes(data []byte) ([]byte, error) {
+	var buffer bytes.Buffer
+	writer, err := gzip.NewWriterLevel(&buffer, gzip.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := writer.Write(data); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
 
 func decodedBody(response *http.Response) ([]byte, error) {

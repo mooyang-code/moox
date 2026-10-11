@@ -423,6 +423,7 @@ import type {
   ViewColumn,
   ViewRebuildLog
 } from "@/api/storage/types";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useSpaceStore } from "@/store/modules/space";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
 import {
@@ -1461,12 +1462,17 @@ async function reloadKlineRecords() {
   await loadKlineRecords(subjectId, seriesTag);
 }
 
+// K 线加载只服务于发起时的 View：切换 View/空间、关闭弹窗或卸载都会使在途请求失效，迟到的响应不能重新打开弹窗或写入旧数据
+const klineRequestGuard = createLatestRequestGuard();
+
 async function loadKlineRecords(subjectId: string, seriesTag: string) {
   const view = activeView.value;
   if (!view) return false;
+  const request = klineRequestGuard.begin();
   klineLoading.value = true;
   try {
-    const rows = await fetchKlineTableRows(view.view_id);
+    const rows = await fetchKlineTableRows(view.view_id, () => request.isLatest());
+    if (!request.isLatest()) return false;
     if (!klineRowsHaveFreq(rows)) {
       Message.warning("当前查询结果缺少 freq 字段，无法展示K线");
       return false;
@@ -1483,14 +1489,15 @@ async function loadKlineRecords(subjectId: string, seriesTag: string) {
     klineRecords.value = records;
     return true;
   } catch (error) {
+    if (!request.isLatest()) return false;
     Message.error(error instanceof Error ? error.message : "加载K线数据失败");
     return false;
   } finally {
-    klineLoading.value = false;
+    if (request.isLatest()) klineLoading.value = false;
   }
 }
 
-async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]> {
+async function fetchKlineTableRows(viewId: string, isCurrent: () => boolean = () => true): Promise<ViewBrowseTableRow[]> {
   const space_id = spaceStore.requireSpaceId();
   const timeRange = defaultTimeSeriesPreviewRange();
   const rows: TimeSeriesRow[] = [];
@@ -1507,6 +1514,7 @@ async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]
       page: { page: pageNo, size: DEFAULT_VIEW_PAGE_SIZE },
       total_mode: "NONE"
     });
+    if (!isCurrent()) break; // 已失效：不再翻页
     const pageRows = rsp.rows || [];
     rows.push(...pageRows);
     if (!rsp.page_result?.has_more || pageRows.length === 0) break;
@@ -1526,6 +1534,8 @@ function firstKlineFreq(subjectId: string, rows = tableRows.value) {
 }
 
 function closeKlineModal() {
+  klineRequestGuard.invalidate();
+  klineLoading.value = false;
   klineVisible.value = false;
   klineRecords.value = [];
   klineSubjectId.value = "";
@@ -1552,6 +1562,7 @@ onMounted(() => {
   }
 });
 onBeforeUnmount(() => {
+  klineRequestGuard.invalidate();
   stopRebuildPolling();
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);

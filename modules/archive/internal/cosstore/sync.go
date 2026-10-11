@@ -134,7 +134,10 @@ func (s Syncer) syncFile(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	unlock := s.PartitionLocks.Lock(domain.PartitionID(partition))
+	unlock, err := s.PartitionLocks.Lock(ctx, domain.PartitionID(partition))
+	if err != nil {
+		return fmt.Errorf("wait partition lock %s: %w", domain.PartitionID(partition), err)
+	}
 	defer unlock()
 	state, err := s.Journal.PartitionState(ctx, partition)
 	if err != nil {
