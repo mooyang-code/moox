@@ -45,8 +45,19 @@ func (s *SilenceScanner) Scan(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	transitions = append(s.pending, transitions...)
-	s.pending = s.pending[:0]
+	// 待重发的通知若已被更新的状态取代（例如离线通知失败后主机已恢复并发出恢复通知），直接丢弃，避免“已恢复 → 失联”的错误顺序。
+	retained := make([]PresenceTransition, 0, len(s.pending)+len(transitions))
+	for _, pending := range s.pending {
+		status, err := s.registry.Status(ctx, pending.AgentID)
+		if err != nil {
+			return err
+		}
+		if status == pending.To {
+			retained = append(retained, pending)
+		}
+	}
+	transitions = append(retained, transitions...)
+	s.pending = nil
 	for _, transition := range transitions {
 		if s.sink != nil {
 			if err := s.sink.HandlePresenceTransition(ctx, transition); err != nil {

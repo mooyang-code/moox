@@ -846,6 +846,9 @@ onMounted(async () => {
 
 watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   if (spaceId === oldSpaceId) return;
+  // 先同步作废所有在途请求，再做任何 await：路由更新等待期间旧空间的响应也不能继续推进
+  listGuard.invalidate();
+  submitGuard.invalidate();
   batchPoller.stop();
   currentBatchChangeStatus.value = null;
   batchChangeProcessing.value = false;
@@ -853,9 +856,7 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   if (getNodeBatchJobId(route.query)) {
     await replaceRouteJobId();
   }
-  // 切换空间：作废在途列表请求，并立即清空列表、分页与详情，避免旧空间数据残留
-  listGuard.invalidate();
-  submitGuard.invalidate();
+  // 切换空间：立即清空列表、分页与详情，避免旧空间数据残留
   loading.value = false;
   cloudNodeList.value = [];
   pagination.value.total = 0;
@@ -967,19 +968,20 @@ const submitAndTrack = async (
   try {
     const response = await submit();
     if (!request.isLatest()) return false;
-    await beginBatchPolling(response);
+    if (!response.job_id) throw new Error("cloudnode 未返回 job_id");
+    currentBatchChangeStatus.value = null;
+    await replaceRouteJobId(response.job_id);
+    if (!request.isLatest()) {
+      // 路由更新期间空间已切换：撤销写入的旧任务 ID，不启动轮询
+      if (getNodeBatchJobId(route.query) === response.job_id) await replaceRouteJobId();
+      return false;
+    }
+    await startBatchPolling(response.job_id);
     return request.isLatest();
   } catch (error: any) {
     if (request.isLatest()) onError(error);
     return false;
   }
-};
-
-const beginBatchPolling = async (response: SubmitNodeBatchResponse) => {
-  if (!response.job_id) throw new Error("cloudnode 未返回 job_id");
-  currentBatchChangeStatus.value = null;
-  await replaceRouteJobId(response.job_id);
-  await startBatchPolling(response.job_id);
 };
 
 // 关闭批量变更提示

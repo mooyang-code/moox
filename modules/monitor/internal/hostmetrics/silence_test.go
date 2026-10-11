@@ -109,3 +109,35 @@ func TestStorePublishesRecoveryTransitionAndDoesNotRegressLatestView(t *testing.
 	require.Equal(t, t0.Add(100*time.Second).Format(time.RFC3339Nano), rows[0].LastSeenAt)
 	require.True(t, rows[0].Reachable)
 }
+
+// 离线通知发送失败后主机已恢复：待重发的离线通知已被取代，扫描重试时必须丢弃，不能在恢复通知之后再发“失联”。
+func TestSilenceScannerDropsPendingOfflineNoticeAfterRecovery(t *testing.T) {
+	ctx := context.Background()
+	registry := NewRegistry(openRegistryTestDB(t))
+	t0 := time.Date(2026, 7, 28, 1, 2, 3, 0, time.UTC)
+	_, err := registry.Observe(ctx, HostObservation{AgentID: "agent-a", Hostname: "host-a", BootID: "boot-a", OccurredAt: t0, EventID: "event-0"})
+	require.NoError(t, err)
+
+	var delivered []string
+	failOffline := true
+	scanner := NewSilenceScanner(registry, 90*time.Second, PresenceTransitionFunc(func(_ context.Context, tr PresenceTransition) error {
+		if tr.To == PresenceUnreachable && failOffline {
+			return errors.New("wecom unavailable")
+		}
+		delivered = append(delivered, tr.To)
+		return nil
+	}))
+	require.NoError(t, scanner.Scan(ctx, t0.Add(91*time.Second)))
+	require.Len(t, scanner.pending, 1)
+
+	// 主机恢复上报，恢复通知成功发出
+	result, err := registry.Observe(ctx, HostObservation{AgentID: "agent-a", Hostname: "host-a", BootID: "boot-a", OccurredAt: t0.Add(100 * time.Second), EventID: "event-1"})
+	require.NoError(t, err)
+	require.NotNil(t, result.Transition)
+	require.NoError(t, scanner.sink.HandlePresenceTransition(ctx, *result.Transition))
+
+	failOffline = false
+	require.NoError(t, scanner.Scan(ctx, t0.Add(110*time.Second)))
+	require.Equal(t, []string{PresenceReachable}, delivered, "过期的离线通知不能在恢复通知之后补发")
+	require.Empty(t, scanner.pending)
+}

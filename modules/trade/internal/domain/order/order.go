@@ -154,7 +154,8 @@ func (o *Order) ApplyFill(fill Fill) ([]Event, error) {
 		CancelUnknown,
 		Canceled,
 		PartiallyCanceled,
-		Rejected:
+		Rejected,
+		Expired:
 	default:
 		return nil, ErrInvalidTransition
 	}
@@ -171,7 +172,7 @@ func (o *Order) ApplyFill(fill Fill) ([]Event, error) {
 		o.State = Filled
 	} else if o.State == Canceled || o.State == PartiallyCanceled || o.State == Rejected {
 		o.State = PartiallyCanceled
-	} else if o.State != Canceling && o.State != CancelUnknown {
+	} else if o.State != Canceling && o.State != CancelUnknown && o.State != Expired {
 		o.State = PartiallyFilled
 	}
 	return o.emit("FillApplied"), nil

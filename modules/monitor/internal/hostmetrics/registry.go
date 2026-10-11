@@ -148,6 +148,24 @@ func (r *Registry) Observe(ctx context.Context, observation HostObservation) (Ob
 	return result, err
 }
 
+// Status 返回 agent 当前的在线状态；未登记时返回空串。
+func (r *Registry) Status(ctx context.Context, agentID string) (string, error) {
+	if r == nil || r.db == nil {
+		return "", errors.New("host agent registry is unavailable")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var record hostAgentRecord
+	err := r.db.WithContext(ctx).Where("c_agent_id = ?", agentID).First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return record.Status, nil
+}
+
 func (r *Registry) MarkUnreachable(ctx context.Context, now time.Time, staleAfter time.Duration) ([]PresenceTransition, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("host agent registry is unavailable")
