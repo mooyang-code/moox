@@ -305,10 +305,12 @@ func (a *Adapter) dispatchPrivate(
 		payload = wrapper.Event
 	}
 	var root struct {
-		Event   string          `json:"e"`
-		Time    int64           `json:"E"`
-		Order   json.RawMessage `json:"o"`
-		Account json.RawMessage `json:"a"`
+		Event string `json:"e"`
+		Time  int64  `json:"E"`
+		// T 是事务（余额实际变更）时间；E 只是消息生成时间，可能晚于 T，不能与 REST 的余额更新时间比较。
+		TransactionTime int64           `json:"T"`
+		Order           json.RawMessage `json:"o"`
+		Account         json.RawMessage `json:"a"`
 	}
 	if err := json.Unmarshal(payload, &root); err != nil {
 		return typedRejected("decode private event", err)
@@ -317,7 +319,11 @@ func (a *Adapter) dispatchPrivate(
 		return errListenKeyExpired
 	}
 	if root.Event == "ACCOUNT_UPDATE" {
-		return a.dispatchFuturesAccount(ctx, root.Time, root.Account, handler)
+		eventTime := root.TransactionTime
+		if eventTime <= 0 {
+			eventTime = root.Time
+		}
+		return a.dispatchFuturesAccount(ctx, eventTime, root.Account, handler)
 	}
 	if root.Event == "outboundAccountPosition" {
 		return a.dispatchSpotAccount(ctx, payload, handler)

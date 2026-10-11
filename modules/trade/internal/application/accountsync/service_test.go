@@ -1267,6 +1267,12 @@ func TestPrivateFillClosesAdmissionUntilFullSync(t *testing.T) {
 	require.True(t, account.Ready, "完整同步确认余额后恢复")
 }
 
+type recordingMetrics struct{ errs []error }
+
+func (m *recordingMetrics) Observe(_ string, _ time.Time, _ float64, err error) {
+	m.errs = append(m.errs, err)
+}
+
 type snapshotAtAdapter struct {
 	*syncAdapter
 	at int64
@@ -1320,12 +1326,15 @@ func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T)
 	}
 	before := boundary()
 
+	metrics := &recordingMetrics{}
+	service.Metrics = metrics
 	for _, at := range []int64{1_500, 2_000, 2_900} { // 旧于已采用快照 / 与已采用快照同时间 / 介于旧余额与成交之间
 		service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, at}}
 		service.Now = func() time.Time { return time.UnixMilli(5_000 + at) }
 		result, syncErr := service.SyncAccount(context.Background(), "account-1")
 		require.NoError(t, syncErr)
 		require.False(t, result.Ready, "快照时间 %d 未覆盖成交 3_000", at)
+		require.True(t, result.BalancePending)
 		account, getErr := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 		require.NoError(t, getErr)
 		require.False(t, account.Ready)
@@ -1333,6 +1342,10 @@ func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T)
 		require.Equal(t, before, boundary(), "未覆盖成交的快照不能推进预留抵扣边界")
 	}
 
+	require.Len(t, metrics.errs, 3)
+	for _, observed := range metrics.errs {
+		require.Error(t, observed, "余额未确认时监控必须看到失败，而不是同步新鲜")
+	}
 	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 3_000}}
 	service.Now = func() time.Time { return time.UnixMilli(9_000) }
 	result, err := service.SyncAccount(context.Background(), "account-1")
@@ -1389,4 +1402,49 @@ func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, account.Ready)
 	require.Equal(t, "100", account.Snapshot.AvailableFunds, "更旧的 REST 不得把可用资金改回 900")
+}
+
+// REST 首次补录的成交同样会释放预留：同一轮读取的余额若早于成交，不能恢复准入；水位在成交入账的同一事务内抬高。
+func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	base := &syncAdapter{
+		order: exchange.Order{
+			ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(3_000),
+		},
+		fill: exchange.Fill{
+			ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+			SettlementAsset: "USDT", TradedAt: time.UnixMilli(3_000),
+		},
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: snapshotAtAdapter{base, 2_000}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	require.False(t, result.Ready, "成交之前读到的余额不能恢复准入")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.Equal(t, int64(3_000), account.BalancePendingUntil)
+
+	// 重放同一成交（已去重）不会丢水位，余额覆盖成交后恢复
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 3_000}}
+	result, err = service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, result.Ready)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Zero(t, account.BalancePendingUntil)
 }

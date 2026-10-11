@@ -51,6 +51,8 @@ import { Message } from "@arco-design/web-vue";
 import { addFactorToSet, listFactors } from "@/api/factor";
 import type { FactorDef, FactorSetInfo } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
+import { useSpaceStore } from "@/store/modules/space";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { precheckAddFactor, type PrecheckResult } from "./add-factor-precheck";
 
@@ -148,13 +150,20 @@ function noteClass(row: CandidateRow) {
 }
 
 /** 逐个提交；预检只是提示，失败按行展示后端给出的原因。 */
+const spaceStore = useSpaceStore();
+
 async function submit() {
   const { set_id: setId } = props.info.factor_set;
+  // 批量添加固定发起空间与代次：每一项请求都按当前空间头发出，空间切换后继续提交会把旧任务的因子写到新空间
+  const submitSpaceId = spaceStore.selectedSpaceId;
+  const submitGeneration = selectedSpaceGeneration();
+  const stale = () => spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
   submitting.value = true;
   errors.value = {};
   const done: string[] = [];
   try {
     for (const factorId of [...selected.value]) {
+      if (stale()) break;
       try {
         await addFactorToSet(setId, factorId);
         done.push(factorId);
@@ -163,7 +172,11 @@ async function submit() {
       }
     }
   } finally {
-    submitting.value = false;
+    if (!stale()) submitting.value = false;
+  }
+  if (stale()) {
+    if (done.length) Message.info(`空间已切换：已向原空间的计算任务添加 ${done.length} 个因子，其余未提交`);
+    return;
   }
   if (done.length) {
     added.value = [...added.value, ...done];

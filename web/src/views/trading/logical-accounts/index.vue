@@ -375,6 +375,7 @@ import { useWindowSize } from "@vueuse/core";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { createClientId } from "@/utils/client-id";
 import {
   addLogicalAccountMember,
@@ -649,19 +650,34 @@ function openFlatten() {
   reasonForm.reason = "";
   reasonVisible.value = true;
 }
+function abandonedReasonSubmit() {
+  Message.info("操作已提交到原空间的组合账户，当前空间或账户已切换；请切回原空间确认操作结果");
+  reasonVisible.value = false;
+  return true;
+}
 async function submitReason() {
   if (!selected.value || !reasonForm.reason.trim() || (reasonMode.value === "flatten" && !reasonForm.action_id.trim())) {
     Message.warning("请填写原因和操作编号");
     return false;
   }
+  const submitSpaceId = spaceStore.selectedSpaceId;
+  const submitGeneration = selectedSpaceGeneration();
+  const submitAccountId = selected.value.logical_account_id;
+  const stale = () =>
+    spaceStore.selectedSpaceId !== submitSpaceId ||
+    selectedSpaceGeneration() !== submitGeneration ||
+    selected.value?.logical_account_id !== submitAccountId;
   if (reasonMode.value === "pause") {
     await pauseLogicalAccount(selected.value.logical_account_id, reasonForm.reason.trim());
+    if (stale()) return abandonedReasonSubmit();
   } else {
     const rsp = await flattenLogicalAccount(
       reasonForm.action_id.trim(),
       selected.value.logical_account_id,
       reasonForm.reason.trim()
     );
+    // 请求已经发出但空间或所选组合账户已变化：不覆盖新对象的操作状态，也不用新空间轮询原空间的操作
+    if (stale()) return abandonedReasonSubmit();
     action.value = rsp.action;
     submittedOrder.value = null;
     startActionPolling(rsp.action.action_id);

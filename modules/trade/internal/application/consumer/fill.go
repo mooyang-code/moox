@@ -203,7 +203,32 @@ func (r *Reducer) applyFillTx(
 			return err
 		}
 	}
-	return tx.UpdateOrder(record, expectedVersion)
+	if err := tx.UpdateOrder(record, expectedVersion); err != nil {
+		return err
+	}
+	return markBalancePendingForLiveFill(tx, source, fill)
+}
+
+// markBalancePendingForLiveFill 在成交入账的同一事务内抬高待余额确认水位并关闭准入：
+// 成交已经释放订单预留，而余额快照还没有反映这笔支出，确认之前同一笔资金不能再被本地下单检查放行。
+// 无论成交来自私有流还是 REST 补录，都与成交入账、预留释放原子完成，重放不会漏掉水位。
+func markBalancePendingForLiveFill(tx *store.Tx, source Source, fill exchange.Fill) error {
+	if source.Kind == OriginPaperMatcher {
+		return nil
+	}
+	account, err := tx.GetTradingAccount(source.SpaceID, source.TradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return nil
+	}
+	if err := tx.RaiseBalancePending(source.SpaceID, source.TradingAccountID, fill.TradedAt.UnixMilli()); err != nil {
+		return err
+	}
+	return tx.UpdateTradingAccountReadiness(
+		source.SpaceID, source.TradingAccountID, false, fill.TradedAt.UnixMilli(), "fill awaiting balance sync",
+	)
 }
 
 func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {

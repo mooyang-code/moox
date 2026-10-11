@@ -31,6 +31,7 @@ import type { SubjectMode } from "@/api/factor/types";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import SubjectScopeFields from "./subject-scope-fields.vue";
 
@@ -94,6 +95,8 @@ async function submit() {
     Message.warning("指定对象模式至少需要一个对象 ID");
     return false;
   }
+  const submitGeneration = selectedSpaceGeneration();
+  const stale = () => spaceStore.selectedSpaceId !== spaceId || selectedSpaceGeneration() !== submitGeneration;
   submitting.value = true;
   try {
     const created = await createFactorSet({
@@ -103,10 +106,16 @@ async function submit() {
       subject_mode: form.subject_mode,
       subjects: form.subject_mode === "include" ? [...subjects.value] : []
     });
+    if (stale()) {
+      // 创建请求属于原空间：不在新空间发出 created（父页面会刷新新空间列表并把原空间的任务 ID 写入详情路由）
+      Message.info(`计算任务 ${created.set_id} 已在原空间创建；当前空间已切换`);
+      return true;
+    }
     Message.success(`计算任务已创建：${created.set_id}`);
     emit("created", created.set_id);
     return true;
   } catch (error) {
+    if (stale()) return false;
     Message.error(error instanceof Error ? error.message : "创建计算任务失败");
     return false;
   } finally {

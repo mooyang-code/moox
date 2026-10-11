@@ -111,6 +111,7 @@ type recordingHandler struct {
 	orders    []exchange.Order
 	fills     []exchange.Fill
 	positions []exchange.Position
+	accounts  []exchange.AccountSnapshot
 }
 
 func (*recordingHandler) OnSubscribed() {}
@@ -127,7 +128,8 @@ func (h *recordingHandler) OnPosition(_ context.Context, value exchange.Position
 	h.positions = append(h.positions, value)
 	return nil
 }
-func (*recordingHandler) OnAccountSnapshot(context.Context, exchange.AccountSnapshot) error {
+func (h *recordingHandler) OnAccountSnapshot(_ context.Context, value exchange.AccountSnapshot) error {
+	h.accounts = append(h.accounts, value)
 	return nil
 }
 
@@ -207,5 +209,21 @@ func TestDispatchPrivateSwapFill(t *testing.T) {
 	}
 	if !handler.orders[0].ReduceOnly {
 		t.Fatalf("order = %+v", handler.orders[0])
+	}
+}
+
+// ACCOUNT_UPDATE 的 E 是消息生成时间，可能晚于余额实际变更的事务时间 T；余额版本时间必须取 T，才能与 REST 的余额更新时间比较。
+func TestDispatchPrivateFuturesAccountUsesTransactionTime(t *testing.T) {
+	adapter := testAdapter(exchange.MarketTypeSwap, "http://unused")
+	handler := &recordingHandler{}
+	err := adapter.dispatchPrivate(context.Background(), []byte(`{
+		"e":"ACCOUNT_UPDATE","E":1700000000001,"T":1700000000000,
+		"a":{"B":[{"a":"USDT","wb":"100","cw":"100","bc":"0"}],"P":[]}
+	}`), handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.accounts) != 1 || handler.accounts[0].ExchangeUpdatedAt.UnixMilli() != 1700000000000 {
+		t.Fatalf("accounts = %+v", handler.accounts)
 	}
 }

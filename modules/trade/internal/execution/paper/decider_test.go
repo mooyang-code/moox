@@ -56,6 +56,14 @@ func deciderFixture(t *testing.T, market string) (*Decider, *deciderAdapter, sto
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: market, ExchangeSymbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
+			Linear: true, ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001",
+			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space", TradingAccountID: "paper", Name: "Decider", Exchange: "BINANCE",
 			MarketType: market, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
@@ -250,4 +258,26 @@ func TestDeciderStorageFailureIsInfrastructureError(t *testing.T) {
 	var infrastructure InfrastructureError
 	require.ErrorAs(t, err, &infrastructure)
 	require.ErrorContains(t, infrastructure.Err, "database is closed")
+}
+
+// 现货手续费按成交额（报价币）计价和扣除：USDT 结算账户交易 ETH/BTC 时手续费币种是 BTC，而不是账户结算币 USDT。
+func TestDeciderSpotFeeAssetIsQuoteAssetOfThePair(t *testing.T) {
+	d, adapter, order := deciderFixture(t, "SPOT")
+	require.NoError(t, d.Store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: "ETHBTC",
+			InstrumentID: "ETH-BTC", BaseAsset: "ETH", QuoteAsset: "BTC", SettlementAsset: "BTC",
+			Linear: true, ContractValue: "1", ContractValueAsset: "ETH", ExchangeQuantityStep: "0.001",
+			MinExchangeQuantity: "0.001", PriceTick: "0.00001", Status: "TRADING",
+		})
+	}))
+	adapter.quote.Bid, adapter.quote.Ask = shared.MustDecimal("0.0499"), shared.MustDecimal("0.05")
+	adapter.snapshot.Balances = []exchange.AssetBalance{{Asset: "BTC", Available: shared.MustDecimal("1")}}
+	order.InstrumentID, order.ExchangeSymbol, order.ReservedAsset = "ETH-BTC", "ETHBTC", "BTC"
+	order.RemainingReservedQuantity = "0.06"
+	order.ReferencePrice = "0.05"
+	decision, err := d.Decide(context.Background(), order)
+	require.NoError(t, err)
+	require.False(t, decision.Cancel || decision.Rest, decision.Reason)
+	require.Equal(t, "BTC", decision.Fill.FeeAsset)
 }

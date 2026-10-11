@@ -50,7 +50,9 @@ type Result struct {
 	UnknownOrdersResolved  int
 	ExternalFactsImported  bool
 	Ready                  bool
-	Warnings               []string
+	// BalancePending 表示本轮完整同步没有确认待确认水位（成交或私有余额更新之后的余额）：同步请求本身成功，但余额尚未确认。
+	BalancePending bool
+	Warnings       []string
 }
 
 type Snapshot struct {
@@ -95,7 +97,12 @@ func (s *Service) SyncAccount(
 	maxDifference := 0.0
 	defer func() {
 		if s.Metrics != nil {
-			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, err)
+			observed := err
+			if observed == nil && result.BalancePending {
+				// 同步请求执行成功不等于余额已确认：余额长期未追上待确认水位时，监控必须看到失败而不是“同步新鲜”
+				observed = errBalanceNotConfirmed
+			}
+			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, observed)
 		}
 	}()
 	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
@@ -405,12 +412,19 @@ func (s *Service) applySnapshot(
 	}
 	// 待确认水位：只有被采用且覆盖水位的完整余额快照才能清零并恢复准入；
 	// 否则余额仍是成交/私有更新之前的值，沿用旧的 LastSyncAt 抵扣边界并保持未就绪。
-	pending := account.BalancePendingUntil
+	// 本轮刚补录的成交已在入账事务内抬高了水位（account 是处理成交之前读取的），这里重新读取，
+	// 避免成交之前读到的余额快照误清零水位。
+	latest, latestErr := s.Store.GetTradingAccountByID(ctx, account.TradingAccountID)
+	if latestErr != nil {
+		return Result{}, latestErr
+	}
+	pending := latest.BalancePendingUntil
 	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending
 	readinessCause := ""
 	if pending > 0 && !clearPending {
 		snapshot.Ready = false
 		result.Ready = false
+		result.BalancePending = true
 		readinessCause = awaitingBalanceReason
 		result.Warnings = append(result.Warnings, "balance snapshot does not cover the pending fill or private update; admission stays closed")
 	}
@@ -496,6 +510,8 @@ func (s *Service) resolveUnknownOrders(
 }
 
 // awaitingBalanceReason 是私有成交释放预留后、余额快照尚未确认期间持久化的未就绪原因。
+var errBalanceNotConfirmed = errors.New("trade account sync: balance snapshot does not cover the pending fill or private update")
+
 const awaitingBalanceReason = "private fill awaiting balance sync"
 
 func (s *Service) ApplyFill(
@@ -526,22 +542,6 @@ func (s *Service) ApplyFill(
 		consumer.OriginPrivateSocket,
 		shared.Zero(),
 	)
-	if err == nil && applied && account.ExecutionMode != string(exchange.ExecutionModePaper) {
-		// 成交已经释放订单的预留，但余额快照还没有反映这笔支出：在完整同步确认余额之前关闭准入，
-		// 否则同一笔资金可以再次通过本地资金检查。
-		err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, fill.TradedAt.UnixMilli()); err != nil {
-				return err
-			}
-			return tx.UpdateTradingAccountReadiness(
-				account.SpaceID,
-				account.TradingAccountID,
-				false,
-				s.now().UnixMilli(),
-				awaitingBalanceReason,
-			)
-		})
-	}
 	unlock()
 	if err == nil && external {
 		err = s.pauseForExternalFact(ctx, tradingAccountID)
