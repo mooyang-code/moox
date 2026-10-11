@@ -43,9 +43,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { recalcFactors } from "@/api/factor";
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
+import { useSpaceStore } from "@/store/modules/space";
 import type { FactorSetInfo, RecalcJob, SubjectMode } from "@/api/factor/types";
 import SubjectScopeFields from "@/views/factor/compute-tasks/subject-scope-fields.vue";
 import { defaultRange, enabledMemberIds, estimateRecalc, quickRange } from "./recalc-model";
@@ -55,6 +57,13 @@ defineOptions({ name: "FactorRecalcCreateDrawer" });
 const props = defineProps<{ info?: FactorSetInfo }>();
 const emit = defineEmits<{ (e: "submitted", job: RecalcJob): void }>();
 const visible = defineModel<boolean>("visible", { default: false });
+const spaceStore = useSpaceStore();
+// 抽屉打开序号：打开/关闭都会递增；进行中的提交只能收尾它自己那一次打开，不能触发导航或回写新表单
+let openToken = 0;
+watch(visible, () => {
+  openToken += 1;
+  submitting.value = false;
+});
 
 const quickItems = [
   { kind: "periods", label: "最近 100 个周期" },
@@ -128,6 +137,11 @@ async function submit() {
     Message.warning("指定对象模式至少需要一个对象 ID");
     return false;
   }
+  const token = openToken;
+  const submitSpaceId = spaceStore.selectedSpaceId;
+  const submitGeneration = selectedSpaceGeneration();
+  const stale = () =>
+    token !== openToken || spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
   submitting.value = true;
   try {
     const job = await recalcFactors({
@@ -139,13 +153,16 @@ async function submit() {
       request_id: form.request_id.trim() || `factor-recalc-${Date.now()}`
     });
     Message.success("补算任务已受理");
+    // 抽屉已被取消/重新打开或空间已切换：任务已受理，但不能再导航（会重建页面、丢失新表单草稿）
+    if (stale()) return true;
     emit("submitted", job);
     return true;
   } catch (error) {
+    if (stale()) return false;
     Message.error(error instanceof Error ? error.message : "补算任务提交失败");
     return false;
   } finally {
-    submitting.value = false;
+    if (!stale()) submitting.value = false;
   }
 }
 </script>

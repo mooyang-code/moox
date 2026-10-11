@@ -256,3 +256,24 @@ func TestCapacityLiveKeepsDeductingOpenOrderNewerThanSnapshotVersion(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, "1", got.String(), "挂单预留未被快照覆盖，余额 202 扣掉它之后只够再买 1")
 }
+
+// 接近满保证金时，减仓单只需现金覆盖手续费预留：已占用保证金会在平仓时释放，不能因为扣除了它而无法平仓；开仓单仍受限。
+func TestCheckPaperFundsLetsReduceOnlyCloseNearFullMargin(t *testing.T) {
+	_, db, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	account := executableAccount(exchange.MarketTypeSwap)
+	account.ExecutionMode = exchange.ExecutionModePaper
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode='PAPER',c_live_environment='',c_credential_secret_id='' WHERE c_space_id=? AND c_trading_account_id=?", "space-1", "account-1").Error)
+	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreatePaperAccountConfig(store.PaperAccountConfigRecord{SpaceID: "space-1", TradingAccountID: "account-1", InitialBalance: "1000", MakerFeeRate: "0.001", TakerFeeRate: "0.001", SlippageBPS: "0"})
+	}))
+	require.NoError(t, db.DBForTest().Exec("INSERT INTO t_paper_asset_balances (c_space_id,c_trading_account_id,c_asset,c_total) VALUES (?,?,?,?) ON CONFLICT (c_space_id,c_trading_account_id,c_asset) DO UPDATE SET c_total=excluded.c_total", "space-1", "account-1", "USDT", "990.1").Error)
+	usedMarginAdjustment := shared.MustDecimal("-990") // 未实现盈亏 0 − 已占用保证金 990：可用资金只剩 0.1
+	fee := shared.MustDecimal("9.9")                   // 原价全部平仓的手续费
+	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		reduce := Validation{Account: account, ReservedAsset: "USDT", ReservedQuantity: fee, ReduceOnly: true}
+		require.NoError(t, checkPaperFunds(tx, reduce, usedMarginAdjustment, fee, "", ""), "减仓单现金覆盖手续费即可")
+		open := Validation{Account: account, ReservedAsset: "USDT", ReservedQuantity: fee}
+		require.ErrorIs(t, checkPaperFunds(tx, open, usedMarginAdjustment, fee, "", ""), ErrInsufficientFunds, "开仓单仍然不能占用已被占满的保证金")
+		return nil
+	}))
+}
