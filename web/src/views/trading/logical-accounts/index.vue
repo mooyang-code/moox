@@ -526,15 +526,20 @@ const eligibleAccounts = computed(() =>
   )
 );
 
+// 空间切换后，旧空间迟到的响应不能覆盖新空间的列表：只有最新一次请求可以更新页面。
+const listRequests = createLatestRequestGuard();
+
 async function load() {
+  const request = listRequests.begin();
   loading.value = true;
   try {
     const rsp = await listLogicalAccounts({ page: pagination.current, size: pagination.pageSize });
+    if (!request.isLatest()) return;
     rows.value = rsp.logical_accounts || [];
     pagination.total = rsp.page_result?.total || 0;
     await openRouteDetail();
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 function changePage(page: number) {
@@ -895,8 +900,10 @@ watch(
   (next, previous) => {
     if (!next || next === previous) return;
     stopActionPolling();
+    listRequests.invalidate();
     pagination.current = 1;
     rows.value = [];
+    selected.value = null;
     void load();
   }
 );

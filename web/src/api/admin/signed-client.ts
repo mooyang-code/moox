@@ -77,6 +77,7 @@ let spaceInitializer: SpaceInitializer | null = null;
 /** 空间 store 在创建时登记：没有已选空间时，空间内的请求先等它完成空间列表加载，再带上 X-Space-Id。 */
 export function setSpaceInitializer(initializer: SpaceInitializer | null): void {
   spaceInitializer = initializer;
+  lastSpaceInitFinished = 0; // 换了初始化函数就不再沿用上一个的冷却
 }
 
 const SPACE_INIT_TIMEOUT_MS = 10_000;
@@ -86,18 +87,26 @@ function independentOfSelectedSpace(url: string | undefined): boolean {
   return /\/api\/admin\/(auth|space)\//.test(url || "");
 }
 
-let lastSpaceInitAttempt = 0;
+let lastSpaceInitFinished = 0;
+let spaceInitInflight: Promise<void> | null = null;
 
 async function ensureSpaceSelected(): Promise<void> {
   if (!spaceInitializer || readSelectedSpaceId()) return;
-  // 没有任何空间（或加载失败）时不要让每个请求都重新拉一次空间列表。
-  if (Date.now() - lastSpaceInitAttempt < 3000) return;
-  lastSpaceInitAttempt = Date.now();
-  try {
-    await Promise.race([spaceInitializer(), new Promise<void>(resolve => setTimeout(resolve, SPACE_INIT_TIMEOUT_MS))]);
-  } catch {
-    // 空间加载失败时照常发请求，由服务端按缺少空间拒绝并给出提示。
+  // 已有在途的初始化：所有并发请求都等它，不能因为冷却而跳过（否则会不带空间头发出去）。
+  if (!spaceInitInflight) {
+    // 冷却只限制“完成或失败之后”的再次尝试：没有任何空间（或加载失败）时不要让每个请求都重新拉一次空间列表。
+    if (Date.now() - lastSpaceInitFinished < 3000) return;
+    spaceInitInflight = Promise.race([
+      spaceInitializer(),
+      new Promise<void>(resolve => setTimeout(resolve, SPACE_INIT_TIMEOUT_MS))
+    ])
+      .catch(() => undefined) // 空间加载失败时照常发请求，由服务端按缺少空间拒绝并给出提示。
+      .finally(() => {
+        lastSpaceInitFinished = Date.now();
+        spaceInitInflight = null;
+      });
   }
+  await spaceInitInflight;
 }
 
 export function installSpaceAwareSignedClient(client: AxiosInstance): void {

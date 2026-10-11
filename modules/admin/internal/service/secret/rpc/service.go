@@ -5,6 +5,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -184,7 +185,8 @@ func (s *Service) UpdateSecret(ctx context.Context, req *pb.UpdateSecretReq) (*p
 		existing.KeyID = keyID
 	}
 	if extraConfig := req.GetExtraConfig(); extraConfig != "" {
-		existing.ExtraConfig = extraConfig
+		// 响应里敏感项（如 OKX passphrase）是脱敏占位，原样提交回来表示保持原值。
+		existing.ExtraConfig = mergeExtraConfig(existing.ExtraConfig, extraConfig)
 	}
 	if category := req.GetCategory(); category != "" {
 		if !validCategories[category] {
@@ -293,7 +295,7 @@ func secretModelToPB(s *model.Secret) *pb.Secret {
 		SecretType:  s.SecretType,
 		KeyId:       s.KeyID,
 		SecretValue: maskSecretValue(s.SecretValue),
-		ExtraConfig: s.ExtraConfig,
+		ExtraConfig: redactExtraConfig(s.ExtraConfig),
 		Status:      s.Status,
 		LastUsedAt:  formatTimePtr(s.LastUsedAt),
 		LastUsedBy:  s.LastUsedBy,
@@ -372,4 +374,61 @@ func formatTimePtr(t *time.Time) string {
 		return ""
 	}
 	return t.Format("2006-01-02 15:04:05")
+}
+
+const maskedExtraValue = "******"
+
+var sensitiveExtraKeys = []string{"passphrase", "password", "secret", "token", "private"}
+
+func sensitiveExtraKey(key string) bool {
+	key = strings.ToLower(key)
+	for _, marker := range sensitiveExtraKeys {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactExtraConfig 把 extra_config 里敏感项（口令、密码、令牌等）的值替换为占位，只读接口不回显它们；
+// 交易模块等机器调用方通过受 ACL 保护的 GetSecretValue 读取明文。无法解析为 JSON 对象时整体隐藏。
+func redactExtraConfig(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &object); err != nil || object == nil {
+		return maskedExtraValue
+	}
+	for key := range object {
+		if sensitiveExtraKey(key) {
+			object[key] = json.RawMessage(`"` + maskedExtraValue + `"`)
+		}
+	}
+	redacted, err := json.Marshal(object)
+	if err != nil {
+		return maskedExtraValue
+	}
+	return string(redacted)
+}
+
+// mergeExtraConfig 用提交的 extra_config 替换原值；提交值里仍是脱敏占位的敏感项沿用原值，避免保存时把口令改成占位。
+func mergeExtraConfig(existing, submitted string) string {
+	var next, previous map[string]json.RawMessage
+	if json.Unmarshal([]byte(submitted), &next) != nil || next == nil {
+		return submitted
+	}
+	_ = json.Unmarshal([]byte(existing), &previous)
+	for key, value := range next {
+		if sensitiveExtraKey(key) && string(value) == `"`+maskedExtraValue+`"` {
+			if old, ok := previous[key]; ok {
+				next[key] = old
+			}
+		}
+	}
+	merged, err := json.Marshal(next)
+	if err != nil {
+		return submitted
+	}
+	return string(merged)
 }

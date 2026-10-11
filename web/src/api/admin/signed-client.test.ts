@@ -84,4 +84,32 @@ describe("installSpaceAwareSignedClient", () => {
     expect(calls).toBe(0);
     setSpaceInitializer(null);
   });
+
+  it("makes concurrent requests wait for the same in-flight Space initialization", async () => {
+    setSelectedSpaceIdCache("");
+    let calls = 0;
+    let finish!: () => void;
+    setSpaceInitializer(
+      () =>
+        new Promise<void>(resolve => {
+          calls += 1;
+          finish = () => {
+            setSelectedSpaceIdCache("crypto");
+            resolve();
+          };
+        })
+    );
+    const handler = spaceHandler();
+    const config = () => ({ url: "/api/admin/trade/ListOrders", headers: new AxiosHeaders() }) as InternalAxiosRequestConfig;
+    const first = handler(config());
+    const second = handler(config()); // 冷却期内的并发请求也必须等待，而不是不带空间头直接发出
+    await Promise.resolve();
+    finish();
+    const [a, b] = await Promise.all([first, second]);
+    expect(calls).toBe(1);
+    expect(a.headers.get("X-Space-Id")).toBe("crypto");
+    expect(b.headers.get("X-Space-Id")).toBe("crypto");
+    setSpaceInitializer(null);
+    setSelectedSpaceIdCache("");
+  });
 });
