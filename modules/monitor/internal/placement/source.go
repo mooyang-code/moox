@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -16,7 +17,12 @@ import (
 )
 
 const pageSize = 100
-const maxRecords = 1500
+
+// 与 SysDeploy 的规模上限一致：最多 1024 台主机，每台最多放置全部组件。
+const (
+	maxHosts      = domain.MaxTopologyHosts
+	maxPlacements = domain.MaxTopologyPlacements
+)
 
 type Snapshot struct {
 	Catalog    servicecatalog.Catalog
@@ -82,7 +88,7 @@ func (s *ClientSource) Snapshot(ctx context.Context) (Snapshot, error) {
 
 func (s *ClientSource) hosts(ctx context.Context) ([]*adminpb.DeploymentHost, error) {
 	var rows []*adminpb.DeploymentHost
-	for page := uint32(1); page <= maxRecords/pageSize; page++ {
+	for page := uint32(1); page <= maxHosts/pageSize; page++ {
 		var response adminpb.ListDeploymentHostsRsp
 		if err := s.invoke(ctx, "ListHosts", &adminpb.ListDeploymentHostsReq{Page: &commonpb.Page{Page: page, Size: pageSize}}, &response); err != nil {
 			return nil, err
@@ -91,19 +97,19 @@ func (s *ClientSource) hosts(ctx context.Context) ([]*adminpb.DeploymentHost, er
 			return nil, err
 		}
 		rows = append(rows, response.GetHosts()...)
-		if len(rows) > maxRecords {
+		if len(rows) > maxHosts {
 			break
 		}
 		if !response.GetPageResult().GetHasMore() {
 			return rows, nil
 		}
 	}
-	return nil, fmt.Errorf("deployment hosts exceed limit %d", maxRecords)
+	return nil, fmt.Errorf("deployment hosts exceed limit %d", maxHosts)
 }
 
 func (s *ClientSource) placements(ctx context.Context) ([]*adminpb.ComponentPlacement, error) {
 	var rows []*adminpb.ComponentPlacement
-	for page := uint32(1); page <= maxRecords/pageSize; page++ {
+	for page := uint32(1); page <= maxPlacements/pageSize; page++ {
 		var response adminpb.ListPlacementsRsp
 		if err := s.invoke(ctx, "ListPlacements", &adminpb.ListPlacementsReq{Page: &commonpb.Page{Page: page, Size: pageSize}}, &response); err != nil {
 			return nil, err
@@ -112,14 +118,14 @@ func (s *ClientSource) placements(ctx context.Context) ([]*adminpb.ComponentPlac
 			return nil, err
 		}
 		rows = append(rows, response.GetPlacements()...)
-		if len(rows) > maxRecords {
+		if len(rows) > maxPlacements {
 			break
 		}
 		if !response.GetPageResult().GetHasMore() {
 			return rows, nil
 		}
 	}
-	return nil, fmt.Errorf("component placements exceed limit %d", maxRecords)
+	return nil, fmt.Errorf("component placements exceed limit %d", maxPlacements)
 }
 
 func (s *ClientSource) GatewayStatus(ctx context.Context, hostID string) (*adminpb.HostGatewayRuntimeStatus, error) {

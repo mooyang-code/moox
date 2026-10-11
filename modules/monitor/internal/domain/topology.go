@@ -24,6 +24,12 @@ type TopologyHost struct {
 	Status         string `json:"status"`
 }
 
+// 与 SysDeploy 的规模上限一致（最多 1024 台主机，每台最多放置全部组件）。
+const (
+	MaxTopologyHosts      = 1024
+	MaxTopologyPlacements = 1024 * 24
+)
+
 type TopologyPlacement struct {
 	HostID      string `json:"host_id"`
 	ComponentID string `json:"component_id"`
@@ -34,7 +40,7 @@ func (s TopologySnapshot) Validate() error {
 	if err := s.Catalog.Validate(); err != nil {
 		return err
 	}
-	if s.ObservedAt.IsZero() || len(s.Hosts) > 1500 || len(s.Placements) > 1500 {
+	if s.ObservedAt.IsZero() || len(s.Hosts) > MaxTopologyHosts || len(s.Placements) > MaxTopologyPlacements {
 		return fmt.Errorf("invalid topology timestamp or size")
 	}
 	validStatus := func(status string) bool { return status == servicecatalog.Enabled || status == servicecatalog.Disabled }

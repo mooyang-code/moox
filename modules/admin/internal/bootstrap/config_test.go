@@ -236,3 +236,13 @@ func TestSetupListenerRejectsHTTP(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(body), 0600))
 	require.ErrorContains(t, validateSetupListener(path), "tcp trpc")
 }
+
+// tRPC 优先使用 address / nic，Setup 没有鉴权，这两项覆盖会绕过 loopback 校验，必须拒绝。
+func TestValidateSetupListenerRejectsAddressAndNICOverrides(t *testing.T) {
+	for _, extra := range []string{"      address: 0.0.0.0:11110\n", "      nic: eth0\n"} {
+		path := filepath.Join(t.TempDir(), "trpc_go.yaml")
+		body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: 127.0.0.1\n      port: 11110\n      network: tcp\n      protocol: trpc\n" + extra
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		require.ErrorContains(t, validateSetupListener(path), "must not override")
+	}
+}

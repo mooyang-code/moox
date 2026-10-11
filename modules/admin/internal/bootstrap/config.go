@@ -129,6 +129,8 @@ func validateSetupListener(path string) error {
 				Name     string `yaml:"name"`
 				IP       string `yaml:"ip"`
 				Port     int    `yaml:"port"`
+				Address  string `yaml:"address"`
+				Nic      string `yaml:"nic"`
 				Network  string `yaml:"network"`
 				Protocol string `yaml:"protocol"`
 			} `yaml:"service"`
@@ -147,6 +149,10 @@ func validateSetupListener(path string) error {
 		}
 		if service.Port != 11110 || service.Network != "tcp" || service.Protocol != "trpc" {
 			return fmt.Errorf("setup listener must use tcp trpc on port 11110")
+		}
+		// tRPC 优先使用 address / nic，会绕过上面的 loopback 校验；Setup 没有签名鉴权，不允许覆盖。
+		if strings.TrimSpace(service.Address) != "" || strings.TrimSpace(service.Nic) != "" {
+			return fmt.Errorf("setup listener must not override the listen address or NIC")
 		}
 		return nil
 	}

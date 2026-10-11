@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	maxDefaultChecks = 1000
+	// 仅防止死循环；足以容纳 1024 台主机的全部探针及历史记录。
+	maxDefaultCheckPages = 400
 )
 
 func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repositories) error {
@@ -82,26 +83,18 @@ func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories)
 		return nil, fmt.Errorf("default alerts require repositories")
 	}
 	checks := make([]domain.Check, 0, 500)
-	for page := 1; len(checks) < maxDefaultChecks; page++ {
+	// 按页读完整个检查集合（含已停用的历史检查），不能因总量上限阻断 Monitor 启动。
+	for page := 1; page <= maxDefaultCheckPages; page++ {
 		batch, err := repositories.Checks.List(ctx, store.ListChecksOptions{Page: store.Page{Page: page, PageSize: 500}})
 		if err != nil {
 			return nil, err
 		}
 		checks = append(checks, batch...)
 		if len(batch) < 500 {
-			break
+			return checks, nil
 		}
 	}
-	if len(checks) >= maxDefaultChecks {
-		total, err := repositories.Checks.Count(ctx, store.ListChecksOptions{})
-		if err != nil {
-			return nil, err
-		}
-		if total > maxDefaultChecks {
-			return nil, fmt.Errorf("default alert checks exceed limit %d", maxDefaultChecks)
-		}
-	}
-	return checks, nil
+	return nil, fmt.Errorf("default alert checks exceed %d pages", maxDefaultCheckPages)
 }
 
 func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Repositories, registry *hostmetrics.Registry) error {
