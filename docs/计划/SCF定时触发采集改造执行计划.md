@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | 1 | Storage：快照、生效表、提交时建周期、状态查询、缺失列表 | 无 | 是（旧链路仍走 Ensure） |
 | 2 | 函数：读计划环境、按周期选份、不连 EventBus、内部截止时间、补采动作 | 1 | 是（新函数独立部署） |
-| 3 | Collector：每空间对账、待下发记录、函数部署（VPC、cron、内存）、检查与补采 | 1、2 | 是（新对账只管新函数组） |
+| 3 | Collector：每空间对账、采集计划、函数部署（VPC、cron、内存）、检查与补采；Admin 活动日志 | 1、2 | 是（新对账只管新函数组） |
 | 4 | 前端与监控 | 3 | 是 |
 | 5 | crypto canary（隔离数据集） | 1～4 | 是 |
 | 6a | crypto 切换（按目标周期交接） | 5 | 旧链路停用但保留，七天内可回退 |
@@ -40,8 +40,6 @@ PrimaryStore 新增（字段为示意，实施时与现有命名对齐）：
 
 ```protobuf
 rpc RegisterSeriesSnapshot(PrimaryRegisterSeriesSnapshotReq) returns (PrimaryRegisterSeriesSnapshotRsp);
-rpc SetDatasetPeriodPolicy(PrimarySetDatasetPeriodPolicyReq) returns (PrimarySetDatasetPeriodPolicyRsp);
-rpc ListDatasetPeriods(PrimaryListDatasetPeriodsReq) returns (PrimaryListDatasetPeriodsRsp);
 
 message PrimaryRegisterSeriesSnapshotReq {
   common.AuthInfo auth_info = 1;
@@ -57,18 +55,11 @@ message PrimaryRegisterSeriesSnapshotRsp {
   uint32 expected_count = 3;
   bool already_registered = 4;               // 同 P 同 hash 的重放
 }
-message PrimarySetDatasetPeriodPolicyReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string dataset_id = 3;
-  string frequency = 4;
-  uint32 allowed_lateness_seconds = 5;
-}
 ```
 
 - DataNode 侧增加对应的内部 RPC（`data_node.proto`），由 Primary 按 `space_id + dataset_id` 路由，与现有周期 RPC 一致（`primarystore/period.go`）。
 - `GetDatasetPeriodStatus`：**保持旧请求形态可用**（旧客户端发送嵌套 `expectation`，并在 Ensure 结果不明时依赖它恢复，见 `marketstorage/storage.go:142`），只放宽为“也可以只带周期键”；响应增加 `found`、`series_hash`、`expected_count`、`successful_count`、`missing_series_indexes`（`include_progress=true` 时返回）。阶段 6b 再删除嵌套 `expectation` 形态。
-- `ListDatasetPeriods`：按时间范围有界返回周期列表（状态、hash、成功数、缺失数），供管理台与检查使用，单次最多返回固定条数并分页。
+- **允许迟到时间**：不新增接口，作为数据集属性 `allowed_lateness_seconds` 保存在元数据中，用现有数据集更新接口设置。Primary 处理 `CommitTimeSeriesBatch` 时从元数据缓存读取该属性，写入 DataNode 提交请求的新字段 `allowed_lateness_seconds`；属性缺失时按 60 秒处理并告警。
 - `CommitTimeSeriesBatch` 请求结构不变：函数在 `expectation` 中只带 `series_hash`、`expected_count`、周期键，不带快照、不带截止时间（Storage 忽略请求中的截止时间）。
 
 ### 2.2 存储布局（Pebble，示意）
@@ -77,7 +68,6 @@ message PrimarySetDatasetPeriodPolicyReq {
 | --- | --- | --- |
 | 快照：`(space, dataset, freq, hash)` | 排序后的完整标的列表 | 只追加；v1 不清理 |
 | 生效表：`(space, dataset, freq, P)` | hash | 只追加；按 P 有序，便于“取 ≤ 周期时间的最后一行” |
-| 迟到策略：`(space, dataset, freq)` | 允许迟到秒数 | 只影响新建周期 |
 | 周期记录 | `series_hash`、`expected_count`、`deadline`、`status`、位图、waiting 与 deadline 索引 | **不再保存 `series_snapshot` 副本** |
 
 键前缀沿用 `period_progress.go` 现有约定，实施时在同文件或新文件 `period_snapshot.go` 中集中定义。
@@ -86,10 +76,10 @@ message PrimarySetDatasetPeriodPolicyReq {
 
 1. **共享 hash 计算**：规范序列键沿用现有定义 `CanonicalSeriesKey(provider, sourceID, marketType, subjectID, seriesTag)`（`collector/internal/domain/task_series.go:30`），排序后生成稠密序号与 `SeriesSetHash`。把这两个函数及排序规则抽到共享包（建议 `packages/seriesset`），Storage 与 Collector 共用。`RegisterSeriesSnapshot` 的快照条目因此必须带齐 provider、sourceID、marketType、subjectID、seriesTag（扩展 `DatasetPeriodSeries` 或单独定义条目消息），Storage 用同一函数重算 hash。补充“相同列表在两边得到相同 hash”的测试。
 2. **`RegisterSeriesSnapshot`**（设计 5.1）：与 `CommitTimeSeriesBatch` 共用 DataNode 周期锁；锁内校验数据集存在、列表规范、规模上限；Storage 重算 hash；`(space, dataset, freq, P)` 唯一——同 P 同 hash 直接返回成功（即使 P 已过），同 P 不同 hash 拒绝；新增 P 必须严格晚于最后一行、对齐频率边界、晚于 Storage 当前时间，且 P 之后尚未建立周期；快照与生效记录同一批次写入。
-3. **`SetDatasetPeriodPolicy`**：保存允许迟到秒数（必须为正、设上限，例如 ≤ 1 天）。
+3. **允许迟到时间**：Primary 从数据集属性读取并随提交请求带给 DataNode（必须为正、设上限，例如 ≤ 1 天；缺失按 60 秒）。属性修改只影响此后新建的周期。
 4. **`CommitTimeSeriesBatch` 提交时建周期**（设计 5.2）：
    - 锁内先判断周期是否存在（不能沿用先读期望再判断的顺序，`period_progress.go:244`）；
-   - 不存在时：按周期时间查生效表得到应生效 hash，与请求不一致则拒绝（错误码区分“hash 与生效表不符”“快照未登记”“已过截止时间”）；按 hash 加载快照；截止时间 = `frequency.BarEnd(P)` + 迟到策略；`now >= deadline` 拒绝且不建周期；
+   - 不存在时：按周期时间查生效表得到应生效 hash，与请求不一致则拒绝（错误码区分“hash 与生效表不符”“快照未登记”“已过截止时间”）；按 hash 加载快照；截止时间 = `frequency.BarEnd(P)` + 请求带来的允许迟到时间；`now >= deadline` 拒绝且不建周期；
    - 用快照构造期望并完成逐行身份校验（`period_progress.go:927`）；
    - 在首次行写入的同一批次保存周期记录、位图、waiting 与 deadline 索引、行与行变更事件；
    - 不在锁内调用 `EnsureDatasetPeriod`。
@@ -100,7 +90,7 @@ message PrimarySetDatasetPeriodPolicyReq {
 
 ### 2.4 权限（`packages/servicecatalog/catalog.yaml`）
 
-- `collector`：增加 `RegisterSeriesSnapshot`、`SetDatasetPeriodPolicy`、`ListDatasetPeriods`。
+- `collector`：增加 `RegisterSeriesSnapshot`。
 - `scf-collector`（经 Access）：保留 `CommitTimeSeriesBatch`；增加 `UpsertFields`（补采写行）。`EnsureDatasetPeriod`、`RecordDatasetPeriodFailures`、`ClaimTimerBatch` 在阶段 6b 移除。
 - 更新路由快照测试（`packages/servicecatalog/routes_test.go`）。
 
@@ -187,8 +177,8 @@ gzip 后 base64 的 JSON（示意）：
 ### 4.1 数据表（`modules/collector/schema/collector.sql`）
 
 ```sql
--- SCF 定时采集的待下发记录；每个空间同一时间最多一条未关闭记录，最近一条已关闭记录即“已生效状态”
-CREATE TABLE IF NOT EXISTS t_collector_scf_rollouts (
+-- SCF 定时采集的采集计划：每个空间同一时间最多一份未生效的计划，最近一份已生效的计划即“已生效状态”
+CREATE TABLE IF NOT EXISTS t_collector_fetch_plans (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'pending',
@@ -197,20 +187,20 @@ CREATE TABLE IF NOT EXISTS t_collector_scf_rollouts (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('pending', 'registered', 'pushing', 'finishing', 'closed'))
+    CHECK (c_status IN ('pending', 'applying', 'applied'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_t_collector_scf_rollouts_open
-ON t_collector_scf_rollouts (c_space_id)
-WHERE c_status <> 'closed';
-CREATE INDEX IF NOT EXISTS idx_t_collector_scf_rollouts_space ON t_collector_scf_rollouts (c_space_id, c_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_t_collector_fetch_plans_open
+ON t_collector_fetch_plans (c_space_id)
+WHERE c_status <> 'applied';
+CREATE INDEX IF NOT EXISTS idx_t_collector_fetch_plans_space ON t_collector_fetch_plans (c_space_id, c_id);
 
-CREATE TRIGGER IF NOT EXISTS trg_t_collector_scf_rollouts_mtime
-AFTER UPDATE ON t_collector_scf_rollouts
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_fetch_plans_mtime
+AFTER UPDATE ON t_collector_fetch_plans
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_scf_rollouts SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 -- K 线补采作业与分块
@@ -263,7 +253,7 @@ CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (
 );
 ```
 
-`c_plan` 保存本次变更的完整内容（各数据集的 P、hash、完整标的列表、每个函数的完整目标环境、退役函数）；`c_progress` 保存登记、各函数下发、收尾各步的确认状态。已关闭记录保留，用于检查时还原“某个时间段应有哪些标的”。旧表在阶段 6b 删除。
+状态：`pending`（已保存，尚未登记快照）→ `applying`（已登记，正在下发与收尾）→ `applied`（全部完成，已生效）。`c_plan` 保存本次变更的完整内容（各数据集的 P、hash、完整标的列表、相对上一份计划新增与移除的标的、每个函数的完整目标环境、退役函数）；`c_progress` 保存登记、各函数下发、收尾、活动日志写入各步的确认状态。已生效的计划保留，用于检查时还原“某个时间段应有哪些标的”。旧表在阶段 6b 删除。
 
 ### 4.2 配置
 
@@ -305,12 +295,12 @@ scf_markets:                              # 每个空间、市场使用的地域
 ### 4.4 每空间对账协程（替换 `reconciler.go` 的 Timer 对账）
 
 - 空间管理器每分钟检查空间列表，为每个启用的空间维持一个协程；空间停用或删除时先停用其全部函数定时器，确认后退出协程（设计 6.1）。
-- 每分钟第 10 秒执行一轮，沿用 `timerjob` 防重叠；流程与约束完全按设计 6.1（先续跑未关闭记录、每小时全量读回放在提前返回之前、只有“无未关闭记录且期望一致”才提前结束、先落记录再登记、旧份保留到 P + 迟到、退役函数在收尾时停用）。
-- **P 的重放与重选**：登记结果不明（超时、断连）时重放原请求；只有 Storage **明确拒绝**“P 已不在未来且该 P 尚未登记”时，才为该数据集重选 P 并更新待下发记录（例如落记录后 Collector 宕机到 P 之后才恢复）。已登记成功的 P 永不重选。
+- 每分钟第 10 秒执行一轮，沿用 `timerjob` 防重叠；流程与约束完全按设计 6.1（先续跑未生效的计划、每小时全量读回放在提前返回之前、只有“无未生效计划且期望一致”才提前结束、先保存计划再登记、旧份保留到 P + 迟到、退役函数在收尾时停用）。
+- **P 的重放与重选**：登记结果不明（超时、断连）时重放原请求；只有 Storage **明确拒绝**“P 已不在未来且该 P 尚未登记”时，才为该数据集重选 P 并更新采集计划（例如保存计划后 Collector 宕机到 P 之后才恢复）。已登记成功的 P 永不重选。
 - 下发通过 CloudNode：新函数用 `SubmitCreateNodes`（VPC、公网访问、内存、异步配置）；环境与定时器用 `SubmitUpdateNodeRuntimeConfigs`；停用定时器同样走运行配置。等待批次结果（`GetNodeBatchChange`），按函数记录确认状态。
 - **授权与发布租约**：服务目录为 `collector` 增加实际使用的 CloudNode 方法（至少 `SubmitCreateNodes`；当前只有 `GetNodeList`、`InvokeFunction`、`GetNodeBatchChange`、`SubmitUpdateNodeRuntimeConfigs`，见 `catalog.yaml:725`）。行情函数创建强制要求采集发布租约与 fencing token（`cloudnode/internal/rpc/node_batch.go:328`），对账复用现有 Timer 对账已有的租约获取、续期、释放与请求字段传递，并用真实网关授权测试覆盖。
 - 全局并发：一个进程级信号量（默认 20）限制同时进行的 SCF 配置操作，各空间共用。
-- Collector 重启后第一轮全量读回云端函数与定时器（CloudNode 节点列表 + 运行配置），与最近已关闭记录、未关闭记录比对。
+- Collector 重启后第一轮全量读回云端函数与定时器（CloudNode 节点列表 + 运行配置），与最近一份已生效的计划、未生效的计划比对。
 
 ### 4.5 CloudNode（`modules/cloudnode`）
 
@@ -323,8 +313,8 @@ scf_markets:                              # 每个空间、市场使用的地域
 
 ### 4.6 Storage 客户端与快照登记
 
-- `collector/internal/marketstorage`、`storageio` 增加 `RegisterSeriesSnapshot`、`SetDatasetPeriodPolicy`、`ListDatasetPeriods`、`GetDatasetPeriodStatus`（新形态）。
-- 迟到策略：任务启用或修改时登记（crypto 15 秒，stockcn 90 秒，任务参数可改）。
+- `collector/internal/marketstorage`、`storageio` 增加 `RegisterSeriesSnapshot`、`GetDatasetPeriodStatus`（新形态）。
+- 允许迟到时间：Collector 在创建或更新任务的结果数据集时设置数据集属性 `allowed_lateness_seconds`（crypto 15 秒，stockcn 90 秒，任务参数可改）。
 
 ### 4.7 检查与补采
 
@@ -339,7 +329,7 @@ moox-cli collector kline backfill-status --job-id ...
 moox-cli collector kline backfill-cancel --job-id ...
 ```
 
-**检查**：由已关闭的待下发记录，以及**已确认登记且 P 已生效的未关闭记录**，还原每段时间应有的（数据集、标的），按频率（crypto 连续，stockcn 用交易日历）生成应有时间点；`ReadTimeSeriesRows` 读行比对；连续缺口合并输出；`--deep` 校验 OHLCV 字段齐全。
+**检查**：由已生效的采集计划，以及**已确认登记且 P 已生效的未生效计划**，还原每段时间应有的（数据集、标的），按频率（crypto 连续，stockcn 用交易日历）生成应有时间点；`ReadTimeSeriesRows` 读行比对；连续缺口合并输出；`--deep` 校验 OHLCV 字段齐全。
 
 **补采执行**：
 - 每个（地域、市场）一个专用补采函数（与实时函数同一代码包、无定时器），**函数级预留并发 5**，由平台硬性限制实际执行实例数；Collector 以同步调用执行 `kline_backfill`。并发 5 的范围是“每个补采函数”。
@@ -347,16 +337,54 @@ moox-cli collector kline backfill-cancel --job-id ...
 - 作业拆成（标的、连续时间段）分块，每块 ≤ 1000 根。**分块 ID 稳定**，实际写入 ID = 分块 ID + 本次写入内容摘要：同一内容重试复用写入 ID，部分写入后重新抓取得到更多行时使用新写入 ID（Storage 对相同来源 ID 整组跳过，见 `store.go:260`）。完成后复查该块缺口；支持取消与重启续跑。
 - 自动补采：同一个对账协程每小时一次，从水位起扫描已过截止时间的周期（保留 10 分钟重叠），每轮行数与请求数有上限；Collector 停机恢复后从水位追赶。
 
-### 4.8 测试
+### 4.8 Admin 活动日志模块（全局）
+
+全局、永久保存的展示日志，任何模块都可写入；第一个使用者是 Collector 的标的变更。
+
+```sql
+-- 活动日志：各模块写入的、需要展示给用户的事件；永久保存，不清理
+CREATE TABLE IF NOT EXISTS t_activity_logs (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL DEFAULT '',
+    c_source TEXT NOT NULL,
+    c_category TEXT NOT NULL,
+    c_level TEXT NOT NULL DEFAULT 'info',
+    c_title TEXT NOT NULL,
+    c_detail TEXT NOT NULL DEFAULT '{}',
+    c_ref_id TEXT NOT NULL DEFAULT '',
+    c_dedup_key TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_level IN ('info', 'warning', 'error'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_t_activity_logs_dedup
+ON t_activity_logs (c_dedup_key)
+WHERE c_dedup_key <> '';
+CREATE INDEX IF NOT EXISTS idx_t_activity_logs_space_time ON t_activity_logs (c_space_id, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_t_activity_logs_category_time ON t_activity_logs (c_category, c_ctime);
+```
+
+- 表放在 `modules/admin/schema/admin.sql`；`c_space_id` 为空表示全局事件。
+- 接口（Admin 新服务，名称实施时与现有服务命名对齐）：
+  - `AppendActivityLogs`：批量追加；`c_dedup_key` 非空时按它去重（重放返回成功、不重复写）。授权给内部组件（先给 `collector`）。
+  - `ListActivityLogs`：按空间、来源、类别、关联对象 ID、时间范围过滤，按时间倒序分页。授权给 `console`、`moox-cli`；console 按用户的空间成员关系过滤。
+- Collector 写入：
+  - 新建采集计划且标的有变化时，类别 `collector.subject_change`，标题如“现货 1m：新增 3 个、移除 1 个标的，将于 2026-10-15 08:32 生效”，详情为各数据集的新增与移除标的、旧 hash、新 hash、生效周期，关联对象为计划 ID，幂等键 `collector.fetch_plan.<计划ID>.created`；
+  - 计划生效时，类别 `collector.fetch_plan_applied`，幂等键 `collector.fetch_plan.<计划ID>.applied`；
+  - 写入状态记在采集计划的 `c_progress` 中，失败时下一分钟随对账重试；日志写入失败不阻塞计划推进，但计划标记为已生效前须确认两条日志都已写入。
+- CLI：`moox-cli activity list [--space-id] [--category] [--since]`。
+
+### 4.9 测试
 
 - 计划计算：合并去重、分片、序号、hash 与 Storage 一致、cron 生成、容量校验拒绝。
 - 对账：无变化提前结束；变化时“先落记录 → 登记 → 下发 → 收尾”；下发部分失败后下一分钟只重试失败项；Collector 在各步骤崩溃后重启续跑且不重选 P；共享函数不被旧记录覆盖；空间停用流程；退役函数在收尾时停用。
 - 补采：分块、写入 ID（部分写入后再补）、响应丢失、取消、重启续跑、并发上限、复查。
 - 恢复与检查：落记录后宕机到 P 之后恢复（重选 P）；登记成功但下发未完成时的检查覆盖新增标的。
 - 共存：同一空间同时有 `invoke` 与 `timer` 任务时，旧调度与新对账互不处理对方任务，旧节点池不选新函数。
+- 活动日志：幂等追加、分页查询、按空间过滤；Collector 新建与生效计划各写一条，Admin 不可用时下一分钟补写，不重复。
 - 用 CloudNode 与 Storage 的测试替身覆盖，不依赖真实云资源。
 
-### 4.9 验收与部署
+### 4.10 验收与部署
 
 - 部署 Collector 与 CloudNode；新对账只处理 `fetch_mode=timer` 的任务与带新标记的函数组，**不触碰现有 80 个 Invoke 函数**；旧调度只处理 `invoke` 任务，照常运行。
 - 部署后在 canary 数据集（阶段 5）上验证。
@@ -367,7 +395,8 @@ moox-cli collector kline backfill-cancel --job-id ...
 
 | 位置 | 改动 |
 | --- | --- |
-| `web/src/views/collector/task-instances/task-instances.vue` 及首页统计卡片 | 改为三块：分配（函数、地域、标的、数据集 hash、最近下发时间与结果、最近执行观测时间）、周期（`ListDatasetPeriods`）、补采作业；接口封装与页面测试 |
+| `web/src/views/collector/task-instances/task-instances.vue` 及首页统计卡片 | 改为三块：分配（函数、地域、标的、数据集 hash、最近下发时间与结果、最近执行观测时间）、标的变更日志（活动日志按类别过滤）、补采作业；不展示周期列表；接口封装与页面测试 |
+| 全局活动日志页（新） | 按空间、来源、类别、时间范围分页查看活动日志；采集任务页复用同一组件 |
 | Collector `GetTaskResultInventory`（`internal/rpc/task_result_inventory.go:372`） | 直接行情任务的最近终态改从 Storage 查询；重采样分支不变 |
 | Monitor `metrics/task_result_inventory.go:309`、`kline_freshness.go:105` | 持久化最后一次有效 inventory；Collector 不可用时继续用它检查，并单独告警“控制面数据过期” |
 | Monitor `observability/overview.go:888` | stockcn feed 健康检查不再依赖函数经 EventBus 上报的指标 |
@@ -378,7 +407,7 @@ moox-cli collector kline backfill-cancel --job-id ...
 ## 6. 阶段 5：crypto canary
 
 1. 新建**隔离的 canary 采集任务**（独立数据集，不与生产数据集共享周期期望）：现货 1m、现货 1h、合约 1m、合约 1h，各 50 个标的（每个市场一个函数，同一函数同时服务 1m 与 1h），全部 `fetch_mode=timer`。
-2. 对账自动登记快照、生效表、迟到策略（15 秒），创建南京现货、香港合约各一个函数（VPC + 公网、每函数 50 标的、并发 10、rps/burst 50），以及两个补采函数。
+2. 对账自动登记快照与生效表，结果数据集带允许迟到时间属性（15 秒），创建南京现货、香港合约各一个函数（VPC + 公网、每函数 50 标的、并发 10、rps/burst 50），以及两个补采函数。
 3. 连续运行至少 24 小时，覆盖多次整点（1m 与 1h 同时到期）。
 4. 验证项：
    - 每分钟、每小时周期 complete；因迟到被拒 ≤ 0.1%；无 hash 不一致被拒；
