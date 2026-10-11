@@ -81,7 +81,7 @@ func (c SCFPlanConfig) fetchFor(spaceID string) marketfetch.PlanFetch {
 func defaultSCFPlan() SCFPlanConfig {
 	return SCFPlanConfig{
 		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: marketfetch.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
-		Fetch: SCFPlanFetchConfig{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerMS: 1500},
+		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerMS: 1500},
 		// stockcn：每函数 40 个标的；错峰窗口第 5～40 秒；国内数据源限流较保守。
 		Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {SymbolsPerFunction: 40, Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}}},
 	}

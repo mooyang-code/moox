@@ -19,6 +19,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -113,6 +114,11 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
 	routerSession := p.Router.NewSession()
+	if deadline, ok := ctx.Deadline(); ok {
+		// 记录本次取数窗口，便于判断行情源延迟尖峰是否吃光了预算。
+		log.InfoContextf(ctx, "market_fetch_pipeline_budget frequency=%s items=%d window_ms=%d chain=%d attempts_per_provider=%d request_timeout_ms=%d",
+			req.Frequency, len(req.Items), time.Until(deadline).Milliseconds(), len(chain), RuntimeKlineProviderAttemptBudget(), attemptTimeoutFloor().Milliseconds())
+	}
 	concurrency := req.Concurrency
 	if concurrency <= 0 {
 		concurrency = DefaultConcurrency
@@ -316,6 +322,15 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		}()
 	}
 	wg.Wait()
+	if deadline, ok := ctx.Deadline(); ok {
+		failed := 0
+		for _, result := range results {
+			if result.Outcome != domain.ItemOutcomeSuccess {
+				failed++
+			}
+		}
+		log.WarnContextf(ctx, "market_fetch_pipeline_fetched frequency=%s items=%d failed=%d fetch_ms=%d window_left_ms=%d", req.Frequency, len(req.Items), failed, time.Since(started).Milliseconds(), time.Until(deadline).Milliseconds())
+	}
 	sort.Slice(rows, func(i, j int) bool {
 		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
 		if left.GetSubjectId() == right.GetSubjectId() {
@@ -508,7 +523,13 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 				if remaining <= 0 {
 					return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
 				}
-				attemptCtx, cancel = context.WithTimeout(ctx, remaining/time.Duration(attemptsLeft))
+				// 每次尝试至少有一个完整的请求超时：行情源在整分钟、整五分钟前后常有数百毫秒到数秒的延迟尖峰，
+				// 按剩余预算平均切成零点几秒会把本来能成功的慢响应全部掐断。
+				attemptTimeout := remaining / time.Duration(attemptsLeft)
+				if floor := min(remaining, attemptTimeoutFloor()); attemptTimeout < floor {
+					attemptTimeout = floor
+				}
+				attemptCtx, cancel = context.WithTimeout(ctx, attemptTimeout)
 			}
 			rows, err := session.FetchKlines(attemptCtx, req, []string{provider})
 			cancel()

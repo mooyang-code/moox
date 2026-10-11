@@ -51,6 +51,7 @@ type planCloud interface {
 	ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
 	ListUnreadyMarketFetchers(context.Context, string, string) ([]scfinvoker.Node, error)
 	SubmitDeleteNodes(context.Context, string, []string, *scfinvoker.CollectorPublishLease) (string, error)
+	SubmitDeployNodes(context.Context, string, []string, string, *scfinvoker.CollectorPublishLease) (string, error)
 	SubmitCreateNodes(context.Context, string, []*cloudnodepb.NodeCreateItem) (string, error)
 	SubmitRuntimeConfigs(context.Context, string, []*cloudnodepb.NodeRuntimeConfigPatch) (string, error)
 	GetBatchResults(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, []scfinvoker.BatchItemResult, error)
@@ -484,7 +485,6 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if err := r.saveProgress(ctx, record, progress, store.FetchPlanApplied, ""); err != nil {
 		return err
 	}
-	r.lastVerified = r.now()
 	log.InfoContextf(ctx, "collector fetch plan applied space=%s plan=%d", r.SpaceID, record.ID)
 	return nil
 }
@@ -794,6 +794,56 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 	return true, nil
 }
 
+// upgradeCode 把代码包版本落后的已生效函数升级到 scf_plan 配置的代码包：只更新代码，环境与定时器不动。
+// 升级走受发布租约保护的部署作业，分批进行；单个函数更新代码的几秒内可能漏掉一次触发，缺口由自动补采补回。
+func (r *PlanReconciler) upgradeCode(ctx context.Context, applied map[string]*PlanFunction, byName map[string]scfinvoker.Node) error {
+	if strings.TrimSpace(r.Deploy.PackageID) == "" {
+		return nil
+	}
+	var stale []string
+	for name := range applied {
+		node, ok := byName[name]
+		if ok && strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.Deploy.PackageID {
+			stale = append(stale, name)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	sort.Strings(stale)
+	release, err := r.acquireOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	lease, err := r.ensureLease(ctx)
+	if err != nil {
+		return r.fail("publish_lease", err)
+	}
+	log.WarnContextf(ctx, "collector fetch plan upgrading function code space=%s package=%s functions=%d", r.SpaceID, r.Deploy.PackageID, len(stale))
+	for start := 0; start < len(stale); start += runtimeConfigBatchSize {
+		batch := stale[start:min(start+runtimeConfigBatchSize, len(stale))]
+		jobID, submitErr := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, batch, r.Deploy.PackageID, lease)
+		if submitErr != nil {
+			return r.fail("cloudnode", submitErr)
+		}
+		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		if waitErr != nil {
+			return r.fail("cloudnode", waitErr)
+		}
+		if !terminal {
+			return r.fail("cloudnode", fmt.Errorf("code upgrade job %s is still running", jobID))
+		}
+		for _, result := range results {
+			if !result.Success {
+				return r.fail("cloudnode", fmt.Errorf("upgrade code of %s: %s", result.NodeID, result.Message))
+			}
+		}
+	}
+	r.releaseLease(ctx)
+	return nil
+}
+
 func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *FetchPlanContent, function *PlanFunctionChange) (*cloudnodepb.NodeCreateItem, error) {
 	network, ok := r.Deploy.Networks[function.Region]
 	if !ok || network.VPCID == "" || network.SubnetID == "" {
@@ -1059,6 +1109,10 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	byName := map[string]scfinvoker.Node{}
 	for _, node := range nodes {
 		byName[node.NodeID] = node
+	}
+	// 配置里的代码包换了新版本：先把已有函数的代码升级到该版本，再比对环境。
+	if err := r.upgradeCode(ctx, applied, byName); err != nil {
+		return err
 	}
 	var drifted, missing, gone []string
 	unverified := 0
@@ -1362,10 +1416,16 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		return "", fmt.Errorf("list market fetchers: %w", err)
 	}
 	for _, node := range nodes {
-		if node.NodeID == name {
-			r.markBackfillReady(name)
-			return name, nil
+		if node.NodeID != name {
+			continue
 		}
+		if strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.Deploy.PackageID {
+			if err := r.upgradeBackfillCode(ctx, name); err != nil {
+				return "", err
+			}
+		}
+		r.markBackfillReady(name)
+		return name, nil
 	}
 	if cleared, clearErr := r.clearStale(ctx, "invoke", []string{name}); clearErr != nil {
 		return "", clearErr
@@ -1431,6 +1491,32 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	}
 	r.markBackfillReady(name)
 	return name, nil
+}
+
+// upgradeBackfillCode 把已存在的补采函数升级到配置的代码包（调用方已持有操作槽）。
+func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name string) error {
+	lease, err := r.ensureBackfillLease(ctx)
+	if err != nil {
+		return fmt.Errorf("publish lease: %w", err)
+	}
+	defer r.releaseBackfillLease(ctx)
+	jobID, err := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, []string{name}, r.Deploy.PackageID, lease)
+	if err != nil {
+		return err
+	}
+	items, terminal, err := r.waitJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if !terminal {
+		return fmt.Errorf("backfill function %s code upgrade is still running", name)
+	}
+	for _, result := range items {
+		if !result.Success {
+			return fmt.Errorf("upgrade backfill function %s: %s", name, result.Message)
+		}
+	}
+	return nil
 }
 
 func (r *PlanReconciler) markBackfillReady(name string) {

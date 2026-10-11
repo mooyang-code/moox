@@ -103,8 +103,17 @@ func endpointAttemptContext(parent context.Context, remainingEndpoints int) (con
 	if remaining <= 0 {
 		return context.WithDeadline(parent, deadline)
 	}
-	return context.WithTimeout(parent, remaining/time.Duration(remainingEndpoints))
+	// 每个端点至少有一段能容纳行情源延迟尖峰的时间：把剩余预算平均切给全部端点，
+	// 前几个端点只能拿到几百毫秒，慢一点的正常响应会被全部掐断，最后一个端点才有机会拿到较长时间。
+	slice := remaining / time.Duration(remainingEndpoints)
+	if slice < minEndpointAttempt {
+		slice = min(remaining, minEndpointAttempt)
+	}
+	return context.WithTimeout(parent, slice)
 }
+
+// minEndpointAttempt 是单个端点一次尝试的最短时间。
+const minEndpointAttempt = 1200 * time.Millisecond
 
 func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, interval string) []*market.Kline {
 	klines := make([]*market.Kline, 0, len(exchangeKlines))

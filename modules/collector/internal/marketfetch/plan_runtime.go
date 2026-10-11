@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -98,8 +101,16 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 			continue
 		}
 		runCtx, cancel := context.WithDeadline(ctx, item.StorageDeadline)
+		closeAt := item.Period.Add(frequencyDuration(item.Frequency))
+		runStarted := now
 		response, runErr := invocationHandler.handleRequest(runCtx, item.Request, false)
 		cancel()
+		// 记录相对收盘时间的起止与截止，便于看出行情源延迟尖峰是否吃光了窗口。
+		finished := time.Now()
+		if h.Now != nil {
+			finished = h.Now()
+		}
+		timing := fmt.Sprintf(" (start=%+dms end=%+dms deadline=%+dms after close)", runStarted.Sub(closeAt).Milliseconds(), finished.Sub(closeAt).Milliseconds(), item.StorageDeadline.Sub(closeAt).Milliseconds())
 		switch {
 		case runErr != nil:
 			result.Status, result.Message = "failed", runErr.Error()
@@ -107,11 +118,11 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		case response == nil || !response.Success:
 			result.Status = "failed"
 			if response != nil {
-				result.Message = response.Message
+				result.Message = response.Message + summarizeBatchFailures(response.Data) + timing
 			}
 			allSucceeded = false
 		default:
-			result.Status, result.Message = "succeeded", response.Message
+			result.Status, result.Message = "succeeded", response.Message+summarizeBatchFailures(response.Data)+timing
 		}
 		log.InfoContextf(ctx, "market_fetch_plan_run function=%s frequency=%s period=%s status=%s items=%d targets=%d message=%s",
 			functionName, result.Frequency, result.Period, result.Status, len(item.Request.Items), len(item.Request.Targets), result.Message)
@@ -137,4 +148,54 @@ func applyPlanFetchEnvironment(fetch PlanFetch) {
 	set("MOOX_FETCH_FEED_CONCURRENCY", fetch.FeedConcurrency)
 	set("MOOX_FETCH_REQUEST_TIMEOUT_MS", fetch.RequestTimeoutMS)
 	set("MOOX_FETCH_STORAGE_TIMEOUT_MS", fetch.StorageTimeoutMS)
+}
+
+// summarizeBatchFailures 把批次里失败条目的错误按（类型、摘要）归并，取出现最多的几类，
+// 写进返回值与日志，方便从一次调用的结果直接看出失败原因。没有失败时返回空串。
+func summarizeBatchFailures(data any) string {
+	payload, ok := data.(*marketfetchpb.MarketFetchBatchCompleted)
+	if !ok || payload == nil {
+		return ""
+	}
+	counts := map[string]int{}
+	for _, item := range payload.GetItems() {
+		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) {
+			continue
+		}
+		summary := item.GetErrorSummary()
+		if len(summary) > 120 {
+			summary = summary[:120]
+		}
+		counts[item.GetOutcome()+"/"+item.GetErrorType()+": "+summary]++
+	}
+	if len(counts) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] != counts[keys[j]] {
+			return counts[keys[i]] > counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	if len(keys) > 3 {
+		keys = keys[:3]
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s ×%d", key, counts[key]))
+	}
+	return " [" + strings.Join(parts, "; ") + "]"
+}
+
+// frequencyDuration 返回频率的名义时长，仅用于诊断信息里的相对时间。
+func frequencyDuration(name string) time.Duration {
+	frequency, err := marketdata.ParseFrequency(name)
+	if err != nil {
+		return 0
+	}
+	return frequency.NominalDuration()
 }

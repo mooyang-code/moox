@@ -199,6 +199,32 @@ func (c *Client) SubmitDeleteNodes(ctx context.Context, spaceID string, nodeIDs 
 	return jobID, nil
 }
 
+// SubmitDeployNodes 在发布租约保护下把代码包部署到一批已有函数（只更新代码，环境与配置保持不变），返回异步作业 ID。
+func (c *Client) SubmitDeployNodes(ctx context.Context, spaceID string, nodeIDs []string, packageID string, lease *CollectorPublishLease) (string, error) {
+	if len(nodeIDs) == 0 || strings.TrimSpace(packageID) == "" {
+		return "", fmt.Errorf("node ids and package id are required")
+	}
+	if lease == nil {
+		return "", fmt.Errorf("collector publish lease is required")
+	}
+	deployments := make([]*cloudnodepb.NodeDeployItem, 0, len(nodeIDs))
+	for _, id := range nodeIDs {
+		deployments = append(deployments, &cloudnodepb.NodeDeployItem{NodeId: id, PackageId: packageID, CollectorPublishLeaseId: lease.LeaseID, CollectorPublishFencingToken: lease.FencingToken})
+	}
+	var rsp cloudnodepb.SubmitNodeBatchRsp
+	if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "SubmitDeployNodes", &cloudnodepb.BatchDeployNodesReq{Deployments: deployments}, &rsp, true); err != nil {
+		return "", err
+	}
+	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
+		return "", fmt.Errorf("submit deploy nodes: %s", rsp.GetRetInfo().GetMsg())
+	}
+	jobID := strings.TrimSpace(rsp.GetJobId())
+	if jobID == "" {
+		return "", fmt.Errorf("%w: SubmitDeployNodes returned no job_id", ErrRuntimeConfigSubmissionUnknown)
+	}
+	return jobID, nil
+}
+
 // SubmitCreateNodes 提交一批函数创建任务，返回异步作业 ID。
 func (c *Client) SubmitCreateNodes(ctx context.Context, spaceID string, items []*cloudnodepb.NodeCreateItem) (string, error) {
 	if len(items) == 0 {

@@ -112,6 +112,7 @@ type fakePlanCloud struct {
 	clock      func() time.Time
 	unready    map[string]scfinvoker.Node
 	deleted    []string
+	upgraded   []string
 	jobs       map[string][]scfinvoker.BatchItemResult
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
 	created    []string
@@ -158,6 +159,16 @@ func (c *fakePlanCloud) ListUnreadyMarketFetchers(context.Context, string, strin
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
+}
+
+func (c *fakePlanCloud) SubmitDeployNodes(_ context.Context, _ string, nodeIDs []string, packageID string, _ *scfinvoker.CollectorPublishLease) (string, error) {
+	for _, id := range nodeIDs {
+		node := c.nodes[id]
+		node.PackageID = packageID
+		c.nodes[id] = node
+		c.upgraded = append(c.upgraded, id)
+	}
+	return c.newJob(nodeIDs), nil
 }
 
 func (c *fakePlanCloud) SubmitDeleteNodes(_ context.Context, _ string, nodeIDs []string, _ *scfinvoker.CollectorPublishLease) (string, error) {
@@ -385,8 +396,9 @@ func TestPlanReconcilerFullLifecycle(t *testing.T) {
 	require.Nil(t, h.open())
 	require.Len(t, h.activity.entries, 2)
 
-	// 没有变化：不会产生新计划。
+	// 没有变化：不会产生新计划（云端校验另有测试，这里让它保持已完成）。
 	submits := h.cloud.submits
+	r.lastVerified = h.now
 	h.now = h.now.Add(5 * time.Minute)
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
@@ -916,4 +928,32 @@ func TestPlanReconcilerRecreatesFunctionsDeletedInTheCloudAndIgnoresFailedReadba
 	require.Equal(t, []string{deleted}, h.cloud.deleted, "only the function that is gone in the cloud is removed from the catalog")
 	require.Equal(t, []string{deleted}, h.cloud.created, "and is recreated afterwards")
 	require.True(t, r.lastVerified.Before(h.now), "an unreadable function keeps the verification open for a retry")
+}
+
+func TestPlanReconcilerUpgradesFunctionCodeWhenThePackageChanges(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-old", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
+			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
+			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(),
+		}}
+	}
+	r.Deploy.PackageID = "pkg-new"
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	require.Len(t, h.cloud.upgraded, len(h.cloud.nodes), "every function still on the old package is upgraded")
+	for _, node := range h.cloud.nodes {
+		require.Equal(t, "pkg-new", node.PackageID)
+	}
+	before := len(h.cloud.upgraded)
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	require.Len(t, h.cloud.upgraded, before, "functions already on the configured package are left alone")
 }

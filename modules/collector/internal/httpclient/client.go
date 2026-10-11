@@ -119,7 +119,10 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		}
 		log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s error=%v", domain, ip, source, dnsHash(), dnsRouteAge(), err)
 	}
-	log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
+	// 没有 DNS 快照时直接走系统解析是常态，不记日志；有快照却全部失败才值得记录。
+	if len(candidates) > 0 {
+		log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
+	}
 	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
 }
 
@@ -282,9 +285,15 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 	if err := consume(resp.Body); err != nil {
 		return fmt.Errorf("JSON 解析失败: %w", err)
 	}
-	log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, time.Since(started).Milliseconds())
+	// 正常请求只有几十毫秒，逐条记录只会淹没日志；只记录偏慢的请求，用于定位行情源的延迟尖峰。
+	if elapsed := time.Since(started); elapsed >= slowRequestLogThreshold {
+		log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, elapsed.Milliseconds())
+	}
 	return nil
 }
+
+// slowRequestLogThreshold 是需要记录成功请求耗时的下限。
+const slowRequestLogThreshold = 500 * time.Millisecond
 
 func uniqueIPs(ips []string) []string {
 	seen := make(map[string]struct{}, len(ips))
