@@ -214,6 +214,14 @@ CREATE TABLE IF NOT EXISTS t_host_gateway_status (
     FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
 );
 
+-- ************ SSH 主机密钥指纹（首次连接记录，之后固定） ************
+CREATE TABLE IF NOT EXISTS t_ssh_host_key (
+    c_host_id INTEGER NOT NULL PRIMARY KEY,                    -- 关联主机ID
+    c_address TEXT NOT NULL,                                    -- 记录指纹时的 地址:端口
+    c_fingerprint TEXT NOT NULL,                                -- SHA256 指纹
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP        -- 记录时间
+);
+
 -- ************ SSH 会话表（用于会话管理） ************
 CREATE TABLE IF NOT EXISTS t_ssh_session (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID

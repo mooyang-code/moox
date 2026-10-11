@@ -290,7 +290,7 @@ func planConfig(ctx context.Context, deps configDeps, file string, only []string
 // nativeLayoutProbe 判断目标主机是否是原生部署（`<部署根>/run/host.json` 由原生 bootstrap/deploy-host 创建）。
 const nativeLayoutProbe = `if [ -f "$1/run/host.json" ]; then exit 0; else exit 4; fi`
 
-var errNativeLayout = errors.New("target host uses the native deployment layout (releases/current); the legacy in-place tooling (config publish, deploy-control, deploy-storage, deploy-service, rebuild-storage) cannot operate on it. Update moox.toml and rerun setup deploy-unit (or bootstrap) so a new immutable release is rendered, verified and activated under the native maintenance lock")
+var errNativeLayout = errors.New("target host uses the native deployment layout (releases/current); the legacy in-place tooling (config publish, deploy-control, deploy-storage, deploy-service, rebuild-storage) cannot operate on it, and updating the configuration of an installed native unit is not supported yet (a unit retry is bound to its original configuration)")
 
 // rejectNativeLayout 在写任何文件、停任何服务之前拒绝原生部署的主机：原生发布不可变，配置在 releases/<ID> 内，维护锁与重启入口
 // 都不同于旧布局；旧路径会读不到配置，或改到并存的旧目录副本，且不与原生安装器互斥。

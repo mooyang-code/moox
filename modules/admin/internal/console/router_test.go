@@ -330,6 +330,10 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		{"/api/admin/sysdeploy/SetHostStatus", 1, http.StatusForbidden},
 		{"/api/admin/sysdeploy/SetPlacementStatus", 2, http.StatusOK},
 		{"/api/admin/sysdeploy/ListPlacements", 1, http.StatusOK},
+		// SSH 主机配置与会话等价于登录主机：普通用户连读都不行。
+		{"/api/admin/ssh/ListHosts", 1, http.StatusForbidden},
+		{"/api/admin/ssh/GetHost", 1, http.StatusForbidden},
+		{"/api/admin/ssh/ListHosts", 2, http.StatusOK},
 	} {
 		_, secret, key, sid := setupRequestAuthTest(t)
 		testTokenRole = tc.role

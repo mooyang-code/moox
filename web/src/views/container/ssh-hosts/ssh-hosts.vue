@@ -139,7 +139,7 @@
 
         <template v-if="formData.auth_type === 'pwd'">
           <a-form-item field="password" label="密码" :rules="passwordRules">
-            <a-input-password v-model="formData.password" placeholder="请输入密码" allow-clear />
+            <a-input-password v-model="formData.password" :placeholder="keepSecretHint || '请输入密码'" allow-clear />
           </a-form-item>
         </template>
         <template v-else>
@@ -152,7 +152,7 @@
             />
           </a-form-item>
           <a-form-item field="cert_pwd" label="证书密码">
-            <a-input-password v-model="formData.cert_pwd" placeholder="证书密码（如有）" allow-clear />
+            <a-input-password v-model="formData.cert_pwd" placeholder="证书密码（如有）；编辑时留空保持不变" allow-clear />
           </a-form-item>
         </template>
 
@@ -389,8 +389,10 @@ const formRules = {
 };
 
 // 认证方式动态校验规则
-const passwordRules = [{ required: true, message: "请输入密码" }];
-const certDataRules = [{ required: true, message: "请粘贴证书内容" }];
+// 凭据不会从服务端回显：编辑时留空表示保持原值，新增时必填。
+const passwordRules = computed(() => [{ required: !isEdit.value, message: "请输入密码" }]);
+const certDataRules = computed(() => [{ required: !isEdit.value, message: "请粘贴证书内容" }]);
+const keepSecretHint = computed(() => (isEdit.value ? "已设置，留空保持不变" : ""));
 
 // ---------- 数据加载 ----------
 const fetchHosts = async () => {

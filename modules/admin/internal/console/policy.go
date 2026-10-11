@@ -37,6 +37,12 @@ func adminOnlyWriteService(serviceID string) bool {
 	return false
 }
 
+// adminOnlyService 的全部方法（含读）只允许全局管理员：主机的 SSH 配置、会话和文件传输等价于登录这些主机，
+// 普通用户不能看到、也不能间接使用。
+func adminOnlyService(serviceID string) bool {
+	return serviceID == "ssh"
+}
+
 // bodySpaceIDs 收集请求体（含嵌套对象）里出现的 space_id。
 func bodySpaceIDs(body []byte) ([]string, error) {
 	if len(strings.TrimSpace(string(body))) == 0 {

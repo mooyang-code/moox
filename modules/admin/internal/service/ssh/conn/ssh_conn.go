@@ -2,8 +2,11 @@ package conn
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
@@ -18,11 +21,14 @@ import (
 type SSHConn struct {
 	// 主机配置
 	Host *model.SSHHost
+	// HostKeys 记录并校验服务端主机密钥。
+	HostKeys HostKeyStore
 
 	// 会话信息
 	SessionID      string    `json:"session_id"`
 	UserID         string    `json:"user_id"`
 	LastActiveTime time.Time `json:"last_active_time"`
+	activeMu       sync.RWMutex
 	StartTime      time.Time `json:"start_time"`
 	ClientIP       string    `json:"client_ip"`
 
@@ -53,16 +59,50 @@ func (s *SSHConn) MarshalJSON() ([]byte, error) {
 		Port:           s.Host.Port,
 		User:           s.Host.User,
 		ClientIP:       s.ClientIP,
-		LastActiveTime: s.LastActiveTime.Format("2006-01-02 15:04:05"),
+		LastActiveTime: s.LastActive().Format("2006-01-02 15:04:05"),
 		StartTime:      s.StartTime.Format("2006-01-02 15:04:05"),
 	})
+}
+
+// HostKeyStore 记录每台主机已信任的 SSH 主机密钥指纹（SHA256）。
+type HostKeyStore interface {
+	// HostKeyPin 返回主机在该地址上已记录的指纹，没有记录时返回空串。
+	HostKeyPin(hostID int, address string) (string, error)
+	SetHostKeyPin(hostID int, address, fingerprint string) error
+}
+
+// hostKeyCallback 校验服务端主机密钥：已记录指纹必须一致，不一致在发送任何认证信息之前拒绝；
+// 首次连接记录指纹（TOFU），之后固定。没有配置存储时一律拒绝，不再接受任意主机密钥。
+func (s *SSHConn) hostKeyCallback() ssh.HostKeyCallback {
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		if s.HostKeys == nil || s.Host == nil {
+			return errors.New("未配置 SSH 主机密钥校验，拒绝连接")
+		}
+		address := fmt.Sprintf("%s:%d", s.Host.Address, s.Host.Port)
+		fingerprint := ssh.FingerprintSHA256(key)
+		pinned, err := s.HostKeys.HostKeyPin(s.Host.ID, address)
+		if err != nil {
+			return fmt.Errorf("读取主机密钥记录失败: %w", err)
+		}
+		switch {
+		case pinned == "":
+			if err := s.HostKeys.SetHostKeyPin(s.Host.ID, address, fingerprint); err != nil {
+				return fmt.Errorf("记录主机密钥失败: %w", err)
+			}
+			log.Infof("[SSH Conn] 首次连接 %s，记录主机密钥 %s", address, fingerprint)
+			return nil
+		case pinned != fingerprint:
+			return fmt.Errorf("主机 %s 的密钥与已记录的指纹不一致，拒绝连接（可能被劫持，或主机已重装）", address)
+		}
+		return nil
+	}
 }
 
 // Connect 建立 SSH 连接
 func (s *SSHConn) Connect(clientIP string) error {
 	s.ClientIP = clientIP
 	s.StartTime = time.Now()
-	s.LastActiveTime = time.Now()
+	s.RefreshActiveTime()
 
 	config := ssh.ClientConfig{
 		User: s.Host.User,
@@ -76,7 +116,7 @@ func (s *SSHConn) Connect(clientIP string) error {
 				return answers, nil
 			}),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: s.hostKeyCallback(),
 		Timeout:         30 * time.Second,
 	}
 
@@ -190,9 +230,18 @@ func (s *SSHConn) ResizeWindow(w, h int) error {
 	return s.sshSession.WindowChange(h, w)
 }
 
+// LastActive 返回最近活跃时间。终端输入、SFTP 请求在各自 goroutine 里刷新，清理线程同时读取，必须加锁。
+func (s *SSHConn) LastActive() time.Time {
+	s.activeMu.RLock()
+	defer s.activeMu.RUnlock()
+	return s.LastActiveTime
+}
+
 // RefreshActiveTime 刷新活跃时间
 func (s *SSHConn) RefreshActiveTime() {
+	s.activeMu.Lock()
 	s.LastActiveTime = time.Now()
+	s.activeMu.Unlock()
 }
 
 // GetSFTPClient 获取 SFTP 客户端

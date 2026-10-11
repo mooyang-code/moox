@@ -99,8 +99,8 @@ func (m *SessionManager) cleanInactiveSessions(maxIdle time.Duration) {
 
 	now := time.Now()
 	m.Range(func(sessionID string, conn *SSHConn) bool {
-		if conn.LastActiveTime.Add(maxIdle).Before(now) {
-			log.Infof("[SessionManager] 清理不活跃会话: %s (最后活跃: %s)", sessionID, conn.LastActiveTime.Format("2006-01-02 15:04:05"))
+		if last := conn.LastActive(); last.Add(maxIdle).Before(now) {
+			log.Infof("[SessionManager] 清理不活跃会话: %s (最后活跃: %s)", sessionID, last.Format("2006-01-02 15:04:05"))
 			m.Delete(sessionID)
 		}
 		return true

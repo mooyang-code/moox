@@ -71,6 +71,21 @@ func (s *Service) UpdateHost(ctx context.Context, req *pb.UpdateHostReq) (*pb.Up
 	if host == nil || host.ID == 0 {
 		return &pb.UpdateHostRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "主机ID不能为空")}, nil
 	}
+	// 凭据不会回显给前端，留空表示保持原值：先用已存的凭据补齐，避免保存时把它们清空。
+	existing, err := s.svc.GetHost(ctx, host.ID)
+	if err != nil {
+		log.ErrorContextf(ctx, "[SSH] UpdateHost load existing failed: %v", err)
+		return &pb.UpdateHostRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "更新主机失败")}, nil
+	}
+	if host.Password == "" {
+		host.Password = existing.Password
+	}
+	if host.CertData == "" {
+		host.CertData = existing.CertData
+	}
+	if host.CertPwd == "" {
+		host.CertPwd = existing.CertPwd
+	}
 	if err := s.svc.UpdateHost(ctx, host); err != nil {
 		log.ErrorContextf(ctx, "[SSH] UpdateHost failed: %v", err)
 		return &pb.UpdateHostRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "更新主机失败")}, nil
@@ -210,16 +225,14 @@ func sshHostModelToPB(h *model.SSHHost) *pb.SSHHost {
 		return nil
 	}
 	return &pb.SSHHost{
-		Id:          int32(h.ID),
-		Name:        h.Name,
-		Address:     h.Address,
-		Port:        int32(h.Port),
-		User:        h.User,
-		Password:    h.Password,
+		Id:      int32(h.ID),
+		Name:    h.Name,
+		Address: h.Address,
+		Port:    int32(h.Port),
+		User:    h.User,
+		// 密码、私钥、私钥口令不随响应返回；更新时留空表示保持原值。
 		AuthType:    h.AuthType,
 		NetType:     h.NetType,
-		CertData:    h.CertData,
-		CertPwd:     h.CertPwd,
 		FontSize:    int32(h.FontSize),
 		Background:  h.Background,
 		Foreground:  h.Foreground,

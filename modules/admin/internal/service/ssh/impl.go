@@ -79,6 +79,7 @@ func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP, u
 	sessionID := idgen.GenerateID(16)
 	sshConn := &conn.SSHConn{
 		Host:      host,
+		HostKeys:  s.hostDAO,
 		SessionID: sessionID,
 		UserID:    userID,
 	}

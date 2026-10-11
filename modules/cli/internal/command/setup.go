@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -1921,6 +1922,12 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 		return setupdeploy.ServiceResult{}, err
 	}
 	defer transport.Close()
+	// 旧的整包发布使用旧布局与旧启停脚本，不能写到原生部署的主机上：上传之前检查部署根及 --deploy-dir 的上一级。
+	for _, root := range []string{snapshot.Manifest.Paths.Resolved().DeployRoot, path.Dir(path.Clean(deployDir))} {
+		if err := rejectNativeLayout(ctx, transport, root); err != nil {
+			return setupdeploy.ServiceResult{}, err
+		}
+	}
 	if isBrowserService(service) {
 		if err := ensureSetupBrowserCATrust(ctx, snapshot); err != nil {
 			return setupdeploy.ServiceResult{}, err

@@ -40,9 +40,31 @@ func (d *SSHHostDAO) Update(host *model.SSHHost) error {
 		Select("*").Omit("c_id", "c_ctime").Updates(host).Error
 }
 
-// Delete 删除主机配置
+// Delete 删除主机配置，并清掉它记录的主机密钥。
 func (d *SSHHostDAO) Delete(id int) error {
+	if err := d.db.Exec("DELETE FROM t_ssh_host_key WHERE c_host_id = ?", id).Error; err != nil {
+		return err
+	}
 	return d.db.Unscoped().Delete(&model.SSHHost{}, "c_id = ?", id).Error
+}
+
+// HostKeyPin 返回主机在该地址上已记录的主机密钥指纹；没有记录（或地址已变）时返回空串。
+func (d *SSHHostDAO) HostKeyPin(hostID int, address string) (string, error) {
+	var rows []struct{ Fingerprint string }
+	if err := d.db.Raw("SELECT c_fingerprint AS fingerprint FROM t_ssh_host_key WHERE c_host_id = ? AND c_address = ?", hostID, address).Scan(&rows).Error; err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+	return rows[0].Fingerprint, nil
+}
+
+// SetHostKeyPin 记录主机在该地址上的主机密钥指纹（地址变化时覆盖，需要重新信任）。
+func (d *SSHHostDAO) SetHostKeyPin(hostID int, address, fingerprint string) error {
+	return d.db.Exec(`INSERT INTO t_ssh_host_key(c_host_id, c_address, c_fingerprint, c_ctime) VALUES(?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(c_host_id) DO UPDATE SET c_address = excluded.c_address, c_fingerprint = excluded.c_fingerprint, c_ctime = CURRENT_TIMESTAMP`,
+		hostID, address, fingerprint).Error
 }
 
 // FindByID 根据 ID 查询

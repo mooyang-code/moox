@@ -27,8 +27,7 @@ type pendingViewReady struct {
 
 // NoteAppliedPosition 记录某个索引已写入到的来源位置。只改内存并标脏：后台循环每 appliedPersistInterval 合并落盘一次，
 // 停止消费时再落盘一次，不必为每条行事件同步落盘（那会让所有分区排队等 fsync）。崩溃时会丢失最近一次落盘之后的
-// 更新；因此有积压就绪事件依赖这条位置时，行事件在 ACK 前同步落盘（makeAppliedDurableForPending），就绪事件入队落盘前也先落盘围栏，
-// 否则这些行不会重投，事件要等同一来源的下一次行写入才放行，日线来源会晚一个交易日。
+// 更新；所以行事件在 ACK 前由 makeAppliedDurableBeforeAck 落盘围栏（一批事件一次），就绪事件入队落盘前也先落盘围栏。
 func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID string, sequence uint64) {
 	if s == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || strings.TrimSpace(indexID) == "" || strings.TrimSpace(nodeID) == "" || strings.TrimSpace(storeID) == "" || sequence == 0 {
 		return
@@ -365,36 +364,14 @@ func (s *Service) positionsApplied(view *pb.View, required []*storagepb.Committe
 	return true
 }
 
-// makeAppliedDurableForPending 在行事件的位置刚好满足某个积压就绪事件时，同步落盘写入围栏。调用方在它成功之后才 ACK 行事件：
-// 否则 ACK 后、后台落盘前崩溃，重启后这些行不会重投，积压的就绪事件缺少证明行已应用的来源位置，要等同一来源的下一次写入。
-// 只在确实有积压事件依赖这条位置时才同步落盘（周期边界附近），不增加每行事件的 fsync。
-func (s *Service) makeAppliedDurableForPending(spaceID string, payloads ...*storagepb.DatasetRowsUpserted) error {
-	if s == nil || !s.pendingDependsOn(spaceID, payloads) {
+// makeAppliedDurableBeforeAck 在行事件 ACK 之前把写入围栏落盘（只在有未落盘的更新时才写）。行事件 ACK 后不会重投：围栏只在内存里，
+// 进程崩溃后这些行的来源位置就丢了，之后到达的周期完成事件（或已入队的就绪事件）要求这些位置，只能等同一来源的下一次行写入，
+// 日线来源会晚一个交易日、停更的数据集则一直等待。并发的分区消费者共用同一次落盘（后到的看到的是新鲜的快照），一批事件只落一次。
+func (s *Service) makeAppliedDurableBeforeAck() error {
+	if s == nil {
 		return nil
 	}
 	return s.flushAppliedFence()
-}
-
-func (s *Service) pendingDependsOn(spaceID string, payloads []*storagepb.DatasetRowsUpserted) bool {
-	s.pendingReadyMu.Lock()
-	defer s.pendingReadyMu.Unlock()
-	for _, item := range s.pendingReady {
-		if item.spaceID != spaceID {
-			continue
-		}
-		for _, position := range item.required {
-			for _, payload := range payloads {
-				if payload == nil || position == nil {
-					continue
-				}
-				if position.GetNodeId() == payload.GetSourceNodeId() && position.GetStoreId() == payload.GetSourceStoreId() &&
-					payload.GetSourceSequence() >= position.GetSequence() {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 func (s *Service) noteAppliedFromPayload(spaceID string, payload *storagepb.DatasetRowsUpserted) {
