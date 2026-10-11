@@ -55,7 +55,20 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
 	manager := &marketfetch.PlanManager{
-		Spaces: func(context.Context) ([]string, error) { return spaces, nil },
+		Spaces: func(ctx context.Context) ([]string, error) {
+			// 配置里的空间 ∩ Admin 中仍启用的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
+			active, err := invoker.ListActiveSpaceIDs(ctx)
+			if err != nil {
+				return nil, err
+			}
+			running := make([]string, 0, len(spaces))
+			for _, space := range spaces {
+				if _, ok := active[strings.ToLower(space)]; ok {
+					running = append(running, space)
+				}
+			}
+			return running, nil
+		},
 		Factory: func(spaceID string) (*marketfetch.PlanReconciler, error) {
 			options := marketfetch.PlanOptions{
 				SpaceID: spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.SymbolsPerFunction,

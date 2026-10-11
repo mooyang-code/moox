@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/spf13/cobra"
@@ -108,6 +109,14 @@ func runCollectorTaskFetchMode(ctx context.Context, out io.Writer, flags collect
 		}
 		task := detail.GetTask()
 		params := task.GetCollectParams().AsMap()
+		if flags.ClearUntil {
+			// 交接边界 T 未到就清除，旧链路会立刻让出 [现在, T)，而新链路要到 T 才开始，中间出现空窗。
+			if existing, _ := params["invoke_until_period"].(string); existing != "" {
+				if boundary, parseErr := time.Parse(time.RFC3339, existing); parseErr == nil && time.Now().Before(boundary.Add(10*time.Minute)) {
+					return fmt.Errorf("task %s: invoke_until_period %s has not passed yet (wait until 10 minutes after it)", taskID, existing)
+				}
+			}
+		}
 		if flags.Mode == "invoke" {
 			// 回退到旧链路必须先有下界，否则旧调度会接管全部周期，与仍在运行的定时函数双采。
 			if _, hasFrom := params["invoke_from_period"]; !hasFrom && from == "" {

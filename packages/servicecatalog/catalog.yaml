@@ -255,6 +255,10 @@ components:
             callers:
               - console
               - moox-cli
+          - methods:
+              - ListSpaces
+            callers:
+              - collector
       - path: trpc.moox.ops.SecretMgr
         port: 11108
         console_name: secret
