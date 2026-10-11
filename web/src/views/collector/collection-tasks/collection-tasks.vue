@@ -1296,6 +1296,8 @@ watch(selectedSpaceId, () => {
   if (!editing.value) selectedOutputFields.value = [];
   if (outputFieldsVisible.value) void loadOutputFieldCatalog();
   pagination.current = 1;
+  // 空间初始化完成或切换后重新加载；数据类型配置同样按空间授权，不能只在挂载时请求一次。
+  if (selectedSpaceId.value) void getDataTypeConfigs();
   void getTaskList();
   void loadSources();
   void loadTags();
@@ -1311,6 +1313,8 @@ watch(
 );
 
 onMounted(() => {
+  // 空间尚未初始化时请求会被 Console 拒绝；初始化完成后由上面的空间监听补载。
+  if (!selectedSpaceId.value) return;
   void getTaskList();
   void getDataTypeConfigs();
   void loadSources();

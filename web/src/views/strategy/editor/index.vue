@@ -167,7 +167,16 @@ watch(
     }
   }
 );
-onMounted(load);
+// 空间初始化完成前请求会被拒绝；空间就绪后补载尚未加载的定义（不覆盖已加载、可能含未保存修改的内容）。
+onMounted(() => {
+  if (spaceStore.selectedSpaceId) void load();
+});
+watch(
+  () => spaceStore.selectedSpaceId,
+  next => {
+    if (next && editing.value && !loaded.value && !loading.value) void load();
+  }
+);
 </script>
 
 <style scoped>

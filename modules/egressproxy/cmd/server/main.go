@@ -18,6 +18,7 @@ import (
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	trpc "trpc.group/trpc-go/trpc-go"
+	trpcserver "trpc.group/trpc-go/trpc-go/server"
 )
 
 var Version = "dev"
@@ -50,7 +51,8 @@ func run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	defer handler.Close()
-	server := trpc.NewServer()
+	drain := &healthz.DrainGate{}
+	server := trpc.NewServer(trpcserver.WithFilter(drain.Filter()))
 	service := server.Service("trpc.moox.egress.Proxy")
 	if service == nil {
 		return errors.New("egress native service is required")
@@ -79,6 +81,7 @@ func run(ctx context.Context, cfg config.Config) error {
 	select {
 	case <-ctx.Done():
 		state.SetReady(false)
+		drain.Begin()
 		return errors.Join(server.Close(nil), <-done)
 	case err := <-done:
 		state.SetReady(false)

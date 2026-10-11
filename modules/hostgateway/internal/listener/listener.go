@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -80,15 +81,19 @@ func (l *Listeners) Close() error {
 
 // TRPC consumes an already bound listener. Explicit go-net transport keeps the
 // owned TLS listener in use on Linux, where the SDK defaults to tnet otherwise.
-func TRPC(opened net.Listener, serviceName string) server.Service {
-	return server.New(
+func TRPC(opened net.Listener, serviceName string, gates ...*healthz.DrainGate) server.Service {
+	options := []server.Option{}
+	for _, gate := range gates {
+		options = append(options, server.WithFilter(gate.Filter()))
+	}
+	return server.New(append(options,
 		// 关闭时停止接纳新连接，并等待已接纳的请求完成（写请求可能已在下游提交，不能直接断开）。
 		server.WithMaxCloseWaitTime(DrainTimeout),
 		server.WithTransport(transport.NewServerTransport()),
 		server.WithListener(opened), server.WithAddress(opened.Addr().String()),
 		server.WithNetwork("tcp"), server.WithProtocol("trpc"),
 		server.WithServiceName(serviceName), server.WithCurrentSerializationType(codec.SerializationTypeNoop),
-	)
+	)...)
 }
 
 type tlsListener struct {

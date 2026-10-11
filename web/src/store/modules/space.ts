@@ -13,8 +13,20 @@ export const useSpaceStore = defineStore(
 
     const selectedSpace = computed(() => spaces.value.find(item => item.space_id === selectedSpaceId.value));
 
-    async function loadSpaces() {
-      if (loading.value) return;
+    // 并发调用共用同一个在途请求：后到的调用者也必须等到空间真正初始化完成，
+    // 否则随后的请求拿不到空间头会被 Console 拒绝。
+    let inflight: Promise<void> | null = null;
+
+    function loadSpaces(): Promise<void> {
+      if (!inflight) {
+        inflight = fetchSpaces().finally(() => {
+          inflight = null;
+        });
+      }
+      return inflight;
+    }
+
+    async function fetchSpaces() {
       loading.value = true;
       try {
         const rsp = await listSpaces({ status: "active", page: { page: 1, size: 200 } });

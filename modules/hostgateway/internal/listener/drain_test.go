@@ -8,8 +8,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/listener"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testrpc"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -18,7 +20,8 @@ func TestTRPCDrainsInFlightRequestOnClose(t *testing.T) {
 	opened, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	entered, release := make(chan struct{}), make(chan struct{})
-	svc := listener.TRPC(opened, "trpc.test.Drain")
+	gate := &healthz.DrainGate{}
+	svc := listener.TRPC(opened, "trpc.test.Drain", gate)
 	desc := &server.ServiceDesc{ServiceName: "trpc.test.Drain", HandlerType: ((*interface{})(nil)), Methods: []server.Method{{Name: "*", Func: func(_ interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 		raw := &codec.Body{}
 		filters, err := f(raw)
@@ -46,8 +49,13 @@ func TestTRPCDrainsInFlightRequestOnClose(t *testing.T) {
 	}()
 	<-entered
 
+	gate.Begin()
 	closed := make(chan struct{})
 	go func() { _ = svc.Close(nil); close(closed) }()
+	// 排空期间新到达的请求必须被拒绝，不能进入业务处理。
+	_, rejectedErr := testrpc.Call(context.Background(), opened.Addr().String(), nil, "trpc.test.Drain", "Late", codec.SerializationTypePB, []byte("y"), nil)
+	require.Error(t, rejectedErr)
+	require.Equal(t, errs.RetServerNoService, errs.Code(rejectedErr))
 	select {
 	case <-closed:
 		t.Fatal("Close 在途请求完成前就返回了")

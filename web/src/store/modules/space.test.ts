@@ -46,4 +46,27 @@ describe("space store", () => {
     expect(store.selectedSpaceId).toBe("crypto");
     expect(setSelectedSpaceIdCache).not.toHaveBeenCalled();
   });
+
+  it("makes concurrent loaders wait for the same in-flight request", async () => {
+    let finish!: (value: { spaces: Array<{ space_id: string; name: string; status: string }> }) => void;
+    vi.mocked(listSpaces).mockReturnValue(
+      new Promise(resolve => {
+        finish = resolve;
+      }) as ReturnType<typeof listSpaces>
+    );
+    const store = useSpaceStore();
+    const first = store.loadSpaces();
+    let secondDone = false;
+    const second = store.loadSpaces().then(() => {
+      secondDone = true;
+    });
+    await Promise.resolve();
+    expect(secondDone).toBe(false);
+    expect(listSpaces).toHaveBeenCalledTimes(1);
+
+    finish({ spaces: [{ space_id: "crypto", name: "加密货币市场", status: "active" }] });
+    await Promise.all([first, second]);
+    expect(secondDone).toBe(true);
+    expect(store.selectedSpaceId).toBe("crypto");
+  });
 });

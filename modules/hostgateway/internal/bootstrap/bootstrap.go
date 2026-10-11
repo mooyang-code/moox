@@ -222,8 +222,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		return err
 	}
 	defer opened.Close()
-	remote := listener.TRPC(opened.Remote, "trpc.moox.hostgateway.Remote")
-	local := listener.TRPC(opened.Local, "trpc.moox.hostgateway.Local")
+	drain := &healthz.DrainGate{}
+	remote := listener.TRPC(opened.Remote, "trpc.moox.hostgateway.Remote", drain)
+	local := listener.TRPC(opened.Local, "trpc.moox.hostgateway.Local", drain)
 	if err := proxy.Register(remote); err != nil {
 		return err
 	}
@@ -261,6 +262,8 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if shutdownErr != nil {
 		_ = healthServer.Close()
 	}
+	// 先拒绝新请求，再等待已接纳的请求。
+	drain.Begin()
 	// 两个入口并行排空，总等待不超过 DrainTimeout。
 	var draining sync.WaitGroup
 	for _, service := range []interface{ Close(chan struct{}) error }{remote, local} {

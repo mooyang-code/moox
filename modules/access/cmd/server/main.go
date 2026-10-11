@@ -67,7 +67,8 @@ func run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	s := trpc.NewServer(server.WithCurrentSerializationType(codec.SerializationTypeNoop))
+	drain := &healthz.DrainGate{}
+	s := trpc.NewServer(server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithFilter(drain.Filter()))
 	if err := accessproxy.RegisterAccessService(s.Service(accessproxy.AccessServiceName), proxy); err != nil {
 		return err
 	}
@@ -91,6 +92,7 @@ func run(ctx context.Context, cfg config.Config) error {
 		select {
 		case <-ctx.Done():
 			state.SetReady(false)
+			drain.Begin()
 			closeErr := s.Close(nil)
 			return errors.Join(closeErr, <-done)
 		case err := <-done:

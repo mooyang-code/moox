@@ -77,9 +77,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive } from "vue";
+import { computed, onMounted, reactive, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { summarizeDSL } from "@/views/strategy/dsl";
 import { formatStrategyTime, shortHash } from "@/views/strategy/model";
@@ -87,6 +88,7 @@ import { formatStrategyTime, shortHash } from "@/views/strategy/model";
 defineOptions({ name: "StrategyOverview" });
 const router = useRouter();
 const store = useStrategyStore();
+const spaceStore = useSpaceStore();
 const pagination = reactive({ current: 1, pageSize: 20, total: computed(() => store.totalStrategies) });
 async function refresh() {
   await store.loadStrategies({ page: pagination.current, page_size: pagination.pageSize }).catch(() => undefined);
@@ -106,7 +108,18 @@ async function remove(strategyId: string) {
     Message.error(err instanceof Error ? err.message : "删除失败");
   }
 }
-onMounted(refresh);
+// 请求按空间授权：空间初始化完成或切换后才加载，避免无空间头被拒绝且不再恢复。
+onMounted(() => {
+  if (spaceStore.selectedSpaceId) void refresh();
+});
+watch(
+  () => spaceStore.selectedSpaceId,
+  next => {
+    if (!next) return;
+    pagination.current = 1;
+    void refresh();
+  }
+);
 </script>
 
 <style scoped>
