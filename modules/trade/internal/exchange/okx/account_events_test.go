@@ -3,6 +3,7 @@ package okx
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -478,5 +479,26 @@ func TestPrivateHandshakeTimesOutWhenServerNeverAcknowledges(t *testing.T) {
 	_, err = adapter.privateHandshake(connection)
 	require.Error(t, err)
 	require.True(t, exchange.IsKind(err, exchange.ErrorTransportUnknown), "error = %v", err)
+	require.Less(t, time.Since(started), 2*time.Second)
+}
+
+func TestDialPrivateStreamHonorsContextWhenUpgradeNeverAnswered(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			defer connection.Close() // 只接受 TCP，不返回 Upgrade 响应
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = dialPrivateStream(ctx, "ws://"+listener.Addr().String())
+	require.Error(t, err)
 	require.Less(t, time.Since(started), 2*time.Second)
 }

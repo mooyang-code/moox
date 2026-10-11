@@ -20,16 +20,14 @@ func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventH
 	if handler == nil {
 		return rejected("private event handler is required", nil)
 	}
-	config, err := websocket.NewConfig(
-		privateStreamEndpoint(a.config.Environment),
-		"https://moox.local",
-	)
+	// 拨号（含 HTTP Upgrade）、登录与订阅确认共用一个继承调用方取消的期限
+	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, privateHandshakeTimeout)
+	defer cancelHandshake()
+	connection, err := dialPrivateStream(handshakeCtx, privateStreamEndpoint(a.config.Environment))
 	if err != nil {
-		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
-	}
-	config.Dialer = &net.Dialer{Timeout: privateHandshakeTimeout}
-	connection, err := websocket.DialConfig(config)
-	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	defer connection.Close()
@@ -55,6 +53,15 @@ func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventH
 			return err
 		}
 	}
+}
+
+// dialPrivateStream 建立私有流连接；ctx 同时约束 TCP/TLS 建连与 HTTP Upgrade 响应。
+func dialPrivateStream(ctx context.Context, endpoint string) (*websocket.Conn, error) {
+	config, err := websocket.NewConfig(endpoint, "https://moox.local")
+	if err != nil {
+		return nil, err
+	}
+	return config.DialContext(ctx)
 }
 
 // privateHandshake 完成登录与订阅确认，整个过程受 privateHandshakeTimeout 约束，返回确认前缓冲的数据帧。

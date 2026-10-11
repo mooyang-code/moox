@@ -83,6 +83,7 @@ import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { importSCFFunctions, previewSCFFunctions, type SCFFunctionCandidate, type SCFRegionScanError } from "@/api/cloud-node";
 import type { CloudAccount } from "@/api/cloud-account";
+import { createSubmitScope } from "@/utils/submit-scope";
 
 const props = defineProps<{ visible: boolean; accounts: CloudAccount[] }>();
 const emit = defineEmits<{ (event: "update:visible", value: boolean): void; (event: "refresh"): void }>();
@@ -96,6 +97,17 @@ const functionKey = (item: SCFFunctionCandidate) =>
   `${item.function.region}/${item.function.namespace}/${item.function.function_name}`;
 const tableRows = computed(() => candidates.value.map(item => ({ ...item, ...item.function, key: functionKey(item) })));
 const selectedCandidates = computed(() => candidates.value.filter(item => selectedKeys.value[functionKey(item)]));
+
+// 云账号是全局资源：只受弹窗打开/关闭约束；关闭或重开后旧的扫描/导入响应不得回写，也不得关闭新弹窗
+const submitScope = createSubmitScope({ global: true });
+watch(
+  () => props.visible,
+  () => {
+    submitScope.invalidate();
+    scanning.value = false;
+    importing.value = false;
+  }
+);
 
 watch(
   () => [props.visible, props.accounts] as const,
@@ -133,9 +145,11 @@ const stateLabel = (state: string | number) => {
 };
 const scan = async () => {
   if (!accountId.value) return;
+  const submission = submitScope.begin();
   scanning.value = true;
   try {
     const response = await previewSCFFunctions(accountId.value);
+    if (!submission.isCurrent()) return;
     candidates.value = response.functions;
     regionErrors.value = response.region_errors;
     selectedKeys.value = Object.fromEntries(
@@ -143,9 +157,10 @@ const scan = async () => {
     );
     if (!response.functions.length && !response.region_errors.length) Message.info("未发现云函数");
   } catch (error) {
+    if (!submission.isCurrent()) return;
     Message.error(error instanceof Error ? error.message : "扫描云函数失败");
   } finally {
-    scanning.value = false;
+    if (submission.isCurrent()) scanning.value = false;
   }
 };
 const remove = (key: string) => {
@@ -154,12 +169,18 @@ const remove = (key: string) => {
 };
 const importSelected = async () => {
   if (!accountId.value || selectedCandidates.value.length === 0) return;
+  const submission = submitScope.begin();
   importing.value = true;
   try {
     const response = await importSCFFunctions(
       accountId.value,
       selectedCandidates.value.map(item => item.function)
     );
+    if (!submission.isCurrent()) {
+      // 导入已在服务端完成，只通知列表刷新，不操作已重新打开的弹窗
+      emit("refresh");
+      return;
+    }
     const summary = `同步完成：新增 ${response.created}，恢复 ${response.restored}，已存在 ${response.unchanged}，失败 ${response.failed}`;
     if (response.failed > 0) {
       Message.warning(summary);
@@ -179,9 +200,10 @@ const importSelected = async () => {
       close();
     }
   } catch (error) {
+    if (!submission.isCurrent()) return;
     Message.error(error instanceof Error ? error.message : "导入云节点失败");
   } finally {
-    importing.value = false;
+    if (submission.isCurrent()) importing.value = false;
   }
 };
 </script>
