@@ -115,6 +115,8 @@ var unitSpecs = map[string]unitComponentSpec{
 	"collector": {[]string{"moox-collector-cli"}, []unitAsset{
 		configAsset("collector", "collector"), schemaAsset("collector", "collector"),
 		{"modules/collector/configs/sources", "collector/configs/sources", true},
+		// A 股行情供应商（sina 等）的路由配置，Collector 启动时必须能读到。
+		{"modules/collector/configs/scf/stockcn/sources", "collector/configs/scf/stockcn/sources", true},
 	}},
 	"cloudnode": {[]string{"moox-cloudnode-cli"}, []unitAsset{configAsset("cloudnode", "cloudnode"), schemaAsset("cloudnode", "cloudnode")}},
 	"factor-mgr": {[]string{"moox-factor-mgr-cli"}, []unitAsset{
