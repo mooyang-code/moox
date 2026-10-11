@@ -639,20 +639,24 @@ watch(
     void openRouteDetail();
   }
 );
+// 原因弹窗的打开序号：过期提交的收尾只能关闭自己打开的那一次弹窗，不能关掉用户在新空间/新账户上重新打开的弹窗
+let reasonOpenToken = 0;
 function requestPause() {
+  reasonOpenToken += 1;
   reasonMode.value = "pause";
   reasonForm.reason = "";
   reasonVisible.value = true;
 }
 function openFlatten() {
+  reasonOpenToken += 1;
   reasonMode.value = "flatten";
   reasonForm.action_id = createClientId();
   reasonForm.reason = "";
   reasonVisible.value = true;
 }
-function abandonedReasonSubmit() {
+function abandonedReasonSubmit(openToken: number) {
   Message.info("操作已提交到原空间的组合账户，当前空间或账户已切换；请切回原空间确认操作结果");
-  reasonVisible.value = false;
+  if (openToken === reasonOpenToken) reasonVisible.value = false;
   return true;
 }
 async function submitReason() {
@@ -660,6 +664,7 @@ async function submitReason() {
     Message.warning("请填写原因和操作编号");
     return false;
   }
+  const openToken = reasonOpenToken;
   const submitSpaceId = spaceStore.selectedSpaceId;
   const submitGeneration = selectedSpaceGeneration();
   const submitAccountId = selected.value.logical_account_id;
@@ -669,7 +674,7 @@ async function submitReason() {
     selected.value?.logical_account_id !== submitAccountId;
   if (reasonMode.value === "pause") {
     await pauseLogicalAccount(selected.value.logical_account_id, reasonForm.reason.trim());
-    if (stale()) return abandonedReasonSubmit();
+    if (stale()) return abandonedReasonSubmit(openToken);
   } else {
     const rsp = await flattenLogicalAccount(
       reasonForm.action_id.trim(),
@@ -677,7 +682,7 @@ async function submitReason() {
       reasonForm.reason.trim()
     );
     // 请求已经发出但空间或所选组合账户已变化：不覆盖新对象的操作状态，也不用新空间轮询原空间的操作
-    if (stale()) return abandonedReasonSubmit();
+    if (stale()) return abandonedReasonSubmit(openToken);
     action.value = rsp.action;
     submittedOrder.value = null;
     startActionPolling(rsp.action.action_id);

@@ -289,3 +289,28 @@ func TestKlineFreshnessMeasuresStalenessFromBarClose(t *testing.T) {
 	require.False(t, stale.Success, "the 07:00 bar is six minutes overdue with stale_after=5m")
 	require.Equal(t, 6*time.Minute, stale.StaleAge)
 }
+
+// 落后对象名单只上报最落后的若干个：停用对象多于名单长度时，名单只能用于展示，不能用来扣减完整计数，
+// 否则剩下那个未上报名字的停用对象会被算作过期，持续误报。
+func TestKlineFreshnessEvaluatorTruncatedLaggingListDoesNotKeepAlertingForRetiredSubjects(t *testing.T) {
+	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	var lagging []viewSummaryLaggingSample
+	subjects := []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}}
+	for i := 1; i <= 20; i++ {
+		id := fmt.Sprintf("OLD%02d", i)
+		lagging = append(lagging, viewSummaryLaggingSample{Subject: id, DataTime: now.Add(-time.Duration(60-i) * time.Minute), ObservedAt: now})
+		subjects = append(subjects, &storagepb.DatasetSubject{SubjectId: id, Status: "archived"})
+	}
+	// 22 个对象里 21 个已停用落后（只上报了 20 个名字），剩下 BTC 正常更新
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 22, Lagging: 21, ObservedAt: now,
+		LaggingSubjects: lagging,
+	}})
+	query.storage = NewStorageAdapter(nil, &fakeMetadata{subjects: subjects}, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.True(t, reports[0].Success, reports[0].Diagnostic)
+	require.Zero(t, reports[0].StaleCount)
+}

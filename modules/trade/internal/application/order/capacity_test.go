@@ -113,7 +113,8 @@ func TestCapacityPaperUsesLedgerFeesSlippageAndReservations(t *testing.T) {
 func TestCapacityLiveWatermarkDoesNotDoubleDeductReflectedReservations(t *testing.T) {
 	s, db, _ := newTestService(t)
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.LastSyncAt = time.UnixMilli(200)
+	account.SnapshotSourceTime = time.UnixMilli(200) // 余额快照的版本时间是预留抵扣边界，不是本地同步完成时间
+	account.LastSyncAt = time.UnixMilli(9_999)       // 同步完成得再晚也不能让早于快照版本之后提交的挂单被排除
 	account.Snapshot.Balances[0].Available = shared.MustDecimal("202")
 	s.Validator.Accounts = accountEligibilityStub{account: account}
 	ctx := context.Background()
@@ -233,4 +234,25 @@ func TestCapacityLimitChildCapUsesReferenceNotLimitNotional(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// 预留抵扣边界是余额快照的版本时间：快照比上一轮新，但早于已有挂单的提交时间，这笔挂单的预留尚未反映在余额里，必须继续扣减。
+func TestCapacityLiveKeepsDeductingOpenOrderNewerThanSnapshotVersion(t *testing.T) {
+	s, db, _ := newTestService(t)
+	account := executableAccount(exchange.MarketTypeSpot)
+	account.SnapshotSourceTime = time.UnixMilli(1_500) // 快照版本 1_500，早于挂单提交时间 2_000
+	account.LastSyncAt = time.UnixMilli(3_000)         // 本地同步完成时间 3_000 晚于挂单
+	account.Snapshot.Balances[0].Available = shared.MustDecimal("202")
+	s.Validator.Accounts = accountEligibilityStub{account: account}
+	ctx := context.Background()
+	spec := testSpec(s.now())
+	validation, err := s.Validator.Validate(ctx, "space-1", spec)
+	require.NoError(t, err)
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{SpaceID: "space-1", OrderID: "open", TradingAccountID: "account-1", ClientOrderID: "open", Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "open", State: "OPEN", Version: 1, ReservedAsset: validation.ReservedAsset, ReservedQuantity: validation.ReservedQuantity.String(), RemainingReservedQuantity: validation.ReservedQuantity.String(), SubmittedAt: 2_000})
+	}))
+	spec.Quantity = shared.MustDecimal("2")
+	got, err := s.Capacity(ctx, "space-1", spec)
+	require.NoError(t, err)
+	require.Equal(t, "1", got.String(), "挂单预留未被快照覆盖，余额 202 扣掉它之后只够再买 1")
 }

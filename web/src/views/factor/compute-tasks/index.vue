@@ -157,6 +157,8 @@
 </template>
 
 <script setup lang="ts">
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
+import { useSpaceStore } from "@/store/modules/space";
 import { computed, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
@@ -231,8 +233,15 @@ function closeDetail() {
   void navigate({ detail: undefined });
 }
 
+const spaceStore = useSpaceStore();
+
 async function onCreated(setId: string) {
+  // 刷新期间切换空间：创建的任务属于原空间，不能把它的 ID 写进新空间的详情路由
+  const createdSpaceId = spaceStore.selectedSpaceId;
+  const createdGeneration = selectedSpaceGeneration();
   await store.reload({ silent: false });
+  if (spaceStore.selectedSpaceId !== createdSpaceId || selectedSpaceGeneration() !== createdGeneration) return;
+  if (!store.sets.some((item: FactorSetInfo) => item.factor_set.set_id === setId)) return;
   openDetail(setId);
 }
 

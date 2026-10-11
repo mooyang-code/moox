@@ -997,7 +997,7 @@ func (s *Service) submit(
 				}
 			}
 		} else if refreshedReference || retryRepriced {
-			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.LastSyncAt.UnixMilli())
+			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.SnapshotSourceTime.UnixMilli())
 			if err != nil {
 				return err
 			}

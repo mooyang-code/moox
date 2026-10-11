@@ -496,7 +496,19 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 		}
 	}
 	report.StaleCount = max(summary.lagging-inactive, 0)
-	if active != nil && !summary.trackedSince.IsZero() && !summary.latest.Before(summary.trackedSince.Add(bar)) {
+	trackingMoved := !summary.trackedSince.IsZero() && !summary.latest.Before(summary.trackedSince.Add(bar))
+	if active != nil && summary.lagging > len(summary.laggingSubjects) {
+		// 落后对象名单被截断（只上报最落后的若干个）：名单只能用于展示，不能用来扣减完整计数，
+		// 否则超过名单长度的已停用对象会被当作过期持续误报。改用集合算术：没有落后的对象视为活跃，
+		// 活跃集合里放不下它们的那部分才是落后或缺失的；不会低于名单里已确认的活跃过期对象数。
+		if trackingMoved {
+			activeUpToDate := max(summary.subjects-summary.lagging, 0)
+			report.StaleCount = max(len(active)-activeUpToDate, len(stale))
+			report.MissingCount = 0
+		} else {
+			report.StaleCount = len(stale)
+		}
+	} else if active != nil && trackingMoved {
 		report.MissingCount = max(len(active)-(summary.subjects-inactive), 0)
 		report.StaleCount += report.MissingCount
 	}
