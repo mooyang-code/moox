@@ -508,7 +508,14 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 	case privateOrder:
 		return s.Sync.ApplyOrder(ctx, s.Account.TradingAccountID, event.order)
 	case privateFill:
-		_, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
+		applied, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
+		if err == nil && applied && s.syncRequested != nil {
+			// 成交已使准入关闭，请求完整同步以确认余额后恢复
+			select {
+			case s.syncRequested <- struct{}{}:
+			default:
+			}
+		}
 		return err
 	case privatePosition:
 		err := s.Sync.ApplyPosition(ctx, s.Account.TradingAccountID, event.position)

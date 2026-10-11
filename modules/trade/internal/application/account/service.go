@@ -188,7 +188,9 @@ func (s *Service) ExecutionEligibility(
 	if err != nil {
 		return tradingaccount.Account{}, err
 	}
-	current.Ready = s.SessionState.ReadyFor(current)
+	// 持久化的同步状态与当前会话状态必须同时就绪：私有流的持仓/成交更新会把持久化状态置为“等待完整同步”，
+	// 此时会话仍然就绪，不能让会话状态把它覆盖回可交易（否则会用尚未同步的资金信息通过准入）。
+	current.Ready = current.Ready && s.SessionState.ReadyFor(current)
 	if err := current.ExecutionEligibility(); err != nil {
 		return tradingaccount.Account{}, err
 	}

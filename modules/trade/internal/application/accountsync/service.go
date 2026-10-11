@@ -501,6 +501,19 @@ func (s *Service) ApplyFill(
 		consumer.OriginPrivateSocket,
 		shared.Zero(),
 	)
+	if err == nil && applied && account.ExecutionMode != string(exchange.ExecutionModePaper) {
+		// 成交已经释放订单的预留，但余额快照还没有反映这笔支出：在完整同步确认余额之前关闭准入，
+		// 否则同一笔资金可以再次通过本地资金检查。
+		err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+			return tx.UpdateTradingAccountReadiness(
+				account.SpaceID,
+				account.TradingAccountID,
+				false,
+				s.now().UnixMilli(),
+				"private fill awaiting balance sync",
+			)
+		})
+	}
 	unlock()
 	if err == nil && external {
 		err = s.pauseForExternalFact(ctx, tradingAccountID)

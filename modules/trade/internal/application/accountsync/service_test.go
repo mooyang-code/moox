@@ -1218,3 +1218,51 @@ func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
 	require.Equal(t, int64(3_000), account.LastSyncAt, "陈旧快照被丢弃时抵扣边界保持不变")
 	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
 }
+
+// 实盘私有成交已释放订单预留，但余额快照尚未反映这笔支出：成交后必须关闭准入，直到完整同步确认余额。
+func TestPrivateFillClosesAdmissionUntilFullSync(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	current := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	fill := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{order: current, fill: fill}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 3_000, "")
+	}))
+	open := current
+	open.FilledQuantity, open.Status = shared.Zero(), exchange.OrderStatusOpen
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, account.Ready, "事件前账户就绪")
+
+	applied, err := service.ApplyFill(context.Background(), "account-1", fill)
+	require.NoError(t, err)
+	require.True(t, applied)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready, "成交后在余额同步确认前不得接受新订单")
+
+	_, err = service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, account.Ready, "完整同步确认余额后恢复")
+}

@@ -345,6 +345,7 @@ func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
 			store := newMemoryStore()
 			value := validAccount()
 			value.Status = tt.status
+			value.Ready = true // 持久化的同步状态就绪，由会话状态决定当前是否可交易
 			store.accounts[value.ID] = value
 			service := Service{
 				Store:        store,
@@ -359,6 +360,20 @@ func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
 				t.Fatalf("ExecutionEligibility() error = %v", err)
 			}
 		})
+	}
+}
+
+// 私有流的持仓/成交更新把持久化状态置为“等待完整同步”时，会话仍然就绪也不能放行：资金信息尚未同步。
+func TestExecutionEligibilityRequiresPersistedSyncReadiness(t *testing.T) {
+	store := newMemoryStore()
+	value := validAccount()
+	value.Ready = false
+	store.accounts[value.ID] = value
+	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}
+
+	_, err := service.ExecutionEligibility(context.Background(), value.ID)
+	if !errors.Is(err, tradingaccount.ErrAccountNotExecutable) {
+		t.Fatalf("ExecutionEligibility() error = %v, want ErrAccountNotExecutable", err)
 	}
 }
 
@@ -381,6 +396,7 @@ func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
 	value.SyncSymbols = []string{"BTCUSDT"}
+	value.Ready = true
 	store.accounts[value.ID] = value
 	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}
 
