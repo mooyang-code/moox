@@ -40,7 +40,9 @@ CREATE TABLE IF NOT EXISTS t_cloud_accounts (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_accounts_account ON t_cloud_accounts (c_account_id, c_is_deleted);
+-- account_id 全局唯一：软删除后同名重建复用旧行，避免 (id,0)/(id,1) 两行并存时再次删除违反联合唯一约束
+DROP INDEX IF EXISTS idx_cloud_accounts_account;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_accounts_account_id ON t_cloud_accounts (c_account_id);
 CREATE INDEX IF NOT EXISTS idx_cloud_accounts_provider ON t_cloud_accounts (c_provider);
 
 CREATE TABLE IF NOT EXISTS t_cloud_function_packages (

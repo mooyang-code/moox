@@ -51,11 +51,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, computed, reactive, ref } from "vue";
+import { onMounted, computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import ButtonCollapsed from "@/layout/components/Header/components/button-collapsed/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
 import { createSpace } from "@/api/admin/spaces";
+import { createSubmitScope } from "@/utils/submit-scope";
 import { storeToRefs } from "pinia";
 import type { Space } from "@/api/admin/types";
 
@@ -75,6 +76,9 @@ const onSpaceChange = (spaceId: string | number | boolean | Record<string, unkno
 };
 
 const createVisible = ref(false);
+// 空间是全局资源：提交只受弹窗开/关约束（@before-ok 弹窗在打开与关闭时都使进行中的提交失效）
+const createScope = createSubmitScope({ global: true });
+watch(createVisible, () => createScope.invalidate());
 const createForm = reactive({
   space_id: "",
   name: "",
@@ -105,14 +109,18 @@ const submitCreate = async (): Promise<boolean> => {
     Message.warning("请填写空间 ID 和名称");
     return false;
   }
+  const submission = createScope.begin();
   try {
     await createSpace({ ...createForm, space_id: spaceId, name, status: "active" });
     await spaceStore.loadSpaces();
+    // 空间已创建；弹窗被关闭/重新打开后不再选中它、也不清空新打开的草稿
+    if (!submission.isCurrent()) return false;
     spaceStore.setSelectedSpace(spaceId);
     Message.success("空间创建成功");
     resetCreate();
     return true;
   } catch (error) {
+    if (!submission.isCurrent()) return false;
     Message.error(error instanceof Error ? error.message : "创建空间失败");
     return false;
   }
