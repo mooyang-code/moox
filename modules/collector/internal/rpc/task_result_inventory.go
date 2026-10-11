@@ -280,7 +280,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 		SpaceId: task.SpaceID, TaskId: task.TaskID, DatasetId: ids.DatasetID, ViewId: ids.ViewID,
 		Frequency: frequency, MarketId: marketID, CalendarId: calendarID, Timezone: timezone,
 		Sessions: sessions, ObservedAt: observed.Format(time.RFC3339Nano), Enabled: task.Enabled,
-		ResultStatus: "pending",
+		ResultStatus: "pending", AllowedLatenessSeconds: int32(allowedLatenessSeconds(params, task.SpaceID)),
 	}
 	if !task.Enabled {
 		if err := s.inspectDisabledTaskResult(ctx, entry, task, params, ids); err != nil {
@@ -374,36 +374,37 @@ func (s *Service) populateLatestCompletedPeriod(ctx context.Context, entry *pb.T
 	if s == nil || s.persistence == nil {
 		return fmt.Errorf("period state persistence is not initialized")
 	}
-	var latestPeriod time.Time
-	var latestStatus string
-	if strings.EqualFold(task.DataType, "kline_resample") {
-		if s.persistence.PeriodReadiness() == nil {
-			return fmt.Errorf("period readiness repository is not initialized")
-		}
-		latest, err := s.persistence.PeriodReadiness().LatestCompletedPeriod(ctx, task.SpaceID, datasetID, frequency)
-		if err != nil {
-			return fmt.Errorf("read latest completed resample period: %w", err)
-		}
-		if latest != nil {
-			latestPeriod, latestStatus = latest.PeriodTime, latest.Status
-		}
-	} else {
-		if s.persistence.PeriodStorageStates() == nil {
-			return fmt.Errorf("period Storage state repository is not initialized")
-		}
-		latest, err := s.persistence.PeriodStorageStates().LatestTerminalPeriod(ctx, task.SpaceID, datasetID, frequency)
-		if err != nil {
-			return fmt.Errorf("read latest Storage-confirmed period: %w", err)
-		}
-		if latest != nil {
-			latestPeriod, latestStatus = latest.Key.PeriodTime, latest.Status
-		}
+	// 直接行情任务的周期由 Storage 裁决，不再查询周期状态；Monitor 只按 View 最新数据时间判断新鲜度。
+	if !strings.EqualFold(task.DataType, "kline_resample") {
+		return nil
 	}
-	if !latestPeriod.IsZero() {
-		entry.LatestCompletedPeriod = latestPeriod.UTC().Format(time.RFC3339Nano)
-		entry.LatestCompletedStatus = latestStatus
+	if s.persistence.PeriodReadiness() == nil {
+		return fmt.Errorf("period readiness repository is not initialized")
+	}
+	latest, err := s.persistence.PeriodReadiness().LatestCompletedPeriod(ctx, task.SpaceID, datasetID, frequency)
+	if err != nil {
+		return fmt.Errorf("read latest completed resample period: %w", err)
+	}
+	if latest != nil && !latest.PeriodTime.IsZero() {
+		entry.LatestCompletedPeriod = latest.PeriodTime.UTC().Format(time.RFC3339Nano)
+		entry.LatestCompletedStatus = latest.Status
 	}
 	return nil
+}
+
+// allowedLatenessSeconds 返回任务结果数据集的允许迟到时间：任务参数优先，否则取空间默认值。
+func allowedLatenessSeconds(params *domain.CollectParams, spaceID string) int {
+	if params != nil && params.AllowedLatenessSeconds > 0 {
+		return params.AllowedLatenessSeconds
+	}
+	switch strings.ToLower(strings.TrimSpace(spaceID)) {
+	case "crypto":
+		return 15
+	case "stockcn":
+		return 90
+	default:
+		return 60
+	}
 }
 
 func taskResultMarketCalendar(marketID string) (calendarID, timezone string, sessions []string) {

@@ -28,16 +28,18 @@ const (
 )
 
 type KlineFreshnessRule struct {
-	Enabled               bool
-	SpaceID               string
-	DatasetID             string
-	ViewID                string
-	Frequency             string
-	MarketID              string
-	CalendarID            string
-	Timezone              string
-	Sessions              []string
-	StaleAfter            time.Duration
+	Enabled    bool
+	SpaceID    string
+	DatasetID  string
+	ViewID     string
+	Frequency  string
+	MarketID   string
+	CalendarID string
+	Timezone   string
+	Sessions   []string
+	StaleAfter time.Duration
+	// AllowedLateness 是结果数据集周期的允许迟到时间：K 线收盘后最多迟这么久才算按时。
+	AllowedLateness       time.Duration
 	ResultStatus          string
 	LatestCompletedPeriod time.Time
 	LatestCompletedStatus string
@@ -102,13 +104,15 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	now = now.UTC()
 	rules := e.rules
 	inventoryEvaluated := false
+	inventoryStale := false
 	if e.inventory != nil {
-		inventory, err := e.inventory.Get(ctx, now)
+		inventory, stale, err := e.inventory.GetAllowStale(ctx, now)
 		if err != nil {
 			return nil, &TaskResultInventoryRefreshError{Cause: fmt.Errorf("load task-result inventory: %w", err), State: e.inventory.State(now)}
 		}
 		rules = klineFreshnessRulesFromInventory(inventory, e.staleAfter)
 		inventoryEvaluated = true
+		inventoryStale = stale
 	}
 	filters := make([]ViewMetricScope, 0, len(rules))
 	for _, rule := range rules {
@@ -125,11 +129,17 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	reports := make([]KlineFreshnessReport, 0, len(rules)+1)
 	if inventoryEvaluated {
 		state := e.inventory.State(now)
-		reports = append(reports, KlineFreshnessReport{
+		inventoryReport := KlineFreshnessReport{
 			Rule:    KlineFreshnessRule{SpaceID: InternalMetricSpaceID, ViewID: "task-result-inventory"},
 			CheckID: TaskResultInventoryCheckID, Success: true, Reason: "inventory_fresh",
 			Diagnostic: fmt.Sprintf("cache_age_seconds=%.0f", state.Age.Seconds()),
-		})
+		}
+		if inventoryStale {
+			// 控制面数据过期：继续用最后一份有效清单检查，同时单独告警。
+			inventoryReport.Success, inventoryReport.Reason = false, "inventory_stale"
+			inventoryReport.Diagnostic = fmt.Sprintf("cache_age_seconds=%.0f last_error=%s", state.Age.Seconds(), state.LastError)
+		}
+		reports = append(reports, inventoryReport)
 	}
 	for _, rule := range rules {
 		if !rule.Enabled {
@@ -322,7 +332,8 @@ func inventoryRule(entry TaskResultInventoryEntry, enabled bool, staleAfter time
 		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID, ViewID: entry.ViewID,
 		Frequency: entry.Frequency, MarketID: entry.MarketID, CalendarID: entry.CalendarID,
 		Timezone: entry.Timezone, Sessions: append([]string(nil), entry.Sessions...), StaleAfter: staleAfter,
-		ResultStatus: entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
+		AllowedLateness: time.Duration(entry.AllowedLatenessSeconds) * time.Second,
+		ResultStatus:    entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
 		LatestCompletedStatus: entry.LatestCompletedStatus, ViewLastDataTime: entry.ViewLastDataTime,
 		InventoryObservedAt: entry.ObservedAt,
 	}
@@ -467,7 +478,7 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 	// closes, so the newest bar is always one period behind. Data is stale
 	// once the bar after it is overdue: that bar closes two periods after the
 	// latest bar's start, plus stale_after.
-	nextBarDue := summary.latest.Add(2 * bar)
+	nextBarDue := summary.latest.Add(2*bar + rule.AllowedLateness)
 	report.StaleAge = inventoryDataAge(now, nextBarDue)
 	if now.Sub(nextBarDue) > rule.StaleAfter {
 		report.ViewStale = true

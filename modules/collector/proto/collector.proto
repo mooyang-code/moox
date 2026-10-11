@@ -118,6 +118,8 @@ message TaskResultInventoryEntry {
   string series_hash = 25;
   uint32 expected_count = 26;
   repeated string output_fields = 27;
+  // allowed_lateness_seconds 是该结果数据集周期的允许迟到时间；Monitor 据此判断新鲜度。
+  int32 allowed_lateness_seconds = 28;
 }
 
 message GetTaskResultInventoryReq {

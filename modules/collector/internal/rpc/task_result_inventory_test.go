@@ -105,8 +105,10 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.Equal(t, activeIDs.ViewID, entry.GetViewId())
 	require.True(t, entry.GetOwnershipVerified())
 	require.Equal(t, "1m", entry.GetFrequency())
-	require.Equal(t, periodTime.Format(time.RFC3339), entry.GetLatestCompletedPeriod())
-	require.Equal(t, domain.PeriodStatusComplete, entry.GetLatestCompletedStatus())
+	// 直接行情任务的周期由 Storage 裁决：清单不再带最近终结周期，只带允许迟到时间。
+	require.Empty(t, entry.GetLatestCompletedPeriod())
+	require.Empty(t, entry.GetLatestCompletedStatus())
+	require.EqualValues(t, 15, entry.GetAllowedLatenessSeconds())
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339), entry.GetViewLastDataTime())
 	require.NotEmpty(t, entry.GetObservedAt())
 	require.True(t, entry.GetCanaryCandidateAvailable())

@@ -227,6 +227,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
+	if klineInventory != nil {
+		// 最后一份有效的任务清单持久化：采集服务不可用或重启后仍可检查新鲜度。
+		klineInventory.SetStore(store.NewInventoryRepository(runtime.Store))
+	}
 	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory)
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,

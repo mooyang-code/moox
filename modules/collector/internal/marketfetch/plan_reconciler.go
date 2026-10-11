@@ -159,9 +159,23 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 		return r.fail("store", fmt.Errorf("read open fetch plan: %w", err))
 	}
 	if open != nil {
+		if r.Metrics != nil {
+			r.Metrics.ObserveAssignmentPending(r.SpaceID, true, open.CreatedAt)
+		}
 		return r.advance(ctx, open)
 	}
-	return r.planChange(ctx)
+	if err := r.planChange(ctx); err != nil {
+		return err
+	}
+	// 没有未生效的计划（或本轮刚把计划推进到生效）：对账成功。
+	if r.Metrics != nil {
+		if still, openErr := r.Store.Open(ctx, r.SpaceID); openErr == nil && still == nil {
+			r.Metrics.ObserveAssignmentPending(r.SpaceID, false, time.Time{})
+			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
+			r.Metrics.ClearAssignmentFailure(r.SpaceID)
+		}
+	}
+	return nil
 }
 
 // managedTasks 返回由本对账器管理的 kline 任务的目标数据集集合。

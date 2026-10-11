@@ -114,6 +114,9 @@ func buildBusinessFreshnessReporterWithInterval(
 					reason := klineReasonText(report, overview.GeneratedAt)
 					if report.CheckID == monmetrics.TaskResultInventoryCheckID {
 						reason = "采集任务清单正常"
+						if !report.Success {
+							reason = "控制面数据过期：采集服务暂不可用，K线检查沿用最后一份有效的任务清单"
+						}
 					}
 					items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
 						spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,

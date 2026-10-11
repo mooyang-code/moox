@@ -289,3 +289,12 @@ CREATE TABLE IF NOT EXISTS t_monitor_component_health (
     PRIMARY KEY (c_host_id, c_component_id),
     CHECK (c_status IN ('healthy', 'degraded', 'down', 'unknown', 'disabled', 'unchecked'))
 );
+
+-- 最后一份有效的采集任务清单：采集服务不可用或 Monitor 重启后继续用它检查 K 线新鲜度
+CREATE TABLE IF NOT EXISTS t_monitor_task_inventory (
+    c_id INTEGER NOT NULL PRIMARY KEY,
+    c_snapshot TEXT NOT NULL,
+    c_fetched_at DATETIME NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_id = 1)
+);

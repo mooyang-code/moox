@@ -332,7 +332,8 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inventoryResults) != 2 || inventoryResults[0].Success || !strings.HasPrefix(inventoryResults[0].ErrorMessage, "无法获取采集任务清单") ||
+	// 采集服务不可用时沿用最后一份有效清单继续检查，同时单独告警“控制面数据过期”。
+	if len(inventoryResults) != 2 || inventoryResults[0].Success || !strings.HasPrefix(inventoryResults[0].ErrorMessage, "控制面数据过期") ||
 		!strings.Contains(inventoryResults[0].BodyExcerpt, "collector inventory endpoint unavailable") {
 		t.Fatalf("inventory refresh result = %+v", inventoryResults)
 	}
@@ -340,8 +341,9 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(klineResults) != 1 || klineResults[0].Success {
-		t.Fatalf("inventory failure must preserve the previous Kline failure without synthesizing a resolution: %+v", klineResults)
+	// 沿用最后一份有效清单继续检查：已有的 K 线失败保持，不会被合成为恢复。
+	if len(klineResults) == 0 || klineResults[0].Success {
+		t.Fatalf("a stale inventory must keep evaluating the Kline check without synthesizing a resolution: %+v", klineResults)
 	}
 }
 
