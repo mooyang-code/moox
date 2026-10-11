@@ -144,10 +144,13 @@ func withLag(runs []domain.SetRunSummary, now time.Time) []domain.SetRunSummary 
 	return out
 }
 
-func (h *Hub) holdsLease(engineID string, now time.Time) bool {
+// holdsLease 要求 engine_id 与 boot_id 都和当前持有租约的进程一致：同一 engine_id 的新进程接管后，旧进程的任务请求
+// （心跳之外的 Pull/Report）不能再续租或完成任务，与心跳的实例隔离一致。
+func (h *Hub) holdsLease(id domain.EngineIdentity, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.engine != nil && h.engine.identity.EngineID == engineID && now.Before(h.engine.lastSeen.Add(h.engineTTL))
+	return h.engine != nil && h.engine.identity.EngineID == id.EngineID && h.engine.identity.BootID == id.BootID &&
+		now.Before(h.engine.lastSeen.Add(h.engineTTL))
 }
 
 func (h *Hub) isReady(setID string) bool {

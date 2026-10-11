@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
@@ -84,11 +83,8 @@ func SftpDownloadHandler(svc ssh.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		sessionID := r.URL.Query().Get("session_id")
-		filePath, err := url.QueryUnescape(r.URL.Query().Get("path"))
-		if err != nil {
-			writeRawError(w, http.StatusBadRequest, "路径格式不正确")
-			return
-		}
+		// Query().Get 已经完成一次解码；再解码会把 + 变成空格、让含 % 的文件名报错。
+		filePath := r.URL.Query().Get("path")
 		if sessionID == "" || filePath == "" {
 			writeRawError(w, http.StatusBadRequest, "session_id/path 不能为空")
 			return

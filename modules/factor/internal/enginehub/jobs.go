@@ -19,7 +19,7 @@ const maxPullAttempts = 16
 // enabled fail immediately, as they could never run.
 func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJob, domain.EngineSet, bool, error) {
 	now := h.now().UTC()
-	if !h.holdsLease(id.EngineID, now) {
+	if !h.holdsLease(id, now) {
 		return store.RecalcJob{}, domain.EngineSet{}, false, ErrLeaseConflict
 	}
 	skip, err := h.unreadySets(ctx)
@@ -49,7 +49,7 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 // the lease cannot keep a long job alive next to the new lease holder.
 func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string) (store.RecalcJob, error) {
 	now := h.now().UTC()
-	if !h.holdsLease(id.EngineID, now) {
+	if !h.holdsLease(id, now) {
 		return store.RecalcJob{}, ErrLeaseConflict
 	}
 	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, now, h.jobTTL)

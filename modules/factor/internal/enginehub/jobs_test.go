@@ -157,3 +157,26 @@ func TestReportRejectsEngineWithoutLease(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrLeaseConflict)
 }
+
+// 同一 engine_id 的新进程（不同 boot_id）接管后，旧进程的 Pull/Report 不能再续租或完成任务。
+func TestOldBootOfSameEngineCannotPullOrReportAfterTakeover(t *testing.T) {
+	hub, db, clock := newTestHub(t)
+	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("set_a", true)
+	seedJob(t, db, "job-1", "set_a")
+	leaseEngineA(t, hub)
+	job, _, _, err := hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	clock.Advance(46 * time.Second)
+	restarted := engineA
+	restarted.BootID = engineA.BootID + "-restarted"
+	_, err = hub.Heartbeat(context.Background(), restarted, domain.EngineStatus{})
+	require.NoError(t, err)
+
+	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+	require.ErrorIs(t, err, ErrLeaseConflict, "旧进程的 Report 必须被拒绝")
+	_, _, _, err = hub.Pull(context.Background(), engineA)
+	require.ErrorIs(t, err, ErrLeaseConflict, "旧进程的 Pull 必须被拒绝")
+	_, err = hub.Report(context.Background(), restarted, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+	require.NotErrorIs(t, err, ErrLeaseConflict, "新进程持有租约")
+}
