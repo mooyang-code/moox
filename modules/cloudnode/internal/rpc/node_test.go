@@ -461,7 +461,8 @@ func TestExecuteCreateExistingTimerNodeEnsuresTrigger(t *testing.T) {
 	environment := completeTimerEnvironment()
 	environment["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
 	environment["MOOX_CREATE_RESERVATION_ID"] = "timer-create-reservation"
-	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}}}}
+	// 函数已存在但还没有定时器：补建一个停用状态的初始定时器。
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}}}, timerInfoSet: true}
 	svc := &Service{
 		catalog:            catalog,
 		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
@@ -476,6 +477,30 @@ func TestExecuteCreateExistingTimerNodeEnsuresTrigger(t *testing.T) {
 	}, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, fake.timerEnsures)
+}
+
+func TestExecuteCreateExistingTimerNodeKeepsAnExistingTrigger(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	environment := completeTimerEnvironment()
+	environment["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+	environment["MOOX_CREATE_RESERVATION_ID"] = "timer-create-reservation"
+	// 默认的假客户端返回一个已启用的定时器：部署或续建不能把它重置成停用。
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}}}}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_name_prefix": "moox-fetcher-crypto-market"})
+	require.NoError(t, err)
+	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-singapore", Namespace: "collector", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "60"}, Environment: environment, Metadata: metadata,
+		CreateReservationId: "timer-create-reservation",
+	}, 0)
+	require.NoError(t, err)
+	require.Zero(t, fake.timerEnsures)
 }
 
 func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
@@ -767,11 +792,11 @@ func (f *fakeSCFClient) EnsureTimerTrigger(_ context.Context, req tencentscf.Tim
 func (f *fakeSCFClient) GetTimerTrigger(_ context.Context, _ tencentscf.FunctionRef, _ string) (*tencentscf.TimerTriggerInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.timerErr != nil {
-		return nil, f.timerErr
-	}
 	if f.timerInfoSet {
 		return f.timerInfo, nil
+	}
+	if f.timerErr != nil {
+		return nil, f.timerErr
 	}
 	return &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "0 * * * * * *", Enabled: true, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage}, nil
 }

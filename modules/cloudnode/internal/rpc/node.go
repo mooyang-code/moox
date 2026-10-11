@@ -867,8 +867,16 @@ func ensureInitialTimerTrigger(ctx context.Context, client scfProvisioner, node 
 	if node == nil || node.TriggerType != "timer" {
 		return nil
 	}
-	_, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: false, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
-	if err != nil {
+	// 已存在的定时器保持原样：部署新代码时不能把正在运行的定时器重置为停用，
+	// 只有函数还没有定时器时才创建一个停用状态的初始定时器，由运行时配置再启用。
+	existing, err := client.GetTimerTrigger(ctx, ref, timerTriggerName)
+	if err != nil && !isSCFNotFound(err) {
+		return fmt.Errorf("read timer trigger for %s: %w", ref.FunctionName, err)
+	}
+	if err == nil && existing != nil {
+		return nil
+	}
+	if _, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: false, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage}); err != nil {
 		return fmt.Errorf("ensure initial timer trigger for %s: %w", ref.FunctionName, err)
 	}
 	return nil

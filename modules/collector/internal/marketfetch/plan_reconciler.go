@@ -30,6 +30,8 @@ const (
 	planJobKindFinal      = "final"
 	// planFinalizeMargin 是旧份保留窗口结束后再多等的时间，让最后一批旧周期提交落地。
 	planFinalizeMargin = 5 * time.Second
+	// planUpgradeCheckInterval 是检查函数代码包是否落后的间隔。
+	planUpgradeCheckInterval = 2 * time.Minute
 	// planVerifyInterval 是全量读回云端配置的间隔；读回不完整时按 planVerifyRetry 重试。
 	planVerifyInterval = time.Hour
 	planVerifyRetry    = 5 * time.Minute
@@ -146,7 +148,9 @@ type PlanReconciler struct {
 	holder       string
 	pending      []pendingPlanJob
 	lastVerified time.Time
-	goneSeen     map[string]int
+	// lastUpgradeCheck 是上一次检查函数代码包是否落后的时间。
+	lastUpgradeCheck time.Time
+	goneSeen         map[string]int
 
 	// 补采函数的创建与对账协程互不干扰：单独的互斥与租约，并缓存已确认存在的函数。
 	backfillMu     sync.Mutex
@@ -190,6 +194,13 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 		return errors.New("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
+	// 代码包升级与采集计划是否在进行无关：计划推进期间也要让落后的函数跟上配置的代码包。
+	if r.now().Sub(r.lastUpgradeCheck) >= planUpgradeCheckInterval {
+		r.lastUpgradeCheck = r.now()
+		if err := r.upgradeLaggingFunctions(ctx); err != nil {
+			return err
+		}
+	}
 	open, err := r.Store.Open(ctx, r.SpaceID)
 	if err != nil {
 		return r.fail("store", fmt.Errorf("read open fetch plan: %w", err))
@@ -197,6 +208,10 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 	if open != nil {
 		if r.Metrics != nil {
 			r.Metrics.ObserveAssignmentPending(r.SpaceID, true, open.CreatedAt)
+		}
+		// 计划推进可能持续很久（整点频率要等到下一个整点才收尾），期间不受该计划影响的函数照常做云端校验与修复。
+		if err := r.verifyUntouched(ctx, open); err != nil {
+			log.WarnContextf(ctx, "collector fetch plan verification skipped space=%s: %v", r.SpaceID, err)
 		}
 		return r.advance(ctx, open)
 	}
@@ -797,11 +812,72 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 // upgradeCode 把代码包版本落后的已生效函数升级到 scf_plan 配置的代码包：只更新代码，环境与定时器不动。
 // 升级走受发布租约保护的部署作业，分批进行；单个函数更新代码的几秒内可能漏掉一次触发，缺口由自动补采补回。
 func (r *PlanReconciler) upgradeCode(ctx context.Context, applied map[string]*PlanFunction, byName map[string]scfinvoker.Node) error {
+	names := make([]string, 0, len(applied))
+	for name := range applied {
+		names = append(names, name)
+	}
+	return r.upgradeCodeOf(ctx, names, byName)
+}
+
+// verifyUntouched 在有未生效计划时，对不受该计划影响的已生效函数做云端校验。
+func (r *PlanReconciler) verifyUntouched(ctx context.Context, open *store.FetchPlanRecord) error {
+	if !r.lastVerified.IsZero() && r.now().Sub(r.lastVerified) < planVerifyInterval {
+		return nil
+	}
+	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
+	if err != nil || applied == nil {
+		return err
+	}
+	appliedContent, err := decodeFetchPlanContent(applied.Plan)
+	if err != nil {
+		return err
+	}
+	openContent, err := decodeFetchPlanContent(open.Plan)
+	if err != nil {
+		return err
+	}
+	previous, _ := appliedContent.Applied()
+	untouched := map[string]*PlanFunction{}
+	for name, function := range previous {
+		change := openContent.Functions[name]
+		if change != nil && (change.Push || change.Create || r.finalDiffers(openContent, change)) {
+			continue
+		}
+		untouched[name] = function
+	}
+	return r.verifyFleet(ctx, untouched)
+}
+
+// upgradeLaggingFunctions 找出本空间代码包落后的计划函数并升级。
+func (r *PlanReconciler) upgradeLaggingFunctions(ctx context.Context) error {
+	release, err := r.acquireOperation(ctx)
+	if err != nil {
+		return err
+	}
+	nodes, err := r.Cloud.ListTimerMarketFetchers(ctx, r.SpaceID)
+	release()
+	if err != nil {
+		return r.fail("cloudnode", fmt.Errorf("list market fetchers: %w", err))
+	}
+	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
+	byName := map[string]scfinvoker.Node{}
+	var names []string
+	for _, node := range nodes {
+		if strings.HasPrefix(node.NodeID, prefix) {
+			byName[node.NodeID] = node
+			names = append(names, node.NodeID)
+		}
+	}
+	return r.upgradeCodeOf(ctx, names, byName)
+}
+
+// upgradeCodeOf 升级给定函数名里代码包落后的函数。
+func (r *PlanReconciler) upgradeCodeOf(ctx context.Context, names []string, byName map[string]scfinvoker.Node) error {
 	if strings.TrimSpace(r.Deploy.PackageID) == "" {
 		return nil
 	}
 	var stale []string
-	for name := range applied {
+	for _, name := range names {
 		node, ok := byName[name]
 		if ok && strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.Deploy.PackageID {
 			stale = append(stale, name)
