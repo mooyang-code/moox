@@ -238,7 +238,7 @@ func buildMonitorMarketCanary(
 						continue
 					}
 					reasons := checkTag(tag, now)
-					result := domain.CheckResult{ResultID: fmt.Sprintf("%s-%d", checkID, now.UnixNano()), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: tagReasonText(reasons), CheckedAt: now, CreatedAt: now}
+					result := domain.CheckResult{ResultID: domain.ScopedResultID(spaceID, checkID, now), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: tagReasonText(reasons), CheckedAt: now, CreatedAt: now}
 					if !result.Success {
 						result.Status = domain.CheckStatusDown
 					}

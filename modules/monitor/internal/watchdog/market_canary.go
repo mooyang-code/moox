@@ -142,7 +142,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	}
 	config := c.Config
 	result := domain.CheckResult{
-		ResultID:   fmt.Sprintf("%s-%d", MarketCanaryCheckID(config), now.UnixNano()),
+		ResultID:   domain.ScopedResultID(config.SpaceID, MarketCanaryCheckID(config), now),
 		SpaceID:    config.SpaceID,
 		CheckID:    MarketCanaryCheckID(config),
 		InstanceID: "monitor",

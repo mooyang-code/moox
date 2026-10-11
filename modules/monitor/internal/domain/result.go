@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"net/url"
+	"time"
+)
 
 const (
 	CheckStatusOK       = "ok"
@@ -28,4 +32,10 @@ type CheckResult struct {
 
 func (CheckResult) TableName() string {
 	return "t_monitor_check_results"
+}
+
+// ScopedResultID 生成采样结果 ID。c_result_id 全局唯一而检查 ID 不含空间：
+// 两个空间的同名检查在同一轮采样里共用同一时刻，必须把空间编码进 ID，否则后插入者会被静默忽略。
+func ScopedResultID(spaceID, checkID string, at time.Time) string {
+	return fmt.Sprintf("%s/%s-%d", url.PathEscape(spaceID), checkID, at.UnixNano())
 }

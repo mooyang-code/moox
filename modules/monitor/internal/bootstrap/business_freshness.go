@@ -364,7 +364,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				status = domain.CheckStatusOK
 			}
 			result := domain.CheckResult{
-				ResultID: fmt.Sprintf("%s-%d", item.checkID, now.UnixNano()),
+				ResultID: domain.ScopedResultID(item.spaceID, item.checkID, now),
 				SpaceID:  item.spaceID, CheckID: item.checkID, InstanceID: "monitor",
 				Success: item.success, Connected: item.success, Status: status,
 				ErrorMessage: item.reason, RawError: item.rawError, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
