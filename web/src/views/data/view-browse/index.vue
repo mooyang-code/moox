@@ -1469,9 +1469,16 @@ async function loadKlineRecords(subjectId: string, seriesTag: string) {
   const view = activeView.value;
   if (!view) return false;
   const request = klineRequestGuard.begin();
+  // 发起时固定整次查询的筛选、投影列、排序与数量：加载期间修改筛选框不能让后续分页读取另一套条件
+  const query = {
+    filter: activeFilterExprs(),
+    columnNames: [...klineColumnNames.value],
+    sorts: buildKlineQuerySorts(),
+    limit: normalizedKlineLimit.value
+  };
   klineLoading.value = true;
   try {
-    const rows = await fetchKlineTableRows(view.view_id, () => request.isLatest());
+    const rows = await fetchKlineTableRows(view.view_id, query, () => request.isLatest());
     if (!request.isLatest()) return false;
     if (!klineRowsHaveFreq(rows)) {
       Message.warning("当前查询结果缺少 freq 字段，无法展示K线");
@@ -1484,7 +1491,7 @@ async function loadKlineRecords(subjectId: string, seriesTag: string) {
       return false;
     }
 
-    klineLimit.value = normalizedKlineLimit.value;
+    klineLimit.value = query.limit;
     klineFreq.value = firstKlineFreq(subjectId, rows);
     klineRecords.value = records;
     return true;
@@ -1497,19 +1504,30 @@ async function loadKlineRecords(subjectId: string, seriesTag: string) {
   }
 }
 
-async function fetchKlineTableRows(viewId: string, isCurrent: () => boolean = () => true): Promise<ViewBrowseTableRow[]> {
+interface KlineQuerySnapshot {
+  filter: ReturnType<typeof activeFilterExprs>;
+  columnNames: string[];
+  sorts: ReturnType<typeof buildKlineQuerySorts>;
+  limit: number;
+}
+
+async function fetchKlineTableRows(
+  viewId: string,
+  query: KlineQuerySnapshot,
+  isCurrent: () => boolean = () => true
+): Promise<ViewBrowseTableRow[]> {
   const space_id = spaceStore.requireSpaceId();
   const timeRange = defaultTimeSeriesPreviewRange();
   const rows: TimeSeriesRow[] = [];
-  const limit = normalizedKlineLimit.value;
+  const limit = query.limit;
   for (let pageNo = 1; rows.length < limit; pageNo += 1) {
     const rsp = await queryTimeSeriesRows({
       space_id,
       view_id: viewId,
       ...(timeRange ? { time_range: timeRange } : {}),
-      ...(klineColumnNames.value.length > 0 ? { column_names: klineColumnNames.value } : {}),
-      filter: activeFilterExprs(),
-      sorts: buildKlineQuerySorts(),
+      ...(query.columnNames.length > 0 ? { column_names: query.columnNames } : {}),
+      filter: query.filter,
+      sorts: query.sorts,
       limit,
       page: { page: pageNo, size: DEFAULT_VIEW_PAGE_SIZE },
       total_mode: "NONE"
