@@ -53,8 +53,9 @@ type PlanFetch struct {
 	FeedConcurrency  int `json:"feed_concurrency"`
 	RequestTimeoutMS int `json:"request_timeout_ms"`
 	StorageTimeoutMS int `json:"storage_timeout_ms,omitempty"`
-	// StaggerMS 是函数内按函数名哈希的确定性错峰上限（毫秒）。
-	StaggerMS int `json:"stagger_ms,omitempty"`
+	// StaggerBaseMS 是错峰的固定起点；StaggerMS 是在起点之后按函数名哈希增加的确定性延迟上限（毫秒）。
+	StaggerBaseMS int `json:"stagger_base_ms,omitempty"`
+	StaggerMS     int `json:"stagger_ms,omitempty"`
 }
 
 // PlanDataset 是一个结果数据集：每个数据集 1～2 份（生效起点、hash、总数、本函数标的与序号）。
@@ -160,7 +161,7 @@ func (p *Plan) Validate() error {
 	if f.Concurrency < 1 || f.Concurrency > MaxConcurrency {
 		return fmt.Errorf("plan fetch.concurrency must be between 1 and %d", MaxConcurrency)
 	}
-	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 || f.StaggerMS < 0 || f.StaggerMS > 5000 {
+	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 || f.StaggerMS < 0 || f.StaggerMS > 60000 || f.StaggerBaseMS < 0 || f.StaggerBaseMS > 60000 {
 		return errors.New("plan fetch limits are out of range")
 	}
 	if len(p.Datasets) == 0 {
@@ -377,9 +378,10 @@ func planInstanceID(frequency, subjectID string) string { return frequency + "|"
 
 // StaggerDelay 返回按函数名哈希得到的确定性错峰延迟。
 func (p *Plan) StaggerDelay(functionName string) time.Duration {
+	base := time.Duration(p.Fetch.StaggerBaseMS) * time.Millisecond
 	if p.Fetch.StaggerMS <= 0 {
-		return 0
+		return base
 	}
 	sum := sha256.Sum256([]byte(functionName))
-	return time.Duration(int(sum[0])<<8|int(sum[1])) % time.Duration(p.Fetch.StaggerMS+1) * time.Millisecond
+	return base + time.Duration(int(sum[0])<<8|int(sum[1]))%time.Duration(p.Fetch.StaggerMS+1)*time.Millisecond
 }

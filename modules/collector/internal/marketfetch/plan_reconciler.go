@@ -82,10 +82,29 @@ type PlanDeploy struct {
 	// BaseEnvironment 是函数的非受管环境（空间、Storage 应用密钥、日志服务等）。
 	BaseEnvironment map[string]string
 	Networks        map[string]PlanNetwork
+	// NamespaceCapacity 为每个命名空间的函数数上限（0 表示不分片）。
+	NamespaceCapacity int
 }
 
 // pendingJobMaxAge 是云端作业的最长等待时间；超时后丢弃并按进度重新下发（下发是幂等的）。
 const pendingJobMaxAge = 10 * time.Minute
+
+// NamespaceFor 返回函数所在的命名空间：每个命名空间最多 NamespaceCapacity 个函数，按函数名末尾的序号分片；
+// 第一片使用配置的命名空间名，之后依次加 -2、-3……
+func (d PlanDeploy) NamespaceFor(functionName string) string {
+	capacity := d.NamespaceCapacity
+	if capacity <= 0 {
+		return d.Namespace
+	}
+	index := 0
+	if cut := strings.LastIndex(functionName, "-"); cut >= 0 {
+		index, _ = strconv.Atoi(functionName[cut+1:])
+	}
+	if shard := index / capacity; shard > 0 {
+		return fmt.Sprintf("%s-%d", d.Namespace, shard+1)
+	}
+	return d.Namespace
+}
 
 type pendingPlanJob struct {
 	at        time.Time
@@ -111,6 +130,8 @@ type PlanReconciler struct {
 	Now      func() time.Time
 	// Operations 限制同时进行的 SCF 配置操作（各空间共用）；为空表示不限制。
 	Operations chan struct{}
+	// Preflight 在创建新计划前执行（例如 stockcn 的公共日历覆盖期检查）；返回错误则本轮不创建新计划，已有计划照常续跑。
+	Preflight func(ctx context.Context) error
 	// JobWait 与 PollInterval 控制等待一个云端作业的时间。
 	JobWait      time.Duration
 	PollInterval time.Duration
@@ -256,6 +277,11 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	}
 	if !changed {
 		return r.verifyFleet(ctx, previousFunctions)
+	}
+	if r.Preflight != nil {
+		if err := r.Preflight(ctx); err != nil {
+			return r.fail("preflight", err)
+		}
 	}
 	if err := r.validateContent(content); err != nil {
 		return r.fail("capacity", err)
@@ -698,7 +724,7 @@ func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *Fetc
 	reservationID := hex.EncodeToString(reservation[:16])
 	return &cloudnodepb.NodeCreateItem{
 		CloudAccountId: r.Deploy.CloudAccountID, NodeType: "scf-event", TriggerType: "timer", Runtime: "Go1", Handler: "main",
-		Namespace: r.Deploy.Namespace, Region: function.Region, PackageId: r.Deploy.PackageID, Environment: environment,
+		Namespace: r.Deploy.NamespaceFor(function.Name), Region: function.Region, PackageId: r.Deploy.PackageID, Environment: environment,
 		Config: map[string]string{
 			"timeout": timeout, "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
 			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",

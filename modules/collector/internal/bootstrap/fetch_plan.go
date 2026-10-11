@@ -3,12 +3,15 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
@@ -71,11 +74,16 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		},
 		Factory: func(spaceID string) (*marketfetch.PlanReconciler, error) {
 			options := marketfetch.PlanOptions{
-				SpaceID: spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.SymbolsPerFunction,
-				Fetch: cfg.SCFPlan.planFetch(), DefaultLatenessS: defaultLatenessSeconds(spaceID),
+				SpaceID: spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
+				Fetch: cfg.SCFPlan.fetchFor(spaceID), DefaultLatenessS: defaultLatenessSeconds(spaceID),
+			}
+			var preflight func(context.Context) error
+			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+				preflight = stockCNCalendarPreflight
 			}
 			reconciler := &marketfetch.PlanReconciler{
-				SpaceID: spaceID, Options: options, Deploy: deploy,
+				Preflight: preflight,
+				SpaceID:   spaceID, Options: options, Deploy: deploy,
 				Groups: &marketfetch.Reconciler{
 					Tasks: dbm.Tasks(), Symbols: source, ResolveSourceID: marketwiring.DefaultSourceID, ResolveSymbol: marketwiring.ResolveSymbol,
 					TaskFilter: func(params *domain.CollectParams) bool { return params.TimerManaged() },
@@ -98,4 +106,28 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	}
 	log.Infof("collector fetch plan reconciliation enabled spaces=%s", strings.Join(spaces, ","))
 	return nil
+}
+
+// stockCNCalendarPreflight 检查公共交易日历的覆盖期：不足 60 天告警，不足 14 天或已过期则拒绝创建新计划
+// （函数在日历失效时无法判断交易周期）。
+func stockCNCalendarPreflight(ctx context.Context) error {
+	calendar, err := stockmarket.LoadCalendar(stockCNCalendarPath())
+	if err != nil {
+		return fmt.Errorf("load stockcn calendar: %w", err)
+	}
+	now := time.Now()
+	if err := calendar.CheckHorizon(now, 14); err != nil {
+		return fmt.Errorf("stockcn calendar coverage is too short: %w", err)
+	}
+	if err := calendar.CheckHorizon(now, 60); err != nil {
+		log.WarnContextf(ctx, "stockcn calendar coverage is running out: %v", err)
+	}
+	return nil
+}
+
+func stockCNCalendarPath() string {
+	if path := strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")); path != "" {
+		return path
+	}
+	return "./config/markets/stockcn/calendar.yaml"
 }

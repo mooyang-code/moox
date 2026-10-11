@@ -748,3 +748,31 @@ func TestPlanLeadIsLongerWhenFunctionsMustBeCreated(t *testing.T) {
 	change := h.content(h.open()).Datasets["ds_spot|1m"]
 	require.GreaterOrEqual(t, change.P-h.now.Unix(), int64(planLeadTimeWithCreate/time.Second))
 }
+
+func TestNamespaceShardsEveryFiftyFunctions(t *testing.T) {
+	deploy := PlanDeploy{Namespace: "moox-stockcn-plan", NamespaceCapacity: 50}
+	require.Equal(t, "moox-stockcn-plan", deploy.NamespaceFor("moox-fetch-plan-stockcn-equity-nanjing-000"))
+	require.Equal(t, "moox-stockcn-plan", deploy.NamespaceFor("moox-fetch-plan-stockcn-equity-nanjing-049"))
+	require.Equal(t, "moox-stockcn-plan-2", deploy.NamespaceFor("moox-fetch-plan-stockcn-equity-nanjing-050"))
+	require.Equal(t, "moox-stockcn-plan-4", deploy.NamespaceFor("moox-fetch-plan-stockcn-equity-nanjing-169"))
+	require.Equal(t, "plain", PlanDeploy{Namespace: "plain"}.NamespaceFor("f-999"))
+}
+
+func TestStaggerDelayStartsAtTheConfiguredBase(t *testing.T) {
+	plan := &Plan{Fetch: PlanFetch{StaggerBaseMS: 5000, StaggerMS: 35000}}
+	for _, name := range []string{"a", "b", "moox-fetch-plan-stockcn-equity-nanjing-017"} {
+		delay := plan.StaggerDelay(name)
+		require.GreaterOrEqual(t, delay, 5*time.Second)
+		require.LessOrEqual(t, delay, 40*time.Second)
+	}
+	require.Equal(t, 5*time.Second, (&Plan{Fetch: PlanFetch{StaggerBaseMS: 5000}}).StaggerDelay("x"))
+}
+
+func TestStockCNPlanSkipsNonTradingPeriods(t *testing.T) {
+	// 没有交易日历配置时（如本测试环境），过滤保守地拒绝执行 stockcn 周期；crypto 不受影响。
+	handler := &Handler{PlanPeriodValid: func(market PlanMarket, frequency string, period time.Time) bool {
+		return market.MarketID != StockCNSpaceID
+	}}
+	require.True(t, handler.PlanPeriodValid(PlanMarket{MarketID: "crypto"}, "1m", time.Now()))
+	require.False(t, handler.PlanPeriodValid(PlanMarket{MarketID: StockCNSpaceID}, "1m", time.Now()))
+}

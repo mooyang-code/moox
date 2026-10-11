@@ -30,6 +30,8 @@ type SCFPlanConfig struct {
 	// 旧 Invoke 函数不在 VPC 内，仍走公网入口，直到 6b 清理。
 	AccessRoutes map[string]SCFAccessEndpoint `yaml:"access_routes"`
 	Fetch        SCFPlanFetchConfig           `yaml:"fetch"`
+	// Spaces 是按空间的覆盖项：每函数标的数与拉取参数（stockcn 与 crypto 的限流、错峰不同）。
+	Spaces map[string]SCFPlanSpaceConfig `yaml:"spaces"`
 }
 
 // SCFPlanFetchConfig 是下发给函数的拉取参数（按数据源）。
@@ -40,20 +42,43 @@ type SCFPlanFetchConfig struct {
 	FeedConcurrency  int `yaml:"feed_concurrency"`
 	RequestTimeoutMS int `yaml:"request_timeout_ms"`
 	StorageTimeoutMS int `yaml:"storage_timeout_ms"`
+	StaggerBaseMS    int `yaml:"stagger_base_ms"`
 	StaggerMS        int `yaml:"stagger_ms"`
+}
+
+// SCFPlanSpaceConfig 覆盖某个空间的每函数标的数与拉取参数；字段为零表示沿用全局值。
+type SCFPlanSpaceConfig struct {
+	SymbolsPerFunction int                 `yaml:"symbols_per_function"`
+	Fetch              *SCFPlanFetchConfig `yaml:"fetch"`
+}
+
+// maxFunctionsPerNamespace 是腾讯云每个命名空间的函数数上限，超过后分到下一个命名空间。
+const maxFunctionsPerNamespace = 50
+
+func (c SCFPlanConfig) symbolsPerFunction(spaceID string) int {
+	if override := c.Spaces[strings.ToLower(spaceID)]; override.SymbolsPerFunction > 0 {
+		return override.SymbolsPerFunction
+	}
+	return c.SymbolsPerFunction
+}
+
+func (c SCFPlanConfig) fetchFor(spaceID string) marketfetch.PlanFetch {
+	fetch := c.Fetch
+	if override := c.Spaces[strings.ToLower(spaceID)].Fetch; override != nil {
+		fetch = *override
+	}
+	return marketfetch.PlanFetch{
+		Concurrency: fetch.Concurrency, RPS: fetch.RPS, Burst: fetch.Burst, FeedConcurrency: fetch.FeedConcurrency,
+		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS, StaggerBaseMS: fetch.StaggerBaseMS, StaggerMS: fetch.StaggerMS,
+	}
 }
 
 func defaultSCFPlan() SCFPlanConfig {
 	return SCFPlanConfig{
 		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: marketfetch.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
 		Fetch: SCFPlanFetchConfig{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerMS: 1500},
-	}
-}
-
-func (c SCFPlanConfig) planFetch() marketfetch.PlanFetch {
-	return marketfetch.PlanFetch{
-		Concurrency: c.Fetch.Concurrency, RPS: c.Fetch.RPS, Burst: c.Fetch.Burst, FeedConcurrency: c.Fetch.FeedConcurrency,
-		RequestTimeoutMS: c.Fetch.RequestTimeoutMS, StorageTimeoutMS: c.Fetch.StorageTimeoutMS, StaggerMS: c.Fetch.StaggerMS,
+		// stockcn：每函数 40 个标的；错峰窗口第 5～40 秒；国内数据源限流较保守。
+		Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {SymbolsPerFunction: 40, Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}}},
 	}
 }
 
@@ -122,7 +147,7 @@ func (c *Config) fetchPlanDeploy() (marketfetch.PlanDeploy, error) {
 	}
 	return marketfetch.PlanDeploy{
 		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.PackageID, Namespace: c.SCFPlan.Namespace, MemoryMB: c.SCFPlan.MemoryMB,
-		BaseEnvironment: environment, Networks: c.SCFRegions,
+		BaseEnvironment: environment, Networks: c.SCFRegions, NamespaceCapacity: maxFunctionsPerNamespace,
 	}, nil
 }
 

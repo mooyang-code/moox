@@ -51,6 +51,15 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	if err != nil {
 		return respond(false, err.Error(), nil)
 	}
+	if h.PlanPeriodValid != nil {
+		kept := planned[:0]
+		for _, item := range planned {
+			if h.PlanPeriodValid(plan.Market, item.Frequency, item.Period) {
+				kept = append(kept, item)
+			}
+		}
+		planned = kept
+	}
 	if len(planned) == 0 {
 		return respond(true, "no_work", nil)
 	}

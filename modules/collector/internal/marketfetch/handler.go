@@ -40,10 +40,12 @@ type Handler struct {
 	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
 	Now                    func() time.Time
-	Reporter               ItemReporter
-	CLSReserve             time.Duration
-	Metrics                *Metrics
-	MetricsReporter        MetricsReporter
+	// PlanPeriodValid 判断采集计划里某个频率的目标周期是否需要执行（stockcn 用交易日历跳过非交易周期）；nil 表示总是执行。
+	PlanPeriodValid func(market PlanMarket, frequency string, period time.Time) bool
+	Reporter        ItemReporter
+	CLSReserve      time.Duration
+	Metrics         *Metrics
+	MetricsReporter MetricsReporter
 }
 
 // MetricsReporter is the common one-shot observability sink used by long-lived
