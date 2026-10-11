@@ -935,6 +935,24 @@ func (s *Service) applyOrder(
 		), nil
 	}
 	if current.FilledQuantity.Cmp(storedFilled) > 0 {
+		// 订单累计成交已经领先本地成交明细：终态转换会释放预留，但余额快照尚未反映这些成交的支出。
+		// 与成交入账一样，先抬高待确认水位并关闭准入，等完整同步补录明细、余额覆盖该时间后才恢复。
+		if account.ExecutionMode != string(exchange.ExecutionModePaper) {
+			until := current.UpdatedAt.UnixMilli()
+			if until <= 0 {
+				until = s.now().UnixMilli()
+			}
+			if markErr := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+				if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, until); err != nil {
+					return err
+				}
+				return tx.UpdateTradingAccountReadiness(
+					account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), awaitingBalanceReason,
+				)
+			}); markErr != nil {
+				return false, false, "", markErr
+			}
+		}
 		return false, externalChanged, fmt.Sprintf(
 			"order %s snapshot is ahead of ingested Fills",
 			record.OrderID,

@@ -63,8 +63,9 @@ type Service struct {
 
 // strategyLock 是一把定义锁及其当前的持有与等待者数。
 type strategyLock struct {
-	mu   sync.Mutex
-	refs int
+	// token 是容量 1 的信号量：用通道才能在等待期间响应 context 取消（sync.Mutex 的 Lock 不可取消）
+	token chan struct{}
+	refs  int
 }
 
 func (s *Service) nowTime() time.Time {
@@ -74,22 +75,21 @@ func (s *Service) nowTime() time.Time {
 	return time.Now().UTC()
 }
 
-// lockStrategy 串行化同一定义下的修改与实例启停。
-func (s *Service) lockStrategy(strategyID string) func() {
+// lockStrategy 串行化同一定义下的修改与实例启停。等待期间响应 ctx：期限到了返回错误并回收引用计数，
+// 不会让已超时的 RPC 处理协程继续排队等一个后台长时间持有的锁。
+func (s *Service) lockStrategy(ctx context.Context, strategyID string) (func(), error) {
 	s.locksMu.Lock()
 	if s.locks == nil {
 		s.locks = make(map[string]*strategyLock)
 	}
 	lock := s.locks[strategyID]
 	if lock == nil {
-		lock = &strategyLock{}
+		lock = &strategyLock{token: make(chan struct{}, 1)}
 		s.locks[strategyID] = lock
 	}
 	lock.refs++
 	s.locksMu.Unlock()
-	lock.mu.Lock()
-	return func() {
-		lock.mu.Unlock()
+	release := func() {
 		s.locksMu.Lock()
 		lock.refs--
 		if lock.refs == 0 {
@@ -97,24 +97,41 @@ func (s *Service) lockStrategy(strategyID string) func() {
 		}
 		s.locksMu.Unlock()
 	}
+	select {
+	case lock.token <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
+	return func() {
+		<-lock.token
+		release()
+	}, nil
 }
 
 // lockStrategies 按 ID 排序依次加锁（去重），避免两个请求以相反顺序加锁而死锁。
-func (s *Service) lockStrategies(strategyIDs ...string) func() {
+// 任何一把等待失败都释放已取得的锁。
+func (s *Service) lockStrategies(ctx context.Context, strategyIDs ...string) (func(), error) {
 	ids := append([]string(nil), strategyIDs...)
 	sort.Strings(ids)
 	unlocks := make([]func(), 0, len(ids))
-	for i, id := range ids {
-		if i > 0 && ids[i-1] == id {
-			continue
-		}
-		unlocks = append(unlocks, s.lockStrategy(id))
-	}
-	return func() {
+	releaseAll := func() {
 		for i := len(unlocks) - 1; i >= 0; i-- {
 			unlocks[i]()
 		}
 	}
+	for i, id := range ids {
+		if i > 0 && ids[i-1] == id {
+			continue
+		}
+		unlock, err := s.lockStrategy(ctx, id)
+		if err != nil {
+			releaseAll()
+			return nil, err
+		}
+		unlocks = append(unlocks, unlock)
+	}
+	return releaseAll, nil
 }
 
 // lockInstance 锁住实例当前引用的定义（以及 extra 中的定义，例如改绑的目标），返回拿锁后重读的实例；
@@ -125,7 +142,10 @@ func (s *Service) lockInstance(ctx context.Context, instanceID string, extra ...
 		return store.Instance{}, nil, err
 	}
 	for attempt := 0; ; attempt++ {
-		unlock := s.lockStrategies(append([]string{instance.StrategyID}, extra...)...)
+		unlock, lockErr := s.lockStrategies(ctx, append([]string{instance.StrategyID}, extra...)...)
+		if lockErr != nil {
+			return store.Instance{}, nil, lockErr
+		}
 		current, err := s.Store.GetInstance(ctx, instanceID)
 		if err != nil {
 			unlock()
@@ -254,7 +274,10 @@ func (s *Service) UpdateStrategy(ctx context.Context, req *strategypb.UpdateStra
 	if err != nil {
 		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
-	unlock := s.lockStrategy(req.GetStrategyId())
+	unlock, lockErr := s.lockStrategy(ctx, req.GetStrategyId())
+	if lockErr != nil {
+		return &strategypb.UpdateStrategyRsp{RetInfo: failure(lockErr)}, nil
+	}
 	defer unlock()
 	def := store.Definition{StrategyID: req.GetStrategyId(), Name: strategy.Name, DSLYaml: req.GetDslYaml(), DSLHash: hash, UpdatedAt: s.nowTime()}
 	if err := s.Store.UpdateDefinition(ctx, def); err != nil {
@@ -316,7 +339,10 @@ func (s *Service) DeleteStrategy(ctx context.Context, req *strategypb.DeleteStra
 	if req == nil || strings.TrimSpace(req.GetStrategyId()) == "" {
 		return &strategypb.DeleteStrategyRsp{RetInfo: invalid(errors.New("strategy_id 不能为空"))}, nil
 	}
-	unlock := s.lockStrategy(req.GetStrategyId())
+	unlock, lockErr := s.lockStrategy(ctx, req.GetStrategyId())
+	if lockErr != nil {
+		return &strategypb.DeleteStrategyRsp{RetInfo: failure(lockErr)}, nil
+	}
 	defer unlock()
 	if err := s.Store.SoftDeleteDefinition(ctx, req.GetStrategyId(), s.nowTime()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

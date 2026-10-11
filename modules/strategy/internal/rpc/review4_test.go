@@ -31,8 +31,8 @@ func TestRebindAndDeleteFollowConcurrentRebind(t *testing.T) {
 			third := demoDSL + "\n# 第三个定义\n"
 			h.createStrategy("s3", third)
 			h.createInstance("i1", "s1", "view_a", "", false)
-			unlockFirst := h.service.lockStrategy("s1")
-			unlockThird := h.service.lockStrategy("s3")
+			unlockFirst := mustLockStrategy(h.service, "s1")
+			unlockThird := mustLockStrategy(h.service, "s3")
 			type result struct {
 				code int32
 				msg  string

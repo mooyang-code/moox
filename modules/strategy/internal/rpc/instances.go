@@ -48,7 +48,10 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 			return &strategypb.CreateStrategyInstanceRsp{RetInfo: failure(err)}, nil
 		}
 	}
-	unlock := s.lockStrategy(v.GetStrategyId())
+	unlock, lockErr := s.lockStrategy(ctx, v.GetStrategyId())
+	if lockErr != nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: failure(lockErr)}, nil
+	}
 	defer unlock()
 	now := s.nowTime()
 	instance := store.Instance{InstanceID: instanceID, StrategyID: v.GetStrategyId(), SpaceID: scoped, ViewID: strings.TrimSpace(v.GetViewId()), LogicalAccountID: optionalString(v.GetLogicalAccountId()), CreatedAt: now, UpdatedAt: now}

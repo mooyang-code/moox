@@ -1521,3 +1521,38 @@ func TestAccountLockWaitHonorsCallerDeadline(t *testing.T) {
 		cancel()
 	}
 }
+
+// 终态订单更新先于成交明细到达：订单累计成交领先本地明细时，终态转换会释放预留，但余额还没有反映这些成交——
+// 必须先关闭准入，直到完整同步补录明细且余额覆盖该时间。
+func TestOrderAheadOfFillDetailsClosesAdmissionUntilBalanceCovers(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	open := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.Zero(),
+		Status:    exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_000),
+	}
+	base := &syncAdapter{order: open}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 3_000, "")
+	}))
+
+	// 撤单更新显示已成交 0.5，但本地还没有任何成交明细
+	canceled := open
+	canceled.FilledQuantity, canceled.Status, canceled.UpdatedAt = shared.MustDecimal("0.5"), exchange.OrderStatusCanceled, time.UnixMilli(3_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", canceled))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready, "订单累计成交领先明细时不得保持可交易")
+	require.Equal(t, int64(3_000), account.BalancePendingUntil)
+}
