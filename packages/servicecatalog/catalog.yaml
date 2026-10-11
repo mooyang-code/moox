@@ -584,6 +584,8 @@ components:
         # SyncSubjects 在服务端最多等 170 秒（交易所标的清单约 17MB），路由预算要大于它。
         method_timeouts_ms:
           SyncSubjects: 180000
+          CheckKline: 310000
+          SubmitKlineBackfill: 310000
         max_body_bytes: 4194304
         methods:
           - GetTaskList
@@ -600,6 +602,12 @@ components:
           - CancelKlineResampleBackfill
           - GetKlineResampleBackfill
           - SyncSubjects
+          - CheckKline
+          - SubmitKlineBackfill
+          - GetKlineBackfill
+          - ListKlineBackfills
+          - CancelKlineBackfill
+          - GetFetchPlans
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -608,6 +616,10 @@ components:
           - GetDataTypeConfigs
           - GetDataTypeConfigWithFields
           - GetKlineResampleBackfill
+          - CheckKline
+          - GetKlineBackfill
+          - ListKlineBackfills
+          - GetFetchPlans
         acl:
           - methods:
               - GetTaskList
@@ -623,6 +635,12 @@ components:
               - StartKlineResampleBackfill
               - CancelKlineResampleBackfill
               - GetKlineResampleBackfill
+              - CheckKline
+              - SubmitKlineBackfill
+              - GetKlineBackfill
+              - ListKlineBackfills
+              - CancelKlineBackfill
+              - GetFetchPlans
             callers:
               - console
               - moox-cli

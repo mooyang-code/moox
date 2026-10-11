@@ -47,6 +47,18 @@ type CollectMgrService interface {
 	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error)
 	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
 	SyncSubjects(ctx context.Context, req *SyncSubjectsReq) (*SyncSubjectsRsp, error)
+	// CheckKline ----- K 线完整性检查与补采 -----
+	CheckKline(ctx context.Context, req *CheckKlineReq) (*CheckKlineRsp, error)
+
+	SubmitKlineBackfill(ctx context.Context, req *SubmitKlineBackfillReq) (*SubmitKlineBackfillRsp, error)
+
+	GetKlineBackfill(ctx context.Context, req *GetKlineBackfillReq) (*GetKlineBackfillRsp, error)
+
+	ListKlineBackfills(ctx context.Context, req *ListKlineBackfillsReq) (*ListKlineBackfillsRsp, error)
+
+	CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq) (*CancelKlineBackfillRsp, error)
+	// GetFetchPlans ----- 采集计划 -----
+	GetFetchPlans(ctx context.Context, req *GetFetchPlansReq) (*GetFetchPlansRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -301,6 +313,114 @@ func CollectMgrService_SyncSubjects_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
+func CollectMgrService_CheckKline_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CheckKlineReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).CheckKline(ctx, reqbody.(*CheckKlineReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_SubmitKlineBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SubmitKlineBackfillReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).SubmitKlineBackfill(ctx, reqbody.(*SubmitKlineBackfillReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_GetKlineBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetKlineBackfillReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetKlineBackfill(ctx, reqbody.(*GetKlineBackfillReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListKlineBackfills_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListKlineBackfillsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListKlineBackfills(ctx, reqbody.(*ListKlineBackfillsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_CancelKlineBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CancelKlineBackfillReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).CancelKlineBackfill(ctx, reqbody.(*CancelKlineBackfillReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_GetFetchPlans_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFetchPlansReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetFetchPlans(ctx, reqbody.(*GetFetchPlansReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -361,6 +481,30 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/SyncSubjects",
 			Func: CollectMgrService_SyncSubjects_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/CheckKline",
+			Func: CollectMgrService_CheckKline_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/SubmitKlineBackfill",
+			Func: CollectMgrService_SubmitKlineBackfill_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetKlineBackfill",
+			Func: CollectMgrService_GetKlineBackfill_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListKlineBackfills",
+			Func: CollectMgrService_ListKlineBackfills_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/CancelKlineBackfill",
+			Func: CollectMgrService_CancelKlineBackfill_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetFetchPlans",
+			Func: CollectMgrService_GetFetchPlans_Handler,
 		},
 	},
 }
@@ -468,6 +612,28 @@ func (s *UnimplementedCollectMgr) SyncSubjects(ctx context.Context, req *SyncSub
 	return nil, errors.New("rpc SyncSubjects of service CollectMgr is not implemented")
 }
 
+// CheckKline ----- K 线完整性检查与补采 -----
+func (s *UnimplementedCollectMgr) CheckKline(ctx context.Context, req *CheckKlineReq) (*CheckKlineRsp, error) {
+	return nil, errors.New("rpc CheckKline of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) SubmitKlineBackfill(ctx context.Context, req *SubmitKlineBackfillReq) (*SubmitKlineBackfillRsp, error) {
+	return nil, errors.New("rpc SubmitKlineBackfill of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) GetKlineBackfill(ctx context.Context, req *GetKlineBackfillReq) (*GetKlineBackfillRsp, error) {
+	return nil, errors.New("rpc GetKlineBackfill of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ListKlineBackfills(ctx context.Context, req *ListKlineBackfillsReq) (*ListKlineBackfillsRsp, error) {
+	return nil, errors.New("rpc ListKlineBackfills of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq) (*CancelKlineBackfillRsp, error) {
+	return nil, errors.New("rpc CancelKlineBackfill of service CollectMgr is not implemented")
+}
+
+// GetFetchPlans ----- 采集计划 -----
+func (s *UnimplementedCollectMgr) GetFetchPlans(ctx context.Context, req *GetFetchPlansReq) (*GetFetchPlansRsp, error) {
+	return nil, errors.New("rpc GetFetchPlans of service CollectMgr is not implemented")
+}
+
 type UnimplementedMarketFetchRuntime struct{}
 
 func (s *UnimplementedMarketFetchRuntime) ClaimTimerBatch(ctx context.Context, req *ClaimTimerBatchReq) (*ClaimTimerBatchRsp, error) {
@@ -510,6 +676,18 @@ type CollectMgrClientProxy interface {
 	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq, opts ...client.Option) (rsp *GetKlineResampleBackfillRsp, err error)
 	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
 	SyncSubjects(ctx context.Context, req *SyncSubjectsReq, opts ...client.Option) (rsp *SyncSubjectsRsp, err error)
+	// CheckKline ----- K 线完整性检查与补采 -----
+	CheckKline(ctx context.Context, req *CheckKlineReq, opts ...client.Option) (rsp *CheckKlineRsp, err error)
+
+	SubmitKlineBackfill(ctx context.Context, req *SubmitKlineBackfillReq, opts ...client.Option) (rsp *SubmitKlineBackfillRsp, err error)
+
+	GetKlineBackfill(ctx context.Context, req *GetKlineBackfillReq, opts ...client.Option) (rsp *GetKlineBackfillRsp, err error)
+
+	ListKlineBackfills(ctx context.Context, req *ListKlineBackfillsReq, opts ...client.Option) (rsp *ListKlineBackfillsRsp, err error)
+
+	CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq, opts ...client.Option) (rsp *CancelKlineBackfillRsp, err error)
+	// GetFetchPlans ----- 采集计划 -----
+	GetFetchPlans(ctx context.Context, req *GetFetchPlansReq, opts ...client.Option) (rsp *GetFetchPlansRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -795,6 +973,126 @@ func (c *CollectMgrClientProxyImpl) SyncSubjects(ctx context.Context, req *SyncS
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncSubjectsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) CheckKline(ctx context.Context, req *CheckKlineReq, opts ...client.Option) (*CheckKlineRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CheckKline")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("CheckKline")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CheckKlineRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) SubmitKlineBackfill(ctx context.Context, req *SubmitKlineBackfillReq, opts ...client.Option) (*SubmitKlineBackfillRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/SubmitKlineBackfill")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("SubmitKlineBackfill")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SubmitKlineBackfillRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetKlineBackfill(ctx context.Context, req *GetKlineBackfillReq, opts ...client.Option) (*GetKlineBackfillRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetKlineBackfill")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetKlineBackfill")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetKlineBackfillRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListKlineBackfills(ctx context.Context, req *ListKlineBackfillsReq, opts ...client.Option) (*ListKlineBackfillsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListKlineBackfills")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListKlineBackfills")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListKlineBackfillsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq, opts ...client.Option) (*CancelKlineBackfillRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CancelKlineBackfill")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("CancelKlineBackfill")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CancelKlineBackfillRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetFetchPlans(ctx context.Context, req *GetFetchPlansReq, opts ...client.Option) (*GetFetchPlansRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetFetchPlans")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetFetchPlans")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetFetchPlansRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

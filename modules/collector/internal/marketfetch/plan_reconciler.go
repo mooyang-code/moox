@@ -46,6 +46,7 @@ type planStore interface {
 
 type planCloud interface {
 	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
+	ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
 	SubmitCreateNodes(context.Context, string, []*cloudnodepb.NodeCreateItem) (string, error)
 	SubmitRuntimeConfigs(context.Context, string, []*cloudnodepb.NodeRuntimeConfigPatch) (string, error)
 	GetBatchResults(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, []scfinvoker.BatchItemResult, error)
@@ -956,4 +957,104 @@ func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRec
 		return nil
 	}
 	return r.Activity.AppendActivityLogs(ctx, r.SpaceID, entries)
+}
+
+// BackfillFunctionName 返回某市场、地域的补采函数名。名称含 PlanFleetMarker，旧的 Invoke 节点池不会选用它。
+func BackfillFunctionName(spaceID, marketType, region string) string {
+	region = strings.TrimPrefix(strings.ToLower(region), "ap-")
+	return fmt.Sprintf("moox-fetch%sbackfill-%s-%s-%s", PlanFleetMarker, planNameSanitizer.Replace(strings.ToLower(spaceID)),
+		planNameSanitizer.Replace(strings.ToLower(marketType)), planNameSanitizer.Replace(region))
+}
+
+// BackfillRegion 返回某市场补采函数所在的地域（市场白名单中的第一个地域）。
+func (r *PlanReconciler) BackfillRegion(marketType string) (string, bool) {
+	regions := r.Options.Markets[strings.ToLower(marketType)]
+	if len(regions) == 0 {
+		return "", false
+	}
+	return regions[0], true
+}
+
+// BackfillReservedConcurrency 是补采函数的最大并发实例数，由平台的函数级预留并发硬性限制。
+const BackfillReservedConcurrency = 5
+
+// EnsureBackfillFunction 保证该市场的补采函数存在（与实时函数同一代码包，不带定时器），返回函数名。
+func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType string) (string, error) {
+	region, ok := r.BackfillRegion(marketType)
+	if !ok {
+		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
+	}
+	name := BackfillFunctionName(r.SpaceID, marketType, region)
+	release, err := r.acquireOperation(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	nodes, err := r.Cloud.ListMarketFetchers(ctx, r.SpaceID)
+	if err != nil {
+		return "", fmt.Errorf("list market fetchers: %w", err)
+	}
+	for _, node := range nodes {
+		if node.NodeID == name {
+			return name, nil
+		}
+	}
+	network, ok := r.Deploy.Networks[region]
+	if !ok || network.VPCID == "" || network.SubnetID == "" {
+		return "", fmt.Errorf("region %s has no VPC and subnet configured", region)
+	}
+	access, err := r.Access(region)
+	if err != nil {
+		return "", err
+	}
+	environment := map[string]string{"MOOX_MARKET_FETCH_MODE": "backfill", "MOOX_FETCH_TIMEOUT_SECONDS": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)}
+	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY", "MOOX_GATEWAY_COMPRESSION"} {
+		if value, ok := access[key]; ok {
+			environment[key] = value
+		}
+	}
+	for key, value := range r.Deploy.BaseEnvironment {
+		if _, set := environment[key]; !set {
+			environment[key] = value
+		}
+	}
+	memory := r.Deploy.MemoryMB
+	if memory <= 0 {
+		memory = 64
+	}
+	reservation := sha256.Sum256([]byte("backfill|" + r.SpaceID + "|" + name))
+	item := &cloudnodepb.NodeCreateItem{
+		CloudAccountId: r.Deploy.CloudAccountID, NodeType: "scf-event", TriggerType: "invoke", Runtime: "Go1", Handler: "main",
+		Namespace: r.Deploy.Namespace, Region: region, PackageId: r.Deploy.PackageID, Environment: environment,
+		Config: map[string]string{
+			"timeout": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds), "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
+			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
+			"reserved_concurrency_mem": strconv.Itoa(BackfillReservedConcurrency * memory),
+		},
+		Metadata:            mustStruct(map[string]any{"function_name": name, "node_id": name, "biz_type": "market_fetcher", "function_mode": "kline", "memory_size": memory, "timeout_seconds": tencent.CollectorTimerTimeoutSeconds}),
+		CreateReservationId: hex.EncodeToString(reservation[:16]),
+	}
+	lease, err := r.ensureLease(ctx)
+	if err != nil {
+		return "", fmt.Errorf("publish lease: %w", err)
+	}
+	item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+	jobID, err := r.Cloud.SubmitCreateNodes(ctx, r.SpaceID, []*cloudnodepb.NodeCreateItem{item})
+	if err != nil {
+		return "", err
+	}
+	items, terminal, err := r.waitJob(ctx, jobID)
+	if err != nil {
+		return "", err
+	}
+	if !terminal {
+		return "", fmt.Errorf("backfill function %s is still being created", name)
+	}
+	for _, result := range items {
+		if !result.Success {
+			return "", fmt.Errorf("create backfill function %s: %s", name, result.Message)
+		}
+	}
+	r.releaseLease(ctx)
+	return name, nil
 }

@@ -85,7 +85,8 @@ const collectorPlanEnvironmentKey = "MOOX_MARKET_FETCH_PLAN"
 // ValidateCollectorMarketFetchEnvironment checks common Invoke and Timer
 // dependencies. Claim and Storage use the same Access identity and connection.
 func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
-	if strings.TrimSpace(values[collectorPlanEnvironmentKey]) != "" {
+	// 采集计划函数与补采函数（MOOX_MARKET_FETCH_MODE=backfill，不带计划）都不连 EventBus。
+	if strings.TrimSpace(values[collectorPlanEnvironmentKey]) != "" || strings.TrimSpace(values["MOOX_MARKET_FETCH_MODE"]) == "backfill" {
 		return validateCollectorPlanEnvironment(values)
 	}
 	for _, key := range collectorInternalGatewayEnvironmentKeys {

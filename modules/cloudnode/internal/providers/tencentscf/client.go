@@ -170,6 +170,26 @@ func (c *Client) UpdateFunctionEventInvokeConfig(ctx context.Context, req Update
 	return out, nil
 }
 
+// PutReservedConcurrencyConfigRequest 设置函数的预留并发内存配额（MB）：并发实例数 × 函数内存。
+type PutReservedConcurrencyConfigRequest struct {
+	FunctionRef
+	ReservedConcurrencyMem int64
+}
+
+// PutReservedConcurrencyConfig 为函数预留并发配额。预留配额同时是该函数并发上限，用于硬性限制补采函数的实例数。
+func (c *Client) PutReservedConcurrencyConfig(ctx context.Context, req PutReservedConcurrencyConfigRequest) error {
+	client, err := c.newClient(req.Region)
+	if err != nil {
+		return err
+	}
+	request := scf.NewPutReservedConcurrencyConfigRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	request.ReservedConcurrencyMem = common.Uint64Ptr(uint64(req.ReservedConcurrencyMem))
+	_, err = client.PutReservedConcurrencyConfigWithContext(ctx, request)
+	return err
+}
+
 // InvokeFunctionRequest describes a SCF invocation.
 type InvokeFunctionRequest struct {
 	Region       string

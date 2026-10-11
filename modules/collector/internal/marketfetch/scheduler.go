@@ -2796,6 +2796,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// MarketFetchEvent 构造调用行情函数的事件（手动与补采调用使用）。
+func MarketFetchEvent(req Request) (map[string]any, error) { return marketFetchEvent(req) }
+
 func marketFetchEvent(req Request) (map[string]any, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {

@@ -178,7 +178,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	svc.SetSubjectSyncer(subjectSyncer)
 	registerMarketFetchSchedule(ctx, s, cfg, dbm, dnsSnapshot, marketFetchMetrics, process)
-	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics); err != nil {
+	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc); err != nil {
 		return nil, err
 	}
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {

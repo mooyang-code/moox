@@ -164,3 +164,19 @@ func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan strin
 	}
 	return nil
 }
+
+// ListAll 按先后顺序返回该空间全部采集计划（含未生效的），用于还原历史上的应有标的。
+func (r *FetchPlanRepository) ListAll(ctx context.Context, spaceID string) ([]*FetchPlanRecord, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("fetch plan repository is not initialized")
+	}
+	var rows []fetchPlanRow
+	if err := r.db.WithContext(ctx).Where("c_space_id = ?", strings.TrimSpace(spaceID)).Order("c_id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]*FetchPlanRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, row.record())
+	}
+	return records, nil
+}

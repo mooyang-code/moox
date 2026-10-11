@@ -130,6 +130,10 @@ func (c *fakePlanCloud) ListTimerMarketFetchers(context.Context, string) ([]scfi
 	return nodes, nil
 }
 
+func (c *fakePlanCloud) ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return nil, nil
+}
+
 func (c *fakePlanCloud) newJob(names []string) string {
 	c.submits++
 	id := fmt.Sprintf("job-%d", c.submits)

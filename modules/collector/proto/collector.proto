@@ -391,6 +391,155 @@ message ClaimTimerBatchRsp {
   int64 period_deadline_at = 4;
 }
 
+// ===== K 线完整性检查与补采 =====
+
+message CheckKlineReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+  // from 含、to 不含，RFC3339。
+  string from = 4;
+  string to = 5;
+  // deep 为 true 时额外校验每根 K 线的字段齐全。
+  bool deep = 6;
+}
+
+message KlineGap {
+  string dataset_id = 1;
+  string frequency = 2;
+  string subject_id = 3;
+  string from = 4;
+  // to 是缺失区间的右开端点。
+  string to = 5;
+  int32 missing = 6;
+}
+
+message CheckKlineRsp {
+  common.RetInfo ret_info = 1;
+  repeated KlineGap gaps = 2;
+  int32 expected = 3;
+  int32 missing = 4;
+  bool truncated = 5;
+}
+
+message SubmitKlineBackfillReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+  string from = 4;
+  string to = 5;
+  // force 为 true 时不检查缺口，范围内应有的 K 线全部重拉。
+  bool force = 6;
+}
+
+message SubmitKlineBackfillRsp {
+  common.RetInfo ret_info = 1;
+  // job_id 为空表示范围内没有缺口。
+  string job_id = 2;
+  int32 chunks = 3;
+}
+
+message KlineBackfillChunk {
+  string dataset_id = 1;
+  string frequency = 2;
+  string subject_id = 3;
+  string from = 4;
+  string to = 5;
+  string status = 6;
+  int32 attempts = 7;
+  string last_error = 8;
+}
+
+message KlineBackfillJob {
+  string job_id = 1;
+  string space_id = 2;
+  // source 取值 manual、auto。
+  string source = 3;
+  string status = 4;
+  string last_error = 5;
+  string request = 6;
+  string created_at = 7;
+  string updated_at = 8;
+  int32 pending = 9;
+  int32 running = 10;
+  int32 succeeded = 11;
+  int32 failed = 12;
+  int32 canceled = 13;
+}
+
+message GetKlineBackfillReq {
+  string job_id = 1;
+}
+
+message GetKlineBackfillRsp {
+  common.RetInfo ret_info = 1;
+  KlineBackfillJob job = 2;
+  repeated KlineBackfillChunk failed_chunks = 3;
+}
+
+message ListKlineBackfillsReq {
+  string space_id = 1;
+  common.Page page = 2;
+}
+
+message ListKlineBackfillsRsp {
+  common.RetInfo ret_info = 1;
+  repeated KlineBackfillJob items = 2;
+  common.PageResult page = 3;
+}
+
+message CancelKlineBackfillReq {
+  string job_id = 1;
+}
+
+message CancelKlineBackfillRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ===== 采集计划（SCF 定时触发采集的分配与变更状态） =====
+
+message GetFetchPlansReq {
+  string space_id = 1;
+}
+
+message FetchDatasetState {
+  string dataset_id = 1;
+  string frequency = 2;
+  string hash = 3;
+  int32 subject_count = 4;
+  // effective_period 是最近一次变更的生效周期（RFC3339），没有则为空。
+  string effective_period = 5;
+}
+
+message FetchFunctionState {
+  string name = 1;
+  string region = 2;
+  string market = 3;
+  string cron = 4;
+  int32 subject_count = 5;
+  // datasets 是该函数服务的“数据集|频率”。
+  repeated string datasets = 6;
+  // state 取值 applied（已生效）、pending（正在下发）、retiring（退役中）。
+  string state = 7;
+}
+
+message FetchPlanSummary {
+  int64 id = 1;
+  string status = 2;
+  string last_error = 3;
+  string created_at = 4;
+  string updated_at = 5;
+}
+
+message GetFetchPlansRsp {
+  common.RetInfo ret_info = 1;
+  // open 是未生效的计划，没有则为空；applied 是最近一份已生效的计划。
+  FetchPlanSummary open = 2;
+  FetchPlanSummary applied = 3;
+  repeated FetchDatasetState datasets = 4;
+  repeated FetchFunctionState functions = 5;
+}
+
 service CollectMgr {
   // ----- 采集任务 -----
   rpc GetTaskList(GetTaskListReq) returns (GetTaskListRsp);
@@ -412,6 +561,16 @@ service CollectMgr {
   rpc GetKlineResampleBackfill(GetKlineResampleBackfillReq) returns (GetKlineResampleBackfillRsp);
   // 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
   rpc SyncSubjects(SyncSubjectsReq) returns (SyncSubjectsRsp);
+
+  // ----- K 线完整性检查与补采 -----
+  rpc CheckKline(CheckKlineReq) returns (CheckKlineRsp);
+  rpc SubmitKlineBackfill(SubmitKlineBackfillReq) returns (SubmitKlineBackfillRsp);
+  rpc GetKlineBackfill(GetKlineBackfillReq) returns (GetKlineBackfillRsp);
+  rpc ListKlineBackfills(ListKlineBackfillsReq) returns (ListKlineBackfillsRsp);
+  rpc CancelKlineBackfill(CancelKlineBackfillReq) returns (CancelKlineBackfillRsp);
+
+  // ----- 采集计划 -----
+  rpc GetFetchPlans(GetFetchPlansReq) returns (GetFetchPlansRsp);
 }
 
 service MarketFetchRuntime {

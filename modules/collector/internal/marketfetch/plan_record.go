@@ -509,3 +509,18 @@ func (c *FetchPlanContent) SortedFunctionNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// DecodeFetchPlanContent 解码采集计划内容（检查与补采还原历史标的时使用）。
+func DecodeFetchPlanContent(raw string) (*FetchPlanContent, error) {
+	return decodeFetchPlanContent(raw)
+}
+
+// DecodeFetchPlanProgress 解码采集计划进度。
+func DecodeFetchPlanProgress(raw string) (*FetchPlanProgress, error) {
+	return decodeFetchPlanProgress(raw)
+}
+
+// PlanDatasetKeyOf 返回计划中数据集的“数据集|频率”键。
+func PlanDatasetKeyOf(dataset PlanDataset) string {
+	return planDatasetKey(dataset.DatasetID, dataset.Frequency)
+}

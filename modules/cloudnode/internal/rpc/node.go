@@ -735,6 +735,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
 			return err
 		}
+		if err := ensureReservedConcurrency(ctx, client, ref, effectiveConfig); err != nil {
+			return err
+		}
 		if err := ensureInitialTimerTrigger(ctx, client, node, ref); err != nil {
 			return err
 		}
@@ -820,6 +823,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := ensureSCFAsyncRetryConfig(reconcileCtx, client, ref, isMarketFetchNode(node)); err != nil {
 			return err
 		}
+		if err := ensureReservedConcurrency(reconcileCtx, client, ref, effectiveConfig); err != nil {
+			return err
+		}
 		if err := ensureInitialTimerTrigger(reconcileCtx, client, node, ref); err != nil {
 			return err
 		}
@@ -841,6 +847,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
 		return err
 	}
+	if err := ensureReservedConcurrency(ctx, client, ref, effectiveConfig); err != nil {
+		return err
+	}
 	if err := ensureInitialTimerTrigger(ctx, client, node, ref); err != nil {
 		return err
 	}
@@ -854,6 +863,25 @@ func ensureInitialTimerTrigger(ctx context.Context, client scfProvisioner, node 
 	_, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: false, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
 	if err != nil {
 		return fmt.Errorf("ensure initial timer trigger for %s: %w", ref.FunctionName, err)
+	}
+	return nil
+}
+
+// ensureReservedConcurrency 按 config.reserved_concurrency_mem 设置函数的预留并发配额；未配置时不处理。
+// 预留配额同时是该函数的并发上限，补采函数借此由平台硬性限制实际并发实例数。
+func ensureReservedConcurrency(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, config map[string]string) error {
+	quota := configInt64(config, "reserved_concurrency_mem", 0)
+	if quota <= 0 {
+		return nil
+	}
+	configurer, ok := client.(interface {
+		PutReservedConcurrencyConfig(context.Context, tencentscf.PutReservedConcurrencyConfigRequest) error
+	})
+	if !ok {
+		return nil
+	}
+	if err := configurer.PutReservedConcurrencyConfig(ctx, tencentscf.PutReservedConcurrencyConfigRequest{FunctionRef: ref, ReservedConcurrencyMem: quota}); err != nil {
+		return fmt.Errorf("configure reserved concurrency for %s: %w", ref.FunctionName, err)
 	}
 	return nil
 }

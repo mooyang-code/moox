@@ -286,3 +286,30 @@ func (r *BackfillRepository) SetWatermark(ctx context.Context, spaceID, datasetI
 		ON CONFLICT (c_space_id, c_dataset_id, c_frequency) DO UPDATE SET c_scanned_until = MAX(c_scanned_until, excluded.c_scanned_until), c_mtime = excluded.c_mtime`,
 		row.SpaceID, row.DatasetID, row.Frequency, row.ScannedUntil, row.UpdatedAt).Error
 }
+
+// ListJobs 按创建时间倒序分页返回该空间的补采作业，并返回总数。
+func (r *BackfillRepository) ListJobs(ctx context.Context, spaceID string, page, size int) ([]BackfillJob, int64, error) {
+	if r == nil || r.db == nil {
+		return nil, 0, fmt.Errorf("backfill repository is not initialized")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 200 {
+		size = 50
+	}
+	query := r.db.WithContext(ctx).Model(&backfillJobRow{}).Where("c_space_id = ?", strings.TrimSpace(spaceID))
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []backfillJobRow
+	if err := query.Order("c_id DESC").Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	jobs := make([]BackfillJob, 0, len(rows))
+	for _, row := range rows {
+		jobs = append(jobs, BackfillJob{JobID: row.JobID, SpaceID: row.SpaceID, Source: row.Source, Request: row.Request, Status: row.Status, LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
+	}
+	return jobs, total, nil
+}
