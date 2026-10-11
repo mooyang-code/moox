@@ -171,7 +171,10 @@ func (p *Proxy) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, e
 		if err != nil {
 			return doError(commonpb.ErrorCode_INNER_ERR, "egress response compression failed")
 		}
-		rsp.Body, rsp.BodyGzip = compressed, true
+		// 不可压缩内容经 gzip 封装后反而更大，可能越过对端按原始大小设定的上限：只在确实变小时才使用压缩结果
+		if len(compressed) < len(body) {
+			rsp.Body, rsp.BodyGzip = compressed, true
+		}
 	}
 	return rsp, nil
 }

@@ -263,3 +263,40 @@ func TestPublicDialChecksAddressesOnceAndNeverDialsPrivateIPs(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 16, attempts)
 }
+
+func TestGzipResponseOnlyWhenCompressionShrinksBody(t *testing.T) {
+	// 随机内容不可压缩：gzip 封装后反而更大，必须原样返回，避免越过对端按原始大小设定的上限
+	incompressible := make([]byte, 64<<10)
+	state := uint64(88172645463325252)
+	for i := range incompressible {
+		state ^= state << 13
+		state ^= state >> 7
+		state ^= state << 17
+		incompressible[i] = byte(state)
+	}
+	compressible := bytes.Repeat([]byte(`{"symbol":"BTCUSDT"}`), 4096)
+	for name, tc := range map[string]struct {
+		body     []byte
+		wantGzip bool
+	}{"incompressible": {incompressible, false}, "compressible": {compressible, true}} {
+		t.Run(name, func(t *testing.T) {
+			p, _ := tlsFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(tc.body)
+			})
+			req := request()
+			req.GzipResponse = true
+			rsp, err := p.Do(context.Background(), req)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantGzip, rsp.BodyGzip)
+			if tc.wantGzip {
+				reader, err := gzip.NewReader(bytes.NewReader(rsp.Body))
+				require.NoError(t, err)
+				decoded, err := io.ReadAll(reader)
+				require.NoError(t, err)
+				require.Equal(t, tc.body, decoded)
+			} else {
+				require.Equal(t, tc.body, rsp.Body)
+			}
+		})
+	}
+}
