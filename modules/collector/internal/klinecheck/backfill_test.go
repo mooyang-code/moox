@@ -46,9 +46,11 @@ func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string
 	from, _ := time.Parse(time.RFC3339, item["start_time"].(string))
 	to, _ := time.Parse(time.RFC3339, item["end_time"].(string))
 	subject := item["subject_id"].(string)
+	h.rows.mu.Lock()
 	for t := from; t.Before(to); t = t.Add(time.Minute) {
 		delete(h.rows.missing[subject], t.Unix())
 	}
+	h.rows.mu.Unlock()
 	return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
 }
 
@@ -185,8 +187,8 @@ func TestBackfillCancelStopsPendingChunks(t *testing.T) {
 	require.Equal(t, store.BackfillCanceled, status.Job.Status)
 }
 
-func TestAutoScanCreatesOneJobPerHourAndAdvancesWatermark(t *testing.T) {
-	backfiller, _, _, base := newBackfillFixture(t)
+func TestAutoScanAdvancesWatermarkOnlyAfterTheJobSucceeds(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
 	ctx := context.Background()
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
 	jobs, err := backfiller.Store.ActiveJobs(ctx, "crypto")
@@ -195,9 +197,35 @@ func TestAutoScanCreatesOneJobPerHourAndAdvancesWatermark(t *testing.T) {
 	require.Equal(t, "auto", jobs[0].Source)
 	mark, err := backfiller.Store.Watermark(ctx, "crypto", "ds", "1m")
 	require.NoError(t, err)
-	require.True(t, mark.After(base), "the watermark moves forward")
+	require.True(t, mark.IsZero(), "the watermark must not move while the job is unfinished")
 
+	// 失败的作业不推进水位：下一次扫描仍会覆盖同一窗口。
+	invoker.fail = true
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	mark, _ = backfiller.Store.Watermark(ctx, "crypto", "ds", "1m")
+	require.True(t, mark.IsZero(), "a failed job leaves the gap to be scanned again")
+
+	// 成功后才推进。
+	backfiller.lastScan = nil
+	invoker.fail = false
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
-	jobs, _ = backfiller.Store.ActiveJobs(ctx, "crypto")
-	require.Len(t, jobs, 1, "scans are spaced an hour apart and never stack on an unfinished auto job")
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	mark, _ = backfiller.Store.Watermark(ctx, "crypto", "ds", "1m")
+	require.True(t, mark.After(base))
+
+	// 一小时内不重复扫描，也不叠加在未结束的自动作业上。
+	before, _ := backfiller.Store.ActiveJobs(ctx, "crypto")
+	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
+	after, _ := backfiller.Store.ActiveJobs(ctx, "crypto")
+	require.Equal(t, len(before), len(after))
+}
+
+func TestCheckRejectsOversizedRanges(t *testing.T) {
+	backfiller, _, _, base := newBackfillFixture(t)
+	_, err := backfiller.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.AddDate(20, 0, 0)})
+	require.ErrorContains(t, err, "narrow")
 }

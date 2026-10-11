@@ -20,14 +20,16 @@ type PlanDatasetChange struct {
 	PlanDatasetState
 	// Changed：该数据集在某些函数上的采集内容发生变化，需要选生效周期 P；
 	// HashChanged：标的集合 hash 变化，需要在 Storage 登记新快照；Gone：数据集不再采集。
-	Changed     bool               `json:"changed,omitempty"`
-	HashChanged bool               `json:"hash_changed,omitempty"`
-	Gone        bool               `json:"gone,omitempty"`
-	OldHash     string             `json:"old_hash,omitempty"`
-	P           int64              `json:"p,omitempty"`
-	Series      []seriesset.Series `json:"series,omitempty"`
-	Added       []string           `json:"added,omitempty"`
-	Removed     []string           `json:"removed,omitempty"`
+	Changed     bool   `json:"changed,omitempty"`
+	HashChanged bool   `json:"hash_changed,omitempty"`
+	Gone        bool   `json:"gone,omitempty"`
+	OldHash     string `json:"old_hash,omitempty"`
+	P           int64  `json:"p,omitempty"`
+	// Handoff：该数据集的首份起点来自旧链路交接边界。
+	Handoff bool               `json:"handoff,omitempty"`
+	Series  []seriesset.Series `json:"series,omitempty"`
+	Added   []string           `json:"added,omitempty"`
+	Removed []string           `json:"removed,omitempty"`
 }
 
 // PlanFunctionChange 是一份采集计划里一个函数的变更。Old 是已生效（单份）的计划，New 是目标计划；
@@ -110,9 +112,17 @@ func nextBoundary(frequency marketdata.Frequency, at time.Time) time.Time {
 	return first
 }
 
+// planLeadTimeWithCreate 是计划里包含需要新建的函数时 P 的最短提前量：创建 VPC 函数要几十秒到数分钟。
+const planLeadTimeWithCreate = 6 * time.Minute
+
 // ChoosePeriodStart 返回数据集新份的生效周期 P：不早于“当前时间 + 2 分钟”的第一个边界；
 // 新数据集若指定了起点（旧链路交接边界）则直接使用起点。
 func ChoosePeriodStart(frequency string, now time.Time, startAt int64, isNew bool) (int64, error) {
+	return ChoosePeriodStartWithLead(frequency, now, startAt, isNew, planLeadTime)
+}
+
+// ChoosePeriodStartWithLead 与 ChoosePeriodStart 相同，但提前量由调用方指定。
+func ChoosePeriodStartWithLead(frequency string, now time.Time, startAt int64, isNew bool, lead time.Duration) (int64, error) {
 	parsed, err := marketdata.ParseFrequency(frequency)
 	if err != nil {
 		return 0, err
@@ -120,7 +130,7 @@ func ChoosePeriodStart(frequency string, now time.Time, startAt int64, isNew boo
 	if isNew && startAt > 0 {
 		return startAt, nil
 	}
-	return nextBoundary(parsed, now.Add(planLeadTime)).Unix(), nil
+	return nextBoundary(parsed, now.Add(lead)).Unix(), nil
 }
 
 func lastCopy(dataset *PlanDataset) *PlanCopy {
@@ -298,6 +308,14 @@ func BuildPlanContent(previous map[string]*PlanFunction, previousDatasets map[st
 			startAt = current.StartAt
 		}
 		_, existed := previousDatasets[key]
+		if change.Gone {
+			// 回退到旧链路：数据集在旧链路接手的边界处停止（边界未到时旧份继续服务到边界）。
+			startAt = desired.StopAt[key]
+			if startAt > 0 {
+				existed = false
+			}
+		}
+		change.Handoff = !existed && startAt > 0
 		p, err := choosePeriod(change.Frequency, startAt, !existed)
 		if err != nil {
 			return nil, false, err
@@ -373,16 +391,25 @@ func (c *FetchPlanContent) TransitionalPlan(function *PlanFunctionChange) *Plan 
 		return nil
 	}
 	out := &Plan{V: base.V, Market: base.Market, Fetch: base.Fetch}
-	if len(base.SymbolExceptions) > 0 || (function.Old != nil && len(function.Old.SymbolExceptions) > 0) {
-		out.SymbolExceptions = map[string]string{}
-		if function.Old != nil {
-			for key, value := range function.Old.SymbolExceptions {
-				out.SymbolExceptions[key] = value
+	// 例外表：只保留过渡计划里仍会采集的标的，新计划的映射优先于旧计划（例外被删除时旧值随之消失）。
+	exceptions := map[string]string{}
+	if function.Old != nil {
+		for key, value := range function.Old.SymbolExceptions {
+			exceptions[key] = value
+		}
+	}
+	if function.New != nil {
+		for key := range function.Old.symbolsOrNil() {
+			if _, kept := function.New.SymbolExceptions[key]; !kept && function.New.hasSubject(key) {
+				delete(exceptions, key)
 			}
 		}
-		for key, value := range base.SymbolExceptions {
-			out.SymbolExceptions[key] = value
+		for key, value := range function.New.SymbolExceptions {
+			exceptions[key] = value
 		}
+	}
+	if len(exceptions) > 0 {
+		out.SymbolExceptions = exceptions
 	}
 	for _, key := range planDatasetKeys(function.Old, function.New) {
 		oldDataset, newDataset := findPlanDataset(function.Old, key), findPlanDataset(function.New, key)
@@ -421,6 +448,7 @@ func (c *FetchPlanContent) TransitionalPlan(function *PlanFunctionChange) *Plan 
 		dataset.Copies = append(dataset.Copies, next)
 		out.Datasets = append(out.Datasets, dataset)
 	}
+	out.pruneExceptions()
 	return out
 }
 
@@ -446,6 +474,7 @@ func (c *FetchPlanContent) FinalPlan(function *PlanFunctionChange) *Plan {
 	if len(out.Datasets) == 0 {
 		return nil
 	}
+	out.pruneExceptions()
 	return out
 }
 
@@ -523,4 +552,41 @@ func DecodeFetchPlanProgress(raw string) (*FetchPlanProgress, error) {
 // PlanDatasetKeyOf 返回计划中数据集的“数据集|频率”键。
 func PlanDatasetKeyOf(dataset PlanDataset) string {
 	return planDatasetKey(dataset.DatasetID, dataset.Frequency)
+}
+
+// symbolsOrNil 返回计划里出现过的标的集合；计划为空返回 nil。
+func (p *Plan) symbolsOrNil() map[string]struct{} {
+	if p == nil {
+		return nil
+	}
+	subjects := map[string]struct{}{}
+	for _, dataset := range p.Datasets {
+		for _, copy := range dataset.Copies {
+			for _, subject := range copy.Subjects {
+				subjects[subject.ID] = struct{}{}
+			}
+		}
+	}
+	return subjects
+}
+
+func (p *Plan) hasSubject(id string) bool {
+	_, ok := p.symbolsOrNil()[id]
+	return ok
+}
+
+// pruneExceptions 去掉不再出现在任何份里的标的的例外。
+func (p *Plan) pruneExceptions() {
+	if len(p.SymbolExceptions) == 0 {
+		return
+	}
+	subjects := p.symbolsOrNil()
+	for key := range p.SymbolExceptions {
+		if _, ok := subjects[key]; !ok {
+			delete(p.SymbolExceptions, key)
+		}
+	}
+	if len(p.SymbolExceptions) == 0 {
+		p.SymbolExceptions = nil
+	}
 }

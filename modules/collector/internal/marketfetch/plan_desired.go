@@ -63,6 +63,8 @@ type PlanFunction struct {
 type DesiredState struct {
 	Datasets  map[string]*DesiredDataset
 	Functions map[string]*PlanFunction
+	// StopAt 是正在回退到旧链路的数据集的停止边界（Unix 秒）；这些数据集不在 Datasets 里，按“不再采集”处理。
+	StopAt map[string]int64
 }
 
 func planDatasetKey(datasetID, frequency string) string { return datasetID + "|" + frequency }
@@ -91,7 +93,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 	if defaultSize <= 0 {
 		defaultSize = DefaultSymbolsPerFunction
 	}
-	state := &DesiredState{Datasets: map[string]*DesiredDataset{}, Functions: map[string]*PlanFunction{}}
+	state := &DesiredState{Datasets: map[string]*DesiredDataset{}, Functions: map[string]*PlanFunction{}, StopAt: map[string]int64{}}
 	type market struct {
 		key        string
 		sample     TaskGroup
@@ -109,6 +111,10 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		frequency, err := marketdata.ParseFrequency(group.Frequency)
 		if err != nil || string(frequency) != group.Frequency {
 			return nil, fmt.Errorf("task group %s frequency %q is not canonical", group.DatasetID, group.Frequency)
+		}
+		if group.StopAt > 0 {
+			state.StopAt[planDatasetKey(group.DatasetID, group.Frequency)] = group.StopAt
+			continue
 		}
 		key := planMarketKey(group)
 		info := markets[key]
@@ -148,7 +154,14 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		}
 	}
 	marketKeys := make([]string, 0, len(markets))
-	for key := range markets {
+	marketTypes := map[string]string{}
+	for key, info := range markets {
+		// 函数名只含空间、市场类型与地域；同一空间里市场类型相同的不同数据源会让函数名冲突。
+		marketType := strings.ToLower(info.sample.MarketType)
+		if other, clash := marketTypes[marketType]; clash {
+			return nil, fmt.Errorf("market type %s is used by more than one market (%s and %s)", marketType, other, key)
+		}
+		marketTypes[marketType] = key
 		marketKeys = append(marketKeys, key)
 	}
 	sort.Strings(marketKeys)

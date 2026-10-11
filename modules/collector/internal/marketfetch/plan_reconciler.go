@@ -84,7 +84,11 @@ type PlanDeploy struct {
 	Networks        map[string]PlanNetwork
 }
 
+// pendingJobMaxAge 是云端作业的最长等待时间；超时后丢弃并按进度重新下发（下发是幂等的）。
+const pendingJobMaxAge = 10 * time.Minute
+
 type pendingPlanJob struct {
+	at        time.Time
 	id        string
 	kind      string
 	functions []string
@@ -117,6 +121,12 @@ type PlanReconciler struct {
 	pending      []pendingPlanJob
 	lastVerified time.Time
 	goneSeen     map[string]int
+
+	// 补采函数的创建与对账协程互不干扰：单独的互斥与租约，并缓存已确认存在的函数。
+	backfillMu     sync.Mutex
+	backfillReady  map[string]bool
+	backfillLease  *scfinvoker.CollectorPublishLease
+	backfillHolder string
 }
 
 func (r *PlanReconciler) now() time.Time {
@@ -229,8 +239,16 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	if r.holdMissingDatasets(ctx, desired, previousDatasets, managed) {
 		return nil
 	}
+	// 计划里有需要新建的函数时拉长提前量：创建 VPC 函数比改环境慢得多。
+	lead := planLeadTime
+	for name := range desired.Functions {
+		if previousFunctions[name] == nil {
+			lead = planLeadTimeWithCreate
+			break
+		}
+	}
 	choose := func(frequency string, startAt int64, isNew bool) (int64, error) {
-		return ChoosePeriodStart(frequency, r.now(), startAt, isNew)
+		return ChoosePeriodStartWithLead(frequency, r.now(), startAt, isNew, lead)
 	}
 	content, changed, err := BuildPlanContent(previousFunctions, previousDatasets, desired, choose)
 	if err != nil {
@@ -274,6 +292,9 @@ func (r *PlanReconciler) holdMissingDatasets(ctx context.Context, desired *Desir
 	for key, state := range previous {
 		if desired.Datasets[key] != nil {
 			continue
+		}
+		if _, stopping := desired.StopAt[key]; stopping {
+			continue // 正在回退到旧链路：这是有意的停止，不是数据暂时取不到
 		}
 		if _, stillEnabled := managed[state.DatasetID]; !stillEnabled {
 			continue
@@ -451,9 +472,14 @@ func (r *PlanReconciler) registerSnapshots(ctx context.Context, record *store.Fe
 		registration, err := r.Storage.RegisterSeriesSnapshot(ctx, r.SpaceID, change.DatasetID, change.Frequency, change.Series, change.P)
 		switch {
 		case errors.Is(err, marketstorage.ErrStaleEffectiveFrom):
-			p, chooseErr := ChoosePeriodStart(change.Frequency, r.now(), 0, false)
+			p, chooseErr := ChoosePeriodStartWithLead(change.Frequency, r.now(), 0, false, planLeadTimeWithCreate)
 			if chooseErr != nil {
 				return false, r.fail("storage", chooseErr)
+			}
+			if change.Handoff {
+				// 交接边界已过：新链路只能从更晚的周期开始，中间的周期由自动补采补回，同时留下告警。
+				log.WarnContextf(ctx, "collector fetch plan handoff boundary has passed space=%s dataset=%s old=%d new=%d", r.SpaceID, key, change.P, p)
+				change.Handoff = false
 			}
 			change.P = p
 			if saveErr := r.Store.SavePlan(ctx, record.ID, mustJSON(content)); saveErr != nil {
@@ -485,6 +511,7 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		confirmed, kind = &progress.Finalized, planJobKindFinal
 	}
 	var todo []string
+	var createErr error
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
 		if (*confirmed)[name] {
@@ -502,14 +529,27 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 	if len(todo) == 0 {
 		return true, nil
 	}
+	// 创建失败或尚未完成的函数不阻塞其他函数：已存在的函数先下发，缺的下一轮再试。
+	notReady := map[string]bool{}
 	if !final {
 		created, err := r.ensureCreated(ctx, record, content, progress, todo)
-		if err != nil || !created {
-			return false, err
+		if err != nil {
+			createErr = err
+		}
+		if !created {
+			for _, name := range todo {
+				if content.Functions[name].Create && !progress.Created[name] {
+					notReady[name] = true
+				}
+			}
 		}
 	}
-	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(todo))
+	patches := make(map[string]*cloudnodepb.NodeRuntimeConfigPatch, len(todo))
+	pushNames := make([]string, 0, len(todo))
 	for _, name := range todo {
+		if notReady[name] {
+			continue
+		}
 		function := content.Functions[name]
 		plan, cron := content.TransitionalPlan(function), content.TransitionalCron(function)
 		if final {
@@ -523,15 +563,25 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		if err != nil {
 			return false, r.fail("environment", fmt.Errorf("function %s: %w", name, err))
 		}
-		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, ManagedEnvironment: environment, TimerEnabled: cron != "", TimerCron: cron})
+		patches[name] = &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, ManagedEnvironment: environment, TimerEnabled: cron != "", TimerCron: timerCronOrPlaceholder(cron)}
+		pushNames = append(pushNames, name)
 	}
-	if err := r.submit(ctx, record, progress, kind, todo, func(lease *scfinvoker.CollectorPublishLease) (string, error) {
-		for _, patch := range patches {
-			patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+	if len(pushNames) > 0 {
+		if err := r.submit(ctx, record, progress, kind, pushNames, func(lease *scfinvoker.CollectorPublishLease, batch []string) (string, error) {
+			chunk := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(batch))
+			for _, name := range batch {
+				patch := patches[name]
+				patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+				chunk = append(chunk, patch)
+			}
+			return r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, chunk)
+		}); err != nil {
+			return false, err
 		}
-		return r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, patches)
-	}); err != nil {
-		return false, err
+	}
+	if createErr != nil {
+		_ = r.saveProgress(ctx, record, progress, record.Status, createErr.Error())
+		return false, createErr
 	}
 	for _, name := range todo {
 		if !(*confirmed)[name] {
@@ -539,6 +589,14 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		}
 	}
 	return true, nil
+}
+
+// timerCronOrPlaceholder 停用定时器时仍要给 CloudNode 一个受支持的 cron（预检要求非空），只靠 enabled=false 停用。
+func timerCronOrPlaceholder(cron string) string {
+	if cron == "" {
+		return "0 * * * * * *"
+	}
+	return cron
 }
 
 // finalDiffers 判断收尾时该函数是否还需要再下发一次。
@@ -594,11 +652,18 @@ func (r *PlanReconciler) ensureCreated(ctx context.Context, record *store.FetchP
 	if len(items) == 0 {
 		return true, r.saveProgress(ctx, record, progress, record.Status, "")
 	}
-	if err := r.submit(ctx, record, progress, planJobKindCreate, names, func(lease *scfinvoker.CollectorPublishLease) (string, error) {
-		for _, item := range items {
+	byName := make(map[string]*cloudnodepb.NodeCreateItem, len(items))
+	for index, item := range items {
+		byName[names[index]] = item
+	}
+	if err := r.submit(ctx, record, progress, planJobKindCreate, names, func(lease *scfinvoker.CollectorPublishLease, batch []string) (string, error) {
+		chunk := make([]*cloudnodepb.NodeCreateItem, 0, len(batch))
+		for _, name := range batch {
+			item := byName[name]
 			item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+			chunk = append(chunk, item)
 		}
-		return r.Cloud.SubmitCreateNodes(ctx, r.SpaceID, items)
+		return r.Cloud.SubmitCreateNodes(ctx, r.SpaceID, chunk)
 	}); err != nil {
 		return false, err
 	}
@@ -643,8 +708,8 @@ func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *Fetc
 	}, nil
 }
 
-// submit 获取发布租约、提交一个云端作业并等待结果；成功的函数记入 progress。
-func (r *PlanReconciler) submit(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, kind string, names []string, send func(*scfinvoker.CollectorPublishLease) (string, error)) error {
+// submit 获取发布租约，按批提交云端作业并等待结果；成功的函数记入 progress。
+func (r *PlanReconciler) submit(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, kind string, names []string, send func(lease *scfinvoker.CollectorPublishLease, batch []string) (string, error)) error {
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
 		return err
@@ -654,26 +719,30 @@ func (r *PlanReconciler) submit(ctx context.Context, record *store.FetchPlanReco
 	if err != nil {
 		return r.fail("publish_lease", fmt.Errorf("publish lease: %w", err))
 	}
-	if len(names) > runtimeConfigBatchSize {
-		return r.fail("capacity", fmt.Errorf("%d functions exceed the batch limit %d", len(names), runtimeConfigBatchSize))
+	var firstErr error
+	for start := 0; start < len(names); start += runtimeConfigBatchSize {
+		batch := names[start:min(start+runtimeConfigBatchSize, len(names))]
+		jobID, sendErr := send(lease, batch)
+		if sendErr != nil {
+			_ = r.saveProgress(ctx, record, progress, record.Status, sendErr.Error())
+			return r.fail("cloudnode", fmt.Errorf("submit %s: %w", kind, sendErr))
+		}
+		job := pendingPlanJob{id: jobID, kind: kind, functions: batch, at: r.now()}
+		items, terminal, waitErr := r.waitJob(ctx, jobID)
+		if waitErr != nil {
+			r.pending = append(r.pending, job)
+			return r.fail("cloudnode", waitErr)
+		}
+		if !terminal {
+			r.pending = append(r.pending, job)
+			return nil
+		}
+		if err := r.applyResults(ctx, record, progress, job, items); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	jobID, sendErr := send(lease)
-	if sendErr != nil {
-		_ = r.saveProgress(ctx, record, progress, record.Status, sendErr.Error())
-		return r.fail("cloudnode", fmt.Errorf("submit %s: %w", kind, sendErr))
-	}
-	job := pendingPlanJob{id: jobID, kind: kind, functions: names}
-	items, terminal, err := r.waitJob(ctx, jobID)
-	if err != nil {
-		r.pending = append(r.pending, job)
-		return r.fail("cloudnode", err)
-	}
-	if !terminal {
-		r.pending = append(r.pending, job)
-		return nil
-	}
-	if err := r.applyResults(ctx, record, progress, job, items); err != nil {
-		return err
+	if firstErr != nil {
+		return firstErr
 	}
 	r.releaseLease(ctx)
 	return nil
@@ -728,6 +797,10 @@ func (r *PlanReconciler) settlePending(ctx context.Context, record *store.FetchP
 	r.pending = nil
 	var firstErr error
 	for index, job := range pending {
+		if r.now().Sub(job.at) > pendingJobMaxAge {
+			log.WarnContextf(ctx, "collector fetch plan dropped a stuck cloud job space=%s job=%s kind=%s", r.SpaceID, job.id, job.kind)
+			continue
+		}
 		items, terminal, err := r.checkJob(ctx, job.id)
 		if err != nil {
 			r.pending = append(r.pending, pending[index:]...)
@@ -867,30 +940,34 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	for _, node := range nodes {
 		byName[node.NodeID] = node
 	}
-	var drifted []string
+	var drifted, missing []string
 	patches := map[string]*cloudnodepb.NodeRuntimeConfigPatch{}
-	for name, function := range applied {
+	names := make([]string, 0, len(applied))
+	for name := range applied {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		function := applied[name]
 		environment, envErr := r.functionEnvironment(function.Region, function.Plan)
 		if envErr != nil {
 			return r.fail("environment", fmt.Errorf("function %s: %w", name, envErr))
 		}
+		patches[name] = &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, ManagedEnvironment: environment, TimerEnabled: function.Cron != "", TimerCron: timerCronOrPlaceholder(function.Cron)}
 		node, exists := byName[name]
-		if exists && fmt.Sprint(node.Metadata["assignment_hash"]) == environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] && !timerNeedsRepair(node.Metadata, function.Cron) {
-			continue
-		}
 		if !exists {
-			log.WarnContextf(ctx, "collector fetch plan function is missing in the cloud space=%s function=%s", r.SpaceID, name)
+			missing = append(missing, name)
 			continue
 		}
-		drifted = append(drifted, name)
-		patches[name] = &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, ManagedEnvironment: environment, TimerEnabled: function.Cron != "", TimerCron: function.Cron}
+		if fmt.Sprint(node.Metadata["assignment_hash"]) != environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] || timerNeedsRepair(node.Metadata, function.Cron) || accessDrifted(node.Metadata, environment) {
+			drifted = append(drifted, name)
+		}
 	}
-	if len(drifted) == 0 {
+	if len(drifted) == 0 && len(missing) == 0 {
 		r.lastVerified = r.now()
 		return nil
 	}
-	sort.Strings(drifted)
-	log.WarnContextf(ctx, "collector fetch plan repairing drifted functions space=%s functions=%s", r.SpaceID, strings.Join(drifted, ","))
+	log.WarnContextf(ctx, "collector fetch plan repairing space=%s drifted=%s missing=%s", r.SpaceID, strings.Join(drifted, ","), strings.Join(missing, ","))
 	release, err = r.acquireOperation(ctx)
 	if err != nil {
 		return err
@@ -900,25 +977,85 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	if err != nil {
 		return r.fail("publish_lease", err)
 	}
-	list := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(drifted))
-	for _, name := range drifted {
-		patch := patches[name]
-		patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-		list = append(list, patch)
+	allOK := true
+	// 云端缺失的函数（例如被手工删除）按已生效计划重建，再补推定时器。
+	for start := 0; start < len(missing); start += runtimeConfigBatchSize {
+		batch := missing[start:min(start+runtimeConfigBatchSize, len(missing))]
+		items := make([]*cloudnodepb.NodeCreateItem, 0, len(batch))
+		for _, name := range batch {
+			function := applied[name]
+			change := &PlanFunctionChange{Name: name, Region: function.Region, Market: function.Market, Old: function.Plan, New: function.Plan}
+			item, itemErr := r.createItem(&store.FetchPlanRecord{ID: r.now().Unix()}, &FetchPlanContent{}, change)
+			if itemErr != nil {
+				return r.fail("environment", fmt.Errorf("function %s: %w", name, itemErr))
+			}
+			item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+			items = append(items, item)
+		}
+		jobID, submitErr := r.Cloud.SubmitCreateNodes(ctx, r.SpaceID, items)
+		if submitErr != nil {
+			return r.fail("cloudnode", submitErr)
+		}
+		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		if waitErr != nil {
+			return r.fail("cloudnode", waitErr)
+		}
+		created := map[string]bool{}
+		for _, result := range results {
+			created[result.NodeID] = result.Success
+		}
+		for _, name := range batch {
+			if terminal && created[name] {
+				drifted = append(drifted, name)
+			} else {
+				allOK = false
+			}
+		}
 	}
-	jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, list)
-	if err != nil {
-		return r.fail("cloudnode", err)
+	sort.Strings(drifted)
+	for start := 0; start < len(drifted); start += runtimeConfigBatchSize {
+		batch := drifted[start:min(start+runtimeConfigBatchSize, len(drifted))]
+		list := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(batch))
+		for _, name := range batch {
+			patch := patches[name]
+			patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+			list = append(list, patch)
+		}
+		jobID, submitErr := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, list)
+		if submitErr != nil {
+			return r.fail("cloudnode", submitErr)
+		}
+		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		if waitErr != nil {
+			return r.fail("cloudnode", waitErr)
+		}
+		pushed := map[string]bool{}
+		for _, result := range results {
+			pushed[result.NodeID] = result.Success
+		}
+		for _, name := range batch {
+			if !terminal || !pushed[name] {
+				allOK = false
+			}
+		}
 	}
-	_, terminal, err := r.waitJob(ctx, jobID)
-	if err != nil {
-		return r.fail("cloudnode", err)
-	}
-	if terminal {
+	if allOK {
 		r.releaseLease(ctx)
 		r.lastVerified = r.now()
+		return nil
 	}
-	return nil
+	// 有失败项：不更新读回时间，下一轮继续修复。
+	return r.fail("cloudnode", errors.New("repair of drifted or missing functions did not fully succeed"))
+}
+
+// accessDrifted 判断云端记录的 Access 入口与调用方身份是否与期望一致。
+func accessDrifted(metadata map[string]any, environment map[string]string) bool {
+	for metaKey, envKey := range map[string]string{"access_address": "MOOX_ACCESS_ADDRESS", "access_id": "MOOX_ACCESS_ID", "access_key_id": "MOOX_CALLER_KEY_ID"} {
+		if fmt.Sprint(metadata[metaKey]) != environment[envKey] {
+			return true
+		}
+	}
+	return false
 }
 
 // timerNeedsRepair 判断云端读回的定时器是否与期望一致。
@@ -993,12 +1130,18 @@ func (r *PlanReconciler) BackfillRegion(marketType string) (string, bool) {
 const BackfillReservedConcurrency = 5
 
 // EnsureBackfillFunction 保证该市场的补采函数存在（与实时函数同一代码包，不带定时器），返回函数名。
+// 多个补采协程并发调用时串行执行，已确认存在的函数直接返回。
 func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType string) (string, error) {
 	region, ok := r.BackfillRegion(marketType)
 	if !ok {
 		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
 	}
 	name := BackfillFunctionName(r.SpaceID, marketType, region)
+	r.backfillMu.Lock()
+	defer r.backfillMu.Unlock()
+	if r.backfillReady[name] {
+		return name, nil
+	}
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
 		return "", err
@@ -1010,6 +1153,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	}
 	for _, node := range nodes {
 		if node.NodeID == name {
+			r.markBackfillReady(name)
 			return name, nil
 		}
 	}
@@ -1048,10 +1192,11 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		Metadata:            mustStruct(map[string]any{"function_name": name, "node_id": name, "biz_type": "market_fetcher", "function_mode": "kline", "memory_size": memory, "timeout_seconds": tencent.CollectorTimerTimeoutSeconds}),
 		CreateReservationId: hex.EncodeToString(reservation[:16]),
 	}
-	lease, err := r.ensureLease(ctx)
+	lease, err := r.ensureBackfillLease(ctx)
 	if err != nil {
 		return "", fmt.Errorf("publish lease: %w", err)
 	}
+	defer r.releaseBackfillLease(ctx)
 	item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
 	jobID, err := r.Cloud.SubmitCreateNodes(ctx, r.SpaceID, []*cloudnodepb.NodeCreateItem{item})
 	if err != nil {
@@ -1069,6 +1214,44 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 			return "", fmt.Errorf("create backfill function %s: %s", name, result.Message)
 		}
 	}
-	r.releaseLease(ctx)
+	r.markBackfillReady(name)
 	return name, nil
+}
+
+func (r *PlanReconciler) markBackfillReady(name string) {
+	if r.backfillReady == nil {
+		r.backfillReady = map[string]bool{}
+	}
+	r.backfillReady[name] = true
+}
+
+func (r *PlanReconciler) ensureBackfillLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {
+	if r.backfillHolder == "" {
+		var raw [16]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return nil, err
+		}
+		r.backfillHolder = "backfill-" + hex.EncodeToString(raw[:])
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	lease, err := r.Cloud.AcquireCollectorPublishLease(leaseCtx, r.SpaceID, r.backfillHolder)
+	if err != nil {
+		return nil, err
+	}
+	if lease == nil || lease.LeaseID == "" || lease.FencingToken < 1 {
+		return nil, errors.New("publish lease response is incomplete")
+	}
+	r.backfillLease = lease
+	return lease, nil
+}
+
+func (r *PlanReconciler) releaseBackfillLease(ctx context.Context) {
+	if r.backfillLease == nil {
+		return
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = r.Cloud.ReleaseCollectorPublishLease(leaseCtx, r.backfillLease)
+	r.backfillLease = nil
 }

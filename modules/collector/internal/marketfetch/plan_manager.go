@@ -245,7 +245,11 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 			log.WarnContextf(ctx, "collector fetch plan reconciliation failed space=%s: %v", space, err)
 		}
 		if m.AfterTick != nil {
-			if err := m.AfterTick(tickCtx, space); err != nil {
+			// 补采推进与对账各用各的超时，对账等云端作业久了不会饿死补采。
+			followCtx, followCancel := context.WithTimeout(ctx, 30*time.Second)
+			err := m.AfterTick(followCtx, space)
+			followCancel()
+			if err != nil {
 				log.WarnContextf(ctx, "collector fetch plan follow-up failed space=%s: %v", space, err)
 			}
 		}

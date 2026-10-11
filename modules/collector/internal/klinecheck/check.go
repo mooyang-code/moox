@@ -19,6 +19,8 @@ const (
 	defaultConcurrent = 8
 	// MaxGaps 是一次检查返回的缺口数上限；超过时标记 Truncated。
 	MaxGaps = 5000
+	// MaxCheckPoints 是一次检查或补采允许展开的（标的 × 时间点）总数上限，防止一次请求占满内存。
+	MaxCheckPoints = 3_000_000
 )
 
 // RowReader 读取 Storage 中的时序行。
@@ -119,6 +121,27 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 				jobs = append(jobs, job{key: key, segment: segment, subject: subject})
 			}
 		}
+	}
+	var points int64
+	for _, item := range jobs {
+		_, frequencyName, _ := strings.Cut(item.key, "|")
+		frequency, err := marketdata.ParseFrequency(frequencyName)
+		if err != nil || frequency.Duration() <= 0 {
+			continue
+		}
+		from, to := request.From.UTC(), request.To.UTC()
+		if from.Unix() < item.segment.From {
+			from = time.Unix(item.segment.From, 0).UTC()
+		}
+		if item.segment.To > 0 && to.Unix() > item.segment.To {
+			to = time.Unix(item.segment.To, 0).UTC()
+		}
+		if to.After(from) {
+			points += int64(to.Sub(from) / frequency.Duration())
+		}
+	}
+	if points > MaxCheckPoints {
+		return nil, fmt.Errorf("the range covers about %d bars, above the limit %d; narrow the time range or the subject set", points, MaxCheckPoints)
 	}
 	result := &Result{}
 	var mu sync.Mutex

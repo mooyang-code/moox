@@ -1362,7 +1362,7 @@ func (r *Reconciler) taskGroupsForRoute(ctx context.Context, task domain.Collect
 			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
 			Subjects: symbolIDs, ExternalSymbols: externalSymbols,
 			SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
-			StartAt: unixOrZero(params.InvokeUntil()),
+			StartAt: unixOrZero(params.InvokeUntil()), StopAt: stopAtFor(params),
 		})
 	}
 	return result, nil
@@ -1405,6 +1405,7 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		current.SymbolsPerFunction = minPositive(current.SymbolsPerFunction, group.SymbolsPerFunction)
 		current.AllowedLatenessSeconds = minPositive(current.AllowedLatenessSeconds, group.AllowedLatenessSeconds)
 		current.StartAt = minPositive64(current.StartAt, group.StartAt)
+		current.StopAt = minPositive64(current.StopAt, group.StopAt)
 		if group.ExternalSymbols != nil {
 			if current.ExternalSymbols == nil {
 				current.ExternalSymbols = make(map[string]string)
@@ -1553,4 +1554,12 @@ func minPositive64(left, right int64) int64 {
 	default:
 		return left
 	}
+}
+
+// stopAtFor 返回定时模式任务正在回退时的停止边界：fetch_mode=timer 且设置了 invoke_from_period。
+func stopAtFor(params *domain.CollectParams) int64 {
+	if params.FetchMode == domain.FetchModeTimer {
+		return unixOrZero(params.InvokeFrom())
+	}
+	return 0
 }

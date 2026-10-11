@@ -185,8 +185,8 @@ func (p *CollectParams) validateFetchMode() error {
 	if p.SymbolsPerFunction < 0 || p.SymbolsPerFunction > 200 {
 		return fmt.Errorf("parse collect params: symbols_per_function must be between 0 and 200")
 	}
-	if p.AllowedLatenessSeconds < 0 || p.AllowedLatenessSeconds > 3600 {
-		return fmt.Errorf("parse collect params: allowed_lateness_seconds must be between 0 and 3600")
+	if p.AllowedLatenessSeconds != 0 && (p.AllowedLatenessSeconds < 5 || p.AllowedLatenessSeconds > 3600) {
+		return fmt.Errorf("parse collect params: allowed_lateness_seconds must be 0 (default) or between 5 and 3600")
 	}
 	for name, raw := range map[string]string{"invoke_until_period": p.InvokeUntilPeriod, "invoke_from_period": p.InvokeFromPeriod} {
 		if strings.TrimSpace(raw) == "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ func (f fakePlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, e
 
 // fakeRows 按“标的 → 缺失的开始时间”返回行；深度检查时缺 open 字段的时间点单独登记。
 type fakeRows struct {
+	mu       sync.Mutex
 	from, to time.Time
 	missing  map[string]map[int64]bool
 	noOpen   map[string]map[int64]bool
@@ -30,6 +32,8 @@ type fakeRows struct {
 }
 
 func (f *fakeRows) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.reads++
 	selector := req.GetSelectors()[0]
 	start, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetStartTime())

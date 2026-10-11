@@ -52,9 +52,12 @@ func TestFetchPlanAllowsOneOpenPlanPerSpace(t *testing.T) {
 	next, err := repo.Create(ctx, "crypto", `{"v":3}`, "")
 	require.NoError(t, err, "已生效之后可以保存下一份计划")
 	require.Greater(t, next.ID, record.ID)
-	history, err := repo.AppliedSince(ctx, "crypto", time.Now().Add(-time.Hour))
+	history, err := repo.ListAll(ctx, "crypto")
 	require.NoError(t, err)
-	require.Len(t, history, 1)
+	require.Len(t, history, 2, "ListAll 返回全部计划（含未生效的），按先后顺序")
+	require.Error(t, repo.Update(ctx, history[0].ID, FetchPlanPending, `{}`, ""), "已生效的计划不能被改回其他状态")
+	again, _ := repo.LatestApplied(ctx, "crypto")
+	require.Equal(t, FetchPlanApplied, again.Status)
 }
 
 func TestBackfillJobChunksClaimAndWatermark(t *testing.T) {

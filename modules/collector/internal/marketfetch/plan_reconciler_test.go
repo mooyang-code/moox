@@ -163,6 +163,12 @@ func (c *fakePlanCloud) SubmitCreateNodes(_ context.Context, _ string, items []*
 }
 
 func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patches []*cloudnodepb.NodeRuntimeConfigPatch) (string, error) {
+	// 与 CloudNode 的预检一致：cron 不能为空，任何一项不合法整批拒绝。
+	for _, patch := range patches {
+		if strings.TrimSpace(patch.GetTimerCron()) == "" {
+			return "", errors.New("INVALID_PARAM: timer_cron is required")
+		}
+	}
 	names := make([]string, 0, len(patches))
 	for _, patch := range patches {
 		names = append(names, patch.GetNodeId())
@@ -318,7 +324,7 @@ func TestPlanReconcilerFullLifecycle(t *testing.T) {
 	require.Equal(t, store.FetchPlanApplying, record.Status)
 	content := h.content(record)
 	change := content.Datasets["ds_spot|1m"]
-	require.Equal(t, time.Date(2026, 10, 12, 8, 33, 0, 0, time.UTC).Unix(), change.P)
+	require.Equal(t, time.Date(2026, 10, 12, 8, 37, 0, 0, time.UTC).Unix(), change.P)
 	require.Equal(t, 15, h.lateness.values["ds_spot"])
 	require.Equal(t, []int64{change.P}, h.registrar.registered["ds_spot|1m"])
 	require.Len(t, h.cloud.created, 3)
@@ -539,6 +545,7 @@ func TestPlanReconcilerRepairsDriftHourly(t *testing.T) {
 	for name, patch := range h.cloud.patches {
 		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, Metadata: map[string]any{
 			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
+			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
 			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(),
 		}}
 	}
@@ -618,4 +625,126 @@ func TestPlanManagerRunsOneWorkerPerSpaceAndDisablesRemovedSpace(t *testing.T) {
 		}
 	}
 	require.Equal(t, 2, disabled, "every function of the removed space is disabled")
+}
+
+func TestPlanReconcilerCreateFailureDoesNotBlockExistingFunctions(t *testing.T) {
+	h := newPlanHarness(t, 120)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+
+	// 120 → 140 个标的需要新增第 3 个函数以外的容量变化：50*3=150 足够，无需新函数；
+	// 改成 160 个标的 → 4 个函数，其中新增 1 个，创建失败。
+	h.setSubjects(160)
+	state, _ := BuildDesiredState(testPlanOptions(), testGroups(160, "1m"), nil)
+	var failing string
+	for name := range state.Functions {
+		if strings.HasSuffix(name, "-003") {
+			failing = name
+		}
+	}
+	h.cloud.failNodes[failing] = true
+	h.cloud.patches = map[string]*cloudnodepb.NodeRuntimeConfigPatch{}
+	require.Error(t, h.reconcile(r))
+	require.Len(t, h.cloud.patches, 3, "the three existing functions still receive their transitional environment")
+	require.Empty(t, h.cloud.patches[failing])
+	delete(h.cloud.failNodes, failing)
+	require.NoError(t, h.reconcile(r))
+	require.NotNil(t, h.cloud.patches[failing])
+}
+
+func TestPlanReconcilerRetiredFunctionsGetAValidCronWhenDisabled(t *testing.T) {
+	h := newPlanHarness(t, 120)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	h.setSubjects(40)
+	require.NoError(t, h.reconcile(r))
+	p := h.content(h.open()).Datasets["ds_spot|1m"].P
+	h.now = time.Unix(p, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r), "the final push of retired functions must pass CloudNode's cron preflight")
+	require.Nil(t, h.open())
+}
+
+func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsAccessDrift(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+
+	created := len(h.cloud.created)
+	for name := range h.cloud.nodes {
+		delete(h.cloud.nodes, name)
+		break
+	}
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, created+1, len(h.cloud.created), "a function deleted in the cloud is rebuilt from the applied plan")
+}
+
+func TestPlanReconcilerRollbackStopsDatasetAtBoundary(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+
+	// 回退：任务仍是 timer 模式，但设置了旧链路下界 T'。
+	boundary := h.now.Truncate(time.Hour).Add(3 * time.Hour)
+	h.tasks.tasks[0].CollectParams = strings.Replace(h.tasks.tasks[0].CollectParams, `"fetch_mode":"timer"`, `"fetch_mode":"timer","invoke_from_period":"`+boundary.Format(time.RFC3339)+`"`, 1)
+	require.NoError(t, h.reconcile(r))
+	record := h.open()
+	require.NotNil(t, record)
+	stop := h.content(record).Datasets["ds_spot|1m"]
+	require.True(t, stop.Gone)
+	require.Equal(t, boundary.Unix(), stop.P, "the dataset stops exactly where the old chain takes over")
+	for name, patch := range h.cloud.patches {
+		plan, err := DecodePlan(patch.GetManagedEnvironment()[PlanEnvName])
+		require.NoError(t, err, name)
+		copies := plan.Datasets[0].Copies
+		require.Len(t, copies, 2)
+		require.Empty(t, copies[1].Subjects)
+		require.Equal(t, boundary.Unix(), copies[1].From)
+	}
+}
+
+func TestTransitionalPlanDropsRemovedSymbolExceptions(t *testing.T) {
+	old := &Plan{V: 1, Market: PlanMarket{MarketID: "crypto", Provider: "binance", SourceID: "s", MarketType: "spot"}, Fetch: PlanFetch{Concurrency: 5},
+		SymbolExceptions: map[string]string{"1000SHIB-USDT": "1000SHIBUSDT"},
+		Datasets:         []PlanDataset{{DatasetID: "d", Frequency: "1m", LatenessS: 15, Copies: []PlanCopy{{From: 100, Hash: "h", Count: 2, Subjects: []PlanSubject{{ID: "1000SHIB-USDT", Index: 0}, {ID: "BTC-USDT", Index: 1}}}}}}}
+	next := &Plan{V: 1, Market: old.Market, Fetch: old.Fetch,
+		Datasets: []PlanDataset{{DatasetID: "d", Frequency: "1m", LatenessS: 15, Copies: []PlanCopy{{Hash: "h2", Count: 2, Subjects: []PlanSubject{{ID: "1000SHIB-USDT", Index: 0}, {ID: "BTC-USDT", Index: 1}}}}}}}
+	content := &FetchPlanContent{Datasets: map[string]*PlanDatasetChange{"d|1m": {Changed: true, HashChanged: true, P: 200, PlanDatasetState: PlanDatasetState{DatasetID: "d", Frequency: "1m", Hash: "h2", Count: 2}}}}
+	function := &PlanFunctionChange{Name: "f", Old: old, New: next}
+	transitional := content.TransitionalPlan(function)
+	require.Empty(t, transitional.SymbolExceptions, "an exception that was removed from the new plan must not survive")
+
+	next.SymbolExceptions = map[string]string{"1000SHIB-USDT": "1000SHIBUSDT"}
+	require.Equal(t, "1000SHIBUSDT", content.TransitionalPlan(function).SymbolExceptions["1000SHIB-USDT"])
+}
+
+func TestBuildDesiredStateRejectsMarketTypeClash(t *testing.T) {
+	groups := testGroups(5, "1m")
+	other := testGroups(5, "1h")[0]
+	other.Provider, other.SourceID = "okx", "okx"
+	other.DatasetID = "ds_okx"
+	_, err := BuildDesiredState(testPlanOptions(), append(groups, other), nil)
+	require.ErrorContains(t, err, "more than one market")
+}
+
+func TestPlanLeadIsLongerWhenFunctionsMustBeCreated(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	require.GreaterOrEqual(t, change.P-h.now.Unix(), int64(planLeadTimeWithCreate/time.Second))
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -47,6 +48,14 @@ type JobRequest struct {
 	To        time.Time `json:"to"`
 	// Force 为 true 时不检查缺口，范围内应有的 K 线全部重拉。
 	Force bool `json:"force,omitempty"`
+	// Watermark 非空表示这是自动补采作业：作业成功后才把该数据集的扫描水位推进到 To。
+	Watermark *WatermarkTarget `json:"watermark,omitempty"`
+}
+
+// WatermarkTarget 标识自动补采作业成功后要推进水位的数据集与频率。
+type WatermarkTarget struct {
+	DatasetID string `json:"dataset_id"`
+	Frequency string `json:"frequency"`
 }
 
 // BackfillStore 是补采需要的持久化接口，由 *store.BackfillRepository 实现。
@@ -111,6 +120,9 @@ func (b *Backfiller) Wait() { b.workers.Wait() }
 
 // splitGap 把一段缺口拆成每块至多 MaxChunkBars 根的分块。
 func splitGap(gap Gap, step time.Duration) [][2]time.Time {
+	if step <= 0 {
+		return nil
+	}
 	var parts [][2]time.Time
 	for from := gap.From; from.Before(gap.To); {
 		to := from.Add(time.Duration(MaxChunkBars) * step)
@@ -134,6 +146,13 @@ func (b *Backfiller) Check(ctx context.Context, request Request) (*Result, error
 
 // Submit 创建补采作业：先找出缺口（Force 时为全部应有 K 线），拆成分块并保存。返回作业 ID 与分块数。
 func (b *Backfiller) Submit(ctx context.Context, request JobRequest, source string) (string, int, error) {
+	return b.submit(ctx, request, source, MaxChunksPerJob)
+}
+
+// errTooManyChunks 表示范围展开的分块数超过上限，调用方可缩小范围重试。
+var errTooManyChunks = fmt.Errorf("the range expands to too many chunks")
+
+func (b *Backfiller) submit(ctx context.Context, request JobRequest, source string, maxChunks int) (string, int, error) {
 	if b == nil || b.Checker == nil || b.Store == nil {
 		return "", 0, fmt.Errorf("backfiller is not initialized")
 	}
@@ -145,7 +164,7 @@ func (b *Backfiller) Submit(ctx context.Context, request JobRequest, source stri
 		return "", 0, nil
 	}
 	if result.Truncated {
-		return "", 0, fmt.Errorf("the range has more than %d gaps; narrow the range", MaxGaps)
+		return "", 0, fmt.Errorf("%w: more than %d gaps", errTooManyChunks, MaxGaps)
 	}
 	jobID := uuid.NewString()
 	var chunks []store.BackfillChunk
@@ -158,8 +177,8 @@ func (b *Backfiller) Submit(ctx context.Context, request JobRequest, source stri
 			chunks = append(chunks, store.BackfillChunk{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: part[0], To: part[1], ChunkID: chunkID(jobID, gap.DatasetID, gap.Frequency, gap.SubjectID, part[0])})
 		}
 	}
-	if len(chunks) > MaxChunksPerJob {
-		return "", 0, fmt.Errorf("the range expands to %d chunks (limit %d); narrow the range", len(chunks), MaxChunksPerJob)
+	if len(chunks) > maxChunks {
+		return "", 0, fmt.Errorf("%w: %d chunks (limit %d)", errTooManyChunks, len(chunks), maxChunks)
 	}
 	raw, _ := json.Marshal(request)
 	if err := b.Store.CreateJob(ctx, store.BackfillJob{JobID: jobID, SpaceID: request.SpaceID, Source: source, Request: string(raw)}, chunks); err != nil {
@@ -257,6 +276,9 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 			}
 			if err := b.Store.SetJobStatus(ctx, job.JobID, status, message); err != nil {
 				return err
+			}
+			if status == store.BackfillSucceeded {
+				b.advanceWatermark(ctx, job)
 			}
 		}
 	}
@@ -361,7 +383,8 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	}
 	functionName, err := provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
 	if err != nil {
-		fail(err)
+		// 补采函数暂时不可用（创建中、发布租约被占用）：不算分块失败，名额到期后重新认领。
+		log.WarnContextf(ctx, "collector backfill function is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
 		return
 	}
 	request, err := chunkRequest(spaceID, functionName, plan, chunk)
@@ -406,6 +429,17 @@ func bars(chunk store.BackfillChunk) int {
 		return 0
 	}
 	return int(chunk.To.Sub(chunk.From) / frequency.Duration())
+}
+
+// advanceWatermark 自动补采作业全部成功后才推进扫描水位；失败的作业不推进，下次扫描会重新覆盖同一窗口。
+func (b *Backfiller) advanceWatermark(ctx context.Context, job store.BackfillJob) {
+	var request JobRequest
+	if json.Unmarshal([]byte(job.Request), &request) != nil || request.Watermark == nil {
+		return
+	}
+	if err := b.Store.SetWatermark(ctx, job.SpaceID, request.Watermark.DatasetID, request.Watermark.Frequency, request.To); err != nil {
+		log.WarnContextf(ctx, "collector auto backfill watermark update failed job=%s: %v", job.JobID, err)
+	}
 }
 
 // AutoScan 每小时一次：从扫描水位（向前重叠 10 分钟）起，检查已过截止时间的周期，发现缺口就建立自动补采作业。
@@ -471,20 +505,34 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 		if !from.Before(to) {
 			continue
 		}
-		jobID, chunks, err := b.Submit(ctx, JobRequest{SpaceID: spaceID, DatasetID: datasetID, From: from, To: to}, "auto")
-		if err != nil {
-			log.WarnContextf(ctx, "collector auto backfill scan failed space=%s dataset=%s: %v", spaceID, key, err)
+		// 窗口展开的分块太多时对半缩小再试；缩到 10 分钟仍太多就跳过本轮，等下一轮。
+		windowTo := to
+		var jobID string
+		var chunks int
+		var submitErr error
+		for {
+			request := JobRequest{SpaceID: spaceID, DatasetID: datasetID, From: from, To: windowTo, Watermark: &WatermarkTarget{DatasetID: datasetID, Frequency: frequencyName}}
+			jobID, chunks, submitErr = b.submit(ctx, request, "auto", autoMaxChunks)
+			if submitErr == nil || !errors.Is(submitErr, errTooManyChunks) || windowTo.Sub(from) <= 10*time.Minute {
+				break
+			}
+			windowTo = from.Add(windowTo.Sub(from) / 2).Truncate(frequency.Duration())
+			if !windowTo.After(from) {
+				break
+			}
+		}
+		if submitErr != nil {
+			log.WarnContextf(ctx, "collector auto backfill scan failed space=%s dataset=%s: %v", spaceID, key, submitErr)
 			continue
 		}
-		if chunks > autoMaxChunks {
-			log.WarnContextf(ctx, "collector auto backfill job is large space=%s dataset=%s chunks=%d", spaceID, key, chunks)
+		if jobID == "" {
+			// 窗口内没有缺口：直接推进水位。
+			if err := b.Store.SetWatermark(ctx, spaceID, datasetID, frequencyName, windowTo); err != nil {
+				return err
+			}
+			continue
 		}
-		if jobID != "" {
-			log.InfoContextf(ctx, "collector auto backfill job created space=%s dataset=%s job=%s chunks=%d", spaceID, key, jobID, chunks)
-		}
-		if err := b.Store.SetWatermark(ctx, spaceID, datasetID, frequencyName, to); err != nil {
-			return err
-		}
+		log.InfoContextf(ctx, "collector auto backfill job created space=%s dataset=%s job=%s chunks=%d", spaceID, key, jobID, chunks)
 	}
 	return nil
 }

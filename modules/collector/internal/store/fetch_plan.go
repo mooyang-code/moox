@@ -86,22 +86,6 @@ func (r *FetchPlanRepository) LatestApplied(ctx context.Context, spaceID string)
 	return row.record(), nil
 }
 
-// AppliedSince 按时间顺序返回自 since 之后（含最近一份之前的一份基线）已生效的计划，用于还原历史上的应有标的。
-func (r *FetchPlanRepository) AppliedSince(ctx context.Context, spaceID string, since time.Time) ([]*FetchPlanRecord, error) {
-	if r == nil || r.db == nil {
-		return nil, fmt.Errorf("fetch plan repository is not initialized")
-	}
-	var rows []fetchPlanRow
-	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status = ? AND c_mtime >= ?", strings.TrimSpace(spaceID), FetchPlanApplied, since.UTC()).Order("c_id ASC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	records := make([]*FetchPlanRecord, 0, len(rows))
-	for _, row := range rows {
-		records = append(records, row.record())
-	}
-	return records, nil
-}
-
 // Create 保存新的计划，状态为 pending。该空间已有未生效计划时返回 ErrFetchPlanOpen。
 func (r *FetchPlanRepository) Create(ctx context.Context, spaceID, plan, progress string) (*FetchPlanRecord, error) {
 	if r == nil || r.db == nil {
@@ -137,7 +121,7 @@ func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, prog
 	if strings.TrimSpace(progress) == "" {
 		progress = "{}"
 	}
-	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ?", id).Updates(map[string]any{"c_status": status, "c_progress": progress, "c_last_error": lastError, "c_mtime": time.Now().UTC()})
+	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_status": status, "c_progress": progress, "c_last_error": lastError, "c_mtime": time.Now().UTC()})
 	if result.Error != nil {
 		return result.Error
 	}

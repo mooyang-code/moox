@@ -119,13 +119,11 @@ func (r *BackfillRepository) CreateJob(ctx context.Context, job BackfillJob, chu
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
+		rows := make([]backfillChunkRow, 0, len(chunks))
 		for _, chunk := range chunks {
-			chunkRow := backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, From: chunk.From.UTC(), To: chunk.To.UTC(), ChunkID: chunk.ChunkID, Status: BackfillPending, UpdatedAt: now}
-			if err := tx.Create(&chunkRow).Error; err != nil {
-				return err
-			}
+			rows = append(rows, backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, From: chunk.From.UTC(), To: chunk.To.UTC(), ChunkID: chunk.ChunkID, Status: BackfillPending, UpdatedAt: now})
 		}
-		return nil
+		return tx.CreateInBatches(&rows, 200).Error
 	})
 }
 
@@ -173,7 +171,8 @@ func (r *BackfillRepository) SetJobStatus(ctx context.Context, jobID, status, la
 	if r == nil || r.db == nil {
 		return fmt.Errorf("backfill repository is not initialized")
 	}
-	return r.db.WithContext(ctx).Model(&backfillJobRow{}).Where("c_job_id = ?", jobID).Updates(map[string]any{"c_status": status, "c_last_error": lastError, "c_mtime": time.Now().UTC()}).Error
+	// 已取消的作业不会被改回运行中。
+	return r.db.WithContext(ctx).Model(&backfillJobRow{}).Where("c_job_id = ? AND c_status <> ?", jobID, BackfillCanceled).Updates(map[string]any{"c_status": status, "c_last_error": lastError, "c_mtime": time.Now().UTC()}).Error
 }
 
 // CancelJob 取消作业：把尚未开始的分块标记为取消；运行中的分块等其结束。

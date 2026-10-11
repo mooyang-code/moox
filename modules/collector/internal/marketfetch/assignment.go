@@ -33,6 +33,8 @@ type TaskGroup struct {
 	SymbolsPerFunction     int
 	AllowedLatenessSeconds int
 	StartAt                int64
+	// StopAt：定时模式的任务设置了旧链路下界（正在回退），数据集在该时间（Unix 秒）后不再由定时函数采集。
+	StopAt int64
 }
 
 // NodeAssignment is the deterministic desired state for one SCF node.
