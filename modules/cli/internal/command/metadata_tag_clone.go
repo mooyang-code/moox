@@ -37,9 +37,35 @@ var metadataTagCloneCmd = &cobra.Command{
 	},
 }
 
+type metadataTagMembersFlags struct {
+	File    string
+	SpaceID string
+	TagID   string
+	Add     []string
+	Remove  []string
+}
+
+var metadataTagMembersFlagsValue metadataTagMembersFlags
+
+var metadataTagMembersCmd = &cobra.Command{
+	Use:   "members",
+	Short: "给手动标签增删成员（用于验证标的变更对采集计划的影响）",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runMetadataTagMembers(cmd.Context(), cmd.OutOrStdout(), metadataTagMembersFlagsValue)
+	},
+}
+
 func init() {
 	metadataCmd.AddCommand(metadataTagCmd)
 	metadataTagCmd.AddCommand(metadataTagCloneCmd)
+	metadataTagCmd.AddCommand(metadataTagMembersCmd)
+	memberFlags := metadataTagMembersCmd.Flags()
+	memberFlags.StringVar(&metadataTagMembersFlagsValue.File, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
+	memberFlags.StringVar(&metadataTagMembersFlagsValue.SpaceID, "space-id", "", "空间 ID")
+	memberFlags.StringVar(&metadataTagMembersFlagsValue.TagID, "tag-id", "", "标签 ID")
+	memberFlags.StringSliceVar(&metadataTagMembersFlagsValue.Add, "add", nil, "要加入的标的 ID（逗号分隔）")
+	memberFlags.StringSliceVar(&metadataTagMembersFlagsValue.Remove, "remove", nil, "要移出的标的 ID（逗号分隔）")
 	flags := metadataTagCloneCmd.Flags()
 	flags.StringVar(&metadataTagCloneFlagsValue.File, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	flags.StringVar(&metadataTagCloneFlagsValue.SpaceID, "space-id", "", "空间 ID")
@@ -99,4 +125,32 @@ func runMetadataTagClone(ctx context.Context, out io.Writer, flags metadataTagCl
 		return fmt.Errorf("添加标签成员失败: %w", err)
 	}
 	return printJSON(out, map[string]any{"tag_id": flags.TagID, "source": tag.Source, "market_type": tag.MarketType, "members": len(subjects), "affected": added.GetAffected()})
+}
+
+func runMetadataTagMembers(ctx context.Context, out io.Writer, flags metadataTagMembersFlags) error {
+	if flags.SpaceID == "" || flags.TagID == "" || (len(flags.Add) == 0 && len(flags.Remove) == 0) {
+		return errors.New("--space-id、--tag-id，以及 --add 或 --remove 至少一项是必填的")
+	}
+	gateway, err := openCommandGateway(ctx, flags.File, nil)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+	const service = "trpc.moox.storage.Metadata"
+	result := map[string]any{"tag_id": flags.TagID}
+	if len(flags.Add) > 0 {
+		added := &pb.TagMembersRsp{}
+		if err := postStorageRaw(ctx, gateway, service, "AddTagMembers", &pb.TagMembersReq{SpaceId: flags.SpaceID, TagId: flags.TagID, SubjectIds: flags.Add}, added); err != nil {
+			return fmt.Errorf("添加标签成员失败: %w", err)
+		}
+		result["added"] = added.GetAffected()
+	}
+	if len(flags.Remove) > 0 {
+		removed := &pb.TagMembersRsp{}
+		if err := postStorageRaw(ctx, gateway, service, "RemoveTagMembers", &pb.TagMembersReq{SpaceId: flags.SpaceID, TagId: flags.TagID, SubjectIds: flags.Remove}, removed); err != nil {
+			return fmt.Errorf("移除标签成员失败: %w", err)
+		}
+		result["removed"] = removed.GetAffected()
+	}
+	return printJSON(out, result)
 }
