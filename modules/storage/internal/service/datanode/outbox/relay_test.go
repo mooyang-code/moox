@@ -598,3 +598,52 @@ func TestRelayQuarantinesInvalidOutboxEventsAndPublishesTheRest(t *testing.T) {
 		t.Fatalf("坏记录应被隔离删除：remaining=%v err=%v", entries, err)
 	}
 }
+
+type stopAfterFirstPublisher struct {
+	relay    *Relay
+	attempts int
+}
+
+func (p *stopAfterFirstPublisher) PublishMessage(_ context.Context, _ []byte) error {
+	p.attempts++
+	if p.attempts == 1 {
+		p.relay.Close() // 模拟发布期间收到关闭信号
+	}
+	return nil
+}
+
+func TestRelayStopsStartingNewPublishesAfterClose(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	for i := 0; i < 3; i++ {
+		if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+			return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publisher := &stopAfterFirstPublisher{}
+	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := NewRelay(store, publisher, RelayOptions{BatchSize: 10, Metrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher.relay = relay
+	if err := relay.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if publisher.attempts != 1 {
+		t.Fatalf("关闭后仍继续发布：attempts = %d", publisher.attempts)
+	}
+	entries, err := store.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("remaining outbox=%v err=%v，期望已确认的 1 条被清理、其余 2 条保留", entries, err)
+	}
+}

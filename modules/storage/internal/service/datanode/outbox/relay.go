@@ -202,6 +202,12 @@ func (r *Relay) flush(ctx context.Context) error {
 	}
 	confirmed := make([]uint64, 0, len(entries))
 	for _, entry := range entries {
+		// 关闭后不再启动下一条发布，只排空当前这条；已确认项照常清理，其余事件保留在持久化队列中
+		select {
+		case <-r.stop:
+			return r.finishConfirmed(ctx, confirmed)
+		default:
+		}
 		var ack *jetstream.PublishAck
 		publishAttempted := false
 		err := r.store.PublishOutboxPublication(ctx, entry.ID, func(data []byte) error {
@@ -247,7 +253,15 @@ func (r *Relay) flush(ctx context.Context) error {
 		confirmed = append(confirmed, entry.ID)
 		r.publishFailures = 0
 	}
-	err = r.options.DeleteOutbox(ctx, confirmed)
+	return r.finishConfirmed(ctx, confirmed)
+}
+
+// finishConfirmed 清理已确认的出站事件并刷新队列快照。
+func (r *Relay) finishConfirmed(ctx context.Context, confirmed []uint64) error {
+	if len(confirmed) == 0 {
+		return nil
+	}
+	err := r.options.DeleteOutbox(ctx, confirmed)
 	if err == nil {
 		pending, _, _, oldest := r.store.OutboxPendingHint()
 		r.metrics.SetOutboxSnapshotAt(pending, oldest)

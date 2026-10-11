@@ -490,3 +490,24 @@ def test_batch_log_budget_keeps_every_factor_result_encodable(tmp_path: Path):
     assert all(item["ok"] for item in response["items"])
     total = sum(len(json.dumps(item["logs"]["stdout"])) + len(json.dumps(item["logs"]["stderr"])) for item in response["items"])
     assert total <= 512 * 1024 + 4 * len(response["items"])  # 预算耗尽后空串仍占引号开销
+
+
+def test_huge_exception_message_is_bounded_and_siblings_survive(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    bad = write_factor(factors_dir, "Boom", 'raise RuntimeError("e" * 5_000_000)')
+    good = write_factor(
+        factors_dir,
+        "Fine",
+        'result = df[["data_time", "series_tag"]].copy(); result["fine"] = df["value"]; return result',
+    )
+    calls = [
+        factor_call(bad, "factor_bad", "Boom", ["value"], ["boom"]),
+        factor_call(good, "factor_good", "Fine", ["value"], ["fine"]),
+    ]
+    worker = FactorWorker(factors_dir)
+    response = worker.execute_request(batch_request(calls))
+    by_id = {item["factor_id"]: item for item in response["items"]}
+    assert by_id["factor_good"]["ok"]
+    assert not by_id["factor_bad"]["ok"]
+    assert len(json.dumps(by_id["factor_bad"]["error"]["message"])) <= 256 * 1024
+    assert by_id["factor_bad"]["error"]["type"] == "RuntimeError"

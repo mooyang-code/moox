@@ -34,6 +34,7 @@ _TRUNCATED_MARK = "\n[输出已截断]"
 
 # 一个批次的日志总预算（字节，按 JSON 转义后的长度计）：单流上限之外，多个因子同时大量输出也不能撑破结果帧的元数据上限。
 _BATCH_LOG_BUDGET_BYTES = 512 * 1024
+_BATCH_ERROR_BUDGET_BYTES = 256 * 1024  # 整批异常文本预算，与日志预算分开计算
 
 
 def _json_size(text):
@@ -54,6 +55,17 @@ def _fit_logs(logs, budget):
         budget[0] = max(0, budget[0] - _json_size(text))
         fitted[name] = text
     return fitted
+
+
+def _fit_error(exc, budget):
+    """异常类型与消息同样受预算约束：单个因子的超大异常文本不能撑爆整批结果帧。"""
+    message = _fit_logs({"stdout": str(exc)}, budget)["stdout"]
+    return {"type": type(exc).__name__[:256], "message": message}
+
+
+def _clip_message(exc):
+    """单条协议错误帧的消息裁剪（独立 64KiB 预算）。"""
+    return _fit_logs({"stdout": str(exc)}, [64 * 1024])["stdout"]
 
 
 def _bounded_pair():
@@ -101,6 +113,7 @@ class FactorWorker:
         items = []
         seen = set()
         log_budget = [_BATCH_LOG_BUDGET_BYTES]
+        error_budget = [_BATCH_ERROR_BUDGET_BYTES]
         for factor in factors:
             if not isinstance(factor, dict):
                 raise TypeError("batch factor item must be an object")
@@ -124,7 +137,7 @@ class FactorWorker:
                 items.append({
                     "factor_id": factor_id,
                     "ok": False,
-                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                    "error": _fit_error(exc, error_budget),
                     "logs": _fit_logs({"stdout": getattr(exc, "stdout", ""), "stderr": getattr(exc, "stderr", "")}, log_budget),
                 })
         return encode_json_batch_results(meta.get("id", ""), items)
@@ -398,7 +411,7 @@ def main():
                         {
                             "id": meta.get("id", ""),
                             "error_type": type(exc).__name__,
-                            "message": str(exc),
+                            "message": _clip_message(exc),
                             "diagnostics": {
                                 "stdout": getattr(exc, "stdout", ""),
                                 "stderr": getattr(exc, "stderr", ""),
@@ -416,13 +429,13 @@ def main():
                 write_frame(
                     sys.stdout.buffer,
                     TYPE_ERROR,
-                    {"id": meta.get("id", ""), "error_type": type(exc).__name__, "message": str(exc)},
+                    {"id": meta.get("id", ""), "error_type": type(exc).__name__, "message": _clip_message(exc)},
                 )
     except EOFError:
         return
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc(file=sys.stderr)
-        write_frame(sys.stdout.buffer, TYPE_ERROR, {"id": "", "error_type": type(exc).__name__, "message": str(exc)})
+        write_frame(sys.stdout.buffer, TYPE_ERROR, {"id": "", "error_type": type(exc).__name__, "message": _clip_message(exc)})
 
 
 if __name__ == "__main__":
