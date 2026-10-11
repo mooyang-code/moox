@@ -52,6 +52,10 @@ class _BoundedTextStream(TextIOBase):
         return bytes(self._buffer).decode("utf-8", errors="ignore")
 
 
+# 公开别名：因子 worker 需要按因子分别保留 stdout/stderr 的有界缓冲，不用整个批次共用一个上下文。
+BoundedTextStream = _BoundedTextStream
+
+
 @dataclass
 class CapturedOutput:
     stdout: str = ""

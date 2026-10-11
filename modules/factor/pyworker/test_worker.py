@@ -440,3 +440,33 @@ def batch_request(factors, rows=None, columns=None):
         },
         "df": {"columns": columns, "rows": rows}, "factors": factors,
     }
+
+
+def test_noisy_factor_logs_are_bounded_and_do_not_fail_the_batch(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    noisy = write_factor(
+        factors_dir,
+        "Loud",
+        'print("x" * 5_000_000); import sys; print("y" * 5_000_000, file=sys.stderr); '
+        'result = df[["data_time", "series_tag"]].copy(); result["loud"] = df["value"]; return result',
+    )
+    worker = FactorWorker(factors_dir)
+    meta = batch_request([
+        factor_call(factors_dir / "Generic.py", "factor_one", "Generic", ["value"], ["double", "triple"]),
+        factor_call(noisy, "factor_loud", "Loud", ["value"], ["loud"]),
+    ])
+    response = worker.execute_request(meta)
+    assert all(item["ok"] for item in response["items"])  # 大量日志不能让同批其他因子的结果丢失
+    logs = response["items"][1]["logs"]
+    assert len(logs["stdout"].encode()) < 128 * 1024 and logs["stdout"].endswith("[输出已截断]")
+    assert len(logs["stderr"].encode()) < 128 * 1024 and logs["stderr"].endswith("[输出已截断]")
+
+
+def test_noisy_import_diagnostics_are_bounded(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    noisy = factors_dir / "NoisyImport.py"
+    noisy.write_text("print('z' * 5_000_000)\nraise ValueError('broken')\n", encoding="utf-8")
+    worker = FactorWorker(factors_dir)
+    with pytest.raises(Exception, match="broken") as exc_info:
+        load_factor(worker, noisy, "NoisyImport")
+    assert len(exc_info.value.stdout.encode()) < 128 * 1024

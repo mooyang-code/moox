@@ -327,31 +327,52 @@ func ensureCOSBucket(ctx context.Context, account store.CloudAccount, credential
 		return fmt.Errorf("create COS client")
 	}
 	_, err := client.Bucket.Head(ctx)
-	if err == nil {
-		return nil
-	}
-	if !cos.IsNotFoundError(err) {
-		return fmt.Errorf("check bucket %s: %w", account.COSBucket, err)
-	}
-	if _, err := client.Bucket.Put(ctx, &cos.BucketPutOptions{XCosACL: "private"}); err != nil {
-		// A concurrent CLI invocation may have created it after our HEAD.
-		if _, verifyErr := client.Bucket.Head(ctx); verifyErr != nil {
-			return fmt.Errorf("create bucket %s: %w", account.COSBucket, err)
+	if err != nil {
+		if !cos.IsNotFoundError(err) {
+			return fmt.Errorf("check bucket %s: %w", account.COSBucket, err)
 		}
-		return nil
+		if _, err := client.Bucket.Put(ctx, &cos.BucketPutOptions{XCosACL: "private"}); err != nil {
+			// A concurrent CLI invocation may have created it after our HEAD.
+			if _, verifyErr := client.Bucket.Head(ctx); verifyErr != nil {
+				return fmt.Errorf("create bucket %s: %w", account.COSBucket, err)
+			}
+		} else if _, err := client.Bucket.Head(ctx); err != nil {
+			return fmt.Errorf("verify bucket %s: %w", account.COSBucket, err)
+		}
 	}
-	if _, err := client.Bucket.Head(ctx); err != nil {
-		return fmt.Errorf("verify bucket %s: %w", account.COSBucket, err)
+	// 桶存在与 CORS 就绪分开处理：首次配置 CORS 失败后，重试时桶已存在，也要补上规则。
+	return ensureBucketCORS(ctx, client.Bucket, account.COSBucket)
+}
+
+// corsAPI 是 ensureBucketCORS 需要的桶 CORS 读写能力（*cos.BucketService 提供）。
+type corsAPI interface {
+	GetCORS(ctx context.Context) (*cos.BucketGetCORSResult, *cos.Response, error)
+	PutCORS(ctx context.Context, opt *cos.BucketPutCORSOptions) (*cos.Response, error)
+}
+
+// ensureBucketCORS 保证桶允许浏览器跨域 PUT/GET 预签名 URL：控制台直接上传到 COS，预检需要桶的 CORS 规则。
+// 桶仍是私有的，所有访问都要带签名，所以放开来源。已经有包含 PUT 的规则时不改动。
+func ensureBucketCORS(ctx context.Context, api corsAPI, bucket string) error {
+	result, _, err := api.GetCORS(ctx)
+	if err == nil && result != nil {
+		for _, rule := range result.Rules {
+			for _, method := range rule.AllowedMethods {
+				if strings.EqualFold(method, "PUT") {
+					return nil
+				}
+			}
+		}
+	} else if err != nil && !cos.IsNotFoundError(err) {
+		return fmt.Errorf("read CORS of bucket %s: %w", bucket, err)
 	}
-	// 控制台用浏览器直接 PUT 到预签名 URL，跨域预检需要桶的 CORS 规则。桶仍是私有的，访问都要带签名，所以放开来源。
-	if _, err := client.Bucket.PutCORS(ctx, &cos.BucketPutCORSOptions{Rules: []cos.BucketCORSRule{{
+	if _, err := api.PutCORS(ctx, &cos.BucketPutCORSOptions{Rules: []cos.BucketCORSRule{{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"PUT", "GET", "HEAD"},
 		AllowedHeaders: []string{"*"},
 		ExposeHeaders:  []string{"ETag"},
 		MaxAgeSeconds:  3600,
 	}}}); err != nil {
-		return fmt.Errorf("configure CORS for bucket %s: %w", account.COSBucket, err)
+		return fmt.Errorf("configure CORS for bucket %s: %w", bucket, err)
 	}
 	return nil
 }

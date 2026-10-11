@@ -8,7 +8,6 @@ import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -19,12 +18,26 @@ if runtime_python:
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "pyruntime" / "python"))
 
+from moox_pyruntime.capture import BoundedTextStream
 from codec import TYPE_ERROR, TYPE_HELLO, TYPE_LOAD, TYPE_RESULT, TYPE_RUN, decode_json_df, encode_json_batch_results, read_frame, write_frame, _validate_series_tags
 
 
 _SOURCE_HASH = re.compile(r"^sha256:([0-9a-f]{64})$")
 _LEGACY_FIELDS = {"task_id", "binding_id", "config_snapshot_id", "missing_subjects"}
 _IDENTITY_COLUMNS = {"data_time", "series_tag", "subject_id"}
+# 每个因子导入/计算保留的 stdout、stderr 上限（字节）。超出部分丢弃并标记，避免诊断日志撑破结果帧的元数据上限，
+# 让同一批次其他因子的结果也无法返回。
+_LOG_LIMIT_BYTES = 64 * 1024
+_TRUNCATED_MARK = "\n[输出已截断]"
+
+
+def _bounded_pair():
+    return BoundedTextStream(_LOG_LIMIT_BYTES), BoundedTextStream(_LOG_LIMIT_BYTES)
+
+
+def _text(stream):
+    value = stream.getvalue()
+    return value + _TRUNCATED_MARK if stream.truncated else value
 
 
 class FactorWorker:
@@ -135,7 +148,7 @@ class FactorWorker:
         projected = list(dict.fromkeys([*identity, *input_columns]))
         factor_frame = self.slice_batch_frame(frame, periods)[projected].copy(deep=True)
 
-        stdout, stderr = StringIO(), StringIO()
+        stdout, stderr = _bounded_pair()
         try:
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 module, load_diagnostics = self.ensure_factor_loaded(factor)
@@ -156,10 +169,10 @@ class FactorWorker:
                     raise ValueError(f"{name} target periods are outside context period_times")
                 produced = produced[produced["data_time"].isin(target_periods)]
             produced = produced.sort_values(identity, kind="stable").reset_index(drop=True)
-            return produced, {"stdout": stdout.getvalue(), "stderr": stderr.getvalue()}
+            return produced, {"stdout": _text(stdout), "stderr": _text(stderr)}
         except Exception as exc:
-            exc.stdout = stdout.getvalue() + getattr(exc, "stdout", "")
-            exc.stderr = stderr.getvalue() + getattr(exc, "stderr", "")
+            exc.stdout = _text(stdout) + getattr(exc, "stdout", "")
+            exc.stderr = _text(stderr) + getattr(exc, "stderr", "")
             raise
 
     @staticmethod
@@ -224,16 +237,16 @@ class FactorWorker:
         if spec is None or spec.loader is None:
             raise ImportError(f"cannot load factor source {path.name}")
         module = importlib.util.module_from_spec(spec)
-        stdout, stderr = StringIO(), StringIO()
+        stdout, stderr = _bounded_pair()
         sys.modules[module_name] = module
         try:
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 spec.loader.exec_module(module)
         except Exception as exc:
             sys.modules.pop(module_name, None)
-            raise FactorLoadError(f"{type(exc).__name__}: {exc}", stdout.getvalue(), stderr.getvalue()) from exc
+            raise FactorLoadError(f"{type(exc).__name__}: {exc}", _text(stdout), _text(stderr)) from exc
         self.modules[source_hash] = module
-        return {"stdout": stdout.getvalue(), "stderr": stderr.getvalue()}
+        return {"stdout": _text(stdout), "stderr": _text(stderr)}
 
 
 class FactorLoadError(Exception):

@@ -170,6 +170,7 @@
 </template>
 
 <script setup lang="ts">
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
@@ -234,28 +235,39 @@ function emptySubject(): Subject {
   };
 }
 
+// 空间切换后，旧空间迟到的响应不能覆盖新空间的标签与成员列表；对象表单固定在打开时的空间，提交前再校验。
+const tagRequests = createLatestRequestGuard();
+const memberRequests = createLatestRequestGuard();
+let subjectFormSpaceId = "";
+
 async function loadTags() {
-  const rsp = await listTags(props.spaceId);
+  const request = tagRequests.begin();
+  const spaceId = props.spaceId;
+  const rsp = await listTags(spaceId);
+  if (!request.isLatest() || spaceId !== props.spaceId) return;
   tags.value = rsp.tags || [];
   if (selectedTagId.value && !tags.value.some(tag => tag.tag_id === selectedTagId.value)) selectedTagId.value = "";
 }
 
 async function reload() {
   if (!props.spaceId) return;
+  const request = memberRequests.begin();
+  const spaceId = props.spaceId;
   loading.value = true;
   selectedKeys.value = [];
   try {
     const rsp = await listTagMembers({
-      space_id: props.spaceId,
+      space_id: spaceId,
       tag_id: selectedTagId.value || undefined,
       status: statusFilter.value || undefined,
       keyword: keyword.value.trim() || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
+    if (!request.isLatest() || spaceId !== props.spaceId) return;
     rows.value = rsp.members || [];
     applyPageResult(pagination, rsp.page_result);
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
@@ -358,18 +370,25 @@ async function submitSelectedAdd(): Promise<boolean> {
 }
 
 function openSubjectCreate() {
+  subjectFormSpaceId = props.spaceId;
   subjectEditing.value = false;
   Object.assign(subjectForm, emptySubject(), { space_id: props.spaceId });
   subjectVisible.value = true;
 }
 
 function openSubjectEdit(subject: Subject) {
+  subjectFormSpaceId = props.spaceId;
   subjectEditing.value = true;
   Object.assign(subjectForm, subject, { timezone: subject.timezone || "Asia/Shanghai" });
   subjectVisible.value = true;
 }
 
 async function submitSubject(): Promise<boolean> {
+  if (subjectFormSpaceId && subjectFormSpaceId !== props.spaceId) {
+    Message.warning("空间已切换，请重新打开编辑窗口");
+    subjectVisible.value = false;
+    return false;
+  }
   if (!subjectForm.subject_id || !subjectForm.subject_type || !subjectForm.name) {
     Message.warning("请补全对象 ID、对象类型和名称");
     return false;
@@ -407,6 +426,13 @@ watch(
 watch(
   () => props.spaceId,
   () => {
+    tagRequests.invalidate();
+    memberRequests.invalidate();
+    rows.value = [];
+    tags.value = [];
+    selectedKeys.value = [];
+    subjectVisible.value = false;
+    selectedAddVisible.value = false;
     selectedTagId.value = props.initialTagId || "";
     statusFilter.value = "";
     pagination.current = 1;
