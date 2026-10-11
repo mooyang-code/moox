@@ -78,8 +78,17 @@ if [[ "${SKIP_PACK}" -eq 0 ]]; then
       -x "${REPO_NAME}/release/*" \
       -x "${REPO_NAME}/**/.DS_Store" \
       -x "${REPO_NAME}/**/pebble/main/*" \
+      -x "*/moox.toml" -x "*/moox.*.toml" -x "*.env" -x "*/.env.*" \
+      -x "*.pem" -x "*.key" -x "*.p12" -x "*/id_rsa*" -x "*/id_ed25519*" \
+      -x "*/.moox/*" -x "*/hidden/*" \
       >/dev/null
   )
+  chmod 600 "${ZIP_LOCAL}"
+  # 哨兵：包内不得出现私有部署配置或密钥材料
+  if unzip -Z1 "${ZIP_LOCAL}" | grep -E '(^|/)(moox(\.[^/]*)?\.toml|\.env(\..*)?|[^/]*\.(env|pem|key|p12)|id_(rsa|ed25519)[^/]*)$' >/dev/null; then
+    rm -f "${ZIP_LOCAL}"
+    fail "打包内容包含私有配置或密钥文件，已删除临时包"
+  fi
   unzip -l "${ZIP_LOCAL}" | grep 'modules/storage/internal/service/datashard/pebble/store.go' >/dev/null || fail "pebble/store.go missing in zip"
   ls -lh "${ZIP_LOCAL}"
 

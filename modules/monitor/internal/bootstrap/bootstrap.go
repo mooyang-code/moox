@@ -106,8 +106,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	// The scanner and sample path use separate failure callbacks so a failed
 	// transition is audited exactly once.
-	presenceSink := hostPresenceTransitionSinkProviderWithFailure(presenceProvider, nil)
-	presenceScannerSink := hostPresenceTransitionSinkProviderWithFailure(presenceProvider, presenceNotificationFailure)
+	// 两条路径共用同一个按主机串行的投递门，保证上下线通知顺序与主机当前状态一致。
+	presenceGate := newPresenceGate(func(ctx context.Context, agentID string) (string, error) {
+		return hostRegistry.Status(ctx, agentID)
+	})
+	presenceSink := hostPresenceTransitionSinkWithGate(presenceProvider, nil, presenceGate)
+	presenceScannerSink := hostPresenceTransitionSinkWithGate(presenceProvider, presenceNotificationFailure, presenceGate)
 	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceScannerSink)
 
 	var hostStore *hostmetrics.Store

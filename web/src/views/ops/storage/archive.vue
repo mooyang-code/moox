@@ -85,6 +85,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { listArchiveFiles } from "@/api/storage/metadata";
 import type { ArchiveFile } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   applyPageResult,
   defaultPagination,
@@ -106,24 +107,30 @@ const sortBy = ref<ArchiveSortField | "">("");
 const sortOrder = ref<"asc" | "desc">("asc");
 const pagination = reactive(defaultPagination());
 
+const loadGuard = createLatestRequestGuard();
+
 async function load() {
-  if (!selectedSpaceId.value) {
+  const spaceId = selectedSpaceId.value;
+  const request = loadGuard.begin();
+  if (!spaceId) {
     rows.value = [];
+    loading.value = false;
     return;
   }
   loading.value = true;
   try {
     const rsp = await listArchiveFiles({
-      space_id: selectedSpaceId.value,
+      space_id: spaceId,
       dataset_id: datasetFilter.value,
       sort_by: sortBy.value || undefined,
       sort_order: sortBy.value ? sortOrder.value : undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
+    if (!request.isLatest() || spaceId !== selectedSpaceId.value) return;
     rows.value = rsp.archive_files || [];
     applyPageResult(pagination, rsp.page_result);
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
@@ -151,6 +158,10 @@ function onPageSizeChange(pageSize: number) {
 }
 
 watch(selectedSpaceId, () => {
+  // 切换空间：作废在途请求并立即清空列表与分页，避免旧空间响应覆盖
+  loadGuard.invalidate();
+  rows.value = [];
+  pagination.total = 0;
   pagination.current = 1;
   load();
 });
