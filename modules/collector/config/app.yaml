@@ -91,4 +91,6 @@ scf_access:
   caller: scf-collector
   key_id: ""
   key_file: ../../secrets/caller-scf-collector.key
+  # 可选：none（默认）或 gzip，随环境变量 MOOX_GATEWAY_COMPRESSION 下发给 SCF。
+  compression: none
 scf_access_routes: {}
