@@ -1,4 +1,5 @@
 import io
+import json
 import hashlib
 import math
 import subprocess
@@ -470,3 +471,22 @@ def test_noisy_import_diagnostics_are_bounded(tmp_path: Path):
     with pytest.raises(Exception, match="broken") as exc_info:
         load_factor(worker, noisy, "NoisyImport")
     assert len(exc_info.value.stdout.encode()) < 128 * 1024
+
+
+def test_batch_log_budget_keeps_every_factor_result_encodable(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    calls = []
+    for index in range(32):
+        path = write_factor(
+            factors_dir,
+            f"Loud{index}",
+            'print("x" * 200_000); import sys; print("y" * 200_000, file=sys.stderr); '
+            f'result = df[["data_time", "series_tag"]].copy(); result["loud{index}"] = df["value"]; return result',
+        )
+        calls.append(factor_call(path, f"factor_{index}", f"Loud{index}", ["value"], [f"loud{index}"]))
+    worker = FactorWorker(factors_dir)
+    meta = batch_request(calls)
+    response = worker.execute_request(meta)  # 返回的已经是编码后的结果；日志总量必须受批次预算约束
+    assert all(item["ok"] for item in response["items"])
+    total = sum(len(json.dumps(item["logs"]["stdout"])) + len(json.dumps(item["logs"]["stderr"])) for item in response["items"])
+    assert total <= 512 * 1024 + 4 * len(response["items"])  # 预算耗尽后空串仍占引号开销

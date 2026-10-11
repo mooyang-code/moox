@@ -656,6 +656,7 @@ import {
   type SubmitNodeBatchResponse
 } from "@/api/cloud-node";
 import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { getNodeBatchJobId, setNodeBatchJobId } from "@/utils/cloud-node-batch-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
@@ -691,6 +692,7 @@ const { selectedSpaceId } = storeToRefs(spaceStore);
 const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
+const listGuard = createLatestRequestGuard();
 const batchChangeProcessing = ref(false);
 const batchPollingTimedOut = ref(false);
 const currentBatchChangeStatus = ref<GetNodeBatchChangeResponse | null>(null);
@@ -849,6 +851,12 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   if (getNodeBatchJobId(route.query)) {
     await replaceRouteJobId();
   }
+  // 切换空间：作废在途列表请求，并立即清空列表、分页与详情，避免旧空间数据残留
+  listGuard.invalidate();
+  loading.value = false;
+  cloudNodeList.value = [];
+  pagination.value.total = 0;
+  selectedNodeDetail.value = null;
   pagination.value.current = 1;
   clearDeleteSelection();
   if (!spaceId) {
@@ -1378,6 +1386,8 @@ const loadData = async (showEmptyTip = false) => {
     pagination.value.total = 0;
     return;
   }
+  const requestSpaceId = selectedSpaceId.value;
+  const request = listGuard.begin();
   loading.value = true;
   try {
     const response = await getNodeList({
@@ -1390,6 +1400,7 @@ const loadData = async (showEmptyTip = false) => {
       page_size: pagination.value.pageSize
     });
 
+    if (!request.isLatest() || requestSpaceId !== selectedSpaceId.value) return;
     const data = response.items || [];
     cloudNodeList.value = normalizeCloudNodes(Array.isArray(data) ? data : [data].filter(Boolean));
     pagination.value.total = response.total || cloudNodeList.value.length;
@@ -1397,10 +1408,11 @@ const loadData = async (showEmptyTip = false) => {
       Message.info("查询结果为空");
     }
   } catch (error) {
+    if (!request.isLatest()) return;
     console.error("加载数据失败:", error);
     Message.error("加载数据失败");
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 };
 

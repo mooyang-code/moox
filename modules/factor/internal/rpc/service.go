@@ -114,6 +114,12 @@ func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFacto
 	if err != nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(err)}, nil
 	}
+	if space, scoped, err := callerSpace(ctx); err != nil || scoped && in.SpaceID != space {
+		if err == nil {
+			err = fmt.Errorf("factor set space %q does not match the request space %q", in.SpaceID, space)
+		}
+		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(err)}, nil
+	}
 	set, err := s.catalog.CreateSet(ctx, in)
 	if err != nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: inner(err)}, nil
@@ -125,6 +131,9 @@ func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFacto
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(err)}, nil
+	}
 	set, err := s.catalog.UpdateSetSubjects(ctx, req.GetSetId(), req.GetSubjectMode(), factorwire.CloneStrings(req.GetSubjects()))
 	if err != nil {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: inner(err)}, nil
@@ -135,6 +144,9 @@ func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFacto
 func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFactorSetStatusReq) (*factorpb.SetFactorSetStatusRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
+	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(err)}, nil
 	}
 	status := req.GetStatus()
 	if status != domain.SetStatusEnabled && status != domain.SetStatusDisabled {
@@ -151,6 +163,9 @@ func (s *Service) DeleteFactorSet(ctx context.Context, req *factorpb.DeleteFacto
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.DeleteFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.DeleteFactorSetRsp{RetInfo: invalid(err)}, nil
+	}
 	if err := s.catalog.DeleteSet(ctx, req.GetSetId(), req.GetPurge()); err != nil {
 		return &factorpb.DeleteFactorSetRsp{RetInfo: inner(err)}, nil
 	}
@@ -160,6 +175,9 @@ func (s *Service) DeleteFactorSet(ctx context.Context, req *factorpb.DeleteFacto
 func (s *Service) GetFactorSet(ctx context.Context, req *factorpb.GetFactorSetReq) (*factorpb.GetFactorSetRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.GetFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
+	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.GetFactorSetRsp{RetInfo: invalid(err)}, nil
 	}
 	set, members, err := s.catalog.GetSet(ctx, req.GetSetId())
 	if err != nil {
@@ -176,8 +194,15 @@ func (s *Service) ListFactorSets(ctx context.Context, req *factorpb.ListFactorSe
 	if err != nil {
 		return &factorpb.ListFactorSetsRsp{RetInfo: inner(err)}, nil
 	}
+	space, scoped, scopeErr := callerSpace(ctx)
+	if scopeErr != nil {
+		return &factorpb.ListFactorSetsRsp{RetInfo: invalid(scopeErr)}, nil
+	}
 	filtered := make([]domain.FactorSet, 0, len(sets))
 	for _, set := range sets {
+		if scoped && set.SpaceID != space {
+			continue // 只返回调用方所属空间的计算任务，分页在过滤之后
+		}
 		if req == nil || req.GetStatus() == "" || set.Status == req.GetStatus() {
 			filtered = append(filtered, set)
 		}
@@ -236,6 +261,9 @@ func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToS
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
 	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(err)}, nil
+	}
 	member, err := s.catalog.AddFactorToSet(ctx, req.GetSetId(), req.GetFactorId())
 	if err != nil {
 		return &factorpb.AddFactorToSetRsp{RetInfo: inner(err)}, nil
@@ -247,6 +275,9 @@ func (s *Service) RemoveFactorFromSet(ctx context.Context, req *factorpb.RemoveF
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
 	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(err)}, nil
+	}
 	if err := s.catalog.RemoveFactorFromSet(ctx, req.GetSetId(), req.GetFactorId()); err != nil {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: inner(err)}, nil
 	}
@@ -256,6 +287,9 @@ func (s *Service) RemoveFactorFromSet(ctx context.Context, req *factorpb.RemoveF
 func (s *Service) SetFactorMemberStatus(ctx context.Context, req *factorpb.SetFactorMemberStatusReq) (*factorpb.SetFactorMemberStatusRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
+	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(err)}, nil
 	}
 	status := req.GetStatus()
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
@@ -316,6 +350,9 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("set_id and request_id are required"))}, nil
 	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(err)}, nil
+	}
 	start, err := factorwire.ParseTime(req.GetStartTime())
 	if err != nil || start.IsZero() {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("start_time must be an RFC3339 timestamp"))}, nil
@@ -352,6 +389,9 @@ func (s *Service) ListRecalcJobs(ctx context.Context, req *factorpb.ListRecalcJo
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.ListRecalcJobsRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
+	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.ListRecalcJobsRsp{RetInfo: invalid(err)}, nil
+	}
 	jobs, err := s.recalc.List(ctx, req.GetSetId(), factorwire.CloneStrings(req.GetStatuses()))
 	if err != nil {
 		return &factorpb.ListRecalcJobsRsp{RetInfo: inner(err)}, nil
@@ -369,6 +409,9 @@ func (s *Service) GetRecalcJob(ctx context.Context, req *factorpb.GetRecalcJobRe
 	if req == nil || strings.TrimSpace(req.GetJobId()) == "" {
 		return &factorpb.GetRecalcJobRsp{RetInfo: invalid(fmt.Errorf("job_id is required"))}, nil
 	}
+	if err := s.checkJobSpace(ctx, req.GetJobId()); err != nil {
+		return &factorpb.GetRecalcJobRsp{RetInfo: invalid(err)}, nil
+	}
 	job, err := s.recalc.Get(ctx, req.GetJobId())
 	if err != nil {
 		return &factorpb.GetRecalcJobRsp{RetInfo: inner(err)}, nil
@@ -379,6 +422,9 @@ func (s *Service) GetRecalcJob(ctx context.Context, req *factorpb.GetRecalcJobRe
 func (s *Service) CancelRecalcJob(ctx context.Context, req *factorpb.CancelRecalcJobReq) (*factorpb.CancelRecalcJobRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetJobId()) == "" {
 		return &factorpb.CancelRecalcJobRsp{RetInfo: invalid(fmt.Errorf("job_id is required"))}, nil
+	}
+	if err := s.checkJobSpace(ctx, req.GetJobId()); err != nil {
+		return &factorpb.CancelRecalcJobRsp{RetInfo: invalid(err)}, nil
 	}
 	job, err := s.recalc.Cancel(ctx, req.GetJobId())
 	if err != nil {

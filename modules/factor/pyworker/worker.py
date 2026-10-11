@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import json
 import importlib.util
 import math
 import os
@@ -29,6 +30,30 @@ _IDENTITY_COLUMNS = {"data_time", "series_tag", "subject_id"}
 # 让同一批次其他因子的结果也无法返回。
 _LOG_LIMIT_BYTES = 64 * 1024
 _TRUNCATED_MARK = "\n[输出已截断]"
+
+
+# 一个批次的日志总预算（字节，按 JSON 转义后的长度计）：单流上限之外，多个因子同时大量输出也不能撑破结果帧的元数据上限。
+_BATCH_LOG_BUDGET_BYTES = 512 * 1024
+
+
+def _json_size(text):
+    return len(json.dumps(text, ensure_ascii=True))
+
+
+def _fit_logs(logs, budget):
+    """把一个因子的日志裁剪到批次剩余预算内（budget 是只有一个元素的列表，原地扣减）。"""
+    fitted = {}
+    for name in ("stdout", "stderr"):
+        text = logs.get(name, "") or ""
+        remaining = budget[0]
+        if _json_size(text) > remaining:
+            keep = text[: max(0, remaining // 6)]  # 转义后一个字符最多 6 字节
+            while keep and _json_size(keep + _TRUNCATED_MARK) > remaining:
+                keep = keep[: len(keep) // 2]
+            text = keep + _TRUNCATED_MARK if _json_size(_TRUNCATED_MARK) <= remaining else ""
+        budget[0] = max(0, budget[0] - _json_size(text))
+        fitted[name] = text
+    return fitted
 
 
 def _bounded_pair():
@@ -75,6 +100,7 @@ class FactorWorker:
 
         items = []
         seen = set()
+        log_budget = [_BATCH_LOG_BUDGET_BYTES]
         for factor in factors:
             if not isinstance(factor, dict):
                 raise TypeError("batch factor item must be an object")
@@ -92,17 +118,14 @@ class FactorWorker:
                     "factor_id": factor_id,
                     "ok": True,
                     "results": encode_frame_result(result),
-                    "logs": diagnostics,
+                    "logs": _fit_logs(diagnostics, log_budget),
                 })
             except Exception as exc:  # noqa: BLE001 - factor failures must not cancel siblings.
                 items.append({
                     "factor_id": factor_id,
                     "ok": False,
                     "error": {"type": type(exc).__name__, "message": str(exc)},
-                    "logs": {
-                        "stdout": getattr(exc, "stdout", ""),
-                        "stderr": getattr(exc, "stderr", ""),
-                    },
+                    "logs": _fit_logs({"stdout": getattr(exc, "stdout", ""), "stderr": getattr(exc, "stderr", "")}, log_budget),
                 })
         return encode_json_batch_results(meta.get("id", ""), items)
 
