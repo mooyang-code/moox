@@ -26,6 +26,7 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 	want := []string{
 		"t_trading_accounts",
 		"t_trade_instruments",
+		"t_trading_position_tombstones",
 		"t_trading_positions",
 		"t_logical_account_members",
 		"t_logical_account_targets",

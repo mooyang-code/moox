@@ -1632,6 +1632,14 @@ func (lateFillAdapter) ListPositionSnapshots(context.Context) ([]exchange.Positi
 func (a lateFillAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	return []exchange.Order{a.order}, nil
 }
+func (a lateFillAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+	return a.order, nil
+}
+func (a lateFillAdapter) GetOrderByExchangeID(_ context.Context, symbol string, exchangeOrderID string) (exchange.Order, error) {
+	current := a.order
+	current.ExchangeSymbol, current.ExchangeOrderID = symbol, exchangeOrderID
+	return current, nil
+}
 func (a lateFillAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
 	return []exchange.Fill{a.fill}, "12", nil
 }
@@ -1712,4 +1720,60 @@ func TestFirstImportedTerminalOrderWithMissingFillsKeepsAdmissionClosed(t *testi
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, result.Ready)
+}
+
+type emptyAdapter struct{ *syncAdapter }
+
+func (emptyAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
+	return nil, nil
+}
+func (emptyAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) { return nil, nil }
+func (emptyAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+	return nil, "", nil
+}
+
+// 空仓快照先到、平仓成交后到：快照确认空仓而删除持仓时留下墓碑，迟到的平仓成交不能从零叠加出反向持仓。
+func TestFlatSnapshotThenLateClosingFillDoesNotCreateReversePosition(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", ExchangeSymbol: "BTC-USDT", PositionSide: "NET",
+			SignedQuantity: "1", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS",
+			UsedMargin: "0", LiquidationPrice: "0", UnrealizedPnL: "0", RealizedPnL: "0", ExchangeUpdatedAt: 1_000,
+		})
+	}))
+	base := &syncAdapter{}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: emptyAdapter{base}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1") // 交易所已空仓（平仓成交明细延迟）：持仓被删除
+	require.NoError(t, err)
+
+	order := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("1"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+	}
+	closing := exchange.Fill{
+		ExchangeTradeID: "trade-close", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+	}
+	service.Adapters = syncAdapterSource{adapter: lateFillAdapter{base, closing, order}}
+	result, err := service.SyncAccount(context.Background(), "account-1") // 迟到的平仓成交补录
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	var count int64
+	require.NoError(t, tradeStore.DBForTest().Raw(
+		"SELECT COUNT(*) FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ?", "space-1", "account-1",
+	).Scan(&count).Error)
+	require.Zero(t, count, "已被空仓快照覆盖的平仓成交不能生成反向持仓")
 }

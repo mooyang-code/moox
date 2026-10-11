@@ -403,16 +403,14 @@ func projectSwapPosition(
 			UnrealizedPnL: "0", RealizedPnL: "0",
 		}
 	}
-	if found {
-		// 迟到成交：权威持仓快照已经覆盖到比这笔成交更晚的时间，成交数量已包含在快照里，不能再叠加（成交仍照常入账本）。
-		// 严格早于才跳过：同毫秒无法判断是否已包含，仍按成交叠加，由下一次权威快照校正。
-		covered, coveredErr := tx.PositionSnapshotCoveredUntil(record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet))
-		if coveredErr != nil {
-			return coveredErr
-		}
-		if covered > 0 && fill.TradedAt.UnixMilli() < covered {
-			return nil
-		}
+	// 迟到成交：权威持仓快照（含确认为空仓而删除留下的墓碑）已经覆盖到比这笔成交更晚的时间，成交数量已体现在快照里，
+	// 不能再叠加（成交仍照常入账本）。严格早于才跳过：同毫秒无法判断是否已包含，仍按成交叠加，由下一次权威快照校正。
+	covered, coveredErr := tx.PositionSnapshotCoveredUntil(record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet))
+	if coveredErr != nil {
+		return coveredErr
+	}
+	if covered > 0 && fill.TradedAt.UnixMilli() < covered {
+		return nil
 	}
 	current, err := shared.ParseDecimal(positionRecord.SignedQuantity)
 	if err != nil {
