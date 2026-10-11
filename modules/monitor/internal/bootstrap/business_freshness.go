@@ -251,7 +251,8 @@ func buildBusinessFreshnessReporterWithInterval(
 			// scheduler. Business freshness must not synthesize a success for an
 			// absent overview item, otherwise a real canary failure is immediately
 			// resolved by a concurrent no_longer_expected result.
-			if strings.HasPrefix(check.CheckID, "market_canary:") {
+			// 标签检查（subject_tag:）同样由行情探针独占其状态更新。
+			if strings.HasPrefix(check.CheckID, "market_canary:") || strings.HasPrefix(check.CheckID, tagCheckPrefix) {
 				continue
 			}
 			if strings.HasPrefix(check.CheckID, "kline_freshness:") {
@@ -306,7 +307,9 @@ func buildBusinessFreshnessReporterWithInterval(
 			switch {
 			case err == nil:
 				if !check.Enabled {
-					if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") {
+					// K 线检查曾因关闭新鲜度监控而退役：重新开启后，当前任务清单仍期望的检查必须恢复启用（规则随后重建）
+					reenableKline := strings.HasPrefix(item.checkID, "kline_freshness:") && item.reason != noLongerExpected
+					if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") || reenableKline {
 						check.Enabled = true
 						if err := repositories.Checks.Update(ctx, check); err != nil {
 							return err

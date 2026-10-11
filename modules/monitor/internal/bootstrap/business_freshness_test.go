@@ -149,6 +149,95 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	}
 }
 
+func TestBusinessFreshnessReporterReenablesRetiredKlineCheckWhenStillExpected(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
+	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, row := range []monmetrics.MetricLatest{
+			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
+			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
+		} {
+			if err := db.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	// 关闭 K 线新鲜度监控时被退役（停用）的检查
+	retired := &domain.Check{SpaceID: "crypto", CheckID: "kline_freshness:crypto:view:1m", Name: "kline", GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30}
+	if err := repositories.Checks.Create(t.Context(), retired); err != nil {
+		t.Fatal(err)
+	}
+	retired.Enabled = false
+	if err := repositories.Checks.Update(t.Context(), retired); err != nil {
+		t.Fatal(err)
+	}
+	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+	}}, 20)
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return now },
+	}, repositories, nil, evaluator)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repositories.Checks.Get(t.Context(), "crypto", "kline_freshness:crypto:view:1m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled {
+		t.Fatal("当前任务清单仍期望的 K 线检查必须在重新开启监控后恢复启用")
+	}
+	if _, err := repositories.Alerts.GetRule(t.Context(), "crypto", "default:kline_freshness:crypto:view:1m"); err != nil {
+		t.Fatalf("恢复后默认规则应重建: %v", err)
+	}
+}
+
+func TestBusinessFreshnessReporterDoesNotResolveSubjectTagCheck(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	check := &domain.Check{
+		SpaceID: "crypto", CheckID: tagCheckPrefix + "crypto:binance_spot",
+		Name: "tag", GroupName: "business", Kind: domain.CheckKindExternal,
+		Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30,
+	}
+	if err := repositories.Checks.Create(t.Context(), check); err != nil {
+		t.Fatal(err)
+	}
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
+	}, repositories, nil)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), check.SpaceID, check.CheckID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("标签检查被业务新鲜度汇总补写了成功结果: %+v", results)
+	}
+}
+
 func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
