@@ -229,10 +229,10 @@ func runKlineBackfillStatus(ctx context.Context, out io.Writer, flags klineRange
 		return err
 	}
 	defer gateway.Close()
+	if strings.TrimSpace(flags.SpaceID) == "" {
+		return errors.New("--space-id is required")
+	}
 	if strings.TrimSpace(flags.JobID) == "" {
-		if strings.TrimSpace(flags.SpaceID) == "" {
-			return errors.New("--job-id or --space-id is required")
-		}
 		rsp := &collectorpb.ListKlineBackfillsRsp{}
 		if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "ListKlineBackfills", &collectorpb.ListKlineBackfillsReq{SpaceId: flags.SpaceID}, rsp); err != nil {
 			return fmt.Errorf("list kline backfills: %w", err)
@@ -247,7 +247,7 @@ func runKlineBackfillStatus(ctx context.Context, out io.Writer, flags klineRange
 		return printJSON(out, map[string]any{"jobs": jobs, "total": rsp.GetPage().GetTotal()})
 	}
 	rsp := &collectorpb.GetKlineBackfillRsp{}
-	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "GetKlineBackfill", &collectorpb.GetKlineBackfillReq{JobId: flags.JobID}, rsp); err != nil {
+	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "GetKlineBackfill", &collectorpb.GetKlineBackfillReq{JobId: flags.JobID, SpaceId: flags.SpaceID}, rsp); err != nil {
 		return fmt.Errorf("get kline backfill: %w", err)
 	}
 	if err := collectorRetError("get kline backfill", rsp.GetRetInfo()); err != nil {
@@ -263,8 +263,8 @@ func runKlineBackfillStatus(ctx context.Context, out io.Writer, flags klineRange
 }
 
 func runKlineBackfillCancel(ctx context.Context, out io.Writer, flags klineRangeFlags) error {
-	if strings.TrimSpace(flags.JobID) == "" {
-		return errors.New("--job-id is required")
+	if strings.TrimSpace(flags.JobID) == "" || strings.TrimSpace(flags.SpaceID) == "" {
+		return errors.New("--job-id and --space-id are required")
 	}
 	gateway, err := openCommandGateway(ctx, flags.File, nil)
 	if err != nil {
@@ -272,7 +272,7 @@ func runKlineBackfillCancel(ctx context.Context, out io.Writer, flags klineRange
 	}
 	defer gateway.Close()
 	rsp := &collectorpb.CancelKlineBackfillRsp{}
-	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "CancelKlineBackfill", &collectorpb.CancelKlineBackfillReq{JobId: flags.JobID}, rsp); err != nil {
+	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "CancelKlineBackfill", &collectorpb.CancelKlineBackfillReq{JobId: flags.JobID, SpaceId: flags.SpaceID}, rsp); err != nil {
 		return fmt.Errorf("cancel kline backfill: %w", err)
 	}
 	if err := collectorRetError("cancel kline backfill", rsp.GetRetInfo()); err != nil {

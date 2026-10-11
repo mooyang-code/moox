@@ -38,8 +38,8 @@ func (s *Service) AppendActivityLogs(ctx context.Context, req *pb.AppendActivity
 	if isBrowserCaller(ctx) {
 		return &pb.AppendActivityLogsRsp{RetInfo: ret(pb.ErrorCode_NO_PERMISSION, "activity logs can only be written by internal components")}, nil
 	}
-	if req == nil || len(req.GetEntries()) == 0 {
-		return &pb.AppendActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "entries are required")}, nil
+	if req == nil || len(req.GetEntries()) == 0 || len(req.GetEntries()) > maxEntriesPerAppend {
+		return &pb.AppendActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("entries must contain 1..%d items", maxEntriesPerAppend))}, nil
 	}
 	entries := make([]Entry, 0, len(req.GetEntries()))
 	for _, item := range req.GetEntries() {

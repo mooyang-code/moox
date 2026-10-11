@@ -234,3 +234,25 @@ func TestLazyPeriodSurvivesReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 }
+
+func TestRegisterSeriesSnapshotRejectsFarFutureAndAmbiguousSeries(t *testing.T) {
+	clock := newPeriodReceiptClock(time.Date(2026, 10, 11, 12, 0, 30, 0, time.UTC))
+	store := newPeriodReceiptStore(t, clock)
+	ctx := context.Background()
+	soon := time.Date(2026, 10, 11, 12, 5, 0, 0, time.UTC).Unix()
+	_, err := store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT"), soon)
+	require.NoError(t, err)
+
+	// 误登记的远期 P 会让后续所有正常变更被判过期，必须在登记时拒绝。
+	far := time.Date(2027, 10, 11, 12, 5, 0, 0, time.UTC).Unix()
+	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), far)
+	require.ErrorContains(t, err, "too far in the future")
+	var stale StaleEffectiveFromError
+	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", snapshotSeries("BTC-USDT", "ETH-USDT"), soon-60)
+	require.ErrorAs(t, err, &stale, "P 不在未来或不晚于最后登记时返回可识别的过期错误")
+
+	// 同一 (subject_id, series_tag) 出现两次，逐行校验会有歧义。
+	dup := append(snapshotSeries("BTC-USDT"), seriesset.Series{Provider: "okx", SourceID: "spot_http", MarketType: "spot", SubjectID: "BTC-USDT"})
+	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", dup, soon+600)
+	require.Error(t, err)
+}

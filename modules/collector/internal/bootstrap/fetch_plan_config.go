@@ -40,7 +40,7 @@ type SCFPlanFetchConfig struct {
 func defaultSCFPlan() SCFPlanConfig {
 	return SCFPlanConfig{
 		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: marketfetch.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
-		Fetch: SCFPlanFetchConfig{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10, RequestTimeoutMS: 3000, StorageTimeoutMS: 5000, StaggerMS: 1500},
+		Fetch: SCFPlanFetchConfig{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerMS: 1500},
 	}
 }
 

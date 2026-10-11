@@ -84,8 +84,11 @@ export function listKlineBackfills(spaceId: string, page = 1, size = 20) {
   >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size } });
 }
 
-export function cancelKlineBackfill(jobId: string) {
-  return callControl<{ job_id: string }, Record<string, never>>("collector", "CancelKlineBackfill", { job_id: jobId });
+export function cancelKlineBackfill(spaceId: string, jobId: string) {
+  return callControl<{ job_id: string; space_id: string }, Record<string, never>>("collector", "CancelKlineBackfill", {
+    job_id: jobId,
+    space_id: spaceId
+  });
 }
 
 export function submitKlineBackfill(request: KlineRangeRequest & { force?: boolean }) {

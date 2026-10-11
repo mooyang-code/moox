@@ -1353,7 +1353,6 @@ components:
               - console
           - methods:
               - UpsertFields
-              - RegisterSeriesSnapshot
               - EnsureDatasetPeriod
               - GetDatasetPeriodStatus
               - CommitTimeSeriesBatch

@@ -245,6 +245,7 @@ import {
   isLikelyFactorResultDatasetId,
   viewMatchesAttribution
 } from "@/views/data/shared/module-attribution";
+import { getFetchPlans } from "@/api/collector/fetch-plan";
 import { callControl } from "@/api/admin/http";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { alertHref } from "@/views/ops/monitor/health-display";
@@ -428,11 +429,11 @@ const dashboardKpis = computed(() => [
   },
   {
     key: "tasks",
-    label: "采集任务实例",
+    label: "采集函数",
     value: fmt(taskCountLabel.value ?? counts.tasks),
     unit: "",
-    note: "已登记任务实例",
-    delta: "查看实例",
+    note: "定时采集函数数",
+    delta: "查看分配",
     tone: "neutral",
     path: "/collector/tasks?tab=instances"
   },
@@ -573,15 +574,10 @@ async function loadSpaceScoped() {
     ).then(rsp => {
       if (isCurrent()) counts.rules = Number(rsp.page?.total) || rsp.tasks?.length || 0;
     }),
-    callControl<
-      { filter: { space_id: string; page: { page: number; size: number } } },
-      { instances?: unknown[]; page?: { total?: number; total_state?: number | string; has_more?: boolean } }
-    >("collector", "GetTaskInstanceList", { filter: { space_id: spaceId, page: { page: 1, size: 1 } } }).then(rsp => {
+    getFetchPlans(spaceId).then(rsp => {
       if (!isCurrent()) return;
-      const totalState = rsp.page?.total_state;
-      const skipped = totalState === 2 || totalState === "SKIPPED" || totalState === "TOTAL_STATE_SKIPPED";
-      counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
-      taskCountLabel.value = skipped ? (rsp.page?.has_more ? "2+" : String(rsp.instances?.length ?? 0)) : null;
+      counts.tasks = rsp.functions?.length ?? 0;
+      taskCountLabel.value = null;
     }),
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;

@@ -28,3 +28,9 @@ export function activityDetailText(detail?: string) {
     return detail;
   }
 }
+
+/** 范围选择器的本地时间文本（YYYY-MM-DD HH:mm:ss）转 ISO；兼容 Safari 的解析限制。 */
+export function rangeToISO(value: string) {
+  const parsed = new Date(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}

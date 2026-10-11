@@ -210,7 +210,6 @@ async function loadPlans() {
   } catch (error) {
     if (!request.isLatest()) return;
     console.error("获取采集计划失败:", error);
-    Message.error("获取采集计划失败");
   } finally {
     if (request.isLatest()) plansLoading.value = false;
   }
@@ -227,7 +226,6 @@ async function loadJobs() {
   } catch (error) {
     if (!request.isLatest()) return;
     console.error("获取补采作业失败:", error);
-    Message.error("获取补采作业失败");
   } finally {
     if (request.isLatest()) jobsLoading.value = false;
   }
@@ -274,7 +272,7 @@ function onCancel(job: KlineBackfillJob) {
     title: "取消补采作业",
     content: "尚未开始的分块不再执行，运行中的分块会等其结束。",
     onOk: async () => {
-      await cancelKlineBackfill(job.job_id || "");
+      await cancelKlineBackfill(selectedSpaceId.value || "", job.job_id || "");
       Message.success("已取消");
       void loadJobs();
     }

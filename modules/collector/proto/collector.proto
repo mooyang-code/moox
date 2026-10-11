@@ -471,6 +471,7 @@ message KlineBackfillJob {
 
 message GetKlineBackfillReq {
   string job_id = 1;
+  string space_id = 2;
 }
 
 message GetKlineBackfillRsp {
@@ -492,6 +493,7 @@ message ListKlineBackfillsRsp {
 
 message CancelKlineBackfillReq {
   string job_id = 1;
+  string space_id = 2;
 }
 
 message CancelKlineBackfillRsp {

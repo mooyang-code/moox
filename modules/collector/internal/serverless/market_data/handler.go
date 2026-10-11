@@ -93,6 +93,10 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 			// 定时触发：按环境里的采集计划与事件的计划时间执行，周期由计划时间决定。
 			return runtimeHandler.HandlePlanTimer(ctx, event.RequestID, functionName, scheduled)
 		}
+		if event.Source == model.EventSourceCollectorScheduler {
+			// 旧的 Invoke 链路（回退窗口内保留）：执行后发布批次完成事件。
+			return runtimeHandler.HandleWithFunctionName(ctx, event, functionName)
+		}
 		// 手动调用与补采：只写行，不发布完成事件，不涉及周期状态。
 		return runtimeHandler.HandleWithFunctionNameWithoutCompletion(ctx, event, functionName)
 	case model.EventActionEgressProbe:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"trpc.group/trpc-go/trpc-go/log"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
@@ -309,6 +310,7 @@ func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectatio
 	}
 	seconds, err := strconv.ParseInt(strings.TrimSpace(dataset.GetAttributes()["allowed_lateness_seconds"]), 10, 64)
 	if err != nil || seconds <= 0 {
+		log.WarnContextf(ctx, "dataset %s/%s has no valid allowed_lateness_seconds; DataNode falls back to its default", exp.GetSpaceId(), exp.GetDatasetId())
 		return 0
 	}
 	return seconds

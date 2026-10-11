@@ -223,7 +223,7 @@ func validateCollectorPlanEnvironment(values map[string]string) error {
 		}
 	}
 	for key := range values {
-		if strings.HasPrefix(key, "MOOX_EVENTBUS_") {
+		if strings.HasPrefix(key, "MOOX_EVENTBUS_") || key == "MOOX_METRICS_EVENTBUS_URL" || key == "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE" || key == "NATS_URL" {
 			return fmt.Errorf("collector plan environment must not contain EventBus field %s", key)
 		}
 	}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,16 +39,23 @@ func (r *InventoryRepository) LoadInventory(ctx context.Context) ([]byte, time.T
 	type result struct {
 		raw       []byte
 		fetchedAt time.Time
+		err       error
 	}
 	value, err := WithDatabase(r.store, func(db *gorm.DB) result {
 		var row inventoryRow
 		if err := db.WithContext(ctx).Take(&row).Error; err != nil {
-			return result{}
+			return result{err: err}
 		}
 		return result{raw: []byte(row.Snapshot), fetchedAt: row.FetchedAt}
 	})
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("load inventory: %w", err)
+	}
+	if errors.Is(value.err, gorm.ErrRecordNotFound) {
+		return nil, time.Time{}, nil
+	}
+	if value.err != nil {
+		return nil, time.Time{}, fmt.Errorf("load inventory: %w", value.err)
 	}
 	return value.raw, value.fetchedAt, nil
 }

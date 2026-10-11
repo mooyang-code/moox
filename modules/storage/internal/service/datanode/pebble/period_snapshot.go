@@ -49,6 +49,9 @@ func (e PeriodDeadlinePassedError) Error() string {
 	return fmt.Sprintf("dataset period deadline %d has passed before the period was created", e.Deadline)
 }
 
+// maxEffectiveFromLead 限制生效周期 P 最远能登记到多久之后：生效表只追加，误登记的远期 P 会让该数据集无法再变更标的。
+const maxEffectiveFromLead = 7 * 24 * time.Hour
+
 // StaleEffectiveFromError 表示生效周期 P 已不在未来（或其后已有周期），且该 P 尚未登记；
 // 调用方（Collector）可据此重新选择 P。错误文本以 effective_from_stale 开头，供客户端识别。
 type StaleEffectiveFromError struct{ Reason string }
@@ -74,7 +77,8 @@ func seriesEffectiveKey(spaceID, datasetID, frequency string, from int64) []byte
 func periodAligned(frequency frequencypkg.Frequency, at int64) bool {
 	step := int64(frequency.Duration() / time.Second)
 	if step <= 0 || step >= 24*60*60 {
-		return at > 0
+		// 日、周、月的边界取决于市场时区，Storage 只要求整分钟，避免明显错位。
+		return at > 0 && at%60 == 0
 	}
 	return at > 0 && at%step == 0
 }
@@ -98,7 +102,14 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 		return RegisterSnapshotResult{}, invalidf("series snapshot is invalid: %v", err)
 	}
 	snapshot := make([]DatasetPeriodSeries, len(series))
+	seenIdentity := make(map[string]struct{}, len(series))
 	for i, item := range series {
+		// 周期里只保存 (subject_id, series_tag)，二者必须唯一，否则逐行校验有歧义。
+		identity := strings.TrimSpace(item.SubjectID) + "\x00" + item.SeriesTag
+		if _, dup := seenIdentity[identity]; dup {
+			return RegisterSnapshotResult{}, invalidf("series snapshot has a duplicated subject_id and series_tag: %s", item.SubjectID)
+		}
+		seenIdentity[identity] = struct{}{}
 		if err := rowidentity.ValidateSeriesTag(item.SeriesTag); err != nil {
 			return RegisterSnapshotResult{}, invalidf("series snapshot series_tag is invalid: %v", err)
 		}
@@ -139,6 +150,9 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 	}
 	if hasLast && effectiveFrom <= lastFrom {
 		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be strictly later than the last registered effective period"}
+	}
+	if effectiveFrom > s.periodNow().UTC().Add(maxEffectiveFromLead).Unix() {
+		return RegisterSnapshotResult{}, invalid("effective_from is too far in the future")
 	}
 	if effectiveFrom <= s.periodNow().UTC().Unix() && hasLast {
 		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be in the future"}

@@ -24,9 +24,6 @@ const PlanEnvName = "MOOX_MARKET_FETCH_PLAN"
 const (
 	maxPlanEncodedBytes = 64 << 10
 	maxPlanJSONBytes    = 1 << 20
-	// planCutoffMargin 是函数内部截止时间相对 Storage 截止时间提前量的下限：
-	// 到点后停止重试，立即提交已拿到的结果。
-	planCutoffMargin = 3 * time.Second
 )
 
 // Plan 是 Collector 下发给一个函数的采集计划。函数只认“市场 + 标的 + 频率”，
@@ -183,8 +180,9 @@ func (p *Plan) Validate() error {
 			return fmt.Errorf("plan datasets[%d] is duplicated", index)
 		}
 		seen[identity] = struct{}{}
-		if dataset.LatenessS < 1 || dataset.LatenessS > 24*3600 {
-			return fmt.Errorf("plan datasets[%d].lateness_s must be between 1 and 86400", index)
+		// 下限给提交与日志预留时间：拉取只能用到“截止 − 提交预留”之前。
+		if dataset.LatenessS < 5 || dataset.LatenessS > 24*3600 {
+			return fmt.Errorf("plan datasets[%d].lateness_s must be between 5 and 86400", index)
 		}
 		if len(dataset.Copies) == 0 || len(dataset.Copies) > 2 {
 			return fmt.Errorf("plan datasets[%d] requires one or two copies", index)
@@ -196,6 +194,9 @@ func (p *Plan) Validate() error {
 			}
 			previous = copy.From
 			// 后一份允许没有标的：标的移到别的函数、或数据集不再采集时，从该份起本函数不再抓取。
+			if len(copy.Subjects) > MaxPlanItems {
+				return fmt.Errorf("plan datasets[%d].copies[%d] has more than %d subjects", index, copyIndex, MaxPlanItems)
+			}
 			if strings.TrimSpace(copy.Hash) == "" || copy.Count == 0 || (copyIndex == 0 && len(copy.Subjects) == 0) {
 				return fmt.Errorf("plan datasets[%d].copies[%d] requires hash, count and subjects", index, copyIndex)
 			}

@@ -47,6 +47,9 @@ export function functionRowKey(item: FetchFunctionState) {
 export function toRFC3339(value: string): string | null {
   const text = value.trim();
   if (!text) return null;
-  const parsed = new Date(text.includes("T") || text.endsWith("Z") ? text : text.replace(" ", "T") + "Z");
+  // 没有时区的输入一律按 UTC 解析，与表单标签一致。
+  let normalized = text.replace(" ", "T");
+  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(normalized)) normalized += normalized.length <= 16 ? ":00Z" : "Z";
+  const parsed = new Date(normalized);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().replace(/\.\d{3}Z$/, "Z");
 }

@@ -114,12 +114,13 @@ func (s *Service) GetKlineBackfill(ctx context.Context, req *pb.GetKlineBackfill
 	if s.klineOps == nil {
 		return &pb.GetKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "kline backfill is not configured")}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetJobId()) == "" {
-		return &pb.GetKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_id is required")}, nil
+	if req == nil || strings.TrimSpace(req.GetJobId()) == "" || strings.TrimSpace(req.GetSpaceId()) == "" {
+		return &pb.GetKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_id and space_id are required")}, nil
 	}
 	status, err := s.klineOps.Status(ctx, strings.TrimSpace(req.GetJobId()))
-	if err != nil {
-		return &pb.GetKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
+	if err != nil || status.Job.SpaceID != strings.TrimSpace(req.GetSpaceId()) {
+		// 作业不属于请求的空间时与不存在一样处理，避免跨空间读取。
+		return &pb.GetKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "补采作业不存在")}, nil
 	}
 	rsp := &pb.GetKlineBackfillRsp{RetInfo: retOK(), Job: jobToPB(*status)}
 	for _, chunk := range status.Failed {
@@ -160,8 +161,12 @@ func (s *Service) CancelKlineBackfill(ctx context.Context, req *pb.CancelKlineBa
 	if s.klineOps == nil {
 		return &pb.CancelKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "kline backfill is not configured")}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetJobId()) == "" {
-		return &pb.CancelKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_id is required")}, nil
+	if req == nil || strings.TrimSpace(req.GetJobId()) == "" || strings.TrimSpace(req.GetSpaceId()) == "" {
+		return &pb.CancelKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_id and space_id are required")}, nil
+	}
+	status, err := s.klineOps.Status(ctx, strings.TrimSpace(req.GetJobId()))
+	if err != nil || status.Job.SpaceID != strings.TrimSpace(req.GetSpaceId()) {
+		return &pb.CancelKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "补采作业不存在")}, nil
 	}
 	if err := s.klineOps.Cancel(ctx, strings.TrimSpace(req.GetJobId())); err != nil {
 		return &pb.CancelKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil

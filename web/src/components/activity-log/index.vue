@@ -51,10 +51,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { activityDetailText, activityLevelColor, activityTimeText } from "./activity-log";
+import { activityDetailText, activityLevelColor, activityTimeText, rangeToISO } from "./activity-log";
 
 const props = withDefaults(
   defineProps<{
@@ -89,8 +88,8 @@ async function load() {
       space_id: props.spaceId || undefined,
       category: filters.value.category.trim() || undefined,
       source: filters.value.source.trim() || undefined,
-      since: range?.[0] ? new Date(range[0]).toISOString() : undefined,
-      until: range?.[1] ? new Date(range[1]).toISOString() : undefined,
+      since: range?.[0] ? rangeToISO(range[0]) : undefined,
+      until: range?.[1] ? rangeToISO(range[1]) : undefined,
       page: { page: page.value, size: props.pageSize }
     });
     if (!request.isLatest()) return;
@@ -99,7 +98,6 @@ async function load() {
   } catch (error) {
     if (!request.isLatest()) return;
     console.error("获取活动日志失败:", error);
-    Message.error("获取活动日志失败");
   } finally {
     if (request.isLatest()) loading.value = false;
   }
@@ -126,6 +124,8 @@ watch(
     filters.value.category = props.category;
     guard.invalidate();
     items.value = [];
+    total.value = 0;
+    detailVisible.value = false;
     search();
   }
 );
