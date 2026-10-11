@@ -4,6 +4,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -51,24 +52,43 @@ func (c *client) call(path, space, body string) (int, string) {
 		return 0, err.Error()
 	}
 	defer response.Body.Close()
-	raw, _ := io.ReadAll(response.Body)
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		return 0, "读取响应失败: " + err.Error()
+	}
 	return response.StatusCode, string(raw)
 }
 
 func main() {
-	base := flag.String("base", "https://106.53.107.122:9527", "Console 地址")
+	base := flag.String("base", "", "Console 地址，例如 https://control.example:9527（必填）")
+	caFile := flag.String("ca-file", "", "internal CA 证书 PEM；默认使用系统信任库并校验主机名")
+	insecure := flag.Bool("insecure-skip-verify", false, "仅限一次性联调：跳过证书校验（密码经环境变量传入，不要在不可信网络使用）")
 	user := flag.String("user", "admin123", "用户名")
 	createSpaces := flag.Bool("create-spaces", false, "先通过 Console 创建默认业务空间（走管理员授权与 Admin 本地分派）")
 	flag.Parse()
 	password := os.Getenv("E2E_PASSWORD")
-	c := &client{base: *base, http: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}}
+	if *base == "" || password == "" {
+		fmt.Println("需要 -base 和环境变量 E2E_PASSWORD")
+		os.Exit(1)
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: *insecure}
+	if *caFile != "" {
+		pem, err := os.ReadFile(*caFile)
+		pool := x509.NewCertPool()
+		if err != nil || !pool.AppendCertsFromPEM(pem) {
+			fmt.Println("无法读取 -ca-file 指定的 CA 证书")
+			os.Exit(1)
+		}
+		tlsConfig.RootCAs = pool
+	}
+	c := &client{base: *base, http: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}}
 	code, raw := c.call("/api/admin/auth/GetLoginSalt", "", fmt.Sprintf(`{"username":%q}`, *user))
 	var salt struct {
 		Salt      string `json:"salt"`
 		Timestamp int64  `json:"timestamp,string"`
 	}
 	if code != 200 || json.Unmarshal([]byte(raw), &salt) != nil || salt.Salt == "" {
-		fmt.Println("GetLoginSalt 失败", code, raw)
+		fmt.Println("GetLoginSalt 失败, http =", code)
 		os.Exit(1)
 	}
 	enc, err := mooxsecurity.Encrypt(password, salt.Salt+fmt.Sprint(salt.Timestamp))
@@ -82,11 +102,12 @@ func main() {
 		Key   string `json:"request_signing_key"`
 	}
 	if code != 200 || json.Unmarshal([]byte(raw), &login) != nil || login.Token == "" {
-		fmt.Println("Login 失败", code, raw)
+		fmt.Println("Login 失败, http =", code, retMessage(raw))
 		os.Exit(1)
 	}
 	c.token, c.key = login.Token, login.Key
 	fmt.Println("登录成功: 已获得会话与请求签名密钥")
+	createFailed := 0
 	if *createSpaces {
 		for _, sp := range []struct{ id, name, owner, market, tz, attrs string }{
 			{"stockcn", "A股市场", "quant", "CN", "Asia/Shanghai", ""},
@@ -97,7 +118,12 @@ func main() {
 		} {
 			body, _ := json.Marshal(map[string]any{"space": map[string]any{"space_id": sp.id, "name": sp.name, "owner": sp.owner, "market": sp.market, "timezone": sp.tz, "status": "active", "attributes": sp.attrs}})
 			code, raw := c.call("/api/admin/space/CreateSpace", "", string(body))
-			fmt.Printf("创建空间 %-8s http=%d %.120s\n", sp.id, code, raw)
+			// 已存在视为成功（重复执行）；其余失败计入验收结果。
+			ok := businessOK(code, raw) || strings.Contains(raw, "UNIQUE") || strings.Contains(raw, "already exists") || strings.Contains(raw, "已存在")
+			if !ok {
+				createFailed++
+			}
+			fmt.Printf("创建空间 %-8s ok=%v http=%d %.120s\n", sp.id, ok, code, raw)
 		}
 	}
 	tests := []struct{ name, path, space, body string }{
@@ -124,13 +150,43 @@ func main() {
 			summary = summary[:160] + "..."
 		}
 		status := "OK  "
-		if code != 200 || strings.Contains(raw, `"code":`) && !strings.Contains(raw, `"code":0`) && !strings.Contains(raw, `"code":"SUCCESS"`) && strings.Contains(raw, "ret_info") {
+		if !businessOK(code, raw) {
 			status = "FAIL"
 			failed++
 		}
 		fmt.Printf("%s %-36s http=%d %s\n", status, test.name, code, strings.ReplaceAll(summary, "\n", " "))
 	}
+	failed += createFailed
 	if failed > 0 {
 		os.Exit(2)
 	}
+}
+
+// businessOK 要求 HTTP 200、完整可解析的 JSON 对象，且顶层 ret_info.code 为 0。
+func businessOK(code int, raw string) bool {
+	if code != 200 {
+		return false
+	}
+	var body struct {
+		RetInfo *struct {
+			Code json.Number `json:"code"`
+		} `json:"ret_info"`
+	}
+	if json.Unmarshal([]byte(raw), &body) != nil || body.RetInfo == nil {
+		return false
+	}
+	return body.RetInfo.Code.String() == "0"
+}
+
+// retMessage 只取出响应里的错误提示，避免把认证响应里的令牌写入日志。
+func retMessage(raw string) string {
+	var body struct {
+		RetInfo struct {
+			Msg string `json:"msg"`
+		} `json:"ret_info"`
+	}
+	if json.Unmarshal([]byte(raw), &body) != nil {
+		return "(响应不可解析)"
+	}
+	return body.RetInfo.Msg
 }
