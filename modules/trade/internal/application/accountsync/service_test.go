@@ -1556,3 +1556,66 @@ func TestOrderAheadOfFillDetailsClosesAdmissionUntilBalanceCovers(t *testing.T) 
 	require.False(t, account.Ready, "订单累计成交领先明细时不得保持可交易")
 	require.Equal(t, int64(3_000), account.BalancePendingUntil)
 }
+
+type noFillsAdapter struct {
+	*syncAdapter
+	at int64
+}
+
+func (a noFillsAdapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
+	return snapshotAtAdapter{a.syncAdapter, a.at}.GetAccountSnapshot(ctx)
+}
+
+func (noFillsAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+	return nil, "", nil
+}
+
+// 订单累计成交领先本地明细时，更新的余额快照也不能恢复准入（余额没有被缺失的成交明细解释）：
+// 明细补齐且余额覆盖水位之后才恢复。
+func TestFillGapKeepsAdmissionClosedEvenWhenBalanceIsNewer(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	open := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.Zero(),
+		Status:    exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_000),
+	}
+	canceled := open
+	canceled.FilledQuantity, canceled.AveragePrice = shared.MustDecimal("0.5"), shared.MustDecimal("100")
+	canceled.Status, canceled.UpdatedAt = exchange.OrderStatusPartiallyFilled, time.UnixMilli(3_000)
+	fill := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_900),
+	}
+	base := &syncAdapter{order: canceled, fill: fill}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: noFillsAdapter{base, 4_000}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(5_000) },
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", canceled)) // 累计成交 0.5 领先明细（0）
+
+	// 余额（4_000）比订单更新（3_000）新，但缺失的成交明细还没有返回
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.Ready, "成交明细仍缺失时不能恢复准入")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.NotZero(t, account.BalancePendingUntil)
+
+	// 成交明细补齐后再同步：恢复
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 4_000}}
+	service.Now = func() time.Time { return time.UnixMilli(6_000) }
+	result, err = service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	require.True(t, result.Ready, "明细补齐且余额覆盖水位后恢复")
+}

@@ -548,7 +548,6 @@ type fakeSessionState struct{ ready bool }
 func (f fakeSessionState) ReadyFor(tradingaccount.Account) bool { return f.ready }
 func (f fakeSessionState) Invalidate(string)                    {}
 
-
 // 实盘账户的凭据同时存在于外层字段与 Live 配置里，落库读取 Live 的值：更换凭据必须两处一起更新。
 func TestApplyUpdateReplacesLiveCredentialUsedByPersistence(t *testing.T) {
 	value := validAccount()

@@ -40,6 +40,7 @@
 </template>
 
 <script setup lang="ts">
+import { validatePasswordInput } from "./login-validation";
 import { useRouter } from "vue-router";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { loginAPI } from "@/api/modules/user/index";
@@ -124,16 +125,9 @@ const rules = ref({
           return;
         }
 
-        // 检查长度
-        if (value.length < 1 || value.length > 20) {
-          callback("密码长度必须在1-20个字符之间");
-          return;
-        }
-
-        // 检查字符类型（仅支持大小写字母和数字）
-        const regex = /^[a-zA-Z0-9]+$/;
-        if (!regex.test(value)) {
-          callback("密码只能包含大小写字母和数字");
+        const passwordError = validatePasswordInput(value);
+        if (passwordError) {
+          callback(passwordError);
           return;
         }
 
@@ -192,7 +186,8 @@ const onLogin = async () => {
     // 执行字符串格式验证
     try {
       await validateStringFormat(form.value.username, "账号");
-      await validateStringFormat(form.value.password, "密码");
+      const passwordError = validatePasswordInput(form.value.password);
+      if (passwordError) throw passwordError;
     } catch (error: any) {
       Message.error(error);
       return;

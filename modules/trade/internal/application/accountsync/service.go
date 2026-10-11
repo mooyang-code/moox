@@ -439,6 +439,17 @@ func (s *Service) applySnapshot(
 	}
 	pending := latest.BalancePendingUntil
 	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending
+	if clearPending && pending > 0 {
+		// 余额覆盖水位还不够：订单累计成交仍领先本地明细时，余额没有被这些成交的明细解释，不能恢复准入
+		gaps, gapErr := s.Store.CountOrdersWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
+		if gapErr != nil {
+			return Result{}, gapErr
+		}
+		if gaps > 0 {
+			clearPending = false
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个订单的累计成交仍领先已入账的成交明细", gaps))
+		}
+	}
 	readinessCause := ""
 	if pending > 0 && !clearPending {
 		snapshot.Ready = false
@@ -919,10 +930,20 @@ func (s *Service) applyOrder(
 		if err != nil {
 			return false, false, "", err
 		}
+		if observeErr := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+			return tx.RaiseObservedFilledQuantity(record.SpaceID, record.OrderID, current.FilledQuantity)
+		}); observeErr != nil {
+			return false, false, "", observeErr
+		}
 		return true, true, "", s.applyOrderState(ctx, record, current)
 	}
 	if err != nil {
 		return false, false, "", err
+	}
+	if observeErr := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.RaiseObservedFilledQuantity(record.SpaceID, record.OrderID, current.FilledQuantity)
+	}); observeErr != nil {
+		return false, false, "", observeErr
 	}
 	storedFilled := shared.MustDecimal(record.FilledQuantity)
 	externalChanged := record.OwnerType == string(orderdomain.OwnerExternal) &&

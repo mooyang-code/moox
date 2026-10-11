@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_runner_id TEXT,
     c_state TEXT NOT NULL,
     c_filled_quantity TEXT NOT NULL DEFAULT '0',
+    -- 交易所订单更新里观察到的累计成交量（只升不降）：大于本地已入账的成交明细时说明明细还没补齐，余额也就不可信
+    c_observed_filled_quantity TEXT NOT NULL DEFAULT '0',
     c_average_price TEXT NOT NULL DEFAULT '0',
     c_reserved_asset TEXT NOT NULL DEFAULT '',
     c_reserved_quantity TEXT NOT NULL DEFAULT '0',
