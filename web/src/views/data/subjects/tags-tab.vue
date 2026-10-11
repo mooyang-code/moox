@@ -242,22 +242,27 @@ function openEdit(tag: Tag) {
 }
 
 async function submit(): Promise<boolean> {
+  // 首次 await（重复 ID 检查）之前固定作用域与提交快照：检查期间取消并重新打开表单后，旧提交不能读取新表单
+  const submission = tagScope.begin();
+  const isEditing = editing.value;
+  const formSnapshot = { ...form };
   const spaceId = props.spaceId;
   if (editSpaceId && editSpaceId !== spaceId) {
     Message.warning("空间已切换，请重新打开编辑窗口");
     visible.value = false;
     return false;
   }
-  const error = validateTagForm(form, !editing.value);
+  const error = validateTagForm(form, !isEditing);
   if (error) {
     Message.warning(error);
     return false;
   }
-  if (!editing.value) {
-    const tagId = form.tag_id.trim().toLowerCase();
+  if (!isEditing) {
+    const tagId = formSnapshot.tag_id.trim().toLowerCase();
     try {
       for (let page = 1; ; page += 1) {
         const response = await listTags(spaceId, { page, size: 500 });
+        if (!submission.isCurrent()) return false;
         if ((response.tags || []).some(tag => tag.tag_id.trim().toLowerCase() === tagId)) {
           Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
           return false;
@@ -265,21 +270,21 @@ async function submit(): Promise<boolean> {
         if (!response.page_result?.has_more || !(response.tags || []).length) break;
       }
     } catch (error) {
+      if (!submission.isCurrent()) return false;
       Message.error(error instanceof Error ? error.message : "检查标签 ID 是否重复失败");
       return false;
     }
   }
-  const submission = tagScope.begin();
   try {
-    await upsertTag(toTagPayload(spaceId, form), !editing.value);
+    await upsertTag(toTagPayload(spaceId, formSnapshot), !isEditing);
   } catch (error) {
     const message = error instanceof Error ? error.message : "标签保存失败";
-    if (!editing.value && /tag name .* already exists/i.test(message)) {
+    if (!isEditing && /tag name .* already exists/i.test(message)) {
       Message.warning("标签名称已存在，请使用其他名称");
       return false;
     }
-    if (!editing.value && /tag .* already exists|tag_id already exists|already exists/i.test(message)) {
-      Message.warning(`标签 ID “${form.tag_id.trim().toLowerCase()}”已存在，请使用其他 ID`);
+    if (!isEditing && /tag .* already exists|tag_id already exists|already exists/i.test(message)) {
+      Message.warning(`标签 ID “${formSnapshot.tag_id.trim().toLowerCase()}”已存在，请使用其他 ID`);
       return false;
     }
     throw error;
@@ -331,9 +336,11 @@ watch(
 
 onMounted(() => void load());
 
-// 提交作用域：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const tagScope = createSubmitScope();
-watch(visible, () => tagScope.invalidate());
+watch(visible, open => {
+  if (open) tagScope.invalidate();
+});
 </script>
 
 <style scoped>

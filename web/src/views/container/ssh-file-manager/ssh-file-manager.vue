@@ -268,11 +268,15 @@ const uploadFile = async (option: {
   onSuccess: (response: unknown) => void;
   onError: (error: Error) => void;
 }) => {
+  // 上传开始时固定会话与目标目录：等待上传票据期间用户可能进入了别的目录，不能改传到后来浏览的目录
+  const sessionId = resolvedSessionId.value;
+  const uploadSessionField = uploadFormData.value.session_id;
+  const targetPath = uploadFormData.value.path;
   try {
-    const url = await getSftpUploadUrl(resolvedSessionId.value);
+    const url = await getSftpUploadUrl(sessionId);
     const formData = new FormData();
-    formData.append("session_id", uploadFormData.value.session_id);
-    formData.append("path", uploadFormData.value.path);
+    formData.append("session_id", uploadSessionField);
+    formData.append("path", targetPath);
     formData.append("file", option.fileItem.file!);
     const response = await fetch(url, { method: "POST", body: formData });
     if (!response.ok) throw new Error(`upload failed: ${response.status}`);

@@ -341,9 +341,14 @@ function onPageSizeChange(pageSize: number) {
 
 onMounted(load);
 
-// 提交作用域：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const nodeScope = createSubmitScope({ global: true });
-watch(visible, () => nodeScope.invalidate());
+watch(visible, open => {
+  if (open) {
+    nodeScope.invalidate();
+    submitting.value = false; // 重新打开时旧提交的 loading 不能遗留
+  }
+});
 </script>
 
 <style scoped>

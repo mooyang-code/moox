@@ -463,9 +463,11 @@ onActivated(() => {
 onDeactivated(stopPolling);
 onUnmounted(stopPolling);
 
-// 提交作用域：notificationVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：notificationVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const notificationScope = createSubmitScope({ global: true });
-watch(notificationVisible, () => notificationScope.invalidate());
+watch(notificationVisible, open => {
+  if (open) notificationScope.invalidate();
+});
 </script>
 
 <style scoped lang="scss">

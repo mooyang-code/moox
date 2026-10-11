@@ -1350,7 +1350,7 @@ onMounted(() => {
   void loadDataNodes();
 });
 
-// 提交作用域：编辑窗口打开/关闭都会使进行中的保存失效
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：编辑窗口打开/关闭都会使进行中的保存失效
 const editorScope = createSubmitScope();
 watch(editorVisible, () => {
   editorScope.invalidate();

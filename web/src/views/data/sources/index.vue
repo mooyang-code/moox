@@ -226,9 +226,11 @@ watch(selectedSpaceId, () => {
 });
 onMounted(load);
 
-// 提交作用域：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const sourceScope = createSubmitScope();
-watch(visible, () => sourceScope.invalidate());
+watch(visible, open => {
+  if (open) sourceScope.invalidate();
+});
 </script>
 
 <style scoped>

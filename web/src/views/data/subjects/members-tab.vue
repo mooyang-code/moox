@@ -365,8 +365,10 @@ async function submitSelectedAdd(): Promise<boolean> {
     Message.warning("请选择标签");
     return false;
   }
+  const submission = selectedAddScope.begin();
   await addTagMembers(props.spaceId, selectedAddTagId.value, ids);
   Message.success("对象已加入标签");
+  if (!submission.isCurrent()) return false;
   selectedAddVisible.value = false;
   await load();
   return true;
@@ -446,13 +448,22 @@ watch(
   { immediate: true }
 );
 
-// 提交作用域：batchVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：batchVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const batchScope = createSubmitScope();
-watch(batchVisible, () => batchScope.invalidate());
+watch(batchVisible, open => {
+  if (open) batchScope.invalidate();
+});
 
-// 提交作用域：subjectVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：subjectVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const subjectScope = createSubmitScope();
-watch(subjectVisible, () => subjectScope.invalidate());
+watch(subjectVisible, open => {
+  if (open) subjectScope.invalidate();
+});
+
+const selectedAddScope = createSubmitScope();
+watch(selectedAddVisible, open => {
+  if (open) selectedAddScope.invalidate();
+});
 </script>
 
 <style scoped>

@@ -426,9 +426,11 @@ const formatTime = (time: string | undefined) => {
   });
 };
 
-// 提交作用域：formVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：formVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const accountScope = createSubmitScope({ global: true });
-watch(formVisible, () => accountScope.invalidate());
+watch(formVisible, open => {
+  if (open) accountScope.invalidate();
+});
 </script>
 
 <style scoped>

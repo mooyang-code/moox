@@ -126,7 +126,7 @@ async function submit() {
   }
 }
 
-// 提交作用域：弹窗打开/关闭都会使进行中的创建失效，旧响应不能再发出 created 或关闭新弹窗
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：弹窗打开/关闭都会使进行中的创建失效，旧响应不能再发出 created 或关闭新弹窗
 const createScope = createSubmitScope();
 watch(visible, () => {
   createScope.invalidate();

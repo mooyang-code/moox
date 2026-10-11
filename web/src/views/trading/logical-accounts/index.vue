@@ -936,13 +936,17 @@ watch(
   }
 );
 
-// 提交作用域：createVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：createVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const createScope = createSubmitScope();
-watch(createVisible, () => createScope.invalidate());
+watch(createVisible, open => {
+  if (open) createScope.invalidate();
+});
 
-// 提交作用域：memberVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：memberVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const memberScope = createSubmitScope();
-watch(memberVisible, () => memberScope.invalidate());
+watch(memberVisible, open => {
+  if (open) memberScope.invalidate();
+});
 </script>
 
 <style scoped>
