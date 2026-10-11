@@ -103,20 +103,22 @@ func TestSSHSessionDAO_ListConnected_ReturnsOnlyConnected(t *testing.T) {
 	assert.Equal(t, "sess-3", rows[0].SessionID)
 }
 
-// 主机密钥指纹：首次记录、地址变化后需要重新信任、删除主机时一并清掉。
-func TestSSHHostDAO_HostKeyPinLifecycle(t *testing.T) {
+// 主机密钥指纹：首次记录、之后固定（不被覆盖）、地址变化后重新信任、删除主机时一并清掉。
+func TestSSHHostDAO_PinHostKeyLifecycle(t *testing.T) {
 	d := NewSSHHostDAO(setupSSHDAOTestDB(t))
 	host := &model.SSHHost{Name: "a", Address: "1.1.1.1", Port: 22, User: "u"}
 	require.NoError(t, d.Create(host))
-	pin, err := d.HostKeyPin(host.ID, "1.1.1.1:22")
+	pin, err := d.PinHostKey(host.ID, "1.1.1.1:22", "SHA256:first")
 	require.NoError(t, err)
-	assert.Empty(t, pin)
-	require.NoError(t, d.SetHostKeyPin(host.ID, "1.1.1.1:22", "SHA256:abc"))
-	pin, _ = d.HostKeyPin(host.ID, "1.1.1.1:22")
-	assert.Equal(t, "SHA256:abc", pin)
-	pin, _ = d.HostKeyPin(host.ID, "2.2.2.2:22")
-	assert.Empty(t, pin, "地址变化后不沿用旧指纹")
+	assert.Equal(t, "SHA256:first", pin)
+	pin, err = d.PinHostKey(host.ID, "1.1.1.1:22", "SHA256:second")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:first", pin, "已记录的指纹不能被后来的连接覆盖")
+	pin, err = d.PinHostKey(host.ID, "2.2.2.2:22", "SHA256:moved")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:moved", pin, "地址变化后重新信任")
 	require.NoError(t, d.Delete(host.ID))
-	pin, _ = d.HostKeyPin(host.ID, "1.1.1.1:22")
-	assert.Empty(t, pin)
+	pin, err = d.PinHostKey(host.ID, "2.2.2.2:22", "SHA256:again")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:again", pin, "删除主机后记录被清掉")
 }

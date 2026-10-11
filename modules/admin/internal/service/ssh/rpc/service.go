@@ -83,7 +83,8 @@ func (s *Service) UpdateHost(ctx context.Context, req *pb.UpdateHostReq) (*pb.Up
 	if host.CertData == "" {
 		host.CertData = existing.CertData
 	}
-	if host.CertPwd == "" {
+	// 口令属于私钥：提交了新私钥就以新私钥为准（口令留空表示它没有口令），不能沿用旧私钥的口令。
+	if host.CertPwd == "" && req.GetHost().GetCertData() == "" {
 		host.CertPwd = existing.CertPwd
 	}
 	if err := s.svc.UpdateHost(ctx, host); err != nil {

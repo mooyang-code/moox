@@ -18,6 +18,7 @@ vi.mock("@/api/trade", async () => ({
   ...(await vi.importActual<typeof import("@/api/trade")>("@/api/trade")),
   ...mocks
 }));
+vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ({ selectedSpaceId: "crypto" }) }));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ replace: mocks.replace }),
   useRoute: () => ({ query: { logical_account_id: "logical" } })

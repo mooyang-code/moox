@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { listSpaces } from "@/api/admin/spaces";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
+import { setSpaceInitializer } from "@/api/admin/signed-client";
 import type { Space } from "@/api/admin/types";
 
 export const useSpaceStore = defineStore(
@@ -57,6 +58,9 @@ export const useSpaceStore = defineStore(
       if (!selectedSpaceId.value) throw new Error("请先选择空间");
       return selectedSpaceId.value;
     }
+
+    // 登记给请求层：没有已选空间时，空间内的请求先等空间列表加载完成。
+    setSpaceInitializer(loadSpaces);
 
     return { spaces, selectedSpaceId, selectedSpace, loading, loadSpaces, setSelectedSpace, hasSpace, requireSpaceId };
   },

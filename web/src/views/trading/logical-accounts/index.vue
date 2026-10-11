@@ -374,6 +374,7 @@ import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { useWindowSize } from "@vueuse/core";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
 import { createClientId } from "@/utils/client-id";
 import {
   addLogicalAccountMember,
@@ -887,6 +888,18 @@ function stopActionPolling() {
 }
 onUnmounted(stopActionPolling);
 load();
+// 切换空间后重新加载，丢弃旧空间的列表与进行中的操作轮询。
+const spaceStore = useSpaceStore();
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!next || next === previous) return;
+    stopActionPolling();
+    pagination.current = 1;
+    rows.value = [];
+    void load();
+  }
+);
 </script>
 
 <style scoped>

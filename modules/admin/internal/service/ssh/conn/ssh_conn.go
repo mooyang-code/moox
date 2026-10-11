@@ -66,9 +66,9 @@ func (s *SSHConn) MarshalJSON() ([]byte, error) {
 
 // HostKeyStore 记录每台主机已信任的 SSH 主机密钥指纹（SHA256）。
 type HostKeyStore interface {
-	// HostKeyPin 返回主机在该地址上已记录的指纹，没有记录时返回空串。
-	HostKeyPin(hostID int, address string) (string, error)
-	SetHostKeyPin(hostID int, address, fingerprint string) error
+	// PinHostKey 原子地确定主机在该地址上受信任的指纹：没有记录时记录 fingerprint（首次信任），已有记录则不改动；
+	// 返回生效的指纹。并发的首次连接只有第一个会被记录，其余看到的是已记录的值。
+	PinHostKey(hostID int, address, fingerprint string) (string, error)
 }
 
 // hostKeyCallback 校验服务端主机密钥：已记录指纹必须一致，不一致在发送任何认证信息之前拒绝；
@@ -80,18 +80,11 @@ func (s *SSHConn) hostKeyCallback() ssh.HostKeyCallback {
 		}
 		address := fmt.Sprintf("%s:%d", s.Host.Address, s.Host.Port)
 		fingerprint := ssh.FingerprintSHA256(key)
-		pinned, err := s.HostKeys.HostKeyPin(s.Host.ID, address)
+		pinned, err := s.HostKeys.PinHostKey(s.Host.ID, address, fingerprint)
 		if err != nil {
-			return fmt.Errorf("读取主机密钥记录失败: %w", err)
+			return fmt.Errorf("记录或读取主机密钥失败: %w", err)
 		}
-		switch {
-		case pinned == "":
-			if err := s.HostKeys.SetHostKeyPin(s.Host.ID, address, fingerprint); err != nil {
-				return fmt.Errorf("记录主机密钥失败: %w", err)
-			}
-			log.Infof("[SSH Conn] 首次连接 %s，记录主机密钥 %s", address, fingerprint)
-			return nil
-		case pinned != fingerprint:
+		if pinned != fingerprint {
 			return fmt.Errorf("主机 %s 的密钥与已记录的指纹不一致，拒绝连接（可能被劫持，或主机已重装）", address)
 		}
 		return nil
@@ -151,6 +144,19 @@ func (s *SSHConn) Connect(clientIP string) error {
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
+	// 只有完整建连成功才把连接交给调用方（由会话管理器负责关闭）；中途失败在这里关闭，避免泄漏连接与文件描述符。
+	connected := false
+	defer func() {
+		if connected {
+			return
+		}
+		if s.sftpClient != nil {
+			_ = s.sftpClient.Close()
+			s.sftpClient = nil
+		}
+		_ = sshClient.Close()
+		s.sshClient = nil
+	}()
 	s.sshClient = sshClient
 
 	// 建立 SFTP 客户端
@@ -168,6 +174,7 @@ func (s *SSHConn) Connect(clientIP string) error {
 		return fmt.Errorf("创建 SSH Session 失败: %w", err)
 	}
 	s.sshSession = sshSession
+	connected = true
 
 	return nil
 }

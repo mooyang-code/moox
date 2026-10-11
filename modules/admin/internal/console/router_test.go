@@ -334,6 +334,10 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		{"/api/admin/ssh/ListHosts", 1, http.StatusForbidden},
 		{"/api/admin/ssh/GetHost", 1, http.StatusForbidden},
 		{"/api/admin/ssh/ListHosts", 2, http.StatusOK},
+		// 因子源码会被服务端 Python 子进程导入校验：只有全局管理员可以保存。
+		{"/api/admin/factor-mgr/CreateFactor", 1, http.StatusForbidden},
+		{"/api/admin/factor-mgr/UpdateFactor", 1, http.StatusForbidden},
+		{"/api/admin/factor-mgr/ListFactors", 1, http.StatusForbidden}, // 无空间的 Factor 请求本来就要管理员
 	} {
 		_, secret, key, sid := setupRequestAuthTest(t)
 		testTokenRole = tc.role

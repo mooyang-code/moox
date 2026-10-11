@@ -276,7 +276,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, serviceID, method string, readOnly bool, body []byte) (string, bool, int, error) {
 	role, _ := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
 	isAdmin := role >= globalAdminRole
-	if (adminOnlyService(serviceID) || adminOnlyWriteService(serviceID) && !readOnly) && !isAdmin {
+	if (adminOnlyService(serviceID) || adminOnlyMethod(serviceID, method) || adminOnlyWriteService(serviceID) && !readOnly) && !isAdmin {
 		return "", false, http.StatusForbidden, errors.New("administrator role required")
 	}
 	if serviceID == "storage" && storageGlobalMethods[method] {

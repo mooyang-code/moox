@@ -49,3 +49,13 @@ func TestHostCredentialsAreNeverReturnedAndKeptOnUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "new", backend.updated.Password)
 }
+
+// 替换成无口令的新私钥并留空口令：不能沿用旧私钥的口令。
+func TestReplacingPrivateKeyDoesNotKeepOldPassphrase(t *testing.T) {
+	backend := &credentialService{stored: model.SSHHost{ID: 7, CertData: "OLD KEY", CertPwd: "old-phrase"}}
+	svc := NewService(backend)
+	_, err := svc.UpdateHost(context.Background(), &pb.UpdateHostReq{Host: &pb.SSHHost{Id: 7, CertData: "NEW KEY"}})
+	require.NoError(t, err)
+	require.Equal(t, "NEW KEY", backend.updated.CertData)
+	require.Empty(t, backend.updated.CertPwd)
+}

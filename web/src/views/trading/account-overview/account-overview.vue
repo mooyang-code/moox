@@ -296,6 +296,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useSpaceStore } from "@/store/modules/space";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -669,6 +670,18 @@ function goOrders(account: TradingAccount) {
 }
 
 onMounted(() => loadAccounts());
+
+// 切换空间后重新加载，旧空间的在途响应由最新请求守卫丢弃。
+const spaceStore = useSpaceStore();
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!next || next === previous) return;
+    pagination.current = 1;
+    accounts.value = [];
+    void loadAccounts();
+  }
+);
 
 watch(
   () => route.query.mode,

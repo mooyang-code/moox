@@ -39,6 +39,12 @@ func adminOnlyWriteService(serviceID string) bool {
 
 // adminOnlyService 的全部方法（含读）只允许全局管理员：主机的 SSH 配置、会话和文件传输等价于登录这些主机，
 // 普通用户不能看到、也不能间接使用。
+// adminOnlyMethods 是会让服务端执行用户提供代码的方法：因子源码保存前会被 Python 子进程导入校验，子进程继承 factor-mgr 的
+// 系统用户权限和服务凭据，所以空间管理员也不能调用，只允许全局管理员。
+var adminOnlyMethods = map[string]bool{"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true}
+
+func adminOnlyMethod(serviceID, method string) bool { return adminOnlyMethods[serviceID+"/"+method] }
+
 func adminOnlyService(serviceID string) bool {
 	return serviceID == "ssh"
 }
