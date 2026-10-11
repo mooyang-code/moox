@@ -58,9 +58,28 @@ type Service struct {
 	inventorySnapshotMu        sync.Mutex
 	inventorySnapshots         map[string]*taskResultInventorySnapshot
 	inventorySnapshotBuilds    map[string]int
-	createTaskMu               sync.Mutex
+	createTaskMu               ctxMutex
 	taskMutationLocks          keyedTaskLocker
 	subjectSyncer              SubjectSyncer
+}
+
+// ctxMutex 是可响应 context 取消的互斥锁：等待者超时或被取消后立即返回，而不是一直排队。
+type ctxMutex struct {
+	once sync.Once
+	slot chan struct{}
+}
+
+func (m *ctxMutex) lock(ctx context.Context) (func(), error) {
+	m.once.Do(func() { m.slot = make(chan struct{}, 1) })
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case m.slot <- struct{}{}:
+		return func() { <-m.slot }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 type keyedTaskLocker struct {
@@ -69,11 +88,12 @@ type keyedTaskLocker struct {
 }
 
 type taskMutationLock struct {
-	mu   sync.Mutex
+	mu   ctxMutex
 	refs int
 }
 
-func (l *keyedTaskLocker) lock(key string) func() {
+// lock 获取任务级互斥锁；等待期间 ctx 取消会回收引用并返回错误。
+func (l *keyedTaskLocker) lock(ctx context.Context, key string) (func(), error) {
 	l.mu.Lock()
 	if l.locks == nil {
 		l.locks = make(map[string]*taskMutationLock)
@@ -86,9 +106,7 @@ func (l *keyedTaskLocker) lock(key string) func() {
 	entry.refs++
 	l.mu.Unlock()
 
-	entry.mu.Lock()
-	return func() {
-		entry.mu.Unlock()
+	release := func() {
 		l.mu.Lock()
 		entry.refs--
 		if entry.refs == 0 {
@@ -96,6 +114,15 @@ func (l *keyedTaskLocker) lock(key string) func() {
 		}
 		l.mu.Unlock()
 	}
+	unlock, err := entry.mu.lock(ctx)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	return func() {
+		unlock()
+		release()
+	}, nil
 }
 
 func taskMutationKey(spaceID, taskID string) string {
@@ -282,8 +309,11 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	// Result metadata is task-exclusive. Serialize the local check/provision/
 	// insert sequence so two UI retries cannot compensate resources provisioned
 	// by the winning request.
-	s.createTaskMu.Lock()
-	defer s.createTaskMu.Unlock()
+	unlockCreate, lockErr := s.createTaskMu.lock(ctx)
+	if lockErr != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "等待创建任务锁失败："+lockErr.Error())}, nil
+	}
+	defer unlockCreate()
 	if req == nil || req.GetTask() == nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is required")}, nil
 	}
@@ -474,7 +504,10 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if taskID == "" {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
-	unlockTask := s.taskMutationLocks.lock(taskMutationKey(spaceID, taskID))
+	unlockTask, lockErr := s.taskMutationLocks.lock(ctx, taskMutationKey(spaceID, taskID))
+	if lockErr != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "等待任务锁失败："+lockErr.Error())}, nil
+	}
 	defer unlockTask()
 	if err := validateTaskResultConfigUpdate(req.GetResultConfig()); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -640,7 +673,10 @@ func (s *Service) DisableTask(ctx context.Context, req *pb.DisableTaskReq) (*pb.
 	if strings.TrimSpace(req.GetTaskId()) == "" {
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
-	unlockTask := s.taskMutationLocks.lock(taskMutationKey(req.GetSpaceId(), req.GetTaskId()))
+	unlockTask, lockErr := s.taskMutationLocks.lock(ctx, taskMutationKey(req.GetSpaceId(), req.GetTaskId()))
+	if lockErr != nil {
+		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "等待任务锁失败："+lockErr.Error())}, nil
+	}
 	defer unlockTask()
 	if err := s.taskRepo.SetEnabled(ctx, req.GetSpaceId(), req.GetTaskId(), false); err != nil {
 		log.ErrorContextf(ctx, "[Collector] disable collection task failed: %v", err)
@@ -658,7 +694,10 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id and task_id are required")}, nil
 	}
 	spaceID, taskID := strings.TrimSpace(req.GetSpaceId()), strings.TrimSpace(req.GetTaskId())
-	unlockTask := s.taskMutationLocks.lock(taskMutationKey(spaceID, taskID))
+	unlockTask, lockErr := s.taskMutationLocks.lock(ctx, taskMutationKey(spaceID, taskID))
+	if lockErr != nil {
+		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "等待任务锁失败："+lockErr.Error())}, nil
+	}
 	defer unlockTask()
 	task, err := s.taskRepo.GetByTaskID(ctx, spaceID, taskID)
 	if err != nil {

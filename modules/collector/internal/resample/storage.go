@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -91,11 +92,16 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subject
 	// PrimaryStore requires at least one field ID even when only an attribute
 	// is needed. Request the canonical K-line fields alongside source_hash;
 	// this remains a single bounded read and keeps the idempotency check valid.
-	existing, err := s.Primary.ReadFields(ctx, []*storagepb.RowKey{targetKey}, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, []string{"source_hash", "resample_revision"})
+	existing, err := s.Primary.ReadFields(ctx, []*storagepb.RowKey{targetKey}, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, []string{"source_hash", "resample_revision", attrOutputFields})
 	if err != nil {
 		return Result{}, false, err
 	}
-	if len(existing) > 0 && typedString(existing[0].GetAttributes()["source_hash"]) == result.SourceHash {
+	// 幂等标识 = 源数据哈希 + 输出字段集合：任务扩大输出字段后，源数据没变也必须补写新增字段，
+	// 否则补算游标会在缺字段的历史桶上继续推进。
+	fieldsSignature := outputFieldsSignature(spec.OutputFields)
+	if len(existing) > 0 &&
+		typedString(existing[0].GetAttributes()["source_hash"]) == result.SourceHash &&
+		typedString(existing[0].GetAttributes()[attrOutputFields]) == fieldsSignature {
 		return result, false, nil
 	}
 	// 事件 ID 要包含这次修订所基于的版本序号（现存目标行的 resample_revision）：只用内容哈希（或前后哈希）时，源数据
@@ -107,7 +113,8 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subject
 	}
 	row := resultRowWithSpec(result, spec)
 	row.Attributes["resample_revision"] = stringValue(strconv.FormatInt(previousRevision+1, 10))
-	eventID := sourceEventID(spec.InstanceID, targetKey, strconv.FormatInt(previousRevision, 10), result.SourceHash)
+	row.Attributes[attrOutputFields] = stringValue(fieldsSignature)
+	eventID := sourceEventID(spec.InstanceID, targetKey, strconv.FormatInt(previousRevision, 10), result.SourceHash+"|"+fieldsSignature)
 	if err := s.Primary.UpsertFieldsWithSource(ctx, []*storagepb.RowFieldUpsert{row}, eventID); err != nil {
 		return Result{}, false, err
 	}
@@ -156,6 +163,34 @@ func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 	row.Attributes["source_dataset_id"] = stringValue(spec.SourceDatasetID)
 	row.Attributes["source_freq"] = stringValue(spec.SourceFrequency.Storage)
 	return row
+}
+
+// attrOutputFields 记录目标行写入时的输出字段集合，参与幂等判断。
+const attrOutputFields = "resample_output_fields"
+
+// outputFieldsSignature 返回规范化（小写、去空白、排序、去重）后的输出字段集合；未限定输出字段时为 "*"。
+func outputFieldsSignature(fields []string) string {
+	if len(fields) == 0 {
+		return "*"
+	}
+	seen := make(map[string]struct{}, len(fields))
+	names := make([]string, 0, len(fields))
+	for _, name := range fields {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "*"
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
 }
 
 func sourceEventID(instanceID string, key *storagepb.RowKey, previousRevision, hash string) string {
