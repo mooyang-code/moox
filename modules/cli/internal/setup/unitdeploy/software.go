@@ -181,10 +181,11 @@ func buildCoreLocally(ctx context.Context, repository, bin, arch string, log io.
 		}
 		return nil
 	}
-	if err := run(filepath.Join(repository, "web"), "npm", "ci", "--no-audit", "--no-fund"); err != nil {
+	// 前端使用 pnpm 与 pnpm-lock.yaml（仓库没有 package-lock.json），与 deploy-moox.sh 的构建方式一致。
+	if err := run(filepath.Join(repository, "web"), "pnpm", "install", "--frozen-lockfile", "--config.confirmModulesPurge=false"); err != nil {
 		return err
 	}
-	if err := run(filepath.Join(repository, "web"), "npm", "run", "build"); err != nil {
+	if err := run(filepath.Join(repository, "web"), "pnpm", "run", "build:prod"); err != nil {
 		return err
 	}
 	if err := run(filepath.Join(repository, "web-host"), "make", "statik"); err != nil {
