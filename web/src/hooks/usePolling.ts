@@ -1,3 +1,4 @@
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { onActivated, onBeforeUnmount, onDeactivated, onMounted, toValue, type MaybeRefOrGetter } from "vue";
 
 /**
@@ -8,16 +9,20 @@ export function usePolling(task: () => Promise<unknown> | unknown, intervalMs: n
   let timer: number | undefined;
   let running = false;
   let paused = false;
+  let runningGeneration = 0;
 
   async function tick() {
+    // 切换空间后，旧空间的在途请求会被请求层丢弃（永不落定），其 finally 不会执行：这里不能被它永久卡住。
+    if (running && runningGeneration !== selectedSpaceGeneration()) running = false;
     if (running || paused || !toValue(active) || document.hidden) return;
     running = true;
+    const generation = (runningGeneration = selectedSpaceGeneration());
     try {
       await task();
     } catch {
       // 轮询失败保留上一份快照，由下一次 tick 重试。
     } finally {
-      running = false;
+      if (runningGeneration === generation) running = false;
     }
   }
 

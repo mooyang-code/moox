@@ -134,6 +134,7 @@ import { upsertFields } from "@/api/storage/access";
 import { listDatasetColumns, listDatasets } from "@/api/storage/metadata";
 import type { Dataset, DatasetColumn, FieldValue, FieldValueType, RowFieldUpsert, TypedValue } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "DataImport" });
@@ -169,25 +170,36 @@ const isTimeSeriesDataset = computed(() => isTimeSeriesDataKind(selectedDataset.
 const canImport = computed(() => parsedRows.value.length > 0 && errors.value.length === 0 && !!form.dataset_id);
 const previewRows = computed(() => parsedRows.value.slice(0, 50).map((row, index) => ({ id: String(index), ...row })));
 
+const datasetsGuard = createLatestRequestGuard();
+const columnsGuard = createLatestRequestGuard();
+
 async function loadDatasets() {
-  if (!selectedSpaceId.value) {
+  const spaceId = selectedSpaceId.value;
+  const request = datasetsGuard.begin();
+  if (!spaceId) {
     datasets.value = [];
     return;
   }
-  const rsp = await listDatasets({ space_id: selectedSpaceId.value, page: { page: 1, size: 500 } });
+  const rsp = await listDatasets({ space_id: spaceId, page: { page: 1, size: 500 } });
+  if (!request.isLatest() || spaceId !== selectedSpaceId.value) return;
   datasets.value = rsp.datasets || [];
 }
 
 async function loadColumns() {
-  if (!selectedSpaceId.value || !form.dataset_id) {
+  const spaceId = selectedSpaceId.value;
+  const datasetId = form.dataset_id;
+  const request = columnsGuard.begin();
+  if (!spaceId || !datasetId) {
     columns.value = [];
     return;
   }
   const rsp = await listDatasetColumns({
-    space_id: selectedSpaceId.value,
-    dataset_id: form.dataset_id,
+    space_id: spaceId,
+    dataset_id: datasetId,
     page: { page: 1, size: 1000 }
   });
+  // 同一空间内快速切换 Dataset 时，旧 Dataset 的列不能覆盖新选择
+  if (!request.isLatest() || spaceId !== selectedSpaceId.value || datasetId !== form.dataset_id) return;
   columns.value = rsp.columns || [];
 }
 
@@ -384,6 +396,9 @@ async function importRows() {
 
 // 切换空间：旧空间的 Dataset、字段映射与已解析的 CSV 都不再有效，清空后重新加载。
 watch(selectedSpaceId, () => {
+  datasetsGuard.invalidate();
+  columnsGuard.invalidate();
+  datasets.value = [];
   form.dataset_id = "";
   columns.value = [];
   parsedRows.value = [];

@@ -5,7 +5,7 @@ import { isRetInfoSuccess } from "../ret-info";
 import { getStorageAuthInfo } from "./auth";
 import type { RetInfo } from "./types";
 import { installSpaceAwareSignedClient, readPersistedAuth } from "../admin/signed-client";
-import { readSelectedSpaceId } from "../admin/space-header";
+import { readSelectedSpaceId, selectedSpaceGeneration } from "../admin/space-header";
 
 const storageClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -48,7 +48,9 @@ function storageCacheKey(method: string, req: object): string {
     req,
     sessionID: auth.sessionId || "",
     token: auth.token || "",
-    spaceID: spaceID || ""
+    spaceID: spaceID || "",
+    // 切走又切回同一空间后，旧代次被丢弃的在途请求不能再被复用
+    spaceGeneration: selectedSpaceGeneration()
   });
 }
 

@@ -1,6 +1,6 @@
 import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from "@/utils/request-signing";
-import { readSelectedSpaceId } from "./space-header";
+import { readSelectedSpaceId, selectedSpaceGeneration } from "./space-header";
 import { AuthSessionExpiredError } from "./auth-errors";
 
 interface PersistedAuth {
@@ -113,6 +113,8 @@ declare module "axios" {
   interface AxiosRequestConfig {
     /** 请求拦截器自动注入 X-Space-Id 时记录的空间；调用方显式指定空间的请求不带这个标记。 */
     injectedSpaceId?: string;
+    /** 与 injectedSpaceId 同时记录的空间代次，用来识别 A→B→A 之后返回的旧请求。 */
+    injectedSpaceGeneration?: number;
   }
 }
 
@@ -122,7 +124,7 @@ const READ_METHOD = /\/(Get|List|Query|Search|Check|Describe|Count|Validate|Prev
 function isStaleSpaceRead(config: InternalAxiosRequestConfig | undefined): boolean {
   const injected = config?.injectedSpaceId;
   if (!injected || !READ_METHOD.test(config?.url || "")) return false;
-  return readSelectedSpaceId() !== injected;
+  return readSelectedSpaceId() !== injected || selectedSpaceGeneration() !== config?.injectedSpaceGeneration;
 }
 
 /** 永不落定的 Promise：旧空间的只读响应（含错误）整体丢弃，页面既不会收到旧数据，也不会弹出多余的错误提示；
@@ -142,6 +144,7 @@ export function installSpaceAwareSignedClient(client: AxiosInstance): void {
     if (spaceId && !config.headers.get("X-Space-Id")) {
       config.headers.set("X-Space-Id", spaceId);
       config.injectedSpaceId = spaceId;
+      config.injectedSpaceGeneration = selectedSpaceGeneration();
     }
     return config;
   });

@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
 import { afterEach, describe, expect, it } from "vitest";
-import { setSelectedSpaceIdCache } from "./space-header";
+import { selectedSpaceGeneration, setSelectedSpaceIdCache } from "./space-header";
 import { AuthSessionExpiredError } from "./auth-errors";
 import { expireBrowserSession, installSpaceAwareSignedClient, setSpaceInitializer } from "./signed-client";
 
@@ -142,10 +142,27 @@ describe("installSpaceAwareSignedClient", () => {
     expect(await settled(onOk(staleRead))).toBe("pending");
     expect(await settled(onErr({ config: staleRead.config }))).toBe("pending");
 
-    const sameSpace = { config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-b" }, data: "B" };
+    const sameSpace = {
+      config: {
+        url: "/api/admin/collector/GetTaskInstanceList",
+        injectedSpaceId: "space-b",
+        injectedSpaceGeneration: selectedSpaceGeneration()
+      },
+      data: "B"
+    };
     expect(onOk(sameSpace)).toBe(sameSpace);
     const staleWrite = { config: { url: "/api/admin/collector/CreateTask", injectedSpaceId: "space-a" }, data: "W" };
     expect(onOk(staleWrite)).toBe(staleWrite);
+    // A→B→A：空间 ID 相同但代次已变，旧请求同样要丢弃
+    const roundTrip = {
+      config: {
+        url: "/api/admin/collector/GetTask",
+        injectedSpaceId: "space-b",
+        injectedSpaceGeneration: selectedSpaceGeneration() - 1
+      },
+      data: "R"
+    };
+    expect(await settled(onOk(roundTrip))).toBe("pending");
     const explicit = { config: { url: "/api/admin/collector/GetTask" }, data: "E" };
     expect(onOk(explicit)).toBe(explicit);
     setSelectedSpaceIdCache("");
