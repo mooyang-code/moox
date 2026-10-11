@@ -88,6 +88,11 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
           next({ path: to.path, query: to.query, replace: true });
         }
       } catch (error: any) {
+        if (error?.name === "StaleAccountRequestError") {
+          // 用户信息请求期间已重新登录：当前会话完好，按新会话重新进入守卫
+          next({ path: to.path, query: to.query, replace: true });
+          return;
+        }
         console.error("路由守卫: 获取用户信息失败", error);
 
         // 确保完全清除用户状态，避免死循环

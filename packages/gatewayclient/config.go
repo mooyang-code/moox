@@ -18,6 +18,8 @@ type FileConfig struct {
 	Caller  string `yaml:"caller"`
 	KeyID   string `yaml:"key_id"`
 	KeyFile string `yaml:"key_file"`
+	// Compression 为 none（默认）或 gzip，作用于跨主机的公网请求。
+	Compression string `yaml:"compression"`
 }
 
 // ExternalFileConfig selects one fixed Access instance, without directory
@@ -29,6 +31,8 @@ type ExternalFileConfig struct {
 	Caller     string `yaml:"caller"`
 	KeyID      string `yaml:"key_id"`
 	KeyFile    string `yaml:"key_file"`
+	// Compression 为 none（默认）或 gzip，作用于发往 Access 的请求。
+	Compression string `yaml:"compression"`
 }
 
 // Validate checks the public configuration without opening private files.
@@ -41,6 +45,9 @@ func (c FileConfig) Validate() error {
 	component, ok := catalog.Component(c.Caller)
 	if !ok || component.ID == "host-gateway" {
 		return errors.New("gateway_client.caller must identify an internal component")
+	}
+	if !ValidCompression(c.Compression) {
+		return errors.New("gateway_client.compression must be none or gzip")
 	}
 	return validateCredentialFile(c.KeyID, c.KeyFile, false)
 }
@@ -67,6 +74,9 @@ func (c ExternalFileConfig) Validate() error {
 	}
 	if err := validateExternalIdentity(catalog, c.Caller, c.Address, c.InstanceID); err != nil {
 		return err
+	}
+	if !ValidCompression(c.Compression) {
+		return errors.New("gateway_client.compression must be none or gzip")
 	}
 	return validateCredentialFile(c.KeyID, c.KeyFile, true)
 }
@@ -114,7 +124,7 @@ func (c ExternalFileConfig) OpenExternal(moduleConfigPath string) (*Client, erro
 	if err != nil {
 		return nil, err
 	}
-	return New(Config{Mode: External, Credentials: credentials, AccessAddress: c.Address, AccessInstanceID: c.InstanceID})
+	return New(Config{Mode: External, Credentials: credentials, AccessAddress: c.Address, AccessInstanceID: c.InstanceID, Compression: c.Compression})
 }
 
 // OpenInternal uses the canonical release layout: <root>/<module>/config/app.yaml
@@ -155,6 +165,6 @@ func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefre
 	return New(Config{
 		Mode: Internal, Credentials: credentials,
 		LocalHostID: host.Host.ID, LocalAddress: host.Server.LocalAddr, CAFile: host.TLS.CAFile,
-		CachePath: cachePath, OnRefreshError: onRefreshError,
+		CachePath: cachePath, Compression: c.Compression, OnRefreshError: onRefreshError,
 	})
 }

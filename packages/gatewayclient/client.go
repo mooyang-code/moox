@@ -54,6 +54,9 @@ type Config struct {
 	AccessAddress    string
 	AccessInstanceID string
 	Serialization    int
+	// Compression 控制跨主机/经 Access 的公网请求体压缩：空或 none 不压缩，gzip 压缩
+	// 达到阈值的请求体；服务端按请求的压缩方式同样压缩响应。回环调用从不压缩。
+	Compression      string
 	Timeout          time.Duration
 	DirectoryTimeout time.Duration
 	RefreshInterval  time.Duration
@@ -62,6 +65,17 @@ type Config struct {
 
 type endpoint struct {
 	address, target, caFile, serverName string
+	compress                            bool
+}
+
+const (
+	CompressionNone = "none"
+	CompressionGzip = "gzip"
+)
+
+// ValidCompression 判断压缩配置取值；空串等同 none。
+func ValidCompression(value string) bool {
+	return value == "" || value == CompressionNone || value == CompressionGzip
 }
 
 type invokeFunc func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error)
@@ -95,6 +109,9 @@ func New(config Config) (*Client, error) {
 	}
 	if config.Timeout < 0 || config.DirectoryTimeout <= 0 || config.RefreshInterval <= 0 || config.Serialization != codec.SerializationTypePB && config.Serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("gateway client requires positive timeouts and PB or JSON serialization")
+	}
+	if !ValidCompression(config.Compression) {
+		return nil, fmt.Errorf("gateway compression must be none or gzip")
 	}
 	if config.Credentials.Caller == "" {
 		return nil, fmt.Errorf("gateway caller is required")
@@ -365,7 +382,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 
 func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoint, error) {
 	if c.config.Mode == External {
-		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID}, nil
+		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: c.config.Compression == CompressionGzip}, nil
 	}
 	c.mu.RLock()
 	// Published directory maps are immutable. Keep one coherent snapshot without
@@ -398,7 +415,7 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 		return endpoint{address: c.config.LocalAddress, target: chosen}, nil
 	}
 	host := directory.Hosts[chosen]
-	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen}, nil
+	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: c.config.Compression == CompressionGzip}, nil
 }
 
 func validAddress(address string) bool {

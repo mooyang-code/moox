@@ -188,3 +188,68 @@ func TestRealTRPCTLSRejectsWrongCAAndHostAfterSuccessfulCall(t *testing.T) {
 	_, err = pool.Get("tcp", ep.address, connpool.NewGetOptions())
 	require.ErrorIs(t, err, net.ErrClosed)
 }
+
+// byteCountingConn 统计经过连接的字节数，用于确认压缩确实缩小了线上流量。
+type byteCountingConn struct {
+	net.Conn
+	read, written *atomic.Int64
+}
+
+func (c *byteCountingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.read.Add(int64(n))
+	return n, err
+}
+
+func (c *byteCountingConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.written.Add(int64(n))
+	return n, err
+}
+
+type byteCountingListener struct {
+	net.Listener
+	read, written atomic.Int64
+}
+
+func (l *byteCountingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &byteCountingConn{Conn: conn, read: &l.read, written: &l.written}, nil
+}
+
+func TestRealTRPCGzipCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
+	body := []byte(`{"rows":"` + strings.Repeat("kline-row-0123456789,", 4000) + `"}`)
+	run := func(compress bool) (read, written int64) {
+		base, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		listener := &byteCountingListener{Listener: base}
+		creds := gatewayauth.Credentials{Caller: "moox-cli", KeyID: "test", Secret: "secret"}
+		startWireServer(t, listener, creds, "storage")
+		headers, err := gatewayauth.Sign(creds, gatewayauth.Request{Method: "POST", Path: "/" + secretService + "/GetSecret", TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		pool := newRPCPool()
+		defer pool.Close()
+		rsp, err := pool.invoke(ctx, endpoint{address: base.Addr().String(), target: "storage", compress: compress}, secretService, "GetSecret", codec.SerializationTypeJSON, body, headers)
+		require.NoError(t, err)
+		require.Equal(t, body, rsp, "服务端看到并回显的必须是未压缩的原始请求体，签名才能通过")
+		return listener.read.Load(), listener.written.Load()
+	}
+	plainRead, plainWritten := run(false)
+	gzipRead, gzipWritten := run(true)
+	require.Less(t, gzipRead*5, plainRead, "请求方向应显著缩小")
+	require.Less(t, gzipWritten*5, plainWritten, "响应方向应随请求压缩方式一并压缩")
+}
+
+func TestCompressionConfigValidation(t *testing.T) {
+	require.True(t, ValidCompression(""))
+	require.True(t, ValidCompression(CompressionNone))
+	require.True(t, ValidCompression(CompressionGzip))
+	require.False(t, ValidCompression("zstd"))
+	_, err := New(Config{Mode: Tunnel, Compression: "zstd", Serialization: codec.SerializationTypeJSON})
+	require.ErrorContains(t, err, "compression")
+}
