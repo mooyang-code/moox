@@ -227,3 +227,30 @@ func TestBackfillerSameRangeCanRunAgainAsNewGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), state.Generation)
 }
+
+func TestBackfillPatchNeverOverridesNewerRealDataAndYieldsToLaterEvents(t *testing.T) {
+	partition := domain.PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}
+	dataTime := time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
+	double := func(v float64) domain.Scalar {
+		return domain.Scalar{Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &v}
+	}
+	patch := func(at time.Time, columns map[string]domain.Scalar) domain.RowPatch {
+		return domain.RowPatch{Partition: partition, DataTime: dataTime, WrittenAt: at, Columns: columns}
+	}
+	real := time.Date(2026, 1, 2, 3, 5, 0, 0, time.UTC)
+
+	// 真实更新 Y 已归档，异步 View 仍返回旧值 X 时回填：不能覆盖 Y，但可补上缺失字段
+	row := domain.MergePatch(domain.ArchiveRow{}, patch(real, map[string]domain.Scalar{"close": double(2)}))
+	row = domain.MergePatch(row, patch(BackfillWrittenAt, map[string]domain.Scalar{"close": double(1), "volume": double(9)}))
+	assert.InDelta(t, 2.0, *row.Columns["close"].Double, 0.001, "回填的陈旧值不能覆盖较新的真实数据")
+	assert.InDelta(t, 9.0, *row.Columns["volume"].Double, 0.001, "回填应补上缺失字段")
+
+	// 回填值之后到达的真实事件可以覆盖回填值
+	row = domain.MergePatch(row, patch(real.Add(time.Minute), map[string]domain.Scalar{"volume": double(10)}))
+	assert.InDelta(t, 10.0, *row.Columns["volume"].Double, 0.001)
+
+	// 已删除字段的墓碑不会被回填复活
+	row = domain.MergePatch(row, patch(real.Add(2*time.Minute), map[string]domain.Scalar{"close": {Null: true}}))
+	row = domain.MergePatch(row, patch(BackfillWrittenAt, map[string]domain.Scalar{"close": double(1)}))
+	assert.NotContains(t, row.Columns, "close")
+}

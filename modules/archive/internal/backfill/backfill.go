@@ -95,7 +95,7 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 				rsp.GetServedIndexedFrom(), rsp.GetServedIndexedTo(),
 			)
 		}
-		patches, err := rowsToPatches(rsp.GetRows(), time.Now().UTC())
+		patches, err := rowsToPatches(rsp.GetRows(), BackfillWrittenAt)
 		if err != nil {
 			return total, err
 		}
@@ -119,6 +119,11 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 	}
 	return total, nil
 }
+
+// BackfillWrittenAt 是回填补丁的字段版本：回填只是低优先级补缺。异步 View 可能仍返回旧值，
+// 用当前时间做版本会盖掉已归档的较新真实数据，并让之后重投的真实事件因“更早”而被忽略。
+// 取最小的非零时间：只填补缺失字段，保留已有字段版本与删除墓碑，后到的真实事件可以覆盖回填值。
+var BackfillWrittenAt = time.Unix(0, 1).UTC()
 
 func valueOrWildcard(value *string) string {
 	if value == nil {
