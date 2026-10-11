@@ -397,8 +397,10 @@ CREATE INDEX IF NOT EXISTS idx_t_activity_logs_category_time ON t_activity_logs 
 | --- | --- |
 | `web/src/views/collector/task-instances/task-instances.vue` 及首页统计卡片 | 改为三块：分配（函数、地域、标的、数据集 hash、最近下发时间与结果、最近执行观测时间）、标的变更日志（活动日志按类别过滤）、补采作业；不展示周期列表；接口封装与页面测试 |
 | 全局活动日志页（新） | 按空间、来源、类别、时间范围分页查看活动日志；采集任务页复用同一组件 |
-| Collector `GetTaskResultInventory`（`internal/rpc/task_result_inventory.go:372`） | 直接行情任务的最近终态改从 Storage 查询；重采样分支不变 |
-| Monitor `metrics/task_result_inventory.go:309`、`kline_freshness.go:105` | 持久化最后一次有效 inventory；Collector 不可用时继续用它检查，并单独告警“控制面数据过期” |
+| Collector `GetTaskResultInventory`（`internal/rpc/task_result_inventory.go:372`） | 直接行情任务不再填 `latest_completed_period`、`latest_completed_status`（不查 Storage，也不再读 `t_collector_period_storage_states`）；条目增加 `allowed_lateness_seconds`；重采样分支仍从本地 readiness 取最近完成周期，不变 |
+| Monitor `metrics/kline_freshness.go:105` | 最近已终结周期为空的条目，只按“View 最新数据时间 ≥ 当前时间 − 一个周期 − 允许迟到时间”判断新鲜，告警文案相应调整；有该字段的条目（重采样）逻辑不变 |
+| Monitor `metrics/task_result_inventory.go:309` | 最后一份有效的任务结果清单持久化到 Monitor 数据库；Collector 不可用或缓存过期时继续用它检查，并单独告警“控制面数据过期”；两者同时重启后仍可用 |
+| Collector `period_storage_reconciler.go` | 新链路不再需要，阶段 6b 随旧代码删除，不做替换 |
 | Monitor `observability/overview.go:888` | stockcn feed 健康检查不再依赖函数经 EventBus 上报的指标 |
 | Monitor 新规则 | 周期无任何提交、对账下发失败、因迟到被拒、hash 不一致被拒、补采积压、429、函数内存峰值（来自 SCF 指标与 CLS） |
 

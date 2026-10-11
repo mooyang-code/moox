@@ -424,7 +424,12 @@ C有效     = min(流水线并发, FeedGuard 并发, 实际连接并发)
 - Collector 在新建采集计划时写一条“标的变更”日志（各数据集新增与移除的标的、旧 hash 与新 hash、生效周期），计划生效时再写一条“已生效”日志；写入失败下一分钟随对账重试。
 - 管理台：采集任务页内嵌按类别过滤的变更日志列表，另提供一个全局的活动日志页。
 
-需要同步修改的后端：`GetTaskResultInventory` 的最近终态改从 Storage 查询；`PeriodStorageReconciler` 替换为新的状态来源；Monitor 在 Collector 不可用时保留最后一次有效的 inventory 继续检查（持久化，两者同时重启后仍可用），并单独告警控制面数据过期；Monitor 中读取旧 assignment 与 coordination 指标的规则改为读对账状态；stockcn feed 健康检查不再依赖函数经 EventBus 上报的指标。
+需要同步修改的后端：
+
+- **任务结果清单**（Collector `GetTaskResultInventory`，Monitor 据此做 K 线新鲜度检查）：直接行情任务**不再提供“最近已终结周期及其状态”**（字段留空），因为新链路中 Collector 不再登记、跟踪周期，而为它给 Storage 加查询接口不值得；清单增加各数据集的允许迟到时间。Monitor 对留空的条目只按“View 最新数据时间是否晚于 当前时间 − 一个周期 − 允许迟到时间”判断新鲜；失去的只是告警里“采集未完成”与“View 未跟上”的区分，需要时用 `kline check` 排查。重采样任务的这一项仍来自本地 readiness，不变。
+- `PeriodStorageReconciler` 直接删除（新链路不需要本地周期状态）。
+- Monitor 把最后一份有效的任务结果清单持久化到自己的数据库：Collector 不可用时继续按它检查，并单独告警“控制面数据过期”；Collector 与 Monitor 同时重启后仍可用。
+- Monitor 中读取旧 assignment 与 coordination 指标的规则改为读对账状态；stockcn feed 健康检查不再依赖函数经 EventBus 上报的指标。
 
 新增监控：周期没有任何提交、触发迟到、hash 不一致被拒、对账下发失败、实际缺口、补采积压、429 响应、函数内存峰值。
 
@@ -443,7 +448,7 @@ C有效     = min(流水线并发, FeedGuard 并发, 实际连接并发)
 | 1 Storage | `RegisterSeriesSnapshot` 与生效表；`CommitTimeSeriesBatch` 自动建立周期（含生效表校验、截止时间与迟到拒绝）；周期只存 hash；缺失列表改为全集减成功位图；hash 计算抽到共享包 | 并发提交只建立一次周期；与生效表不符的 hash 被拒；快照未登记被拒；过截止时间被拒；不能登记过去的生效周期 |
 | 2 函数 | 读压缩工作项；只拉目标 bar；不调用 Ensure；不连 EventBus；严格事件时间；限流参数化；错误返回与重试配置 | 无 EventBus 配置可正常采集；一次触发写入全部目标数据集 |
 | 3 Collector | 每空间对账协程；分配计算；快照登记；并行下发；地域与 VPC 校验；cron 生成；内存可配；检查与补采 CLI、自动补采；清理旧调度 | Collector 停机时函数照常写入；标的变更 2 分钟内生效 |
-| 4 前端与监控 | 采集实例页三块；inventory 改造；新监控 | Monitor 不因 Collector 不可用而停止检查 |
+| 4 前端与监控 | 采集实例页三块；任务结果清单去掉最近已终结周期、Monitor 持久化清单；新监控 | Monitor 不因 Collector 不可用而停止检查 |
 | 5 crypto canary | 隔离的一组新函数，每函数 50 个标的、并发 10、rps/burst 50；VPC + 公网访问与私网 Access 路径已在前置实验中验证，canary 关注端到端延迟、内存峰值与 429 | 见下方验收 |
 | 6 crypto 切换 | 停用旧 Invoke 函数（保留 7 天），新函数全量接管；删除旧调度代码与表 | 与 canary 相同的验收，连续运行一天 |
 | 7 stockcn | 交易时段与 TDX 容量验证 | 覆盖开盘、午休、收盘与非交易日 |
