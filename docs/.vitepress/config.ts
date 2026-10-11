@@ -51,17 +51,10 @@ export default defineConfig({
 
     sidebar: [
       {
-        text: '计划（待实施）',
-        collapsed: true,
-        items: [
-          { text: '网关与服务部署重构设计', link: '/计划/网关与服务部署重构设计' },
-          { text: '网关与服务部署重构执行计划', link: '/计划/网关与服务部署重构执行计划' },
-          { text: 'Console Proxy 内嵌 Caddy', link: '/2026-10-09-console-proxy-embedded-caddy-execution-plan' },
-        ],
-      },
-      {
         text: '总体',
         items: [
+          { text: '文档索引', link: '/README' },
+          { text: '当前实现与文档边界', link: '/实现状态' },
           { text: '总体设计', link: '/总体设计' },
           { text: '部署与运维', link: '/部署与运维' },
           { text: '元数据命名规范', link: '/元数据命名规范' },
@@ -103,6 +96,21 @@ export default defineConfig({
           { text: '命令行工具', link: '/模块/命令行工具' },
           { text: '前端', link: '/模块/前端' },
           { text: '共享包', link: '/模块/共享包' },
+        ],
+      },
+      {
+        text: '审查与历史记录',
+        collapsed: true,
+        items: [
+          { text: '代码审查与优化建议', link: '/审查/2026-10-10代码审查' },
+          { text: '计划索引', link: '/计划/README' },
+          { text: '策略重建设计', link: '/计划/策略模块评审与设计' },
+          { text: '策略重建执行计划', link: '/计划/策略模块执行计划' },
+          { text: '数据保留与配置发布', link: '/计划/数据保留与配置发布' },
+          { text: '网关与服务部署重构设计', link: '/计划/网关与服务部署重构设计' },
+          { text: '网关与服务部署重构执行计划', link: '/计划/网关与服务部署重构执行计划' },
+          { text: 'Console Proxy 实施记录', link: '/2026-10-09-console-proxy-embedded-caddy-execution-plan' },
+          { text: 'Timer 写入压测记录', link: '/计划/Timer模式Storage写入压测报告' },
         ],
       },
     ],

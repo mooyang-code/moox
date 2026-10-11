@@ -41,10 +41,8 @@ cp moox.toml.example moox.toml && chmod 600 moox.toml   # 填写主机、云账�
 make build                                              # 构建全部二进制到 bin/
 
 ./bin/moox-cli setup validate --file ./moox.toml
-./bin/moox-cli setup deploy-control --file ./moox.toml
-./bin/moox-cli setup apply --file ./moox.toml
-./bin/moox-cli setup deploy-storage --file ./moox.toml --host storage
-./bin/moox-cli setup init --file ./moox.toml --config-dir ./config/setup --storage-host storage
+./bin/moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir .
+# core-ready 仅表示核心控制面就绪；随后按放置部署 host、业务单元和完整 control。
 ```
 
 完整流程与注意事项见[部署与运维](docs/部署与运维.md)。
