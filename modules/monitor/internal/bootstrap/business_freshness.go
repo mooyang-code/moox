@@ -20,6 +20,9 @@ type businessFreshnessItem struct {
 	success                                              bool
 }
 
+// maxFreshnessChecks 覆盖 1024 台主机各自的网关/上报检查（每台数条）及业务检查。
+const maxFreshnessChecks = 1024 * 8
+
 func unixSeconds(value time.Time) float64 {
 	if value.IsZero() {
 		return 0
@@ -219,7 +222,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		enabled := true
 		existing := make([]domain.Check, 0, 500)
-		for page := 1; len(existing) < 1000; page++ {
+		for page := 1; len(existing) < maxFreshnessChecks; page++ {
 			batch, err := repositories.Checks.List(ctx, store.ListChecksOptions{
 				Source: domain.CheckSourceObservability, Enabled: &enabled,
 				Page: store.Page{Page: page, PageSize: 500},
@@ -232,15 +235,15 @@ func buildBusinessFreshnessReporterWithInterval(
 				break
 			}
 		}
-		if len(existing) >= 1000 {
+		if len(existing) >= maxFreshnessChecks {
 			total, err := repositories.Checks.Count(ctx, store.ListChecksOptions{
 				Source: domain.CheckSourceObservability, Enabled: &enabled,
 			})
 			if err != nil {
 				return err
 			}
-			if total > 1000 {
-				return fmt.Errorf("business freshness checks exceed limit 1000")
+			if total > maxFreshnessChecks {
+				return fmt.Errorf("business freshness checks exceed limit %d", maxFreshnessChecks)
 			}
 		}
 		for _, check := range existing {
@@ -293,8 +296,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				}
 			}
 		}
-		if len(items) > 1000 {
-			return fmt.Errorf("business freshness checks exceed limit 1000")
+		if len(items) > maxFreshnessChecks {
+			return fmt.Errorf("business freshness checks exceed limit %d", maxFreshnessChecks)
 		}
 
 		checks := make(map[string]domain.Check, len(items))

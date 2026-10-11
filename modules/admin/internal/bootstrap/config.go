@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"trpc.group/trpc-go/trpc-go"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
@@ -37,10 +38,13 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	if err := loadEncryptionKey(); err != nil {
 		return nil, err
 	}
-	if err := validateSetupListener("./config/trpc_go.yaml"); err != nil {
+	// 校验必须针对 tRPC 实际加载的配置文件（-conf 可指定其他路径）；NewServer 已解析该参数，
+	// 此时尚未 Serve，不会有监听被提前打开。
+	listenerConfig := trpc.ServerConfigPath
+	if err := validateSetupListener(listenerConfig); err != nil {
 		return nil, err
 	}
-	if err := validateGatewayControlListener("./config/trpc_go.yaml"); err != nil {
+	if err := validateGatewayControlListener(listenerConfig); err != nil {
 		return nil, err
 	}
 	adminNodeID := strings.TrimSpace(os.Getenv("MOOX_ADMIN_NODE_ID"))
@@ -139,10 +143,13 @@ func validateSetupListener(path string) error {
 	if err := yaml.Unmarshal(raw, &document); err != nil {
 		return fmt.Errorf("decode setup listener config")
 	}
+	// tRPC 对重名服务以后者覆盖前者，所以必须恰好一项，并校验这一项的全部字段。
+	count := 0
 	for _, service := range document.Server.Services {
 		if service.Name != "trpc.moox.admin.Setup" {
 			continue
 		}
+		count++
 		address := net.ParseIP(strings.TrimSpace(service.IP))
 		if address == nil || !address.IsLoopback() {
 			return fmt.Errorf("setup listener must bind to loopback")
@@ -154,9 +161,14 @@ func validateSetupListener(path string) error {
 		if strings.TrimSpace(service.Address) != "" || strings.TrimSpace(service.Nic) != "" {
 			return fmt.Errorf("setup listener must not override the listen address or NIC")
 		}
-		return nil
 	}
-	return fmt.Errorf("setup listener trpc.moox.admin.Setup is required")
+	if count == 0 {
+		return fmt.Errorf("setup listener trpc.moox.admin.Setup is required")
+	}
+	if count != 1 {
+		return fmt.Errorf("exactly one setup listener is required")
+	}
+	return nil
 }
 
 func loadEncryptionKey() error {

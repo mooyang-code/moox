@@ -241,12 +241,15 @@ type ReporterPlacement struct{ NodeID, ServiceName string }
 // The newest reporter per registered placement survives cleanup, so a stopped
 // component cannot become "never reported". A nil registration list means
 // discovery is still unknown; an empty non-nil list is authoritative.
+// maxRegisteredPlacements 与拓扑上限一致（1024 台主机，每台最多放置全部组件）。
+const maxRegisteredPlacements = 1024 * 24
+
 func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time, registered []ReporterPlacement) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("message store is not initialized")
 	}
-	if len(registered) > 1500 {
-		return 0, errors.New("registered metric placements exceed limit 1500")
+	if len(registered) > maxRegisteredPlacements {
+		return 0, fmt.Errorf("registered metric placements exceed limit %d", maxRegisteredPlacements)
 	}
 	cutoff := now.UTC().Add(-RetiredSeriesAfter)
 	var pruned int64

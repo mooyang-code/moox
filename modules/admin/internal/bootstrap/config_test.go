@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"trpc.group/trpc-go/trpc-go"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/stretchr/testify/assert"
@@ -158,7 +159,7 @@ cors:
 
 func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	setupBootstrapConfigDir(t)
-	cfg, err := LoadConfigs(context.Background())
+	cfg, err := loadConfigsForTest(t)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	assert.NotNil(t, cfg.App)
@@ -172,7 +173,7 @@ func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
 	setupBootstrapConfigDir(t)
 	t.Setenv("MOOX_ADMIN_NODE_ID", "")
 
-	_, err := LoadConfigs(context.Background())
+	_, err := loadConfigsForTest(t)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MOOX_ADMIN_NODE_ID")
@@ -188,7 +189,7 @@ cors:
   allowed_origins:
     - "*"
 `), 0o644))
-	_, err := LoadConfigs(context.Background())
+	_, err := loadConfigsForTest(t)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "jwt.secret_key")
 }
@@ -245,4 +246,27 @@ func TestValidateSetupListenerRejectsAddressAndNICOverrides(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 		require.ErrorContains(t, validateSetupListener(path), "must not override")
 	}
+}
+
+// tRPC 对重名服务以后者覆盖前者：前安全后不安全的重复配置必须被拒绝。
+func TestValidateSetupListenerRejectsDuplicateEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trpc_go.yaml")
+	entry := func(extra string) string {
+		return "    - name: trpc.moox.admin.Setup\n      ip: 127.0.0.1\n      port: 11110\n      network: tcp\n      protocol: trpc\n" + extra
+	}
+	body := "server:\n  service:\n" + entry("") + entry("      address: 0.0.0.0:11110\n")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	require.ErrorContains(t, validateSetupListener(path), "must not override")
+	body = "server:\n  service:\n" + entry("") + entry("")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	require.ErrorContains(t, validateSetupListener(path), "exactly one")
+}
+
+// loadConfigsForTest 让 tRPC 框架配置路径指向测试目录里的 config/trpc_go.yaml（生产由 -conf 指定）。
+func loadConfigsForTest(t *testing.T) (*Config, error) {
+	t.Helper()
+	previous := trpc.ServerConfigPath
+	trpc.ServerConfigPath = "./config/trpc_go.yaml"
+	t.Cleanup(func() { trpc.ServerConfigPath = previous })
+	return LoadConfigs(context.Background())
 }

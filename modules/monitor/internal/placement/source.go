@@ -88,7 +88,7 @@ func (s *ClientSource) Snapshot(ctx context.Context) (Snapshot, error) {
 
 func (s *ClientSource) hosts(ctx context.Context) ([]*adminpb.DeploymentHost, error) {
 	var rows []*adminpb.DeploymentHost
-	for page := uint32(1); page <= maxHosts/pageSize; page++ {
+	for page := uint32(1); page <= (maxHosts+pageSize-1)/pageSize+1; page++ {
 		var response adminpb.ListDeploymentHostsRsp
 		if err := s.invoke(ctx, "ListHosts", &adminpb.ListDeploymentHostsReq{Page: &commonpb.Page{Page: page, Size: pageSize}}, &response); err != nil {
 			return nil, err
@@ -109,7 +109,7 @@ func (s *ClientSource) hosts(ctx context.Context) ([]*adminpb.DeploymentHost, er
 
 func (s *ClientSource) placements(ctx context.Context) ([]*adminpb.ComponentPlacement, error) {
 	var rows []*adminpb.ComponentPlacement
-	for page := uint32(1); page <= maxPlacements/pageSize; page++ {
+	for page := uint32(1); page <= (maxPlacements+pageSize-1)/pageSize+1; page++ {
 		var response adminpb.ListPlacementsRsp
 		if err := s.invoke(ctx, "ListPlacements", &adminpb.ListPlacementsReq{Page: &commonpb.Page{Page: page, Size: pageSize}}, &response); err != nil {
 			return nil, err

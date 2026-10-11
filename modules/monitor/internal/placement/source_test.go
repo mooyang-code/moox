@@ -69,3 +69,34 @@ func TestClientSourceRejectsUnverifiedCatalogAndFailedResponses(t *testing.T) {
 		})
 	}
 }
+
+// 主机数在分页边界附近（1000、1001、1024、1025）：上限内全部读取，超出上限才拒绝。
+func TestClientSourceHostPagingBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		total int
+		ok    bool
+	}{{1000, true}, {1001, true}, {1024, true}, {1025, false}} {
+		t.Run(fmt.Sprint(tc.total), func(t *testing.T) {
+			gateway := invocation(func(ctx context.Context, _, method string, request, response any) error {
+				switch method {
+				case "ListHosts":
+					req := request.(*adminpb.ListDeploymentHostsReq)
+					page, size := int(req.GetPage().GetPage()), int(req.GetPage().GetSize())
+					var hosts []*adminpb.DeploymentHost
+					for i := (page - 1) * size; i < page*size && i < tc.total; i++ {
+						hosts = append(hosts, &adminpb.DeploymentHost{HostId: fmt.Sprintf("h%d", i)})
+					}
+					*response.(*adminpb.ListDeploymentHostsRsp) = adminpb.ListDeploymentHostsRsp{RetInfo: &commonpb.RetInfo{}, Hosts: hosts, PageResult: &commonpb.PageResult{HasMore: page*size < tc.total}}
+				}
+				return nil
+			})
+			hosts, err := NewClientSource(gateway).hosts(t.Context())
+			if tc.ok {
+				require.NoError(t, err)
+				require.Len(t, hosts, tc.total)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
