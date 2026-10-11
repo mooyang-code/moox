@@ -1,3 +1,4 @@
+import { readSelectedSpaceId } from "./admin/space-header";
 import { callControl } from "@/api/admin/http";
 import forge from "node-forge";
 export { withOptionalSpace } from "@/api/space-context";
@@ -117,25 +118,39 @@ export const STATUS_OPTIONS = [
   { label: "已删除", value: 4 }
 ];
 
-export const initPackageUpload = async (data: UploadPackageRequest): Promise<InitPackageUploadResponse> => {
-  return callControl<UploadPackageRequest, InitPackageUploadResponse>("cloudnode", "InitPackageUpload", data);
+// 上传流程的各个请求显式带上发起时的空间：用户在上传期间切换空间时，完成请求仍要落在包所属的空间。
+const spaceHeaders = (spaceId: string) => (spaceId ? { headers: { "X-Space-Id": spaceId } } : undefined);
+
+export const initPackageUpload = async (
+  data: UploadPackageRequest,
+  spaceId = readSelectedSpaceId()
+): Promise<InitPackageUploadResponse> => {
+  return callControl<UploadPackageRequest, InitPackageUploadResponse>(
+    "cloudnode",
+    "InitPackageUpload",
+    data,
+    spaceHeaders(spaceId)
+  );
 };
 
 export const completePackageUpload = async (
   packageId: string,
   fileMd5: string,
-  fileSize: number
+  fileSize: number,
+  spaceId = readSelectedSpaceId()
 ): Promise<FunctionPackage | null> => {
   const rsp = await callControl<{ package_id: string; file_md5: string; file_size: number }, { detail?: FunctionPackage }>(
     "cloudnode",
     "CompletePackageUpload",
-    { package_id: packageId, file_md5: fileMd5, file_size: fileSize }
+    { package_id: packageId, file_md5: fileMd5, file_size: fileSize },
+    spaceHeaders(spaceId)
   );
   return rsp.detail ?? null;
 };
 
 export const uploadFunctionPackage = async (data: UploadPackageRequest, file: File) => {
-  const initRsp = await initPackageUpload({ ...data, original_filename: file.name });
+  const spaceId = readSelectedSpaceId();
+  const initRsp = await initPackageUpload({ ...data, original_filename: file.name }, spaceId);
   const putResp = await fetch(initRsp.upload_url, { method: "PUT", body: file });
   if (!putResp.ok) {
     throw new Error(`COS upload failed: ${putResp.status}`);
@@ -147,7 +162,7 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest, file: Fi
     binary += String.fromCharCode(bytes[i]);
   }
   const md5Hex = forge.md.md5.create().update(binary).digest().toHex();
-  const detail = await completePackageUpload(initRsp.package_id, md5Hex, file.size);
+  const detail = await completePackageUpload(initRsp.package_id, md5Hex, file.size, spaceId);
   return { package_id: initRsp.package_id, detail };
 };
 

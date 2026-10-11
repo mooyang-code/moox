@@ -75,12 +75,17 @@ func (s *Service) GetPackageDownloadURL(ctx context.Context, req *pb.GetPackageD
 	if pkg == nil {
 		return &pb.GetPackageDownloadURLRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "package not found")}, nil
 	}
+	// 包放在私有桶里：未签名的对象 URL 会被 COS 拒绝，所以按包所属云账户的凭据生成短时有效的签名下载地址。
+	downloadURL, err := s.presignedDownloadURL(ctx, *pkg)
+	if err != nil {
+		return &pb.GetPackageDownloadURLRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "presign download url failed: "+err.Error())}, nil
+	}
 	return &pb.GetPackageDownloadURLRsp{RetInfo: retOK(), Url: &pb.PackageDownloadURL{
 		PackageId:   pkg.PackageID,
 		PackageName: pkg.PackageName,
 		Version:     pkg.Version,
 		Filename:    pkg.COSPath,
-		DownloadUrl: cosURL(*pkg),
+		DownloadUrl: downloadURL,
 		FileSize:    pkg.FileSize,
 		FileMd5:     pkg.FileMD5,
 	}}, nil
@@ -252,6 +257,27 @@ func toPBPackageDetail(pkg store.FunctionPackage) *pb.PackageDetail {
 	}
 }
 
+func (s *Service) presignedDownloadURL(ctx context.Context, pkg store.FunctionPackage) (string, error) {
+	if cosURL(pkg) == "" {
+		return "", fmt.Errorf("package has no COS location")
+	}
+	account, err := s.catalog.GetAccount(ctx, pkg.CloudAccountID)
+	if err != nil {
+		return "", err
+	}
+	if account == nil {
+		return "", fmt.Errorf("cloud account %s not found", pkg.CloudAccountID)
+	}
+	credential, err := s.resolveCloudCredential(ctx, *account)
+	if err != nil {
+		return "", err
+	}
+	// 用包记录里的桶与地域（账户配置可能后来改过），凭据取自账户。
+	located := *account
+	located.COSBucket, located.COSRegion = pkg.COSBucket, pkg.COSRegion
+	return presignCOS(ctx, http.MethodGet, located, credential, strings.TrimPrefix(pkg.COSPath, "/"), time.Now().UTC().Add(15*time.Minute))
+}
+
 func cosURL(pkg store.FunctionPackage) string {
 	if pkg.COSBucket == "" || pkg.COSRegion == "" || pkg.COSPath == "" {
 		return ""
@@ -260,6 +286,11 @@ func cosURL(pkg store.FunctionPackage) string {
 }
 
 func presignCOSPut(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential, objectPath string, expires time.Time) (string, error) {
+	return presignCOS(ctx, http.MethodPut, account, credential, objectPath, expires)
+}
+
+// presignCOS 生成带签名的限时 URL：私有桶里的对象（上传 PUT、下载 GET）都必须带签名才能访问。
+func presignCOS(ctx context.Context, method string, account store.CloudAccount, credential cloudcredential.TencentCredential, objectPath string, expires time.Time) (string, error) {
 	bucketURL, err := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", account.COSBucket, account.COSRegion))
 	if err != nil {
 		return "", err
@@ -270,7 +301,7 @@ func presignCOSPut(ctx context.Context, account store.CloudAccount, credential c
 			SecretKey: credential.SecretKey,
 		},
 	})
-	u, err := client.Object.GetPresignedURL(ctx, http.MethodPut, objectPath, credential.SecretID, credential.SecretKey, time.Until(expires), nil)
+	u, err := client.Object.GetPresignedURL(ctx, method, objectPath, credential.SecretID, credential.SecretKey, time.Until(expires), nil)
 	if err != nil {
 		return "", err
 	}
@@ -311,6 +342,16 @@ func ensureCOSBucket(ctx context.Context, account store.CloudAccount, credential
 	}
 	if _, err := client.Bucket.Head(ctx); err != nil {
 		return fmt.Errorf("verify bucket %s: %w", account.COSBucket, err)
+	}
+	// 控制台用浏览器直接 PUT 到预签名 URL，跨域预检需要桶的 CORS 规则。桶仍是私有的，访问都要带签名，所以放开来源。
+	if _, err := client.Bucket.PutCORS(ctx, &cos.BucketPutCORSOptions{Rules: []cos.BucketCORSRule{{
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"PUT", "GET", "HEAD"},
+		AllowedHeaders: []string{"*"},
+		ExposeHeaders:  []string{"ETag"},
+		MaxAgeSeconds:  3600,
+	}}}); err != nil {
+		return fmt.Errorf("configure CORS for bucket %s: %w", account.COSBucket, err)
 	}
 	return nil
 }

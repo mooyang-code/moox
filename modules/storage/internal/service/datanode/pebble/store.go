@@ -1014,22 +1014,43 @@ func (s *Store) DeleteOutbox(ctx context.Context, ids []uint64) error {
 	}
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
-	sorted := append([]uint64(nil), ids...)
+	// 只统计实际存在、去重后的删除项：同一批 id 可能已被并发的数据集清理删除，或被 relay 重复删除；按 len(ids) 扣减会把其他
+	// 事件的待发计数扣成零，hint 误判队列为空后 relay 不再扫描，新事件一直滞留。
+	sorted := make([]uint64, 0, len(ids))
+	seen := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate || id == 0 {
+			continue
+		}
+		seen[id] = struct{}{}
+		sorted = append(sorted, id)
+	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	batch := s.db.NewBatch()
 	defer batch.Close()
+	existing := 0
 	for _, id := range sorted {
-		if id == 0 {
+		key := []byte(outboxKey(id))
+		_, closer, err := s.db.Get(key)
+		if errors.Is(err, cpebble.ErrNotFound) {
 			continue
 		}
-		if err := batch.Delete([]byte(outboxKey(id)), s.writeOptions); err != nil {
+		if err != nil {
 			return err
 		}
+		_ = closer.Close()
+		existing++
+		if err := batch.Delete(key, s.writeOptions); err != nil {
+			return err
+		}
+	}
+	if existing == 0 {
+		return nil
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return err
 	}
-	s.noteOutboxDeleted(len(sorted))
+	s.noteOutboxDeleted(existing)
 	return nil
 }
 

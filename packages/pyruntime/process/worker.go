@@ -55,14 +55,16 @@ type LogRecord struct {
 }
 
 type StdioWorker struct {
-	cfg   Config
-	cmd   *exec.Cmd
-	in    io.WriteCloser
-	out   io.ReadCloser
-	state State
-	hello protocol.Hello
-	mu    sync.Mutex
-	logs  chan LogRecord
+	cfg Config
+	cmd *exec.Cmd
+	in  io.WriteCloser
+	out io.ReadCloser
+	// state 由 stateMu 保护，与 mu 分开：mu 在整个 Python 执行期间被持有，健康检查读取状态不能被正常的长计算挡住。
+	state   State
+	stateMu sync.RWMutex
+	hello   protocol.Hello
+	mu      sync.Mutex
+	logs    chan LogRecord
 }
 
 func NewStdioWorker(ctx context.Context, cfg Config) (*StdioWorker, error) {
@@ -138,7 +140,7 @@ func newStdioWorker(ctx context.Context, cfg Config, observeStarted func(*StdioW
 		_ = w.Close()
 		return nil, err
 	}
-	w.state = StateReady
+	w.setState(StateReady)
 	w.hello = hello
 	return w, nil
 }
@@ -152,13 +154,13 @@ func (w *StdioWorker) Load(ctx context.Context, req LoadRequest) error {
 func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.state != StateReady {
+	if w.getState() != StateReady {
 		return RunResult{}, errors.New("pyruntime: worker not ready")
 	}
-	w.state = StateBusy
+	w.setState(StateBusy)
 	defer func() {
-		if w.state != StateDead {
-			w.state = StateReady
+		if w.getState() != StateDead {
+			w.setState(StateReady)
 		}
 	}()
 	taskTimeout := w.cfg.TaskTimeout
@@ -236,7 +238,7 @@ func decodeRunMeta(raw json.RawMessage) (map[string]any, error) {
 func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, meta map[string]any) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.state == StateDead {
+	if w.getState() == StateDead {
 		return errors.New("pyruntime: worker dead")
 	}
 	ctx, cancel := context.WithTimeout(ctx, w.cfg.TaskTimeout)
@@ -291,12 +293,23 @@ func (w *StdioWorker) writeFrameLocked(ctx context.Context, frame protocol.Frame
 	}
 }
 
-func (w *StdioWorker) State() State { w.mu.Lock(); defer w.mu.Unlock(); return w.state }
-func (w *StdioWorker) Hello() protocol.Hello {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.hello
+func (w *StdioWorker) setState(state State) {
+	w.stateMu.Lock()
+	w.state = state
+	w.stateMu.Unlock()
 }
+
+func (w *StdioWorker) getState() State {
+	w.stateMu.RLock()
+	defer w.stateMu.RUnlock()
+	return w.state
+}
+
+// State 不等待执行锁：Python 正在计算时健康检查也能立即得到 busy。
+func (w *StdioWorker) State() State { return w.getState() }
+
+// Hello 在构造完成后不再变化，无需加锁。
+func (w *StdioWorker) Hello() protocol.Hello { return w.hello }
 func (w *StdioWorker) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -311,7 +324,7 @@ func (w *StdioWorker) terminateLocked() error {
 	w.cmd = nil
 	w.in = nil
 	w.out = nil
-	w.state = StateDead
+	w.setState(StateDead)
 	if in != nil {
 		_ = in.Close()
 	}
@@ -339,6 +352,8 @@ func (w *StdioWorker) captureStderr(r io.Reader) {
 	if n > 0 {
 		w.logs <- LogRecord{Stream: "stderr", Message: string(buf[:n]), Truncated: n == len(buf)}
 	}
+	// 超出保留上限的部分继续读取并丢弃直到 EOF：不再消费 stderr 管道会被写满，Python 阻塞在写日志上，任务只能等超时被杀掉。
+	_, _ = io.Copy(io.Discard, r)
 }
 func (w *StdioWorker) Logs() <-chan LogRecord { return w.logs }
 

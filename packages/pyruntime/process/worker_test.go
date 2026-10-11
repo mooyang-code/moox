@@ -1,6 +1,7 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -314,4 +315,58 @@ func assertReapedWorker(t *testing.T, worker *StdioWorker, cmd *exec.Cmd) {
 	assert.Nil(t, worker.cmd)
 	assert.NotNil(t, cmd.ProcessState)
 	require.NoError(t, worker.Close())
+}
+
+// Python 正在计算时（Run 持有执行锁），健康检查读取状态必须立即返回，而不是等计算结束。
+func TestStdioWorkerStateDoesNotWaitForRunningTask(t *testing.T) {
+	w, _ := newSilentStdioWorker(t)
+	t.Cleanup(func() { _ = w.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = w.Run(ctx, RunRequest{RequestID: "long"})
+	}()
+	time.Sleep(100 * time.Millisecond) // 等 Run 进入执行
+	got := make(chan State, 1)
+	go func() { got <- w.State() }()
+	select {
+	case state := <-got:
+		assert.Equal(t, StateBusy, state)
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("State() 被正在执行的任务挡住")
+	}
+	<-done
+}
+
+// stderr 超过保留上限后必须继续读取并丢弃：不消费会让管道写满，Python 阻塞在写日志上。
+func TestCaptureStderrKeepsDrainingAfterLimit(t *testing.T) {
+	w := &StdioWorker{cfg: Config{MaxLogBytes: 1024}, logs: make(chan LogRecord, 4)}
+	reader, writer := io.Pipe()
+	finished := make(chan struct{})
+	go func() {
+		w.captureStderr(reader)
+		close(finished)
+	}()
+	written := make(chan error, 1)
+	go func() {
+		chunk := bytes.Repeat([]byte("x"), 64<<10)
+		var err error
+		for i := 0; i < 16 && err == nil; i++ { // 1 MiB，远超管道容量与保留上限
+			_, err = writer.Write(chunk)
+		}
+		_ = writer.Close()
+		written <- err
+	}()
+	select {
+	case err := <-written:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("写端被阻塞：超限后没有继续消费 stderr")
+	}
+	<-finished
+	record := <-w.logs
+	assert.True(t, record.Truncated)
+	assert.Len(t, record.Message, 1024)
 }
