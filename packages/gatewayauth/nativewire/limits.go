@@ -11,4 +11,5 @@ const MaxFrameBytes = 64 << 20
 
 func init() {
 	trpc.DefaultMaxFrameSize = MaxFrameBytes
+	installBoundedCompressors()
 }

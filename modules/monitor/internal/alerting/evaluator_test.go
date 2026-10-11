@@ -104,3 +104,42 @@ func TestRecoveryNotificationFailureKeepsAlertFiringForRetry(t *testing.T) {
 		t.Fatalf("recovery failure lost firing state: %+v", state)
 	}
 }
+
+func TestFailedSendAfterParentContextExpiresClearsReminderSoNextSampleRetries(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	if err := mgr.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	repos := mgr.Repositories()
+	background := context.Background()
+	check := domain.Check{SpaceID: "crypto", CheckID: "collector:market", Name: "行情采集", Enabled: true}
+	if err := repos.Checks.Create(background, &check); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Alerts.CreateRule(background, &domain.AlertRule{SpaceID: check.SpaceID, RuleID: "default:collector:market", CheckID: check.CheckID, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(background)
+	evaluator := NewEvaluator(repos.Alerts, Options{
+		Channel: func(context.Context) (*domain.NotificationChannel, error) {
+			cancel() // 发送期间父 context 到期
+			return &domain.NotificationChannel{ChannelType: "wecom", WebhookURL: "https://not-approved.example/hook"}, nil
+		},
+		Now: func() time.Time { return time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC) },
+	})
+	result := domain.CheckResult{SpaceID: check.SpaceID, CheckID: check.CheckID, Success: false, Status: domain.CheckStatusDown, ErrorMessage: "Timer 不可用", CheckedAt: time.Now().UTC()}
+	if err := evaluator.Evaluate(ctx, check, result); err == nil {
+		t.Fatal("expected send failure")
+	}
+	state, err := repos.Alerts.GetState(background, check.SpaceID, "default:collector:market", check.CheckID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastReminderAt != nil {
+		t.Fatalf("发送失败后必须清除提醒时间戳，否则后续采样被抑制一个提醒间隔: %v", state.LastReminderAt)
+	}
+}

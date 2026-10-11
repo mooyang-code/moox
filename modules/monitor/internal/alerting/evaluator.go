@@ -101,8 +101,7 @@ func (e *Evaluator) evaluateFailure(ctx context.Context, check domain.Check, res
 			// failure. A nil reminder timestamp makes the next firing result a
 			// retry instead of waiting for the normal five-minute reminder.
 			state.LastReminderAt = nil
-			_ = e.alerts.UpsertState(ctx, state)
-			return err
+			return errors.Join(err, e.persistRetryState(ctx, state))
 		}
 	} else if state.Status == domain.AlertStatusFiring && reminderDue(state.LastReminderAt, now, rule.MinimumReminderIntervalSeconds) {
 		state.LastReminderAt = &now
@@ -111,8 +110,7 @@ func (e *Evaluator) evaluateFailure(ctx context.Context, check domain.Check, res
 		}
 		if err := e.recordAndSend(ctx, check, result, rule, state, domain.AlertEventReminder); err != nil {
 			state.LastReminderAt = nil
-			_ = e.alerts.UpsertState(ctx, state)
-			return err
+			return errors.Join(err, e.persistRetryState(ctx, state))
 		}
 	}
 	return e.alerts.UpsertState(ctx, state)
@@ -145,6 +143,14 @@ func (e *Evaluator) evaluateSuccess(ctx context.Context, check domain.Check, res
 		}
 	}
 	return e.alerts.UpsertState(ctx, state)
+}
+
+// persistRetryState 把“待重试”标记（LastReminderAt=nil）落库。发送失败常常正是因为父 context 到期，
+// 此时必须用不受取消影响的短期限 context 落库，并把落库失败带回给调用方，否则未送达的通知会被抑制一个提醒间隔。
+func (e *Evaluator) persistRetryState(ctx context.Context, state *domain.AlertState) error {
+	retryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return e.alerts.UpsertState(retryCtx, state)
 }
 
 func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, eventType string) error {
