@@ -438,20 +438,19 @@ func (s *Service) applySnapshot(
 		return Result{}, latestErr
 	}
 	pending := latest.BalancePendingUntil
-	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending
-	if clearPending && pending > 0 {
-		// 余额覆盖水位还不够：订单累计成交仍领先本地明细时，余额没有被这些成交的明细解释，不能恢复准入
-		gaps, gapErr := s.Store.CountOrdersWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
-		if gapErr != nil {
-			return Result{}, gapErr
-		}
-		if gaps > 0 {
-			clearPending = false
-			result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个订单的累计成交仍领先已入账的成交明细", gaps))
-		}
+	// 订单累计成交仍领先本地成交明细时，余额没有被这些成交的明细解释，不能恢复准入（与水位是否为零无关：
+	// 首次导入的终态外部订单、由首笔成交触发的导入都可能在水位为零时留下缺口）。
+	gaps, gapErr := s.Store.CountOrdersWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
+	if gapErr != nil {
+		return Result{}, gapErr
 	}
+	hasGap := gaps > 0
+	if hasGap {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个订单的累计成交仍领先已入账的成交明细", gaps))
+	}
+	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending && !hasGap
 	readinessCause := ""
-	if pending > 0 && !clearPending {
+	if (pending > 0 || hasGap) && !clearPending {
 		snapshot.Ready = false
 		result.Ready = false
 		result.BalancePending = true
@@ -461,7 +460,7 @@ func (s *Service) applySnapshot(
 	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
 	// 否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
 	syncBoundary := now
-	if (!result.AccountSnapshotUpdated || (pending > 0 && !clearPending)) && account.LastSyncAt > 0 {
+	if (!result.AccountSnapshotUpdated || ((pending > 0 || hasGap) && !clearPending)) && account.LastSyncAt > 0 {
 		syncBoundary = account.LastSyncAt
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -883,8 +882,14 @@ func (s *Service) ensureOrderForFill(
 	// lookup adapters return a cached order without the requested symbol (or
 	// with a stale one); never let that collapse fills from two instruments.
 	current.ExchangeSymbol = fill.ExchangeSymbol
-	_, err = s.importExternalOrder(ctx, account, current)
-	return err == nil, err
+	imported, err := s.importExternalOrder(ctx, account, current)
+	if err != nil {
+		return false, err
+	}
+	if err := s.observeOrderFills(ctx, account, imported, current); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func fillBatchKey(fill exchange.Fill) string {
@@ -930,9 +935,7 @@ func (s *Service) applyOrder(
 		if err != nil {
 			return false, false, "", err
 		}
-		if observeErr := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-			return tx.RaiseObservedFilledQuantity(record.SpaceID, record.OrderID, current.FilledQuantity)
-		}); observeErr != nil {
+		if observeErr := s.observeOrderFills(ctx, account, record, current); observeErr != nil {
 			return false, false, "", observeErr
 		}
 		return true, true, "", s.applyOrderState(ctx, record, current)
@@ -940,9 +943,7 @@ func (s *Service) applyOrder(
 	if err != nil {
 		return false, false, "", err
 	}
-	if observeErr := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.RaiseObservedFilledQuantity(record.SpaceID, record.OrderID, current.FilledQuantity)
-	}); observeErr != nil {
+	if observeErr := s.observeOrderFills(ctx, account, record, current); observeErr != nil {
 		return false, false, "", observeErr
 	}
 	storedFilled := shared.MustDecimal(record.FilledQuantity)
@@ -956,30 +957,46 @@ func (s *Service) applyOrder(
 		), nil
 	}
 	if current.FilledQuantity.Cmp(storedFilled) > 0 {
-		// 订单累计成交已经领先本地成交明细：终态转换会释放预留，但余额快照尚未反映这些成交的支出。
-		// 与成交入账一样，先抬高待确认水位并关闭准入，等完整同步补录明细、余额覆盖该时间后才恢复。
-		if account.ExecutionMode != string(exchange.ExecutionModePaper) {
-			until := current.UpdatedAt.UnixMilli()
-			if until <= 0 {
-				until = s.now().UnixMilli()
-			}
-			if markErr := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-				if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, until); err != nil {
-					return err
-				}
-				return tx.UpdateTradingAccountReadiness(
-					account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), awaitingBalanceReason,
-				)
-			}); markErr != nil {
-				return false, false, "", markErr
-			}
-		}
 		return false, externalChanged, fmt.Sprintf(
 			"order %s snapshot is ahead of ingested Fills",
 			record.OrderID,
 		), s.applyOrderState(ctx, record, current)
 	}
 	return true, externalChanged, "", s.applyOrderState(ctx, record, current)
+}
+
+// observeOrderFills 在所有订单入口（已有订单更新、首次导入、由成交触发的导入）统一记录交易所观察到的累计成交量；
+// 累计成交领先本地成交明细时，终态转换会释放预留，而余额还没有反映这些成交，所以先抬高待确认水位并关闭准入，
+// 明细补齐且余额覆盖该时间后才由完整同步恢复。
+func (s *Service) observeOrderFills(
+	ctx context.Context,
+	account store.TradingAccountRecord,
+	record store.OrderRecord,
+	current exchange.Order,
+) error {
+	stored, parseErr := shared.ParseDecimal(record.FilledQuantity)
+	if parseErr != nil {
+		return parseErr
+	}
+	ahead := current.FilledQuantity.Cmp(stored) > 0 && account.ExecutionMode != string(exchange.ExecutionModePaper)
+	until := current.UpdatedAt.UnixMilli()
+	if until <= 0 {
+		until = s.now().UnixMilli()
+	}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.RaiseObservedFilledQuantity(record.SpaceID, record.OrderID, current.FilledQuantity); err != nil {
+			return err
+		}
+		if !ahead {
+			return nil
+		}
+		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, until); err != nil {
+			return err
+		}
+		return tx.UpdateTradingAccountReadiness(
+			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), awaitingBalanceReason,
+		)
+	})
 }
 
 func (s *Service) applyOrderState(

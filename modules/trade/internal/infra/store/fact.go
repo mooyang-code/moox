@@ -1309,6 +1309,9 @@ func (tx *Tx) ReplacePositionsForAccount(
 		if err := tx.UpsertPosition(record); err != nil {
 			return err
 		}
+		if err := tx.markPositionSnapshotCovered(record); err != nil {
+			return err
+		}
 	}
 	query := `
 		DELETE FROM t_trading_positions
@@ -1333,6 +1336,27 @@ func (tx *Tx) ReplacePositionsForAccount(
 		return writeError(err)
 	}
 	return nil
+}
+
+// markPositionSnapshotCovered 记录权威持仓快照已覆盖到的时间（只升不降）。
+func (tx *Tx) markPositionSnapshotCovered(record PositionRecord) error {
+	return writeError(tx.db.Exec(`
+		UPDATE t_trading_positions
+		SET c_snapshot_covered_until = MAX(c_snapshot_covered_until, ?)
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?
+	`, record.ExchangeUpdatedAt, record.SpaceID, record.TradingAccountID, record.ExchangeSymbol, record.PositionSide).Error)
+}
+
+// PositionSnapshotCoveredUntil 返回权威持仓快照已覆盖到的时间；没有快照覆盖过返回 0。
+func (tx *Tx) PositionSnapshotCoveredUntil(spaceID, tradingAccountID, symbol, positionSide string) (int64, error) {
+	var covered int64
+	if err := tx.db.Raw(`
+		SELECT COALESCE(MAX(c_snapshot_covered_until), 0) FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?
+	`, spaceID, tradingAccountID, symbol, positionSide).Scan(&covered).Error; err != nil {
+		return 0, err
+	}
+	return covered, nil
 }
 
 func (tx *Tx) GetPosition(

@@ -1619,3 +1619,97 @@ func TestFillGapKeepsAdmissionClosedEvenWhenBalanceIsNewer(t *testing.T) {
 	require.Equal(t, 1, result.FillsIngested)
 	require.True(t, result.Ready, "明细补齐且余额覆盖水位后恢复")
 }
+
+type lateFillAdapter struct {
+	*syncAdapter
+	fill  exchange.Fill
+	order exchange.Order
+}
+
+func (lateFillAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
+	return nil, nil
+}
+func (a lateFillAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
+	return []exchange.Order{a.order}, nil
+}
+func (a lateFillAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+	return []exchange.Fill{a.fill}, "12", nil
+}
+
+// 权威（REST）持仓快照已覆盖到的时间之前的迟到成交，数量已包含在快照里：不能再叠加到持仓上（成交仍入账本）。
+func TestLateFillCoveredByPositionSnapshotDoesNotDoubleCountPosition(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	order := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	fill1 := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+	}
+	base := &syncAdapter{order: order, fill: fill1}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base}, // 持仓快照：数量 0.5，版本时间 2_000
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+
+	// 迟到的成交（时间 1_800 < 快照覆盖时间 2_000）已包含在持仓快照里
+	late := fill1
+	late.ExchangeTradeID, late.Quantity, late.TradedAt = "trade-2", shared.MustDecimal("0.25"), time.UnixMilli(1_800)
+	orderLate := order
+	orderLate.FilledQuantity = shared.MustDecimal("0.75")
+	service.Adapters = syncAdapterSource{adapter: lateFillAdapter{base, late, orderLate}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested, "迟到成交仍然入成交账本")
+	var quantity string
+	require.NoError(t, tradeStore.DBForTest().Raw(
+		"SELECT c_signed_quantity FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?",
+		"space-1", "account-1", "BTC-USDT",
+	).Scan(&quantity).Error)
+	require.Equal(t, "0.5", quantity, "已被权威快照覆盖的迟到成交不能重复叠加持仓")
+}
+
+// 首次导入就是终态且累计成交领先本地明细的外部订单：导入入口同样必须关闭准入（水位原先为零，缺口检查不能依赖水位）。
+func TestFirstImportedTerminalOrderWithMissingFillsKeepsAdmissionClosed(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	imported := exchange.Order{
+		ExchangeOrderID: "ext-1", ClientOrderID: "ext-client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusCanceled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(3_000),
+	}
+	base := &syncAdapter{order: imported}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: noFillsAdapter{base, 4_000}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(5_000) },
+	}
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 2_000, "")
+	}))
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", imported))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready, "首次导入的终态外部订单缺成交明细时必须关闭准入")
+
+	// 余额（4_000）比订单更新新，但明细仍缺失：完整同步也不能恢复
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.Ready)
+}

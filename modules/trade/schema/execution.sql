@@ -146,6 +146,8 @@ CREATE TABLE IF NOT EXISTS t_trading_positions (
     c_unrealized_pnl TEXT NOT NULL DEFAULT '0',
     c_realized_pnl TEXT NOT NULL DEFAULT '0',
     c_exchange_updated_at INTEGER NOT NULL DEFAULT 0,
+    -- 权威（REST 完整）持仓快照已经覆盖到的时间：时间早于它的迟到成交已包含在快照数量里，不能再叠加
+    c_snapshot_covered_until INTEGER NOT NULL DEFAULT 0,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (
         c_space_id,
