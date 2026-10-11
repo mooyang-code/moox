@@ -1173,3 +1173,48 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 		})
 	}))
 }
+
+type staleSnapshotAdapter struct{ *syncAdapter }
+
+func (staleSnapshotAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
+	return exchange.AccountSnapshot{
+		AvailableFunds:    shared.MustDecimal("999"),
+		ExchangeUpdatedAt: time.UnixMilli(1_000), // 早于已采用的快照（2_000）
+	}, nil
+}
+
+// LastSyncAt 是资金预留的抵扣边界：丢弃陈旧余额快照时不能推进它，否则已提交订单的预留会被误认为已反映在余额中。
+func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	adapter := &syncAdapter{order: exchange.Order{
+		ExchangeOrderID: "exchange-1", ClientOrderID: "manual-1", ExchangeSymbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.Zero(), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}, fill: exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "exchange-1", ClientOrderID: "manual-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+	}}
+	clock := int64(3_000)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(clock) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+
+	clock = 5_000
+	service.Adapters = syncAdapterSource{adapter: staleSnapshotAdapter{adapter}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.AccountSnapshotUpdated)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, int64(3_000), account.LastSyncAt, "陈旧快照被丢弃时抵扣边界保持不变")
+	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
+}

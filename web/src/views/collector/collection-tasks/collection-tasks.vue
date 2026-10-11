@@ -1058,19 +1058,26 @@ async function getDataTypeConfigs() {
   }
 }
 
+let sourceListRequestToken = 0;
+
 async function loadSources() {
   const sources: CollectionSourceOption[] = [];
-  if (!selectedSpaceId.value) {
+  const spaceId = selectedSpaceId.value;
+  const token = ++sourceListRequestToken;
+  if (!spaceId) {
     sourceOptions.value = [];
+    loadingSources.value = false;
     return;
   }
   loadingSources.value = true;
   try {
     for (let page = 1; ; page += 1) {
       const response = await listDatasets({
-        space_id: selectedSpaceId.value,
+        space_id: spaceId,
         page: { page, size: 500 }
       });
+      // 整次分页固定发起空间：切换空间或有更新的请求后，旧响应整体丢弃
+      if (token !== sourceListRequestToken || spaceId !== selectedSpaceId.value) return;
       for (const source of response.datasets || []) {
         if (source.status !== "active") continue;
         sources.push({
@@ -1087,10 +1094,11 @@ async function loadSources() {
     }
     sourceOptions.value = sources;
   } catch (error) {
+    if (token !== sourceListRequestToken) return;
     sourceOptions.value = [];
     Message.error(error instanceof Error ? error.message : "获取标的来源失败");
   } finally {
-    loadingSources.value = false;
+    if (token === sourceListRequestToken) loadingSources.value = false;
   }
 }
 
@@ -1286,6 +1294,8 @@ async function onBackfillChanged() {
 
 watch(selectedSpaceId, () => {
   tagListRequestToken += 1;
+  sourceListRequestToken += 1;
+  sourceOptions.value = [];
   if (editorVisible.value && editor.space_id !== selectedSpaceId.value) {
     editorVisible.value = false;
     outputFieldsVisible.value = false;

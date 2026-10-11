@@ -188,6 +188,7 @@ import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { callControl } from "@/api/admin/http";
 import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { taskInstancePaginationTotal, type TaskInstancePageResult } from "./task-instances-pagination";
 
 interface TaskWriteTarget {
@@ -364,8 +365,11 @@ function search() {
   void getInstanceList();
 }
 
+const listGuard = createLatestRequestGuard();
+
 async function getInstanceList() {
   const spaceId = selectedSpaceId.value || "";
+  const request = listGuard.begin();
   if (!spaceId) {
     instanceList.value = [];
     pagination.value.total = 0;
@@ -390,6 +394,7 @@ async function getInstanceList() {
       "GetTaskInstanceList",
       { filter }
     );
+    if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     instanceList.value = (data.instances || []).map(normalizeTaskInstance);
     pagination.value.total = taskInstancePaginationTotal(
       pagination.value.current,
@@ -398,10 +403,11 @@ async function getInstanceList() {
       data.page
     );
   } catch (error) {
+    if (!request.isLatest()) return;
     console.error("获取任务实例列表失败:", error);
     Message.error("获取任务实例列表失败");
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
@@ -414,7 +420,16 @@ function openTargetResult(target: TaskWriteTarget) {
   void router.push({ path: "/collector/tasks", query: { tab: "results", resultTask: target.TaskID } });
 }
 
-watch(selectedSpaceId, () => void getInstanceList());
+watch(selectedSpaceId, () => {
+  // 切换空间：作废在途请求，立即清空列表、分页与详情，避免旧空间数据残留
+  listGuard.invalidate();
+  instanceList.value = [];
+  pagination.value.total = 0;
+  pagination.value.current = 1;
+  detailVisible.value = false;
+  detailData.value = {};
+  void getInstanceList();
+});
 onMounted(() => void getInstanceList());
 </script>
 

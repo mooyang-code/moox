@@ -397,6 +397,12 @@ func (s *Service) applySnapshot(
 	if snapshot.FillCursors == nil {
 		snapshot.FillCursors = account.FillCursors
 	}
+	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用时才能推进；
+	// 丢弃陈旧快照时保持原边界，否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
+	syncBoundary := now
+	if !result.AccountSnapshotUpdated && account.LastSyncAt > 0 {
+		syncBoundary = account.LastSyncAt
+	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.UpdateTradingAccountFacts(
 			account.SpaceID,
@@ -404,7 +410,7 @@ func (s *Service) applySnapshot(
 			snapshot.FillCursors,
 			account.Snapshot,
 			account.SnapshotSourceTime,
-			now,
+			syncBoundary,
 		); err != nil {
 			return err
 		}

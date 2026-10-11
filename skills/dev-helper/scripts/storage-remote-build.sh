@@ -89,7 +89,7 @@ if [[ "${SKIP_PACK}" -eq 0 ]]; then
     rm -f "${ZIP_LOCAL}"
     fail "打包内容包含私有配置或密钥文件，已删除临时包"
   fi
-  unzip -l "${ZIP_LOCAL}" | grep 'modules/storage/internal/service/datashard/pebble/store.go' >/dev/null || fail "pebble/store.go missing in zip"
+  unzip -l "${ZIP_LOCAL}" | grep 'modules/storage/internal/service/datanode/pebble/store.go' >/dev/null || fail "pebble/store.go missing in zip"
   ls -lh "${ZIP_LOCAL}"
 
   log "upload ${ZIP_LOCAL} -> ${TARGET}:${ZIP_REMOTE}"
@@ -106,7 +106,7 @@ rm -rf \"${REMOTE_BUILD_DIR}\"
 mkdir -p \"${REMOTE_BUILD_DIR}\"
 cd \"${REMOTE_BUILD_DIR}\"
 unzip -q \"${ZIP_REMOTE}\"
-test -f \"${REPO_NAME}/modules/storage/internal/service/datashard/pebble/store.go\"
+test -f \"${REPO_NAME}/modules/storage/internal/service/datanode/pebble/store.go\"
 cd \"${REPO_NAME}\"
 CGO_ENABLED=1 \"${REMOTE_GO}\" build -ldflags '-s -w' -o \"${OUTPUT_REMOTE}\" ./modules/storage/cmd/server
 ls -la \"${OUTPUT_REMOTE}\"

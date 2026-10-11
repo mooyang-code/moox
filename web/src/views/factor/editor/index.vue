@@ -171,6 +171,7 @@ import {
 } from "./factor-form";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 
 defineOptions({ name: "FactorEditor" });
 
@@ -254,14 +255,21 @@ async function load() {
   }
 }
 
+const referenceGuard = createLatestRequestGuard();
+
 async function loadReferenceDatasets() {
   const spaceId = spaceStore.selectedSpaceId;
-  if (!spaceId) return;
+  const request = referenceGuard.begin();
+  if (!spaceId) {
+    datasetsLoading.value = false;
+    return;
+  }
   datasetsLoading.value = true;
   try {
     const items: Dataset[] = [];
     for (let page = 1; ; page += 1) {
       const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } });
+      if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
       items.push(...(rsp.datasets || []));
       if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
     }
@@ -270,10 +278,16 @@ async function loadReferenceDatasets() {
         item.status === "active" && isTimeSeriesDataKind(item.data_kind) && item.attributes?.dataset_role !== "factor_result"
     );
   } catch {
-    referenceDatasets.value = [];
+    if (request.isLatest()) referenceDatasets.value = [];
   } finally {
-    datasetsLoading.value = false;
+    if (request.isLatest()) datasetsLoading.value = false;
   }
+}
+
+function clearReferenceSelection() {
+  columnsGate.next();
+  referenceDatasetId.value = "";
+  referenceColumns.value = [];
 }
 
 async function loadReferenceColumns() {
@@ -289,6 +303,7 @@ async function loadReferenceColumns() {
         dataset_id: referenceDatasetId.value,
         page: { page, size: PAGE_SIZE }
       });
+      if (!columnsGate.isCurrent(token) || spaceId !== spaceStore.selectedSpaceId) return;
       columns.push(...(rsp.columns || []));
       if (!rsp.page_result?.has_more || !(rsp.columns || []).length) break;
     }
@@ -351,6 +366,17 @@ onBeforeRouteLeave(() => confirmLeave());
 onBeforeRouteUpdate(() => confirmLeave());
 
 watch(factorId, () => void load());
+// 空间初始化完成或切换后重新加载参考数据集；旧空间的数据集、已选数据集和列一并清空
+watch(
+  () => spaceStore.selectedSpaceId,
+  (spaceId, oldSpaceId) => {
+    if (spaceId === oldSpaceId) return;
+    referenceGuard.invalidate();
+    referenceDatasets.value = [];
+    clearReferenceSelection();
+    void loadReferenceDatasets();
+  }
+);
 onMounted(() => {
   void load();
   void loadReferenceDatasets();

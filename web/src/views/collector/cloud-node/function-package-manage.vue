@@ -367,6 +367,8 @@ import {
   type PackageListRequest
 } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
+import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 
 // Props
 const props = defineProps<{
@@ -383,6 +385,8 @@ const emit = defineEmits<{
 }>();
 
 // 响应式数据
+const spaceStore = useSpaceStore();
+const listGuard = createLatestRequestGuard();
 const packageManageMode = computed(() => props.mode || "page");
 const standalone = computed(() => packageManageMode.value === "page");
 const visible = ref(standalone.value ? true : props.modelValue);
@@ -468,8 +472,29 @@ watch(
 watch(visible, newVal => {
   if (!standalone.value) {
     emit("update:modelValue", newVal);
+    if (!newVal) resetForSpace();
   }
 });
+
+// 关闭弹窗或切换空间：作废在途请求，清空列表与详情，避免组件常驻时重新打开看到其他空间的数据
+function resetForSpace() {
+  listGuard.invalidate();
+  loading.value = false;
+  packageList.value = [];
+  total.value = 0;
+  detailVisible.value = false;
+  packageDetail.value = null;
+}
+
+watch(
+  () => spaceStore.selectedSpaceId,
+  (spaceId, oldSpaceId) => {
+    if (spaceId === oldSpaceId) return;
+    resetForSpace();
+    searchForm.page = 1;
+    if (standalone.value || visible.value) void loadPackageList();
+  }
+);
 
 const handlePackageManageVisibleChange = (newVal: boolean) => {
   visible.value = newVal;
@@ -490,12 +515,16 @@ const initializePackageManage = async () => {
 
 // 加载代码包列表
 const loadPackageList = async () => {
+  const spaceId = spaceStore.selectedSpaceId;
+  const request = listGuard.begin();
   loading.value = true;
   try {
     // 构建查询参数，排除 package_type
     const queryParams = { ...searchForm };
     delete queryParams.package_type;
     const response = await getFunctionPackageList(queryParams);
+    // 弹窗关闭、空间切换或有更新的请求后，旧响应丢弃
+    if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
 
     if (response?.items) {
       packageList.value = response.items || [];
@@ -505,13 +534,14 @@ const loadPackageList = async () => {
       total.value = 0;
     }
   } catch (error) {
+    if (!request.isLatest()) return;
     console.error("加载代码包列表失败:", error);
     Message.error({
       content: "加载代码包列表失败",
       duration: 5000
     });
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 };
 
