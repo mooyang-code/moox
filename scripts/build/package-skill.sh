@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${CONFIG:-${ROOT}/moox.toml}"
 MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"
 OUT="${OUT:-${ROOT}/dist/moox-skill.tar.gz}"
-SKILL_DIR="${ROOT}/skills/moox"
+SKILL_DIR="${SKILL_DIR:-${ROOT}/skills/moox}"
 
 STAGE=""
 ARCHIVE_TMP=""
@@ -45,6 +45,9 @@ mkdir -p "$(dirname "${OUT}")"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/moox-skill-stage.XXXXXX")"
 mkdir -p "${STAGE}/moox"
 cp -R "${SKILL_DIR}/." "${STAGE}/moox/"
+# 隐藏文件与密钥类文件不进分发包：本地调试用的 .env（例如 references/cls-query.md 让用户保存的 CLS 云凭据）、.ssh、*.key/*.pem。
+# 导出的 config（含 .moox-skill-keys）在下面由 moox-cli 单独生成，不受这里影响。
+find "${STAGE}/moox" -mindepth 1 \( -name '.*' -o -name '*.env' -o -name '*.key' -o -name '*.pem' \) -prune -exec rm -rf {} +
 rm -rf "${STAGE}/moox/config"
 mkdir -p "${STAGE}/moox/config"
 

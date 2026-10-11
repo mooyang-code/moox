@@ -143,6 +143,7 @@
 </template>
 
 <script setup lang="ts">
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { deleteTag, listDataSources, listTags, upsertTag } from "@/api/storage/metadata";
@@ -196,19 +197,26 @@ function parseListing(source: DataSource): string[] {
   }
 }
 
+// 空间切换后，旧空间迟到的响应不能覆盖新空间的列表；编辑/删除都固定在打开时的空间，提交前再校验。
+const loadRequests = createLatestRequestGuard();
+let editSpaceId = "";
+
 async function load() {
   if (!props.spaceId) return;
+  const request = loadRequests.begin();
+  const spaceId = props.spaceId;
   loading.value = true;
   try {
     const [tagRsp, sourceRsp] = await Promise.all([
-      listTags(props.spaceId, { page: pagination.current, size: 200 }),
-      listDataSources({ space_id: props.spaceId, page: { page: 1, size: 200 } })
+      listTags(spaceId, { page: pagination.current, size: 200 }),
+      listDataSources({ space_id: spaceId, page: { page: 1, size: 200 } })
     ]);
+    if (!request.isLatest() || spaceId !== props.spaceId) return;
     rows.value = tagRsp.tags || [];
     dataSources.value = sourceRsp.data_sources || [];
     pagination.total = tagRsp.page_result?.total ?? rows.value.length;
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
@@ -217,6 +225,7 @@ function openMembers(tag: Tag) {
 }
 
 function openCreate() {
+  editSpaceId = props.spaceId;
   editing.value = false;
   activeTag.value = undefined;
   Object.assign(form, emptyForm());
@@ -224,6 +233,7 @@ function openCreate() {
 }
 
 function openEdit(tag: Tag) {
+  editSpaceId = props.spaceId;
   editing.value = true;
   activeTag.value = tag;
   Object.assign(form, tagToFormState(tag));
@@ -231,6 +241,12 @@ function openEdit(tag: Tag) {
 }
 
 async function submit(): Promise<boolean> {
+  const spaceId = props.spaceId;
+  if (editSpaceId && editSpaceId !== spaceId) {
+    Message.warning("空间已切换，请重新打开编辑窗口");
+    visible.value = false;
+    return false;
+  }
   const error = validateTagForm(form, !editing.value);
   if (error) {
     Message.warning(error);
@@ -240,7 +256,7 @@ async function submit(): Promise<boolean> {
     const tagId = form.tag_id.trim().toLowerCase();
     try {
       for (let page = 1; ; page += 1) {
-        const response = await listTags(props.spaceId, { page, size: 500 });
+        const response = await listTags(spaceId, { page, size: 500 });
         if ((response.tags || []).some(tag => tag.tag_id.trim().toLowerCase() === tagId)) {
           Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
           return false;
@@ -253,7 +269,7 @@ async function submit(): Promise<boolean> {
     }
   }
   try {
-    await upsertTag(toTagPayload(props.spaceId, form), !editing.value);
+    await upsertTag(toTagPayload(spaceId, form), !editing.value);
   } catch (error) {
     const message = error instanceof Error ? error.message : "标签保存失败";
     if (!editing.value && /tag name .* already exists/i.test(message)) {
@@ -273,12 +289,17 @@ async function submit(): Promise<boolean> {
 }
 
 function confirmDelete(tag: Tag) {
+  const spaceId = props.spaceId;
   Modal.confirm({
     title: `删除标签“${tag.tag_name}”？`,
     content: "删除后标签成员关系也会被移除，且无法恢复。",
     onOk: async () => {
+      if (spaceId !== props.spaceId) {
+        Message.warning("空间已切换，已取消删除");
+        return;
+      }
       try {
-        await deleteTag(props.spaceId, tag.tag_id);
+        await deleteTag(spaceId, tag.tag_id);
         Message.success("标签已删除");
         await load();
       } catch (error) {
@@ -295,6 +316,10 @@ function confirmDelete(tag: Tag) {
 watch(
   () => props.spaceId,
   () => {
+    loadRequests.invalidate();
+    rows.value = [];
+    visible.value = false;
+    activeTag.value = undefined;
     pagination.current = 1;
     void load();
   },

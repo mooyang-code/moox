@@ -61,32 +61,32 @@ func TestSortedColumnNames(t *testing.T) {
 
 func ptrFloat(v float64) *float64 { return &v }
 
-// 重投的旧事件越过了新事件：旧补丁不能覆盖或删除新值，只能补上缺失的字段；行写入时间保持较新的那个。
-func TestMergePatchStalePatchNeverOverwritesNewerValues(t *testing.T) {
-	newer := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
-	older := newer.Add(-time.Minute)
+// 字段级最后写入者胜：重投的旧事件不能盖掉其他批次已经落盘的新值，删除留下墓碑，旧值不会把已删除字段补回来。
+// 每一步都把合并结果当作下一次物化的输入（模拟跨批次、跨重启）。
+func TestMergePatchIsLastWriterWinsPerFieldAcrossMaterializations(t *testing.T) {
 	partition := PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}
-	base := ArchiveRow{
-		WrittenAt:  newer,
-		Attributes: map[string]string{"source": "live"},
-		Columns:    map[string]Scalar{"close": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: ptrFloat(2.0)}},
+	at := func(minute int) time.Time { return time.Date(2026, 1, 2, 10, minute, 0, 0, time.UTC) }
+	double := func(v float64) Scalar {
+		return Scalar{Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: ptrFloat(v)}
 	}
-	stale := RowPatch{
-		Partition: partition, DataTime: newer, WrittenAt: older,
-		Attributes: map[string]string{"source": "old", "batch": "1"},
-		Columns: map[string]Scalar{
-			"close":  {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: ptrFloat(1.0)},
-			"volume": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: ptrFloat(9.0)},
-		},
+	patch := func(minute int, attrs map[string]string, columns map[string]Scalar) RowPatch {
+		return RowPatch{Partition: partition, DataTime: at(0), WrittenAt: at(minute), Attributes: attrs, Columns: columns}
 	}
-	merged := MergePatch(base, stale)
-	assert.InDelta(t, 2.0, *merged.Columns["close"].Double, 0.001, "旧补丁不能覆盖已有值")
-	assert.InDelta(t, 9.0, *merged.Columns["volume"].Double, 0.001, "旧补丁可以补上缺失的字段")
-	assert.Equal(t, "live", merged.Attributes["source"])
-	assert.Equal(t, "1", merged.Attributes["batch"])
-	assert.True(t, merged.WrittenAt.Equal(newer))
+	var row ArchiveRow
+	row = MergePatch(row, patch(1, nil, map[string]Scalar{"close": double(1)}))                                  // t1: close=1
+	row = MergePatch(row, patch(3, map[string]string{"source": "live"}, map[string]Scalar{"volume": double(9)})) // t3: volume=9（先落盘）
+	row = MergePatch(row, patch(2, map[string]string{"source": "old"}, map[string]Scalar{"close": double(2)}))   // t2 迟到重投
+	assert.InDelta(t, 2.0, *row.Columns["close"].Double, 0.001, "t2 的 close 比 t1 新，必须生效，不能因为整行已是 t3 而被丢弃")
+	assert.InDelta(t, 9.0, *row.Columns["volume"].Double, 0.001)
+	assert.Equal(t, "live", row.Attributes["source"], "属性同样按字段版本：t3 的 source 不能被 t2 覆盖")
+	assert.True(t, row.WrittenAt.Equal(at(3)))
 
-	deleting := RowPatch{Partition: partition, DataTime: newer, WrittenAt: older, Columns: map[string]Scalar{"close": {Null: true}}}
-	kept := MergePatch(base, deleting)
-	assert.Contains(t, kept.Columns, "close", "旧补丁不能删除新值")
+	// 较新的补丁删除字段后，较旧补丁重投不能把它补回来。
+	row = MergePatch(row, patch(5, nil, map[string]Scalar{"close": {Null: true}}))
+	assert.NotContains(t, row.Columns, "close")
+	row = MergePatch(row, patch(4, nil, map[string]Scalar{"close": double(7)}))
+	assert.NotContains(t, row.Columns, "close", "删除的墓碑版本比旧补丁新，旧值不能复活")
+	// 之后更新的写入仍可重新写入该字段。
+	row = MergePatch(row, patch(6, nil, map[string]Scalar{"close": double(8)}))
+	assert.InDelta(t, 8.0, *row.Columns["close"].Double, 0.001)
 }

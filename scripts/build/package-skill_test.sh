@@ -59,8 +59,18 @@ chmod 0600 "$8" "$(dirname "$8")/.moox-skill-keys/fixture.key"
 EOF
 chmod +x "${FAKE_CLI}"
 
+# 技能目录里本地保存的 .env（云凭据）、密钥文件不能进分发包。
+SKILL_FIXTURE="${TEST_ROOT}/skill"
+mkdir -p "${SKILL_FIXTURE}/references" "${SKILL_FIXTURE}/scripts" "${SKILL_FIXTURE}/.hidden"
+cp -R "${ROOT}/skills/moox/." "${SKILL_FIXTURE}/"
+SENTINEL_ENV='TEST_ONLY_CLS_ENV_SECRET_2kD8'
+printf 'CLS_SECRET_KEY=%s\n' "${SENTINEL_ENV}" >"${SKILL_FIXTURE}/.env"
+printf '%s\n' "${SENTINEL_ENV}" >"${SKILL_FIXTURE}/references/local.env"
+printf '%s\n' "${SENTINEL_ENV}" >"${SKILL_FIXTURE}/scripts/private.key"
+printf '%s\n' "${SENTINEL_ENV}" >"${SKILL_FIXTURE}/.hidden/token"
+
 mkdir -p "$(dirname "${OUT}")" "${EXTRACTED}"
-CONFIG="${CONFIG}" MOOX_CLI="${FAKE_CLI}" OUT="${OUT}" \
+SKILL_DIR="${SKILL_FIXTURE}" CONFIG="${CONFIG}" MOOX_CLI="${FAKE_CLI}" OUT="${OUT}" \
   ARGS_LOG="${ARGS_LOG}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"
 
 [[ -f "${OUT}" && ! -L "${OUT}" ]] || fail "package was not created as a regular file"
@@ -77,6 +87,13 @@ if tar -tzf "${OUT}" >"${TEST_ROOT}/archive.list"; then
   fi
 else
   fail "archive cannot be listed"
+fi
+if grep -Eq '(^|/)(\.env|local\.env|private\.key|\.hidden)(/|$)' "${TEST_ROOT}/archive.list"; then
+  fail "local env/key files leaked into archive"
+fi
+tar -xzOf "${OUT}" >"${TEST_ROOT}/archive.content" 2>/dev/null || true
+if grep -aq "${SENTINEL_ENV}" "${TEST_ROOT}/archive.content"; then
+  fail "local credential content leaked into archive"
 fi
 
 tar -xzf "${OUT}" -C "${EXTRACTED}"

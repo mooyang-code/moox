@@ -179,43 +179,60 @@ func (s Scalar) clone() Scalar {
 	return out
 }
 
-// MergePatch 把增量补丁合并进行。补丁的写入时间早于行上已有的写入时间时（重投的旧事件越过了新事件），它是过期补丁：
-// 只补上行里还没有的字段与属性，不覆盖、不删除已有值，行的写入时间保持较新的那个，旧值不会盖掉新值。
+// FieldVersionsAttribute 是保存在行属性里的内部字段版本表（JSON：字段/属性 → 最后一次生效的写入时间 UnixNano，含删除的墓碑）。
+// 版本随行一起持久化，跨物化与重启都有效，所以重投的旧事件不会盖掉其他批次已经落盘的新值，也不会把已删除的字段补回来。
+const FieldVersionsAttribute = "__moox_field_versions"
+
+func decodeFieldVersions(attributes map[string]string) map[string]int64 {
+	versions := map[string]int64{}
+	if raw := attributes[FieldVersionsAttribute]; raw != "" {
+		_ = json.Unmarshal([]byte(raw), &versions)
+	}
+	return versions
+}
+
+// MergePatch 把增量补丁合并进行，按字段做“最后写入者胜”：补丁里某个字段（或属性）的写入时间不早于该字段已记录的版本才生效，
+// 删除同样记录版本（墓碑）。没有版本记录的旧数据按未知处理，补丁照常生效。
 func MergePatch(base ArchiveRow, patch RowPatch) ArchiveRow {
 	out := base
 	out.DataTime = patch.DataTime
 	out.Partition = patch.Partition
-	stale := !base.WrittenAt.IsZero() && patch.WrittenAt.Before(base.WrittenAt)
-	if !stale {
+	if base.WrittenAt.IsZero() || !patch.WrittenAt.Before(base.WrittenAt) {
 		out.WrittenAt = patch.WrittenAt
 	}
 	out.Attributes = cloneStrings(base.Attributes)
 	if out.Attributes == nil {
 		out.Attributes = map[string]string{}
 	}
-	for k, v := range patch.Attributes {
-		if _, exists := out.Attributes[k]; stale && exists {
-			continue
-		}
-		out.Attributes[k] = v
-	}
 	out.Columns = cloneScalars(base.Columns)
 	if out.Columns == nil {
 		out.Columns = map[string]Scalar{}
 	}
-	for k, v := range patch.Columns {
-		if stale {
-			if _, exists := out.Columns[k]; exists || v.Null {
-				continue
-			}
-			out.Columns[k] = v.clone()
+	versions := decodeFieldVersions(base.Attributes)
+	version := patch.WrittenAt.UnixNano()
+	for k, v := range patch.Attributes {
+		if k == FieldVersionsAttribute {
 			continue
 		}
+		if key := "a:" + k; version >= versions[key] {
+			out.Attributes[k] = v
+			versions[key] = version
+		}
+	}
+	for k, v := range patch.Columns {
+		key := "c:" + k
+		if version < versions[key] {
+			continue
+		}
+		versions[key] = version
 		if v.Null {
 			delete(out.Columns, k)
 			continue
 		}
 		out.Columns[k] = v.clone()
+	}
+	if encoded, err := json.Marshal(versions); err == nil {
+		out.Attributes[FieldVersionsAttribute] = string(encoded)
 	}
 	return out
 }

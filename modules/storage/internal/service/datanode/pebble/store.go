@@ -936,9 +936,7 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 	// Keep the relay's hot path on a cheap atomic hint. A full scan is still
 	// used to discover legacy entries after restart, but it must not be repeated
 	// every poll when the outbox is empty. Do not overwrite a concurrent write.
-	if revision == s.outboxRevision.Load() {
-		s.setOutboxHintFromList(len(result), len(result) == max, oldestEventAt)
-	}
+	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromList(len(result), len(result) == max, oldestEventAt) })
 	return result, nil
 }
 
@@ -976,9 +974,7 @@ func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
 	if err := iter.Error(); err != nil {
 		return OutboxStats{}, err
 	}
-	if revision == s.outboxRevision.Load() {
-		s.setOutboxHintFromStats(stats)
-	}
+	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromStats(stats) })
 	return stats, nil
 }
 
@@ -1045,6 +1041,17 @@ func (s *Store) OutboxPendingHint() (pending int, known, mayHaveMore bool, oldes
 		return 0, false, false, time.Time{}
 	}
 	return int(maxInt64(s.outboxPending.Load(), 0)), s.outboxHintKnown.Load(), s.outboxHintMayHaveMore.Load(), unixNanoTime(s.outboxOldestEventNanos.Load())
+}
+
+// applyOutboxHintIfUnchanged 在与写入/删除共用的 outboxMu 下复核 revision 并回写缓存：扫描读到“空”之后、回写之前，
+// 并发写入可能已经提交事件并推进 revision；不加锁的“先检查再回写”会用过期的“空队列”覆盖掉它，relay 之后一直
+// 跳过扫描，已提交的事件不再发布。写入在持有 outboxMu 的情况下提交并推进 revision，所以在这里复核是原子的。
+func (s *Store) applyOutboxHintIfUnchanged(revision uint64, apply func()) {
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	if revision == s.outboxRevision.Load() {
+		apply()
+	}
 }
 
 func (s *Store) noteOutboxCommitted(count int, oldest time.Time) {
