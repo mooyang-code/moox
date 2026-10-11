@@ -483,6 +483,10 @@ type periodProxyForwardingStub struct {
 	statusRsp *pb.GetDatasetPeriodStatusRsp
 }
 
+func (*periodProxyForwardingStub) RegisterSeriesSnapshot(context.Context, *pb.RegisterSeriesSnapshotReq, ...client.Option) (*pb.RegisterSeriesSnapshotRsp, error) {
+	return nil, nil
+}
+
 func (*periodProxyForwardingStub) EnsureDatasetPeriod(context.Context, *pb.EnsureDatasetPeriodReq, ...client.Option) (*pb.EnsureDatasetPeriodRsp, error) {
 	return nil, nil
 }
@@ -531,6 +535,10 @@ type periodRPCContractService struct {
 	status *pb.GetDatasetPeriodStatusReq
 	commit *pb.CommitTimeSeriesBatchReq
 	record *pb.RecordDatasetPeriodFailuresReq
+}
+
+func (s *periodRPCContractService) RegisterSeriesSnapshot(_ context.Context, _ *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error) {
+	return &pb.RegisterSeriesSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 
 func (s *periodRPCContractService) EnsureDatasetPeriod(_ context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {

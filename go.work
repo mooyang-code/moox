@@ -48,6 +48,7 @@ use (
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
+	./packages/seriesset
 	./packages/routeprobe
 	./packages/security
 	./packages/servicecatalog

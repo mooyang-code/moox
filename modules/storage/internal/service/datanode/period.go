@@ -8,7 +8,29 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
+
+func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error) {
+	if req == nil || len(req.GetSeries()) == 0 {
+		return &pb.RegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("series snapshot is required"))}, nil
+	}
+	if err := validatePeriodNodeID(req.GetNodeId(), s.nodeID); err != nil {
+		return &pb.RegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.RegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	series := make([]seriesset.Series, len(req.GetSeries()))
+	for i, entry := range req.GetSeries() {
+		series[i] = seriesset.Series{Provider: entry.GetProvider(), SourceID: entry.GetSourceId(), MarketType: entry.GetMarketType(), SubjectID: entry.GetSubjectId(), SeriesTag: entry.GetSeriesTag()}
+	}
+	result, err := s.store.RegisterSeriesSnapshot(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetFrequency(), series, req.GetEffectiveFrom())
+	if err != nil {
+		return &pb.RegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.RegisterSeriesSnapshotRsp{RetInfo: retinfo.Success("success"), SeriesHash: result.SeriesHash, ExpectedCount: result.ExpectedCount, AlreadyRegistered: result.AlreadyRegistered}, nil
+}
 
 func (s *Service) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
 	if req == nil || req.GetExpectation() == nil {
@@ -40,11 +62,28 @@ func (s *Service) GetDatasetPeriodStatus(ctx context.Context, req *pb.GetDataset
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	progress, err := s.store.GetDatasetPeriodStatus(ctx, periodExpectation(req.GetExpectation()))
+	exp := req.GetExpectation()
+	if strings.TrimSpace(exp.GetSeriesHash()) == "" {
+		// 只带周期键的新形态：周期不存在返回 found=false，include_progress 时附带缺失序号。
+		progress, found, err := s.store.PeriodStatusByKey(ctx, exp.GetSpaceId(), exp.GetDatasetId(), exp.GetFrequency(), exp.GetPeriodTime(), req.GetIncludeProgress())
+		if err != nil {
+			return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+		}
+		if !found {
+			return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Success("success"), Found: false}, nil
+		}
+		rsp := &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Success("success"), Found: true, Status: progress.Status, SeriesHash: progress.SeriesHash, ExpectedCount: progress.ExpectedCount, DeadlineAt: progress.DeadlineAt}
+		if req.GetIncludeProgress() {
+			rsp.MissingSeriesIndexes = pebble.PeriodMissingIndexes(progress.ExpectedCount, progress.Bitmap)
+			rsp.SuccessfulCount = progress.ExpectedCount - uint32(len(rsp.MissingSeriesIndexes))
+		}
+		return rsp, nil
+	}
+	progress, err := s.store.GetDatasetPeriodStatus(ctx, periodExpectation(exp))
 	if err != nil {
 		return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Success("success"), Status: progress.Status, SeriesHash: progress.SeriesHash, ExpectedCount: progress.ExpectedCount, DeadlineAt: progress.DeadlineAt}, nil
+	return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Success("success"), Found: true, Status: progress.Status, SeriesHash: progress.SeriesHash, ExpectedCount: progress.ExpectedCount, DeadlineAt: progress.DeadlineAt}, nil
 }
 
 func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
@@ -66,7 +105,9 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeS
 		items = append(items, pebble.TimeSeriesBatchItem{SeriesIndex: item.GetSeriesIndex(), Row: item.GetRow()})
 		keys = append(keys, item.GetRow().GetKey())
 	}
-	result, err := s.store.CommitTimeSeriesBatch(ctx, periodExpectation(req.GetExpectation()), items, req.GetSourceEventId(), req.GetWriteSource())
+	commitExp := periodExpectation(req.GetExpectation())
+	commitExp.AllowedLatenessSeconds = req.GetAllowedLatenessSeconds()
+	result, err := s.store.CommitTimeSeriesBatch(ctx, commitExp, items, req.GetSourceEventId(), req.GetWriteSource())
 	if err != nil {
 		return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}

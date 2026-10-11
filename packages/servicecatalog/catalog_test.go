@@ -180,7 +180,7 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string][]Permission{
-		"scf-collector": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}}, {Service: "trpc.moox.collector.MarketFetchRuntime", Methods: []string{"ClaimTimerBatch"}}},
+		"scf-collector": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus", "UpsertFields"}}, {Service: "trpc.moox.collector.MarketFetchRuntime", Methods: []string{"ClaimTimerBatch"}}},
 		"factor-engine": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "WriteFactorRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}}},
 		"moox-skill":    {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}},
 	}

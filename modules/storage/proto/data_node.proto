@@ -43,7 +43,11 @@ message EnsureDatasetPeriodRsp {
 message GetDatasetPeriodStatusReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
+  // 只需周期键（space_id、dataset_id、frequency、period_time）；series_hash 为空时按周期键查询，
+  // 周期不存在返回 found=false 而不是错误。带 series_hash 的旧形态仍按旧语义校验身份。
   DatasetPeriodExpectation expectation = 3;
+  // 为 true 时返回成功数与缺失序号。
+  bool include_progress = 4;
 }
 
 message GetDatasetPeriodStatusRsp {
@@ -52,6 +56,37 @@ message GetDatasetPeriodStatusRsp {
   string series_hash = 3;
   uint32 expected_count = 4;
   int64 deadline_at = 5;
+  bool found = 6;
+  uint32 successful_count = 7;
+  // 期望集合减去成功位图；未触发的序列同样缺失。
+  repeated uint32 missing_series_indexes = 8;
+}
+
+// SeriesSnapshotEntry 是快照中一条序列的完整身份，Storage 用它重算 series_hash。
+message SeriesSnapshotEntry {
+  string provider = 1;
+  string source_id = 2;
+  string market_type = 3;
+  string subject_id = 4;
+  string series_tag = 5;
+}
+
+message RegisterSeriesSnapshotReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  string dataset_id = 4;
+  string frequency = 5;
+  repeated SeriesSnapshotEntry series = 6;
+  // 生效周期 P：K 线开始时间（Unix 秒）。
+  int64 effective_from = 7;
+}
+
+message RegisterSeriesSnapshotRsp {
+  common.RetInfo ret_info = 1;
+  string series_hash = 2;
+  uint32 expected_count = 3;
+  bool already_registered = 4;
 }
 
 message TimeSeriesBatchRow {
@@ -66,6 +101,8 @@ message CommitTimeSeriesBatchReq {
   repeated TimeSeriesBatchRow items = 4;
   string source_event_id = 5;
   string write_source = 6;
+  // 周期不存在时，按生效表与已登记快照自动建立周期所用的允许迟到时间；由 Primary 从数据集属性带入。
+  int64 allowed_lateness_seconds = 7;
 }
 
 message CommitTimeSeriesBatchRsp {
@@ -256,6 +293,7 @@ service DataNodeRuntime {
 // DataNodePeriodRuntime owns Dataset-local collection progress. It is separate
 // from the general row RPC so existing DataNodeRuntime clients remain narrow.
 service DataNodePeriodRuntime {
+  rpc RegisterSeriesSnapshot(RegisterSeriesSnapshotReq) returns (RegisterSeriesSnapshotRsp);
   rpc EnsureDatasetPeriod(EnsureDatasetPeriodReq) returns (EnsureDatasetPeriodRsp);
   rpc GetDatasetPeriodStatus(GetDatasetPeriodStatusReq) returns (GetDatasetPeriodStatusRsp);
   rpc CommitTimeSeriesBatch(CommitTimeSeriesBatchReq) returns (CommitTimeSeriesBatchRsp);

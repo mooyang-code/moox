@@ -462,7 +462,8 @@ func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testin
 	require.Len(t, exp.SeriesSnapshot, 3)
 	require.Len(t, marker.GetUniverseSubjectIds(), 2)
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetUniverseSubjectIds(), "universe must deduplicate provider series")
-	require.Equal(t, []string{"ETH-USDT"}, marker.GetFailedSubjects())
+	// 缺失 = 全集减成功位图：从未提交成功的 BTC-USDT 同样列为缺失，不要求另行上报失败。
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetFailedSubjects())
 }
 
 func TestDatasetPeriodDeadlineWinsAgainstConcurrentLateCommit(t *testing.T) {

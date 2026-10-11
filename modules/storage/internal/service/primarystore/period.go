@@ -3,6 +3,7 @@ package primarystore
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -12,11 +13,59 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
+type snapshotDataNodeClient interface {
+	RegisterSeriesSnapshot(context.Context, *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error)
+}
+
 type periodDataNodeClient interface {
 	EnsureDatasetPeriod(context.Context, *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error)
 	GetDatasetPeriodStatus(context.Context, *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error)
 	CommitTimeSeriesBatch(context.Context, *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error)
 	RecordDatasetPeriodFailures(context.Context, *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error)
+}
+
+// RegisterSeriesSnapshot 把数据集的完整标的列表与生效周期转发给所属 DataNode。
+func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryRegisterSeriesSnapshotReq) (*pb.PrimaryRegisterSeriesSnapshotRsp, error) {
+	if req == nil || len(req.GetSeries()) == 0 {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("series snapshot is required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := rejectCollectorPeriodWriteCredential(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	ctx = s.requestContext(ctx)
+	scope := &pb.DatasetPeriodExpectation{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Frequency: req.GetFrequency()}
+	if err := validateCollectorPeriodDataset(ctx, req.GetAuthInfo(), scope); err != nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	periodNode, ok := node.(snapshotDataNodeClient)
+	if !ok {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode period RPC is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := periodNode.RegisterSeriesSnapshot(ctx, &pb.RegisterSeriesSnapshotReq{
+		AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Frequency: req.GetFrequency(),
+		Series: req.GetSeries(), EffectiveFrom: req.GetEffectiveFrom(),
+	})
+	if err != nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	if rsp == nil || rsp.GetRetInfo() == nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no snapshot response"))}, nil
+	}
+	return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: rsp.GetRetInfo(), SeriesHash: rsp.GetSeriesHash(), ExpectedCount: rsp.GetExpectedCount(), AlreadyRegistered: rsp.GetAlreadyRegistered()}, nil
 }
 
 func (s *Service) EnsureDatasetPeriod(ctx context.Context, req *pb.PrimaryEnsureDatasetPeriodReq) (*pb.PrimaryEnsureDatasetPeriodRsp, error) {
@@ -89,14 +138,14 @@ func (s *Service) GetDatasetPeriodStatus(ctx context.Context, req *pb.PrimaryGet
 	if err != nil {
 		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	rsp, err := periodNode.GetDatasetPeriodStatus(ctx, &pb.GetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: exp})
+	rsp, err := periodNode.GetDatasetPeriodStatus(ctx, &pb.GetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: exp, IncludeProgress: req.GetIncludeProgress()})
 	if err != nil {
 		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	if rsp == nil || rsp.GetRetInfo() == nil {
 		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
 	}
-	return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: rsp.GetRetInfo(), Status: rsp.GetStatus(), SeriesHash: rsp.GetSeriesHash(), ExpectedCount: rsp.GetExpectedCount(), DeadlineAt: rsp.GetDeadlineAt()}, nil
+	return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: rsp.GetRetInfo(), Status: rsp.GetStatus(), SeriesHash: rsp.GetSeriesHash(), ExpectedCount: rsp.GetExpectedCount(), DeadlineAt: rsp.GetDeadlineAt(), Found: rsp.GetFound(), SuccessfulCount: rsp.GetSuccessfulCount(), MissingSeriesIndexes: rsp.GetMissingSeriesIndexes()}, nil
 }
 
 func (s *Service) RecordDatasetPeriodFailures(ctx context.Context, req *pb.PrimaryRecordDatasetPeriodFailuresReq) (*pb.PrimaryRecordDatasetPeriodFailuresRsp, error) {
@@ -198,6 +247,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	}
 	rsp, err := periodNode.CommitTimeSeriesBatch(ctx, &pb.CommitTimeSeriesBatchReq{
 		AuthInfo: auth, Expectation: exp, Items: items, SourceEventId: req.GetSourceEventId(), WriteSource: req.GetWriteSource(),
+		AllowedLatenessSeconds: datasetAllowedLateness(ctx, exp),
 	})
 	if err != nil {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -245,4 +295,21 @@ func validateCollectorPeriodDataset(ctx context.Context, auth *pb.AuthInfo, expe
 		return errors.New("period frequency does not match the Dataset declaration")
 	}
 	return nil
+}
+
+// datasetAllowedLateness 读取数据集属性 allowed_lateness_seconds；缺失或非法时返回 0，由 DataNode 采用默认值。
+func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectation) int64 {
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return 0
+	}
+	dataset, ok := snapshot.GetDataset(exp.GetSpaceId(), exp.GetDatasetId())
+	if !ok || dataset == nil {
+		return 0
+	}
+	seconds, err := strconv.ParseInt(strings.TrimSpace(dataset.GetAttributes()["allowed_lateness_seconds"]), 10, 64)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return seconds
 }

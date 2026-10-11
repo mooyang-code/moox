@@ -1283,6 +1283,7 @@ components:
         max_body_bytes: 33554432
         methods:
           - UpsertFields
+          - RegisterSeriesSnapshot
           - EnsureDatasetPeriod
           - GetDatasetPeriodStatus
           - CommitTimeSeriesBatch
@@ -1313,6 +1314,7 @@ components:
               - console
           - methods:
               - UpsertFields
+              - RegisterSeriesSnapshot
               - EnsureDatasetPeriod
               - GetDatasetPeriodStatus
               - CommitTimeSeriesBatch
@@ -1332,6 +1334,7 @@ components:
             callers:
               - moox-cli
           - methods:
+              - RegisterSeriesSnapshot
               - EnsureDatasetPeriod
               - GetDatasetPeriodStatus
               - CommitTimeSeriesBatch
@@ -1706,6 +1709,7 @@ principals:
           - CommitTimeSeriesBatch
           - RecordDatasetPeriodFailures
           - GetDatasetPeriodStatus
+          - UpsertFields
       - service: trpc.moox.collector.MarketFetchRuntime
         methods:
           - ClaimTimerBatch

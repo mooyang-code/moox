@@ -104,7 +104,8 @@ func TestPeriodFailureReplayAfterFinalization(t *testing.T) {
 	replay, err := store.RecordDatasetPeriodFailures(ctx, exp, []uint32{2, 1, 0, 1})
 	require.NoError(t, err)
 	require.Equal(t, result, replay, "persisted failure ACK must survive crossing the cutoff")
-	require.Equal(t, []string{"ETH-USDT"}, collectorPeriodMarkerFromOutbox(t, store).GetFailedSubjects())
+	// 缺失 = 全集减成功位图：BTC-USDT 已成功，ETH-USDT 与 SOL-USDT 都没有成功提交。
+	require.Equal(t, []string{"ETH-USDT", "SOL-USDT"}, collectorPeriodMarkerFromOutbox(t, store).GetFailedSubjects())
 	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
 }
 

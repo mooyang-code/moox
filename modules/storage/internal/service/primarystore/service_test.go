@@ -26,6 +26,12 @@ type primaryPeriodNodeIDAdapter struct {
 	*datanode.Service
 }
 
+func (n primaryPeriodNodeIDAdapter) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error) {
+	bound := proto.Clone(req).(*pb.RegisterSeriesSnapshotReq)
+	bound.NodeId = "node-a"
+	return n.Service.RegisterSeriesSnapshot(ctx, bound)
+}
+
 func (n primaryPeriodNodeIDAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
 	bound := proto.Clone(req).(*pb.EnsureDatasetPeriodReq)
 	bound.NodeId = "node-a"

@@ -301,6 +301,18 @@ func errorCode(err error) pb.ErrorCode {
 	if errors.As(err, &periodConflict) {
 		return pb.ErrorCode_CONFLICT
 	}
+	var hashMismatch pebble.PeriodHashMismatchError
+	if errors.As(err, &hashMismatch) {
+		return pb.ErrorCode_CONFLICT
+	}
+	var snapshotMissing pebble.SeriesSnapshotMissingError
+	if errors.As(err, &snapshotMissing) {
+		return pb.ErrorCode_NOT_FOUND
+	}
+	var deadlinePassed pebble.PeriodDeadlinePassedError
+	if errors.As(err, &deadlinePassed) {
+		return pb.ErrorCode_INVALID_PARAM
+	}
 	return pb.ErrorCode_INNER_ERR
 }
 

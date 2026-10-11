@@ -1052,6 +1052,18 @@ func (a *dataNodeProxyAdapter) bindNodeID(nodeID string) {
 	a.nodeID = nodeID
 }
 
+func (a *dataNodeProxyAdapter) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error) {
+	if a == nil || a.periodProxy == nil {
+		return nil, errors.New("DataNode period runtime is unavailable")
+	}
+	if req != nil {
+		bound := proto.Clone(req).(*pb.RegisterSeriesSnapshotReq)
+		bound.NodeId = a.nodeID
+		req = bound
+	}
+	return a.periodProxy.RegisterSeriesSnapshot(ctx, req)
+}
+
 func (a *dataNodeProxyAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
 	if a == nil || a.periodProxy == nil {
 		return nil, errors.New("DataNode period runtime is unavailable")
