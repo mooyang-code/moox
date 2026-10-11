@@ -47,7 +47,9 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		return fmt.Errorf("resolve storage auth: %w", err)
 	}
 	var reconcilers sync.Map
-	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth, Calendar: stockCNCheckCalendar()}
+	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth}
+	checkCalendar := newStockCNCheckCalendar()
+	checker.Calendar, checker.CalendarReady = checkCalendar.valid, checkCalendar.ready
 	backfiller := &klinecheck.Backfiller{
 		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx,
 		Functions: func(spaceID string) klinecheck.FunctionProvider {
@@ -132,45 +134,63 @@ func stockCNCalendarPreflight(ctx context.Context) error {
 	return nil
 }
 
-// stockCNCheckCalendar 返回完整性检查使用的交易日历过滤：与函数侧一致，stockcn 只在交易日历的
-// 交易分钟应有 K 线，其余空间连续交易。日历加载失败时按“没有应有 K 线”处理，检查会得到空结果而不是误报缺口。
-func stockCNCheckCalendar() func(spaceID, frequency string, barStart time.Time) bool {
-	var (
-		mu       sync.Mutex
-		calendar *stockmarket.Calendar
-		loadErr  error
-		loaded   bool
-		sessions = map[string]map[int64]struct{}{}
-	)
-	return func(spaceID, frequency string, barStart time.Time) bool {
-		if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-			return true
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if !loaded {
-			calendar, loadErr = stockmarket.LoadCalendar(stockCNCalendarPath())
-			loaded = true
-		}
-		if loadErr != nil || calendar == nil || calendar.Location() == nil || !strings.EqualFold(frequency, "1m") {
+// stockCNCheckCalendarFilter 是完整性检查使用的交易日历过滤：与函数侧一致，stockcn 只在交易日历的
+// 交易分钟应有 K 线，其余空间连续交易。日历加载失败不缓存，修复文件后下次检查会重新加载；
+// 不可用时 ready 返回错误，检查直接失败而不是得到空结果。
+type stockCNCheckCalendarFilter struct {
+	mu       sync.Mutex
+	calendar *stockmarket.Calendar
+	sessions map[string]map[int64]struct{}
+}
+
+func newStockCNCheckCalendar() *stockCNCheckCalendarFilter {
+	return &stockCNCheckCalendarFilter{sessions: map[string]map[int64]struct{}{}}
+}
+
+func (f *stockCNCheckCalendarFilter) ready(spaceID string) error {
+	if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calendar != nil {
+		return nil
+	}
+	calendar, err := stockmarket.LoadCalendar(stockCNCalendarPath())
+	if err != nil {
+		return err
+	}
+	if calendar == nil || calendar.Location() == nil {
+		return fmt.Errorf("calendar has no time zone")
+	}
+	f.calendar = calendar
+	return nil
+}
+
+func (f *stockCNCheckCalendarFilter) valid(spaceID, frequency string, barStart time.Time) bool {
+	if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calendar == nil || !strings.EqualFold(frequency, "1m") {
+		return false
+	}
+	tradeDate := barStart.In(f.calendar.Location()).Format("2006-01-02")
+	bars, cached := f.sessions[tradeDate]
+	if !cached {
+		expected, err := f.calendar.ExpectedMinuteBars(tradeDate)
+		if err != nil {
 			return false
 		}
-		tradeDate := barStart.In(calendar.Location()).Format("2006-01-02")
-		bars, cached := sessions[tradeDate]
-		if !cached {
-			expected, err := calendar.ExpectedMinuteBars(tradeDate)
-			if err != nil {
-				return false
-			}
-			bars = make(map[int64]struct{}, len(expected))
-			for _, bar := range expected {
-				bars[bar.UTC().Unix()] = struct{}{}
-			}
-			sessions[tradeDate] = bars
+		bars = make(map[int64]struct{}, len(expected))
+		for _, bar := range expected {
+			bars[bar.UTC().Unix()] = struct{}{}
 		}
-		_, ok := bars[barStart.UTC().Unix()]
-		return ok
+		f.sessions[tradeDate] = bars
 	}
+	_, ok := bars[barStart.UTC().Unix()]
+	return ok
 }
 
 func stockCNCalendarPath() string {

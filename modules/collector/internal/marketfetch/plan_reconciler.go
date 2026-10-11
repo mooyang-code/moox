@@ -747,11 +747,11 @@ func (r *PlanReconciler) clearStaleReservations(ctx context.Context, trigger str
 		return false, err
 	}
 	defer release()
-	return r.clearStale(ctx, trigger, names)
+	return r.clearStale(ctx, trigger, names, false)
 }
 
 // clearStale 是 clearStaleReservations 的实现，调用方须已持有操作槽。
-func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names []string) (bool, error) {
+func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names []string, backfill bool) (bool, error) {
 	unready, err := r.Cloud.ListUnreadyMarketFetchers(ctx, r.SpaceID, trigger)
 	if err != nil {
 		return false, fmt.Errorf("list unready market fetchers: %w", err)
@@ -761,9 +761,12 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 		wanted[name] = struct{}{}
 	}
 	inFlight := map[string]struct{}{}
-	for _, job := range r.pending {
-		for _, name := range job.functions {
-			inFlight[name] = struct{}{}
+	if !backfill {
+		// 补采路径与实时对账并发运行，不能读写实时对账的在途作业与租约。
+		for _, job := range r.pending {
+			for _, name := range job.functions {
+				inFlight[name] = struct{}{}
+			}
 		}
 	}
 	var stale []string
@@ -784,7 +787,12 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 		return true, nil
 	}
 	sort.Strings(stale)
-	lease, err := r.ensureLease(ctx)
+	var lease *scfinvoker.CollectorPublishLease
+	if backfill {
+		lease, err = r.ensureBackfillLease(ctx)
+	} else {
+		lease, err = r.ensureLease(ctx)
+	}
 	if err != nil {
 		return false, fmt.Errorf("publish lease: %w", err)
 	}
@@ -805,7 +813,11 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 		}
 	}
 	log.Infof("collector fetch plan removed stale create reservations space=%s functions=%s", r.SpaceID, strings.Join(stale, ","))
-	r.releaseLease(ctx)
+	if backfill {
+		r.releaseBackfillLease(ctx)
+	} else {
+		r.releaseLease(ctx)
+	}
 	return true, nil
 }
 
@@ -1187,8 +1199,9 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		byName[node.NodeID] = node
 	}
 	// 配置里的代码包换了新版本：先把已有函数的代码升级到该版本，再比对环境。
+	// 升级失败不阻断后面的重建与修复（例如云端函数已被删除，升级必然失败）。
 	if err := r.upgradeCode(ctx, applied, byName); err != nil {
-		return err
+		log.WarnContextf(ctx, "collector fetch plan code upgrade failed space=%s: %v", r.SpaceID, err)
 	}
 	var drifted, missing, gone []string
 	unverified := 0
@@ -1269,7 +1282,17 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			}
 		}
 	}
-	// 云端缺失的函数（例如被手工删除）按已生效计划重建，再补推定时器。
+	// 云端缺失的函数（例如被手工删除）按已生效计划重建，再补推定时器；先清掉上次重建失败遗留的预留。
+	if len(missing) > 0 {
+		cleared, clearErr := r.clearStale(ctx, "timer", missing, false)
+		if clearErr != nil {
+			return r.fail("cloudnode", clearErr)
+		}
+		if !cleared {
+			missing = nil
+			allOK = false
+		}
+	}
 	for start := 0; start < len(missing); start += runtimeConfigBatchSize {
 		batch := missing[start:min(start+runtimeConfigBatchSize, len(missing))]
 		items := make([]*cloudnodepb.NodeCreateItem, 0, len(batch))
@@ -1386,6 +1409,9 @@ func readbackState(metadata map[string]any, now time.Time) readbackResult {
 		return readbackStale
 	}
 	if message := strings.ToLower(strings.TrimSpace(fmt.Sprint(metadata["timer_status_error"]))); message != "" && message != "<nil>" {
+		if strings.Contains(message, "timer trigger is missing") {
+			return readbackFresh // 触发器缺失由 timerNeedsRepair 按元数据修复
+		}
 		if strings.Contains(message, "resourcenotfound") || strings.Contains(message, "not found") {
 			if strings.Contains(message, "function") {
 				return readbackGone
@@ -1503,7 +1529,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		r.markBackfillReady(name)
 		return name, nil
 	}
-	if cleared, clearErr := r.clearStale(ctx, "invoke", []string{name}); clearErr != nil {
+	if cleared, clearErr := r.clearStale(ctx, "invoke", []string{name}, true); clearErr != nil {
 		return "", clearErr
 	} else if !cleared {
 		return "", fmt.Errorf("backfill function %s has an unfinished create reservation", name)

@@ -76,17 +76,21 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		r.releaseLease(ctx)
 		return true, nil
 	}
-	jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, patches)
-	if err != nil {
-		return false, err
-	}
-	items, terminal, err := r.waitJob(ctx, jobID)
-	if err != nil || !terminal {
-		return false, err
-	}
-	for _, item := range items {
-		if !item.Success {
-			return false, fmt.Errorf("disable timer of %s: %s", item.NodeID, item.Message)
+	// CloudNode 单个作业最多 100 项：分批提交，全部确认后才算停用完成。
+	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
+		batch := patches[start:min(start+runtimeConfigBatchSize, len(patches))]
+		jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, batch)
+		if err != nil {
+			return false, err
+		}
+		items, terminal, err := r.waitJob(ctx, jobID)
+		if err != nil || !terminal {
+			return false, err
+		}
+		for _, item := range items {
+			if !item.Success {
+				return false, fmt.Errorf("disable timer of %s: %s", item.NodeID, item.Message)
+			}
 		}
 	}
 	r.releaseLease(ctx)

@@ -68,7 +68,13 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		return respond(true, "no_work", nil)
 	}
 	// 截止时间最近的先执行：整点同时到期多个频率时，短周期不能被长周期占去预算。
-	sort.SliceStable(planned, func(i, j int) bool { return planned[i].StorageDeadline.Before(planned[j].StorageDeadline) })
+	// 截止时间相同则周期短的先执行（1m 先于 1h）。
+	sort.SliceStable(planned, func(i, j int) bool {
+		if !planned[i].StorageDeadline.Equal(planned[j].StorageDeadline) {
+			return planned[i].StorageDeadline.Before(planned[j].StorageDeadline)
+		}
+		return frequencyDuration(planned[i].Frequency) < frequencyDuration(planned[j].Frequency)
+	})
 	invocationHandler, closeGateway, err := h.prepareInvocation(false)
 	if err != nil {
 		return respond(false, err.Error(), nil)
@@ -123,6 +129,10 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 			allSucceeded = false
 		default:
 			result.Status, result.Message = "succeeded", response.Message+summarizeBatchFailures(response.Data)+timing
+			if response.Message == "partial_failed" {
+				result.Status = "partial_failed"
+				allSucceeded = false
+			}
 		}
 		log.InfoContextf(ctx, "market_fetch_plan_run function=%s frequency=%s period=%s status=%s items=%d targets=%d message=%s",
 			functionName, result.Frequency, result.Period, result.Status, len(item.Request.Items), len(item.Request.Targets), result.Message)

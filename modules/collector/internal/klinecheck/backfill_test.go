@@ -235,25 +235,36 @@ func TestCheckRejectsOversizedRanges(t *testing.T) {
 	require.ErrorContains(t, err, "narrow")
 }
 
-func TestBackfillTreatsBarsMissingAtTheSourceAsDoneAndDoesNotResubmitThem(t *testing.T) {
+func TestBackfillTreatsASingleBarMissingAtTheSourceAsDoneAndDoesNotResubmitIt(t *testing.T) {
 	backfiller, invoker, _, base := newBackfillFixture(t)
 	ctx := context.Background()
 	invoker.noWrite = true
-	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	// 单根缺口（ETH 第 10 分钟）：函数成功而仍然缺失，说明行情源没有这根 K 线。
+	request := JobRequest{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}
+	jobID, _, err := backfiller.Submit(ctx, request, "manual")
 	require.NoError(t, err)
 	require.NoError(t, backfiller.Tick(ctx, "crypto"))
 	backfiller.Wait()
 	require.NoError(t, backfiller.Tick(ctx, "crypto"))
 	status, err := backfiller.Status(ctx, jobID)
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillSucceeded, status.Job.Status, "the function ran and wrote nothing wrong; what stays missing is absent at the source")
-	require.Equal(t, 2, status.Counts[store.BackfillSucceeded])
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
 
 	// 手动补采仍会重新尝试；自动补采不再重复提交已知行情源没有的 K 线。
-	manual, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	manual, _, err := backfiller.Submit(ctx, request, "manual")
 	require.NoError(t, err)
 	require.NotEmpty(t, manual)
-	auto, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "auto")
+	auto, _, err := backfiller.Submit(ctx, request, "auto")
 	require.NoError(t, err)
 	require.Empty(t, auto)
+
+	// 多根分块只写入一部分时无法判断剩余缺口的原因：按失败处理，继续重试。
+	multi, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	failed, err := backfiller.Status(ctx, multi)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillFailed, failed.Job.Status)
 }
