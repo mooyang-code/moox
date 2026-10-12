@@ -54,7 +54,7 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 		}
 	}
 
-	frames, failed, err := r.readSubjects(ctx, plan, reads, plan.Mode == ModeRecalc)
+	frames, failed, err := r.readSubjects(ctx, plan, reads, plan.Mode == ModeRecalc, false)
 	if err != nil {
 		return LoadResult{}, err
 	}
@@ -86,12 +86,16 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 // Subjects sharing a start share batches, read by a bounded worker pool. A
 // failed batch marks its subjects failed; only when every batch fails is the
 // read an infrastructure error.
-func (r *Runner) readSubjects(ctx context.Context, plan Plan, reads map[string]subjectRead, pageDeadline bool) (map[string]*storageio.Frame, map[string]struct{}, error) {
+func (r *Runner) readSubjects(ctx context.Context, plan Plan, reads map[string]subjectRead, pageDeadline, warmup bool) (map[string]*storageio.Frame, map[string]struct{}, error) {
 	type readJob struct {
 		start    time.Time
 		subjects []string
 	}
-	batchSize := r.cfg.ReadBatchSubjects
+	batchSize, workerLimit, pause := r.cfg.ReadBatchSubjects, r.cfg.ReadWorkers, time.Duration(0)
+	if warmup {
+		// 首次预热允许慢：小批量、低并发、批间停顿，避免瞬时大量读请求压垮 Storage。
+		batchSize, workerLimit, pause = r.cfg.WarmupBatchSubjects, r.cfg.WarmupWorkers, r.cfg.WarmupBatchPause
+	}
 	if batchSize < 1 {
 		batchSize = 100
 	}
@@ -117,7 +121,7 @@ func (r *Runner) readSubjects(ctx context.Context, plan Plan, reads map[string]s
 	if len(jobs) == 0 {
 		return frames, failed, nil
 	}
-	workers := max(1, min(r.cfg.ReadWorkers, len(jobs)))
+	workers := max(1, min(workerLimit, len(jobs)))
 	type batchResult struct {
 		subjects []string
 		frames   map[string]*storageio.Frame
@@ -133,6 +137,12 @@ func (r *Runner) readSubjects(ctx context.Context, plan Plan, reads map[string]s
 			for job := range queue {
 				batch, err := r.readBatch(ctx, plan, job.start, job.subjects, pageDeadline)
 				results <- batchResult{subjects: job.subjects, frames: batch, err: err}
+				if pause > 0 {
+					select {
+					case <-time.After(pause):
+					case <-ctx.Done():
+					}
+				}
 			}
 		}()
 	}
@@ -266,7 +276,7 @@ func (r *Runner) warmup(ctx context.Context, plan Plan, subjects []string) bool 
 	for _, subject := range subjects {
 		reads[subject] = subjectRead{start: plan.TargetStart}
 	}
-	frames, failed, err := r.readSubjects(ctx, plan, reads, true)
+	frames, failed, err := r.readSubjects(ctx, plan, reads, true, true)
 	if err != nil {
 		log.Warnf("factor_warmup_failed set_id=%s subjects=%d window=%s/%s duration=%s error=%v", plan.Set.SetID, len(subjects),
 			plan.TargetStart.UTC().Format(time.RFC3339), plan.TargetEnd.UTC().Format(time.RFC3339), time.Since(started).Round(time.Millisecond), err)

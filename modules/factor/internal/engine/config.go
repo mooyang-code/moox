@@ -74,9 +74,13 @@ type PipelineConfig struct {
 	ReadBatchSubjects int           `yaml:"read_batch_subjects"`
 	ReadWorkers       int           `yaml:"read_workers"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
-	WriteBatchRows    int           `yaml:"write_batch_rows"`
-	PeriodBudgetMin   time.Duration `yaml:"period_budget_min"`
-	PeriodBudgetMax   time.Duration `yaml:"period_budget_max"`
+	// 预热读取节流（默认 10 个标的一批、1 个并发、批间停顿 500ms）。
+	WarmupBatchSubjects int           `yaml:"warmup_batch_subjects"`
+	WarmupWorkers       int           `yaml:"warmup_workers"`
+	WarmupBatchPause    time.Duration `yaml:"warmup_batch_pause"`
+	WriteBatchRows      int           `yaml:"write_batch_rows"`
+	PeriodBudgetMin     time.Duration `yaml:"period_budget_min"`
+	PeriodBudgetMax     time.Duration `yaml:"period_budget_max"`
 }
 
 type RecalcConfig struct {
@@ -137,6 +141,7 @@ func Default() *Config {
 		},
 		Pipeline: PipelineConfig{
 			ReadBatchSubjects: 100, ReadWorkers: 4, ReadTimeout: 60 * time.Second,
+			WarmupBatchSubjects: 10, WarmupWorkers: 1, WarmupBatchPause: 500 * time.Millisecond,
 			WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute,
 		},
 		Recalc: RecalcConfig{ChunkPeriods: 500, PollInterval: 5 * time.Second},
@@ -159,6 +164,9 @@ func (c *Config) applyDefaults() {
 	setInt(&c.Pipeline.ReadBatchSubjects, d.Pipeline.ReadBatchSubjects)
 	setInt(&c.Pipeline.ReadWorkers, d.Pipeline.ReadWorkers)
 	setDuration(&c.Pipeline.ReadTimeout, d.Pipeline.ReadTimeout)
+	setInt(&c.Pipeline.WarmupBatchSubjects, d.Pipeline.WarmupBatchSubjects)
+	setInt(&c.Pipeline.WarmupWorkers, d.Pipeline.WarmupWorkers)
+	setDuration(&c.Pipeline.WarmupBatchPause, d.Pipeline.WarmupBatchPause)
 	setInt(&c.Pipeline.WriteBatchRows, d.Pipeline.WriteBatchRows)
 	setDuration(&c.Pipeline.PeriodBudgetMin, d.Pipeline.PeriodBudgetMin)
 	setDuration(&c.Pipeline.PeriodBudgetMax, d.Pipeline.PeriodBudgetMax)

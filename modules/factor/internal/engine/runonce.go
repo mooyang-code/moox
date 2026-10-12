@@ -86,7 +86,8 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	}
 	runner := pipeline.NewRunner(storage, pool, clock, pipeline.Config{
 		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
-		ReadTimeout: cfg.Pipeline.ReadTimeout, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
+		ReadTimeout:         cfg.Pipeline.ReadTimeout,
+		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
 		PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
 	})
 	return recalcexec.NewExecutor(runner, recalcexec.WithClock(clock)).RunChunk(ctx, recalcexec.Selection{

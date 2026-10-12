@@ -45,12 +45,16 @@ type Config struct {
 	ReadBatchSubjects int
 	ReadWorkers       int
 	ReadRetries       int
-	ReadTimeout       time.Duration
-	WriteBatchRows    int
-	WriteRetries      int
-	WriteRetryBackoff time.Duration
-	PythonWorkers     int
-	FactorsDir        string
+	// 后台预热的读取节流：批量更小、并发更低、每批之后停顿，预热时间可以长一些。
+	WarmupBatchSubjects int
+	WarmupWorkers       int
+	WarmupBatchPause    time.Duration
+	ReadTimeout         time.Duration
+	WriteBatchRows      int
+	WriteRetries        int
+	WriteRetryBackoff   time.Duration
+	PythonWorkers       int
+	FactorsDir          string
 	// BackgroundWarmup leaves live subjects without a loaded lookback window
 	// out of their period and loads it in RunWarmup; without it such a subject
 	// is read in full inside the period.
@@ -71,6 +75,15 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 	}
 	if cfg.ReadWorkers <= 0 {
 		cfg.ReadWorkers = 4
+	}
+	if cfg.WarmupBatchSubjects <= 0 {
+		cfg.WarmupBatchSubjects = 10
+	}
+	if cfg.WarmupWorkers <= 0 {
+		cfg.WarmupWorkers = 1
+	}
+	if cfg.WarmupBatchPause <= 0 {
+		cfg.WarmupBatchPause = 500 * time.Millisecond
 	}
 	if cfg.ReadRetries <= 0 {
 		cfg.ReadRetries = 2

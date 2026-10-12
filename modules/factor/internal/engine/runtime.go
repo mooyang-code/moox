@@ -119,7 +119,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	clock := periodclock.Continuous{}
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.python, clock, pipeline.Config{
 		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
-		ReadTimeout: cfg.Pipeline.ReadTimeout, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
+		ReadTimeout:         cfg.Pipeline.ReadTimeout,
+		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
 		WriteRetryBackoff: 300 * time.Millisecond, PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
 		BackgroundWarmup: true,
 	})
