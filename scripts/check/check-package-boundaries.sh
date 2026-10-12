@@ -170,7 +170,7 @@ if [[ -d packages/doctor ]]; then
 fi
 
 required_timer_services=(
-	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.schedule.timer"
+	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.kline_resample.timer"
 )
 for required in "${required_timer_services[@]}"; do
 	file="${required%%:*}"

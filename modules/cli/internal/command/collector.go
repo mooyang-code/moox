@@ -195,6 +195,7 @@ type collectorDeleteOptions struct {
 	File             string
 	SpaceID          string
 	Namespace        string
+	NodePrefix       string
 	Region           string
 	Confirm          bool
 	DryRun           bool
@@ -442,6 +443,7 @@ func init() {
 	deleteFlags.StringVar(&collectorDeleteFlags.File, "file", "", "optional moox.toml; enables manifest-backed service auth/CA")
 	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	deleteFlags.StringVar(&collectorDeleteFlags.Namespace, "namespace", "", "只删除指定 SCF 命名空间中的节点")
+	deleteFlags.StringVar(&collectorDeleteFlags.NodePrefix, "node-prefix", "", "只删除节点 ID 以该前缀开头的 SCF 节点")
 	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 节点")
 	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前筛选范围内的 SCF 节点")
 	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
@@ -2866,7 +2868,7 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		if err != nil {
 			return nil, fmt.Errorf("list active SCF nodes: %w", err)
 		}
-		nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace)
+		nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace, strings.TrimSpace(opts.NodePrefix))
 		summary := collectorDeleteResult(spaceID, namespace, region, true, nodeIDs)
 		if len(nodeIDs) == 0 {
 			summary.Status = "nothing_to_delete"
@@ -2896,7 +2898,7 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	if err != nil {
 		return nil, fmt.Errorf("list active SCF nodes under publish lease: %w", err)
 	}
-	nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace)
+	nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace, strings.TrimSpace(opts.NodePrefix))
 	summary := collectorDeleteResult(spaceID, namespace, region, false, nodeIDs)
 	if len(nodeIDs) == 0 {
 		summary.Status = "nothing_to_delete"
@@ -2975,10 +2977,10 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	return summary, retErr
 }
 
-func collectorDeleteTargetNodeIDs(nodes []adminclient.CloudNode, namespace string) []string {
+func collectorDeleteTargetNodeIDs(nodes []adminclient.CloudNode, namespace, nodePrefix string) []string {
 	nodeIDs := make([]string, 0, len(nodes))
 	for _, node := range nodes {
-		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || (namespace != "" && strings.TrimSpace(node.Namespace) != namespace) {
+		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || (namespace != "" && strings.TrimSpace(node.Namespace) != namespace) || (nodePrefix != "" && !strings.HasPrefix(node.NodeID, nodePrefix)) {
 			continue
 		}
 		nodeIDs = append(nodeIDs, node.NodeID)

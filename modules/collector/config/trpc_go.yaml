@@ -31,11 +31,6 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 25000
-    - name: trpc.moox.collector.schedule.timer
-      port: 11413
-      network: "0 * * * * *"
-      protocol: timer
-      timeout: 10000
     - name: trpc.moox.collector.kline_resample.timer
       port: 11415
       network: "0 * * * * *"
