@@ -537,3 +537,23 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	require.Equal(t, defaults.Fetch.RPS, got.RPS)
 	require.Equal(t, defaults.Fetch.RequestTimeoutMS, got.RequestTimeoutMS)
 }
+
+// CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
+func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	raw, err := os.ReadFile("../../../cli/internal/setup/config/testdata/scf_plan_rendered.yaml")
+	require.NoError(t, err)
+	cfg, err := Load(writeCollectorConfig(t, string(raw)))
+	require.NoError(t, err)
+	require.Equal(t, []string{"crypto", "stockcn"}, cfg.fetchPlanSpaces())
+	for _, space := range cfg.fetchPlanSpaces() {
+		deploy, deployErr := cfg.fetchPlanDeploy(space)
+		require.NoError(t, deployErr, space)
+		require.NotEmpty(t, deploy.PackageName, space)
+		require.Contains(t, deploy.Networks, "ap-hongkong")
+	}
+	require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"), "渲染产物里只有包名与命名空间，stockcn 默认值仍应补回")
+	route, err := cfg.scfPlanAccessEnvironmentRoute("ap-hongkong")
+	require.NoError(t, err)
+	require.Equal(t, "172.19.32.13:11004", route.Address)
+}

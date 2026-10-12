@@ -1275,7 +1275,8 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 		_, err := r.EnsureBackfillFunction(context.Background(), "spot")
 		done <- err
 	}()
-	time.Sleep(100 * time.Millisecond) // 让调用方先解析到 v1，再卡在补采锁上
+	// 等调用方确实解析到 v1（并卡在补采锁上）再推进包版本，而不是靠固定睡眠假定调度顺序。
+	require.Eventually(t, func() bool { return r.packageID() == "pkg-v1" }, 5*time.Second, 5*time.Millisecond)
 	h.cloud.packages = []string{"pkg-v1", "pkg-v2"}
 	h.now = h.now.Add(time.Minute)
 	require.NoError(t, r.refreshPackage(context.Background()))

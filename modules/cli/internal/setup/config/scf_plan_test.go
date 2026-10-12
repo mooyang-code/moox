@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -138,4 +139,25 @@ func TestSCFPlanAccessSelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", address)
 	require.Equal(t, "access@compute-1", id)
+}
+
+// 渲染产物夹具：Collector 的 bootstrap 测试用真实 Load 读取同一份文件，两端字段名、键与必填项不一致时任一侧测试都会失败。
+// 渲染逻辑变化后用 MOOX_UPDATE_GOLDEN=1 重新生成。
+const scfPlanRenderedFixture = "testdata/scf_plan_rendered.yaml"
+
+func TestSCFPlanRenderedCollectorConfigMatchesTheSharedFixture(t *testing.T) {
+	manifest := scfPlanTestManifest()
+	manifest.SCFPlan.Spaces = append(manifest.SCFPlan.Spaces, SCFPlanSpace{SpaceID: "stockcn", Markets: map[string][]string{"equity": {"ap-hongkong"}}})
+	require.NoError(t, validateSCFPlan(&manifest))
+	// 与默认部署一致的出口与保留策略，使产物是 Collector 能真实加载的完整配置。
+	manifest.EgressProxy = EgressProxy{HTTPDomains: []string{"*.binance.com"}, DNS: EgressDNS{Domains: []string{"fapi.binance.com"}, RefreshIntervalSeconds: 300, RequestTimeoutMS: 3000, LookupTimeoutMS: 1500, ProbeTimeoutMS: 500, ProbePort: 443, CacheTTLSeconds: 300, MaxIPsPerDomain: 4}}
+	manifest.CollectorRetention = CollectorRetention{MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000, ExecutionDetailRetention: "6h", ScheduledRunSummaryRetention: "720h", TerminalRetryRetention: "168h", PeriodSnapshotRetention: "720h"}
+	rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: manifest}, []byte("gateway_client:\n  caller: collector\n  key_file: ./caller-collector.key\n"))
+	require.NoError(t, err)
+	if os.Getenv("MOOX_UPDATE_GOLDEN") == "1" {
+		require.NoError(t, os.WriteFile(scfPlanRenderedFixture, rendered, 0o644))
+	}
+	expected, err := os.ReadFile(scfPlanRenderedFixture)
+	require.NoError(t, err)
+	require.Equal(t, string(expected), string(rendered))
 }

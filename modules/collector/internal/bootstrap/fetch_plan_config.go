@@ -301,11 +301,20 @@ func (c *Config) fetchPlanDeploy(spaceID string) (marketfetch.PlanDeploy, error)
 	}, nil
 }
 
-// scfPlanAccessEnvironment 返回采集计划函数在某地域使用的 Access 环境：私网入口与调用方密钥。
-func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, error) {
+// scfPlanAccessEnvironmentRoute 返回某地域的 Access 私网入口配置。
+func (c *Config) scfPlanAccessEnvironmentRoute(region string) (SCFAccessEndpoint, error) {
 	route, ok := c.SCFPlan.AccessRoutes[strings.ToLower(strings.TrimSpace(region))]
 	if !ok {
-		return nil, fmt.Errorf("region %s has no Access route in scf_plan.access_routes", region)
+		return SCFAccessEndpoint{}, fmt.Errorf("region %s has no Access route in scf_plan.access_routes", region)
+	}
+	return route, nil
+}
+
+// scfPlanAccessEnvironment 返回采集计划函数在某地域使用的 Access 环境：私网入口与调用方密钥。
+func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, error) {
+	route, err := c.scfPlanAccessEnvironmentRoute(region)
+	if err != nil {
+		return nil, err
 	}
 	config := c.SCFAccess
 	config.Address, config.InstanceID = route.Address, route.InstanceID
