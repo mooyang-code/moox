@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"sync"
 	"time"
 
@@ -30,9 +31,11 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 			names[name] = function.Region
 		}
 	}
-	if open, err := r.Store.Open(ctx, r.SpaceID); err != nil {
+	openRecord, err := r.Store.Open(ctx, r.SpaceID)
+	if err != nil {
 		return false, err
-	} else if open != nil {
+	}
+	if open := openRecord; open != nil {
 		content, decodeErr := decodeFetchPlanContent(open.Plan)
 		if decodeErr != nil {
 			return false, decodeErr
@@ -49,6 +52,8 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	defer release()
+	// 先结算在途作业，再读回云端：若先读回，在途的启用作业可能在读回之后完成，用过期的 disabled 状态误判停用完成。
+	busy := r.busyFunctions(ctx, true)
 	// 停用确认必须以云端读回为准：目录缓存可能与云端实际状态不一致。
 	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
 	if err != nil {
@@ -64,7 +69,6 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	deferred := 0
-	busy := r.busyFunctions(ctx, true)
 	for name := range names {
 		if _, inFlight := busy[name]; inFlight {
 			deferred++ // 仍有在途作业：本轮不提交，也不能宣布停用完成
@@ -81,7 +85,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	}
 	if len(patches) == 0 {
 		r.releaseLease(ctx)
-		return deferred == 0, nil
+		return r.finishDisable(ctx, openRecord, deferred)
 	}
 	// CloudNode 单个作业最多 100 项：分批提交，全部确认后才算停用完成。
 	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
@@ -105,7 +109,30 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		}
 	}
 	r.releaseLease(ctx)
-	return deferred == 0, nil
+	return r.finishDisable(ctx, openRecord, deferred)
+}
+
+// finishDisable 在停用确认后收尾：仍有在途作业则未完成；否则作废未完成计划里的下发确认，并让重新启用后立即校验。
+func (r *PlanReconciler) finishDisable(ctx context.Context, openRecord *store.FetchPlanRecord, deferred int) (bool, error) {
+	if deferred > 0 {
+		return false, nil
+	}
+	// 停用之后，未完成计划里“已下发/已收尾”的确认不再代表云端状态：作废确认，重新启用时按原计划（原 P 与登记结果不变）重推；
+	// 已生效的函数也要在重新启用后立即校验定时器，不能等下一个校验周期。
+	r.lastVerified = time.Time{}
+	if openRecord != nil {
+		progress, err := decodeFetchPlanProgress(openRecord.Progress)
+		if err != nil {
+			return false, err
+		}
+		if len(progress.Transitioned) > 0 || len(progress.Finalized) > 0 {
+			progress.Transitioned, progress.Finalized = nil, nil
+			if err := r.saveProgress(ctx, openRecord, progress, openRecord.Status, openRecord.LastError); err != nil {
+				return false, err
+			}
+		}
+	}
+	return true, nil
 }
 
 // PlanManager 为每个启用采集计划的空间维持一个独立的对账协程，每分钟第 Offset 秒执行一轮。

@@ -115,6 +115,7 @@ type fakePlanCloud struct {
 	upgraded   []string
 	jobs       map[string][]scfinvoker.BatchItemResult
 	running    map[string]bool // 仍在运行的作业
+	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
 	created    []string
 	submits    int
@@ -137,6 +138,9 @@ func (c *fakePlanCloud) ListTimerMarketFetchers(context.Context, string) ([]scfi
 
 func (c *fakePlanCloud) ListTimerMarketFetchersFresh(ctx context.Context, spaceID string) ([]scfinvoker.Node, error) {
 	nodes, err := c.ListTimerMarketFetchers(ctx, spaceID)
+	if c.onFresh != nil {
+		c.onFresh()
+	}
 	for index := range nodes {
 		metadata := map[string]any{}
 		for key, value := range nodes[index].Metadata {
@@ -987,11 +991,11 @@ func TestAuxJobsTrackedUntilTerminalAndBlockResubmission(t *testing.T) {
 	require.Equal(t, []string{"fn-c"}, r.excludeBusy(context.Background(), []string{"fn-a", "fn-c"}))
 	require.Equal(t, 1, r.aux.count())
 
-	// 超过 10 分钟但作业仍在运行：不能凭年龄解除互斥（CloudNode 单项最长执行 16 分钟）。
-	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-15 * time.Minute)})
+	// 排队超过告警年龄（20 分钟）的作业仍在运行：只告警，不解除互斥。
+	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-2 * auxJobWarnAge)})
 	require.Empty(t, r.excludeBusy(context.Background(), []string{"fn-d"}))
-	// 超过最长跟踪时间后丢弃，不会永久阻塞。
-	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-2 * auxJobMaxAge)})
+	require.Equal(t, 2, r.aux.count())
+	h.cloud.running["job-2"] = false
 	require.Equal(t, []string{"fn-d"}, r.excludeBusy(context.Background(), []string{"fn-d"}))
 
 	// 作业到终态后立即解除。
@@ -1056,4 +1060,56 @@ func TestDisableAllWaitsForInFlightEnablingJobs(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, done)
 	require.False(t, h.cloud.patches[target].GetTimerEnabled())
+}
+
+func TestDisableAllDoesNotTrustAReadbackTakenBeforeInFlightJobsSettle(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	var target string
+	for name := range h.cloud.patches {
+		target = name
+		break
+	}
+	// 启用作业在读回的这一刻才完成：先结算再读回，所以这一轮仍判定未完成，下一轮基于完成后的读回再停用。
+	h.cloud.running = map[string]bool{"enable-job": true}
+	h.cloud.onFresh = func() { h.cloud.running["enable-job"] = false }
+	r.pending = []pendingPlanJob{{id: "enable-job", kind: planJobKindTransition, functions: []string{target}, at: r.now()}}
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.False(t, done)
+	done, err = r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+}
+
+func TestReenableAfterDisableRepushesAnUnfinishedPlan(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	open := h.open()
+	require.NotNil(t, open, "计划在等待生效边界，尚未收尾")
+	require.NotEmpty(t, h.cloud.patches)
+	for name, patch := range h.cloud.patches {
+		require.True(t, patch.GetTimerEnabled(), name)
+	}
+
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	for name, patch := range h.cloud.patches {
+		require.False(t, patch.GetTimerEnabled(), name)
+	}
+	progress, err := DecodeFetchPlanProgress(h.open().Progress)
+	require.NoError(t, err)
+	require.Empty(t, progress.Transitioned, "停用后下发确认作废")
+
+	// 重新启用：原计划的下发确认已作废，函数的定时器被重新打开。
+	require.NoError(t, h.reconcile(r))
+	for name, patch := range h.cloud.patches {
+		require.True(t, patch.GetTimerEnabled(), name)
+	}
 }

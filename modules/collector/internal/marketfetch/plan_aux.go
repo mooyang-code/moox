@@ -24,6 +24,7 @@ type auxJob struct {
 	kind      string
 	functions []string
 	at        time.Time
+	warned    bool // 超龄告警只发一次
 }
 
 type auxJobs struct {
@@ -51,6 +52,19 @@ func (a *auxJobs) snapshot() []auxJob {
 	return jobs
 }
 
+// markWarned 标记已告警，首次标记返回 true。
+func (a *auxJobs) markWarned(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	job, ok := a.jobs[id]
+	if !ok || job.warned {
+		return false
+	}
+	job.warned = true
+	a.jobs[id] = job
+	return true
+}
+
 func (a *auxJobs) drop(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -72,9 +86,9 @@ func (r *PlanReconciler) waitAux(ctx context.Context, kind string, names []strin
 	return items, terminal, err
 }
 
-// auxJobMaxAge 是辅助作业的最长跟踪时间：CloudNode 单项执行最长 16 分钟，超过该时间作业必定已终止，
-// 才能凭年龄解除互斥（同时告警）。
-const auxJobMaxAge = 20 * time.Minute
+// auxJobWarnAge 是在途作业的告警年龄：CloudNode 批量作业含排队时间，且会重新领取需要对账的项恢复执行，
+// 年龄不能证明作业已经结束，所以超龄只告警，只有确认到终态才解除互斥。
+const auxJobWarnAge = 20 * time.Minute
 
 // busyFunctions 返回仍有在途云端作业的函数（辅助作业与计划作业的并集），并刷新辅助作业：
 // 已到终态的移除，仍在运行的续租发布租约，防止后续排队项因租约过期失败。
@@ -83,10 +97,8 @@ func (r *PlanReconciler) busyFunctions(ctx context.Context, settlePending bool) 
 	busy := map[string]struct{}{}
 	running := false
 	for _, job := range r.aux.snapshot() {
-		if r.now().Sub(job.at) > auxJobMaxAge {
-			log.WarnContextf(ctx, "collector fetch plan auxiliary cloud job exceeded its maximum age space=%s job=%s kind=%s", r.SpaceID, job.id, job.kind)
-			r.aux.drop(job.id)
-			continue
+		if r.now().Sub(job.at) > auxJobWarnAge && r.aux.markWarned(job.id) {
+			log.WarnContextf(ctx, "collector fetch plan auxiliary cloud job is still not finished space=%s job=%s kind=%s age=%s", r.SpaceID, job.id, job.kind, r.now().Sub(job.at).Round(time.Second))
 		}
 		if _, terminal, err := r.checkJob(ctx, job.id); err == nil && terminal {
 			r.aux.drop(job.id)
@@ -100,9 +112,6 @@ func (r *PlanReconciler) busyFunctions(ctx context.Context, settlePending bool) 
 	if settlePending {
 		kept := r.pending[:0]
 		for _, job := range r.pending {
-			if r.now().Sub(job.at) > auxJobMaxAge {
-				continue
-			}
 			if _, terminal, err := r.checkJob(ctx, job.id); err == nil && terminal {
 				continue
 			}

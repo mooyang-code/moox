@@ -95,8 +95,8 @@ type PlanDeploy struct {
 	NamespaceCapacity int
 }
 
-// pendingJobMaxAge 是云端作业的最长等待时间；超时后丢弃并按进度重新下发（下发是幂等的）。
-const pendingJobMaxAge = 10 * time.Minute
+// pendingJobWarnAge 是云端作业的告警年龄：超过后仍须等到终态，不会因年龄丢弃而重复下发。
+const pendingJobWarnAge = 10 * time.Minute
 
 // NamespaceFor 返回函数所在的命名空间：每个命名空间最多 NamespaceCapacity 个函数，按函数名末尾的序号分片；
 // 第一片使用配置的命名空间名，之后依次加 -2、-3……
@@ -1080,9 +1080,9 @@ func (r *PlanReconciler) settlePending(ctx context.Context, record *store.FetchP
 	r.pending = nil
 	var firstErr error
 	for index, job := range pending {
-		if r.now().Sub(job.at) > pendingJobMaxAge {
-			log.WarnContextf(ctx, "collector fetch plan dropped a stuck cloud job space=%s job=%s kind=%s", r.SpaceID, job.id, job.kind)
-			continue
+		if r.now().Sub(job.at) > pendingJobWarnAge {
+			// 年龄不能证明作业已经结束：继续按状态判断，只告警。
+			log.WarnContextf(ctx, "collector fetch plan cloud job is still not finished space=%s job=%s kind=%s age=%s", r.SpaceID, job.id, job.kind, r.now().Sub(job.at).Round(time.Second))
 		}
 		items, terminal, err := r.checkJob(ctx, job.id)
 		if err != nil {

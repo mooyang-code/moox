@@ -475,6 +475,19 @@ func (c *FetchPlanContent) SymbolAt(function *PlanFunctionChange, key, subjectID
 	return "", false
 }
 
+// SymbolChangedWithoutBoundary 判断该函数在这次计划里是否发生了没有明确生效边界的符号映射变更：
+// 新旧计划都包含该标的、映射不同，而数据集本身没有变更（没有 P）。此时无法确定旧映射适用到何时。
+func (c *FetchPlanContent) SymbolChangedWithoutBoundary(function *PlanFunctionChange, key, subjectID string) bool {
+	if function == nil || function.Old == nil || function.New == nil {
+		return false
+	}
+	if change := c.Datasets[key]; change != nil && change.Changed {
+		return false
+	}
+	return function.Old.hasSubject(subjectID) && function.New.hasSubject(subjectID) &&
+		function.Old.ExchangeSymbol(subjectID) != function.New.ExchangeSymbol(subjectID)
+}
+
 // FinalPlan 是变更窗口结束后的计划：每个数据集只留最新一份，没有标的的数据集移除；退役函数返回空。
 func (c *FetchPlanContent) FinalPlan(function *PlanFunctionChange) *Plan {
 	if function.New == nil {

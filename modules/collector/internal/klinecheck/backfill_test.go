@@ -291,3 +291,49 @@ func TestBackfillTreatsSourceEmptyFailureOfASingleBarAsAbsent(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, auto)
 }
+
+// 纯符号映射变更（标的集合不变）没有数据集生效边界：变更之前的历史数据拒绝补采，之后的照常。
+func TestDatasetMarketRefusesHistoryBeforeAMappingOnlyChange(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = db.Close() })
+
+	base := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	build := func(previous *marketfetch.FetchPlanContent, external string) *marketfetch.FetchPlanContent {
+		desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+			Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
+			Subjects: []string{"BTC-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": external},
+		}}, nil)
+		require.NoError(t, err)
+		var prevFunctions map[string]*marketfetch.PlanFunction
+		var prevDatasets map[string]*marketfetch.PlanDatasetState
+		if previous != nil {
+			prevFunctions, prevDatasets = previous.Applied()
+		}
+		content, _, err := marketfetch.BuildPlanContent(prevFunctions, prevDatasets, desired, func(string, int64, bool) (int64, error) { return base.Unix(), nil })
+		require.NoError(t, err)
+		return content
+	}
+	first := build(nil, "BTCOLD")
+	second := build(first, "BTCNEW")
+	for _, content := range []*marketfetch.FetchPlanContent{first, second} {
+		raw, err := json.Marshal(content)
+		require.NoError(t, err)
+		record, err := db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
+		require.NoError(t, err)
+		require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", ""))
+	}
+	backfiller := &Backfiller{Plans: db.FetchPlans(), BaseCtx: ctx, Now: func() time.Time { return base.Add(time.Hour) }}
+
+	// 更新时间是“现在”：此前的历史数据拒绝补采。
+	_, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", base.Add(-time.Minute))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "without an effective boundary")
+	// 变更之后的数据取新映射。
+	plan, err := backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, "BTCNEW", plan.ExchangeSymbol("BTC-USDT"))
+}

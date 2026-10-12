@@ -329,12 +329,23 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		patched.SymbolExceptions[subjectID] = symbol
 		return &patched
 	}
-	var fallback *marketfetch.Plan
-	for i := len(records) - 1; i >= 0; i-- {
+	contents := make([]*marketfetch.FetchPlanContent, len(records))
+	for i := range records {
 		content, err := marketfetch.DecodeFetchPlanContent(records[i].Plan)
 		if err != nil {
 			return nil, err
 		}
+		contents[i] = content
+		// 纯符号映射变更没有数据集生效边界：不知道旧映射适用到何时，变更之前的历史数据拒绝补采，避免取错交易对。
+		for _, name := range content.SortedFunctionNames() {
+			if content.SymbolChangedWithoutBoundary(content.Functions[name], key, subjectID) && at.Before(records[i].UpdatedAt) {
+				return nil, fmt.Errorf("symbol mapping of %s changed at %s without an effective boundary; backfill of earlier data is refused", subjectID, records[i].UpdatedAt.UTC().Format(time.RFC3339))
+			}
+		}
+	}
+	var fallback *marketfetch.Plan
+	for i := len(records) - 1; i >= 0; i-- {
+		content := contents[i]
 		for _, name := range content.SortedFunctionNames() {
 			function := content.Functions[name]
 			for _, plan := range []*marketfetch.Plan{content.FinalPlan(function), content.TransitionalPlan(function)} {
