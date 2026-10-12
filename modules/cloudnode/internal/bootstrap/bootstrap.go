@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/publishlease"
@@ -122,6 +123,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	opts = append(opts, cloudnoderpc.WithCredentialResolver(credentialResolver))
+	// 日志服务（CLS）自动开通与下发：创建或更新采集函数时补齐上报环境，失败不阻断。
+	opts = append(opts, cloudnoderpc.WithCLSEnvironment(clsprovision.New(cfg.CLS, nil)))
 	svc := cloudnoderpc.New(dbm, opts...)
 	nodeBatchCtx, nodeBatchCancel := context.WithCancel(ctx)
 	runtime.NodeBatchCancel = nodeBatchCancel

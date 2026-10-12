@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -20,8 +21,10 @@ type Config struct {
 	Database      DatabaseConfig           `yaml:"database"`
 	NodeBatch     NodeBatchConfig          `yaml:"node_batch"`
 	TencentSCF    TencentSCFConfig         `yaml:"tencent_scf"`
-	Debug         DebugConfig              `yaml:"debug"`
-	Health        HealthConfig             `yaml:"health"`
+	// CLS 控制日志服务的自动开通与函数环境下发：默认开启，初始化后创建的 SCF 采集函数自动带上日志上报配置。
+	CLS    clsprovision.Config `yaml:"cls"`
+	Debug  DebugConfig         `yaml:"debug"`
+	Health HealthConfig        `yaml:"health"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -97,6 +100,9 @@ func (c *Config) Validate() error {
 	if c.NodeBatch.PollInterval < 100*time.Millisecond || c.NodeBatch.PollInterval > 10*time.Second {
 		return fmt.Errorf("node_batch.poll_interval must be between 100ms and 10s")
 	}
+	if err := c.CLS.Validate(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -133,6 +139,7 @@ func Default() *Config {
 			DefaultNamespace: "default",
 			DefaultRuntime:   "Go1",
 		},
+		CLS:   clsprovision.DefaultConfig(),
 		Debug: DebugConfig{},
 		Health: HealthConfig{
 			Addr: ":11411",

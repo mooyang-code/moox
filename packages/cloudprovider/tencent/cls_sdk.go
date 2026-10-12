@@ -177,6 +177,71 @@ func (a *CLSSDKAPI) CreateIndex(ctx context.Context, topicID string) (string, er
 	return stringValue(rsp.Response.RequestId), nil
 }
 
+// EnsureIndexFields 读取主题当前索引，补上缺失的键值索引字段后整体回写；已有的全文、键值、元字段索引原样保留。
+// CLS 的 ModifyIndex 要求 Tag 与 DynamicIndex 非空，所以主题没有元字段索引时补一个占位字段（不影响检索）。
+func (a *CLSSDKAPI) EnsureIndexFields(ctx context.Context, topicID string, fields []CLSIndexField) (bool, string, error) {
+	describe := cls.NewDescribeIndexRequest()
+	describe.TopicId = common.StringPtr(topicID)
+	current, err := a.client.DescribeIndexWithContext(ctx, describe)
+	if err != nil {
+		return false, "", err
+	}
+	if current == nil || current.Response == nil || current.Response.Rule == nil {
+		return false, "", fmt.Errorf("CLS DescribeIndex returned an empty response")
+	}
+	rule := current.Response.Rule
+	if rule.KeyValue == nil {
+		rule.KeyValue = &cls.RuleKeyValueInfo{CaseSensitive: common.BoolPtr(false)}
+	}
+	have := make(map[string]struct{}, len(rule.KeyValue.KeyValues))
+	for _, item := range rule.KeyValue.KeyValues {
+		if item != nil && item.Key != nil {
+			have[*item.Key] = struct{}{}
+		}
+	}
+	changed := false
+	for _, field := range fields {
+		if _, ok := have[field.Key]; ok {
+			continue
+		}
+		valueType := "text"
+		if field.Numeric {
+			valueType = "long"
+		}
+		rule.KeyValue.KeyValues = append(rule.KeyValue.KeyValues, &cls.KeyValueInfo{
+			Key:   common.StringPtr(field.Key),
+			Value: &cls.ValueInfo{Type: common.StringPtr(valueType), Tokenizer: common.StringPtr(""), SqlFlag: common.BoolPtr(true), ContainZH: common.BoolPtr(false)},
+		})
+		changed = true
+	}
+	if !changed {
+		return false, "", nil
+	}
+	if rule.Tag == nil || len(rule.Tag.KeyValues) == 0 {
+		rule.Tag = &cls.RuleTagInfo{CaseSensitive: common.BoolPtr(false), KeyValues: []*cls.KeyValueInfo{{
+			Key:   common.StringPtr("moox_unused"),
+			Value: &cls.ValueInfo{Type: common.StringPtr("text"), Tokenizer: common.StringPtr(""), SqlFlag: common.BoolPtr(true), ContainZH: common.BoolPtr(false)},
+		}}}
+	}
+	if rule.DynamicIndex == nil {
+		rule.DynamicIndex = &cls.DynamicIndex{Status: common.BoolPtr(false)}
+	}
+	modify := cls.NewModifyIndexRequest()
+	modify.TopicId = common.StringPtr(topicID)
+	modify.Status = common.BoolPtr(true)
+	modify.Rule = rule
+	modify.IncludeInternalFields = current.Response.IncludeInternalFields
+	modify.MetadataFlag = current.Response.MetadataFlag
+	rsp, err := a.client.ModifyIndexWithContext(ctx, modify)
+	if err != nil {
+		return false, "", err
+	}
+	if rsp == nil || rsp.Response == nil {
+		return false, "", fmt.Errorf("CLS ModifyIndex returned an empty response")
+	}
+	return true, stringValue(rsp.Response.RequestId), nil
+}
+
 func stringValue(value *string) string {
 	if value == nil {
 		return ""

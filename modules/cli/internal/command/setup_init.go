@@ -7,15 +7,18 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
 
@@ -60,6 +63,7 @@ type setupInitSummary struct {
 	BusinessSpaceIDs []string                      `json:"business_space_ids"`
 	Admin            setupclient.ApplyResult       `json:"admin"`
 	CloudAccounts    *setupCloudAccountSummary     `json:"cloud_accounts,omitempty"`
+	CLS              *setupCLSSummary              `json:"cls,omitempty"`
 	AdminState       string                        `json:"admin_state"`
 	LoginAPI         string                        `json:"login_api"`
 	Metadata         setupInitMetadataCounts       `json:"metadata"`
@@ -145,6 +149,12 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
+	// 日志服务（CLS）开箱即用：幂等开通服务、日志集、主题与采集日志字段索引。它只影响排障可观测性，
+	// 失败不阻断初始化，结果记入摘要，修复后重跑 init 即可。
+	cls, err := deps.provisionCLS(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
 	login, err := deps.login(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
@@ -205,7 +215,7 @@ func runSetupInit(
 	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-		Admin: admin, CloudAccounts: cloudAccounts, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
+		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},
@@ -215,6 +225,56 @@ func runSetupInit(
 		},
 		Factors: factorSummary, SCFRoutes: scfRoutes,
 	}, nil
+}
+
+type setupCLSSummary struct {
+	Enabled            bool   `json:"enabled"`
+	Status             string `json:"status"`
+	Region             string `json:"region,omitempty"`
+	LogsetID           string `json:"logset_id,omitempty"`
+	TopicID            string `json:"topic_id,omitempty"`
+	ServiceOpened      bool   `json:"service_opened,omitempty"`
+	LogsetCreated      bool   `json:"logset_created,omitempty"`
+	TopicCreated       bool   `json:"topic_created,omitempty"`
+	IndexFieldsChanged bool   `json:"index_fields_changed,omitempty"`
+	Warning            string `json:"warning,omitempty"`
+}
+
+// defaultSetupProvisionCLS 用已登记的腾讯云账号幂等开通 CLS。账号凭证由 Admin 持有，这里只取用不落盘。
+// SCF 采集未启用时不做任何事；开通失败返回 status=failed 与脱敏的原因，不中断初始化。
+func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupCLSSummary, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("cls: setup configuration is missing")
+	}
+	if !snapshot.Manifest.SCFFetcher.Enabled {
+		return nil, nil
+	}
+	gateway, err := openCommandGateway(ctx, "", snapshot)
+	if err != nil {
+		return &setupCLSSummary{Enabled: true, Status: "failed", Warning: "open gateway failed"}, nil
+	}
+	defer gateway.Close()
+	client := &adminclient.Client{Gateway: gateway}
+	return provisionSetupCLS(ctx, client, defaultCLSFactory, snapshot.Manifest.SCFFetcher.CloudAccount.AccountID), nil
+}
+
+func defaultCLSFactory(secretID, secretKey string) (tencent.CLSAPI, error) {
+	return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{SecretID: secretID, SecretKey: secretKey, Region: clsprepare.Region, Endpoint: "cls.tencentcloudapi.com"})
+}
+
+func provisionSetupCLS(ctx context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, accountID string) *setupCLSSummary {
+	provisionCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	result, err := clsprepare.Provision(provisionCtx, source, factory, accountID)
+	if err != nil {
+		// 错误文本已由 clsprepare 脱敏，只带操作名。
+		return &setupCLSSummary{Enabled: true, Status: "failed", Region: clsprepare.Region, Warning: err.Error()}
+	}
+	return &setupCLSSummary{
+		Enabled: true, Status: "ready", Region: result.Region, LogsetID: result.LogsetID, TopicID: result.TopicID,
+		ServiceOpened: result.ServiceOpened, LogsetCreated: result.LogsetCreated, TopicCreated: result.TopicCreated,
+		IndexFieldsChanged: result.IndexFieldsChanged,
+	}
 }
 
 // defaultSetupRegisterCloudAccounts makes the single declarative SCF account

@@ -15,6 +15,14 @@ type CLSAPI interface {
 	FindTopic(context.Context, string, string) (CLSTopic, bool, error)
 	CreateTopic(context.Context, CLSCreateTopicOptions) (CLSTopic, string, error)
 	CreateIndex(context.Context, string) (string, error)
+	// EnsureIndexFields 幂等地把键值索引字段补齐（保留主题上已有的全部索引配置），返回是否有改动与请求 ID。
+	EnsureIndexFields(ctx context.Context, topicID string, fields []CLSIndexField) (bool, string, error)
+}
+
+// CLSIndexField 是需要建立键值索引的日志字段；Numeric 为 true 时按 long 建索引（可做数值统计），否则按 text。
+type CLSIndexField struct {
+	Key     string
+	Numeric bool
 }
 
 type CLSLogset struct {
@@ -41,16 +49,20 @@ type CLSBootstrapOptions struct {
 	TopicName     string
 	RetentionDays int64
 	Partitions    int64
+	// IndexFields 非空时，主题就绪后补齐这些字段的键值索引，使日志可以按字段检索与 SQL 统计。
+	IndexFields []CLSIndexField
 }
 
 type CLSBootstrapResult struct {
-	ServiceOpened bool     `json:"service_opened"`
-	LogsetCreated bool     `json:"logset_created"`
-	TopicCreated  bool     `json:"topic_created"`
-	IndexCreated  bool     `json:"index_created"`
-	LogsetID      string   `json:"logset_id"`
-	TopicID       string   `json:"topic_id"`
-	RequestIDs    []string `json:"request_ids,omitempty"`
+	ServiceOpened bool `json:"service_opened"`
+	LogsetCreated bool `json:"logset_created"`
+	TopicCreated  bool `json:"topic_created"`
+	IndexCreated  bool `json:"index_created"`
+	// IndexFieldsChanged 表示这次补齐了键值索引字段。
+	IndexFieldsChanged bool     `json:"index_fields_changed"`
+	LogsetID           string   `json:"logset_id"`
+	TopicID            string   `json:"topic_id"`
+	RequestIDs         []string `json:"request_ids,omitempty"`
 }
 
 // ResolveExistingCLS returns fixed CLS resources without creating or changing them.
@@ -168,6 +180,14 @@ func BootstrapCLS(ctx context.Context, api CLSAPI, opts CLSBootstrapOptions) (CL
 			return result, fmt.Errorf("create CLS index: %w", err)
 		}
 		result.IndexCreated = true
+		appendRequestID(&result, requestID)
+	}
+	if len(opts.IndexFields) > 0 {
+		changed, requestID, err := api.EnsureIndexFields(ctx, topic.ID, opts.IndexFields)
+		if err != nil {
+			return result, fmt.Errorf("ensure CLS index fields: %w", err)
+		}
+		result.IndexFieldsChanged = changed
 		appendRequestID(&result, requestID)
 	}
 	return result, nil

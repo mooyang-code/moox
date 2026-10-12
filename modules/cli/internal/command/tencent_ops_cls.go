@@ -151,6 +151,7 @@ func runCLSBootstrap(cmd *cobra.Command, opts clsBootstrapOptions) error {
 	result, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
 		LogsetName: opts.LogsetName, TopicName: opts.TopicName,
 		RetentionDays: opts.RetentionDays, Partitions: opts.Partitions,
+		IndexFields: tencent.MarketFetchLogIndexFields,
 	})
 	if err != nil {
 		return err

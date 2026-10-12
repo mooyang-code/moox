@@ -3,11 +3,13 @@ package marketfetch
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/clsreporter"
 	"github.com/stretchr/testify/require"
 )
@@ -69,4 +71,36 @@ func TestFlushReportsIsBoundedAndNeverFails(t *testing.T) {
 	defer cancel()
 	handler.flushReports(expired)
 	require.Equal(t, 1, reporter.flushed)
+}
+
+// 上报的每个字段都必须在 CLS 主题的键值索引里，否则无法按字段检索；索引字段清单在 cloudprovider 里统一维护。
+func TestReportedFieldsAreAllInTheCLSIndex(t *testing.T) {
+	reporter := &recordingReporter{}
+	pipeline := &KlinePipeline{Reporter: reporter, SpaceID: "crypto", FunctionName: "fn"}
+	req := Request{RequestID: "r", DatasetID: "ds", Frequency: "1m", BatchKind: domain.BatchKindRealtime}
+	cause := errors.New("boom")
+	pipeline.reportItemFailure(req, failureResult(domain.CollectionItem{SubjectID: "S", Symbol: "SYM"}, domain.ItemOutcomeNetworkError, "network_error", cause), "binance", 3, time.Second, time.Now(), time.Now(), cause)
+	pipeline.reportBatch(req, 1, 1, time.Second, time.Second)
+	indexed := map[string]bool{}
+	for _, field := range tencent.MarketFetchLogIndexFields {
+		indexed[field.Key] = true
+	}
+	for _, entry := range reporter.entries {
+		for key := range entry.Fields {
+			require.True(t, indexed[key], "上报字段 %s 没有建键值索引", key)
+		}
+	}
+	// 索引里的数值字段必须能被解析为整数。
+	numeric := map[string]bool{}
+	for _, field := range tencent.MarketFetchLogIndexFields {
+		numeric[field.Key] = field.Numeric
+	}
+	for _, entry := range reporter.entries {
+		for key, value := range entry.Fields {
+			if numeric[key] {
+				_, err := strconv.ParseInt(value, 10, 64)
+				require.NoError(t, err, key)
+			}
+		}
+	}
 }

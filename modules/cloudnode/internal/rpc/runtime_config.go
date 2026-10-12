@@ -227,6 +227,8 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}
+	// 缺少日志上报配置的采集函数（例如日志服务开通之前创建的）在这次更新里补齐。
+	needsEnvironmentUpdate = s.applyCLSEnvironment(ctx, *account, node, environment) || needsEnvironmentUpdate
 	if environment["MOOX_MARKET_FETCH_BINDING_HASH"] != "" {
 		_, oldSubjects := environment["MOOX_MARKET_FETCH_SUBJECTS"]
 		_, oldSymbols := environment["MOOX_MARKET_FETCH_SYMBOLS_JSON"]

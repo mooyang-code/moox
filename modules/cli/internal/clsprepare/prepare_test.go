@@ -49,6 +49,10 @@ func (fakeCLS) FindTopic(context.Context, string, string) (tencent.CLSTopic, boo
 func (fakeCLS) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
 	panic("unexpected CreateTopic")
 }
+func (fakeCLS) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
+	return false, "", nil
+}
+
 func (fakeCLS) CreateIndex(context.Context, string) (string, error) {
 	panic("unexpected CreateIndex")
 }
@@ -71,6 +75,10 @@ func (f failingCLS) FindTopic(context.Context, string, string) (tencent.CLSTopic
 func (f failingCLS) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
 	panic("unexpected CreateTopic")
 }
+func (f failingCLS) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
+	return false, "", nil
+}
+
 func (f failingCLS) CreateIndex(context.Context, string) (string, error) {
 	panic("unexpected CreateIndex")
 }
@@ -281,4 +289,35 @@ func TestPrepareDoesNotReplaceCredentialsWhenBootstrapFails(t *testing.T) {
 	data, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
 	require.Equal(t, "preserve-me", string(data))
+}
+
+// 记录索引字段请求的 CLS 替身：验证开通时会补齐采集日志字段。
+type fieldRecordingCLS struct {
+	fakeCLS
+	fields *[]tencent.CLSIndexField
+}
+
+func (f fieldRecordingCLS) EnsureIndexFields(_ context.Context, _ string, fields []tencent.CLSIndexField) (bool, string, error) {
+	*f.fields = fields
+	return true, "request-fields", nil
+}
+
+func TestProvisionEnsuresIndexFieldsAndWritesNoCredentialFile(t *testing.T) {
+	source := testSource()
+	var got []tencent.CLSIndexField
+	result, err := Provision(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
+		return fieldRecordingCLS{fields: &got}, nil
+	}, "")
+	require.NoError(t, err)
+	require.Equal(t, "topic-1", result.TopicID)
+	require.True(t, result.IndexFieldsChanged)
+	require.Equal(t, tencent.MarketFetchLogIndexFields, got)
+}
+
+func TestProvisionHidesUpstreamErrorText(t *testing.T) {
+	_, err := Provision(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
+		return failingCLS{err: errors.New("SecretId=AKIDleak")}, nil
+	}, "")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "AKID")
 }

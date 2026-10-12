@@ -11,6 +11,15 @@ type fakeCLSAPI struct {
 	logset      CLSLogset
 	topic       CLSTopic
 	calls       []string
+	// fieldsChanged 控制 EnsureIndexFields 是否报告有改动；fields 记录收到的字段。
+	fieldsChanged bool
+	fields        []CLSIndexField
+}
+
+func (f *fakeCLSAPI) EnsureIndexFields(_ context.Context, topicID string, fields []CLSIndexField) (bool, string, error) {
+	f.calls = append(f.calls, "ensure-index-fields:"+topicID)
+	f.fields = fields
+	return f.fieldsChanged, "request-fields", nil
 }
 
 func (f *fakeCLSAPI) GetService(context.Context) (bool, error) {
@@ -143,5 +152,34 @@ func TestBootstrapCLSRejectsUnsafeResourceSettings(t *testing.T) {
 				t.Fatal("BootstrapCLS() error = nil")
 			}
 		})
+	}
+}
+
+func TestBootstrapCLSEnsuresIndexFieldsAfterTheTopicIsReady(t *testing.T) {
+	api := &fakeCLSAPI{serviceOpen: true, logset: CLSLogset{ID: "logset-1", Name: "moox"}, topic: CLSTopic{ID: "topic-1", LogsetID: "logset-1", Name: "moox-application", IndexEnabled: true}, fieldsChanged: true}
+	result, err := BootstrapCLS(context.Background(), api, CLSBootstrapOptions{
+		LogsetName: "moox", TopicName: "moox-application", RetentionDays: 2, Partitions: 1,
+		IndexFields: []CLSIndexField{{Key: "log_type"}, {Key: "fetch_ms", Numeric: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IndexFieldsChanged {
+		t.Fatal("index fields change should be reported")
+	}
+	if !strings.Contains(strings.Join(api.calls, ","), "ensure-index-fields:topic-1") {
+		t.Fatalf("index fields were not ensured: %v", api.calls)
+	}
+	if len(api.fields) != 2 || api.fields[0].Key != "log_type" || !api.fields[1].Numeric {
+		t.Fatalf("unexpected fields: %+v", api.fields)
+	}
+
+	// 没有声明字段时不触碰索引。
+	api.calls, api.fields = nil, nil
+	if _, err := BootstrapCLS(context.Background(), api, CLSBootstrapOptions{LogsetName: "moox", TopicName: "moox-application", RetentionDays: 2, Partitions: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(api.calls, ","), "ensure-index-fields") {
+		t.Fatalf("index must not be touched without declared fields: %v", api.calls)
 	}
 }

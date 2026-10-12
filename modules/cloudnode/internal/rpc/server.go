@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -17,6 +18,7 @@ import (
 type Service struct {
 	pb.UnimplementedCloudNodeMgr
 	catalog            *store.CatalogRepository
+	clsEnvironment     clsEnvironment
 	credentialResolver interface {
 		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
 	}
@@ -50,6 +52,16 @@ func WithModuleMetrics(metrics *report.ModuleMetrics) Option {
 
 func WithCollectorPublishLeaseValidator(validator CollectorPublishLeaseValidator) Option {
 	return func(s *Service) { s.publishLeaseValidator = validator }
+}
+
+// WithCLSEnvironment 让 CloudNode 在创建与更新 SCF 采集函数时自动补齐日志服务（CLS）上报环境。
+func WithCLSEnvironment(provisioner clsEnvironment) Option {
+	return func(s *Service) { s.clsEnvironment = provisioner }
+}
+
+// clsEnvironment 把 CLS 上报环境补进函数环境，返回是否有改动；实现保证失败时不阻断调用方。
+type clsEnvironment interface {
+	Apply(ctx context.Context, accountID string, credential clsprovision.Credential, environment map[string]string) bool
 }
 
 func WithCredentialResolver(resolver interface {

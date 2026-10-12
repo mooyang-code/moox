@@ -6,9 +6,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -563,4 +565,46 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 	} {
 		assert.NotContains(t, output.String(), secret)
 	}
+}
+
+func TestProvisionSetupCLSReportsReadyAndNeverBlocksInit(t *testing.T) {
+	ready := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return clsReadyAPI{}, nil }, "")
+	require.Equal(t, "ready", ready.Status)
+	require.Equal(t, "topic-1", ready.TopicID)
+	require.True(t, ready.IndexFieldsChanged)
+
+	failed := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return nil, errors.New("boom SecretKey=leak") }, "")
+	require.Equal(t, "failed", failed.Status)
+	require.NotContains(t, failed.Warning, "leak")
+}
+
+type clsAccountSource struct{}
+
+func (clsAccountSource) ListCloudAccounts(context.Context, string) ([]adminclient.CloudAccount, error) {
+	return []adminclient.CloudAccount{{AccountID: "a", Provider: "tencent", CredentialSecretID: "s"}}, nil
+}
+
+func (clsAccountSource) GetSecretValue(context.Context, string) (*adminclient.SecretMaterial, error) {
+	return &adminclient.SecretMaterial{Category: "cloud", Provider: "tencent", Status: "active", KeyID: "id", SecretValue: "key"}, nil
+}
+
+type clsReadyAPI struct{}
+
+func (clsReadyAPI) GetService(context.Context) (bool, error)    { return true, nil }
+func (clsReadyAPI) OpenService(context.Context) (string, error) { return "", nil }
+func (clsReadyAPI) FindLogset(context.Context, string) (tencent.CLSLogset, bool, error) {
+	return tencent.CLSLogset{ID: "logset-1"}, true, nil
+}
+func (clsReadyAPI) CreateLogset(context.Context, string) (tencent.CLSLogset, string, error) {
+	return tencent.CLSLogset{}, "", nil
+}
+func (clsReadyAPI) FindTopic(context.Context, string, string) (tencent.CLSTopic, bool, error) {
+	return tencent.CLSTopic{ID: "topic-1", LogsetID: "logset-1", IndexEnabled: true}, true, nil
+}
+func (clsReadyAPI) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
+	return tencent.CLSTopic{}, "", nil
+}
+func (clsReadyAPI) CreateIndex(context.Context, string) (string, error) { return "", nil }
+func (clsReadyAPI) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
+	return true, "r", nil
 }

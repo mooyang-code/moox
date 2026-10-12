@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -761,6 +762,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	environment["MOOX_CREATE_RESERVATION_ID"] = reservationID
+	s.applyCLSEnvironment(ctx, *account, node, environment)
 	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
 		return fmt.Errorf("scf function %s %w", ref.FunctionName, err)
 	}
@@ -1272,6 +1274,19 @@ func (s *Service) scfClient(ctx context.Context, account store.CloudAccount) (sc
 		factory = defaultSCFClientFactory
 	}
 	return factory(credential), nil
+}
+
+// applyCLSEnvironment 在采集函数的环境里补齐日志服务（CLS）上报配置，返回是否有改动。
+// 首次使用时幂等开通 CLS；开通或补齐失败只记日志，不影响函数创建与更新。
+func (s *Service) applyCLSEnvironment(ctx context.Context, account store.CloudAccount, node *store.CloudNode, environment map[string]string) bool {
+	if s.clsEnvironment == nil || !isMarketFetchNode(node) {
+		return false
+	}
+	credential, err := s.resolveCloudCredential(ctx, account)
+	if err != nil {
+		return false
+	}
+	return s.clsEnvironment.Apply(ctx, account.AccountID, clsprovision.Credential{SecretID: credential.SecretID, SecretKey: credential.SecretKey}, environment)
 }
 
 func (s *Service) resolveCloudCredential(ctx context.Context, account store.CloudAccount) (cloudcredential.TencentCredential, error) {

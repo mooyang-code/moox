@@ -657,6 +657,10 @@ func (collectorCLSAPI) FindTopic(context.Context, string, string) (tencent.CLSTo
 func (collectorCLSAPI) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
 	panic("unexpected CreateTopic")
 }
+func (collectorCLSAPI) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
+	return false, "", nil
+}
+
 func (collectorCLSAPI) CreateIndex(context.Context, string) (string, error) {
 	panic("unexpected CreateIndex")
 }

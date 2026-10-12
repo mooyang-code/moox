@@ -24,3 +24,16 @@ tencent_scf:
 
 health:
   addr: ":11411"
+
+# 日志服务（CLS）自动开通与下发：创建或更新 SCF 采集函数时，幂等开通 CLS（服务、日志集、主题、采集日志字段索引），
+# 并把上报所需的环境变量补进函数环境；开通失败只记日志，不影响函数创建。函数环境里已声明 MOOX_CLS_ENABLED 的保持不动。
+cls:
+  enabled: true
+  region: ap-guangzhou
+  api_endpoint: cls.tencentcloudapi.com
+  ingest_endpoint: ap-guangzhou.cls.tencentcs.com
+  logset_name: moox
+  topic_name: moox-application
+  retention_days: 2
+  partitions: 1
+  timeout_ms: 3000
