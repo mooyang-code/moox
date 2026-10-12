@@ -1,15 +1,14 @@
 # SCF E2E Debug
 
-Use this reference when a MooX collector cloud function does not publish, does not run on its Timer, or does not write K-line data to Storage.
+Use this reference when a MooX collector cloud function does not run on its Timer, or does not write K-line data to Storage.
 
 ## How Realtime Collection Works
 
-1. Collector plans one Timer batch per period and function shard (`t_collector_timer_period_batches`).
-2. CloudNode writes each function's shard assignment into its SCF environment and keeps its Timer trigger enabled.
-3. At each Timer tick the function calls `ClaimTimerBatch` through Access (`11004`) as the `scf-collector` external identity (`MOOX_ACCESS_ADDRESS`, `MOOX_ACCESS_ID`, `MOOX_CALLER`, `MOOX_CALLER_KEY_ID`, `MOOX_CALLER_KEY` in the function environment; the address and instance identity are derived from the placement manifest) and receives its batch.
-4. It fetches the providers concurrently and writes through the same Access instance: `EnsureDatasetPeriod`, `CommitTimeSeriesBatch`, `RecordDatasetPeriodFailures`.
-5. It publishes `MarketFetchBatchCompleted` to EventBus; the Collector completion consumer updates the batch and schedules retries.
-6. At the period deadline the Storage DataNode marks the period `complete` or `degraded` and emits `CollectorPeriodCompleted`.
+1. Collector (one reconciler per space) computes the fetch plan, registers series snapshots in Storage and writes the plan into each function's SCF environment (`MOOX_*` variables). Functions keep their Timer trigger enabled.
+2. At each Timer tick the function derives the (dataset, subject) work from the plan and the event time, fetches the providers concurrently, and writes through Access (`11004`) as the `scf-collector` external identity: `CommitTimeSeriesBatch` (and `UpsertFields` for backfill rows). The Access address and instance identity are derived from the placement manifest.
+3. The function never talks to Collector or EventBus. Failed items are reported to CLS (`market_fetch_item_failure`, `market_fetch_batch`); they are not retried online.
+4. Gaps are found by `moox-cli collector kline check` and repaired by `kline backfill` or the Collector's automatic backfill.
+5. At the period deadline the Storage DataNode marks the period `complete` or `degraded` and emits `CollectorPeriodCompleted`.
 
 ## Inputs
 
@@ -18,36 +17,31 @@ Collect these before acting:
 - Function name, namespace, region, Timer cron, and the CloudNode node ID.
 - Cloud account ID, COS bucket/region, package ID and version.
 - Space, collection task ID, result Dataset/View, frequency and the failing period time.
-- CLS topic ID and a narrow time range around the failed Timer tick.
+- CLS topic ID and a narrow time range around the failed Timer tick (CLS timestamps are in milliseconds).
 
-Never paste SecretKey, service auth secret, SSH password, signed headers, or EventBus tokens into notes or final answers.
+Never paste SecretKey, service auth secret, SSH password or signed headers into notes or final answers.
 
 ## Fast Triage
 
 1. No package: local build or COS upload failed.
 2. No function or Timer disabled: CloudNode node batch or Tencent SCF API failed.
-3. Timer fires but claims nothing: no planned batch for the shard, or the gateway runtime target/credentials are wrong.
-4. Claim succeeds but no Storage rows: provider fetch or access write failed.
-5. Rows written but the period stays waiting: completion not published or not consumed; check `MOOX_MARKET_FETCH` and the Collector completion consumer.
+3. Timer fires but nothing is fetched: the plan in the function environment has no entry for this period (check `moox-cli collector fetch-plan`), or the event time is past the lateness deadline.
+4. Fetch succeeds but no Storage rows: Access write failed (principal/method allowlist, wrong Storage application key).
+5. Rows written but the View is empty: inspect the View consumer and `storage-view` logs.
 6. Preserve `git status --short` before touching code.
 
 ## Build And Package
 
 ```bash
-SCF_SPACE_ID=crypto scripts/build/build-collector-scf-package.sh --eventbus-ca-file /path/to/eventbus-ca.pem
-unzip -l release/scf/collector-scf-crypto-<version>.zip
+moox-cli collector function upload --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
 ```
 
-Expected contents: `main`, `sources/market/*.yaml`, `certs/eventbus-ca.pem`, and for `stockcn` also `markets/stockcn/{calendar,route}.yaml`. The package carries no credentials; runtime addresses and secrets come from the function environment written by CloudNode.
+The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector and CloudNode. Uploading a new version under the same package name makes Collector roll the functions forward (it resolves the latest package every 30 seconds).
 
-## Publish And Inspect Functions
-
-Prefer the CLI, which reads `moox.toml` and drives CloudNode:
+## Inspect Functions
 
 ```bash
-bin/moox-cli collector function package ...
-bin/moox-cli collector function publish ...
-bin/moox-cli collector function status ...
+bin/moox-cli collector fetch-plan --file ./moox.toml --space-id crypto
 bin/moox-cli collector function timer-inventory \
   --control-url http://127.0.0.1:11002 --file ./moox.toml \
   --space-id crypto --cloud-account-id <account-id> --namespace <namespace> --region <region>
@@ -57,42 +51,35 @@ bin/moox-cli collector function timer-inventory \
 
 ## Control Plane Checks
 
-Useful log filters on the control host:
-
 ```bash
-rg -n "ClaimTimerBatch|timer_period|market_fetch|completion|EnsureDatasetPeriod|CommitTimeSeriesBatch" /data/moox/prod/logs/collector/trpc.log
-rg -n "SubmitUpdateNodeRuntimeConfigs|EnsureTimerTrigger|UpdateFunctionConfiguration" /data/moox/prod/logs/cloudnode/trpc.log
+rg -n "fetch plan|backfill|readback" /data/moox/run/logs/collector.log
+rg -n "SubmitUpdateNodeRuntimeConfigs|EnsureTimerTrigger|UpdateFunctionConfiguration" /data/moox/run/logs/cloudnode.log
 ```
 
 Check these boundaries:
 
 - The node row has the expected function name, region, namespace, package and Timer state.
-- The function environment carries the current assignment and binding hash.
-- `t_collector_timer_period_batches` has a row for the shard and period, and it gets claimed.
-- The Collector completion durable on `MOOX_MARKET_FETCH` is advancing.
+- The applied plan (`fetch-plan`) lists the dataset hashes you expect and no `last_error`.
 
 ## CLS Log Investigation
 
-Use the `cls-query` skill when available. Query one Timer tick first, then widen. Look for the claim result, per-subject provider results, Storage commit acknowledgements, and the completion publish.
+Use the `cls-query` skill when available. Query one Timer tick first, then widen.
 
 | Observation | Boundary |
 | --- | --- |
 | No invocation at the expected tick | Timer disabled, wrong cron, or function not deployed |
-| Claim returns nothing | no planned batch, wrong group/binding hash, or runtime gateway auth |
-| Provider errors for most subjects | egress IP blocked or provider down; run `moox-cli collector probe-egress` |
-| Commit rejected | Storage period snapshot mismatch or access principal/method allowlist |
-| Commit ok but no completion | EventBus TLS/credential (`market-fetch-publisher`) or CA mismatch |
+| Provider errors for most subjects | egress IP blocked or provider down; run `moox-cli collector function probe-egress` |
+| Commit rejected | series snapshot mismatch (plan in the environment is stale) or Access principal/method allowlist |
 
 ## K-line Data Verification
 
 1. Rows use the exchange bar time, never local time; only closed bars are written.
-2. The result View for the task (`view_<task>_kline_<freq>`) shows the subject at the expected `data_time`.
-3. If raw rows exist but the View is empty, inspect the View's consumer, rebuild state and `storage-view` logs.
+2. `moox-cli collector kline check --space-id <space> --dataset-id <dataset> --from <RFC3339> --to <RFC3339>` lists the missing bars.
+3. The result View for the task (`view_<task>_kline_<freq>`) shows the subject at the expected `data_time`.
 
 ## Common Root Causes
 
 - Timer disabled or cron drift after a manual change in the Tencent console.
-- Function environment not updated after a task or subject change (stale binding hash).
-- access target or principal missing for the function's region.
-- EventBus CA or `market-fetch-publisher` token rotated without republishing the functions.
+- Function environment not updated after a task or subject change (stale plan).
+- Access target or principal missing for the function's region.
 - Provider throttling or egress IP blocked for the region.

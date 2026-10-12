@@ -21,8 +21,8 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// MarketFetchBatchCompleted is the only event emitted by a short-lived
-// market-fetch invocation. It contains storage-acknowledged item outcomes.
+// MarketFetchBatchCompleted 是一次行情函数调用的批次结果（进程内结构，不再作为事件发布），
+// 包含已被 Storage 确认的逐项结果。
 type MarketFetchBatchCompleted struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

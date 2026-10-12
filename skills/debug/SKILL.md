@@ -28,13 +28,13 @@ Use this skill for MooX production-like debugging that crosses local code, remot
 
 Use this order unless evidence points elsewhere:
 
-1. Local build: the SCF package contains `main`, `sources/`, the EventBus CA and (for stockcn) market assets.
+1. Local build: the SCF package contains `main`, `sources/` and (for stockcn) market assets.
 2. Package upload: COS object exists and region/bucket/key match the publish request.
 3. SCF function: name, namespace, region, runtime, handler and environment match the CloudNode node.
 4. Timer: the trigger is enabled with the expected cron (`collector function timer-inventory`).
-5. Claim: the function claims its Timer batch through `ClaimTimerBatch`.
+5. Plan: the function environment carries the current fetch plan (`collector fetch-plan`).
 6. Execution: CLS logs show per-subject provider results.
-7. Storage: `EnsureDatasetPeriod`/`CommitTimeSeriesBatch` succeed through access, and the function publishes `MarketFetchBatchCompleted`.
+7. Storage: `CommitTimeSeriesBatch` succeeds through access.
 8. Result: rows appear in the task's result View for the space, subject and frequency.
 
 ## Evidence To Preserve
@@ -44,7 +44,7 @@ Use this order unless evidence points elsewhere:
 - COS bucket, region, object key, and package version.
 - SCF function name, namespace, region, runtime, handler, Timer cron and environment keys (not values).
 - CLS topic ID, query time range, request ID, batch ID and key log lines.
-- Collector logs around `ClaimTimerBatch`, completion handling and retries.
+- Collector logs around plan reconciliation and backfill.
 - Storage query parameters and result counts, not full secrets or large payloads.
 
 ## Common Mistakes
