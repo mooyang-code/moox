@@ -1473,6 +1473,15 @@ func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error
 	// persisted, but not the provider request or the task's series scope.
 	existingParams.OutputFields = nil
 	desiredParams.OutputFields = nil
+	// 实时采集的归属与交接边界（fetch_mode、每函数标的数、允许迟到、旧链路交接的起止周期）是可变的运维属性：
+	// 新旧链路交接与回退就是通过更新它们完成的，不属于任务的序列范围。
+	for _, params := range []*domain.CollectParams{existingParams, desiredParams} {
+		params.FetchMode = ""
+		params.SymbolsPerFunction = 0
+		params.AllowedLatenessSeconds = 0
+		params.InvokeUntilPeriod = ""
+		params.InvokeFromPeriod = ""
+	}
 	existingCanonical, err := existingParams.CanonicalJSON()
 	if err != nil {
 		return fmt.Errorf("canonicalize existing task collect_params: %w", err)
