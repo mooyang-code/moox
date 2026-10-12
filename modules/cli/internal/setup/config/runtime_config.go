@@ -97,6 +97,10 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
+	rendered, err = renderSCFPlanBlocks(snapshot.Manifest, rendered)
+	if err != nil {
+		return nil, err
+	}
 	retention := snapshot.Manifest.CollectorRetention
 	rendered, err = replaceYAMLMapping(rendered, "collector_retention", orderedMapping(
 		mappingField{"maintenance_interval", retention.MaintenanceInterval},
@@ -125,6 +129,57 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 		return replaceYAMLMapping(rendered, "stockcn", stockFields)
 	}
 	return rendered, nil
+}
+
+// renderSCFPlanBlocks 渲染 Timer 采集计划的 Collector 配置：scf_regions（地域网络）、scf_markets（空间与市场的运行地域）、
+// scf_plan（云账号、代码包名称、命名空间、各地域 Access 私网入口）。未启用时三块一并移除，保证关闭后配置不残留。
+// 代码包只写名称：Collector 总是使用该名称的最新可用版本，上传新版本后不需要改配置或重启。
+func renderSCFPlanBlocks(manifest Manifest, rendered []byte) ([]byte, error) {
+	plan := manifest.SCFPlan
+	var err error
+	if !plan.Enabled {
+		for _, key := range []string{"scf_regions", "scf_markets", "scf_plan"} {
+			if rendered, err = replaceYAMLMapping(rendered, key, nil); err != nil {
+				return nil, err
+			}
+		}
+		return rendered, nil
+	}
+	regions := map[string]map[string]string{}
+	access := map[string]map[string]string{}
+	for _, region := range manifest.SCFPlanRegionNames() {
+		network := plan.Regions[region]
+		regions[region] = map[string]string{"vpc_id": network.VPCID, "subnet_id": network.SubnetID}
+		address, id, accessErr := manifest.SCFPlanAccess(region)
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		access[region] = map[string]string{"access_address": address, "access_id": id}
+	}
+	markets := map[string]map[string][]string{}
+	spaces := map[string]map[string]any{}
+	for _, space := range plan.Spaces {
+		markets[space.SpaceID] = space.Markets
+		override := map[string]any{"package_name": space.PackageName, "namespace": space.Namespace}
+		if space.SymbolsPerFunction > 0 {
+			override["symbols_per_function"] = space.SymbolsPerFunction
+		}
+		spaces[space.SpaceID] = override
+	}
+	account := manifest.SCFCloudAccount()
+	if rendered, err = replaceYAMLMapping(rendered, "scf_regions", valueNode(regions)); err != nil {
+		return nil, err
+	}
+	if rendered, err = replaceYAMLMapping(rendered, "scf_markets", valueNode(markets)); err != nil {
+		return nil, err
+	}
+	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(
+		mappingField{"cloud_account_id", account.AccountID},
+		mappingField{"memory_mb", plan.MemoryMB},
+		mappingField{"symbols_per_function", plan.SymbolsPerFunction},
+		mappingField{"access_routes", access},
+		mappingField{"spaces", spaces},
+	))
 }
 
 // WriteRenderedRuntimeConfig atomically writes already-rendered YAML.

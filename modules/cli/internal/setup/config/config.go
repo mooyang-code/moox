@@ -805,6 +805,7 @@ type Manifest struct {
 	Notification       Notification              `toml:"notification"`
 	Factors            FactorSetup               `toml:"factors"`
 	SCFFetcher         SCFFetcher                `toml:"scf_fetcher"`
+	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
 	CompileHostRef     CompileHostReference      `toml:"compile_host"`
 }
@@ -1123,7 +1124,10 @@ func validate(manifest *Manifest) error {
 	if err := validateEgressProxy(&manifest.EgressProxy); err != nil {
 		return err
 	}
-	return validatePlacements(manifest)
+	if err := validatePlacements(manifest); err != nil {
+		return err
+	}
+	return validateSCFPlan(manifest)
 }
 
 func validatePaths(paths *Paths) error {

@@ -92,6 +92,34 @@ func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType st
 	return c.listMarketFetcherNodes(ctx, spaceID, triggerType, true)
 }
 
+// LatestPackage 返回指定名称的最新可用代码包 ID（名称精确匹配，按创建先后取最新）。
+// 采集计划函数按包名取代码：上传新版本后，对账器自动把落后的函数升级到它，不需要改配置或重启。
+func (c *Client) LatestPackage(ctx context.Context, spaceID, name string) (string, error) {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("space_id and package name are required")
+	}
+	status := cloudnodepb.PackageStatus_PACKAGE_STATUS_AVAILABLE
+	for page := uint32(1); ; page++ {
+		request := &cloudnodepb.GetPackageListReq{PackageName: name, BizType: "market_fetcher", Status: &status, Page: &commonpb.Page{Page: page, Size: listMarketFetchersPageSize}}
+		var rsp cloudnodepb.GetPackageListRsp
+		if err := c.invoke(ctx, spaceID, "trpc.moox.cloudnode.CloudNodeMgr", "GetPackageList", request, &rsp, false); err != nil {
+			return "", err
+		}
+		if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
+			return "", fmt.Errorf("list packages: %s", rsp.GetRetInfo().GetMsg())
+		}
+		// 服务端按创建先后倒序返回，名称是模糊匹配：取第一个名称完全相同的。
+		for _, item := range rsp.GetItems() {
+			if item != nil && item.GetPackageName() == name && item.GetStatus() == cloudnodepb.PackageStatus_PACKAGE_STATUS_AVAILABLE {
+				return item.GetPackageId(), nil
+			}
+		}
+		if rsp.GetPage() == nil || !rsp.GetPage().GetHasMore() {
+			return "", fmt.Errorf("no available code package named %q; upload one with `moox-cli collector function upload`", name)
+		}
+	}
+}
+
 // ListUnreadyMarketFetchers 返回目录中存在但尚未部署完成的采集函数节点（创建预留）。
 // 创建失败后预留会一直留在目录里，调用方据此识别并清理，才能重新创建同名函数。
 func (c *Client) ListUnreadyMarketFetchers(ctx context.Context, spaceID, triggerType string) ([]Node, error) {

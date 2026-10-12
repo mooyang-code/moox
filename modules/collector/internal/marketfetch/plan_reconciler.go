@@ -50,6 +50,7 @@ type planStore interface {
 }
 
 type planCloud interface {
+	LatestPackage(context.Context, string, string) (string, error)
 	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
 	ListTimerMarketFetchersFresh(context.Context, string) ([]scfinvoker.Node, error)
 	ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
@@ -85,9 +86,12 @@ type ActivityLogger interface {
 // PlanDeploy 是创建与配置函数所需的部署参数。
 type PlanDeploy struct {
 	CloudAccountID string
-	PackageID      string
-	Namespace      string
-	MemoryMB       int
+	// PackageID 固定使用某个代码包；PackageName 非空时每轮解析该名称的最新可用代码包（优先于 PackageID），
+	// 上传新版本后函数自动升级，不需要改配置。
+	PackageID   string
+	PackageName string
+	Namespace   string
+	MemoryMB    int
 	// BaseEnvironment 是函数的非受管环境（空间、Storage 应用密钥、日志服务等）。
 	BaseEnvironment map[string]string
 	Networks        map[string]PlanNetwork
@@ -152,6 +156,10 @@ type PlanReconciler struct {
 	pending      []pendingPlanJob
 	aux          auxJobs
 	lastVerified time.Time
+	// 按包名解析出的最新代码包及其解析时间（见 plan_package.go）。
+	packageMu       sync.Mutex
+	resolvedPackage string
+	resolvedAt      time.Time
 	// lastUpgradeCheck 是上一次检查函数代码包是否落后的时间。
 	lastUpgradeCheck time.Time
 	goneSeen         map[string]int
@@ -198,6 +206,9 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 		return errors.New("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
+	if err := r.refreshPackage(ctx); err != nil {
+		return r.fail("package", err)
+	}
 	r.refreshAux(ctx)
 	// 代码包升级与采集计划是否在进行无关：计划推进期间也要让落后的函数跟上配置的代码包。
 	if r.now().Sub(r.lastUpgradeCheck) >= planUpgradeCheckInterval {
@@ -418,7 +429,7 @@ func (r *PlanReconciler) validateContent(content *FetchPlanContent) error {
 			if err != nil {
 				return fmt.Errorf("function %s: %w", name, err)
 			}
-			merged := map[string]string{"MOOX_CODE_PACKAGE_ID": r.Deploy.PackageID, "MOOX_CREATE_RESERVATION_ID": "00000000-0000-0000-0000-000000000000"}
+			merged := map[string]string{"MOOX_CODE_PACKAGE_ID": r.packageID(), "MOOX_CREATE_RESERVATION_ID": "00000000-0000-0000-0000-000000000000"}
 			for key, value := range r.Deploy.BaseEnvironment {
 				merged[key] = value
 			}
@@ -903,13 +914,13 @@ func (r *PlanReconciler) upgradeLaggingFunctions(ctx context.Context) error {
 
 // upgradeCodeOf 升级给定函数名里代码包落后的函数。
 func (r *PlanReconciler) upgradeCodeOf(ctx context.Context, names []string, byName map[string]scfinvoker.Node) error {
-	if strings.TrimSpace(r.Deploy.PackageID) == "" {
+	if strings.TrimSpace(r.packageID()) == "" {
 		return nil
 	}
 	var stale []string
 	for _, name := range names {
 		node, ok := byName[name]
-		if ok && strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.Deploy.PackageID {
+		if ok && strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.packageID() {
 			stale = append(stale, name)
 		}
 	}
@@ -929,10 +940,10 @@ func (r *PlanReconciler) upgradeCodeOf(ctx context.Context, names []string, byNa
 	if err != nil {
 		return r.fail("publish_lease", err)
 	}
-	log.WarnContextf(ctx, "collector fetch plan upgrading function code space=%s package=%s functions=%d", r.SpaceID, r.Deploy.PackageID, len(stale))
+	log.WarnContextf(ctx, "collector fetch plan upgrading function code space=%s package=%s functions=%d", r.SpaceID, r.packageID(), len(stale))
 	for start := 0; start < len(stale); start += runtimeConfigBatchSize {
 		batch := stale[start:min(start+runtimeConfigBatchSize, len(stale))]
-		jobID, submitErr := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, batch, r.Deploy.PackageID, lease)
+		jobID, submitErr := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, batch, r.packageID(), lease)
 		if submitErr != nil {
 			return r.fail("cloudnode", submitErr)
 		}
@@ -978,7 +989,7 @@ func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *Fetc
 	reservationID := hex.EncodeToString(reservation[:16])
 	return &cloudnodepb.NodeCreateItem{
 		CloudAccountId: r.Deploy.CloudAccountID, NodeType: "scf-event", TriggerType: "timer", Runtime: "Go1", Handler: "main",
-		Namespace: r.Deploy.NamespaceFor(function.Name), Region: function.Region, PackageId: r.Deploy.PackageID, Environment: environment,
+		Namespace: r.Deploy.NamespaceFor(function.Name), Region: function.Region, PackageId: r.packageID(), Environment: environment,
 		Config: map[string]string{
 			"timeout": timeout, "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
 			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
@@ -1535,6 +1546,9 @@ const BackfillReservedConcurrency = 5
 // EnsureBackfillFunction 保证该市场的补采函数存在（与实时函数同一代码包，不带定时器），返回函数名。
 // 多个补采协程并发调用时串行执行，已确认存在的函数直接返回。
 func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType string) (string, error) {
+	if err := r.refreshPackage(ctx); err != nil {
+		return "", err
+	}
 	region, ok := r.BackfillRegion(marketType)
 	if !ok {
 		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
@@ -1558,7 +1572,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		if node.NodeID != name {
 			continue
 		}
-		if strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.Deploy.PackageID {
+		if strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.packageID() {
 			if err := r.upgradeBackfillCode(ctx, name); err != nil {
 				return "", err
 			}
@@ -1597,7 +1611,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	reservation := sha256.Sum256([]byte("backfill|" + r.SpaceID + "|" + name))
 	item := &cloudnodepb.NodeCreateItem{
 		CloudAccountId: r.Deploy.CloudAccountID, NodeType: "scf-event", TriggerType: "invoke", Runtime: "Go1", Handler: "main",
-		Namespace: r.Deploy.Namespace, Region: region, PackageId: r.Deploy.PackageID, Environment: environment,
+		Namespace: r.Deploy.Namespace, Region: region, PackageId: r.packageID(), Environment: environment,
 		Config: map[string]string{
 			"timeout": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds), "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
 			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
@@ -1639,7 +1653,7 @@ func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name string) e
 		return fmt.Errorf("publish lease: %w", err)
 	}
 	defer r.releaseBackfillLease(ctx)
-	jobID, err := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, []string{name}, r.Deploy.PackageID, lease)
+	jobID, err := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, []string{name}, r.packageID(), lease)
 	if err != nil {
 		return err
 	}

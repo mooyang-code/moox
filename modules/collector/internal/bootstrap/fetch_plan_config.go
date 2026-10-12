@@ -12,16 +12,22 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/packages/security"
 )
 
 // SCFPlanConfig 是定时触发采集的函数部署参数。网络（VPC、子网）按地域放在 scf_regions，
 // 每个空间与市场使用的地域放在 scf_markets，函数访问 Access 的私网入口沿用 scf_access_routes。
 type SCFPlanConfig struct {
 	CloudAccountID string `yaml:"cloud_account_id"`
-	PackageID      string `yaml:"package_id"`
-	Namespace      string `yaml:"namespace"`
-	MemoryMB       int    `yaml:"memory_mb"`
-	// BaseEnvironmentFile 是函数的非受管环境（JSON 对象：空间、Storage 应用密钥、日志服务等），含密钥，权限应为 0600。
+	// PackageName 非空时每轮解析该名称的最新可用代码包（上传新版本后函数自动升级）；PackageID 固定某个代码包，
+	// 两者二选一，推荐 PackageName。
+	PackageName string `yaml:"package_name"`
+	PackageID   string `yaml:"package_id"`
+	Namespace   string `yaml:"namespace"`
+	MemoryMB    int    `yaml:"memory_mb"`
+	// BaseEnvironmentFile 是可选的额外非受管环境（JSON 对象），含密钥时权限应为 0600。空间身份与 Storage 应用密钥
+	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务由 CloudNode 创建函数时补齐，
+	// 所以通常不需要这个文件。
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`
 	// MaxConcurrentOperations 限制各空间同时进行的 SCF 配置操作。
@@ -50,8 +56,9 @@ type SCFPlanFetchConfig struct {
 type SCFPlanSpaceConfig struct {
 	SymbolsPerFunction int                 `yaml:"symbols_per_function"`
 	Fetch              *SCFPlanFetchConfig `yaml:"fetch"`
-	// PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
+	// PackageName、PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
 	// 同时管理多个空间时每个空间必须有自己的代码包。
+	PackageName         string `yaml:"package_name"`
 	PackageID           string `yaml:"package_id"`
 	Namespace           string `yaml:"namespace"`
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
@@ -108,19 +115,22 @@ func (c *Config) validateSCFPlan() error {
 		return nil
 	}
 	plan := c.SCFPlan
-	if plan.CloudAccountID == "" || plan.PackageID == "" || plan.BaseEnvironmentFile == "" {
-		return fmt.Errorf("scf_plan requires cloud_account_id, package_id and base_environment_file when scf_markets is configured")
+	if plan.CloudAccountID == "" {
+		return fmt.Errorf("scf_plan requires cloud_account_id when scf_markets is configured")
 	}
 	if plan.SymbolsPerFunction < 1 || plan.SymbolsPerFunction > 200 || plan.MemoryMB < 64 || plan.MaxConcurrentOperations < 1 {
 		return fmt.Errorf("scf_plan has an out-of-range symbols_per_function, memory_mb or max_concurrent_operations")
 	}
 	packages := map[string]string{}
 	for space := range c.SCFMarkets {
-		packageID := plan.packageIDFor(space)
-		if other, dup := packages[packageID]; dup && len(c.SCFMarkets) > 1 {
-			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_id in scf_plan.spaces", other, space, packageID)
+		key, err := plan.packageKeyFor(space)
+		if err != nil {
+			return err
 		}
-		packages[packageID] = space
+		if other, dup := packages[key]; dup && len(c.SCFMarkets) > 1 {
+			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_name or package_id in scf_plan.spaces", other, space, key)
+		}
+		packages[key] = space
 	}
 	for space, markets := range c.SCFMarkets {
 		if space != strings.ToLower(space) || len(markets) == 0 {
@@ -145,30 +155,82 @@ func (c *Config) validateSCFPlan() error {
 }
 
 func (c SCFPlanConfig) packageIDFor(spaceID string) string {
-	if override := c.Spaces[strings.ToLower(spaceID)].PackageID; override != "" {
-		return override
+	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageID != "" || override.PackageName != "" {
+		return override.PackageID
 	}
 	return c.PackageID
+}
+
+func (c SCFPlanConfig) packageNameFor(spaceID string) string {
+	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageID != "" || override.PackageName != "" {
+		return override.PackageName
+	}
+	return c.PackageName
+}
+
+// packageKeyFor 返回空间使用的代码包标识（包名或固定 ID），二者必须恰有一个。
+func (c SCFPlanConfig) packageKeyFor(spaceID string) (string, error) {
+	name, id := strings.TrimSpace(c.packageNameFor(spaceID)), strings.TrimSpace(c.packageIDFor(spaceID))
+	switch {
+	case name != "" && id != "":
+		return "", fmt.Errorf("scf_plan: space %s sets both package_name and package_id; keep exactly one", spaceID)
+	case name != "":
+		return "name:" + name, nil
+	case id != "":
+		return "id:" + id, nil
+	default:
+		return "", fmt.Errorf("scf_plan: space %s needs package_name (recommended) or package_id", spaceID)
+	}
+}
+
+// storageAuthSecretEnv 是控制机 Collector 进程里 Storage 主密钥的环境变量名。
+const storageAuthSecretEnv = "MOOX_STORAGE_PRIMARY_AUTH_SECRET"
+
+// collectorStorageAppID 是函数写 Storage 使用的应用身份（Storage 绑定里允许的固定值）。
+const collectorStorageAppID = "moox-collector"
+
+// builtinPlanEnvironment 是 Collector 自己能生成的函数非受管环境：空间身份与 Storage 应用密钥。
+// 应用密钥由 Storage 主密钥按应用 ID 派生，与 Storage 校验方式一致；密钥不落配置文件。
+func builtinPlanEnvironment(getenv func(string) string) (map[string]string, error) {
+	secret := strings.TrimSpace(getenv(storageAuthSecretEnv))
+	if secret == "" {
+		return nil, fmt.Errorf("%s is not set; the Collector cannot derive the SCF Storage app key", storageAuthSecretEnv)
+	}
+	keys, err := json.Marshal(map[string]string{collectorStorageAppID: security.HMACSHA256Hex(secret, []byte(collectorStorageAppID))})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": string(keys)}, nil
 }
 
 // fetchPlanDeploy 读取某个空间的非受管环境文件并生成部署参数。空间身份由对账器所属空间强制写入，
 // 不信任环境文件里的取值，避免一个空间的函数拿到另一个空间的身份。
 func (c *Config) fetchPlanDeploy(spaceID string) (marketfetch.PlanDeploy, error) {
 	override := c.SCFPlan.Spaces[strings.ToLower(spaceID)]
+	environment, err := builtinPlanEnvironment(os.Getenv)
+	if err != nil {
+		return marketfetch.PlanDeploy{}, err
+	}
 	path := c.SCFPlan.BaseEnvironmentFile
 	if override.BaseEnvironmentFile != "" {
 		path = override.BaseEnvironmentFile
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(filepath.Dir(c.sourcePath), path)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return marketfetch.PlanDeploy{}, fmt.Errorf("read scf_plan.base_environment_file for space %s: %w", spaceID, err)
-	}
-	environment := map[string]string{}
-	if err := json.Unmarshal(raw, &environment); err != nil {
-		return marketfetch.PlanDeploy{}, fmt.Errorf("parse scf_plan.base_environment_file for space %s: %w", spaceID, err)
+	if path != "" {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(c.sourcePath), path)
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return marketfetch.PlanDeploy{}, fmt.Errorf("read scf_plan.base_environment_file for space %s: %w", spaceID, readErr)
+		}
+		extra := map[string]string{}
+		if err := json.Unmarshal(raw, &extra); err != nil {
+			return marketfetch.PlanDeploy{}, fmt.Errorf("parse scf_plan.base_environment_file for space %s: %w", spaceID, err)
+		}
+		// 文件里的额外环境覆盖内置值（运维显式指定优先），空间身份仍由对账器强制写入。
+		for key, value := range extra {
+			environment[key] = value
+		}
 	}
 	environment["MOOX_SPACE_ID"] = strings.ToLower(spaceID)
 	namespace := c.SCFPlan.Namespace
@@ -176,7 +238,7 @@ func (c *Config) fetchPlanDeploy(spaceID string) (marketfetch.PlanDeploy, error)
 		namespace = override.Namespace
 	}
 	return marketfetch.PlanDeploy{
-		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.packageIDFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
+		CloudAccountID: c.SCFPlan.CloudAccountID, PackageID: c.SCFPlan.packageIDFor(spaceID), PackageName: c.SCFPlan.packageNameFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
 		BaseEnvironment: environment, Networks: c.SCFRegions, NamespaceCapacity: maxFunctionsPerNamespace,
 	}, nil
 }

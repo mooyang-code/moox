@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"encoding/json"
+	"github.com/mooyang-code/moox/packages/security"
 	"os"
 	"path/filepath"
 	"strings"
@@ -398,6 +400,7 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 }
 
 func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "env.json"), []byte(`{"MOOX_SPACE_ID":"crypto","OTHER":"x"}`), 0o600))
 	cfg := Default()
@@ -412,4 +415,41 @@ func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "crypto", cryptoDeploy.BaseEnvironment["MOOX_SPACE_ID"])
 	require.Equal(t, "pkg", cryptoDeploy.PackageID)
+}
+
+func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	cfg := Default()
+	cfg.sourcePath = filepath.Join(t.TempDir(), "app.yaml")
+	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName = "acct", "moox-collector-crypto-plan"
+	deploy, err := cfg.fetchPlanDeploy("crypto")
+	require.NoError(t, err)
+	require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
+	require.Equal(t, "moox-collector-crypto-plan", deploy.PackageName)
+	require.Empty(t, deploy.PackageID)
+	// Storage 应用密钥由主密钥按应用 ID 派生，密钥本身不进入配置文件。
+	var keys map[string]string
+	require.NoError(t, json.Unmarshal([]byte(deploy.BaseEnvironment["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]), &keys))
+	require.Equal(t, security.HMACSHA256Hex("test-storage-primary-secret", []byte("moox-collector")), keys["moox-collector"])
+	require.Len(t, keys, 1)
+
+	// 主密钥缺失时明确报错，不下发没有密钥的函数。
+	t.Setenv(storageAuthSecretEnv, "")
+	_, err = cfg.fetchPlanDeploy("crypto")
+	require.ErrorContains(t, err, storageAuthSecretEnv)
+}
+
+func TestSCFPlanPackageSelectionRequiresExactlyOneOfNameAndID(t *testing.T) {
+	plan := SCFPlanConfig{PackageName: "pkg-name", Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-id"}}}
+	key, err := plan.packageKeyFor("crypto")
+	require.NoError(t, err)
+	require.Equal(t, "name:pkg-name", key)
+	key, err = plan.packageKeyFor("stockcn")
+	require.NoError(t, err)
+	require.Equal(t, "id:pkg-id", key)
+
+	_, err = (SCFPlanConfig{PackageName: "a", PackageID: "b"}).packageKeyFor("crypto")
+	require.ErrorContains(t, err, "both")
+	_, err = (SCFPlanConfig{}).packageKeyFor("crypto")
+	require.ErrorContains(t, err, "needs package_name")
 }

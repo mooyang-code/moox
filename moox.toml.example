@@ -218,6 +218,29 @@ freq = "1m"
 factor_id = "QuoteVolumeMean"
 status = "enabled"
 
+# SCF 定时触发采集（Timer 模式）：声明哪些空间、市场在哪些地域运行，以及这些地域的函数网络。
+# setup deploy 据此渲染 Collector 的 scf_regions / scf_markets / scf_plan；setup init 登记云账号、开通日志服务（CLS）、
+# 为每个空间上传代码包。函数的数量、标的分配与定时器由 Collector 按任务与标签成员自动创建和维护，
+# 代码包按名称取最新版本：升级时执行 `moox-cli collector function upload`，不需要改配置或重启。
+# 云账号沿用 [scf_fetcher.cloud_account]（旧段清理前），也可在 [scf_plan.cloud_account] 单独声明。
+[scf_plan]
+enabled = false
+# memory_mb = 128               # 每个函数内存，默认 128
+# symbols_per_function = 50     # 每个函数负责的标的数，默认 50
+
+# 函数在地域 VPC 内运行，通过同地域主机的私网地址访问 Access：
+# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address、并在 [placements] 里带 access 组件。
+# [scf_plan.regions.ap-hongkong]
+# vpc_id = "vpc-xxxxxxxx"
+# subnet_id = "subnet-xxxxxxxx"
+
+# [[scf_plan.spaces]]
+# space_id = "crypto"
+# # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
+# [scf_plan.spaces.markets]
+# spot = ["ap-hongkong"]
+# swap = ["ap-hongkong"]
+
 [scf_fetcher]
 enabled = false
 

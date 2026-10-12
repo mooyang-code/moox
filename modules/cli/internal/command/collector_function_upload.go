@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,8 +28,9 @@ var collectorFunctionUploadFlags collectorFunctionUploadOptions
 var collectorFunctionUploadCmd = &cobra.Command{
 	Use:   "upload",
 	Short: "构建（或使用现成的）SCF 代码包并只上传，不创建函数",
-	Long: "采集计划函数由 Collector 的对账协程自动创建，只需要一个可用的代码包。本命令构建或读取代码包 zip、校验后上传到 CloudNode，" +
-		"输出 package_id；把它填进 Collector 配置 scf_plan.package_id。",
+	Long: "采集计划函数由 Collector 的对账协程自动创建，只需要一个可用的代码包。本命令构建或读取代码包 zip、校验后上传到 CloudNode。" +
+		"--package-name 必须与 moox.toml 里该空间的 scf_plan.spaces.package_name 一致：Collector 总是使用该名称的最新可用版本，" +
+		"上传后落后的函数会自动升级，不需要改配置或重启。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runCollectorFunctionUpload(cmd.Context(), cmd.OutOrStdout(), collectorFunctionUploadFlags)
@@ -85,5 +85,5 @@ func runCollectorFunctionUpload(ctx context.Context, out io.Writer, opts collect
 	}
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(map[string]any{"status": "uploaded", "package_id": response.PackageID, "zip": zipPath, "bytes": len(data), "message": fmt.Sprintf("请把 scf_plan.package_id 设为 %s", response.PackageID)})
+	return encoder.Encode(map[string]any{"status": "uploaded", "package_id": response.PackageID, "zip": zipPath, "bytes": len(data), "message": "Collector 按包名自动使用最新可用版本，落后的函数会自动升级，无需修改配置"})
 }

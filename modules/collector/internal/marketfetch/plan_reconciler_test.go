@@ -113,6 +113,8 @@ type fakePlanCloud struct {
 	unready    map[string]scfinvoker.Node
 	deleted    []string
 	upgraded   []string
+	packages   []string // 按创建先后（旧到新）的可用代码包 ID，名称不区分
+	packageErr error
 	jobs       map[string][]scfinvoker.BatchItemResult
 	running    map[string]bool // 仍在运行的作业
 	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
@@ -165,6 +167,16 @@ func (c *fakePlanCloud) ListUnreadyMarketFetchers(context.Context, string, strin
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
+}
+
+func (c *fakePlanCloud) LatestPackage(context.Context, string, string) (string, error) {
+	if c.packageErr != nil {
+		return "", c.packageErr
+	}
+	if len(c.packages) == 0 {
+		return "", errors.New("no available code package")
+	}
+	return c.packages[len(c.packages)-1], nil
 }
 
 func (c *fakePlanCloud) SubmitDeployNodes(_ context.Context, _ string, nodeIDs []string, packageID string, _ *scfinvoker.CollectorPublishLease) (string, error) {
@@ -1145,4 +1157,50 @@ func TestDisableAllInvalidatesConfirmationsBeforeSubmittingDisables(t *testing.T
 	for name, patch := range h.cloud.patches {
 		require.True(t, patch.GetTimerEnabled(), name)
 	}
+}
+
+func TestPlanReconcilerResolvesTheLatestPackageByNameAndUpgradesWhenANewOneIsUploaded(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	h.cloud.packages = []string{"pkg-v1"}
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, "pkg-v1", r.packageID())
+
+	// 上传了新版本：超过刷新间隔后自动解析到新包，落后的函数随之升级，不需要改配置。
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-v1", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
+			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
+			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}}
+	}
+	h.cloud.packages = append(h.cloud.packages, "pkg-v2")
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, "pkg-v2", r.packageID())
+	require.Len(t, h.cloud.upgraded, len(h.cloud.nodes))
+	for _, node := range h.cloud.nodes {
+		require.Equal(t, "pkg-v2", node.PackageID)
+	}
+
+	// 云端暂时读不到包列表：沿用上一次的结果，不让函数停摆。
+	h.cloud.packageErr = errors.New("cloudnode unavailable")
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, "pkg-v2", r.packageID())
+}
+
+func TestPlanReconcilerRefusesToRunWithoutAnyResolvablePackage(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	// 没有上传过代码包：不能创建函数，明确报错而不是用空包 ID 创建。
+	err := h.reconcile(r)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "code package")
+	require.Empty(t, h.cloud.created)
 }

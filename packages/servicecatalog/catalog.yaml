@@ -772,6 +772,7 @@ components:
               - SubmitDeleteNodes
               - GetNodeBatchChange
               - SubmitUpdateNodeRuntimeConfigs
+              - GetPackageList
             callers:
               - collector
           - methods:

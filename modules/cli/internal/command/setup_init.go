@@ -64,6 +64,7 @@ type setupInitSummary struct {
 	Admin            setupclient.ApplyResult       `json:"admin"`
 	CloudAccounts    *setupCloudAccountSummary     `json:"cloud_accounts,omitempty"`
 	CLS              *setupCLSSummary              `json:"cls,omitempty"`
+	SCFPlan          *setupSCFPlanSummary          `json:"scf_plan,omitempty"`
 	AdminState       string                        `json:"admin_state"`
 	LoginAPI         string                        `json:"login_api"`
 	Metadata         setupInitMetadataCounts       `json:"metadata"`
@@ -155,6 +156,12 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
+	// Timer 采集计划：保证每个空间有可用代码包（没有则构建上传）。Collector 的采集计划配置由部署渲染，
+	// 代码包按名称取最新版本，所以这里不需要改任何配置；失败不阻断，记入摘要。
+	scfPlan, err := deps.ensureSCFPlan(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
 	login, err := deps.login(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
@@ -215,7 +222,7 @@ func runSetupInit(
 	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
+		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},
@@ -246,7 +253,7 @@ func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupconfig.Snapsho
 	if snapshot == nil {
 		return nil, fmt.Errorf("cls: setup configuration is missing")
 	}
-	if !snapshot.Manifest.SCFFetcher.Enabled {
+	if !snapshot.Manifest.SCFEnabled() {
 		return nil, nil
 	}
 	gateway, err := openCommandGateway(ctx, "", snapshot)
@@ -255,7 +262,7 @@ func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupconfig.Snapsho
 	}
 	defer gateway.Close()
 	client := &adminclient.Client{Gateway: gateway}
-	return provisionSetupCLS(ctx, client, defaultCLSFactory, snapshot.Manifest.SCFFetcher.CloudAccount.AccountID), nil
+	return provisionSetupCLS(ctx, client, defaultCLSFactory, snapshot.Manifest.SCFCloudAccount().AccountID), nil
 }
 
 func defaultCLSFactory(secretID, secretKey string) (tencent.CLSAPI, error) {
@@ -286,7 +293,7 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 	if snapshot == nil {
 		return nil, fmt.Errorf("cloud_accounts: setup configuration is missing")
 	}
-	if !snapshot.Manifest.SCFFetcher.Enabled {
+	if !snapshot.Manifest.SCFEnabled() {
 		return nil, nil
 	}
 
@@ -307,7 +314,7 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 		}
 	}
 
-	account := snapshot.Manifest.SCFFetcher.CloudAccount
+	account := snapshot.Manifest.SCFCloudAccount()
 	input := adminclient.CloudAccountInput{
 		AccountID: account.AccountID, AccountName: account.AccountName,
 		Provider: "tencent", CredentialSecretID: account.CredentialSecretID,

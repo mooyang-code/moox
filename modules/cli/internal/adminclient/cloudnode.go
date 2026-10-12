@@ -580,6 +580,36 @@ func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]Clou
 	return resp.Accounts, nil
 }
 
+// LatestPackage 返回指定名称的最新可用代码包 ID；没有则 found=false。client.SpaceID 必须是代码包所属空间。
+func (c *Client) LatestPackage(ctx context.Context, name string) (id string, found bool, err error) {
+	raw, err := c.callCloudNodeJSON(ctx, "GetPackageList", map[string]any{
+		"package_name": name, "biz_type": "market_fetcher", "status": "PACKAGE_STATUS_AVAILABLE", "page": map[string]any{"page": 1, "size": 50},
+	})
+	if err != nil {
+		return "", false, err
+	}
+	var resp struct {
+		RetInfo *retInfo `json:"ret_info"`
+		Items   []struct {
+			PackageID   string `json:"package_id"`
+			PackageName string `json:"package_name"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", false, err
+	}
+	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
+		return "", false, fmt.Errorf("GetPackageList: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
+	}
+	// 服务端按名称模糊匹配、按创建先后倒序：取第一个名称完全相同的。
+	for _, item := range resp.Items {
+		if item.PackageName == name && item.PackageID != "" {
+			return item.PackageID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // CreateCloudAccount registers a cloud account before a fleet publish. COS
 // bucket creation remains CloudNode's responsibility during package upload.
 func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput) (*CloudAccount, error) {
