@@ -270,6 +270,8 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, publish bool) 
 		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
+		pipeline.Reporter = h.Reporter
+		pipeline.FunctionName = req.FunctionName
 		payload, err = pipeline.Execute(workCtx, req)
 	} else {
 		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
@@ -296,6 +298,8 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, publish bool) 
 		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
+		pipeline.Reporter = h.Reporter
+		pipeline.FunctionName = req.FunctionName
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
 		defer workCancel()
 		payload, err = pipeline.Execute(workCtx, req)
@@ -314,6 +318,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, publish bool) 
 }
 
 func (h *Handler) reportMetrics(parent context.Context) {
+	h.flushReports(parent)
 	if h == nil || h.MetricsReporter == nil {
 		return
 	}
@@ -340,6 +345,34 @@ func (h *Handler) reportMetrics(parent context.Context) {
 		log.WarnContextf(parent, "market_fetch_metrics_report_failed: %v", err)
 	}
 }
+
+// flushReports 把本次调用积累的失败明细与批次摘要一次性发往 CLS：同步、有界，失败只记日志，不影响采集结果。
+func (h *Handler) flushReports(parent context.Context) {
+	if h == nil || h.Reporter == nil {
+		return
+	}
+	timeout := h.CLSReserve
+	if timeout <= 0 {
+		timeout = clsFlushTimeout
+	}
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
+	defer cancel()
+	if err := h.Reporter.Flush(ctx); err != nil {
+		log.WarnContextf(parent, "market_fetch_cls_report_failed: %v", err)
+	}
+}
+
+// clsFlushTimeout 是 CLS 上报的默认时间上限。
+const clsFlushTimeout = 1500 * time.Millisecond
 
 func contextWithReserve(parent context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
 	if reserve <= 0 {

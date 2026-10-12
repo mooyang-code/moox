@@ -48,6 +48,9 @@ type KlinePipeline struct {
 	Now            func() time.Time
 	Calendar       *stockmarket.Calendar
 	Metrics        *Metrics
+	// Reporter 非空时，把失败项明细与批次摘要上报 CLS；FunctionName 是上报用的函数名。
+	Reporter     ItemReporter
+	FunctionName string
 }
 
 func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
@@ -209,11 +212,13 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					dnsRoutes[host] = append([]string(nil), route.IPs...)
 				}
 			}
-			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetchStarted := time.Now()
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			if err != nil {
 				item.CandidateIndex = nextCandidateIndex
 				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
+				p.reportItemFailure(req, results[index], selectedProvider, attempts, time.Since(fetchStarted), coverageStart, coverageEnd, err)
 				return
 			}
 			if err := bindKlineSource(fetched, selectedProvider, ""); err != nil {
@@ -330,6 +335,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 		}
 		log.WarnContextf(ctx, "market_fetch_pipeline_fetched frequency=%s items=%d failed=%d fetch_ms=%d window_left_ms=%d", req.Frequency, len(req.Items), failed, time.Since(started).Milliseconds(), time.Until(deadline).Milliseconds())
+		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline))
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
@@ -498,11 +504,11 @@ func periodRowBindingKey(datasetID, subjectID, seriesTag string) string {
 	return strings.Join([]string{strings.TrimSpace(datasetID), strings.ToUpper(strings.TrimSpace(subjectID)), strings.TrimSpace(seriesTag)}, "\x00")
 }
 
-func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, error) {
+func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, int, error) {
 	var lastErr error
 	lastProvider := "none"
 	if len(chain) == 0 {
-		return nil, lastProvider, 0, fmt.Errorf("kline candidate chain is empty")
+		return nil, lastProvider, 0, 0, fmt.Errorf("kline candidate chain is empty")
 	}
 	startIndex %= len(chain)
 	if startIndex < 0 {
@@ -521,7 +527,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 				remaining := time.Until(deadline)
 				attemptsLeft := (len(chain)-index-1)*attemptBudget + attemptBudget - retry
 				if remaining <= 0 {
-					return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
+					return nil, provider, (startIndex + attempts) % len(chain), attempts, ctx.Err()
 				}
 				// 每次尝试至少有一个完整的请求超时：行情源在整分钟、整五分钟前后常有数百毫秒到数秒的延迟尖峰，
 				// 按剩余预算平均切成零点几秒会把本来能成功的慢响应全部掐断。
@@ -548,7 +554,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 					lastErr = fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider)
 					break
 				}
-				return rows, provider, startIndex, nil
+				return rows, provider, startIndex, attempts, nil
 			}
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
@@ -558,7 +564,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 				break
 			}
 			if !marketdata.CanFallback(ctx, err) {
-				return nil, provider, (startIndex + attempts) % len(chain), err
+				return nil, provider, (startIndex + attempts) % len(chain), attempts, err
 			}
 			lastErr = err
 		}
@@ -566,7 +572,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 	if lastErr == nil {
 		lastErr = fmt.Errorf("kline provider chain exhausted")
 	}
-	return nil, lastProvider, (startIndex + attempts) % len(chain), lastErr
+	return nil, lastProvider, (startIndex + attempts) % len(chain), attempts, lastErr
 }
 
 // selectOutputFields keeps the canonical row field order while dropping fields

@@ -291,4 +291,7 @@ type periodStorage interface {
 
 // ItemReporter receives final per-item outcomes from the common invocation
 // handler. It is deliberately small so CLS remains an optional boundary.
-type ItemReporter interface{ Report(clsreporter.Entry) }
+type ItemReporter interface {
+	Report(clsreporter.Entry)
+	Flush(context.Context) error
+}

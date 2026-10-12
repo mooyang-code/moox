@@ -111,7 +111,7 @@ func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.
 	router, err := marketdata.NewRouter(registry, 10, pipelineClock{now: time.Now().UTC()}, nil)
 	require.NoError(t, err)
 
-	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	rows, selected, _, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "stockcn", ExchangeID: "XSHG", SubjectID: "600000.XSHG", ProviderSymbol: "sh600000",
 		Frequency: "1m", Limit: 1, RequestID: "retry-3",
 	}, []string{"sina", "tdx"}, 0)
@@ -144,7 +144,7 @@ func TestFetchKlinesFromChainUsesConfiguredHTTPMaxAttempts(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 10, nil, nil)
 	require.NoError(t, err)
 
-	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	rows, selected, _, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "crypto", ExchangeID: "binance", SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT",
 		Frequency: "1m", Limit: 1, RequestID: "retry-4",
 	}, []string{"binance"}, 0)
@@ -169,12 +169,13 @@ func TestFetchKlinesFromChainUsesConfiguredRequestTimeout(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 10, pipelineClock{now: time.Now().UTC()}, nil)
 	require.NoError(t, err)
 
-	_, _, _, err = fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	_, _, _, attempts, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "crypto", ExchangeID: "binance", SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT",
 		Frequency: "1m", Limit: 1, RequestID: "request-timeout",
 	}, []string{"binance"}, 0)
 	require.ErrorIs(t, err, marketdata.ErrTimeout)
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
+	require.Equal(t, 1, attempts, "失败时返回实际尝试次数，供 CLS 失败明细使用")
 }
 
 func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
@@ -775,7 +776,7 @@ func TestKlinePipelineAdvancesCandidateIndexAfterExhaustedChain(t *testing.T) {
 	}
 	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
-	_, selected, next, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	_, selected, next, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1, RequestID: "candidate-index",
 	}, []string{"sina", "tencent", "eastmoney"}, 1)
@@ -800,7 +801,7 @@ func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T)
 	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
 	require.NoError(t, err)
 
-	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	rows, selected, _, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: valid.SubjectID, ProviderSymbol: valid.ProviderSymbol, Frequency: "1m", Limit: 1,
 		StartTime: start, EndTime: end, Now: now, RequestID: "coverage-fallback",

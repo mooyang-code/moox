@@ -87,6 +87,9 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		runtimeHandler.Metrics = invocationMetrics.Metrics
 		runtimeHandler.MetricsReporter = invocationMetrics.Reporter
 	}
+	if reporter := newItemReporter(ctx, functionName); reporter != nil {
+		runtimeHandler.Reporter = reporter
+	}
 	switch event.Action {
 	case model.EventActionMarketFetch:
 		if timerEnvelope {
