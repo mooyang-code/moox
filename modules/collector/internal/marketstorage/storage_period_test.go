@@ -2,141 +2,13 @@ package marketstorage
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
-
-func TestEnsureDatasetPeriodRecoversLostAckWithOriginalStorageDeadline(t *testing.T) {
-	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	expectation := validStorageExpectation(period)
-	expectation.DeadlineAt = period.Add(10 * time.Minute).Unix()
-	access := &periodAccessStub{
-		ensureErr: errors.New("ack lost"),
-		status: &storagepb.PrimaryGetDatasetPeriodStatusRsp{
-			RetInfo: storageSuccess(), Status: domain.PeriodStatusWaiting, SeriesHash: expectation.SeriesHash,
-			ExpectedCount: expectation.ExpectedCount, DeadlineAt: period.Add(time.Minute).Unix(),
-		},
-	}
-	writer := &storageWriter{period: access}
-
-	state, err := writer.EnsureDatasetPeriod(context.Background(), expectation)
-	require.NoError(t, err)
-	require.Equal(t, 1, access.ensureCalls, "a lost acknowledgement is recovered by a read-only status query before retrying Ensure")
-	require.Equal(t, 1, access.statusCalls)
-	require.Equal(t, period.Add(time.Minute), state.DeadlineAt, "the first Storage deadline remains authoritative")
-	require.Equal(t, domain.PeriodStatusWaiting, state.Status)
-	require.NotZero(t, state.ConfirmedAt)
-}
-
-func TestEnsureDatasetPeriodRecoversInnerErrorWithAuthoritativeStatus(t *testing.T) {
-	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	expectation := validStorageExpectation(period)
-	access := &periodAccessStub{
-		ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{
-			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "DataNode internal RPC failed"},
-		},
-		status: &storagepb.PrimaryGetDatasetPeriodStatusRsp{
-			RetInfo: storageSuccess(), Status: domain.PeriodStatusWaiting, SeriesHash: expectation.SeriesHash,
-			ExpectedCount: expectation.ExpectedCount, DeadlineAt: period.Add(time.Minute).Unix(),
-		},
-	}
-
-	state, err := (&storageWriter{period: access}).EnsureDatasetPeriod(context.Background(), expectation)
-	require.NoError(t, err)
-	require.Equal(t, 1, access.ensureCalls)
-	require.Equal(t, 1, access.statusCalls, "retryable INNER_ERR is an unknown outcome and must be checked with read-only GetStatus")
-	require.Equal(t, domain.PeriodStatusWaiting, state.Status)
-	require.Equal(t, period.Add(time.Minute), state.DeadlineAt)
-}
-
-func TestEnsureDatasetPeriodDoesNotProbeNonRetryableStorageErrors(t *testing.T) {
-	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		name         string
-		code         storagepb.ErrorCode
-		wantConflict bool
-	}{
-		{name: "invalid parameter", code: storagepb.ErrorCode_INVALID_PARAM},
-		{name: "permission denied", code: storagepb.ErrorCode_NO_PERMISSION},
-		{name: "conflict", code: storagepb.ErrorCode_CONFLICT, wantConflict: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			access := &periodAccessStub{ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{
-				RetInfo: &storagepb.RetInfo{Code: tc.code, Msg: "rejected"},
-			}}
-			_, err := (&storageWriter{period: access}).EnsureDatasetPeriod(context.Background(), validStorageExpectation(period))
-			require.Error(t, err)
-			if tc.wantConflict {
-				require.ErrorIs(t, err, ErrDatasetPeriodConflict)
-			}
-			require.Equal(t, 1, access.ensureCalls)
-			require.Zero(t, access.statusCalls, "non-retryable rejection must not be treated as an unknown write outcome")
-		})
-	}
-}
-
-func TestEnsureDatasetPeriodNeverResendsUnknownWriteWhenStatusIsNotFound(t *testing.T) {
-	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	access := &periodAccessStub{
-		ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{
-			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "DataNode internal RPC failed"},
-		},
-		status: &storagepb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NOT_FOUND}},
-	}
-	_, err := (&storageWriter{period: access}).EnsureDatasetPeriod(context.Background(), validStorageExpectation(period))
-	require.Error(t, err)
-	require.Equal(t, 1, access.ensureCalls, "an unknown write outcome must never resend Ensure")
-	require.Equal(t, 1, access.statusCalls, "the unknown outcome is checked using a read-only query")
-}
-
-func TestEnsureDatasetPeriodRejectsInvalidStorageResponse(t *testing.T) {
-	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		name   string
-		status string
-		until  int64
-	}{
-		{name: "unknown status", status: "unknown", until: period.Add(time.Minute).Unix()},
-		{name: "missing deadline", status: domain.PeriodStatusWaiting},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			writer := &storageWriter{period: &periodAccessStub{ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{RetInfo: storageSuccess(), Status: tc.status, DeadlineAt: tc.until}}}
-			_, err := writer.EnsureDatasetPeriod(context.Background(), validStorageExpectation(period))
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestGetDatasetPeriodStatusValidatesIdentityAndDoesNotCreate(t *testing.T) {
-	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	expectation := validStorageExpectation(period)
-	access := &periodAccessStub{status: &storagepb.PrimaryGetDatasetPeriodStatusRsp{
-		RetInfo: storageSuccess(), Status: domain.PeriodStatusComplete, SeriesHash: "wrong",
-		ExpectedCount: expectation.ExpectedCount, DeadlineAt: period.Add(time.Minute).Unix(),
-	}}
-	writer := &storageWriter{period: access}
-	_, err := writer.GetDatasetPeriodStatus(context.Background(), expectation)
-	require.Error(t, err)
-	require.Zero(t, access.ensureCalls)
-	require.Equal(t, 1, access.statusCalls)
-}
-
-func TestGetDatasetPeriodStatusNotFoundIsNotFabricatedAsWaiting(t *testing.T) {
-	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	access := &periodAccessStub{status: &storagepb.PrimaryGetDatasetPeriodStatusRsp{
-		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NOT_FOUND},
-	}}
-	state, err := (&storageWriter{period: access}).GetDatasetPeriodStatus(context.Background(), validStorageExpectation(period))
-	require.ErrorIs(t, err, ErrDatasetPeriodNotFound)
-	require.Zero(t, state)
-	require.Zero(t, access.ensureCalls)
-}
 
 func TestCommitTimeSeriesBatchRequiresExactAcceptedIndexSet(t *testing.T) {
 	expectation := validStorageExpectation(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
@@ -149,43 +21,6 @@ func TestCommitTimeSeriesBatchRequiresExactAcceptedIndexSet(t *testing.T) {
 		t.Run("invalid accepted set", func(t *testing.T) {
 			writer := &storageWriter{period: &periodAccessStub{commit: &storagepb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: storageSuccess(), AcceptedSeriesIndexes: accepted}}}
 			require.Error(t, writer.CommitTimeSeriesBatch(context.Background(), expectation, rows, "event"))
-		})
-	}
-}
-
-func TestRecordDatasetPeriodFailuresRequiresExactAuthoritativeReceipts(t *testing.T) {
-	expectation := validStorageExpectation(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
-	want := []uint32{1, 2}
-	valid := &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{
-		RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting,
-		Results: []*storagepb.DatasetPeriodFailureResult{
-			{SeriesIndex: 2, Disposition: storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED},
-			{SeriesIndex: 1, Disposition: storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_ALREADY_SUCCEEDED},
-		},
-	}
-	results, err := (&storageWriter{period: &periodAccessStub{record: valid}}).RecordDatasetPeriodFailures(context.Background(), expectation, []uint32{2, 1, 2})
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	access := &periodAccessStub{record: valid}
-	_, err = (&storageWriter{period: access}).RecordDatasetPeriodFailures(context.Background(), expectation, []uint32{2, 1, 2})
-	require.NoError(t, err)
-	require.Equal(t, []uint32{1, 2}, access.recordReq.GetSeriesIndexes(), "RPC input must use sorted, deduplicated indexes")
-
-	for _, test := range []struct {
-		name string
-		rsp  *storagepb.PrimaryRecordDatasetPeriodFailuresRsp
-	}{
-		{name: "empty response"},
-		{name: "non-success ret info", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR}, PeriodStatus: domain.PeriodStatusWaiting, Results: valid.Results}},
-		{name: "invalid period status", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: "unknown", Results: valid.Results}},
-		{name: "missing index", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: valid.Results[:1]}},
-		{name: "extra index", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: append(append([]*storagepb.DatasetPeriodFailureResult(nil), valid.Results...), &storagepb.DatasetPeriodFailureResult{SeriesIndex: 3, Disposition: storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED})}},
-		{name: "duplicate index", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: []*storagepb.DatasetPeriodFailureResult{valid.Results[0], valid.Results[0]}}},
-		{name: "unknown disposition", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: []*storagepb.DatasetPeriodFailureResult{{SeriesIndex: 1, Disposition: storagepb.PeriodFailureDisposition(99)}, valid.Results[0]}}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := (&storageWriter{period: &periodAccessStub{record: test.rsp}}).RecordDatasetPeriodFailures(context.Background(), expectation, want)
-			require.Error(t, err)
 		})
 	}
 }

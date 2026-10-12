@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"strings"
 	"time"
 )
 
@@ -24,10 +23,6 @@ const (
 	BatchStatusFailed        BatchStatus = "failed"
 	BatchStatusTimedOut      BatchStatus = "timed_out"
 )
-
-func (s BatchStatus) Terminal() bool {
-	return s == BatchStatusSucceeded || s == BatchStatusPartialFailed || s == BatchStatusFailed || s == BatchStatusTimedOut
-}
 
 type ItemOutcome string
 
@@ -101,79 +96,6 @@ type ItemResult struct {
 
 type TargetResult struct{ WriteTargetID, DatasetID, Status, ErrorSummary string }
 
-type BatchInvocation struct {
-	ID            int       `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID       string    `gorm:"column:c_space_id"`
-	BatchID       string    `gorm:"column:c_batch_id"`
-	ParentBatchID string    `gorm:"column:c_parent_batch_id"`
-	ScheduleID    string    `gorm:"column:c_schedule_id"`
-	BatchKind     BatchKind `gorm:"column:c_batch_kind"`
-	ShardIndex    int       `gorm:"column:c_shard_index"`
-	// TaskID/DatasetID are deprecated compatibility projections. Batch ownership
-	// is represented by batch_items -> TaskInstance -> WriteTarget.
-	TaskID    string `gorm:"-"`
-	DatasetID string `gorm:"-"`
-	// InstanceID and WriteTargetID are retained for retry-batch diagnostics.
-	InstanceID           string      `gorm:"column:c_instance_id"`
-	WriteTargetID        string      `gorm:"column:c_write_target_id"`
-	RetryScope           string      `gorm:"column:c_retry_scope"`
-	Frequency            string      `gorm:"column:c_frequency"`
-	PeriodTime           *time.Time  `gorm:"column:c_period_time"`
-	PeriodDeadlineAt     *time.Time  `gorm:"column:c_period_deadline_at"`
-	Region               string      `gorm:"column:c_region"`
-	NodeID               string      `gorm:"column:c_node_id"`
-	FunctionName         string      `gorm:"column:c_function_name"`
-	Status               BatchStatus `gorm:"column:c_status"`
-	Attempt              int         `gorm:"column:c_attempt"`
-	RequestID            string      `gorm:"column:c_request_id"`
-	RequestJSON          string      `gorm:"column:c_request_json"`
-	PlannedCount         int         `gorm:"column:c_planned_count"`
-	SuccessCount         int         `gorm:"column:c_success_count"`
-	RetryCount           int         `gorm:"column:c_retry_count"`
-	PermanentFailedCount int         `gorm:"column:c_permanent_failed_count"`
-	ErrorSummary         string      `gorm:"column:c_error_summary"`
-	LateCompletion       bool        `gorm:"column:c_late_completion"`
-	PlannedAt            *time.Time  `gorm:"column:c_planned_at"`
-	DispatchedAt         *time.Time  `gorm:"column:c_dispatched_at"`
-	DeadlineAt           *time.Time  `gorm:"column:c_deadline_at"`
-	CompletedAt          *time.Time  `gorm:"column:c_completed_at"`
-	CreateTime           time.Time   `gorm:"column:c_ctime"`
-	ModifyTime           time.Time   `gorm:"column:c_mtime"`
-}
-
-func (b *BatchInvocation) TableName() string { return "t_collector_fetch_batches" }
-
-type RetryItem struct {
-	ID                              int                      `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID                         string                   `gorm:"column:c_space_id"`
-	RetryKey                        string                   `gorm:"column:c_retry_key"`
-	SourceBatchID                   string                   `gorm:"column:c_source_batch_id"`
-	BatchKind                       BatchKind                `gorm:"column:c_batch_kind"`
-	InstanceID                      string                   `gorm:"column:c_instance_id"`
-	WriteTargetID                   string                   `gorm:"column:c_write_target_id"`
-	RetryScope                      string                   `gorm:"column:c_retry_scope"`
-	SubjectID                       string                   `gorm:"column:c_subject_id"`
-	Frequency                       string                   `gorm:"column:c_frequency"`
-	TargetDataTime                  time.Time                `gorm:"column:c_target_data_time"`
-	PeriodTime                      *time.Time               `gorm:"column:c_period_time"`
-	PeriodDeadlineAt                *time.Time               `gorm:"column:c_period_deadline_at"`
-	TaskJSON                        string                   `gorm:"column:c_task_json"`
-	FailureTargetsJSON              string                   `gorm:"column:c_failure_targets_json"`
-	Attempt                         int                      `gorm:"column:c_attempt"`
-	Status                          string                   `gorm:"column:c_status"`
-	PeriodFailureReportState        PeriodFailureReportState `gorm:"column:c_period_failure_report_state"`
-	PeriodFailureResultsJSON        string                   `gorm:"column:c_period_failure_results_json"`
-	PeriodFailureLastError          string                   `gorm:"column:c_period_failure_last_error"`
-	PeriodFailureDeadlineExceededAt *time.Time               `gorm:"column:c_period_failure_deadline_exceeded_at"`
-	NextRetryAt                     *time.Time               `gorm:"column:c_next_retry_at"`
-	LastErrorType                   string                   `gorm:"column:c_last_error_type"`
-	LastErrorSummary                string                   `gorm:"column:c_last_error_summary"`
-	CreateTime                      time.Time                `gorm:"column:c_ctime"`
-	ModifyTime                      time.Time                `gorm:"column:c_mtime"`
-}
-
-func (r *RetryItem) TableName() string { return "t_collector_fetch_retry_items" }
-
 type PeriodFailureReportState string
 
 const (
@@ -193,37 +115,4 @@ type PeriodFailureTargetResult struct {
 	SeriesIndex   uint32    `json:"series_index"`
 	Disposition   string    `json:"disposition"`
 	ObservedAt    time.Time `json:"observed_at"`
-}
-
-// AggregatePeriodFailureReportState derives the receipt state from durable
-// targets. Missing and unknown outcomes stay pending; a transport error can
-// never be interpreted as an acknowledgement.
-func AggregatePeriodFailureReportState(targets []WriteTarget, results []PeriodFailureTargetResult) PeriodFailureReportState {
-	if len(targets) == 0 {
-		return PeriodFailureReportPending
-	}
-	byTarget := make(map[string]PeriodFailureTargetResult, len(results))
-	for _, result := range results {
-		if strings.TrimSpace(result.WriteTargetID) != "" {
-			byTarget[result.WriteTargetID] = result
-		}
-	}
-	missed := false
-	for _, target := range targets {
-		result, ok := byTarget[target.ID]
-		if !ok {
-			return PeriodFailureReportPending
-		}
-		switch result.Disposition {
-		case "recorded", "already_succeeded":
-		case "missed_deadline":
-			missed = true
-		default:
-			return PeriodFailureReportPending
-		}
-	}
-	if missed {
-		return PeriodFailureReportMissedDeadline
-	}
-	return PeriodFailureReportAcknowledged
 }

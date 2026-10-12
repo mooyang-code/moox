@@ -34,7 +34,7 @@ func testGroups(count int, frequencies ...string) []TaskGroup {
 
 func choose(now time.Time) func(string) (int64, error) {
 	return func(frequency string) (int64, error) {
-		return ChoosePeriodStart(frequency, now)
+		return ChoosePeriodStartWithLead(frequency, now, planLeadTime)
 	}
 }
 
@@ -262,12 +262,12 @@ func TestBuildPlanContentRetiresFunctionsAndDatasets(t *testing.T) {
 	}
 }
 
-func TestChoosePeriodStart(t *testing.T) {
+func TestChoosePeriodStartWithLead(t *testing.T) {
 	now := time.Date(2026, 10, 12, 8, 59, 30, 0, time.UTC)
-	if p, _ := ChoosePeriodStart("1h", now); p != time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC).Truncate(time.Hour).Add(time.Hour).Unix() {
+	if p, _ := ChoosePeriodStartWithLead("1h", now, planLeadTime); p != time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC).Truncate(time.Hour).Add(time.Hour).Unix() {
 		t.Fatalf("1h P=%s", time.Unix(p, 0).UTC())
 	}
-	if p, _ := ChoosePeriodStart("1m", now); p != time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC).Unix() {
+	if p, _ := ChoosePeriodStartWithLead("1m", now, planLeadTime); p != time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC).Unix() {
 		t.Fatalf("1m P=%s", time.Unix(p, 0).UTC())
 	}
 }

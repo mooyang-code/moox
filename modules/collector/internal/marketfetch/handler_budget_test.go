@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +33,7 @@ func TestInstrumentNamesReadHasShortIndependentBudget(t *testing.T) {
 }
 
 type slowDeadlineCommitStorage struct {
-	recordingPeriodFailureStorage
+	noopStorage
 }
 
 func (s *slowDeadlineCommitStorage) ListInstrumentNames(ctx context.Context, _ string, _ []string) (map[string]string, error) {
@@ -112,28 +111,7 @@ func TestReservedDeadlineStorageForwardsInstrumentNames(t *testing.T) {
 	require.Equal(t, "浦发银行", names["600000.XSHG"])
 }
 
-// recordingPeriodFailureStorage 是不做任何事的 Storage 测试替身，记录对周期状态的调用。
-type recordingPeriodFailureStorage struct {
-	ensured []*storagepb.DatasetPeriodExpectation
-}
+// noopStorage 是只接受行写入而不做任何事的 Storage 测试替身。
+type noopStorage struct{}
 
-func (s *recordingPeriodFailureStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
-	return nil
-}
-
-func (s *recordingPeriodFailureStorage) EnsureDatasetPeriod(_ context.Context, exp *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	s.ensured = append(s.ensured, exp)
-	return domain.PeriodStorageState{}, nil
-}
-
-func (s *recordingPeriodFailureStorage) GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	return domain.PeriodStorageState{}, nil
-}
-
-func (s *recordingPeriodFailureStorage) CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error {
-	return nil
-}
-
-func (s *recordingPeriodFailureStorage) RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
-	return nil, nil
-}
+func (noopStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }

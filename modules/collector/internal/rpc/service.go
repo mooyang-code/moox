@@ -727,9 +727,6 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 	if err := s.taskRepo.SetEnabled(ctx, spaceID, taskID, false); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	if err := s.persistence.WaitTaskDrain(ctx, spaceID, taskID, 30*time.Second); err != nil {
-		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("task drain failed; task remains disabled for retry: %v", err))}, nil
-	}
 	if err := s.persistence.DeleteTaskRuntime(ctx, spaceID, taskID); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}

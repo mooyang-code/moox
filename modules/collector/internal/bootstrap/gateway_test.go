@@ -250,32 +250,11 @@ func (w *collectorGatewayWire) ListSubjects(ctx context.Context, request *storag
 	return &storagepb.ListSubjectsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) EnsureDatasetPeriod(ctx context.Context, request *storagepb.PrimaryEnsureDatasetPeriodReq) (*storagepb.PrimaryEnsureDatasetPeriodRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "EnsureDatasetPeriod", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.PrimaryEnsureDatasetPeriodRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) GetDatasetPeriodStatus(ctx context.Context, request *storagepb.PrimaryGetDatasetPeriodStatusReq) (*storagepb.PrimaryGetDatasetPeriodStatusRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "GetDatasetPeriodStatus", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) CommitTimeSeriesBatch(ctx context.Context, request *storagepb.PrimaryCommitTimeSeriesBatchReq) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", request); err != nil {
 		return nil, err
 	}
 	return &storagepb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) RecordDatasetPeriodFailures(ctx context.Context, request *storagepb.PrimaryRecordDatasetPeriodFailuresReq) (*storagepb.PrimaryRecordDatasetPeriodFailuresRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "RecordDatasetPeriodFailures", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func (w *collectorGatewayWire) UpsertFields(ctx context.Context, request *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error) {
@@ -457,20 +436,8 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.ListSubjects(t.Context(), &storagepb.ListSubjectsReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("EnsureDatasetPeriod", func(t *testing.T) {
-		_, err := adapter.EnsureDatasetPeriod(t.Context(), &storagepb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("GetDatasetPeriodStatus", func(t *testing.T) {
-		_, err := adapter.GetDatasetPeriodStatus(t.Context(), &storagepb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	t.Run("CommitTimeSeriesBatch", func(t *testing.T) {
 		_, err := adapter.CommitTimeSeriesBatch(t.Context(), &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
-	t.Run("RecordDatasetPeriodFailures", func(t *testing.T) {
-		_, err := adapter.RecordDatasetPeriodFailures(t.Context(), &storagepb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
 	t.Run("UpsertFields", func(t *testing.T) {
@@ -500,7 +467,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 32)
+	require.Len(t, wire.calls, 29)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

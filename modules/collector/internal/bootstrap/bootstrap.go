@@ -455,7 +455,6 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 		}
 	}
 	maintenanceSpaceCursor := 0
-	executionSweeps := make(map[string]*executionSweep, len(spaceIDs))
 	retentionConfig := cfg.CollectorRetention
 	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
@@ -463,7 +462,6 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 		for _, spaceID := range spaceIDs {
 			metrics.ObserveMaintenanceDeletes(spaceID, nil)
 		}
-		budgets := collectorMaintenanceBudgets(retentionConfig.MaxRowsPerPass)
 		start := maintenanceSpaceCursor % len(spaceIDs)
 		maintenanceSpaceCursor = nextMaintenanceSpaceCursor(start, len(spaceIDs))
 		for offset := 0; offset < len(spaceIDs); offset++ {
@@ -472,43 +470,16 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 			}
 			spaceID := spaceIDs[(start+offset)%len(spaceIDs)]
 			deletedRows := make(map[string]int64)
-			writeTargetBudget := maintenanceBudget(budgets.writeTargets, len(spaceIDs), offset)
-			executionCutoff := now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention))
-			sweep := executionSweeps[spaceID]
-			if sweep == nil {
-				sweep = &executionSweep{}
-				executionSweeps[spaceID] = sweep
-			}
-			targetsDeleted, instancesDeleted, err := sweepScheduledExecutionDetails(passCtx, dbm.TaskInstances(), sweep, spaceID,
-				executionCutoff, executionSweepDeadline(passCtx, time.Now(), retentionConfig.timeout()/4, len(spaceIDs)-offset),
-				writeTargetBudget, maintenanceBudget(budgets.instances, len(spaceIDs), offset))
-			if err != nil {
-				passErrors = append(passErrors, fmt.Errorf("cleanup scheduled execution details for space %s: %w", spaceID, err))
-			} else {
-				deletedRows["write_targets"] += targetsDeleted
-				deletedRows["instances"] = instancesDeleted
-				if targetsDeleted+instancesDeleted > 0 {
-					log.Infof("cleaned scheduled execution details space=%s write_targets=%d task_instances=%d", spaceID, targetsDeleted, instancesDeleted)
-				}
-			}
-			if runsDeleted, err := drainMaintenancePages(passCtx, maintenanceBudget(budgets.runs, len(spaceIDs), offset), maintenancePageRows,
-				func(ctx context.Context, limit int) (int64, error) {
-					return dbm.Runs().CleanupScheduledTerminalSpace(ctx, spaceID, now.Add(-retentionConfig.duration(retentionConfig.ScheduledRunSummaryRetention)), limit)
-				}); err != nil {
-				passErrors = append(passErrors, fmt.Errorf("cleanup terminal scheduled Runs for space %s: %w", spaceID, err))
-			} else {
-				deletedRows["runs"] = runsDeleted
-			}
 			readinessDeleted, err := dbm.PeriodReadiness().CleanupReportedRetentionInSpace(
 				passCtx, spaceID, now.Add(-cfg.PeriodReadiness.ParentRetention), cfg.PeriodReadiness.ItemRetention,
-				maintenanceBudget(budgets.periodReadiness, len(spaceIDs), offset),
+				maintenanceBudget(retentionConfig.MaxRowsPerPass, len(spaceIDs), offset),
 			)
 			if err != nil {
 				passErrors = append(passErrors, fmt.Errorf("cleanup reported PeriodReadiness for space %s: %w", spaceID, err))
 			} else {
 				deletedRows["period_readiness"] = readinessDeleted
 			}
-			if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, spaceID, now.Add(-retentionConfig.duration(retentionConfig.PeriodSnapshotRetention)), now, deletedRows); err != nil {
+			if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, spaceID, now, deletedRows); err != nil {
 				log.WarnContextf(passCtx, "Collector store metrics refresh failed space=%s: %v", spaceID, err)
 			}
 		}
@@ -576,26 +547,11 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	}
 }
 
-func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *marketfetch.Metrics, spaceID string, before, now time.Time, deleted map[string]int64) error {
+func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *marketfetch.Metrics, spaceID string, now time.Time, deleted map[string]int64) error {
 	metrics.ObserveMaintenanceDeletes(spaceID, deleted)
 	statsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	return metrics.RefreshOperationalStats(statsCtx, db, spaceID, before, now)
-}
-
-// executionSweepDeadline gives one Space an equal share of the pass time that
-// is left, keeping `reserve` for the steps after the sweep (Runs, readiness,
-// and Storage period reconciliation).
-func executionSweepDeadline(ctx context.Context, now time.Time, reserve time.Duration, spacesLeft int) time.Time {
-	passDeadline, ok := ctx.Deadline()
-	if !ok || spacesLeft <= 0 {
-		return now
-	}
-	available := passDeadline.Sub(now) - reserve
-	if available <= 0 {
-		return now
-	}
-	return now.Add(available / time.Duration(spacesLeft))
+	return metrics.RefreshOperationalStats(statsCtx, db, spaceID, now)
 }
 
 func maintenanceBudget(total, spaces, index int) int {
@@ -614,66 +570,6 @@ func nextMaintenanceSpaceCursor(current, spaces int) int {
 		return 0
 	}
 	return (current + 1) % spaces
-}
-
-type collectorMaintenanceRowBudget struct {
-	batchItems      int
-	batches         int
-	retries         int
-	writeTargets    int
-	instances       int
-	runs            int
-	periodReadiness int
-	periodSnapshots int
-	periodManifests int
-}
-
-func (b collectorMaintenanceRowBudget) total() int {
-	return b.batchItems + b.batches + b.retries + b.writeTargets + b.instances + b.runs + b.periodReadiness + b.periodSnapshots + b.periodManifests
-}
-
-func collectorMaintenanceBudgets(total int) collectorMaintenanceRowBudget {
-	if total < 9 {
-		return collectorMaintenanceRowBudget{}
-	}
-	const weightTotal = 50000 - 9
-	remainingRows := total - 9
-	budget := collectorMaintenanceRowBudget{
-		batchItems:      1 + remainingRows*(11500-1)/weightTotal,
-		batches:         1 + remainingRows*(500-1)/weightTotal,
-		retries:         1 + remainingRows*(10000-1)/weightTotal,
-		writeTargets:    1 + remainingRows*(12000-1)/weightTotal,
-		instances:       1 + remainingRows*(10000-1)/weightTotal,
-		runs:            1 + remainingRows*(3000-1)/weightTotal,
-		periodReadiness: 1 + remainingRows*(1000-1)/weightTotal,
-		periodSnapshots: 1 + remainingRows*(1000-1)/weightTotal,
-		periodManifests: 1 + remainingRows*(1000-1)/weightTotal,
-	}
-	remaining := total - budget.total()
-	for index := 0; remaining > 0; index = (index + 1) % 9 {
-		switch index {
-		case 0:
-			budget.batchItems++
-		case 1:
-			budget.batches++
-		case 2:
-			budget.retries++
-		case 3:
-			budget.writeTargets++
-		case 4:
-			budget.instances++
-		case 5:
-			budget.runs++
-		case 6:
-			budget.periodReadiness++
-		case 7:
-			budget.periodSnapshots++
-		case 8:
-			budget.periodManifests++
-		}
-		remaining--
-	}
-	return budget
 }
 
 func marketFetchSpaceID() string {

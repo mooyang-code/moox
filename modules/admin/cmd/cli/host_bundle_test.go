@@ -181,7 +181,7 @@ func TestHostBundleExportsOnlyExternalAccessKeysAcrossRotation(t *testing.T) {
 	registryPath := filepath.Join(first.BundleDir, first.VerificationFile)
 	registry, err := gatewayauth.LoadCredentialRegistry(registryPath)
 	require.NoError(t, err)
-	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.collector.MarketFetchRuntime/ClaimTimerBatch", TargetNode: "access@compute-1", Callee: "trpc.moox.collector.MarketFetchRuntime", Func: "ClaimTimerBatch"}
+	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch", TargetNode: "access@compute-1", Callee: "trpc.moox.storage.PrimaryStore", Func: "CommitTimeSeriesBatch"}
 	verify := func(registry *gatewayauth.CredentialRegistry, key keys.SigningKey) error {
 		header, err := gatewayauth.Sign(key.Credentials(), request, time.Now())
 		require.NoError(t, err)

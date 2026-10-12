@@ -34,14 +34,14 @@ func TestEventBusIssuanceIsAtomicAndRefusesLostIdentity(t *testing.T) {
 	require.Zero(t, count(), "a failed server insert must also roll back CA and role tokens")
 	require.NoError(t, db.Exec("DROP TRIGGER reject_synthetic_server").Error)
 	require.NoError(t, runEventBusCredentialsCommand(args, &output, &bytes.Buffer{}))
-	require.EqualValues(t, 13, count())
+	require.EqualValues(t, 11, count())
 	for _, lost := range []string{"eventbus_tls_server", "eventbus_tls_ca"} {
 		t.Run(lost, func(t *testing.T) {
 			require.NoError(t, db.Exec("UPDATE t_secrets SET c_is_deleted = 1 WHERE c_key_id = ?", lost).Error)
 			output.Reset()
 			require.Error(t, runEventBusCredentialsCommand(args, &output, &bytes.Buffer{}))
 			require.Empty(t, output.String())
-			require.EqualValues(t, 13, count(), "missing half of an issued TLS identity must never create a replacement")
+			require.EqualValues(t, 11, count(), "missing half of an issued TLS identity must never create a replacement")
 			require.NoError(t, db.Exec("UPDATE t_secrets SET c_is_deleted = 0 WHERE c_key_id = ?", lost).Error)
 		})
 	}

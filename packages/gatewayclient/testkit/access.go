@@ -35,7 +35,6 @@ type AccessOptions struct {
 	AccessBinary, GatewayBinary string
 	HostID                      string
 	StorageAddress              string
-	RuntimeAddress              string
 	ExternalCredentials         []gatewayauth.Credentials
 	// SCF publication forbids loopback endpoints. Use a local interface in its
 	// runtime integration tests, while keeping the internal gateway on loopback.
@@ -53,7 +52,7 @@ func StartAccess(t *testing.T, options AccessOptions) Access {
 	gatewayReady := filepath.Join(root, "gateway.ready")
 	gateway := start(t, root, options.GatewayBinary, append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+internal.Secret),
 		"-mode=access-native", "-node-id="+options.HostID, "-upstream-addr="+options.StorageAddress,
-		"-runtime-upstream-addr="+options.RuntimeAddress, "-ready-file="+gatewayReady,
+		"-ready-file="+gatewayReady,
 		"-nonce-dir="+filepath.Join(root, "gateway-nonces"), "-key-id="+internal.KeyID)
 	var gatewayAddress string
 	wait(t, gateway, func() bool {

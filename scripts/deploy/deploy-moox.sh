@@ -1921,7 +1921,6 @@ COLLECTOR_ENV=(
   "MOOX_SPACE_ID=${MOOX_SPACE_ID:-crypto}"
   "MOOX_SPACE_IDS=${MOOX_SPACE_IDS:-${MOOX_SPACE_ID:-crypto}}"
   "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
-  "MOOX_EVENTBUS_CREDENTIAL_FILE=${MOOX_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/collector-market-fetch-consumer.yaml}"
 )
 
 # moox-factor-mgr keeps the factor catalog; it neither consumes EventBus nor
@@ -2420,8 +2419,8 @@ start_admin() {
     local eventbus_credentials_complete=1 credential_name
     for credential_name in ca.pem server.pem server-key.pem users.yaml internal-admin.yaml \
       archive-eventbus.yaml \
-      hostagent-publisher.yaml market-fetch-publisher.yaml metrics-publisher.yaml \
-      collector-market-fetch-consumer.yaml factor-eventbus.yaml \
+      hostagent-publisher.yaml metrics-publisher.yaml \
+      factor-eventbus.yaml \
       monitor-observability.yaml \
       storage-eventbus.yaml strategy-eventbus.yaml trade-eventbus.yaml; do
       [[ -s "${eventbus_credentials_dir}/${credential_name}" ]] || eventbus_credentials_complete=0

@@ -38,12 +38,9 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "kline-native", "kline-native, admin-native, doctor-native, cloudnode-native or collector-period-native")
-	routeScope := flag.String("route-scope", "", "test route scope")
+	mode := flag.String("mode", "kline-native", "access-native, kline-native, storage-native, egress-native, doctor-native, admin-native or cloudnode-native")
 	nodeID := flag.String("node-id", "", "test host ID")
 	upstream := flag.String("upstream-addr", "", "loopback fixture upstream")
-	metadata := flag.String("metadata-upstream-addr", "", "optional metadata fixture upstream")
-	runtimeAddress := flag.String("runtime-upstream-addr", "", "optional Collector runtime fixture upstream")
 	address := flag.String("listen-addr", "127.0.0.1:0", "fixture listener")
 	ready := flag.String("ready-file", "", "fixture readiness file")
 	nonces := flag.String("nonce-dir", "", "fixture nonce directory")
@@ -52,7 +49,7 @@ func main() {
 	var err error
 	switch *mode {
 	case "access-native":
-		err = runAccessNative(*nodeID, *upstream, *runtimeAddress, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+		err = runAccessNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "kline-native":
 		err = runKlineNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "storage-native":
@@ -65,8 +62,6 @@ func main() {
 		err = runAdminNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	case "cloudnode-native":
 		err = runCloudNodeNative(*nodeID, *upstream, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
-	case "collector-period-native":
-		err = runCollectorPeriodNative(*routeScope, *upstream, *metadata, *nodeID, *address, *ready, *nonces, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 	default:
 		err = errors.New("unsupported native fixture mode")
 	}
@@ -78,7 +73,7 @@ func main() {
 
 // runAccessNative uses the real router verification boundary. Access supplies
 // its own internal signature; no synthetic caller or signing adapter is used.
-func runAccessNative(hostID, storageAddress, runtimeAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+func runAccessNative(hostID, storageAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
@@ -86,7 +81,6 @@ func runAccessNative(hostID, storageAddress, runtimeAddress, listenAddress, read
 	var routes []gatewayroute.Route
 	for _, selected := range []struct{ id, path, address string }{
 		{"storage-primary", "trpc.moox.storage.PrimaryStore", storageAddress},
-		{"collector", "trpc.moox.collector.MarketFetchRuntime", runtimeAddress},
 	} {
 		if selected.address == "" {
 			continue
@@ -148,17 +142,8 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	if err != nil {
 		return err
 	}
-	internalCaller := caller
-	externalPrincipal := ""
-
-	// The legacy period harness uses collector credentials for its simulated
-	// SCF worker. ClaimTimerBatch belongs to scf-collector's external policy;
-	// this test boundary models Access without widening the production ACL.
-	if caller == "collector" && len(routes) == 1 && routes[0].ServicePath == "trpc.moox.collector.MarketFetchRuntime" {
-		internalCaller, externalPrincipal = "access", "scf-collector"
-	}
 	digest := sha256.Sum256([]byte("synthetic fixture/" + secret))
-	internal := gatewayauth.Credentials{Caller: internalCaller, KeyID: keyID, Secret: hex.EncodeToString(digest[:])}
+	internal := gatewayauth.Credentials{Caller: caller, KeyID: keyID, Secret: hex.EncodeToString(digest[:])}
 	if caller == "access" {
 		internal = incoming
 	}
@@ -189,14 +174,11 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 			limit = servicecatalog.DefaultMaxBodyBytes
 		}
 		for _, method := range selected.AllowedMethods {
-			if !catalog.Allowed(internalCaller, service.Path, method) {
-				if externalPrincipal != "" {
-					continue
-				}
+			if !catalog.Allowed(caller, service.Path, method) {
 				return errors.New("fixture caller/method absent from catalog")
 			}
 			raw.Routes = append(raw.Routes, &pb.HostGatewayRoute{ComponentId: componentID, ServicePath: service.Path, Method: method,
-				Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMs: service.TimeoutFor(method), MaxBodyBytes: limit, ReadOnly: catalog.ReadOnly(service.Path, method), Callers: []string{internalCaller}})
+				Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMs: service.TimeoutFor(method), MaxBodyBytes: limit, ReadOnly: catalog.ReadOnly(service.Path, method), Callers: []string{caller}})
 		}
 	}
 	dir.Version, err = dir.VersionHash()
@@ -207,7 +189,7 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	for path, hosts := range dir.Services {
 		raw.Directory.Services[path] = &directorypb.ServiceHosts{HostIds: hosts}
 	}
-	raw.VerificationKeys = []*pb.GatewayVerificationKey{{Caller: internalCaller, KeyId: keyID, Secret: []byte(internal.Secret)}}
+	raw.VerificationKeys = []*pb.GatewayVerificationKey{{Caller: caller, KeyId: keyID, Secret: []byte(internal.Secret)}}
 	raw.Hash, err = pb.SnapshotHash(raw)
 	if err != nil {
 		return err
@@ -256,9 +238,6 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 		if _, err := gatewayauth.Verify(incoming, gatewayauth.Request{Method: "POST", Path: path, TargetNode: hostID, Callee: servicePath, Func: method, Body: body}, headers, time.Now()); err != nil {
 			return nil, err
 		}
-		if externalPrincipal != "" && !catalog.PrincipalAllowed(externalPrincipal, servicePath, method) {
-			return nil, errors.New("caller is not allowed for service/method")
-		}
 		signed, err := gatewayauth.Sign(internal, gatewayauth.Request{Method: "POST", Path: path, TargetNode: hostID, Callee: servicePath, Func: method, Body: body}, time.Now())
 		if err != nil {
 			return nil, err
@@ -301,77 +280,6 @@ func runNativeRoutes(hostID string, routes []gatewayroute.Route, caller, listenA
 	case err := <-done:
 		return err
 	}
-}
-
-func runCollectorPeriodNative(scope, upstreamAddress, metadataUpstreamAddress, nodeID, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	routes, err := loadCollectorPeriodRoutesWithMetadata(scope, upstreamAddress, metadataUpstreamAddress)
-	if err != nil {
-		return err
-	}
-	return runNativeRoutes(nodeID, routes, "collector", listenAddress, readyFile, nonceDirectory, keyID, secret)
-}
-
-func loadCollectorPeriodRoutesWithMetadata(scope, upstreamAddress, metadataUpstreamAddress string) ([]gatewayroute.Route, error) {
-	routes, err := loadCollectorPeriodRoutes(scope, upstreamAddress)
-	if err != nil {
-		return nil, err
-	}
-	if metadataUpstreamAddress == "" {
-		return routes, nil
-	}
-	if scope != "storage-period" {
-		return nil, errors.New("metadata-upstream-addr requires storage-period route-scope")
-	}
-	metadata, err := loadCollectorPeriodRoutes("storage-metadata", metadataUpstreamAddress)
-	if err != nil {
-		return nil, err
-	}
-	return append(routes, metadata...), nil
-}
-
-// Fixture routes use the current catalog and retain only the methods exercised
-// by this scenario. There is no deployment seed or alternate ACL source.
-func loadCollectorPeriodRoutes(scope, upstreamAddress string) ([]gatewayroute.Route, error) {
-	host, port, err := net.SplitHostPort(upstreamAddress)
-	number, portErr := strconv.Atoi(port)
-	if err != nil || (host != "127.0.0.1" && host != "::1") || portErr != nil || number < 1 || number > 65535 {
-		return nil, errors.New("upstream-addr must be a loopback host:port")
-	}
-	component, path := "storage-primary", "trpc.moox.storage.PrimaryStore"
-	required := []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}
-	switch scope {
-	case "storage-period":
-	case "storage-metadata":
-		path = "trpc.moox.storage.Metadata"
-		required = []string{"ApplyTagSnapshot", "GetTag", "ListSubjects", "ResolveSubjects"}
-	case "collector-runtime":
-		component, path = "collector", "trpc.moox.collector.MarketFetchRuntime"
-		required = []string{"ClaimTimerBatch"}
-	default:
-		return nil, errors.New("unsupported route-scope")
-	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return nil, err
-	}
-	service, ok := catalog.Service(path)
-	if !ok {
-		return nil, errors.New("period fixture service is missing from the catalog")
-	}
-	for _, method := range required {
-		allowed := catalog.Allowed("collector", path, method)
-		if scope == "collector-runtime" {
-			allowed = catalog.PrincipalAllowed("scf-collector", path, method)
-		}
-		if !slices.Contains(service.Methods, method) || !allowed {
-			return nil, errors.New("period fixture method is not allowed by the catalog")
-		}
-	}
-	route := gatewayroute.Route{ServiceID: component, ServicePath: path, Address: upstreamAddress, AllowedMethods: required, AllowedCallers: []string{"collector"}, TimeoutMS: service.TimeoutMS, MaxBodyBytes: service.MaxBodyBytes}
-	if _, err := gatewayroute.NormalizeAndHash("period-fixture", []gatewayroute.Route{route}); err != nil {
-		return nil, err
-	}
-	return []gatewayroute.Route{route}, nil
 }
 
 func writeReadyFile(path, value string) error {

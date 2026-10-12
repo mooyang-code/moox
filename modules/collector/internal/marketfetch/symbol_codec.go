@@ -4,56 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
-	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
-
-// TimerRequestFromEnv parses only the managed identity used
-// to Claim frozen work. Membership and write bindings come from Collector.
-type TimerInvocation struct {
-	Claim     *collectorpb.ClaimTimerBatchReq
-	DNSRoutes map[string]sources.DNSResolution
-}
-
-func TimerRequestFromEnv(requestID, functionName string, now time.Time) (TimerInvocation, error) {
-	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-	functionName = strings.TrimSpace(functionName)
-	if functionName == "" {
-		functionName = strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
-	}
-	requestID = strings.TrimSpace(requestID)
-	groupID, groupCount, err := timerGroupIdentity(spaceID)
-	if err != nil {
-		return TimerInvocation{}, err
-	}
-	bindingHash := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_BINDING_HASH"))
-	if spaceID == "" || functionName == "" || requestID == "" || bindingHash == "" ||
-		groupCount <= 0 || groupID < 0 || groupID >= groupCount {
-		return TimerInvocation{}, fmt.Errorf("timer claim identity is incomplete")
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
-	if err != nil {
-		return TimerInvocation{}, err
-	}
-	return TimerInvocation{
-		Claim: &collectorpb.ClaimTimerBatchReq{
-			SpaceId: spaceID, FunctionName: functionName, RequestId: requestID,
-			GroupId: uint32(groupID), GroupCount: uint32(groupCount), BindingHash: bindingHash, TickTime: now.UTC().Unix(),
-		},
-		DNSRoutes: dnsRoutes,
-	}, nil
-}
 
 func defaultInstrumentTypeForMarket(marketID, marketType string) string {
 	switch strings.ToLower(strings.TrimSpace(marketID)) {
@@ -67,32 +24,6 @@ func defaultInstrumentTypeForMarket(marketID, marketType string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(marketType))
 	}
-}
-
-func timerGroupIdentity(spaceID string) (int, int, error) {
-	groupID := 0
-	groupCount := 0
-	for name, target := range map[string]*int{
-		"MOOX_MARKET_FETCH_GROUP_ID":    &groupID,
-		"MOOX_MARKET_FETCH_GROUP_COUNT": &groupCount,
-	} {
-		raw := strings.TrimSpace(os.Getenv(name))
-		if raw == "" {
-			continue
-		}
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 0 {
-			return 0, 0, fmt.Errorf("%s must be a non-negative integer", name)
-		}
-		*target = parsed
-	}
-	if groupCount <= 0 {
-		return 0, 0, fmt.Errorf("timer group count is required")
-	}
-	if groupID >= groupCount {
-		return 0, 0, fmt.Errorf("timer group id %d is outside [0,%d)", groupID, groupCount)
-	}
-	return groupID, groupCount, nil
 }
 
 func stockProviderSymbol(subjectID string) (string, error) {

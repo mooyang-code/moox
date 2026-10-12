@@ -54,7 +54,8 @@ func TestMaintenanceRunnerRunsPassesSerially(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, runner.Start(ctx))
+	_, startErr := runner.StartWithDone(ctx)
+	require.NoError(t, startErr)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -75,11 +76,14 @@ func TestMaintenanceRunnerValidatesScheduleAndSingleStart(t *testing.T) {
 		{interval: time.Minute, offset: time.Minute, timeout: time.Second},
 		{interval: time.Minute, offset: 35 * time.Second, timeout: 30 * time.Second},
 	} {
-		require.Error(t, NewMaintenanceRunner(test.interval, test.offset, test.timeout, pass).Start(context.Background()))
+		_, err := NewMaintenanceRunner(test.interval, test.offset, test.timeout, pass).StartWithDone(context.Background())
+		require.Error(t, err)
 	}
 	runner := NewMaintenanceRunner(time.Hour, 0, time.Minute, pass)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, runner.Start(ctx))
-	require.Error(t, runner.Start(ctx))
+	_, startErr := runner.StartWithDone(ctx)
+	require.NoError(t, startErr)
+	_, secondErr := runner.StartWithDone(ctx)
+	require.Error(t, secondErr)
 }

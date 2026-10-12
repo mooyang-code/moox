@@ -24,7 +24,7 @@ func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *te
 	reg := prometheus.NewRegistry()
 	m := marketfetch.NewMetrics(reg)
 	now := time.Now().UTC()
-	require.NoError(t, observeCollectorMaintenanceSpace(context.Background(), db, m, "crypto", now.Add(-24*time.Hour), now, map[string]int64{"runs": 2}))
+	require.NoError(t, observeCollectorMaintenanceSpace(context.Background(), db, m, "crypto", now, map[string]int64{"period_readiness": 2}))
 	families, err := reg.Gather()
 	require.NoError(t, err)
 	values := map[string]float64{}
@@ -32,7 +32,7 @@ func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *te
 		for _, metric := range family.Metric {
 			if family.GetName() == "moox_collector_maintenance_deleted_rows" {
 				for _, label := range metric.Label {
-					if label.GetName() == "table" && label.GetValue() == "runs" {
+					if label.GetName() == "table" && label.GetValue() == "period_readiness" {
 						values["deleted"] = metric.GetGauge().GetValue()
 					}
 				}
@@ -45,7 +45,7 @@ func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *te
 	require.Equal(t, map[string]float64{"deleted": 2, "healthy": 1}, values)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	require.Error(t, observeCollectorMaintenanceSpace(ctx, db, m, "crypto", now, now, nil))
+	require.Error(t, observeCollectorMaintenanceSpace(ctx, db, m, "crypto", now, nil))
 }
 
 type inventoryReconcilerStub struct {

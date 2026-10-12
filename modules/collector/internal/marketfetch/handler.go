@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -371,16 +370,6 @@ func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows
 	return s.Storage.UpsertFields(ctx, rows)
 }
 
-func (s *reservedDeadlineStorage) EnsureDatasetPeriod(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	storage, err := s.periodStorage("EnsureDatasetPeriod")
-	if err != nil {
-		return domain.PeriodStorageState{}, err
-	}
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	return storage.EnsureDatasetPeriod(ctx, expectation)
-}
-
 func (s *reservedDeadlineStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, sourceEventID string) error {
 	storage, err := s.periodStorage("CommitTimeSeriesBatch")
 	if err != nil {
@@ -389,26 +378,6 @@ func (s *reservedDeadlineStorage) CommitTimeSeriesBatch(_ context.Context, expec
 	ctx, cancel := s.storageContext()
 	defer cancel()
 	return storage.CommitTimeSeriesBatch(ctx, expectation, rows, sourceEventID)
-}
-
-func (s *reservedDeadlineStorage) RecordDatasetPeriodFailures(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, indexes []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
-	storage, err := s.periodStorage("RecordDatasetPeriodFailures")
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	return storage.RecordDatasetPeriodFailures(ctx, expectation, indexes)
-}
-
-func (s *reservedDeadlineStorage) GetDatasetPeriodStatus(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	storage, err := s.periodStorage("GetDatasetPeriodStatus")
-	if err != nil {
-		return domain.PeriodStorageState{}, err
-	}
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	return storage.GetDatasetPeriodStatus(ctx, expectation)
 }
 
 func (s *reservedDeadlineStorage) periodStorage(method string) (periodStorage, error) {

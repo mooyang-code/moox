@@ -21,6 +21,6 @@ go test -count=1 ./modules/collector/...
 
 进程内 Metadata/Primary 调用使用共享客户端；`storage.gateway_target` 暂供 SCF 外部调用使用，随主计划 E2 迁移。发布租约经同一进程客户端调用 Admin，保留空间标识、fencing token 与写入单发。旧 SysDeploy 地址发现、HTTP 租约适配与相关内部配置已删除；DNS 随 E4 迁移。Collector 四个程序均不需要 CGO，在本机编译或交叉编译。
 
-CollectMgr 仅在 loopback 11402 提供 tRPC，MarketFetchRuntime 仅在 loopback 11422 提供 tRPC。Monitor 清单、CLI 任务管理和控制台均经主机网关调用；旧 11418 HTTP 监听已删除。
+CollectMgr 仅在 loopback 11402 提供 tRPC。Monitor 清单、CLI 任务管理和控制台均经主机网关调用；旧 11418 HTTP 监听已删除。
 
 CloudNode 的节点清单、批次查询、函数调用和运行配置提交也复用进程级网关客户端，空间标识通过元数据传递。运行配置提交只发送一次；发送后的网络或解码错误按结果未知处理，保留发布围栏。Admin 发布租约的 HTTP 调用随 D2c 迁移。

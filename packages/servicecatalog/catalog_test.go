@@ -180,7 +180,7 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string][]Permission{
-		"scf-collector": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus", "UpsertFields"}}, {Service: "trpc.moox.collector.MarketFetchRuntime", Methods: []string{"ClaimTimerBatch"}}},
+		"scf-collector": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"CommitTimeSeriesBatch", "UpsertFields"}}},
 		"factor-engine": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "WriteFactorRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}}},
 		"moox-skill":    {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}},
 	}
@@ -284,10 +284,8 @@ func TestReadOnlyMethodsDoNotIncludeWrites(t *testing.T) {
 		{"trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", true},
 		{"trpc.moox.storage.Metadata", "ListDatasetColumns", true},
 		{"trpc.moox.ops.SecretMgr", "GetSecretValue", true},
-		{"trpc.moox.storage.PrimaryStore", "EnsureDatasetPeriod", false},
 		{"trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"trpc.moox.storage.PrimaryStore", "ReportFactorPeriodComputed", false},
-		{"trpc.moox.collector.MarketFetchRuntime", "ClaimTimerBatch", false},
 		{"trpc.moox.factor.FactorEngine", "PullRecalcJob", false},
 		{"trpc.moox.egress.Proxy", "Do", false},
 		{GatewayControlPath, "ReportStatus", false},

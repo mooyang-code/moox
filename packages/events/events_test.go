@@ -18,7 +18,6 @@ func TestBuiltInEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"event.market.fetch.batch.completed@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
 		"event.storage.collector.period.completed@1",
@@ -31,7 +30,6 @@ func TestBuiltInEvents(t *testing.T) {
 	wantOwners := map[string]string{
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",
-		"event.market.fetch.batch.completed@1":            "collector",
 		"event.storage.collector.period.completed@1":      "storage",
 		"event.storage.dataset.factor_period.computed@1":  "storage",
 		"event.storage.dataset.rows.upserted@2":           "storage",

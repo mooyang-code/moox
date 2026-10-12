@@ -70,11 +70,6 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 		metadata.views[ids.ViewID] = owned.views[ids.ViewID]
 	}
 	periodTime := now.Add(-time.Minute)
-	require.NoError(t, db.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
-		Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: activeIDs.DatasetID, Frequency: "1m", PeriodTime: periodTime},
-		SeriesHash: "storage-series-hash", ExpectedCount: 1, DeadlineAt: now,
-		Status: domain.PeriodStatusComplete, ConfirmedAt: now,
-	}))
 	// A newer local resample-readiness row is not authoritative for a direct
 	// market-fetch task and must not advance its inventory watermark.
 	legacyPeriodTime := periodTime.Add(time.Minute)

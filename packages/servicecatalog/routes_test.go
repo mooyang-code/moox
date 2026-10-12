@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {152, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "7ce27be1dc253a1a03d5c8a5f6c2e074bc5f44f08d139fc83509368da05e2a3d"},
-		"storage":   {100, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "3c493bcc28fbfde26d6c7341b496ad5fa917ff9c7f6e9517dbe76962b38e91ac"},
-		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "13116fd8d4e94f3f035cf667687edf0772493735266edc97912e35a7e23ed148"},
+		"control":   {151, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "c9871d3e5ac6bf6621938ebb131709a27bcc0bd06fb2507599269c379be5b5ea"},
+		"storage":   {100, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "ff2db42e0c055ccbe39d90c9e248b31f2fe9b8bf9ad1d3957cb71c5dede8003e"},
+		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "cf0c78e6614510d464b9500c4459f5a0fa8392684a0347f6b02346ab49ea4c91"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -283,7 +283,7 @@ func TestDisabledHostAndPlacementWithdrawRoutes(t *testing.T) {
 			t.Fatal("disabled placement retains a route")
 		}
 	}
-	if len(compiled.Directory.Services["trpc.moox.collector.MarketFetchRuntime"]) != 0 {
+	if len(compiled.Directory.Services["trpc.moox.collector.CollectMgr"]) != 0 {
 		t.Fatal("disabled placement remains discoverable")
 	}
 	if _, err := c.Compile(p, "unknown"); err == nil {

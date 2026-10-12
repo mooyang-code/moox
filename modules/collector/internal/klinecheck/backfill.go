@@ -2,8 +2,6 @@ package klinecheck
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -705,10 +703,4 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 		log.InfoContextf(ctx, "collector auto backfill job created space=%s dataset=%s job=%s chunks=%d", spaceID, key, jobID, chunks)
 	}
 	return nil
-}
-
-// ShortHash 返回字符串的短摘要，用于日志与名称。
-func ShortHash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:4])
 }

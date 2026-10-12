@@ -77,9 +77,7 @@ func TestProxyUsesOnlyCatalogGrantsAndRecordsDeniedMethods(t *testing.T) {
 	proxy, credential := fixtureProxy(t, forwardFunc(func(_ context.Context, _, _ string, _ int, body []byte) ([]byte, error) { called++; return body, nil }))
 	body := []byte{0x0a, 1, 'a', 0x0a, 1, 'b'}
 	for _, call := range []struct{ service, method string }{
-		{primaryService, "EnsureDatasetPeriod"}, {primaryService, "CommitTimeSeriesBatch"},
-		{primaryService, "RecordDatasetPeriodFailures"}, {primaryService, "GetDatasetPeriodStatus"},
-		{"trpc.moox.collector.MarketFetchRuntime", "ClaimTimerBatch"},
+		{primaryService, "CommitTimeSeriesBatch"},
 		// 补采函数把历史行直接写入 Storage。
 		{primaryService, "UpsertFields"},
 	} {
@@ -87,7 +85,7 @@ func TestProxyUsesOnlyCatalogGrantsAndRecordsDeniedMethods(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, body, response.Data)
 	}
-	require.Equal(t, 6, called)
+	require.Equal(t, 2, called)
 	for _, method := range []string{"ReadTimeSeriesRows", "WriteFactorRows", "DeleteDatasetRows", "unbounded-untrusted-method"} {
 		_, err := proxy.Forward(signedContext(t, credential, "access@storage", primaryService, method, body), &codec.Body{Data: body})
 		require.ErrorContains(t, err, "not allowed")
@@ -97,7 +95,7 @@ func TestProxyUsesOnlyCatalogGrantsAndRecordsDeniedMethods(t *testing.T) {
 		}
 		require.Equal(t, 1.0, testutil.ToFloat64(proxy.denials.WithLabelValues("scf-collector", primaryService, label, "permission")))
 	}
-	require.Equal(t, 6, called)
+	require.Equal(t, 2, called)
 }
 
 func TestProxyRejectsReplayTamperingWrongInstanceUnknownCallerAndNonceFailure(t *testing.T) {

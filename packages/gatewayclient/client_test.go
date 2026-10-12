@@ -176,19 +176,17 @@ func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestExternalReadsResignRetriesAndPeriodWritesRunOnce(t *testing.T) {
+func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 	for _, call := range []struct {
-		service, method string
-		attempts        int
+		caller, service, method string
+		attempts                int
 	}{
-		{"trpc.moox.storage.PrimaryStore", "GetDatasetPeriodStatus", 2},
-		{"trpc.moox.storage.PrimaryStore", "EnsureDatasetPeriod", 1},
-		{"trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 1},
-		{"trpc.moox.storage.PrimaryStore", "RecordDatasetPeriodFailures", 1},
-		{"trpc.moox.collector.MarketFetchRuntime", "ClaimTimerBatch", 1},
+		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", 2},
+		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 1},
+		{"scf-collector", "trpc.moox.storage.PrimaryStore", "UpsertFields", 1},
 	} {
 		t.Run(call.method, func(t *testing.T) {
-			config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: "assigned-scf-key-71", Secret: "fixture-key"},
+			config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: call.caller, KeyID: "assigned-scf-key-71", Secret: "fixture-key"},
 				AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
 			client := newTestClient(t, config)
 			body := []byte{0x0a, 1, 'a', 0x0a, 1, 'b'}

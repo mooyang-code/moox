@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -32,30 +31,12 @@ func (s *capturedStorage) UpsertFields(_ context.Context, rows []*storagepb.RowF
 	return nil
 }
 
-func (s *capturedStorage) EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	return domain.PeriodStorageState{}, nil
-}
-
-func (s *capturedStorage) GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	return domain.PeriodStorageState{}, nil
-}
-
 func (s *capturedStorage) CommitTimeSeriesBatch(_ context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
 	s.committed = append(s.committed, rows...)
 	for _, row := range rows {
 		s.rows = append(s.rows, row.GetRow())
 	}
 	return nil
-}
-
-func (s *capturedStorage) RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
-	return nil, nil
-}
-
-type composedTimerRuntimeClientFunc func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error)
-
-func (f composedTimerRuntimeClientFunc) ClaimTimerBatch(ctx context.Context, req *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
-	return f(ctx, req)
 }
 
 func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {

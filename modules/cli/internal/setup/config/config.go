@@ -191,14 +191,10 @@ func (m Manifest) StoragePolicy() storagepolicy.Policy {
 // CollectorRetention describes the Collector maintenance worker and terminal
 // execution-history retention windows rendered into the Collector config.
 type CollectorRetention struct {
-	MaintenanceInterval          string `toml:"maintenance_interval" json:"maintenance_interval"`
-	MaintenanceOffset            string `toml:"maintenance_offset" json:"maintenance_offset"`
-	MaintenanceTimeout           string `toml:"maintenance_timeout" json:"maintenance_timeout"`
-	MaxRowsPerPass               int    `toml:"max_rows_per_pass" json:"max_rows_per_pass"`
-	ExecutionDetailRetention     string `toml:"execution_detail_retention" json:"execution_detail_retention"`
-	ScheduledRunSummaryRetention string `toml:"scheduled_run_summary_retention" json:"scheduled_run_summary_retention"`
-	TerminalRetryRetention       string `toml:"terminal_retry_retention" json:"terminal_retry_retention"`
-	PeriodSnapshotRetention      string `toml:"period_snapshot_retention" json:"period_snapshot_retention"`
+	MaintenanceInterval string `toml:"maintenance_interval" json:"maintenance_interval"`
+	MaintenanceOffset   string `toml:"maintenance_offset" json:"maintenance_offset"`
+	MaintenanceTimeout  string `toml:"maintenance_timeout" json:"maintenance_timeout"`
+	MaxRowsPerPass      int    `toml:"max_rows_per_pass" json:"max_rows_per_pass"`
 }
 
 type Notification struct {
@@ -987,18 +983,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("collector_retention", "max_rows_per_pass") {
 		out.CollectorRetention.MaxRowsPerPass = 50000
 	}
-	if !md.IsDefined("collector_retention", "execution_detail_retention") {
-		out.CollectorRetention.ExecutionDetailRetention = "6h"
-	}
-	if !md.IsDefined("collector_retention", "scheduled_run_summary_retention") {
-		out.CollectorRetention.ScheduledRunSummaryRetention = "720h"
-	}
-	if !md.IsDefined("collector_retention", "terminal_retry_retention") {
-		out.CollectorRetention.TerminalRetryRetention = "168h"
-	}
-	if !md.IsDefined("collector_retention", "period_snapshot_retention") {
-		out.CollectorRetention.PeriodSnapshotRetention = "720h"
-	}
 	if !md.IsDefined("local_logs", "max_size_mb") {
 		out.LocalLogs.MaxSizeMB = 50
 	}
@@ -1192,19 +1176,8 @@ func validateCollectorRetention(cfg *CollectorRetention) error {
 		// Collector market tick owns its single SQLite connection.
 		return fmt.Errorf("config_invalid: collector_retention.maintenance_timeout must be positive and maintenance_offset + maintenance_timeout must not exceed maintenance_interval")
 	}
-	if cfg.MaxRowsPerPass < 9 || cfg.MaxRowsPerPass > 50000 {
-		return fmt.Errorf("config_invalid: collector_retention.max_rows_per_pass must be between 9 and 50000")
-	}
-	for field, raw := range map[string]string{
-		"execution_detail_retention":      cfg.ExecutionDetailRetention,
-		"scheduled_run_summary_retention": cfg.ScheduledRunSummaryRetention,
-		"terminal_retry_retention":        cfg.TerminalRetryRetention,
-		"period_snapshot_retention":       cfg.PeriodSnapshotRetention,
-	} {
-		duration, err := time.ParseDuration(strings.TrimSpace(raw))
-		if err != nil || duration <= 0 || duration > 365*24*time.Hour {
-			return fmt.Errorf("config_invalid: collector_retention.%s must be greater than 0 and at most 365 days", field)
-		}
+	if cfg.MaxRowsPerPass < 1 || cfg.MaxRowsPerPass > 50000 {
+		return fmt.Errorf("config_invalid: collector_retention.max_rows_per_pass must be between 1 and 50000")
 	}
 	return nil
 }

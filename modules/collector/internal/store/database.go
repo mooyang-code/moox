@@ -19,19 +19,13 @@ import (
 
 // Store owns the Collector SQLite connection and repositories.
 type Store struct {
-	db                   *gorm.DB
-	path                 string
-	taskRepo             *TaskRepository
-	taskItems            *TaskInstanceRepository
-	fetchBatches         *FetchBatchRepository
-	runs                 *RunRepository
-	fetchRetries         *FetchRetryRepository
-	periods              *PeriodReadinessRepository
-	periodSeriesSnapshot *PeriodSeriesSnapshotRepository
-	periodStorageStates  *PeriodStorageStateRepository
-	timerPeriodBatches   *TimerPeriodBatchRepository
-	fetchPlans           *FetchPlanRepository
-	backfill             *BackfillRepository
+	db         *gorm.DB
+	path       string
+	taskRepo   *TaskRepository
+	taskItems  *TaskInstanceRepository
+	periods    *PeriodReadinessRepository
+	fetchPlans *FetchPlanRepository
+	backfill   *BackfillRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -42,11 +36,7 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	}
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Target-level retry/readiness state belongs to the target task. Remove
-		// it before deleting the WriteTarget relation itself.
-		if err := tx.Exec(`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?) AND NOT (c_status = 'permanent_failed' AND c_period_failure_report_state = 'pending')`, spaceID, spaceID, taskID).Error; err != nil {
-			return err
-		}
+		// 目标级的就绪状态属于目标任务，先于 WriteTarget 关系本身删除。
 		if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, taskID).Error; err != nil {
 			return err
 		}
@@ -92,39 +82,6 @@ func (s *Store) HasOtherDatasetWriteTargets(ctx context.Context, spaceID, datase
 	return count > 0, nil
 }
 
-// WaitTaskDrain waits until no planned or dispatched batch still references a
-// task. Disabling a task prevents new planning, but an already invoked SCF may
-// still write to Storage; destructive result deletion must fail closed until
-// that batch reaches a terminal state.
-func (s *Store) WaitTaskDrain(ctx context.Context, spaceID, taskID string, maxWait time.Duration) error {
-	if s == nil || s.fetchBatches == nil {
-		return fmt.Errorf("collector batch repository is not initialized")
-	}
-	if maxWait <= 0 {
-		maxWait = 30 * time.Second
-	}
-	deadline := time.Now().Add(maxWait)
-	for {
-		active, err := s.fetchBatches.HasActiveTask(ctx, strings.TrimSpace(spaceID), strings.TrimSpace(taskID))
-		if err != nil {
-			return fmt.Errorf("check task drain state: %w", err)
-		}
-		if !active {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("task %s/%s still has an active fetch batch", strings.TrimSpace(spaceID), strings.TrimSpace(taskID))
-		}
-		timer := time.NewTimer(200 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
 // Options configures the Collector SQLite store.
 type Options struct {
 	Path            string
@@ -152,13 +109,7 @@ func Open(opts *Options) (*Store, error) {
 	s := &Store{db: db, path: dbPath}
 	s.taskRepo = NewTaskRepository(db)
 	s.taskItems = NewTaskInstanceRepository(db)
-	s.fetchBatches = NewFetchBatchRepository(db)
-	s.runs = NewRunRepository(db)
-	s.fetchRetries = NewFetchRetryRepository(db)
 	s.periods = NewPeriodReadinessRepository(db)
-	s.periodSeriesSnapshot = NewPeriodSeriesSnapshotRepository(db)
-	s.periodStorageStates = NewPeriodStorageStateRepository(db)
-	s.timerPeriodBatches = NewTimerPeriodBatchRepository(db)
 	s.fetchPlans = NewFetchPlanRepository(db)
 	s.backfill = NewBackfillRepository(db)
 	applySQLitePoolConfig(db, opts)
@@ -182,44 +133,12 @@ func (s *Store) TaskInstances() *TaskInstanceRepository {
 	return s.taskItems
 }
 
-func (s *Store) FetchBatches() *FetchBatchRepository {
-	if s == nil {
-		return nil
-	}
-	return s.fetchBatches
-}
-
-func (s *Store) Runs() *RunRepository { return s.runs }
-
-func (s *Store) FetchRetries() *FetchRetryRepository {
-	if s == nil {
-		return nil
-	}
-	return s.fetchRetries
-}
-
 // PeriodReadiness returns the durable period completion repository.
 func (s *Store) PeriodReadiness() *PeriodReadinessRepository {
 	if s == nil {
 		return nil
 	}
 	return s.periods
-}
-
-// PeriodSeriesSnapshot returns the immutable Dataset period series snapshot repository.
-func (s *Store) PeriodSeriesSnapshot() *PeriodSeriesSnapshotRepository {
-	if s == nil {
-		return nil
-	}
-	return s.periodSeriesSnapshot
-}
-
-// PeriodStorageStates returns the authoritative Storage observation repository.
-func (s *Store) PeriodStorageStates() *PeriodStorageStateRepository {
-	if s == nil {
-		return nil
-	}
-	return s.periodStorageStates
 }
 
 // FetchPlans returns the SCF fetch plan repository.
@@ -236,14 +155,6 @@ func (s *Store) Backfill() *BackfillRepository {
 		return nil
 	}
 	return s.backfill
-}
-
-// TimerPeriodBatches returns the durable Timer period claim repository.
-func (s *Store) TimerPeriodBatches() *TimerPeriodBatchRepository {
-	if s == nil {
-		return nil
-	}
-	return s.timerPeriodBatches
 }
 
 // ApplySchema applies schema SQL during service startup.

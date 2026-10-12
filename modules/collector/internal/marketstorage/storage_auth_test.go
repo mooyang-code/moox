@@ -97,7 +97,7 @@ func assertStorageAuthConstructorsFailBeforeProxy(t *testing.T) {
 	require.Zero(t, access.calls, "invalid credentials must never reach Storage")
 }
 
-func TestStorageRuntimeManagedAuthCompletesPeriodRPC(t *testing.T) {
+func TestStorageRuntimeManagedAuthCompletesPeriodCommit(t *testing.T) {
 	setStorageAuthConfig(t, "moox-collector", "host-fallback-key")
 	key := strings.Repeat("a", 64)
 	t.Setenv(storageAppKeysEnv, `{"other":"`+strings.Repeat("b", 64)+`","moox-collector":"`+key+`"}`)
@@ -106,12 +106,6 @@ func TestStorageRuntimeManagedAuthCompletesPeriodRPC(t *testing.T) {
 	gateway := storageGatewayFunc(func(ctx context.Context, service, method string, req, rsp any) error {
 		require.Equal(t, "trpc.moox.storage.PrimaryStore", service)
 		switch method {
-		case "EnsureDatasetPeriod":
-			response, err := access.EnsureDatasetPeriod(ctx, req.(*storagepb.PrimaryEnsureDatasetPeriodReq))
-			if err != nil {
-				return err
-			}
-			proto.Merge(rsp.(proto.Message), response)
 		case "CommitTimeSeriesBatch":
 			response, err := access.CommitTimeSeriesBatch(ctx, req.(*storagepb.PrimaryCommitTimeSeriesBatchReq))
 			if err != nil {
@@ -126,10 +120,8 @@ func TestStorageRuntimeManagedAuthCompletesPeriodRPC(t *testing.T) {
 	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "test")
 	require.NoError(t, err)
 	expectation := validStorageExpectation(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
-	_, err = writer.EnsureDatasetPeriod(context.Background(), expectation)
-	require.NoError(t, err)
 	require.NoError(t, writer.CommitTimeSeriesBatch(context.Background(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}}, "test-event"))
-	require.Equal(t, 2, access.calls)
+	require.Equal(t, 1, access.calls)
 	metadata, err := NewGatewayResampleMetadataClient(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
 	require.NoError(t, err)
 	require.Equal(t, key, metadata.Auth.AppKey)
@@ -178,13 +170,6 @@ type authPeriodClient struct {
 	calls   int
 }
 
-func (c *authPeriodClient) EnsureDatasetPeriod(_ context.Context, req *storagepb.PrimaryEnsureDatasetPeriodReq, _ ...client.Option) (*storagepb.PrimaryEnsureDatasetPeriodRsp, error) {
-	c.calls++
-	require.Equal(c.t, "moox-collector", req.AuthInfo.AppId)
-	require.Equal(c.t, c.wantKey, req.AuthInfo.AppKey)
-	return &storagepb.PrimaryEnsureDatasetPeriodRsp{RetInfo: storageSuccess(), Status: "waiting", DeadlineAt: req.Expectation.DeadlineAt}, nil
-}
-
 func (c *authPeriodClient) CommitTimeSeriesBatch(_ context.Context, req *storagepb.PrimaryCommitTimeSeriesBatchReq, _ ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error) {
 	c.calls++
 	require.Equal(c.t, "moox-collector", req.AuthInfo.AppId)
@@ -210,10 +195,6 @@ func TestInternalGatewayWriterDoesNotRepeatFailedCalls(t *testing.T) {
 		{"CommitTimeSeriesBatch", func(w BatchStorage) error {
 			return w.CommitTimeSeriesBatch(t.Context(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}}, "stable-event")
 		}},
-		{"RecordDatasetPeriodFailures", func(w BatchStorage) error {
-			_, err := w.RecordDatasetPeriodFailures(t.Context(), expectation, []uint32{0})
-			return err
-		}},
 		{"UpsertFields", func(w BatchStorage) error { return w.UpsertFields(t.Context(), nil) }},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
@@ -230,14 +211,4 @@ func TestInternalGatewayWriterDoesNotRepeatFailedCalls(t *testing.T) {
 			require.Equal(t, 1, calls)
 		})
 	}
-	var methods []string
-	gateway := storageGatewayFunc(func(_ context.Context, _, method string, request, response any) error {
-		methods = append(methods, method)
-		return context.DeadlineExceeded
-	})
-	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "collector")
-	require.NoError(t, err)
-	_, err = writer.EnsureDatasetPeriod(t.Context(), expectation)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Equal(t, []string{"EnsureDatasetPeriod", "GetDatasetPeriodStatus"}, methods, "an unknown write outcome is checked once without resending the write")
 }

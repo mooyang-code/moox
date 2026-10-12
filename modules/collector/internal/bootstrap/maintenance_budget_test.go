@@ -37,31 +37,3 @@ func TestNextMaintenanceSpaceCursorAlwaysAdvances(t *testing.T) {
 		t.Fatal("empty Space inventory must reset the maintenance cursor")
 	}
 }
-
-func TestCollectorMaintenanceBudgetsHonorGlobalRowCap(t *testing.T) {
-	for total := 9; total <= 50000; total++ {
-		budgets := collectorMaintenanceBudgets(total)
-		if got := budgets.total(); got != total {
-			t.Fatalf("budgets for cap %d sum to %d", total, got)
-		}
-		if budgets.periodSnapshots < 1 {
-			t.Fatalf("budgets for cap %d must reserve period snapshot cleanup rows: %+v", total, budgets)
-		}
-		if budgets.periodReadiness < 1 {
-			t.Fatalf("budgets for cap %d must reserve PeriodReadiness cleanup rows: %+v", total, budgets)
-		}
-		if budgets.batchItems > 11500 || budgets.batches > 500 || budgets.retries > 10000 ||
-			budgets.writeTargets > 12000 || budgets.instances > 10000 || budgets.runs > 3000 ||
-			budgets.periodReadiness > 1000 || budgets.periodSnapshots > 1000 || budgets.periodManifests > 1000 {
-			t.Fatalf("period budgets exceed process caps: %+v", budgets)
-		}
-	}
-
-	budgets := collectorMaintenanceBudgets(50000)
-	if budgets.runs != 3000 || budgets.periodReadiness != 1000 {
-		t.Fatalf("default budget runs=%d readiness=%d, want 3000/1000: %+v", budgets.runs, budgets.periodReadiness, budgets)
-	}
-	if budgets.total() != 50000 {
-		t.Fatalf("default maintenance budget = %d rows, want 50000", budgets.total())
-	}
-}

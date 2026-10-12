@@ -35,8 +35,6 @@ func eventBusRole(id string) string {
 		return "hostagent-publisher"
 	case "monitor":
 		return "monitor-observability"
-	case "collector":
-		return "collector-market-fetch-consumer"
 	case "storage-primary", "storage-node", "storage-view":
 		return "storage-eventbus"
 	case "archive":

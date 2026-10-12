@@ -41,10 +41,7 @@ type Metadata interface {
 type Primary interface {
 	RegisterSeriesSnapshot(context.Context, *storagepb.PrimaryRegisterSeriesSnapshotReq, ...client.Option) (*storagepb.PrimaryRegisterSeriesSnapshotRsp, error)
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
-	EnsureDatasetPeriod(context.Context, *storagepb.PrimaryEnsureDatasetPeriodReq, ...client.Option) (*storagepb.PrimaryEnsureDatasetPeriodRsp, error)
-	GetDatasetPeriodStatus(context.Context, *storagepb.PrimaryGetDatasetPeriodStatusReq, ...client.Option) (*storagepb.PrimaryGetDatasetPeriodStatusRsp, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq, ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error)
-	RecordDatasetPeriodFailures(context.Context, *storagepb.PrimaryRecordDatasetPeriodFailuresReq, ...client.Option) (*storagepb.PrimaryRecordDatasetPeriodFailuresRsp, error)
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
 	ReportCollectorPeriodCompleted(context.Context, *storagepb.ReportCollectorPeriodCompletedReq, ...client.Option) (*storagepb.ReportCollectorPeriodCompletedRsp, error)
 	ReadFields(context.Context, *storagepb.PrimaryReadFieldsReq, ...client.Option) (*storagepb.PrimaryReadFieldsRsp, error)
@@ -172,20 +169,8 @@ func (c *Client) ReadTimeSeriesRows(ctx context.Context, request *storagepb.Read
 	return invoke[storagepb.ReadTimeSeriesRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", request, options)
 }
 
-func (c *Client) EnsureDatasetPeriod(ctx context.Context, request *storagepb.PrimaryEnsureDatasetPeriodReq, options ...client.Option) (*storagepb.PrimaryEnsureDatasetPeriodRsp, error) {
-	return invoke[storagepb.PrimaryEnsureDatasetPeriodRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "EnsureDatasetPeriod", request, options)
-}
-
-func (c *Client) GetDatasetPeriodStatus(ctx context.Context, request *storagepb.PrimaryGetDatasetPeriodStatusReq, options ...client.Option) (*storagepb.PrimaryGetDatasetPeriodStatusRsp, error) {
-	return invoke[storagepb.PrimaryGetDatasetPeriodStatusRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "GetDatasetPeriodStatus", request, options)
-}
-
 func (c *Client) CommitTimeSeriesBatch(ctx context.Context, request *storagepb.PrimaryCommitTimeSeriesBatchReq, options ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error) {
 	return invoke[storagepb.PrimaryCommitTimeSeriesBatchRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", request, options)
-}
-
-func (c *Client) RecordDatasetPeriodFailures(ctx context.Context, request *storagepb.PrimaryRecordDatasetPeriodFailuresReq, options ...client.Option) (*storagepb.PrimaryRecordDatasetPeriodFailuresRsp, error) {
-	return invoke[storagepb.PrimaryRecordDatasetPeriodFailuresRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "RecordDatasetPeriodFailures", request, options)
 }
 
 func (c *Client) UpsertFields(ctx context.Context, request *storagepb.PrimaryUpsertFieldsReq, options ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {

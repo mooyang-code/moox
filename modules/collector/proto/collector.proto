@@ -373,26 +373,6 @@ message SyncSubjectsRsp {
   repeated SubjectAttributeSyncResult attributes = 3;
 }
 
-// ClaimTimerBatchReq binds one Timer invocation to its durable period batch.
-// Work membership is derived from Collector's persisted manifest, never from
-// client-submitted items or tag names.
-message ClaimTimerBatchReq {
-  string space_id = 1;
-  string function_name = 2;
-  string request_id = 3;
-  uint32 group_id = 4;
-  uint32 group_count = 5;
-  string binding_hash = 6;
-  int64 tick_time = 7;
-}
-
-message ClaimTimerBatchRsp {
-  common.RetInfo ret_info = 1;
-  bool claimed = 2;
-  bytes request_json = 3;
-  int64 period_deadline_at = 4;
-}
-
 // ===== K 线完整性检查与补采 =====
 
 message CheckKlineReq {
@@ -575,8 +555,4 @@ service CollectMgr {
 
   // ----- 采集计划 -----
   rpc GetFetchPlans(GetFetchPlansReq) returns (GetFetchPlansRsp);
-}
-
-service MarketFetchRuntime {
-  rpc ClaimTimerBatch(ClaimTimerBatchReq) returns (ClaimTimerBatchRsp);
 }

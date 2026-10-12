@@ -60,17 +60,6 @@ streams:
     max_age: 24h
     duplicates: 2m
     max_bytes: 134217728
-  - name: MOOX_MARKET_FETCH
-    subjects: ["moox.event.market.fetch.batch.completed.v1.>"]
-    # Collector and Monitor both observe the completion; work_queue would let
-    # the first durable consumer steal the message from the other one.
-    retention: limits
-    discard: old
-    storage: file
-    replicas: 1
-    max_age: 24h
-    duplicates: 10m
-    max_bytes: 134217728
   - name: MOOX_TRADE
     # Automatic execution consumes only the session-scoped weight contract.
     # Historical quantity messages are intentionally not routed into this

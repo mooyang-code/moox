@@ -35,16 +35,15 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "market-fetch-publisher", "collector-market-fetch-consumer", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "market-fetch-publisher": "eventbus_market_fetch_publisher", "collector-market-fetch-consumer": "eventbus_collector_market_fetch_consumer", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
+var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
+var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
 var localEventBusRoles = map[string]bool{
-	"eventbus-internal-admin":         true,
-	"metrics-publisher":               true,
-	"monitor-observability-consumer":  true,
-	"collector-market-fetch-consumer": true,
-	"factor-eventbus":                 true,
-	"strategy-eventbus":               true,
-	"trade-eventbus":                  true,
+	"eventbus-internal-admin":        true,
+	"metrics-publisher":              true,
+	"monitor-observability-consumer": true,
+	"factor-eventbus":                true,
+	"strategy-eventbus":              true,
+	"trade-eventbus":                 true,
 }
 
 type eventbusBundle struct {
@@ -436,17 +435,15 @@ func validateEventBusTLS(rows map[string]model.Secret, natsURL string) error {
 
 func eventBusRoleFiles() map[string]string {
 	return map[string]string{
-		"eventbus-internal-admin":         "internal-admin.yaml",
-		"hostagent-publisher":             "hostagent-publisher.yaml",
-		"metrics-publisher":               "metrics-publisher.yaml",
-		"monitor-observability-consumer":  "monitor-observability.yaml",
-		"storage-eventbus":                "storage-eventbus.yaml",
-		"archive-eventbus":                "archive-eventbus.yaml",
-		"market-fetch-publisher":          "market-fetch-publisher.yaml",
-		"collector-market-fetch-consumer": "collector-market-fetch-consumer.yaml",
-		"factor-eventbus":                 "factor-eventbus.yaml",
-		"strategy-eventbus":               "strategy-eventbus.yaml",
-		"trade-eventbus":                  "trade-eventbus.yaml",
+		"eventbus-internal-admin":        "internal-admin.yaml",
+		"hostagent-publisher":            "hostagent-publisher.yaml",
+		"metrics-publisher":              "metrics-publisher.yaml",
+		"monitor-observability-consumer": "monitor-observability.yaml",
+		"storage-eventbus":               "storage-eventbus.yaml",
+		"archive-eventbus":               "archive-eventbus.yaml",
+		"factor-eventbus":                "factor-eventbus.yaml",
+		"strategy-eventbus":              "strategy-eventbus.yaml",
+		"trade-eventbus":                 "trade-eventbus.yaml",
 	}
 }
 
@@ -469,12 +466,10 @@ func usersYAML(tokens map[string]string) string { // ACLs are deliberately subje
 		"  - username: monitor-observability-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.DELETE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.ACK.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.storage.dataset.rows.upserted.v2.>\", \"moox.event.storage.collector.period.completed.v1.>\", \"moox.event.storage.dataset.factor_period.computed.v1.>\", \"moox.event.storage.view.data.ready.v1.>\", \"moox.event.storage.dataset.sync_point.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.storage_view_factor\", \"$JS.API.CONSUMER.INFO.*.storage_view_metrics\", \"$JS.API.CONSUMER.INFO.*.storage_view_misc\", \"$JS.API.CONSUMER.INFO.*.storage_view_misc.>\", \"$JS.API.CONSUMER.INFO.*.*\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_factor.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_metrics.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_factor.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_metrics.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_misc.>\", \"$JS.ACK.MOOX_STORAGE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: archive-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.ACK.MOOX_STORAGE.moox_archive_kline_v2.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: market-fetch-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.market.fetch.batch.completed.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: collector-market-fetch-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_MARKET_FETCH.*\", \"$JS.ACK.MOOX_MARKET_FETCH.*.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>\", \"$JS.ACK.MOOX_STORAGE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.ACK.MOOX_STORAGE.factor_collector_period_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.collector.period.completed.v1.>\"]}\n      responses: {max_messages: 1, expires: 10s}\n"+
 		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.trade.target.weight_requested.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.ACK.MOOX_STORAGE.strategy_view_data_ready_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.view.data.ready.v1.>\"]}\n"+
 		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
-		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["market-fetch-publisher"], tokens["collector-market-fetch-consumer"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
+		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
 }
 func atomicSecretFile(path string, data []byte) error {
 	dir := filepath.Dir(path)

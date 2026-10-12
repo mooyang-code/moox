@@ -47,7 +47,7 @@ func TestConsumerEventFiltersRejectAmbiguousOrCrossStreamEvents(t *testing.T) {
 	tests := []ConsumerConfig{
 		{Event: DatasetRowsUpserted, Events: []Event{CollectorPeriodCompleted}},
 		{Events: []Event{DatasetRowsUpserted, DatasetRowsUpserted}},
-		{Events: []Event{DatasetRowsUpserted, MarketFetchBatchCompleted}},
+		{Events: []Event{DatasetRowsUpserted, ObservabilityHostSnapshotReported}},
 		{},
 	}
 	for _, cfg := range tests {
@@ -101,13 +101,13 @@ func TestSpaceConsumerFilterOnlyIncludesOneSpace(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := spaceConsumerFilter(registry, SpaceConsumerConfig{
-		ConsumerConfig: ConsumerConfig{Event: MarketFetchBatchCompleted},
+		ConsumerConfig: ConsumerConfig{Event: DatasetRowsUpserted},
 		SpaceID:        "crypto",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := registry.SpacePattern(MarketFetchBatchCompleted, "crypto")
+	want, err := registry.SpacePattern(DatasetRowsUpserted, "crypto")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestSpaceConsumerFilterRejectsEmptySpaceID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = spaceConsumerFilter(registry, SpaceConsumerConfig{ConsumerConfig: ConsumerConfig{Event: MarketFetchBatchCompleted}})
+	_, err = spaceConsumerFilter(registry, SpaceConsumerConfig{ConsumerConfig: ConsumerConfig{Event: DatasetRowsUpserted}})
 	if err == nil || !strings.Contains(err.Error(), "space_id") {
 		t.Fatalf("error = %v, want space_id validation", err)
 	}

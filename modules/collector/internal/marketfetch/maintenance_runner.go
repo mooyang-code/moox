@@ -44,11 +44,6 @@ func ValidateMaintenanceSchedule(interval, offset, timeout time.Duration) error 
 	return nil
 }
 
-func (r *MaintenanceRunner) Start(ctx context.Context) error {
-	_, err := r.StartWithDone(ctx)
-	return err
-}
-
 func (r *MaintenanceRunner) StartWithDone(ctx context.Context) (<-chan struct{}, error) {
 	if r == nil || r.pass == nil {
 		return nil, fmt.Errorf("Collector maintenance runner is not initialized")

@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
@@ -86,9 +85,6 @@ var (
 	DatasetSyncPoint = declareEvent("event.storage.dataset.sync_point", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetSyncPoint{}
 	}, validateDatasetSyncPoint)
-	MarketFetchBatchCompleted = declareEvent("event.market.fetch.batch.completed", 1, "MOOX_MARKET_FETCH", "collector", func() proto.Message {
-		return &marketfetchpb.MarketFetchBatchCompleted{}
-	}, validateMarketFetchBatchCompleted)
 	LogicalAccountTargetWeightRequested = declareEvent("event.trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetWeightRequested{}
 	}, validateLogicalAccountTargetWeightRequested)

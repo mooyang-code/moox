@@ -75,14 +75,10 @@ type SCFAccessEndpoint struct {
 
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
 type CollectorRetentionConfig struct {
-	MaintenanceInterval          string `yaml:"maintenance_interval"`
-	MaintenanceOffset            string `yaml:"maintenance_offset"`
-	MaintenanceTimeout           string `yaml:"maintenance_timeout"`
-	MaxRowsPerPass               int    `yaml:"max_rows_per_pass"`
-	ExecutionDetailRetention     string `yaml:"execution_detail_retention"`
-	ScheduledRunSummaryRetention string `yaml:"scheduled_run_summary_retention"`
-	TerminalRetryRetention       string `yaml:"terminal_retry_retention"`
-	PeriodSnapshotRetention      string `yaml:"period_snapshot_retention"`
+	MaintenanceInterval string `yaml:"maintenance_interval"`
+	MaintenanceOffset   string `yaml:"maintenance_offset"`
+	MaintenanceTimeout  string `yaml:"maintenance_timeout"`
+	MaxRowsPerPass      int    `yaml:"max_rows_per_pass"`
 }
 
 func (c CollectorRetentionConfig) interval() time.Duration {
@@ -98,11 +94,6 @@ func (c CollectorRetentionConfig) offset() time.Duration {
 func (c CollectorRetentionConfig) timeout() time.Duration {
 	value, _ := time.ParseDuration(c.MaintenanceTimeout)
 	return value
-}
-
-func (c CollectorRetentionConfig) duration(value string) time.Duration {
-	parsed, _ := time.ParseDuration(value)
-	return parsed
 }
 
 // PeriodReadinessConfig controls the durable Collector period completion
@@ -312,19 +303,8 @@ func (c *Config) validateCollectorRetention() error {
 	if offsetErr != nil || timeoutErr != nil || marketfetch.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
 		return fmt.Errorf("collector_retention.maintenance_offset and maintenance_timeout must keep each pass inside one interval: 0 <= offset < interval and offset + timeout <= interval")
 	}
-	if retention.MaxRowsPerPass < 9 || retention.MaxRowsPerPass > 50000 {
-		return fmt.Errorf("collector_retention.max_rows_per_pass must be between 9 and 50000")
-	}
-	for name, raw := range map[string]string{
-		"execution_detail_retention":      retention.ExecutionDetailRetention,
-		"scheduled_run_summary_retention": retention.ScheduledRunSummaryRetention,
-		"terminal_retry_retention":        retention.TerminalRetryRetention,
-		"period_snapshot_retention":       retention.PeriodSnapshotRetention,
-	} {
-		duration, err := time.ParseDuration(strings.TrimSpace(raw))
-		if err != nil || duration <= 0 || duration > 365*24*time.Hour {
-			return fmt.Errorf("collector_retention.%s must be greater than 0 and at most 365 days", name)
-		}
+	if retention.MaxRowsPerPass < 1 || retention.MaxRowsPerPass > 50000 {
+		return fmt.Errorf("collector_retention.max_rows_per_pass must be between 1 and 50000")
 	}
 	return nil
 }
@@ -361,8 +341,6 @@ func Default() *Config {
 		},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
-			ExecutionDetailRetention: "6h", ScheduledRunSummaryRetention: "720h",
-			TerminalRetryRetention: "168h", PeriodSnapshotRetention: "720h",
 		},
 		KlineResample: KlineResampleConfig{
 			Enabled: false, ScanTimeout: 30 * time.Second, WorkerConcurrency: 2, MaxClaimsPerTick: 100,

@@ -656,13 +656,6 @@ components:
               - GetTaskResultInventory
             callers:
               - monitor
-      - path: trpc.moox.collector.MarketFetchRuntime
-        port: 11422
-        timeout_ms: 5000
-        max_body_bytes: 4194304
-        methods:
-          - ClaimTimerBatch
-        acl: []
     doctor:
       role: collector
       description: Market data collection planner and executor
@@ -1750,14 +1743,8 @@ principals:
     allow:
       - service: trpc.moox.storage.PrimaryStore
         methods:
-          - EnsureDatasetPeriod
           - CommitTimeSeriesBatch
-          - RecordDatasetPeriodFailures
-          - GetDatasetPeriodStatus
           - UpsertFields
-      - service: trpc.moox.collector.MarketFetchRuntime
-        methods:
-          - ClaimTimerBatch
   - id: factor-engine
     allow:
       - service: trpc.moox.storage.PrimaryStore

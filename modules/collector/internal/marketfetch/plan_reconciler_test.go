@@ -772,8 +772,6 @@ func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsAccessDrift(t *testing
 	require.Equal(t, created+1, len(h.cloud.created), "a function deleted in the cloud is rebuilt from the applied plan")
 }
 
-
-
 func TestTransitionalPlanDropsRemovedSymbolExceptions(t *testing.T) {
 	old := &Plan{V: 1, Market: PlanMarket{MarketID: "crypto", Provider: "binance", SourceID: "s", MarketType: "spot"}, Fetch: PlanFetch{Concurrency: 5},
 		SymbolExceptions: map[string]string{"1000SHIB-USDT": "1000SHIBUSDT"},

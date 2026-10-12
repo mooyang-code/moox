@@ -32,8 +32,6 @@ type pipelineProvider struct {
 	errFor    func() error
 }
 
-
-
 func TestPeriodCommitDisabledIgnoresResidualBindings(t *testing.T) {
 	req := Request{Items: []domain.CollectionItem{{DatasetID: "bars", SubjectID: "BTC-USDT", SeriesHash: "old", ExpectedCount: 1}}}
 	_, _, enabled, err := periodCommitForDataset(req, "bars", []*storagepb.RowFieldUpsert{{}})
@@ -463,7 +461,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 }
 
 type recordingTimerPeriodCommitStorage struct {
-	recordingPeriodFailureStorage
+	noopStorage
 	commits     int
 	indexes     []uint32
 	failDataset string

@@ -107,10 +107,6 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 		mappingField{"maintenance_offset", retention.MaintenanceOffset},
 		mappingField{"maintenance_timeout", retention.MaintenanceTimeout},
 		mappingField{"max_rows_per_pass", retention.MaxRowsPerPass},
-		mappingField{"execution_detail_retention", retention.ExecutionDetailRetention},
-		mappingField{"scheduled_run_summary_retention", retention.ScheduledRunSummaryRetention},
-		mappingField{"terminal_retry_retention", retention.TerminalRetryRetention},
-		mappingField{"period_snapshot_retention", retention.PeriodSnapshotRetention},
 	))
 	if err != nil {
 		return nil, err

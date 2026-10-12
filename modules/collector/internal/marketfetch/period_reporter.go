@@ -44,11 +44,6 @@ func NewPeriodReporter(periods *store.PeriodReadinessRepository, storage Dataset
 	return &PeriodReporter{periods: periods, storage: storage, spaceID: spaceID, batchSize: 100, now: time.Now}
 }
 
-func StartPeriodReporter(ctx context.Context, reporter *PeriodReporter, interval time.Duration) error {
-	_, err := StartPeriodReporterWithDone(ctx, reporter, interval)
-	return err
-}
-
 func StartPeriodReporterWithDone(ctx context.Context, reporter *PeriodReporter, interval time.Duration) (<-chan struct{}, error) {
 	if reporter == nil {
 		return nil, fmt.Errorf("period reporter is required")

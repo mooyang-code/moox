@@ -113,11 +113,6 @@ func nextBoundary(frequency marketdata.Frequency, at time.Time) time.Time {
 // planLeadTimeWithCreate 是计划里包含需要新建的函数时 P 的最短提前量：创建 VPC 函数要几十秒到数分钟。
 const planLeadTimeWithCreate = 6 * time.Minute
 
-// ChoosePeriodStart 返回数据集新份的生效周期 P：不早于“当前时间 + 2 分钟”的第一个边界。
-func ChoosePeriodStart(frequency string, now time.Time) (int64, error) {
-	return ChoosePeriodStartWithLead(frequency, now, planLeadTime)
-}
-
 // ChoosePeriodStartWithLead 与 ChoosePeriodStart 相同，但提前量由调用方指定。
 func ChoosePeriodStartWithLead(frequency string, now time.Time, lead time.Duration) (int64, error) {
 	parsed, err := marketdata.ParseFrequency(frequency)
@@ -202,24 +197,6 @@ func cloneDataset(dataset PlanDataset) PlanDataset {
 	}
 	dataset.Copies = copies
 	return dataset
-}
-
-// settingsEqual 比较计划里除数据集外的设置，以及各数据集的元数据（迟到时间、输出字段）。
-func settingsEqual(left, right *Plan) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	strip := func(plan *Plan) []byte {
-		clone := *plan
-		clone.Datasets = nil
-		for _, dataset := range plan.Datasets {
-			dataset.Copies = nil
-			clone.Datasets = append(clone.Datasets, dataset)
-		}
-		raw, _ := json.Marshal(clone)
-		return raw
-	}
-	return bytes.Equal(strip(left), strip(right))
 }
 
 // BuildPlanContent 比较已生效状态与期望状态，生成采集计划的内容。返回的 changed 为 false 表示没有任何变化。

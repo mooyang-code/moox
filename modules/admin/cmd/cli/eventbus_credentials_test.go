@@ -54,8 +54,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 13 {
-		t.Fatalf("eventbus records=%d, want 13", count)
+	if count != 11 {
+		t.Fatalf("eventbus records=%d, want 11", count)
 	}
 }
 
@@ -78,8 +78,8 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	}
 	require.Equal(t, []string{
 		"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer",
-		"storage-eventbus", "archive-eventbus", "market-fetch-publisher",
-		"collector-market-fetch-consumer", "factor-eventbus", "strategy-eventbus", "trade-eventbus",
+		"storage-eventbus", "archive-eventbus",
+		"factor-eventbus", "strategy-eventbus", "trade-eventbus",
 	}, eventBusRoles)
 }
 
@@ -107,8 +107,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-observability.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "archive-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "trade-eventbus.yaml"))
-	assert.FileExists(t, filepath.Join(exportDir, "market-fetch-publisher.yaml"))
-	assert.FileExists(t, filepath.Join(exportDir, "collector-market-fetch-consumer.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "factor-eventbus.yaml"))
 	for _, filename := range eventBusRoleFiles() {
 		assert.FileExists(t, filepath.Join(exportDir, filename))
@@ -132,17 +130,15 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	}
 
 	yaml := usersYAML(map[string]string{
-		"eventbus-internal-admin":         "a",
-		"hostagent-publisher":             "b",
-		"metrics-publisher":               "c",
-		"monitor-observability-consumer":  "d",
-		"storage-eventbus":                "f",
-		"market-fetch-publisher":          "publisher",
-		"collector-market-fetch-consumer": "consumer",
-		"factor-eventbus":                 "h",
-		"strategy-eventbus":               "i",
-		"archive-eventbus":                "j",
-		"trade-eventbus":                  "k",
+		"eventbus-internal-admin":        "a",
+		"hostagent-publisher":            "b",
+		"metrics-publisher":              "c",
+		"monitor-observability-consumer": "d",
+		"storage-eventbus":               "f",
+		"factor-eventbus":                "h",
+		"strategy-eventbus":              "i",
+		"archive-eventbus":               "j",
+		"trade-eventbus":                 "k",
 	})
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
@@ -153,17 +149,15 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "$JS.EVENT.ADVISORY.API"]}`, aclLine(internalAdminACL, "subscribe:"))
 	assert.NotContains(t, aclLine(internalAdminACL, "subscribe:"), "$JS.EVENT.ADVISORY.API.>")
 	for role, password := range map[string]string{
-		"eventbus-internal-admin":         "a",
-		"hostagent-publisher":             "b",
-		"metrics-publisher":               "c",
-		"monitor-observability-consumer":  "d",
-		"storage-eventbus":                "f",
-		"market-fetch-publisher":          "publisher",
-		"collector-market-fetch-consumer": "consumer",
-		"factor-eventbus":                 "h",
-		"archive-eventbus":                "j",
-		"strategy-eventbus":               "i",
-		"trade-eventbus":                  "k",
+		"eventbus-internal-admin":        "a",
+		"hostagent-publisher":            "b",
+		"metrics-publisher":              "c",
+		"monitor-observability-consumer": "d",
+		"storage-eventbus":               "f",
+		"factor-eventbus":                "h",
+		"archive-eventbus":               "j",
+		"strategy-eventbus":              "i",
+		"trade-eventbus":                 "k",
 	} {
 		assert.Contains(t, eventBusACLBlock(yaml, role), "password: "+password)
 	}
@@ -224,16 +218,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, archiveACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	assert.NotContains(t, aclLine(archiveACL, "subscribe:"), "$JS.API")
 	assert.NotContains(t, aclLine(archiveACL, "subscribe:"), "$JS.ACK")
-	publisherACL := eventBusACLBlock(yaml, "market-fetch-publisher")
-	assert.Contains(t, publisherACL, "moox.event.market.fetch.batch.completed.v1.>")
-	assert.NotContains(t, publisherACL, "$JS.API.CONSUMER")
-	consumerACL := eventBusACLBlock(yaml, "collector-market-fetch-consumer")
-	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.INFO.*.*")
-	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*")
-	assert.Contains(t, consumerACL, "$JS.ACK.MOOX_MARKET_FETCH.*.>")
-	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>")
-	assert.Contains(t, consumerACL, "$JS.ACK.MOOX_STORAGE.>")
-	assert.NotContains(t, consumerACL, "$JS.API.>")
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
 	assert.Contains(t, aclLine(factorACL, "publish:"), "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.collector.period.completed.v1.>"]}`, aclLine(factorACL, "subscribe:"))
@@ -278,23 +262,21 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
-	assert.GreaterOrEqual(t, count, int64(13))
+	assert.GreaterOrEqual(t, count, int64(11))
 }
 
 func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
 	dir := t.TempDir()
 	roleFiles := map[string]string{
-		"internal-admin.yaml":                  "token: admin-token\n",
-		"hostagent-publisher.yaml":             "eventbus_token: host-token\n",
-		"metrics-publisher.yaml":               "token: metrics-token\n",
-		"monitor-observability.yaml":           "monitor_eventbus_token: monitor-token\n",
-		"storage-eventbus.yaml":                "token: storage-token\n",
-		"archive-eventbus.yaml":                "token: archive-token\n",
-		"market-fetch-publisher.yaml":          "token: market-token\n",
-		"collector-market-fetch-consumer.yaml": "token: collector-token\n",
-		"factor-eventbus.yaml":                 "token: factor-token\n",
-		"strategy-eventbus.yaml":               "token: strategy-token\n",
-		"trade-eventbus.yaml":                  "token: trade-token\n",
+		"internal-admin.yaml":        "token: admin-token\n",
+		"hostagent-publisher.yaml":   "eventbus_token: host-token\n",
+		"metrics-publisher.yaml":     "token: metrics-token\n",
+		"monitor-observability.yaml": "monitor_eventbus_token: monitor-token\n",
+		"storage-eventbus.yaml":      "token: storage-token\n",
+		"archive-eventbus.yaml":      "token: archive-token\n",
+		"factor-eventbus.yaml":       "token: factor-token\n",
+		"strategy-eventbus.yaml":     "token: strategy-token\n",
+		"trade-eventbus.yaml":        "token: trade-token\n",
 	}
 	for name, content := range roleFiles {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))

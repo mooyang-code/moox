@@ -583,10 +583,3 @@ func normalizePage(page int, size int) (int, int) {
 	}
 	return page, size
 }
-
-func normalizeJSON(raw string) string {
-	if raw == "" {
-		return "{}"
-	}
-	return raw
-}

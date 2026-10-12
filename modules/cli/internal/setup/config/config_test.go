@@ -935,10 +935,6 @@ func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
 	assert.Equal(t, "35s", snapshot.Manifest.CollectorRetention.MaintenanceOffset)
 	assert.Equal(t, "20s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 50000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
-	assert.Equal(t, "6h", snapshot.Manifest.CollectorRetention.ExecutionDetailRetention)
-	assert.Equal(t, "720h", snapshot.Manifest.CollectorRetention.ScheduledRunSummaryRetention)
-	assert.Equal(t, "168h", snapshot.Manifest.CollectorRetention.TerminalRetryRetention)
-	assert.Equal(t, "720h", snapshot.Manifest.CollectorRetention.PeriodSnapshotRetention)
 
 	root = t.TempDir()
 	body := validManifest + `
@@ -947,7 +943,6 @@ maintenance_interval = "2m"
 maintenance_offset = "10s"
 maintenance_timeout = "30s"
 max_rows_per_pass = 25000
-terminal_retry_retention = "336h"
 `
 	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
@@ -955,7 +950,6 @@ terminal_retry_retention = "336h"
 	assert.Equal(t, "10s", snapshot.Manifest.CollectorRetention.MaintenanceOffset)
 	assert.Equal(t, "30s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 25000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
-	assert.Equal(t, "336h", snapshot.Manifest.CollectorRetention.TerminalRetryRetention)
 }
 
 func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
@@ -965,14 +959,12 @@ func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
 		want string
 	}{
 		{name: "zero row budget", body: "max_rows_per_pass = 0", want: "max_rows_per_pass"},
-		{name: "row budget below category minimum", body: "max_rows_per_pass = 8", want: "max_rows_per_pass"},
 		{name: "excessive row budget", body: "max_rows_per_pass = 50001", want: "max_rows_per_pass"},
 		{name: "timeout exceeds interval", body: `maintenance_interval = "1m"
 maintenance_timeout = "2m"`, want: "maintenance_timeout"},
 		{name: "pass crosses the next interval boundary", body: `maintenance_offset = "35s"
 maintenance_timeout = "30s"`, want: "maintenance_timeout"},
 		{name: "offset outside interval", body: `maintenance_offset = "1m"`, want: "maintenance_offset"},
-		{name: "retention over one year", body: `execution_detail_retention = "9000h"`, want: "execution_detail_retention"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -986,7 +978,7 @@ maintenance_timeout = "30s"`, want: "maintenance_timeout"},
 
 func TestLoadAcceptsMinimumCollectorRetentionBudget(t *testing.T) {
 	root := t.TempDir()
-	_, err := Load(writeManifest(t, root, validManifest+"\n[collector_retention]\nmax_rows_per_pass = 9\n", 0o600), root)
+	_, err := Load(writeManifest(t, root, validManifest+"\n[collector_retention]\nmax_rows_per_pass = 1\n", 0o600), root)
 	require.NoError(t, err)
 }
 

@@ -3,9 +3,10 @@ package marketfetch
 import (
 	"context"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
