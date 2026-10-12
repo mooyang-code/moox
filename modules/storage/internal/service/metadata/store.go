@@ -93,6 +93,8 @@ type Reader interface {
 	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
 	ListDatasets(ctx context.Context, query DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 	ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error)
+	// SubjectsRevision 返回空间的标的修订号；标的、标签成员或数据集标的范围变化时递增，未变化过返回 0。
+	SubjectsRevision(ctx context.Context, spaceID string) (uint64, error)
 
 	GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error)
 	ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error)

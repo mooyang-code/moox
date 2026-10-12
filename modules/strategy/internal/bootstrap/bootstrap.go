@@ -114,7 +114,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 
 	var consumer *eventconsumer.Consumer
 	if inputClient != nil {
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: input.NewMetaCache()}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof}
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
 			jsConfig, err := eventBusConfig(cfg, "moox-strategy-ready")

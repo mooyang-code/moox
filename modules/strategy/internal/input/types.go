@@ -101,6 +101,8 @@ type DatasetInfo struct {
 	Retention   string
 	Attributes  map[string]string
 	SubjectTags []string
+	// SubjectsRevision 是所属空间的标的修订号，标的、标签成员或数据集标的范围变化时递增。
+	SubjectsRevision uint64
 }
 
 // TagInfo 是标签元数据；MarketType 是标签唯一且不可修改的市场类型（spot | swap）。

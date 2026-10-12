@@ -384,6 +384,11 @@ func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, dataset
 	return s.base.ListDatasetSubjects(ctx, spaceID, datasetID, subjectID, page)
 }
 
+// SubjectsRevision 直读底层存储，修订号必须与实时读取的标的数据一致，不进快照。
+func (s *Store) SubjectsRevision(ctx context.Context, spaceID string) (uint64, error) {
+	return s.base.SubjectsRevision(ctx, spaceID)
+}
+
 func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error) {
 	return getProto(s, ctx, kindField, spaceID, fieldID, func() *pb.Field { return &pb.Field{} })
 }

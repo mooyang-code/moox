@@ -395,6 +395,114 @@ BEGIN
     UPDATE t_datasets SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
+-- ************ 标的修订号 ************
+-- 按空间单调递增：标的、标签成员、标签市场类型、数据集标的范围任一变化都会递增，
+-- 调用方（Strategy）用它判断缓存的标的绑定、标的详情与标签成员是否过期。
+-- 触发器的 UPDATE OF 只列业务列，排除 c_mtime 与标签同步状态，避免 mtime 触发器和同步任务造成多余递增。
+CREATE TABLE IF NOT EXISTS t_space_revisions (
+    c_space_id TEXT NOT NULL PRIMARY KEY,
+    c_subjects_revision INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_insert
+AFTER INSERT ON t_subjects
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_update
+AFTER UPDATE OF c_status, c_attrs_json, c_subject_type, c_market ON t_subjects
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_delete
+AFTER DELETE ON t_subjects
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_insert
+AFTER INSERT ON t_subject_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_update
+AFTER UPDATE OF c_status ON t_subject_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_delete
+AFTER DELETE ON t_subject_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_tags_rev_update
+AFTER UPDATE OF c_market_type ON t_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_tags_rev_delete
+AFTER DELETE ON t_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_datasets_rev_insert
+AFTER INSERT ON t_datasets
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_datasets_rev_update
+AFTER UPDATE OF c_subject_tags_json ON t_datasets
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_datasets_rev_delete
+AFTER DELETE ON t_datasets
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
 CREATE TABLE IF NOT EXISTS t_field_groups (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,

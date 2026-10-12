@@ -282,3 +282,17 @@ func TestMetadataReturnsDatasetRetentionFromPolicy(t *testing.T) {
 	require.Equal(t, "1080h", retention)
 	require.Equal(t, "space", source)
 }
+
+func TestGetDatasetReturnsLiveSubjectsRevision(t *testing.T) {
+	store, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	ctx := context.Background()
+	first, err := service.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, first.GetRetInfo().GetCode(), first.GetRetInfo().GetMsg())
+
+	_, err = store.UpsertSubject(ctx, &pb.Subject{SpaceId: dataset.GetSpaceId(), SubjectId: "REV-USDT", SubjectType: "crypto", Name: "REV"})
+	require.NoError(t, err)
+	second, err := service.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	require.NoError(t, err)
+	require.Greater(t, second.GetSubjectsRevision(), first.GetSubjectsRevision(), "新增标的后 GetDataset 返回的修订号必须递增")
+}

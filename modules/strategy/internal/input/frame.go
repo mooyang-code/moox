@@ -15,6 +15,8 @@ import (
 // Loader 为一个启用实例装配一期输入。
 type Loader struct {
 	Client Client
+	// Meta 是进程级标的元数据缓存；为空时每个事件使用新的缓存。
+	Meta *MetaCache
 }
 
 // Bar 是一期的输入参数。
@@ -57,6 +59,14 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	if missing := MissingColumns(view, program, resolved.MinAgeBars); len(missing) > 0 {
 		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), resolved.ViewID)}
+	}
+	// 标的元数据缓存按 Storage 的标的修订号校验；必须先于标的绑定、标签与标签成员的读取。
+	if revalidator, ok := l.Client.(interface {
+		Revalidate(ctx context.Context, spaceID, datasetID string) error
+	}); ok {
+		if err := revalidator.Revalidate(ctx, spaceID, view.DatasetID); err != nil {
+			return Loaded{}, err
+		}
 	}
 	// 标签只在启用时校验过：运行期被删除时成员列表为空，exclude_tags 悄悄失效、按标签选池变空，必须报出来。
 	for _, tag := range referencedTags(program.Strategy) {

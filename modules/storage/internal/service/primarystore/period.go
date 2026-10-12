@@ -66,12 +66,6 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: rsp.GetRetInfo(), SeriesHash: rsp.GetSeriesHash(), ExpectedCount: rsp.GetExpectedCount(), AlreadyRegistered: rsp.GetAlreadyRegistered()}, nil
 }
 
-
-
-
-
-
-
 func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryCommitTimeSeriesBatchReq) (*pb.PrimaryCommitTimeSeriesBatchRsp, error) {
 	if req == nil || req.GetExpectation() == nil || len(req.GetItems()) == 0 {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation and items are required"))}, nil

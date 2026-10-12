@@ -935,6 +935,8 @@ message GetDatasetRsp {
   common.RetInfo ret_info = 1;
   // dataset 是数据集元数据。
   Dataset dataset = 2;
+  // subjects_revision 是所属空间的标的修订号：标的、标签成员、标签市场类型或数据集标的范围变化时递增。
+  uint64 subjects_revision = 3;
 }
 
 // ListDatasetsReq 表示列出数据集的请求。

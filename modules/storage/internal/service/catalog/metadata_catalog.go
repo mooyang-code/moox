@@ -258,7 +258,11 @@ func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.Ge
 	if err != nil {
 		return &pb.GetDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
 	}
-	return &pb.GetDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(item)}, nil
+	revision, err := s.metadata.SubjectsRevision(ctx, req.GetSpaceId())
+	if err != nil {
+		return &pb.GetDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.GetDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(item), SubjectsRevision: revision}, nil
 }
 
 func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {

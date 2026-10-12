@@ -32,10 +32,6 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSe
 	return &pb.RegisterSeriesSnapshotRsp{RetInfo: retinfo.Success("success"), SeriesHash: result.SeriesHash, ExpectedCount: result.ExpectedCount, AlreadyRegistered: result.AlreadyRegistered}, nil
 }
 
-
-
-
-
 func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
 	if req == nil || req.GetExpectation() == nil || len(req.GetItems()) == 0 {
 		return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation and items are required"))}, nil
@@ -63,8 +59,6 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeS
 	}
 	return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Success("success"), Keys: keys, PeriodStatus: result.Status, AcceptedSeriesIndexes: result.AcceptedSeriesIndexes}, nil
 }
-
-
 
 func validatePeriodNodeID(nodeID, expectedNodeID string) error {
 	if strings.TrimSpace(nodeID) == "" {
