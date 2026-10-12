@@ -116,6 +116,7 @@ type fakePlanCloud struct {
 	jobs       map[string][]scfinvoker.BatchItemResult
 	running    map[string]bool // 仍在运行的作业
 	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
+	submitErr  error           // 非空时 SubmitRuntimeConfigs 直接失败，模拟提交停用时崩溃
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
 	created    []string
 	submits    int
@@ -214,6 +215,9 @@ func (c *fakePlanCloud) SubmitCreateNodes(_ context.Context, _ string, items []*
 }
 
 func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patches []*cloudnodepb.NodeRuntimeConfigPatch) (string, error) {
+	if c.submitErr != nil {
+		return "", c.submitErr
+	}
 	// 与 CloudNode 的预检一致：cron 不能为空，任何一项不合法整批拒绝。
 	for _, patch := range patches {
 		if strings.TrimSpace(patch.GetTimerCron()) == "" {
@@ -1109,6 +1113,35 @@ func TestReenableAfterDisableRepushesAnUnfinishedPlan(t *testing.T) {
 
 	// 重新启用：原计划的下发确认已作废，函数的定时器被重新打开。
 	require.NoError(t, h.reconcile(r))
+	for name, patch := range h.cloud.patches {
+		require.True(t, patch.GetTimerEnabled(), name)
+	}
+}
+
+func TestDisableAllInvalidatesConfirmationsBeforeSubmittingDisables(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	require.NotNil(t, h.open())
+	before, err := DecodeFetchPlanProgress(h.open().Progress)
+	require.NoError(t, err)
+	require.NotEmpty(t, before.Transitioned)
+
+	// 提交停用时失败（进程崩溃的等价情形）：确认位已经先持久化作废，重启后的对账器重新启用就会重推。
+	h.cloud.submitErr = errors.New("submit crashed")
+	_, err = r.DisableAll(context.Background())
+	require.Error(t, err)
+	after, err := DecodeFetchPlanProgress(h.open().Progress)
+	require.NoError(t, err)
+	require.Empty(t, after.Transitioned)
+	require.Empty(t, after.Finalized)
+
+	h.cloud.submitErr = nil
+	for name := range h.cloud.patches {
+		patch := h.cloud.patches[name]
+		patch.TimerEnabled = false // 云端已有一部分函数被停用
+	}
+	require.NoError(t, h.reconcile(h.reconciler()))
 	for name, patch := range h.cloud.patches {
 		require.True(t, patch.GetTimerEnabled(), name)
 	}

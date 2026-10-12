@@ -329,11 +329,20 @@ func TestDatasetMarketRefusesHistoryBeforeAMappingOnlyChange(t *testing.T) {
 	backfiller := &Backfiller{Plans: db.FetchPlans(), BaseCtx: ctx, Now: func() time.Time { return base.Add(time.Hour) }}
 
 	// 更新时间是“现在”：此前的历史数据拒绝补采。
-	_, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", base.Add(-time.Minute))
+	_, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", time.Now().Add(-time.Hour))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "without an effective boundary")
 	// 变更之后的数据取新映射。
 	plan, err := backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", time.Now().Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, "BTCNEW", plan.ExchangeSymbol("BTC-USDT"))
+
+	// 变更所在的计划还没生效（进度仍在更新）：UpdatedAt 不是可靠边界，任何时间的补采都拒绝。
+	raw, err := json.Marshal(build(second, "BTCNEWER"))
+	require.NoError(t, err)
+	_, err = db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
+	require.NoError(t, err)
+	_, err = backfiller.datasetMarket(ctx, "crypto", "ds", "1m", "BTC-USDT", time.Now().Add(time.Hour))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unfinished fetch plan")
 }

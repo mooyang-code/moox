@@ -120,6 +120,7 @@ type pendingPlanJob struct {
 	id        string
 	kind      string
 	functions []string
+	warned    bool // 超龄告警只发一次
 }
 
 // PlanReconciler 是一个空间的采集计划对账器：由任务与标签成员算出期望状态，
@@ -1079,11 +1080,9 @@ func (r *PlanReconciler) settlePending(ctx context.Context, record *store.FetchP
 	pending := r.pending
 	r.pending = nil
 	var firstErr error
-	for index, job := range pending {
-		if r.now().Sub(job.at) > pendingJobWarnAge {
-			// 年龄不能证明作业已经结束：继续按状态判断，只告警。
-			log.WarnContextf(ctx, "collector fetch plan cloud job is still not finished space=%s job=%s kind=%s age=%s", r.SpaceID, job.id, job.kind, r.now().Sub(job.at).Round(time.Second))
-		}
+	for index := range pending {
+		r.warnStalePending(ctx, &pending[index])
+		job := pending[index]
 		items, terminal, err := r.checkJob(ctx, job.id)
 		if err != nil {
 			r.pending = append(r.pending, pending[index:]...)

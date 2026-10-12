@@ -90,6 +90,15 @@ func (r *PlanReconciler) waitAux(ctx context.Context, kind string, names []strin
 // 年龄不能证明作业已经结束，所以超龄只告警，只有确认到终态才解除互斥。
 const auxJobWarnAge = 20 * time.Minute
 
+// warnStalePending 对超龄的计划作业只告警一次：年龄不能证明作业已经结束，仍须等到终态。
+func (r *PlanReconciler) warnStalePending(ctx context.Context, job *pendingPlanJob) {
+	if job.warned || r.now().Sub(job.at) <= pendingJobWarnAge {
+		return
+	}
+	job.warned = true
+	log.WarnContextf(ctx, "collector fetch plan cloud job is still not finished space=%s job=%s kind=%s age=%s", r.SpaceID, job.id, job.kind, r.now().Sub(job.at).Round(time.Second))
+}
+
 // busyFunctions 返回仍有在途云端作业的函数（辅助作业与计划作业的并集），并刷新辅助作业：
 // 已到终态的移除，仍在运行的续租发布租约，防止后续排队项因租约过期失败。
 // settlePending 为 true 时（空间停用收尾，没有计划推进来结算）还会把已到终态或超龄的计划作业移出在途集合。
@@ -119,7 +128,9 @@ func (r *PlanReconciler) busyFunctions(ctx context.Context, settlePending bool) 
 		}
 		r.pending = kept
 	}
-	for _, job := range r.pending {
+	for index := range r.pending {
+		r.warnStalePending(ctx, &r.pending[index])
+		job := r.pending[index]
 		running = true
 		for _, name := range job.functions {
 			busy[name] = struct{}{}

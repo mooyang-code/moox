@@ -83,9 +83,12 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		}
 		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, TimerEnabled: false, TimerCron: "0 * * * * * *", CollectorPublishLeaseId: lease.LeaseID, CollectorPublishFencingToken: lease.FencingToken})
 	}
+	if err := r.invalidateConfirmations(ctx, openRecord); err != nil {
+		return false, err
+	}
 	if len(patches) == 0 {
 		r.releaseLease(ctx)
-		return r.finishDisable(ctx, openRecord, deferred)
+		return r.finishDisable(deferred)
 	}
 	// CloudNode 单个作业最多 100 项：分批提交，全部确认后才算停用完成。
 	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
@@ -109,29 +112,37 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		}
 	}
 	r.releaseLease(ctx)
-	return r.finishDisable(ctx, openRecord, deferred)
+	return r.finishDisable(deferred)
 }
 
-// finishDisable 在停用确认后收尾：仍有在途作业则未完成；否则作废未完成计划里的下发确认，并让重新启用后立即校验。
-func (r *PlanReconciler) finishDisable(ctx context.Context, openRecord *store.FetchPlanRecord, deferred int) (bool, error) {
+// invalidateConfirmations 作废未完成计划里的下发与收尾确认（保留 Created/Registered 与原 P）：停用之后这些确认不再代表云端状态，
+// 重新启用时按原计划重推（下发是幂等的）。必须在提交停用之前持久化：否则部分停用后崩溃，重启时空间已重新启用，
+// 旧确认会让计划一直跳过这些函数。
+func (r *PlanReconciler) invalidateConfirmations(ctx context.Context, openRecord *store.FetchPlanRecord) error {
+	if openRecord == nil {
+		return nil
+	}
+	progress, err := decodeFetchPlanProgress(openRecord.Progress)
+	if err != nil {
+		return err
+	}
+	if len(progress.Transitioned) == 0 && len(progress.Finalized) == 0 {
+		return nil
+	}
+	progress.Transitioned, progress.Finalized = nil, nil
+	if err := r.saveProgress(ctx, openRecord, progress, openRecord.Status, openRecord.LastError); err != nil {
+		return err
+	}
+	openRecord.Progress = mustJSON(progress)
+	return nil
+}
+
+// finishDisable 在停用确认后收尾：仍有在途作业则未完成；否则让已生效函数在重新启用后立即校验。
+func (r *PlanReconciler) finishDisable(deferred int) (bool, error) {
 	if deferred > 0 {
 		return false, nil
 	}
-	// 停用之后，未完成计划里“已下发/已收尾”的确认不再代表云端状态：作废确认，重新启用时按原计划（原 P 与登记结果不变）重推；
-	// 已生效的函数也要在重新启用后立即校验定时器，不能等下一个校验周期。
 	r.lastVerified = time.Time{}
-	if openRecord != nil {
-		progress, err := decodeFetchPlanProgress(openRecord.Progress)
-		if err != nil {
-			return false, err
-		}
-		if len(progress.Transitioned) > 0 || len(progress.Finalized) > 0 {
-			progress.Transitioned, progress.Finalized = nil, nil
-			if err := r.saveProgress(ctx, openRecord, progress, openRecord.Status, openRecord.LastError); err != nil {
-				return false, err
-			}
-		}
-	}
 	return true, nil
 }
 

@@ -338,7 +338,15 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		contents[i] = content
 		// 纯符号映射变更没有数据集生效边界：不知道旧映射适用到何时，变更之前的历史数据拒绝补采，避免取错交易对。
 		for _, name := range content.SortedFunctionNames() {
-			if content.SymbolChangedWithoutBoundary(content.Functions[name], key, subjectID) && at.Before(records[i].UpdatedAt) {
+			if !content.SymbolChangedWithoutBoundary(content.Functions[name], key, subjectID) {
+				continue
+			}
+			// 未完成的计划还在更新（进度、错误、停用收尾都会改 UpdatedAt），无法证明映射何时切换：一律拒绝。
+			// 已生效的计划不再更新，UpdatedAt 是确认完成的保守上界：此前的历史数据拒绝，此后的照常。
+			if records[i].Status != store.FetchPlanApplied {
+				return nil, fmt.Errorf("symbol mapping of %s is changing in an unfinished fetch plan without an effective boundary; backfill is refused until it is applied", subjectID)
+			}
+			if at.Before(records[i].UpdatedAt) {
 				return nil, fmt.Errorf("symbol mapping of %s changed at %s without an effective boundary; backfill of earlier data is refused", subjectID, records[i].UpdatedAt.UTC().Format(time.RFC3339))
 			}
 		}
