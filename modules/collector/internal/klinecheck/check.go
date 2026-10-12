@@ -41,7 +41,8 @@ type Checker struct {
 	Now         func() time.Time
 	Concurrency int
 	// Calendar 非空时用于过滤非交易时间点（按空间区分，stockcn 使用交易日历）；为空表示连续交易。
-	Calendar func(spaceID, frequency string, barStart time.Time) bool
+	// 日历无法判断（超出覆盖期、计算出错）必须返回错误，不能当作非交易时间。
+	Calendar func(spaceID, frequency string, barStart time.Time) (bool, error)
 	// CalendarReady 非空时在检查前确认该空间的日历可用；不可用必须报错，不能当作“没有应有数据”。
 	CalendarReady func(spaceID string) error
 }
@@ -203,19 +204,25 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 }
 
 // expectedBars 返回区间内已过截止时间、应当存在的 K 线开始时间。
-func (c *Checker) expectedBars(spaceID string, frequency marketdata.Frequency, frequencyName string, from, to time.Time, lateness time.Duration) []time.Time {
+func (c *Checker) expectedBars(spaceID string, frequency marketdata.Frequency, frequencyName string, from, to time.Time, lateness time.Duration) ([]time.Time, error) {
 	now := c.now()
 	var bars []time.Time
 	for t := alignUp(frequency, from); t.Before(to); t = frequency.BarEnd(t) {
 		if frequency.BarEnd(t).Add(lateness).After(now) {
 			break
 		}
-		if c.Calendar != nil && !c.Calendar(spaceID, frequencyName, t) {
-			continue
+		if c.Calendar != nil {
+			trading, err := c.Calendar(spaceID, frequencyName, t)
+			if err != nil {
+				return nil, fmt.Errorf("trading calendar at %s: %w", t.Format(time.RFC3339), err)
+			}
+			if !trading {
+				continue
+			}
 		}
 		bars = append(bars, t)
 	}
-	return bars
+	return bars, nil
 }
 
 func (c *Checker) checkSubject(ctx context.Context, request Request, datasetID, frequencyName, subject string, segment Segment) ([]Gap, int, error) {
@@ -233,7 +240,10 @@ func (c *Checker) checkSubject(ctx context.Context, request Request, datasetID, 
 	if !from.Before(to) {
 		return nil, 0, nil
 	}
-	bars := c.expectedBars(request.SpaceID, frequency, frequencyName, from, to, time.Duration(segment.LatenessS)*time.Second)
+	bars, err := c.expectedBars(request.SpaceID, frequency, frequencyName, from, to, time.Duration(segment.LatenessS)*time.Second)
+	if err != nil {
+		return nil, 0, err
+	}
 	if len(bars) == 0 {
 		return nil, 0, nil
 	}

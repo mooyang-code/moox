@@ -32,6 +32,8 @@ const (
 	planFinalizeMargin = 5 * time.Second
 	// planUpgradeCheckInterval 是检查函数代码包是否落后的间隔。
 	planUpgradeCheckInterval = 2 * time.Minute
+	// planUpgradeBudget 是单轮代码升级的时间上限，超出后放弃本轮，留给计划推进。
+	planUpgradeBudget = 90 * time.Second
 	// planVerifyInterval 是全量读回云端配置的间隔；读回不完整时按 planVerifyRetry 重试。
 	planVerifyInterval = time.Hour
 	planVerifyRetry    = 5 * time.Minute
@@ -147,6 +149,7 @@ type PlanReconciler struct {
 	lease        *scfinvoker.CollectorPublishLease
 	holder       string
 	pending      []pendingPlanJob
+	aux          auxJobs
 	lastVerified time.Time
 	// lastUpgradeCheck 是上一次检查函数代码包是否落后的时间。
 	lastUpgradeCheck time.Time
@@ -197,9 +200,12 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 	// 代码包升级与采集计划是否在进行无关：计划推进期间也要让落后的函数跟上配置的代码包。
 	if r.now().Sub(r.lastUpgradeCheck) >= planUpgradeCheckInterval {
 		r.lastUpgradeCheck = r.now()
-		if err := r.upgradeLaggingFunctions(ctx); err != nil {
-			return err
+		// 升级失败只记日志：不能因为代码升级慢或失败而拖住计划推进与重建。
+		upgradeCtx, cancel := context.WithTimeout(ctx, planUpgradeBudget)
+		if err := r.upgradeLaggingFunctions(upgradeCtx); err != nil {
+			log.WarnContextf(ctx, "collector fetch plan code upgrade failed space=%s: %v", r.SpaceID, err)
 		}
+		cancel()
 	}
 	open, err := r.Store.Open(ctx, r.SpaceID)
 	if err != nil {
@@ -787,6 +793,11 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 		return true, nil
 	}
 	sort.Strings(stale)
+	if !backfill {
+		if stale = r.excludeBusy(ctx, stale); len(stale) == 0 {
+			return false, nil
+		}
+	}
 	var lease *scfinvoker.CollectorPublishLease
 	if backfill {
 		lease, err = r.ensureBackfillLease(ctx)
@@ -800,7 +811,13 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 	if err != nil {
 		return false, fmt.Errorf("submit delete of stale reservations: %w", err)
 	}
-	items, terminal, err := r.waitJob(ctx, jobID)
+	var items []scfinvoker.BatchItemResult
+	var terminal bool
+	if backfill {
+		items, terminal, err = r.waitJob(ctx, jobID)
+	} else {
+		items, terminal, err = r.waitAux(ctx, auxJobKindCleanup, stale, jobID)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -815,9 +832,8 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 	log.Infof("collector fetch plan removed stale create reservations space=%s functions=%s", r.SpaceID, strings.Join(stale, ","))
 	if backfill {
 		r.releaseBackfillLease(ctx)
-	} else {
-		r.releaseLease(ctx)
 	}
+	// 实时对账路径的租约由调用方统一持有与释放：清理后调用方还要继续创建与补推，不能在此释放。
 	return true, nil
 }
 
@@ -899,6 +915,9 @@ func (r *PlanReconciler) upgradeCodeOf(ctx context.Context, names []string, byNa
 		return nil
 	}
 	sort.Strings(stale)
+	if stale = r.excludeBusy(ctx, stale); len(stale) == 0 {
+		return nil
+	}
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
 		return err
@@ -915,12 +934,14 @@ func (r *PlanReconciler) upgradeCodeOf(ctx context.Context, names []string, byNa
 		if submitErr != nil {
 			return r.fail("cloudnode", submitErr)
 		}
-		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		results, terminal, waitErr := r.waitAux(ctx, auxJobKindUpgrade, batch, jobID)
 		if waitErr != nil {
 			return r.fail("cloudnode", waitErr)
 		}
 		if !terminal {
-			return r.fail("cloudnode", fmt.Errorf("code upgrade job %s is still running", jobID))
+			// 作业已记入在途集合，后续轮次不会对这批函数重复提交。
+			log.WarnContextf(ctx, "collector fetch plan code upgrade job still running space=%s job=%s", r.SpaceID, jobID)
+			return nil
 		}
 		for _, result := range results {
 			if !result.Success {
@@ -1167,7 +1188,7 @@ func (r *PlanReconciler) renewLease(ctx context.Context) error {
 }
 
 func (r *PlanReconciler) releaseLease(ctx context.Context) {
-	if r.lease == nil || len(r.pending) > 0 {
+	if r.lease == nil || len(r.pending) > 0 || r.aux.count() > 0 {
 		return
 	}
 	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -1248,6 +1269,11 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		r.lastVerified = r.now()
 		return nil
 	}
+	// 仍有在途辅助作业的函数本轮不再提交，等作业结束后下一轮继续。
+	drifted, missing, gone = r.excludeBusy(ctx, drifted), r.excludeBusy(ctx, missing), r.excludeBusy(ctx, gone)
+	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 {
+		return nil
+	}
 	log.WarnContextf(ctx, "collector fetch plan repairing space=%s drifted=%s missing=%s gone=%s", r.SpaceID, strings.Join(drifted, ","), strings.Join(missing, ","), strings.Join(gone, ","))
 	release, err = r.acquireOperation(ctx)
 	if err != nil {
@@ -1266,7 +1292,7 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		if submitErr != nil {
 			return r.fail("cloudnode", submitErr)
 		}
-		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		results, terminal, waitErr := r.waitAux(ctx, auxJobKindRepair, gone, jobID)
 		if waitErr != nil {
 			return r.fail("cloudnode", waitErr)
 		}
@@ -1310,7 +1336,7 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		if submitErr != nil {
 			return r.fail("cloudnode", submitErr)
 		}
-		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		results, terminal, waitErr := r.waitAux(ctx, auxJobKindRepair, batch, jobID)
 		if waitErr != nil {
 			return r.fail("cloudnode", waitErr)
 		}
@@ -1339,7 +1365,7 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		if submitErr != nil {
 			return r.fail("cloudnode", submitErr)
 		}
-		results, terminal, waitErr := r.waitJob(ctx, jobID)
+		results, terminal, waitErr := r.waitAux(ctx, auxJobKindRepair, batch, jobID)
 		if waitErr != nil {
 			return r.fail("cloudnode", waitErr)
 		}
@@ -1433,7 +1459,11 @@ func timerNeedsRepair(metadata map[string]any, cron string) bool {
 	if cron == "" {
 		return false
 	}
-	return !strings.EqualFold(fmt.Sprint(metadata["timer_available_status"]), "available") || strings.TrimSpace(fmt.Sprint(metadata["timer_actual_cron"])) != cron
+	// 定时器的 Message 与 Qualifier 决定函数是否接受事件，漂移后同样需要修复。
+	return !strings.EqualFold(fmt.Sprint(metadata["timer_available_status"]), "available") ||
+		strings.TrimSpace(fmt.Sprint(metadata["timer_actual_cron"])) != cron ||
+		strings.TrimSpace(fmt.Sprint(metadata["timer_actual_qualifier"])) != timerTriggerQualifier ||
+		strings.TrimSpace(fmt.Sprint(metadata["timer_actual_message"])) != timerTriggerMessage
 }
 
 // logPlan 写入活动日志：计划创建（标的变更）与计划生效。写入失败返回错误，下一轮重试；幂等键保证不重复。

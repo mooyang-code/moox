@@ -109,6 +109,15 @@ func (c *Calendar) Location() *time.Location {
 	return c.location
 }
 
+// Covers 判断日历的覆盖期是否包含该日；覆盖期之外日历无法判断是否交易日。
+func (c *Calendar) Covers(day time.Time) bool {
+	if c == nil || c.location == nil {
+		return false
+	}
+	date, err := time.ParseInLocation("2006-01-02", day.In(c.location).Format("2006-01-02"), c.location)
+	return err == nil && !date.Before(c.start) && !date.After(c.end)
+}
+
 func (c *Calendar) ValidateHorizon(now time.Time, minDays int) error {
 	err := c.CheckHorizon(now, minDays)
 	if errors.Is(err, ErrCalendarExpiringSoon) {

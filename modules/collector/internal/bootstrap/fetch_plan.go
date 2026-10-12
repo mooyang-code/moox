@@ -140,11 +140,16 @@ func stockCNCalendarPreflight(ctx context.Context) error {
 type stockCNCheckCalendarFilter struct {
 	mu       sync.Mutex
 	calendar *stockmarket.Calendar
+	loadedAt time.Time
 	sessions map[string]map[int64]struct{}
+	now      func() time.Time
 }
 
+// checkCalendarReloadInterval 是交易日历的重新加载间隔：日历文件更新后无需重启即可生效。
+const checkCalendarReloadInterval = time.Hour
+
 func newStockCNCheckCalendar() *stockCNCheckCalendarFilter {
-	return &stockCNCheckCalendarFilter{sessions: map[string]map[int64]struct{}{}}
+	return &stockCNCheckCalendarFilter{sessions: map[string]map[int64]struct{}{}, now: time.Now}
 }
 
 func (f *stockCNCheckCalendarFilter) ready(spaceID string) error {
@@ -153,35 +158,47 @@ func (f *stockCNCheckCalendarFilter) ready(spaceID string) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.calendar != nil {
+	if f.calendar != nil && f.now().Sub(f.loadedAt) < checkCalendarReloadInterval {
 		return nil
 	}
 	calendar, err := stockmarket.LoadCalendar(stockCNCalendarPath())
+	if err == nil && (calendar == nil || calendar.Location() == nil) {
+		err = fmt.Errorf("calendar has no time zone")
+	}
 	if err != nil {
+		if f.calendar != nil {
+			// 重新加载失败时继续使用已加载的日历，下次检查再试。
+			f.loadedAt = f.now().Add(-checkCalendarReloadInterval + time.Minute)
+			return nil
+		}
 		return err
 	}
-	if calendar == nil || calendar.Location() == nil {
-		return fmt.Errorf("calendar has no time zone")
-	}
-	f.calendar = calendar
+	f.calendar, f.loadedAt = calendar, f.now()
+	f.sessions = map[string]map[int64]struct{}{}
 	return nil
 }
 
-func (f *stockCNCheckCalendarFilter) valid(spaceID, frequency string, barStart time.Time) bool {
+func (f *stockCNCheckCalendarFilter) valid(spaceID, frequency string, barStart time.Time) (bool, error) {
 	if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-		return true
+		return true, nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.calendar == nil || !strings.EqualFold(frequency, "1m") {
-		return false
+	if f.calendar == nil {
+		return false, fmt.Errorf("stockcn calendar is not loaded")
+	}
+	if !strings.EqualFold(frequency, "1m") {
+		return false, fmt.Errorf("stockcn calendar only supports 1m, got %s", frequency)
+	}
+	if !f.calendar.Covers(barStart) {
+		return false, fmt.Errorf("%s is outside the calendar coverage", barStart.In(f.calendar.Location()).Format("2006-01-02"))
 	}
 	tradeDate := barStart.In(f.calendar.Location()).Format("2006-01-02")
 	bars, cached := f.sessions[tradeDate]
 	if !cached {
 		expected, err := f.calendar.ExpectedMinuteBars(tradeDate)
 		if err != nil {
-			return false
+			return false, err
 		}
 		bars = make(map[int64]struct{}, len(expected))
 		for _, bar := range expected {
@@ -190,7 +207,7 @@ func (f *stockCNCheckCalendarFilter) valid(spaceID, frequency string, barStart t
 		f.sessions[tradeDate] = bars
 	}
 	_, ok := bars[barStart.UTC().Unix()]
-	return ok
+	return ok, nil
 }
 
 func stockCNCalendarPath() string {

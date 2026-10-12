@@ -323,6 +323,7 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		}
 		for _, name := range content.SortedFunctionNames() {
 			function := content.Functions[name]
+			var covering *marketfetch.Plan
 			for _, plan := range []*marketfetch.Plan{content.FinalPlan(function), content.TransitionalPlan(function)} {
 				if plan == nil {
 					continue
@@ -337,7 +338,14 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 								continue
 							}
 							if copyView.From <= at.Unix() {
-								return plan, nil
+								// 新旧两份都覆盖该时刻时，标的映射必须一致，否则无法确定该用哪份：宁可失败也不静默选一份。
+								if covering != nil && covering.ExchangeSymbol(subjectID) != plan.ExchangeSymbol(subjectID) {
+									return nil, fmt.Errorf("subject %s of dataset %s %s has ambiguous symbol mapping at %s", subjectID, datasetID, frequency, at.UTC().Format(time.RFC3339))
+								}
+								if covering == nil {
+									covering = plan
+								}
+								continue
 							}
 							if fallback == nil {
 								fallback = plan
@@ -345,6 +353,9 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 						}
 					}
 				}
+			}
+			if covering != nil {
+				return covering, nil
 			}
 		}
 	}
@@ -445,7 +456,8 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		log.WarnContextf(ctx, "collector backfill invoke outcome unknown space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
 		return
 	}
-	if success, _ := result.Result["success"].(bool); !success {
+	if success, _ := result.Result["success"].(bool); !success && !(bars(chunk) == 1 && sourceReportedEmpty(result)) {
+		// 单根分块且函数只因“行情源没有已收盘 K 线”失败时，不算执行失败，继续走下面的复查与缺失判定。
 		fail(fmt.Errorf("function reported failure: code=%d message=%q result=%v", result.Code, result.Message, result.Result))
 		return
 	}
@@ -472,6 +484,12 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, rows, note); err != nil {
 		log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, err)
 	}
+}
+
+// sourceReportedEmpty 判断函数的失败是否仅因行情源返回了空结果（没有已收盘的 K 线）。
+func sourceReportedEmpty(result scfinvoker.InvocationResult) bool {
+	text := strings.ToLower(fmt.Sprintf("%s %v", result.Message, result.Result))
+	return strings.Contains(text, strings.ToLower(marketdata.ErrNoClosedBar.Error()))
 }
 
 // markAbsent 记住补采成功后仍缺的 K 线。

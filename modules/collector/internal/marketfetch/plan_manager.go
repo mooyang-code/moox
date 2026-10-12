@@ -49,7 +49,8 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	defer release()
-	nodes, err := r.Cloud.ListTimerMarketFetchers(ctx, r.SpaceID)
+	// 停用确认必须以云端读回为准：目录缓存可能与云端实际状态不一致。
+	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
 	if err != nil {
 		return false, err
 	}
@@ -62,7 +63,12 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	deferred := 0
 	for name := range names {
+		if len(r.excludeBusy(ctx, []string{name})) == 0 {
+			deferred++ // 仍有在途作业：本轮不提交，也不能宣布停用完成
+			continue
+		}
 		node, ok := exists[name]
 		if !ok {
 			continue
@@ -74,7 +80,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	}
 	if len(patches) == 0 {
 		r.releaseLease(ctx)
-		return true, nil
+		return deferred == 0, nil
 	}
 	// CloudNode 单个作业最多 100 项：分批提交，全部确认后才算停用完成。
 	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
@@ -83,7 +89,11 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		items, terminal, err := r.waitJob(ctx, jobID)
+		batchNames := make([]string, 0, len(batch))
+		for _, patch := range batch {
+			batchNames = append(batchNames, patch.GetNodeId())
+		}
+		items, terminal, err := r.waitAux(ctx, auxJobKindDisable, batchNames, jobID)
 		if err != nil || !terminal {
 			return false, err
 		}
@@ -94,7 +104,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		}
 	}
 	r.releaseLease(ctx)
-	return true, nil
+	return deferred == 0, nil
 }
 
 // PlanManager 为每个启用采集计划的空间维持一个独立的对账协程，每分钟第 Offset 秒执行一轮。

@@ -31,6 +31,8 @@ type healingInvoker struct {
 	fail   bool
 	// noWrite 让函数“成功”却不写入任何行，模拟行情源本身没有这根 K 线。
 	noWrite bool
+	// sourceEmpty 让函数按真实路径失败：行情源返回空结果（no closed bar），不写入任何行。
+	sourceEmpty bool
 }
 
 func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
@@ -42,6 +44,9 @@ func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string
 	}
 	if h.fail {
 		return scfinvoker.InvocationResult{Result: map[string]any{"success": false, "message": "provider error"}}, nil
+	}
+	if h.sourceEmpty {
+		return scfinvoker.InvocationResult{Result: map[string]any{"success": false, "message": "item failed: no closed bar"}}, nil
 	}
 	if h.noWrite {
 		return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
@@ -267,4 +272,22 @@ func TestBackfillTreatsASingleBarMissingAtTheSourceAsDoneAndDoesNotResubmitIt(t 
 	failed, err := backfiller.Status(ctx, multi)
 	require.NoError(t, err)
 	require.Equal(t, store.BackfillFailed, failed.Job.Status)
+}
+
+func TestBackfillTreatsSourceEmptyFailureOfASingleBarAsAbsent(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	ctx := context.Background()
+	invoker.sourceEmpty = true
+	request := JobRequest{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}
+	jobID, _, err := backfiller.Submit(ctx, request, "manual")
+	require.NoError(t, err)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	auto, _, err := backfiller.Submit(ctx, request, "auto")
+	require.NoError(t, err)
+	require.Empty(t, auto)
 }

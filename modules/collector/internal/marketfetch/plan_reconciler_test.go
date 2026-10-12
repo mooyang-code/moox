@@ -114,6 +114,7 @@ type fakePlanCloud struct {
 	deleted    []string
 	upgraded   []string
 	jobs       map[string][]scfinvoker.BatchItemResult
+	running    map[string]bool // 仍在运行的作业
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
 	created    []string
 	submits    int
@@ -226,6 +227,9 @@ func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patche
 }
 
 func (c *fakePlanCloud) GetBatchResults(_ context.Context, _, jobID string) (*cloudnodepb.NodeBatchSummary, []scfinvoker.BatchItemResult, error) {
+	if c.running[jobID] {
+		return &cloudnodepb.NodeBatchSummary{JobId: jobID, Status: cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING}, nil, nil
+	}
 	items := c.jobs[jobID]
 	status := cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS
 	for _, item := range items {
@@ -594,7 +598,7 @@ func TestPlanReconcilerRepairsDriftHourly(t *testing.T) {
 		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, Metadata: map[string]any{
 			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
 			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(),
+			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
 		}}
 	}
 	h.now = h.now.Add(2 * time.Hour)
@@ -908,7 +912,7 @@ func TestPlanReconcilerRecreatesFunctionsDeletedInTheCloudAndIgnoresFailedReadba
 		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, Metadata: map[string]any{
 			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
 			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(),
+			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
 		}}
 	}
 	sort.Strings(names)
@@ -942,7 +946,7 @@ func TestPlanReconcilerUpgradesFunctionCodeWhenThePackageChanges(t *testing.T) {
 		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-old", Metadata: map[string]any{
 			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
 			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
-			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(),
+			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
 		}}
 	}
 	r.Deploy.PackageID = "pkg-new"
@@ -956,4 +960,33 @@ func TestPlanReconcilerUpgradesFunctionCodeWhenThePackageChanges(t *testing.T) {
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
 	require.Len(t, h.cloud.upgraded, before, "functions already on the configured package are left alone")
+}
+
+func TestTimerNeedsRepairDetectsMessageAndQualifierDrift(t *testing.T) {
+	good := func() map[string]any {
+		return map[string]any{
+			"timer_actual_enabled": true, "timer_actual_cron": "0 * * * * * *", "timer_available_status": "Available",
+			"timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}
+	}
+	require.False(t, timerNeedsRepair(good(), "0 * * * * * *"))
+	bad := good()
+	bad["timer_actual_message"] = "wrong"
+	require.True(t, timerNeedsRepair(bad, "0 * * * * * *"))
+	bad = good()
+	bad["timer_actual_qualifier"] = "v1"
+	require.True(t, timerNeedsRepair(bad, "0 * * * * * *"))
+}
+
+func TestAuxJobsTrackedUntilTerminalAndBlockResubmission(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	h.cloud.running = map[string]bool{"job-1": true, "job-2": true}
+	r.aux.track(auxJob{id: "job-1", kind: auxJobKindUpgrade, functions: []string{"fn-a", "fn-b"}, at: r.now()})
+	// 作业未结束：这批函数被排除，其余函数不受影响。
+	require.Equal(t, []string{"fn-c"}, r.excludeBusy(context.Background(), []string{"fn-a", "fn-c"}))
+	require.Equal(t, 1, r.aux.count())
+	// 超过最长存活后丢弃，不会永久阻塞。
+	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-2 * pendingJobMaxAge)})
+	require.Equal(t, []string{"fn-d"}, r.excludeBusy(context.Background(), []string{"fn-d"}))
 }

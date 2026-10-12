@@ -150,9 +150,9 @@ func TestCheckSplitsGapsAtNonTradingPeriods(t *testing.T) {
 		rows.missing["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
 	// 第 4、5 分钟不是交易分钟：它们既不应有、也不算缺口，两侧的缺口不能合并成一段。
-	calendar := func(_, _ string, barStart time.Time) bool {
+	calendar := func(_, _ string, barStart time.Time) (bool, error) {
 		minute := int(barStart.Sub(base) / time.Minute)
-		return minute != 4 && minute != 5
+		return minute != 4 && minute != 5, nil
 	}
 	checker := &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }, Calendar: calendar}
 	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(10 * time.Minute)})
