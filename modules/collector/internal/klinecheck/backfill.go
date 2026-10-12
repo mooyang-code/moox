@@ -89,6 +89,9 @@ type Invoker interface {
 
 // Backfiller 管理补采作业：展开分块、通过补采函数执行、复查缺口。
 type Backfiller struct {
+	// Refill 为 true 时，分块执行完立刻补位认领下一块（生产开启）；为 false 时只在调度节拍上认领。
+	Refill bool
+
 	Checker   *Checker
 	Store     BackfillStore
 	Plans     PlanHistory
@@ -105,6 +108,8 @@ type Backfiller struct {
 	// 它们不再被自动补采重复提交；只存在于内存，到期或重启后会重新尝试一次。
 	absent  map[absentKey]time.Time
 	workers sync.WaitGroup
+	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
+	tickMu sync.Mutex
 }
 
 type absentKey struct {
@@ -251,6 +256,8 @@ func (b *Backfiller) Cancel(ctx context.Context, jobID string) error {
 
 // Tick 推进该空间的补采作业：在名额内认领分块并异步执行，作业全部结束后标记结果。
 func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
+	b.tickMu.Lock()
+	defer b.tickMu.Unlock()
 	jobs, err := b.Store.ActiveJobs(ctx, spaceID)
 	if err != nil {
 		return err
@@ -275,7 +282,14 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 				b.workers.Add(1)
 				go func() {
 					defer b.workers.Done()
-					b.runChunk(b.baseContext(), spaceID, chunk)
+					// 分块执行完（成功或失败）后立刻补位认领下一块，不等下一次定时调度：
+					// 否则吞吐被限制为每次调度一批（每分钟约 5 块），大窗口要排很久。
+					// 退回名额、结果不明的分块不触发补位，避免函数未就绪时空转。
+					if b.runChunk(b.baseContext(), spaceID, chunk) && b.Refill {
+						if err := b.Tick(b.baseContext(), spaceID); err != nil {
+							log.WarnContextf(b.baseContext(), "collector backfill refill failed space=%s: %v", spaceID, err)
+						}
+					}
 				}()
 			}
 		}
@@ -424,8 +438,9 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 }
 
 // runChunk 调用补采函数执行一个分块，随后复查该块的缺口。
-func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk) {
+func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk) (finished bool) {
 	fail := func(err error) {
+		finished = true
 		log.WarnContextf(ctx, "collector backfill chunk failed space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
 		if finishErr := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillFailed, 0, err.Error()); finishErr != nil {
 			log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, finishErr)
@@ -503,9 +518,11 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		note = fmt.Sprintf("%d bars are absent at the source", check.Missing)
 		log.InfoContextf(ctx, "collector backfill chunk finished with source gaps space=%s chunk=%s missing=%d", spaceID, chunk.ChunkID, check.Missing)
 	}
+	finished = true
 	if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, rows, note); err != nil {
 		log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, err)
 	}
+	return finished
 }
 
 // sourceReportedEmpty 判断函数的失败是否仅因行情源返回了空结果（没有已收盘的 K 线）。

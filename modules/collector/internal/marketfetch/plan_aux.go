@@ -101,7 +101,7 @@ func (r *PlanReconciler) warnStalePending(ctx context.Context, job *pendingPlanJ
 
 // busyFunctions 返回仍有在途云端作业的函数（辅助作业与计划作业的并集），并刷新辅助作业：
 // 已到终态的移除，仍在运行的续租发布租约，防止后续排队项因租约过期失败。
-// settlePending 为 true 时（空间停用收尾，没有计划推进来结算）还会把已到终态或超龄的计划作业移出在途集合。
+// settlePending 为 true 时（空间停用收尾，没有计划推进来结算）还会把已到终态的计划作业移出在途集合。
 func (r *PlanReconciler) busyFunctions(ctx context.Context, settlePending bool) map[string]struct{} {
 	busy := map[string]struct{}{}
 	running := false

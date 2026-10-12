@@ -346,3 +346,22 @@ func TestDatasetMarketRefusesHistoryBeforeAMappingOnlyChange(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unfinished fetch plan")
 }
+
+// 开启补位后，分块执行完立刻认领下一块：一次调度就能处理完多块，且任何时刻都不超过并发上限。
+func TestBackfillRefillDrainsAJobWithoutWaitingForTheNextTick(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	backfiller.MaxInFlight = 1
+	backfiller.Refill = true
+	ctx := context.Background()
+	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(2500 * time.Minute), Force: true}, "manual")
+	require.NoError(t, err)
+	require.Equal(t, 3, chunks)
+
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.Len(t, invoker.events, 3, "补位让三块在一次调度内全部执行")
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+}
