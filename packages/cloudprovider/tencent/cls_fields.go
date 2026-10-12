@@ -8,5 +8,5 @@ var MarketFetchLogIndexFields = []CLSIndexField{
 	{Key: "dataset_id"}, {Key: "frequency"}, {Key: "subject_id"}, {Key: "symbol"}, {Key: "provider"},
 	{Key: "outcome"}, {Key: "error_type"}, {Key: "error"}, {Key: "window_start"}, {Key: "window_end"},
 	{Key: "attempts", Numeric: true}, {Key: "fetch_ms", Numeric: true}, {Key: "planned", Numeric: true},
-	{Key: "failed", Numeric: true}, {Key: "window_left_ms", Numeric: true},
+	{Key: "failed", Numeric: true}, {Key: "window_left_ms", Numeric: true}, {Key: "used_weight", Numeric: true},
 }

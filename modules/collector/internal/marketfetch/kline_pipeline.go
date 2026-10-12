@@ -117,6 +117,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
 	routerSession := p.Router.NewSession()
+	marketdata.TakeUsedWeight() // 丢弃上一批次残留，批次结束时读到的就是本批次内的最大值
 	if deadline, ok := ctx.Deadline(); ok {
 		// 记录本次取数窗口，便于判断行情源延迟尖峰是否吃光了预算。
 		log.InfoContextf(ctx, "market_fetch_pipeline_budget frequency=%s items=%d window_ms=%d chain=%d attempts_per_provider=%d request_timeout_ms=%d",

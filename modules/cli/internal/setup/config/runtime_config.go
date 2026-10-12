@@ -149,13 +149,16 @@ func renderSCFPlanBlocks(manifest Manifest, rendered []byte) ([]byte, error) {
 	if rendered, err = replaceYAMLMapping(rendered, "scf_markets", valueNode(markets)); err != nil {
 		return nil, err
 	}
-	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(
-		mappingField{"cloud_account_id", account.AccountID},
-		mappingField{"memory_mb", plan.MemoryMB},
-		mappingField{"symbols_per_function", plan.SymbolsPerFunction},
-		mappingField{"access_routes", access},
-		mappingField{"spaces", spaces},
-	))
+	fields := []mappingField{
+		{"cloud_account_id", account.AccountID},
+		{"memory_mb", plan.MemoryMB},
+		{"symbols_per_function", plan.SymbolsPerFunction},
+	}
+	if plan.AssumedEgressIPs > 0 {
+		fields = append(fields, mappingField{"assumed_egress_ips", plan.AssumedEgressIPs})
+	}
+	fields = append(fields, mappingField{"access_routes", access}, mappingField{"spaces", spaces})
+	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(fields...))
 }
 
 // WriteRenderedRuntimeConfig atomically writes already-rendered YAML.

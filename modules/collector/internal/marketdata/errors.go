@@ -3,6 +3,7 @@ package marketdata
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 )
 
@@ -105,3 +106,18 @@ func CanFallback(ctx context.Context, err error) bool {
 		return false
 	}
 }
+
+var usedWeight atomic.Int64
+
+// NoteUsedWeight 记录行情源响应头里读到的已用权重（出口 IP 在当前分钟的总用量），只保留本批次内的最大值。
+func NoteUsedWeight(used int) {
+	for {
+		current := usedWeight.Load()
+		if int64(used) <= current || usedWeight.CompareAndSwap(current, int64(used)) {
+			return
+		}
+	}
+}
+
+// TakeUsedWeight 返回自上次调用以来读到的最大已用权重并清零；批次开始时调用一次丢弃旧值，结束时读取。
+func TakeUsedWeight() int { return int(usedWeight.Swap(0)) }

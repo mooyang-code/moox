@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/packages/clsreporter"
 )
 
@@ -40,12 +41,17 @@ func (p *KlinePipeline) reportBatch(req Request, planned, failed int, fetch time
 	if p == nil || p.Reporter == nil {
 		return
 	}
-	p.Reporter.Report(clsreporter.Entry{Fields: map[string]string{
+	fields := map[string]string{
 		"log_type": clsLogTypeBatch, "space_id": firstNonEmptyString(p.SpaceID, req.SpaceID), "function": p.FunctionName,
 		"batch_kind": string(req.BatchKind), "request_id": req.RequestID, "dataset_id": req.DatasetID, "frequency": req.Frequency,
 		"planned": strconv.Itoa(planned), "failed": strconv.Itoa(failed),
 		"fetch_ms": strconv.FormatInt(fetch.Milliseconds(), 10), "window_left_ms": strconv.FormatInt(windowLeft.Milliseconds(), 10),
-	}})
+	}
+	// 已用权重：行情源按出口 IP 统计的当前分钟总用量（含同一 IP 上其他函数），用来估算离限额还有多远。
+	if used := marketdata.TakeUsedWeight(); used > 0 {
+		fields["used_weight"] = strconv.Itoa(used)
+	}
+	p.Reporter.Report(clsreporter.Entry{Fields: fields})
 }
 
 func formatReportTime(value time.Time) string {

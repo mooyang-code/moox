@@ -80,6 +80,7 @@ func (g *weightGovernor) Observe(domain string, status int, header http.Header) 
 	if value := strings.TrimSpace(header.Get("X-MBX-USED-WEIGHT-1M")); value != "" {
 		if used, err := strconv.Atoi(value); err == nil {
 			state.used, state.observedAt = used, now
+			marketdata.NoteUsedWeight(used)
 		}
 	}
 	retryAfter := time.Duration(0)

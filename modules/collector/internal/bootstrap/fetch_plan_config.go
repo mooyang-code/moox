@@ -32,6 +32,8 @@ type SCFPlanConfig struct {
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`
 	// MaxConcurrentOperations 限制各空间同时进行的 SCF 配置操作。
 	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
+	// AssumedEgressIPs 是函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警。
+	AssumedEgressIPs int `yaml:"assumed_egress_ips"`
 	// AccessRoutes 是采集计划函数访问 Access 的私网入口（按地域）。与旧链路的 scf_access_routes 分开：
 	// 旧 Invoke 函数不在 VPC 内，仍走公网入口，直到 6b 清理。
 	AccessRoutes map[string]SCFAccessEndpoint `yaml:"access_routes"`

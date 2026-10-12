@@ -29,6 +29,8 @@ type PlanOptions struct {
 	Fetch              PlanFetch
 	// DefaultLatenessS 是任务没有指定允许迟到时间时的空间默认值。
 	DefaultLatenessS int
+	// AssumedEgressIPs 是函数出口 IP 个数的估计值，只用于频控估算（保守默认 1）。
+	AssumedEgressIPs int
 }
 
 // PlanDatasetState 是一个结果数据集在某一时刻的状态：标的集合 hash 与总数等。

@@ -86,7 +86,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		Factory: func(spaceID string) (*marketfetch.PlanReconciler, error) {
 			options := marketfetch.PlanOptions{
 				SpaceID: spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
-				Fetch: cfg.SCFPlan.fetchFor(spaceID), DefaultLatenessS: defaultLatenessSeconds(spaceID),
+				Fetch: cfg.SCFPlan.fetchFor(spaceID), DefaultLatenessS: defaultLatenessSeconds(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
 			}
 			var preflight func(context.Context) error
 			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {

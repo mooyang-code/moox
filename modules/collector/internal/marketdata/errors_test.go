@@ -42,3 +42,16 @@ func TestCanFallbackOnlyForFetchFailuresWithLiveContext(t *testing.T) {
 	cancel()
 	assert.False(t, CanFallback(canceled, ErrTimeout))
 }
+
+func TestUsedWeightKeepsTheMaximumUntilTaken(t *testing.T) {
+	TakeUsedWeight()
+	NoteUsedWeight(300)
+	NoteUsedWeight(120)
+	NoteUsedWeight(450)
+	if got := TakeUsedWeight(); got != 450 {
+		t.Fatalf("used weight = %d, want 450", got)
+	}
+	if got := TakeUsedWeight(); got != 0 {
+		t.Fatalf("used weight after take = %d, want 0", got)
+	}
+}
