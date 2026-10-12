@@ -20,7 +20,6 @@ import (
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
 type capturedStorage struct {
@@ -62,8 +61,8 @@ func (f composedTimerRuntimeClientFunc) ClaimTimerBatch(ctx context.Context, req
 func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 	for _, product := range []string{"spot", "swap"} {
 		for _, frequency := range []string{"1m", "1h"} {
-			for _, mode := range []string{"invoke", "timer"} {
-				t.Run(product+"/"+frequency+"/"+mode, func(t *testing.T) {
+			{
+				t.Run(product+"/"+frequency, func(t *testing.T) {
 					now := time.Now().UTC().Truncate(time.Hour)
 					start := now.Add(-time.Hour)
 					barDuration := time.Minute
@@ -112,51 +111,17 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					t.Setenv("MOOX_SPACE_ID", "crypto")
 					subject := "BTC-USDT"
 					var response *model.Response
-					if mode == "timer" {
-						h.Publish = func(context.Context, marketfetch.Request, proto.Message) error { return nil }
-						t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
-						t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
-						t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
-						t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime")
-						t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
-						t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage")
-						period := start.UTC().Format(time.RFC3339Nano)
-						claimed, marshalErr := json.Marshal(marketfetch.Request{
-							BatchID: "timer-batch", RequestID: "request", BatchKind: domain.BatchKindRealtime,
-							SpaceID: "crypto", MarketID: "crypto", InstrumentType: product, DatasetID: "bars", Frequency: frequency,
-							Provider: "binance", SourceID: product + "_http", MarketType: product, FunctionName: "function",
-							GroupID: 0, GroupCount: 1, BindingHash: "binding-hash", RequirePeriodCommit: true,
-							Items: []domain.CollectionItem{{
-								InstanceID: "timer-instance", SubjectID: subject, Symbol: "BTCUSDT", Provider: "binance", SourceID: product + "_http",
-								MarketID: "crypto", InstrumentType: product, MarketType: product, DataType: "kline", DatasetID: "bars",
-								Frequency: frequency, TargetDataTime: period, BarLimit: 1, SeriesIndex: 0, SeriesHash: "timer-series", ExpectedCount: 1,
-								RequirePeriodCommit: true,
-							}},
-							Targets: []domain.WriteTarget{{
-								ID: "timer-target", SpaceID: "crypto", InstanceID: "timer-instance", TaskID: "timer-task", DatasetID: "bars",
-								SeriesIndex: 0, SeriesHash: "timer-series", ExpectedCount: 1, Frequency: frequency, TargetDataTime: period,
-							}},
-						})
-						require.NoError(t, marshalErr)
-						h.TimerRuntimeClient = composedTimerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
-							return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: claimed}, nil
-						})
-						response, err = h.HandleTimerAt(context.Background(), "request", "function", now)
-					} else {
+					{
 						req := marketfetch.Request{BatchID: "batch", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", MarketID: "crypto", InstrumentType: product, DatasetID: "bars", Frequency: frequency, Provider: "binance", SourceID: product + "_http", MarketType: product, RequestID: "request", Items: []domain.CollectionItem{{SubjectID: subject, Symbol: "BTCUSDT", Provider: "binance", SourceID: product + "_http", MarketType: product, DataType: "kline", DatasetID: "bars", Frequency: frequency, BarLimit: 1}}}
 						encoded, marshalErr := json.Marshal(req)
 						require.NoError(t, marshalErr)
 						var data map[string]interface{}
 						require.NoError(t, json.Unmarshal(encoded, &data))
-						response, err = h.HandleWithFunctionNameWithoutCompletion(context.Background(), model.CloudFunctionEvent{Action: model.EventActionMarketFetch, Data: data}, "function")
+						response, err = h.HandleWithFunctionName(context.Background(), model.CloudFunctionEvent{Action: model.EventActionMarketFetch, Data: data}, "function")
 					}
 					require.NoError(t, err)
 					require.True(t, response.Success, "%+v", response)
 					require.Len(t, storage.rows, 1, "%+v", response)
-					if mode == "timer" {
-						require.Len(t, storage.committed, 1)
-						require.Equal(t, uint32(0), storage.committed[0].GetSeriesIndex())
-					}
 					require.Equal(t, expectedPath+"?"+strings.ToLower(frequency)+"&BTCUSDT", <-requests)
 					fields := map[string]*storagepb.TypedValue{}
 					for _, field := range storage.rows[0].GetFields() {

@@ -356,7 +356,7 @@ func newPlanHarness(t *testing.T, subjectCount int) *planHarness {
 	h.setSubjects(subjectCount)
 	h.tasks = &planTasksStub{tasks: []domain.CollectionTask{{
 		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline",
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m","fetch_mode":"timer"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m"}`,
 	}}}
 	return h
 }
@@ -373,7 +373,7 @@ func (h *planHarness) reconciler() *PlanReconciler {
 		SpaceID: "crypto", Options: testPlanOptions(),
 		Deploy: PlanDeploy{CloudAccountID: "acct", PackageID: "pkg", Namespace: "default", MemoryMB: 64, Networks: map[string]PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}},
 			BaseEnvironment: map[string]string{"MOOX_SPACE_ID": "crypto"}},
-		Groups: &Reconciler{Tasks: h.tasks, Symbols: h.symbols, TaskFilter: func(p *domain.CollectParams) bool { return p.TimerManaged() }},
+		Groups: &GroupBuilder{Tasks: h.tasks, Symbols: h.symbols},
 		Store:  h.store, Storage: h.registrar, Cloud: h.cloud, Access: testSCFAccessEnvironment, Lateness: h.lateness, Activity: h.activity,
 		Now: func() time.Time { return h.now }, JobWait: time.Millisecond, PollInterval: time.Millisecond,
 	}
@@ -652,7 +652,7 @@ func TestPlanReconcilerRejectsOversizedEnvironment(t *testing.T) {
 	h := newPlanHarness(t, 400)
 	r := h.reconciler()
 	r.Options.SymbolsPerFunction = 200
-	h.tasks.tasks[0].CollectParams = strings.Replace(h.tasks.tasks[0].CollectParams, `"fetch_mode":"timer"`, `"fetch_mode":"timer","symbols_per_function":200`, 1)
+	h.tasks.tasks[0].CollectParams = strings.Replace(h.tasks.tasks[0].CollectParams, `"frequency":"1m"`, `"frequency":"1m","symbols_per_function":200`, 1)
 	r.Deploy.BaseEnvironment["PADDING"] = strings.Repeat("x", 3000)
 	require.Error(t, h.reconcile(r))
 	require.Empty(t, h.store.records, "no plan is saved when the environment cannot fit")
@@ -772,32 +772,7 @@ func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsAccessDrift(t *testing
 	require.Equal(t, created+1, len(h.cloud.created), "a function deleted in the cloud is rebuilt from the applied plan")
 }
 
-func TestPlanReconcilerRollbackStopsDatasetAtBoundary(t *testing.T) {
-	h := newPlanHarness(t, 60)
-	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
 
-	// 回退：任务仍是 timer 模式，但设置了旧链路下界 T'。
-	boundary := h.now.Truncate(time.Hour).Add(3 * time.Hour)
-	h.tasks.tasks[0].CollectParams = strings.Replace(h.tasks.tasks[0].CollectParams, `"fetch_mode":"timer"`, `"fetch_mode":"timer","invoke_from_period":"`+boundary.Format(time.RFC3339)+`"`, 1)
-	require.NoError(t, h.reconcile(r))
-	record := h.open()
-	require.NotNil(t, record)
-	stop := h.content(record).Datasets["ds_spot|1m"]
-	require.True(t, stop.Gone)
-	require.Equal(t, boundary.Unix(), stop.P, "the dataset stops exactly where the old chain takes over")
-	for name, patch := range h.cloud.patches {
-		plan, err := DecodePlan(patch.GetManagedEnvironment()[PlanEnvName])
-		require.NoError(t, err, name)
-		copies := plan.Datasets[0].Copies
-		require.Len(t, copies, 2)
-		require.Empty(t, copies[1].Subjects)
-		require.Equal(t, boundary.Unix(), copies[1].From)
-	}
-}
 
 func TestTransitionalPlanDropsRemovedSymbolExceptions(t *testing.T) {
 	old := &Plan{V: 1, Market: PlanMarket{MarketID: "crypto", Provider: "binance", SourceID: "s", MarketType: "spot"}, Fetch: PlanFetch{Concurrency: 5},
@@ -1286,4 +1261,8 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 	require.NoError(t, <-done)
 	require.Empty(t, h.cloud.upgraded, "已在 v2 的补采函数不能被降级")
 	require.Equal(t, "pkg-v2", h.cloud.backfill[name].PackageID)
+}
+
+func testSCFAccessEnvironment(string) (map[string]string, error) {
+	return map[string]string{"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64)}, nil
 }

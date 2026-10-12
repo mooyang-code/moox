@@ -13,6 +13,5 @@ func TestProviderResponseErrorsRemainRetryableForLaterCandidateWindow(t *testing
 		outcome := classifyError(err)
 		require.Equal(t, domain.ItemOutcomeProviderError, outcome, "error=%v", err)
 		require.True(t, isRetryable(outcome), "error=%v", err)
-		require.True(t, isRetryOutcome(string(outcome)), "error=%v", err)
 	}
 }

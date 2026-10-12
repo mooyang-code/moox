@@ -45,9 +45,8 @@ type PlanDatasetState struct {
 // DesiredDataset 是期望状态里的一个数据集，带完整标的序列（规范顺序，序号即下标）。
 type DesiredDataset struct {
 	PlanDatasetState
-	StartAt int64
-	Series  []seriesset.Series
-	index   map[string]uint32
+	Series []seriesset.Series
+	index  map[string]uint32
 }
 
 // PlanFunction 是一个定时函数的状态：所在地域、服务的市场、cron 与计划。
@@ -63,8 +62,6 @@ type PlanFunction struct {
 type DesiredState struct {
 	Datasets  map[string]*DesiredDataset
 	Functions map[string]*PlanFunction
-	// StopAt 是正在回退到旧链路的数据集的停止边界（Unix 秒）；这些数据集不在 Datasets 里，按“不再采集”处理。
-	StopAt map[string]int64
 }
 
 func planDatasetKey(datasetID, frequency string) string { return datasetID + "|" + frequency }
@@ -93,7 +90,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 	if defaultSize <= 0 {
 		defaultSize = DefaultSymbolsPerFunction
 	}
-	state := &DesiredState{Datasets: map[string]*DesiredDataset{}, Functions: map[string]*PlanFunction{}, StopAt: map[string]int64{}}
+	state := &DesiredState{Datasets: map[string]*DesiredDataset{}, Functions: map[string]*PlanFunction{}}
 	type market struct {
 		key        string
 		sample     TaskGroup
@@ -111,10 +108,6 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		frequency, err := marketdata.ParseFrequency(group.Frequency)
 		if err != nil || string(frequency) != group.Frequency {
 			return nil, fmt.Errorf("task group %s frequency %q is not canonical", group.DatasetID, group.Frequency)
-		}
-		if group.StopAt > 0 {
-			state.StopAt[planDatasetKey(group.DatasetID, group.Frequency)] = group.StopAt
-			continue
 		}
 		key := planMarketKey(group)
 		info := markets[key]
@@ -140,7 +133,6 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		} else if dataset.Market != key {
 			return nil, fmt.Errorf("dataset %s %s is collected from more than one market", group.DatasetID, group.Frequency)
 		}
-		dataset.StartAt = minPositive64(dataset.StartAt, group.StartAt)
 		for _, subject := range group.Subjects {
 			subject = strings.ToUpper(strings.TrimSpace(subject))
 			if subject == "" {

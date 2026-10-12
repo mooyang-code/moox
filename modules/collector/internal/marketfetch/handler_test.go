@@ -2,62 +2,15 @@ package marketfetch
 
 import (
 	"context"
-	"encoding/json"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
-
-type timerMetricsReporter struct{ calls atomic.Int32 }
-
-func (r *timerMetricsReporter) Handle(context.Context) error {
-	r.calls.Add(1)
-	return nil
-}
-
-type timerHandlerStorage struct{}
-
-func (timerHandlerStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
-	return nil
-}
-
-func TestHandleTimerAtReportsMetricsForTimerExecution(t *testing.T) {
-	setTimerClaimEnvironment(t)
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
-	requestJSON, err := json.Marshal(validClaimedTimerRequest())
-	require.NoError(t, err)
-	reporter := &timerMetricsReporter{}
-	handler := &Handler{
-		TimerRuntimeClient: timerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
-			return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: requestJSON}, nil
-		}),
-		NewStorage: func(string, string) (Storage, error) { return timerHandlerStorage{}, nil },
-		Execute: func(_ context.Context, req Request, _ Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
-			require.Equal(t, domain.BatchKindRealtime, req.BatchKind)
-			require.Equal(t, 3, req.GroupID)
-			require.Equal(t, 200, req.GroupCount)
-			return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil
-		},
-		Publish:         func(context.Context, Request, proto.Message) error { return nil },
-		MetricsReporter: reporter,
-	}
-
-	response, err := handler.HandleTimerAt(context.Background(), "request-1", "function-1", time.Date(2026, 8, 30, 3, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	require.True(t, response.Success)
-	require.Equal(t, int32(1), reporter.calls.Load())
-}
 
 func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
@@ -88,7 +41,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 		Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "handler-metrics", GroupID: 3, GroupCount: 4,
 		Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1}},
 	}
-	response, err := handler.handleRequest(context.Background(), req, false)
+	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success)
 	require.Equal(t, 1.0, testutil.ToFloat64(metrics.feedResults.WithLabelValues(StockCNSpaceID, StockCNRouteID, "sina", "kline", "3", "realtime", "success")))
@@ -130,7 +83,7 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 		MarketType: "swap", InstrumentType: "swap", RequestID: "swap-pipeline",
 		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
 	}
-	response, err := handler.handleRequest(context.Background(), req, false)
+	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success)
 	require.Equal(t, marketdata.InstrumentSwap, product)
@@ -166,21 +119,8 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 		MarketType: "swap", InstrumentType: "swap", RequestID: "stale-source",
 		Items: []domain.CollectionItem{{SubjectID: "ETH-USDT", Symbol: "ETHUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
 	}
-	response, err := handler.handleRequest(context.Background(), req, false)
+	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success, "%+v", response)
 	require.Len(t, storage.rows, 1)
-}
-
-// HandleTimer executes one durable batch claimed from the Collector runtime.
-func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*model.Response, error) {
-	now := time.Now().UTC()
-	if h != nil && h.Now != nil {
-		now = h.Now().UTC()
-	}
-	return h.HandleTimerAt(ctx, requestID, nodeID, now)
-}
-
-func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	return h.handleWithFunctionName(ctx, event, true, "")
 }

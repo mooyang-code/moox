@@ -2,7 +2,9 @@ package marketfetch
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -183,4 +185,48 @@ func upgradeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 		}
 	}
 	return context.WithTimeout(ctx, budget)
+}
+
+// stockCNHistoryMaxLookback 是 A 股当前数据源能回看的最长历史。
+const stockCNHistoryMaxLookback = 24 * time.Hour
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func minPositive(left, right int) int {
+	return int(minPositive64(int64(left), int64(right)))
+}
+
+func minPositive64(left, right int64) int64 {
+	switch {
+	case left <= 0:
+		return max(right, 0)
+	case right <= 0:
+		return left
+	case right < left:
+		return right
+	default:
+		return left
+	}
+}
+
+func metadataBoolValue(metadata map[string]any, key string) (bool, bool) {
+	value, ok := metadata[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true"), true
+	default:
+		return fmt.Sprint(typed) == "1", true
+	}
 }

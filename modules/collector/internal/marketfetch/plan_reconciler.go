@@ -133,7 +133,7 @@ type PlanReconciler struct {
 	SpaceID  string
 	Options  PlanOptions
 	Deploy   PlanDeploy
-	Groups   *Reconciler
+	Groups   *GroupBuilder
 	Store    planStore
 	Storage  PlanSnapshotRegistrar
 	Cloud    planCloud
@@ -258,7 +258,7 @@ func (r *PlanReconciler) managedTasks(ctx context.Context) (map[string]struct{},
 	datasets := map[string]struct{}{}
 	for _, task := range tasks {
 		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-		if parseErr != nil || params.Collector.DataType != "kline" || !params.TimerManaged() {
+		if parseErr != nil || params.Collector.DataType != "kline" {
 			continue
 		}
 		datasets[params.Target.DatasetID] = struct{}{}
@@ -308,8 +308,8 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 			break
 		}
 	}
-	choose := func(frequency string, startAt int64, isNew bool) (int64, error) {
-		return ChoosePeriodStartWithLead(frequency, r.now(), startAt, isNew, lead)
+	choose := func(frequency string) (int64, error) {
+		return ChoosePeriodStartWithLead(frequency, r.now(), lead)
 	}
 	content, changed, err := BuildPlanContent(previousFunctions, previousDatasets, desired, choose)
 	if err != nil {
@@ -358,9 +358,6 @@ func (r *PlanReconciler) holdMissingDatasets(ctx context.Context, desired *Desir
 	for key, state := range previous {
 		if desired.Datasets[key] != nil {
 			continue
-		}
-		if _, stopping := desired.StopAt[key]; stopping {
-			continue // 正在回退到旧链路：这是有意的停止，不是数据暂时取不到
 		}
 		if _, stillEnabled := managed[state.DatasetID]; !stillEnabled {
 			continue
@@ -538,14 +535,9 @@ func (r *PlanReconciler) registerSnapshots(ctx context.Context, record *store.Fe
 		registration, err := r.Storage.RegisterSeriesSnapshot(ctx, r.SpaceID, change.DatasetID, change.Frequency, change.Series, change.P)
 		switch {
 		case errors.Is(err, marketstorage.ErrStaleEffectiveFrom):
-			p, chooseErr := ChoosePeriodStartWithLead(change.Frequency, r.now(), 0, false, planLeadTimeWithCreate)
+			p, chooseErr := ChoosePeriodStartWithLead(change.Frequency, r.now(), planLeadTimeWithCreate)
 			if chooseErr != nil {
 				return false, r.fail("storage", chooseErr)
-			}
-			if change.Handoff {
-				// 交接边界已过：新链路只能从更晚的周期开始，中间的周期由自动补采补回，同时留下告警。
-				log.WarnContextf(ctx, "collector fetch plan handoff boundary has passed space=%s dataset=%s old=%d new=%d", r.SpaceID, key, change.P, p)
-				change.Handoff = false
 			}
 			change.P = p
 			if saveErr := r.Store.SavePlan(ctx, record.ID, mustJSON(content)); saveErr != nil {

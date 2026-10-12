@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
@@ -99,9 +98,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			reconciler := &marketfetch.PlanReconciler{
 				Preflight: preflight,
 				SpaceID:   spaceID, Options: options, Deploy: deploy,
-				Groups: &marketfetch.Reconciler{
+				Groups: &marketfetch.GroupBuilder{
 					Tasks: dbm.Tasks(), Symbols: source, ResolveSourceID: marketwiring.DefaultSourceID, ResolveSymbol: marketwiring.ResolveSymbol,
-					TaskFilter: func(params *domain.CollectParams) bool { return params.TimerManaged() },
 				},
 				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
 				Activity: invoker, Metrics: metrics, Operations: operations,

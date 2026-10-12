@@ -12,7 +12,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"gopkg.in/yaml.v3"
@@ -405,27 +404,4 @@ func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client,
 		return nil, fmt.Errorf("collector gateway client requires a loaded collector configuration")
 	}
 	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
-}
-
-func (c *Config) scfAccessEnvironment(region string) (map[string]string, error) {
-	config := c.SCFAccess
-	if route, ok := c.SCFAccessRoutes[strings.ToLower(strings.TrimSpace(region))]; ok {
-		config.Address, config.InstanceID = route.Address, route.InstanceID
-	}
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("SCF Access configuration: %w", err)
-	}
-	keyPath := config.KeyFile
-	if !filepath.IsAbs(keyPath) {
-		keyPath = filepath.Join(filepath.Dir(c.sourcePath), keyPath)
-	}
-	secret, err := gatewayauth.ReadSigningSecret(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("SCF Access signing key: %w", err)
-	}
-	compression := config.Compression
-	if compression == "" {
-		compression = gatewayclient.CompressionNone
-	}
-	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret, "MOOX_GATEWAY_COMPRESSION": compression}, nil
 }

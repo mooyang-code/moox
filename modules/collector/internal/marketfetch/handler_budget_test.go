@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -69,29 +70,6 @@ func TestContextWithReserveEndsFetchBeforeStorageAndCLSWindow(t *testing.T) {
 	require.LessOrEqual(t, remaining, 140*time.Millisecond)
 }
 
-func TestStorageAndPublishReservesColdEventBusConnection(t *testing.T) {
-	commit, publish := storageAndPublishReserves(5*time.Second, 0, true)
-	require.Equal(t, 18750*time.Millisecond, commit)
-	require.Equal(t, 13*time.Second, publish)
-	require.GreaterOrEqual(t, publish, 2*(completionConnectTimeout+3*time.Second)+300*time.Millisecond)
-}
-
-func TestTimerBudgetLeavesBoundedStorageEventBusAndCLSWindows(t *testing.T) {
-	t.Setenv("MOOX_FETCH_TIMEOUT_SECONDS", "")
-	t.Setenv("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", "")
-	claim := timerClaimTimeout
-	commit, publish := storageAndPublishReserves(5*time.Second, 0, true)
-	ctx, cancel := executionContext(context.Background())
-	defer cancel()
-	deadline, ok := ctx.Deadline()
-	require.True(t, ok)
-	budget := time.Until(deadline)
-	require.Equal(t, 13*time.Second, publish)
-	require.Equal(t, metricsResponseReserve, commit-5*time.Second-publish)
-	provider := 4 * 4 * time.Second // 40 Timer subjects / 10 inflight, one bound source.
-	require.Greater(t, budget-claim-commit-3*time.Second, provider, "Timer must preserve Claim, provider attempts, Storage, Completion and CLS")
-}
-
 func TestReservedDeadlineStorageSharesWriteDeadlineAndLeavesPublishReserve(t *testing.T) {
 	parent, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
@@ -132,4 +110,30 @@ func TestReservedDeadlineStorageForwardsInstrumentNames(t *testing.T) {
 	names, err := storage.ListInstrumentNames(context.Background(), StockCNSpaceID, []string{"600000.XSHG"})
 	require.NoError(t, err)
 	require.Equal(t, "浦发银行", names["600000.XSHG"])
+}
+
+// recordingPeriodFailureStorage 是不做任何事的 Storage 测试替身，记录对周期状态的调用。
+type recordingPeriodFailureStorage struct {
+	ensured []*storagepb.DatasetPeriodExpectation
+}
+
+func (s *recordingPeriodFailureStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
+	return nil
+}
+
+func (s *recordingPeriodFailureStorage) EnsureDatasetPeriod(_ context.Context, exp *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	s.ensured = append(s.ensured, exp)
+	return domain.PeriodStorageState{}, nil
+}
+
+func (s *recordingPeriodFailureStorage) GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	return domain.PeriodStorageState{}, nil
+}
+
+func (s *recordingPeriodFailureStorage) CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error {
+	return nil
+}
+
+func (s *recordingPeriodFailureStorage) RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
+	return nil, nil
 }

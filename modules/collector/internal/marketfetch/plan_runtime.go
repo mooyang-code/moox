@@ -75,7 +75,7 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		}
 		return frequencyDuration(planned[i].Frequency) < frequencyDuration(planned[j].Frequency)
 	})
-	invocationHandler, closeGateway, err := h.prepareInvocation(false)
+	invocationHandler, closeGateway, err := h.prepareInvocation()
 	if err != nil {
 		return respond(false, err.Error(), nil)
 	}
@@ -109,7 +109,7 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		runCtx, cancel := context.WithDeadline(ctx, item.StorageDeadline)
 		closeAt := item.Period.Add(frequencyDuration(item.Frequency))
 		runStarted := now
-		response, runErr := invocationHandler.handleRequest(runCtx, item.Request, false)
+		response, runErr := invocationHandler.handleRequest(runCtx, item.Request)
 		cancel()
 		// 记录相对收盘时间的起止与截止，便于看出行情源延迟尖峰是否吃光了窗口。
 		finished := time.Now()

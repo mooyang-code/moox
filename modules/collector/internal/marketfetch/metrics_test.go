@@ -136,34 +136,6 @@ func TestPeriodFailureMetricsUseOnlyBoundedLabels(t *testing.T) {
 	}
 }
 
-func TestPeriodFailureReporterMetricsTrackDatasetTasksWithoutDatasetLabels(t *testing.T) {
-	db := newTestMarketFetchStore(t)
-	ctx := context.Background()
-	registry := prometheus.NewRegistry()
-	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string) (Storage, error) { return nil, nil }, "crypto")
-	reporter.SetMetrics(NewMetrics(registry))
-	period := time.Now().UTC().Truncate(time.Minute)
-	targetA, retryA := addMetricFailureTask(t, db, "task-a", "dataset-a", "target-a", period)
-	require.NoError(t, reporter.refreshPendingMetrics(ctx, "crypto"))
-	assertPendingFailureMetric(t, registry, 1)
-
-	_, retryB := addMetricFailureTask(t, db, "task-b", "dataset-b", "target-b", period)
-	require.NoError(t, reporter.refreshPendingMetrics(ctx, "crypto"))
-	assertPendingFailureMetric(t, registry, 2)
-
-	require.NoError(t, db.FetchRetries().ApplyPeriodFailureReportResults(ctx, "crypto", retryA.RetryKey, []domain.PeriodFailureTargetResult{{
-		WriteTargetID: targetA.ID, SpaceID: "crypto", DatasetID: targetA.DatasetID, Frequency: "1m", PeriodTime: period,
-		SeriesHash: targetA.SeriesHash, ExpectedCount: targetA.ExpectedCount, SeriesIndex: targetA.SeriesIndex, Disposition: "recorded", ObservedAt: period,
-	}}, ""))
-	require.NoError(t, db.DeleteTaskRuntime(ctx, "crypto", "task-a"))
-	require.NoError(t, db.Tasks().DeleteByTaskID(ctx, "crypto", "task-a"))
-	require.NoError(t, reporter.refreshPendingMetrics(ctx, "crypto"))
-	assertPendingFailureMetric(t, registry, 1)
-	stored, err := db.FetchRetries().Get(ctx, "crypto", retryB.RetryKey)
-	require.NoError(t, err)
-	require.Equal(t, domain.PeriodFailureReportPending, stored.PeriodFailureReportState)
-}
-
 func addMetricFailureTask(t *testing.T, db *store.Store, taskID, datasetID, targetID string, period time.Time) (domain.WriteTarget, domain.RetryItem) {
 	t.Helper()
 	ctx := context.Background()
@@ -260,21 +232,6 @@ func TestMetricsRemoveDeletedAssignmentAndTimerLabels(t *testing.T) {
 	}
 }
 
-func TestAssignmentMetricsCountEnvironmentSplits(t *testing.T) {
-	groups := []TaskGroup{
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"ETH-USDT"}},
-	}
-	assignments := []NodeAssignment{
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"ETH-USDT"}},
-	}
-	scopes := assignmentMetricScopes(groups, assignments)
-	require.Len(t, scopes, 1)
-	require.Equal(t, 2, scopes[0].Required)
-	require.Equal(t, 2, scopes[0].Active)
-}
-
 func TestMetricsRecoveryCanSucceedWithoutAssignmentScopes(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
 	metrics.ObserveAssignmentFailure("crypto", "rules")
@@ -303,42 +260,6 @@ func TestMetricsResetRequirementsPreservesLastActiveAssignment(t *testing.T) {
 
 	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "1m")))
 	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "1m")))
-}
-
-func TestAssignmentMetricsAggregateAcrossDatasetsWithoutDatasetLabels(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	metrics := NewMetrics(registry)
-	reconciler := &Reconciler{Metrics: metrics}
-	groups := []TaskGroup{
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars-a", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars-a", Frequency: "1m", Subjects: []string{"ETH-USDT"}},
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars-b", Frequency: "1m", Subjects: []string{"SOL-USDT"}},
-	}
-	assignments := []NodeAssignment{
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars-a", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
-		{Provider: "binance", MarketType: "spot", DatasetID: "bars-b", Frequency: "1m", Subjects: []string{"SOL-USDT"}},
-	}
-
-	reconciler.observeAssignmentRequirements("crypto", groups)
-	reconciler.observeAssignmentDesiredMetrics("crypto", groups, assignments)
-	reconciler.observeAssignmentMetrics("crypto", groups, assignments, 1722772800)
-
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, name := range []string{
-		"moox_collector_market_fetch_assignment_required",
-		"moox_collector_market_fetch_assignment_active",
-	} {
-		family := metricFamily(t, families, name)
-		require.Len(t, family.GetMetric(), 1)
-		metric := family.GetMetric()[0]
-		require.Equal(t, map[string]string{"space_id": "crypto", "frequency": "1m"}, metricLabels(metric))
-		if name == "moox_collector_market_fetch_assignment_required" {
-			require.Equal(t, float64(3), metric.GetGauge().GetValue())
-		} else {
-			require.Equal(t, float64(2), metric.GetGauge().GetValue())
-		}
-	}
 }
 
 func TestAssignmentMetricsBoundUnsupportedFrequencyLabels(t *testing.T) {

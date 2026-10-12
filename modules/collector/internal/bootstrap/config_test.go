@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -72,8 +71,6 @@ scf_access_routes:
 	require.NoError(t, err)
 	require.Equal(t, "assigned-scf-key-17", cfg.SCFAccess.KeyID)
 	require.Equal(t, "10.0.0.5:11004", cfg.SCFAccessRoutes["ap-guangzhou"].Address)
-	_, err = cfg.scfAccessEnvironment("ap-guangzhou")
-	require.ErrorContains(t, err, "signing key")
 }
 
 func TestLoadRejectsRemovedCollectorRuntimeGatewayConfig(t *testing.T) {
@@ -128,18 +125,6 @@ func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {
 		port     int
 		protocol string
 	}{"127.0.0.1", 11422, "trpc"}, listeners["trpc"])
-}
-
-func TestStockCNTargetDataTimeValidatorUsesConfiguredCalendar(t *testing.T) {
-	calendar, err := stockmarket.LoadCalendar(filepath.Join("..", "..", "config", "markets", "stockcn", "calendar.yaml"))
-	require.NoError(t, err)
-	current := time.Date(2026, 9, 30, 2, 1, 10, 0, time.UTC)
-	valid := stockCNTargetDataTimeValidator(calendar, 10*time.Second, func() time.Time { return current })
-	assert.True(t, valid("1m", time.Date(2026, 9, 30, 2, 0, 0, 0, time.UTC)), "latest closed session minute")
-	assert.False(t, valid("1m", time.Date(2026, 9, 30, 4, 0, 0, 0, time.UTC)), "lunch period")
-	current = time.Date(2026, 10, 1, 2, 1, 10, 0, time.UTC)
-	assert.False(t, valid("1m", time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)), "configured holiday")
-	assert.False(t, valid("5m", time.Date(2026, 9, 30, 2, 0, 0, 0, time.UTC)), "non-1m frequency")
 }
 
 func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {

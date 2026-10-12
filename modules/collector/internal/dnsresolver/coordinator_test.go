@@ -114,7 +114,6 @@ func TestCoordinatorStatusIncludesSourceHashAgeAndErrorCategory(t *testing.T) {
 	status := coordinator.Status()
 	require.Equal(t, "egress", status.Source)
 	require.NotEmpty(t, status.Hash)
-	require.NotEmpty(t, status.ManagedHash)
 	require.Equal(t, 1, status.RouteCount)
 	require.NotZero(t, status.LastRefreshAt)
 	require.NotZero(t, status.LastSuccessAt)
@@ -127,7 +126,6 @@ func TestCoordinatorStatusIncludesSourceHashAgeAndErrorCategory(t *testing.T) {
 	require.Equal(t, "egress_rpc", status.LastErrorCategory)
 	require.Equal(t, 1, status.RouteCount)
 	require.NotEmpty(t, status.Hash)
-	require.NotEmpty(t, status.ManagedHash)
 }
 
 func TestCoordinatorRestoresLastGoodEgressSnapshotAcrossRestart(t *testing.T) {

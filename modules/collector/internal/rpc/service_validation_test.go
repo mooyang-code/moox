@@ -959,17 +959,17 @@ func TestValidateCollectionTaskUpdateIgnoresLegacySubjectTags(t *testing.T) {
 	require.NoError(t, validateCollectionTaskUpdate(existing, desired))
 }
 
-// 新旧链路的交接与回退靠更新采集归属与边界完成：这些运维属性可以改，序列范围（频率等）仍不可改。
-func TestValidateCollectionTaskUpdateAllowsFetchOwnershipChanges(t *testing.T) {
+// 每函数标的数与允许迟到是可变的运维属性，序列范围（频率等）仍不可改。
+func TestValidateCollectionTaskUpdateAllowsPlanOptionChanges(t *testing.T) {
 	existing := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-handoff", TaskName: "handoff", DataType: "kline", ResultDatasetID: "dataset-result", ResultViewID: "view-result",
 		CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"1m"}`,
 	}
 	desired := existing
-	desired.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"1m","fetch_mode":"timer","invoke_until_period":"2026-10-12T05:00:00Z","invoke_from_period":"2026-10-12T04:00:00Z","symbols_per_function":50,"allowed_lateness_seconds":15}`
+	desired.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"1m","symbols_per_function":50,"allowed_lateness_seconds":15}`
 	require.NoError(t, validateCollectionTaskUpdate(existing, desired))
 
-	desired.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"5m","fetch_mode":"timer"}`
+	desired.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"5m"}`
 	require.ErrorContains(t, validateCollectionTaskUpdate(existing, desired), "create a new task")
 }
 

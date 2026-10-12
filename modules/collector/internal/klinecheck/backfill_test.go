@@ -78,7 +78,7 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 		Subjects: []string{"BTC-USDT", "ETH-USDT"},
 	}}, nil)
 	require.NoError(t, err)
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string, int64, bool) (int64, error) { return base.Unix(), nil })
+	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -313,7 +313,7 @@ func TestDatasetMarketRefusesHistoryBeforeAMappingOnlyChange(t *testing.T) {
 		if previous != nil {
 			prevFunctions, prevDatasets = previous.Applied()
 		}
-		content, _, err := marketfetch.BuildPlanContent(prevFunctions, prevDatasets, desired, func(string, int64, bool) (int64, error) { return base.Unix(), nil })
+		content, _, err := marketfetch.BuildPlanContent(prevFunctions, prevDatasets, desired, func(string) (int64, error) { return base.Unix(), nil })
 		require.NoError(t, err)
 		return content
 	}

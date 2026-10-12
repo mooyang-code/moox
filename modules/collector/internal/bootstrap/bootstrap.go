@@ -17,15 +17,12 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresult "github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -41,11 +38,6 @@ import (
 )
 
 var collectorStartedAt = time.Now()
-
-const (
-	marketFetchScheduleTimeout  = 30 * time.Second
-	marketFetchReconcileTimeout = 30 * time.Second
-)
 
 // Initialize loads config, initializes persistence, and registers RPC services.
 func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
@@ -134,9 +126,6 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		ResultDataNodeID:           cfg.Storage.ResultDataNodeID,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
-	if err := registerMarketFetchRuntime(s, collectsvc.NewMarketFetchRuntime(&marketfetch.TimerBatchClaimer{Batches: dbm.TimerPeriodBatches()})); err != nil {
-		return nil, err
-	}
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
 	dnsDomains := append([]string(nil), cfg.DNS.Domains...)
@@ -177,7 +166,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		return nil, err
 	}
 	svc.SetSubjectSyncer(subjectSyncer)
-	registerMarketFetchSchedule(ctx, s, cfg, dbm, dnsSnapshot, marketFetchMetrics, process)
+	registerCollectorBackground(ctx, s, cfg, dbm, marketFetchMetrics, process)
 	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc); err != nil {
 		return nil, err
 	}
@@ -189,22 +178,6 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	keepRuntime = true
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return process, nil
-}
-
-const marketFetchRuntimeNativeService = "trpc.moox.collector.MarketFetchRuntime.native"
-
-func registerMarketFetchRuntime(s *server.Server, implementation collectorpb.MarketFetchRuntimeService) error {
-	if s == nil || implementation == nil {
-		return fmt.Errorf("collector MarketFetchRuntime server is not initialized")
-	}
-	service := s.Service(marketFetchRuntimeNativeService)
-	if service == nil {
-		return fmt.Errorf("collector MarketFetchRuntime listener %q is not configured", marketFetchRuntimeNativeService)
-	}
-	if err := service.Register(&collectorpb.MarketFetchRuntimeServer_ServiceDesc, implementation); err != nil {
-		return fmt.Errorf("register MarketFetchRuntime: %w", err)
-	}
-	return nil
 }
 
 func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager, dataNodeID string) error {
@@ -382,7 +355,6 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State,
 					"enabled":             true,
 					"source":              status.Source,
 					"hash":                status.Hash,
-					"managed_hash":        status.ManagedHash,
 					"route_count":         status.RouteCount,
 					"route_age_seconds":   status.RouteAgeSeconds,
 					"last_refresh_at":     formatHealthTime(status.LastRefreshAt),
@@ -434,17 +406,13 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter, process 
 	})
 }
 
-func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics, process *Runtime) {
+// registerCollectorBackground 启动 Collector 的后台任务：K 线重采样与保留期清理。
+// 实时行情采集已全部由 SCF 定时器按采集计划触发（见 registerFetchPlanManager），这里不再有任何行情调度。
+func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *marketfetch.Metrics, process *Runtime) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
-	service := s.Service("trpc.moox.collector.schedule.timer")
-	if service == nil {
-		log.Warn("collector market fetch timer service is not configured, scheduler registration skipped")
-	}
-	invoker := scfinvoker.New(scfinvoker.Config{Gateway: process.gateway})
 	metadataSource := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
-	plannerSource := metadataSource
 	newStorage := func(marketType, writeSource string) (marketfetch.Storage, error) {
 		if strings.EqualFold(strings.TrimSpace(marketType), "equity") || strings.EqualFold(strings.TrimSpace(marketType), marketfetch.StockCNSpaceID) {
 			marketType = marketstorage.InstTypeSPOT
@@ -453,15 +421,13 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	}
 	spaceIDs := marketFetchSpaceIDs()
 	if len(spaceIDs) == 0 {
-		log.Warn("collector market fetch scheduler has no configured spaces")
+		log.Warn("collector background tasks have no configured spaces")
 		return
 	}
-	var resampleRunner *collectorresample.Runner
 	var resampleRunners []*collectorresample.Runner
 	var resamplePreparer *collectorresample.Preparer
-	var resampleMetrics *collectorresample.Metrics
 	if cfg.KlineResample.Enabled {
-		resampleMetrics = collectorresample.NewMetrics(prometheus.DefaultRegisterer)
+		resampleMetrics := collectorresample.NewMetrics(prometheus.DefaultRegisterer)
 		metadataClient, metadataErr := marketstorage.NewGatewayResampleMetadataClient(process.gateway, marketstorage.InstTypeSPOT)
 		localStorage, storageErr := marketstorage.NewGatewayResampleStorage(process.gateway, marketstorage.InstTypeSPOT, "collector:kline_resample")
 		if metadataErr != nil || storageErr != nil {
@@ -475,12 +441,11 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
 			}
 			for _, spaceID := range spaceIDs {
-				resampleRunner = &collectorresample.Runner{Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
+				resampleRunners = append(resampleRunners, &collectorresample.Runner{Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
 					SpaceID: spaceID, ScanTimeout: cfg.KlineResample.ScanTimeout, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, MaxClaimsPerTick: cfg.KlineResample.MaxClaimsPerTick, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
 					WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
 					StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
-				}, Metrics: resampleMetrics}
-				resampleRunners = append(resampleRunners, resampleRunner)
+				}, Metrics: resampleMetrics})
 			}
 			prepareCtx, prepareCancel := context.WithTimeout(process.ctx, cfg.KlineResample.ScanTimeout)
 			if err := resamplePreparer.RunOnce(prepareCtx); err != nil {
@@ -489,199 +454,69 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			prepareCancel()
 		}
 	}
-	type marketFetchRuntime struct {
-		spaceID              string
-		timerOwned           bool
-		reconciler           *marketfetch.Reconciler
-		scheduler            *marketfetch.Scheduler
-		periodStorageCleanup *marketfetch.PeriodStorageReconciler
-		tickRunning          atomic.Bool
-	}
-	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
-	for _, spaceID := range spaceIDs {
-		stockCNTimerOwned := strings.EqualFold(spaceID, marketfetch.StockCNSpaceID)
-		invokeConcurrency := marketFetchInvokeConcurrency(spaceID)
-		maintenanceBatchLimit, recoveryBatchLimit := marketFetchMaintenanceLimits(spaceID, invokeConcurrency, cfg.StockCN.ExpectedTimerFunctionCount)
-		reconciler := &marketfetch.Reconciler{
-			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
-			ResolveSourceID:     marketwiring.DefaultSourceID,
-			ResolveSymbol:       marketwiring.ResolveSymbol,
-			AccessEnvironment:   cfg.scfAccessEnvironment,
-			Tasks:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
-			Metrics: metrics, MaxSubjects: marketfetch.DefaultMaxSubjects(spaceID),
-			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
-			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
-			StockCNStagger: marketfetch.StockCNStaggerConfig{
-				StartSecond:        cfg.StockCN.StaggerStartSecond,
-				WindowSeconds:      cfg.StockCN.StaggerWindowSeconds,
-				MaxStartsPerSecond: cfg.StockCN.StaggerMaxStartsPerSecond,
-			},
-			DisableTimerTriggers: !stockCNTimerOwned,
-		}
-		invokeScheduler := &marketfetch.Scheduler{
-			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
-			ResolveSymbol:       marketwiring.ResolveSymbol,
-			ResolveSourceID:     marketwiring.DefaultSourceID,
-			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(), PeriodStorageStates: dbm.PeriodStorageStates(),
-			// Internal Storage uses the process gateway client. The external
-			// SCF payload keeps its discovered public target until E2.
-			Lifetime: ctx, Invoker: invoker, Storage: newStorage,
-			InvokeConcurrency: invokeConcurrency, MaintenanceBatchLimit: maintenanceBatchLimit, MaintenanceRecoveryBatchLimit: recoveryBatchLimit,
-			MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
-			Symbols:                    plannerSource,
-			InvokeNonRealtimeOnly:      stockCNTimerOwned,
-			TimerMeasuredSafeGroupSize: cfg.StockCN.MeasuredSafeGroupSize,
-		}
-		if stockCNTimerOwned {
-			calendar, calendarErr := stockmarket.LoadCalendar("./config/markets/stockcn/calendar.yaml")
-			if calendarErr != nil {
-				log.ErrorContextf(process.ctx, "collector StockCN Timer planning is fail-closed because the market calendar could not be loaded: %v", calendarErr)
-			}
-			timerPlanner := &marketfetch.TimerPeriodPlanner{
-				Snapshots: dbm.PeriodSeriesSnapshot(), States: dbm.PeriodStorageStates(), Batches: dbm.TimerPeriodBatches(),
-				ValidTargetDataTime: stockCNTargetDataTimeValidator(calendar, cfg.KlineResample.DefaultSettleDelay, nil),
-			}
-			invokeScheduler.TimerPeriodBatches = dbm.TimerPeriodBatches()
-			invokeScheduler.TimerPeriodPlanner = timerPlanner
-			invokeScheduler.TimerAssignments = reconciler.TimerAssignments
-		}
-		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), newStorage, spaceID)
-		failureReporter.SetMetrics(metrics)
-		invokeScheduler.WakePeriodFailureReporter = failureReporter.Wake
-		process.beforeClose = append(process.beforeClose, invokeScheduler.Close)
-		if err := process.join(marketfetch.StartPeriodFailureReporterWithDone(ctx, failureReporter, spaceID, time.Second)); err != nil {
-			log.WarnContextf(ctx, "collector permanent period failure reporter disabled space=%s: %v", spaceID, err)
-		}
-		if err := process.join(marketfetch.StartCompletionConsumerWithDone(ctx, spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics, failureReporter.Wake)); err != nil {
-			log.WarnContextf(process.ctx, "collector market fetch completion consumer disabled space=%s: %v", spaceID, err)
-		}
-		if err := process.join(marketfetch.StartStorageWriteConsumerWithDone(ctx, spaceID, dbm.TaskInstances())); err != nil {
-			log.WarnContextf(process.ctx, "collector storage write consumer disabled space=%s: %v", spaceID, err)
-		}
-		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, timerOwned: stockCNTimerOwned, reconciler: reconciler, scheduler: invokeScheduler})
-	}
 	maintenanceSpaceCursor := 0
-	executionSweeps := make(map[string]*executionSweep, len(runtimes))
+	executionSweeps := make(map[string]*executionSweep, len(spaceIDs))
 	retentionConfig := cfg.CollectorRetention
 	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
-		for index := range runtimes {
-			metrics.ObserveMaintenanceDeletes(runtimes[index].spaceID, nil)
+		for _, spaceID := range spaceIDs {
+			metrics.ObserveMaintenanceDeletes(spaceID, nil)
 		}
-		if len(runtimes) > 0 {
-			budgets := collectorMaintenanceBudgets(retentionConfig.MaxRowsPerPass)
-			start := maintenanceSpaceCursor % len(runtimes)
-			maintenanceSpaceCursor = nextMaintenanceSpaceCursor(start, len(runtimes))
-			for offset := 0; offset < len(runtimes); offset++ {
-				if passCtx.Err() != nil {
-					break
+		budgets := collectorMaintenanceBudgets(retentionConfig.MaxRowsPerPass)
+		start := maintenanceSpaceCursor % len(spaceIDs)
+		maintenanceSpaceCursor = nextMaintenanceSpaceCursor(start, len(spaceIDs))
+		for offset := 0; offset < len(spaceIDs); offset++ {
+			if passCtx.Err() != nil {
+				break
+			}
+			spaceID := spaceIDs[(start+offset)%len(spaceIDs)]
+			deletedRows := make(map[string]int64)
+			writeTargetBudget := maintenanceBudget(budgets.writeTargets, len(spaceIDs), offset)
+			executionCutoff := now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention))
+			sweep := executionSweeps[spaceID]
+			if sweep == nil {
+				sweep = &executionSweep{}
+				executionSweeps[spaceID] = sweep
+			}
+			targetsDeleted, instancesDeleted, err := sweepScheduledExecutionDetails(passCtx, dbm.TaskInstances(), sweep, spaceID,
+				executionCutoff, executionSweepDeadline(passCtx, time.Now(), retentionConfig.timeout()/4, len(spaceIDs)-offset),
+				writeTargetBudget, maintenanceBudget(budgets.instances, len(spaceIDs), offset))
+			if err != nil {
+				passErrors = append(passErrors, fmt.Errorf("cleanup scheduled execution details for space %s: %w", spaceID, err))
+			} else {
+				deletedRows["write_targets"] += targetsDeleted
+				deletedRows["instances"] = instancesDeleted
+				if targetsDeleted+instancesDeleted > 0 {
+					log.Infof("cleaned scheduled execution details space=%s write_targets=%d task_instances=%d", spaceID, targetsDeleted, instancesDeleted)
 				}
-				runtimeIndex := (start + offset) % len(runtimes)
-				runtime := &runtimes[runtimeIndex]
-				deletedRows := make(map[string]int64)
-				writeTargetBudget := maintenanceBudget(budgets.writeTargets, len(runtimes), offset)
-				if runtime.scheduler != nil {
-					prunedTargets, err := runtime.scheduler.RunMaintenance(passCtx, runtime.spaceID, writeTargetBudget)
-					deletedRows["write_targets"] += prunedTargets
-					writeTargetBudget -= int(prunedTargets)
-					if err != nil {
-						passErrors = append(passErrors, fmt.Errorf("scheduler maintenance for space %s: %w", runtime.spaceID, err))
-					}
-				}
-				if passCtx.Err() != nil {
-					break
-				}
-				executionCutoff := now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention))
-				itemsDeleted, batchesDeleted, err := drainMaintenancePagePairs(passCtx,
-					maintenanceBudget(budgets.batchItems, len(runtimes), offset), maintenanceBudget(budgets.batches, len(runtimes), offset),
-					maintenancePageRows, maintenanceBatchPageRows,
-					func(ctx context.Context, items, batches int) (int64, int64, error) {
-						return dbm.FetchBatches().CleanupSpaceWithCounts(ctx, runtime.spaceID, executionCutoff, items, batches)
-					})
-				if err != nil {
-					passErrors = append(passErrors, fmt.Errorf("cleanup terminal FetchBatches for space %s: %w", runtime.spaceID, err))
-				}
-				deletedRows["batch_items"], deletedRows["batches"] = itemsDeleted, batchesDeleted
-				retriesDeleted, err := drainMaintenancePages(passCtx, maintenanceBudget(budgets.retries, len(runtimes), offset), maintenancePageRows,
-					func(ctx context.Context, limit int) (int64, error) {
-						return dbm.FetchRetries().CleanupSpaceWithCount(ctx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.TerminalRetryRetention)), limit)
-					})
-				if err != nil {
-					passErrors = append(passErrors, fmt.Errorf("cleanup terminal FetchRetries for space %s: %w", runtime.spaceID, err))
-				}
-				deletedRows["retry"] = retriesDeleted
-				sweep := executionSweeps[runtime.spaceID]
-				if sweep == nil {
-					sweep = &executionSweep{}
-					executionSweeps[runtime.spaceID] = sweep
-				}
-				targetsDeleted, instancesDeleted, err := sweepScheduledExecutionDetails(passCtx, dbm.TaskInstances(), sweep, runtime.spaceID,
-					executionCutoff, executionSweepDeadline(passCtx, time.Now(), retentionConfig.timeout()/4, len(runtimes)-offset),
-					writeTargetBudget, maintenanceBudget(budgets.instances, len(runtimes), offset))
-				if err != nil {
-					passErrors = append(passErrors, fmt.Errorf("cleanup scheduled execution details for space %s: %w", runtime.spaceID, err))
-				} else {
-					deletedRows["write_targets"] += targetsDeleted
-					deletedRows["instances"] = instancesDeleted
-					if targetsDeleted+instancesDeleted > 0 {
-						log.Infof("cleaned scheduled execution details space=%s write_targets=%d task_instances=%d", runtime.spaceID, targetsDeleted, instancesDeleted)
-					}
-				}
-				if runsDeleted, err := drainMaintenancePages(passCtx, maintenanceBudget(budgets.runs, len(runtimes), offset), maintenancePageRows,
-					func(ctx context.Context, limit int) (int64, error) {
-						return dbm.Runs().CleanupScheduledTerminalSpace(ctx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.ScheduledRunSummaryRetention)), limit)
-					}); err != nil {
-					passErrors = append(passErrors, fmt.Errorf("cleanup terminal scheduled Runs for space %s: %w", runtime.spaceID, err))
-				} else {
-					deletedRows["runs"] = runsDeleted
-				}
-				readinessDeleted, err := dbm.PeriodReadiness().CleanupReportedRetentionInSpace(
-					passCtx,
-					runtime.spaceID,
-					now.Add(-cfg.PeriodReadiness.ParentRetention),
-					cfg.PeriodReadiness.ItemRetention,
-					maintenanceBudget(budgets.periodReadiness, len(runtimes), offset),
-				)
-				if err != nil {
-					passErrors = append(passErrors, fmt.Errorf("cleanup reported PeriodReadiness for space %s: %w", runtime.spaceID, err))
-				} else {
-					deletedRows["period_readiness"] = readinessDeleted
-				}
-				if runtime.periodStorageCleanup == nil {
-					if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.PeriodSnapshotRetention)), now, deletedRows); err != nil {
-						log.WarnContextf(passCtx, "Collector store metrics refresh failed space=%s: %v", runtime.spaceID, err)
-					}
-					continue
-				}
-				periodDeleted, err := runtime.periodStorageCleanup.ReconcileWithCleanupCounts(
-					passCtx, now, retentionConfig.duration(retentionConfig.PeriodSnapshotRetention),
-					maintenanceBudget(budgets.periodSnapshots, len(runtimes), offset),
-					maintenanceBudget(budgets.periodManifests, len(runtimes), offset),
-				)
-				deletedRows["period_snapshot"] = periodDeleted.SnapshotRows
-				deletedRows["period_state"] = periodDeleted.StateRows
-				deletedRows["period_manifest"] = periodDeleted.ManifestRows
-				if err != nil {
-					passErrors = append(passErrors, fmt.Errorf("reconcile Storage periods for space %s: %w", runtime.spaceID, err))
-				} else {
-					if periodDeleted.Total() > 0 {
-						log.Infof("cleaned terminal Collector period rows space=%s snapshot_rows=%d state_rows=%d manifest_rows=%d", runtime.spaceID, periodDeleted.SnapshotRows, periodDeleted.StateRows, periodDeleted.ManifestRows)
-					}
-				}
-				if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.PeriodSnapshotRetention)), now, deletedRows); err != nil {
-					log.WarnContextf(passCtx, "Collector store metrics refresh failed space=%s: %v", runtime.spaceID, err)
-				}
+			}
+			if runsDeleted, err := drainMaintenancePages(passCtx, maintenanceBudget(budgets.runs, len(spaceIDs), offset), maintenancePageRows,
+				func(ctx context.Context, limit int) (int64, error) {
+					return dbm.Runs().CleanupScheduledTerminalSpace(ctx, spaceID, now.Add(-retentionConfig.duration(retentionConfig.ScheduledRunSummaryRetention)), limit)
+				}); err != nil {
+				passErrors = append(passErrors, fmt.Errorf("cleanup terminal scheduled Runs for space %s: %w", spaceID, err))
+			} else {
+				deletedRows["runs"] = runsDeleted
+			}
+			readinessDeleted, err := dbm.PeriodReadiness().CleanupReportedRetentionInSpace(
+				passCtx, spaceID, now.Add(-cfg.PeriodReadiness.ParentRetention), cfg.PeriodReadiness.ItemRetention,
+				maintenanceBudget(budgets.periodReadiness, len(spaceIDs), offset),
+			)
+			if err != nil {
+				passErrors = append(passErrors, fmt.Errorf("cleanup reported PeriodReadiness for space %s: %w", spaceID, err))
+			} else {
+				deletedRows["period_readiness"] = readinessDeleted
+			}
+			if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, spaceID, now.Add(-retentionConfig.duration(retentionConfig.PeriodSnapshotRetention)), now, deletedRows); err != nil {
+				log.WarnContextf(passCtx, "Collector store metrics refresh failed space=%s: %v", spaceID, err)
 			}
 		}
 		return errors.Join(passErrors...)
 	})
 	maintenanceRunner.Metrics = metrics
-	// Resampling owns a dedicated minute timer. Its callback only schedules a
-	// bounded background scan, so slow source/target Storage I/O cannot delay the
-	// existing SCF coordination timer.
-	resampleService := s.Service("trpc.moox.collector.kline_resample.timer")
-	if resampleService == nil {
+	// 重采样使用独立的分钟定时器：回调只调度有界的后台扫描，源/目标 Storage 的慢 I/O 不会拖住别的定时任务。
+	if resampleService := s.Service("trpc.moox.collector.kline_resample.timer"); resampleService == nil {
 		if len(resampleRunners) > 0 || resamplePreparer != nil {
 			log.Warn("collector kline resample timer service is not configured, skip register")
 		}
@@ -714,76 +549,31 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			return nil
 		})
 	}
-	for index := range runtimes {
-		runtime := &runtimes[index]
+	// 重采样的周期就绪上报：仅用于本地重采样作业。
+	for _, spaceID := range spaceIDs {
 		periodMarketType := "spot"
-		if strings.EqualFold(runtime.spaceID, marketfetch.StockCNSpaceID) {
+		if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
 			periodMarketType = "equity"
 		}
 		periodStorage, storageErr := newStorage(periodMarketType, "collector")
 		if storageErr != nil {
-			log.WarnContextf(process.ctx, "collector Storage period reporter and cleanup disabled space=%s: %v", runtime.spaceID, storageErr)
+			log.WarnContextf(process.ctx, "collector Storage period reporter disabled space=%s: %v", spaceID, storageErr)
 			continue
-		}
-		if statusClient, ok := periodStorage.(marketfetch.PeriodStorageStatusClient); ok {
-			runtime.periodStorageCleanup = marketfetch.NewPeriodStorageReconciler(dbm.PeriodSeriesSnapshot(), dbm.PeriodStorageStates(), statusClient, runtime.spaceID, dbm.TimerPeriodBatches())
-			runtime.periodStorageCleanup.Metrics = metrics
-		} else {
-			log.WarnContextf(process.ctx, "collector Storage adapter does not support period status queries; cleanup disabled space=%s", runtime.spaceID)
 		}
 		reporter, ok := periodStorage.(marketfetch.DatasetPeriodReporter)
 		if !ok {
-			log.WarnContextf(process.ctx, "collector Storage adapter does not support period readiness reports space=%s", runtime.spaceID)
+			log.WarnContextf(process.ctx, "collector Storage adapter does not support period readiness reports space=%s", spaceID)
 			continue
 		}
-		// The legacy readiness repository remains only for local resample jobs.
-		// Direct market-fetch Dataset completion is finalized inside Storage
-		// DataNode and no longer waits for DatasetRowsUpserted replay.
-		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, runtime.spaceID)
+		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, spaceID)
 		periodReporter.SetMetrics(metrics)
 		if err := process.join(marketfetch.StartPeriodReporterWithDone(ctx, periodReporter, cfg.PeriodReadiness.ReportInterval)); err != nil {
-			log.WarnContextf(process.ctx, "collector resample period reporter disabled space=%s: %v", runtime.spaceID, err)
+			log.WarnContextf(process.ctx, "collector resample period reporter disabled space=%s: %v", spaceID, err)
 		}
 	}
-	// The maintenance pass reads each runtime's periodStorageCleanup field.
-	// Start only after all Space-specific Storage clients have been assigned.
 	if err := process.join(maintenanceRunner.StartWithDone(ctx)); err != nil {
 		return
 	}
-	if service == nil {
-		return
-	}
-	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(service, func(ctx context.Context) error {
-		for index := range runtimes {
-			runtime := &runtimes[index]
-			if !runtime.tickRunning.CompareAndSwap(false, true) {
-				log.WarnContextf(ctx, "collector market fetch timer tick skipped because the previous tick is still running space=%s", runtime.spaceID)
-				continue
-			}
-			process.launch(func() {
-				defer runtime.tickRunning.Store(false)
-				spaceID := runtime.spaceID
-				if runtime.timerOwned {
-					reconcileCtx, reconcileCancel := context.WithTimeout(process.ctx, marketFetchReconcileTimeout)
-					if err := runtime.reconciler.Reconcile(reconcileCtx, spaceID); err != nil {
-						if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-							log.WarnContextf(reconcileCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
-						} else {
-							log.WarnContextf(reconcileCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
-						}
-					}
-					reconcileCancel()
-				}
-				scheduleCtx, scheduleCancel := context.WithTimeout(process.ctx, marketFetchScheduleTimeout)
-				if err := runtime.scheduler.Tick(scheduleCtx, spaceID); err != nil {
-					log.WarnContextf(scheduleCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
-				}
-				scheduleCancel()
-			})
-		}
-		return nil
-	})
 }
 
 func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *marketfetch.Metrics, spaceID string, before, now time.Time, deleted map[string]int64) error {
@@ -886,30 +676,6 @@ func collectorMaintenanceBudgets(total int) collectorMaintenanceRowBudget {
 	return budget
 }
 
-func marketFetchInvokeConcurrency(spaceID string) int {
-	if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-		return marketfetch.StockCNTimerInvokeConcurrency
-	}
-	return marketfetch.DefaultInvokeConcurrency
-}
-
-func marketFetchMaintenanceLimits(spaceID string, invokeConcurrency, expectedTimerFunctionCount int) (dispatch, recovery int) {
-	dispatch, recovery = invokeConcurrency, invokeConcurrency
-	if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-		return dispatch, recovery
-	}
-	if expectedTimerFunctionCount <= 0 {
-		return max(1, dispatch), max(1, recovery)
-	}
-	waveSize := max(1, expectedTimerFunctionCount)
-	// Size one full maintenance pass to cover the steady-state failure wave;
-	// faster passes are a bonus, not part of the capacity guarantee.
-	denominator := marketfetch.RetryMaintenancePassesPerMinute * 4
-	dispatch = (waveSize*3*5 + denominator - 1) / denominator
-	recovery = (waveSize*4*5 + denominator - 1) / denominator
-	return max(1, dispatch), max(1, recovery)
-}
-
 func marketFetchSpaceID() string {
 	spaceIDs := marketFetchSpaceIDs()
 	if len(spaceIDs) == 0 {
@@ -942,31 +708,4 @@ func parseMarketFetchSpaceIDs(raw string) []string {
 		spaceIDs = append(spaceIDs, spaceID)
 	}
 	return spaceIDs
-}
-
-func stockCNTargetDataTimeValidator(calendar *stockmarket.Calendar, settleDelay time.Duration, now func() time.Time) func(string, time.Time) bool {
-	return func(frequency string, target time.Time) bool {
-		if calendar == nil || !strings.EqualFold(strings.TrimSpace(frequency), "1m") || calendar.Location() == nil {
-			return false
-		}
-		current := time.Now().UTC()
-		if now != nil {
-			current = now().UTC()
-		}
-		latest, _, err := calendar.LatestClosedMinute(current, settleDelay)
-		if err != nil || target.After(latest) {
-			return false
-		}
-		tradeDate := target.In(calendar.Location()).Format("2006-01-02")
-		bars, err := calendar.ExpectedMinuteBars(tradeDate)
-		if err != nil {
-			return false
-		}
-		for _, bar := range bars {
-			if bar.Equal(target.UTC()) {
-				return true
-			}
-		}
-		return false
-	}
 }

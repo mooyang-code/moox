@@ -12,7 +12,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
 func testPlanEnv(t *testing.T) string {
@@ -35,12 +34,11 @@ func timerEvent(at string) json.RawMessage {
 	return raw
 }
 
-func planHandler(observed *[]marketfetch.Request, published *int, now *time.Time) *Handler {
+func planHandler(observed *[]marketfetch.Request, now *time.Time) *Handler {
 	return &Handler{NewMarketFetch: func() *marketfetch.Handler {
 		return &marketfetch.Handler{
 			Now:        func() time.Time { return *now },
 			NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
-			Publish:    func(context.Context, marketfetch.Request, proto.Message) error { *published++; return nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				*observed = append(*observed, request)
 				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
@@ -54,15 +52,13 @@ func TestHandlerTimerBuildsRequestsFromThePlanWithoutClaimOrCompletion(t *testin
 	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
 	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
 	var observed []marketfetch.Request
-	published := 0
 	now := time.Date(2026, 10, 11, 13, 0, 3, 0, time.UTC)
-	handler := planHandler(&observed, &published, &now)
+	handler := planHandler(&observed, &now)
 
 	// 整点：1m 与 1h 同时到期，各执行一次，目标周期是刚收盘的那根 K 线的开始时间。
 	response, err := handler.HandleRequest(context.Background(), timerEvent("2026-10-11T13:00:00Z"))
 	require.NoError(t, err)
 	require.True(t, response.(*model.Response).Success, response.(*model.Response).Message)
-	require.Zero(t, published, "新链路不发布批次完成事件")
 	require.Len(t, observed, 2)
 	byFrequency := map[string]marketfetch.Request{}
 	for _, request := range observed {
@@ -94,9 +90,8 @@ func TestHandlerTimerRejectsMissingOrInvalidScheduledTime(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
 	var observed []marketfetch.Request
-	published := 0
 	now := time.Date(2026, 10, 11, 13, 0, 3, 0, time.UTC)
-	handler := planHandler(&observed, &published, &now)
+	handler := planHandler(&observed, &now)
 	for _, at := range []string{"", "not-a-time"} {
 		response, err := handler.HandleRequest(context.Background(), timerEvent(at))
 		require.NoError(t, err)
@@ -111,9 +106,8 @@ func TestHandlerTimerSkipsDatasetsWhoseFirstCopyHasNotStarted(t *testing.T) {
 	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
 	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
 	var observed []marketfetch.Request
-	published := 0
 	now := time.Date(2026, 10, 11, 13, 0, 3, 0, time.UTC)
-	handler := planHandler(&observed, &published, &now)
+	handler := planHandler(&observed, &now)
 	// 计划的生效起点是 1970-01-01T00:16:40Z（1000 秒），更早的周期没有可用的份。
 	response, err := handler.HandleRequest(context.Background(), timerEvent("1970-01-01T00:16:00Z"))
 	require.NoError(t, err)
@@ -127,23 +121,20 @@ func TestHandlerTimerExpiredEventIsNotFetched(t *testing.T) {
 	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
 	t.Setenv(marketfetch.PlanEnvName, testPlanEnv(t))
 	var observed []marketfetch.Request
-	published := 0
 	now := time.Date(2026, 10, 11, 13, 1, 20, 0, time.UTC) // 13:01 的周期截止是 13:01:15
-	handler := planHandler(&observed, &published, &now)
+	handler := planHandler(&observed, &now)
 	response, err := handler.HandleRequest(context.Background(), timerEvent("2026-10-11T13:01:00Z"))
 	require.NoError(t, err)
 	require.False(t, response.(*model.Response).Success)
 	require.Empty(t, observed, "迟到到截止之后的事件不再抓取，数据交给补采")
 }
 
-func TestHandlerManualInvokeDoesNotPublishCompletion(t *testing.T) {
+func TestHandlerManualInvokeWritesRowsOnly(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
-	published := 0
 	var observed marketfetch.Request
 	handler := &Handler{NewMarketFetch: func() *marketfetch.Handler {
 		return &marketfetch.Handler{
 			NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
-			Publish:    func(context.Context, marketfetch.Request, proto.Message) error { published++; return nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				observed = request
 				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
@@ -164,7 +155,6 @@ func TestHandlerManualInvokeDoesNotPublishCompletion(t *testing.T) {
 	response, err := handler.HandleRequest(context.Background(), raw)
 	require.NoError(t, err)
 	require.True(t, response.(*model.Response).Success)
-	require.Zero(t, published, "补采与手动调用只写行，不发布完成事件")
 	require.Equal(t, "backfill-1", observed.BatchID)
 }
 

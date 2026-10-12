@@ -89,36 +89,6 @@ func TestCollectorHealthSnapshot(t *testing.T) {
 	}
 }
 
-func TestMarketFetchInvokeConcurrencyIsStockCNTimerSpecific(t *testing.T) {
-	if got := marketFetchInvokeConcurrency("stockcn"); got != 256 {
-		t.Fatalf("StockCN timer invoke concurrency = %d, want 256", got)
-	}
-	for _, spaceID := range []string{"crypto", "other"} {
-		if got := marketFetchInvokeConcurrency(spaceID); got != 20 {
-			t.Fatalf("%s invoke concurrency = %d, want existing default 20", spaceID, got)
-		}
-	}
-}
-
-func TestMarketFetchMaintenanceLimitsBudgetRetryGenerations(t *testing.T) {
-	dispatch, recovery := marketFetchMaintenanceLimits("stockcn", marketFetchInvokeConcurrency("stockcn"), 170)
-	if dispatch != 638 || recovery != 850 {
-		t.Fatalf("StockCN dispatch/recovery limits = %d/%d, want 638/850 for one full pass per minute", dispatch, recovery)
-	}
-	dispatch, recovery = marketFetchMaintenanceLimits("crypto", marketFetchInvokeConcurrency("crypto"), 170)
-	if dispatch != 20 || recovery != 20 {
-		t.Fatalf("crypto dispatch/recovery limits = %d/%d, want invoke concurrency 20", dispatch, recovery)
-	}
-	dispatch, recovery = marketFetchMaintenanceLimits("stockcn", 96, 0)
-	if dispatch != 96 || recovery != 96 {
-		t.Fatalf("StockCN fallback limits = %d/%d, want invoke concurrency 96", dispatch, recovery)
-	}
-	dispatch, recovery = marketFetchMaintenanceLimits("stockcn", 0, 0)
-	if dispatch != 1 || recovery != 1 {
-		t.Fatalf("StockCN zero-concurrency fallback limits = %d/%d, want minimum one per lane", dispatch, recovery)
-	}
-}
-
 type dnsStatusStub struct{ status collectordns.Status }
 
 func (s dnsStatusStub) Status() collectordns.Status { return s.status }

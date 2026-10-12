@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -444,4 +445,31 @@ func containsStringFold(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func stockCNAssignmentRoute() (string, []stockCNSource, error) {
+	route, err := loadStockCNRoute()
+	if err != nil {
+		return "", nil, fmt.Errorf("load stockcn assignment route: %w", err)
+	}
+	sources := route.KlinePrimarySources()
+	if len(sources) < 2 {
+		return "", nil, fmt.Errorf("stockcn assignment route must have at least two primary kline providers")
+	}
+	return route.RouteID, sources, nil
+}
+
+func weightedSourceBucket(routeVersion, subject string, sources []stockCNSource, totalWeight int) stockCNSource {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(routeVersion))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(subject))
+	bucket := int(hash.Sum64() % uint64(totalWeight))
+	for _, source := range sources {
+		if bucket < source.Weight {
+			return source
+		}
+		bucket -= source.Weight
+	}
+	return sources[len(sources)-1]
 }

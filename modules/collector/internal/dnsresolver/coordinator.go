@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 )
 
@@ -44,7 +43,6 @@ type Coordinator struct {
 type Status struct {
 	Source            string
 	Hash              string
-	ManagedHash       string
 	RouteCount        int
 	RouteAgeSeconds   float64
 	LastRefreshAt     time.Time
@@ -373,7 +371,7 @@ func (c *Coordinator) Status() Status {
 }
 
 func buildStatus(now time.Time, routes map[string]sources.DNSResolution, routeSource map[string]string, previous Status, remoteErr, localErr error, refreshed bool) Status {
-	status := Status{RouteCount: len(routes), LastRefreshAt: now, Hash: routeHash(routes), ManagedHash: marketfetch.ManagedDNSHash(routes), LastSuccessAt: previous.LastSuccessAt}
+	status := Status{RouteCount: len(routes), LastRefreshAt: now, Hash: routeHash(routes), LastSuccessAt: previous.LastSuccessAt}
 	if refreshed {
 		status.LastSuccessAt = now
 	}

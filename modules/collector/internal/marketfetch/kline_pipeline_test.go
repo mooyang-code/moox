@@ -32,47 +32,7 @@ type pipelineProvider struct {
 	errFor    func() error
 }
 
-func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
-	period := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
-	for _, test := range []struct {
-		instrument marketdata.InstrumentType
-		subject    string
-		dataset    string
-	}{
-		{marketdata.InstrumentEquity, "600000.XSHG", StockCNDatasetID},
-		{marketdata.InstrumentIndex, "000001.XSHG", "dataset_stockcn_index_kline_1d"},
-		{marketdata.InstrumentConvertibleBond, "113001.XSHG", "dataset_stockcn_bond_kline_1m"},
-	} {
-		t.Run(string(test.instrument), func(t *testing.T) {
-			item := domain.CollectionItem{SubjectID: test.subject, Symbol: "sh" + test.subject[:6], DatasetID: test.dataset, Provider: "sina", SourceID: "stockcn_http", MarketType: string(test.instrument), TargetDataTime: period.Format(time.RFC3339Nano), SeriesHash: "one-logical-series", ExpectedCount: 1, PeriodReservationID: "release-canary-123"}
-			storage := &recordingPeriodFailureStorage{}
-			scheduler := &Scheduler{Storage: func(string, string) (Storage, error) { return storage, nil }}
-			require.NoError(t, scheduler.ensureDatasetPeriod(context.Background(), domain.CollectionTask{SpaceID: StockCNSpaceID}, []domain.CollectionItem{item}, "1m", period, period.Add(time.Minute)))
-			require.Len(t, storage.ensured, 1)
-			ensured := storage.ensured[0]
-			require.Equal(t, uint32(1), ensured.GetExpectedCount())
-			require.Equal(t, item.PeriodReservationID, ensured.GetReservationId())
-			// Match the composition root: no explicit SeriesTag for index or bond.
-			pipeline := &KlinePipeline{SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, InstrumentType: test.instrument, DatasetID: test.dataset, SourceID: item.SourceID}
-			req := Request{SpaceID: StockCNSpaceID, DatasetID: test.dataset, Frequency: "1m", SourceID: item.SourceID, MarketType: string(test.instrument), Items: []domain.CollectionItem{item}, RequirePeriodCommit: true}
-			for rank, provider := range []string{"sina", "tencent", "tdx", "eastmoney"} {
-				bar := marketdata.NormalizedKline{SubjectID: test.subject, ProviderID: provider, SourceID: provider + "_http", ProviderSymbol: item.Symbol, Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: period.Add(time.Minute), FetchedAt: period.Add(2 * time.Minute), RequestID: "row-period-binding"}
-				row, err := pipeline.rowFor(bar, req, "stockcn-route", rank+1)
-				require.NoError(t, err)
-				expectation, rows, enabled, err := periodCommitForDataset(req, test.dataset, []*storagepb.RowFieldUpsert{row})
-				require.NoError(t, err, "actual rowFor output must bind to the Ensure index even after a provider fallback")
-				require.True(t, enabled)
-				require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
-				require.Equal(t, ensured.GetSeriesSnapshot()[0].GetSeriesTag(), row.GetKey().GetTimeSeries().GetSeriesTag())
-				require.Equal(t, ensured.GetSeriesHash(), expectation.GetSeriesHash())
-				require.Equal(t, item.PeriodReservationID, expectation.GetReservationId())
-				require.Equal(t, uint32(1), expectation.GetExpectedCount())
-				require.Len(t, rows, 1)
-				require.Zero(t, rows[0].GetSeriesIndex())
-			}
-		})
-	}
-}
+
 
 func TestPeriodCommitDisabledIgnoresResidualBindings(t *testing.T) {
 	req := Request{Items: []domain.CollectionItem{{DatasetID: "bars", SubjectID: "BTC-USDT", SeriesHash: "old", ExpectedCount: 1}}}

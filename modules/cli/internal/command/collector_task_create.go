@@ -19,7 +19,6 @@ type collectorTaskCreateFlags struct {
 	Description string
 	TagIDs      []string
 	Frequency   string
-	FetchMode   string
 	Fields      []string
 	Symbols     int
 	Lateness    int
@@ -47,7 +46,6 @@ func init() {
 	flags.StringVar(&collectorTaskCreateFlagsValue.Description, "description", "", "任务说明")
 	flags.StringSliceVar(&collectorTaskCreateFlagsValue.TagIDs, "tag-id", nil, "标的标签，可重复")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Frequency, "frequency", "1m", "K 线频率")
-	flags.StringVar(&collectorTaskCreateFlagsValue.FetchMode, "fetch-mode", "", "实时采集归属：invoke 或 timer；留空为 invoke")
 	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Symbols, "symbols-per-function", 0, "定时模式下每个函数负责的标的数（0 为默认 50）")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
@@ -59,15 +57,9 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	if strings.TrimSpace(flags.SpaceID) == "" || strings.TrimSpace(flags.Name) == "" || len(flags.TagIDs) == 0 {
 		return errors.New("--space-id, --name and at least one --tag-id are required")
 	}
-	if flags.FetchMode != "" && flags.FetchMode != "invoke" && flags.FetchMode != "timer" {
-		return errors.New("--fetch-mode must be invoke or timer")
-	}
 	params := map[string]any{
 		"subject_tags": stringsToAny(flags.TagIDs), "frequency": flags.Frequency, "output_fields": stringsToAny(flags.Fields),
 		"history_policy": map[string]any{"mode": "live_only", "max_concurrency": 1, "rate_budget_ratio": 1, "batch_bar_limit": 1000, "gap_repair_lookback": "0m"},
-	}
-	if flags.FetchMode != "" {
-		params["fetch_mode"] = flags.FetchMode
 	}
 	if flags.Symbols > 0 {
 		params["symbols_per_function"] = flags.Symbols
