@@ -1064,39 +1064,9 @@ func (a *dataNodeProxyAdapter) RegisterSeriesSnapshot(ctx context.Context, req *
 	return a.periodProxy.RegisterSeriesSnapshot(ctx, req)
 }
 
-func (a *dataNodeProxyAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
-	if a == nil || a.periodProxy == nil {
-		return nil, errors.New("DataNode period runtime is unavailable")
-	}
-	if req != nil {
-		bound := proto.Clone(req).(*pb.EnsureDatasetPeriodReq)
-		bound.NodeId = a.nodeID
-		req = bound
-	}
-	return a.periodProxy.EnsureDatasetPeriod(ctx, req)
-}
-func (a *dataNodeProxyAdapter) GetDatasetPeriodStatus(ctx context.Context, req *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error) {
-	if a == nil || a.periodProxy == nil {
-		return nil, errors.New("DataNode period runtime is unavailable")
-	}
-	if req != nil {
-		bound := proto.Clone(req).(*pb.GetDatasetPeriodStatusReq)
-		bound.NodeId = a.nodeID
-		req = bound
-	}
-	return a.periodProxy.GetDatasetPeriodStatus(ctx, req)
-}
-func (a *dataNodeProxyAdapter) RecordDatasetPeriodFailures(ctx context.Context, req *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error) {
-	if a == nil || a.periodProxy == nil {
-		return nil, errors.New("DataNode period runtime is unavailable")
-	}
-	if req != nil {
-		bound := proto.Clone(req).(*pb.RecordDatasetPeriodFailuresReq)
-		bound.NodeId = a.nodeID
-		req = bound
-	}
-	return a.periodProxy.RecordDatasetPeriodFailures(ctx, req)
-}
+
+
+
 func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
 	if a == nil || a.periodProxy == nil {
 		return nil, errors.New("DataNode period runtime is unavailable")

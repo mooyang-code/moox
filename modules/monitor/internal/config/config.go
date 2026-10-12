@@ -99,7 +99,6 @@ type MarketCanaryConfig struct {
 type MarketHealthConfig struct {
 	TimerCoordinationStaleAfter   time.Duration `yaml:"timer_coordination_stale_after"`
 	TimerCoordinationPendingGrace time.Duration `yaml:"timer_coordination_pending_grace"`
-	LowCapacityHeadroom           int           `yaml:"low_capacity_headroom"`
 	FeedFailureRateWindow         time.Duration `yaml:"feed_failure_rate_window"`
 	FeedFailureRateThreshold      float64       `yaml:"feed_failure_rate_threshold"`
 	InstrumentSnapshotMaxAge      time.Duration `yaml:"instrument_snapshot_max_age"`
@@ -218,7 +217,7 @@ func Default() *Config {
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
-		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
+		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		KlineFreshness: KlineFreshnessConfig{
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
@@ -296,9 +295,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace == 0 {
 		c.MarketHealth.TimerCoordinationPendingGrace = marketHealthDefaults.TimerCoordinationPendingGrace
-	}
-	if c.MarketHealth.LowCapacityHeadroom == 0 {
-		c.MarketHealth.LowCapacityHeadroom = marketHealthDefaults.LowCapacityHeadroom
 	}
 	if c.MarketHealth.FeedFailureRateWindow == 0 {
 		c.MarketHealth.FeedFailureRateWindow = marketHealthDefaults.FeedFailureRateWindow
@@ -478,9 +474,6 @@ func (c *Config) Validate() error {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
 		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
-	}
-	if c.MarketHealth.LowCapacityHeadroom < 0 {
-		return fmt.Errorf("market_health.low_capacity_headroom must not be negative")
 	}
 	if c.MarketHealth.FeedFailureRateWindow <= 0 || c.MarketHealth.FeedFailureRateThreshold <= 0 || c.MarketHealth.FeedFailureRateThreshold > 1 {
 		return fmt.Errorf("market_health feed failure window and threshold are invalid")

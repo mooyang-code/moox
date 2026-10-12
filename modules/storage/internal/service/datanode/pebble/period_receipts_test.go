@@ -79,36 +79,6 @@ func TestPeriodFailureDeadlineFence(t *testing.T) {
 	}
 }
 
-func TestPeriodFailureReplayAfterFinalization(t *testing.T) {
-	field := (&pb.RecordDatasetPeriodFailuresRsp{}).ProtoReflect().Descriptor().Fields().ByNumber(3)
-	require.NotNil(t, field, "failure RPC must expose per-index dispositions for an ACK-loss replay")
-	deadline := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	clock := newPeriodReceiptClock(deadline.Add(-time.Second))
-	store := newPeriodReceiptStore(t, clock)
-	exp := periodExpectationForTest(deadline.Add(-time.Minute), 3, "BTC-USDT", "ETH-USDT", "SOL-USDT")
-	exp.DeadlineAt = deadline.Unix()
-	ctx := context.Background()
-	_, err := store.EnsureDatasetPeriod(ctx, exp)
-	require.NoError(t, err)
-	_, err = store.RecordDatasetPeriodFailures(ctx, exp, []uint32{0, 1})
-	require.NoError(t, err)
-	committed, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(time.Unix(exp.PeriodTime, 0), "BTC-USDT")}}, "", "collector")
-	require.NoError(t, err)
-	require.Equal(t, []uint32{0}, committed.AcceptedSeriesIndexes)
-	clock.set(deadline)
-	result, err := store.RecordDatasetPeriodFailures(ctx, exp, []uint32{2, 1, 0, 1})
-	require.NoError(t, err)
-	require.Equal(t, "degraded", result.Status)
-	assertPeriodFailureReceipt(t, result, []uint32{0, 1, 2}, succeededFailure, recordedFailure, missedFailure)
-	clock.set(deadline.Add(time.Hour))
-	replay, err := store.RecordDatasetPeriodFailures(ctx, exp, []uint32{2, 1, 0, 1})
-	require.NoError(t, err)
-	require.Equal(t, result, replay, "persisted failure ACK must survive crossing the cutoff")
-	// 缺失 = 全集减成功位图：BTC-USDT 已成功，ETH-USDT 与 SOL-USDT 都没有成功提交。
-	require.Equal(t, []string{"ETH-USDT", "SOL-USDT"}, collectorPeriodMarkerFromOutbox(t, store).GetFailedSubjects())
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
-}
-
 func TestPeriodFailureTerminalValidatesIndexes(t *testing.T) {
 	store := newPeriodTestStore(t)
 	exp := periodExpectationForTest(time.Now().UTC().Truncate(time.Minute), 1, "BTC-USDT")

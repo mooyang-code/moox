@@ -20,8 +20,8 @@ func resolveSCFRoutePlan(ctx context.Context, snapshot *setupconfig.Snapshot, re
 	if snapshot == nil {
 		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: setup configuration is missing")
 	}
-	if !snapshot.Manifest.SCFFetcher.Enabled {
-		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: scf_fetcher.enabled is false")
+	if !snapshot.Manifest.SCFPlan.Enabled {
+		return privatenet.SCFRoutePlan{}, fmt.Errorf("scf-network: scf_plan.enabled is false")
 	}
 	host := snapshot.Manifest.StorageHost()
 	if !snapshot.Manifest.HasStorageHost() {
@@ -99,14 +99,6 @@ func resolveSCFRoutePlan(ctx context.Context, snapshot *setupconfig.Snapshot, re
 	return privatenet.SCFRoutePlan{
 		Storage: resolved[0], StorageRegionConfigured: storageRegionConfigured, Routes: routes, Notes: notes,
 	}, nil
-}
-
-func routeMap(plan privatenet.SCFRoutePlan) map[string]privatenet.SCFStorageRoute {
-	out := make(map[string]privatenet.SCFStorageRoute, len(plan.Routes))
-	for _, route := range plan.Routes {
-		out[strings.ToLower(strings.TrimSpace(route.Region))] = route
-	}
-	return out
 }
 
 func newSetupSCFNetworkPlanCommand(deps setupDeps) *cobra.Command {

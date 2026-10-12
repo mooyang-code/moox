@@ -141,55 +141,5 @@ func resolveManifestReferences(m *Manifest) error {
 		return fmt.Errorf("config_invalid: placements must include eventbus")
 	}
 	m.EventBus.PublicAddress = eventbus.Address
-	return m.resolveAccessRoutes()
-}
-
-// Manifest routes are public candidates. Deployment verifies VPC/subnet
-// membership before promoting an endpoint to a private SCF route.
-func (m *Manifest) resolveAccessRoutes() error {
-	var access []Host
-	for _, host := range m.Hosts() {
-		if slices.Contains(m.Placements[host.Name], "access") {
-			access = append(access, host)
-		}
-	}
-	for i := range m.SCFFetcher.Spaces {
-		space := &m.SCFFetcher.Spaces[i]
-		space.AccessID, space.AccessHost, space.AccessAddress = "", "", ""
-		space.AccessPrivateHost, space.AccessPrivateAddress = "", ""
-		space.AccessAddresses, space.AccessIDs = make(map[string]string), make(map[string]string)
-		if len(access) == 0 {
-			if m.SCFFetcher.Enabled {
-				return fmt.Errorf("config_invalid: enabled scf_fetcher requires an access component in placements")
-			}
-			continue
-		}
-		primary := access[0]
-		if storage := m.StorageHost(); storage.Name != "" {
-			for _, host := range access {
-				if host.Name == storage.Name {
-					primary = host
-					break
-				}
-			}
-		}
-		space.AccessHost, space.AccessID = primary.Name, "access@"+primary.Name
-		space.AccessAddress = net.JoinHostPort(primary.Address, "11004")
-		space.AccessPrivateHost = primary.PrivateAddress
-		if primary.PrivateAddress != "" {
-			space.AccessPrivateAddress = net.JoinHostPort(primary.PrivateAddress, "11004")
-		}
-		for _, region := range space.Regions {
-			target := primary
-			for _, host := range access {
-				if host.Region != "" && host.Region == strings.ToLower(strings.TrimSpace(region.Region)) {
-					target = host
-					break
-				}
-			}
-			space.AccessAddresses[region.Region] = net.JoinHostPort(target.Address, "11004")
-			space.AccessIDs[region.Region] = "access@" + target.Name
-		}
-	}
 	return nil
 }

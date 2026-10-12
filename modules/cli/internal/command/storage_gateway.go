@@ -24,17 +24,9 @@ func (s storageGateway) ReadTimeSeriesRows(ctx context.Context, request *pb.Read
 	return response, err
 }
 
-func (s storageGateway) EnsureDatasetPeriod(ctx context.Context, request *pb.PrimaryEnsureDatasetPeriodReq, options ...client.Option) (*pb.PrimaryEnsureDatasetPeriodRsp, error) {
-	response := &pb.PrimaryEnsureDatasetPeriodRsp{}
-	err := s.invoke(ctx, "trpc.moox.storage.PrimaryStore", "EnsureDatasetPeriod", request, response, options)
-	return response, err
-}
 
-func (s storageGateway) GetDatasetPeriodStatus(ctx context.Context, request *pb.PrimaryGetDatasetPeriodStatusReq, options ...client.Option) (*pb.PrimaryGetDatasetPeriodStatusRsp, error) {
-	response := &pb.PrimaryGetDatasetPeriodStatusRsp{}
-	err := s.invoke(ctx, "trpc.moox.storage.PrimaryStore", "GetDatasetPeriodStatus", request, response, options)
-	return response, err
-}
+
+
 
 func (s storageGateway) QueryTimeSeriesRows(ctx context.Context, request *pb.QueryTimeSeriesRowsReq, options ...client.Option) (*pb.QueryTimeSeriesRowsRsp, error) {
 	response := &pb.QueryTimeSeriesRowsRsp{}

@@ -28,40 +28,6 @@ message DatasetPeriodExpectation {
   string reservation_id = 9;
 }
 
-message EnsureDatasetPeriodReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  DatasetPeriodExpectation expectation = 3;
-}
-
-message EnsureDatasetPeriodRsp {
-  common.RetInfo ret_info = 1;
-  string status = 2;
-  int64 deadline_at = 3;
-}
-
-message GetDatasetPeriodStatusReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  // 只需周期键（space_id、dataset_id、frequency、period_time）；series_hash 为空时按周期键查询，
-  // 周期不存在返回 found=false 而不是错误。带 series_hash 的旧形态仍按旧语义校验身份。
-  DatasetPeriodExpectation expectation = 3;
-  // 为 true 时返回成功数与缺失序号。
-  bool include_progress = 4;
-}
-
-message GetDatasetPeriodStatusRsp {
-  common.RetInfo ret_info = 1;
-  string status = 2;
-  string series_hash = 3;
-  uint32 expected_count = 4;
-  int64 deadline_at = 5;
-  bool found = 6;
-  uint32 successful_count = 7;
-  // 期望集合减去成功位图；未触发的序列同样缺失。
-  repeated uint32 missing_series_indexes = 8;
-}
-
 // SeriesSnapshotEntry 是快照中一条序列的完整身份，Storage 用它重算 series_hash。
 message SeriesSnapshotEntry {
   string provider = 1;
@@ -110,19 +76,6 @@ message CommitTimeSeriesBatchRsp {
   repeated RowKey keys = 2;
   string period_status = 3;
   repeated uint32 accepted_series_indexes = 4;
-}
-
-message RecordDatasetPeriodFailuresReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  DatasetPeriodExpectation expectation = 3;
-  repeated uint32 series_indexes = 4;
-}
-
-message RecordDatasetPeriodFailuresRsp {
-  common.RetInfo ret_info = 1;
-  string period_status = 2;
-  repeated DatasetPeriodFailureResult results = 3;
 }
 
 enum PeriodFailureDisposition {
@@ -294,10 +247,7 @@ service DataNodeRuntime {
 // from the general row RPC so existing DataNodeRuntime clients remain narrow.
 service DataNodePeriodRuntime {
   rpc RegisterSeriesSnapshot(RegisterSeriesSnapshotReq) returns (RegisterSeriesSnapshotRsp);
-  rpc EnsureDatasetPeriod(EnsureDatasetPeriodReq) returns (EnsureDatasetPeriodRsp);
-  rpc GetDatasetPeriodStatus(GetDatasetPeriodStatusReq) returns (GetDatasetPeriodStatusRsp);
   rpc CommitTimeSeriesBatch(CommitTimeSeriesBatchReq) returns (CommitTimeSeriesBatchRsp);
-  rpc RecordDatasetPeriodFailures(RecordDatasetPeriodFailuresReq) returns (RecordDatasetPeriodFailuresRsp);
 }
 
 // DataNodeDatasetAdminRuntime is a narrow destructive surface used by

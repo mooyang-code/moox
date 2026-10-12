@@ -2,14 +2,15 @@ package command
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 func TestGetFullVersionInfoDefaultsToDev(t *testing.T) {
@@ -131,32 +132,6 @@ type bytesBuffer struct{ b []byte }
 func (b *bytesBuffer) Write(p []byte) (int, error) {
 	b.b = append(b.b, p...)
 	return len(p), nil
-}
-
-func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
-	got := parseCollectorOverrides([]string{" A = 1 ", "bad", "B=2"})
-	assert.Equal(t, map[string]string{"A": "1", "B": "2"}, got)
-	env := map[string]string{}
-	setDefaultEnv(env, "K", "v")
-	setDefaultEnv(env, "EMPTY", " ")
-	assert.Equal(t, "v", env["K"])
-}
-
-func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_CA_FILE", "")
-	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
-	t.Setenv("TENCENTCLOUD_SECRET_ID", "test-cls-id")
-	t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
-	require.NoError(t, err)
-	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
-	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
-}
-
-func TestDeployCollectorFunctionValidatesRequiredFields(t *testing.T) {
-	_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "control-url")
 }
 
 func TestRunStorageImportDryRunPath(t *testing.T) {

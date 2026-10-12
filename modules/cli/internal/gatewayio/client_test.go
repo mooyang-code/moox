@@ -3,7 +3,6 @@ package gatewayio
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,9 +11,6 @@ import (
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
@@ -23,8 +19,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
-	"trpc.group/trpc-go/trpc-go/server"
-	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type gatewayWire struct {
@@ -79,73 +73,6 @@ func (w *gatewayWire) verify(ctx context.Context, method string, request proto.M
 
 func (w *gatewayWire) ReadTimeSeriesRows(ctx context.Context, request *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, w.verify(ctx, "ReadTimeSeriesRows", request)
-}
-
-func (w *gatewayWire) EnsureDatasetPeriod(ctx context.Context, request *pb.PrimaryEnsureDatasetPeriodReq) (*pb.PrimaryEnsureDatasetPeriodRsp, error) {
-	return nil, w.verify(ctx, "EnsureDatasetPeriod", request)
-}
-
-func TestSignedGatewayUsesTrustedSSHTunnelsRefreshesRoutesAndCloses(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	wire := &gatewayWire{credentials: gatewayauth.Credentials{Caller: "moox-cli", KeyID: "admin-assigned-operator-42", Secret: strings.Repeat("operator-secret-", 4)}, host: "storage", calls: map[string]int{}, nonces: map[string]bool{}}
-	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
-	pb.RegisterPrimaryStoreService(svc, wire)
-	directorypb.RegisterDirectoryService(svc, wire)
-	go func() { _ = svc.Serve() }()
-	t.Cleanup(func() { _ = svc.Close(nil) })
-	root := t.TempDir()
-	knownHosts := filepath.Join(root, "known_hosts")
-	require.NoError(t, os.WriteFile(knownHosts, nil, 0o600))
-	snapshot := &setupconfig.Snapshot{}
-	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "console-proxy", "web-host", "eventbus")
-	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "storage", listener.Addr().String(), knownHosts), "storage-primary")
-	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "storage-next", listener.Addr().String(), knownHosts))
-	identity := filepath.Join(root, "gateway-client.yaml")
-	require.NoError(t, os.WriteFile(identity, []byte("caller: moox-cli\nkey_id: "+wire.credentials.KeyID+"\nkey_file: caller-moox-cli.key\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "caller-moox-cli.key"), []byte(wire.credentials.Secret+"\n"), 0o600))
-	client, err := open(t.Context(), snapshot, identity, setupssh.Options{KnownHostsPath: knownHosts, Timeout: time.Second, DisableAgent: true, IdentityFiles: []string{filepath.Join(root, "no-default-key")}})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-	auth := &pb.AuthInfo{AppId: "storage-role", AppKey: "role-key"}
-	require.NoError(t, client.Invoke(t.Context(), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", &pb.ReadTimeSeriesRowsReq{AuthInfo: auth}, &pb.ReadTimeSeriesRowsRsp{}))
-	require.Error(t, client.Invoke(t.Context(), "trpc.moox.storage.PrimaryStore", "EnsureDatasetPeriod", &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth}, &pb.PrimaryEnsureDatasetPeriodRsp{}))
-	wire.mu.Lock()
-	readCalls, writeCalls, nonceCount := wire.calls["ReadTimeSeriesRows"], wire.calls["EnsureDatasetPeriod"], len(wire.nonces)
-	wire.mu.Unlock()
-	require.Equal(t, 2, readCalls)
-	require.Equal(t, 1, writeCalls)
-	require.Equal(t, 3, nonceCount)
-	client.tunnels.mu.Lock()
-	oldControl := client.tunnels.connections["control"]
-	client.tunnels.mu.Unlock()
-	require.NoError(t, oldControl.ssh.Close())
-	reopenedAddress, reopenErr := client.tunnels.Resolve(t.Context(), "control")
-	require.NoError(t, reopenErr)
-	require.NotEqual(t, oldControl.listener.Addr().String(), reopenedAddress)
-	require.NoError(t, client.Refresh(t.Context()), "a broken control tunnel must be reopened before refreshing Directory")
-	client.tunnels.mu.Lock()
-	newControlAddress := client.tunnels.connections["control"].listener.Addr().String()
-	client.tunnels.mu.Unlock()
-	require.NotEqual(t, oldControl.listener.Addr().String(), newControlAddress)
-	_, err = client.tunnels.Resolve(t.Context(), "unconfigured")
-	require.ErrorContains(t, err, "no configured SSH identity")
-	client.tunnels.mu.Lock()
-	connectionCount := len(client.tunnels.connections)
-	address := client.tunnels.connections["storage-next"].listener.Addr().String()
-	client.tunnels.mu.Unlock()
-	require.Equal(t, 3, connectionCount)
-	require.NoError(t, client.Close())
-	require.NoError(t, client.Close())
-	_, err = net.DialTimeout("tcp", address, time.Second)
-	require.Error(t, err)
-	_, err = client.tunnels.Resolve(t.Context(), "storage-next")
-	require.ErrorIs(t, err, net.ErrClosed)
-	require.Error(t, client.Invoke(t.Context(), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", &pb.ReadTimeSeriesRowsReq{AuthInfo: auth}, &pb.ReadTimeSeriesRowsRsp{}))
-	// Host-key verification remains mandatory before even querying Directory.
-	require.NoError(t, os.WriteFile(knownHosts, nil, 0o600))
-	_, err = open(t.Context(), snapshot, identity, setupssh.Options{KnownHostsPath: knownHosts, Timeout: time.Second, DisableAgent: true})
-	require.ErrorContains(t, err, "host_key_unknown")
 }
 
 func TestOperatorIdentityRejectsUnsafeAndObsoleteConfiguration(t *testing.T) {

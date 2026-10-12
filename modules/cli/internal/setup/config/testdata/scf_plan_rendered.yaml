@@ -10,14 +10,12 @@ egress_proxy:
     refresh_interval: 300s
     request_timeout: 3000ms
     cache_ttl: 300s
-scf_region_blacklists: {}
 scf_access:
   access_address: 2.2.2.2:11004
   access_id: access@storage
   caller: scf-collector
   key_file: ../../secrets/caller-scf-collector.key
   key_id: ""
-scf_access_routes: {}
 scf_regions:
   ap-hongkong:
     subnet_id: subnet-hk

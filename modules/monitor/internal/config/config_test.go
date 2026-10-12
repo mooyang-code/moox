@@ -85,8 +85,7 @@ func TestMonitorConfigDefaults(t *testing.T) {
 		t.Fatalf("market canary must come from deployment config, defaults = %+v", cfg.MarketCanary)
 	}
 	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
-		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
-		cfg.MarketHealth.LowCapacityHeadroom != 2 {
+		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute {
 		t.Fatalf("market health defaults = %+v", cfg.MarketHealth)
 	}
 }
@@ -423,13 +422,6 @@ func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
 		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
-	}
-
-	cfg = Default()
-	cfg.Placement.Enabled = false
-	cfg.MarketHealth.LowCapacityHeadroom = -1
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "low_capacity_headroom") {
-		t.Fatalf("Validate() error = %v, want low capacity headroom error", err)
 	}
 }
 

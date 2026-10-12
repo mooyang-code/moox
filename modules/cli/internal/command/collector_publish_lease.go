@@ -24,7 +24,6 @@ const (
 )
 
 var errCollectorBatchOutcomeUnknown = errors.New("collector batch outcome is unknown")
-var errCollectorPublishFenceChanged = errors.New("collector publish fence changed")
 
 type collectorPublishLeaseGuard struct {
 	client *adminclient.Client

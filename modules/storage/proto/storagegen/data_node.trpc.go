@@ -160,13 +160,7 @@ func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService
 type DataNodePeriodRuntimeService interface {
 	RegisterSeriesSnapshot(ctx context.Context, req *RegisterSeriesSnapshotReq) (*RegisterSeriesSnapshotRsp, error)
 
-	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error)
-
-	GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq) (*GetDatasetPeriodStatusRsp, error)
-
 	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error)
-
-	RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq) (*RecordDatasetPeriodFailuresRsp, error)
 }
 
 func DataNodePeriodRuntimeService_RegisterSeriesSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -177,42 +171,6 @@ func DataNodePeriodRuntimeService_RegisterSeriesSnapshot_Handler(svr interface{}
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(DataNodePeriodRuntimeService).RegisterSeriesSnapshot(ctx, reqbody.(*RegisterSeriesSnapshotReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &EnsureDatasetPeriodReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodePeriodRuntimeService).EnsureDatasetPeriod(ctx, reqbody.(*EnsureDatasetPeriodReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DataNodePeriodRuntimeService_GetDatasetPeriodStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetDatasetPeriodStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodePeriodRuntimeService).GetDatasetPeriodStatus(ctx, reqbody.(*GetDatasetPeriodStatusReq))
 	}
 
 	var rsp interface{}
@@ -241,24 +199,6 @@ func DataNodePeriodRuntimeService_CommitTimeSeriesBatch_Handler(svr interface{},
 	return rsp, nil
 }
 
-func DataNodePeriodRuntimeService_RecordDatasetPeriodFailures_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RecordDatasetPeriodFailuresReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodePeriodRuntimeService).RecordDatasetPeriodFailures(ctx, reqbody.(*RecordDatasetPeriodFailuresReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // DataNodePeriodRuntimeServer_ServiceDesc descriptor for server.RegisterService.
 var DataNodePeriodRuntimeServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataNodePeriodRuntime",
@@ -269,20 +209,8 @@ var DataNodePeriodRuntimeServer_ServiceDesc = server.ServiceDesc{
 			Func: DataNodePeriodRuntimeService_RegisterSeriesSnapshot_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNodePeriodRuntime/EnsureDatasetPeriod",
-			Func: DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataNodePeriodRuntime/GetDatasetPeriodStatus",
-			Func: DataNodePeriodRuntimeService_GetDatasetPeriodStatus_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.DataNodePeriodRuntime/CommitTimeSeriesBatch",
 			Func: DataNodePeriodRuntimeService_CommitTimeSeriesBatch_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataNodePeriodRuntime/RecordDatasetPeriodFailures",
-			Func: DataNodePeriodRuntimeService_RecordDatasetPeriodFailures_Handler,
 		},
 	},
 }
@@ -566,17 +494,8 @@ type UnimplementedDataNodePeriodRuntime struct{}
 func (s *UnimplementedDataNodePeriodRuntime) RegisterSeriesSnapshot(ctx context.Context, req *RegisterSeriesSnapshotReq) (*RegisterSeriesSnapshotRsp, error) {
 	return nil, errors.New("rpc RegisterSeriesSnapshot of service DataNodePeriodRuntime is not implemented")
 }
-func (s *UnimplementedDataNodePeriodRuntime) EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error) {
-	return nil, errors.New("rpc EnsureDatasetPeriod of service DataNodePeriodRuntime is not implemented")
-}
-func (s *UnimplementedDataNodePeriodRuntime) GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq) (*GetDatasetPeriodStatusRsp, error) {
-	return nil, errors.New("rpc GetDatasetPeriodStatus of service DataNodePeriodRuntime is not implemented")
-}
 func (s *UnimplementedDataNodePeriodRuntime) CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error) {
 	return nil, errors.New("rpc CommitTimeSeriesBatch of service DataNodePeriodRuntime is not implemented")
-}
-func (s *UnimplementedDataNodePeriodRuntime) RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq) (*RecordDatasetPeriodFailuresRsp, error) {
-	return nil, errors.New("rpc RecordDatasetPeriodFailures of service DataNodePeriodRuntime is not implemented")
 }
 
 type UnimplementedDataNodeDatasetAdminRuntime struct{}
@@ -745,13 +664,7 @@ func (c *DataNodeRuntimeClientProxyImpl) CleanupExpiredBuckets(ctx context.Conte
 type DataNodePeriodRuntimeClientProxy interface {
 	RegisterSeriesSnapshot(ctx context.Context, req *RegisterSeriesSnapshotReq, opts ...client.Option) (rsp *RegisterSeriesSnapshotRsp, err error)
 
-	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq, opts ...client.Option) (rsp *EnsureDatasetPeriodRsp, err error)
-
-	GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq, opts ...client.Option) (rsp *GetDatasetPeriodStatusRsp, err error)
-
 	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq, opts ...client.Option) (rsp *CommitTimeSeriesBatchRsp, err error)
-
-	RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq, opts ...client.Option) (rsp *RecordDatasetPeriodFailuresRsp, err error)
 }
 
 type DataNodePeriodRuntimeClientProxyImpl struct {
@@ -783,46 +696,6 @@ func (c *DataNodePeriodRuntimeClientProxyImpl) RegisterSeriesSnapshot(ctx contex
 	return rsp, nil
 }
 
-func (c *DataNodePeriodRuntimeClientProxyImpl) EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq, opts ...client.Option) (*EnsureDatasetPeriodRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/EnsureDatasetPeriod")
-	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodePeriodRuntime")
-	msg.WithCalleeMethod("EnsureDatasetPeriod")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &EnsureDatasetPeriodRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataNodePeriodRuntimeClientProxyImpl) GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq, opts ...client.Option) (*GetDatasetPeriodStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/GetDatasetPeriodStatus")
-	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodePeriodRuntime")
-	msg.WithCalleeMethod("GetDatasetPeriodStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetDatasetPeriodStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *DataNodePeriodRuntimeClientProxyImpl) CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq, opts ...client.Option) (*CommitTimeSeriesBatchRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -837,26 +710,6 @@ func (c *DataNodePeriodRuntimeClientProxyImpl) CommitTimeSeriesBatch(ctx context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CommitTimeSeriesBatchRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataNodePeriodRuntimeClientProxyImpl) RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq, opts ...client.Option) (*RecordDatasetPeriodFailuresRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/RecordDatasetPeriodFailures")
-	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodePeriodRuntime")
-	msg.WithCalleeMethod("RecordDatasetPeriodFailures")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RecordDatasetPeriodFailuresRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

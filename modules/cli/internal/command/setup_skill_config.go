@@ -153,21 +153,6 @@ func buildSkillDataAccessConfig(
 	if spaceID != "crypto" {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
 	}
-	var selected *setupconfig.SCFFetcherSpace
-	for index := range snapshot.Manifest.SCFFetcher.Spaces {
-		candidate := &snapshot.Manifest.SCFFetcher.Spaces[index]
-		candidateSpaceID := strings.TrimSpace(candidate.SpaceID)
-		if strings.EqualFold(candidateSpaceID, "crypto") {
-			candidateSpaceID = "crypto"
-		}
-		if candidateSpaceID == spaceID {
-			selected = candidate
-			break
-		}
-	}
-	if selected == nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: scf_fetcher has no configuration for space %q", spaceID)
-	}
 	storageHost := snapshot.Manifest.ControlHost()
 	if snapshot.Manifest.HasStorageHost() {
 		storageHost = snapshot.Manifest.StorageHost()

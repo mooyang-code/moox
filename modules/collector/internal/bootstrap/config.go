@@ -19,36 +19,22 @@ import (
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	GatewayClient       gatewayclient.FileConfig         `yaml:"gateway_client"`
-	sourcePath          string                           `yaml:"-"`
-	SCFRegionBlacklists map[string][]string              `yaml:"scf_region_blacklists"`
-	Database            DatabaseConfig                   `yaml:"database"`
-	Storage             StorageConfig                    `yaml:"storage"`
-	SCFAccess           gatewayclient.ExternalFileConfig `yaml:"scf_access"`
-	SCFAccessRoutes     map[string]SCFAccessEndpoint     `yaml:"scf_access_routes"`
+	GatewayClient gatewayclient.FileConfig         `yaml:"gateway_client"`
+	sourcePath    string                           `yaml:"-"`
+	Database      DatabaseConfig                   `yaml:"database"`
+	Storage       StorageConfig                    `yaml:"storage"`
+	SCFAccess     gatewayclient.ExternalFileConfig `yaml:"scf_access"`
 	// SCFRegions 是各地域的函数网络；SCFMarkets 是每个空间、市场使用的地域；SCFPlan 是函数部署参数。
 	SCFRegions         map[string]marketfetch.PlanNetwork `yaml:"scf_regions"`
 	SCFMarkets         map[string]map[string][]string     `yaml:"scf_markets"`
 	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
 	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
-	StockCN            StockCNConfig                      `yaml:"stockcn"`
 	PeriodReadiness    PeriodReadinessConfig              `yaml:"period_readiness"`
 	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
 	Health             HealthConfig                       `yaml:"health"`
 	DNS                DNSConfig                          `yaml:"dns"`
 	EgressProxy        EgressProxyConfig                  `yaml:"egress_proxy"`
 	SubjectSync        subjectsync.Config                 `yaml:"subject_sync"`
-}
-
-// StockCNConfig carries the release-time capacity contract to the Collector
-// reconciler. It is rendered from moox.toml; zero values fail closed when a
-// stockcn collection task is selected rather than silently choosing a default fleet.
-type StockCNConfig struct {
-	ExpectedTimerFunctionCount int `yaml:"expected_timer_function_count"`
-	MeasuredSafeGroupSize      int `yaml:"measured_safe_group_size"`
-	StaggerStartSecond         int `yaml:"stagger_start_second"`
-	StaggerWindowSeconds       int `yaml:"stagger_window_seconds"`
-	StaggerMaxStartsPerSecond  int `yaml:"stagger_max_starts_per_second"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -242,16 +228,6 @@ func (c *Config) validateSCFAccess() error {
 	}
 	if err := c.SCFAccess.Validate(); err != nil {
 		return fmt.Errorf("scf_access: %w", err)
-	}
-	for region, endpoint := range c.SCFAccessRoutes {
-		if region == "" || region != strings.ToLower(strings.TrimSpace(region)) {
-			return fmt.Errorf("scf_access_routes requires canonical regions")
-		}
-		config := c.SCFAccess
-		config.Address, config.InstanceID = endpoint.Address, endpoint.InstanceID
-		if err := config.Validate(); err != nil {
-			return fmt.Errorf("scf_access_routes[%s]: %w", region, err)
-		}
 	}
 	return nil
 }

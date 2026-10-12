@@ -215,7 +215,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
 		CoordinationStaleAfter:      cfg.MarketHealth.TimerCoordinationStaleAfter,
 		PendingGrace:                cfg.MarketHealth.TimerCoordinationPendingGrace,
-		LowCapacityHeadroom:         cfg.MarketHealth.LowCapacityHeadroom,
 		FeedFailureRateWindow:       cfg.MarketHealth.FeedFailureRateWindow,
 		FeedFailureRateThreshold:    cfg.MarketHealth.FeedFailureRateThreshold,
 		InstrumentSnapshotMaxAge:    cfg.MarketHealth.InstrumentSnapshotMaxAge,

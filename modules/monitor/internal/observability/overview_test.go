@@ -224,60 +224,11 @@ func TestBuilderReportsTimerCoordinationHealth(t *testing.T) {
 	}
 }
 
-func TestBuilderReportsTimerCapacityShortfall(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		labels := `{"space_id":"crypto"}`
-		seedOverviewMetricForInstance(t, db, "capacity-total", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_total", labels, 45, now)
-		seedOverviewMetricForInstance(t, db, "capacity-required", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_required", labels, 52, now)
-		seedOverviewMetricForInstance(t, db, "capacity-active", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_active", labels, 0, now)
-		seedOverviewMetricForInstance(t, db, "capacity-headroom", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_headroom", labels, -7, now)
-	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
-	require.NoError(t, err)
-	require.Len(t, got.BusinessChecks, 1)
-	require.Equal(t, "down", got.BusinessChecks[0].Status)
-	require.Contains(t, got.BusinessChecks[0].Reason, "Timer SCF 容量不足")
-	require.Contains(t, got.BusinessChecks[0].Reason, "缺口 7 个")
-}
 
-func TestBuilderReportsStockCNConfiguredGroupMismatch(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "groups-expected", "collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stockcn","route_id":"stockcn_equity_kline_1m_multi_provider_v1","kind":"expected"}`, 200, now)
-		seedOverviewMetricForInstance(t, db, "groups-actual", "collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stockcn","route_id":"stockcn_equity_kline_1m_multi_provider_v1","kind":"actual"}`, 199, now)
-	})
 
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stockcn")
 
-	require.NoError(t, err)
-	require.Len(t, got.BusinessChecks, 1)
-	require.Equal(t, "down", got.BusinessChecks[0].Status)
-	require.Contains(t, got.BusinessChecks[0].Reason, "Group 数量不一致")
-	require.Contains(t, got.BusinessChecks[0].Reason, "期望 200")
-	require.Contains(t, got.BusinessChecks[0].Reason, "实际 199")
-}
 
-func TestBuilderAlertsOnStockCNConfiguredGroupIdentityMismatch(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		route := "stockcn_equity_kline_1m_multi_provider_v1"
-		labels := `{"space_id":"stockcn","dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m"}`
-		seedOverviewMetricForInstance(t, db, "identity-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
-		seedOverviewMetricForInstance(t, db, "identity-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
-		seedOverviewMetricForInstance(t, db, "identity-success", "collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"stockcn"}`, float64(now.Unix()), now)
-		seedOverviewMetricForInstance(t, db, "identity-expected", "collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stockcn","route_id":"`+route+`","kind":"expected"}`, 2, now)
-		seedOverviewMetricForInstance(t, db, "identity-actual", "collector", "collector@control", "moox_collector_market_configured_groups", `{"market_id":"stockcn","route_id":"`+route+`","kind":"actual"}`, 2, now)
-		seedOverviewMetricForInstance(t, db, "identity-0", "collector", "collector@control", "moox_collector_market_configured_group_id", `{"market_id":"stockcn","route_id":"`+route+`","group_id":"0"}`, 2, now)
-		seedOverviewMetricForInstance(t, db, "identity-1", "collector", "collector@control", "moox_collector_market_configured_group_id", `{"market_id":"stockcn","route_id":"`+route+`","group_id":"1"}`, 0, now)
-	})
 
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "stockcn")
-	require.NoError(t, err)
-	require.Len(t, overview.BusinessChecks, 1)
-	require.Equal(t, "down", overview.BusinessChecks[0].Status)
-	require.Contains(t, overview.BusinessChecks[0].Reason, "Group ID 0")
-}
 
 func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
@@ -291,7 +242,7 @@ func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 
 	got, err := (Builder{
 		Metrics: query, Now: func() time.Time { return now },
-		MarketFetchThresholds: MarketFetchThresholds{CoordinationStaleAfter: time.Minute, PendingGrace: 30 * time.Second, LowCapacityHeadroom: 0},
+		MarketFetchThresholds: MarketFetchThresholds{CoordinationStaleAfter: time.Minute, PendingGrace: 30 * time.Second,},
 	}).Build(t.Context(), "stockcn")
 
 	require.NoError(t, err)
@@ -300,26 +251,7 @@ func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 	require.Contains(t, got.BusinessChecks[0].Reason, "超过允许时间")
 }
 
-func TestBuilderWarnsWhenTimerCapacityHeadroomIsLow(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		assignmentLabels := `{"space_id":"crypto","dataset_id":"bars","frequency":"1m"}`
-		spaceLabels := `{"space_id":"crypto"}`
-		seedOverviewMetricForInstance(t, db, "timer-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", assignmentLabels, 1, now)
-		seedOverviewMetricForInstance(t, db, "timer-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", assignmentLabels, 1, now)
-		seedOverviewMetricForInstance(t, db, "timer-success", "collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", spaceLabels, float64(now.Unix()), now)
-		seedOverviewMetricForInstance(t, db, "capacity-total", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_total", spaceLabels, 60, now)
-		seedOverviewMetricForInstance(t, db, "capacity-required", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_required", spaceLabels, 59, now)
-		seedOverviewMetricForInstance(t, db, "capacity-active", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_active", spaceLabels, 59, now)
-		seedOverviewMetricForInstance(t, db, "capacity-headroom", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_headroom", spaceLabels, 1, now)
-		seedOverviewMetricForInstance(t, db, "timer-trigger", "collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto","node_id":"timer-1","enabled":"true"}`, 1, now)
-	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
-	require.NoError(t, err)
-	require.Len(t, got.BusinessChecks, 1)
-	require.Equal(t, "degraded", got.BusinessChecks[0].Status)
-	require.Contains(t, got.BusinessChecks[0].Reason, "容量余量仅 1 个节点")
-}
+
 
 func TestBuilderIgnoresDisabledTimerNodes(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)

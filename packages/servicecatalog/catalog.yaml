@@ -1323,10 +1323,7 @@ components:
         methods:
           - UpsertFields
           - RegisterSeriesSnapshot
-          - EnsureDatasetPeriod
-          - GetDatasetPeriodStatus
           - CommitTimeSeriesBatch
-          - RecordDatasetPeriodFailures
           - WriteFactorRows
           - ReadFields
           - DeleteDatasetRows
@@ -1340,7 +1337,6 @@ components:
           - GetFactorPeriodComputed
           - WaitViewSyncPoint
         read_only_methods:
-          - GetDatasetPeriodStatus
           - ReadFields
           - ReadTimeSeriesRows
           - ListHistorySubjects
@@ -1353,10 +1349,7 @@ components:
               - console
           - methods:
               - UpsertFields
-              - EnsureDatasetPeriod
-              - GetDatasetPeriodStatus
               - CommitTimeSeriesBatch
-              - RecordDatasetPeriodFailures
               - WriteFactorRows
               - ReadFields
               - DeleteDatasetRows
@@ -1373,10 +1366,7 @@ components:
               - moox-cli
           - methods:
               - RegisterSeriesSnapshot
-              - EnsureDatasetPeriod
-              - GetDatasetPeriodStatus
               - CommitTimeSeriesBatch
-              - RecordDatasetPeriodFailures
               - ReportCollectorPeriodCompleted
               - AppendDatasetSyncPoint
               - DeleteDatasetRows

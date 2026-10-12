@@ -55,18 +55,11 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	blacklists := make([]mappingField, 0, len(snapshot.Manifest.SCFFetcher.Spaces))
-	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		blacklists = append(blacklists, mappingField{space.SpaceID, append([]string{}, space.RegionBlacklist...)})
-	}
-	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", orderedMapping(blacklists...))
+	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", nil)
 	if err != nil {
 		return nil, err
 	}
-	access, routes, err := SCFAccessRoutes(snapshot)
-	if err != nil {
-		return nil, err
-	}
+	access := SCFAccessIdentity(snapshot)
 	var prior map[string]any
 	if len(existing) > 0 {
 		if err := yaml.Unmarshal(existing, &prior); err != nil {
@@ -93,7 +86,7 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	rendered, err = replaceYAMLMapping(rendered, "scf_access_routes", valueNode(routes))
+	rendered, err = replaceYAMLMapping(rendered, "scf_access_routes", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -110,19 +103,6 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	))
 	if err != nil {
 		return nil, err
-	}
-	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") {
-			continue
-		}
-		stockFields := orderedMapping(
-			mappingField{"expected_timer_function_count", space.TimerFunctionCount},
-			mappingField{"measured_safe_group_size", space.MeasuredSafeGroupSize},
-			mappingField{"stagger_start_second", space.StaggerStartSecond},
-			mappingField{"stagger_window_seconds", space.StaggerWindowSeconds},
-			mappingField{"stagger_max_starts_per_second", space.StaggerMaxStartsPerSecond},
-		)
-		return replaceYAMLMapping(rendered, "stockcn", stockFields)
 	}
 	return rendered, nil
 }
@@ -308,35 +288,17 @@ func writeRenderedBytes(path string, rendered []byte) error {
 	return nil
 }
 
-// SCFAccessRoutes emits fixed external endpoints independently of internal
-// Collector routing. Regional endpoint identities must agree across Spaces.
-func SCFAccessRoutes(snapshot *Snapshot) (map[string]string, map[string]map[string]string, error) {
+// SCFAccessIdentity 返回函数调用 Access 的固定身份与默认入口（Storage 主机的 Access，缺省为控制机）；
+// 各地域的私网入口由 [scf_plan] 渲染到 scf_plan.access_routes。
+func SCFAccessIdentity(snapshot *Snapshot) map[string]string {
 	base := map[string]string{"caller": "scf-collector", "key_id": "", "key_file": "../../secrets/caller-scf-collector.key"}
-	routes := map[string]map[string]string{}
-	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		if space.AccessAddress != "" {
-			if base["access_address"] != "" && (base["access_address"] != space.AccessAddress || base["access_id"] != space.AccessID) {
-				return nil, nil, fmt.Errorf("config_invalid: SCF Access default identity must agree across Spaces")
-			}
-			base["access_address"], base["access_id"] = space.AccessAddress, space.AccessID
-		}
-		for region, address := range space.AccessAddresses {
-			identity := space.AccessIDForRegion(region)
-			if old, ok := routes[region]; ok && (old["access_address"] != address || old["access_id"] != identity) {
-				return nil, nil, fmt.Errorf("config_invalid: SCF Access routes for %s must agree across Spaces", region)
-			}
-			routes[region] = map[string]string{"access_address": address, "access_id": identity}
-		}
+	host := snapshot.Manifest.StorageHost()
+	if host.Address == "" {
+		host = snapshot.Manifest.ControlHost()
 	}
-	if base["access_address"] == "" {
-		host := snapshot.Manifest.StorageHost()
-		if host.Address == "" {
-			host = snapshot.Manifest.ControlHost()
-		}
-		if host.Address != "" {
-			base["access_address"] = net.JoinHostPort(host.Address, "11004")
-			base["access_id"] = "access@" + host.Name
-		}
+	if host.Address != "" {
+		base["access_address"] = net.JoinHostPort(host.Address, "11004")
+		base["access_id"] = "access@" + host.Name
 	}
-	return base, routes, nil
+	return base
 }

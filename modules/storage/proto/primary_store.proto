@@ -11,34 +11,6 @@ import "dataset_markers.proto";
 import "data_node.proto";
 
 
-message PrimaryEnsureDatasetPeriodReq {
-  common.AuthInfo auth_info = 1;
-  DatasetPeriodExpectation expectation = 2;
-}
-
-message PrimaryEnsureDatasetPeriodRsp {
-  common.RetInfo ret_info = 1;
-  string status = 2;
-  int64 deadline_at = 3;
-}
-
-message PrimaryGetDatasetPeriodStatusReq {
-  common.AuthInfo auth_info = 1;
-  DatasetPeriodExpectation expectation = 2;
-  bool include_progress = 3;
-}
-
-message PrimaryGetDatasetPeriodStatusRsp {
-  common.RetInfo ret_info = 1;
-  string status = 2;
-  string series_hash = 3;
-  uint32 expected_count = 4;
-  int64 deadline_at = 5;
-  bool found = 6;
-  uint32 successful_count = 7;
-  repeated uint32 missing_series_indexes = 8;
-}
-
 message PrimaryRegisterSeriesSnapshotReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -68,18 +40,6 @@ message PrimaryCommitTimeSeriesBatchRsp {
   repeated RowKey keys = 2;
   string period_status = 3;
   repeated uint32 accepted_series_indexes = 4;
-}
-
-message PrimaryRecordDatasetPeriodFailuresReq {
-  common.AuthInfo auth_info = 1;
-  DatasetPeriodExpectation expectation = 2;
-  repeated uint32 series_indexes = 3;
-}
-
-message PrimaryRecordDatasetPeriodFailuresRsp {
-  common.RetInfo ret_info = 1;
-  string period_status = 2;
-  repeated DatasetPeriodFailureResult results = 3;
 }
 
 message PrimaryWriteFactorRowsReq {
@@ -210,10 +170,7 @@ service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
   rpc RegisterSeriesSnapshot(PrimaryRegisterSeriesSnapshotReq) returns (PrimaryRegisterSeriesSnapshotRsp);
-  rpc EnsureDatasetPeriod(PrimaryEnsureDatasetPeriodReq) returns (PrimaryEnsureDatasetPeriodRsp);
-  rpc GetDatasetPeriodStatus(PrimaryGetDatasetPeriodStatusReq) returns (PrimaryGetDatasetPeriodStatusRsp);
   rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
-  rpc RecordDatasetPeriodFailures(PrimaryRecordDatasetPeriodFailuresReq) returns (PrimaryRecordDatasetPeriodFailuresRsp);
   rpc WriteFactorRows(PrimaryWriteFactorRowsReq) returns (PrimaryWriteFactorRowsRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
   rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);

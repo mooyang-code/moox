@@ -28,9 +28,6 @@ assert_contains "${RELEASE}" 'gateway/config/trpc_go.yaml'
 assert_contains "${RELEASE}" 'obsolete Gateway refresh_interval'
 assert_contains "${RELEASE}" 'copy_binary moox-host-gateway'
 assert_contains "${RELEASE}" 'copy_binary moox-host-gateway-cli'
-assert_contains "${ROOT}/config/setup/service-deployments.yaml" 'gateway_methods: [EnsureDatasetPeriod, CommitTimeSeriesBatch, RecordDatasetPeriodFailures, GetDatasetPeriodStatus]'
-assert_contains "${ROOT}/modules/admin/internal/service/sysdeploy/defaults.go" 'const storageCollectorPeriodGatewayMethods ='
-assert_contains "${ROOT}/modules/admin/internal/service/sysdeploy/defaults.go" 'storageCollectorPeriodGatewayMethods, storageTimeSeriesGatewayCallers'
 
 for option in --node-id --gateway-control-url --gateway-ca-bundle --gateway-control-key-file --gateway-service-key-file --monitor-instance-id --no-admin --component-overlay; do
   assert_contains "${DEPLOY}" "${option}"

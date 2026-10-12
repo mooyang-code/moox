@@ -65,7 +65,6 @@ market_canary:
 market_health:
   timer_coordination_stale_after: 15m
   timer_coordination_pending_grace: 5m
-  low_capacity_headroom: 2
   feed_failure_rate_window: 5m
   feed_failure_rate_threshold: 0.2
   instrument_snapshot_max_age: 36h

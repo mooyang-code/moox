@@ -115,7 +115,7 @@ func runSetupInit(
 	// and applies private routing only to SCF functions in Storage's Tencent
 	// region.
 	var scfRoutes *privatenet.SCFRoutePlan
-	if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost().Provider), "tencent") {
+	if snapshot.Manifest.SCFPlan.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost().Provider), "tencent") {
 		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")
 		if routeErr != nil {
 			return setupInitSummary{}, fmt.Errorf("scf-network: %w", routeErr)
@@ -321,7 +321,7 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 		AppID: account.AppID, COSRegion: account.COSRegion, COSBucket: account.COSBucket,
 	}
 	if strings.TrimSpace(input.AccountID) == "" || strings.TrimSpace(input.AccountName) == "" || strings.TrimSpace(input.CredentialSecretID) == "" || strings.TrimSpace(input.AppID) == "" || strings.TrimSpace(input.COSRegion) == "" || strings.TrimSpace(input.COSBucket) == "" {
-		return nil, fmt.Errorf("cloud_accounts: incomplete Tencent account in scf_fetcher.cloud_account")
+		return nil, fmt.Errorf("cloud_accounts: incomplete Tencent account in scf_plan.cloud_account")
 	}
 
 	summary := &setupCloudAccountSummary{Enabled: true, Planned: 1}

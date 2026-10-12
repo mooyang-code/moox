@@ -12,12 +12,7 @@
 `metadata.yaml` 的业务 Space 包含 `stockcn`、`stockhk`、`stockus` 和 `crypto`。`mooxsys` 带
 `attributes.scope: internal`，只进入 Storage，不显示在管理台业务空间选择器中。
 
-根目录 `moox.toml` 的 `[scf_fetcher.tencent_limits]` 保存腾讯云 SCF 配额参考。默认值为每
-地域 5 个命名空间、每命名空间 50 个函数、每分钟 burst 500，并记录已核对地域的账号级并发
-内存配额。发布校验会使用其中的函数数上限；实际套餐或工单提额仍需以腾讯云实时账号配额为准。
-建议每个 SCF Space 使用独立 `namespace`，并为发布器自动创建的 Invoke canary、stockcn
-Instrument snapshot Timer 预留函数配额。首次发布时 CloudNode 会在目标地域幂等创建非
-`default` namespace，旧 namespace 中的同前缀节点不会被误复用。
+SCF 采集函数的云账号、地域网络与空间在根目录 `moox.toml` 的 `[scf_plan]` 声明；函数数量由 Collector 按标的数与每函数标的数自动计算，每个空间使用独立 namespace。
 仓库实际 `moox.toml` 保留既有 `default` fleet 且默认关闭 SCF；重新启用前请先完成 namespace
 迁移或地域节点重平衡，发布校验会拒绝包含辅助函数后超过配额的配置。
 

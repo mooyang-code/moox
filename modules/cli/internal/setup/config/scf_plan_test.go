@@ -9,7 +9,7 @@ import (
 )
 
 func scfPlanTestManifest() Manifest {
-	account := SCFFetcherCloudAccount{AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "secret", AppID: "1", COSRegion: "ap-guangzhou", COSBucket: "bucket"}
+	account := SCFCloudAccountConfig{AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "secret", AppID: "1", COSRegion: "ap-guangzhou", COSBucket: "bucket"}
 	return Manifest{
 		HostCatalog: map[string]HostDefinition{
 			"control":   {Address: "1.1.1.1", Region: "ap-guangzhou", PrivateAddress: "10.0.0.1"},
@@ -71,7 +71,7 @@ func TestSCFPlanDisabledRemovesTheRenderedBlocks(t *testing.T) {
 
 func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) {
 	cases := map[string]func(*Manifest){
-		"no cloud account":   func(m *Manifest) { m.SCFPlan.CloudAccount = SCFFetcherCloudAccount{} },
+		"no cloud account":   func(m *Manifest) { m.SCFPlan.CloudAccount = SCFCloudAccountConfig{} },
 		"no spaces":          func(m *Manifest) { m.SCFPlan.Spaces = nil },
 		"no markets":         func(m *Manifest) { m.SCFPlan.Spaces[0].Markets = nil },
 		"missing vpc":        func(m *Manifest) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },

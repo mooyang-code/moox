@@ -15,12 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestLoadSCFRegionBlacklists(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, "scf_region_blacklists:\n  crypto: [ap-guangzhou]\n  stockcn: [ap-tokyo]\n"))
-	require.NoError(t, err)
-	require.Equal(t, map[string][]string{"crypto": {"ap-guangzhou"}, "stockcn": {"ap-tokyo"}}, cfg.SCFRegionBlacklists)
-}
-
 func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
 
@@ -54,23 +48,6 @@ storage:
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
 	assert.Equal(t, "result-test", cfg.Storage.ResultDataNodeID)
 	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
-}
-
-func TestSCFAccessConfigUsesAssignedIdentityAndRegionalRoutes(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, `scf_access:
-  access_address: storage.example:11004
-  access_id: access@storage
-  caller: scf-collector
-  key_id: assigned-scf-key-17
-  key_file: ../secrets/scf.key
-scf_access_routes:
-  ap-guangzhou:
-    access_address: 10.0.0.5:11004
-    access_id: access@storage
-`))
-	require.NoError(t, err)
-	require.Equal(t, "assigned-scf-key-17", cfg.SCFAccess.KeyID)
-	require.Equal(t, "10.0.0.5:11004", cfg.SCFAccessRoutes["ap-guangzhou"].Address)
 }
 
 func TestLoadRejectsRemovedCollectorRuntimeGatewayConfig(t *testing.T) {
@@ -139,22 +116,6 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	assert.Equal(t, 5, cfg.KlineResample.RepairLookbackBuckets)
 	assert.Equal(t, 100, cfg.KlineResample.MaxClaimsPerTick)
 	assert.Equal(t, 20, cfg.KlineResample.WorkerSubjectBatchSize)
-}
-
-func TestLoadStockCNRuntimeCapacityConfig(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, `stockcn:
-  expected_timer_function_count: 200
-  measured_safe_group_size: 30
-  stagger_start_second: 5
-  stagger_window_seconds: 35
-  stagger_max_starts_per_second: 6
-`))
-	require.NoError(t, err)
-	assert.Equal(t, 200, cfg.StockCN.ExpectedTimerFunctionCount)
-	assert.Equal(t, 30, cfg.StockCN.MeasuredSafeGroupSize)
-	assert.Equal(t, 5, cfg.StockCN.StaggerStartSecond)
-	assert.Equal(t, 35, cfg.StockCN.StaggerWindowSeconds)
-	assert.Equal(t, 6, cfg.StockCN.StaggerMaxStartsPerSecond)
 }
 
 func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {

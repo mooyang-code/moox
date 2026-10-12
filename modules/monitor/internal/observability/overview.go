@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -89,7 +88,6 @@ type Builder struct {
 type MarketFetchThresholds struct {
 	CoordinationStaleAfter      time.Duration
 	PendingGrace                time.Duration
-	LowCapacityHeadroom         int
 	FeedFailureRateWindow       time.Duration
 	FeedFailureRateThreshold    float64
 	InstrumentSnapshotMaxAge    time.Duration
@@ -807,21 +805,16 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 }
 
 type timerCoordinationState struct {
-	required, active, lastSuccess                                                 float64
-	pending, pendingSince                                                         float64
-	capacityTotal, capacityRequired, capacityActive, capacityHeadroom             float64
-	hasRequired, hasLastSuccess                                                   bool
-	hasPending, hasPendingSince                                                   bool
-	hasCapacityTotal, hasCapacityRequired, hasCapacityActive, hasCapacityHeadroom bool
-	healthy                                                                       float64
-	hasHealth                                                                     bool
-	staleSeries                                                                   bool
-	badNodes                                                                      []string
-	failureReasons                                                                map[string]bool
-	configuredGroupsExpected, configuredGroupsActual                              float64
-	hasConfiguredGroupsExpected, hasConfiguredGroupsActual                        bool
-	configuredGroupIDs                                                            map[int]float64
-	configuredGroupIDObserved                                                     map[int]time.Time
+	lastSuccess     float64
+	pending         float64
+	pendingSince    float64
+	hasLastSuccess  bool
+	hasPending      bool
+	hasPendingSince bool
+	healthy         float64
+	hasHealth       bool
+	staleSeries     bool
+	failureReasons  map[string]bool
 }
 
 type marketFeedHealthState struct {
@@ -1095,11 +1088,6 @@ const timerCoordinationStaleAfter = 15 * time.Minute
 
 const timerCoordinationPendingGrace = 5 * time.Minute
 
-// Keep a small reserve so adding a new symbol or frequency is visible before
-// the next reconciliation hits a hard Timer capacity error. The metric still
-// exposes the exact headroom for operators who need a different threshold.
-const timerCoordinationLowCapacityHeadroom = 2
-
 func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	thresholds := b.MarketFetchThresholds
 	if thresholds.CoordinationStaleAfter <= 0 {
@@ -1107,9 +1095,6 @@ func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	}
 	if thresholds.PendingGrace <= 0 {
 		thresholds.PendingGrace = timerCoordinationPendingGrace
-	}
-	if thresholds.LowCapacityHeadroom <= 0 {
-		thresholds.LowCapacityHeadroom = timerCoordinationLowCapacityHeadroom
 	}
 	if thresholds.FeedFailureRateWindow <= 0 {
 		thresholds.FeedFailureRateWindow = 5 * time.Minute
@@ -1184,17 +1169,6 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		}
 		return nil
 	}
-	if err := load("moox_collector_market_fetch_assignment_required", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		state.required += maxFloat(value, 0)
-		state.hasRequired = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_assignment_active", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		state.active += maxFloat(value, 0)
-	}); err != nil {
-		return nil, err
-	}
 	if err := load("moox_collector_market_fetch_assignment_last_success_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
 		if value > state.lastSuccess {
 			state.lastSuccess = value
@@ -1243,235 +1217,46 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}); err != nil {
 		return nil, err
 	}
-	if err := load("moox_collector_market_fetch_timer_capacity_total", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if !state.hasCapacityTotal || value > state.capacityTotal {
-			state.capacityTotal = maxFloat(value, 0)
-		}
-		state.hasCapacityTotal = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_capacity_required", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if !state.hasCapacityRequired || value > state.capacityRequired {
-			state.capacityRequired = maxFloat(value, 0)
-		}
-		state.hasCapacityRequired = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_capacity_active", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if !state.hasCapacityActive || value > state.capacityActive {
-			state.capacityActive = maxFloat(value, 0)
-		}
-		state.hasCapacityActive = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_capacity_headroom", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		// During a rolling restart more than one Collector may report the same
-		// space. Use the smallest headroom so one constrained reporter cannot be
-		// hidden by a newer, more optimistic series.
-		if !state.hasCapacityHeadroom || value < state.capacityHeadroom {
-			state.capacityHeadroom = value
-		}
-		state.hasCapacityHeadroom = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_available", func(state *timerCoordinationState, labels map[string]string, value float64) {
-		// Disabled SCF assignments are spare capacity, not an expected
-		// trigger. Their readback may legitimately be unavailable while the
-		// Collector is reconciling the fleet; only enabled assignments should
-		// participate in the coordination failure check.
-		if strings.EqualFold(strings.TrimSpace(labels["enabled"]), "false") {
-			return
-		}
-		// CloudNode reports -1 while a provider readback is unknown.  That is a
-		// transient observation, not proof that the trigger is unavailable; the
-		// next reconciliation will either confirm it or publish a real 0.
-		if value != 0 {
-			return
-		}
-		if nodeID := strings.TrimSpace(labels["node_id"]); nodeID != "" {
-			state.badNodes = append(state.badNodes, nodeID)
-		}
-	}); err != nil {
-		return nil, err
-	}
-	configuredGroups, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_collector_market_configured_groups", "", 500, now)
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range configuredGroups {
-		if item.IsStale {
-			continue
-		}
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("configured group labels for %s: %w", item.SeriesID, err)
-		}
-		currentSpace := strings.TrimSpace(labels["market_id"])
-		if currentSpace != "stockcn" || (spaceID != "" && currentSpace != spaceID) {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		state := states[currentSpace]
-		if state == nil {
-			state = &timerCoordinationState{}
-			states[currentSpace] = state
-		}
-		switch strings.TrimSpace(labels["kind"]) {
-		case "expected":
-			if !state.hasConfiguredGroupsExpected || latest.Value > state.configuredGroupsExpected {
-				state.configuredGroupsExpected = maxFloat(latest.Value, 0)
-			}
-			state.hasConfiguredGroupsExpected = true
-		case "actual":
-			if !state.hasConfiguredGroupsActual || latest.Value < state.configuredGroupsActual {
-				state.configuredGroupsActual = maxFloat(latest.Value, 0)
-			}
-			state.hasConfiguredGroupsActual = true
-		}
-	}
-	groupIdentitySeries, err := b.marketMetricSeries(ctx, "moox_collector_market_configured_group_id")
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range groupIdentitySeries {
-		if item.IsStale {
-			continue
-		}
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("configured group identity labels for %s: %w", item.SeriesID, err)
-		}
-		currentSpace := strings.TrimSpace(labels["market_id"])
-		if currentSpace != "stockcn" || (spaceID != "" && currentSpace != spaceID) {
-			continue
-		}
-		groupID, parseErr := strconv.Atoi(strings.TrimSpace(labels["group_id"]))
-		if parseErr != nil || groupID < 0 {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		state := states[currentSpace]
-		if state == nil {
-			state = &timerCoordinationState{}
-			states[currentSpace] = state
-		}
-		if state.configuredGroupIDs == nil {
-			state.configuredGroupIDs = make(map[int]float64)
-			state.configuredGroupIDObserved = make(map[int]time.Time)
-		}
-		if state.configuredGroupIDObserved[groupID].Before(latest.ObservedAt.UTC()) {
-			state.configuredGroupIDs[groupID] = maxFloat(latest.Value, 0)
-			state.configuredGroupIDObserved[groupID] = latest.ObservedAt.UTC()
-		}
-	}
 	out := make([]BusinessStatus, 0, len(states))
 	for currentSpace, state := range states {
-		pendingGrace := state.hasRequired && state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
-			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace &&
-			state.active >= state.required && len(state.badNodes) == 0
+		pendingGrace := state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
+			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace
 		if pendingGrace {
-			reason := "Timer 配置协调进行中"
+			reason := "采集计划协调进行中"
 			if state.failureReasons["submit_timeout"] {
-				reason = "Timer 配置提交超时，正在自动重试"
+				reason = "采集计划配置提交超时，正在自动重试"
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
 			continue
 		}
-		if state.hasCapacityTotal && state.hasCapacityRequired && state.capacityRequired > state.capacityTotal {
-			shortfall := state.capacityRequired - state.capacityTotal
-			reason := fmt.Sprintf("Timer SCF 容量不足：需要 %.0f 个节点，当前仅有 %.0f 个，缺口 %.0f 个", state.capacityRequired, state.capacityTotal, shortfall)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
-			continue
-		}
-		if state.hasConfiguredGroupsExpected && state.hasConfiguredGroupsActual &&
-			state.configuredGroupsExpected != state.configuredGroupsActual {
-			reason := fmt.Sprintf("stockcn Group 数量不一致：期望 %.0f，实际 %.0f", state.configuredGroupsExpected, state.configuredGroupsActual)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
-			continue
-		}
 		if state.hasHealth && state.healthy <= 0 {
-			reason := "Collector Timer 协调失败：请检查 Timer 分片容量、触发器状态和 Collector 日志"
+			reason := "采集计划协调失败：请检查 Collector 日志、CloudNode 和函数网络"
 			switch {
 			case state.failureReasons["submit_timeout"]:
-				reason = "Timer 配置提交持续超时：请检查 CloudNode、网关连接和批处理队列"
+				reason = "采集计划配置提交持续超时：请检查 CloudNode、网关连接和批处理队列"
 			case state.failureReasons["cloudnode"]:
-				reason = "Timer 配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
+				reason = "采集计划配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
 			case state.failureReasons["environment"]:
-				reason = "Timer 运行环境生成失败：请检查环境变量大小和 DNS 配置"
+				reason = "函数运行环境生成失败：请检查环境变量大小和 DNS 配置"
 			case state.failureReasons["rules"]:
-				reason = "Timer 采集规则读取失败：请检查 Collector 规则配置和存储连接"
-			case state.failureReasons["task_instances"]:
-				reason = "Timer 任务实例保存失败：请检查 Collector 数据库"
-			case state.failureReasons["capacity"] && state.hasRequired && state.required > state.active:
-				reason = fmt.Sprintf("Timer 分片节点不足：需要 %.0f 个，当前仅分配 %.0f 个", state.required, state.active)
+				reason = "采集规则读取失败：请检查 Collector 规则配置和存储连接"
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
-		if !state.hasRequired || state.required <= 0 {
+		if !state.hasLastSuccess || state.lastSuccess <= 0 {
 			if state.staleSeries && !collectorReporterFresh {
-				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调指标已停止上报", LastCheckedAt: now})
+				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector 采集计划指标已停止上报", LastCheckedAt: now})
 			}
 			continue
 		}
-		status, reason := "healthy", "Timer 分配和触发器正常"
-		switch {
-		case state.hasCapacityHeadroom && state.capacityHeadroom >= 0 && state.capacityHeadroom <= float64(thresholds.LowCapacityHeadroom):
-			status, reason = "degraded", fmt.Sprintf("Timer SCF 容量余量仅 %.0f 个节点，当前需要 %.0f/%.0f 个", state.capacityHeadroom, state.capacityRequired, state.capacityTotal)
-		case state.active < state.required:
-			status, reason = "down", fmt.Sprintf("Timer 节点分配不足：已分配 %.0f 个，需要 %.0f 个", state.active, state.required)
-		case !state.hasLastSuccess || state.lastSuccess <= 0:
-			status, reason = "down", "尚未完成 Timer 配置协调"
-		case now.Sub(unixTime(state.lastSuccess)) > thresholds.CoordinationStaleAfter:
-			status, reason = "down", fmt.Sprintf("最近一次 Timer 配置协调已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
-		case len(state.badNodes) > 0:
-			sort.Strings(state.badNodes)
-			status, reason = "down", "Timer 触发器不可用：节点 "+strings.Join(state.badNodes, ", ")
-		case currentSpace == "stockcn" && state.hasConfiguredGroupsExpected:
-			status, reason = validateConfiguredGroupIDs(now, state, thresholds.CoordinationStaleAfter)
+		status, reason := "healthy", "采集计划对账正常"
+		if now.Sub(unixTime(state.lastSuccess)) > thresholds.CoordinationStaleAfter {
+			status, reason = "down", fmt.Sprintf("最近一次采集计划对账已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
 		}
 		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
-}
-
-func validateConfiguredGroupIDs(now time.Time, state *timerCoordinationState, staleAfter time.Duration) (string, string) {
-	expected := int(state.configuredGroupsExpected)
-	if expected <= 0 {
-		return "healthy", "Timer 分配和触发器正常"
-	}
-	if len(state.configuredGroupIDs) != expected {
-		return "down", fmt.Sprintf("stockcn Group ID 数量不一致：期望 %d，实际 %d", expected, len(state.configuredGroupIDs))
-	}
-	for groupID := 0; groupID < expected; groupID++ {
-		count, ok := state.configuredGroupIDs[groupID]
-		observed := state.configuredGroupIDObserved[groupID]
-		if !ok {
-			return "down", fmt.Sprintf("stockcn 缺少 Group ID %d", groupID)
-		}
-		if count != 1 {
-			return "down", fmt.Sprintf("stockcn Group ID %d 出现 %.0f 次，期望 1 次", groupID, count)
-		}
-		if !isFreshMetric(now, observed, staleAfter) {
-			return "down", fmt.Sprintf("stockcn Group ID %d 的配置指标已过期", groupID)
-		}
-	}
-	for groupID := range state.configuredGroupIDs {
-		if groupID < 0 || groupID >= expected {
-			return "down", fmt.Sprintf("stockcn 出现越界 Group ID %d，期望范围 0..%d", groupID, expected-1)
-		}
-	}
-	return "healthy", "Timer 分配和触发器正常"
 }
 
 func maxFloat(value, floor float64) float64 {

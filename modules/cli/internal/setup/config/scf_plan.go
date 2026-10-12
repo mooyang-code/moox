@@ -14,8 +14,8 @@ import (
 // （数量、标的分配、定时器）由 Collector 的对账协程按任务与标签成员自动创建和维护。
 type SCFPlan struct {
 	Enabled bool `toml:"enabled"`
-	// CloudAccount 为空时沿用 [scf_fetcher.cloud_account]（旧段在清理前仍可提供云账号）。
-	CloudAccount SCFFetcherCloudAccount `toml:"cloud_account"`
+	// CloudAccount 是 SCF 与 COS 使用的云账号。
+	CloudAccount SCFCloudAccountConfig `toml:"cloud_account"`
 	// MemoryMB 是每个函数的内存，默认 128。
 	MemoryMB int `toml:"memory_mb"`
 	// SymbolsPerFunction 是每个函数负责的标的数，默认 50；按空间可覆盖。
@@ -55,16 +55,11 @@ const (
 
 var scfPlanNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
-// SCFCloudAccount 返回 SCF 使用的云账号：[scf_plan.cloud_account] 优先，否则沿用 [scf_fetcher.cloud_account]。
-func (m Manifest) SCFCloudAccount() SCFFetcherCloudAccount {
-	if m.SCFPlan.CloudAccount.AccountID != "" {
-		return m.SCFPlan.CloudAccount
-	}
-	return m.SCFFetcher.CloudAccount
-}
+// SCFCloudAccount 返回 SCF 使用的云账号（[scf_plan.cloud_account]）。
+func (m Manifest) SCFCloudAccount() SCFCloudAccountConfig { return m.SCFPlan.CloudAccount }
 
-// SCFEnabled 表示是否使用任何 SCF 采集（Timer 计划或旧的 Invoke 函数）：云账号登记与日志服务开通共用。
-func (m Manifest) SCFEnabled() bool { return m.SCFPlan.Enabled || m.SCFFetcher.Enabled }
+// SCFEnabled 表示是否启用 SCF 采集：云账号登记与日志服务开通共用。
+func (m Manifest) SCFEnabled() bool { return m.SCFPlan.Enabled }
 
 func normalizeSCFPlan(plan *SCFPlan) {
 	plan.CloudAccount.AccountID = strings.TrimSpace(plan.CloudAccount.AccountID)
@@ -117,7 +112,7 @@ func validateSCFPlan(manifest *Manifest) error {
 	}
 	account := manifest.SCFCloudAccount()
 	if account.AccountID == "" || account.AccountName == "" || account.CredentialSecretID == "" || account.AppID == "" || account.COSRegion == "" || account.COSBucket == "" {
-		return fmt.Errorf("config_invalid: scf_plan requires a cloud account (scf_plan.cloud_account or scf_fetcher.cloud_account) with account_id, account_name, credential_secret_id, app_id, cos_region, and cos_bucket")
+		return fmt.Errorf("config_invalid: scf_plan requires scf_plan.cloud_account with account_id, account_name, credential_secret_id, app_id, cos_region, and cos_bucket")
 	}
 	if !supportedSCFRegion(account.COSRegion) {
 		return fmt.Errorf("config_invalid: scf_plan cloud account cos_region %q is not supported", account.COSRegion)

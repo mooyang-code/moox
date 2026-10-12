@@ -7,81 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{
-			"control":   {Address: "106.53.107.122", Provider: "tencent"},
-			"storage":   {Address: "146.56.196.204", Provider: "tencent"},
-			"compute-1": {Address: "43.132.204.177", Provider: "tencent"},
-		},
-		Placements: map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "storage": {"storage-primary", "storage-view"}},
-		SCFFetcher: setupconfig.SCFFetcher{
-			Enabled: true,
-			Spaces: []setupconfig.SCFFetcherSpace{
-				{
-					SpaceID: "crypto", FunctionPrefix: "moox-fetcher-crypto-binance", Namespace: "default",
-					PublicNetStatus: "ENABLE", RegionBlacklist: []string{"ap-guangzhou"},
-					AccessAddresses: map[string]string{
-						"ap-hongkong": "43.132.204.177:12004",
-					},
-					Regions: []setupconfig.SCFFetcherRegion{
-						{Region: "ap-singapore", Enabled: true, FunctionCount: 18},
-						{Region: "ap-guangzhou", Enabled: true, FunctionCount: 11},
-						{Region: "ap-hongkong", Enabled: true, FunctionCount: 40},
-					},
-				},
-				{
-					SpaceID: "stockcn", FunctionPrefix: "moox-fetcher-stockcn",
-					Regions: []setupconfig.SCFFetcherRegion{
-						{Region: "ap-chengdu", Enabled: true, FunctionCount: 32},
-					},
-				},
-			},
-		},
-	}
-	hosts := CollectTencentHosts(manifest)
-	require.Len(t, hosts, 3)
-	scf := CollectSCFTargets(manifest)
-	regions := map[string]SCFTarget{}
-	for _, item := range scf {
-		regions[item.Region] = item
-	}
-	_, hasGZ := regions["ap-guangzhou"]
-	assert.False(t, hasGZ)
-	assert.Contains(t, regions["ap-hongkong"].Prefixes, "moox-fetcher-crypto-binance")
-	assert.Equal(t, "43.132.204.177:12004", regions["ap-hongkong"].AccessAddress)
-	assert.Contains(t, regions["ap-chengdu"].Prefixes, "moox-fetcher-stockcn")
-	assert.Equal(t, 32, regions["ap-chengdu"].FunctionCount)
-}
-
-func TestCollectSCFTargetsSplitsOverflowNamespaces(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		SCFFetcher: setupconfig.SCFFetcher{
-			Enabled: true,
-			TencentLimits: setupconfig.TencentSCFLimits{
-				MaxNamespacesPerRegion:   5,
-				MaxFunctionsPerNamespace: 50,
-			},
-			Spaces: []setupconfig.SCFFetcherSpace{{
-				SpaceID: "crypto", FunctionPrefix: "moox-fetcher-crypto-binance", Namespace: "moox-crypto",
-				Regions: []setupconfig.SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 54}},
-			}},
-		},
-	}
-	targets := CollectSCFTargets(manifest)
-	require.Len(t, targets, 2)
-	assert.Equal(t, "ap-nanjing", targets[0].Region)
-	assert.Equal(t, "moox-crypto", targets[0].Namespace)
-	assert.Equal(t, 50, targets[0].FunctionCount)
-	assert.Equal(t, "moox-crypto-ns2", targets[1].Namespace)
-	assert.Equal(t, 5, targets[1].FunctionCount, "the candidate release canary needs its own private-network slot")
-}
 
 func TestBuildPlanDoesNotCreatePrivateNetwork(t *testing.T) {
 	plan := BuildPlan(Options{CCNName: DefaultCCNName}, []ResolvedHost{
@@ -290,44 +219,6 @@ func TestApplyRestoreDoesNotDetachHostVPC(t *testing.T) {
 		}
 	}
 	assert.True(t, skipped)
-}
-
-func TestCollectSCFRestoreTargetsIncludesIdleAndBlacklistedRegions(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		SCFFetcher: setupconfig.SCFFetcher{
-			Enabled: true,
-			Spaces: []setupconfig.SCFFetcherSpace{
-				{
-					SpaceID: "crypto", FunctionPrefix: "moox-fetcher-crypto-binance",
-					PublicNetStatus: "ENABLE", RegionBlacklist: []string{"ap-guangzhou"},
-					Regions: []setupconfig.SCFFetcherRegion{
-						{Region: "ap-hongkong", Enabled: true, FunctionCount: 40},
-						{Region: "ap-guangzhou", Enabled: true, FunctionCount: 11},
-						{Region: "ap-shanghai", Enabled: false, FunctionCount: 0},
-					},
-				},
-			},
-		},
-	}
-	active := CollectSCFTargets(manifest)
-	regions := map[string]struct{}{}
-	for _, item := range active {
-		regions[item.Region] = struct{}{}
-	}
-	_, hasGZ := regions["ap-guangzhou"]
-	_, hasSH := regions["ap-shanghai"]
-	assert.False(t, hasGZ)
-	assert.False(t, hasSH)
-	assert.Contains(t, regions, "ap-hongkong")
-
-	restore := CollectSCFRestoreTargets(manifest)
-	restoreRegions := map[string]struct{}{}
-	for _, item := range restore {
-		restoreRegions[item.Region] = struct{}{}
-	}
-	assert.Contains(t, restoreRegions, "ap-guangzhou")
-	assert.Contains(t, restoreRegions, "ap-shanghai")
-	assert.Contains(t, restoreRegions, "ap-hongkong")
 }
 
 type fakeCloud struct {

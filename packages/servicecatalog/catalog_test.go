@@ -313,7 +313,7 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 		}
 	}
 	for service, methods := range map[string][]string{
-		"PrimaryStore": {"CommitTimeSeriesBatch", "EnsureDatasetPeriod"},
+		"PrimaryStore": {"CommitTimeSeriesBatch"},
 		"Metadata":     {"RebindDatasetDataNode", "DeleteDataNode"},
 	} {
 		for _, method := range methods {

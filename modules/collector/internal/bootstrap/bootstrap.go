@@ -62,7 +62,6 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if spaceID := marketFetchSpaceID(); spaceID == "" {
 		return nil, fmt.Errorf("MOOX_SPACE_ID is required for collector market scheduling")
 	}
-	log.InfoContextf(ctx, "collector stockcn runtime config expected_timer_function_count=%d measured_safe_group_size=%d stagger_start_second=%d stagger_window_seconds=%d stagger_max_starts_per_second=%d", cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, cfg.StockCN.StaggerStartSecond, cfg.StockCN.StaggerWindowSeconds, cfg.StockCN.StaggerMaxStartsPerSecond)
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
