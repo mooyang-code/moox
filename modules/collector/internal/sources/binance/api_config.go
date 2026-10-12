@@ -8,6 +8,9 @@ import (
 
 func newConfiguredClient(clients ...*httpclient.HTTPClient) *binanceapi.Client {
 	client := binanceapi.NewClient(clients...)
+	if client.HTTPClient != nil {
+		client.HTTPClient.ResponseObserver = defaultWeightGovernor.Observe
+	}
 
 	cfg, err := ResolveAPIConfig()
 	if err != nil {

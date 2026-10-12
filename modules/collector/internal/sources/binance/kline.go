@@ -56,6 +56,9 @@ func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *source
 	case InstTypeSPOT:
 		var lastErr error
 		for index, domain := range c.client.SpotDomains() {
+			if err := defaultWeightGovernor.Admit(ctx, domain); err != nil {
+				return nil, err
+			}
 			attemptCtx, cancel := endpointAttemptContext(ctx, len(c.client.SpotDomains())-index)
 			klines, err := c.spotAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, params.DNSIPs(domain))
 			cancel()
@@ -71,6 +74,9 @@ func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *source
 	case InstTypeSWAP:
 		var lastErr error
 		for index, domain := range c.client.SwapDomains() {
+			if err := defaultWeightGovernor.Admit(ctx, domain); err != nil {
+				return nil, err
+			}
 			attemptCtx, cancel := endpointAttemptContext(ctx, len(c.client.SwapDomains())-index)
 			klines, err := c.swapAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, params.DNSIPs(domain))
 			cancel()

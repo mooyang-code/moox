@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,12 @@ import (
 
 // HTTPClient issues HTTPS requests using the platform DNS resolver and TLS SNI.
 type HTTPClient struct {
-	httpClient *http.Client
-	ipMu       sync.Mutex
-	ipClients  map[string]*http.Client
-	ipOrder    []string
+	// ResponseObserver 在每次收到响应（含非 200）后同步调用，用于读取限流相关的响应头。
+	ResponseObserver func(domain string, status int, header http.Header)
+	httpClient       *http.Client
+	ipMu             sync.Mutex
+	ipClients        map[string]*http.Client
+	ipOrder          []string
 }
 
 const maxIPClients = 32
@@ -35,9 +38,22 @@ const defaultRequestTimeout = 5 * time.Second
 const hostnameFallbackReserve = time.Second
 
 // StatusError reports a non-success HTTP response.
-type StatusError struct{ StatusCode int }
+type StatusError struct {
+	StatusCode int
+	// RetryAfter 是响应头 Retry-After 给出的等待时间，没有则为 0。
+	RetryAfter time.Duration
+}
 
 func (e *StatusError) Error() string { return fmt.Sprintf("HTTP status %d", e.StatusCode) }
+
+// retryAfterOf 解析 Retry-After（秒数）。
+func retryAfterOf(header http.Header) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(header.Get("Retry-After")))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 func NewHTTPClient(base ...*http.Client) *HTTPClient {
 	if len(base) > 0 && base[0] != nil {
@@ -278,9 +294,12 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
+	if c.ResponseObserver != nil {
+		c.ResponseObserver(domain, resp.StatusCode, resp.Header)
+	}
 	if resp.StatusCode != http.StatusOK {
 		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, time.Since(started).Milliseconds())
-		return &StatusError{StatusCode: resp.StatusCode}
+		return &StatusError{StatusCode: resp.StatusCode, RetryAfter: retryAfterOf(resp.Header)}
 	}
 	if err := consume(resp.Body); err != nil {
 		return fmt.Errorf("JSON 解析失败: %w", err)

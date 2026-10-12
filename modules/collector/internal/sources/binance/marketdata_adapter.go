@@ -470,7 +470,7 @@ func classifyProviderError(err error) error {
 	}
 	var statusErr *httpclient.StatusError
 	if errors.As(err, &statusErr) {
-		if statusErr.StatusCode == http.StatusTooManyRequests {
+		if statusErr.StatusCode == http.StatusTooManyRequests || statusErr.StatusCode == http.StatusTeapot {
 			return fmt.Errorf("%w: %v", marketdata.ErrRateLimited, err)
 		}
 		return fmt.Errorf("%w: %v", marketdata.ErrHTTPStatus, err)
