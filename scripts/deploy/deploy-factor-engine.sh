@@ -141,7 +141,8 @@ engine:
 gateway_client:
   access_address: "${ACCESS_ADDRESS}"
   access_id: "${ACCESS_ID}"
-  compression: gzip  caller: factor-engine
+  compression: gzip
+  caller: factor-engine
   key_id: "${ACCESS_KEY_ID}"
   key_file: ${SECRETS_DIR}/access-factor-engine.key
 
