@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -137,10 +138,10 @@ func Default() *Config {
 		EventBus:      EventBusConfig{FetchMaxWait: 10 * time.Second},
 		Python: PythonConfig{
 			Bin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./data/engine/factors",
-			Workers: 8, TaskTimeout: 30 * time.Second,
+			Workers: autoPythonWorkers(runtime.NumCPU()), TaskTimeout: 30 * time.Second,
 		},
 		Pipeline: PipelineConfig{
-			ReadBatchSubjects: 100, ReadWorkers: 4, ReadTimeout: 60 * time.Second,
+			ReadBatchSubjects: 100, ReadWorkers: autoReadWorkers(runtime.NumCPU()), ReadTimeout: 60 * time.Second,
 			WarmupBatchSubjects: 10, WarmupWorkers: 1, WarmupBatchPause: 500 * time.Millisecond,
 			WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute,
 		},
@@ -227,6 +228,17 @@ func setDuration(target *time.Duration, fallback time.Duration) {
 	if *target == 0 {
 		*target = fallback
 	}
+}
+
+// autoPythonWorkers 按目标机器核数选择 Python 因子进程数（配置里 workers 不写或为 0 时）：
+// 取核数的一半，留出余量给 Go 进程与同机其他服务，范围 [4, 64]。
+func autoPythonWorkers(cpus int) int {
+	return min(64, max(4, cpus/2))
+}
+
+// autoReadWorkers 按核数选择读取并发（read_workers 不写或为 0 时），范围 [4, 16]。
+func autoReadWorkers(cpus int) int {
+	return min(16, max(4, cpus/4))
 }
 
 func setInt(target *int, fallback int) {

@@ -166,13 +166,11 @@ python:
   bin: ./venv/bin/python
   worker_path: ./pyworker/worker.py
   factors_dir: ./data/engine/factors
-  workers: 64
   task_timeout: 30s
 
 pipeline:
   read_batch_subjects: 50
-  read_workers: 16
-  read_timeout: 20s
+  read_timeout: 60s
   write_batch_rows: 1000
   period_budget_min: 60s
   period_budget_max: 15m
