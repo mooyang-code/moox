@@ -452,6 +452,29 @@ func (c *FetchPlanContent) TransitionalPlan(function *PlanFunctionChange) *Plan 
 	return out
 }
 
+// SymbolAt 返回函数在某数据集上、at 时刻适用的标的交易所符号。符号例外是函数级的，过渡计划已把新旧例外合并，
+// 所以必须按原始新旧计划与生效时间 P 判断：P 之前用旧计划的映射，P 及之后用新计划的映射。
+// 新旧计划不同时包含该标的、或该数据集没有变更时返回 false，由调用方沿用计划自带的映射。
+func (c *FetchPlanContent) SymbolAt(function *PlanFunctionChange, key, subjectID string, at time.Time) (string, bool) {
+	if function == nil || function.Old == nil || function.New == nil {
+		return "", false
+	}
+	change := c.Datasets[key]
+	if change == nil || !change.Changed {
+		return "", false
+	}
+	if at.Unix() < change.P {
+		if function.Old.hasSubject(subjectID) {
+			return function.Old.ExchangeSymbol(subjectID), true
+		}
+		return "", false
+	}
+	if function.New.hasSubject(subjectID) {
+		return function.New.ExchangeSymbol(subjectID), true
+	}
+	return "", false
+}
+
 // FinalPlan 是变更窗口结束后的计划：每个数据集只留最新一份，没有标的的数据集移除；退役函数返回空。
 func (c *FetchPlanContent) FinalPlan(function *PlanFunctionChange) *Plan {
 	if function.New == nil {

@@ -986,7 +986,74 @@ func TestAuxJobsTrackedUntilTerminalAndBlockResubmission(t *testing.T) {
 	// 作业未结束：这批函数被排除，其余函数不受影响。
 	require.Equal(t, []string{"fn-c"}, r.excludeBusy(context.Background(), []string{"fn-a", "fn-c"}))
 	require.Equal(t, 1, r.aux.count())
-	// 超过最长存活后丢弃，不会永久阻塞。
-	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-2 * pendingJobMaxAge)})
+
+	// 超过 10 分钟但作业仍在运行：不能凭年龄解除互斥（CloudNode 单项最长执行 16 分钟）。
+	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-15 * time.Minute)})
+	require.Empty(t, r.excludeBusy(context.Background(), []string{"fn-d"}))
+	// 超过最长跟踪时间后丢弃，不会永久阻塞。
+	r.aux.track(auxJob{id: "job-2", kind: auxJobKindRepair, functions: []string{"fn-d"}, at: r.now().Add(-2 * auxJobMaxAge)})
 	require.Equal(t, []string{"fn-d"}, r.excludeBusy(context.Background(), []string{"fn-d"}))
+
+	// 作业到终态后立即解除。
+	h.cloud.running["job-1"] = false
+	require.Equal(t, []string{"fn-a"}, r.excludeBusy(context.Background(), []string{"fn-a"}))
+	require.Equal(t, 0, r.aux.count())
+}
+
+func TestInFlightPlanJobsAlsoBlockAuxiliaryChanges(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	h.cloud.running = map[string]bool{"plan-job": true}
+	r.pending = []pendingPlanJob{{id: "plan-job", kind: planJobKindTransition, functions: []string{"fn-x"}, at: r.now()}}
+	// 普通计划作业在途时，辅助变更同样不能碰这些函数；活动对账路径不在这里结算计划作业。
+	require.Equal(t, []string{"fn-y"}, r.excludeBusy(context.Background(), []string{"fn-x", "fn-y"}))
+	require.Len(t, r.pending, 1)
+
+	// 空间停用收尾时没有计划推进，终态的计划作业在这里移出在途集合。
+	busy := r.busyFunctions(context.Background(), true)
+	require.Contains(t, busy, "fn-x")
+	h.cloud.running["plan-job"] = false
+	busy = r.busyFunctions(context.Background(), true)
+	require.NotContains(t, busy, "fn-x")
+	require.Empty(t, r.pending)
+}
+
+func TestUpgradeContextReservesTimeForPlanProgress(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), 55*time.Second)
+	defer cancel()
+	child, cancelChild := upgradeContext(parent)
+	defer cancelChild()
+	deadline, ok := child.Deadline()
+	require.True(t, ok)
+	require.LessOrEqual(t, time.Until(deadline), 19*time.Second)
+	require.NoError(t, parent.Err())
+}
+
+func TestDisableAllWaitsForInFlightEnablingJobs(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+
+	// 启用定时器的计划作业等待超时仍在运行：停用不能宣布完成，否则作业生效后定时器又被打开。
+	var target string
+	for name := range h.cloud.patches {
+		target = name
+		break
+	}
+	h.cloud.running = map[string]bool{"enable-job": true}
+	r.pending = []pendingPlanJob{{id: "enable-job", kind: planJobKindTransition, functions: []string{target}, at: r.now()}}
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.False(t, done)
+
+	// 作业结束后才提交停用并确认完成。
+	h.cloud.running["enable-job"] = false
+	done, err = r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	require.False(t, h.cloud.patches[target].GetTimerEnabled())
 }

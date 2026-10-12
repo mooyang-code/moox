@@ -64,8 +64,9 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	deferred := 0
+	busy := r.busyFunctions(ctx, true)
 	for name := range names {
-		if len(r.excludeBusy(ctx, []string{name})) == 0 {
+		if _, inFlight := busy[name]; inFlight {
 			deferred++ // 仍有在途作业：本轮不提交，也不能宣布停用完成
 			continue
 		}

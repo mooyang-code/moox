@@ -197,11 +197,12 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 		return errors.New("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
+	r.refreshAux(ctx)
 	// 代码包升级与采集计划是否在进行无关：计划推进期间也要让落后的函数跟上配置的代码包。
 	if r.now().Sub(r.lastUpgradeCheck) >= planUpgradeCheckInterval {
 		r.lastUpgradeCheck = r.now()
 		// 升级失败只记日志：不能因为代码升级慢或失败而拖住计划推进与重建。
-		upgradeCtx, cancel := context.WithTimeout(ctx, planUpgradeBudget)
+		upgradeCtx, cancel := upgradeContext(ctx)
 		if err := r.upgradeLaggingFunctions(upgradeCtx); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan code upgrade failed space=%s: %v", r.SpaceID, err)
 		}
@@ -988,6 +989,10 @@ func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *Fetc
 
 // submit 获取发布租约，按批提交云端作业并等待结果；成功的函数记入 progress。
 func (r *PlanReconciler) submit(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, kind string, names []string, send func(lease *scfinvoker.CollectorPublishLease, batch []string) (string, error)) error {
+	// 仍有辅助作业在途的函数本轮不提交，等作业结束后下一轮继续。
+	if names = r.excludeBusy(ctx, names); len(names) == 0 {
+		return nil
+	}
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
 		return err
@@ -1221,7 +1226,10 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	}
 	// 配置里的代码包换了新版本：先把已有函数的代码升级到该版本，再比对环境。
 	// 升级失败不阻断后面的重建与修复（例如云端函数已被删除，升级必然失败）。
-	if err := r.upgradeCode(ctx, applied, byName); err != nil {
+	upgradeCtx, cancelUpgrade := upgradeContext(ctx)
+	err = r.upgradeCode(upgradeCtx, applied, byName)
+	cancelUpgrade()
+	if err != nil {
 		log.WarnContextf(ctx, "collector fetch plan code upgrade failed space=%s: %v", r.SpaceID, err)
 	}
 	var drifted, missing, gone []string

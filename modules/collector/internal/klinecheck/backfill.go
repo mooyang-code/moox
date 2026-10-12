@@ -315,6 +315,20 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		return nil, err
 	}
 	key := DatasetKey(datasetID, frequency)
+	// resolve 返回选中的计划；标的的符号映射按原始新旧计划与时间重新判定，避免过渡计划合并后的映射用错。
+	resolve := func(content *marketfetch.FetchPlanContent, function *marketfetch.PlanFunctionChange, plan *marketfetch.Plan) *marketfetch.Plan {
+		symbol, ok := content.SymbolAt(function, key, subjectID, at)
+		if !ok || plan.ExchangeSymbol(subjectID) == symbol {
+			return plan
+		}
+		patched := *plan
+		patched.SymbolExceptions = map[string]string{}
+		for id, value := range plan.SymbolExceptions {
+			patched.SymbolExceptions[id] = value
+		}
+		patched.SymbolExceptions[subjectID] = symbol
+		return &patched
+	}
 	var fallback *marketfetch.Plan
 	for i := len(records) - 1; i >= 0; i-- {
 		content, err := marketfetch.DecodeFetchPlanContent(records[i].Plan)
@@ -323,7 +337,6 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		}
 		for _, name := range content.SortedFunctionNames() {
 			function := content.Functions[name]
-			var covering *marketfetch.Plan
 			for _, plan := range []*marketfetch.Plan{content.FinalPlan(function), content.TransitionalPlan(function)} {
 				if plan == nil {
 					continue
@@ -338,24 +351,14 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 								continue
 							}
 							if copyView.From <= at.Unix() {
-								// 新旧两份都覆盖该时刻时，标的映射必须一致，否则无法确定该用哪份：宁可失败也不静默选一份。
-								if covering != nil && covering.ExchangeSymbol(subjectID) != plan.ExchangeSymbol(subjectID) {
-									return nil, fmt.Errorf("subject %s of dataset %s %s has ambiguous symbol mapping at %s", subjectID, datasetID, frequency, at.UTC().Format(time.RFC3339))
-								}
-								if covering == nil {
-									covering = plan
-								}
-								continue
+								return resolve(content, function, plan), nil
 							}
 							if fallback == nil {
-								fallback = plan
+								fallback = resolve(content, function, plan)
 							}
 						}
 					}
 				}
-			}
-			if covering != nil {
-				return covering, nil
 			}
 		}
 	}
