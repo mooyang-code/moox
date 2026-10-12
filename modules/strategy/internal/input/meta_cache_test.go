@@ -99,3 +99,52 @@ func TestMetaCacheRevalidateFailureIsReturned(t *testing.T) {
 		t.Fatalf("数据集不存在应返回读取错误：%v", err)
 	}
 }
+
+// 经真实 LoadBar 连续处理多个事件：标的元数据跨事件复用，修订号变化后重读，修订号读取失败时返回错误。
+func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
+	fake := newFakeClient("spot")
+	resolved, program, err := Resolve(context.Background(), fake, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.rows = func(query Query) ([]Row, uint64, error) {
+		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 9, nil
+	}
+	client := &datasetCountingClient{countingClient: &countingClient{fakeClient: fake}}
+	loader := Loader{Client: client, Meta: NewMetaCache()}
+	loadEvent := func() error {
+		_, err := loader.ForEvent().LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
+		return err
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := loadEvent(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if client.subjects != 1 || client.members != 1 {
+		t.Fatalf("三个事件应只读一次标的元数据：subjects=%d members=%d", client.subjects, client.members)
+	}
+	if client.datasets != 3 {
+		t.Fatalf("每个事件应校验一次修订号：datasets=%d", client.datasets)
+	}
+
+	dataset := fake.datasets["ds_factor"]
+	dataset.SubjectsRevision++
+	fake.datasets["ds_factor"] = dataset
+	if err := loadEvent(); err != nil {
+		t.Fatal(err)
+	}
+	if client.subjects != 2 || client.members != 2 {
+		t.Fatalf("修订号变化后应重读：subjects=%d members=%d", client.subjects, client.members)
+	}
+
+	delete(fake.datasets, "ds_factor")
+	subjectsBefore := client.subjects
+	if err := loadEvent(); err == nil {
+		t.Fatal("修订号读取失败时 LoadBar 应返回错误，而不是使用缓存")
+	}
+	if client.subjects != subjectsBefore {
+		t.Fatal("修订号读取失败后不应继续读取标的元数据")
+	}
+}

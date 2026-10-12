@@ -63,6 +63,12 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 	expectChange("subject attrs", func() {
 		execRevisionSQL(t, ctx, store, `UPDATE t_subjects SET c_attrs_json = '{"series_tag":"x"}' WHERE c_subject_id = 'AAA'`)
 	})
+	expectChange("member insert alone", func() {
+		execRevisionSQL(t, ctx, store, `INSERT INTO t_subject_tags (c_space_id, c_tag_id, c_subject_id) VALUES ('space', 'assets', 'AAA')`)
+	})
+	expectChange("member delete alone", func() {
+		execRevisionSQL(t, ctx, store, `DELETE FROM t_subject_tags WHERE c_subject_id = 'AAA'`)
+	})
 	expectChange("tag snapshot adds members", func() {
 		if _, err := store.ApplyTagSnapshot(ctx, "space", "assets", time.Date(2026, 9, 25, 1, 0, 0, 0, time.UTC), []*pb.TagSnapshotItem{
 			{SubjectId: "BTC-USDT", SubjectType: "crypto", Name: "BTC"},
@@ -129,5 +135,46 @@ func TestInitSchemaIsRepeatableOnPopulatedDatabase(t *testing.T) {
 	}
 	if _, err := store.GetSubject(ctx, "space", "AAA"); err != nil {
 		t.Fatalf("subject lost after InitSchema: %v", err)
+	}
+}
+
+// 缺少新表与触发器的旧库（版本 13）重放 InitSchema 后补齐，并从此开始计数。
+func TestInitSchemaUpgradesDatabaseWithoutRevisionObjects(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	execRevisionSQL(t, ctx, store, `INSERT INTO t_subjects (c_space_id, c_subject_id, c_subject_type) VALUES ('space', 'AAA', 'crypto')`)
+	rows, err := store.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg\_%\_rev\_%' ESCAPE '\'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var triggers []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		triggers = append(triggers, name)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(triggers) != 11 {
+		t.Fatalf("应有 11 个修订号触发器，实际 %d：%v", len(triggers), triggers)
+	}
+	for _, name := range triggers {
+		execRevisionSQL(t, ctx, store, `DROP TRIGGER `+name)
+	}
+	execRevisionSQL(t, ctx, store, `DROP TABLE t_space_revisions`)
+
+	if err := store.InitSchema(ctx); err != nil {
+		t.Fatalf("旧库重放 InitSchema: %v", err)
+	}
+	if got := subjectsRevision(t, ctx, store); got != 0 {
+		t.Fatalf("补建后修订号应从 0 开始，实际 %d", got)
+	}
+	execRevisionSQL(t, ctx, store, `UPDATE t_subjects SET c_status = 'disabled' WHERE c_subject_id = 'AAA'`)
+	if got := subjectsRevision(t, ctx, store); got != 1 {
+		t.Fatalf("补建后的触发器应生效，实际修订号 %d", got)
 	}
 }
