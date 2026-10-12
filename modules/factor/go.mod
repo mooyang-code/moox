@@ -21,7 +21,6 @@ require (
 	gorm.io/gorm v1.31.2
 	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
-	trpc.group/trpc-go/trpc-filter/transinfo-blocker v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
@@ -41,7 +40,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect

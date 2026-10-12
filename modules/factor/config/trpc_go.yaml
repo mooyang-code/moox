@@ -40,20 +40,7 @@ server:
       protocol: timer
       timeout: 10000
 
-client:
-  filter:
-    - transinfo-blocker
-
 plugins:
-  security:
-    transinfo-blocker:
-      default:
-        mode: whitelist
-        keys:
-          - traceparent
-          - tracestate
-          - x-moox-trace-id
-          - x-moox-space-id
   metrics:
     prometheus:
       ip: 127.0.0.1
