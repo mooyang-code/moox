@@ -100,9 +100,10 @@ func stringsToAny(values []string) []any {
 }
 
 var collectorTaskDeleteFlagsValue struct {
-	File    string
-	SpaceID string
-	TaskID  string
+	KeepResult bool
+	File       string
+	SpaceID    string
+	TaskID     string
 }
 
 var collectorTaskDeleteCmd = &cobra.Command{
@@ -120,7 +121,7 @@ var collectorTaskDeleteCmd = &cobra.Command{
 		}
 		defer gateway.Close()
 		rsp := &collectorpb.DeleteTaskRsp{}
-		if err := gateway.Invoke(cmd.Context(), "trpc.moox.collector.CollectMgr", "DeleteTask", &collectorpb.DeleteTaskReq{SpaceId: flags.SpaceID, TaskId: flags.TaskID}, rsp); err != nil {
+		if err := gateway.Invoke(cmd.Context(), "trpc.moox.collector.CollectMgr", "DeleteTask", &collectorpb.DeleteTaskReq{SpaceId: flags.SpaceID, TaskId: flags.TaskID, DeleteResultData: !flags.KeepResult}, rsp); err != nil {
 			return fmt.Errorf("delete task: %w", err)
 		}
 		if err := collectorRetError("delete task", rsp.GetRetInfo()); err != nil {
@@ -136,4 +137,49 @@ func init() {
 	flags.StringVar(&collectorTaskDeleteFlagsValue.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	flags.StringVar(&collectorTaskDeleteFlagsValue.SpaceID, "space-id", "", "空间 ID")
 	flags.StringVar(&collectorTaskDeleteFlagsValue.TaskID, "task-id", "", "任务 ID")
+	flags.BoolVar(&collectorTaskDeleteFlagsValue.KeepResult, "keep-result", false, "只删任务，保留结果数据集与 View")
+}
+
+var collectorResultDeleteFlagsValue struct {
+	File, SpaceID, AuthFile string
+	DatasetIDs, ViewIDs     []string
+}
+
+// collectorResultDeleteCmd 删除已没有任务引用的采集结果（View、行数据、数据集）。
+var collectorResultDeleteCmd = &cobra.Command{
+	Use:   "delete-result",
+	Short: "删除没有任务引用的采集结果（View、行数据与数据集）",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		flags := collectorResultDeleteFlagsValue
+		if flags.SpaceID == "" || (len(flags.DatasetIDs) == 0 && len(flags.ViewIDs) == 0) {
+			return errors.New("--space-id and at least one --dataset-id/--view-id are required")
+		}
+		metadata, closer, err := newCollectorStorageMetadataClient(cmd.Context(), flags.File, nil, flags.AuthFile)
+		if err != nil {
+			return err
+		}
+		defer closer.Close()
+		summary := &collectorTaskPurgeSummary{}
+		for _, id := range flags.ViewIDs {
+			summary.storageViewRefs = appendUniqueStorageObject(summary.storageViewRefs, flags.SpaceID, id)
+		}
+		for _, id := range flags.DatasetIDs {
+			summary.storageDatasetRefs = appendUniqueStorageObject(summary.storageDatasetRefs, flags.SpaceID, id)
+		}
+		if err := deleteCollectorOwnedMetadata(cmd.Context(), metadata, summary); err != nil {
+			return err
+		}
+		return printJSON(cmd.OutOrStdout(), map[string]any{"status": "deleted", "views": flags.ViewIDs, "datasets": flags.DatasetIDs})
+	},
+}
+
+func init() {
+	collectorTaskCmd.AddCommand(collectorResultDeleteCmd)
+	flags := collectorResultDeleteCmd.Flags()
+	flags.StringVar(&collectorResultDeleteFlagsValue.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
+	flags.StringVar(&collectorResultDeleteFlagsValue.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
+	flags.StringVar(&collectorResultDeleteFlagsValue.SpaceID, "space-id", "", "空间 ID")
+	flags.StringArrayVar(&collectorResultDeleteFlagsValue.DatasetIDs, "dataset-id", nil, "要删除的数据集（连同行数据），可重复")
+	flags.StringArrayVar(&collectorResultDeleteFlagsValue.ViewIDs, "view-id", nil, "要删除的 View，可重复；先于数据集删除")
 }

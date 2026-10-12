@@ -47,7 +47,7 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	if err := registry.Register(provider); err != nil {
 		return nil, err
 	}
-	router, err := marketdata.NewRouter(registry, marketfetch.RuntimeKlineProviderAttemptBudget(), nil, nil)
+	router, err := marketdata.NewRouter(registry, marketfetch.RuntimeKlineBreakerThreshold(), nil, nil)
 	if err != nil {
 		return nil, err
 	}
