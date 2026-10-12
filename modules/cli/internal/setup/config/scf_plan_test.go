@@ -98,3 +98,44 @@ func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) 
 	manifest.SCFPlan.Enabled, manifest.SCFPlan.Spaces = false, nil
 	require.NoError(t, validateSCFPlan(&manifest))
 }
+
+func TestSCFPlanAccessSelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
+	manifest := scfPlanTestManifest()
+	manifest.HostCatalog["compute-2"] = HostDefinition{Address: "4.4.4.4", Region: "ap-hongkong", PrivateAddress: "172.19.32.14"}
+	manifest.HostCatalog["compute-0"] = HostDefinition{Address: "5.5.5.5", Region: "ap-hongkong"} // 没有私网地址
+	manifest.Placements["compute-2"] = []string{"access"}
+	manifest.Placements["compute-0"] = []string{"access"}
+
+	// 两台都有私网地址：必须显式指定。
+	_, _, err := manifest.SCFPlanAccess("ap-hongkong")
+	require.ErrorContains(t, err, "access_host")
+	require.ErrorContains(t, validateSCFPlan(&manifest), "access_host")
+
+	region := manifest.SCFPlan.Regions["ap-hongkong"]
+	region.AccessHost = "compute-2"
+	manifest.SCFPlan.Regions["ap-hongkong"] = region
+	address, id, err := manifest.SCFPlanAccess("ap-hongkong")
+	require.NoError(t, err)
+	require.Equal(t, "172.19.32.14:11004", address)
+	require.Equal(t, "access@compute-2", id)
+	require.NoError(t, validateSCFPlan(&manifest))
+
+	// 指定的主机没有私网地址、或不在该地域：明确拒绝。
+	region.AccessHost = "compute-0"
+	manifest.SCFPlan.Regions["ap-hongkong"] = region
+	_, _, err = manifest.SCFPlanAccess("ap-hongkong")
+	require.ErrorContains(t, err, "private_address")
+	region.AccessHost = "storage"
+	manifest.SCFPlan.Regions["ap-hongkong"] = region
+	_, _, err = manifest.SCFPlanAccess("ap-hongkong")
+	require.ErrorContains(t, err, "not an access host in that region")
+
+	// 第一台（按名称排序）没有私网地址、只有一台可用：自动选可用的那台。
+	manifest = scfPlanTestManifest()
+	manifest.HostCatalog["a-compute"] = HostDefinition{Address: "6.6.6.6", Region: "ap-hongkong"}
+	manifest.Placements["a-compute"] = []string{"access"}
+	address, id, err = manifest.SCFPlanAccess("ap-hongkong")
+	require.NoError(t, err)
+	require.Equal(t, "172.19.32.13:11004", address)
+	require.Equal(t, "access@compute-1", id)
+}

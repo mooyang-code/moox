@@ -241,3 +241,50 @@ func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 func collectorTestClient(server *httptest.Server) *Client {
 	return &Client{Gateway: testfixture.HandlerGateway{Handler: server.Config.Handler}}
 }
+
+// 名称是服务端模糊匹配：更新的、名称更长的包会把精确匹配挤到第二页，必须翻页找。
+func TestLatestPackageWalksPagesToFindTheExactName(t *testing.T) {
+	var pages []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/GetPackageList", r.URL.Path)
+		var body struct {
+			PackageName string `json:"package_name"`
+			Page        struct {
+				Page int `json:"page"`
+			} `json:"page"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "moox-collector-crypto-plan", body.PackageName)
+		pages = append(pages, body.Page.Page)
+		items := []map[string]any{{"package_id": "other-1", "package_name": "moox-collector-crypto-plan-experimental"}}
+		if body.Page.Page == 2 {
+			items = []map[string]any{{"package_id": "exact-1", "package_name": "moox-collector-crypto-plan"}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"items":    items,
+			"page":     map[string]any{"page": body.Page.Page, "has_more": body.Page.Page == 1},
+		})
+	}))
+	defer server.Close()
+	client := collectorTestClient(server)
+	id, found, err := client.LatestPackage(context.Background(), "moox-collector-crypto-plan")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "exact-1", id)
+	require.Equal(t, []int{1, 2}, pages)
+}
+
+func TestLatestPackageReportsMissingWhenNoPageHasTheExactName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"items":    []map[string]any{{"package_id": "other", "package_name": "moox-collector-crypto-plan-experimental"}},
+			"page":     map[string]any{"has_more": false},
+		})
+	}))
+	defer server.Close()
+	_, found, err := collectorTestClient(server).LatestPackage(context.Background(), "moox-collector-crypto-plan")
+	require.NoError(t, err)
+	require.False(t, found)
+}

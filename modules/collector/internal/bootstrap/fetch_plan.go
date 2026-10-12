@@ -25,8 +25,14 @@ import (
 
 // registerFetchPlanManager 为配置了 SCF 市场地域的空间启动采集计划对账：每个空间一个独立协程。
 func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service) error {
-	spaces := cfg.fetchPlanSpaces(marketFetchSpaceIDs())
-	if len(spaces) == 0 {
+	spaces := cfg.fetchPlanSpaces()
+	stored, err := dbm.FetchPlans().Spaces(process.ctx)
+	if err != nil {
+		return fmt.Errorf("list spaces with fetch plans: %w", err)
+	}
+	// 配置里已移除、但库里有采集计划的空间也要启动管理器：由它先停用这些空间的定时器再退出。
+	configured := withStoredSpaces(spaces, stored)
+	if len(configured) == 0 {
 		return nil
 	}
 	// 启动时先逐个空间检查部署参数，配置错误尽早暴露。
@@ -62,7 +68,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
 	manager := &marketfetch.PlanManager{
-		Configured: spaces,
+		Configured: configured,
 		Spaces: func(ctx context.Context) ([]string, error) {
 			// 配置里的空间 ∩ Admin 中仍启用的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
 			active, err := invoker.ListActiveSpaceIDs(ctx)

@@ -63,14 +63,48 @@ func TestReportItemFailureAndBatchCarryTheFieldsNeededForAnalysis(t *testing.T) 
 func TestFlushReportsIsBoundedAndNeverFails(t *testing.T) {
 	reporter := &recordingReporter{err: errors.New("cls unavailable")}
 	handler := &Handler{Reporter: reporter}
-	handler.flushReports(context.Background())
+	handler.flushReports(context.Background(), time.Second)
 	require.Equal(t, 1, reporter.flushed)
-	// 没有配置上报器、或调用窗口已用尽时直接返回。
-	(&Handler{}).flushReports(context.Background())
-	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	// 没有配置上报器、或预算用尽时直接返回。
+	(&Handler{}).flushReports(context.Background(), time.Second)
+	handler.flushReports(context.Background(), 0)
+	require.Equal(t, 1, reporter.flushed)
+}
+
+// 慢上报不能吃掉函数返回需要的时间：CLS 与指标共享预算，整体耗时不超过预算。
+type blockingReporter struct{ recordingReporter }
+
+func (r *blockingReporter) Flush(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type slowMetrics struct{ took time.Duration }
+
+func (m *slowMetrics) Handle(ctx context.Context) error {
+	start := time.Now()
+	<-ctx.Done()
+	m.took = time.Since(start)
+	return ctx.Err()
+}
+
+func TestReportMetricsSharesOneBudgetBetweenCLSAndMetrics(t *testing.T) {
+	metrics := &slowMetrics{}
+	handler := &Handler{Reporter: &blockingReporter{}, MetricsReporter: metrics, CLSReserve: 800 * time.Millisecond}
+	parent, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	handler.flushReports(expired)
-	require.Equal(t, 1, reporter.flushed)
+	started := time.Now()
+	handler.reportMetrics(parent)
+	elapsed := time.Since(started)
+	require.Less(t, elapsed, 1100*time.Millisecond, "两类上报总共不超过预算（800ms）加调度余量")
+	require.Greater(t, metrics.took, 150*time.Millisecond, "指标仍分到了预算的剩余部分")
+
+	// 距函数截止时间不足一个预算时，按剩余时间收缩。
+	short, cancelShort := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancelShort()
+	started = time.Now()
+	handler.reportMetrics(short)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
 // 上报的每个字段都必须在 CLS 主题的键值索引里，否则无法按字段检索；索引字段清单在 cloudprovider 里统一维护。

@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"encoding/json"
 	"github.com/mooyang-code/moox/packages/security"
 	"os"
@@ -377,7 +378,14 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 		return cfg
 	}
 	require.NoError(t, valid().validateSCFPlan())
-	require.Equal(t, []string{"crypto"}, valid().fetchPlanSpaces([]string{"stockcn", "crypto"}))
+	require.Equal(t, []string{"crypto"}, valid().fetchPlanSpaces())
+	multi := valid()
+	multi.SCFMarkets["stockcn"] = map[string][]string{"equity": {"ap-nanjing"}}
+	require.Equal(t, []string{"crypto", "stockcn"}, multi.fetchPlanSpaces(), "空间集合以 scf_markets 为准，与旧调度的空间环境变量无关")
+	onlyStock := valid()
+	onlyStock.SCFMarkets = map[string]map[string][]string{"stockcn": {"equity": {"ap-nanjing"}}}
+	require.Equal(t, []string{"stockcn"}, onlyStock.fetchPlanSpaces())
+	require.Equal(t, []string{"crypto", "stockcn"}, withStoredSpaces([]string{"stockcn"}, []string{"crypto", "", "STOCKCN"}))
 
 	noRoute := valid()
 	noRoute.SCFPlan.AccessRoutes = nil
@@ -452,4 +460,53 @@ func TestSCFPlanPackageSelectionRequiresExactlyOneOfNameAndID(t *testing.T) {
 	require.ErrorContains(t, err, "both")
 	_, err = (SCFPlanConfig{}).packageKeyFor("crypto")
 	require.ErrorContains(t, err, "needs package_name")
+}
+
+func TestLoadKeepsTheStockCNDefaultsWhenTheRenderedConfigOnlyNamesThePackage(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "app.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`gateway_client:
+  caller: collector
+  key_file: ./caller-collector.key
+scf_regions:
+  ap-nanjing: {vpc_id: vpc-1, subnet_id: subnet-1}
+scf_markets:
+  stockcn: {equity: [ap-nanjing]}
+  crypto: {spot: [ap-nanjing]}
+scf_plan:
+  cloud_account_id: acct
+  access_routes:
+    ap-nanjing: {access_address: "10.0.0.5:11004", access_id: access@storage}
+  spaces:
+    stockcn: {package_name: pkg-stock, namespace: ns-stock}
+    crypto: {package_name: pkg-crypto, namespace: ns-crypto}
+`), 0o600))
+	defaults := defaultSCFPlan()
+	cfg := Default()
+	require.NoError(t, yamlDecodeStrict(t, cfgPath, cfg))
+	cfg.SCFPlan.mergeSpaceDefaults(defaults.Spaces)
+	stock := cfg.SCFPlan.Spaces["stockcn"]
+	require.Equal(t, "pkg-stock", stock.PackageName)
+	require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"), "stockcn 每函数 40 个标的的默认值不能丢")
+	require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn").Concurrency)
+	require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn").StaggerMS)
+	// crypto 没有专属默认值，沿用全局。
+	require.Equal(t, 50, cfg.SCFPlan.symbolsPerFunction("crypto"))
+	require.Equal(t, 50, cfg.SCFPlan.fetchFor("crypto").Concurrency)
+	// 配置里显式写了的字段优先。
+	explicit := SCFPlanConfig{Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {SymbolsPerFunction: 25}}}
+	explicit.mergeSpaceDefaults(defaults.Spaces)
+	require.Equal(t, 25, explicit.Spaces["stockcn"].SymbolsPerFunction)
+	require.NotNil(t, explicit.Spaces["stockcn"].Fetch)
+}
+
+func yamlDecodeStrict(t *testing.T, path string, out *Config) error {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	return decoder.Decode(out)
 }

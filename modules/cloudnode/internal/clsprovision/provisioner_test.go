@@ -3,6 +3,9 @@ package clsprovision
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -112,4 +115,53 @@ func TestDisabledProvisionerIsANoop(t *testing.T) {
 	cfg.Enabled = true
 	cfg.TimeoutMS = 10
 	require.Error(t, cfg.Validate())
+}
+
+func TestApplyUsesTheDedicatedWriterCredentialWhenConfigured(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "writer.key")
+	require.NoError(t, os.WriteFile(keyFile, []byte("writer-secret-key\n"), 0o600))
+	cfg := DefaultConfig()
+	cfg.WriterSecretID, cfg.WriterSecretKeyFile = "writer-id", keyFile
+	require.NoError(t, cfg.Validate())
+	api, builds := &fakeAPI{}, 0
+	p := New(cfg, func(credential Credential, _, _ string) (tencent.CLSAPI, error) {
+		builds++
+		require.Equal(t, "management-id", credential.SecretID, "开通仍用管理凭证")
+		return api, nil
+	})
+	env := map[string]string{}
+	require.True(t, p.Apply(context.Background(), "acct", Credential{SecretID: "management-id", SecretKey: "management-key"}, env))
+	require.Equal(t, "writer-id", env["MOOX_CLS_SECRET_ID"], "函数拿到的是只写专用凭证，不是管理密钥")
+	require.Equal(t, "writer-secret-key", env["MOOX_CLS_SECRET_KEY"])
+	require.Equal(t, 1, builds)
+
+	// 专用凭证文件读不到时不注入，也不退回管理密钥。
+	require.NoError(t, os.Remove(keyFile))
+	other := map[string]string{}
+	require.False(t, p.Apply(context.Background(), "acct", Credential{SecretID: "management-id", SecretKey: "management-key"}, other))
+	require.Empty(t, other)
+}
+
+func TestWriterCredentialConfigMustBeSetTogether(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WriterSecretID = "only-id"
+	require.ErrorContains(t, cfg.Validate(), "together")
+	cfg.WriterSecretID, cfg.WriterSecretKeyFile = "", "/some/file"
+	require.ErrorContains(t, cfg.Validate(), "together")
+}
+
+func TestConcurrentApplyForOneAccountProvisionsOnce(t *testing.T) {
+	api, builds := &fakeAPI{}, 0
+	p := newTestProvisioner(api, &builds)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			env := map[string]string{}
+			require.True(t, p.Apply(context.Background(), "acct", Credential{SecretID: "id", SecretKey: "key"}, env))
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, 1, builds, "同一账号的并发请求合并为一次开通")
 }

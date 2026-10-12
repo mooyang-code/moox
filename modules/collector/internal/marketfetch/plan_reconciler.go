@@ -158,6 +158,7 @@ type PlanReconciler struct {
 	lastVerified time.Time
 	// 按包名解析出的最新代码包及其解析时间（见 plan_package.go）。
 	packageMu       sync.Mutex
+	refreshMu       sync.Mutex // 串行化包解析（含云端查询）
 	resolvedPackage string
 	resolvedAt      time.Time
 	// lastUpgradeCheck 是上一次检查函数代码包是否落后的时间。
@@ -166,7 +167,7 @@ type PlanReconciler struct {
 
 	// 补采函数的创建与对账协程互不干扰：单独的互斥与租约，并缓存已确认存在的函数。
 	backfillMu     sync.Mutex
-	backfillReady  map[string]bool
+	backfillReady  map[string]string // 补采函数名 → 已确认就绪的代码包 ID：目标包变了就重新校验升级
 	backfillLease  *scfinvoker.CollectorPublishLease
 	backfillHolder string
 }
@@ -1549,6 +1550,8 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	if err := r.refreshPackage(ctx); err != nil {
 		return "", err
 	}
+	// 一次操作内固定目标代码包，期间对账协程解析到新版本也不影响这次的判断与创建。
+	pkg := r.packageID()
 	region, ok := r.BackfillRegion(marketType)
 	if !ok {
 		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
@@ -1556,7 +1559,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	name := BackfillFunctionName(r.SpaceID, marketType, region)
 	r.backfillMu.Lock()
 	defer r.backfillMu.Unlock()
-	if r.backfillReady[name] {
+	if pkg != "" && r.backfillReady[name] == pkg {
 		return name, nil
 	}
 	release, err := r.acquireOperation(ctx)
@@ -1572,12 +1575,12 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		if node.NodeID != name {
 			continue
 		}
-		if strings.TrimSpace(node.PackageID) != "" && node.PackageID != r.packageID() {
-			if err := r.upgradeBackfillCode(ctx, name); err != nil {
+		if strings.TrimSpace(node.PackageID) != "" && node.PackageID != pkg {
+			if err := r.upgradeBackfillCode(ctx, name, pkg); err != nil {
 				return "", err
 			}
 		}
-		r.markBackfillReady(name)
+		r.markBackfillReady(name, pkg)
 		return name, nil
 	}
 	if cleared, clearErr := r.clearStale(ctx, "invoke", []string{name}, true); clearErr != nil {
@@ -1611,7 +1614,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	reservation := sha256.Sum256([]byte("backfill|" + r.SpaceID + "|" + name))
 	item := &cloudnodepb.NodeCreateItem{
 		CloudAccountId: r.Deploy.CloudAccountID, NodeType: "scf-event", TriggerType: "invoke", Runtime: "Go1", Handler: "main",
-		Namespace: r.Deploy.Namespace, Region: region, PackageId: r.packageID(), Environment: environment,
+		Namespace: r.Deploy.Namespace, Region: region, PackageId: pkg, Environment: environment,
 		Config: map[string]string{
 			"timeout": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds), "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
 			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
@@ -1642,18 +1645,18 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 			return "", fmt.Errorf("create backfill function %s: %s", name, result.Message)
 		}
 	}
-	r.markBackfillReady(name)
+	r.markBackfillReady(name, pkg)
 	return name, nil
 }
 
 // upgradeBackfillCode 把已存在的补采函数升级到配置的代码包（调用方已持有操作槽）。
-func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name string) error {
+func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name, pkg string) error {
 	lease, err := r.ensureBackfillLease(ctx)
 	if err != nil {
 		return fmt.Errorf("publish lease: %w", err)
 	}
 	defer r.releaseBackfillLease(ctx)
-	jobID, err := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, []string{name}, r.packageID(), lease)
+	jobID, err := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, []string{name}, pkg, lease)
 	if err != nil {
 		return err
 	}
@@ -1672,11 +1675,11 @@ func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name string) e
 	return nil
 }
 
-func (r *PlanReconciler) markBackfillReady(name string) {
+func (r *PlanReconciler) markBackfillReady(name, pkg string) {
 	if r.backfillReady == nil {
-		r.backfillReady = map[string]bool{}
+		r.backfillReady = map[string]string{}
 	}
-	r.backfillReady[name] = true
+	r.backfillReady[name] = pkg
 }
 
 func (r *PlanReconciler) ensureBackfillLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {

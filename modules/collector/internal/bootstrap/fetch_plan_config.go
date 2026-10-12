@@ -85,6 +85,24 @@ func (c SCFPlanConfig) fetchFor(spaceID string) marketfetch.PlanFetch {
 	}
 }
 
+// mergeSpaceDefaults 用内置的空间默认值补齐配置里未指定的字段（每函数标的数、拉取参数）。
+func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfig) {
+	for space, base := range defaults {
+		override, ok := c.Spaces[space]
+		if !ok {
+			continue
+		}
+		if override.SymbolsPerFunction == 0 {
+			override.SymbolsPerFunction = base.SymbolsPerFunction
+		}
+		if override.Fetch == nil && base.Fetch != nil {
+			fetch := *base.Fetch
+			override.Fetch = &fetch
+		}
+		c.Spaces[space] = override
+	}
+}
+
 func defaultSCFPlan() SCFPlanConfig {
 	return SCFPlanConfig{
 		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: marketfetch.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
@@ -97,16 +115,37 @@ func defaultSCFPlan() SCFPlanConfig {
 // defaultLatenessSeconds 是空间的允许迟到时间默认值。
 func defaultLatenessSeconds(spaceID string) int { return domain.DefaultAllowedLatenessSeconds(spaceID) }
 
-// fetchPlanSpaces 返回配置了 SCF 市场地域、由采集计划对账管理的空间。
-func (c *Config) fetchPlanSpaces(spaceIDs []string) []string {
-	var spaces []string
-	for _, spaceID := range spaceIDs {
-		if len(c.SCFMarkets[strings.ToLower(spaceID)]) > 0 {
-			spaces = append(spaces, spaceID)
+// fetchPlanSpaces 返回配置了 SCF 市场地域、由采集计划对账管理的空间（排序）。空间集合以 scf_markets 为准，
+// 不再与进程的旧调度空间环境变量取交集：Timer 采集可以管理旧调度之外的空间（例如只配置 stockcn）。
+func (c *Config) fetchPlanSpaces() []string {
+	spaces := make([]string, 0, len(c.SCFMarkets))
+	for spaceID, markets := range c.SCFMarkets {
+		if len(markets) > 0 {
+			spaces = append(spaces, strings.ToLower(spaceID))
 		}
 	}
 	sort.Strings(spaces)
 	return spaces
+}
+
+// withStoredSpaces 把库里有过采集计划、但已不在配置里的空间并入：配置被移除后，这些空间的定时器必须先停用，
+// 不能留下无人管理却仍在采集的函数。
+func withStoredSpaces(configured, stored []string) []string {
+	set := make(map[string]struct{}, len(configured)+len(stored))
+	for _, space := range configured {
+		set[strings.ToLower(space)] = struct{}{}
+	}
+	for _, space := range stored {
+		if space = strings.ToLower(strings.TrimSpace(space)); space != "" {
+			set[space] = struct{}{}
+		}
+	}
+	all := make([]string, 0, len(set))
+	for space := range set {
+		all = append(all, space)
+	}
+	sort.Strings(all)
+	return all
 }
 
 // validateSCFPlan 检查采集计划配置：每个地域必须有 VPC、子网与同地域 Access 私网入口。

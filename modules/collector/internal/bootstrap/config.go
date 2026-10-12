@@ -180,6 +180,9 @@ func Load(path string) (*Config, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, fmt.Errorf("collector config must contain exactly one YAML document")
 	}
+	// YAML 解码会整体替换 map 里的元素：部署渲染的空间只写包名与命名空间，空间专属的默认参数（stockcn 的每函数标的数、
+	// 限流与错峰）要在解码后按字段补回，配置里写了的字段优先。
+	cfg.SCFPlan.mergeSpaceDefaults(defaultSCFPlan().Spaces)
 	if cfg.GatewayClient.Caller != "collector" {
 		return nil, fmt.Errorf("gateway_client.caller must be collector")
 	}

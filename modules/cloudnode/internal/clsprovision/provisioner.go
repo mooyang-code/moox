@@ -6,6 +6,7 @@ package clsprovision
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,10 @@ type Config struct {
 	Partitions     int64  `yaml:"partitions"`
 	// TimeoutMS 是函数单次上报 CLS 的超时。
 	TimeoutMS int `yaml:"timeout_ms"`
+	// WriterSecretID 与 WriterSecretKeyFile 指定函数上报日志使用的专用凭证（建议是只有该主题写入权限的子账号密钥）。
+	// 两者都为空时退回使用云账号的管理密钥（仍能工作，但函数环境泄露会扩大到云资源控制面），并记一次告警。
+	WriterSecretID      string `yaml:"writer_secret_id"`
+	WriterSecretKeyFile string `yaml:"writer_secret_key_file"`
 }
 
 // DefaultConfig 返回默认配置：开启，沿用 moox-cli 初始化使用的固定日志集与主题名。
@@ -54,7 +59,30 @@ func (c Config) Validate() error {
 	if c.TimeoutMS < 100 || c.TimeoutMS > 3000 {
 		return fmt.Errorf("cls.timeout_ms must be between 100 and 3000")
 	}
+	if (strings.TrimSpace(c.WriterSecretID) == "") != (strings.TrimSpace(c.WriterSecretKeyFile) == "") {
+		return fmt.Errorf("cls.writer_secret_id and cls.writer_secret_key_file must be set together")
+	}
 	return nil
+}
+
+// writer 返回函数上报使用的凭证：配置了专用写入凭证就用它，否则退回云账号管理密钥。
+func (p *Provisioner) writer(management Credential) (Credential, error) {
+	id, file := strings.TrimSpace(p.cfg.WriterSecretID), strings.TrimSpace(p.cfg.WriterSecretKeyFile)
+	if id == "" {
+		p.warnOnce.Do(func() {
+			log.Warnf("cloudnode cls: functions report with the cloud account management key; configure cls.writer_secret_id and cls.writer_secret_key_file with a CLS write-only key")
+		})
+		return management, nil
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return Credential{}, fmt.Errorf("read cls writer secret key file failed")
+	}
+	key := strings.TrimSpace(string(raw))
+	if key == "" {
+		return Credential{}, fmt.Errorf("cls writer secret key file is empty")
+	}
+	return Credential{SecretID: id, SecretKey: key}, nil
 }
 
 // Credential 是云账号的 API 密钥。
@@ -79,8 +107,16 @@ type Provisioner struct {
 	factory Factory
 	now     func() time.Time
 
+	warnOnce sync.Once
+	mu       sync.Mutex
+	accounts map[string]*accountEntry
+}
+
+// accountEntry 让开通按云账号串行：同一账号的并发请求合并，不同账号互不等待。
+type accountEntry struct {
 	mu    sync.Mutex
-	cache map[string]settings
+	value settings
+	set   bool
 }
 
 const (
@@ -95,7 +131,7 @@ func New(cfg Config, factory Factory) *Provisioner {
 	if factory == nil {
 		factory = DefaultFactory
 	}
-	return &Provisioner{cfg: cfg, factory: factory, now: time.Now, cache: map[string]settings{}}
+	return &Provisioner{cfg: cfg, factory: factory, now: time.Now, accounts: map[string]*accountEntry{}}
 }
 
 // Apply 在 environment 里补齐 CLS 上报环境，返回是否有改动。已声明 MOOX_CLS_ENABLED 的环境（运维手工指定）原样保留。
@@ -112,53 +148,75 @@ func (p *Provisioner) Apply(ctx context.Context, accountID string, credential Cr
 		log.WarnContextf(ctx, "cloudnode cls provision skipped account=%s: %v", accountID, err)
 		return false
 	}
+	writer, err := p.writer(credential)
+	if err != nil {
+		log.WarnContextf(ctx, "cloudnode cls skipped account=%s: %v", accountID, err)
+		return false
+	}
 	environment["MOOX_CLS_ENABLED"] = "true"
 	environment["MOOX_CLS_ENDPOINT"] = p.cfg.IngestEndpoint
 	environment["MOOX_CLS_LOGSET_ID"] = resolved.logsetID
 	environment["MOOX_CLS_TOPIC_ID"] = resolved.topicID
-	environment["MOOX_CLS_SECRET_ID"] = credential.SecretID
-	environment["MOOX_CLS_SECRET_KEY"] = credential.SecretKey
+	environment["MOOX_CLS_SECRET_ID"] = writer.SecretID
+	environment["MOOX_CLS_SECRET_KEY"] = writer.SecretKey
 	environment["MOOX_CLS_TIMEOUT_MS"] = strconv.Itoa(p.cfg.TimeoutMS)
 	return true
 }
 
-func (p *Provisioner) resolve(ctx context.Context, accountID string, credential Credential) (settings, error) {
+func (p *Provisioner) entry(accountID string) *accountEntry {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if cached, ok := p.cache[accountID]; ok && p.now().Sub(cached.resolvedAt) < cacheTTL {
-		if cached.topicID == "" {
+	entry, ok := p.accounts[accountID]
+	if !ok {
+		entry = &accountEntry{}
+		p.accounts[accountID] = entry
+	}
+	return entry
+}
+
+func (p *Provisioner) resolve(ctx context.Context, accountID string, credential Credential) (settings, error) {
+	entry := p.entry(accountID)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.set && p.now().Sub(entry.value.resolvedAt) < cacheTTL {
+		if entry.value.topicID == "" {
 			return settings{}, fmt.Errorf("cls provisioning failed recently; retrying later")
 		}
-		return cached, nil
+		return entry.value, nil
 	}
-	provisionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), provisionTimeout)
+	// 开通尊重调用方的取消与截止时间（最长 provisionTimeout）：调用方放弃后不再占着账号锁。
+	provisionCtx, cancel := context.WithTimeout(ctx, provisionTimeout)
 	defer cancel()
 	api, err := p.factory(credential, p.cfg.Region, p.cfg.APIEndpoint)
 	if err != nil {
-		return p.remember(accountID, settings{}, fmt.Errorf("create cls client failed"))
+		return p.remember(entry, settings{}, fmt.Errorf("create cls client failed"))
 	}
 	result, err := tencent.BootstrapCLS(provisionCtx, api, tencent.CLSBootstrapOptions{
 		LogsetName: p.cfg.LogsetName, TopicName: p.cfg.TopicName, RetentionDays: p.cfg.RetentionDays, Partitions: p.cfg.Partitions,
 		IndexFields: tencent.MarketFetchLogIndexFields,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			// 调用方取消不算开通失败，不进入退避。
+			return settings{}, fmt.Errorf("cls provisioning canceled")
+		}
 		// SDK 与 HTTP 错误可能带出密钥相关信息：只记录操作，不记录错误文本。
-		return p.remember(accountID, settings{}, fmt.Errorf("prepare cls resources failed"))
+		return p.remember(entry, settings{}, fmt.Errorf("prepare cls resources failed"))
 	}
 	if result.LogsetCreated || result.TopicCreated || result.IndexFieldsChanged {
 		log.InfoContextf(ctx, "cloudnode cls provisioned account=%s logset=%s topic=%s created_logset=%t created_topic=%t index_fields_changed=%t",
 			accountID, result.LogsetID, result.TopicID, result.LogsetCreated, result.TopicCreated, result.IndexFieldsChanged)
 	}
-	return p.remember(accountID, settings{logsetID: result.LogsetID, topicID: result.TopicID}, nil)
+	return p.remember(entry, settings{logsetID: result.LogsetID, topicID: result.TopicID}, nil)
 }
 
 // remember 缓存结果；失败时缓存一个空结果用于退避。
-func (p *Provisioner) remember(accountID string, value settings, err error) (settings, error) {
+func (p *Provisioner) remember(entry *accountEntry, value settings, err error) (settings, error) {
 	value.resolvedAt = p.now()
 	if err != nil {
 		// 退避：把时间戳提前，使空结果的有效期等于 failureBackoff。
 		value.resolvedAt = p.now().Add(failureBackoff - cacheTTL)
 	}
-	p.cache[accountID] = value
+	entry.value, entry.set = value, true
 	return value, err
 }

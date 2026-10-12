@@ -233,6 +233,7 @@ enabled = false
 # [scf_plan.regions.ap-hongkong]
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
+# access_host = "compute-1"   # 同地域有多台带私网地址的 access 主机时必须指定入口主机
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"

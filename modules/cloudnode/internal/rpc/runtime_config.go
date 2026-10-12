@@ -228,7 +228,10 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		environment[key] = value
 	}
 	// 缺少日志上报配置的采集函数（例如日志服务开通之前创建的）在这次更新里补齐。
-	needsEnvironmentUpdate = s.applyCLSEnvironment(ctx, *account, node, environment) || needsEnvironmentUpdate
+	// 停用定时器的更新不顺带开通日志服务：停用必须能在任何情况下完成。
+	if item.GetTimerEnabled() {
+		needsEnvironmentUpdate = s.applyCLSEnvironment(ctx, *account, node, environment) || needsEnvironmentUpdate
+	}
 	if environment["MOOX_MARKET_FETCH_BINDING_HASH"] != "" {
 		_, oldSubjects := environment["MOOX_MARKET_FETCH_SUBJECTS"]
 		_, oldSymbols := environment["MOOX_MARKET_FETCH_SYMBOLS_JSON"]

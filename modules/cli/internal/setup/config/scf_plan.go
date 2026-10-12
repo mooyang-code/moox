@@ -29,6 +29,9 @@ type SCFPlan struct {
 type SCFPlanRegion struct {
 	VPCID    string `toml:"vpc_id"`
 	SubnetID string `toml:"subnet_id"`
+	// AccessHost 指定该地域用哪台主机的 Access 作为函数入口；同地域只有一台有私网地址的 Access 主机时可省略，
+	// 有多台时必须显式指定（不同 VPC 的入口函数未必可达）。
+	AccessHost string `toml:"access_host"`
 }
 
 // SCFPlanSpace 是参与 Timer 采集的一个空间。
@@ -73,6 +76,7 @@ func normalizeSCFPlan(plan *SCFPlan) {
 	regions := make(map[string]SCFPlanRegion, len(plan.Regions))
 	for name, region := range plan.Regions {
 		region.VPCID, region.SubnetID = strings.TrimSpace(region.VPCID), strings.TrimSpace(region.SubnetID)
+		region.AccessHost = strings.TrimSpace(region.AccessHost)
 		regions[strings.ToLower(strings.TrimSpace(name))] = region
 	}
 	plan.Regions = regions
@@ -179,24 +183,51 @@ func validateSCFPlan(manifest *Manifest) error {
 	return nil
 }
 
-// SCFPlanAccess 返回某地域 SCF 函数访问 Access 的私网入口：该地域内带 access 组件的主机的私网地址。
-// 函数在地域的 VPC 里运行，只能用私网地址访问；没有配置 private_address 的主机不能作为入口。
+// SCFPlanAccess 返回某地域 SCF 函数访问 Access 的私网入口：该地域内带 access 组件、配置了私网地址的主机。
+// 函数在地域的 VPC 里运行，只能用私网地址访问。同地域有多台候选时必须用 scf_plan.regions.<region>.access_host 指定。
 func (m Manifest) SCFPlanAccess(region string) (address, id string, err error) {
 	region = strings.ToLower(strings.TrimSpace(region))
-	var candidates []Host
+	var inRegion, usable []Host
 	for _, host := range m.Hosts() {
-		if host.Region == region && slices.Contains(m.Placements[host.Name], "access") {
-			candidates = append(candidates, host)
+		if host.Region != region || !slices.Contains(m.Placements[host.Name], "access") {
+			continue
+		}
+		inRegion = append(inRegion, host)
+		if host.PrivateAddress != "" {
+			usable = append(usable, host)
 		}
 	}
-	if len(candidates) == 0 {
+	if len(inRegion) == 0 {
 		return "", "", fmt.Errorf("config_invalid: scf_plan region %s needs a host in that region (hosts.<id>.region) placed with the access component", region)
 	}
-	host := candidates[0]
-	if host.PrivateAddress == "" {
-		return "", "", fmt.Errorf("config_invalid: hosts.%s.private_address is required: scf_plan functions in %s reach Access over the VPC", host.Name, region)
+	var chosen Host
+	if want := m.SCFPlan.Regions[region].AccessHost; want != "" {
+		for _, host := range inRegion {
+			if host.Name == want {
+				chosen = host
+			}
+		}
+		if chosen.Name == "" {
+			return "", "", fmt.Errorf("config_invalid: scf_plan.regions.%s.access_host %q is not an access host in that region", region, want)
+		}
+	} else {
+		switch len(usable) {
+		case 1:
+			chosen = usable[0]
+		case 0:
+			return "", "", fmt.Errorf("config_invalid: hosts.%s.private_address is required: scf_plan functions in %s reach Access over the VPC", inRegion[0].Name, region)
+		default:
+			names := make([]string, 0, len(usable))
+			for _, host := range usable {
+				names = append(names, host.Name)
+			}
+			return "", "", fmt.Errorf("config_invalid: scf_plan region %s has several access hosts with a private address (%s); set scf_plan.regions.%s.access_host", region, strings.Join(names, ", "), region)
+		}
 	}
-	return net.JoinHostPort(host.PrivateAddress, scfPlanAccessPort), "access@" + host.Name, nil
+	if chosen.PrivateAddress == "" {
+		return "", "", fmt.Errorf("config_invalid: hosts.%s.private_address is required: scf_plan functions in %s reach Access over the VPC", chosen.Name, region)
+	}
+	return net.JoinHostPort(chosen.PrivateAddress, scfPlanAccessPort), "access@" + chosen.Name, nil
 }
 
 // SCFPlanRegionNames 返回计划用到的地域（排序）。

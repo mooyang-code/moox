@@ -54,6 +54,18 @@ type FetchPlanRepository struct{ db *gorm.DB }
 
 func NewFetchPlanRepository(db *gorm.DB) *FetchPlanRepository { return &FetchPlanRepository{db: db} }
 
+// Spaces 返回保存过采集计划的全部空间（排序）：配置移除某个空间后，据此找到仍需停用定时器的空间。
+func (r *FetchPlanRepository) Spaces(ctx context.Context) ([]string, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("fetch plan repository is not initialized")
+	}
+	var spaces []string
+	if err := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Distinct("c_space_id").Order("c_space_id").Pluck("c_space_id", &spaces).Error; err != nil {
+		return nil, err
+	}
+	return spaces, nil
+}
+
 // Open 返回该空间未生效的计划；没有则返回 nil。
 func (r *FetchPlanRepository) Open(ctx context.Context, spaceID string) (*FetchPlanRecord, error) {
 	if r == nil || r.db == nil {

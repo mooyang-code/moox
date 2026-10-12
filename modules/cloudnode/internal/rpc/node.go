@@ -1277,7 +1277,8 @@ func (s *Service) scfClient(ctx context.Context, account store.CloudAccount) (sc
 }
 
 // applyCLSEnvironment 在采集函数的环境里补齐日志服务（CLS）上报配置，返回是否有改动。
-// 首次使用时幂等开通 CLS；开通或补齐失败只记日志，不影响函数创建与更新。
+// 首次使用时幂等开通 CLS。这是尽力而为的附加动作：开通失败、补齐后环境超过平台上限、凭证取不到，
+// 都只记日志并保持环境原样，绝不让它影响函数的创建、升级或停用。
 func (s *Service) applyCLSEnvironment(ctx context.Context, account store.CloudAccount, node *store.CloudNode, environment map[string]string) bool {
 	if s.clsEnvironment == nil || !isMarketFetchNode(node) {
 		return false
@@ -1286,7 +1287,22 @@ func (s *Service) applyCLSEnvironment(ctx context.Context, account store.CloudAc
 	if err != nil {
 		return false
 	}
-	return s.clsEnvironment.Apply(ctx, account.AccountID, clsprovision.Credential{SecretID: credential.SecretID, SecretKey: credential.SecretKey}, environment)
+	// 在副本上补齐并校验容量：放不下就放弃注入，原环境不变。
+	candidate := copyStringMap(environment)
+	if candidate == nil {
+		candidate = make(map[string]string)
+	}
+	if !s.clsEnvironment.Apply(ctx, account.AccountID, clsprovision.Credential{SecretID: credential.SecretID, SecretKey: credential.SecretKey}, candidate) {
+		return false
+	}
+	if err := tencent.ValidateSCFEnvironment(candidate); err != nil {
+		log.WarnContextf(ctx, "cloudnode skip cls environment for node %s: %v", node.NodeID, err)
+		return false
+	}
+	for key, value := range candidate {
+		environment[key] = value
+	}
+	return true
 }
 
 func (s *Service) resolveCloudCredential(ctx context.Context, account store.CloudAccount) (cloudcredential.TencentCredential, error) {

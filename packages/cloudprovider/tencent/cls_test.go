@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	cls "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cls/v20201016"
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 )
 
 type fakeCLSAPI struct {
@@ -181,5 +184,41 @@ func TestBootstrapCLSEnsuresIndexFieldsAfterTheTopicIsReady(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(api.calls, ","), "ensure-index-fields") {
 		t.Fatalf("index must not be touched without declared fields: %v", api.calls)
+	}
+}
+
+func TestBuildModifyIndexKeepsEverythingAndRepairsConflictingFields(t *testing.T) {
+	text := func(key string) *cls.KeyValueInfo {
+		return &cls.KeyValueInfo{Key: common.StringPtr(key), Value: &cls.ValueInfo{Type: common.StringPtr("text"), SqlFlag: common.BoolPtr(true)}}
+	}
+	current := &cls.DescribeIndexResponseParams{
+		IncludeInternalFields: common.BoolPtr(true), MetadataFlag: common.Uint64Ptr(1), CoverageField: common.StringPtr("__parse_failed__"),
+		Rule: &cls.RuleInfo{
+			FullText: &cls.FullTextInfo{CaseSensitive: common.BoolPtr(false), Tokenizer: common.StringPtr(", ")},
+			KeyValue: &cls.RuleKeyValueInfo{CaseSensitive: common.BoolPtr(false), KeyValues: []*cls.KeyValueInfo{text("SCF_FunctionName"), text("fetch_ms")}},
+			Tag:      &cls.RuleTagInfo{CaseSensitive: common.BoolPtr(false), KeyValues: []*cls.KeyValueInfo{text("region")}},
+		},
+	}
+	fields := []CLSIndexField{{Key: "log_type"}, {Key: "fetch_ms", Numeric: true}}
+	modify, changed := buildModifyIndex("topic-1", current, fields)
+	if !changed || modify == nil {
+		t.Fatal("new field and conflicting type should require a modification")
+	}
+	if *modify.CoverageField != "__parse_failed__" || *modify.MetadataFlag != 1 || !*modify.IncludeInternalFields {
+		t.Fatalf("index switches must be carried over: %+v", modify)
+	}
+	if modify.Rule.FullText == nil || modify.Rule.Tag == nil || len(modify.Rule.Tag.KeyValues) != 1 || *modify.Rule.Tag.KeyValues[0].Key != "region" {
+		t.Fatalf("existing full-text and tag indexes must be preserved: %+v", modify.Rule)
+	}
+	types := map[string]string{}
+	for _, item := range modify.Rule.KeyValue.KeyValues {
+		types[*item.Key] = *item.Value.Type
+	}
+	if types["SCF_FunctionName"] != "text" || types["log_type"] != "text" || types["fetch_ms"] != "long" {
+		t.Fatalf("unexpected key-value indexes: %v", types)
+	}
+	// 已经满足要求时不产生修改。
+	if _, changed := buildModifyIndex("topic-1", &cls.DescribeIndexResponseParams{Rule: modify.Rule}, fields); changed {
+		t.Fatal("idempotent merge should not modify again")
 	}
 }

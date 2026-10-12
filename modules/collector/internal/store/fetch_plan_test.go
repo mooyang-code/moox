@@ -99,3 +99,19 @@ func TestBackfillJobChunksClaimAndWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, mark.Equal(from.Add(time.Hour)))
 }
+
+func TestFetchPlanSpacesListsEverySpaceThatEverHadAPlan(t *testing.T) {
+	ctx := context.Background()
+	repo := openPlanTestStore(t).FetchPlans()
+	spaces, err := repo.Spaces(ctx)
+	require.NoError(t, err)
+	require.Empty(t, spaces)
+	_, err = repo.Create(ctx, "stockcn", `{"v":1}`, "")
+	require.NoError(t, err)
+	record, err := repo.Create(ctx, "crypto", `{"v":1}`, "")
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(ctx, record.ID, FetchPlanApplied, "{}", ""))
+	spaces, err = repo.Spaces(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"crypto", "stockcn"}, spaces)
+}

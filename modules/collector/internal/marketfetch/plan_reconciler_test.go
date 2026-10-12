@@ -113,7 +113,8 @@ type fakePlanCloud struct {
 	unready    map[string]scfinvoker.Node
 	deleted    []string
 	upgraded   []string
-	packages   []string // 按创建先后（旧到新）的可用代码包 ID，名称不区分
+	packages   []string                   // 按创建先后（旧到新）的可用代码包 ID，名称不区分
+	backfill   map[string]scfinvoker.Node // 补采函数（ListMarketFetchers 返回）
 	packageErr error
 	jobs       map[string][]scfinvoker.BatchItemResult
 	running    map[string]bool // 仍在运行的作业
@@ -158,7 +159,11 @@ func (c *fakePlanCloud) ListTimerMarketFetchersFresh(ctx context.Context, spaceI
 }
 
 func (c *fakePlanCloud) ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
-	return nil, nil
+	nodes := make([]scfinvoker.Node, 0, len(c.backfill))
+	for _, node := range c.backfill {
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
 }
 
 func (c *fakePlanCloud) ListUnreadyMarketFetchers(context.Context, string, string) ([]scfinvoker.Node, error) {
@@ -181,9 +186,14 @@ func (c *fakePlanCloud) LatestPackage(context.Context, string, string) (string, 
 
 func (c *fakePlanCloud) SubmitDeployNodes(_ context.Context, _ string, nodeIDs []string, packageID string, _ *scfinvoker.CollectorPublishLease) (string, error) {
 	for _, id := range nodeIDs {
-		node := c.nodes[id]
-		node.PackageID = packageID
-		c.nodes[id] = node
+		if node, ok := c.backfill[id]; ok {
+			node.PackageID = packageID
+			c.backfill[id] = node
+		} else {
+			node := c.nodes[id]
+			node.PackageID = packageID
+			c.nodes[id] = node
+		}
 		c.upgraded = append(c.upgraded, id)
 	}
 	return c.newJob(nodeIDs), nil
@@ -1203,4 +1213,49 @@ func TestPlanReconcilerRefusesToRunWithoutAnyResolvablePackage(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "code package")
 	require.Empty(t, h.cloud.created)
+}
+
+func TestBackfillFunctionFollowsANewlyUploadedPackageWithinTheSameReconciler(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
+	h.cloud.packages = []string{"pkg-v1"}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1"}}
+
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Empty(t, h.cloud.upgraded)
+
+	// 就绪缓存记的是已确认的代码包：上传新版本后，补采函数在同一个对账器里被升级，不需要重启 Collector。
+	h.cloud.packages = append(h.cloud.packages, "pkg-v2")
+	h.now = h.now.Add(time.Minute)
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, []string{name}, h.cloud.upgraded)
+	require.Equal(t, "pkg-v2", h.cloud.backfill[name].PackageID)
+
+	// 之后不再重复升级。
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Len(t, h.cloud.upgraded, 1)
+}
+
+// 对账协程与补采协程并发解析包名：查询串行，较早发出的旧结果不会覆盖更新的版本。
+func TestPackageResolutionIsSerializedAndNeverRegresses(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	h.cloud.packages = []string{"pkg-v1", "pkg-v2"}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			require.NoError(t, r.refreshPackage(context.Background()))
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, "pkg-v2", r.packageID())
 }

@@ -27,6 +27,9 @@ func (r *PlanReconciler) refreshPackage(ctx context.Context) error {
 	if strings.TrimSpace(r.Deploy.PackageName) == "" {
 		return nil
 	}
+	// 解析整体串行：对账协程与多个补采协程并发刷新时，较早发出的旧查询结果不能晚返回后覆盖已缓存的新版本。
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
 	r.packageMu.Lock()
 	fresh := r.resolvedPackage != "" && r.now().Sub(r.resolvedAt) < planPackageRefreshInterval
 	r.packageMu.Unlock()

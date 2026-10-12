@@ -317,27 +317,41 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, publish bool) 
 	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
 }
 
+// reportMetrics 在调用结束前发出两类观测数据：CLS 失败明细与指标。两者共享同一个上报预算（CLSReserve，至少 750ms，
+// 且不超过距函数截止时间的剩余时间），CLS 先占约六成、指标用剩下的，所以慢上报不会吃掉函数返回需要的时间。
 func (h *Handler) reportMetrics(parent context.Context) {
-	h.flushReports(parent)
-	if h == nil || h.MetricsReporter == nil {
+	if h == nil || (h.Reporter == nil && h.MetricsReporter == nil) {
 		return
 	}
 	reserve := h.CLSReserve
 	if reserve < metricsResponseReserve {
 		reserve = metricsResponseReserve
 	}
-	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", int(reserve/time.Millisecond))) * time.Millisecond
-	if timeout > reserve {
-		timeout = reserve
-	}
+	total := reserve
 	if deadline, ok := parent.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return
 		}
-		if remaining < timeout {
-			timeout = remaining
+		if remaining < total {
+			total = remaining
 		}
+	}
+	end := time.Now().Add(total)
+	if h.Reporter != nil {
+		share := total
+		if h.MetricsReporter != nil {
+			share = total * 3 / 5
+		}
+		h.flushReports(parent, min(share, clsFlushTimeout))
+	}
+	if h.MetricsReporter == nil {
+		return
+	}
+	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", int(reserve/time.Millisecond))) * time.Millisecond
+	timeout = min(timeout, time.Until(end))
+	if timeout <= 0 {
+		return
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -346,32 +360,19 @@ func (h *Handler) reportMetrics(parent context.Context) {
 	}
 }
 
-// flushReports 把本次调用积累的失败明细与批次摘要一次性发往 CLS：同步、有界，失败只记日志，不影响采集结果。
-func (h *Handler) flushReports(parent context.Context) {
-	if h == nil || h.Reporter == nil {
+// flushReports 把本次调用积累的失败明细与批次摘要一次性发往 CLS：同步、有界（budget），失败只记日志，不影响采集结果。
+func (h *Handler) flushReports(parent context.Context, budget time.Duration) {
+	if h == nil || h.Reporter == nil || budget <= 0 {
 		return
 	}
-	timeout := h.CLSReserve
-	if timeout <= 0 {
-		timeout = clsFlushTimeout
-	}
-	if deadline, ok := parent.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return
-		}
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), budget)
 	defer cancel()
 	if err := h.Reporter.Flush(ctx); err != nil {
 		log.WarnContextf(parent, "market_fetch_cls_report_failed: %v", err)
 	}
 }
 
-// clsFlushTimeout 是 CLS 上报的默认时间上限。
+// clsFlushTimeout 是 CLS 单次上报的时间上限。
 const clsFlushTimeout = 1500 * time.Millisecond
 
 func contextWithReserve(parent context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
