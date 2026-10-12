@@ -52,6 +52,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		return fmt.Errorf("resolve storage auth: %w", err)
 	}
 	var reconcilers sync.Map
+	var autoScans sync.Map
 	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth}
 	checkCalendar := newStockCNCheckCalendar()
 	checker.Calendar, checker.CalendarReady = checkCalendar.valid, checkCalendar.ready
@@ -111,7 +112,22 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			if err := backfiller.Tick(ctx, spaceID); err != nil {
 				return err
 			}
-			return backfiller.AutoScan(ctx, spaceID)
+			// 自动补采扫描要逐标的读取 Storage，耗时远超一轮对账的预算：放到独立协程里跑，
+			// 每个空间同一时间只跑一个，用进程上下文加较长的超时。
+			if _, running := autoScans.LoadOrStore(spaceID, struct{}{}); running {
+				return nil
+			}
+			if !process.launch(func() {
+				defer autoScans.Delete(spaceID)
+				scanCtx, cancel := context.WithTimeout(process.ctx, 15*time.Minute)
+				defer cancel()
+				if err := backfiller.AutoScan(scanCtx, spaceID); err != nil {
+					log.WarnContextf(scanCtx, "collector auto backfill scan failed space=%s: %v", spaceID, err)
+				}
+			}) {
+				autoScans.Delete(spaceID)
+			}
+			return nil
 		},
 	}
 	if !process.launch(func() { manager.Run(process.ctx) }) {

@@ -621,8 +621,19 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 		b.mu.Unlock()
 		return nil
 	}
-	b.lastScan[spaceID] = b.now()
+	started := b.now()
+	b.lastScan[spaceID] = started
 	b.mu.Unlock()
+	// 扫描被超时或取消打断时不占用整整一小时的间隔：下一轮对账就重试。
+	defer func() {
+		if ctx.Err() != nil {
+			b.mu.Lock()
+			if b.lastScan[spaceID].Equal(started) {
+				delete(b.lastScan, spaceID)
+			}
+			b.mu.Unlock()
+		}
+	}()
 	active, err := b.Store.ActiveJobs(ctx, spaceID)
 	if err != nil {
 		return err
