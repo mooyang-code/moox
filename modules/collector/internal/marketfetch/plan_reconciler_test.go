@@ -1259,3 +1259,30 @@ func TestPackageResolutionIsSerializedAndNeverRegresses(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, "pkg-v2", r.packageID())
 }
+
+// 较早读到旧包的补采调用，等到拿到补采锁时必须按最新解析结果判断，不能把别的调用刚升级好的函数降回旧版本。
+func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
+	h.cloud.packages = []string{"pkg-v1"}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v2"}}
+
+	r.backfillMu.Lock() // 模拟另一次调用正在升级补采函数
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // 让调用方先解析到 v1，再卡在补采锁上
+	h.cloud.packages = []string{"pkg-v1", "pkg-v2"}
+	h.now = h.now.Add(time.Minute)
+	require.NoError(t, r.refreshPackage(context.Background()))
+	require.Equal(t, "pkg-v2", r.packageID())
+	r.backfillMu.Unlock()
+
+	require.NoError(t, <-done)
+	require.Empty(t, h.cloud.upgraded, "已在 v2 的补采函数不能被降级")
+	require.Equal(t, "pkg-v2", h.cloud.backfill[name].PackageID)
+}

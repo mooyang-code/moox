@@ -52,6 +52,21 @@ type SCFPlanFetchConfig struct {
 	StaggerMS        int `yaml:"stagger_ms"`
 }
 
+// filled 用 base 补齐未指定（为零）的字段。拉取参数里零值表示“沿用默认”，所以只写部分字段的覆盖项不会得到不完整的参数。
+func (f SCFPlanFetchConfig) filled(base SCFPlanFetchConfig) SCFPlanFetchConfig {
+	pick := func(value, fallback int) int {
+		if value != 0 {
+			return value
+		}
+		return fallback
+	}
+	return SCFPlanFetchConfig{
+		Concurrency: pick(f.Concurrency, base.Concurrency), RPS: pick(f.RPS, base.RPS), Burst: pick(f.Burst, base.Burst),
+		FeedConcurrency: pick(f.FeedConcurrency, base.FeedConcurrency), RequestTimeoutMS: pick(f.RequestTimeoutMS, base.RequestTimeoutMS),
+		StorageTimeoutMS: pick(f.StorageTimeoutMS, base.StorageTimeoutMS), StaggerBaseMS: pick(f.StaggerBaseMS, base.StaggerBaseMS), StaggerMS: pick(f.StaggerMS, base.StaggerMS),
+	}
+}
+
 // SCFPlanSpaceConfig 覆盖某个空间的每函数标的数与拉取参数；字段为零表示沿用全局值。
 type SCFPlanSpaceConfig struct {
 	SymbolsPerFunction int                 `yaml:"symbols_per_function"`
@@ -77,7 +92,7 @@ func (c SCFPlanConfig) symbolsPerFunction(spaceID string) int {
 func (c SCFPlanConfig) fetchFor(spaceID string) marketfetch.PlanFetch {
 	fetch := c.Fetch
 	if override := c.Spaces[strings.ToLower(spaceID)].Fetch; override != nil {
-		fetch = *override
+		fetch = override.filled(c.Fetch)
 	}
 	return marketfetch.PlanFetch{
 		Concurrency: fetch.Concurrency, RPS: fetch.RPS, Burst: fetch.Burst, FeedConcurrency: fetch.FeedConcurrency,
@@ -95,8 +110,12 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 		if override.SymbolsPerFunction == 0 {
 			override.SymbolsPerFunction = base.SymbolsPerFunction
 		}
-		if override.Fetch == nil && base.Fetch != nil {
+		switch {
+		case override.Fetch == nil && base.Fetch != nil:
 			fetch := *base.Fetch
+			override.Fetch = &fetch
+		case override.Fetch != nil && base.Fetch != nil:
+			fetch := override.Fetch.filled(*base.Fetch)
 			override.Fetch = &fetch
 		}
 		c.Spaces[space] = override

@@ -99,12 +99,22 @@ func TestReportMetricsSharesOneBudgetBetweenCLSAndMetrics(t *testing.T) {
 	require.Less(t, elapsed, 1100*time.Millisecond, "两类上报总共不超过预算（800ms）加调度余量")
 	require.Greater(t, metrics.took, 150*time.Millisecond, "指标仍分到了预算的剩余部分")
 
-	// 距函数截止时间不足一个预算时，按剩余时间收缩。
-	short, cancelShort := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	// 距函数截止时间不足一个预算时，上报必须在“截止时间减返回余量”之前结束，给函数返回留出时间。
+	short, cancelShort := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancelShort()
+	deadline, _ := short.Deadline()
 	started = time.Now()
 	handler.reportMetrics(short)
-	require.Less(t, time.Since(started), 500*time.Millisecond)
+	require.Less(t, time.Until(deadline), 500*time.Millisecond)
+	require.GreaterOrEqual(t, time.Until(deadline), reportReturnMargin-40*time.Millisecond, "上报结束时离函数截止时间至少还有返回余量")
+
+	// 剩余时间已不足返回余量：直接跳过，不调用任何上报器。
+	reporter := &recordingReporter{}
+	skipped := &Handler{Reporter: reporter}
+	tight, cancelTight := context.WithTimeout(context.Background(), reportReturnMargin/2)
+	defer cancelTight()
+	skipped.reportMetrics(tight)
+	require.Zero(t, reporter.flushed)
 }
 
 // 上报的每个字段都必须在 CLS 主题的键值索引里，否则无法按字段检索；索引字段清单在 cloudprovider 里统一维护。

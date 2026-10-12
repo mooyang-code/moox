@@ -327,17 +327,18 @@ func (h *Handler) reportMetrics(parent context.Context) {
 	if reserve < metricsResponseReserve {
 		reserve = metricsResponseReserve
 	}
-	total := reserve
+	// 两类上报共用同一个绝对截止时间：不超过预算，也不超过“函数截止时间减返回余量”——
+	// 慢上报不能把已经成功写入的调用拖到平台超时。余量不足就直接跳过上报。
+	end := time.Now().Add(reserve)
 	if deadline, ok := parent.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return
-		}
-		if remaining < total {
-			total = remaining
+		if latest := deadline.Add(-reportReturnMargin); latest.Before(end) {
+			end = latest
 		}
 	}
-	end := time.Now().Add(total)
+	total := time.Until(end)
+	if total <= 0 {
+		return
+	}
 	if h.Reporter != nil {
 		share := total
 		if h.MetricsReporter != nil {
@@ -371,6 +372,9 @@ func (h *Handler) flushReports(parent context.Context, budget time.Duration) {
 		log.WarnContextf(parent, "market_fetch_cls_report_failed: %v", err)
 	}
 }
+
+// reportReturnMargin 是上报结束到函数截止时间之间必须留出的返回余量。
+const reportReturnMargin = 200 * time.Millisecond
 
 // clsFlushTimeout 是 CLS 单次上报的时间上限。
 const clsFlushTimeout = 1500 * time.Millisecond

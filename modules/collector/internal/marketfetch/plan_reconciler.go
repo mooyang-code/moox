@@ -1550,8 +1550,6 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	if err := r.refreshPackage(ctx); err != nil {
 		return "", err
 	}
-	// 一次操作内固定目标代码包，期间对账协程解析到新版本也不影响这次的判断与创建。
-	pkg := r.packageID()
 	region, ok := r.BackfillRegion(marketType)
 	if !ok {
 		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
@@ -1559,6 +1557,9 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	name := BackfillFunctionName(r.SpaceID, marketType, region)
 	r.backfillMu.Lock()
 	defer r.backfillMu.Unlock()
+	// 持有补采锁之后才读取并固定目标代码包：在锁外读取，较早读到旧包的调用等到锁后会把已升级的函数降回旧版本。
+	// 期间对账协程解析到新版本不影响这次的判断与创建，下一次调用再跟进。
+	pkg := r.packageID()
 	if pkg != "" && r.backfillReady[name] == pkg {
 		return name, nil
 	}

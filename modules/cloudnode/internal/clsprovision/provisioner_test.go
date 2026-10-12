@@ -165,3 +165,40 @@ func TestConcurrentApplyForOneAccountProvisionsOnce(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, 1, builds, "同一账号的并发请求合并为一次开通")
 }
+
+// 同账号的等待者随调用方取消退出，不被慢开通拖住；不同账号互不阻塞。
+func TestApplyWaitersHonourCancellationAndAccountsDoNotBlockEachOther(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan string, 4)
+	api := &fakeAPI{}
+	p := New(DefaultConfig(), func(credential Credential, _, _ string) (tencent.CLSAPI, error) {
+		started <- credential.SecretID
+		if credential.SecretID == "slow" {
+			<-release
+		}
+		return api, nil
+	})
+	slowDone := make(chan bool, 1)
+	go func() {
+		slowDone <- p.Apply(context.Background(), "acct-slow", Credential{SecretID: "slow", SecretKey: "k"}, map[string]string{})
+	}()
+	require.Equal(t, "slow", <-started) // 慢开通已持有 acct-slow 的执行权
+
+	// 同账号的第二个请求：调用方超时后立即退出。
+	waiter, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	require.False(t, p.Apply(waiter, "acct-slow", Credential{SecretID: "slow", SecretKey: "k"}, map[string]string{}))
+	require.Less(t, time.Since(begin), 2*time.Second)
+
+	// 不同账号不被 acct-slow 阻塞。
+	require.True(t, p.Apply(context.Background(), "acct-fast", Credential{SecretID: "fast", SecretKey: "k"}, map[string]string{}))
+
+	close(release)
+	require.True(t, <-slowDone)
+
+	// 已取消的调用即使缓存命中也不继续。
+	cancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	require.False(t, p.Apply(cancelled, "acct-fast", Credential{SecretID: "fast", SecretKey: "k"}, map[string]string{}))
+}

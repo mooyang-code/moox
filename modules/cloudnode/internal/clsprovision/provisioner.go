@@ -114,7 +114,8 @@ type Provisioner struct {
 
 // accountEntry 让开通按云账号串行：同一账号的并发请求合并，不同账号互不等待。
 type accountEntry struct {
-	mu    sync.Mutex
+	// sem 是容量为 1 的信号量（可取消的互斥）：等待者可以随调用方的取消或超时退出，不会被慢开通拖住。
+	sem   chan struct{}
 	value settings
 	set   bool
 }
@@ -168,7 +169,7 @@ func (p *Provisioner) entry(accountID string) *accountEntry {
 	defer p.mu.Unlock()
 	entry, ok := p.accounts[accountID]
 	if !ok {
-		entry = &accountEntry{}
+		entry = &accountEntry{sem: make(chan struct{}, 1)}
 		p.accounts[accountID] = entry
 	}
 	return entry
@@ -176,8 +177,15 @@ func (p *Provisioner) entry(accountID string) *accountEntry {
 
 func (p *Provisioner) resolve(ctx context.Context, accountID string, credential Credential) (settings, error) {
 	entry := p.entry(accountID)
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
+	select {
+	case entry.sem <- struct{}{}:
+		defer func() { <-entry.sem }()
+	case <-ctx.Done():
+		return settings{}, fmt.Errorf("cls provisioning canceled while waiting")
+	}
+	if err := ctx.Err(); err != nil {
+		return settings{}, fmt.Errorf("cls provisioning canceled")
+	}
 	if entry.set && p.now().Sub(entry.value.resolvedAt) < cacheTTL {
 		if entry.value.topicID == "" {
 			return settings{}, fmt.Errorf("cls provisioning failed recently; retrying later")

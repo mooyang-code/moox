@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"bytes"
 	"encoding/json"
 	"github.com/mooyang-code/moox/packages/security"
 	"os"
@@ -462,51 +461,79 @@ func TestSCFPlanPackageSelectionRequiresExactlyOneOfNameAndID(t *testing.T) {
 	require.ErrorContains(t, err, "needs package_name")
 }
 
-func TestLoadKeepsTheStockCNDefaultsWhenTheRenderedConfigOnlyNamesThePackage(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "app.yaml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(`gateway_client:
-  caller: collector
-  key_file: ./caller-collector.key
-scf_regions:
+// 部署渲染出的 Timer 配置经真实 Load（含 validateSCFPlan）：覆盖 crypto、仅 stockcn、多空间与关闭状态。
+const renderedTimerRegions = `scf_regions:
   ap-nanjing: {vpc_id: vpc-1, subnet_id: subnet-1}
-scf_markets:
-  stockcn: {equity: [ap-nanjing]}
-  crypto: {spot: [ap-nanjing]}
-scf_plan:
+`
+
+func renderedTimerPlan(markets, spaces string) string {
+	return renderedTimerRegions + "scf_markets:\n" + markets + `scf_plan:
   cloud_account_id: acct
+  memory_mb: 128
+  symbols_per_function: 50
   access_routes:
     ap-nanjing: {access_address: "10.0.0.5:11004", access_id: access@storage}
   spaces:
-    stockcn: {package_name: pkg-stock, namespace: ns-stock}
-    crypto: {package_name: pkg-crypto, namespace: ns-crypto}
-`), 0o600))
-	defaults := defaultSCFPlan()
-	cfg := Default()
-	require.NoError(t, yamlDecodeStrict(t, cfgPath, cfg))
-	cfg.SCFPlan.mergeSpaceDefaults(defaults.Spaces)
-	stock := cfg.SCFPlan.Spaces["stockcn"]
-	require.Equal(t, "pkg-stock", stock.PackageName)
-	require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"), "stockcn 每函数 40 个标的的默认值不能丢")
-	require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn").Concurrency)
-	require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn").StaggerMS)
-	// crypto 没有专属默认值，沿用全局。
-	require.Equal(t, 50, cfg.SCFPlan.symbolsPerFunction("crypto"))
-	require.Equal(t, 50, cfg.SCFPlan.fetchFor("crypto").Concurrency)
-	// 配置里显式写了的字段优先。
-	explicit := SCFPlanConfig{Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {SymbolsPerFunction: 25}}}
-	explicit.mergeSpaceDefaults(defaults.Spaces)
-	require.Equal(t, 25, explicit.Spaces["stockcn"].SymbolsPerFunction)
-	require.NotNil(t, explicit.Spaces["stockcn"].Fetch)
+` + spaces
 }
 
-func yamlDecodeStrict(t *testing.T, path string, out *Config) error {
-	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	decoder := yaml.NewDecoder(bytes.NewReader(raw))
-	decoder.KnownFields(true)
-	return decoder.Decode(out)
+func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	t.Run("crypto only", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
+		require.NoError(t, err)
+		require.Equal(t, []string{"crypto"}, cfg.fetchPlanSpaces())
+		deploy, err := cfg.fetchPlanDeploy("crypto")
+		require.NoError(t, err)
+		require.Equal(t, "pkg-crypto", deploy.PackageName)
+		require.Equal(t, "ns-crypto", deploy.Namespace)
+		require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
+		require.Equal(t, 50, cfg.SCFPlan.symbolsPerFunction("crypto"))
+	})
+	t.Run("only stockcn keeps its own defaults", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  stockcn: {equity: [ap-nanjing]}\n", "    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
+		require.NoError(t, err)
+		require.Equal(t, []string{"stockcn"}, cfg.fetchPlanSpaces(), "只配置 stockcn 也要启动管理器")
+		require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"))
+		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn").Concurrency)
+		require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn").StaggerMS)
+	})
+	t.Run("several spaces", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
+			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
+		require.NoError(t, err)
+		require.Equal(t, []string{"crypto", "stockcn"}, cfg.fetchPlanSpaces())
+	})
+	t.Run("two spaces sharing one package are rejected", func(t *testing.T) {
+		_, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
+			"    crypto: {package_name: shared}\n    stockcn: {package_name: shared}\n")))
+		require.ErrorContains(t, err, "share code package")
+	})
+	t.Run("disabled renders nothing", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, "database: {path: ./c.db}\n"))
+		require.NoError(t, err)
+		require.Empty(t, cfg.fetchPlanSpaces())
+	})
+}
+
+func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
+	defaults := defaultSCFPlan()
+	// 只写了 rps：并发、错峰等沿用 stockcn 的默认值，不会变成零。
+	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {Fetch: &SCFPlanFetchConfig{RPS: 10}}}}
+	plan.mergeSpaceDefaults(defaults.Spaces)
+	fetch := plan.fetchFor("stockcn")
+	require.Equal(t, 10, fetch.RPS)
+	require.Equal(t, 8, fetch.Concurrency)
+	require.Equal(t, 35000, fetch.StaggerMS)
+	require.Positive(t, fetch.Concurrency)
+	require.Positive(t, fetch.Burst)
+	require.Positive(t, fetch.RequestTimeoutMS)
+
+	// 没有内置默认的空间只写部分字段：从全局默认补齐。
+	other := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"futures": {Fetch: &SCFPlanFetchConfig{Concurrency: 4}}}}
+	other.mergeSpaceDefaults(defaults.Spaces)
+	got := other.fetchFor("futures")
+	require.Equal(t, 4, got.Concurrency)
+	require.Equal(t, defaults.Fetch.RPS, got.RPS)
+	require.Equal(t, defaults.Fetch.RequestTimeoutMS, got.RequestTimeoutMS)
 }
