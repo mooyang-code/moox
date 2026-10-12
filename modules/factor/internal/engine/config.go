@@ -231,9 +231,9 @@ func setDuration(target *time.Duration, fallback time.Duration) {
 }
 
 // autoPythonWorkers 按目标机器核数选择 Python 因子进程数（配置里 workers 不写或为 0 时）：
-// 取核数的一半，留出余量给 Go 进程与同机其他服务，范围 [4, 64]。
+// 取核数的 3/4（计算只在每分钟周期里突发，其余时间空闲），留出余量给 Go 进程与同机其他服务，范围 [4, 64]。
 func autoPythonWorkers(cpus int) int {
-	return min(64, max(4, cpus/2))
+	return min(64, max(4, cpus*3/4))
 }
 
 // autoReadWorkers 按核数选择读取并发（read_workers 不写或为 0 时），范围 [4, 16]。
