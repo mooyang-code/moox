@@ -223,6 +223,7 @@ status = "enabled"
 enabled = false
 # memory_mb = 128               # 每个函数内存，默认 128
 # symbols_per_function = 50     # 每个函数负责的标的数，默认 50
+# assumed_egress_ips = 1        # 函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警
 
 # [scf_plan.cloud_account]
 # account_id = "tencent-scf"
