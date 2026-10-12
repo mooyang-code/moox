@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -144,4 +145,46 @@ func TestMarketFetcherTimerDeployRemovesLegacyEmbeddedCA(t *testing.T) {
 	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	require.NotContains(t, fake.configured[0].Environment, "MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	require.NotContains(t, fake.configured[0].Environment, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
+}
+
+// 上线时发现：环境里不带 CLS 配置的 Timer 函数创建被环境校验拒绝，因为 CloudNode 的自动补齐发生在校验之后。
+// 补齐必须先于校验：提交的环境没有 CLS 变量也能创建，且创建出的函数带齐 CLS 配置。
+func TestMarketFetcherTimerCreateWithoutCLSEnvironmentGetsItInjectedBeforeValidation(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	submitted := completeTimerEnvironment()
+	submitted["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+	for key := range submitted {
+		if strings.HasPrefix(key, "MOOX_CLS_") {
+			delete(submitted, key)
+		}
+	}
+	readback := completeTimerEnvironment()
+	readback["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{err: errors.New("ResourceNotFound.FunctionName")}, {info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: readback}}}}
+	svc := &Service{
+		catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+		clsEnvironment:   clsSettingsEnvironment{},
+	}
+	metadata := &structpb.Struct{}
+	require.NoError(t, metadata.UnmarshalJSON([]byte(`{"biz_type":"market_fetcher","function_mode":"kline"}`)))
+	_, err := svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"memory_size": "64"}, Environment: submitted, Metadata: metadata}, 0)
+	require.NoError(t, err)
+	require.Len(t, fake.created, 1)
+	require.Equal(t, "true", fake.created[0].Environment["MOOX_CLS_ENABLED"])
+	require.Equal(t, "topic", fake.created[0].Environment["MOOX_CLS_TOPIC_ID"])
+}
+
+// clsSettingsEnvironment 补齐 Timer 环境校验要求的 CLS 变量。
+type clsSettingsEnvironment struct{}
+
+func (clsSettingsEnvironment) Apply(_ context.Context, _ string, _ clsprovision.Credential, environment map[string]string) bool {
+	environment["MOOX_CLS_ENABLED"] = "true"
+	environment["MOOX_CLS_ENDPOINT"] = "ap-guangzhou.cls.tencentcs.com"
+	environment["MOOX_CLS_TOPIC_ID"] = "topic"
+	environment["MOOX_CLS_TIMEOUT_MS"] = "3000"
+	environment["MOOX_CLS_SECRET_ID"] = "cls-id"
+	environment["MOOX_CLS_SECRET_KEY"] = "cls-secret"
+	return true
 }

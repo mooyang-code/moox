@@ -649,6 +649,11 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		return fmt.Errorf("create reservation identity is required")
 	}
 	node.PackageVersion = pkg.Version
+	// 日志服务（CLS）环境必须在环境校验之前补齐：Timer 采集函数的环境校验要求带 CLS 配置，
+	// 之后的校验、创建与读回比对都基于补齐后的环境。
+	if environment := copyStringMap(item.GetEnvironment()); s.applyCLSEnvironment(ctx, *account, node, environment) {
+		item.Environment = environment
+	}
 	metadata := parseJSONMap(node.Metadata)
 	config := item.GetConfig()
 	memorySize := configInt64(config, "memory_size", 256)
