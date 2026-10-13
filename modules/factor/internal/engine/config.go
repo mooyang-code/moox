@@ -29,6 +29,7 @@ type Config struct {
 	Python        PythonConfig                     `yaml:"python"`
 	Pipeline      PipelineConfig                   `yaml:"pipeline"`
 	Recalc        RecalcConfig                     `yaml:"recalc"`
+	Gap           GapConfig                        `yaml:"gap"`
 }
 
 // IdentityConfig names the engine; engine_id must stay stable across restarts
@@ -89,6 +90,25 @@ type RecalcConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
+// GapConfig 是 K 线空洞防护：回看窗口有洞的因子对该标的当期失败，账本永久记录，补齐后定时只填充重算。
+// 默认关闭：下游（Storage、策略、Trade）全部支持 gap_subjects 与保持标记之后才打开。
+// 设计见 docs/计划/因子窗口空洞防护详细设计.md。
+type GapConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// LedgerDir 是账本目录（按月一个 JSONL 文件，永不自动删除，纳入备份）。
+	LedgerDir string `yaml:"ledger_dir"`
+	// SweepInterval 是恢复轮询间隔；Settle 是发现后至少等多久才尝试恢复（给自动补采留时间）。
+	SweepInterval time.Duration `yaml:"sweep_interval"`
+	Settle        time.Duration `yaml:"settle"`
+	// GiveUpAfter 是超过多久仍补不上就记 gave_up 并告警，交给人工。
+	GiveUpAfter time.Duration `yaml:"give_up_after"`
+	// MaxGroupsPerSweep 与 MaxSpan 限制一轮恢复的工作量：每个组一次最多处理 MaxSpan 个周期，避免长时间占住集合锁。
+	MaxGroupsPerSweep int `yaml:"max_groups_per_sweep"`
+	MaxSpan           int `yaml:"max_span"`
+	// MassRatio 是整期大面积缺失的告警阈值：有空洞或上游失败的标的占预期的比例达到它时输出 ERROR 日志；0 表示不告警。
+	MassRatio float64 `yaml:"mass_ratio"`
+}
+
 // Load reads the engine config; relative paths resolve against the directory
 // that contains the config directory.
 func Load(path string) (*Config, error) {
@@ -146,6 +166,10 @@ func Default() *Config {
 			WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute,
 		},
 		Recalc: RecalcConfig{ChunkPeriods: 500, PollInterval: 5 * time.Second},
+		Gap: GapConfig{
+			LedgerDir: "./data/gap", SweepInterval: 5 * time.Minute, Settle: 5 * time.Minute, GiveUpAfter: 6 * time.Hour,
+			MaxGroupsPerSweep: 20, MaxSpan: 60, MassRatio: 0.2,
+		},
 	}
 }
 
@@ -173,12 +197,21 @@ func (c *Config) applyDefaults() {
 	setDuration(&c.Pipeline.PeriodBudgetMax, d.Pipeline.PeriodBudgetMax)
 	setInt(&c.Recalc.ChunkPeriods, d.Recalc.ChunkPeriods)
 	setDuration(&c.Recalc.PollInterval, d.Recalc.PollInterval)
+	setString(&c.Gap.LedgerDir, d.Gap.LedgerDir)
+	setDuration(&c.Gap.SweepInterval, d.Gap.SweepInterval)
+	setDuration(&c.Gap.Settle, d.Gap.Settle)
+	setDuration(&c.Gap.GiveUpAfter, d.Gap.GiveUpAfter)
+	setInt(&c.Gap.MaxGroupsPerSweep, d.Gap.MaxGroupsPerSweep)
+	setInt(&c.Gap.MaxSpan, d.Gap.MaxSpan)
+	if c.Gap.MassRatio == 0 {
+		c.Gap.MassRatio = d.Gap.MassRatio
+	}
 }
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Python.WorkerPath, &c.Python.FactorsDir,
+		&c.Python.WorkerPath, &c.Python.FactorsDir, &c.Gap.LedgerDir,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {
@@ -212,6 +245,9 @@ func (c *Config) Validate() error {
 	require(c.Python.Workers > 0 && c.Python.TaskTimeout > 0, "python.workers and python.task_timeout must be positive")
 	require(c.Pipeline.PeriodBudgetMin <= c.Pipeline.PeriodBudgetMax, "pipeline.period_budget_min must not exceed period_budget_max")
 	require(c.Recalc.ChunkPeriods > 0, "recalc.chunk_periods must be positive")
+	require(c.Gap.SweepInterval > 0 && c.Gap.Settle >= 0 && c.Gap.GiveUpAfter > 0, "gap.sweep_interval, gap.settle and gap.give_up_after must be positive")
+	require(c.Gap.MaxGroupsPerSweep > 0 && c.Gap.MaxSpan > 0, "gap.max_groups_per_sweep and gap.max_span must be positive")
+	require(c.Gap.MassRatio >= 0 && c.Gap.MassRatio <= 1, "gap.mass_ratio must be within [0, 1]")
 	if len(problems) > 0 {
 		return errors.New("invalid factor engine config: " + strings.Join(problems, "; "))
 	}

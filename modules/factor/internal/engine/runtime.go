@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
@@ -45,6 +46,7 @@ type Runtime struct {
 	monitor  *Health
 	metrics  *observability.Metrics
 	locks    *setlock.Locks
+	gap      *gapledger.Ledger
 	lease    *leaseState
 	syncer   *catalogSyncer
 	health   *factorhealth.State
@@ -117,13 +119,25 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		return nil, fmt.Errorf("register factor pipeline metrics: %w", err)
 	}
 	clock := periodclock.Continuous{}
-	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.python, clock, pipeline.Config{
+	pipelineConfig := pipeline.Config{
 		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
 		ReadTimeout:         cfg.Pipeline.ReadTimeout,
 		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
 		WriteRetryBackoff: 300 * time.Millisecond, PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
 		BackgroundWarmup: true,
-	})
+	}
+	if cfg.Gap.Enabled {
+		ledger, expired, ledgerErr := gapledger.Open(cfg.Gap.LedgerDir, time.Now, cfg.Gap.GiveUpAfter)
+		if ledgerErr != nil {
+			return nil, fmt.Errorf("open factor gap ledger: %w", ledgerErr)
+		}
+		r.gap = ledger
+		logExpired(expired, cfg.Gap.GiveUpAfter)
+		r.metrics.GapGaveUp.Add(float64(len(expired)))
+		log.InfoContextf(ctx, "factor_gap_ledger_opened dir=%s pending=%d ignored_lines=%d expired=%d", cfg.Gap.LedgerDir, ledger.PendingCount(), ledger.Ignored(), len(expired))
+		pipelineConfig.GapCheck, pipelineConfig.MassRatio, pipelineConfig.GapSink = true, cfg.Gap.MassRatio, ledger
+	}
+	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.python, clock, pipelineConfig)
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 
@@ -149,6 +163,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval}
+	if r.gap != nil {
+		filler := &gapFiller{
+			ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
+			active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
+		}
+		r.goRun(appCtx, filler.Run)
+	}
 
 	r.goRun(appCtx, r.syncer.Run)
 	r.goRun(appCtx, beat.Run)
@@ -252,12 +273,14 @@ func (r *Runtime) reportMetrics(ctx context.Context) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	knownSets := make(map[string]struct{})
+	var gapSkipped int64
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			r.metrics.PythonBusy.Set(float64(r.python.Busy()))
+			r.reportGapMetrics(&gapSkipped)
 			currentSets := make(map[string]struct{})
 			if consumer := r.currentConsumer(); consumer != nil {
 				for _, lane := range consumer.LaneStatuses() {
@@ -275,6 +298,23 @@ func (r *Runtime) reportMetrics(ctx context.Context) {
 	}
 }
 
+// reportGapMetrics 把账本的待恢复数、累计跳过数与写盘状态同步到指标。
+func (r *Runtime) reportGapMetrics(lastSkipped *int64) {
+	if r.gap == nil {
+		return
+	}
+	r.metrics.GapPending.Set(float64(r.gap.PendingCount()))
+	if total := r.gap.SkippedTotal(); total > *lastSkipped {
+		r.metrics.GapSkipped.Add(float64(total - *lastSkipped))
+		*lastSkipped = total
+	}
+	degraded := 0.0
+	if r.gap.Degraded() {
+		degraded = 1
+	}
+	r.metrics.GapLedgerDegraded.Set(degraded)
+}
+
 func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	catalog := r.catalog.Status()
 	lease := r.lease.snapshot()
@@ -285,6 +325,10 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	r.monitor.SetDependency("python", pythonReady)
 	r.monitor.SetDependency("eventbus", consumerReady)
 	r.monitor.SetDependency("lease", !lease.Conflict)
+	if r.gap != nil {
+		// 账本写盘失败：账本可能不完整，健康检查降级（周期推进不受影响）。
+		r.monitor.SetDependency("gap_ledger", !r.gap.Degraded())
+	}
 	check := r.monitor.Check(time.Now())
 	state := "ok"
 	if !check.Healthy {
@@ -294,6 +338,10 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 		"reasons": check.Reasons, "engine_id": r.identity.EngineID, "boot_id": r.identity.BootID,
 		"catalog_hash": catalog.Hash, "catalog_sets": catalog.Sets, "consumer_ready": consumerReady,
 		"lease_conflict": lease.Conflict,
+	}
+	if r.gap != nil {
+		details["gap_pending"] = r.gap.PendingCount()
+		details["gap_ledger_degraded"] = r.gap.Degraded()
 	}
 	if !catalog.SyncedAt.IsZero() {
 		details["catalog_synced_at"] = catalog.SyncedAt.Format(time.RFC3339)
@@ -342,6 +390,9 @@ func (r *Runtime) Close() error {
 		r.reconcileMu.Unlock()
 		if r.python != nil {
 			r.err = errors.Join(r.err, r.python.Close())
+		}
+		if r.gap != nil {
+			r.err = errors.Join(r.err, r.gap.Close())
 		}
 		if r.gateway != nil {
 			r.err = errors.Join(r.err, r.gateway.Close())

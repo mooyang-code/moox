@@ -34,6 +34,8 @@ type Selection struct {
 	Factors  []domain.FactorDef
 	Subjects []string
 	Columns  []string
+	// FillOnly 只填充：窗口检查通过才计算并写入，有洞与失败都不写任何字段，也不写 carry 列。用于 K 线空洞补齐后的恢复。
+	FillOnly bool
 }
 
 // SelectionSource is consulted under the set lock before every chunk attempt,
@@ -154,6 +156,43 @@ func (e *Executor) RunChunk(ctx context.Context, selection Selection, start, end
 	return e.runner.Run(ctx, plan(selection, start, end))
 }
 
+// RunChunkWith 先取集合锁，再在锁内调用 source 重新取得集合、因子、标的与源列，运行一个显式区间，并在仍持有锁时调用
+// after（可为 nil）。恢复用它在锁内重读待办、写入并确认，锁释放之后发生的新失效不会被这次确认移除。
+// source 返回空标的集合时不运行。
+func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, start, end time.Time, after func(Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
+	if e == nil || e.runner == nil {
+		return pipeline.Outcome{}, errors.New("factor recalc runner is required")
+	}
+	if source == nil {
+		return pipeline.Outcome{}, errors.New("recalc selection source is required")
+	}
+	// 先在锁外取一次，只为知道要锁哪个集合；真正使用的选择在锁内重读。
+	probe, err := source(ctx)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
+	unlock, err := e.lock(ctx, probe.Set.SetID)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return pipeline.Outcome{}, err
+	}
+	selection, err := source(ctx)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
+	if len(selection.Subjects) == 0 {
+		return pipeline.Outcome{}, nil
+	}
+	outcome, runErr := e.runner.Run(ctx, plan(selection, start, end))
+	if after != nil {
+		after(selection, outcome, runErr)
+	}
+	return outcome, runErr
+}
+
 // runChunkWithRetry retries a chunk only for transient Storage failures. Progress
 // is committed after a successful chunk, so a final failure still leaves the job
 // resumable from the last completed chunk.
@@ -248,7 +287,7 @@ func plan(selection Selection, start, end time.Time) pipeline.Plan {
 		TargetStart: start, TargetEnd: end,
 		Expected:     append([]string(nil), selection.Subjects...),
 		Available:    append([]string(nil), selection.Subjects...),
-		CarryColumns: selection.Columns, WriteCarry: true,
+		CarryColumns: selection.Columns, WriteCarry: !selection.FillOnly, FillOnly: selection.FillOnly,
 	}
 }
 

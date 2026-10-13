@@ -48,10 +48,12 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 			return Computation{}, err
 		}
 	}
+	gaps := loaded.Gaps
 	available := intersectLists(plan.Expected, loaded.Available)
 	missing := subjectDifference(plan.Expected, available)
 	missing = uniqueSorted(append(missing, loaded.FailedSubjects...))
 	computation := Computation{
+		CrossPeriods: make(map[string]map[int64]periodOutcome),
 		Results:      make(map[string]map[string]pyexec.ItemResult, len(plan.Factors)),
 		FactorStates: make(map[string]storageio.FactorState, len(plan.Factors)),
 	}
@@ -59,7 +61,14 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	for _, factor := range plan.Factors {
 		status := "complete"
 		failed := append([]string(nil), missing...)
+		// 回看窗口有 K 线空洞的标的对该因子失败（gap_subjects 是 failed_subjects 的子集）。
+		gapSubjects := gaps.FactorSubjects(factor.FactorID)
+		failed = uniqueSorted(append(failed, gapSubjects...))
 		if factor.FactorType == domain.FactorTypeCrossSection && len(missing) > 0 && !factor.AllowPartialUniverse {
+			status = "skipped"
+		}
+		// 严格截面因子：实时周期只要有标的有洞就整因子 skipped；补算按周期逐个跳过（见下面的任务生成），不整块跳过。
+		if factor.FactorType == domain.FactorTypeCrossSection && len(gapSubjects) > 0 && !factor.AllowPartialUniverse && plan.Mode == ModeLive {
 			status = "skipped"
 		}
 		if factor.FactorType == domain.FactorTypeCrossSection && len(available) == 0 {
@@ -71,7 +80,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		computation.Results[factor.FactorID] = make(map[string]pyexec.ItemResult)
 		computation.FactorStates[factor.FactorID] = storageio.FactorState{
 			FactorID: factor.FactorID, Status: status, FailedSubjects: failed, SourceHash: factor.SourceHash,
-			DefinitionHash: domain.DefinitionHash(factor),
+			DefinitionHash: domain.DefinitionHash(factor), GapSubjects: gapSubjects,
 		}
 	}
 	addResult := func(factorID, key string, item pyexec.ItemResult) {
@@ -123,6 +132,11 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 			factorTargets = targets
 		}
 		for _, factorTarget := range factorTargets {
+			// 严格截面因子在该周期有标的有洞：这个周期不算（其余周期照常），不能用缺了标的的全集算排名与标准化。
+			if !factor.AllowPartialUniverse && len(gaps.Subjects(factor.FactorID, factorTarget)) > 0 {
+				setCrossPeriod(&computation, factor.FactorID, factorTarget, periodGap)
+				continue
+			}
 			tasks = append(tasks, computeTask{cross: true, factors: []domain.FactorDef{factor}, target: factorTarget})
 		}
 	}
@@ -168,13 +182,25 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 			defer workersDone.Done()
 			for task := range jobs {
 				frame := any(panel)
-				contextValues, contextErr := crossSectionContext(r.clock, plan, task.target, task.factors, available)
+				// 允许部分全集的截面因子：该周期有洞的标的不进 panel 与 available_subjects，用剩下的计算。
+				taskAvailable, excluded := available, map[string]struct{}(nil)
+				if task.cross {
+					if dropped := gaps.Subjects(task.factors[0].FactorID, task.target); len(dropped) > 0 {
+						excluded = make(map[string]struct{}, len(dropped))
+						for _, subject := range dropped {
+							excluded[subject] = struct{}{}
+						}
+						taskAvailable = subjectDifference(available, dropped)
+						frame = filterPanel(panel, excluded)
+					}
+				}
+				contextValues, contextErr := crossSectionContext(r.clock, plan, task.target, task.factors, taskAvailable)
 				if task.cross && plan.Mode == ModeRecalc && contextErr == nil {
 					factorStart, windowErr := r.clock.Window(task.target, plan.Set.Freq, task.factors[0].LookbackPeriods)
 					if windowErr != nil {
 						contextErr = windowErr
 					} else {
-						frame = panels.slice(factorStart[0], task.target.Add(freqDuration))
+						frame = filterPanel(panels.slice(factorStart[0], task.target.Add(freqDuration)), excluded)
 						contextValues["target_period_times"] = []string{task.target.UTC().Format(time.RFC3339Nano)}
 					}
 				}
@@ -212,6 +238,15 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 					}
 					if callErr != nil {
 						item = pyexec.ItemResult{FactorID: factor.FactorID, Err: callErr}
+					}
+					if task.cross {
+						outcome := periodOK
+						if item.Err != nil {
+							outcome = periodFailed
+						}
+						statesMu.Lock()
+						setCrossPeriod(&computation, factor.FactorID, task.target, outcome)
+						statesMu.Unlock()
 					}
 					if task.cross && item.Err != nil {
 						statesMu.Lock()
@@ -482,4 +517,29 @@ func subjectDifference(expected, available []string) []string {
 		}
 	}
 	return uniqueSorted(missing)
+}
+
+// setCrossPeriod 记录截面因子一个目标周期的结果（调用方负责并发保护）。
+func setCrossPeriod(computation *Computation, factorID string, period time.Time, outcome periodOutcome) {
+	if computation.CrossPeriods[factorID] == nil {
+		computation.CrossPeriods[factorID] = make(map[int64]periodOutcome)
+	}
+	computation.CrossPeriods[factorID][period.UTC().Unix()] = outcome
+}
+
+// filterPanel 返回去掉指定标的的 panel（subject_id 是第三列）；没有要去掉的标的时原样返回。
+func filterPanel(frame storageio.Frame, exclude map[string]struct{}) storageio.Frame {
+	if len(exclude) == 0 {
+		return frame
+	}
+	out := storageio.Frame{SubjectID: frame.SubjectID, Columns: frame.Columns, Rows: make([][]any, 0, len(frame.Rows))}
+	for _, row := range frame.Rows {
+		if subject, ok := row[2].(string); ok {
+			if _, dropped := exclude[subject]; dropped {
+				continue
+			}
+		}
+		out.Rows = append(out.Rows, row)
+	}
+	return out
 }

@@ -85,3 +85,22 @@ func TestEngineConfigResolvesRelativePythonBin(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "python3", cfg.Python.Bin, "a bare command is looked up on PATH")
 }
+
+// 空洞防护默认关闭，默认值与账本目录按配置根目录解析；不合法的取值被拒绝。
+func TestEngineConfigGapDefaultsAndValidation(t *testing.T) {
+	path := writeEngineConfig(t, minimalEngineConfig)
+	root := filepath.Dir(filepath.Dir(path))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.False(t, cfg.Gap.Enabled, "默认关闭")
+	require.Equal(t, filepath.Join(root, "data/gap"), cfg.Gap.LedgerDir)
+	require.Equal(t, 5*time.Minute, cfg.Gap.SweepInterval)
+	require.Equal(t, 6*time.Hour, cfg.Gap.GiveUpAfter)
+	require.Equal(t, 20, cfg.Gap.MaxGroupsPerSweep)
+	require.Equal(t, 60, cfg.Gap.MaxSpan)
+	require.InDelta(t, 0.2, cfg.Gap.MassRatio, 1e-9)
+
+	bad := writeEngineConfig(t, minimalEngineConfig+"\ngap:\n  mass_ratio: 1.5\n")
+	_, err = Load(bad)
+	require.ErrorContains(t, err, "gap.mass_ratio")
+}

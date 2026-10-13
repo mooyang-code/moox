@@ -68,7 +68,7 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 		result.Frames[subject] = frame
 	}
 	if live {
-		r.windows.store(plan, result.Frames)
+		r.storeWindows(ctx, plan, result.Frames)
 	}
 	for _, subject := range subjects {
 		if _, failed := failedSet[subject]; !failed {
@@ -282,7 +282,7 @@ func (r *Runner) warmup(ctx context.Context, plan Plan, subjects []string) bool 
 			plan.TargetStart.UTC().Format(time.RFC3339), plan.TargetEnd.UTC().Format(time.RFC3339), time.Since(started).Round(time.Millisecond), err)
 		return false
 	}
-	r.windows.store(plan, frames)
+	r.storeWindows(ctx, plan, frames)
 	log.Infof("factor_warmup_done set_id=%s subjects=%d warmed=%d failed=%d window=%s/%s duration=%s", plan.Set.SetID, len(subjects), len(frames), len(failed),
 		plan.TargetStart.UTC().Format(time.RFC3339), plan.TargetEnd.UTC().Format(time.RFC3339), time.Since(started).Round(time.Millisecond))
 	return len(failed) == 0
@@ -311,4 +311,26 @@ func keysOf[V any](values map[string]V) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+// storeWindows 把读到的窗口写进实时缓存：缓存里的窗口一定无洞。有洞的标的不写缓存，标记为 dirty，下期整窗口读取；
+// 读到完整窗口的标的解除 dirty。所有写缓存的入口（实时周期与后台预热）都经过这里，所以在途的旧预热结果也只可能写入无洞窗口。
+// 未开启空洞检查时与直接写缓存完全一致。
+func (r *Runner) storeWindows(ctx context.Context, plan Plan, frames map[string]*storageio.Frame) {
+	if !r.cfg.GapCheck {
+		r.windows.store(plan, frames)
+		return
+	}
+	holes := r.cacheHoles(ctx, plan, frames)
+	clean := make(map[string]*storageio.Frame, len(frames))
+	cleared := make([]string, 0, len(frames))
+	for subject, frame := range frames {
+		if _, bad := holes[subject]; bad {
+			continue
+		}
+		clean[subject] = frame
+		cleared = append(cleared, subject)
+	}
+	r.windows.store(plan, clean)
+	r.windows.markDirty(plan, holes, cleared)
 }

@@ -332,3 +332,63 @@ func testRecalcFactor(id, status string, lookback int) recalcMember {
 		LookbackPeriods: lookback,
 	}}
 }
+
+// RunChunkWith：先取集合锁再在锁内重读选择；after 在仍持有锁时调用；FillOnly 传到计划里并且不写 carry 列。
+func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
+	locks := &countingLocks{}
+	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+		require.True(t, locks.held, "运行必须在集合锁内")
+		return pipeline.Outcome{Status: "complete", Items: map[pipeline.ItemKey]pipeline.ItemStatus{{FactorID: "f", Subject: "BTC"}: pipeline.ItemWritten}}, nil
+	}}
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithLocks(locks))
+	calls := 0
+	source := func(context.Context) (Selection, error) {
+		calls++
+		selection := executorSelection("BTC")
+		selection.FillOnly = true
+		if locks.held {
+			selection.Columns = []string{"close", "reloaded-under-lock"}
+		}
+		return selection, nil
+	}
+	afterHeld := false
+	start := testWindow(1).Start
+
+	outcome, err := executor.RunChunkWith(context.Background(), source, start, start.Add(2*time.Minute), func(selection Selection, outcome pipeline.Outcome, runErr error) {
+		afterHeld = locks.held
+		require.NoError(t, runErr)
+		require.Equal(t, []string{"close", "reloaded-under-lock"}, selection.Columns)
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, calls, "锁外探测一次，锁内重读一次")
+	require.True(t, afterHeld, "after 在持有集合锁时调用")
+	require.Equal(t, pipeline.ItemWritten, outcome.Items[pipeline.ItemKey{FactorID: "f", Subject: "BTC"}])
+	plans := runner.snapshot()
+	require.Len(t, plans, 1)
+	require.True(t, plans[0].FillOnly)
+	require.False(t, plans[0].WriteCarry, "只填充不写 carry 列")
+	require.Equal(t, []string{"close", "reloaded-under-lock"}, plans[0].CarryColumns, "源列仍读取（计算输入需要）")
+	require.False(t, locks.held)
+}
+
+// 锁内重读发现没有标的：不运行，也不调用 after。
+func TestRunChunkWithSkipsWhenSelectionBecomesEmpty(t *testing.T) {
+	locks := &countingLocks{}
+	runner := &recordingRunner{}
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithLocks(locks))
+	start := testWindow(1).Start
+	calls := 0
+	source := func(context.Context) (Selection, error) {
+		calls++
+		if calls == 1 {
+			return executorSelection("BTC"), nil
+		}
+		return executorSelection(), nil // 等锁期间待办已被处理
+	}
+	afterCalled := false
+	_, err := executor.RunChunkWith(context.Background(), source, start, start.Add(time.Minute), func(Selection, pipeline.Outcome, error) { afterCalled = true })
+	require.NoError(t, err)
+	require.Empty(t, runner.snapshot())
+	require.False(t, afterCalled)
+}

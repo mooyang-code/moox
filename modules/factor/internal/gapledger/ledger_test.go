@@ -1,0 +1,142 @@
+package gapledger
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
+	"github.com/stretchr/testify/require"
+)
+
+var t0 = time.Date(2026, 10, 14, 6, 0, 0, 0, time.UTC)
+
+type clock struct{ now time.Time }
+
+func (c *clock) Now() time.Time { return c.now }
+
+func gap(subject string, minute int, factors ...string) []pipeline.GapEntry {
+	var out []pipeline.GapEntry
+	for _, factor := range factors {
+		out = append(out, pipeline.GapEntry{
+			SetID: "fset", Subject: subject, Period: t0.Add(time.Duration(minute) * time.Minute), FactorID: factor, DefinitionHash: "h-" + factor,
+			Missing: []time.Time{t0.Add(-time.Minute)}, Tags: []string{""}, TriggerEventID: "evt",
+		})
+	}
+	return out
+}
+
+func open(t *testing.T, dir string, c *clock, giveUp time.Duration) (*Ledger, []Entry) {
+	t.Helper()
+	ledger, expired, err := Open(dir, c.Now, giveUp)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ledger.Close() })
+	return ledger, expired
+}
+
+// 追加后重启回放得到同样的待恢复集合；终结后不再待恢复。
+func TestLedgerReplayRebuildsPendingSet(t *testing.T) {
+	dir, c := t.TempDir(), &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a", "b"), gap("ETH", 1, "a")...)))
+	pending := ledger.Pending()
+	require.Len(t, pending, 3)
+	require.Equal(t, "BTC", pending[0].Subject)
+
+	require.NoError(t, ledger.MarkRepaired([]Ref{pending[0].Ref()}))
+	require.Equal(t, 2, ledger.PendingCount())
+	require.NoError(t, ledger.Close())
+
+	reopened, _ := open(t, dir, c, 0)
+	got := reopened.Pending()
+	require.Len(t, got, 2)
+	require.Equal(t, "b", got[0].FactorID, "BTC 的因子 a 已 repaired，回放后不再待恢复")
+	require.Equal(t, "evt", got[0].Trigger)
+	require.Equal(t, []time.Time{t0.Add(-time.Minute)}, got[0].Missing)
+}
+
+// 同键再次 skip：skipID 取最后一条，发现时间取最早；用旧 skipID 确认不会移除新的待办。
+func TestLedgerReSkipChangesSkipIDAndStaleRepairedKeepsEntry(t *testing.T) {
+	dir, c := t.TempDir(), &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	require.NoError(t, ledger.RecordGaps(context.Background(), gap("BTC", 0, "a")))
+	first := ledger.Pending()[0]
+
+	c.now = t0.Add(2 * time.Minute)
+	require.NoError(t, ledger.RecordGaps(context.Background(), gap("BTC", 0, "a")))
+	second := ledger.Pending()[0]
+	require.NotEqual(t, first.SkipID, second.SkipID, "每条 skip 行都带新的 skipID")
+	require.Equal(t, first.FirstSeen, second.FirstSeen, "发现时间保留最早的")
+
+	require.NoError(t, ledger.MarkRepaired([]Ref{first.Ref()}))
+	require.Equal(t, 1, ledger.PendingCount(), "期间再次失效：用旧 skipID 的确认不能移除新的待办")
+	require.NoError(t, ledger.MarkRepaired([]Ref{second.Ref()}))
+	require.Zero(t, ledger.PendingCount())
+
+	// 回放得到同样的结果：旧 skipID 的 repaired 行不会移除新条目。
+	require.NoError(t, ledger.Close())
+	again, _ := open(t, dir, c, 0)
+	require.Zero(t, again.PendingCount())
+}
+
+// 终结后又出现的同键新 skip 是新条目；定义哈希不同的待办互不影响。
+func TestLedgerKeysIncludeDefinitionHash(t *testing.T) {
+	dir, c := t.TempDir(), &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	old := gap("BTC", 0, "a")
+	next := gap("BTC", 0, "a")
+	next[0].DefinitionHash = "h-a-v2"
+	require.NoError(t, ledger.RecordGaps(context.Background(), append(old, next...)))
+	require.Equal(t, 2, ledger.PendingCount())
+	var oldRef Ref
+	for _, entry := range ledger.Pending() {
+		if entry.Hash == "h-a" {
+			oldRef = entry.Ref()
+		}
+	}
+	require.NoError(t, ledger.MarkCancelled([]Ref{oldRef}, "definition_changed"))
+	remaining := ledger.Pending()
+	require.Len(t, remaining, 1)
+	require.Equal(t, "h-a-v2", remaining[0].Hash, "取消旧定义的待办不会误伤新定义的")
+}
+
+// 崩溃留下的半行被忽略，新行不会接在它后面；停机期间超期的待恢复项启动时追加 gave_up。
+func TestLedgerHandlesTruncatedLineAndExpiresOverdueOnOpen(t *testing.T) {
+	dir, c := t.TempDir(), &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	require.NoError(t, ledger.RecordGaps(context.Background(), gap("BTC", 0, "a")))
+	require.NoError(t, ledger.Close())
+	path := filepath.Join(dir, "factor-gap-202610.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o640)
+	require.NoError(t, err)
+	_, err = file.WriteString(`{"event":"skip","at":"2026-10-14T06:0`) // 半行
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	c.now = t0.Add(7 * time.Hour) // 停机期间已超过 6 小时
+	reopened, expired := open(t, dir, c, 6*time.Hour)
+	require.Equal(t, 1, reopened.Ignored())
+	require.Len(t, expired, 1, "停机期间超期的项启动时被标记 gave_up，不会无声消失")
+	require.Zero(t, reopened.PendingCount())
+
+	// 新追加的行可以被回放，不会接在半行后面。
+	require.NoError(t, reopened.RecordGaps(context.Background(), gap("ETH", 1, "a")))
+	require.NoError(t, reopened.Close())
+	final, _ := open(t, dir, c, 0)
+	require.Equal(t, 1, final.PendingCount())
+	require.Equal(t, "ETH", final.Pending()[0].Subject)
+}
+
+// 写盘失败时内存仍是权威（本进程内的恢复不受影响），并标记降级。
+func TestLedgerDiskFailureKeepsMemoryAndMarksDegraded(t *testing.T) {
+	dir, c := t.TempDir(), &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	require.NoError(t, os.Remove(dir))
+	require.NoError(t, os.WriteFile(dir, []byte("not a directory"), 0o600)) // 目录被同名文件占用，之后无法再创建账本文件
+	err := ledger.RecordGaps(context.Background(), gap("BTC", 0, "a"))
+	require.Error(t, err)
+	require.True(t, ledger.Degraded())
+	require.Equal(t, 1, ledger.PendingCount(), "内存里的待办不因写盘失败丢失")
+}

@@ -44,6 +44,9 @@ type liveWindowCache struct {
 type cachedSetWindow struct {
 	source   string
 	subjects map[string]cachedSubjectWindow
+	// dirty 是最近一次读到的窗口有 K 线空洞的标的（值是标记时的窗口结束时间）：它们的窗口不进缓存，也不进后台预热，
+	// 每期在本期内整窗口读取，直到读到的窗口完整为止。
+	dirty map[string]time.Time
 
 	// warmup is the latest live plan that found subjects not warm; pending
 	// subjects wait for the warm-up worker and inflight ones are being read.
@@ -86,7 +89,7 @@ func (c *liveWindowCache) setFor(plan Plan) *cachedSetWindow {
 	set := c.sets[plan.Set.SetID]
 	if set == nil || set.source != source {
 		set = &cachedSetWindow{
-			source: source, subjects: make(map[string]cachedSubjectWindow),
+			source: source, subjects: make(map[string]cachedSubjectWindow), dirty: make(map[string]time.Time),
 			pending: make(map[string]struct{}), inflight: make(map[string]struct{}),
 		}
 		c.sets[plan.Set.SetID] = set
@@ -106,6 +109,11 @@ func (c *liveWindowCache) plan(plan Plan, subjects []string) (map[string]subject
 	reads := make(map[string]subjectRead, len(subjects))
 	var warming []string
 	for _, subject := range subjects {
+		if _, bad := set.dirty[subject]; bad {
+			// 窗口有洞的标的整窗口读取，不用缓存前缀、不进预热：失败原因由空洞检查决定，不能退化成普通的预热失败。
+			reads[subject] = subjectRead{start: plan.TargetStart}
+			continue
+		}
 		cached, ok := set.subjects[subject]
 		covered := ok && !cached.start.After(plan.TargetStart) && cached.end.After(plan.TargetStart)
 		if covered && c.wake != nil && period > 0 && plan.PeriodTime.Sub(cached.end) > liveCatchUpBars*period {
@@ -247,4 +255,30 @@ func rowsBetween(rows [][]any, start, end time.Time) [][]any {
 		out = append(out, row)
 	}
 	return out
+}
+
+// markDirty 标记窗口有洞的标的并把它移出预热队列；cleared 是读到完整窗口的标的，窗口结束时间不早于标记时才解除，
+// 迟到的较旧窗口不能解除较新的标记。
+func (c *liveWindowCache) markDirty(plan Plan, holes map[string]struct{}, cleared []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	set := c.setFor(plan)
+	for subject := range holes {
+		if since, bad := set.dirty[subject]; !bad || plan.TargetEnd.After(since) {
+			set.dirty[subject] = plan.TargetEnd
+		}
+		delete(set.pending, subject)
+	}
+	for _, subject := range cleared {
+		if since, bad := set.dirty[subject]; bad && !plan.TargetEnd.Before(since) {
+			delete(set.dirty, subject)
+		}
+	}
+}
+
+// dirtyCount 返回集合里窗口有洞的标的数（测试与指标用）。
+func (c *liveWindowCache) dirtyCount(plan Plan) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.setFor(plan).dirty)
 }

@@ -167,6 +167,39 @@ func (c *CatalogCache) EnabledSetByDataset(_ context.Context, spaceID, datasetID
 	return domain.FactorSet{}, nil, false, nil
 }
 
+// SetLookup 是按集合 ID 查目录的结果。
+type SetLookup int
+
+const (
+	// SetFound：集合已启用且结果数据集就绪。
+	SetFound SetLookup = iota
+	// SetNotReady：目录尚未加载，或集合的结果数据集还没就绪：本轮等待，不能当作集合已经不存在。
+	SetNotReady
+	// SetGone：目录已加载且里面没有这个启用的集合。
+	SetGone
+)
+
+// SetByID 按集合 ID 取快照里的集合（含因子）。空洞恢复用它在集合锁内重新取得最新的集合与因子定义。
+func (c *CatalogCache) SetByID(setID string) (domain.EngineSet, SetLookup) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.loaded {
+		return domain.EngineSet{}, SetNotReady
+	}
+	for _, set := range c.sets {
+		if set.Set.SetID != setID {
+			continue
+		}
+		if !set.ResultReady {
+			return domain.EngineSet{}, SetNotReady
+		}
+		copied := set
+		copied.Factors = append([]domain.FactorDef(nil), set.Factors...)
+		return copied, SetFound
+	}
+	return domain.EngineSet{}, SetGone
+}
+
 // FilterSubjects renders the collector period subjects of the snapshot's sets.
 func (c *CatalogCache) FilterSubjects(context.Context) ([]string, error) {
 	c.mu.RLock()

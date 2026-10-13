@@ -1,0 +1,252 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
+	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/stretchr/testify/require"
+)
+
+var gapT0 = time.Date(2026, 10, 14, 6, 0, 0, 0, time.UTC)
+
+func gapFactor(id, factorType string, partial bool) domain.FactorDef {
+	code := "def compute(df, params, context): return df"
+	return domain.FactorDef{
+		FactorID: id, Name: id, FactorType: factorType, SourceCode: code, SourceHash: domain.SourceHash(code),
+		InputColumns: []string{"close"}, Outputs: []string{id + "_value"}, ParamsJSON: "{}", LookbackPeriods: 3, AllowPartialUniverse: partial,
+	}
+}
+
+type fakeSets struct {
+	sets    map[string]domain.EngineSet
+	lookups map[string]SetLookup
+}
+
+func (f *fakeSets) SetByID(id string) (domain.EngineSet, SetLookup) {
+	if lookup, ok := f.lookups[id]; ok {
+		return f.sets[id], lookup
+	}
+	if set, ok := f.sets[id]; ok {
+		return set, SetFound
+	}
+	return domain.EngineSet{}, SetGone
+}
+
+type fakeColumns struct{}
+
+func (fakeColumns) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return []string{"close"}, nil
+}
+func (fakeColumns) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+
+type runCall struct {
+	selection  recalcexec.Selection
+	start, end time.Time
+}
+
+// fakeChunks 模拟补算执行器：RunChunkWith 取锁后调用 source（锁内重读），再按 items 给出逐项结果并调用 after。
+type fakeChunks struct {
+	calls  []runCall
+	status func(recalcexec.Selection, time.Time) pipeline.ItemStatus
+	err    error
+}
+
+func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.SelectionSource, start, end time.Time, after func(recalcexec.Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
+	if _, err := source(ctx); err != nil { // 锁外探测
+		return pipeline.Outcome{}, err
+	}
+	selection, err := source(ctx) // 锁内重读
+	if err != nil || len(selection.Subjects) == 0 {
+		return pipeline.Outcome{}, err
+	}
+	f.calls = append(f.calls, runCall{selection: selection, start: start, end: end})
+	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}}
+	for _, factor := range selection.Factors {
+		for _, subject := range selection.Subjects {
+			for at := start; at.Before(end); at = at.Add(time.Minute) {
+				status := pipeline.ItemWritten
+				if f.status != nil {
+					status = f.status(selection, at)
+				}
+				outcome.Items[pipeline.ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at}] = status
+			}
+		}
+	}
+	if after != nil {
+		after(selection, outcome, f.err)
+	}
+	return outcome, f.err
+}
+
+type fakeUniverse struct {
+	subjects []string
+	found    bool
+	err      error
+}
+
+func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, int64) ([]string, bool, error) {
+	return f.subjects, f.found, f.err
+}
+
+type gapFixture struct {
+	ledger *gapledger.Ledger
+	now    time.Time
+	sets   *fakeSets
+	chunks *fakeChunks
+	filler *gapFiller
+}
+
+func newGapFixture(t *testing.T, universe fakeUniverse, factors ...domain.FactorDef) *gapFixture {
+	t.Helper()
+	f := &gapFixture{now: gapT0.Add(10 * time.Minute), chunks: &fakeChunks{}}
+	ledger, _, err := gapledger.Open(t.TempDir(), func() time.Time { return f.now }, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ledger.Close() })
+	f.ledger = ledger
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "bars", ResultDatasetID: "result", Freq: "1m"}, Factors: factors, ResultReady: true}
+	f.sets = &fakeSets{sets: map[string]domain.EngineSet{"fset": set}, lookups: map[string]SetLookup{}}
+	f.filler = &gapFiller{
+		ledger: ledger, sets: f.sets, source: fakeColumns{}, exec: f.chunks, universe: universe, clock: periodclock.Continuous{},
+		cfg:    GapConfig{SweepInterval: time.Minute, Settle: 5 * time.Minute, GiveUpAfter: 6 * time.Hour, MaxGroupsPerSweep: 20, MaxSpan: 60},
+		now:    func() time.Time { return f.now },
+		active: func() bool { return true },
+	}
+	return f
+}
+
+func (f *gapFixture) record(t *testing.T, at time.Time, subject string, minute int, trigger string, factors ...domain.FactorDef) {
+	t.Helper()
+	saved := f.now
+	f.now = at
+	var entries []pipeline.GapEntry
+	for _, factor := range factors {
+		entries = append(entries, pipeline.GapEntry{SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
+			FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger})
+	}
+	require.NoError(t, f.ledger.RecordGaps(context.Background(), entries))
+	f.now = saved
+}
+
+// 发现后过了 settle 才恢复；填充写入确认的项追加 repaired，仍有洞的保持待恢复。
+func TestGapFillerRepairsWrittenItemsAndKeepsGaps(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, factor)
+	f.record(t, gapT0, "BTC", 0, "", factor)
+	f.record(t, gapT0, "BTC", 1, "", factor)
+	f.chunks.status = func(_ recalcexec.Selection, at time.Time) pipeline.ItemStatus {
+		if at.Equal(gapT0.Add(time.Minute)) {
+			return pipeline.ItemGap // 01 仍有洞
+		}
+		return pipeline.ItemWritten
+	}
+
+	f.now = gapT0.Add(2 * time.Minute) // 还没过 settle
+	f.filler.tick(context.Background())
+	require.Empty(t, f.chunks.calls)
+
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 1)
+	call := f.chunks.calls[0]
+	require.True(t, call.selection.FillOnly, "恢复用只填充")
+	require.Equal(t, []string{"BTC"}, call.selection.Subjects)
+	require.Equal(t, gapT0, call.start)
+	require.Equal(t, gapT0.Add(2*time.Minute), call.end, "终点是最后一个待补周期加一个周期")
+	pending := f.ledger.Pending()
+	require.Len(t, pending, 1)
+	require.Equal(t, gapT0.Add(time.Minute), pending[0].Period, "00 已 repaired，01 仍有洞保持待恢复")
+}
+
+// 定义哈希变化：取消，不用新定义的结果去标旧定义的待办为已修复；因子已移除同样取消。
+func TestGapFillerCancelsWhenDefinitionChangedOrFactorRemoved(t *testing.T) {
+	old := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	removed := gapFactor("rsi", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, old)
+	changed := old
+	changed.LookbackPeriods = 9 // 定义变化，哈希不同
+	f.record(t, gapT0, "BTC", 0, "", changed, removed)
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Empty(t, f.chunks.calls, "没有可恢复的项就不运行")
+	require.Zero(t, f.ledger.PendingCount())
+}
+
+// 集合已不存在：取消；目录未加载或结果表未就绪：等待，不能当作集合已经不存在。
+func TestGapFillerSetGoneCancelsButNotReadyWaits(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, factor)
+	f.record(t, gapT0, "BTC", 0, "", factor)
+	f.now = gapT0.Add(6 * time.Minute)
+
+	f.sets.lookups["fset"] = SetNotReady
+	f.filler.tick(context.Background())
+	require.Equal(t, 1, f.ledger.PendingCount(), "目录未就绪：等待")
+
+	f.sets.lookups["fset"] = SetGone
+	f.filler.tick(context.Background())
+	require.Zero(t, f.ledger.PendingCount(), "集合已不再启用：取消")
+}
+
+// 超过 give_up_after 仍补不上：gave_up 并通知；执行出错保持待恢复。
+func TestGapFillerGivesUpOverdueAndKeepsPendingOnError(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, factor)
+	f.record(t, gapT0, "BTC", 0, "", factor)
+	f.chunks.err = errors.New("storage unavailable")
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Equal(t, 1, f.ledger.PendingCount(), "执行出错保持待恢复")
+
+	gaveUp := 0
+	f.filler.onGaveUp = func(n int) { gaveUp += n }
+	f.now = gapT0.Add(7 * time.Hour)
+	f.filler.tick(context.Background())
+	require.Zero(t, f.ledger.PendingCount())
+	require.Equal(t, 1, gaveUp)
+}
+
+// 截面因子：用 marker 里冻结的全集重算，不用单个标的当全集；全集读不到记 gave_up。
+func TestGapFillerCrossSectionUsesFrozenUniverse(t *testing.T) {
+	factor := gapFactor("rank", domain.FactorTypeCrossSection, true)
+	f := newGapFixture(t, fakeUniverse{subjects: []string{"BTC", "ETH", "SOL"}, found: true}, factor)
+	f.record(t, gapT0, "ETH", 0, "evt-1", factor)
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 1)
+	require.Equal(t, []string{"BTC", "ETH", "SOL"}, f.chunks.calls[0].selection.Subjects, "用冻结全集，不是只有 ETH")
+	require.Zero(t, f.ledger.PendingCount())
+
+	missing := newGapFixture(t, fakeUniverse{found: false}, factor)
+	missing.record(t, gapT0, "ETH", 0, "evt-1", factor)
+	missing.now = gapT0.Add(6 * time.Minute)
+	missing.filler.tick(context.Background())
+	require.Empty(t, missing.chunks.calls)
+	require.Zero(t, missing.ledger.PendingCount(), "marker 读不到：gave_up 交给人工")
+
+	failing := newGapFixture(t, fakeUniverse{err: errors.New("storage unavailable")}, factor)
+	failing.record(t, gapT0, "ETH", 0, "evt-1", factor)
+	failing.now = gapT0.Add(6 * time.Minute)
+	failing.filler.tick(context.Background())
+	require.Equal(t, 1, failing.ledger.PendingCount(), "读取失败只是暂时的：保持待恢复")
+}
+
+// 不是活动引擎（租约冲突）时不恢复。
+func TestGapFillerSkipsWhenNotActive(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, factor)
+	f.record(t, gapT0, "BTC", 0, "", factor)
+	f.filler.active = func() bool { return false }
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Empty(t, f.chunks.calls)
+	require.Equal(t, 1, f.ledger.PendingCount())
+}

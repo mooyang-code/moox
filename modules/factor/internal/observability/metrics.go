@@ -10,6 +10,11 @@ type Metrics struct {
 	LaneBacklog    *prometheus.GaugeVec
 	PythonBusy     prometheus.Gauge
 	LastPeriodTime *prometheus.GaugeVec
+	// K 线空洞账本：待恢复条目数、累计跳过与累计放弃（交给人工）的条目数、账本是否写盘失败。
+	GapPending        prometheus.Gauge
+	GapSkipped        prometheus.Counter
+	GapGaveUp         prometheus.Counter
+	GapLedgerDegraded prometheus.Gauge
 }
 
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
@@ -39,12 +44,25 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		LastPeriodTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_last_period_time", Help: "Unix timestamp of the most recently computed period.",
 		}, []string{"set"}),
+		GapPending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "factor_gap_pending", Help: "Number of window-gap entries waiting to be repaired.",
+		}),
+		GapSkipped: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "factor_gap_skipped_total", Help: "Number of (subject, period, factor) entries skipped because of a window gap.",
+		}),
+		GapGaveUp: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "factor_gap_gave_up_total", Help: "Number of window-gap entries given up and left for manual repair.",
+		}),
+		GapLedgerDegraded: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "factor_gap_ledger_degraded", Help: "1 when the last window-gap ledger write failed.",
+		}),
 	}
 	if err := registerer.Register(metrics.PeriodDuration); err != nil {
 		return nil, err
 	}
 	collectors := []prometheus.Collector{
 		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.LaneBacklog, metrics.PythonBusy, metrics.LastPeriodTime,
+		metrics.GapPending, metrics.GapSkipped, metrics.GapGaveUp, metrics.GapLedgerDegraded,
 	}
 	for _, collector := range collectors {
 		if err := registerer.Register(collector); err != nil {

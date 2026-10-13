@@ -2,14 +2,18 @@ package pipeline
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
@@ -92,6 +96,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		}
 	}
 	rowsWritten := 0
+	var items map[ItemKey]ItemStatus
 	if len(plan.Factors) > 0 {
 		stage := time.Now()
 		var err error
@@ -100,6 +105,16 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		if err != nil {
 			return Outcome{StageDurations: outcome.StageDurations}, err
 		}
+		// 回看窗口的 K 线空洞检查：有洞的因子对该标的当期失败（不计算、不写值），并按周期记入账本。
+		if r.cfg.GapCheck {
+			loaded.Gaps = r.checkGaps(ctx, plan, loaded)
+			r.noteGaps(ctx, plan, loaded)
+		}
+		// 补算与含空洞失效写入使用每次执行唯一的提交 ID：Storage 对相同提交 ID、相同内容直接返回成功而不再写字段，
+		// 这类写入必须保证「期望重写就一定重写」。普通实时写入保持内容寻址去重。
+		if plan.CommitSalt == "" && (plan.Mode == ModeRecalc || loaded.Gaps.Len() > 0) {
+			plan.CommitSalt = newCommitSalt()
+		}
 		stage = time.Now()
 		computation, err = r.Compute(ctx, plan, loaded)
 		outcome.StageDurations["compute"] = time.Since(stage)
@@ -107,10 +122,15 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 			return Outcome{StageDurations: outcome.StageDurations}, err
 		}
 		stage = time.Now()
-		rows, assemblyErr := r.Assemble(plan, loaded, computation)
+		rows, assembled, assemblyErr := r.AssembleWithReport(plan, loaded, computation)
 		outcome.StageDurations["assemble"] = time.Since(stage)
 		if assemblyErr != nil {
 			return Outcome{StageDurations: outcome.StageDurations}, assemblyErr
+		}
+		items = assembled.Items
+		// 先记账本、再写结果与 marker：崩溃后事件重投时，同一条目按唯一键合并，不会丢账。
+		if !plan.FillOnly {
+			r.recordGaps(ctx, plan, loaded.Gaps)
 		}
 		stage = time.Now()
 		target, targetErr := planTarget(r.clock, plan)
@@ -130,6 +150,9 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	outcome = mergeOutcomeDurations(outcomeFor(plan, loaded, computation), outcome)
 	outcome.RowsWritten = rowsWritten
+	if plan.Mode == ModeRecalc {
+		outcome.Items = items
+	}
 	outcome.Warming = len(loaded.WarmingSubjects)
 	stage := time.Now()
 	if err := r.Report(ctx, plan, outcome); err != nil {
@@ -144,4 +167,56 @@ func mergeOutcomeDurations(outcome, previous Outcome) Outcome {
 		outcome.StageDurations[name] = duration
 	}
 	return outcome
+}
+
+// newCommitSalt 生成每次执行唯一的提交 ID 盐。
+func newCommitSalt() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return time.Now().UTC().Format("20060102150405.000000000")
+	}
+	return hex.EncodeToString(buf)
+}
+
+// recordGaps 把本次因空洞跳过的 (因子, 标的, 周期) 写入账本。写入失败只记日志，不影响周期推进。
+func (r *Runner) recordGaps(ctx context.Context, plan Plan, gaps GapReport) {
+	if r.cfg.GapSink == nil || gaps.Len() == 0 {
+		return
+	}
+	entries := gaps.entries4Ledger(plan)
+	if len(entries) == 0 {
+		return
+	}
+	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
+		log.ErrorContextf(ctx, "factor_gap_record_failed set_id=%s entries=%d error=%v", plan.Set.SetID, len(entries), err)
+	}
+}
+
+// noteGaps 输出有空洞的结构化日志；整期大面积缺失（有空洞或上游失败的标的占预期的比例达到 MassRatio）输出 ERROR，
+// 由监控告警接入，人工介入确认数据源。
+func (r *Runner) noteGaps(ctx context.Context, plan Plan, loaded LoadResult) {
+	affected := loaded.Gaps.AffectedSubjects()
+	if plan.Mode == ModeLive {
+		for _, entry := range loaded.Gaps.entries4Ledger(plan) {
+			log.WarnContextf(ctx, "factor_window_gap set=%s factor=%s subject=%s period=%s missing=%s",
+				entry.SetID, entry.FactorID, entry.Subject, entry.Period.Format(time.RFC3339), formatTimes(entry.Missing))
+		}
+	}
+	if r.cfg.MassRatio <= 0 || plan.Mode != ModeLive || len(plan.Expected) == 0 {
+		return
+	}
+	failed := uniqueSorted(append(append([]string(nil), affected...), plan.UpstreamFailed...))
+	ratio := float64(len(failed)) / float64(len(plan.Expected))
+	if ratio >= r.cfg.MassRatio {
+		log.ErrorContextf(ctx, "factor_gap_mass set=%s period=%s ratio=%.3f affected=%d expected=%d",
+			plan.Set.SetID, plan.PeriodTime.Format(time.RFC3339), ratio, len(failed), len(plan.Expected))
+	}
+}
+
+func formatTimes(values []time.Time) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, value.UTC().Format(time.RFC3339))
+	}
+	return strings.Join(parts, ",")
 }
