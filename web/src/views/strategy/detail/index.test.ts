@@ -25,10 +25,6 @@ vi.mock("@/views/strategy/components/strategy-result-table.vue", () => ({
     }
   })
 }));
-for (const name of ["strategy-operation-panel", "strategy-resolved-table", "strategy-status-badge", "strategy-target-table"]) {
-  vi.mock(`@/views/strategy/components/${name}.vue`, () => ({ default: { template: "<div />" } }));
-}
-
 import DetailPage from "./index.vue";
 
 const stubs = {
@@ -42,6 +38,9 @@ const stubs = {
   "a-tab-pane": { template: "<div><slot /></div>" },
   "a-link": true,
   "a-tag": true,
+  "a-popconfirm": true,
+  "a-table": true,
+  "a-table-column": true,
   "a-tooltip": { template: "<span><slot /></span>" },
   "a-empty": true,
   "icon-left": true,
