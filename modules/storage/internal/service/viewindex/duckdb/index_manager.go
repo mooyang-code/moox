@@ -64,10 +64,10 @@ const (
 	defaultDuckDBThreads  = 1
 	defaultMaxOpenConns   = 4
 	defaultMaxIdleConns   = 1
-	// DuckDB accepts a large parameter count, but keeping each statement
-	// bounded avoids oversized SQL packets during a 10k-row backfill while
-	// still amortizing per-row Exec overhead for the event consumer.
-	maxWriteRowsPerStatement = 256
+	// 每条 UPSERT 的行数。DuckDB 解析与绑定大 VALUES 列表的代价是超线性的：基准（TestLiveWriteBaseline，
+	// 500 行 × 18 列）中 256 行/条约 1.2–1.4s，32 行/条约 0.2s，1 行/条反而因逐条开销升到 2.7s。
+	// 所有 View（K 线、因子结果）的实时写入、回填与重建都经过这里。
+	maxWriteRowsPerStatement = 32
 	// internalAttributesColumn keeps row attributes that are not part of the
 	// declared View projection (notably factor.source_hash) available to
 	// downstream readers without exposing them as user columns.
