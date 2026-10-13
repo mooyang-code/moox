@@ -191,7 +191,7 @@ tags:
   builtin: true
   source: binance
   market_type: spot
-  cron: "0 * * * *"
+  cron: "13 * * * *"
   timezone: UTC
 - space_id: crypto
   tag_id: binance_swap
@@ -201,7 +201,7 @@ tags:
   builtin: true
   source: binance
   market_type: swap
-  cron: "0 * * * *"
+  cron: "17 * * * *"
   timezone: UTC
 - space_id: stockcn
   tag_id: cn_a_share
@@ -211,7 +211,7 @@ tags:
   builtin: true
   source: eastmoney
   market_type: equity
-  cron: "0 * * * *"
+  cron: "23 * * * *"
   timezone: Asia/Shanghai
 
 datasets:
