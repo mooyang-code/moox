@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -135,6 +136,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 }
 
 func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.FactorPeriodComputed) error {
+	handleStart := time.Now()
 	if message == nil || payload == nil {
 		return eventconsumer.Permanent(errors.New("Factor 周期计算事件为空"))
 	}
@@ -171,15 +173,21 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 			Factors:            cloneFactorStates(payload.GetFactors()),
 		}
 		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
+		enqueueStart := time.Now()
 		if err := s.enqueueViewDataReady(view, nil, ready, message, eventID); err != nil {
 			return err
 		}
+		flushStart := time.Now()
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
 		if s.pendingReadyContains(eventID) {
 			return eventconsumer.Deferred(ErrViewDataReadyPending)
 		}
+		// 分段耗时：投递滞后 = 因子完成事件发出到本进程开始处理；入队含围栏与就绪队列落盘；发布含 ViewDataReady 的 JetStream 发布。
+		log.Printf("storage view 因子结果就绪 view=%s period=%d 投递滞后=%s 前置=%s 入队=%s 发布=%s 本事件处理=%s",
+			view.GetViewId(), payload.GetPeriodTime(), handleStart.Sub(message.GetOccurredAt().AsTime()).Round(time.Millisecond), enqueueStart.Sub(handleStart).Round(time.Millisecond),
+			flushStart.Sub(enqueueStart).Round(time.Millisecond), time.Since(flushStart).Round(time.Millisecond), time.Since(handleStart).Round(time.Millisecond))
 	}
 	return nil
 }

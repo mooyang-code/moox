@@ -16,6 +16,8 @@ type Delivery struct {
 	StreamSeq     uint64
 	ConsumerSeq   uint64
 	DeliveryCount uint64
+	// StoredAt 是消息写入流的时间（服务端时间戳），用来度量从发布到被消费者拿到之间的排队。
+	StoredAt time.Time
 	// DecodeError and RawData are populated when a consumer opts into transport
 	// validation errors. Business EventMessage decoding happens in packages/events.
 	DecodeError  error
@@ -137,5 +139,6 @@ func rawDeliveryFromMessage(msg *nats.Msg, stream, consumer string, maxPayload i
 	delivery.StreamSeq = metadata.Sequence.Stream
 	delivery.ConsumerSeq = metadata.Sequence.Consumer
 	delivery.DeliveryCount = metadata.NumDelivered
+	delivery.StoredAt = metadata.Timestamp
 	return delivery, nil
 }

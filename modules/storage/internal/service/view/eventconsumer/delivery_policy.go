@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
@@ -259,7 +260,13 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 	defer func() { heartbeat.stop() }()
 	retryCount := 0
 	for ctx.Err() == nil {
+		applyStart := time.Now()
 		err := apply(ctx, delivery)
+		if err == nil && strings.Contains(delivery.Subject, "period") && !delivery.StoredAt.IsZero() {
+			// 周期事件的分段耗时：入流到开始处理是消费者排队与拉取的时间，处理是 apply 本身。
+			log.Printf("storage view 周期事件 subject=%s 入流至开始处理=%s 处理=%s",
+				delivery.Subject, applyStart.Sub(delivery.StoredAt).Round(time.Millisecond), time.Since(applyStart).Round(time.Millisecond))
+		}
 		if err == nil || IsDeferred(err) {
 			settled = true
 			// Applying an event is deliberately separate from ACK retry:
