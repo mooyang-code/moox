@@ -40,7 +40,7 @@
         :data="store.instances"
         :loading="store.instancesLoading"
         :pagination="pagination"
-        :scroll="{ x: 920 }"
+        :scroll="{ x: 940 }"
         @page-change="changePage"
       >
         <template #columns>
@@ -68,22 +68,24 @@
           <a-table-column title="更新时间" :width="180"
             ><template #cell="{ record }">{{ formatStrategyTime(record.updated_at) }}</template></a-table-column
           >
-          <a-table-column title="操作" :width="150" fixed="right">
+          <a-table-column title="操作" :width="170" fixed="right">
             <template #cell="{ record }">
-              <a-button type="text" size="mini" @click="openResults(record.instance_id)">结果</a-button>
-              <a-button type="text" size="mini" @click="openDetail(record.instance_id)">详情</a-button>
-              <a-dropdown trigger="click">
-                <a-button type="text" size="mini">更多</a-button>
-                <template #content>
-                  <a-doption
-                    :disabled="deleteState(record).disabled || removingId === record.instance_id"
-                    @click="confirmRemove(record)"
-                    >删除<span v-if="deleteState(record).reason" class="muted"
-                      >（{{ deleteState(record).reason }}）</span
-                    ></a-doption
-                  >
-                </template>
-              </a-dropdown>
+              <div class="row-actions">
+                <a-button type="text" size="mini" @click="openResults(record.instance_id)">结果</a-button>
+                <a-button type="text" size="mini" @click="openDetail(record.instance_id)">详情</a-button>
+                <a-dropdown trigger="click">
+                  <a-button type="text" size="mini">更多</a-button>
+                  <template #content>
+                    <a-doption
+                      :disabled="deleteState(record).disabled || removingId === record.instance_id"
+                      @click="confirmRemove(record)"
+                      >删除<span v-if="deleteState(record).reason" class="muted"
+                        >（{{ deleteState(record).reason }}）</span
+                      ></a-doption
+                    >
+                  </template>
+                </a-dropdown>
+              </div>
             </template>
           </a-table-column>
         </template>
@@ -323,5 +325,11 @@ watch(
   .filter-status {
     width: 100%;
   }
+}
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
 }
 </style>

@@ -54,15 +54,17 @@
           >
           <a-table-column title="操作" :width="170" fixed="right">
             <template #cell="{ record }">
-              <a-button type="text" size="mini" @click="openDetail(record.strategy_id)">查看</a-button>
-              <a-button type="text" size="mini" @click="edit(record.strategy_id)">编辑</a-button>
-              <a-dropdown trigger="click">
-                <a-button type="text" size="mini">更多</a-button>
-                <template #content>
-                  <a-doption @click="goReplay(record.strategy_id)">发起回放</a-doption>
-                  <a-doption @click="confirmRemove(record)">删除</a-doption>
-                </template>
-              </a-dropdown>
+              <div class="row-actions">
+                <a-button type="text" size="mini" @click="openDetail(record.strategy_id)">查看</a-button>
+                <a-button type="text" size="mini" @click="edit(record.strategy_id)">编辑</a-button>
+                <a-dropdown trigger="click">
+                  <a-button type="text" size="mini">更多</a-button>
+                  <template #content>
+                    <a-doption @click="goReplay(record.strategy_id)">发起回放</a-doption>
+                    <a-doption @click="confirmRemove(record)">删除</a-doption>
+                  </template>
+                </a-dropdown>
+              </div>
             </template>
           </a-table-column>
         </template>
@@ -212,5 +214,11 @@ watch(
     align-items: flex-start;
     flex-direction: column;
   }
+}
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
 }
 </style>
