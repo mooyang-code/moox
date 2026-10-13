@@ -20,8 +20,8 @@ do
   fi
 done
 
-for token in HistoryPolicy BatchKindBackfill BatchKindGapRepair; do
-  if ! rg -n -F -- "$token" "$COLLECTOR/internal/domain" "$COLLECTOR/internal/marketfetch" >/dev/null; then
+for token in BatchKindBackfill BatchKindGapRepair; do
+  if ! rg -n -F -- "$token" "$COLLECTOR/internal/marketfetch" >/dev/null; then
     printf 'collector is missing preserved contract %q\n' "$token" >&2
     exit 1
   fi

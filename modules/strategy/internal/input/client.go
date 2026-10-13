@@ -264,12 +264,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 	for _, id := range order {
 		subject := Subject{SubjectID: id, Active: bindings[id]}
 		if detail, ok := details[id]; ok {
-			attributes := detail.GetAttributes()
-			subject.Attributes = make(map[string]string, len(attributes))
-			for key, value := range attributes {
-				subject.Attributes[key] = value
-			}
-			subject.SeriesTag = seriesTag(attributes)
+			subject.SeriesTag = seriesTag(detail.GetAttributes())
 			subject.Active = subject.Active && detail.GetStatus() == "active"
 		} else {
 			subject.Active = false

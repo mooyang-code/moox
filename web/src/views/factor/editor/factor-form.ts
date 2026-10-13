@@ -121,7 +121,15 @@ export function factorChecklist(form: FactorFormState): ChecklistItem[] {
       "因子 ID 合法（全局唯一由后端保存时检查）",
       !id ? "因子 ID 不能为空" : isIdentifier(id) ? "" : "因子 ID 必须以字母或下划线开头，仅含字母数字下划线"
     ),
-    item("name", "模块名不为空", form.name.trim() ? "" : "模块名不能为空"),
+    item(
+      "name",
+      "模块名是合法标识符",
+      !form.name.trim()
+        ? "模块名不能为空"
+        : isIdentifier(form.name.trim())
+          ? ""
+          : "模块名必须以字母或下划线开头，仅含字母数字下划线"
+    ),
     item("input_columns", "输入列非空、名称合法、无重复", checkColumns(form.input_columns, "输入列", null)),
     item("outputs", "输出列非空、不含系统保留列、无重复", checkColumns(form.outputs, "输出列", reserved)),
     item("params_json", "参数是合法 JSON object", checkParams(form.params_json)),

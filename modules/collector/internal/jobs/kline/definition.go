@@ -8,9 +8,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 )
 
-// JobType is the queue routing type for K-line collection.
-const JobType = "collect.binance.kline"
-
 // NewJobDefinition returns the K-line collector job definition.
 func NewJobDefinition() jobdef.JobDefinition {
 	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "binance", Label: "币安"}}}
@@ -52,6 +49,7 @@ func NewJobDefinition() jobdef.JobDefinition {
 		Supports: []jobdef.Support{
 			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset"},
 			{Exchange: "binance", Market: "swap", DataType: "kline", SourceKind: "dataset"},
+			{Exchange: "eastmoney", Market: "equity", DataType: "kline", SourceKind: "dataset", Frequencies: []string{"1m"}},
 		},
 		Planner: func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 			_ = ctx

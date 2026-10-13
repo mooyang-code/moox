@@ -580,3 +580,13 @@ func TestMarkerToProtoCarriesGapSubjects(t *testing.T) {
 	require.Equal(t, []string{"BTC", "ETH"}, got[0].GetFailedSubjects())
 	require.Equal(t, []string{"ETH"}, got[0].GetGapSubjects(), "gap_subjects 与 failed_subjects 一样去重排序")
 }
+
+func TestCarriedTimeAndJSONFieldsKeepTheirStorageType(t *testing.T) {
+	timeValue, err := encodeValue(typedValueToAny(&storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: "2026-10-04T00:00:00Z"}}))
+	require.NoError(t, err)
+	require.Equal(t, "2026-10-04T00:00:00Z", timeValue.GetTimeValue())
+
+	jsonValue, err := encodeValue(typedValueToAny(&storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: `{"a":1}`}}))
+	require.NoError(t, err)
+	require.Equal(t, `{"a":1}`, jsonValue.GetJsonValue())
+}

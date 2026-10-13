@@ -94,7 +94,7 @@ func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 			string(marketdata.FrequencyMinute), string(marketdata.Frequency5Min),
 			string(marketdata.Frequency15Min), string(marketdata.Frequency30Min),
 			string(marketdata.FrequencyHour), string(marketdata.FrequencyDay),
-			string(marketdata.FrequencyWeek),
+			string(marketdata.FrequencyWeek), string(marketdata.FrequencyMonth),
 		},
 		CompleteOHLCV:     true,
 		HasAmount:         true,

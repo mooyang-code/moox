@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
@@ -327,6 +328,10 @@ func (s *planSymbolsStub) GetDataset(context.Context, string, string) (storageso
 	return storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}}, nil
 }
 
+func (s *planSymbolsStub) GetTag(_ context.Context, _, tagID string) (*storagepb.Tag, error) {
+	return &storagepb.Tag{TagId: tagID, Source: "binance", MarketType: "spot"}, nil
+}
+
 func (s *planSymbolsStub) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
 	items := make([]domain.Subject, 0, len(s.subjects))
 	for _, subject := range s.subjects {
@@ -355,7 +360,7 @@ func newPlanHarness(t *testing.T, subjectCount int) *planHarness {
 	h.cloud.clock = func() time.Time { return h.now }
 	h.setSubjects(subjectCount)
 	h.tasks = &planTasksStub{tasks: []domain.CollectionTask{{
-		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline",
+		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
 		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m"}`,
 	}}}
 	return h

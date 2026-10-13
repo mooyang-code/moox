@@ -25,7 +25,7 @@ func (f HandlerGateway) Forward(ctx context.Context, service, method string, ser
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collectmgr", "trpc.moox.cloudnode.CloudNodeMgr": "cloudnode", "trpc.moox.ops.SecretMgr": "secret", "trpc.moox.admin.CollectorPublishLease": "publishlease", "trpc.moox.admin.Setup": "setup", "trpc.moox.ops.SysDeploy": "sysdeploy", "trpc.moox.trade.TradeConsoleService": "trade", "trpc.moox.storage.Metadata": "storage-metadata", "trpc.moox.storage.PrimaryStore": "storage-primary", "trpc.moox.storage.DataView": "storage-view"}[service]
+	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collector", "trpc.moox.cloudnode.CloudNodeMgr": "cloudnode", "trpc.moox.ops.SecretMgr": "secret", "trpc.moox.admin.CollectorPublishLease": "publishlease", "trpc.moox.admin.Setup": "setup", "trpc.moox.ops.SysDeploy": "sysdeploy", "trpc.moox.trade.TradeConsoleService": "trade", "trpc.moox.storage.Metadata": "storage-metadata", "trpc.moox.storage.PrimaryStore": "storage-primary", "trpc.moox.storage.DataView": "storage-view"}[service]
 	if alias == "" || strings.ContainsAny(method, "/?#") || serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("unexpected gateway fixture call")
 	}

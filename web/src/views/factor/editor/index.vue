@@ -162,7 +162,7 @@ import type { Dataset } from "@/api/storage/types";
 import { AsyncCodeEditor } from "@/components/code-editor/async";
 import { RequestGate } from "@/utils/request-gate";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
-import { FACTOR_SOURCE_TEMPLATE } from "./editor-template";
+import { CROSS_SECTION_TEMPLATE, FACTOR_SOURCE_TEMPLATE, TIMESERIES_TEMPLATE, type FactorTemplate } from "./editor-template";
 import {
   blankFactorForm,
   buildFactorPayload,
@@ -323,20 +323,46 @@ function pickColumn(name: string) {
   form.input_columns = [...form.input_columns, name];
 }
 
+function templateFor(type: string): FactorTemplate {
+  return type === "cross_section" ? CROSS_SECTION_TEMPLATE : TIMESERIES_TEMPLATE;
+}
+
+function applyTemplate(template: FactorTemplate) {
+  form.source_code = template.source;
+  form.input_columns = [...template.inputColumns];
+  form.outputs = [...template.outputs];
+  form.params_json = template.paramsJson;
+}
+
+// 源码、输入输出与参数都还是某个内置模板的原样（或输入输出为空）时，才视为未改动。
+function isUntouchedTemplate(template: FactorTemplate) {
+  const same = (left: string[], right: string[]) => left.length === right.length && left.every((item, i) => item === right[i]);
+  return (
+    form.source_code === template.source &&
+    form.params_json === template.paramsJson &&
+    (same(form.outputs, template.outputs) || form.outputs.length === 0) &&
+    (same(form.input_columns, template.inputColumns) || form.input_columns.length === 0)
+  );
+}
+
 function onTypeChange() {
   if (form.factor_type !== "cross_section") form.allow_partial_universe = false;
+  // 内置模板未改动时，随因子类型切换到对应模板及其声明；用户改过的内容不动。
+  const other = templateFor(form.factor_type === "cross_section" ? "timeseries" : "cross_section");
+  if (isUntouchedTemplate(other)) applyTemplate(templateFor(form.factor_type));
 }
 
 function insertTemplate() {
+  const template = templateFor(form.factor_type);
   if (
     form.source_code.trim() &&
-    form.source_code !== FACTOR_SOURCE_TEMPLATE &&
+    !isUntouchedTemplate(TIMESERIES_TEMPLATE) &&
+    !isUntouchedTemplate(CROSS_SECTION_TEMPLATE) &&
     !window.confirm("编辑器里已有内容，确认用模板替换？")
   )
     return;
-  form.source_code = FACTOR_SOURCE_TEMPLATE;
+  applyTemplate(template);
 }
-
 async function save() {
   saveError.value = "";
   sourceCheck.value = "unchecked";

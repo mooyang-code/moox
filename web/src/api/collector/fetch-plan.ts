@@ -91,10 +91,18 @@ export function cancelKlineBackfill(spaceId: string, jobId: string) {
   });
 }
 
+// 这两个同步操作服务端业务预算 300 秒、网关路由预算 310 秒，浏览器超时要略大于网关预算。
+const klineOpsRequestConfig = { timeout: 330000 };
+
 export function submitKlineBackfill(request: KlineRangeRequest & { force?: boolean }) {
-  return callControl<typeof request, { job_id?: string; chunks?: number }>("collector", "SubmitKlineBackfill", request);
+  return callControl<typeof request, { job_id?: string; chunks?: number }>(
+    "collector",
+    "SubmitKlineBackfill",
+    request,
+    klineOpsRequestConfig
+  );
 }
 
 export function checkKline(request: KlineRangeRequest & { deep?: boolean }) {
-  return callControl<typeof request, CheckKlineResponse>("collector", "CheckKline", request);
+  return callControl<typeof request, CheckKlineResponse>("collector", "CheckKline", request, klineOpsRequestConfig);
 }

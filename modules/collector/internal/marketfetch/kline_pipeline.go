@@ -577,7 +577,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 }
 
 // selectOutputFields keeps the canonical row field order while dropping fields
-// not selected by the task. Empty selection deliberately preserves legacy rows.
+// not selected by the task. An empty selection keeps every field.
 func selectOutputFields(fields []*storagepb.FieldValue, selected []string) []*storagepb.FieldValue {
 	if len(selected) == 0 {
 		return fields
@@ -794,7 +794,8 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
 		fields = append(fields, doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount))
 	} else {
-		fields = append(fields, doubleValue("amount", bar.AmountCNY))
+		// 估算成交额（close × volume）不是真实成交额：显式写 NULL，也覆盖该行之前写入过的估算值。
+		fields = append(fields, amountField(bar))
 		if p.InstrumentType == marketdata.InstrumentIndex {
 			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
 		}
@@ -886,7 +887,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 	}
 	fields := []*storagepb.FieldValue{
 		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
-		doubleValue("volume", bar.VolumeShares), doubleValue("amount", bar.AmountCNY),
+		doubleValue("volume", bar.VolumeShares),
 		stringValue("instrument_name", instrumentName),
 		timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
 		stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
@@ -896,6 +897,8 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 		stringValue("source_provider", bar.ProviderID),
 		stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
 	}
+	// 上游缺成交额时按 close × volume 估算的值不是真实成交额：amount 显式写 NULL，只在 amount_quality 里留痕。
+	fields = append(fields, amountField(bar))
 	if strings.TrimSpace(bar.SourceID) != "" {
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
@@ -984,6 +987,14 @@ func tradeDateUTC(value time.Time) time.Time {
 
 func amountUnit(bar marketdata.NormalizedKline) string {
 	return "cny"
+}
+
+// amountField 返回成交额字段；估算值（close × volume）不当作真实成交额，写显式 NULL（覆盖该行此前写入的估算值）。
+func amountField(bar marketdata.NormalizedKline) *storagepb.FieldValue {
+	if bar.AmountEstimated {
+		return &storagepb.FieldValue{FieldId: "amount", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}}
+	}
+	return doubleValue("amount", bar.AmountCNY)
 }
 
 func doubleValue(field string, value float64) *storagepb.FieldValue {

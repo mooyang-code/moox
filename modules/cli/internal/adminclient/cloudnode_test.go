@@ -131,11 +131,11 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		switch r.URL.Path {
-		case "/api/admin/collectmgr/GetTaskDetail":
+		case "/api/admin/collector/GetTaskDetail":
 			assert.Equal(t, "stockcn", body["space_id"])
 			assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", body["task_id"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task":{"space_id":"stockcn","task_id":"d5v5n3p8r7c9m2k4j6h1","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_d5v5n3p8r7c9m2k4j6h1"}}}`))
-		case "/api/admin/collectmgr/UpdateTask":
+		case "/api/admin/collector/UpdateTask":
 			task, ok := body["task"].(map[string]any)
 			require.True(t, ok)
 			assert.Equal(t, true, task["enabled"])
@@ -152,7 +152,7 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 
 func TestCreateTaskStartsDisabled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/collectmgr/CreateTask", r.URL.Path)
+		assert.Equal(t, "/api/admin/collector/CreateTask", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		task, ok := body["task"].(map[string]any)
@@ -190,7 +190,7 @@ func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
 
 func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/collectmgr/GetTaskList", r.URL.Path)
+		assert.Equal(t, "/api/admin/collector/GetTaskList", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, true, body["enabled"])

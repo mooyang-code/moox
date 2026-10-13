@@ -6,7 +6,7 @@ const { callControl, MockControlRequestError } = vi.hoisted(() => {
 });
 vi.mock("@/api/admin/http", () => ({ callControl, ControlRequestError: MockControlRequestError }));
 
-import { batchDeleteNodes, importSCFFunctions, previewSCFFunctions, submitCreateNodes, submitDeployNodes } from "./cloud-node";
+import { batchDeleteNodes, getNodeBatchChange, importSCFFunctions, previewSCFFunctions } from "./cloud-node";
 
 describe("cloud node batch API", () => {
   beforeEach(() => {
@@ -292,53 +292,24 @@ describe("cloud node batch API", () => {
     expect(callControl.mock.calls.filter(([, method]) => method === "ReleaseCollectorPublishLease")).toHaveLength(1);
   });
 
-  it("submits create nodes and returns the backend job id", async () => {
+  it("converts numeric batch enums returned by the backend to enum names", async () => {
     callControl.mockResolvedValue({
-      job_id: "node-batch-create",
-      operation: "NODE_BATCH_OPERATION_CREATE_NODES",
-      total_count: 1
-    });
-
-    const result = await submitCreateNodes({
-      nodes: [
-        {
-          cloud_account_id: "account-1",
-          runtime: "Go1",
-          region: "ap-guangzhou",
-          package_id: "pkg-1",
-          metadata: { function_name_prefix: "collector", index: 0 }
-        }
-      ],
-      cloud_account_id: "account-1",
-      region: "ap-guangzhou",
-      namespace: "default",
-      function_name_prefix: "collector",
-      runtime: "Go1",
-      count: 1
-    });
-
-    expect(result.job_id).toBe("node-batch-create");
-    expect(callControl).toHaveBeenCalledWith("cloudnode", "SubmitCreateNodes", {
-      nodes: expect.arrayContaining([expect.objectContaining({ package_id: "pkg-1" })])
-    });
-  });
-
-  it("submits deployments and returns the backend job id", async () => {
-    callControl.mockResolvedValue({
-      job_id: "node-batch-deploy",
-      operation: "NODE_BATCH_OPERATION_DEPLOY_NODES",
-      total_count: 2
-    });
-
-    const result = await submitDeployNodes({ node_ids: ["node-1", "node-2"], package_id: "pkg-2" });
-
-    expect(result.job_id).toBe("node-batch-deploy");
-    expect(callControl).toHaveBeenCalledWith("cloudnode", "SubmitDeployNodes", {
-      deployments: [
-        { node_id: "node-1", package_id: "pkg-2" },
-        { node_id: "node-2", package_id: "pkg-2" }
+      job: { job_id: "job-1", status: 3 },
+      items: [
+        { item_id: "i1", status: 3 },
+        { item_id: "i2", status: "4" },
+        { item_id: "i3", status: "NODE_BATCH_ITEM_STATUS_RUNNING" }
       ]
     });
+
+    const result = await getNodeBatchChange("job-1");
+
+    expect(result.job.status).toBe("NODE_BATCH_STATUS_SUCCESS");
+    expect(result.items.map(item => item.status)).toEqual([
+      "NODE_BATCH_ITEM_STATUS_SUCCESS",
+      "NODE_BATCH_ITEM_STATUS_FAILED",
+      "NODE_BATCH_ITEM_STATUS_RUNNING"
+    ]);
   });
 
   it("previews and imports only selected SCF references", async () => {

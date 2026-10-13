@@ -204,6 +204,14 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 						contextValues["target_period_times"] = []string{task.target.UTC().Format(time.RFC3339Nano)}
 					}
 				}
+				if task.cross {
+					// Python 要求面板按 (data_time, series_tag, subject_id) 排序，而面板按标的拼接。
+					sortedFrame, sortErr := sortPanelFrame(frame.(storageio.Frame))
+					if sortErr != nil {
+						contextErr = sortErr
+					}
+					frame = sortedFrame
+				}
 				resultKey := ""
 				if !task.cross {
 					frame = frameFor(loaded.Frames[task.subject], task.subject, plan.CarryColumns)
@@ -430,6 +438,37 @@ func buildPanelFrame(subjects []string, frames map[string]*storageio.Frame) (sto
 		}
 	}
 	return panel, nil
+}
+
+// sortPanelFrame 返回按 (data_time, series_tag, subject_id) 升序的面板副本，不改动共享的原面板。
+func sortPanelFrame(panel storageio.Frame) (storageio.Frame, error) {
+	type keyed struct {
+		at  time.Time
+		row []any
+	}
+	rows := make([]keyed, len(panel.Rows))
+	for i, row := range panel.Rows {
+		at, err := parseDataTime(row[0])
+		if err != nil {
+			return storageio.Frame{}, fmt.Errorf("panel row %d data_time: %w", i, err)
+		}
+		rows[i] = keyed{at: at, row: row}
+	}
+	sort.SliceStable(rows, func(a, b int) bool {
+		left, right := rows[a], rows[b]
+		if !left.at.Equal(right.at) {
+			return left.at.Before(right.at)
+		}
+		if leftTag, rightTag := fmt.Sprint(left.row[1]), fmt.Sprint(right.row[1]); leftTag != rightTag {
+			return leftTag < rightTag
+		}
+		return fmt.Sprint(left.row[2]) < fmt.Sprint(right.row[2])
+	})
+	sorted := storageio.Frame{SubjectID: panel.SubjectID, Columns: panel.Columns, Rows: make([][]any, len(rows))}
+	for i, item := range rows {
+		sorted.Rows[i] = item.row
+	}
+	return sorted, nil
 }
 
 // panelIndex keeps the cross-section panel grouped by subject with rows ordered

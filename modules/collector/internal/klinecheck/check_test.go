@@ -205,3 +205,14 @@ func TestMonthlyBarsUseCalendarArithmetic(t *testing.T) {
 	parts := splitGap(Gap{From: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)}, month)
 	require.Len(t, parts, 1)
 }
+
+func TestWeeklyBarsAlignOnMonday(t *testing.T) {
+	week, err := marketdata.ParseFrequency("1w")
+	require.NoError(t, err)
+	// 2026-10-14 是周三；周线 K 线开始于周一 00:00 UTC。
+	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	require.Equal(t, time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), alignDown(week, at))
+	require.Equal(t, time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), alignUp(week, at))
+	monday := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	require.Equal(t, monday, alignUp(week, monday))
+}

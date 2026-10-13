@@ -108,44 +108,6 @@ export interface GetNodeListRequest {
   page_size?: number;
 }
 
-export interface BatchCreateNodesRequest {
-  nodes?: BatchCreateNodeItem[];
-  cloud_account_id: string;
-  region: string;
-  namespace: string;
-  node_type?: string;
-  trigger_type?: string;
-  function_name_prefix: string;
-  runtime: string;
-  handler?: string;
-  package_id?: string;
-  deployment_id?: string;
-  count: number;
-  config?: Record<string, string>;
-  environment?: Record<string, string>;
-  metadata?: Record<string, unknown>;
-}
-
-export interface BatchCreateNodeItem {
-  cloud_account_id: string;
-  node_type?: string;
-  trigger_type?: string;
-  runtime: string;
-  handler?: string;
-  config?: Record<string, string>;
-  environment?: Record<string, string>;
-  region: string;
-  namespace?: string;
-  package_id?: string;
-  deployment_id?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface BatchDeployNodesRequest {
-  node_ids: string[];
-  package_id: string;
-}
-
 export interface BatchDeleteNodesRequest {
   space_id: string;
   node_ids: string[];
@@ -231,41 +193,42 @@ export const getNodeList = async (
   return { items: rsp.items ?? [], total: rsp.page?.total ?? 0, page: rsp.page };
 };
 
-export const submitCreateNodes = async (data: BatchCreateNodesRequest): Promise<SubmitNodeBatchResponse> => {
-  const nodes =
-    data.nodes ??
-    Array.from({ length: data.count }).map((_, index) => ({
-      cloud_account_id: data.cloud_account_id,
-      node_type: data.node_type,
-      trigger_type: data.trigger_type,
-      region: data.region,
-      namespace: data.namespace,
-      runtime: data.runtime,
-      handler: data.handler,
-      package_id: data.package_id,
-      deployment_id: data.deployment_id,
-      config: data.config,
-      environment: data.environment,
-      metadata: {
-        ...(data.metadata ?? {}),
-        function_name_prefix: data.function_name_prefix,
-        index
-      }
-    }));
-  return callControl<{ nodes: BatchCreateNodeItem[] }, SubmitNodeBatchResponse>("cloudnode", "SubmitCreateNodes", { nodes });
+const BATCH_STATUS_NAMES = [
+  "NODE_BATCH_STATUS_UNSPECIFIED",
+  "NODE_BATCH_STATUS_PENDING",
+  "NODE_BATCH_STATUS_RUNNING",
+  "NODE_BATCH_STATUS_SUCCESS",
+  "NODE_BATCH_STATUS_FAILED",
+  "NODE_BATCH_STATUS_PARTIAL"
+];
+const BATCH_ITEM_STATUS_NAMES = [
+  "NODE_BATCH_ITEM_STATUS_UNSPECIFIED",
+  "NODE_BATCH_ITEM_STATUS_PENDING",
+  "NODE_BATCH_ITEM_STATUS_RUNNING",
+  "NODE_BATCH_ITEM_STATUS_SUCCESS",
+  "NODE_BATCH_ITEM_STATUS_FAILED"
+];
+
+// 后端 JSON 以数字输出枚举；在 API 边界统一转换为枚举名，页面只比较名称。
+const enumName = <T extends string>(value: unknown, names: string[]): T => {
+  if (typeof value === "number") return (names[value] ?? names[0]) as T;
+  if (typeof value === "string" && /^\d+$/.test(value)) return (names[Number(value)] ?? names[0]) as T;
+  return value as T;
 };
 
-export const submitDeployNodes = async (data: BatchDeployNodesRequest): Promise<SubmitNodeBatchResponse> => {
-  const deployments = data.node_ids.map(id => ({ node_id: id, package_id: data.package_id }));
-  return callControl<{ deployments: Array<{ node_id: string; package_id: string }> }, SubmitNodeBatchResponse>(
-    "cloudnode",
-    "SubmitDeployNodes",
-    { deployments }
-  );
+export const getNodeBatchChange = async (jobId: string): Promise<GetNodeBatchChangeResponse> => {
+  const rsp = await callControl<{ job_id: string }, GetNodeBatchChangeResponse>("cloudnode", "GetNodeBatchChange", {
+    job_id: jobId
+  });
+  return {
+    ...rsp,
+    job: { ...rsp.job, status: enumName<NodeBatchStatus>(rsp.job.status, BATCH_STATUS_NAMES) },
+    items: (rsp.items ?? []).map(item => ({
+      ...item,
+      status: enumName<NodeBatchItemStatus>(item.status, BATCH_ITEM_STATUS_NAMES)
+    }))
+  };
 };
-
-export const getNodeBatchChange = async (jobId: string): Promise<GetNodeBatchChangeResponse> =>
-  callControl<{ job_id: string }, GetNodeBatchChangeResponse>("cloudnode", "GetNodeBatchChange", { job_id: jobId });
 
 export const batchDeleteNodes = async (
   data: BatchDeleteNodesRequest,

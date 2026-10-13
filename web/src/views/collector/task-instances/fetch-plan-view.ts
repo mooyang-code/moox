@@ -47,6 +47,8 @@ export function functionRowKey(item: FetchFunctionState) {
 export function toRFC3339(value: string): string | null {
   const text = value.trim();
   if (!text) return null;
+  // 先校验形状：Date 的宽松解析会把 "not-a-timeZ" 之类的文本当成 2000 年的某个时刻。
+  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(text)) return null;
   // 没有时区的输入一律按 UTC 解析，与表单标签一致。
   let normalized = text.replace(" ", "T");
   if (!/(Z|[+-]\d{2}:?\d{2})$/.test(normalized)) normalized += normalized.length <= 16 ? ":00Z" : "Z";

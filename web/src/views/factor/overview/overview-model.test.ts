@@ -57,11 +57,23 @@ const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   ...patch
 });
 
+const onlineEngine = {
+  engine_id: "factor-engine@mac",
+  boot_id: "b",
+  version: "v1",
+  online: true,
+  last_heartbeat_at: "",
+  catalog_hash: "h",
+  catalog_synced_at: "",
+  catalog_in_sync: true
+};
+
 const label = (item: FactorSet) => `现货K线 · ${item.freq}`;
 
 describe("overview model", () => {
   it("stats strip from engine status", () => {
     const engine = {
+      engine: onlineEngine,
       consumer_running: true,
       python_workers: 4,
       python_busy: 1,
@@ -72,7 +84,7 @@ describe("overview model", () => {
     } as EngineStatus;
     const stats = statsStrip(engine, 2);
     expect(stats.map(item => item.key)).toEqual(["engine", "consumer", "workers", "queue", "warmup", "recalc"]);
-    expect(stats[0]).toMatchObject({ value: "未连接", tone: "danger" });
+    expect(stats[0]).toMatchObject({ value: "在线", tone: "ok" });
     expect(stats[1]).toMatchObject({ value: "运行中", tone: "ok" });
     expect(stats[2].value).toBe("1 / 4");
     expect(stats[3].value).toBe("5");
@@ -82,10 +94,16 @@ describe("overview model", () => {
     expect(statsStrip(null, 0)[1]).toMatchObject({ value: "-", tone: "muted" });
     expect(statsStrip(null, 0)[0]).toMatchObject({ value: "未连接", tone: "muted" });
     expect(statsStrip({ ...engine, consumer_running: false }, 0)[1]).toMatchObject({ value: "已停止", tone: "danger" });
+    // 离线或从未收到心跳：只剩最后一次快照，不能展示成当前运行状态。
+    const offline = statsStrip({ ...engine, engine: { ...onlineEngine, online: false } }, 0);
+    expect(offline[1]).toMatchObject({ value: "-", tone: "muted" });
+    expect(offline[4]).toMatchObject({ value: "-", tone: "muted" });
+    expect(statsStrip({ ...engine, engine: undefined } as unknown as EngineStatus, 0)[1]).toMatchObject({ value: "-" });
   });
 
   it("warm-up card summarizes warming sets", () => {
     const engine = {
+      engine: onlineEngine,
       consumer_running: true,
       python_workers: 4,
       python_busy: 0,

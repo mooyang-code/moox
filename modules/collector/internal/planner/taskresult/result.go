@@ -288,19 +288,16 @@ type tagReader interface {
 	GetTag(context.Context, *storagepb.GetTagReq) (*storagepb.GetTagRsp, error)
 }
 
-// resultDataSource returns the data source shared by all of a task's tags.
-// A result whose tags span several sources stays without one, which Storage
-// allows for Collector-owned Datasets.
-func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectTags []string) (string, error) {
+// resultDataSource 返回任务全部标签共享的数据源与市场类型；标签间不一致时返回空值。
+func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectTags []string) (source, marketType string, err error) {
 	reader, ok := m.metadata.(tagReader)
 	if !ok || len(subjectTags) == 0 {
-		return "", nil
+		return "", "", nil
 	}
-	source := ""
-	for _, tagID := range subjectTags {
-		rsp, err := reader.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: m.auth, SpaceId: spaceID, TagId: tagID})
-		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetTag() == nil {
-			return "", metadataError("get result subject tag", err, func() *storagepb.RetInfo {
+	for i, tagID := range subjectTags {
+		rsp, getErr := reader.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: m.auth, SpaceId: spaceID, TagId: tagID})
+		if getErr != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetTag() == nil {
+			return "", "", metadataError("get result subject tag", getErr, func() *storagepb.RetInfo {
 				if rsp == nil {
 					return nil
 				}
@@ -308,12 +305,13 @@ func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectT
 			}())
 		}
 		tagSource := strings.TrimSpace(rsp.GetTag().GetSource())
-		if source != "" && tagSource != source {
-			return "", nil
+		tagMarket := strings.ToLower(strings.TrimSpace(rsp.GetTag().GetMarketType()))
+		if i > 0 && (tagSource != source || tagMarket != marketType) {
+			return "", "", nil
 		}
-		source = tagSource
+		source, marketType = tagSource, tagMarket
 	}
-	return source, nil
+	return source, marketType, nil
 }
 
 // Inspection is the read-only result metadata snapshot for one task.
@@ -532,14 +530,18 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
 		kind = storagepb.DataKind_DATA_KIND_RECORD
 	}
-	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID}
-	if marketType = strings.TrimSpace(marketType); marketType != "" {
-		attrs["market_type"] = marketType
-	}
 	subjectTags := normalizeSubjectTags(cfg.SubjectTags)
-	dataSourceID, err := m.resultDataSource(ctx, spaceID, subjectTags)
+	dataSourceID, tagMarketType, err := m.resultDataSource(ctx, spaceID, subjectTags)
 	if err != nil {
 		return IDs{}, err
+	}
+	// 未显式指定市场类型时，取标签共享的市场类型；重采样等下游据此校验来源数据集。
+	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID}
+	if marketType = strings.TrimSpace(marketType); marketType == "" {
+		marketType = tagMarketType
+	}
+	if marketType != "" {
+		attrs["market_type"] = marketType
 	}
 	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
@@ -570,11 +572,18 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			subjectTags = normalizeSubjectTags(get.GetDataset().GetSubjectTags())
 		}
 		assignSource := dataSourceID != "" && get.GetDataset().GetDataSourceId() == ""
-		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource {
+		assignMarket := marketType != "" && get.GetDataset().GetAttributes()["market_type"] == ""
+		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource || assignMarket {
 			updated := proto.Clone(get.GetDataset()).(*storagepb.Dataset)
 			updated.SubjectTags = subjectTags
 			if assignSource {
 				updated.DataSourceId = dataSourceID
+			}
+			if assignMarket {
+				if updated.Attributes == nil {
+					updated.Attributes = map[string]string{}
+				}
+				updated.Attributes["market_type"] = marketType
 			}
 			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
 			if updateErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {

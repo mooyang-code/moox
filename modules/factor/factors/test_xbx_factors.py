@@ -12,7 +12,6 @@ FACTOR_NAMES = [
     "Bias",
     "BiasQ",
     "Cci",
-    "CirculatingMcap",
     "MinMax",
     "QuoteVolumeMean",
     "QuoteVolumeMeanQ",
@@ -46,7 +45,6 @@ def sample_frame():
                 "close": 10 + i + shift,
                 "volume": 100 + i + shift,
                 "quote_volume": 1000 + 10 * i + shift,
-                "circulating_supply": 1000 + shift,
             })
     return pd.DataFrame(rows)
 
@@ -71,7 +69,7 @@ class XBXFactorTest(unittest.TestCase):
             with self.subTest(factor=name):
                 module = load_factor(name)
                 params = {"window": 3}
-                if name not in ("Cci", "CirculatingMcap"):
+                if name != "Cci":
                     params = {"windows": [3]}
                 result = module.compute(frame, params, {})
                 self.assertEqual(len(result), len(frame))
@@ -121,11 +119,6 @@ class XBXFactorTest(unittest.TestCase):
         )
         pd.testing.assert_series_equal(
             cci["cci"], (typical - mean) / (deviation * 0.015), check_names=False
-        )
-
-        mcap = load_factor("CirculatingMcap").compute(frame, {}, {})
-        pd.testing.assert_series_equal(
-            mcap["circulating_mcap"], frame["circulating_supply"] * frame["close"], check_names=False
         )
 
     def test_zf_abs_mean_uses_typical_price_direction(self):

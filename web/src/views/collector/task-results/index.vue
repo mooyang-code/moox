@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { ControlRequestError } from "@/api/admin/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
@@ -103,6 +103,7 @@ const pagination = reactive({ current: 1, pageSize: 100, total: 0 });
 let loadSequence = 0;
 let detailSequence = 0;
 let loadedSpaceId = "";
+let pageActive = true;
 
 const permanentTaskDetailErrorCodes = new Set<unknown>([2, 3, 5, "2", "3", "5", "NO_AUTH", "NO_PERMISSION", "NOT_FOUND"]);
 class TaskDetailIdentityError extends Error {}
@@ -249,6 +250,8 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
 }
 
 async function keepResultSelection(taskId: string) {
+  // 页面被缓存（停用）后，在途请求返回也不能再把路由写回结果页。
+  if (!pageActive) return;
   const requestedTaskId = queryTaskId(route.query.resultTask);
   if (requestedTaskId === taskId && route.query.tab === "results") return;
   await router.replace({ path: "/collector/tasks", query: buildResultsQuery(taskId) });
@@ -284,9 +287,19 @@ function goToTaskDetail() {
   });
 }
 
+// 页面被 keep-alive 缓存、停用期间不响应空间切换，否则会把路由写回结果页；重新激活时再补载。
+onActivated(() => {
+  pageActive = true;
+  if (selectedSpaceId.value && loadedSpaceId !== selectedSpaceId.value) void load();
+});
+onDeactivated(() => {
+  pageActive = false;
+});
+
 watch(
   selectedSpaceId,
   () => {
+    if (!pageActive) return;
     void load();
   },
   { immediate: true }

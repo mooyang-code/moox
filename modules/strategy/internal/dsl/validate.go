@@ -213,7 +213,8 @@ func validateRankRule(prefix string, rule *Rule) error {
 	if (sel.Top > 0) == (sel.Bottom > 0) {
 		return fmt.Errorf("%s 的 select 必须且只能设置 top 或 bottom 之一", prefix)
 	}
-	// 能同时持有的标的数上限：普通规则是选中数量，holding 规则是各批次之和。
+	// 单次配权能覆盖的标的数：就是选中数量。holding 规则的每个批次各自按 cap/total 配权（见 engine 的
+	// baseShares + applyCapRat），批次之间互不补足，所以这里不能乘批次数放宽。
 	slots := sel.Top
 	if sel.Bottom > 0 {
 		slots = sel.Bottom
@@ -225,7 +226,6 @@ func validateRankRule(prefix string, rule *Rule) error {
 		if err := validateHolding(prefix, rule.Holding); err != nil {
 			return err
 		}
-		slots *= len(rule.Holding.Offsets)
 	}
 	if rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
 		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)

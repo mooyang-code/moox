@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"sort"
 	"strings"
-	"time"
 )
 
 // CollectParams describes how a rule generates concrete task instances.
@@ -38,33 +36,11 @@ type CollectParams struct {
 	TargetFrequency string          `json:"target_frequency,omitempty"`
 	Alignment       string          `json:"alignment,omitempty"`
 	SettleDelayMS   *int64          `json:"settle_delay_ms,omitempty"`
-	HistoryPolicy   *HistoryPolicy  `json:"history_policy,omitempty"`
 	// SymbolsPerFunction 是定时模式下每个函数负责的标的数；0 表示使用默认值。
 	SymbolsPerFunction int `json:"symbols_per_function,omitempty"`
 	// AllowedLatenessSeconds 是结果数据集的允许迟到时间；0 表示使用空间默认值（crypto 15 秒，stockcn 90 秒）。
 	AllowedLatenessSeconds int `json:"allowed_lateness_seconds,omitempty"`
 }
-
-type HistoryPolicy struct {
-	Mode              string  `json:"mode"`
-	Lookback          int     `json:"lookback,omitempty"`
-	Since             string  `json:"since,omitempty"`
-	BatchBarLimit     int     `json:"batch_bar_limit,omitempty"`
-	MaxConcurrency    int     `json:"max_concurrency,omitempty"`
-	GapRepairLookback string  `json:"gap_repair_lookback,omitempty"`
-	RateBudgetRatio   float64 `json:"rate_budget_ratio,omitempty"`
-}
-
-const (
-	HistoryModeLiveOnly = "live_only"
-	HistoryModeLookback = "lookback"
-	HistoryModeSince    = "since"
-
-	DefaultHistoryBatchBarLimit     = 1000
-	DefaultHistoryMaxConcurrency    = 1
-	DefaultHistoryGapRepairLookback = "0m"
-	DefaultHistoryRateBudgetRatio   = 1.0
-)
 
 // CollectSource describes where target objects come from.
 type CollectSource struct {
@@ -97,6 +73,7 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 	if raw == "" {
 		raw = "{}"
 	}
+	raw = DropRetiredParams(raw)
 	var params CollectParams
 	decoder := json.NewDecoder(bytes.NewBufferString(raw))
 	decoder.DisallowUnknownFields()
@@ -114,6 +91,32 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 		return nil, err
 	}
 	return &params, nil
+}
+
+// retiredParams 是已删除的采集参数：存量任务的 collect_params 里还带着这些键，解析时忽略，下次保存即消失。
+var retiredParams = []string{"history_policy"}
+
+// DropRetiredParams 去掉已删除的采集参数键，返回新的 JSON；没有这些键时原样返回。
+func DropRetiredParams(raw string) string {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return raw // 交给严格解码报告真正的 JSON 错误
+	}
+	changed := false
+	for _, key := range retiredParams {
+		if _, exists := values[key]; exists {
+			delete(values, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
 }
 
 func (p *CollectParams) validatePlanOptions() error {
@@ -151,7 +154,6 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	}
 	if dataType == "kline" {
 		p.Frequency = normalizeFrequency(p.Frequency)
-		p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
 	}
 
 	// The source is the target Dataset's subject range. It is no longer a
@@ -186,7 +188,7 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 		return nil // the strict struct decoder reports the useful JSON error first
 	}
 	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
-	standardOnly := []string{"frequency", "history_policy"}
+	standardOnly := []string{"frequency"}
 	resampleOnly := []string{"source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment", "settle_delay_ms"}
 	for _, key := range standardOnly {
 		if _, exists := values[key]; exists && resample {
@@ -197,9 +199,6 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 		if _, exists := values[key]; exists && !resample {
 			return fmt.Errorf("parse collect params: field %q is only valid for kline_resample", key)
 		}
-	}
-	if _, exists := values["history_policy"]; exists && !strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline") {
-		return fmt.Errorf("parse collect params: field %q is only valid for kline", "history_policy")
 	}
 	return nil
 }
@@ -239,9 +238,6 @@ func (p *CollectParams) ValidateTaskDefinition() error {
 			if value == "" {
 				return fmt.Errorf("collector.intervals must not contain empty values")
 			}
-		}
-		if err := p.ValidateHistoryPolicy(); err != nil {
-			return err
 		}
 	case "kline_resample":
 		return p.ValidateKlineResample()
@@ -306,115 +302,6 @@ func normalizeOutputFields(fields []string) []string {
 		fields[i] = strings.ToLower(strings.TrimSpace(fields[i]))
 	}
 	return normalizeTags(fields)
-}
-
-func normalizeHistoryPolicy(policy *HistoryPolicy) *HistoryPolicy {
-	if policy == nil {
-		policy = &HistoryPolicy{}
-	}
-	policy.Mode = strings.ToLower(strings.TrimSpace(policy.Mode))
-	if policy.Mode == "" {
-		policy.Mode = HistoryModeLiveOnly
-	}
-	policy.Since = canonicalRFC3339(policy.Since)
-	if policy.BatchBarLimit == 0 {
-		policy.BatchBarLimit = DefaultHistoryBatchBarLimit
-	}
-	if policy.MaxConcurrency == 0 {
-		policy.MaxConcurrency = DefaultHistoryMaxConcurrency
-	}
-	if strings.TrimSpace(policy.GapRepairLookback) == "" {
-		policy.GapRepairLookback = DefaultHistoryGapRepairLookback
-	}
-	policy.GapRepairLookback = canonicalNonNegativeDuration(policy.GapRepairLookback)
-	if policy.RateBudgetRatio == 0 {
-		policy.RateBudgetRatio = DefaultHistoryRateBudgetRatio
-	}
-	return policy
-}
-
-func (p *CollectParams) ValidateHistoryPolicy() error {
-	if p == nil {
-		return fmt.Errorf("history_policy is required")
-	}
-	p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
-	policy := p.HistoryPolicy
-	switch policy.Mode {
-	case HistoryModeLiveOnly:
-	case HistoryModeLookback:
-		if policy.Lookback <= 0 {
-			return fmt.Errorf("history_policy.lookback must be greater than 0")
-		}
-	case HistoryModeSince:
-		if strings.TrimSpace(policy.Since) == "" {
-			return fmt.Errorf("history_policy.since is required")
-		}
-		if _, err := time.Parse(time.RFC3339Nano, policy.Since); err != nil {
-			return fmt.Errorf("history_policy.since must be RFC3339: %w", err)
-		}
-	default:
-		return fmt.Errorf("history_policy.mode %q is invalid", policy.Mode)
-	}
-	if policy.BatchBarLimit < 1 || policy.BatchBarLimit > 1000 {
-		return fmt.Errorf("history_policy.batch_bar_limit must be between 1 and 1000")
-	}
-	if policy.MaxConcurrency < 1 || policy.MaxConcurrency > 64 {
-		return fmt.Errorf("history_policy.max_concurrency must be between 1 and 64")
-	}
-	if _, err := parseNonNegativeDuration(policy.GapRepairLookback); err != nil {
-		return fmt.Errorf("history_policy.gap_repair_lookback: %w", err)
-	}
-	if policy.RateBudgetRatio <= 0 || policy.RateBudgetRatio > 1 || math.IsNaN(policy.RateBudgetRatio) || math.IsInf(policy.RateBudgetRatio, 0) {
-		return fmt.Errorf("history_policy.rate_budget_ratio must be within (0,1]")
-	}
-	return nil
-}
-
-func canonicalRFC3339(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	at, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return raw
-	}
-	return at.UTC().Format(time.RFC3339Nano)
-}
-
-func canonicalNonNegativeDuration(raw string) string {
-	value, err := parseNonNegativeDuration(raw)
-	if err != nil {
-		return strings.TrimSpace(raw)
-	}
-	return formatDurationCanonical(value)
-}
-
-func parseNonNegativeDuration(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0, fmt.Errorf("duration is required")
-	}
-	if raw == "0" || raw == "0m" || raw == "0h" || raw == "0d" || raw == "0w" {
-		return 0, nil
-	}
-	return ParseScheduleInterval(raw)
-}
-
-func formatDurationCanonical(value time.Duration) string {
-	if value == 0 {
-		return "0m"
-	}
-	if value%(7*24*time.Hour) == 0 {
-		return fmt.Sprintf("%dw", int(value/(7*24*time.Hour)))
-	}
-	if value%(24*time.Hour) == 0 {
-		return fmt.Sprintf("%dd", int(value/(24*time.Hour)))
-	}
-	if value%time.Hour == 0 {
-		return fmt.Sprintf("%dh", int(value/time.Hour))
-	}
-	return fmt.Sprintf("%dm", int(value/time.Minute))
 }
 
 // DefaultAllowedLatenessSeconds 返回空间的允许迟到时间默认值：crypto 15 秒，stockcn 90 秒，其余 60 秒。

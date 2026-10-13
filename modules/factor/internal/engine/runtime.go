@@ -162,7 +162,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock))
-	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval}
+	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval, materialize: r.catalog.Materialize}
 	if r.gap != nil {
 		filler := &gapFiller{
 			ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,

@@ -29,4 +29,10 @@ describe("strategy DSL preview", () => {
     expect(summarizeDSL("name: [")).toBe("DSL 无法解析");
     expect(summarizeDSL("name: a")).toBe("DSL 没有规则");
   });
+
+  it("reports YAML that fails to convert instead of throwing", () => {
+    const result = parseDSL("name: test\nrules: *missing\n");
+    expect(result.preview).toBeNull();
+    expect(result.diagnostics.length).toBeGreaterThan(0);
+  });
 });

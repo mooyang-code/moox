@@ -28,6 +28,8 @@ type Support struct {
 	Market     string
 	DataType   string
 	SourceKind string
+	// Frequencies 限定该来源能采集的 K 线周期；为空表示不限。
+	Frequencies []string
 }
 
 // ExecutionMode separates queue-backed exchange jobs from Collector-local jobs.
@@ -80,11 +82,31 @@ func (d JobDefinition) Matches(params *domain.CollectParams) bool {
 		if equalFoldTrim(support.Exchange, params.Collector.Exchange) &&
 			equalFoldTrim(support.Market, params.Collector.Market) &&
 			equalFoldTrim(support.DataType, params.Collector.DataType) &&
-			equalFoldTrim(support.SourceKind, params.Source.Kind) {
+			equalFoldTrim(support.SourceKind, params.Source.Kind) &&
+			supportsIntervals(support.Frequencies, params.Collector.Intervals) {
 			return true
 		}
 	}
 	return false
+}
+
+func supportsIntervals(supported, intervals []string) bool {
+	if len(supported) == 0 {
+		return true
+	}
+	for _, interval := range intervals {
+		found := false
+		for _, item := range supported {
+			if equalFoldTrim(item, interval) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func equalFoldTrim(left string, right string) bool {

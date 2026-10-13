@@ -159,10 +159,6 @@ describe("page layout standards", () => {
     const cloudNodeActions = extractBlock(cloudNodes, '<a-space class="cloud-node-action-bar" wrap>', "</a-space>");
     const cloudNodeFilters = extractBlock(cloudNodes, '<a-space class="cloud-node-filter-bar" wrap>', "</a-space>");
     expectStrictOrder(cloudNodeActions, [
-      '<a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">',
-      "<span>批量新增</span>",
-      '<a-button type="primary" status="warning" @click="batchDeploy" :disabled="batchChangeProcessing">',
-      "<span>批量部署</span>",
       '<a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">',
       "<span>批量删除</span>",
       '<a-button type="outline" @click="onCloudAccountManage">',

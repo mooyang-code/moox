@@ -279,3 +279,37 @@ type runnerFunc func(context.Context, pipeline.Plan) (pipeline.Outcome, error)
 func (f runnerFunc) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
 	return f(ctx, plan)
 }
+
+func TestRecalcLoopMaterializesFactorSourcesBeforeRunning(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	var materialized []string
+	loop.materialize = func(factors []domain.FactorDef) error {
+		for _, factor := range factors {
+			materialized = append(materialized, factor.FactorID)
+		}
+		return nil
+	}
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"bias"}, materialized)
+	require.Len(t, runner.plans, 3)
+}
+
+func TestRecalcLoopFailsJobWhenSourceCannotBeMaterialized(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	loop.materialize = func([]domain.FactorDef) error { return errors.New("disk full") }
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Empty(t, runner.plans, "no period may be computed without the factor source")
+	require.Len(t, client.reports, 1)
+	require.Equal(t, jobStatusFailed, client.reports[0].status)
+	require.Contains(t, client.reports[0].errText, "disk full")
+}

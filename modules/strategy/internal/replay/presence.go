@@ -12,10 +12,12 @@ import (
 type presence struct {
 	indexes map[string]map[int64]struct{}
 	cache   map[int64]int64
+	// passed 是回放中已通过年龄判定的标的：与实时一致，通过后不再因之后窗口缺口被重新剔除。
+	passed map[string]struct{}
 }
 
 func newPresence() *presence {
-	return &presence{indexes: make(map[string]map[int64]struct{}), cache: make(map[int64]int64)}
+	return &presence{indexes: make(map[string]map[int64]struct{}), cache: make(map[int64]int64), passed: make(map[string]struct{})}
 }
 
 // add 登记一段读取到的行。不在日历上的行（例如 A 股节假日误写的一行）不能作为年龄依据，跳过而不是让整个回放失败。
@@ -61,17 +63,24 @@ func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries) in
 			return false
 		}
 		satisfied := make(map[string]struct{}, len(instruments))
+		for id := range wanted {
+			if _, ok := p.passed[id]; ok {
+				satisfied[id] = struct{}{}
+			}
+		}
 		anyRows := false
 		for subjectID, indexes := range p.indexes {
 			if !inWindow(indexes) {
 				continue
 			}
 			anyRows = true
+			p.passed[subjectID] = struct{}{}
 			if _, ok := wanted[subjectID]; ok {
 				satisfied[subjectID] = struct{}{}
 			}
 		}
-		if len(instruments) > 0 && !anyRows {
+		// 与实时一致：已证明年龄的标的放行；其余全部不满足且窗口内整个数据集没有数据时，才是历史缺口。
+		if len(instruments) > 0 && len(satisfied) == 0 && !anyRows {
 			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars)}
 		}
 		return satisfied, nil

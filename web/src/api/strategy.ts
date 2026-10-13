@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { callControl, ControlRequestError } from "@/api/admin/http";
 import type {
   InstrumentTarget,
   PageRequest,
@@ -129,14 +129,6 @@ function pageRequest(params: PageRequest): Required<PageRequest> {
   return { page: params.page ?? 1, page_size: params.page_size ?? 20 };
 }
 
-function ensureResponse<T extends Record<string, any>>(response: T): T {
-  const code = response?.ret_info?.code;
-  if (code !== undefined && code !== 0 && code !== "0" && code !== "SUCCESS") {
-    throw new Error(response.ret_info?.msg || `策略服务返回错误：${String(code)}`);
-  }
-  return response;
-}
-
 /** 请求选项：silent 为 true 时失败不弹全局错误提示（后台轮询由页面自己提示）。 */
 export interface RequestOptions {
   silent?: boolean;
@@ -147,9 +139,8 @@ async function call<Req extends object, Rsp extends Record<string, any>>(
   request: Req,
   options: RequestOptions = {}
 ): Promise<Rsp> {
-  return ensureResponse(
-    await callControl<Req, Rsp>("strategy", method, request, options.silent ? { silentError: true } : undefined)
-  );
+  // callControl 已把业务失败（ret_info.code 非成功）抛成 ControlRequestError。
+  return callControl<Req, Rsp>("strategy", method, request, options.silent ? { silentError: true } : undefined);
 }
 
 export async function createStrategy(strategy: { strategy_id?: string; dsl_yaml: string }) {
@@ -187,18 +178,25 @@ export async function listStrategies(params: PageRequest = {}): Promise<PageResu
 
 /** 校验 DSL；给出 view_id 时解析绑定并在最新周期试算一次（不落库）。 */
 export async function validateStrategy(dsl_yaml: string, view_id = ""): Promise<ValidateStrategyResult> {
-  const response = await callControl<{ dsl_yaml: string; view_id?: string }, any>("strategy", "ValidateStrategy", {
-    dsl_yaml,
-    view_id: view_id || undefined
-  });
-  const code = response?.ret_info?.code;
-  const diagnostics: string[] = response?.diagnostics ?? [];
-  if (code !== undefined && code !== 0 && code !== "0" && code !== "SUCCESS") {
-    const message = response?.ret_info?.msg || `策略服务返回错误：${String(code)}`;
-    return { diagnostics: diagnostics.length ? diagnostics : [message], resolved_json: "", trial: null, trial_items: [] };
+  let response: any;
+  try {
+    response = await callControl<{ dsl_yaml: string; view_id?: string }, any>("strategy", "ValidateStrategy", {
+      dsl_yaml,
+      view_id: view_id || undefined
+    });
+  } catch (error) {
+    // 校验不通过时服务端以业务错误返回诊断：作为结果交给页面展示，而不是抛异常。
+    if (!(error instanceof ControlRequestError)) throw error;
+    const diagnostics: string[] = (error.response as any)?.diagnostics ?? [];
+    return {
+      diagnostics: diagnostics.length ? diagnostics : [error.message],
+      resolved_json: "",
+      trial: null,
+      trial_items: []
+    };
   }
   return {
-    diagnostics,
+    diagnostics: response?.diagnostics ?? [],
     resolved_json: response?.resolved_json ?? "",
     trial: response?.trial ? normalizeResult(response.trial) : null,
     trial_items: (response?.trial_items ?? []).map(normalizeItem)
@@ -248,7 +246,8 @@ export async function listInstances(
   >("ListStrategyInstances", {
     page: pageRequest(params),
     strategy_id: params.strategy_id || undefined,
-    enabled: params.enabled
+    // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
+    enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
   });
   return {
     items: (response.instances ?? []).map(normalizeInstance),

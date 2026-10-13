@@ -163,8 +163,10 @@ func ownedDatasetNodeID(ctx context.Context, spaceID, datasetID, owner string) (
 	validOwner := false
 	switch owner {
 	case "collector":
+		// Collector 的原始采集结果与重采样结果都由它自己上报周期完成标记。
+		role := strings.ToLower(strings.TrimSpace(attrs["dataset_role"]))
 		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "collector") &&
-			strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "raw_collection")
+			(role == "raw_collection" || role == "kline_resample_result")
 	case "factor":
 		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") &&
 			strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "factor_result") &&

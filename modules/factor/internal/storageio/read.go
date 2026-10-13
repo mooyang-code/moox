@@ -255,6 +255,13 @@ func decodeFields(fields []*storagepb.FieldValue, columns []string) ([]any, erro
 	return values, nil
 }
 
+// TimeText 与 JSONText 保留源字段的 TIME / JSON 类型：对 Python 就是字符串，携带列写回时仍按原类型编码，
+// 否则会被编码成 STRING，与结果数据集的字段类型不一致而整批写入失败。
+type (
+	TimeText string
+	JSONText string
+)
+
 func typedValueToAny(value *storagepb.TypedValue) any {
 	if value == nil {
 		return nil
@@ -269,9 +276,9 @@ func typedValueToAny(value *storagepb.TypedValue) any {
 	case *storagepb.TypedValue_BoolValue:
 		return item.BoolValue
 	case *storagepb.TypedValue_TimeValue:
-		return item.TimeValue
+		return TimeText(item.TimeValue)
 	case *storagepb.TypedValue_JsonValue:
-		return item.JsonValue
+		return JSONText(item.JsonValue)
 	case *storagepb.TypedValue_BytesValue:
 		return append([]byte(nil), item.BytesValue...)
 	case *storagepb.TypedValue_NullValue:

@@ -319,8 +319,8 @@ type KlineRequest struct {
 	HistoryAsOf time.Time
 	RequestID   string
 	DNSRoutes   map[string][]string
-	// RateBudgetRatio applies the HistoryPolicy budget to this invocation's
-	// provider limiter. Zero means the normal provider budget (1.0).
+	// RateBudgetRatio limits this invocation's share of the
+	// provider limiter budget. Zero means the normal provider budget (1.0).
 	RateBudgetRatio float64
 }
 

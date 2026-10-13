@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_result_dataset_id TEXT NOT NULL DEFAULT '',
     c_result_view_id TEXT NOT NULL DEFAULT '',
-    c_coverage_start_time DATETIME,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );

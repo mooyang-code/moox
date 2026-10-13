@@ -119,7 +119,7 @@
                   size="mini"
                   status="success"
                   @click="onDownload(record)"
-                  :disabled="record.status !== 1"
+                  :disabled="Number(record.status) !== PACKAGE_STATUS_AVAILABLE"
                   :loading="downloadProgress[record.package_id] !== undefined && downloadProgress[record.package_id] < 100"
                 >
                   <template #icon>
@@ -320,7 +320,7 @@
               type="primary"
               status="success"
               @click="onDownload(packageDetail)"
-              :disabled="packageDetail.status !== 1"
+              :disabled="Number(packageDetail.status) !== PACKAGE_STATUS_AVAILABLE"
               :loading="
                 downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100
               "
@@ -349,6 +349,8 @@
 </template>
 
 <script setup lang="ts">
+// PackageStatus 枚举：2 = 可用（已上传完成）。
+const PACKAGE_STATUS_AVAILABLE = 2;
 import { ref, watch, reactive, computed, onMounted } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {

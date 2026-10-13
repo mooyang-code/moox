@@ -72,7 +72,13 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
   const document = parseDocument(source, { uniqueKeys: true });
   const diagnostics: DSLDiagnostic[] = [...document.errors, ...document.warnings].map(item => ({ message: item.message }));
   if (document.errors.length > 0) return { preview: null, diagnostics };
-  const value = document.toJS() as Record<string, any> | null;
+  let value: Record<string, any> | null;
+  try {
+    value = document.toJS() as Record<string, any> | null;
+  } catch (error) {
+    // 例如未解析的别名：document.errors 里没有，但转换成对象时会抛异常。
+    return { preview: null, diagnostics: [{ message: error instanceof Error ? error.message : "YAML 无法解析" }] };
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { preview: null, diagnostics: [{ message: "DSL 必须是 YAML 对象" }] };
   }

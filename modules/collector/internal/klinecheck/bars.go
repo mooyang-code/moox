@@ -10,8 +10,12 @@ import (
 func alignUp(frequency marketdata.Frequency, t time.Time) time.Time {
 	t = t.UTC()
 	if frequency.Duration() > 0 {
-		seconds := int64(frequency.Duration() / time.Second)
-		return time.Unix((t.Unix()+seconds-1)/seconds*seconds, 0).UTC()
+		// 与 alignDown 一致用 Truncate 对齐（周线落在周一）。
+		start := t.Truncate(frequency.Duration())
+		if start.Before(t) {
+			start = start.Add(frequency.Duration())
+		}
+		return start
 	}
 	start := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 	if start.Before(t) {

@@ -72,8 +72,9 @@ func ValidateDefinition(def FactorDef) error {
 	if !factorIDPattern.MatchString(def.FactorID) {
 		return fmt.Errorf("factor_id must match [A-Za-z_][A-Za-z0-9_]*")
 	}
-	if strings.TrimSpace(def.Name) == "" {
-		return fmt.Errorf("name is required")
+	// name 同时是落盘的 Python 模块名，必须是合法标识符，否则整个目录快照安装失败。
+	if !factorIDPattern.MatchString(def.Name) {
+		return fmt.Errorf("name must match [A-Za-z_][A-Za-z0-9_]*")
 	}
 	if err := ValidateFactorType(def.FactorType); err != nil {
 		return err

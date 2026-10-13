@@ -308,6 +308,46 @@ def test_batch_rejects_invalid_output_shape(tmp_path, body, outputs, message):
     assert message in response["items"][0]["error"]["message"]
 
 
+# 与前端编辑器「插入模板」（web/src/views/factor/editor/editor-template.ts）里的时序模板保持一致。
+TIMESERIES_TEMPLATE = """
+def compute(df, params, context):
+    result = df[['data_time', 'series_tag']].copy()
+    close = df.groupby('series_tag', sort=False)['close']
+    for window in params['windows']:
+        average = close.transform(lambda values: values.rolling(window, min_periods=1).mean())
+        result[f'bias_{window}'] = df['close'] / average - 1
+    return result
+"""
+
+
+def test_timeseries_template_rolls_each_series_separately():
+    namespace = {}
+    exec(TIMESERIES_TEMPLATE, namespace)
+    df = pd.DataFrame({
+        "data_time": pd.to_datetime(["2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z",
+                                     "2026-01-01T00:01:00Z", "2026-01-01T00:01:00Z"], utc=True),
+        "series_tag": ["a", "b", "a", "b"],
+        "close": [10.0, 100.0, 20.0, 50.0],
+    })
+    result = namespace["compute"](df, {"windows": [2]}, {})
+    # 交错的两个序列各自滚动：a 为 20 / 15 - 1，b 为 50 / 75 - 1；不能混进同一个窗口。
+    assert result["bias_2"].round(6).tolist() == [0.0, 0.0, round(20 / 15 - 1, 6), round(50 / 75 - 1, 6)]
+
+
+def test_batch_accepts_outputs_in_any_column_order(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    path = write_factor(
+        factors_dir, "Reordered",
+        'result = df[["data_time", "series_tag"]].copy(); result["b"] = 2.0; result["a"] = 1.0; return result',
+    )
+    response = FactorWorker(factors_dir).execute_request(batch_request([
+        factor_call(path, "reordered", "Reordered", ["value"], ["a", "b"])
+    ]))
+    item = response["items"][0]
+    assert item["ok"] is True
+    assert item["results"]["rows"][0][2:] == [1.0, 2.0]
+
+
 def test_batch_normalizes_nan_and_infinity(tmp_path: Path):
     factors_dir = make_factor_dir(tmp_path)
     path = write_factor(

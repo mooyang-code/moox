@@ -173,6 +173,12 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || collected.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("collected rsp=%v err=%v", collected, err)
 	}
+	resampled, err := svc.ReportCollectorPeriodCompleted(context.Background(), &pb.ReportCollectorPeriodCompletedReq{
+		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "resample-data"},
+	})
+	if err != nil || resampled.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("resampled rsp=%v err=%v", resampled, err)
+	}
 	computed, err := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
 		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{DatasetId: "factor-data"},
 	})
@@ -186,7 +192,7 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || syncPoint.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("sync point rsp=%v err=%v", syncPoint, err)
 	}
-	if !reflect.DeepEqual(node.markerCalls, []string{"collector", "factor", "sync-point"}) {
+	if !reflect.DeepEqual(node.markerCalls, []string{"collector", "collector", "factor", "sync-point"}) {
 		t.Fatalf("marker calls=%v", node.markerCalls)
 	}
 }
@@ -239,6 +245,8 @@ func (markerRoutingSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset,
 	switch datasetID {
 	case "collector-data":
 		attrs = map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}
+	case "resample-data":
+		attrs = map[string]string{"owner_module": "collector", "dataset_role": "kline_resample_result"}
 	case "factor-data":
 		attrs = map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"}
 	}

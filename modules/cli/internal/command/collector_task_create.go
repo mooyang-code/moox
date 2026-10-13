@@ -59,7 +59,6 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	}
 	params := map[string]any{
 		"subject_tags": stringsToAny(flags.TagIDs), "frequency": flags.Frequency, "output_fields": stringsToAny(flags.Fields),
-		"history_policy": map[string]any{"mode": "live_only", "max_concurrency": 1, "rate_budget_ratio": 1, "batch_bar_limit": 1000, "gap_repair_lookback": "0m"},
 	}
 	if flags.Symbols > 0 {
 		params["symbols_per_function"] = flags.Symbols

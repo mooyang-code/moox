@@ -222,7 +222,7 @@ func TestValidateCollectionTaskAcceptsCollectorLocalResampleWithoutCloudRoute(t 
 func TestValidateCollectionTaskAcceptsBoundedStockHistoryMode(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "stock-bars", TaskName: "stock bars", DataType: "kline", TagIDs: []string{"cn_a_share"},
-		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m"}`,
 	}
 	require.NoError(t, validateCollectionTask(task))
 }
@@ -657,7 +657,7 @@ func TestResolveSubjectTagsRejectsEmptyStorageSubjectResolution(t *testing.T) {
 	require.ErrorContains(t, err, "所选标签没有有效标的")
 }
 
-func TestResolveSubjectTagsSupportsExplicitAndInheritedResampleTags(t *testing.T) {
+func TestResolveSubjectTagsResampleInheritsSourceTags(t *testing.T) {
 	source := validationDatasetSource{
 		"source": {SubjectTags: []string{"source_tag"}},
 	}
@@ -668,9 +668,16 @@ func TestResolveSubjectTagsSupportsExplicitAndInheritedResampleTags(t *testing.T
 	}
 	explicitParams, err := domain.ParseCollectParams(explicit.CollectParams, "", "", explicit.DataType)
 	require.NoError(t, err)
-	clean, tags, err := service.resolveSubjectTags(context.Background(), explicit, explicitParams, "")
+	_, _, err = service.resolveSubjectTags(context.Background(), explicit, explicitParams, "")
+	require.ErrorContains(t, err, "不能单独选择标签")
+
+	matching := explicit
+	matching.CollectParams = strings.Replace(explicit.CollectParams, `"explicit_tag"`, `"source_tag"`, 1)
+	matchingParams, err := domain.ParseCollectParams(matching.CollectParams, "", "", matching.DataType)
 	require.NoError(t, err)
-	require.Equal(t, []string{"explicit_tag"}, tags)
+	clean, tags, err := service.resolveSubjectTags(context.Background(), matching, matchingParams, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"source_tag"}, tags)
 	require.NotContains(t, clean, "subject_tags")
 
 	inherited := explicit
@@ -907,15 +914,6 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "create a new task")
 }
 
-func TestPreserveCollectionTaskCoverageStartOnOrdinaryUpdate(t *testing.T) {
-	original := time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)
-	replacement := original.Add(24 * time.Hour)
-	desired := domain.CollectionTask{CoverageStartTime: &replacement}
-	preserveCollectionTaskCoverageStart(domain.CollectionTask{CoverageStartTime: &original}, &desired)
-	require.NotNil(t, desired.CoverageStartTime)
-	require.Equal(t, original, desired.CoverageStartTime.UTC())
-}
-
 func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 	base := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", TaskName: "original", DataType: "kline_resample", Enabled: true,
@@ -1041,11 +1039,11 @@ func TestCollectionTaskDefinitionHashCanonicalizesKlineDefinition(t *testing.T) 
 		SpaceID: "crypto", DataType: "kline", TagIDs: []string{"tag-a", "tag-b"},
 		CollectParams: `{"provider":"okx","market_type":"swap","market_id":"other","instrument_type":"swap","source_id":"swap_http","series_tag":"venue:okx","target_dataset_id":"dataset-b","frequency":"1h","output_fields":["close","volume"]}`,
 	}
-	require.Equal(t, collectionTaskDefinitionHash(left), collectionTaskDefinitionHash(right))
+	require.Equal(t, CollectionTaskDefinitionHash(left), CollectionTaskDefinitionHash(right))
 
 	changed := right
 	changed.CollectParams = `{"frequency":"1h","output_fields":["close"]}`
-	require.NotEqual(t, collectionTaskDefinitionHash(left), collectionTaskDefinitionHash(changed))
+	require.NotEqual(t, CollectionTaskDefinitionHash(left), CollectionTaskDefinitionHash(changed))
 }
 
 func TestStripCollectionTaskRoutingRemovesAllKlineRouteOverrides(t *testing.T) {
@@ -1126,4 +1124,44 @@ func (f *taskResultMetadataFake) ListViews(_ context.Context, req *storagepb.Lis
 		}
 	}
 	return rsp, nil
+}
+
+type tagValidationSource struct {
+	validationDatasetSource
+	tags map[string]*storagepb.Tag
+}
+
+func (s tagValidationSource) GetTag(_ context.Context, _, tagID string) (*storagepb.Tag, error) {
+	if tag, ok := s.tags[tagID]; ok {
+		return tag, nil
+	}
+	return nil, fmt.Errorf("tag %s not found", tagID)
+}
+
+func TestValidateCollectionTaskTagRoutes(t *testing.T) {
+	service := &Service{datasetSrc: tagValidationSource{tags: map[string]*storagepb.Tag{
+		"binance_spot": {TagId: "binance_spot", Source: "binance", MarketType: "spot"},
+		"binance_swap": {TagId: "binance_swap", Source: "binance", MarketType: "swap"},
+		"cn_a_share":   {TagId: "cn_a_share", Source: "eastmoney", MarketType: "equity"},
+	}}}
+	params := `{"target_dataset_id":"bars","frequency":"1m"}`
+	task := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", CollectParams: params}
+
+	task.TagIDs = []string{"binance_spot", "binance_swap"}
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "different markets")
+
+	for _, tagID := range []string{"binance_spot", "cn_a_share"} {
+		task.TagIDs = []string{tagID}
+		require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task), tagID)
+	}
+
+	// 同一来源与市场的多个标签通过。
+	service.datasetSrc.(tagValidationSource).tags["binance_spot_2"] = &storagepb.Tag{TagId: "binance_spot_2", Source: "binance", MarketType: "spot"}
+	task.TagIDs = []string{"binance_spot", "binance_spot_2"}
+	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
+
+	// 东方财富只支持 1m：5m 在创建时就拒绝。
+	task.TagIDs = []string{"cn_a_share"}
+	task.CollectParams = `{"target_dataset_id":"bars","frequency":"5m"}`
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "unsupported")
 }

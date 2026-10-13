@@ -71,7 +71,7 @@ type CollectionItem struct {
 	DatasetID       string  `json:"dataset_id"`
 	Frequency       string  `json:"frequency,omitempty"`
 	// OutputFields limits the fields persisted for each fetched row. An empty
-	// list preserves the legacy behavior and writes every normalized field.
+	// list writes every normalized field.
 	OutputFields       []string `json:"output_fields,omitempty"`
 	SnapshotShardIndex int      `json:"snapshot_shard_index,omitempty"`
 	SnapshotShardCount int      `json:"snapshot_shard_count,omitempty"`

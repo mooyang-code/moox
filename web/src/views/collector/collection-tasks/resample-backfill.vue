@@ -58,6 +58,7 @@ import {
   defaultClosedEnd,
   formatUtcInput,
   parseFixedFrequencyMinutes,
+  parseUtcInput,
   type ResampleBackfillSummary
 } from "./resample-backfill";
 
@@ -122,8 +123,8 @@ async function start() {
       space_id: props.spaceId,
       task_id: props.taskId,
       request_id: `resample-${Date.now()}`,
-      start: new Date(form.start).toISOString(),
-      end: new Date(form.end).toISOString()
+      start: parseUtcInput(form.start).toISOString(),
+      end: parseUtcInput(form.end).toISOString()
     });
     Message.success("回填已提交");
     emit("started");

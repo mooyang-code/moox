@@ -108,6 +108,10 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	if err := domain.ValidateSet(in); err != nil {
 		return domain.FactorSet{}, err
 	}
+	// 启用成员时才会取空间日历；不支持的空间在创建时就拒绝，避免出现永远无法启用的计算任务。
+	if _, err := periodclock.ForSpace(in.SpaceID); err != nil {
+		return domain.FactorSet{}, err
+	}
 	unlock, err := s.locks.LockContext(ctx, in.SetID)
 	if err != nil {
 		return domain.FactorSet{}, err

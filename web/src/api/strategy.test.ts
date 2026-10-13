@@ -1,12 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { callControl } = vi.hoisted(() => ({ callControl: vi.fn() }));
-vi.mock("@/api/admin/http", () => ({ callControl }));
+const { callControl, ControlRequestError } = vi.hoisted(() => ({
+  callControl: vi.fn(),
+  ControlRequestError: class ControlRequestError extends Error {
+    constructor(
+      message: string,
+      public readonly response?: unknown
+    ) {
+      super(message);
+    }
+  }
+}));
+vi.mock("@/api/admin/http", () => ({ callControl, ControlRequestError }));
 
 import {
   createInstance,
   getReplay,
   getStrategyResult,
+  listInstances,
   listReplays,
   listStrategies,
   listStrategyResults,
@@ -29,7 +40,7 @@ describe("strategy API", () => {
     await expect(listStrategies({ page: 1, page_size: 20 })).resolves.toMatchObject({
       items: [{ strategy_id: "momentum", name: "动量", dsl_hash: "sha256:abc" }]
     });
-    callControl.mockResolvedValueOnce({ ret_info: { code: 13, msg: "upstream EOF" } });
+    callControl.mockRejectedValueOnce(new ControlRequestError("upstream EOF", { ret_info: { code: 13, msg: "upstream EOF" } }));
     await expect(listStrategies()).rejects.toThrow("upstream EOF");
   });
 
@@ -83,14 +94,24 @@ describe("strategy API", () => {
   });
 
   it("returns diagnostics instead of throwing when validation fails", async () => {
-    callControl.mockResolvedValueOnce({
-      ret_info: { code: 1, msg: "列 momentum_99 不存在于 View view_a" },
-      diagnostics: ["列 momentum_99 不存在于 View view_a"]
-    });
+    callControl.mockRejectedValueOnce(
+      new ControlRequestError("列 momentum_99 不存在于 View view_a", {
+        ret_info: { code: 1, msg: "列 momentum_99 不存在于 View view_a" },
+        diagnostics: ["列 momentum_99 不存在于 View view_a"]
+      })
+    );
     const result = await validateStrategy("name: x", "view_a");
     expect(result.diagnostics[0]).toContain("momentum_99");
     expect(result.trial).toBeNull();
     expect(callControl).toHaveBeenCalledWith("strategy", "ValidateStrategy", { dsl_yaml: "name: x", view_id: "view_a" });
+  });
+
+  it("omits the enabled filter unless it is a boolean", async () => {
+    callControl.mockResolvedValue({ instances: [], total: 0 });
+    await listInstances({ enabled: "" as unknown as boolean });
+    await listInstances({ enabled: false });
+    expect(callControl.mock.calls[0][2]).toMatchObject({ enabled: undefined });
+    expect(callControl.mock.calls[1][2]).toMatchObject({ enabled: false });
   });
 
   it("starts a replay with the requested window and fee", async () => {

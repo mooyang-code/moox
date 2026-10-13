@@ -115,7 +115,8 @@ func (c *liveWindowCache) plan(plan Plan, subjects []string) (map[string]subject
 			continue
 		}
 		cached, ok := set.subjects[subject]
-		covered := ok && !cached.start.After(plan.TargetStart) && cached.end.After(plan.TargetStart)
+		// 缓存是 [start, end)：回看 1 个周期时，下一周期的 TargetStart 恰好等于缓存的 end，也算相邻覆盖（不必有重叠行）。
+		covered := ok && !cached.start.After(plan.TargetStart) && !cached.end.Before(plan.TargetStart)
 		if covered && c.wake != nil && period > 0 && plan.PeriodTime.Sub(cached.end) > liveCatchUpBars*period {
 			covered = false
 		}

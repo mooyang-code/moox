@@ -38,7 +38,7 @@ async function change(enabled: boolean) {
     await setInstanceEnabled(props.instanceId, enabled);
     Message.success(enabled ? "实例已启用" : "实例已停用");
   } catch (error) {
-    Message.error("控制请求失败，正在重新读取实例状态");
+    Message.error(`${error instanceof Error && error.message ? error.message : "控制请求失败"}（正在重新读取实例状态）`);
     emit("failed", error);
   } finally {
     loading.value = false;

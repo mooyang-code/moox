@@ -71,9 +71,10 @@ export interface FactorPeriodState {
 
 export interface SetRunSummary {
   set_id: string;
-  last_period_time: number;
+  /** int64：ProtoJSON 实际输出字符串，格式化函数统一转换。 */
+  last_period_time: number | string;
   last_status: string;
-  lag_seconds: number;
+  lag_seconds: number | string;
   factors?: FactorPeriodState[];
   failed_subjects?: string[];
   /** 预热中、未计入正式结果的对象数。 */

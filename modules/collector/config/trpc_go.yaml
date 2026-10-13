@@ -19,7 +19,7 @@ server:
       port: 11402
       network: tcp
       protocol: trpc
-      timeout: 180000
+      timeout: 320000
     - name: trpc.moox.collector.Health
       ip: 127.0.0.1
       port: 11412

@@ -125,7 +125,7 @@
       </template>
     </div>
 
-    <a-modal v-model:visible="rangeVisible" :title="rangeMode === 'check' ? '检查缺口' : '新建补采'" :ok-loading="rangeBusy" @ok="onRangeSubmit">
+    <a-modal v-model:visible="rangeVisible" :title="rangeMode === 'check' ? '检查缺口' : '新建补采'" :ok-loading="rangeBusy" @before-ok="onRangeSubmit">
       <a-form :model="range" layout="vertical">
         <a-form-item label="数据集（留空表示全部）"><a-input v-model="range.dataset_id" allow-clear /></a-form-item>
         <a-form-item label="标的（留空表示全部）"><a-input v-model="range.subject_id" allow-clear /></a-form-item>
@@ -280,6 +280,7 @@ async function onRangeSubmit(): Promise<boolean> {
     return true;
   } catch (error) {
     console.error("检查或补采失败:", error);
+    Message.error(error instanceof Error ? error.message : "检查或补采失败");
     return false;
   } finally {
     rangeBusy.value = false;

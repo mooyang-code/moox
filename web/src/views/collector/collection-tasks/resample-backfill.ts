@@ -33,9 +33,16 @@ export function defaultClosedEnd(frequency: string, now = new Date()): Date | nu
   return floorToEpochBucket(now, frequency);
 }
 
+// 表单标注 UTC：没带时区的日期时间按 UTC 解析，避免按浏览器本地时区偏移。
+export function parseUtcInput(raw: string): Date {
+  const text = String(raw || "").trim();
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+  return new Date(!hasZone && /\d{2}:\d{2}/.test(text) ? `${text}Z` : text);
+}
+
 export function countBackfillBuckets(startRaw: string, endRaw: string, frequency: string): number {
-  const start = new Date(startRaw);
-  const end = new Date(endRaw);
+  const start = parseUtcInput(startRaw);
+  const end = parseUtcInput(endRaw);
   const minutes = parseFixedFrequencyMinutes(frequency);
   if (!minutes || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return 0;
   const span = end.getTime() - start.getTime();

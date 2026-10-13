@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -157,4 +158,33 @@ func (f *fakeExecutor) requests() []pyexec.Request {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]pyexec.Request(nil), f.calls...)
+}
+
+func TestSortPanelFrameOrdersByTimeThenSubject(t *testing.T) {
+	panel, err := buildPanelFrame([]string{"B-USDT", "A-USDT"}, map[string]*storageio.Frame{
+		"A-USDT": {Columns: []string{"data_time", "series_tag", "close"}, Rows: [][]any{
+			{"2026-01-01T00:00:00Z", "s", 1.0}, {"2026-01-01T00:01:00Z", "s", 2.0},
+		}},
+		"B-USDT": {Columns: []string{"data_time", "series_tag", "close"}, Rows: [][]any{
+			{"2026-01-01T00:00:00Z", "s", 3.0}, {"2026-01-01T00:01:00Z", "s", 4.0},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sorted, err := sortPanelFrame(panel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, row := range sorted.Rows {
+		got = append(got, row[0].(string)+"/"+row[2].(string))
+	}
+	want := []string{"2026-01-01T00:00:00Z/A-USDT", "2026-01-01T00:00:00Z/B-USDT", "2026-01-01T00:01:00Z/A-USDT", "2026-01-01T00:01:00Z/B-USDT"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	if panel.Rows[1][0] != "2026-01-01T00:01:00Z" {
+		t.Fatalf("shared panel was mutated: %v", panel.Rows[1])
+	}
 }

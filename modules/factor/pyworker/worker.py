@@ -216,11 +216,11 @@ class FactorWorker:
         if not isinstance(produced, pd.DataFrame):
             raise TypeError(f"{name} compute result must be a pandas DataFrame")
         expected_columns = [*identity, *outputs]
-        if list(produced.columns) != expected_columns:
-            raise ValueError(
-                f"{name} outputs mismatch: got={list(produced.columns)} want={expected_columns}"
-            )
-        produced = produced.copy().reset_index(drop=True)
+        got_columns = list(produced.columns)
+        # 只要求列集合一致、无重复；列顺序按声明重排，因子不必关心输出列的顺序。
+        if len(got_columns) != len(expected_columns) or set(got_columns) != set(expected_columns):
+            raise ValueError(f"{name} outputs mismatch: got={got_columns} want={expected_columns}")
+        produced = produced[expected_columns].copy().reset_index(drop=True)
         produced["data_time"] = pd.to_datetime(
             produced["data_time"], format="ISO8601", utc=True, errors="raise"
         )

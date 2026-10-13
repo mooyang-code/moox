@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -146,4 +147,15 @@ func TestWriteEventIDFollowsContent(t *testing.T) {
 	require.Equal(t, two, writeEventID(req, []*storagepb.RowFieldUpsert{rowB, rowA}), "与行顺序无关")
 	req.WriteIDByContent = false
 	require.Equal(t, "fn|1m|100", writeEventID(req, []*storagepb.RowFieldUpsert{rowA}), "旧路径的写入 ID 不变")
+}
+
+func TestFrequencyDueWeeklyUsesMonday(t *testing.T) {
+	week, err := marketdata.ParseFrequency("1w")
+	require.NoError(t, err)
+	monday := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	start, due := frequencyDue(week, monday)
+	require.True(t, due)
+	require.Equal(t, monday.AddDate(0, 0, -7), start)
+	_, due = frequencyDue(week, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)) // 周四
+	require.False(t, due)
 }

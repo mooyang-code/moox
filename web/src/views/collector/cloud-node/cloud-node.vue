@@ -3,14 +3,6 @@
     <a-spin :loading="loading">
       <div class="moox-inner">
         <a-space class="cloud-node-action-bar" wrap>
-          <a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">
-            <template #icon><icon-plus-circle /></template>
-            <span>批量新增</span>
-          </a-button>
-          <a-button type="primary" status="warning" @click="batchDeploy" :disabled="batchChangeProcessing">
-            <template #icon><icon-upload /></template>
-            <span>批量部署</span>
-          </a-button>
           <a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">
             <template #icon><icon-delete /></template>
             <span>批量删除</span>
@@ -194,264 +186,6 @@
         </CloudNodeTable>
       </div>
     </a-spin>
-
-    <!-- 批量新增弹窗 -->
-    <a-modal
-      v-model:visible="batchAddVisible"
-      title="批量新增云函数节点"
-      :width="600"
-      :mask-closable="false"
-      @cancel="handleBatchAddCancel"
-      @ok="handleBatchAddOk"
-    >
-      <a-form :model="batchAddForm" layout="vertical">
-        <a-form-item field="cloudAccountId" label="云账户" required>
-          <a-select v-model="batchAddForm.cloudAccountId" placeholder="请选择云账户" style="width: 100%">
-            <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
-              {{ account.account_name }} ({{ getProviderName(account.provider) }})
-            </a-option>
-          </a-select>
-        </a-form-item>
-
-        <a-form-item field="nodeType" label="节点类型" required>
-          <a-select v-model="batchAddForm.nodeType" placeholder="请选择节点类型" style="width: 100%">
-            <a-option value="scf-event">云函数（事件型）</a-option>
-            <a-option value="scf-web">云函数（Web型）</a-option>
-            <a-option value="server">服务器</a-option>
-          </a-select>
-        </a-form-item>
-
-        <a-form-item v-if="batchAddForm.nodeType === 'scf-event'" field="triggerType" label="触发方式" required>
-          <a-select v-model="batchAddForm.triggerType" style="width: 100%">
-            <a-option value="timer">定时器</a-option>
-            <a-option value="invoke">手动调用</a-option>
-          </a-select>
-        </a-form-item>
-
-        <a-form-item field="runtime" label="运行时环境" required>
-          <a-select v-model="batchAddForm.runtime" placeholder="请选择运行时环境" style="width: 100%">
-            <a-option value="Go1">Go1</a-option>
-            <a-option value="Python3.6">Python3.6</a-option>
-            <a-option value="Python3.7">Python3.7</a-option>
-            <a-option value="Python3.9">Python3.9</a-option>
-            <a-option value="Nodejs12.16">Node.js 12.16</a-option>
-            <a-option value="Nodejs16.13">Node.js 16.13</a-option>
-            <a-option value="CustomRuntime">CustomRuntime</a-option>
-          </a-select>
-        </a-form-item>
-
-        <a-form-item field="handler" label="函数入口" required>
-          <a-input v-model="batchAddForm.handler" placeholder="main" />
-        </a-form-item>
-
-        <a-form-item field="region" label="地区" required>
-          <a-select v-model="batchAddForm.region" placeholder="请选择地区" style="width: 100%">
-            <a-option :value="REGION_UNLIMITED">不限</a-option>
-            <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
-              {{ region.name }}
-              <a-tag
-                v-if="region.tag"
-                size="small"
-                :color="region.tag === '国内' ? 'blue' : 'orange'"
-                style="margin-left: var(--moox-space-1)"
-              >
-                {{ region.tag }}
-              </a-tag>
-            </a-option>
-          </a-select>
-        </a-form-item>
-
-        <a-form-item field="tag" label="标签" required>
-          <a-select v-model="batchAddForm.tag" :disabled="batchAddTagLocked" placeholder="请选择标签" style="width: 100%">
-            <a-option v-for="tag in tagOptions" :key="tag" :value="tag">
-              {{ tag }}
-            </a-option>
-          </a-select>
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">选择具体地区时标签会自动锁定</div>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="packageId" label="代码包版本" required>
-          <a-select v-model="batchAddForm.packageId" placeholder="请选择代码包版本" style="width: 100%">
-            <a-option v-for="pkg in availablePackagesForCreation" :key="pkg.package_id" :value="pkg.package_id">
-              {{ pkg.package_name }} - {{ pkg.version }} ({{ pkg.runtime }})
-            </a-option>
-          </a-select>
-        </a-form-item>
-
-        <a-form-item field="nodeCount" label="节点数量" required>
-          <a-input-number
-            v-model="batchAddForm.nodeCount"
-            :min="1"
-            :max="100"
-            placeholder="请输入要创建的节点数量"
-            style="width: 100%"
-          />
-        </a-form-item>
-      </a-form>
-    </a-modal>
-
-    <!-- 批量新增分布计划弹窗 -->
-    <a-modal
-      v-model:visible="batchPlanVisible"
-      title="预计分布计划"
-      :width="900"
-      :mask-closable="false"
-      @cancel="handleBatchPlanCancel"
-      @ok="handleBatchPlanOk"
-    >
-      <a-spin :loading="batchPlanLoading">
-        <div style="margin-bottom: var(--moox-space-3)">
-          <div>标签：{{ batchPlanTag }}</div>
-          <div>请求数量：{{ batchPlanRequested }}</div>
-          <div>可用总数：{{ batchPlanTotalAvailable }}</div>
-          <div>计划数量：{{ batchPlanPlannedTotal }} / {{ batchPlanTarget }}</div>
-        </div>
-        <a-alert v-if="batchPlanNotice" type="warning" style="margin-bottom: var(--moox-space-3)">
-          {{ batchPlanNotice }}
-        </a-alert>
-        <a-table row-key="regionCode" :data="batchPlanItems" :bordered="{ cell: true }" :pagination="false" size="small">
-          <template #columns>
-            <a-table-column title="地区" data-index="regionName" :width="180" />
-            <a-table-column title="最大节点数" data-index="maxNodes" :width="120" />
-            <a-table-column title="已占用" data-index="usedNodes" :width="100" />
-            <a-table-column title="可用" data-index="availableNodes" :width="100" />
-            <a-table-column title="计划数" :width="140">
-              <template #cell="{ record }">
-                <a-input-number v-model="record.planCount" :min="0" :max="record.availableNodes" style="width: 120px" />
-              </template>
-            </a-table-column>
-            <a-table-column title="操作" :width="80">
-              <template #cell="{ record }">
-                <a-button type="text" status="danger" size="mini" @click="removePlanItem(record)"> 删除 </a-button>
-              </template>
-            </a-table-column>
-          </template>
-        </a-table>
-      </a-spin>
-    </a-modal>
-
-    <!-- 批量部署弹窗 -->
-    <a-modal
-      v-model:visible="batchDeployVisible"
-      title="批量部署云函数"
-      :width="800"
-      :mask-closable="false"
-      @cancel="handleBatchDeployCancel"
-      @ok="handleBatchDeployOk"
-    >
-      <a-form :model="batchDeployForm" layout="vertical">
-        <a-form-item label="选择代码包版本" required>
-          <a-table
-            row-key="package_id"
-            size="small"
-            :bordered="{ cell: true }"
-            :data="availablePackages"
-            :loading="packagesLoading"
-            :pagination="packagesPagination"
-            :scroll="{ y: 300 }"
-            :row-selection="{ type: 'radio', showCheckedAll: false }"
-            :selected-keys="batchDeployForm.selectedPackageId ? [batchDeployForm.selectedPackageId] : []"
-            @select="onSelectPackage"
-            @page-change="onPackagePageChange"
-          >
-            <template #columns>
-              <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
-              <a-table-column title="版本" data-index="version" :width="100"></a-table-column>
-              <a-table-column title="类型" data-index="package_type" :width="120">
-                <template #cell="{ record }">
-                  <a-tag :color="getPackageTypeColor(record.package_type)" size="small">
-                    {{ getPackageTypeLabel(record.package_type) }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="运行时" data-index="runtime" :width="100"></a-table-column>
-              <a-table-column title="文件大小" data-index="file_size" :width="100">
-                <template #cell="{ record }">
-                  {{ formatFileSize(record.file_size) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="创建时间" data-index="created_time" :width="150">
-                <template #cell="{ record }">
-                  {{ formatTime(record.created_time) }}
-                </template>
-              </a-table-column>
-            </template>
-          </a-table>
-        </a-form-item>
-
-        <a-form-item>
-          <a-alert type="info">
-            <div>将为以下 {{ selectedKeys.length }} 个节点部署选中的函数版本：</div>
-            <div style="margin-top: var(--moox-space-2); max-height: 120px; overflow-y: auto">
-              <a-tag v-for="nodeId in selectedKeys" :key="nodeId" style="margin: var(--moox-space-1)">
-                {{ nodeId }}
-              </a-tag>
-            </div>
-          </a-alert>
-        </a-form-item>
-      </a-form>
-    </a-modal>
-
-    <!-- 单节点部署弹窗 -->
-    <a-modal
-      v-model:visible="singleDeployVisible"
-      title="部署云函数代码包"
-      :width="800"
-      :mask-closable="false"
-      @cancel="handleSingleDeployCancel"
-      @ok="handleSingleDeployOk"
-    >
-      <a-form :model="singleDeployForm" layout="vertical">
-        <a-form-item label="节点信息">
-          <a-alert type="info" style="margin-bottom: var(--moox-space-2)">
-            <div><strong>节点ID：</strong>{{ singleDeployForm.nodeId }}</div>
-            <div><strong>命名空间：</strong>{{ singleDeployForm.namespace }}</div>
-            <div><strong>地区：</strong>{{ singleDeployForm.region }}</div>
-          </a-alert>
-        </a-form-item>
-
-        <a-form-item label="选择代码包版本" required>
-          <a-table
-            row-key="package_id"
-            size="small"
-            :bordered="{ cell: true }"
-            :data="singleDeployPackages"
-            :loading="singleDeployPackagesLoading"
-            :pagination="singleDeployPackagesPagination"
-            :scroll="{ y: 300 }"
-            :row-selection="{ type: 'radio', showCheckedAll: false }"
-            :selected-keys="singleDeployForm.selectedPackageId ? [singleDeployForm.selectedPackageId] : []"
-            @select="onSelectSingleDeployPackage"
-            @page-change="onSingleDeployPackagePageChange"
-          >
-            <template #columns>
-              <a-table-column title="代码包名称" data-index="package_name" :width="140"></a-table-column>
-              <a-table-column title="版本" data-index="version" :width="100"></a-table-column>
-              <a-table-column title="类型" data-index="package_type" :width="120">
-                <template #cell="{ record }">
-                  <a-tag :color="getPackageTypeColor(record.package_type)" size="small">
-                    {{ getPackageTypeLabel(record.package_type) }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="运行时" data-index="runtime" :width="100"></a-table-column>
-              <a-table-column title="文件大小" data-index="file_size" :width="100">
-                <template #cell="{ record }">
-                  {{ formatFileSize(record.file_size) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="创建时间" data-index="created_time" :width="150">
-                <template #cell="{ record }">
-                  {{ formatTime(record.created_time) }}
-                </template>
-              </a-table-column>
-            </template>
-          </a-table>
-        </a-form-item>
-      </a-form>
-    </a-modal>
 
     <!-- 云账户管理弹窗 -->
     <CloudAccountManage v-model="cloudAccountManageVisible" @refresh="loadCloudAccounts" />
@@ -638,22 +372,15 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "v
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
-import {
-  getFunctionPackageList,
-  getFunctionPackageDetail,
-  downloadPackageByURL,
-  type FunctionPackage
-} from "@/api/function-package";
+import { getFunctionPackageDetail, downloadPackageByURL, type FunctionPackage } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
 import {
   batchDeleteNodes,
   getNodeBatchChange,
   getNodeList,
   listCloudRegions,
-  submitDeployNodes,
   type BatchDeleteNodesRequest,
-  type GetNodeBatchChangeResponse,
-  type SubmitNodeBatchResponse
+  type GetNodeBatchChangeResponse
 } from "@/api/cloud-node";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -662,14 +389,12 @@ import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
 import SCFSyncDialog from "./scf-sync-dialog.vue";
 import CloudNodeTable from "./components/cloud-node-table.vue";
-import { submitCloudNodeBatchChange } from "./cloud-node-batch-service";
 import { createCloudNodeBatchPoller } from "./cloud-node-batch-poller";
 import { captureDeleteSelection, updateDeleteSelection, type CloudNodeDeleteSnapshotMap } from "./delete-selection";
 import {
   formatDateTime,
   formatFileSize,
   formatMetadata,
-  formatTime,
   getBatchChangeTypeText,
   getNodeTypeColor,
   getTriggerTypeLabel,
@@ -681,7 +406,6 @@ import {
   getProviderName,
   normalizeCloudNodes,
   parseMetadata,
-  type BatchPlanItem,
   type CloudNode,
   type RegionInfo
 } from "./cloud-node-model";
@@ -693,8 +417,6 @@ const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
 const listGuard = createLatestRequestGuard();
-// 批量提交（新增/部署）的迟到响应守卫：切换空间或卸载后，旧空间的 job 不能再写路由或启动轮询
-const submitGuard = createLatestRequestGuard();
 const batchChangeProcessing = ref(false);
 const batchPollingTimedOut = ref(false);
 const currentBatchChangeStatus = ref<GetNodeBatchChangeResponse | null>(null);
@@ -715,71 +437,6 @@ const cloudAccountOptions = ref<CloudAccount[]>([]);
 const regionOptions = ref<RegionInfo[]>([]); // 地区选项
 const scfSyncVisible = ref(false);
 const REGION_UNLIMITED = "all";
-const tagOptions = ["国内", "海外"];
-
-// 批量新增相关
-const batchAddVisible = ref(false);
-const batchAddForm = reactive({
-  cloudAccountId: "",
-  nodeType: "scf-event", // 节点类型，默认为事件型云函数
-  triggerType: "timer",
-  runtime: "Go1", // 运行时环境，默认Go1
-  handler: "main",
-  region: "ap-guangzhou",
-  tag: "",
-  packageId: "", // 代码包版本ID
-  nodeCount: 5,
-  namespace: "",
-  config: {} as Record<string, string>,
-  environment: {} as Record<string, string>
-});
-
-const batchPlanVisible = ref(false);
-const batchPlanLoading = ref(false);
-const batchPlanItems = ref<BatchPlanItem[]>([]);
-const batchPlanNotice = ref("");
-const batchPlanRequested = ref(0);
-const batchPlanTag = ref("");
-
-// 批量部署相关
-const batchDeployVisible = ref(false);
-const packagesLoading = ref(false);
-const availablePackages = ref<any[]>([]);
-const availablePackagesForCreation = ref<any[]>([]); // 批量创建时的代码包选项
-const batchDeployForm = reactive({
-  selectedPackageId: "", // 选中的代码包ID
-  deployConfig: {} // 可选的部署配置
-});
-
-// 代码包分页配置
-const packagesPagination = ref({
-  current: 1,
-  pageSize: 10,
-  total: 0,
-  showTotal: true,
-  showJumper: true,
-  showPageSize: false
-});
-
-// 单节点部署相关
-const singleDeployVisible = ref(false);
-const singleDeployPackagesLoading = ref(false);
-const singleDeployPackages = ref<any[]>([]);
-const singleDeployForm = reactive({
-  nodeId: "",
-  namespace: "",
-  region: "",
-  selectedPackageId: ""
-});
-
-const singleDeployPackagesPagination = ref({
-  current: 1,
-  pageSize: 10,
-  total: 0,
-  showTotal: true,
-  showJumper: true,
-  showPageSize: false
-});
 
 // 分页配置
 const pagination = ref({
@@ -802,25 +459,8 @@ const paginationConfig = computed(() => ({
   pageSizeOptions: pagination.value.pageSizeOptions
 }));
 
-const batchAddTagLocked = computed(() => batchAddForm.region !== REGION_UNLIMITED);
-const batchPlanPlannedTotal = computed(() => batchPlanItems.value.reduce((sum, item) => sum + (Number(item.planCount) || 0), 0));
-const batchPlanTotalAvailable = computed(() =>
-  batchPlanItems.value.reduce((sum, item) => sum + (Number(item.availableNodes) || 0), 0)
-);
-const batchPlanTarget = computed(() => Math.min(batchPlanRequested.value, batchPlanTotalAvailable.value));
-
 // 当前页面是采集云节点管理页，代码包固定按采集器类型过滤。
 const currentPackageType = computed(() => 1);
-
-// 根据路由路径判断默认的节点类型
-const defaultNodeType = computed(() => {
-  // Collector cloud-node operations create event SCFs by default. The list
-  // filter remains unselected so it can still show every node type.
-  return "scf-event";
-});
-
-// 采集 SCF runtime 默认使用 Go1。
-const defaultRuntime = computed(() => "Go1");
 
 // Short-lived market-fetch SCF nodes are registered under this shared type.
 const currentBizType = computed(() => "market_fetcher");
@@ -848,7 +488,6 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   if (spaceId === oldSpaceId) return;
   // 先同步作废所有在途请求，再做任何 await：路由更新等待期间旧空间的响应也不能继续推进
   listGuard.invalidate();
-  submitGuard.invalidate();
   batchPoller.stop();
   currentBatchChangeStatus.value = null;
   batchChangeProcessing.value = false;
@@ -871,15 +510,7 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   await loadData();
 });
 
-watch(
-  () => batchAddForm.nodeType,
-  nodeType => {
-    batchAddForm.triggerType = nodeType === "scf-event" ? batchAddForm.triggerType || "timer" : "";
-  }
-);
-
 onBeforeUnmount(() => {
-  submitGuard.invalidate();
   listGuard.invalidate();
   batchPoller.dispose();
   currentBatchChangeStatus.value = null;
@@ -958,32 +589,6 @@ const startBatchPolling = async (jobId: string) => {
   });
 };
 
-// 提交批量变更并跟踪进度。响应或错误到达时若空间已切换/页面已卸载（请求已过期），则静默丢弃，不改动页面状态；
-// 返回 true 表示成功提交并已开始跟踪。
-const submitAndTrack = async (
-  submit: () => Promise<SubmitNodeBatchResponse>,
-  onError: (error: any) => void
-): Promise<boolean> => {
-  const request = submitGuard.begin();
-  try {
-    const response = await submit();
-    if (!request.isLatest()) return false;
-    if (!response.job_id) throw new Error("cloudnode 未返回 job_id");
-    currentBatchChangeStatus.value = null;
-    await replaceRouteJobId(response.job_id);
-    if (!request.isLatest()) {
-      // 路由更新期间空间已切换：撤销写入的旧任务 ID，不启动轮询
-      if (getNodeBatchJobId(route.query) === response.job_id) await replaceRouteJobId();
-      return false;
-    }
-    await startBatchPolling(response.job_id);
-    return request.isLatest();
-  } catch (error: any) {
-    if (request.isLatest()) onError(error);
-    return false;
-  }
-};
-
 // 关闭批量变更提示
 const handleCloseBatchChangeAlert = () => {
   batchPoller.stop();
@@ -991,373 +596,6 @@ const handleCloseBatchChangeAlert = () => {
   batchChangeProcessing.value = false;
   batchPollingTimedOut.value = false;
   void replaceRouteJobId();
-};
-
-// 批量新增
-const onBatchAdd = async () => {
-  // 如果云账户列表为空，尝试重新加载
-  if (cloudAccountOptions.value.length === 0) {
-    await loadCloudAccounts();
-
-    // 重新检查
-    if (cloudAccountOptions.value.length === 0) {
-      Message.warning("请先创建云账户");
-      return;
-    }
-  }
-
-  // 重置表单
-  batchAddForm.cloudAccountId = cloudAccountOptions.value[0]?.account_id || "";
-  batchAddForm.nodeType = defaultNodeType.value; // 根据路由设置默认节点类型
-  batchAddForm.triggerType = batchAddForm.nodeType === "scf-event" ? "timer" : "";
-  batchAddForm.runtime = defaultRuntime.value; // 根据路由设置默认运行时
-  batchAddForm.region = "ap-hongkong";
-  batchAddForm.tag = getRegionTag(batchAddForm.region) || "海外";
-  batchAddForm.packageId = "";
-  batchAddForm.nodeCount = 5;
-  batchAddForm.namespace = "";
-
-  // 加载可用的代码包列表
-  await loadAvailablePackagesForCreation();
-
-  // 显示批量新增弹窗
-  batchAddVisible.value = true;
-};
-
-// 批量新增弹窗取消
-const handleBatchAddCancel = () => {
-  batchAddVisible.value = false;
-};
-
-// 批量新增弹窗确认
-const handleBatchAddOk = async () => {
-  // 表单验证
-  if (!batchAddForm.cloudAccountId) {
-    Message.warning("请选择云账户");
-    return;
-  }
-  if (!batchAddForm.nodeType) {
-    Message.warning("请选择节点类型");
-    return;
-  }
-  if (batchAddForm.nodeType === "scf-event" && !["timer", "invoke"].includes(batchAddForm.triggerType)) {
-    Message.warning("请选择云函数触发方式");
-    return;
-  }
-  if (!batchAddForm.runtime) {
-    Message.warning("请选择运行时环境");
-    return;
-  }
-  if (!batchAddForm.region) {
-    Message.warning("请选择地区");
-    return;
-  }
-  if (!batchAddForm.tag) {
-    Message.warning("请选择标签");
-    return;
-  }
-  if (!batchAddForm.packageId) {
-    Message.warning("请选择代码包版本");
-    return;
-  }
-  if (!batchAddForm.nodeCount || batchAddForm.nodeCount < 1) {
-    Message.warning("请输入有效的节点数量");
-    return;
-  }
-  if (batchAddForm.nodeCount > 100) {
-    Message.warning("一次最多创建 100 个云节点");
-    return;
-  }
-
-  // 关闭弹窗
-  batchAddVisible.value = false;
-
-  if (batchAddForm.region === REGION_UNLIMITED) {
-    await prepareBatchPlan();
-    return;
-  }
-
-  // 执行批量新增
-  await executeBatchAddDirect();
-};
-
-const optionalRecord = (value: Record<string, string>) => (Object.keys(value).length > 0 ? value : undefined);
-
-const buildCreateNodeBatchChange = (region: string, index: number) => ({
-  batchChangeType: "CREATE_NODE",
-  requestPayload: {
-    cloud_account_id: batchAddForm.cloudAccountId,
-    namespace: batchAddForm.namespace || undefined,
-    node_type: batchAddForm.nodeType, // 使用表单中选择的节点类型
-    trigger_type: batchAddForm.nodeType === "scf-event" ? batchAddForm.triggerType : undefined,
-    runtime: batchAddForm.runtime, // 运行时环境
-    handler: batchAddForm.handler || "main",
-    biz_type: currentBizType.value, // 根据路由设置业务类型
-    region,
-    tag: getRegionTag(region) || batchAddForm.tag,
-    package_id: batchAddForm.packageId,
-    config: optionalRecord(batchAddForm.config),
-    environment: optionalRecord(batchAddForm.environment),
-    metadata: JSON.stringify({ env: "prod", index })
-  }
-});
-
-const buildBatchChangesForRegion = (region: string, count: number, startIndex: number) =>
-  Array(count)
-    .fill(null)
-    .map((_, index) => buildCreateNodeBatchChange(region, startIndex + index));
-
-const buildBatchChangesFromPlan = (items: BatchPlanItem[]) => {
-  const batchChanges: Array<{ batchChangeType: string; requestPayload: any }> = [];
-  let index = 0;
-  items.forEach(item => {
-    const count = Number(item.planCount) || 0;
-    for (let i = 0; i < count; i += 1) {
-      batchChanges.push(buildCreateNodeBatchChange(item.regionCode, index));
-      index += 1;
-    }
-  });
-  return batchChanges;
-};
-
-const executeBatchAddChanges = async (batchChanges: Array<{ batchChangeType: string; requestPayload: any }>) => {
-  if (batchChanges.length === 0) {
-    Message.warning("没有可执行的批量变更");
-    return;
-  }
-  if (batchChanges.length > 100) {
-    Message.warning("一次最多创建 100 个云节点");
-    return;
-  }
-
-  batchChangeProcessing.value = true;
-  await submitAndTrack(
-    () => submitCloudNodeBatchChange(batchChanges),
-    error => {
-      batchChangeProcessing.value = false;
-      Message.error(error?.message || "创建批量变更失败");
-    }
-  );
-};
-
-const executeBatchAddDirect = async () => {
-  const batchChanges = buildBatchChangesForRegion(batchAddForm.region, batchAddForm.nodeCount, 0);
-  await executeBatchAddChanges(batchChanges);
-};
-
-const fetchRegionUsage = async (regionCode: string, tag: string) => {
-  const response = await getNodeList({
-    region: regionCode,
-    tag,
-    node_type: batchAddForm.nodeType,
-    page: 1,
-    page_size: 1
-  });
-  return Number(response.total || 0);
-};
-
-const prepareBatchPlan = async () => {
-  const selectedTag = batchAddForm.tag;
-  const requestedCount = batchAddForm.nodeCount;
-
-  const taggedRegions = regionOptions.value.filter(region => region.tag === selectedTag);
-  if (taggedRegions.length === 0) {
-    Message.warning("未找到对应标签的地区");
-    return;
-  }
-
-  batchPlanLoading.value = true;
-  batchPlanNotice.value = "";
-  batchPlanRequested.value = requestedCount;
-  batchPlanTag.value = selectedTag;
-
-  try {
-    const usageList = await Promise.all(
-      taggedRegions.map(async region => {
-        const usedNodes = await fetchRegionUsage(region.code, selectedTag);
-        const maxNodes = Number(region.max_nodes || 0);
-        const availableNodes = Math.max(0, maxNodes - usedNodes);
-        return {
-          regionCode: region.code,
-          regionName: region.name,
-          tag: region.tag,
-          maxNodes,
-          usedNodes,
-          availableNodes,
-          planCount: 0
-        };
-      })
-    );
-
-    const availableItems = usageList.filter(item => item.availableNodes > 0);
-    if (availableItems.length === 0) {
-      Message.warning("当前标签没有可用节点");
-      return;
-    }
-
-    availableItems.sort((a, b) => a.availableNodes - b.availableNodes);
-
-    let remaining = requestedCount;
-    availableItems.forEach(item => {
-      if (remaining <= 0) {
-        item.planCount = 0;
-        return;
-      }
-      const assign = Math.min(item.availableNodes, remaining);
-      item.planCount = assign;
-      remaining -= assign;
-    });
-
-    batchPlanItems.value = availableItems;
-    if (batchPlanTotalAvailable.value < requestedCount) {
-      batchPlanNotice.value = `当前可用节点总数为 ${batchPlanTotalAvailable.value}，小于需求 ${requestedCount}，将按可用数量创建。`;
-    } else {
-      batchPlanNotice.value = "";
-    }
-
-    batchPlanVisible.value = true;
-  } catch (error) {
-    console.error("生成分布计划失败:", error);
-    Message.error("生成分布计划失败，请稍后重试");
-  } finally {
-    batchPlanLoading.value = false;
-  }
-};
-
-const handleBatchPlanCancel = () => {
-  batchPlanVisible.value = false;
-  batchPlanItems.value = [];
-  batchPlanNotice.value = "";
-};
-
-const removePlanItem = (record: BatchPlanItem) => {
-  batchPlanItems.value = batchPlanItems.value.filter(item => item.regionCode !== record.regionCode);
-  if (batchPlanTotalAvailable.value < batchPlanRequested.value) {
-    batchPlanNotice.value = `当前可用节点总数为 ${batchPlanTotalAvailable.value}，小于需求 ${batchPlanRequested.value}，将按可用数量创建。`;
-  } else {
-    batchPlanNotice.value = "";
-  }
-};
-
-const handleBatchPlanOk = async () => {
-  if (batchPlanItems.value.length === 0) {
-    Message.warning("没有可用地区");
-    return;
-  }
-  if (batchPlanPlannedTotal.value <= 0) {
-    Message.warning("计划数量不能为空");
-    return;
-  }
-  if (batchPlanPlannedTotal.value > batchAddForm.nodeCount) {
-    Message.warning("计划数量不能超过请求数量");
-    return;
-  }
-
-  const overLimit = batchPlanItems.value.find(item => item.planCount > item.availableNodes);
-  if (overLimit) {
-    Message.warning(`地区 ${overLimit.regionName} 的计划数超过可用数量`);
-    return;
-  }
-
-  if (batchPlanPlannedTotal.value < batchPlanTarget.value) {
-    Message.warning("计划数量少于可创建数量，将按当前计划创建");
-  }
-
-  const batchChanges = buildBatchChangesFromPlan(batchPlanItems.value);
-  batchPlanVisible.value = false;
-  await executeBatchAddChanges(batchChanges);
-};
-
-// 批量部署
-const batchDeploy = async () => {
-  if (selectedKeys.value.length === 0) {
-    Message.warning("请选择要部署的节点");
-    return;
-  }
-
-  // 重置表单和分页
-  batchDeployForm.selectedPackageId = "";
-  batchDeployForm.deployConfig = {};
-  packagesPagination.value.current = 1;
-
-  // 显示批量部署弹窗
-  batchDeployVisible.value = true;
-
-  // 加载可用的代码包列表
-  await loadAvailablePackages(1);
-};
-
-// 加载可用的代码包列表
-const loadAvailablePackages = async (page: number = 1) => {
-  packagesLoading.value = true;
-  try {
-    const response = await getFunctionPackageList({
-      page: page,
-      page_size: packagesPagination.value.pageSize,
-      status: 2, // PACKAGE_STATUS_AVAILABLE
-      package_type: currentPackageType.value // 根据当前路由过滤代码包类型
-    });
-
-    if (response?.items) {
-      // 按时间倒序排列
-      availablePackages.value = (response.items || []).sort((a: any, b: any) => {
-        return new Date(b.created_time).getTime() - new Date(a.created_time).getTime();
-      });
-
-      // 更新分页信息
-      packagesPagination.value.current = page;
-      packagesPagination.value.total = response.total || response.items.length;
-    } else {
-      availablePackages.value = [];
-      packagesPagination.value.total = 0;
-    }
-  } catch (error) {
-    console.error("加载代码包列表失败:", error);
-    Message.error("加载代码包列表失败");
-    availablePackages.value = [];
-    packagesPagination.value.total = 0;
-  } finally {
-    packagesLoading.value = false;
-  }
-};
-
-// 加载批量创建时的代码包列表
-const loadAvailablePackagesForCreation = async () => {
-  try {
-    const response = await getFunctionPackageList({
-      page: 1,
-      page_size: 100, // 获取较多数据
-      status: 2, // PACKAGE_STATUS_AVAILABLE
-      package_type: currentPackageType.value // 根据当前路由过滤代码包类型
-    });
-
-    if (response?.items) {
-      // 按时间倒序排列
-      availablePackagesForCreation.value = (response.items || []).sort((a: any, b: any) => {
-        return new Date(b.created_time).getTime() - new Date(a.created_time).getTime();
-      });
-    } else {
-      availablePackagesForCreation.value = [];
-    }
-  } catch (error) {
-    console.error("加载代码包列表失败:", error);
-    Message.error("加载代码包列表失败");
-    availablePackagesForCreation.value = [];
-  }
-};
-
-// 选择代码包
-const onSelectPackage = (rowKeys: string[]) => {
-  if (rowKeys.length > 0) {
-    batchDeployForm.selectedPackageId = rowKeys[0];
-  } else {
-    batchDeployForm.selectedPackageId = "";
-  }
-};
-
-// 代码包分页处理
-const onPackagePageChange = (page: number) => {
-  loadAvailablePackages(page);
 };
 
 // 批量删除
@@ -1483,32 +721,6 @@ const getRegionName = (region: string) => {
   const regionInfo = regionOptions.value.find(r => r.code === region);
   return regionInfo ? regionInfo.name : region;
 };
-
-// 根据地区代码获取标签
-const getRegionTag = (region: string) => {
-  if (region === REGION_UNLIMITED) {
-    return "";
-  }
-  const regionInfo = regionOptions.value.find(r => r.code === region);
-  return regionInfo ? regionInfo.tag : "";
-};
-
-watch(
-  () => batchAddForm.region,
-  region => {
-    if (region && region !== REGION_UNLIMITED) {
-      const tag = getRegionTag(region);
-      if (tag) {
-        batchAddForm.tag = tag;
-      }
-      return;
-    }
-
-    if (!batchAddForm.tag) {
-      batchAddForm.tag = "海外";
-    }
-  }
-);
 
 // 分页相关（使用后端分页）
 const onPageChange = (page: number) => {
@@ -1701,128 +913,6 @@ const onDownloadPackage = async (pkg: FunctionPackage) => {
       content: "代码包下载失败",
       duration: 5000
     });
-  }
-};
-
-// 批量部署弹窗取消
-const handleBatchDeployCancel = () => {
-  batchDeployVisible.value = false;
-  // 清理表单和分页
-  batchDeployForm.selectedPackageId = "";
-  batchDeployForm.deployConfig = {};
-  availablePackages.value = [];
-  packagesPagination.value.current = 1;
-  packagesPagination.value.total = 0;
-};
-
-// 批量部署弹窗确认
-const handleBatchDeployOk = async () => {
-  // 表单验证
-  if (!batchDeployForm.selectedPackageId) {
-    Message.warning("请选择要部署的代码包版本");
-    return;
-  }
-
-  // 关闭弹窗
-  batchDeployVisible.value = false;
-
-  // 执行批量部署
-  await executeBatchDeploy();
-};
-
-// 执行批量部署
-const executeBatchDeploy = async () => {
-  batchChangeProcessing.value = true;
-  const ok = await submitAndTrack(
-    () =>
-      submitDeployNodes({
-        node_ids: selectedKeys.value,
-        package_id: batchDeployForm.selectedPackageId
-      }),
-    error => {
-      batchChangeProcessing.value = false;
-      console.error("创建批量部署变更失败:", error);
-      Message.error("创建批量部署变更失败: " + (error?.message || "未知错误"));
-    }
-  );
-  if (ok) {
-    // 清理表单
-    batchDeployForm.selectedPackageId = "";
-    batchDeployForm.deployConfig = {};
-  }
-};
-
-// 单节点部署相关函数
-const loadSingleDeployPackages = async () => {
-  try {
-    singleDeployPackagesLoading.value = true;
-
-    const response = await getFunctionPackageList({
-      page: singleDeployPackagesPagination.value.current,
-      page_size: singleDeployPackagesPagination.value.pageSize,
-      status: 2, // PACKAGE_STATUS_AVAILABLE
-      package_type: currentPackageType.value // 根据当前路由过滤代码包类型
-    });
-
-    if (response?.items) {
-      singleDeployPackages.value = response.items || [];
-      singleDeployPackagesPagination.value.total = response.total || 0;
-    }
-  } catch (error) {
-    console.error("获取代码包列表失败:", error);
-    Message.error("获取代码包列表失败");
-  } finally {
-    singleDeployPackagesLoading.value = false;
-  }
-};
-
-const onSelectSingleDeployPackage = (rowKeys: string[]) => {
-  if (rowKeys.length > 0) {
-    singleDeployForm.selectedPackageId = rowKeys[0];
-  } else {
-    singleDeployForm.selectedPackageId = "";
-  }
-};
-
-const onSingleDeployPackagePageChange = (page: number) => {
-  singleDeployPackagesPagination.value.current = page;
-  loadSingleDeployPackages();
-};
-
-const handleSingleDeployCancel = () => {
-  singleDeployVisible.value = false;
-  singleDeployForm.selectedPackageId = "";
-  singleDeployPackages.value = [];
-  singleDeployPackagesPagination.value.current = 1;
-  singleDeployPackagesPagination.value.total = 0;
-};
-
-const handleSingleDeployOk = async () => {
-  // 表单验证
-  if (!singleDeployForm.selectedPackageId) {
-    Message.warning("请选择要部署的代码包版本");
-    return;
-  }
-
-  // 关闭弹窗
-  singleDeployVisible.value = false;
-
-  batchChangeProcessing.value = true;
-  const ok = await submitAndTrack(
-    () =>
-      submitDeployNodes({
-        node_ids: [singleDeployForm.nodeId],
-        package_id: singleDeployForm.selectedPackageId
-      }),
-    error => {
-      batchChangeProcessing.value = false;
-      console.error("创建部署变更失败:", error);
-      Message.error("创建部署变更失败: " + (error?.message || "未知错误"));
-    }
-  );
-  if (ok) {
-    // 清理表单
-    singleDeployForm.selectedPackageId = "";
   }
 };
 </script>

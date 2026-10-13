@@ -29,12 +29,14 @@ export interface StatItem {
   tone: "ok" | "danger" | "muted" | "info";
 }
 
-export function statsStrip(engine: EngineStatus | null | undefined, runningRecalc: number): StatItem[] {
+export function statsStrip(status: EngineStatus | null | undefined, runningRecalc: number): StatItem[] {
+  // 引擎离线或从未上报心跳时，管理端留着的只是最后一次快照，不能当作当前的运行状态展示。
+  const engine = status?.engine?.online ? status : null;
   const lanes = engine?.lanes ?? [];
   const queued = lanes.reduce((total, lane) => total + lane.queued, 0);
   const active = lanes.filter(lane => lane.active).length;
   return [
-    engineStat(engine),
+    engineStat(status),
     {
       key: "consumer",
       label: "实时消费",

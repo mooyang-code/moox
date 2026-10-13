@@ -24,16 +24,6 @@ export interface RegionInfo {
   max_nodes?: number;
 }
 
-export interface BatchPlanItem {
-  regionCode: string;
-  regionName: string;
-  tag: string;
-  maxNodes: number;
-  usedNodes: number;
-  availableNodes: number;
-  planCount: number;
-}
-
 export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode[] {
   return items.map(item => ({
     node_id: String(item.node_id || ""),

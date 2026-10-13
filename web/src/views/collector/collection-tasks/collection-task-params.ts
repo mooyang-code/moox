@@ -2,7 +2,35 @@ import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
-export type CollectionTaskMarket = "spot" | "swap";
+// K 线采集结果后端（taskresult.ensureColumns 的时序数据集）支持的全部输出字段；字段目录里的其他字段选了会被拒绝。
+export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
+  "open",
+  "high",
+  "low",
+  "close",
+  "volume",
+  "quote_volume",
+  "trade_num",
+  "amount",
+  "instrument_name",
+  "provider_id",
+  "source_id",
+  "provider_symbol",
+  "volume_unit",
+  "amount_unit",
+  "trade_date",
+  "close_time",
+  "provider_timestamp",
+  "fetched_at",
+  "request_id",
+  "route_id",
+  "route_rank",
+  "source_provider",
+  "quality_status",
+  "amount_quality"
+]);
+
+export type CollectionTaskMarket = "spot" | "swap" | "equity";
 
 export interface CollectionSourceOption {
   source_id: string;
@@ -246,8 +274,8 @@ function normalizeDataType(value: string): CollectionTaskDataType {
   return "kline";
 }
 
-function normalizeMarket(value: string): CollectionTaskMarket {
-  return value === "swap" ? "swap" : "spot";
+export function normalizeMarket(value: string): CollectionTaskMarket {
+  return value === "swap" || value === "equity" ? value : "spot";
 }
 
 function normalizeResult(value: unknown): CollectorTask["result"] | undefined {

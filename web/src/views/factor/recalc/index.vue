@@ -145,7 +145,13 @@ const pagination = reactive(defaultPagination());
 const gate = new RequestGate();
 
 const rows = computed(() =>
-  jobs.value.map(job => ({ job, source: jobSource(job), display: jobDisplay(job), progress: progressPercent(job) }))
+  jobs.value.map(job => ({
+    job_id: job.job_id,
+    job,
+    source: jobSource(job),
+    display: jobDisplay(job),
+    progress: progressPercent(job)
+  }))
 );
 const rowClass = (record: { job_id?: string }) =>
   record.job_id && record.job_id === highlightJob.value ? "recalc-row--highlight" : "";

@@ -112,10 +112,9 @@ type TagInfo struct {
 
 // Subject 是数据集绑定的一个标的；策略的标的 ID 就是 subject_id。
 type Subject struct {
-	SubjectID  string
-	SeriesTag  string
-	Active     bool
-	Attributes map[string]string
+	SubjectID string
+	SeriesTag string
+	Active    bool
 }
 
 // FactorInfo 是因子定义中策略关心的部分。
@@ -203,11 +202,6 @@ type Resolved struct {
 	CompletionKind string   `json:"completion_kind"`
 	MinAgeBars     int      `json:"min_age_bars,omitempty"`
 	ViewColumns    []string `json:"view_columns"`
-}
-
-// FactorIDs 返回引用的因子 ID（排序）。
-func (r Resolved) FactorIDs() []string {
-	return sortedKeys(r.Factors)
 }
 
 // ColumnsOfFactor 返回由某个因子产出的被引用列。

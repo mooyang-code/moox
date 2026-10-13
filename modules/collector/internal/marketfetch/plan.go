@@ -246,11 +246,12 @@ func frequencyDue(frequency marketdata.Frequency, scheduled time.Time) (time.Tim
 		}
 		return scheduled.AddDate(0, -1, 0), true
 	}
-	step := int64(frequency.Duration() / time.Second)
-	if step <= 0 || scheduled.Unix()%step != 0 {
+	// 用 Truncate（以零时刻为基准）对齐，周线落在周一，与 Binance 周线及 alignDown 一致；Unix 取模会落在周四。
+	step := frequency.Duration()
+	if step <= 0 || !scheduled.Truncate(step).Equal(scheduled) {
 		return time.Time{}, false
 	}
-	return scheduled.Add(-frequency.Duration()), true
+	return scheduled.Add(-step), true
 }
 
 // ExchangeSymbol 返回标的的交易所 symbol：例外表优先，否则 crypto 去掉连字符。

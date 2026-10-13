@@ -70,10 +70,12 @@ describe("compute task list model", () => {
   });
 
   it("delete disabled while members exist and explains why", () => {
-    const blocked = deleteState(info({}, [member("a", "disabled")]));
+    const blocked = deleteState(info({ status: "disabled" }, [member("a", "disabled")]));
     expect(blocked.disabled).toBe(true);
     expect(blocked.reason).toContain("移除");
-    expect(deleteState(info()).disabled).toBe(false);
+    expect(deleteState(info({ status: "disabled" })).disabled).toBe(false);
+    // 后端 DeleteSet 要求任务已停用：启用中的任务先停用。
+    expect(deleteState(info({ status: "enabled" }))).toMatchObject({ disabled: true, reason: expect.stringContaining("停用") });
     expect(deleteState(info({ status: "deleting" })).disabled).toBe(true);
   });
 
@@ -99,6 +101,9 @@ describe("compute task list model", () => {
     expect(addFactorState(set({ status: "deleting" })).disabled).toBe(true);
     expect(addFactorState(set({ status: "disabled" })).disabled).toBe(false);
     expect(memberActions(set({ status: "pending" }), member("a", "disabled")).toggle.disabled).toBe(true);
+    // 已停用的计算任务里不能启用成员（后端启用回填要求任务已启用），但仍可停用成员。
+    expect(memberActions(set({ status: "disabled" }), member("a", "disabled")).toggle.disabled).toBe(true);
+    expect(memberActions(set({ status: "disabled" }), member("a", "enabled")).toggle.disabled).toBe(false);
   });
 
   it("finds the latest period state of a member factor", () => {

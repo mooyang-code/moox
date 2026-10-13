@@ -179,6 +179,16 @@ const (
 	SetGone
 )
 
+// Materialize 把给定因子的源码落盘到因子目录（幂等）。
+func (c *CatalogCache) Materialize(factors []domain.FactorDef) error {
+	for _, factor := range factors {
+		if _, err := c.artifacts.Materialize(factor); err != nil {
+			return fmt.Errorf("factor %q: %w", factor.FactorID, err)
+		}
+	}
+	return nil
+}
+
 // SetByID 按集合 ID 取快照里的集合（含因子）。空洞恢复用它在集合锁内重新取得最新的集合与因子定义。
 func (c *CatalogCache) SetByID(setID string) (domain.EngineSet, SetLookup) {
 	c.mu.RLock()

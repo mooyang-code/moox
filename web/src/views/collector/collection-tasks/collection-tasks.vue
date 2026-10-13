@@ -214,13 +214,16 @@
               allow-search
               allow-clear
               multiple
-              :disabled="editing"
+              :disabled="editing || editor.data_type === 'kline_resample'"
             >
               <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
                 {{ tag.tag_name }}（{{ tag.source || "-" }} / {{ tag.market_type || "-" }}）
               </a-option>
             </a-select>
-            <span class="field-hint">Provider 和市场由标签固定绑定；一个任务可选择不同来源/市场的多个标签。</span>
+            <span class="field-hint"
+              >Provider
+              和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。重采样任务继承源行情的标的范围，不可修改。</span
+            >
           </a-form-item>
           <a-alert v-else type="info" show-icon>当前执行任务类型没有标的范围，此项留空。</a-alert>
 
@@ -465,7 +468,9 @@ import {
   collectionTaskResultLabel,
   inspectCollectionTaskResults,
   collectionTaskNameError,
+  KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
+  normalizeMarket,
   parseCollectionTaskInput,
   taskFrequency,
   type CollectionSourceOption,
@@ -628,12 +633,13 @@ const { account } = storeToRefs(userInfoStore);
 
 const editorTitle = computed(() => (editorMode.value === "create" ? "新建采集任务" : "修改采集任务"));
 const editing = computed(() => editorMode.value === "edit");
+const editingRecord = ref<CollectionTaskRecord | null>(null);
 const availableDataTypeConfigs = computed(() =>
   dataTypeConfigs.value.filter(config => !["instrument", "symbol"].includes(config.data_type))
 );
 const resampleSourceOptions = computed(() =>
   sourceOptions.value.filter(source =>
-    collectionSourceMatches(source, editor.provider, "kline_resample", editor.market_type, sourceFrequencyValue.value)
+    collectionSourceMatches(source, editor.provider, "kline_resample", undefined, sourceFrequencyValue.value)
   )
 );
 const frequencyOptions = computed(() => {
@@ -740,6 +746,7 @@ function onAdd() {
 
 function onUpdate(record: CollectionTaskRecord) {
   const input = parseCollectionTaskInput(record);
+  editingRecord.value = record;
   editorMode.value = "edit";
   editor.task_id = record.task_id;
   editor.task_name = record.task_name;
@@ -821,7 +828,9 @@ async function loadOutputFieldCatalog(force = false) {
     const activeGroupIDs = new Set(groups.filter(group => group.status === "active").map(group => group.group_id));
     outputFieldGroups.value = groups;
     outputFieldCatalog.value = fields.filter(
-      field => !field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id)
+      field =>
+        KLINE_OUTPUT_FIELD_IDS.has(field.field_id) &&
+        (!field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id))
     );
     outputCatalogSpaceID.value = spaceID;
   } catch (error) {
@@ -1140,13 +1149,21 @@ async function loadTags() {
   }
 }
 
+let sourceTagsRequestToken = 0;
 async function loadSourceSubjectTags() {
   if (editing.value || editor.data_type !== "kline_resample" || !selectedSpaceId.value || !sourceIdValue.value) return;
+  // 连续切换来源时响应可能乱序：只采纳仍对应当前空间与当前来源的最新一次响应。
+  const token = ++sourceTagsRequestToken;
+  const spaceId = selectedSpaceId.value;
+  const sourceId = sourceIdValue.value;
   try {
-    const dataset = await getDataset({ space_id: selectedSpaceId.value, dataset_id: sourceIdValue.value });
+    const dataset = await getDataset({ space_id: spaceId, dataset_id: sourceId });
+    if (token !== sourceTagsRequestToken || spaceId !== selectedSpaceId.value || sourceId !== sourceIdValue.value) return;
     subjectTagIds.value = (dataset.dataset?.subject_tags || []).slice();
+    // 重采样的市场类型取自源行情，后端据此校验源数据集。
+    editor.market_type = normalizeMarket(dataset.dataset?.attributes?.market_type || "");
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "获取源行情标签失败");
+    if (token === sourceTagsRequestToken) Message.error(error instanceof Error ? error.message : "获取源行情标签失败");
   }
 }
 
@@ -1168,8 +1185,18 @@ async function loadTaskSubjectTags(record: CollectionTaskRecord) {
   }
 }
 
+// 表单不编辑的几项（每函数标的数、允许迟到）原样带回，否则整体替换会把它们丢掉。
+const PRESERVED_TASK_PARAM_KEYS = ["symbols_per_function", "allowed_lateness_seconds"];
+
 function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
-  return buildCollectionTaskParams(input);
+  const original = editingRecord.value?.collect_params ?? {};
+  const preserved: Record<string, unknown> = {};
+  if (input.dataType === "kline") {
+    for (const key of PRESERVED_TASK_PARAM_KEYS) {
+      if (original[key] !== undefined) preserved[key] = original[key];
+    }
+  }
+  return { ...preserved, ...buildCollectionTaskParams(input) };
 }
 
 async function loadDataNodes() {
@@ -1332,7 +1359,7 @@ watch(selectedSpaceId, () => {
 });
 
 watch(
-  () => [editor.provider, editor.market_type, frequencyValue.value, sourceFrequencyValue.value],
+  () => [editor.provider, frequencyValue.value, sourceFrequencyValue.value],
   () => {
     if (sourceIdValue.value && !resampleSourceOptions.value.some(source => source.source_id === sourceIdValue.value)) {
       sourceIdValue.value = "";

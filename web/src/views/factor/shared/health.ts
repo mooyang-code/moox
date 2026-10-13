@@ -29,11 +29,14 @@ export function setHealth(set: Pick<FactorSet, "status" | "freq">, lastRun?: Set
   if (lastRun.last_status === "failed") return { key: "failed", label: "失败", color: "red" };
   if (lastRun.last_status === "degraded") return { key: "degraded", label: "降级", color: "orange" };
   const period = freqSeconds(set.freq);
-  if (period > 0 && lastRun.lag_seconds > period * LAG_TOLERANCE_PERIODS) return { key: "lagging", label: "滞后", color: "red" };
+  if (period > 0 && Number(lastRun.lag_seconds) > period * LAG_TOLERANCE_PERIODS)
+    return { key: "lagging", label: "滞后", color: "red" };
   return { key: "ok", label: "正常", color: "green" };
 }
 
-export function formatLag(seconds?: number) {
+// int64 字段在 ProtoJSON 里是字符串，这里统一转成数字再格式化。
+export function formatLag(raw?: number | string) {
+  const seconds = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
   if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "-";
   const value = Math.max(0, Math.floor(seconds));
   if (value < 60) return `${value} 秒`;
@@ -42,6 +45,7 @@ export function formatLag(seconds?: number) {
   return `${(value / 86400).toFixed(1)} 天`;
 }
 
-export function formatPeriod(unixSeconds?: number) {
+export function formatPeriod(raw?: number | string) {
+  const unixSeconds = Number(raw);
   return unixSeconds ? new Date(unixSeconds * 1000).toLocaleString() : "-";
 }

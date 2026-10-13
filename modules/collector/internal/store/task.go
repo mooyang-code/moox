@@ -4,15 +4,11 @@ package store
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"gorm.io/gorm"
 )
 
@@ -193,9 +189,6 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask)
 	if task.PrepareState == "" {
 		task.PrepareState = domain.PrepareStateReady
 	}
-	if err := applyCollectionTaskCoverageStart(&task, now, task.Enabled); err != nil {
-		return err
-	}
 	task.CreateTime = now
 	task.ModifyTime = now
 	tags := normalizeTaskTagIDs(task.TagIDs)
@@ -355,21 +348,17 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 		}
 	}
 	now := time.Now().UTC()
-	if err := applyCollectionTaskCoverageStart(&task, now, task.Enabled); err != nil {
-		return nil, err
-	}
 	updates := map[string]any{
-		"c_space_id":            task.SpaceID,
-		"c_task_name":           task.TaskName,
-		"c_description":         task.Description,
-		"c_data_type":           task.DataType,
-		"c_collect_params":      task.CollectParams,
-		"c_enabled":             task.Enabled,
-		"c_creator":             task.Creator,
-		"c_result_dataset_id":   task.ResultDatasetID,
-		"c_result_view_id":      task.ResultViewID,
-		"c_coverage_start_time": task.CoverageStartTime,
-		"c_mtime":               now,
+		"c_space_id":          task.SpaceID,
+		"c_task_name":         task.TaskName,
+		"c_description":       task.Description,
+		"c_data_type":         task.DataType,
+		"c_collect_params":    task.CollectParams,
+		"c_enabled":           task.Enabled,
+		"c_creator":           task.Creator,
+		"c_result_dataset_id": task.ResultDatasetID,
+		"c_result_view_id":    task.ResultViewID,
+		"c_mtime":             now,
 	}
 	if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := validateTaskResultIdentityConflict(ctx, tx, task, taskID); err != nil {
@@ -434,16 +423,12 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 	if !domain.CollectionTaskPrepareState(task.PrepareState).Valid() {
 		return nil, fmt.Errorf("invalid collection task prepare state: %s", task.PrepareState)
 	}
-	if !task.Enabled {
-		task.CoverageStartTime = nil
-	}
 	now := time.Now().UTC()
 	updates := map[string]any{
-		"c_task_name":           task.TaskName,
-		"c_description":         task.Description,
-		"c_enabled":             task.Enabled,
-		"c_coverage_start_time": task.CoverageStartTime,
-		"c_mtime":               now,
+		"c_task_name":   task.TaskName,
+		"c_description": task.Description,
+		"c_enabled":     task.Enabled,
+		"c_mtime":       now,
 	}
 	if persistCollectParams {
 		updates["c_collect_params"] = task.CollectParams
@@ -464,22 +449,6 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 // SetEnabled changes a task enabled flag.
 func (r *TaskRepository) SetEnabled(ctx context.Context, spaceID, taskID string, enabled bool) error {
 	updates := map[string]any{"c_enabled": enabled, "c_mtime": time.Now().UTC()}
-	if enabled {
-		task, err := r.GetByTaskID(ctx, spaceID, taskID)
-		if err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		// Re-enabling is a new coverage decision. Do not preserve the old
-		// timestamp from the previous enable period, otherwise live_only rules
-		// silently replay stale history and lookback rules never move forward.
-		task.CoverageStartTime = nil
-		if err := applyCollectionTaskCoverageStart(task, now, true); err != nil {
-			return err
-		}
-		updates["c_coverage_start_time"] = task.CoverageStartTime
-		updates["c_mtime"] = now
-	}
 	q := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
@@ -513,98 +482,4 @@ func (r *TaskRepository) applyFilter(q *gorm.DB, filter TaskFilter) *gorm.DB {
 		q = q.Where("c_task_id = ?", v)
 	}
 	return q
-}
-
-func applyCollectionTaskCoverageStart(task *domain.CollectionTask, now time.Time, enabled bool) error {
-	if task == nil {
-		return nil
-	}
-	if !enabled {
-		task.CoverageStartTime = nil
-		return nil
-	}
-	start, err := resolveCollectionTaskCoverageStart(task, now)
-	if err != nil {
-		return err
-	}
-	if start == nil {
-		return nil
-	}
-	task.CoverageStartTime = start
-	return nil
-}
-
-func resolveCollectionTaskCoverageStart(task *domain.CollectionTask, now time.Time) (*time.Time, error) {
-	if task == nil {
-		return nil, nil
-	}
-	if task.CoverageStartTime != nil && !task.CoverageStartTime.IsZero() {
-		at := task.CoverageStartTime.UTC()
-		return &at, nil
-	}
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-	if err != nil || params == nil || params.HistoryPolicy == nil {
-		at := now.UTC().Truncate(time.Minute)
-		return &at, nil
-	}
-	policy := params.HistoryPolicy
-	var start time.Time
-	switch policy.Mode {
-	case domain.HistoryModeSince:
-		at, parseErr := time.Parse(time.RFC3339Nano, policy.Since)
-		if parseErr != nil {
-			at = now
-		}
-		start = at.UTC()
-	case domain.HistoryModeLookback:
-		if isStockCNTask(task) {
-			calendar, calendarErr := loadStockCNCalendarForTask()
-			if calendarErr != nil {
-				return nil, calendarErr
-			}
-			start, err = calendar.LookbackStart(now.UTC(), policy.Lookback)
-			if err != nil {
-				return nil, fmt.Errorf("resolve stockcn history lookback: %w", err)
-			}
-		} else {
-			start = now.UTC().Add(-time.Duration(policy.Lookback) * 24 * time.Hour).Truncate(time.Minute)
-		}
-	default:
-		start = now.UTC().Truncate(time.Minute)
-	}
-	return &start, nil
-}
-
-func isStockCNTask(task *domain.CollectionTask) bool {
-	if task == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(task.SpaceID), "stockcn")
-}
-
-func loadStockCNCalendarForTask() (*stockmarket.Calendar, error) {
-	_, sourceFile, _, _ := runtime.Caller(0)
-	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
-	candidates := []string{
-		strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")),
-		"markets/stockcn/calendar.yaml",
-		"config/markets/stockcn/calendar.yaml",
-		"modules/collector/config/markets/stockcn/calendar.yaml",
-		sourceRelative,
-	}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		candidate = filepath.Clean(candidate)
-		if _, err := os.Stat(candidate); err != nil {
-			continue
-		}
-		calendar, err := stockmarket.LoadCalendar(candidate)
-		if err != nil {
-			return nil, fmt.Errorf("load stockcn calendar %s: %w", candidate, err)
-		}
-		return calendar, nil
-	}
-	return nil, fmt.Errorf("stockcn calendar config was not found")
 }

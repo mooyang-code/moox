@@ -111,15 +111,19 @@ func TestPortfolioDefaultsAndExplicitZero(t *testing.T) {
 	}
 }
 
-// holding 规则能同时持有 top × 批次数个标的，cap 校验按这个上限计算。
-func TestHoldingCapCountsAllBatches(t *testing.T) {
+// holding 规则的每个批次各自按 cap/total 配权，批次之间互不补足，所以 cap 校验不能按批次数放宽。
+func TestHoldingCapIsCheckedPerBatch(t *testing.T) {
 	t.Parallel()
 	base := "name: x\nrules:\n  - {id: a, type: rank, score: close, select: {top: 2}, weight: {total: 1, cap: 0.25}"
-	if _, err := Parse([]byte(base + ", holding: {bars: 4, offsets: [0, 2]}}\n")); err != nil {
-		t.Fatalf("2 个批次 × 2 个标的 × 0.25 能分完预算：%v", err)
+	if _, err := Parse([]byte(base + ", holding: {bars: 4, offsets: [0, 2]}}\n")); err == nil || !strings.Contains(err.Error(), "分不完") {
+		t.Fatalf("2 个批次不能让 top 2 × 0.25 分完预算：%v", err)
 	}
 	if _, err := Parse([]byte(base + "}\n")); err == nil || !strings.Contains(err.Error(), "分不完") {
 		t.Fatalf("没有 holding 时 2 × 0.25 分不完预算：%v", err)
+	}
+	ok := strings.Replace(base, "cap: 0.25", "cap: 0.5", 1)
+	if _, err := Parse([]byte(ok + ", holding: {bars: 4, offsets: [0, 2]}}\n")); err != nil {
+		t.Fatalf("top 2 × 0.5 能分完预算：%v", err)
 	}
 }
 

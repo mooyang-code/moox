@@ -266,7 +266,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	}
 	columns := uniqueStrings(append(append([]string{"close"}, program.Columns...), program.PreviousColumns...))
 	reader := &segmentReader{
-		runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort,
+		runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, passed: make(map[string]struct{}),
 		rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: columns, Abort: abort},
 		history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}, Abort: abort},
 	}
@@ -474,6 +474,8 @@ type segmentReader struct {
 	switches int
 	// end 是当前有效的终点（不含）：换代后可能被新索引截短。
 	end time.Time
+	// passed 是整次回放内已通过年龄判定的标的，各段共用（与实时一致：通过后不再因窗口缺口被重新剔除）。
+	passed map[string]struct{}
 }
 
 func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundaries) (input.RangeRows, *presence, error) {
@@ -489,7 +491,7 @@ func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundari
 		if err == nil {
 			// 年龄探针固定到主数据读到的修订号：两次读取之间同一代索引发生原地补算时，丢弃整段重读，不混用两个修订号。
 			s.history.ExpectedRevision = rows.Revision
-			ages, err = agePresence(ctx, s.history, s.resolved, segment)
+			ages, err = agePresence(ctx, s.history, s.resolved, segment, s.passed)
 			var changedRevision *input.RevisionChangedError
 			if errors.As(err, &changedRevision) {
 				if revisionRereads >= maxRevisionRereads {
@@ -512,6 +514,8 @@ func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundari
 			return input.RangeRows{}, nil, err
 		}
 		s.rows.View, s.history.View, s.end = view, view, end
+		// 年龄证明属于旧索引；与实时的缓存一致，换代后重新判定。
+		clear(s.passed)
 		s.acc.setNote(noteIndexSwitch, fmt.Sprintf("回放过程中 View 重建了 %d 次索引，每次都按新索引复查了剩余区间后继续", s.switches))
 	}
 }
@@ -631,9 +635,12 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 }
 
 // agePresence 为一段 bar 读取年龄判定所需的窗口 [首根 − (N+1), 末根 − (N−1)]（只读 close），
-// 每段重新构造，内存只与段长和标的数有关，不随 min_age_bars 或回放长度增长。
-func agePresence(ctx context.Context, history *input.RangeLoader, resolved input.Resolved, segment []input.PeriodBoundaries) (*presence, error) {
+// 每段重新构造，内存只与段长和标的数有关，不随 min_age_bars 或回放长度增长；已通过判定的标的集合由各段共用。
+func agePresence(ctx context.Context, history *input.RangeLoader, resolved input.Resolved, segment []input.PeriodBoundaries, passed map[string]struct{}) (*presence, error) {
 	result := newPresence()
+	if passed != nil {
+		result.passed = passed
+	}
 	if resolved.MinAgeBars <= 0 {
 		return result, nil
 	}

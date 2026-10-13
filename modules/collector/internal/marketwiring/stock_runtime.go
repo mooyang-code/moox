@@ -166,7 +166,7 @@ func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.
 	}
 	// The target dataset is supplied by the active Collector rule (the 1m and
 	// 1h datasets are different). Leave it request-bound instead of imposing
-	// the legacy route dataset ID selected by NewMarketKlinePipeline.
+	// the default route dataset ID selected by NewMarketKlinePipeline.
 	pipeline.DatasetID = ""
 	pipeline.InstrumentType = instrumentType
 	return pipeline, nil

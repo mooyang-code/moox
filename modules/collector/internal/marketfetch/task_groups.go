@@ -69,81 +69,55 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 			continue
 		}
 
-		// New tasks use task_tags as the authoritative acquisition scope. Each
-		// Tag owns immutable source/market routing, so a single CollectionTask can
-		// fan out to several Provider routes without task-level overrides.
-		if tagIDs := normalizedTaskTagIDs(task.TagIDs); len(tagIDs) > 0 {
-			tagSource, ok := r.Symbols.(tagRouteSource)
-			if !ok {
-				log.WarnContextf(ctx, "skip collection task=%s: metadata source does not expose tag routes", task.TaskID)
-				if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
-					groups = append(groups, previous...)
-				}
-				continue
-			}
-			taskGroups := make([]TaskGroup, 0)
-			valid := true
-			for _, tagID := range tagIDs {
-				tag, tagErr := tagSource.GetTag(ctx, spaceID, tagID)
-				if tagErr != nil || tag == nil {
-					log.WarnContextf(ctx, "skip collection task=%s: load tag=%s: %v", task.TaskID, tagID, tagErr)
-					valid = false
-					break
-				}
-				provider := strings.ToLower(strings.TrimSpace(tag.GetSource()))
-				marketType := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
-				if provider == "" || marketType == "" {
-					log.WarnContextf(ctx, "skip collection task=%s: tag=%s missing immutable source/market_type", task.TaskID, tagID)
-					valid = false
-					break
-				}
-				subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, []string{tagID})
-				if subjectErr != nil || len(subjects) == 0 {
-					log.WarnContextf(ctx, "skip collection task=%s: resolve tag=%s subjects: %v", task.TaskID, tagID, subjectErr)
-					valid = false
-					break
-				}
-				routeGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, "", subjects)
-				if routeErr != nil {
-					log.WarnContextf(ctx, "skip collection task=%s tag=%s route: %v", task.TaskID, tagID, routeErr)
-					valid = false
-					break
-				}
-				taskGroups = append(taskGroups, routeGroups...)
-			}
-			if !valid || len(taskGroups) == 0 {
-				if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
-					groups = append(groups, previous...)
-				}
-				continue
-			}
-			r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
-			groups = append(groups, taskGroups...)
+		// task_tags 是采集范围的唯一来源；每个标签固定绑定来源与市场。
+		tagIDs := normalizedTaskTagIDs(task.TagIDs)
+		if len(tagIDs) == 0 {
+			log.WarnContextf(ctx, "skip collection task=%s: task has no tags", task.TaskID)
 			continue
 		}
-
-		// Compatibility path for built-in/legacy task fixtures that do not yet
-		// carry task_tags. New user-created kline tasks never depend on this path.
-		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID)
-		if datasetErr != nil {
-			continue
-		}
-		subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
-		if subjectErr != nil {
-			log.WarnContextf(ctx, "resolve subjects for collection task=%s tags=%v: %v", task.TaskID, dataset.SubjectTags, subjectErr)
-		}
-		if len(subjects) == 0 {
+		tagSource, ok := r.Symbols.(tagRouteSource)
+		if !ok {
+			log.WarnContextf(ctx, "skip collection task=%s: metadata source does not expose tag routes", task.TaskID)
 			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
 				groups = append(groups, previous...)
 			}
 			continue
 		}
-		provider := strings.ToLower(strings.TrimSpace(params.Provider))
-		marketType := strings.ToLower(strings.TrimSpace(params.MarketType))
-		sourceID := strings.TrimSpace(params.SourceID)
-		taskGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, sourceID, subjects)
-		if routeErr != nil {
-			return nil, routeErr
+		taskGroups := make([]TaskGroup, 0)
+		valid := true
+		for _, tagID := range tagIDs {
+			tag, tagErr := tagSource.GetTag(ctx, spaceID, tagID)
+			if tagErr != nil || tag == nil {
+				log.WarnContextf(ctx, "skip collection task=%s: load tag=%s: %v", task.TaskID, tagID, tagErr)
+				valid = false
+				break
+			}
+			provider := strings.ToLower(strings.TrimSpace(tag.GetSource()))
+			marketType := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+			if provider == "" || marketType == "" {
+				log.WarnContextf(ctx, "skip collection task=%s: tag=%s missing immutable source/market_type", task.TaskID, tagID)
+				valid = false
+				break
+			}
+			subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, []string{tagID})
+			if subjectErr != nil || len(subjects) == 0 {
+				log.WarnContextf(ctx, "skip collection task=%s: resolve tag=%s subjects: %v", task.TaskID, tagID, subjectErr)
+				valid = false
+				break
+			}
+			routeGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, "", subjects)
+			if routeErr != nil {
+				log.WarnContextf(ctx, "skip collection task=%s tag=%s route: %v", task.TaskID, tagID, routeErr)
+				valid = false
+				break
+			}
+			taskGroups = append(taskGroups, routeGroups...)
+		}
+		if !valid || len(taskGroups) == 0 {
+			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+				groups = append(groups, previous...)
+			}
+			continue
 		}
 		r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
 		groups = append(groups, taskGroups...)

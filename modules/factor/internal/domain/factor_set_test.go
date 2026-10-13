@@ -101,6 +101,17 @@ func TestValidateDefinitionRejectsReservedOutput(t *testing.T) {
 	}
 }
 
+func TestValidateDefinitionRequiresIdentifierName(t *testing.T) {
+	for _, name := range []string{"", "中文因子", "my-factor", "1bias", "has space"} {
+		factor := validFactor()
+		factor.Name = name
+		require.ErrorContains(t, ValidateDefinition(factor), "name must match", name)
+	}
+	factor := validFactor()
+	factor.Name = "Bias_20"
+	require.NoError(t, ValidateDefinition(factor))
+}
+
 func TestValidateDefinitionRejectsDuplicateInputsAndOutputs(t *testing.T) {
 	factor := validFactor()
 	factor.InputColumns = []string{"close", "close"}

@@ -22,7 +22,7 @@
             ><a-form-item label="策略 ID"
               ><a-input
                 v-model="strategyId"
-                :disabled="editing || loading"
+                :disabled="editing || loading || saving"
                 placeholder="留空自动生成，例如 momentum_hourly" /></a-form-item
             ><a-alert v-if="parse.diagnostics.length" type="warning" show-icon
               ><div v-for="item in parse.diagnostics" :key="item.message">{{ item.message }}</div></a-alert

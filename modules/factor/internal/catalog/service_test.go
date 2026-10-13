@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
@@ -51,6 +52,16 @@ func TestCreateSetCanonicalizesUppercaseFrequency(t *testing.T) {
 	require.Equal(t, "1h", created.Freq)
 	require.Equal(t, "fset_prices_1h", created.SetID)
 	require.Equal(t, "dataset_factor_prices_1h", created.ResultDatasetID)
+}
+
+func TestCreateSetRejectsSpaceWithoutCalendar(t *testing.T) {
+	svc := NewService(openCatalogStore(t), newMetadataFake())
+	set := newSet()
+	set.SpaceID = "stockcn"
+
+	_, err := svc.CreateSet(context.Background(), set)
+
+	require.ErrorIs(t, err, periodclock.ErrUnsupportedCalendar)
 }
 
 func TestCreateSetRetryResumesFromPending(t *testing.T) {

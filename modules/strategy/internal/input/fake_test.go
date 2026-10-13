@@ -116,7 +116,7 @@ func plainColumn(name string) ViewColumn {
 }
 
 func subject(id string, active bool) Subject {
-	return Subject{SubjectID: id, SeriesTag: "venue:binance", Active: active, Attributes: map[string]string{}}
+	return Subject{SubjectID: id, SeriesTag: "venue:binance", Active: active}
 }
 
 // newFakeClient 构造一个现货因子 View：K 线列 + ma_20、bias_q_20、quote_volume_mean_20、quote_volume_mean_q_20 因子列。

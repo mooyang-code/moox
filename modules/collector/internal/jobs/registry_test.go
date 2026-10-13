@@ -22,9 +22,6 @@ func TestResampleJobDefinitionRunsInsideCollector(t *testing.T) {
 	if def.ExecutionMode != ExecutionModeCollectorLocal {
 		t.Fatalf("execution mode = %q, want collector_local", def.ExecutionMode)
 	}
-	if _, routeExists := JobRouteFor("moox", "kline_resample"); routeExists {
-		t.Fatal("local resample definition must not register a cloud queue route")
-	}
 }
 
 func TestExistingJobDefinitionsRemainCloudInvoked(t *testing.T) {

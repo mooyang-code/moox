@@ -62,9 +62,10 @@ const lockedReason = (status: FactorSetStatus) =>
   status === "pending" ? "计算任务创建中，暂不能操作" : "计算任务清理中，暂不能操作";
 const isLocked = (set: Pick<FactorSet, "status">) => set.status === "pending" || set.status === "deleting";
 
-/** 删除计算任务的前置条件：没有成员（D23），且不在清理中。 */
+/** 删除计算任务的前置条件：已停用、没有成员（D23），且不在清理中。 */
 export function deleteState(info: Pick<FactorSetInfo, "factor_set" | "members">): ActionState {
   if (info.factor_set.status === "deleting") return blocked("计算任务清理中");
+  if (info.factor_set.status !== "disabled") return blocked("请先停用计算任务，再删除");
   if ((info.members || []).length > 0) return blocked("请先在「因子」里移除全部因子成员，再删除计算任务");
   return enabledAction;
 }
@@ -86,7 +87,11 @@ export function memberActions(set: Pick<FactorSet, "status">, member: Pick<Facto
   return {
     toggleLabel: enabled ? "停用" : "启用",
     toggleTarget: enabled ? "disabled" : "enabled",
-    toggle: isLocked(set) ? blocked(lockedReason(set.status)) : enabledAction,
+    toggle: isLocked(set)
+      ? blocked(lockedReason(set.status))
+      : !enabled && set.status === "disabled"
+        ? blocked("计算任务已停用，请先启用计算任务，再启用因子")
+        : enabledAction,
     edit: enabled ? blocked("已启用的因子需要先停用，才能编辑定义") : enabledAction,
     remove: enabled ? blocked("已启用的因子需要先停用，才能移除") : enabledAction
   };

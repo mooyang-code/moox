@@ -375,7 +375,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	}
 	// Hash the normalized, persisted definition so duplicate checks include the
 	// resolved tag range and canonical collector parameters.
-	task.DefinitionHash = collectionTaskDefinitionHash(task)
+	task.DefinitionHash = CollectionTaskDefinitionHash(task)
 	if _, lookupErr := s.taskRepo.GetByTaskID(ctx, task.SpaceID, task.TaskID); lookupErr == nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task %s already exists", task.TaskID))}, nil
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -578,11 +578,6 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if err := validateCollectionTaskUpdate(*existing, task); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	if task.Enabled {
-		preserveCollectionTaskCoverageStart(*existing, &task)
-	} else {
-		task.CoverageStartTime = nil
-	}
 	task, err = canonicalizeCollectionTask(task)
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -613,7 +608,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if outputFieldsChanged && len(requestedParams.OutputFields) == 0 {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "output_fields cannot be cleared; specify the fields to persist")}, nil
 	}
-	task.DefinitionHash = collectionTaskDefinitionHash(task)
+	task.DefinitionHash = CollectionTaskDefinitionHash(task)
 	if duplicate, lookupErr := s.taskRepo.GetByDefinitionHash(ctx, task.SpaceID, task.DefinitionHash); lookupErr == nil {
 		if duplicate != nil && duplicate.TaskID != task.TaskID {
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("same tag, task type, frequency and parameters already exist in task %s", duplicate.TaskID))}, nil
@@ -1026,11 +1021,12 @@ func normalizeCollectionTask(task domain.CollectionTask) domain.CollectionTask {
 	if strings.TrimSpace(task.CollectParams) == "" {
 		task.CollectParams = "{}"
 	}
-	task.DefinitionHash = collectionTaskDefinitionHash(task)
+	task.DefinitionHash = CollectionTaskDefinitionHash(task)
 	return task
 }
 
-func collectionTaskDefinitionHash(task domain.CollectionTask) string {
+// CollectionTaskDefinitionHash 是任务定义的去重哈希（空间、标签、类型与规范化后的采集参数）。
+func CollectionTaskDefinitionHash(task domain.CollectionTask) string {
 	params := strings.TrimSpace(task.CollectParams)
 	if parsed, err := domain.ParseCollectParams(params, "", "", task.DataType); err == nil {
 		// Tag membership is hashed separately and task-owned result identity must
@@ -1205,17 +1201,23 @@ func (s *Service) resolveSubjectTags(ctx context.Context, task domain.Collection
 	if len(tags) == 0 {
 		tags = normalizeTagIDs(paramTags)
 	}
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		// 重采样任务继承源行情的标的范围；显式给出的标签必须与源一致。
+		if s.datasetSrc == nil {
+			return "", nil, errors.New("source Dataset metadata is unavailable")
+		}
+		info, sourceErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, params.SourceDatasetID)
+		if sourceErr != nil {
+			return "", nil, fmt.Errorf("resolve source Dataset tags: %w", sourceErr)
+		}
+		sourceTags := normalizeTagIDs(info.SubjectTags)
+		if len(tags) > 0 && !equalStringSlices(tags, sourceTags) {
+			return "", nil, errors.New("重采样任务继承源行情的标的范围，不能单独选择标签")
+		}
+		tags = sourceTags
+	}
 	if len(tags) == 0 {
-		if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-			if s.datasetSrc == nil {
-				return "", nil, errors.New("source Dataset metadata is unavailable")
-			}
-			info, sourceErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, params.SourceDatasetID)
-			if sourceErr != nil {
-				return "", nil, fmt.Errorf("resolve source Dataset tags: %w", sourceErr)
-			}
-			tags = normalizeTagIDs(info.SubjectTags)
-		} else if fallbackDatasetID != "" && s.datasetSrc != nil {
+		if fallbackDatasetID != "" && s.datasetSrc != nil {
 			info, sourceErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, fallbackDatasetID)
 			if sourceErr != nil {
 				return "", nil, fmt.Errorf("resolve existing Dataset tags: %w", sourceErr)
@@ -1361,6 +1363,7 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		// production DatasetSource implements GetTag and always takes this path.
 		return nil
 	}
+	var firstTag, firstRoute string
 	for _, tagID := range normalizeTagIDs(task.TagIDs) {
 		tag, err := tagSource.GetTag(ctx, task.SpaceID, tagID)
 		if err != nil {
@@ -1370,6 +1373,13 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		market := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
 		if source == "" || market == "" {
 			return fmt.Errorf("tag %s must have immutable source and market_type", tagID)
+		}
+		// 同一任务的结果数据集只能来自一个市场，否则计划生成会拒绝整个空间。
+		route := source + "/" + market
+		if firstTag == "" {
+			firstTag, firstRoute = tagID, route
+		} else if route != firstRoute {
+			return fmt.Errorf("tag %s (%s) and tag %s (%s) belong to different markets; a task must use tags of one source and market_type", firstTag, firstRoute, tagID, route)
 		}
 		params, err := domain.ParseCollectParams(task.CollectParams, source, market, task.DataType)
 		if err != nil {
@@ -1382,25 +1392,8 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		if !exists || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
 			return fmt.Errorf("tag %s route is unsupported: provider=%s market=%s data_type=%s", tagID, source, market, params.Collector.DataType)
 		}
-		if definition.ExecutionMode == jobs.ExecutionModeCloudInvoke {
-			if _, routeOK := jobs.JobRouteFor(source, params.Collector.DataType); !routeOK {
-				return fmt.Errorf("tag %s provider route not found: provider=%s data_type=%s", tagID, source, params.Collector.DataType)
-			}
-		}
 	}
 	return nil
-}
-
-func preserveCollectionTaskCoverageStart(existing domain.CollectionTask, desired *domain.CollectionTask) {
-	if desired == nil {
-		return
-	}
-	if existing.CoverageStartTime == nil || existing.CoverageStartTime.IsZero() {
-		desired.CoverageStartTime = nil
-		return
-	}
-	at := existing.CoverageStartTime.UTC()
-	desired.CoverageStartTime = &at
 }
 
 func canonicalizeCollectionTask(task domain.CollectionTask) (domain.CollectionTask, error) {
@@ -1461,9 +1454,8 @@ func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error
 	if err != nil {
 		return fmt.Errorf("parse desired task collect_params: %w", err)
 	}
-	// subject_tags is a create/update input that lives on the result Dataset,
-	// not part of the task's immutable execution contract. Ignore the legacy
-	// copy here so a task can be updated once during bootstrap migration.
+	// subject_tags 是创建/更新时的输入，实际范围保存在结果数据集上，不属于任务不可变的执行契约；
+	// 重采样 seed 路径仍可能把它写进 collect_params，所以比较时忽略。
 	existingParams.SubjectTags = nil
 	desiredParams.SubjectTags = nil
 	// output_fields is a per-target projection. It changes which fields are
