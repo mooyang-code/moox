@@ -3,11 +3,12 @@
     <div class="moox-inner">
       <div class="page-head">
         <div>
-          <a-button type="text" @click="router.push({ name: 'strategy-running' })"
-            ><template #icon><icon-left /></template>返回实例</a-button
+          <a-button type="text" @click="router.push(instancesLink())"
+            ><template #icon><icon-left /></template>返回运行实例</a-button
           >
-          <h2>{{ store.instance?.instance_id || instanceId }}</h2>
-          <span>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</span>
+          <h2>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</h2>
+          <span class="mono">{{ store.instance?.instance_id || instanceId }}</span>
+          <span v-if="readAt" class="muted"> · 状态读取 {{ readAt }}</span>
         </div>
         <div class="page-actions">
           <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" /><span class="muted" aria-hidden="true"
@@ -23,7 +24,7 @@
         }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
       >
       <template v-if="store.instance">
-        <a-descriptions :column="{ xs: 1, sm: 3 }" bordered class="summary">
+        <a-descriptions :column="{ xs: 1, sm: 3 }" bordered size="small" class="summary">
           <a-descriptions-item label="实例状态"
             ><StatusBadge :enabled="store.instance.enabled" :uncertain="controlUncertain" :health="store.instance.health"
           /></a-descriptions-item>
@@ -55,12 +56,6 @@
             ><span v-else>未关联账户</span></a-descriptions-item
           >
         </a-descriptions>
-        <a-alert v-if="!store.instance.enabled && store.instance.session_id" type="warning" show-icon class="top-alert"
-          >实例已经停用，但会话仍存在。后台账户释放可能尚未完成，请不要将旧目标当作当前有效仓位。</a-alert
-        >
-        <a-alert v-if="store.instance.health === 'degraded'" type="error" show-icon class="top-alert"
-          >最近一期被跳过。请在下方历史结果中查看具体跳过原因：数据暂时不足等情况会在后续周期自动恢复，仅当原因是因子定义版本变化时才需要停用并重新启用实例。</a-alert
-        >
         <OperationPanel
           :instance-id="instanceId"
           :enabled="store.instance.enabled"
@@ -69,27 +64,28 @@
           @changed="reconcileControl"
           @failed="handleControlFailed"
         />
-        <a-tabs v-model:active-key="activeTab">
-          <a-tab-pane key="targets" title="最新目标"
-            ><TargetTable :targets="store.targetSnapshot?.targets || []" :snapshot="store.targetSnapshot" :state="targetState"
-          /></a-tab-pane>
-          <a-tab-pane key="results" title="历史结果"
-            ><ResultTimeline
-              :results="store.results"
-              :total="store.totalResults"
-              :page="resultPage"
-              :page-size="resultPageSize"
-              :scope="resultScope"
-              :loading="store.resultsLoading"
-              :error="store.resultsError"
-              @page="loadResults"
-              @retry="loadResults(resultPage, resultScope)"
-          /></a-tab-pane>
-          <a-tab-pane key="bindings" title="输入绑定"><ResolvedTable :resolved-json="store.instance.resolved_json" /></a-tab-pane>
-          <a-tab-pane key="definition" title="DSL 定义">
+        <InstanceResults
+          :instance="store.instance"
+          :snapshot="store.targetSnapshot"
+          :target-state="targetState"
+          :results="store.results"
+          :total="store.totalResults"
+          :page="resultPage"
+          :page-size="resultPageSize"
+          :scope="resultScope"
+          :loading="store.resultsLoading"
+          :error="store.resultsError"
+          @page="loadResults"
+          @retry="loadResults(resultPage, resultScope)"
+        />
+        <a-collapse :bordered="false" class="extra-sections">
+          <a-collapse-item key="bindings" header="输入绑定（会话固化的 View 列与因子指纹）"
+            ><ResolvedTable :resolved-json="store.instance.resolved_json"
+          /></a-collapse-item>
+          <a-collapse-item key="definition" header="DSL 定义">
             <pre class="code-block">{{ store.strategy?.dsl_yaml || definitionEmptyText }}</pre>
-          </a-tab-pane>
-        </a-tabs>
+          </a-collapse-item>
+        </a-collapse>
       </template>
       <a-empty v-else-if="!store.detailLoading" description="实例不存在或无法读取" />
     </div>
@@ -97,32 +93,48 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
-import { useStrategyStore } from "@/store/modules/strategy";
+import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
 import OperationPanel from "@/views/strategy/components/strategy-operation-panel.vue";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
-import ResultTimeline from "@/views/strategy/components/strategy-result-table.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
-import TargetTable from "@/views/strategy/components/strategy-target-table.vue";
-import { deriveTargetState } from "@/views/strategy/model";
-import { useNowClock } from "@/views/strategy/use-now-clock";
+import { instancesLink, replayLink } from "@/views/strategy/links";
+import { useInstanceResults } from "@/views/strategy/use-instance-results";
 
 defineOptions({ name: "StrategyDetail" });
 const route = useRoute();
 const router = useRouter();
-const store = useStrategyStore();
 const spaceStore = useSpaceStore();
 const instanceId = computed(() => String(route.params.instanceId || ""));
-const activeTab = ref("targets");
-const resultPage = ref(1);
-const resultPageSize = 20;
-const resultScope = ref<"session" | "all">("session");
 const controlUncertain = ref(false);
 const autoRefresh = ref(true);
-// 目标有效期要随时间流逝重算：关闭自动刷新后页面不再请求数据，只读 Date.now() 的 computed 不会自己更新。
-const nowMs = useNowClock();
+
+// 读取到的实例不属于当前空间（例如从别的空间的链接进入）：停止刷新并回到实例列表。
+function leaveIfOtherSpace() {
+  const currentSpaceId = spaceStore.selectedSpaceId;
+  if (store.instance && currentSpaceId && store.instance.space_id !== currentSpaceId) {
+    store.stopPolling();
+    store.clearDetail();
+    router.replace(instancesLink());
+    return true;
+  }
+  return false;
+}
+
+const { store, resultPage, resultScope, resultPageSize, readAt, targetState, load, loadResults, start } = useInstanceResults(
+  instanceId,
+  {
+    autoRefresh,
+    controlUncertain,
+    onLoaded: () => void leaveIfOtherSpace(),
+    onReset: () => {
+      controlUncertain.value = false;
+    }
+  }
+);
+
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
 );
@@ -133,45 +145,15 @@ const definitionEmptyText = computed(() =>
       ? "定义读取失败（并非已删除），将在下次刷新时重试"
       : "定义读取中"
 );
-const targetState = computed(() =>
-  store.instance && !controlUncertain.value ? deriveTargetState(store.instance, store.targetSnapshot, nowMs.value) : "unknown"
-);
-async function load(reconcileControlState = false) {
-  try {
-    const applied = await store.loadInstanceDetail(
-      instanceId.value,
-      resultPage.value,
-      resultPageSize,
-      resultScope.value === "all"
-    );
-    const currentSpaceId = spaceStore.selectedSpaceId;
-    if (store.instance && currentSpaceId && store.instance.space_id !== currentSpaceId) {
-      store.stopPolling();
-      store.clearDetail();
-      router.replace({ name: "strategy-running" });
-      return;
-    }
-    if (reconcileControlState && applied && !store.detailError) controlUncertain.value = false;
-  } catch {
-    /* 错误由 store 展示 */
-  }
-}
+
 async function refresh() {
-  await load(controlUncertain.value);
+  if (controlUncertain.value) await reconcileControl();
+  else await load();
 }
-async function loadResults(page: number, scope: "session" | "all") {
-  resultPage.value = page;
-  resultScope.value = scope;
-  try {
-    await store.loadResultPage(page, resultPageSize, scope === "all");
-  } catch {
-    // 翻页失败：表格仍是上一次成功读取的数据，页码与范围退回到它所属的那一页，否则分页器停在失败的页码上点不动。
-    resultPage.value = store.loadedResultPage;
-    resultScope.value = store.loadedResultAllHistory ? "all" : "session";
-  }
-}
+/** 启停结果未知时重新读取实例，读到最新状态后解除“状态未知”。 */
 async function reconcileControl() {
-  await load(true);
+  const applied = await load();
+  if (applied && !store.detailError) controlUncertain.value = false;
 }
 function handleControlStarted() {
   controlUncertain.value = true;
@@ -180,43 +162,16 @@ function handleControlFailed() {
   controlUncertain.value = true;
 }
 function openReplay() {
-  if (store.instance)
-    router.push({ name: "strategy-replay", query: { instance_id: store.instance.instance_id, view_id: store.instance.view_id } });
+  if (store.instance) router.push(replayLink({ instanceId: store.instance.instance_id, viewId: store.instance.view_id }));
 }
-onMounted(() => {
-  load();
-  store.startPolling(() => (autoRefresh.value ? load() : undefined));
-});
-watch(
-  () => route.params.instanceId,
-  (next, previous) => {
-    if (next !== previous) {
-      store.stopPolling();
-      store.clearDetail();
-      resultPage.value = 1;
-      resultScope.value = "session";
-      controlUncertain.value = false;
-      load();
-      store.startPolling(() => (autoRefresh.value ? load() : undefined));
-    }
-  }
-);
+onMounted(start);
 watch(
   () => spaceStore.selectedSpaceId,
   (next, previous) => {
-    if (next && next !== previous) {
-      if (store.instance && store.instance.space_id !== next) {
-        store.stopPolling();
-        store.clearDetail();
-        router.replace({ name: "strategy-running" });
-      } else if (!previous) load();
-    }
+    if (!next || next === previous) return;
+    if (!leaveIfOtherSpace() && !previous) void load();
   }
 );
-onUnmounted(() => {
-  store.stopPolling();
-  store.clearDetail();
-});
 </script>
 
 <style scoped>
@@ -245,6 +200,9 @@ onUnmounted(() => {
 .summary,
 .top-alert {
   margin-bottom: var(--moox-space-2);
+}
+.extra-sections {
+  margin-top: var(--moox-space-3);
 }
 .mono,
 .code-block {

@@ -1,19 +1,6 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <div class="page-head">
-        <div>
-          <h2>运行实例</h2>
-          <span>实例绑定一个定义、一个 View 和可选的组合账户；启用后由 View 就绪事件驱动计算。</span>
-        </div>
-        <a-space
-          ><a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="refresh"
-            ><template #icon><icon-refresh /></template>刷新</a-button
-          ><a-button type="primary" status="success" :disabled="!spaceStore.selectedSpaceId" @click="openCreate"
-            ><template #icon><icon-plus /></template>新建实例</a-button
-          ></a-space
-        >
-      </div>
       <a-alert v-if="store.instancesError" type="error" show-icon class="top-alert"
         >实例加载失败：{{ store.instancesError
         }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
@@ -22,17 +9,31 @@
         >策略定义目录加载失败，定义名称与筛选项可能不完整：{{ store.catalogError
         }}<template #action><a-button size="small" @click="loadCatalog">重试</a-button></template></a-alert
       >
-      <div class="filters">
-        <a-select v-model="filters.strategy_id" allow-clear allow-search placeholder="策略定义"
-          ><a-option v-for="item in store.strategyCatalog" :key="item.strategy_id" :value="item.strategy_id"
-            >{{ item.name }}（{{ item.strategy_id }}）</a-option
-          ></a-select
-        ><a-select v-model="filters.enabled" allow-clear placeholder="启用状态"
-          ><a-option value="true">已启用</a-option><a-option value="false">已停用</a-option></a-select
-        ><a-button type="primary" @click="search">查询</a-button><a-button @click="reset">重置</a-button>
-      </div>
-      <div class="toolbar muted">
-        共 {{ store.totalInstances }} 条<template v-if="readAt"> · 状态读取 {{ readAt }}</template>
+      <div class="result-toolbar">
+        <span class="result-count">
+          共 {{ store.totalInstances }} 个实例<span v-if="readAt">；状态读取：{{ readAt }}</span>
+          <InfoTip
+            text="实例绑定一个定义、一个 View 和可选的组合账户；启用后由 View 就绪事件驱动计算，结果在「运行结果」查看。"
+          />
+        </span>
+        <a-space wrap>
+          <a-select v-model="filters.strategy_id" allow-clear allow-search placeholder="全部策略定义" class="filter-select"
+            ><a-option v-for="item in store.strategyCatalog" :key="item.strategy_id" :value="item.strategy_id"
+              >{{ item.name }}（{{ item.strategy_id }}）</a-option
+            ></a-select
+          >
+          <a-select v-model="filters.enabled" allow-clear placeholder="全部状态" class="filter-status"
+            ><a-option value="true">已启用</a-option><a-option value="false">已停用</a-option></a-select
+          >
+          <a-button @click="search">查询</a-button>
+          <a-button @click="reset">重置</a-button>
+          <a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="refresh"
+            ><template #icon><icon-refresh /></template>刷新</a-button
+          >
+          <a-button type="primary" status="success" :disabled="!spaceStore.selectedSpaceId" @click="openCreate"
+            ><template #icon><icon-plus /></template>新建实例</a-button
+          >
+        </a-space>
       </div>
       <a-table
         row-key="instance_id"
@@ -69,7 +70,7 @@
           >
           <a-table-column title="操作" :width="200" fixed="right">
             <template #cell="{ record }">
-              <a-button type="text" size="small" @click="openQuick(record.instance_id)">快速查看</a-button>
+              <a-button type="text" size="small" @click="openResults(record.instance_id)">结果</a-button>
               <a-button type="text" size="small" @click="openDetail(record.instance_id)">详情</a-button>
               <a-dropdown trigger="click">
                 <a-button type="text" size="small">更多</a-button>
@@ -103,6 +104,7 @@
         :strategies="store.strategyCatalog"
         @close="closeOverlay"
         @open-detail="openDetail"
+        @results="openResults"
         @replay="goReplay"
       />
       <StrategyInstanceCreate
@@ -127,6 +129,8 @@ import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
 import { formatStrategyTime } from "@/views/strategy/model";
+import InfoTip from "@/views/factor/shared/info-tip.vue";
+import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
 import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.vue";
 import {
   buildRunningQuery,
@@ -139,7 +143,7 @@ import {
 } from "@/views/strategy/running/running-model";
 
 defineOptions({ name: "StrategyRunning" });
-const ROUTE_NAME = "strategy-running";
+const ROUTE_NAME = STRATEGY_TASKS_ROUTE;
 const PAGE_SIZE = 20;
 const router = useRouter();
 const route = useRoute();
@@ -211,10 +215,17 @@ function closeOverlay() {
   go({ instanceId: "", create: false });
 }
 function openDetail(instanceId: string) {
-  router.push({ name: "strategy-detail", params: { instanceId } });
+  router.push(detailLink(instanceId));
+}
+function openResults(instanceId: string) {
+  router.push(resultsLink(instanceId));
 }
 function goReplay(instance: StrategyInstance) {
-  router.push({ name: "strategy-replay", query: { instance_id: instance.instance_id, view_id: instance.view_id, create: "1" } });
+  router.push(replayLink({ instanceId: instance.instance_id, viewId: instance.view_id }));
+}
+/** 本 Tab 是否是当前页面：离开工作台或切到其它 Tab 后不再响应 URL。 */
+function isCurrentTab() {
+  return route.name === ROUTE_NAME && normalizeTaskTab(route.query.tab) === "instances";
 }
 function strategyName(id: string) {
   return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || "定义已删除或未加载";
@@ -283,7 +294,7 @@ watch(
 watch(
   () => listKey(state.value),
   key => {
-    if (route.name !== ROUTE_NAME) return;
+    if (!isCurrentTab()) return;
     filters.strategy_id = state.value.strategyId;
     filters.enabled = state.value.enabled;
     if (key !== loadedKey && spaceStore.selectedSpaceId) void refresh();
@@ -291,49 +302,25 @@ watch(
 );
 </script>
 
-<style scoped>
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: var(--moox-space-2);
-}
-.page-head h2 {
-  margin: 0 0 4px;
-}
-.page-head span,
+<style scoped lang="scss">
+@use "../shared/strategy-page.scss";
+
 .muted {
   color: var(--color-text-3);
   font-size: 12px;
 }
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-.toolbar {
-  margin-bottom: 8px;
-}
-.filters {
-  display: flex;
-  gap: 8px;
-  margin-bottom: var(--moox-space-2);
-}
-.filters .arco-select-view {
-  width: 220px;
-}
 .top-alert {
   margin-bottom: var(--moox-space-2);
 }
+.filter-select {
+  width: 240px;
+}
+.filter-status {
+  width: 140px;
+}
 @media (max-width: 640px) {
-  .page-head {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .filters {
-    flex-wrap: wrap;
-  }
-  .filters .arco-select-view {
+  .filter-select,
+  .filter-status {
     width: 100%;
   }
 }

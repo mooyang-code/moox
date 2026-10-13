@@ -19,6 +19,31 @@ export function deriveTargetState(
   return snapshot.targets.length === 0 ? "zero" : "valid";
 }
 
+/** 目标状态的标签与颜色：有效为绿色，过期与无法确认为橙色，其余为灰色或蓝色。 */
+export function targetStateTag(state: TargetState): { label: string; color: string } {
+  return (
+    {
+      valid: { label: "目标有效", color: "green" },
+      zero: { label: "零仓位目标", color: "blue" },
+      expired: { label: "目标已过期", color: "orange" },
+      empty: { label: "尚无结果", color: "gray" },
+      inactive: { label: "实例已停用", color: "gray" },
+      unknown: { label: "无法确认", color: "orange" }
+    } as const
+  )[state];
+}
+
+/** 目标按权重绝对值从大到小排列，并给出相对最大权重的比例（0~1），用于权重条。 */
+export function rankTargets(targets: InstrumentTarget[]): { target: InstrumentTarget; weight: number; ratio: number }[] {
+  const rows = targets.map(target => ({ target, weight: Number(target.target_weight) }));
+  const valid = rows.filter(row => Number.isFinite(row.weight));
+  const max = Math.max(0, ...valid.map(row => Math.abs(row.weight)));
+  return rows
+    .map(row => ({ ...row, weight: Number.isFinite(row.weight) ? row.weight : 0 }))
+    .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight) || a.target.instrument_id.localeCompare(b.target.instrument_id))
+    .map(row => ({ ...row, ratio: max > 0 ? Math.abs(row.weight) / max : 0 }));
+}
+
 export function targetWeightPercent(target: InstrumentTarget): string {
   return percent(target.target_weight);
 }

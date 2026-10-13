@@ -1,13 +1,12 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <div class="page-head">
-        <div>
-          <h2>策略回放</h2>
-          <span>基于 View 的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。</span>
-        </div>
-        <a-space
-          ><span v-if="readAt" class="muted">状态读取 {{ readAt }}</span
+      <div class="result-toolbar">
+        <span class="result-count">
+          共 {{ replayTotal }} 个回放<span v-if="readAt">；状态读取：{{ readAt }}</span>
+          <InfoTip text="基于 View 的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
+        </span>
+        <a-space wrap
           ><a-button :loading="listLoading" aria-label="刷新回放" @click="loadReplays"
             ><template #icon><icon-refresh /></template>刷新</a-button
           ><a-button type="primary" @click="openCreate"
@@ -268,6 +267,8 @@ import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
 import { sameQuery } from "@/views/strategy/query";
+import InfoTip from "@/views/factor/shared/info-tip.vue";
+import { STRATEGY_TASKS_ROUTE, normalizeTaskTab } from "@/views/strategy/links";
 import ReplayCreateDrawer from "@/views/strategy/replay/replay-create-drawer.vue";
 import { type ReplayFormState, replaySourceOf, validateReplayForm } from "@/views/strategy/replay/replay-form-model";
 import { buildReplayQuery, hasPrefill, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
@@ -288,7 +289,11 @@ import {
 } from "@/views/strategy/replay/model";
 
 defineOptions({ name: "StrategyReplay" });
-const ROUTE_NAME = "strategy-replay";
+const ROUTE_NAME = STRATEGY_TASKS_ROUTE;
+/** 本 Tab 是否是当前页面：离开工作台或切到其它 Tab 后不再读写 URL。 */
+function isCurrentTab() {
+  return route.name === ROUTE_NAME && normalizeTaskTab(route.query.tab) === "replay";
+}
 const route = useRoute();
 const router = useRouter();
 // URL 保存分析对象、两处分页、创建抽屉及其预填；表单草稿与请求状态仍在页面内。
@@ -372,9 +377,9 @@ let pending: { state: ReplayQueryState; query: Record<string, string>; mode: "pu
 
 /** 把状态补丁写入 URL：只在回放页自己的路由上写，且与当前（或待生效）query 语义相同时不导航。 */
 function writeQuery(patch: Partial<ReplayQueryState>, mode: "push" | "replace" = "replace") {
-  if (route.name !== ROUTE_NAME) return;
+  if (!isCurrentTab()) return;
   const state = { ...(pending?.state ?? parsed.value), ...patch };
-  const query = buildReplayQuery(state);
+  const query = { tab: "replay", ...buildReplayQuery(state) };
   if (sameQuery(query, pending?.query ?? route.query)) return;
   // 上一次 push 还没生效就又来一次写入：后者会取消前者，必须沿用 push，否则这条历史记录就被替换掉了。
   if (pending?.mode === "push") mode = "push";
@@ -875,7 +880,7 @@ watch(
       hasPrefill(parsed.value.prefill) && !parsed.value.create
     ] as const,
   ([replayId, barPage, page, legacy]) => {
-    if (route.name !== ROUTE_NAME) return;
+    if (!isCurrentTab()) return;
     if (legacy) normalizeEntry();
     if (page !== replayPage.value) {
       replayPage.value = page;
@@ -944,18 +949,9 @@ onBeforeUnmount(() => {
 });
 </script>
 
-<style scoped>
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: var(--moox-space-2);
-}
-.page-head h2 {
-  margin: 0 0 4px;
-}
-.page-head span,
+<style scoped lang="scss">
+@use "../shared/strategy-page.scss";
+
 .muted {
   color: var(--color-text-3);
   font-size: 12px;
@@ -1042,12 +1038,6 @@ onBeforeUnmount(() => {
 @media (max-width: 900px) {
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 640px) {
-  .page-head {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 </style>

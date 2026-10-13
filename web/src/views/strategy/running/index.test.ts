@@ -36,6 +36,7 @@ const stubs = {
   "a-doption": true,
   "icon-refresh": true,
   "icon-plus": true,
+  FactorInfoTip: true,
   StatusBadge: true,
   StrategyInstanceCreate: defineComponent({
     props: ["visible", "presetStrategyId"],
@@ -55,12 +56,11 @@ async function setup(query: Record<string, string>) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: "/strategy/running", name: "strategy-running", component: RunningPage },
-      { path: "/strategy/detail/:instanceId", name: "strategy-detail", component: { template: "<div />" } },
-      { path: "/strategy/replay", name: "strategy-replay", component: { template: "<div />" } }
+      { path: "/strategy/tasks", name: "strategy-tasks", component: RunningPage },
+      { path: "/strategy/detail/:instanceId", name: "strategy-detail", component: { template: "<div />" } }
     ]
   });
-  await router.push({ path: "/strategy/running", query });
+  await router.push({ path: "/strategy/tasks", query });
   const wrapper = mount(RunningPage, { global: { plugins: [router], stubs } });
   await flushPromises();
   return { router, wrapper };
@@ -119,7 +119,7 @@ describe("strategy running page", () => {
   it("does not reload when only the overlay changes", async () => {
     const { router, wrapper } = await setup({ page: "2" });
     api.loadInstances.mockClear();
-    await router.push({ path: "/strategy/running", query: { page: "2", instance_id: "i7" } });
+    await router.push({ path: "/strategy/tasks", query: { page: "2", instance_id: "i7" } });
     await flushPromises();
     expect(api.loadInstances).not.toHaveBeenCalled();
     expect(wrapper.find(".quick").text()).toBe("quick:i7");

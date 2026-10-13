@@ -71,9 +71,13 @@ describe("page layout standards", () => {
     expect(staticMenuSource.match(/\/trading\/accounts/g)?.length).toBe(2);
     expect(staticMenuSource).not.toContain('"0504"');
     expect(staticMenuSource).not.toContain("/trading/logical-accounts");
-    const strategyDefinitionsPos = staticMenuSource.indexOf('menu("025002",');
-    const strategyRunningPos = staticMenuSource.indexOf('menu("025001",');
-    expect(strategyDefinitionsPos).toBeLessThan(strategyRunningPos);
+    // 策略菜单与因子计算一致：总览 → 定义 → 运行（实例 / 结果 / 回放 工作台）。
+    const strategyOverviewPos = staticMenuSource.indexOf('"/strategy/overview", "strategy-overview"', staticMenuSource.indexOf('directory("0250"'));
+    const strategyDefinitionsPos = staticMenuSource.indexOf('"/strategy/definitions"');
+    const strategyTasksPos = staticMenuSource.indexOf('"/strategy/tasks"');
+    expect(strategyOverviewPos).toBeGreaterThan(-1);
+    expect(strategyOverviewPos).toBeLessThan(strategyDefinitionsPos);
+    expect(strategyDefinitionsPos).toBeLessThan(strategyTasksPos);
 
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));
@@ -92,6 +96,21 @@ describe("page layout standards", () => {
     expect(computeTasks).toContain("新建计算任务");
     expect(definitions).toContain("新增因子");
     expect(definitions).not.toContain('class="filters"');
+  });
+
+  it("keeps the strategy run host, its tabs and the results tab aligned with the factor workbench", () => {
+    const host = read("strategy/workbench/index.vue");
+    const results = read("strategy/results/index.vue");
+    const running = read("strategy/running/index.vue");
+
+    expect(host).toContain("PageTitleTabs");
+    expect(host).toContain('label: "运行实例"');
+    expect(host).toContain('label: "运行结果"');
+    expect(host).toContain('label: "策略回放"');
+    expect(results).toContain('type="rounded"');
+    expect(results).toContain("InstanceResults");
+    expect(running).toContain("新建实例");
+    expect(running).not.toContain('class="filters"');
   });
 
   it("keeps factor tab explanations in info tips instead of rows under the tabs", () => {
@@ -220,7 +239,7 @@ describe("page layout standards", () => {
     const globalStyle = readStyle("index.scss");
     const healthMonitor = read("ops/monitor/index.vue");
     const dataImport = read("data/import/index.vue");
-    const strategyOverview = read("strategy/overview/index.vue");
+    const strategyDefinitions = read("strategy/definitions/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
     const packageManage = read("collector/cloud-node/function-package-manage.vue");
 
@@ -233,8 +252,8 @@ describe("page layout standards", () => {
 
     expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
-    expectMargin(strategyOverview, ".page-head", "margin-bottom", 8);
-    expectMargin(strategyOverview, ".top-alert", "margin-bottom", 8);
+    expectMargin(strategyDefinitions, ".page-head", "margin-bottom", 8);
+    expectMargin(strategyDefinitions, ".top-alert", "margin-bottom", 8);
     expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:\s*0 0 var\(--moox-space-5\);/);
     expectMargin(hostMonitor, ".monitor-toolbar", "margin-bottom", 8);
     expectMargin(hostMonitor, ".monitor-summary", "margin-bottom", 8);

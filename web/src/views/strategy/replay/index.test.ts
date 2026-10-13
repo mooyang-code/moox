@@ -196,7 +196,7 @@ describe("strategy replay page", () => {
     api.chartSpecs.length = 0;
     api.charts.length = 0;
     api.space = reactive({ selectedSpaceId: "crypto" });
-    nav.route = reactive({ name: "strategy-replay", query: {} });
+    nav.route = reactive({ name: "strategy-tasks", query: { tab: "replay" } });
     nav.async = false;
     nav.history.length = 0;
     for (const fn of [
@@ -1250,7 +1250,7 @@ describe("strategy replay page URL state and create drawer", () => {
     api.chartSpecs.length = 0;
     api.charts.length = 0;
     api.space = reactive({ selectedSpaceId: "crypto" });
-    nav.route = reactive({ name: "strategy-replay", query: {} });
+    nav.route = reactive({ name: "strategy-tasks", query: { tab: "replay" } });
     nav.async = false;
     nav.history.length = 0;
     for (const fn of [
@@ -1275,7 +1275,7 @@ describe("strategy replay page URL state and create drawer", () => {
   });
 
   it("opens an explicit replay_id even when it is not on the list page, with its bar page", async () => {
-    nav.route.query = { replay_id: "r9", bar_page: "2" };
+    nav.route.query = { tab: "replay", replay_id: "r9", bar_page: "2" };
     mountPage();
     await flushPromises();
     expect(api.getReplay.mock.calls.map(call => call[0])).toEqual(["r9"]);
@@ -1284,7 +1284,7 @@ describe("strategy replay page URL state and create drawer", () => {
   });
 
   it("does not fall back to the first record when the explicit replay cannot be read", async () => {
-    nav.route.query = { replay_id: "r9" };
+    nav.route.query = { tab: "replay", replay_id: "r9" };
     api.getReplay.mockRejectedValue(new Error("找不到回放"));
     const wrapper = mountPage();
     await flushPromises();
@@ -1300,24 +1300,26 @@ describe("strategy replay page URL state and create drawer", () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
     const wrapper = mountPage();
     await flushPromises();
-    expect(nav.history[0]).toEqual({ mode: "replace", query: { replay_id: "r1" } });
+    expect(nav.history[0]).toEqual({ mode: "replace", query: { tab: "replay", replay_id: "r1" } });
     await wrapper.findAll("button.replay-row")[1].trigger("click");
     await flushPromises();
-    expect(nav.history.filter(item => item.mode === "push")).toEqual([{ mode: "push", query: { replay_id: "r2" } }]);
-    expect(nav.route.query).toEqual({ replay_id: "r2" });
+    expect(nav.history.filter(item => item.mode === "push")).toEqual([
+      { mode: "push", query: { tab: "replay", replay_id: "r2" } }
+    ]);
+    expect(nav.route.query).toEqual({ tab: "replay", replay_id: "r2" });
   });
 
   it("follows back/forward navigation to another replay", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
     const wrapper = mountPage();
     await flushPromises();
-    nav.route.query = { replay_id: "r2" };
+    nav.route.query = { tab: "replay", replay_id: "r2" };
     await flushPromises();
     expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
   });
 
   it("normalizes a legacy prefill entry into an open create drawer with the form prefilled", async () => {
-    nav.route.query = { instance_id: "i1", view_id: "view_a" };
+    nav.route.query = { tab: "replay", instance_id: "i1", view_id: "view_a" };
     const wrapper = mountPage();
     await flushPromises();
     expect(nav.route.query).toMatchObject({ create: "1", instance_id: "i1", view_id: "view_a" });
@@ -1328,7 +1330,7 @@ describe("strategy replay page URL state and create drawer", () => {
   });
 
   it("prefills a definition and clears the prefill from the URL when the drawer closes", async () => {
-    nav.route.query = { create: "1", strategy_id: "s1" };
+    nav.route.query = { tab: "replay", create: "1", strategy_id: "s1" };
     const wrapper = mountPage();
     await flushPromises();
     expect((wrapper.vm as any).form.strategy_id).toBe("s1");
@@ -1343,7 +1345,7 @@ describe("strategy replay page URL state and create drawer", () => {
     await flushPromises();
     nav.history.length = 0;
     await click(wrapper, "发起回放");
-    expect(nav.history).toEqual([{ mode: "push", query: { create: "1", replay_id: "r1" } }]);
+    expect(nav.history).toEqual([{ mode: "push", query: { tab: "replay", create: "1", replay_id: "r1" } }]);
   });
 
   it("keeps the draft while the drawer is closed and reopened", async () => {
@@ -1376,7 +1378,7 @@ describe("strategy replay page URL state and create drawer", () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     api.startReplay.mockResolvedValue(started("r5"));
     api.getReplay.mockResolvedValue(replay("r5", "pending"));
-    nav.route.query = { create: "1" };
+    nav.route.query = { tab: "replay", create: "1" };
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -1384,13 +1386,13 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.strategy_id = "s1";
     await click(wrapper, "开始回放");
     expect(api.startReplay).toHaveBeenCalledTimes(1);
-    expect(nav.route.query).toEqual({ replay_id: "r5" });
+    expect(nav.route.query).toEqual({ tab: "replay", replay_id: "r5" });
     expect(wrapper.find(".drawer").attributes("data-visible")).toBe("false");
   });
 
   it("keeps a deep link when the space initializes but clears the context on a real switch", async () => {
     api.space.selectedSpaceId = "";
-    nav.route.query = { replay_id: "r9", page: "2" };
+    nav.route.query = { tab: "replay", replay_id: "r9", page: "2" };
     mountPage();
     await flushPromises();
     api.getReplay.mockClear();
@@ -1416,7 +1418,7 @@ describe("strategy replay page URL state and create drawer", () => {
   });
   it("does not re-select the old space's replay on a real space switch (async router)", async () => {
     nav.async = true;
-    nav.route.query = { replay_id: "r1" };
+    nav.route.query = { tab: "replay", replay_id: "r1" };
     api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
     mountPage();
     await flushPromises();
@@ -1449,10 +1451,10 @@ describe("strategy replay page URL state and create drawer", () => {
     await wrapper.findAll("button.replay-row")[1].trigger("click");
     await flushPromises();
     expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
-    nav.route.query = {};
+    nav.route.query = { tab: "replay" };
     await flushPromises();
     expect(wrapper.findAll("button.replay-row")[0].attributes("aria-current")).toBe("true");
-    expect(nav.route.query).toEqual({ replay_id: "r1" });
+    expect(nav.route.query).toEqual({ tab: "replay", replay_id: "r1" });
   });
 
   it("does not steal the selection after an external navigation during a start", async () => {
@@ -1465,7 +1467,7 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.view_id = "view_a";
     vm.form.strategy_id = "s1";
     await click(wrapper, "开始回放");
-    nav.route.query = { replay_id: "r2" };
+    nav.route.query = { tab: "replay", replay_id: "r2" };
     await flushPromises();
     api.getReplay.mockClear();
     api.listReplays.mockResolvedValue({ items: [replay("r5", "pending"), replay("r1", "done")], page: { total: 2 } });

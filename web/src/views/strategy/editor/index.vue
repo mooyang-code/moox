@@ -142,7 +142,7 @@ async function save() {
     Message.success("策略定义已保存");
     // 保存期间用户已确认离开页面或切换了策略定义：定义已保存，但不能再把用户带回列表
     if (!submission.isCurrent()) return;
-    router.push({ name: "strategy-overview" });
+    router.push({ name: "strategy-definitions" });
   } catch (err) {
     if (!submission.isCurrent()) return;
     error.value = err instanceof Error ? err.message : "策略定义保存失败";
@@ -151,7 +151,7 @@ async function save() {
   }
 }
 function leave() {
-  router.push({ name: "strategy-overview" });
+  router.push({ name: "strategy-definitions" });
 }
 onBeforeRouteLeave(() => {
   if (!dirty.value || window.confirm("当前 DSL 尚未保存，确认离开？")) return true;

@@ -1,0 +1,63 @@
+// 策略页面共用的页头 / 工具栏 / 统计条样式，数值与因子计算页面一致：
+// 页面里 `@use "../shared/strategy-page.scss";`（位于 <style scoped lang="scss"> 内，随该页 scoped 编译）。
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moox-space-2);
+  margin-bottom: var(--moox-space-2);
+}
+
+.page-head__title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 6px;
+}
+
+.page-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.result-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-2);
+}
+
+.result-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text-2);
+}
+
+.cell-sub {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.page-alert {
+  margin-bottom: var(--moox-space-3);
+}
+
+@media (max-width: 600px) {
+  .page-head {
+    align-items: flex-start;
+  }
+
+  .page-head__title {
+    flex: 1 1 100%;
+  }
+}

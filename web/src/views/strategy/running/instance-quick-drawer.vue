@@ -36,11 +36,12 @@
           <a-descriptions-item label="读取时间">{{ readAt }}</a-descriptions-item>
         </a-descriptions>
         <a-space class="drawer-actions" wrap>
-          <a-button type="primary" @click="emit('openDetail', instance.instance_id)">打开完整详情</a-button>
+          <a-button type="primary" @click="emit('results', instance.instance_id)">查看运行结果</a-button>
+          <a-button @click="emit('openDetail', instance.instance_id)">打开完整详情</a-button>
           <a-button @click="emit('replay', instance)">按实例会话回放</a-button>
           <a-button :loading="loading" @click="load">刷新</a-button>
         </a-space>
-        <div class="muted">启停与目标、历史结果在完整详情中查看和操作。</div>
+        <div class="muted">当前目标与历史结果在「运行结果」查看；启停在完整详情中操作。</div>
       </template>
     </a-spin>
   </a-drawer>
@@ -57,7 +58,7 @@ import { formatStrategyTime } from "@/views/strategy/model";
 
 // 快速详情只读取实例本身，不加载定义、目标与历史结果；换对象先清空旧内容，迟到响应由 gate 丢弃。
 const props = defineProps<{ instanceId: string; strategies: Strategy[] }>();
-const emit = defineEmits<{ close: []; openDetail: [string]; replay: [StrategyInstance] }>();
+const emit = defineEmits<{ close: []; openDetail: [string]; results: [string]; replay: [StrategyInstance] }>();
 
 const instance = ref<StrategyInstance | null>(null);
 const loading = ref(false);

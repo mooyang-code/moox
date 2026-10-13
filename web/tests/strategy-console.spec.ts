@@ -43,7 +43,7 @@ test("strategy definitions render the DSL v3 contract", async ({ page }) => {
       }
     })
   );
-  await page.goto("/#/strategy/overview");
+  await page.goto("/#/strategy/definitions");
   await expect(page.getByRole("heading", { name: "策略定义", exact: true })).toBeVisible();
   await expect(page.getByText("动量策略")).toBeVisible();
   await expect(page.getByText("DSL 是唯一策略配置来源")).toBeVisible();
@@ -132,13 +132,15 @@ test("instance detail distinguishes valid target weight from trade fills and exp
     })
   );
   await page.goto("/#/strategy/detail/instance-paper");
-  await expect(page.getByRole("heading", { name: "instance-paper" })).toBeVisible();
-  await expect(page.getByText("25.00%")).toBeVisible();
-  await page.getByText("历史结果", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "动量策略" })).toBeVisible();
+  await expect(page.getByText("instance-paper").first()).toBeVisible();
+  // 当前目标与历史结果直接在页面主体展示，不需要切换标签。
+  await expect(page.getByText("25.00%").first()).toBeVisible();
+  await expect(page.getByText("历史结果", { exact: true })).toBeVisible();
   await expect(page.getByText("已发送")).toBeVisible();
   await expect(page.getByText("上一根版本未知（previous_version_unknown）")).toBeVisible();
   await expect(page.getByText("投递状态不代表成交状态")).toBeVisible();
-  await page.getByText("输入绑定", { exact: true }).click();
+  await page.getByText("输入绑定（会话固化的 View 列与因子指纹）").click();
   await expect(page.getByText("ma_20")).toBeVisible();
   await expect(page.getByText("停用实例")).toBeVisible();
 });

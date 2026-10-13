@@ -90,37 +90,37 @@ export const staticRoutes = [
         path: "/strategy/overview",
         name: "strategy-overview",
         component: () => import("@/views/strategy/overview/index.vue"),
+        meta: { title: "strategy-overview" }
+      },
+      {
+        path: "/strategy/definitions",
+        name: "strategy-definitions",
+        component: () => import("@/views/strategy/definitions/index.vue"),
         meta: { title: "strategy-definitions", reuseOnQuery: true }
       },
       {
-        path: "/strategy/running",
-        name: "strategy-running",
-        component: () => import("@/views/strategy/running/index.vue"),
-        meta: { title: "strategy-running", reuseOnQuery: true }
+        path: "/strategy/tasks",
+        name: "strategy-tasks",
+        component: () => import("@/views/strategy/workbench/index.vue"),
+        meta: { title: "strategy-tasks", reuseOnQuery: true }
       },
       {
         path: "/strategy/definitions/new",
         name: "strategy-definition-new",
         component: () => import("@/views/strategy/editor/index.vue"),
-        meta: { title: "strategy-definition-new", hide: true, activeMenu: "strategy-overview" }
+        meta: { title: "strategy-definition-new", hide: true, activeMenu: "strategy-definitions" }
       },
       {
         path: "/strategy/definitions/:strategyId/edit",
         name: "strategy-definition-edit",
         component: () => import("@/views/strategy/editor/index.vue"),
-        meta: { title: "strategy-definition-edit", hide: true, activeMenu: "strategy-overview" }
+        meta: { title: "strategy-definition-edit", hide: true, activeMenu: "strategy-definitions" }
       },
       {
         path: "/strategy/detail/:instanceId",
         name: "strategy-detail",
         component: () => import("@/views/strategy/detail/index.vue"),
-        meta: { title: "strategy-detail", hide: true, activeMenu: "strategy-running" }
-      },
-      {
-        path: "/strategy/replay",
-        name: "strategy-replay",
-        component: () => import("@/views/strategy/replay/index.vue"),
-        meta: { title: "strategy-replay", reuseOnQuery: true }
+        meta: { title: "strategy-detail", hide: true, activeMenu: "strategy-tasks" }
       },
       {
         path: "/data/import",
