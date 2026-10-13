@@ -7,6 +7,7 @@
           <span>基于 View 的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。</span>
         </div>
         <a-space
+          ><span v-if="readAt" class="muted">状态读取 {{ readAt }}</span
           ><a-button :loading="listLoading" aria-label="刷新回放" @click="loadReplays"
             ><template #icon><icon-refresh /></template>刷新</a-button
           ><a-button type="primary" @click="openCreate"
@@ -312,6 +313,8 @@ const selectedId = ref("");
 const selected = ref<Replay | null>(null);
 const detailLoading = ref(false);
 const listLoading = ref(false);
+// readAt 是回放列表最近一次成功读取的时间（轮询也算）。
+const readAt = ref("");
 const viewsLoading = ref(false);
 const starting = ref(false);
 const cancelling = ref(false);
@@ -365,7 +368,7 @@ let tableLoadedPage = 0;
 
 // pending 是刚发出、路由还没生效的导航目标：连续两次写入（如先 push 再由 select 补写）以它为基准，
 // 避免读到滞后的 route.query 而把 push 误变成 replace，或用旧的对象写回。
-let pending: { state: ReplayQueryState; query: Record<string, string> } | null = null;
+let pending: { state: ReplayQueryState; query: Record<string, string>; mode: "push" | "replace" } | null = null;
 
 /** 把状态补丁写入 URL：只在回放页自己的路由上写，且与当前（或待生效）query 语义相同时不导航。 */
 function writeQuery(patch: Partial<ReplayQueryState>, mode: "push" | "replace" = "replace") {
@@ -373,7 +376,9 @@ function writeQuery(patch: Partial<ReplayQueryState>, mode: "push" | "replace" =
   const state = { ...(pending?.state ?? parsed.value), ...patch };
   const query = buildReplayQuery(state);
   if (sameQuery(query, pending?.query ?? route.query)) return;
-  const mine = { state, query };
+  // 上一次 push 还没生效就又来一次写入：后者会取消前者，必须沿用 push，否则这条历史记录就被替换掉了。
+  if (pending?.mode === "push") mode = "push";
+  const mine = { state, query, mode };
   pending = mine;
   const done = mode === "push" ? router.push({ name: ROUTE_NAME, query }) : router.replace({ name: ROUTE_NAME, query });
   void Promise.resolve(done).finally(() => {
@@ -436,10 +441,12 @@ async function loadStrategies() {
 function applyReplayList(gen: number, seq: number, page: number, result: PageResult<Replay>): boolean {
   if (gen !== generation || seq <= listApplied || page !== replayPage.value) return false;
   listApplied = seq;
+  readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
   replays.value = result.items;
   replayTotal.value = result.page.total;
   errors.list = "";
-  if (!selectedId.value && !parsed.value.replayId && result.items.length) void select(result.items[0].replay_id);
+  if (!selectedId.value && !(pending?.state ?? parsed.value).replayId && result.items.length)
+    void select(result.items[0].replay_id);
   return true;
 }
 
@@ -874,9 +881,17 @@ watch(
       replayPage.value = page;
       void loadReplays();
     }
-    if (!replayId || !spaceStore.selectedSpaceId) return;
-    if (replayId !== selectedId.value) void select(replayId, { tablePage: barPage });
-    else if (barPage !== tablePage.value) changeTablePage(barPage);
+    if (!spaceStore.selectedSpaceId) return;
+    // URL 去掉了 replay_id（例如再次点击菜单进入本页）：本地选择跟着回到默认——选中列表第一条并写回 URL。
+    if (!replayId) {
+      if (selectedId.value && !pending && replays.value.length) void select(replays.value[0].replay_id);
+      return;
+    }
+    if (replayId !== selectedId.value) {
+      // 外部导航（前进后退、深链接）等同用户另选：发起回放等待期间发生时，完成后不再抢选新回放。
+      userPicks += 1;
+      void select(replayId, { tablePage: barPage });
+    } else if (barPage !== tablePage.value) changeTablePage(barPage);
   }
 );
 
@@ -914,7 +929,8 @@ watch(
     chart = null;
     loadViews();
     loadReplays();
-    if (next) applyRouteSelection();
+    // 只有空间初始化才按 URL 恢复深链接选择；真实切换时旧空间的 replay_id 不属于新空间，由新列表自动选择。
+    if (next && !previous) applyRouteSelection();
   }
 );
 onBeforeUnmount(() => {

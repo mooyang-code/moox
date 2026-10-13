@@ -6,7 +6,6 @@
     unmount-on-close
     title="策略定义"
     @cancel="emit('close')"
-    @close="emit('close')"
   >
     <a-alert v-if="error" type="error" show-icon class="drawer-alert"
       >{{ error }}<template #action><a-button size="small" @click="load">重试</a-button></template></a-alert
@@ -41,9 +40,11 @@
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { getStrategy } from "@/api/strategy";
 import type { Strategy } from "@/api/strategy-types";
 import CodeBlock from "@/components/code-block/index.vue";
+import { useSpaceStore } from "@/store/modules/space";
 import { RequestGate } from "@/utils/request-gate";
 import { summarizeDSL } from "@/views/strategy/dsl";
 import { formatStrategyTime, shortHash } from "@/views/strategy/model";
@@ -76,13 +77,21 @@ async function load() {
     const loaded = await getStrategy(props.definitionId);
     if (gate.isCurrent(token)) definition.value = loaded;
   } catch (err) {
+    // 切空间造成的取消不是失败：空间监听会重新读取。
+    if (err instanceof StaleSpaceRequestError) return;
     if (gate.isCurrent(token)) error.value = err instanceof Error ? `策略定义读取失败：${err.message}` : "策略定义读取失败";
   } finally {
     if (gate.isCurrent(token)) loading.value = false;
   }
 }
 
+const spaceStore = useSpaceStore();
 watch(() => props.definitionId, load, { immediate: true });
+// 请求按空间授权：切空间后要重新读取（旧请求已被请求层取消）。
+watch(
+  () => spaceStore.selectedSpaceId,
+  () => void load()
+);
 </script>
 
 <style scoped>

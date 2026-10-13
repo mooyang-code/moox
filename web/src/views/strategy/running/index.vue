@@ -240,10 +240,14 @@ async function remove(instanceId: string) {
     await store.removeInstance(instanceId);
     Message.success("实例已删除");
     const page = pageAfterRemoval(state.value.page, store.instances.length);
-    if (state.value.instanceId === instanceId) closeOverlay();
-    // 补载当前页：本页被删空的末页回到上一页，其余页把后面的实例补上来。
-    if (page !== state.value.page) go({ page });
-    else await refresh();
+    const closing = state.value.instanceId === instanceId;
+    // 页码回退与关闭已删除实例的快速详情合并成一次导航，否则后一次会基于旧 query 把已删除的 ID 带回来。
+    // 补载当前页：本页被删空的末页回到上一页（由 URL 变化触发读取），其余页把后面的实例补上来。
+    if (page !== state.value.page) void go({ page, ...(closing ? { instanceId: "" } : {}) });
+    else {
+      if (closing) void go({ instanceId: "" });
+      await refresh();
+    }
   } catch (err) {
     Message.error(err instanceof Error ? err.message : "删除失败");
   } finally {
@@ -252,19 +256,25 @@ async function remove(instanceId: string) {
 }
 
 onMounted(() => {
+  // 进入页面先清掉 store 里可能属于其它空间的实例：期间在别的页面切过空间时，请求失败也不能继续显示旧空间的实例。
+  store.clearInstances();
   if (spaceStore.selectedSpaceId) void Promise.all([refresh(), loadCatalog()]);
 });
+// 空间切换的代次：快速连续切换时，较早的切换流程在等待导航之后发现自己已过期就退出，由最新一次负责读取。
+let spaceGeneration = 0;
 // 空间初始化（无 → 有）只是首次加载，不能清掉深链接参数；真正的 A → B 切换才清空旧空间的实例与选中对象。
 watch(
   () => spaceStore.selectedSpaceId,
   async (next, previous) => {
     if (!next) return;
+    const generation = ++spaceGeneration;
     if (previous) {
       store.clearInstances();
       // 先记下新条件对应的键再改 URL：路由监听据此跳过重复读取，且显式读取用的是已更新的页码。
       const cleared = { ...state.value, page: 1, instanceId: "", create: false };
       loadedKey = listKey(cleared);
       await go(cleared);
+      if (generation !== spaceGeneration) return;
     }
     void Promise.all([refresh(), loadCatalog()]);
   }

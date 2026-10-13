@@ -160,4 +160,27 @@ describe("strategy instance creation behavior", () => {
     expect(wrapper.text()).not.toContain("View 列表读取失败");
     expect(wrapper.findAll("option").some(item => item.text().includes("view_a"))).toBe(true);
   });
+  it("initializes the form and metadata when it is mounted already open (deep link)", async () => {
+    const { flushPromises, mount } = await import("@vue/test-utils");
+    const Create = (await import("./strategy-instance-create.vue")).default;
+    const wrapper = mount(Create, {
+      props: { visible: true, strategies, spaceId: "crypto", presetStrategyId: "s1" } as never,
+      global: { stubs }
+    });
+    await flushPromises();
+    expect(api.listViews).toHaveBeenCalledTimes(1);
+    expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("s1");
+  });
+
+  it("emits created without asking the parent to close, so the parent's navigation wins", async () => {
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    await wrapper.findAll("select")[1].setValue("view_a");
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "创建停用实例")!
+      .trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("created")).toEqual([["i1"]]);
+    expect(wrapper.emitted("update:visible")).toBeUndefined();
+  });
 });

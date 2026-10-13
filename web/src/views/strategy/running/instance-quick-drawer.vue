@@ -6,7 +6,6 @@
     unmount-on-close
     title="实例快速详情"
     @cancel="emit('close')"
-    @close="emit('close')"
   >
     <a-alert v-if="error" type="error" show-icon class="drawer-alert"
       >{{ error }}<template #action><a-button size="small" @click="load">重试</a-button></template></a-alert
@@ -49,6 +48,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { getInstance } from "@/api/strategy";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
@@ -84,6 +84,7 @@ async function load() {
     instance.value = loaded;
     readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
   } catch (err) {
+    if (err instanceof StaleSpaceRequestError) return;
     if (gate.isCurrent(token)) {
       instance.value = null;
       error.value = err instanceof Error ? `实例读取失败：${err.message}` : "实例读取失败";

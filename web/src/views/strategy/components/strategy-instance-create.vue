@@ -298,8 +298,10 @@ async function submit() {
       Message.info("实例已创建，但当前空间已切换；请在原空间实例列表中确认");
       return;
     }
+    // 成功后由父组件统一导航：不再发 update:visible(false)，否则父组件的“关闭抽屉”导航会取消去详情页的导航。
+    submitRequest += 1;
+    saving.value = false;
     emit("created", instance.instance_id);
-    close();
     Message.success("策略实例已创建并保持停用");
   } catch (err) {
     if (requestId !== submitRequest || props.spaceId !== spaceId) return;
@@ -322,6 +324,7 @@ async function submit() {
   }
 }
 
+// immediate：深链接（?create=1）进入时组件首次收到的 visible 就是 true，也要初始化表单并读取元数据。
 watch(
   () => props.visible,
   value => {
@@ -329,7 +332,8 @@ watch(
       resetForm();
       loadMetadata();
     }
-  }
+  },
+  { immediate: true }
 );
 
 watch(

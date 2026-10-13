@@ -28,20 +28,22 @@ vi.mock("@/api/storage/metadata", () => ({ listViews: api.listViews }));
 vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() } }));
 // 假路由：push/replace 同步更新响应式 query，并记录导航，页面据此读写 URL 状态。
-const nav = vi.hoisted(() => ({ route: null as any, history: [] as { mode: string; query: Record<string, string> }[] }));
+// async 为真时 query 在若干微任务之后才生效，模拟真实路由的异步导航。
+const nav = vi.hoisted(() => ({
+  route: null as any,
+  async: false,
+  history: [] as { mode: string; query: Record<string, string> }[]
+}));
+async function navigate(mode: string, target: any) {
+  nav.history.push({ mode, query: target.query });
+  if (nav.async) for (let i = 0; i < 3; i += 1) await Promise.resolve();
+  nav.route.query = { ...target.query };
+}
 vi.mock("vue-router", () => ({
   useRoute: () => nav.route,
   useRouter: () => ({
-    push: (target: any) => {
-      nav.history.push({ mode: "push", query: target.query });
-      nav.route.query = { ...target.query };
-      return Promise.resolve();
-    },
-    replace: (target: any) => {
-      nav.history.push({ mode: "replace", query: target.query });
-      nav.route.query = { ...target.query };
-      return Promise.resolve();
-    }
+    push: (target: any) => navigate("push", target),
+    replace: (target: any) => navigate("replace", target)
   })
 }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
@@ -195,6 +197,7 @@ describe("strategy replay page", () => {
     api.charts.length = 0;
     api.space = reactive({ selectedSpaceId: "crypto" });
     nav.route = reactive({ name: "strategy-replay", query: {} });
+    nav.async = false;
     nav.history.length = 0;
     for (const fn of [
       api.getReplay,
@@ -1248,6 +1251,7 @@ describe("strategy replay page URL state and create drawer", () => {
     api.charts.length = 0;
     api.space = reactive({ selectedSpaceId: "crypto" });
     nav.route = reactive({ name: "strategy-replay", query: {} });
+    nav.async = false;
     nav.history.length = 0;
     for (const fn of [
       api.getReplay,
@@ -1409,5 +1413,65 @@ describe("strategy replay page URL state and create drawer", () => {
     expect(wrapper.text()).toContain("回放列表加载失败：列表失败");
     await click(wrapper, "重试");
     expect(wrapper.text()).not.toContain("回放列表加载失败");
+  });
+  it("does not re-select the old space's replay on a real space switch (async router)", async () => {
+    nav.async = true;
+    nav.route.query = { replay_id: "r1" };
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    mountPage();
+    await flushPromises();
+    api.getReplay.mockClear();
+    api.listReplays.mockResolvedValue({ items: [replay("rB", "done")], page: { total: 1 } });
+    api.space.selectedSpaceId = "hk";
+    await nextTick();
+    await flushPromises();
+    expect(api.getReplay.mock.calls.map(call => call[0])).not.toContain("r1");
+    expect(nav.route.query.replay_id).toBe("rB");
+  });
+
+  it("keeps the push entry when another write races it (async router)", async () => {
+    nav.async = true;
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 40 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    nav.history.length = 0;
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    // push 还没生效时又翻页：后一次不能把 push 变成 replace。
+    wrapper.findComponent({ name: "ReplayRecordList" }).vm.$emit("pageChange", 2);
+    await flushPromises();
+    expect(nav.history.map(item => item.mode)).not.toContain("replace");
+  });
+
+  it("follows the default selection when the URL drops replay_id", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
+    nav.route.query = {};
+    await flushPromises();
+    expect(wrapper.findAll("button.replay-row")[0].attributes("aria-current")).toBe("true");
+    expect(nav.route.query).toEqual({ replay_id: "r1" });
+  });
+
+  it("does not steal the selection after an external navigation during a start", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    let finish!: (value: unknown) => void;
+    api.startReplay.mockReturnValue(new Promise(resolve => (finish = resolve)));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.view_id = "view_a";
+    vm.form.strategy_id = "s1";
+    await click(wrapper, "开始回放");
+    nav.route.query = { replay_id: "r2" };
+    await flushPromises();
+    api.getReplay.mockClear();
+    api.listReplays.mockResolvedValue({ items: [replay("r5", "pending"), replay("r1", "done")], page: { total: 2 } });
+    finish(started("r5"));
+    await flushPromises();
+    expect(api.getReplay.mock.calls.map(call => call[0])).not.toContain("r5");
+    expect(nav.route.query.replay_id).toBe("r2");
   });
 });

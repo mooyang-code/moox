@@ -140,13 +140,14 @@ describe("strategy running page", () => {
     api.space.selectedSpaceId = "crypto";
     await nextTick();
     await flushPromises();
-    expect(api.clearInstances).not.toHaveBeenCalled();
+    // 挂载时清理一次；空间初始化（无 → 有）不再清理。
+    expect(api.clearInstances).toHaveBeenCalledTimes(1);
     expect(router.currentRoute.value.query).toEqual({ instance_id: "i1", page: "2" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     api.space.selectedSpaceId = "hk";
     await nextTick();
     await flushPromises();
-    expect(api.clearInstances).toHaveBeenCalledTimes(1);
+    expect(api.clearInstances).toHaveBeenCalledTimes(2);
     expect(router.currentRoute.value.query).toEqual({});
     expect(api.loadInstances).toHaveBeenCalledTimes(2);
     expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 });
@@ -174,5 +175,35 @@ describe("strategy running page", () => {
     expect(router.currentRoute.value.query).toEqual({ page: "2" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 });
+  });
+  it("closes the deleted instance's quick detail and steps back a page in one navigation", async () => {
+    const { router, wrapper } = await setup({ page: "3", instance_id: "i9" });
+    api.removeInstance.mockImplementation(async () => {
+      api.store.instances = [];
+    });
+    api.store.instances = [{ instance_id: "i9", enabled: false, session_id: "" }];
+    const vm = wrapper.vm as unknown as { confirmRemove: (instance: unknown) => void };
+    vm.confirmRemove({ instance_id: "i9", enabled: false, session_id: "" });
+    await api.warning.mock.calls.at(-1)[0].onOk();
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ page: "2" });
+  });
+
+  it("lets only the latest of two quick space switches load the list", async () => {
+    const { router } = await setup({ page: "2" });
+    api.loadInstances.mockClear();
+    api.space.selectedSpaceId = "hk";
+    await nextTick();
+    api.space.selectedSpaceId = "eu";
+    await nextTick();
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({});
+    expect(api.loadInstances).toHaveBeenCalledTimes(1);
+    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 });
+  });
+
+  it("clears instances left over from another space when the page mounts", async () => {
+    await setup({});
+    expect(api.clearInstances).toHaveBeenCalledTimes(1);
   });
 });

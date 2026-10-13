@@ -7,7 +7,12 @@ vi.mock("@/api/strategy", () => api);
 import Drawer from "./instance-quick-drawer.vue";
 
 const stubs = {
-  "a-drawer": { props: ["visible"], template: '<div v-if="visible" class="drawer"><slot /></div>' },
+  "a-drawer": {
+    props: ["visible"],
+    emits: ["cancel", "close"],
+    template:
+      '<div v-if="visible" class="drawer"><button class="x" @click="$emit(\'cancel\')" /><button class="anim" @click="$emit(\'close\')" /><slot /></div>'
+  },
   "a-alert": { template: '<div class="alert"><slot /><slot name="action" /></div>' },
   "a-spin": { template: "<div><slot /></div>" },
   "a-descriptions": { template: "<div><slot /></div>" },
@@ -79,5 +84,14 @@ describe("instance quick drawer", () => {
     await flushPromises();
     expect(wrapper.find(".drawer").exists()).toBe(false);
     expect(api.getInstance).not.toHaveBeenCalled();
+  });
+  it("closes on the user's cancel but ignores the drawer's close-animation event", async () => {
+    api.getInstance.mockResolvedValue(instance("i1"));
+    const wrapper = mount(Drawer, { props: { instanceId: "i1", strategies }, global: { stubs } });
+    await flushPromises();
+    await wrapper.find(".anim").trigger("click");
+    expect(wrapper.emitted("close")).toBeUndefined();
+    await wrapper.find(".x").trigger("click");
+    expect(wrapper.emitted("close")).toHaveLength(1);
   });
 });

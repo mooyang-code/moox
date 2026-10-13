@@ -1,8 +1,11 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { nextTick, reactive } from "vue";
 
 const api = vi.hoisted(() => ({ getStrategy: vi.fn() }));
 vi.mock("@/api/strategy", () => api);
+const space = vi.hoisted(() => ({ store: null as any }));
+vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => space.store }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 
 import Drawer from "./strategy-definition-drawer.vue";
@@ -28,7 +31,10 @@ function deferred<T>() {
 }
 
 describe("strategy definition drawer", () => {
-  beforeEach(() => api.getStrategy.mockReset());
+  beforeEach(() => {
+    api.getStrategy.mockReset();
+    space.store = reactive({ selectedSpaceId: "crypto" });
+  });
 
   it("stays closed and does not read anything without an id", async () => {
     const wrapper = mount(Drawer, { props: { definitionId: "" }, global: { stubs } });
@@ -75,5 +81,17 @@ describe("strategy definition drawer", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("策略-s2");
     expect(wrapper.text()).not.toContain("策略-s1");
+  });
+  it("re-reads the definition after a space switch and ignores a stale-space cancellation", async () => {
+    const { StaleSpaceRequestError } = await import("@/api/admin/stale-space");
+    api.getStrategy.mockRejectedValueOnce(new StaleSpaceRequestError()).mockResolvedValueOnce(definition("s1"));
+    const wrapper = mount(Drawer, { props: { definitionId: "s1" }, global: { stubs } });
+    await flushPromises();
+    expect(wrapper.find(".alert").exists()).toBe(false);
+    space.store.selectedSpaceId = "hk";
+    await nextTick();
+    await flushPromises();
+    expect(api.getStrategy).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain("策略-s1");
   });
 });
