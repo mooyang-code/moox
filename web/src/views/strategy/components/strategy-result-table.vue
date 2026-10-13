@@ -16,42 +16,42 @@
     :data="results"
     :loading="loading"
     :pagination="pagination"
-    :scroll="{ x: 1260 }"
+    :scroll="{ x: 1350 }"
     @page-change="changePage"
   >
     <template #columns>
-      <a-table-column title="K 线结束" :width="160"
+      <a-table-column title="K 线结束" :width="180"
         ><template #cell="{ record }">{{ formatStrategyTime(record.bar_end_time) }}</template></a-table-column
       >
-      <a-table-column title="状态" :width="76"
+      <a-table-column title="状态" :width="80"
         ><template #cell="{ record }"
           ><a-tag size="small" :color="record.status === 'ok' ? 'green' : 'orange'">{{
             record.status === "ok" ? "成功" : "跳过"
           }}</a-tag></template
         ></a-table-column
       >
-      <a-table-column title="目标数" :width="70" align="center"
+      <a-table-column title="目标数" :width="80" align="center"
         ><template #cell="{ record }">{{ record.status === "ok" ? record.targets.length : "-" }}</template></a-table-column
       >
       <a-table-column title="目标成员变化" :width="260" :ellipsis="true" :tooltip="true"
         ><template #cell="{ record }">{{ changeText(record) }}</template></a-table-column
       >
-      <a-table-column title="换手" :width="80"
+      <a-table-column title="换手" :width="92"
         ><template #cell="{ record }">{{
           record.status === "ok" ? percent(parseSummary(record.summary_json).turnover) : "-"
         }}</template></a-table-column
       >
-      <a-table-column title="gross" :width="80"
+      <a-table-column title="gross" :width="92"
         ><template #cell="{ record }">{{
           record.status === "ok" ? percent(parseSummary(record.summary_json).gross) : "-"
         }}</template></a-table-column
       >
-      <a-table-column title="现金" :width="80"
+      <a-table-column title="现金" :width="92"
         ><template #cell="{ record }">{{
           record.status === "ok" ? percent(parseSummary(record.summary_json).cash) : "-"
         }}</template></a-table-column
       >
-      <a-table-column title="产出延迟" :width="84"
+      <a-table-column title="产出延迟" :width="92"
         ><template #cell="{ record }">{{
           record.status === "ok" ? formatDelay(insights[record.result_id]?.delayMs) : "-"
         }}</template></a-table-column

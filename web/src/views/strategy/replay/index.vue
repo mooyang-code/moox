@@ -257,7 +257,7 @@
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { default as VChart } from "@visactor/vchart";
+import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
@@ -353,6 +353,12 @@ const form = reactive<ReplayFormState>({
   fee_bps: 10
 });
 let chart: VChart | null = null;
+// 图表库体积很大（约 2MB）：第一次真正要画曲线时才加载，回放列表与创建表单不必等它。
+let chartLibrary: Promise<typeof import("@visactor/vchart")> | null = null;
+function loadChartLibrary() {
+  chartLibrary ??= import("@visactor/vchart");
+  return chartLibrary;
+}
 let poll: ReturnType<typeof setInterval> | null = null;
 let polling = false;
 // generation 随空间切换递增：旧空间发出的请求返回后一律丢弃；selectRequest 让被新选择取代的详情请求作废。
@@ -708,10 +714,14 @@ async function renderChart(rebuild: boolean) {
   chart?.release();
   chart = null;
   if (!chartContainer.value || !values.length) return;
-  chart = new VChart(
+  const { default: ChartClass } = await loadChartLibrary();
+  // 加载期间可能已换了回放、已由另一次绘制建好图表或页面已卸载：以最新的序列与容器为准，不重复创建。
+  const latest = equitySeries(series.value);
+  if (chart || !chartContainer.value || !latest.length) return;
+  chart = new ChartClass(
     {
       type: "line",
-      data: [{ id: "equity", values }],
+      data: [{ id: "equity", values: latest }],
       xField: "time",
       yField: "value",
       axes: [

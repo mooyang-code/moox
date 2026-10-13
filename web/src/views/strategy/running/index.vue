@@ -40,35 +40,35 @@
         :data="store.instances"
         :loading="store.instancesLoading"
         :pagination="pagination"
-        :scroll="{ x: 900 }"
+        :scroll="{ x: 920 }"
         @page-change="changePage"
       >
         <template #columns>
-          <a-table-column title="实例" :width="240"
+          <a-table-column title="实例" :width="220"
             ><template #cell="{ record }"
               ><a-link @click="openQuick(record.instance_id)">{{ strategyName(record.strategy_id) }}</a-link>
               <div class="cell-sub mono">{{ record.instance_id }}</div></template
             ></a-table-column
           >
-          <a-table-column title="View" :ellipsis="true" :tooltip="true"
+          <a-table-column title="View" :width="180" :ellipsis="true" :tooltip="true"
             ><template #cell="{ record }"
               ><span class="mono">{{ record.view_id }}</span></template
             ></a-table-column
           >
-          <a-table-column title="模式" :width="100"
+          <a-table-column title="模式" :width="80"
             ><template #cell="{ record }"
               ><a-tag :color="record.logical_account_id ? 'orange' : 'blue'">{{
                 record.logical_account_id ? "交易模式" : "仅计算"
               }}</a-tag></template
             ></a-table-column
           >
-          <a-table-column title="状态" :width="160"
+          <a-table-column title="状态" :width="110"
             ><template #cell="{ record }"><StatusBadge :enabled="record.enabled" :health="record.health" /></template
           ></a-table-column>
-          <a-table-column title="更新时间" :width="170"
+          <a-table-column title="更新时间" :width="180"
             ><template #cell="{ record }">{{ formatStrategyTime(record.updated_at) }}</template></a-table-column
           >
-          <a-table-column title="操作" :width="190" fixed="right">
+          <a-table-column title="操作" :width="150" fixed="right">
             <template #cell="{ record }">
               <a-button type="text" size="mini" @click="openResults(record.instance_id)">结果</a-button>
               <a-button type="text" size="mini" @click="openDetail(record.instance_id)">详情</a-button>
