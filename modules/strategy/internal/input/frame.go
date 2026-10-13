@@ -54,6 +54,16 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	var steps []Step
 	mark := func(name string, began time.Time) { steps = append(steps, Step{Name: name, Took: time.Since(began)}) }
+	// 标的修订号与 View 彼此独立：并行读取，View 校验之后再等修订号结果。数据集取启用时固化的绑定，
+	// 与 View 实际的数据集不一致时下面的校验会先报配置变化。
+	revalidator, canRevalidate := l.Client.(interface {
+		Revalidate(ctx context.Context, spaceID, datasetID string) error
+	})
+	var revalidated chan error
+	if canRevalidate {
+		revalidated = make(chan error, 1)
+		go func() { revalidated <- revalidator.Revalidate(ctx, spaceID, resolved.DatasetID) }()
+	}
 	began := time.Now()
 	view, err := l.Client.GetView(ctx, spaceID, resolved.ViewID)
 	mark("View", began)
@@ -73,12 +83,10 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), resolved.ViewID)}
 	}
 	// 标的元数据缓存按 Storage 的标的修订号校验；必须先于标的绑定、标签与标签成员的读取。
-	if revalidator, ok := l.Client.(interface {
-		Revalidate(ctx context.Context, spaceID, datasetID string) error
-	}); ok {
+	if canRevalidate {
 		began = time.Now()
-		err := revalidator.Revalidate(ctx, spaceID, view.DatasetID)
-		mark("修订号", began)
+		err := <-revalidated
+		mark("修订号等待", began)
 		if err != nil {
 			return Loaded{}, err
 		}
@@ -94,14 +102,24 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 	}
 	mark("标签", began)
+	// 年龄探针需要覆盖统计；事件路径只读 Storage 缓存的统计，不触发全量统计，未知时由探针的确认查询兜底。
+	// 覆盖统计只在探针前用到：与标的、集合和行读取并行，探针前再取结果。
+	var covered chan struct {
+		view ViewInfo
+		err  error
+	}
 	if resolved.MinAgeBars > 0 {
-		// 年龄探针需要覆盖统计；事件路径只读 Storage 缓存的统计，不触发全量统计，未知时由探针的确认查询兜底。
-		began = time.Now()
-		view, err = WithCoverage(ctx, l.Client, spaceID, view, false)
-		mark("覆盖统计", began)
-		if err != nil {
-			return Loaded{}, err
-		}
+		covered = make(chan struct {
+			view ViewInfo
+			err  error
+		}, 1)
+		go func(view ViewInfo) {
+			withCoverage, err := WithCoverage(ctx, l.Client, spaceID, view, false)
+			covered <- struct {
+				view ViewInfo
+				err  error
+			}{withCoverage, err}
+		}(view)
 	}
 	began = time.Now()
 	subjects, err := l.Client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
@@ -156,6 +174,15 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	current, err := groupRows(currentRows)
 	if err != nil {
 		return Loaded{}, err
+	}
+	if covered != nil {
+		began = time.Now()
+		result := <-covered
+		mark("覆盖统计等待", began)
+		if result.err != nil {
+			return Loaded{}, result.err
+		}
+		view = result.view
 	}
 	began = time.Now()
 	err = sets.ApplyAge(ctx, resolved.MinAgeBars, NewAgeProbe(l.Client, spaceID, resolved, view, activeSubjects, bar.BarStart, revision, l.Meta))

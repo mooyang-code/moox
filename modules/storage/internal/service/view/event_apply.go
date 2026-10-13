@@ -417,8 +417,8 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	}
 	if total := time.Since(applyStart); total >= slowIndexApplyLog {
 		// 分段耗时：准备 = 校验与构造写入；补读 = 从 Primary 补全缺列的行；写入 = 索引写入闸门与 DuckDB 事务。
-		log.Printf("storage view 行写入索引较慢 index=%s dataset=%s 行=%d 写入行=%d 补读行=%d 准备=%s 补读=%s 写入=%s 合计=%s",
-			id, datasetID, len(rows), len(complete), len(incomplete), recoverStart.Sub(applyStart).Round(time.Millisecond),
+		log.Printf("storage view 行写入索引较慢 index=%s dataset=%s 开始于=%s 行=%d 写入行=%d 补读行=%d 准备=%s 补读=%s 写入=%s 合计=%s",
+			id, datasetID, applyStart.Format("15:04:05.000"), len(rows), len(complete), len(incomplete), recoverStart.Sub(applyStart).Round(time.Millisecond),
 			writeStart.Sub(recoverStart).Round(time.Millisecond), time.Since(writeStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
 	return rowsWrittenByIndexKeys(rows, complete, schema.PrimaryDatasetID), nil

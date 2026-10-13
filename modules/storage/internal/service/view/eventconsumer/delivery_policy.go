@@ -273,10 +273,12 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 	for ctx.Err() == nil {
 		applyStart := time.Now()
 		err := apply(ctx, delivery)
-		if err == nil && strings.Contains(delivery.Subject, "period") && !delivery.StoredAt.IsZero() {
-			// 周期事件的分段耗时：入流到开始处理是消费者排队与拉取的时间，处理是 apply 本身。
-			log.Printf("storage view 周期事件 subject=%s 入流至开始处理=%s 处理=%s",
-				delivery.Subject, applyStart.Sub(delivery.StoredAt).Round(time.Millisecond), time.Since(applyStart).Round(time.Millisecond))
+		if wait, took := applyStart.Sub(delivery.StoredAt), time.Since(applyStart); err == nil && !delivery.StoredAt.IsZero() &&
+			(strings.Contains(delivery.Subject, "period") || wait >= time.Second || took >= 200*time.Millisecond) {
+			// 分段耗时：入流到开始处理是消费者排队与拉取的时间，处理是 apply 本身。周期事件总是记录，
+			// 其余事件（如行写入）只记录排队或处理较久的。
+			log.Printf("storage view 事件 consumer=%s subject=%s 入流至开始处理=%s 处理=%s 开始于=%s",
+				delivery.Consumer, delivery.Subject, wait.Round(time.Millisecond), took.Round(time.Millisecond), applyStart.Format("15:04:05.000"))
 		}
 		if err == nil || IsDeferred(err) {
 			settled = true
