@@ -72,10 +72,11 @@ describe("strategy model helpers", () => {
 });
 
 describe("result insights", () => {
-  const base = { summary_json: "{}", skip_reason: "" };
+  const base = { summary_json: "{}", skip_reason: "", session_id: "s1" };
   const at = (minute: number) => `2026-10-01T01:0${minute}:00Z`;
-  const ok = (id: string, minute: number, ids: string[], delaySec = 2) => ({
+  const ok = (id: string, minute: number, ids: string[], delaySec = 2, session_id = "s1") => ({
     ...base,
+    session_id,
     result_id: id,
     status: "ok",
     bar_end_time: at(minute),
@@ -89,6 +90,17 @@ describe("result insights", () => {
     expect(insights.b).toMatchObject({ comparable: true, added: [], removed: [] });
     expect(insights.c).toMatchObject({ comparable: true, added: ["C"], removed: ["B"] });
     expect(insights.c.delayMs).toBe(2000);
+  });
+
+  it("never compares results across sessions", () => {
+    const insights = buildResultInsights([
+      ok("a", 1, ["A", "B"], 2, "s1"),
+      ok("b", 2, ["A", "B"], 2, "s1"),
+      ok("c", 3, ["X"], 2, "s2"),
+      ok("d", 4, ["X", "Y"], 2, "s2")
+    ]);
+    expect(insights.c).toMatchObject({ comparable: false, added: [], removed: [] });
+    expect(insights.d).toMatchObject({ comparable: true, added: ["Y"], removed: [] });
   });
 
   it("keeps the holdings baseline across skipped periods", () => {

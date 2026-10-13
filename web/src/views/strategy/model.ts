@@ -207,27 +207,28 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
 }
 
 export interface ResultInsight {
-  /** 相对上一期（时间更早的一期 ok 结果）新进的标的。 */
+  /** 相对同一会话内上一期（时间更早的一期 ok 结果）新进的目标标的。 */
   added: string[];
   /** 相对上一期移出的标的。 */
   removed: string[];
-  /** 是否有上一期可比较；没有时 added/removed 不代表真实变化。 */
+  /** 同一会话内是否有上一期可比较；没有时 added/removed 不代表真实变化。 */
   comparable: boolean;
   /** 结果落库时间减 K 线结束时间，毫秒；任一时间无效时为 null。 */
   delayMs: number | null;
 }
 
-type ResultLike = Pick<StrategyResult, "result_id" | "status" | "bar_end_time" | "created_at" | "targets" | "skip_reason">;
+type ResultLike = Pick<StrategyResult, "result_id" | "session_id" | "status" | "bar_end_time" | "created_at" | "targets" | "skip_reason">;
 
 /**
- * 按 K 线结束时间从旧到新比较相邻的 ok 结果，得到每期的持仓变化与产出延迟。
- * 只在传入的结果之间比较：分页边界上最旧的一期没有上一期，comparable 为 false。
- * 跳过期不改变持仓基线，持仓变化跨过跳过期比较。
+ * 按 K 线结束时间从旧到新比较同一会话内相邻的 ok 结果，得到每期的目标成员变化与产出延迟。
+ * 比较的是目标标的集合（不含权重），也不代表账户实际持仓。
+ * 不同会话的结果互不比较：每个会话的首期 comparable 为 false；分页边界上最旧的一期同理。
+ * 跳过期不改变该会话的比较基线，成员变化跨过跳过期比较。
  */
 export function buildResultInsights(results: ResultLike[]): Record<string, ResultInsight> {
   const ordered = [...results].sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
   const insights: Record<string, ResultInsight> = {};
-  let previous: Set<string> | null = null;
+  const baselines = new Map<string, Set<string>>();
   for (const item of ordered) {
     const barEnd = Date.parse(item.bar_end_time);
     const created = Date.parse(item.created_at);
@@ -235,12 +236,13 @@ export function buildResultInsights(results: ResultLike[]): Record<string, Resul
     const insight: ResultInsight = { added: [], removed: [], comparable: false, delayMs };
     if (item.status === "ok") {
       const current = new Set(item.targets.map(target => target.instrument_id));
+      const previous = baselines.get(item.session_id);
       if (previous) {
         insight.comparable = true;
-        insight.added = [...current].filter(id => !previous!.has(id)).sort();
+        insight.added = [...current].filter(id => !previous.has(id)).sort();
         insight.removed = [...previous].filter(id => !current.has(id)).sort();
       }
-      previous = current;
+      baselines.set(item.session_id, current);
     }
     insights[item.result_id] = insight;
   }

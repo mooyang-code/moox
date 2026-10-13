@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@/api/strategy", () => api);
 
+import { ControlRequestError } from "@/api/admin/http";
 import { useStrategyStore } from "./strategy";
 
 const instance = (overrides: Record<string, unknown> = {}) => ({
@@ -168,20 +169,35 @@ describe("strategy store", () => {
     expect(store.instance?.instance_id).toBe("instance-2");
   });
 
-  it("keeps the detail page usable when the definition was deleted", async () => {
+  const emptyTargets = {
+    targets: [],
+    session_id: "session-1",
+    bar_end_time: "",
+    valid_until: "",
+    result_id: ""
+  };
+
+  it("marks the definition as missing only when the server confirms NOT_FOUND", async () => {
     api.getInstance.mockResolvedValue(instance());
-    api.getStrategy.mockRejectedValue(new Error("not found"));
-    api.listStrategyTargets.mockResolvedValue({
-      targets: [],
-      session_id: "session-1",
-      bar_end_time: "",
-      valid_until: "",
-      result_id: ""
-    });
+    api.getStrategy.mockRejectedValue(new ControlRequestError("not found", { ret_info: { code: 5, msg: "not found" } } as never));
+    api.listStrategyTargets.mockResolvedValue(emptyTargets);
     api.listStrategyResults.mockResolvedValue({ items: [], page: { total: 0 } });
     const store = useStrategyStore();
     await expect(store.loadInstanceDetail("instance-1")).resolves.toBe(true);
     expect(store.strategy).toBeNull();
+    expect(store.strategyStatus).toBe("missing");
+    expect(store.detailError).toBe("");
+  });
+
+  it("reports a failed definition read as an error instead of deleted", async () => {
+    api.getInstance.mockResolvedValue(instance());
+    api.getStrategy.mockRejectedValue(new Error("network down"));
+    api.listStrategyTargets.mockResolvedValue(emptyTargets);
+    api.listStrategyResults.mockResolvedValue({ items: [], page: { total: 0 } });
+    const store = useStrategyStore();
+    await expect(store.loadInstanceDetail("instance-1")).resolves.toBe(true);
+    expect(store.strategy).toBeNull();
+    expect(store.strategyStatus).toBe("error");
     expect(store.detailError).toBe("");
   });
 

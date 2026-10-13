@@ -48,7 +48,7 @@
           record.status === "ok" ? percent(parseSummary(record.summary_json).turnover) : "-"
         }}</template></a-table-column
       >
-      <a-table-column title="持仓变化" :width="200" :ellipsis="true" :tooltip="true"
+      <a-table-column title="目标成员变化" :width="200" :ellipsis="true" :tooltip="true"
         ><template #cell="{ record }">{{ changeText(record) }}</template></a-table-column
       >
       <a-table-column title="产出延迟" :width="90"
@@ -128,7 +128,7 @@ const insights = computed(() => buildResultInsights(props.results));
 function changeText(record: StrategyResult): string {
   if (record.status !== "ok") return "-";
   const insight = insights.value[record.result_id];
-  if (!insight?.comparable) return "本页最早一期，无上期可比";
+  if (!insight?.comparable) return "会话首期或本页最早一期，无上期可比";
   if (!insight.added.length && !insight.removed.length) return "无变化";
   const parts: string[] = [];
   if (insight.added.length) parts.push(`+${insight.added.join(" +")}`);

@@ -33,7 +33,7 @@
             }}</a-tag></a-descriptions-item
           >
           <a-descriptions-item label="策略定义"
-            >{{ store.strategy?.name || "定义已删除" }} ·
+            >{{ store.strategy?.name || definitionHint }} ·
             <span class="mono">{{ store.instance.strategy_id }}</span></a-descriptions-item
           >
           <a-descriptions-item label="View"
@@ -84,7 +84,7 @@
           /></a-tab-pane>
           <a-tab-pane key="bindings" title="输入绑定"><ResolvedTable :resolved-json="store.instance.resolved_json" /></a-tab-pane>
           <a-tab-pane key="definition" title="DSL 定义">
-            <pre class="code-block">{{ store.strategy?.dsl_yaml || "定义已删除；历史结果的解释里保留了当时的 DSL 版本" }}</pre>
+            <pre class="code-block">{{ store.strategy?.dsl_yaml || definitionEmptyText }}</pre>
           </a-tab-pane>
         </a-tabs>
       </template>
@@ -120,6 +120,16 @@ const controlUncertain = ref(false);
 const autoRefresh = ref(true);
 // 目标有效期要随时间流逝重算：关闭自动刷新后页面不再请求数据，只读 Date.now() 的 computed 不会自己更新。
 const nowMs = useNowClock();
+const definitionHint = computed(() =>
+  store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
+);
+const definitionEmptyText = computed(() =>
+  store.strategyStatus === "missing"
+    ? "定义已删除；历史结果的解释里保留了当时的 DSL 版本"
+    : store.strategyStatus === "error"
+      ? "定义读取失败（并非已删除），将在下次刷新时重试"
+      : "定义读取中"
+);
 const targetState = computed(() =>
   store.instance && !controlUncertain.value ? deriveTargetState(store.instance, store.targetSnapshot, nowMs.value) : "unknown"
 );

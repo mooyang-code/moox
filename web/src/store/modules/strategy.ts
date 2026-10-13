@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
+import { ControlRequestError } from "@/api/admin/http";
 import {
   deleteInstance,
   deleteStrategy,
@@ -24,6 +25,15 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+/** 定义的读取结果：loaded 已读取；missing 服务端确认不存在；error 读取失败（不等于已删除）。 */
+export type StrategyDefinitionStatus = "unknown" | "loaded" | "missing" | "error";
+
+function isNotFound(error: unknown): boolean {
+  if (!(error instanceof ControlRequestError)) return false;
+  const code = error.response?.ret_info?.code;
+  return code === 5 || code === "5" || code === "NOT_FOUND";
+}
+
 export const useStrategyStore = defineStore("strategy", () => {
   // strategies 是定义页当前页的分页列表；strategyCatalog 是完整目录（运行页、回放页的下拉与名称查找）。两者各有请求序号，
   // 迟到的分页响应不能覆盖完整目录。
@@ -32,6 +42,7 @@ export const useStrategyStore = defineStore("strategy", () => {
   const instances = ref<StrategyInstance[]>([]);
   const instance = ref<StrategyInstance | null>(null);
   const strategy = ref<Strategy | null>(null);
+  const strategyStatus = ref<StrategyDefinitionStatus>("unknown");
   const results = ref<StrategyResult[]>([]);
   const resultDetails = ref<Record<string, StrategyResultDetail>>({});
   const targetSnapshot = ref<StrategyTargetSnapshot | null>(null);
@@ -127,9 +138,17 @@ export const useStrategyStore = defineStore("strategy", () => {
       const current = await getInstance(instanceId);
       if (requestId !== detailRequest) return false;
       instance.value = current;
-      const definition = await getStrategy(current.strategy_id).catch(() => null);
+      // 定义读取失败不阻断实例详情，但要区分“已删除”与“读取失败”：只有服务端确认 NOT_FOUND 才算已删除。
+      let definition: Strategy | null = null;
+      let definitionStatus: StrategyDefinitionStatus = "loaded";
+      try {
+        definition = await getStrategy(current.strategy_id);
+      } catch (err) {
+        definitionStatus = isNotFound(err) ? "missing" : "error";
+      }
       if (requestId !== detailRequest) return false;
       strategy.value = definition;
+      strategyStatus.value = definitionStatus;
       const resultTask =
         current.session_id || allHistory
           ? listStrategyResults(instanceId, {
@@ -252,6 +271,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     resultRequest += 1;
     instance.value = null;
     strategy.value = null;
+    strategyStatus.value = "unknown";
     results.value = [];
     resultDetails.value = {};
     targetSnapshot.value = null;
@@ -265,6 +285,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     instances,
     instance,
     strategy,
+    strategyStatus,
     results,
     resultDetails,
     targetSnapshot,
