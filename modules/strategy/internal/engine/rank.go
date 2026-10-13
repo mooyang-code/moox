@@ -107,6 +107,9 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 			return ruleResult{}, fmt.Errorf("holding 需要非负的 bar 序号，当前为 %d", frame.BarIndex)
 		}
 		rebuild = holdingRebuilds(rule.Rule.Holding, frame.BarIndex, previous)
+		// 含冻结成员的批次延后重建：冻结成员不在候选里，现在重建会丢掉它的份额，保持结束后它就会被卖掉。
+		// 延后期间不推进批次的 EstablishedBar，保持解除后由「已满 bars 根未重建」的补建逻辑重建，建仓序号仍按 offset 对齐。
+		rebuild = withoutFrozenBatches(rebuild, previous, sets.frozen)
 	}
 	// 本期要用分数选择时（普通规则，或 holding 要建仓、补建批次的 bar），分数全部无效说明表达式本身有问题；
 	// holding 的其余 bar 只延续批次、不使用本期分数，不能因此整期跳过。
@@ -189,6 +192,10 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 			explain.reject(id, StageScored, notChosenReason, scoreOf(id), rankOf[id])
 		}
 	}
+	// 冻结标的不配权、不进明细：它由组合层的保持目标代替（批次里的份额仍保留，见 evaluateHolding）。
+	for id := range sets.frozen {
+		delete(weights, id)
+	}
 	short := rule.Rule.Side == dsl.SideShort
 	held := make([]string, 0, len(weights))
 	for _, id := range sortedIDs(weights) {
@@ -205,6 +212,13 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		_, isFresh := fresh[id]
 		explain.weight(id, weight, scoreOf(id), rankOf[id], isFresh)
 	}
+	// 上期持有的冻结标的仍记为持有：保持结束后 buffer 照常给它缓冲资格。
+	for _, id := range previous.Held {
+		if _, isFrozen := sets.frozen[id]; isFrozen {
+			held = append(held, id)
+		}
+	}
+	sort.Strings(held)
 	result.state.Held = held
 	result.weights = weights
 	result.items = explain.list()
@@ -246,8 +260,12 @@ type holdingOutcome struct {
 func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, rebuild []int, ordered []string, scores map[string]float64, count int, explain *explanation, rankOf map[string]int) (holdingOutcome, error) {
 	holding := rule.Rule.Holding
 	outcome := holdingOutcome{fresh: map[string]struct{}{}}
-	availableSet := make(map[string]struct{}, len(sets.available))
+	availableSet := make(map[string]struct{}, len(sets.available)+len(sets.frozen))
 	for _, id := range sets.available {
+		availableSet[id] = struct{}{}
+	}
+	// 冻结成员的基准权重继续留在延续批次里。
+	for id := range sets.frozen {
 		availableSet[id] = struct{}{}
 	}
 	previousByOffset := make(map[int]HoldingBatch, len(previous.Batches))
@@ -342,4 +360,27 @@ func containsInt(values []int, target int) bool {
 		}
 	}
 	return false
+}
+
+// withoutFrozenBatches 从待重建的 offset 里去掉旧批次含冻结成员的批次：它们延后到保持解除后再重建。
+func withoutFrozenBatches(rebuild []int, previous RuleState, frozen map[string]struct{}) []int {
+	if len(frozen) == 0 || len(rebuild) == 0 {
+		return rebuild
+	}
+	delayed := make(map[int]bool, len(previous.Batches))
+	for _, batch := range previous.Batches {
+		for id := range batch.BaseWeights {
+			if _, isFrozen := frozen[id]; isFrozen {
+				delayed[batch.Offset] = true
+				break
+			}
+		}
+	}
+	kept := make([]int, 0, len(rebuild))
+	for _, offset := range rebuild {
+		if !delayed[offset] {
+			kept = append(kept, offset)
+		}
+	}
+	return kept
 }

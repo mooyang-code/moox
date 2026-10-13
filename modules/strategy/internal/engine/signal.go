@@ -19,8 +19,14 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 	}
 	heldBefore := make(map[string]struct{}, len(previous.Held))
 	held := make([]string, 0, len(previous.Held)+len(sets.available))
+	// 冻结的持仓（因 K 线空洞缺数）不判 exit、不参与平分，但仍记在理论持仓里，保持结束后照常延续。
+	var frozenHeld []string
 	for _, id := range previous.Held {
 		heldBefore[id] = struct{}{}
+		if _, isFrozen := sets.frozen[id]; isFrozen {
+			frozenHeld = append(frozenHeld, id)
+			continue
+		}
 		if _, ok := availableSet[id]; !ok {
 			// exit 输入缺失的持仓按清仓处理；明细已由集合划分记录为 missing。
 			continue
@@ -71,6 +77,7 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 		result.items = append(result.items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageWeighted, Weight: truncateWeightWith(weight, tolerance).String()})
 	}
 	result.weights = weights
-	result.state.Held = held
+	result.state.Held = append(append([]string(nil), held...), frozenHeld...)
+	sort.Strings(result.state.Held)
 	return result, nil
 }

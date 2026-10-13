@@ -77,14 +77,18 @@ const (
 type Target struct {
 	InstrumentID string
 	Weight       quant.Decimal
+	// Hold 为 true 表示保持该标的当前持仓数量不动：Weight 是预留的预算占用（取上期组合目标权重），下游不据此调仓。
+	Hold bool
 }
 
 // RuleSummary 是一条规则各阶段的数量与预算使用。
 type RuleSummary struct {
-	Expected  int    `json:"expected"`
-	AgedOut   int    `json:"aged_out"`
-	Available int    `json:"available"`
-	Missing   int    `json:"missing"`
+	Expected  int `json:"expected"`
+	AgedOut   int `json:"aged_out"`
+	Available int `json:"available"`
+	Missing   int `json:"missing"`
+	// Held 是因 K 线空洞缺数而保持持仓的标的数（不计入 Available 与 Missing）。
+	Held      int    `json:"held,omitempty"`
 	Filtered  int    `json:"filtered"`
 	Scored    int    `json:"scored"`
 	Selected  int    `json:"selected"`

@@ -25,6 +25,8 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		State:   State{Rules: make(map[string]RuleState, len(program.Rules)), Targets: map[string]string{}},
 		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
 	}
+	// 因 K 线空洞缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
+	frozen := frozenSet(program, frame, previous)
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
 	skipReason, skipNote := "", ""
@@ -33,13 +35,14 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 	}
 	for i := range program.Rules {
 		rule := &program.Rules[i]
-		sets := partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held)
+		sets := partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held, frozen)
 		partitions[i] = sets
 		decision.Summary.Rules[rule.Rule.ID] = RuleSummary{
 			Expected:  len(sets.expected),
 			AgedOut:   len(sets.agedOut),
 			Available: len(sets.available),
 			Missing:   len(sets.missing),
+			Held:      len(sets.frozen),
 			Budget:    rule.Rule.Weight.Total.String(),
 		}
 		decision.Items = append(decision.Items, sets.items(rule.Rule.ID)...)
@@ -92,7 +95,7 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		decision.Items = append(decision.Items, result.items...)
 		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}
-	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, previous, tolerance); err != nil {
+	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, frozen, previous, tolerance); err != nil {
 		return skipped(decision, previous, SkipConfigError, err.Error())
 	}
 	return decision
@@ -119,8 +122,10 @@ func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets) string {
 	if ruleType == dsl.RuleTypeRank && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
 		return SkipUniverseTooSmall
 	}
-	if denominator > 0 && len(sets.missing) > 0 {
-		ratio := quant.Must(fmt.Sprint(len(sets.missing))).Div(quant.Must(fmt.Sprint(denominator)))
+	// 冻结（保持持仓）的标的仍计入缺数比例：保护中的标的不能伪装成可用。
+	missing := len(sets.missing) + len(sets.frozen)
+	if denominator > 0 && missing > 0 {
+		ratio := quant.Must(fmt.Sprint(missing)).Div(quant.Must(fmt.Sprint(denominator)))
 		if ratio.Cmp(portfolio.MaxMissing) > 0 {
 			return SkipTooManyMissing
 		}

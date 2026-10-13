@@ -22,6 +22,8 @@ const (
 	StageWeighted = "weighted"
 	// StageDropped：曾被选中或持有但被剔除（filter_after、exit、score 无效）。
 	StageDropped = "dropped"
+	// StageHeld：因 K 线空洞缺数的已持仓标的，持仓数量保持不动（不求值、不调仓），原因 gap_hold。
+	StageHeld = "held"
 )
 
 // Item 是一条规则下一个标的的解释：到达的阶段、分数、名次、权重与原因。

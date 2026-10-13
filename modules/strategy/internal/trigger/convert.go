@@ -16,13 +16,15 @@ import (
 type TargetJSON struct {
 	InstrumentID string `json:"instrument_id"`
 	TargetWeight string `json:"target_weight"`
+	// Hold 为 true 表示保持该标的当前持仓数量不动（因 K 线空洞缺数），TargetWeight 是预留的预算占用。
+	Hold bool `json:"hold,omitempty"`
 }
 
 // EncodeTargets 把目标权重编码为 targets_json。
 func EncodeTargets(targets []engine.Target) ([]TargetJSON, json.RawMessage, error) {
 	items := make([]TargetJSON, 0, len(targets))
 	for _, target := range targets {
-		items = append(items, TargetJSON{InstrumentID: target.InstrumentID, TargetWeight: target.Weight.String()})
+		items = append(items, TargetJSON{InstrumentID: target.InstrumentID, TargetWeight: target.Weight.String(), Hold: target.Hold})
 	}
 	raw, err := json.Marshal(items)
 	if err != nil {
@@ -88,7 +90,7 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, targets []
 	}
 	payloadTargets := make([]*tradeeventpb.InstrumentWeightTarget, 0, len(targets))
 	for _, target := range targets {
-		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight})
+		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold})
 	}
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,
