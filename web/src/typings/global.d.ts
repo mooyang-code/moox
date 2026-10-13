@@ -26,6 +26,8 @@ declare namespace Menu {
     type?: number;
     /** 隐藏路由进入时侧栏高亮的菜单 name */
     activeMenu?: string;
+    /** 同一路径仅 query 变化时复用页面组件（不重建、不闪全局加载态），页面自己监听 query。 */
+    reuseOnQuery?: boolean;
   }
 }
 /* tabs菜单 */

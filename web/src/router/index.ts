@@ -3,6 +3,7 @@ import pinia from "@/store/index";
 import { createRouter, createWebHashHistory } from "vue-router";
 import { staticRoutes, notFoundAndNoPower } from "@/router/route.ts";
 import { currentlyRoute } from "@/router/route-output";
+import { shouldShowRouteLoading } from "@/router/route-loading";
 import { storeToRefs } from "pinia";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
@@ -47,8 +48,8 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
     await store.logOut();
   }
 
-  // 显示路由加载状态
-  loadingStore.showRouteLoading();
+  // 显示路由加载状态（同一页面仅 query 变化时不显示，避免卸载页面内容）
+  if (shouldShowRouteLoading(to, _from)) loadingStore.showRouteLoading();
 
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach
   if (to.path === "/login" && !token.value) {
