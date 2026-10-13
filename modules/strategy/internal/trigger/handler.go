@@ -257,7 +257,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		switch {
 		case err == nil:
 			if created {
-				h.logTiming(p, payload, decision.Status)
+				h.logTiming(p, payload, decision.Status, loaded.Steps)
 				h.observe(instance, bar, boundary.BarEnd, decision.Status, decision.SkipReason)
 				h.updateHealth(ctx, instance.InstanceID, rt.sessionID, decision.Status, decision.SkipReason)
 			}
@@ -479,15 +479,19 @@ func (h *Handler) observe(instance store.Instance, bar string, barEnd time.Time,
 
 // logTiming 记录一期的分段耗时。“就绪等待”是 View 数据就绪到本实例开始处理（含排队与事件投递），
 // “K 线至就绪”是 K 线结束到 View 数据就绪（上游因子计算、写入与 View 刷新）。
-func (h *Handler) logTiming(p *period, payload *storagepb.ViewDataReady, status string) {
+func (h *Handler) logTiming(p *period, payload *storagepb.ViewDataReady, status string, steps []input.Step) {
 	var wait, upstream time.Duration
 	if ready := payload.GetReadyAt(); ready != nil {
 		wait = p.timing.start.Sub(ready.AsTime())
 		upstream = ready.AsTime().Sub(p.boundary.BarEnd)
 	}
-	h.logf("实例 %s 周期 %s %s 耗时：K线至就绪=%s 就绪等待=%s 读取=%s 求值=%s 提交=%s 本期处理=%s 总计=%s",
+	var detail []string
+	for _, step := range steps {
+		detail = append(detail, fmt.Sprintf("%s %s", step.Name, step.Took.Round(time.Millisecond)))
+	}
+	h.logf("实例 %s 周期 %s %s 耗时：K线至就绪=%s 就绪等待=%s 读取=%s（%s） 求值=%s 提交=%s 本期处理=%s 总计=%s",
 		p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), status,
-		upstream.Round(time.Millisecond), wait.Round(time.Millisecond), p.timing.load.Round(time.Millisecond),
+		upstream.Round(time.Millisecond), wait.Round(time.Millisecond), p.timing.load.Round(time.Millisecond), strings.Join(detail, "，"),
 		p.timing.eval.Round(time.Millisecond), p.timing.commit.Round(time.Millisecond),
 		h.now().Sub(p.timing.start).Round(time.Millisecond), h.now().Sub(p.boundary.BarEnd).Round(time.Millisecond))
 }

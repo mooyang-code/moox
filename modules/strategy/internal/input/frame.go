@@ -32,6 +32,14 @@ type Loaded struct {
 	Frame    engine.Frame
 	Sets     Sets
 	Boundary PeriodBoundaries
+	// Steps 是读取各步骤的耗时（按发生顺序），用来定位一期读取时间花在哪。
+	Steps []Step
+}
+
+// Step 是一个读取步骤及其耗时。
+type Step struct {
+	Name string
+	Took time.Duration
 }
 
 // LoadBar 读取绑定 View 的一期数据：集合划分 → 当期行（以及可选的上一根）→ 引擎帧。
@@ -44,7 +52,11 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	if err != nil {
 		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: err.Error()}
 	}
+	var steps []Step
+	mark := func(name string, began time.Time) { steps = append(steps, Step{Name: name, Took: time.Since(began)}) }
+	began := time.Now()
 	view, err := l.Client.GetView(ctx, spaceID, resolved.ViewID)
+	mark("View", began)
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -64,10 +76,14 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	if revalidator, ok := l.Client.(interface {
 		Revalidate(ctx context.Context, spaceID, datasetID string) error
 	}); ok {
-		if err := revalidator.Revalidate(ctx, spaceID, view.DatasetID); err != nil {
+		began = time.Now()
+		err := revalidator.Revalidate(ctx, spaceID, view.DatasetID)
+		mark("修订号", began)
+		if err != nil {
 			return Loaded{}, err
 		}
 	}
+	began = time.Now()
 	// 标签只在启用时校验过：运行期被删除时成员列表为空，exclude_tags 悄悄失效、按标签选池变空，必须报出来。
 	for _, tag := range referencedTags(program.Strategy) {
 		if _, err := l.Client.GetTag(ctx, spaceID, tag); err != nil {
@@ -77,13 +93,19 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			return Loaded{}, err
 		}
 	}
+	mark("标签", began)
 	if resolved.MinAgeBars > 0 {
 		// 年龄探针需要覆盖统计；事件路径只读 Storage 缓存的统计，不触发全量统计，未知时由探针的确认查询兜底。
-		if view, err = WithCoverage(ctx, l.Client, spaceID, view, false); err != nil {
+		began = time.Now()
+		view, err = WithCoverage(ctx, l.Client, spaceID, view, false)
+		mark("覆盖统计", began)
+		if err != nil {
 			return Loaded{}, err
 		}
 	}
+	began = time.Now()
 	subjects, err := l.Client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
+	mark("标的", began)
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -96,7 +118,9 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	members := func(ctx context.Context, tagID string) ([]string, error) {
 		return l.Client.ListTagMembers(ctx, spaceID, tagID)
 	}
+	began = time.Now()
 	sets, err := BuildSets(ctx, members, program.Strategy, subjects, bar.EventUniverse)
+	mark("集合", began)
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -110,27 +134,37 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	columns := append([]string(nil), program.Columns...)
 	columns = uniqueSorted(append(columns, program.PreviousColumns...))
 	query := Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: boundary.StorageStart, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
-	currentRows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
+	// 上一根与当期合并成一次范围读取：相邻两根之间没有别的根，少一次往返，也保证两根取自同一修订号。
+	if program.UsesPreviousBar && !boundary.PreviousStart.IsZero() {
+		query.Start = boundary.PreviousStart
+	}
+	began = time.Now()
+	rangeRows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
+	mark("当期与上一根行", began)
 	if err != nil {
 		return Loaded{}, err
+	}
+	var currentRows, previousRows []Row
+	for _, row := range rangeRows {
+		switch {
+		case row.DataTime.Equal(boundary.StorageStart):
+			currentRows = append(currentRows, row)
+		case !boundary.PreviousStart.IsZero() && row.DataTime.Equal(boundary.PreviousStart):
+			previousRows = append(previousRows, row)
+		}
 	}
 	current, err := groupRows(currentRows)
 	if err != nil {
 		return Loaded{}, err
 	}
-	if err := sets.ApplyAge(ctx, resolved.MinAgeBars, NewAgeProbe(l.Client, spaceID, resolved, view, activeSubjects, bar.BarStart, revision)); err != nil {
+	began = time.Now()
+	err = sets.ApplyAge(ctx, resolved.MinAgeBars, NewAgeProbe(l.Client, spaceID, resolved, view, activeSubjects, bar.BarStart, revision, l.Meta))
+	mark("年龄探针", began)
+	if err != nil {
 		return Loaded{}, err
 	}
 	previous := map[string]Row{}
-	// A 股内嵌日历的第一个交易日没有上一根（PreviousStart 为零值），bars[-1] 的值都缺失。
-	if program.UsesPreviousBar && !boundary.PreviousStart.IsZero() {
-		query.Start = boundary.PreviousStart
-		query.End = boundary.PreviousStart.Add(time.Nanosecond)
-		query.ExpectedRevision = revision
-		previousRows, _, err := l.Client.QueryRows(ctx, spaceID, query)
-		if err != nil {
-			return Loaded{}, err
-		}
+	if len(previousRows) > 0 {
 		if previous, err = groupRows(previousRows); err != nil {
 			return Loaded{}, err
 		}
@@ -146,7 +180,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 		frame.Rows[subjectID] = engineRow
 	}
-	return Loaded{Frame: frame, Sets: sets, Boundary: boundary}, nil
+	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, Steps: steps}, nil
 }
 
 // MissingColumns 返回策略需要、但 View 已不提供的列：当期列、bars[-1] 列，以及 min_age_bars 探针读取的 close。

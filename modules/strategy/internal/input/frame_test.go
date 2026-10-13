@@ -38,13 +38,15 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.rows = func(query Query) ([]Row, uint64, error) {
-		if query.Start.Equal(barStart) {
-			return rowsAt(barStart, map[string]map[string]float64{
-				"BTC-USDT": {"close": 101, "ma_20": 100},
-				"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4},
-			}), 9, nil
+		// 当期与上一根合并成一次范围读取（上一根起、当期止）。
+		rows := rowsAt(barStart, map[string]map[string]float64{
+			"BTC-USDT": {"close": 101, "ma_20": 100},
+			"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4},
+		})
+		if query.Start.Before(barStart) {
+			rows = append(rows, rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 99, "ma_20": 100}})...)
 		}
-		return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 99, "ma_20": 100}}), 9, nil
+		return rows, 9, nil
 	}
 	loader := Loader{Client: client}
 	loaded, err := loader.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, EventUniverse: []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}, Readiness: readiness.Result{FailedByFactor: map[string][]string{"qv": {"SOL-USDT"}}}})
@@ -71,8 +73,8 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 	if _, failed := frame.FailedColumns["ma_20"]["SOL-USDT"]; failed {
 		t.Fatalf("因子失败不应映射到其他因子的列：%v", frame.FailedColumns)
 	}
-	if len(client.queries) != 2 || client.queries[1].ExpectedRevision != 9 || !client.queries[1].Start.Equal(barStart.Add(-time.Hour)) {
-		t.Fatalf("上一根的读取应固定修订号：%+v", client.queries)
+	if len(client.queries) != 1 || !client.queries[0].Start.Equal(barStart.Add(-time.Hour)) || !client.queries[0].End.Equal(barStart.Add(time.Nanosecond)) {
+		t.Fatalf("当期与上一根应合并成一次范围读取：%+v", client.queries)
 	}
 	columns := strings.Join(client.queries[0].Columns, ",")
 	for _, column := range []string{"close", "ma_20", "bias_q_20", "quote_volume_mean_20", "quote_volume_mean_q_20"} {
@@ -211,12 +213,12 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 	if _, err := (Loader{Client: client}).LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
 		t.Fatalf("装配失败：%v", err)
 	}
-	if len(client.queries) != 3 || !client.queries[0].Start.Equal(barStart) || client.queries[0].ExpectedRevision != 0 {
-		t.Fatalf("第一个查询应是当期主查询：%+v", client.queries)
+	if len(client.queries) != 2 || !client.queries[0].Start.Equal(barStart.Add(-time.Hour)) || !client.queries[0].End.Equal(barStart.Add(time.Nanosecond)) || client.queries[0].ExpectedRevision != 0 {
+		t.Fatalf("第一个查询应是上一根起、当期止的合并读取：%+v", client.queries)
 	}
 	for _, query := range client.queries[1:] {
 		if query.ExpectedRevision != 11 {
-			t.Fatalf("探针与上一根应固定主查询的修订号：%+v", client.queries)
+			t.Fatalf("探针应固定主查询的修订号：%+v", client.queries)
 		}
 	}
 

@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -146,5 +147,53 @@ func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 	}
 	if client.subjects != subjectsBefore {
 		t.Fatal("修订号读取失败后不应继续读取标的元数据")
+	}
+}
+
+// 年龄探针通过的标的跨周期缓存：第二期不再发探针查询；活动索引变化后重新探针。
+func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
+	client := newFakeClient("spot")
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
+	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		if len(query.Columns) == 1 && query.Columns[0] == ageProbeColumn {
+			// 探针查询：全部候选都有窗口内的行。
+			return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 1}, "ETH-USDT": {"close": 1}, "SOL-USDT": {"close": 1}}), 11, nil
+		}
+		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
+	}
+	loader := Loader{Client: client, Meta: NewMetaCache()}
+	probes := func() int {
+		count := 0
+		for _, query := range client.queries {
+			if len(query.Columns) == 1 && query.Columns[0] == ageProbeColumn {
+				count++
+			}
+		}
+		return count
+	}
+	load := func() {
+		t.Helper()
+		if _, err := loader.ForEvent().LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
+			t.Fatalf("装配失败：%v", err)
+		}
+	}
+	load()
+	if probes() != 1 {
+		t.Fatalf("第一期应发 1 次探针查询：%d", probes())
+	}
+	load()
+	if probes() != 1 {
+		t.Fatalf("已证明年龄足够的标的不应再探针：%d", probes())
+	}
+	view := client.views["view_factor_1h"]
+	view.ActiveIndexID = "idx_b"
+	client.views["view_factor_1h"] = view
+	load()
+	if probes() != 2 {
+		t.Fatalf("活动索引变化后应重新探针：%d", probes())
 	}
 }

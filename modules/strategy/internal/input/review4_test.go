@@ -73,7 +73,7 @@ func TestCoverageStartAnchorsAtProcessedBar(t *testing.T) {
 		return []Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
 	}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true)}
-	satisfied, err := NewAgeProbe(client, "space", resolved, view, subjects, barStart, 0)(context.Background(), []string{"BTC-USDT"})
+	satisfied, err := NewAgeProbe(client, "space", resolved, view, subjects, barStart, 0, nil)(context.Background(), []string{"BTC-USDT"})
 	if err != nil {
 		t.Fatalf("N 等于保留根数、索引已前进时不应误判历史不足：%v", err)
 	}

@@ -160,7 +160,7 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 	}
 	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "ETH-USDT": subject("ETH-USDT", true)}
-	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], subjects, barStart, 0)
+	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], subjects, barStart, 0, nil)
 	satisfied, err := probe(context.Background(), []string{"BTC-USDT", "ETH-USDT"})
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
 		}
 		return nil, 7, nil
 	}
-	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], subjects, barStart, 7)
+	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], subjects, barStart, 7, nil)
 	satisfied, err := probe(context.Background(), []string{"NEW-USDT"})
 	if err != nil || len(satisfied) != 0 {
 		t.Fatalf("数据集有数据时新标的应正常剔除：%v err=%v", satisfied, err)
@@ -209,7 +209,7 @@ func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
 
 	gap := newFakeClient("spot")
 	gap.rows = func(Query) ([]Row, uint64, error) { return nil, 7, nil }
-	probe = NewAgeProbe(gap, "space", resolved, gap.views["view_factor_1h"], subjects, barStart, 7)
+	probe = NewAgeProbe(gap, "space", resolved, gap.views["view_factor_1h"], subjects, barStart, 7, nil)
 	_, err = probe(context.Background(), []string{"BTC-USDT", "NEW-USDT"})
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "历史缺口") {

@@ -192,7 +192,7 @@ func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.T
 
 // NewAgeProbe 构造每期一次的探针查询：读取年龄窗口内的 close 列，有行即满足。
 // revision 应与当期主查询一致；活跃序列的覆盖起点（CoverageStartAt）晚于目标根时无法判断年龄，返回 history_insufficient。
-func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, subjects map[string]Subject, barStart time.Time, revision uint64) AgeProbe {
+func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, subjects map[string]Subject, barStart time.Time, revision uint64, meta *MetaCache) AgeProbe {
 	return func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
 		if resolved.MinAgeBars <= 0 || len(instruments) == 0 {
 			all := make(map[string]struct{}, len(instruments))
@@ -209,8 +209,22 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
 			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, target), resolved.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
-		selected := make([]Subject, 0, len(instruments))
-		for _, id := range instruments {
+		// 已证明年龄足够的标的直接放行，只探针其余的；全部已知时不发查询。
+		cacheKey := fmt.Sprintf("%s\x00%s\x00%d", resolved.ViewID, view.ActiveIndexID, resolved.MinAgeBars)
+		candidates := instruments
+		var hits []string
+		if meta != nil {
+			hits, candidates = meta.ageSplit(cacheKey, instruments)
+		}
+		satisfied := make(map[string]struct{}, len(instruments))
+		for _, id := range hits {
+			satisfied[id] = struct{}{}
+		}
+		if len(candidates) == 0 {
+			return satisfied, nil
+		}
+		selected := make([]Subject, 0, len(candidates))
+		for _, id := range candidates {
 			if subject, ok := subjects[id]; ok {
 				selected = append(selected, subject)
 			}
@@ -219,11 +233,17 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		if err != nil {
 			return nil, fmt.Errorf("年龄探针查询：%w", err)
 		}
-		satisfied := make(map[string]struct{}, len(rows))
+		var passed []string
 		for _, row := range rows {
 			if _, ok := subjects[row.SubjectID]; ok {
+				if _, dup := satisfied[row.SubjectID]; !dup {
+					passed = append(passed, row.SubjectID)
+				}
 				satisfied[row.SubjectID] = struct{}{}
 			}
+		}
+		if meta != nil {
+			meta.ageRecord(cacheKey, passed)
 		}
 		if len(satisfied) == 0 {
 			// 候选全部不满足时，确认窗口内整个数据集是否有数据：一行都没有说明是历史缺口（停机、维护），

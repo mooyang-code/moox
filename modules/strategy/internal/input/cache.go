@@ -15,6 +15,11 @@ type MetaCache struct {
 	subjects map[string][]Subject
 	members  map[string][]string
 	tags     map[string]TagInfo
+
+	// ageKey / ageOK 缓存已证明“年龄足够”的标的：上市时间只会越来越久，探针通过一次后不必每期重查。
+	// 键是 View 的活动索引与 min_age_bars，索引重建（换了活动索引）后自动作废。
+	ageKey string
+	ageOK  map[string]struct{}
 }
 
 // NewMetaCache 创建空缓存；Loader 不带缓存时每个事件使用一份新的，等同于事件内缓存。
@@ -185,4 +190,33 @@ func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string)
 		c.meta.mu.Unlock()
 	}
 	return append([]string(nil), members...), nil
+}
+
+// ageSplit 把候选标的按是否已证明年龄足够拆成两组；键变化时清空缓存。
+func (m *MetaCache) ageSplit(key string, ids []string) (hit, miss []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ageKey != key {
+		m.ageKey, m.ageOK = key, map[string]struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := m.ageOK[id]; ok {
+			hit = append(hit, id)
+		} else {
+			miss = append(miss, id)
+		}
+	}
+	return hit, miss
+}
+
+// ageRecord 登记本期探针通过的标的。
+func (m *MetaCache) ageRecord(key string, ids []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ageKey != key {
+		m.ageKey, m.ageOK = key, map[string]struct{}{}
+	}
+	for _, id := range ids {
+		m.ageOK[id] = struct{}{}
+	}
 }

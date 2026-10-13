@@ -103,7 +103,7 @@ rules:
 func TestAgeProbeCalendarErrorIsConfigError(t *testing.T) {
 	client := newFakeClient("spot")
 	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}
-	probe := NewAgeProbe(client, "space", resolved, ViewInfo{ViewID: "view_stock"}, map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0)
+	probe := NewAgeProbe(client, "space", resolved, ViewInfo{ViewID: "view_stock"}, map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
 	_, err := probe(context.Background(), []string{"600000.SH"})
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "之前没有交易日") {

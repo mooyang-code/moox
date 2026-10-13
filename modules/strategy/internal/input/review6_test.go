@@ -45,7 +45,7 @@ func TestCalendarErrorsNameTheDay(t *testing.T) {
 		t.Fatalf("越过末尾时应报日历的最后一天：%v", err)
 	}
 	client := newFakeClient("spot")
-	probe := NewAgeProbe(client, "space", Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}, ViewInfo{ViewID: "view_stock"}, map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0)
+	probe := NewAgeProbe(client, "space", Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}, ViewInfo{ViewID: "view_stock"}, map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
 	if _, err := probe(context.Background(), []string{"600000.SH"}); err == nil || strings.Contains(err.Error(), "0000-00-00") {
 		t.Fatalf("探针的 config_error 明细不应出现零值日期：%v", err)
 	}
