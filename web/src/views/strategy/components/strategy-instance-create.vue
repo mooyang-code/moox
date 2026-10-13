@@ -2,7 +2,12 @@
   <a-drawer :visible="visible" :width="'min(760px, 100vw)'" title="新建策略实例" unmount-on-close @cancel="close">
     <a-alert v-if="error" type="error" show-icon class="form-alert">{{ error }}</a-alert>
     <a-form layout="vertical">
-      <a-form-item label="策略定义" required :validate-status="fieldErrors.strategy_id ? 'error' : undefined" :help="fieldErrors.strategy_id">
+      <a-form-item
+        label="策略定义"
+        required
+        :validate-status="fieldErrors.strategy_id ? 'error' : undefined"
+        :help="fieldErrors.strategy_id"
+      >
         <a-select v-model="form.strategy_id" allow-search placeholder="选择一份 DSL 定义" @change="onStrategyChange">
           <a-option v-for="item in strategies" :key="item.strategy_id" :value="item.strategy_id"
             >{{ item.name }}（{{ item.strategy_id }}）</a-option
@@ -16,7 +21,12 @@
         <a-descriptions-item label="标的池">{{ preview.universe }}</a-descriptions-item>
         <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
       </a-descriptions>
-      <a-form-item label="输入 View" required :validate-status="fieldErrors.view_id ? 'error' : undefined" :help="fieldErrors.view_id">
+      <a-form-item
+        label="输入 View"
+        required
+        :validate-status="fieldErrors.view_id ? 'error' : undefined"
+        :help="fieldErrors.view_id"
+      >
         <a-select
           v-model="form.view_id"
           allow-search
@@ -121,7 +131,13 @@ const fieldErrors = reactive<Record<"strategy_id" | "view_id" | "logical_account
   logical_account_id: ""
 });
 // mode 决定是否发送目标：账户读取失败只影响“发送至交易模块”，不阻断仅计算；切换模式不会悄悄改选账户。
-const form = reactive({ instance_id: "", strategy_id: "", view_id: "", logical_account_id: "", mode: "compute" as "compute" | "trade" });
+const form = reactive({
+  instance_id: "",
+  strategy_id: "",
+  view_id: "",
+  logical_account_id: "",
+  mode: "compute" as "compute" | "trade"
+});
 const views = ref<View[]>([]);
 const accounts = ref<LogicalAccount[]>([]);
 const check_result = ref<ValidateStrategyResult | null>(null);

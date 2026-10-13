@@ -70,7 +70,9 @@
         <template #empty>
           <a-empty v-if="store.error" description="读取失败，暂无可显示的定义" />
           <a-empty v-else description="暂无策略定义">
-            <a-button type="primary" @click="router.push({ name: 'strategy-definition-new' })">新建策略</a-button>
+            <a-button type="primary" status="success" @click="router.push({ name: 'strategy-definition-new' })"
+              >新建策略</a-button
+            >
           </a-empty>
         </template>
       </a-table>

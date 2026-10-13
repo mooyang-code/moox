@@ -36,7 +36,13 @@
 
 <script setup lang="ts">
 import type { Replay, Strategy } from "@/api/strategy-types";
-import { formatUtcTime, replayRangeLabel, replaySourceLabel, replayStatusColor, replayStatusLabel } from "@/views/strategy/replay/model";
+import {
+  formatUtcTime,
+  replayRangeLabel,
+  replaySourceLabel,
+  replayStatusColor,
+  replayStatusLabel
+} from "@/views/strategy/replay/model";
 
 defineProps<{
   replays: Replay[];

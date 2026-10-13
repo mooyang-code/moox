@@ -3,7 +3,9 @@ import { buildReplayQuery, emptyPrefill, hasPrefill, parseReplayQuery } from "./
 
 describe("replay query", () => {
   it("normalizes pages and drops the definition when an instance is given", () => {
-    expect(parseReplayQuery({ page: "0", bar_page: "x", strategy_id: "s1", instance_id: "i1", view_id: "v1", create: "1" })).toEqual({
+    expect(
+      parseReplayQuery({ page: "0", bar_page: "x", strategy_id: "s1", instance_id: "i1", view_id: "v1", create: "1" })
+    ).toEqual({
       replayId: "",
       page: 1,
       barPage: 1,

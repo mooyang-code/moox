@@ -74,8 +74,12 @@
               <a-dropdown trigger="click">
                 <a-button type="text" size="small">更多</a-button>
                 <template #content>
-                  <a-doption :disabled="deleteState(record).disabled || removingId === record.instance_id" @click="confirmRemove(record)"
-                    >删除<span v-if="deleteState(record).reason" class="muted">（{{ deleteState(record).reason }}）</span></a-doption
+                  <a-doption
+                    :disabled="deleteState(record).disabled || removingId === record.instance_id"
+                    @click="confirmRemove(record)"
+                    >删除<span v-if="deleteState(record).reason" class="muted"
+                      >（{{ deleteState(record).reason }}）</span
+                    ></a-doption
                   >
                 </template>
               </a-dropdown>
@@ -88,7 +92,9 @@
             <a-button @click="reset">清除筛选</a-button>
           </a-empty>
           <a-empty v-else description="当前空间暂无策略实例">
-            <a-button type="primary" :disabled="!spaceStore.selectedSpaceId" @click="openCreate">新建实例</a-button>
+            <a-button type="primary" status="success" :disabled="!spaceStore.selectedSpaceId" @click="openCreate"
+              >新建实例</a-button
+            >
           </a-empty>
         </template>
       </a-table>
@@ -180,7 +186,12 @@ async function loadCatalog() {
   await store.loadAllStrategies(200).catch(() => undefined);
 }
 function search() {
-  go({ strategyId: filters.strategy_id || "", enabled: (filters.enabled || "") as RunningState["enabled"], page: 1, instanceId: "" });
+  go({
+    strategyId: filters.strategy_id || "",
+    enabled: (filters.enabled || "") as RunningState["enabled"],
+    page: 1,
+    instanceId: ""
+  });
 }
 function reset() {
   filters.strategy_id = "";

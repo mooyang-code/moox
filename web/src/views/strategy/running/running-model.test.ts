@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildRunningQuery,
-  emptyKind,
-  instanceDeleteState,
-  listKey,
-  pageAfterRemoval,
-  parseRunningQuery
-} from "./running-model";
+import { buildRunningQuery, emptyKind, instanceDeleteState, listKey, pageAfterRemoval, parseRunningQuery } from "./running-model";
 
 describe("running page model", () => {
   it("normalizes the URL state", () => {

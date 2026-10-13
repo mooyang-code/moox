@@ -51,10 +51,8 @@
         <a-button size="mini" @click="applyPreset(30)">近 30 天</a-button>
       </a-space>
     </a-form-item>
-    <a-form-item label="单边手续费（bps）"
-      ><a-input-number v-model="form.fee_bps" :min="0" :max="1000" :step="1"
-    /></a-form-item>
-    </a-form>
+    <a-form-item label="单边手续费（bps）"><a-input-number v-model="form.fee_bps" :min="0" :max="1000" :step="1" /></a-form-item>
+  </a-form>
 </template>
 
 <script setup lang="ts">

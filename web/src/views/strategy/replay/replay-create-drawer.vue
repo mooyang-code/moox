@@ -1,13 +1,8 @@
 <template>
-  <a-drawer
-    :visible="visible"
-    :width="'min(560px, 100vw)'"
-    title="发起回放"
-    @cancel="emit('close')"
-    @close="emit('close')"
-  >
+  <a-drawer :visible="visible" :width="'min(560px, 100vw)'" title="发起回放" @cancel="emit('close')" @close="emit('close')">
     <a-alert v-if="errors.strategies" type="error" show-icon class="drawer-alert"
-      >{{ errors.strategies }}<template #action><a-button size="small" @click="emit('retryStrategies')">重试</a-button></template></a-alert
+      >{{ errors.strategies
+      }}<template #action><a-button size="small" @click="emit('retryStrategies')">重试</a-button></template></a-alert
     >
     <a-alert v-if="errors.views" type="error" show-icon class="drawer-alert"
       >{{ errors.views }}<template #action><a-button size="small" @click="emit('retryViews')">重试</a-button></template></a-alert

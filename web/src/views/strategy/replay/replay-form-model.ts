@@ -11,7 +11,9 @@ export interface ReplayFormState {
 }
 
 /** 回放对象三选一：实例会话固化的版本、已保存的定义，或未保存的 DSL 文本；都没选返回 null。 */
-export function replaySourceOf(form: ReplayFormState): { instance_id: string } | { strategy_id: string } | { dsl_yaml: string } | null {
+export function replaySourceOf(
+  form: ReplayFormState
+): { instance_id: string } | { strategy_id: string } | { dsl_yaml: string } | null {
   if (form.instance_id) return { instance_id: form.instance_id };
   if (form.source === "dsl") return form.dsl_yaml.trim() ? { dsl_yaml: form.dsl_yaml } : null;
   return form.strategy_id ? { strategy_id: form.strategy_id } : null;

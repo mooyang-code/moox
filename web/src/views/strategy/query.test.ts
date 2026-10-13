@@ -23,7 +23,9 @@ describe("strategy query helpers", () => {
   });
 
   it("builds queries without empty values or defaults", () => {
-    expect(buildQuery({ page: 1, strategy_id: "s1", enabled: "", create: undefined }, { page: 1 })).toEqual({ strategy_id: "s1" });
+    expect(buildQuery({ page: 1, strategy_id: "s1", enabled: "", create: undefined }, { page: 1 })).toEqual({
+      strategy_id: "s1"
+    });
     expect(buildQuery({ page: 2, create: true })).toEqual({ create: "true", page: "2" });
   });
 

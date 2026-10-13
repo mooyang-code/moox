@@ -638,7 +638,8 @@ function retryTable() {
   const replayId = selectedId.value;
   const requestId = selectRequest;
   const gen = generation;
-  if (replayId) void loadTablePage(replayId, () => requestId === selectRequest && gen === generation && selectedId.value === replayId);
+  if (replayId)
+    void loadTablePage(replayId, () => requestId === selectRequest && gen === generation && selectedId.value === replayId);
 }
 
 /** 所选回放是否还需要轮询：排队或运行中，或刚取消、部分指标尚未写入（最多等 2 分钟），或表格落后、待刷新。 */
@@ -859,7 +860,13 @@ watch(
 );
 // URL 的外部变化：预填入口、前进后退、深链接。
 watch(
-  () => [parsed.value.replayId, parsed.value.barPage, parsed.value.page, hasPrefill(parsed.value.prefill) && !parsed.value.create] as const,
+  () =>
+    [
+      parsed.value.replayId,
+      parsed.value.barPage,
+      parsed.value.page,
+      hasPrefill(parsed.value.prefill) && !parsed.value.create
+    ] as const,
   ([replayId, barPage, page, legacy]) => {
     if (route.name !== ROUTE_NAME) return;
     if (legacy) normalizeEntry();

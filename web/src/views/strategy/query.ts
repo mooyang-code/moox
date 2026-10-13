@@ -21,7 +21,10 @@ export function queryEnum<T extends string>(raw: RawValue, allowed: readonly T[]
 }
 
 /** 构造 query：丢弃空值与默认值，数字与布尔转为字符串；键按字典序，便于比较。 */
-export function buildQuery(entries: Record<string, string | number | boolean | undefined | null>, defaults: Record<string, string | number | boolean> = {}): Record<string, string> {
+export function buildQuery(
+  entries: Record<string, string | number | boolean | undefined | null>,
+  defaults: Record<string, string | number | boolean> = {}
+): Record<string, string> {
   const query: Record<string, string> = {};
   for (const key of Object.keys(entries).sort()) {
     const value = entries[key];

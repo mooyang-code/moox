@@ -27,9 +27,9 @@
           <a-descriptions-item label="摘要" :span="2">{{ summarizeDSL(definition.dsl_yaml) }}</a-descriptions-item>
         </a-descriptions>
         <a-space class="drawer-actions" wrap>
-          <a-button type="primary" @click="emit('edit', definition.strategy_id)">编辑定义</a-button>
+          <a-button @click="emit('edit', definition.strategy_id)">编辑定义</a-button>
           <a-button @click="emit('instances', definition.strategy_id)">查看当前空间实例</a-button>
-          <a-button @click="emit('createInstance', definition.strategy_id)">创建实例</a-button>
+          <a-button type="primary" status="success" @click="emit('createInstance', definition.strategy_id)">创建实例</a-button>
           <a-button @click="emit('replay', definition.strategy_id)">发起回放</a-button>
         </a-space>
         <div class="section-title">DSL</div>

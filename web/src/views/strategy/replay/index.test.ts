@@ -1235,7 +1235,10 @@ describe("strategy replay page", () => {
 describe("strategy replay page URL state and create drawer", () => {
   const started = (id: string) => ({ replay: replay(id, "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
   const click = async (wrapper: ReturnType<typeof mountPage>, text: string) => {
-    await wrapper.findAll("button").find(button => button.text() === text)!.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(button => button.text() === text)!
+      .trigger("click");
     await flushPromises();
   };
 
@@ -1246,7 +1249,15 @@ describe("strategy replay page URL state and create drawer", () => {
     api.space = reactive({ selectedSpaceId: "crypto" });
     nav.route = reactive({ name: "strategy-replay", query: {} });
     nav.history.length = 0;
-    for (const fn of [api.getReplay, api.listReplays, api.listReplayBars, api.startReplay, api.cancelReplay, api.listViews, api.loadAllStrategies])
+    for (const fn of [
+      api.getReplay,
+      api.listReplays,
+      api.listReplayBars,
+      api.startReplay,
+      api.cancelReplay,
+      api.listViews,
+      api.loadAllStrategies
+    ])
       fn.mockReset();
     api.serverNow = null;
     api.loadAllStrategies.mockResolvedValue(undefined);

@@ -59,7 +59,10 @@ describe("instance quick drawer", () => {
   });
 
   it("shows a failure with retry and clears the previous object when switching", async () => {
-    api.getInstance.mockResolvedValueOnce(instance("i1")).mockRejectedValueOnce(new Error("超时")).mockResolvedValueOnce(instance("i2"));
+    api.getInstance
+      .mockResolvedValueOnce(instance("i1"))
+      .mockRejectedValueOnce(new Error("超时"))
+      .mockResolvedValueOnce(instance("i2"));
     const wrapper = mount(Drawer, { props: { instanceId: "i1", strategies }, global: { stubs } });
     await flushPromises();
     await wrapper.setProps({ instanceId: "i2" });

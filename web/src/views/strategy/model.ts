@@ -217,7 +217,10 @@ export interface ResultInsight {
   delayMs: number | null;
 }
 
-type ResultLike = Pick<StrategyResult, "result_id" | "session_id" | "status" | "bar_end_time" | "created_at" | "targets" | "skip_reason">;
+type ResultLike = Pick<
+  StrategyResult,
+  "result_id" | "session_id" | "status" | "bar_end_time" | "created_at" | "targets" | "skip_reason"
+>;
 
 /**
  * 按 K 线结束时间从旧到新比较同一会话内相邻的 ok 结果，得到每期的目标成员变化与产出延迟。

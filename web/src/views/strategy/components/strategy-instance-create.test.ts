@@ -42,14 +42,17 @@ describe("strategy instance creation behavior", () => {
     "a-drawer": { props: ["visible"], template: '<div v-if="visible"><slot /><slot name="footer" /></div>' },
     "a-alert": { template: '<div class="alert"><slot /></div>' },
     "a-form": { template: "<form><slot /></form>" },
-    "a-form-item": { props: ["help"], template: '<div class="item"><slot /><span class="help">{{ help }}</span><slot name="extra" /></div>' },
+    "a-form-item": {
+      props: ["help"],
+      template: '<div class="item"><slot /><span class="help">{{ help }}</span><slot name="extra" /></div>'
+    },
     "a-select": {
       props: ["modelValue"],
       emits: ["update:modelValue", "change"],
       template:
         '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\')"><option value="" /><slot /></select>'
     },
-    "a-option": { props: ["value"], template: "<option :value=\"value\"><slot /></option>" },
+    "a-option": { props: ["value"], template: '<option :value="value"><slot /></option>' },
     "a-radio-group": {
       name: "RadioGroupStub",
       props: ["modelValue"],
@@ -96,9 +99,17 @@ describe("strategy instance creation behavior", () => {
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     const selects = wrapper.findAll("select");
     await selects[1].setValue("view_a");
-    await wrapper.findAll("button").find(item => item.text() === "创建停用实例")!.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "创建停用实例")!
+      .trigger("click");
     await flushPromises();
-    expect(api.createInstance).toHaveBeenCalledWith({ instance_id: undefined, strategy_id: "s1", view_id: "view_a", logical_account_id: "" });
+    expect(api.createInstance).toHaveBeenCalledWith({
+      instance_id: undefined,
+      strategy_id: "s1",
+      view_id: "view_a",
+      logical_account_id: ""
+    });
   });
 
   it("shows the account failure with a retry in trade mode and blocks submission without an account", async () => {
@@ -111,21 +122,37 @@ describe("strategy instance creation behavior", () => {
     wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "trade");
     await flushPromises();
     expect(wrapper.text()).toContain("账户列表读取失败：账户服务不可用");
-    await wrapper.findAll("button").find(item => item.text() === "创建停用实例")!.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "创建停用实例")!
+      .trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("请选择组合账户");
     expect(api.createInstance).not.toHaveBeenCalled();
     // 重试后账户可选，提交时携带所选账户。
-    await wrapper.findAll(".link").find(item => item.text() === "重试")!.trigger("click");
+    await wrapper
+      .findAll(".link")
+      .find(item => item.text() === "重试")!
+      .trigger("click");
     await flushPromises();
     await wrapper.findAll("select")[2].setValue("acc1");
-    await wrapper.findAll("button").find(item => item.text() === "创建停用实例")!.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "创建停用实例")!
+      .trigger("click");
     await flushPromises();
-    expect(api.createInstance).toHaveBeenCalledWith({ instance_id: undefined, strategy_id: "s1", view_id: "view_a", logical_account_id: "acc1" });
+    expect(api.createInstance).toHaveBeenCalledWith({
+      instance_id: undefined,
+      strategy_id: "s1",
+      view_id: "view_a",
+      logical_account_id: "acc1"
+    });
   });
 
   it("offers a retry when the view list fails", async () => {
-    api.listViews.mockRejectedValueOnce(new Error("View 服务不可用")).mockResolvedValueOnce({ views: [view], page_result: { has_more: false } });
+    api.listViews
+      .mockRejectedValueOnce(new Error("View 服务不可用"))
+      .mockResolvedValueOnce({ views: [view], page_result: { has_more: false } });
     const { wrapper, flushPromises } = await open();
     expect(wrapper.text()).toContain("View 列表读取失败：View 服务不可用");
     await wrapper.find(".link").trigger("click");
