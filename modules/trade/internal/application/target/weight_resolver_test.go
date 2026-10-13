@@ -101,3 +101,29 @@ func TestWeightResolverHoldTargetSkipsConversionAndChangesRequestHash(t *testing
 	require.NoError(t, err)
 	require.NotEqual(t, held, normal)
 }
+
+type failingEquityStub struct{}
+
+func (failingEquityStub) ResolveLogicalAccountEquity(context.Context, string, string) (shared.Decimal, int64, error) {
+	return shared.Decimal{}, 0, errors.New("权益快照暂时不可用")
+}
+
+// 全部是保持标的的目标不依赖权益快照与报价：权益读取失败时保持标记仍然被接受，旧的调仓目标不会继续执行。
+func TestWeightResolverAllHoldTargetDoesNotNeedEquity(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	resolver := WeightResolver{Store: fixture.store, Prices: targetPriceStub{err: errors.New("不应取报价")}, Equity: failingEquityStub{}, Now: func() time.Time { return fixture.now }}
+	bar := timestamppb.New(time.UnixMilli(1000))
+	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
+		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
+		BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(time.UnixMilli(3000)),
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", TargetWeight: "0.3", Hold: true}},
+	}
+	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+	require.NoError(t, err)
+	require.Equal(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
+
+	// 混有需要换算的目标时仍然需要权益快照。
+	request.Targets = append(request.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "ETH-USDT-SWAP", TargetWeight: "0.2"})
+	_, err = resolver.Resolve(context.Background(), 0, request, "space-1")
+	require.Error(t, err)
+}

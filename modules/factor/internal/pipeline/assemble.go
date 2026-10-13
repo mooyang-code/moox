@@ -42,6 +42,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 	}
 	gaps := loaded.Gaps
 	applied := make(map[ItemKey]bool)
+	failedItems := make(map[ItemKey]bool) // 任一序列失败的项：不能因为另一序列成功就确认
 	subjectTags := make(map[string][]string)
 	rows := make(map[resultKey]*assembledRow)
 	factorColumns := make([]string, 0)
@@ -138,6 +139,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 					if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, factor, outputs, factorColumns, plan.FillOnly) {
 						applied[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
 					} else {
+						failedItems[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
 						markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
 					}
 				}
@@ -170,6 +172,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, factor, outputs, factorColumns, plan.FillOnly) {
 					applied[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
 				} else {
+					failedItems[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
 					markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
 				}
 			}
@@ -211,6 +214,9 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		}
 		return out[i].SeriesTag < out[j].SeriesTag
 	})
+	for key := range failedItems {
+		delete(applied, key)
+	}
 	report, reportErr := r.assembleReport(plan, loaded, computation, applied)
 	if reportErr != nil {
 		return nil, AssembleReport{}, reportErr

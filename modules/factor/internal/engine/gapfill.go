@@ -42,6 +42,9 @@ type gapFiller struct {
 	now      func() time.Time
 	// onGaveUp 在条目被记为 gave_up 时调用（指标用，可为 nil）。
 	onGaveUp func(entries int)
+	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
+	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
+	lastTried map[string]time.Time
 }
 
 // Run 按 SweepInterval 轮询直到 ctx 结束。
@@ -102,8 +105,15 @@ func (g *gapFiller) tick(ctx context.Context) {
 		}
 		groups[gk] = append(groups[gk], entry)
 	}
+	if g.lastTried == nil {
+		g.lastTried = make(map[string]time.Time)
+	}
+	name := func(gk groupKey) string { return fmt.Sprintf("%s|%s|%t|%d", gk.set, gk.subject, gk.cross, gk.period) }
 	sort.Slice(order, func(i, j int) bool {
 		a, b := order[i], order[j]
+		if ta, tb := g.lastTried[name(a)], g.lastTried[name(b)]; !ta.Equal(tb) {
+			return ta.Before(tb)
+		}
 		if a.set != b.set {
 			return a.set < b.set
 		}
@@ -119,9 +129,11 @@ func (g *gapFiller) tick(ctx context.Context) {
 		order = order[:g.cfg.MaxGroupsPerSweep]
 	}
 	for _, gk := range order {
-		if ctx.Err() != nil {
+		// 租约在一轮中途丢失时不再启动新的写入：另一个引擎已经接手，两个进程的集合锁互不约束。
+		if ctx.Err() != nil || (g.active != nil && !g.active()) {
 			return
 		}
+		g.lastTried[name(gk)] = g.now()
 		set := setCache[gk.set]
 		var err error
 		if gk.cross {
@@ -254,6 +266,9 @@ func (g *gapFiller) fillSubject(ctx context.Context, set domain.EngineSet, subje
 	setID := set.Set.SetID
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
 		// 在集合锁内重读：用最新的待办（含最新的 skipID）与最新的集合、因子定义。
+		if g.active != nil && !g.active() {
+			return recalcexec.Selection{}, nil // 取得集合锁后租约已丢失：不运行
+		}
 		current, lookup, use, factors := g.refresh(setID, g.ledger.PendingFor(setID, subject), false)
 		if lookup != SetFound || len(use) == 0 {
 			return recalcexec.Selection{}, nil
@@ -307,6 +322,9 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 	setID := set.Set.SetID
 	periodStart := period
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
+		if g.active != nil && !g.active() {
+			return recalcexec.Selection{}, nil
+		}
 		var pending []gapledger.Entry
 		for _, entry := range g.ledger.Pending() {
 			if entry.Set == setID && entry.Period.Equal(periodStart) {

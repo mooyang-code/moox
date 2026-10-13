@@ -436,3 +436,30 @@ func TestAssembleFillOnlyWritesLegitimateNull(t *testing.T) {
 	require.Equal(t, map[string]any{factor.Outputs[0]: nil}, rows[0].Fields)
 	require.Equal(t, ItemWritten, report.Items[ItemKey{FactorID: "f", Subject: "BTC", Period: minute(10)}])
 }
+
+// 存储不支持首根 K 线查询（或读取失败）时，空帧保守当作窗口整段缺失，不能把「查不到」当成「没有历史」。
+func TestCheckGapsEmptyFrameWithUnknownHistoryIsConservative(t *testing.T) {
+	factor := testPipelineFactor("f", domain.FactorTypeTimeSeries, 3, false)
+	plan := livePlanAt(minute(10), []domain.FactorDef{factor}, "BTC")
+	frames := map[string]*storageio.Frame{"BTC": {SubjectID: "BTC", Columns: []string{"data_time", "series_tag", "close"}}}
+	require.True(t, gapRunner(&outputStore{}).checkGaps(context.Background(), plan, loadedOf(frames)).Invalid("f", "BTC", minute(10)))
+	require.True(t, gapRunner(&earliestStore{failed: true}).checkGaps(context.Background(), plan, loadedOf(frames)).Invalid("f", "BTC", minute(10)))
+}
+
+// 同一因子、标的、周期有两个序列：一个成功一个失败时不能确认该项（否则恢复会把待办移除，失败的序列再也不重试）。
+func TestAssembleReportDoesNotConfirmWhenOneSeriesFails(t *testing.T) {
+	factor := testPipelineFactor("f", domain.FactorTypeTimeSeries, 1, false)
+	plan := computePlan(minute(10), []domain.FactorDef{factor}, []string{"BTC"})
+	plan.Mode = ModeRecalc
+	plan.FillOnly, plan.WriteCarry = true, false
+	plan.TargetStart, plan.TargetEnd = minute(10), minute(11)
+	frame := gapFrame("BTC", "a", 10)
+	frame.Rows = append(frame.Rows, gapFrame("BTC", "b", 10).Rows...)
+	loaded := loadedOf(map[string]*storageio.Frame{"BTC": frame})
+	computation := successfulComputation(factor, []string{"data_time", "series_tag", factor.Outputs[0]},
+		[][]any{{minute(10), "a", 1.0}, {minute(10), "b", "不是数字"}})
+	rows, report, err := gapRunner(&outputStore{}).AssembleWithReport(plan, loaded, computation)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "只写成功的序列")
+	require.Equal(t, ItemFailed, report.Items[ItemKey{FactorID: "f", Subject: "BTC", Period: minute(10)}])
+}

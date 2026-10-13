@@ -271,8 +271,10 @@ func (r *Runner) subjectGrid(ctx context.Context, plan Plan, subject string, fra
 	result := &seriesGaps{grid: grid, missing: make(map[string][]bool)}
 	if len(present) == 0 {
 		// 空帧：读取成功但窗口内没有任何行。存在过（有首根 K 线记录且早于窗口结束）说明窗口整段缺失；从未有过数据则沿用现有路径。
-		first, found, _ := r.firstBar(ctx, plan, subject)
-		if !found || !first.Before(grid[len(grid)-1].Add(time.Nanosecond)) {
+		// 确认从未有过数据（或首根 K 线晚于窗口结束）才沿用现有路径；无法查询（读取失败、存储不支持）时保守当作空洞，
+		// 不能把「查不到」当成「没有历史」而漏检。
+		first, found, known := r.firstBar(ctx, plan, subject)
+		if known && (!found || !first.Before(grid[len(grid)-1].Add(time.Nanosecond))) {
 			return nil
 		}
 		present[""] = map[int64]struct{}{}

@@ -18,6 +18,20 @@ type observedStore struct {
 	health *Health
 }
 
+// earliestPeriodReader 是存储客户端读取标的最早一根 K 线的能力；窗口空洞检查用它区分新上市与真正的空洞。
+// observedStore 嵌入的是 storageio.Store 接口，不含这个方法，必须显式转发，否则 pipeline 里的类型断言永远失败。
+type earliestPeriodReader interface {
+	EarliestPeriod(ctx context.Context, spaceID, datasetID, freq string, subjects, columns []string) (time.Time, bool, error)
+}
+
+func (s *observedStore) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq string, subjects, columns []string) (time.Time, bool, error) {
+	reader, ok := s.Store.(earliestPeriodReader)
+	if !ok {
+		return time.Time{}, false, errors.New("storage client does not support earliest period reads")
+	}
+	return reader.EarliestPeriod(ctx, spaceID, datasetID, freq, subjects, columns)
+}
+
 func (s *observedStore) WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []storageio.ResultRow) error {
 	err := s.Store.WriteRows(ctx, spaceID, datasetID, commitID, rows)
 	s.health.RecordStorageWrite(err == nil)

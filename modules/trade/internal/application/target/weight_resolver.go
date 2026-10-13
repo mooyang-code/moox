@@ -101,6 +101,15 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	if len(orderedWeights) == 0 {
 		return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: []store.InstrumentTarget{}}, nil
 	}
+	// 全部是保持标的的目标不换算任何数量，不依赖权益快照与报价：权益读取暂时失败时保持标记也必须被接受，
+	// 否则旧的调仓目标会继续执行，保持保护失效。
+	if allHold(orderedWeights) {
+		held := make([]store.InstrumentTarget, 0, len(orderedWeights))
+		for _, weight := range orderedWeights {
+			held = append(held, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
+		}
+		return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: held}, nil
+	}
 	equity, equityTime, err := r.Equity.ResolveLogicalAccountEquity(ctx, spaceID, request.GetLogicalAccountId())
 	if err != nil {
 		return WeightConversion{}, err
@@ -158,6 +167,15 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		})
 	}
 	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: equity, EquitySourceTime: equityTime, ReferencePrices: prices, ReferencePriceEvidence: evidence, WeightsJSON: weightsJSON, QuantityTargets: quantities}, nil
+}
+
+func allHold(weights []orderedWeight) bool {
+	for _, weight := range weights {
+		if !weight.Hold {
+			return false
+		}
+	}
+	return len(weights) > 0
 }
 
 func validateWeightRisk(weights []orderedWeight) error {
