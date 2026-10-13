@@ -176,6 +176,11 @@ export async function listStrategies(params: PageRequest = {}): Promise<PageResu
   };
 }
 
+/** ErrorCode.INVALID_PARAM = 1：请求内容本身有问题（DSL 不合法、绑定无法解析）。 */
+function isInvalidParam(code: unknown): boolean {
+  return code === 1 || code === "1" || code === "INVALID_PARAM";
+}
+
 /** 校验 DSL；给出 view_id 时解析绑定并在最新周期试算一次（不落库）。 */
 export async function validateStrategy(dsl_yaml: string, view_id = ""): Promise<ValidateStrategyResult> {
   let response: any;
@@ -185,11 +190,15 @@ export async function validateStrategy(dsl_yaml: string, view_id = ""): Promise<
       view_id: view_id || undefined
     });
   } catch (error) {
-    // 校验不通过时服务端以业务错误返回诊断：作为结果交给页面展示，而不是抛异常。
-    if (!(error instanceof ControlRequestError)) throw error;
-    const diagnostics: string[] = (error.response as any)?.diagnostics ?? [];
+    // 只有服务端明确返回“参数无效”的校验失败才转成诊断结果；断网、HTTP、认证、空间失效等请求错误继续抛出，由页面按请求错误展示。
+    const rejected = error instanceof ControlRequestError ? (error.response as any) : undefined;
+    if (!(error instanceof ControlRequestError) || !isInvalidParam(rejected?.ret_info?.code)) throw error;
+    const diagnostics: unknown = rejected?.diagnostics;
+    const messages = Array.isArray(diagnostics)
+      ? diagnostics.filter((item): item is string => typeof item === "string" && item !== "")
+      : [];
     return {
-      diagnostics: diagnostics.length ? diagnostics : [error.message],
+      diagnostics: messages.length ? messages : [error.message],
       resolved_json: "",
       trial: null,
       trial_items: []

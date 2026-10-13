@@ -5,11 +5,16 @@
     >
     <span class="muted">投递状态不代表成交状态</span>
   </div>
+  <a-alert v-if="error" type="error" show-icon class="result-alert"
+    >{{ error }}<template v-if="results.length">（下方是上一次读取的结果）</template
+    ><template #action><a-button size="small" @click="emit('retry')">重试</a-button></template></a-alert
+  >
   <ResultOverview :results="results" />
   <a-table
     row-key="result_id"
     size="small"
     :data="results"
+    :loading="loading"
     :pagination="pagination"
     :scroll="{ x: 1280 }"
     @page-change="changePage"
@@ -70,10 +75,12 @@
       >
     </template>
   </a-table>
-  <a-empty v-if="!results.length" description="暂无策略结果" />
+  <a-empty v-if="!results.length && !loading && !error" description="暂无策略结果" />
   <a-drawer v-model:visible="explainVisible" :width="'min(980px, 100vw)'" :footer="false" unmount-on-close :title="explainTitle">
     <a-spin :loading="explainLoading" class="explain-body">
-      <a-alert v-if="explainError" type="error" show-icon>{{ explainError }}</a-alert>
+      <a-alert v-if="explainError" type="error" show-icon
+        >{{ explainError }}<template #action><a-button size="small" @click="retryExplain">重试</a-button></template></a-alert
+      >
       <template v-else-if="detail">
         <a-tabs default-active-key="items">
           <a-tab-pane key="items" title="逐标的解释"><ResultItems :result="detail.result" :items="detail.items" /></a-tab-pane>
@@ -112,8 +119,12 @@ const props = defineProps<{
   page: number;
   pageSize: number;
   scope: "session" | "all";
+  /** 结果表正在加载（翻页、切换范围）；翻页期间旧数据不应被当作新页展示。 */
+  loading?: boolean;
+  /** 结果读取失败的说明；表格保留上一次成功读取的数据。 */
+  error?: string;
 }>();
-const emit = defineEmits<{ page: [number, "session" | "all"] }>();
+const emit = defineEmits<{ page: [number, "session" | "all"]; retry: [] }>();
 const store = useStrategyStore();
 const explainVisible = ref(false);
 const explainLoading = ref(false);
@@ -121,6 +132,7 @@ const explainError = ref("");
 const detail = ref<StrategyResultDetail | null>(null);
 const explainTitle = ref("结果解释");
 let explainRequest = 0;
+let explainTarget: StrategyResult | null = null;
 const pagination = computed(() => ({ current: props.page, pageSize: props.pageSize, total: props.total }));
 const scope = computed(() => props.scope);
 const insights = computed(() => buildResultInsights(props.results));
@@ -158,7 +170,11 @@ function changePage(page: number) {
 function changeScope(value: string | number | boolean) {
   emit("page", 1, value === "all" ? "all" : "session");
 }
+function retryExplain() {
+  if (explainTarget) void explain(explainTarget);
+}
 async function explain(record: StrategyResult) {
+  explainTarget = record;
   const requestId = ++explainRequest;
   explainTitle.value = `结果解释 · ${formatStrategyTime(record.bar_end_time)}`;
   explainVisible.value = true;
@@ -186,6 +202,9 @@ function publishColor(value?: string) {
 </script>
 
 <style scoped>
+.result-alert {
+  margin-bottom: 12px;
+}
 .result-toolbar {
   display: flex;
   align-items: center;

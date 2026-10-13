@@ -93,17 +93,45 @@ describe("strategy API", () => {
     );
   });
 
-  it("returns diagnostics instead of throwing when validation fails", async () => {
+  it("returns the server's diagnostics when validation is rejected as an invalid parameter", async () => {
     callControl.mockRejectedValueOnce(
       new ControlRequestError("列 momentum_99 不存在于 View view_a", {
         ret_info: { code: 1, msg: "列 momentum_99 不存在于 View view_a" },
-        diagnostics: ["列 momentum_99 不存在于 View view_a"]
+        diagnostics: ["列 momentum_99 不存在于 View view_a", "规则 r2 引用了未知列", ""]
       })
     );
     const result = await validateStrategy("name: x", "view_a");
-    expect(result.diagnostics[0]).toContain("momentum_99");
+    expect(result.diagnostics).toEqual(["列 momentum_99 不存在于 View view_a", "规则 r2 引用了未知列"]);
     expect(result.trial).toBeNull();
     expect(callControl).toHaveBeenCalledWith("strategy", "ValidateStrategy", { dsl_yaml: "name: x", view_id: "view_a" });
+  });
+
+  it("falls back to the error message when a rejected validation carries no diagnostics", async () => {
+    callControl.mockRejectedValueOnce(
+      new ControlRequestError("YAML 无法解析", { ret_info: { code: "INVALID_PARAM", msg: "YAML 无法解析" } })
+    );
+    await expect(validateStrategy("::")).resolves.toMatchObject({ diagnostics: ["YAML 无法解析"] });
+  });
+
+  it("keeps transport, auth and server errors as request errors", async () => {
+    const network = new ControlRequestError("Network Error");
+    callControl.mockRejectedValueOnce(network);
+    await expect(validateStrategy("name: x")).rejects.toBe(network);
+    const internal = new ControlRequestError("内部错误", { ret_info: { code: 4, msg: "内部错误" } });
+    callControl.mockRejectedValueOnce(internal);
+    await expect(validateStrategy("name: x")).rejects.toBe(internal);
+    const other = new Error("框架错误");
+    callControl.mockRejectedValueOnce(other);
+    await expect(validateStrategy("name: x")).rejects.toBe(other);
+  });
+
+  it("passes success-path diagnostics (trial notes) through untouched", async () => {
+    callControl.mockResolvedValueOnce({ diagnostics: ["试算未完成：View 暂无数据"], resolved_json: '{"view_id":"v"}' });
+    await expect(validateStrategy("name: x", "v")).resolves.toMatchObject({
+      diagnostics: ["试算未完成：View 暂无数据"],
+      resolved_json: '{"view_id":"v"}',
+      trial: null
+    });
   });
 
   it("omits the enabled filter unless it is a boolean", async () => {

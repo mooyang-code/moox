@@ -28,8 +28,16 @@ const stubs = {
   "a-radio": { template: "<span><slot /></span>" },
   "a-button": { template: "<button><slot /></button>" },
   "a-drawer": true,
-  "a-empty": true
+  "a-alert": { template: '<div class="alert"><slot /><slot name="action" /></div>' },
+  "a-empty": { template: '<div class="empty" />' }
 };
+
+function mountTable(props: Record<string, unknown>) {
+  return mount(ResultTable, {
+    props: { results: [], total: 0, page: 1, pageSize: 20, scope: "session", ...props } as never,
+    global: { stubs }
+  });
+}
 
 function result(overrides: Partial<StrategyResult>): StrategyResult {
   return {
@@ -91,5 +99,23 @@ describe("strategy result table", () => {
     expect(wrapper.text()).toContain("80.00%");
     expect(wrapper.text()).toContain("20.00%");
     expect(wrapper.text()).toContain("解释");
+  });
+
+  it("shows a read failure with a retry that keeps the last rows visible", async () => {
+    const wrapper = mountTable({ results: [result({ result_id: "r1" })], error: "策略结果加载失败" });
+    expect(wrapper.text()).toContain("策略结果加载失败");
+    expect(wrapper.text()).toContain("上一次读取的结果");
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "重试")!
+      .trigger("click");
+    expect(wrapper.emitted("retry")).toHaveLength(1);
+  });
+
+  it("shows the empty state only when idle, not while loading or after a failure", () => {
+    const empty = (props: Record<string, unknown>) => mountTable({ results: [], ...props }).find(".empty");
+    expect(empty({}).exists()).toBe(true);
+    expect(empty({ loading: true }).exists()).toBe(false);
+    expect(empty({ error: "失败" }).exists()).toBe(false);
   });
 });

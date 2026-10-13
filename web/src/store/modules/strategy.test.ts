@@ -234,6 +234,77 @@ describe("strategy store", () => {
     expect(store.totalInstances).toBe(0);
   });
 
+  describe("history results", () => {
+    const targets = { targets: [], session_id: "session-1", bar_end_time: "", valid_until: "", result_id: "" };
+    const row = (id: string) => ({ result_id: id });
+
+    async function loaded() {
+      api.getInstance.mockResolvedValue(instance());
+      api.getStrategy.mockResolvedValue({ strategy_id: "strategy-1" });
+      api.listStrategyTargets.mockResolvedValue(targets);
+      api.listStrategyResults.mockResolvedValue({ items: [row("r1"), row("r2")], page: { total: 45 } });
+      const store = useStrategyStore();
+      await store.loadInstanceDetail("instance-1");
+      await vi.waitFor(() => expect(store.resultsLoading).toBe(false));
+      return store;
+    }
+
+    it("reports a failed result read without calling the instance detail failed", async () => {
+      api.getInstance.mockResolvedValue(instance());
+      api.getStrategy.mockResolvedValue({ strategy_id: "strategy-1" });
+      api.listStrategyTargets.mockResolvedValue(targets);
+      api.listStrategyResults.mockRejectedValue(new Error("结果服务超时"));
+      const store = useStrategyStore();
+      await expect(store.loadInstanceDetail("instance-1")).resolves.toBe(true);
+      await vi.waitFor(() => expect(store.resultsLoading).toBe(false));
+      expect(store.resultsError).toBe("结果服务超时");
+      expect(store.detailError).toBe("");
+    });
+
+    it("keeps the loaded rows and page when a page read fails", async () => {
+      const store = await loaded();
+      expect(store.loadedResultPage).toBe(1);
+      api.listStrategyResults.mockRejectedValueOnce(new Error("翻页失败"));
+      await expect(store.loadResultPage(2)).rejects.toThrow("翻页失败");
+      expect(store.results.map(item => item.result_id)).toEqual(["r1", "r2"]);
+      expect(store.loadedResultPage).toBe(1);
+      expect(store.resultsError).toBe("翻页失败");
+      expect(store.resultsLoading).toBe(false);
+    });
+
+    it("tracks loading while a page is read and records the loaded page and scope on success", async () => {
+      const store = await loaded();
+      const pending = deferred<{ items: unknown[]; page: { total: number } }>();
+      api.listStrategyResults.mockReturnValueOnce(pending.promise);
+      const reading = store.loadResultPage(3, 20, true);
+      expect(store.resultsLoading).toBe(true);
+      pending.resolve({ items: [row("r9")], page: { total: 45 } });
+      await reading;
+      expect(store.resultsLoading).toBe(false);
+      expect(store.resultsError).toBe("");
+      expect(store.loadedResultPage).toBe(3);
+      expect(store.loadedResultAllHistory).toBe(true);
+    });
+
+    it("clears the previous error when a later read succeeds", async () => {
+      const store = await loaded();
+      api.listStrategyResults.mockRejectedValueOnce(new Error("失败"));
+      await store.loadResultPage(2).catch(() => undefined);
+      await store.loadResultPage(2);
+      expect(store.resultsError).toBe("");
+      expect(store.loadedResultPage).toBe(2);
+    });
+
+    it("keeps the previous rows when a background refresh fails", async () => {
+      const store = await loaded();
+      api.listStrategyResults.mockRejectedValueOnce(new Error("后台刷新失败"));
+      await store.loadInstanceDetail("instance-1");
+      await vi.waitFor(() => expect(store.resultsError).toBe("后台刷新失败"));
+      expect(store.results).toHaveLength(2);
+      expect(store.resultsLoading).toBe(false);
+    });
+  });
+
   it("caches result explanations and removes deleted rows", async () => {
     api.getStrategyResult.mockResolvedValue({ result: { result_id: "r1" }, items: [], dsl_yaml: "", resolved_json: "{}" });
     api.deleteInstance.mockResolvedValue(undefined);

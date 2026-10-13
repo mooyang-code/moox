@@ -80,7 +80,10 @@
               :page="resultPage"
               :page-size="resultPageSize"
               :scope="resultScope"
+              :loading="store.resultsLoading"
+              :error="store.resultsError"
               @page="loadResults"
+              @retry="loadResults(resultPage, resultScope)"
           /></a-tab-pane>
           <a-tab-pane key="bindings" title="输入绑定"><ResolvedTable :resolved-json="store.instance.resolved_json" /></a-tab-pane>
           <a-tab-pane key="definition" title="DSL 定义">
@@ -159,7 +162,13 @@ async function refresh() {
 async function loadResults(page: number, scope: "session" | "all") {
   resultPage.value = page;
   resultScope.value = scope;
-  await store.loadResultPage(page, resultPageSize, scope === "all").catch(() => undefined);
+  try {
+    await store.loadResultPage(page, resultPageSize, scope === "all");
+  } catch {
+    // 翻页失败：表格仍是上一次成功读取的数据，页码与范围退回到它所属的那一页，否则分页器停在失败的页码上点不动。
+    resultPage.value = store.loadedResultPage;
+    resultScope.value = store.loadedResultAllHistory ? "all" : "session";
+  }
 }
 async function reconcileControl() {
   await load(true);

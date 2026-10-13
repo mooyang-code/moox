@@ -59,6 +59,12 @@ export const useStrategyStore = defineStore("strategy", () => {
   const detailLoading = ref(false);
   const error = ref("");
   const detailError = ref("");
+  // 历史结果的加载与错误独立于实例详情：结果读取失败不能算成“实例详情加载失败”，也不能挡住启停后的状态核对。
+  // loadedResultPage/loadedResultAllHistory 是当前表格里数据所属的页与范围：翻页失败时页面据此把页码退回去。
+  const resultsLoading = ref(false);
+  const resultsError = ref("");
+  const loadedResultPage = ref(1);
+  const loadedResultAllHistory = ref(false);
   const operationLoading = ref(false);
   const poller = ref<ReturnType<typeof setInterval> | null>(null);
   let pollingBusy = false;
@@ -146,6 +152,7 @@ export const useStrategyStore = defineStore("strategy", () => {
   async function loadInstanceDetail(instanceId: string, page = 1, pageSize = 20, allHistory = false) {
     const requestId = ++detailRequest;
     const resultRequestId = ++resultRequest;
+    const hadInstance = instance.value?.instance_id === instanceId;
     detailLoading.value = true;
     detailError.value = "";
     try {
@@ -171,15 +178,24 @@ export const useStrategyStore = defineStore("strategy", () => {
               page_size: pageSize
             })
           : Promise.resolve(null);
+      // 首次读取该实例时显示结果加载态；后台轮询刷新不遮罩，失败时保留上次的数据并提示。
+      const firstLoad = !hadInstance;
+      if (firstLoad) resultsLoading.value = true;
       void resultTask
         .then(response => {
           if (requestId !== detailRequest || resultRequestId !== resultRequest) return;
           results.value = response?.items ?? [];
           totalResults.value = response?.page.total ?? 0;
+          loadedResultPage.value = page;
+          loadedResultAllHistory.value = allHistory;
+          resultsError.value = "";
         })
         .catch(err => {
           if (requestId === detailRequest && resultRequestId === resultRequest)
-            detailError.value = errorMessage(err, "策略结果加载失败");
+            resultsError.value = errorMessage(err, "策略结果加载失败");
+        })
+        .finally(() => {
+          if (requestId === detailRequest && resultRequestId === resultRequest) resultsLoading.value = false;
         });
       const targets = await listStrategyTargets(instanceId);
       if (requestId !== detailRequest) return false;
@@ -193,6 +209,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
+  /** 读取历史结果的一页：失败时保留当前表格的数据，错误记在 resultsError，调用方按 loadedResultPage 退回页码。 */
   async function loadResultPage(page: number, pageSize = 20, allHistory = false) {
     if (!instance.value) return;
     if (!allHistory && !instance.value.session_id) {
@@ -200,11 +217,15 @@ export const useStrategyStore = defineStore("strategy", () => {
       resultRequest += 1;
       results.value = [];
       totalResults.value = 0;
-      detailError.value = "";
+      loadedResultPage.value = 1;
+      loadedResultAllHistory.value = false;
+      resultsLoading.value = false;
+      resultsError.value = "";
       return;
     }
     const requestId = ++resultRequest;
-    detailError.value = "";
+    resultsLoading.value = true;
+    resultsError.value = "";
     try {
       const response = await listStrategyResults(instance.value.instance_id, {
         page,
@@ -214,9 +235,13 @@ export const useStrategyStore = defineStore("strategy", () => {
       if (requestId !== resultRequest) return;
       results.value = response.items;
       totalResults.value = response.page.total;
+      loadedResultPage.value = page;
+      loadedResultAllHistory.value = allHistory;
     } catch (err) {
-      if (requestId === resultRequest) detailError.value = errorMessage(err, "策略结果加载失败");
+      if (requestId === resultRequest) resultsError.value = errorMessage(err, "策略结果加载失败");
       throw err;
+    } finally {
+      if (requestId === resultRequest) resultsLoading.value = false;
     }
   }
 
@@ -291,6 +316,10 @@ export const useStrategyStore = defineStore("strategy", () => {
     targetSnapshot.value = null;
     totalResults.value = 0;
     detailError.value = "";
+    resultsLoading.value = false;
+    resultsError.value = "";
+    loadedResultPage.value = 1;
+    loadedResultAllHistory.value = false;
   }
 
   return {
@@ -316,6 +345,10 @@ export const useStrategyStore = defineStore("strategy", () => {
     operationLoading,
     error,
     detailError,
+    resultsLoading,
+    resultsError,
+    loadedResultPage,
+    loadedResultAllHistory,
     loadStrategies,
     loadAllStrategies,
     invalidateStrategyCatalog,
