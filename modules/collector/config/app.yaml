@@ -1,5 +1,6 @@
 gateway_client:
   caller: collector
+  compression: gzip
   key_id: ""
   key_file: ../../secrets/caller-collector.key
 # MooX Collector control-plane service configuration.

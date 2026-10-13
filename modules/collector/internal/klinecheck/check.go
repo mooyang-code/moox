@@ -17,6 +17,8 @@ import (
 const (
 	rowPageSize       = 5000
 	defaultConcurrent = 8
+	// subjectsPerRead 是一次读取合并的标的数：把逐标的的小请求合成批量请求，减少公网往返与网关压力。
+	subjectsPerRead = 50
 	// MaxGaps 是一次检查返回的缺口数上限；超过时标记 Truncated。
 	MaxGaps = 5000
 	// MaxCheckPoints 是一次检查或补采允许展开的（标的 × 时间点）总数上限，防止一次请求占满内存。
@@ -106,9 +108,9 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 		return nil, err
 	}
 	type job struct {
-		key     string
-		segment Segment
-		subject string
+		key      string
+		segment  Segment
+		subjects []string
 	}
 	var jobs []job
 	keys := make([]string, 0, len(timeline))
@@ -122,11 +124,15 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			continue
 		}
 		for _, segment := range timeline[key] {
+			var selected []string
 			for _, subject := range segment.Subjects {
 				if request.SubjectID != "" && !strings.EqualFold(request.SubjectID, subject) {
 					continue
 				}
-				jobs = append(jobs, job{key: key, segment: segment, subject: subject})
+				selected = append(selected, subject)
+			}
+			for from := 0; from < len(selected); from += subjectsPerRead {
+				jobs = append(jobs, job{key: key, segment: segment, subjects: selected[from:min(from+subjectsPerRead, len(selected))]})
 			}
 		}
 	}
@@ -145,7 +151,7 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			to = time.Unix(item.segment.To, 0).UTC()
 		}
 		if to.After(from) {
-			points += int64(barCount(frequency, alignUp(frequency, from), to))
+			points += int64(barCount(frequency, alignUp(frequency, from), to)) * int64(len(item.subjects))
 		}
 	}
 	if points > MaxCheckPoints {
@@ -166,12 +172,12 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			defer wg.Done()
 			defer func() { <-slots }()
 			datasetID, frequency, _ := strings.Cut(item.key, "|")
-			gaps, expected, err := c.checkSubject(ctx, request, datasetID, frequency, item.subject, item.segment)
+			gaps, expected, err := c.checkSubjects(ctx, request, datasetID, frequency, item.subjects, item.segment)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				if firstErr == nil {
-					firstErr = fmt.Errorf("check %s %s %s: %w", datasetID, frequency, item.subject, err)
+					firstErr = fmt.Errorf("check %s %s %s 等 %d 个标的: %w", datasetID, frequency, item.subjects[0], len(item.subjects), err)
 				}
 				return
 			}
@@ -225,7 +231,8 @@ func (c *Checker) expectedBars(spaceID string, frequency marketdata.Frequency, f
 	return bars, nil
 }
 
-func (c *Checker) checkSubject(ctx context.Context, request Request, datasetID, frequencyName, subject string, segment Segment) ([]Gap, int, error) {
+// checkSubjects 检查同一数据集、同一计划段内的一批标的：应有的 K 线对它们相同，只读一次 Storage，再逐标的求缺口。
+func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID, frequencyName string, subjects []string, segment Segment) ([]Gap, int, error) {
 	frequency, err := marketdata.ParseFrequency(frequencyName)
 	if err != nil {
 		return nil, 0, err
@@ -251,14 +258,22 @@ func (c *Checker) checkSubject(ctx context.Context, request Request, datasetID, 
 	if request.Deep {
 		required = deepFields(segment.OutputFields)
 	}
-	present := map[int64]bool{}
+	present := map[string]map[int64]bool{}
 	if !request.AssumeMissing {
-		var err error
-		present, err = c.readPresent(ctx, request.SpaceID, datasetID, frequencyName, subject, bars[0], bars[len(bars)-1].Add(time.Second), required, request.Deep)
+		present, err = c.readPresent(ctx, request.SpaceID, datasetID, frequencyName, subjects, bars[0], bars[len(bars)-1].Add(time.Second), required, request.Deep)
 		if err != nil {
 			return nil, 0, err
 		}
 	}
+	var gaps []Gap
+	for _, subject := range subjects {
+		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, frequency, bars, present[subject])...)
+	}
+	return gaps, len(bars) * len(subjects), nil
+}
+
+// subjectGaps 把应有的 K 线与实际存在的时间点比对，合并成连续缺口。
+func subjectGaps(datasetID, frequencyName, subject string, frequency marketdata.Frequency, bars []time.Time, present map[int64]bool) []Gap {
 	var gaps []Gap
 	var open *Gap
 	for _, bar := range bars {
@@ -283,7 +298,7 @@ func (c *Checker) checkSubject(ctx context.Context, request Request, datasetID, 
 	if open != nil {
 		gaps = append(gaps, *open)
 	}
-	return gaps, len(bars), nil
+	return gaps
 }
 
 func deepFields(configured []string) []string {
@@ -293,13 +308,18 @@ func deepFields(configured []string) []string {
 	return []string{"open", "high", "low", "close"}
 }
 
-// readPresent 读出区间内存在（深度检查时字段齐全）的 K 线开始时间。
-func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency, subject string, from, to time.Time, columns []string, deep bool) (map[int64]bool, error) {
-	present := map[int64]bool{}
+// readPresent 一次读出一批标的在区间内存在（深度检查时字段齐全）的 K 线开始时间，按标的分组返回。
+func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time, columns []string, deep bool) (map[string]map[int64]bool, error) {
+	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
+	present := make(map[string]map[int64]bool, len(subjects))
+	for _, subject := range subjects {
+		selectors = append(selectors, &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency})
+		present[subject] = map[int64]bool{}
+	}
 	for page := uint32(1); ; page++ {
 		rsp, err := c.Rows.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID,
-			Selectors:   []*storagepb.TimeSeriesSelector{{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency}},
+			Selectors:   selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: from.Format(time.RFC3339), EndTime: to.Format(time.RFC3339)},
 			ColumnNames: columns, Page: &storagepb.Page{Page: page, Size: rowPageSize},
 		})
@@ -317,7 +337,9 @@ func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency
 			if deep && !hasFields(row, columns) {
 				continue
 			}
-			present[barTime.UTC().Unix()] = true
+			if bySubject, ok := present[row.GetKey().GetSubjectId()]; ok {
+				bySubject[barTime.UTC().Unix()] = true
+			}
 		}
 		if !rsp.GetPageResult().GetHasMore() {
 			return present, nil

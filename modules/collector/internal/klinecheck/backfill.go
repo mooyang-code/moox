@@ -29,9 +29,15 @@ const (
 	// MaxChunksPerJob 防止一次作业展开出无法完成的分块数。
 	MaxChunksPerJob = 20000
 	// autoScanInterval 是自动补采的扫描间隔；autoScanOverlap 是每次扫描向前重叠的时间。
-	autoScanInterval  = time.Hour
-	autoScanOverlap   = 10 * time.Minute
-	autoScanWindow    = 24 * time.Hour
+	// 高频小窗口：每次只检查最近几分钟，请求量小、链路占用短，缺口也能很快发现。
+	autoScanInterval = 5 * time.Minute
+	autoScanOverlap  = 5 * time.Minute
+	// autoScanOffset 把扫描错开到每个 5 分钟槽开始后 2 分 30 秒之后，避开整点、整 5 分钟与每分钟开头的采集高峰。
+	autoScanOffset = 150 * time.Second
+	// autoScanWindow 是一次扫描单个数据集的最大跨度（落后时分多次追赶）：窗口过大（例如 24 小时的 1 分钟线约
+	// 70 万行）会在公网链路上持续数分钟占满带宽，拖慢同一时段的策略与事件投递，读超时又使水位无法推进、
+	// 下一轮重复同样的大扫描。
+	autoScanWindow    = time.Hour
 	autoMaxChunks     = 2000
 	maxChunkAttempts  = 5
 	chunkInvokeLimit  = 90 * time.Second
@@ -610,21 +616,23 @@ func (b *Backfiller) advanceWatermark(ctx context.Context, job store.BackfillJob
 	}
 }
 
-// AutoScan 每小时一次：从扫描水位（向前重叠 10 分钟）起，检查已过截止时间的周期，发现缺口就建立自动补采作业。
-// 每次最多扫描 24 小时、展开不超过 autoMaxChunks 个分块；Collector 停机恢复后从水位追赶。
+// AutoScan 每 autoScanInterval 一次：从扫描水位（向前重叠 autoScanOverlap）起，检查已过截止时间的周期，发现缺口就建立自动补采作业。
+// 每次每个数据集最多扫描 autoScanWindow、展开不超过 autoMaxChunks 个分块；Collector 停机恢复后从水位追赶。
 func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 	b.mu.Lock()
 	if b.lastScan == nil {
 		b.lastScan = map[string]time.Time{}
 	}
-	if last := b.lastScan[spaceID]; !last.IsZero() && b.now().Sub(last) < autoScanInterval {
+	// 每个 autoScanInterval 槽只扫一次，且只在槽内偏移 autoScanOffset 之后：lastScan 记录已扫的槽起点。
+	now := b.now()
+	started := now.Truncate(autoScanInterval)
+	if now.Sub(started) < autoScanOffset || b.lastScan[spaceID].Equal(started) {
 		b.mu.Unlock()
 		return nil
 	}
-	started := b.now()
 	b.lastScan[spaceID] = started
 	b.mu.Unlock()
-	// 扫描被超时或取消打断时不占用整整一小时的间隔：下一轮对账就重试。
+	// 扫描被超时或取消打断时不占用整个扫描槽：下一轮对账就重试。
 	defer func() {
 		if ctx.Err() != nil {
 			b.mu.Lock()
@@ -656,7 +664,7 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	now := b.now()
+	now = b.now()
 	for _, key := range keys {
 		datasetID, frequencyName, _ := strings.Cut(key, "|")
 		segments := timeline[key]

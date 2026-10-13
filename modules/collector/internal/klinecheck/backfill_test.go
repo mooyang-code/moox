@@ -91,7 +91,7 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 		rows.missing["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
 	rows.missing["ETH-USDT"][base.Add(10*time.Minute).Unix()] = true
-	now := base.Add(48 * time.Hour)
+	now := base.Add(48*time.Hour + 3*time.Minute) // 已过扫描槽的偏移
 	checker := &Checker{Plans: db.FetchPlans(), Rows: rows, Now: func() time.Time { return now }}
 	invoker := &healingInvoker{rows: rows}
 	backfiller := &Backfiller{
@@ -227,11 +227,26 @@ func TestAutoScanAdvancesWatermarkOnlyAfterTheJobSucceeds(t *testing.T) {
 	mark, _ = backfiller.Store.Watermark(ctx, "crypto", "ds", "1m")
 	require.True(t, mark.After(base))
 
-	// 一小时内不重复扫描，也不叠加在未结束的自动作业上。
+	// 扫描间隔内不重复扫描，也不叠加在未结束的自动作业上。
 	before, _ := backfiller.Store.ActiveJobs(ctx, "crypto")
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
 	after, _ := backfiller.Store.ActiveJobs(ctx, "crypto")
 	require.Equal(t, len(before), len(after))
+}
+
+func TestAutoScanCatchUpAdvancesOneWindowAtATime(t *testing.T) {
+	backfiller, _, _, base := newBackfillFixture(t)
+	ctx := context.Background()
+	// 夹具里计划从 base 起、当前时间是 base+48h：落后远超一个窗口时，一次扫描只覆盖 autoScanWindow，
+	// 不会一次读出几十小时的行占满链路。
+	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
+	jobs, err := backfiller.Store.ActiveJobs(ctx, "crypto")
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	var request JobRequest
+	require.NoError(t, json.Unmarshal([]byte(jobs[0].Request), &request))
+	require.True(t, request.From.Equal(base))
+	require.Equal(t, autoScanWindow, request.To.Sub(request.From))
 }
 
 func TestCheckRejectsOversizedRanges(t *testing.T) {

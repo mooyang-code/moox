@@ -36,22 +36,23 @@ func (f *fakeRows) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTime
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads++
-	selector := req.GetSelectors()[0]
 	start, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetStartTime())
 	end, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetEndTime())
 	rsp := &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, PageResult: &storagepb.PageResult{}}
-	for t := start; t.Before(end); t = t.Add(time.Minute) {
-		if f.missing[selector.GetSubjectId()][t.Unix()] {
-			continue
-		}
-		row := &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SubjectId: selector.GetSubjectId(), DataTime: t.Format(time.RFC3339)}}
-		for _, column := range req.GetColumnNames() {
-			if column == "open" && f.noOpen[selector.GetSubjectId()][t.Unix()] {
+	for _, selector := range req.GetSelectors() {
+		for t := start; t.Before(end); t = t.Add(time.Minute) {
+			if f.missing[selector.GetSubjectId()][t.Unix()] {
 				continue
 			}
-			row.Fields = append(row.Fields, &storagepb.FieldValue{FieldId: column, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1}}})
+			row := &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SubjectId: selector.GetSubjectId(), DataTime: t.Format(time.RFC3339)}}
+			for _, column := range req.GetColumnNames() {
+				if column == "open" && f.noOpen[selector.GetSubjectId()][t.Unix()] {
+					continue
+				}
+				row.Fields = append(row.Fields, &storagepb.FieldValue{FieldId: column, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1}}})
+			}
+			rsp.Rows = append(rsp.Rows, row)
 		}
-		rsp.Rows = append(rsp.Rows, row)
 	}
 	return rsp, nil
 }
@@ -94,6 +95,22 @@ func TestCheckFindsMergedGapsAcrossSubjectChanges(t *testing.T) {
 	one, err := checker.Check(context.Background(), Request{SpaceID: "crypto", SubjectID: "eth-usdt", From: base, To: base.Add(20 * time.Minute)})
 	require.NoError(t, err)
 	require.Equal(t, 10, one.Expected)
+}
+
+func TestCheckReadsManySubjectsInBatches(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	subjects := make([]string, 0, subjectsPerRead+20)
+	for i := 0; i < subjectsPerRead+20; i++ {
+		subjects = append(subjects, fmt.Sprintf("S%03d-USDT", i))
+	}
+	rows := &fakeRows{missing: map[string]map[int64]bool{"S007-USDT": {base.Add(2 * time.Minute).Unix(): true}}}
+	checker := &Checker{Plans: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), subjects...)}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
+	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.Add(5 * time.Minute)})
+	require.NoError(t, err)
+	require.Equal(t, 2, rows.reads, "标的按每批 subjectsPerRead 个合并读取")
+	require.Equal(t, len(subjects)*5, result.Expected)
+	require.Len(t, result.Gaps, 1)
+	require.Equal(t, "S007-USDT", result.Gaps[0].SubjectID)
 }
 
 func TestCheckIgnoresPeriodsBeforeDeadlineAndUnregisteredPlans(t *testing.T) {
