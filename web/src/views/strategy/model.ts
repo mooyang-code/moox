@@ -1,4 +1,4 @@
-import type { InstrumentTarget, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type { InstrumentTarget, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
 
 export type TargetState = "inactive" | "unknown" | "empty" | "expired" | "zero" | "valid";
 
@@ -204,4 +204,98 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     min_age_bars: Number(value.min_age_bars ?? 0),
     columns
   };
+}
+
+export interface ResultInsight {
+  /** 相对上一期（时间更早的一期 ok 结果）新进的标的。 */
+  added: string[];
+  /** 相对上一期移出的标的。 */
+  removed: string[];
+  /** 是否有上一期可比较；没有时 added/removed 不代表真实变化。 */
+  comparable: boolean;
+  /** 结果落库时间减 K 线结束时间，毫秒；任一时间无效时为 null。 */
+  delayMs: number | null;
+}
+
+type ResultLike = Pick<StrategyResult, "result_id" | "status" | "bar_end_time" | "created_at" | "targets" | "skip_reason">;
+
+/**
+ * 按 K 线结束时间从旧到新比较相邻的 ok 结果，得到每期的持仓变化与产出延迟。
+ * 只在传入的结果之间比较：分页边界上最旧的一期没有上一期，comparable 为 false。
+ * 跳过期不改变持仓基线，持仓变化跨过跳过期比较。
+ */
+export function buildResultInsights(results: ResultLike[]): Record<string, ResultInsight> {
+  const ordered = [...results].sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
+  const insights: Record<string, ResultInsight> = {};
+  let previous: Set<string> | null = null;
+  for (const item of ordered) {
+    const barEnd = Date.parse(item.bar_end_time);
+    const created = Date.parse(item.created_at);
+    const delayMs = Number.isFinite(barEnd) && Number.isFinite(created) ? created - barEnd : null;
+    const insight: ResultInsight = { added: [], removed: [], comparable: false, delayMs };
+    if (item.status === "ok") {
+      const current = new Set(item.targets.map(target => target.instrument_id));
+      if (previous) {
+        insight.comparable = true;
+        insight.added = [...current].filter(id => !previous!.has(id)).sort();
+        insight.removed = [...previous].filter(id => !current.has(id)).sort();
+      }
+      previous = current;
+    }
+    insights[item.result_id] = insight;
+  }
+  return insights;
+}
+
+export interface ResultOverview {
+  total: number;
+  ok: number;
+  skipped: number;
+  /** 跳过原因计数，按次数降序。 */
+  skipReasons: { reason: string; count: number }[];
+  /** ok 结果的产出延迟（毫秒）：平均与最大；没有可用样本时为 null。 */
+  avgDelayMs: number | null;
+  maxDelayMs: number | null;
+  /** 从旧到新的 ok 结果趋势点。 */
+  trend: { time: string; targets: number; gross: number; turnover: number }[];
+}
+
+export function buildResultOverview(results: ResultLike[] & Pick<StrategyResult, "summary_json">[]): ResultOverview {
+  const insights = buildResultInsights(results);
+  const ordered = [...results].sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
+  const reasons = new Map<string, number>();
+  const delays: number[] = [];
+  const trend: ResultOverview["trend"] = [];
+  let ok = 0;
+  for (const item of ordered) {
+    if (item.status === "ok") {
+      ok += 1;
+      const summary = parseSummary(item.summary_json);
+      trend.push({
+        time: item.bar_end_time,
+        targets: item.targets.length,
+        gross: Number(summary.gross) || 0,
+        turnover: Number(summary.turnover) || 0
+      });
+      const delay = insights[item.result_id]?.delayMs;
+      if (delay !== null && delay !== undefined && delay >= 0) delays.push(delay);
+    } else {
+      reasons.set(item.skip_reason || "unknown", (reasons.get(item.skip_reason || "unknown") ?? 0) + 1);
+    }
+  }
+  return {
+    total: results.length,
+    ok,
+    skipped: results.length - ok,
+    skipReasons: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
+    avgDelayMs: delays.length ? delays.reduce((sum, value) => sum + value, 0) / delays.length : null,
+    maxDelayMs: delays.length ? Math.max(...delays) : null,
+    trend
+  };
+}
+
+/** 毫秒延迟的可读文本；null 显示 "-"。 */
+export function formatDelay(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "-";
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }

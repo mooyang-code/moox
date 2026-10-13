@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildResultInsights,
+  buildResultOverview,
   deriveTargetState,
+  formatDelay,
   itemReasonLabel,
   parseResolved,
   parseSummary,
@@ -65,5 +68,68 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("factor_failed:ma_20")).toContain("上游因子失败（ma_20）");
     expect(itemReasonLabel("source_failed:close")).toContain("上游数据失败（close）");
     expect(itemReasonLabel("custom_reason")).toBe("custom_reason");
+  });
+});
+
+describe("result insights", () => {
+  const base = { summary_json: "{}", skip_reason: "" };
+  const at = (minute: number) => `2026-10-01T01:0${minute}:00Z`;
+  const ok = (id: string, minute: number, ids: string[], delaySec = 2) => ({
+    ...base,
+    result_id: id,
+    status: "ok",
+    bar_end_time: at(minute),
+    created_at: new Date(Date.parse(at(minute)) + delaySec * 1000).toISOString(),
+    targets: ids.map(instrument_id => ({ instrument_id, target_weight: "0.2" }))
+  });
+
+  it("compares holdings between adjacent ok results regardless of input order", () => {
+    const insights = buildResultInsights([ok("c", 3, ["A", "C"]), ok("a", 1, ["A", "B"]), ok("b", 2, ["A", "B"])]);
+    expect(insights.a.comparable).toBe(false);
+    expect(insights.b).toMatchObject({ comparable: true, added: [], removed: [] });
+    expect(insights.c).toMatchObject({ comparable: true, added: ["C"], removed: ["B"] });
+    expect(insights.c.delayMs).toBe(2000);
+  });
+
+  it("keeps the holdings baseline across skipped periods", () => {
+    const skipped = {
+      ...base,
+      result_id: "s",
+      status: "skipped",
+      skip_reason: "no_data",
+      bar_end_time: at(2),
+      created_at: at(2),
+      targets: []
+    };
+    const insights = buildResultInsights([ok("a", 1, ["A"]), skipped, ok("c", 3, ["B"])]);
+    expect(insights.s.comparable).toBe(false);
+    expect(insights.c).toMatchObject({ added: ["B"], removed: ["A"] });
+  });
+
+  it("summarizes skip reasons, delay and trend", () => {
+    const skipped = (id: string, minute: number, reason: string) => ({
+      ...base,
+      result_id: id,
+      status: "skipped",
+      skip_reason: reason,
+      bar_end_time: at(minute),
+      created_at: at(minute),
+      targets: []
+    });
+    const overview = buildResultOverview([
+      ok("a", 1, ["A"], 2),
+      ok("b", 2, ["A", "B"], 4),
+      skipped("x", 3, "no_data"),
+      skipped("y", 4, "no_data"),
+      skipped("z", 5, "expired")
+    ]);
+    expect(overview).toMatchObject({ total: 5, ok: 2, skipped: 3, avgDelayMs: 3000, maxDelayMs: 4000 });
+    expect(overview.skipReasons).toEqual([
+      { reason: "no_data", count: 2 },
+      { reason: "expired", count: 1 }
+    ]);
+    expect(overview.trend.map(point => point.targets)).toEqual([1, 2]);
+    expect(formatDelay(1500)).toBe("1.5s");
+    expect(formatDelay(null)).toBe("-");
   });
 });

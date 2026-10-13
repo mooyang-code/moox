@@ -5,12 +5,13 @@
     >
     <span class="muted">投递状态不代表成交状态</span>
   </div>
+  <ResultOverview :results="results" />
   <a-table
     row-key="result_id"
     size="small"
     :data="results"
     :pagination="pagination"
-    :scroll="{ x: 980 }"
+    :scroll="{ x: 1280 }"
     @page-change="changePage"
   >
     <template #columns>
@@ -45,6 +46,14 @@
       <a-table-column title="换手" :width="90"
         ><template #cell="{ record }">{{
           record.status === "ok" ? percent(parseSummary(record.summary_json).turnover) : "-"
+        }}</template></a-table-column
+      >
+      <a-table-column title="持仓变化" :width="200" :ellipsis="true" :tooltip="true"
+        ><template #cell="{ record }">{{ changeText(record) }}</template></a-table-column
+      >
+      <a-table-column title="产出延迟" :width="90"
+        ><template #cell="{ record }">{{
+          record.status === "ok" ? formatDelay(insights[record.result_id]?.delayMs) : "-"
         }}</template></a-table-column
       >
       <a-table-column title="投递状态" :width="110"
@@ -87,7 +96,15 @@ import type { InstrumentTarget, StrategyResult, StrategyResultDetail } from "@/a
 import { useStrategyStore } from "@/store/modules/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
-import { formatStrategyTime, parseSummary, percent, skipReasonLabel } from "@/views/strategy/model";
+import ResultOverview from "@/views/strategy/components/strategy-result-overview.vue";
+import {
+  buildResultInsights,
+  formatDelay,
+  formatStrategyTime,
+  parseSummary,
+  percent,
+  skipReasonLabel
+} from "@/views/strategy/model";
 
 const props = defineProps<{
   results: StrategyResult[];
@@ -106,6 +123,18 @@ const explainTitle = ref("结果解释");
 let explainRequest = 0;
 const pagination = computed(() => ({ current: props.page, pageSize: props.pageSize, total: props.total }));
 const scope = computed(() => props.scope);
+const insights = computed(() => buildResultInsights(props.results));
+
+function changeText(record: StrategyResult): string {
+  if (record.status !== "ok") return "-";
+  const insight = insights.value[record.result_id];
+  if (!insight?.comparable) return "本页最早一期，无上期可比";
+  if (!insight.added.length && !insight.removed.length) return "无变化";
+  const parts: string[] = [];
+  if (insight.added.length) parts.push(`+${insight.added.join(" +")}`);
+  if (insight.removed.length) parts.push(`-${insight.removed.join(" -")}`);
+  return parts.join("  ");
+}
 
 const TargetList = defineComponent({
   props: { targets: { type: Array as () => InstrumentTarget[], required: true } },
