@@ -556,6 +556,8 @@ func (e *Executor) activeOrders(
 
 type desiredTarget struct {
 	Quantity shared.Decimal
+	// Hold 为 true 时该标的保持当前持仓数量不动，nextLaneAction 视为已完成。
+	Hold bool
 }
 
 func desiredTargets(
@@ -563,6 +565,10 @@ func desiredTargets(
 ) (map[string]desiredTarget, error) {
 	desired := make(map[string]desiredTarget, len(target.Targets))
 	for _, current := range target.Targets {
+		if current.Hold {
+			desired[current.InstrumentID] = desiredTarget{Hold: true}
+			continue
+		}
 		quantity, err := shared.ParseDecimal(current.Quantity)
 		if err != nil {
 			return nil, err
@@ -602,6 +608,10 @@ func nextLaneAction(
 	desired desiredTarget,
 	members []memberState,
 ) (laneAction, bool, string, error) {
+	// 保持标的：既不加仓也不减仓。
+	if desired.Hold {
+		return laneAction{}, true, "", nil
+	}
 	confirmed := shared.Zero()
 	for _, member := range members {
 		confirmed = confirmed.Add(member.positions[instrumentID])

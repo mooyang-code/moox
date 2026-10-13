@@ -242,3 +242,54 @@ func seedLogicalAccount(t *testing.T, s *Store, runnerID string) {
 		})
 	}))
 }
+
+// 保持标的不带数量：编码、受理、读回都保留 hold，现货的负数量检查与编码不把它当作数量目标。
+func TestAcceptLogicalAccountTargetKeepsHoldTargetsWithoutQuantity(t *testing.T) {
+	s := openTestStore(t)
+	seedLogicalAccount(t, s, "runner-1")
+	record := validLogicalAccountTarget()
+	record.Targets = append(record.Targets, InstrumentTarget{InstrumentID: "ETH-USDT-SPOT", Hold: true})
+
+	_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
+
+	require.NoError(t, err)
+	require.True(t, accepted)
+	got, err := s.GetLogicalAccountTarget(context.Background(), record.SpaceID, record.LogicalAccountID)
+	require.NoError(t, err)
+	require.Equal(t, []InstrumentTarget{
+		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
+		{InstrumentID: "ETH-USDT-SPOT", Hold: true},
+	}, got.Targets)
+}
+
+func TestEncodeInstrumentTargetsRejectsHoldWithQuantity(t *testing.T) {
+	_, err := encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "1", Hold: true}})
+	require.ErrorIs(t, err, ErrInvalidRecord)
+	encoded, err := encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Hold: true}})
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`, encoded)
+	decoded, err := decodeCurrentTargets(encoded)
+	require.NoError(t, err)
+	require.Equal(t, []InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Hold: true}}, decoded)
+	// 非保持标的的数量仍必须是合法数字。
+	_, err = encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT"}})
+	require.ErrorIs(t, err, ErrInvalidRecord)
+}
+
+// 回执只有换算过数量的目标才要求权益快照：全部是保持标的时没有换算，不要求；混有换算项仍要求。
+func TestInsertTargetReceiptRequiresEquityOnlyForConvertedTargets(t *testing.T) {
+	s := openTestStore(t)
+	seedLogicalAccount(t, s, "runner-1")
+	ctx := context.Background()
+	receipt := func(id, quantityTargets string) TargetReceiptRecord {
+		return TargetReceiptRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1", RunnerID: "runner-1", CommandSequence: 1,
+			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, AcceptedAt: 1}
+	}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.InsertTargetReceipt(receipt("all-hold", `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`))
+	}))
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		return tx.InsertTargetReceipt(receipt("mixed", `[{"instrument_id":"ETH-USDT-SPOT","hold":true},{"instrument_id":"BTC-USDT-SPOT","quantity":"1"}]`))
+	})
+	require.ErrorIs(t, err, ErrInvalidRecord)
+}

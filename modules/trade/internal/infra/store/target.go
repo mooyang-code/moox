@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,10 @@ import (
 
 type InstrumentTarget struct {
 	InstrumentID string `json:"instrument_id"`
-	Quantity     string `json:"quantity"`
+	// Quantity 在 Hold 为 true 时为空：保持标的不换算数量。
+	Quantity string `json:"quantity,omitempty"`
+	// Hold 为 true 表示保持该标的当前持仓数量不动（策略因数据空洞暂时无法决策），执行器对它既不加仓也不减仓。
+	Hold bool `json:"hold,omitempty"`
 }
 
 type BlockedTarget struct {
@@ -152,6 +156,9 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	}
 	if account.MarketType == "SPOT" {
 		for _, target := range record.Targets {
+			if target.Hold {
+				continue
+			}
 			quantity, parseErr := shared.ParseDecimal(target.Quantity)
 			if parseErr != nil || quantity.Cmp(shared.Zero()) < 0 {
 				return LogicalAccountTargetRecord{}, false, fmt.Errorf(
@@ -397,6 +404,14 @@ func encodeInstrumentTargets(targets []InstrumentTarget) (string, error) {
 				ErrInvalidRecord, target.InstrumentID)
 		}
 		seen[target.InstrumentID] = struct{}{}
+		if target.Hold {
+			// 保持标的不带数量。
+			if !blank(target.Quantity) {
+				return "", fmt.Errorf("%w: hold target must not carry a quantity", ErrInvalidRecord)
+			}
+			target.Quantity = ""
+			continue
+		}
 		quantity, err := shared.ParseDecimal(target.Quantity)
 		if err != nil {
 			return "", fmt.Errorf("%w: target quantity", ErrInvalidRecord)
@@ -471,9 +486,17 @@ func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
 				return nil, fmt.Errorf("%w: duplicate target field", ErrInvalidRecord)
 			}
 			switch name {
-			case "instrument_id", "quantity":
+			case "instrument_id", "quantity", "hold":
 			default:
 				return nil, fmt.Errorf("%w: unknown target field %s", ErrInvalidRecord, name)
+			}
+			if name == "hold" {
+				var hold bool
+				if err := d.Decode(&hold); err != nil {
+					return nil, fmt.Errorf("%w: invalid target field %s", ErrInvalidRecord, name)
+				}
+				fields[name] = strconv.FormatBool(hold)
+				continue
 			}
 			var value string
 			if err := d.Decode(&value); err != nil || blank(value) {
@@ -484,7 +507,7 @@ func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
 		if _, err := d.Token(); err != nil {
 			return nil, err
 		}
-		targets = append(targets, InstrumentTarget{InstrumentID: fields["instrument_id"], Quantity: fields["quantity"]})
+		targets = append(targets, InstrumentTarget{InstrumentID: fields["instrument_id"], Quantity: fields["quantity"], Hold: fields["hold"] == "true"})
 	}
 	if _, err := d.Token(); err != nil {
 		return nil, err

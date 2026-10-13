@@ -314,6 +314,10 @@ func unsupportedLogicalTargetInstrument(
 	// that it can become the eventual eligible execution venue.
 	membersReady = enabledMemberCount > 0 && readyMemberCount == enabledMemberCount
 	for _, target := range request.GetTargets() {
+		// 保持标的不会被下单，不能因为它暂时不受支持（例如已下架的持仓）而拒绝整个目标。
+		if target.GetHold() {
+			continue
+		}
 		if _, ok := supportedIDs[target.GetInstrumentId()]; !ok {
 			return target.GetInstrumentId(), membersReady, nil
 		}

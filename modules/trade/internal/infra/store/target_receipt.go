@@ -71,7 +71,14 @@ func (tx *Tx) InsertTargetReceipt(record TargetReceiptRecord) error {
 	if err := json.Unmarshal([]byte(record.QuantityTargetsJSON), &quantityTargets); err != nil {
 		return fmt.Errorf("%w: invalid target receipt quantity_targets", ErrInvalidRecord)
 	}
-	if len(quantityTargets) > 0 && (record.Equity == "" || record.EquitySourceTime <= 0) {
+	// 只有存在换算过数量的目标才需要权益快照；全部是保持标的的目标没有换算。
+	converted := 0
+	for _, target := range quantityTargets {
+		if !target.Hold {
+			converted++
+		}
+	}
+	if converted > 0 && (record.Equity == "" || record.EquitySourceTime <= 0) {
 		return fmt.Errorf("%w: conversion receipt requires equity snapshot", ErrInvalidRecord)
 	}
 	if record.CommandSequence == 0 && record.BarEndTime > 0 {

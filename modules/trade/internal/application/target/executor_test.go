@@ -465,6 +465,32 @@ func TestTargetExecutorRetriesQuoteAgainstCurrentMemberPriorityWithoutRevaluatio
 	require.Equal(t, "2", current.Targets[0].Quantity)
 }
 
+// 保持标的既不加仓也不减仓：已有持仓不动，目标视为已完成。
+func TestTargetExecutorHoldTargetLeavesPositionUntouched(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "3")
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, fixture.orders.specs, "保持标的不能产生任何订单")
+}
+
+// 对照：同样的持仓，目标里省略该标的会被平仓，所以保持必须显式标记。
+func TestTargetExecutorOmittedTargetStillClosesPosition(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "3")
+	fixture.target(t, nil)
+
+	_, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
+}
+
 func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "1")

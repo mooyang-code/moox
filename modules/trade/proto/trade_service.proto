@@ -229,6 +229,8 @@ message Position {
 message InstrumentTarget {
   string instrument_id = 1;
   string quantity = 2;
+  // hold 为 true 表示保持当前持仓数量不动，此时 quantity 为空。
+  bool hold = 3;
 }
 
 message BlockedTarget {

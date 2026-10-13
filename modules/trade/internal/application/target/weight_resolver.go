@@ -116,6 +116,11 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	evidence := make([]ReferencePriceEvidence, 0, len(orderedWeights))
 	quantities := make([]store.InstrumentTarget, 0, len(orderedWeights))
 	for _, weight := range orderedWeights {
+		if weight.Hold {
+			// 保持标的不取报价、不换算数量；执行器对它既不加仓也不减仓。
+			quantities = append(quantities, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
+			continue
+		}
 		instrument, tradingAccountID, err := r.instrumentForMembers(ctx, spaceID, members, weight.InstrumentID)
 		if err != nil {
 			return WeightConversion{}, err
@@ -215,6 +220,8 @@ func (r *WeightResolver) priceFresh(updatedAt time.Time) bool {
 type orderedWeight struct {
 	InstrumentID string `json:"instrument_id"`
 	TargetWeight string `json:"target_weight"`
+	// Hold 为 true 的标的保持当前持仓数量不动，权重只是预留的预算占用，不换算数量。
+	Hold bool `json:"hold,omitempty"`
 }
 
 func canonicalWeights(request *tradeeventpb.LogicalAccountTargetWeightRequested) (string, string, []orderedWeight, error) {
@@ -232,7 +239,7 @@ func canonicalWeights(request *tradeeventpb.LogicalAccountTargetWeightRequested)
 		if err != nil {
 			return "", "", nil, fmt.Errorf("target weight resolver: invalid weight for %s", target.GetInstrumentId())
 		}
-		weights = append(weights, orderedWeight{InstrumentID: target.GetInstrumentId(), TargetWeight: weight.String()})
+		weights = append(weights, orderedWeight{InstrumentID: target.GetInstrumentId(), TargetWeight: weight.String(), Hold: target.GetHold()})
 	}
 	sort.Slice(weights, func(i, j int) bool { return weights[i].InstrumentID < weights[j].InstrumentID })
 	payload := struct {

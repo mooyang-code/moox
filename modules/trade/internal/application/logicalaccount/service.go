@@ -718,6 +718,10 @@ func (s *Service) readiness(
 			reasons = append(reasons, "target runner does not own logical account")
 		}
 		for _, desired := range target.Targets {
+			// 保持标的不会被下单，不因它暂时不可用而阻止恢复自动化。
+			if desired.Hold {
+				continue
+			}
 			if _, ok := supported[desired.InstrumentID]; !ok {
 				reasons = append(
 					reasons,
