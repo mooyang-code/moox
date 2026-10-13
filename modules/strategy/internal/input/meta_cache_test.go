@@ -3,8 +3,10 @@ package input
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // datasetCountingClient 在 countingClient 之上统计 GetDataset 与 GetTag 的读取次数。
@@ -195,5 +197,62 @@ func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 	load()
 	if probes() != 2 {
 		t.Fatalf("活动索引变化后应重新探针：%d", probes())
+	}
+}
+
+// memoryAgeStore 是内存里的 AgeStore，用来模拟跨重启的持久化。
+type memoryAgeStore struct{ saved map[string][]string }
+
+func (m *memoryAgeStore) LoadAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int) ([]string, error) {
+	return m.saved[fmt.Sprintf("%s|%s|%s|%d", spaceID, viewID, indexID, minAgeBars)], nil
+}
+
+func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, ids []string, _ time.Time) error {
+	key := fmt.Sprintf("%s|%s|%s|%d", spaceID, viewID, indexID, minAgeBars)
+	m.saved[key] = append(m.saved[key], ids...)
+	return nil
+}
+
+// 持久化后“重启”（新的 MetaCache）第一期也不再探针。
+func TestAgeProbePersistsAcrossRestart(t *testing.T) {
+	client := newFakeClient("spot")
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
+	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		if len(query.Columns) == 1 && query.Columns[0] == ageProbeColumn {
+			return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 1}, "ETH-USDT": {"close": 1}, "SOL-USDT": {"close": 1}}), 11, nil
+		}
+		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
+	}
+	store := &memoryAgeStore{saved: map[string][]string{}}
+	probes := func() int {
+		count := 0
+		for _, query := range client.queries {
+			if len(query.Columns) == 1 && query.Columns[0] == ageProbeColumn {
+				count++
+			}
+		}
+		return count
+	}
+	load := func(meta *MetaCache) {
+		t.Helper()
+		if _, err := (Loader{Client: client, Meta: meta}).ForEvent().LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
+			t.Fatalf("装配失败：%v", err)
+		}
+	}
+	first := NewMetaCache()
+	first.Ages = store
+	load(first)
+	if probes() != 1 || len(store.saved) != 1 {
+		t.Fatalf("第一期应探针一次并持久化：probes=%d saved=%v", probes(), store.saved)
+	}
+	restarted := NewMetaCache()
+	restarted.Ages = store
+	load(restarted)
+	if probes() != 1 {
+		t.Fatalf("重启后应从持久化读回，不再探针：%d", probes())
 	}
 }

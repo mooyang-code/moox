@@ -288,7 +288,8 @@ func normalizeSchemaSQL(text string) string {
 }
 
 // validateSchema 校验策略表与当前 schema 一致：表的集合相同，每个表与索引的定义（列、约束、索引列与条件）逐字等价。
-// 没有任何策略表的新库在 allowEmpty 时直接通过（随后由 ApplySchema 建表）。额外的触发器与索引不影响判断。
+// 没有任何策略表的新库在 allowEmpty 时直接通过（随后由 ApplySchema 建表）；allowEmpty 时已有库缺少的表与索引也放行（由 ApplySchema 补建），
+// 但已存在的对象必须与当前定义一致。额外的触发器与索引不影响判断。
 func (s *Store) validateSchema(allowEmpty bool) error {
 	expected, err := expectedSchemaObjects()
 	if err != nil {
@@ -318,7 +319,13 @@ func (s *Store) validateSchema(allowEmpty bool) error {
 	sort.Strings(keys)
 	for _, key := range keys {
 		want := expected[key]
-		if got, ok := actual[key]; !ok || got.SQL != want.SQL {
+		got, ok := actual[key]
+		if !ok && allowEmpty {
+			// 打开已有数据库时，当前 schema 新增的表与索引还没建：由随后的 ApplySchema 补建（IF NOT EXISTS），
+			// 补建之后 validateCurrentSchema 再要求全部齐备。
+			continue
+		}
+		if !ok || got.SQL != want.SQL {
 			return obsoleteSchemaError(want.Table)
 		}
 	}

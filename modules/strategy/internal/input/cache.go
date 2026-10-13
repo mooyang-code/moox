@@ -2,7 +2,9 @@ package input
 
 import (
 	"context"
+	"strconv"
 	"sync"
+	"time"
 )
 
 // MetaCache 是进程级的标的元数据缓存：标的绑定、标签成员与标签详情只在 Storage 的标的修订号
@@ -20,6 +22,22 @@ type MetaCache struct {
 	// 键是 View 的活动索引与 min_age_bars，索引重建（换了活动索引）后自动作废。
 	ageKey string
 	ageOK  map[string]struct{}
+	// Ages 非空时，年龄探针通过的标的会持久化，重启后第一期也不必重新探针；读写失败只影响缓存效果，不影响探针结果。
+	Ages AgeStore
+}
+
+// AgeKey 标识一组年龄探针结果：某个 View 的某个活动索引、某个 min_age_bars。
+type AgeKey struct {
+	SpaceID    string
+	ViewID     string
+	IndexID    string
+	MinAgeBars int
+}
+
+// AgeStore 持久化年龄探针通过的标的。
+type AgeStore interface {
+	LoadAgePassed(ctx context.Context, spaceID, viewID, indexID string, minAgeBars int) ([]string, error)
+	SaveAgePassed(ctx context.Context, spaceID, viewID, indexID string, minAgeBars int, subjectIDs []string, at time.Time) error
 }
 
 // NewMetaCache 创建空缓存；Loader 不带缓存时每个事件使用一份新的，等同于事件内缓存。
@@ -192,13 +210,12 @@ func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string)
 	return append([]string(nil), members...), nil
 }
 
-// ageSplit 把候选标的按是否已证明年龄足够拆成两组；键变化时清空缓存。
-func (m *MetaCache) ageSplit(key string, ids []string) (hit, miss []string) {
+// ageSplit 把候选标的按是否已证明年龄足够拆成两组；键变化（换了活动索引或 min_age_bars）时换一份缓存，
+// 并从持久化里读回这个键已通过的标的。
+func (m *MetaCache) ageSplit(ctx context.Context, key AgeKey, ids []string) (hit, miss []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ageKey != key {
-		m.ageKey, m.ageOK = key, map[string]struct{}{}
-	}
+	m.switchAgeKeyLocked(ctx, key)
 	for _, id := range ids {
 		if _, ok := m.ageOK[id]; ok {
 			hit = append(hit, id)
@@ -209,14 +226,34 @@ func (m *MetaCache) ageSplit(key string, ids []string) (hit, miss []string) {
 	return hit, miss
 }
 
-// ageRecord 登记本期探针通过的标的。
-func (m *MetaCache) ageRecord(key string, ids []string) {
+// ageRecord 登记本期探针通过的标的，并写入持久化。
+func (m *MetaCache) ageRecord(ctx context.Context, key AgeKey, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ageKey != key {
-		m.ageKey, m.ageOK = key, map[string]struct{}{}
-	}
+	m.switchAgeKeyLocked(ctx, key)
 	for _, id := range ids {
 		m.ageOK[id] = struct{}{}
+	}
+	if m.Ages != nil {
+		_ = m.Ages.SaveAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars, ids, time.Now())
+	}
+}
+
+func (m *MetaCache) switchAgeKeyLocked(ctx context.Context, key AgeKey) {
+	label := key.SpaceID + "\x00" + key.ViewID + "\x00" + key.IndexID + "\x00" + strconv.Itoa(key.MinAgeBars)
+	if m.ageKey == label && m.ageOK != nil {
+		return
+	}
+	m.ageKey, m.ageOK = label, map[string]struct{}{}
+	if m.Ages == nil {
+		return
+	}
+	if ids, err := m.Ages.LoadAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars); err == nil {
+		for _, id := range ids {
+			m.ageOK[id] = struct{}{}
+		}
 	}
 }

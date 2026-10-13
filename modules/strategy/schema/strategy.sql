@@ -152,3 +152,14 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     PRIMARY KEY (c_replay_id, c_bar_end_time),
     FOREIGN KEY (c_replay_id) REFERENCES t_strategy_replays (c_replay_id) ON DELETE CASCADE
 );
+
+-- 年龄探针通过的标的：上市时间只会越来越久，通过一次后跨周期、跨重启复用；c_index_id 是 View 的活动索引，索引重建后旧行作废
+CREATE TABLE IF NOT EXISTS t_strategy_age_passed (
+    c_space_id TEXT NOT NULL,
+    c_view_id TEXT NOT NULL,
+    c_index_id TEXT NOT NULL,
+    c_min_age_bars INTEGER NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_subject_id)
+);

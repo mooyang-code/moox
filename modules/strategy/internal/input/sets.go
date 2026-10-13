@@ -210,11 +210,11 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, target), resolved.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
 		// 已证明年龄足够的标的直接放行，只探针其余的；全部已知时不发查询。
-		cacheKey := fmt.Sprintf("%s\x00%s\x00%d", resolved.ViewID, view.ActiveIndexID, resolved.MinAgeBars)
+		cacheKey := AgeKey{SpaceID: spaceID, ViewID: resolved.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: resolved.MinAgeBars}
 		candidates := instruments
 		var hits []string
 		if meta != nil {
-			hits, candidates = meta.ageSplit(cacheKey, instruments)
+			hits, candidates = meta.ageSplit(ctx, cacheKey, instruments)
 		}
 		satisfied := make(map[string]struct{}, len(instruments))
 		for _, id := range hits {
@@ -243,7 +243,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 			}
 		}
 		if meta != nil {
-			meta.ageRecord(cacheKey, passed)
+			meta.ageRecord(ctx, cacheKey, passed)
 		}
 		if len(satisfied) == 0 {
 			// 候选全部不满足时，确认窗口内整个数据集是否有数据：一行都没有说明是历史缺口（停机、维护），
