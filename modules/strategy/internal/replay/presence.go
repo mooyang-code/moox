@@ -74,9 +74,10 @@ func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries) in
 				continue
 			}
 			anyRows = true
-			p.passed[subjectID] = struct{}{}
+			// 与实时一致：只有本期的候选通过判定才记入已通过集合；不在候选里的标的之后重新出现时仍要重新判定。
 			if _, ok := wanted[subjectID]; ok {
 				satisfied[subjectID] = struct{}{}
+				p.passed[subjectID] = struct{}{}
 			}
 		}
 		// 与实时一致：已证明年龄的标的放行；其余全部不满足且窗口内整个数据集没有数据时，才是历史缺口。

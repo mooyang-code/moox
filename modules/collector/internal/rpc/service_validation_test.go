@@ -1160,6 +1160,13 @@ func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	task.TagIDs = []string{"binance_spot", "binance_spot_2"}
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
 
+	// Binance 不支持 4h：创建时就拒绝，否则整个空间的计划生成都会失败。
+	task.TagIDs = []string{"binance_spot"}
+	task.CollectParams = `{"target_dataset_id":"bars","frequency":"4h"}`
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "unsupported")
+	task.CollectParams = `{"target_dataset_id":"bars","frequency":"1mo"}`
+	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
+
 	// 东方财富只支持 1m：5m 在创建时就拒绝。
 	task.TagIDs = []string{"cn_a_share"}
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"5m"}`

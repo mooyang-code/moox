@@ -82,4 +82,17 @@ describe("collector task workbench", () => {
     expect(source).toContain("selectedOutputFields.value = input.outputFields || []");
     expect(source).toContain("outputFields: selectedOutputFields.value");
   });
+
+  it("clears source-derived tags on switch and waits for the backfill before saving", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    const loader = source.slice(
+      source.indexOf("function loadSourceSubjectTags"),
+      source.indexOf("async function fetchSourceSubjectTags")
+    );
+    expect(loader).toContain("subjectTagIds.value = []");
+    expect(loader).toContain("sourceTagsPending = task");
+    const submit = source.slice(source.indexOf("async function handleOk"));
+    expect(submit.indexOf("await sourceTagsPending")).toBeGreaterThan(-1);
+    expect(submit.indexOf("await sourceTagsPending")).toBeLessThan(submit.indexOf("currentTaskInput()"));
+  });
 });

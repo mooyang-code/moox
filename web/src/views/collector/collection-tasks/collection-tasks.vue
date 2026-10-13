@@ -949,6 +949,8 @@ async function validateEditor() {
 
 async function handleOk(): Promise<boolean> {
   if (!(await validateEditor())) return false;
+  // 来源回填还没返回时先等它，保存用的是回填之后的标签与市场。
+  if (sourceTagsPending) await sourceTagsPending;
   // 提交快照：预检（getDataset）等待期间用户可能取消并重新打开表单，旧提交只能用它自己的输入，
   // 不能把旧输入与新表单的任务名称、结果配置混合提交，也不能关闭新窗口。
   const submission = editorScope.begin();
@@ -1150,14 +1152,27 @@ async function loadTags() {
 }
 
 let sourceTagsRequestToken = 0;
-async function loadSourceSubjectTags() {
-  if (editing.value || editor.data_type !== "kline_resample" || !selectedSpaceId.value || !sourceIdValue.value) return;
-  // 连续切换来源时响应可能乱序：只采纳仍对应当前空间与当前来源的最新一次响应。
+// 进行中的来源回填：保存前必须等它结束，否则会提交"新来源 + 旧标签/市场"。
+let sourceTagsPending: Promise<void> | null = null;
+
+function loadSourceSubjectTags(): Promise<void> {
+  if (editing.value || editor.data_type !== "kline_resample") return Promise.resolve();
+  // 来源一变，由它派生的标签与市场先作废，回填成功后再写入；回填失败时不会残留上一个来源的值。
+  subjectTagIds.value = [];
   const token = ++sourceTagsRequestToken;
-  const spaceId = selectedSpaceId.value;
-  const sourceId = sourceIdValue.value;
+  if (!selectedSpaceId.value || !sourceIdValue.value) return Promise.resolve();
+  const task = fetchSourceSubjectTags(token, selectedSpaceId.value, sourceIdValue.value);
+  sourceTagsPending = task;
+  void task.finally(() => {
+    if (sourceTagsPending === task) sourceTagsPending = null;
+  });
+  return task;
+}
+
+async function fetchSourceSubjectTags(token: number, spaceId: string, sourceId: string) {
   try {
     const dataset = await getDataset({ space_id: spaceId, dataset_id: sourceId });
+    // 连续切换来源时响应可能乱序：只采纳仍对应当前空间与当前来源的最新一次响应。
     if (token !== sourceTagsRequestToken || spaceId !== selectedSpaceId.value || sourceId !== sourceIdValue.value) return;
     subjectTagIds.value = (dataset.dataset?.subject_tags || []).slice();
     // 重采样的市场类型取自源行情，后端据此校验源数据集。

@@ -42,3 +42,22 @@ func TestAgePresenceSharesPassedSetAcrossSegments(t *testing.T) {
 	require.Contains(t, second.passed, "A")
 	require.Contains(t, second.passed, "B", "各段共用同一份已通过集合")
 }
+
+func TestPresenceOnlyRemembersCandidatesThatPassed(t *testing.T) {
+	p := newPresence()
+	p.indexes["A"] = map[int64]struct{}{10: {}}
+	p.indexes["B"] = map[int64]struct{}{10: {}}
+	resolved := input.Resolved{MinAgeBars: 1}
+
+	// bar 10：只有 A 是候选，B 虽然窗口内有行，但本期没参与，不能被记为已通过。
+	got, err := p.probe(resolved, input.PeriodBoundaries{BarIndex: 10})(context.Background(), []string{"A"})
+	require.NoError(t, err)
+	require.Contains(t, got, "A")
+	require.NotContains(t, p.passed, "B")
+
+	// bar 20：窗口内没有任何行，B 重新成为候选：A 已通过所以不会整期跳过，B 仍要重新判定，不满足。
+	got, err = p.probe(resolved, input.PeriodBoundaries{BarIndex: 20})(context.Background(), []string{"A", "B"})
+	require.NoError(t, err)
+	require.Contains(t, got, "A")
+	require.NotContains(t, got, "B")
+}
