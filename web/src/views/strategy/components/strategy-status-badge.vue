@@ -1,7 +1,7 @@
 <template>
   <a-space :size="4">
     <a-tag size="small" :color="color">{{ label }}</a-tag>
-    <a-tooltip v-if="health === 'degraded'" content="最近一期因配置或数据问题跳过，请检查 View、因子与数据后重新启用实例">
+    <a-tooltip v-if="health === 'degraded'" content="最近一期被跳过，请在实例详情的历史结果中查看具体跳过原因">
       <a-tag size="small" color="red">需要处理</a-tag>
     </a-tooltip>
     <a-tooltip

@@ -50,7 +50,12 @@ export const useStrategyStore = defineStore("strategy", () => {
   const strategiesComplete = ref(false);
   const totalInstances = ref(0);
   const totalResults = ref(0);
+  // 加载与错误按资源分开：定义分页列表（listLoading/error）、完整目录、实例列表互不覆盖。
   const listLoading = ref(false);
+  const catalogLoading = ref(false);
+  const catalogError = ref("");
+  const instancesLoading = ref(false);
+  const instancesError = ref("");
   const detailLoading = ref(false);
   const error = ref("");
   const detailError = ref("");
@@ -82,8 +87,8 @@ export const useStrategyStore = defineStore("strategy", () => {
 
   async function loadAllStrategies(pageSize = 200) {
     const requestId = ++catalogRequest;
-    listLoading.value = true;
-    error.value = "";
+    catalogLoading.value = true;
+    catalogError.value = "";
     try {
       const items: Strategy[] = [];
       let total = 0;
@@ -97,10 +102,10 @@ export const useStrategyStore = defineStore("strategy", () => {
       strategyCatalog.value = items;
       strategiesComplete.value = true;
     } catch (err) {
-      if (requestId === catalogRequest) error.value = errorMessage(err, "策略定义加载失败");
+      if (requestId === catalogRequest) catalogError.value = errorMessage(err, "策略定义加载失败");
       throw err;
     } finally {
-      if (requestId === catalogRequest) listLoading.value = false;
+      if (requestId === catalogRequest) catalogLoading.value = false;
     }
   }
 
@@ -108,24 +113,33 @@ export const useStrategyStore = defineStore("strategy", () => {
   function invalidateStrategyCatalog() {
     catalogRequest += 1;
     strategiesComplete.value = false;
-    listLoading.value = false;
+    catalogLoading.value = false;
   }
 
   async function loadInstances(params: Parameters<typeof listInstances>[0] = {}) {
     const requestId = ++instancesRequest;
-    listLoading.value = true;
-    error.value = "";
+    instancesLoading.value = true;
+    instancesError.value = "";
     try {
       const result = await listInstances(params);
       if (requestId !== instancesRequest) return;
       instances.value = result.items;
       totalInstances.value = result.page.total;
     } catch (err) {
-      if (requestId === instancesRequest) error.value = errorMessage(err, "策略实例加载失败");
+      if (requestId === instancesRequest) instancesError.value = errorMessage(err, "策略实例加载失败");
       throw err;
     } finally {
-      if (requestId === instancesRequest) listLoading.value = false;
+      if (requestId === instancesRequest) instancesLoading.value = false;
     }
+  }
+
+  /** 切空间时清空实例列表并作废在途请求：新空间的请求失败时不能继续显示旧空间的实例。 */
+  function clearInstances() {
+    instancesRequest += 1;
+    instances.value = [];
+    totalInstances.value = 0;
+    instancesLoading.value = false;
+    instancesError.value = "";
   }
 
   /** 读取实例详情：实例 → 定义 → 最新目标；历史结果异步加载，不阻塞目标显示。 */
@@ -294,6 +308,10 @@ export const useStrategyStore = defineStore("strategy", () => {
     totalInstances,
     totalResults,
     listLoading,
+    catalogLoading,
+    catalogError,
+    instancesLoading,
+    instancesError,
     detailLoading,
     operationLoading,
     error,
@@ -302,6 +320,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     loadAllStrategies,
     invalidateStrategyCatalog,
     loadInstances,
+    clearInstances,
     loadInstanceDetail,
     loadResultPage,
     loadResultDetail,

@@ -201,6 +201,39 @@ describe("strategy store", () => {
     expect(store.detailError).toBe("");
   });
 
+  it("tracks instance list and catalog loading and errors independently", async () => {
+    const instances = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listInstances.mockReturnValue(instances.promise);
+    api.listStrategies.mockRejectedValue(new Error("目录失败"));
+    const store = useStrategyStore();
+    const loadingInstances = store.loadInstances({ page: 1, page_size: 20 });
+    await expect(store.loadAllStrategies(200)).rejects.toThrow("目录失败");
+    // 目录请求先结束并失败：不能关闭实例列表的加载状态，也不能把错误算到实例头上。
+    expect(store.catalogLoading).toBe(false);
+    expect(store.catalogError).toBe("目录失败");
+    expect(store.instancesLoading).toBe(true);
+    expect(store.instancesError).toBe("");
+    instances.resolve({ items: [], page: { total: 0 } });
+    await loadingInstances;
+    expect(store.instancesLoading).toBe(false);
+  });
+
+  it("clears the instance list and drops an in-flight response when the space changes", async () => {
+    const pending = deferred<{ items: unknown[]; page: { total: number } }>();
+    api.listInstances.mockReturnValue(pending.promise);
+    const store = useStrategyStore();
+    store.instances = [instance({ instance_id: "old" })] as never;
+    store.totalInstances = 1;
+    const stale = store.loadInstances({ page: 1, page_size: 20 });
+    store.clearInstances();
+    expect(store.instances).toEqual([]);
+    expect(store.instancesLoading).toBe(false);
+    pending.resolve({ items: [instance({ instance_id: "late" })], page: { total: 1 } });
+    await stale;
+    expect(store.instances).toEqual([]);
+    expect(store.totalInstances).toBe(0);
+  });
+
   it("caches result explanations and removes deleted rows", async () => {
     api.getStrategyResult.mockResolvedValue({ result: { result_id: "r1" }, items: [], dsl_yaml: "", resolved_json: "{}" });
     api.deleteInstance.mockResolvedValue(undefined);

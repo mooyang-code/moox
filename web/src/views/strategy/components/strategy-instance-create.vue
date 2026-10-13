@@ -2,8 +2,8 @@
   <a-drawer :visible="visible" :width="'min(760px, 100vw)'" title="新建策略实例" unmount-on-close @cancel="close">
     <a-alert v-if="error" type="error" show-icon class="form-alert">{{ error }}</a-alert>
     <a-form layout="vertical">
-      <a-form-item label="策略定义" required>
-        <a-select v-model="form.strategy_id" allow-search placeholder="选择一份 DSL 定义" @change="resetCheck">
+      <a-form-item label="策略定义" required :validate-status="fieldErrors.strategy_id ? 'error' : undefined" :help="fieldErrors.strategy_id">
+        <a-select v-model="form.strategy_id" allow-search placeholder="选择一份 DSL 定义" @change="onStrategyChange">
           <a-option v-for="item in strategies" :key="item.strategy_id" :value="item.strategy_id"
             >{{ item.name }}（{{ item.strategy_id }}）</a-option
           >
@@ -16,13 +16,13 @@
         <a-descriptions-item label="标的池">{{ preview.universe }}</a-descriptions-item>
         <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
       </a-descriptions>
-      <a-form-item label="输入 View" required>
+      <a-form-item label="输入 View" required :validate-status="fieldErrors.view_id ? 'error' : undefined" :help="fieldErrors.view_id">
         <a-select
           v-model="form.view_id"
           allow-search
-          :loading="metadataLoading"
+          :loading="viewsLoading"
           placeholder="选择一个 View（通常是因子结果 View）"
-          @change="resetCheck"
+          @change="onViewChange"
         >
           <a-option v-for="view in views" :key="view.view_id" :value="view.view_id">
             {{ view.name || view.view_id }}（{{ view.view_id }} · {{ view.freq || "无周期" }}）<template
@@ -32,14 +32,37 @@
             >
           </a-option>
         </a-select>
+        <template #extra>
+          <span v-if="viewsError" class="meta-error"
+            >View 列表读取失败：{{ viewsError }}<a-link @click="loadViewsList">重试</a-link></span
+          >
+          <span v-else-if="!viewsLoading && !views.length">当前空间没有可用 View，请先在存储模块创建或发布 View。</span>
+        </template>
       </a-form-item>
       <a-form-item label="运行模式">
-        <a-radio-group v-model="form.logical_account_id" direction="vertical">
-          <a-radio value="">仅计算（观察实例，不向交易模块发送目标）</a-radio>
-          <a-radio v-for="account in accounts" :key="account.logical_account_id" :value="account.logical_account_id"
-            >发送给交易模块：{{ account.name || account.logical_account_id }}</a-radio
-          >
+        <a-radio-group v-model="form.mode" type="button" @change="onModeChange">
+          <a-radio value="compute">仅计算（不向交易模块发送目标）</a-radio>
+          <a-radio value="trade">发送至交易模块</a-radio>
         </a-radio-group>
+      </a-form-item>
+      <a-form-item
+        v-if="form.mode === 'trade'"
+        label="组合账户"
+        required
+        :validate-status="fieldErrors.logical_account_id ? 'error' : undefined"
+        :help="fieldErrors.logical_account_id"
+      >
+        <a-select v-model="form.logical_account_id" allow-search :loading="accountsLoading" placeholder="选择接收目标的组合账户">
+          <a-option v-for="account in accounts" :key="account.logical_account_id" :value="account.logical_account_id">{{
+            account.name || account.logical_account_id
+          }}</a-option>
+        </a-select>
+        <template #extra>
+          <span v-if="accountsError" class="meta-error"
+            >账户列表读取失败：{{ accountsError }}<a-link @click="loadAccountsList">重试</a-link>；也可以改为“仅计算”。</span
+          >
+          <span v-else-if="!accountsLoading && !accounts.length">当前空间没有可用的组合账户，请先在交易模块创建。</span>
+        </template>
       </a-form-item>
       <a-form-item label="实例 ID（可选）"><a-input v-model="form.instance_id" placeholder="留空自动生成" /></a-form-item>
     </a-form>
@@ -87,13 +110,23 @@ const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: s
 const emit = defineEmits<{ "update:visible": [boolean]; created: [string] }>();
 const saving = ref(false);
 const checking = ref(false);
-const metadataLoading = ref(false);
+const viewsLoading = ref(false);
+const accountsLoading = ref(false);
+const viewsError = ref("");
+const accountsError = ref("");
 const error = ref("");
-const form = reactive({ instance_id: "", strategy_id: "", view_id: "", logical_account_id: "" });
+const fieldErrors = reactive<Record<"strategy_id" | "view_id" | "logical_account_id", string>>({
+  strategy_id: "",
+  view_id: "",
+  logical_account_id: ""
+});
+// mode 决定是否发送目标：账户读取失败只影响“发送至交易模块”，不阻断仅计算；切换模式不会悄悄改选账户。
+const form = reactive({ instance_id: "", strategy_id: "", view_id: "", logical_account_id: "", mode: "compute" as "compute" | "trade" });
 const views = ref<View[]>([]);
 const accounts = ref<LogicalAccount[]>([]);
 const check_result = ref<ValidateStrategyResult | null>(null);
-let metadataRequest = 0;
+let viewsRequest = 0;
+let accountsRequest = 0;
 let submitRequest = 0;
 let checkRequest = 0;
 
@@ -128,27 +161,58 @@ async function loadAllAccounts() {
   }
 }
 
-async function loadMetadata() {
+async function loadViewsList() {
   const spaceId = props.spaceId;
   if (!spaceId) return;
-  const requestId = ++metadataRequest;
-  metadataLoading.value = true;
-  error.value = "";
+  const requestId = ++viewsRequest;
+  viewsLoading.value = true;
+  viewsError.value = "";
   try {
-    const [nextViews, nextAccounts] = await Promise.all([
-      loadAllViews(spaceId),
-      loadAllAccounts().catch(() => [] as LogicalAccount[])
-    ]);
-    if (requestId !== metadataRequest || props.spaceId !== spaceId) return;
+    const nextViews = await loadAllViews(spaceId);
+    if (requestId !== viewsRequest || props.spaceId !== spaceId) return;
     views.value = nextViews
       .filter(view => view.space_id === spaceId)
       .sort((a, b) => Number(isFactorView(b)) - Number(isFactorView(a)) || a.view_id.localeCompare(b.view_id));
+  } catch (err) {
+    if (requestId === viewsRequest) viewsError.value = err instanceof Error ? err.message : "元数据加载失败";
+  } finally {
+    if (requestId === viewsRequest) viewsLoading.value = false;
+  }
+}
+
+async function loadAccountsList() {
+  const spaceId = props.spaceId;
+  if (!spaceId) return;
+  const requestId = ++accountsRequest;
+  accountsLoading.value = true;
+  accountsError.value = "";
+  try {
+    const nextAccounts = await loadAllAccounts();
+    if (requestId !== accountsRequest || props.spaceId !== spaceId) return;
     accounts.value = nextAccounts.filter(account => account.space_id === spaceId);
   } catch (err) {
-    if (requestId === metadataRequest) error.value = err instanceof Error ? err.message : "元数据加载失败";
+    if (requestId === accountsRequest) accountsError.value = err instanceof Error ? err.message : "账户读取失败";
   } finally {
-    if (requestId === metadataRequest) metadataLoading.value = false;
+    if (requestId === accountsRequest) accountsLoading.value = false;
   }
+}
+
+function loadMetadata() {
+  void loadViewsList();
+  void loadAccountsList();
+}
+
+function onStrategyChange() {
+  fieldErrors.strategy_id = "";
+  resetCheck();
+}
+function onViewChange() {
+  fieldErrors.view_id = "";
+  resetCheck();
+}
+function onModeChange() {
+  fieldErrors.logical_account_id = "";
+  if (form.mode === "compute") form.logical_account_id = "";
 }
 
 function resetCheck() {
@@ -184,18 +248,26 @@ function resetForm() {
   form.strategy_id = props.presetStrategyId || "";
   form.view_id = "";
   form.logical_account_id = "";
+  form.mode = "compute";
   views.value = [];
   accounts.value = [];
+  viewsRequest += 1;
+  accountsRequest += 1;
+  viewsLoading.value = false;
+  accountsLoading.value = false;
+  viewsError.value = "";
+  accountsError.value = "";
+  fieldErrors.strategy_id = fieldErrors.view_id = fieldErrors.logical_account_id = "";
   error.value = "";
   resetCheck();
 }
 
 async function submit() {
   error.value = "";
-  if (!form.strategy_id || !form.view_id) {
-    error.value = "请选择策略定义与输入 View";
-    return;
-  }
+  fieldErrors.strategy_id = form.strategy_id ? "" : "请选择策略定义";
+  fieldErrors.view_id = form.view_id ? "" : "请选择输入 View";
+  fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
+  if (fieldErrors.strategy_id || fieldErrors.view_id || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;
   const requestId = ++submitRequest;
   saving.value = true;
@@ -204,7 +276,7 @@ async function submit() {
       instance_id: form.instance_id.trim() || undefined,
       strategy_id: form.strategy_id,
       view_id: form.view_id,
-      logical_account_id: form.logical_account_id
+      logical_account_id: form.mode === "trade" ? form.logical_account_id : ""
     });
     if (requestId !== submitRequest || props.spaceId !== spaceId) {
       Message.info("实例已创建，但当前空间已切换；请在原空间实例列表中确认");
@@ -267,6 +339,9 @@ watch(
   align-items: center;
   justify-content: space-between;
   margin: 4px 0 10px;
+}
+.meta-error {
+  color: rgb(var(--red-6));
 }
 .confirm-note {
   margin-top: 16px;

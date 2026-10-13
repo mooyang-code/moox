@@ -59,7 +59,7 @@
           >实例已经停用，但会话仍存在。后台账户释放可能尚未完成，请不要将旧目标当作当前有效仓位。</a-alert
         >
         <a-alert v-if="store.instance.health === 'degraded'" type="error" show-icon class="top-alert"
-          >最近一期因配置问题跳过（例如列被删除或 View 失效）。请检查后停用并重新启用实例。</a-alert
+          >最近一期被跳过。请在下方历史结果中查看具体跳过原因：数据暂时不足等情况会在后续周期自动恢复，仅当原因是因子定义版本变化时才需要停用并重新启用实例。</a-alert
         >
         <OperationPanel
           :instance-id="instanceId"
