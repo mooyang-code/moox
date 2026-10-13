@@ -256,7 +256,7 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
 		SourceDatasetId: "prices", UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
 		Factors: []*storageeventpb.FactorPeriodState{
-			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH-USDT", "BTC-USDT"}, SourceHash: "hash-z", DefinitionHash: "def-z"},
+			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH-USDT", "BTC-USDT"}, SourceHash: "hash-z", DefinitionHash: "def-z", GapSubjects: []string{"BTC-USDT"}},
 			{FactorId: "a-factor", Status: "complete", SourceHash: "hash-a", DefinitionHash: "def-a"},
 		},
 		ComputedAt: timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
@@ -294,6 +294,10 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	payload.Factors[0].FailedSubjects[0] = "changed-after-handling"
 	if ready.Factors[0].FailedSubjects[0] != "ETH-USDT" {
 		t.Fatal("ready factor state aliases input payload")
+	}
+	payload.Factors[0].GapSubjects[0] = "changed-after-handling"
+	if ready.Factors[0].GapSubjects[0] != "BTC-USDT" {
+		t.Fatal("ready factor gap_subjects aliases input payload")
 	}
 }
 

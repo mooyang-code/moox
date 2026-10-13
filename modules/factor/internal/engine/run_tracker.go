@@ -44,6 +44,7 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 			FailedSubjects: factor.FailedSubjects,
 			SourceHash:     factor.SourceHash,
 			DefinitionHash: factor.DefinitionHash,
+			GapSubjects:    factor.GapSubjects,
 		})
 	}
 	t.runs[setID] = trackedRun{

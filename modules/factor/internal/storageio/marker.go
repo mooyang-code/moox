@@ -83,7 +83,7 @@ func markerToProto(marker PeriodMarker) *storagepb.FactorPeriodComputedMarker {
 		protoFactors = append(protoFactors, &storagepb.FactorPeriodState{
 			FactorId: factor.FactorID, Status: factor.Status,
 			FailedSubjects: normalizedSorted(factor.FailedSubjects), SourceHash: factor.SourceHash,
-			DefinitionHash: factor.DefinitionHash,
+			DefinitionHash: factor.DefinitionHash, GapSubjects: normalizedSorted(factor.GapSubjects),
 		})
 	}
 	return &storagepb.FactorPeriodComputedMarker{

@@ -33,9 +33,11 @@ type Frame struct {
 	FailedColumns map[string]map[string]string
 }
 
-// 上游失败的原因：因子对该标的计算失败，或 View 本身（例如 K 线采集）声明该标的本期失败。
+// 上游失败的原因：因子对该标的计算失败，因子因回看窗口 K 线空洞对该标的失败（FailedGap，是 FailedFactor 的细分），
+// 或 View 本身（例如 K 线采集）声明该标的本期失败。
 const (
 	FailedFactor = "factor_failed"
+	FailedGap    = "factor_gap"
 	FailedSource = "source_failed"
 )
 

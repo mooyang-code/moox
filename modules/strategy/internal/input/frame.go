@@ -246,7 +246,7 @@ func groupRows(rows []Row) (map[string]Row, error) {
 	return grouped, nil
 }
 
-// failedColumns 把就绪判定的失败标的映射到列：因子失败 → 该因子产出的被引用列（factor_failed）；
+// failedColumns 把就绪判定的失败标的映射到列：因子失败 → 该因子产出的被引用列（factor_failed；因 K 线空洞失败的记 factor_gap）；
 // View 级失败（K 线 View 声明的失败标的）→ 全部引用列（source_failed）。
 func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Result) map[string]map[string]string {
 	failed := make(map[string]map[string]string)
@@ -259,9 +259,17 @@ func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Res
 		}
 	}
 	for factorID, subjects := range result.FailedByFactor {
+		gap := make(map[string]bool, len(result.GapByFactor[factorID]))
+		for _, subject := range result.GapByFactor[factorID] {
+			gap[subject] = true
+		}
 		for _, column := range resolved.ColumnsOfFactor(factorID) {
 			for _, subject := range subjects {
-				add(column, subject, engine.FailedFactor)
+				reason := engine.FailedFactor
+				if gap[subject] {
+					reason = engine.FailedGap
+				}
+				add(column, subject, reason)
 			}
 		}
 	}

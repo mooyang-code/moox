@@ -144,3 +144,22 @@ func TestCheckKeepsExistingHashesWhenAnotherFactorIsMissing(t *testing.T) {
 		t.Fatalf("恢复后不应再跳过：%q（%s）", next.Reason, next.Detail)
 	}
 }
+
+func TestCheckCollectsGapSubjectsByFactor(t *testing.T) {
+	binding := Binding{Factors: map[string]string{"ma": "h1"}}
+	gapState := state("ma", "degraded", "h1", "ETH-USDT", "SOL-USDT")
+	gapState.GapSubjects = []string{"SOL-USDT", "SOL-USDT"}
+	result := Check(binding, nil, factorEvent(gapState))
+	if result.Reason != "" {
+		t.Fatalf("不应跳过：%s", result.Reason)
+	}
+	if !reflect.DeepEqual(result.FailedByFactor, map[string][]string{"ma": {"ETH-USDT", "SOL-USDT"}}) {
+		t.Fatalf("失败标的不符：%v", result.FailedByFactor)
+	}
+	if !reflect.DeepEqual(result.GapByFactor, map[string][]string{"ma": {"SOL-USDT"}}) {
+		t.Fatalf("空洞标的应去重并只含 gap_subjects：%v", result.GapByFactor)
+	}
+	if got := Check(binding, nil, factorEvent(state("ma", "degraded", "h1", "ETH-USDT"))); len(got.GapByFactor) != 0 {
+		t.Fatalf("没有 gap_subjects 时 GapByFactor 应为空：%v", got.GapByFactor)
+	}
+}

@@ -77,6 +77,24 @@ func TestValidateFactorPeriodComputedRequiresFactorStates(t *testing.T) {
 			v.Status = "degraded"
 			v.FailedSubjects = []string{"unknown"}
 		}, wantError: true},
+		{name: "gap subject within failed subjects", mutate: func(v *storagepb.FactorPeriodComputed) {
+			v.Status = "degraded"
+			v.Factors[0].Status = "degraded"
+			v.Factors[0].FailedSubjects = []string{"ETH"}
+			v.Factors[0].GapSubjects = []string{"ETH"}
+		}},
+		{name: "gap subject outside failed subjects", mutate: func(v *storagepb.FactorPeriodComputed) {
+			v.Status = "degraded"
+			v.Factors[0].Status = "degraded"
+			v.Factors[0].FailedSubjects = []string{"ETH"}
+			v.Factors[0].GapSubjects = []string{"BTC"}
+		}, wantError: true},
+		{name: "duplicate gap subject", mutate: func(v *storagepb.FactorPeriodComputed) {
+			v.Status = "degraded"
+			v.Factors[0].Status = "degraded"
+			v.Factors[0].FailedSubjects = []string{"ETH"}
+			v.Factors[0].GapSubjects = []string{"ETH", "ETH"}
+		}, wantError: true},
 		{name: "unknown factor failed subject", mutate: func(v *storagepb.FactorPeriodComputed) {
 			v.Status = "degraded"
 			v.Factors[0].Status = "degraded"

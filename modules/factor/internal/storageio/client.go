@@ -78,6 +78,8 @@ type FactorState struct {
 	FailedSubjects []string
 	SourceHash     string
 	DefinitionHash string
+	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
+	GapSubjects []string
 }
 
 type Store interface {

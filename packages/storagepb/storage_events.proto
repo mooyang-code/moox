@@ -56,6 +56,8 @@ message FactorPeriodState {
   string source_hash = 4;
   // definition_hash 是因子完整计算契约的指纹，策略据此判断绑定的因子版本是否变化。
   string definition_hash = 5;
+  // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
+  repeated string gap_subjects = 6;
 }
 
 // FactorPeriodComputed marks all frozen factors for one result Dataset period

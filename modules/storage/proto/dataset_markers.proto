@@ -35,6 +35,8 @@ message FactorPeriodState {
   string source_hash = 4;
   // definition_hash 是因子完整计算契约的指纹，由 Factor 计算并随周期标记透传。
   string definition_hash = 5;
+  // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
+  repeated string gap_subjects = 6;
 }
 
 // FactorPeriodComputedMarker is appended after all result row writes commit.

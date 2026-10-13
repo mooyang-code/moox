@@ -325,6 +325,16 @@ func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[st
 				return fmt.Errorf("%s factor %q failed_subject %q is not in universe_subject_ids", label, state.GetFactorId(), subject)
 			}
 		}
+		// gap_subjects 是 failed_subjects 的子集：因回看窗口 K 线空洞而失败的标的。
+		gaps, err := validateUniqueTokens(state.GetGapSubjects(), false, fmt.Sprintf("%s factor %q gap_subjects", label, state.GetFactorId()))
+		if err != nil {
+			return err
+		}
+		for subject := range gaps {
+			if _, ok := failed[subject]; !ok {
+				return fmt.Errorf("%s factor %q gap_subject %q is not in failed_subjects", label, state.GetFactorId(), subject)
+			}
+		}
 		if state.GetStatus() == "complete" && len(failed) != 0 {
 			return fmt.Errorf("%s complete factor %q has failed subjects", label, state.GetFactorId())
 		}

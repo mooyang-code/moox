@@ -62,6 +62,8 @@ message FactorPeriodState {
   repeated string failed_subjects = 3;
   string source_hash = 4;
   string definition_hash = 5;
+  // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
+  repeated string gap_subjects = 6;
 }
 
 message SetRunSummary {

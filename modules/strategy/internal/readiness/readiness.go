@@ -48,13 +48,15 @@ type Result struct {
 	Hashes map[string]string
 	// FailedByFactor 是 degraded 因子对应的失败标的，引用该因子的规则把它们视为缺数。
 	FailedByFactor map[string][]string
+	// GapByFactor 是 FailedByFactor 中因回看窗口 K 线空洞而失败的标的（子集）：持仓的标的缺数且全部原因都是空洞时，策略保持持仓而不是退出。
+	GapByFactor map[string][]string
 	// FailedSubjects 是没有因子状态的 View（K 线 View）在 degraded 时声明失败的标的，所有列都视为缺数。
 	FailedSubjects []string
 }
 
 // Check 按设计文档 3.3 的表格顺序判定：因子缺失 → 事件指纹变化 → 上一根版本证据 → 因子跳过 → 降级标的。
 func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Result {
-	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}}
+	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{}}
 	states := indexFactors(event)
 	required := sortedKeys(binding.Factors)
 	// 先收齐事件里已有的全部指纹再判缺失：缺失的因子不能让其余因子的指纹没有保存，否则下一期经 bars[-1] 读取这些因子时，
@@ -111,6 +113,9 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			failed := uniqueSorted(state.GetFailedSubjects())
 			if len(failed) > 0 {
 				result.FailedByFactor[factorID] = failed
+			}
+			if gaps := uniqueSorted(state.GetGapSubjects()); len(gaps) > 0 {
+				result.GapByFactor[factorID] = gaps
 			}
 		}
 	}

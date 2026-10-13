@@ -106,6 +106,7 @@ func RunSummaryToPB(summary domain.SetRunSummary) *factorpb.SetRunSummary {
 			FailedSubjects: CloneStrings(factor.FailedSubjects),
 			SourceHash:     factor.SourceHash,
 			DefinitionHash: factor.DefinitionHash,
+			GapSubjects:    CloneStrings(factor.GapSubjects),
 		})
 	}
 	return &factorpb.SetRunSummary{
@@ -124,7 +125,7 @@ func RunSummaryFromPB(pb *factorpb.SetRunSummary) domain.SetRunSummary {
 		factors = append(factors, domain.FactorPeriodState{
 			FactorID: factor.GetFactorId(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SourceHash: factor.GetSourceHash(),
-			DefinitionHash: factor.GetDefinitionHash(),
+			DefinitionHash: factor.GetDefinitionHash(), GapSubjects: CloneStrings(factor.GetGapSubjects()),
 		})
 	}
 	return domain.SetRunSummary{
