@@ -40,16 +40,20 @@
       </a-select>
     </a-form-item>
     <a-form-item label="区间（UTC，左闭右开，格式 YYYY-MM-DD HH:mm）" required>
-      <div class="range-inputs">
-        <a-input v-model="form.start" aria-label="开始时间（UTC）" placeholder="开始，例如 2026-09-01 00:00" />
-        <a-input v-model="form.end" aria-label="结束时间（UTC）" placeholder="结束，例如 2026-10-01 00:00" />
+      <!-- 表单项内容区是横向 flex：包一层纵向容器，输入、快捷区间与说明依次上下排列。 -->
+      <div class="range-block">
+        <div class="range-inputs">
+          <a-input v-model="form.start" aria-label="开始时间（UTC）" placeholder="开始，例如 2026-09-01 00:00" />
+          <span class="range-sep">至</span>
+          <a-input v-model="form.end" aria-label="结束时间（UTC）" placeholder="结束，例如 2026-10-01 00:00" />
+        </div>
+        <a-space class="presets" :size="4">
+          <a-button size="mini" @click="applyPreset(1)">近 1 天</a-button>
+          <a-button size="mini" @click="applyPreset(7)">近 7 天</a-button>
+          <a-button size="mini" @click="applyPreset(30)">近 30 天</a-button>
+        </a-space>
+        <div class="muted range-hint">A 股日线 View 按上海日期回放：起止各取所在的上海日期，含起始日期、不含结束日期。</div>
       </div>
-      <div class="muted range-hint">A 股日线 View 按上海日期回放：起止各取所在的上海日期，含起始日期、不含结束日期。</div>
-      <a-space class="presets" :size="4">
-        <a-button size="mini" @click="applyPreset(1)">近 1 天</a-button>
-        <a-button size="mini" @click="applyPreset(7)">近 7 天</a-button>
-        <a-button size="mini" @click="applyPreset(30)">近 30 天</a-button>
-      </a-space>
     </a-form-item>
     <a-form-item label="单边手续费（bps）"><a-input-number v-model="form.fee_bps" :min="0" :max="1000" :step="1" /></a-form-item>
   </a-form>
@@ -74,13 +78,21 @@ function applyPreset(days: number) {
 .instance-alert {
   width: 100%;
 }
-.range-inputs {
+.range-block {
   display: grid;
   gap: 6px;
   width: 100%;
 }
+.range-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.range-sep {
+  color: var(--color-text-3);
+}
 .range-hint {
-  margin-top: 6px;
   font-size: 12px;
 }
 .muted {
@@ -88,7 +100,7 @@ function applyPreset(days: number) {
   font-size: 12px;
 }
 .presets {
-  margin-top: 6px;
+  margin: 0;
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

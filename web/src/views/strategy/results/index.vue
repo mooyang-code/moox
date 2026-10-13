@@ -26,7 +26,7 @@
             <a-space wrap>
               <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" />
               <span class="cell-sub" aria-hidden="true">自动刷新</span>
-              <a-button :loading="listLoading || store.detailLoading" @click="refreshAll">
+              <a-button :loading="refreshing" @click="refreshAll">
                 <template #icon><icon-refresh /></template>
                 刷新结果
               </a-button>
@@ -77,6 +77,7 @@
               :scope="resultScope"
               :loading="store.resultsLoading"
               :error="store.resultsError"
+              :initial-loading="initialLoading"
               @page="loadResults"
               @retry="loadResults(resultPage, resultScope)"
             />
@@ -126,10 +127,20 @@ function isCurrentTab() {
 // URL 的 instance 是选中实例的唯一来源；没有指定时，列表读到后写入默认实例。
 const selectedId = computed(() => (isCurrentTab() ? queryString(route.query.instance as string) : ""));
 
-const { store, resultPage, resultScope, resultPageSize, readAt, targetState, load, loadResults, start } = useInstanceResults(
-  selectedId,
-  { autoRefresh }
-);
+const {
+  store,
+  resultPage,
+  resultScope,
+  resultPageSize,
+  readAt,
+  refreshing,
+  initialLoading,
+  targetState,
+  load,
+  refresh,
+  loadResults,
+  start
+} = useInstanceResults(selectedId, { autoRefresh });
 
 const tabs = computed(() => {
   const list = instanceTabs(instances.value, store.strategyCatalog);
@@ -183,7 +194,7 @@ async function loadCatalog() {
 
 function refreshAll() {
   void loadInstanceList();
-  void load();
+  void refresh();
 }
 
 onMounted(() => {

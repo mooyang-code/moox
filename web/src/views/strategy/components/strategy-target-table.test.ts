@@ -44,4 +44,21 @@ describe("strategy target table", () => {
     expect(wrapper.findAll(".target-id")).toHaveLength(3);
     expect(wrapper.find(".alert").text()).toContain("实例已停用");
   });
+
+  it("shows a reading state instead of a verdict before the first read finishes", () => {
+    const wrapper = mount(TargetTable, {
+      props: { targets: [], snapshot: null, state: "unknown", loading: true } as never,
+      global: { stubs }
+    });
+    expect(wrapper.text()).toContain("正在读取当前目标");
+    expect(wrapper.text()).not.toContain("无法确认");
+    expect(wrapper.find(".alert").exists()).toBe(false);
+  });
+
+  it("labels the bar column as distribution and the number column as target weight", () => {
+    const heads = render("valid")
+      .findAll('[role="columnheader"]')
+      .map(item => item.text());
+    expect(heads).toEqual(["标的", "权重分布", "目标权重", "方向"]);
+  });
 });

@@ -32,6 +32,7 @@
             :total="replayTotal"
             @select="pick"
             @page-change="changeReplayPage"
+            @create="openCreate"
           />
         </a-grid-item>
         <a-grid-item :span="{ xs: 1, md: 2 }">

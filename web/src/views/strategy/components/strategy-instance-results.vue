@@ -7,7 +7,7 @@
       >最近一期被跳过。请在下方历史结果中查看具体跳过原因：数据暂时不足等情况会在后续周期自动恢复，仅当原因是因子定义版本变化时才需要停用并重新启用实例。</a-alert
     >
     <div class="results-card">
-      <TargetTable :targets="snapshot?.targets || []" :snapshot="snapshot" :state="targetState" />
+      <TargetTable :targets="snapshot?.targets || []" :snapshot="snapshot" :state="targetState" :loading="initialLoading" />
     </div>
     <div class="results-card">
       <div class="results-card__title">
@@ -19,7 +19,7 @@
         :page="page"
         :page-size="pageSize"
         :scope="scope"
-        :loading="loading"
+        :loading="loading || initialLoading"
         :error="error"
         @page="(next, nextScope) => emit('page', next, nextScope)"
         @retry="emit('retry')"
@@ -46,6 +46,8 @@ defineProps<{
   scope: "session" | "all";
   loading: boolean;
   error: string;
+  /** 首次读取尚未完成：目标与结果都显示读取中。 */
+  initialLoading?: boolean;
 }>();
 const emit = defineEmits<{ page: [number, "session" | "all"]; retry: [] }>();
 </script>

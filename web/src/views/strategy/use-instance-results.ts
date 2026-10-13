@@ -28,8 +28,13 @@ export function useInstanceResults(
   const resultPageSize = 20;
   // readAt 是最近一次成功读取实例与目标的时间。
   const readAt = ref("");
+  // refreshing 只跟踪用户手动刷新；后台定时刷新不让按钮转圈。
+  const refreshing = ref(false);
   // 目标有效期要随时间流逝重算：关闭自动刷新后页面不再请求数据，只读 Date.now() 的 computed 不会自己更新。
   const nowMs = useNowClock();
+
+  // 还没有成功读到过这个实例时的加载：页面应显示“读取中”，而不是“无法确认”“暂无结果”。
+  const initialLoading = computed(() => Boolean(instanceId.value) && !readAt.value && !store.detailError);
 
   const targetState = computed<TargetState>(() =>
     store.instance && store.instance.instance_id === instanceId.value && !options.controlUncertain?.value
@@ -52,6 +57,16 @@ export function useInstanceResults(
     } catch {
       // 错误由 store 记录并在页面上展示。
       return false;
+    }
+  }
+
+  /** 用户手动刷新：按钮显示加载，直到这次读取结束。 */
+  async function refresh(): Promise<boolean> {
+    refreshing.value = true;
+    try {
+      return await load();
+    } finally {
+      refreshing.value = false;
     }
   }
 
@@ -87,5 +102,18 @@ export function useInstanceResults(
     store.clearDetail();
   });
 
-  return { store, resultPage, resultScope, resultPageSize, readAt, targetState, load, loadResults, start };
+  return {
+    store,
+    resultPage,
+    resultScope,
+    resultPageSize,
+    readAt,
+    refreshing,
+    initialLoading,
+    targetState,
+    load,
+    refresh,
+    loadResults,
+    start
+  };
 }

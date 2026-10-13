@@ -29,10 +29,10 @@
         @page-change="changePage"
       >
         <template #columns>
-          <a-table-column title="策略名称" :width="240"
+          <a-table-column title="策略名称" :width="220"
             ><template #cell="{ record }"
               ><a-link @click="openDetail(record.strategy_id)">{{ record.name || "未命名策略" }}</a-link>
-              <div class="muted">{{ record.strategy_id }}</div></template
+              <div class="muted mono">{{ record.strategy_id }}</div></template
             ></a-table-column
           >
           <a-table-column title="DSL 摘要"
@@ -40,24 +40,24 @@
               ><span class="summary">{{ summarizeDSL(record.dsl_yaml) }}</span></template
             ></a-table-column
           >
-          <a-table-column title="版本" :width="140"
+          <a-table-column title="版本" :width="110"
             ><template #cell="{ record }"
               ><a-tooltip :content="record.dsl_hash"
                 ><span class="mono">{{ shortHash(record.dsl_hash) }}</span></a-tooltip
               ></template
             ></a-table-column
           >
-          <a-table-column title="更新时间" :width="180"
+          <a-table-column title="更新时间" :width="170"
             ><template #cell="{ record }">{{
               formatStrategyTime(record.updated_at || record.created_at)
             }}</template></a-table-column
           >
-          <a-table-column title="操作" :width="200" fixed="right">
+          <a-table-column title="操作" :width="170" fixed="right">
             <template #cell="{ record }">
-              <a-button type="text" size="small" @click="openDetail(record.strategy_id)">查看</a-button>
-              <a-button type="text" size="small" @click="edit(record.strategy_id)">编辑</a-button>
+              <a-button type="text" size="mini" @click="openDetail(record.strategy_id)">查看</a-button>
+              <a-button type="text" size="mini" @click="edit(record.strategy_id)">编辑</a-button>
               <a-dropdown trigger="click">
-                <a-button type="text" size="small">更多</a-button>
+                <a-button type="text" size="mini">更多</a-button>
                 <template #content>
                   <a-doption @click="goReplay(record.strategy_id)">发起回放</a-doption>
                   <a-doption @click="confirmRemove(record)">删除</a-doption>

@@ -139,6 +139,23 @@ export function stageColor(stage: string): string {
   return stages[stage]?.color ?? "blue";
 }
 
+/** 解释明细的阶段顺序：入选的放最前面，其次是被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
+const stageOrder: Record<string, number> = { weighted: 0, dropped: 1, scored: 2, missing: 3, idle: 4, filtered: 5, aged_out: 6 };
+
+/** 解释明细排序：按阶段，再按名次（无名次的在后），最后按标的；入选的几个标的不会淹没在几百个被过滤的标的里。 */
+export function sortResultItems<T extends { stage: string; rank?: number; instrument_id: string; rule_id: string }>(
+  items: T[]
+): T[] {
+  const rankOf = (item: T) => (item.rank && item.rank > 0 ? item.rank : Number.MAX_SAFE_INTEGER);
+  return [...items].sort(
+    (a, b) =>
+      (stageOrder[a.stage] ?? 9) - (stageOrder[b.stage] ?? 9) ||
+      rankOf(a) - rankOf(b) ||
+      a.rule_id.localeCompare(b.rule_id) ||
+      a.instrument_id.localeCompare(b.instrument_id)
+  );
+}
+
 export interface RuleSummary {
   expected: number;
   aged_out: number;

@@ -3,20 +3,21 @@
     <header class="target-head">
       <div class="target-title">
         <strong>当前目标</strong>
-        <a-tag size="small" :color="tag.color">{{ tag.label }}</a-tag>
-        <span class="target-count">{{ targets.length }} 个标的</span>
+        <a-tag v-if="!loading" size="small" :color="tag.color">{{ tag.label }}</a-tag>
+        <span v-if="!loading" class="target-count">{{ targets.length }} 个标的</span>
       </div>
       <div v-if="snapshot && (snapshot.bar_end_time || snapshot.valid_until)" class="target-times">
         <span v-if="snapshot.bar_end_time">K 线结束 {{ formatStrategyTime(snapshot.bar_end_time) }}</span>
         <span v-if="snapshot.valid_until">有效至 {{ formatStrategyTime(snapshot.valid_until) }}</span>
       </div>
     </header>
-    <a-alert v-if="notice" :type="notice.type" show-icon class="target-alert">{{ notice.text }}</a-alert>
+    <div v-if="loading" class="target-loading">正在读取当前目标…</div>
+    <a-alert v-else-if="notice" :type="notice.type" show-icon class="target-alert">{{ notice.text }}</a-alert>
     <div v-if="rows.length" class="target-rows" role="table" aria-label="目标权重">
       <div class="target-row target-row--head" role="row">
         <span role="columnheader">标的</span>
-        <span role="columnheader">目标权重</span>
-        <span role="columnheader" class="target-weight-col">权重</span>
+        <span role="columnheader">权重分布</span>
+        <span role="columnheader" class="target-weight-col">目标权重</span>
         <span role="columnheader">方向</span>
       </div>
       <div v-for="row in rows" :key="row.target.instrument_id" class="target-row" role="row">
@@ -38,7 +39,13 @@ import { computed } from "vue";
 import type { InstrumentTarget, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { formatStrategyTime, rankTargets, targetStateTag, targetWeightPercent, type TargetState } from "@/views/strategy/model";
 
-const props = defineProps<{ targets: InstrumentTarget[]; snapshot: StrategyTargetSnapshot | null; state: TargetState }>();
+const props = defineProps<{
+  targets: InstrumentTarget[];
+  snapshot: StrategyTargetSnapshot | null;
+  state: TargetState;
+  /** 首次读取中：不显示状态判断。 */
+  loading?: boolean;
+}>();
 
 const rows = computed(() => rankTargets(props.targets));
 const tag = computed(() => targetStateTag(props.state));
@@ -87,6 +94,12 @@ const notice = computed<{ type: "info" | "warning"; text: string } | null>(() =>
 .target-times {
   display: flex;
   gap: 12px;
+}
+.target-loading {
+  padding: 16px 0;
+  color: var(--color-text-3);
+  font-size: 13px;
+  text-align: center;
 }
 .target-alert {
   margin-bottom: 10px;

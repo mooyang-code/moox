@@ -10,6 +10,7 @@ import {
   percent,
   shortHash,
   skipReasonLabel,
+  sortResultItems,
   stageLabel
 } from "./model";
 
@@ -143,5 +144,22 @@ describe("result insights", () => {
     expect(overview.trend.map(point => point.targets)).toEqual([1, 2]);
     expect(formatDelay(1500)).toBe("1.5s");
     expect(formatDelay(null)).toBe("-");
+  });
+});
+
+describe("result item ordering", () => {
+  const item = (instrument_id: string, stage: string, rank = 0, rule_id = "r") => ({ instrument_id, stage, rank, rule_id });
+
+  it("puts weighted items first by rank and filtered ones last", () => {
+    const sorted = sortResultItems([
+      item("A", "filtered"),
+      item("B", "weighted", 2),
+      item("C", "scored", 7),
+      item("D", "weighted", 1),
+      item("E", "idle"),
+      item("F", "scored", 6),
+      item("G", "missing")
+    ]);
+    expect(sorted.map(row => row.instrument_id)).toEqual(["D", "B", "F", "C", "G", "E", "A"]);
   });
 });

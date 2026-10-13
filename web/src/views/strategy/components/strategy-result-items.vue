@@ -39,8 +39,8 @@
     </div>
     <a-table :row-key="rowKey" size="small" :data="filtered" :pagination="{ pageSize: 50 }" :scroll="{ x: 760 }">
       <template #columns>
-        <a-table-column title="规则" data-index="rule_id" :width="140" />
-        <a-table-column title="标的" data-index="instrument_id" :width="160" />
+        <a-table-column title="规则" data-index="rule_id" :width="150" :ellipsis="true" :tooltip="true" />
+        <a-table-column title="标的" data-index="instrument_id" :width="170" :ellipsis="true" :tooltip="true" />
         <a-table-column title="阶段" :width="100"
           ><template #cell="{ record }"
             ><a-tag size="small" :color="stageColor(record.stage)">{{ stageLabel(record.stage) }}</a-tag></template
@@ -66,7 +66,15 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { StrategyResult, StrategyResultItem } from "@/api/strategy-types";
-import { itemReasonLabel, parseSummary, percent, skipReasonLabel, stageColor, stageLabel } from "@/views/strategy/model";
+import {
+  itemReasonLabel,
+  parseSummary,
+  percent,
+  skipReasonLabel,
+  sortResultItems,
+  stageColor,
+  stageLabel
+} from "@/views/strategy/model";
 
 const props = defineProps<{ result: StrategyResult; items: StrategyResultItem[] }>();
 const ruleFilter = ref<string>();
@@ -84,7 +92,7 @@ const detail = computed(() => {
   }
 });
 const filtered = computed(() =>
-  props.items.filter(
+  sortResultItems(props.items).filter(
     item =>
       (!ruleFilter.value || item.rule_id === ruleFilter.value) &&
       (!stageFilter.value || item.stage === stageFilter.value) &&

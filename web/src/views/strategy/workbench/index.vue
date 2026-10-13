@@ -12,15 +12,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, defineAsyncComponent, h, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { STRATEGY_TASKS_ROUTE, normalizeTaskTab, type StrategyTaskTab } from "@/views/strategy/links";
-import StrategyReplay from "@/views/strategy/replay/index.vue";
-import StrategyResults from "@/views/strategy/results/index.vue";
-import StrategyRunning from "@/views/strategy/running/index.vue";
 
 defineOptions({ name: "StrategyWorkbench" });
+
+// 各 Tab 按需加载：回放依赖体积很大的图表库，只有打开「策略回放」时才下载，其余 Tab 不被它拖慢。
+const tabLoading = { render: () => h("div", { class: "workbench-loading" }, [h("span", "正在加载…")]) };
+const lazyTab = (loader: () => Promise<{ default: Component }>) =>
+  defineAsyncComponent({ loader: () => loader().then(module => module.default), loadingComponent: tabLoading, delay: 200 });
+const StrategyRunning = lazyTab(() => import("@/views/strategy/running/index.vue"));
+const StrategyResults = lazyTab(() => import("@/views/strategy/results/index.vue"));
+const StrategyReplay = lazyTab(() => import("@/views/strategy/replay/index.vue"));
 
 const tabs = [
   { key: "instances", label: "运行实例" },
@@ -67,6 +72,13 @@ function onTabChange(value: string | number) {
   margin-top: var(--moox-space-3);
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+.workbench-content :deep(.workbench-loading) {
+  display: flex;
+  justify-content: center;
+  padding: 48px 0;
+  color: var(--color-text-3);
 }
 
 .workbench-content :deep(.moox-page) {

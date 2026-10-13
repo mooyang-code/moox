@@ -14,17 +14,17 @@
           <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" /><span class="muted" aria-hidden="true"
             >自动刷新</span
           ><a-button :disabled="!store.instance" @click="openReplay">回放</a-button
-          ><a-button :loading="store.detailLoading" aria-label="刷新实例详情" @click="refresh"
+          ><a-button :loading="refreshing" aria-label="刷新实例详情" @click="refreshDetail"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
         </div>
       </div>
       <a-alert v-if="store.detailError" type="error" show-icon class="top-alert"
         >详情加载失败：{{ store.detailError
-        }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
+        }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
       <template v-if="store.instance">
-        <a-descriptions :column="{ xs: 1, sm: 3 }" bordered size="small" class="summary">
+        <a-descriptions :column="{ xs: 1, md: 2, xl: 3 }" bordered size="small" class="summary">
           <a-descriptions-item label="实例状态"
             ><StatusBadge :enabled="store.instance.enabled" :uncertain="controlUncertain" :health="store.instance.health"
           /></a-descriptions-item>
@@ -75,6 +75,7 @@
           :scope="resultScope"
           :loading="store.resultsLoading"
           :error="store.resultsError"
+          :initial-loading="initialLoading"
           @page="loadResults"
           @retry="loadResults(resultPage, resultScope)"
         />
@@ -123,17 +124,27 @@ function leaveIfOtherSpace() {
   return false;
 }
 
-const { store, resultPage, resultScope, resultPageSize, readAt, targetState, load, loadResults, start } = useInstanceResults(
-  instanceId,
-  {
-    autoRefresh,
-    controlUncertain,
-    onLoaded: () => void leaveIfOtherSpace(),
-    onReset: () => {
-      controlUncertain.value = false;
-    }
+const {
+  store,
+  resultPage,
+  resultScope,
+  resultPageSize,
+  readAt,
+  refreshing,
+  initialLoading,
+  targetState,
+  load,
+  refresh,
+  loadResults,
+  start
+} = useInstanceResults(instanceId, {
+  autoRefresh,
+  controlUncertain,
+  onLoaded: () => void leaveIfOtherSpace(),
+  onReset: () => {
+    controlUncertain.value = false;
   }
-);
+});
 
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
@@ -146,9 +157,9 @@ const definitionEmptyText = computed(() =>
       : "定义读取中"
 );
 
-async function refresh() {
+async function refreshDetail() {
   if (controlUncertain.value) await reconcileControl();
-  else await load();
+  else await refresh();
 }
 /** 启停结果未知时重新读取实例，读到最新状态后解除“状态未知”。 */
 async function reconcileControl() {

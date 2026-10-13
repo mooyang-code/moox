@@ -1,6 +1,9 @@
 <template>
   <div class="section-title list-title">回放记录</div>
-  <a-list :data="replays" :loading="loading" :bordered="false" size="small">
+  <a-empty v-if="!loading && !replays.length" description="还没有回放">
+    <a-button type="primary" size="small" @click="emit('create')">发起回放</a-button>
+  </a-empty>
+  <a-list v-else :data="replays" :loading="loading" :bordered="false" size="small">
     <template #item="{ item }">
       <a-list-item :class="{ active: item.replay_id === selectedId }">
         <button
@@ -53,7 +56,7 @@ defineProps<{
   pageSize: number;
   total: number;
 }>();
-const emit = defineEmits<{ select: [string]; pageChange: [number] }>();
+const emit = defineEmits<{ select: [string]; pageChange: [number]; create: [] }>();
 </script>
 
 <style scoped>
