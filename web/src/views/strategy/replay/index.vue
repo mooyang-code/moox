@@ -234,8 +234,9 @@
           </template>
         </a-grid-item>
       </a-grid>
+      <!-- form 是页面持有的 reactive 草稿：只单向传入，子组件就地修改字段，不整体替换（const 不能被 v-model 赋值）。 -->
       <ReplayCreateDrawer
-        v-model="form"
+        :model-value="form"
         :visible="parsed.create"
         :strategies="strategyStore.strategyCatalog"
         :views="views"
