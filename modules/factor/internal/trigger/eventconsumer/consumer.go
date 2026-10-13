@@ -138,7 +138,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
-		BatchSize: cfg.MaxAckPending, IndependentBatch: true,
+		BatchSize: cfg.MaxAckPending, Concurrent: true,
 		InProgressInterval: cfg.InProgressInterval,
 		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 			log.ErrorContextf(runCtx, "factor period consumer error: %v", err)

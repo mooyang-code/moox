@@ -593,7 +593,7 @@ func TestRunnerCancellationReleasesInterruptedDelivery(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			consumer := &runnerFakeConsumer{batches: [][]*Delivery{{delivery}}}
 			handler := &runnerFakeHandler{result: tc.result, onHandle: cancel}
-			if err := NewRunner(consumer, handler, RunnerConfig{IndependentBatch: true}).Run(ctx); err != nil {
+			if err := NewRunner(consumer, handler, RunnerConfig{Concurrent: true}).Run(ctx); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
 			if strings.Join(actions, ",") != tc.want {
@@ -656,7 +656,7 @@ func TestRunnerBatchIsSequentialByDefault(t *testing.T) {
 	}
 }
 
-func TestRunnerIndependentBatchStartsAllFetchedDeliveriesConcurrently(t *testing.T) {
+func TestRunnerConcurrentStartsAllFetchedDeliveriesConcurrently(t *testing.T) {
 	const batchSize = 4
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -686,7 +686,7 @@ func TestRunnerIndependentBatchStartsAllFetchedDeliveriesConcurrently(t *testing
 		runDone <- NewRunner(
 			&runnerFakeConsumer{batches: [][]*Delivery{deliveries}},
 			handler,
-			RunnerConfig{BatchSize: batchSize, IndependentBatch: true},
+			RunnerConfig{BatchSize: batchSize, Concurrent: true},
 		).Run(ctx)
 	}()
 
@@ -701,7 +701,7 @@ func TestRunnerIndependentBatchStartsAllFetchedDeliveriesConcurrently(t *testing
 	}
 }
 
-func TestRunnerIndependentBatchRetryDoesNotNakPeers(t *testing.T) {
+func TestRunnerConcurrentRetryDoesNotNakPeers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var actionCount atomic.Int32
@@ -740,7 +740,7 @@ func TestRunnerIndependentBatchRetryDoesNotNakPeers(t *testing.T) {
 	err := NewRunner(
 		&runnerFakeConsumer{batches: [][]*Delivery{{first, second, third}}},
 		handler,
-		RunnerConfig{BatchSize: 3, IndependentBatch: true},
+		RunnerConfig{BatchSize: 3, Concurrent: true},
 	).Run(ctx)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -753,57 +753,7 @@ func TestRunnerIndependentBatchRetryDoesNotNakPeers(t *testing.T) {
 	}
 }
 
-func TestRunnerIndependentBatchWaitsForAllDeliveries(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	slowStarted := make(chan struct{})
-	releaseSlow := make(chan struct{})
-	var actions atomic.Int32
-	newDelivery := func() *Delivery {
-		return &Delivery{ackFn: func(context.Context) error {
-			if actions.Add(1) == 2 {
-				cancel()
-			}
-			return nil
-		}}
-	}
-	slow, fast := newDelivery(), newDelivery()
-	handler := DeliveryHandlerFunc(func(_ context.Context, delivery *Delivery) HandlerResult {
-		if delivery == slow {
-			close(slowStarted)
-			<-releaseSlow
-		}
-		return HandlerResult{Decision: ACK}
-	})
-	runDone := make(chan error, 1)
-	go func() {
-		runDone <- NewRunner(
-			&runnerFakeConsumer{batches: [][]*Delivery{{slow, fast}}},
-			handler,
-			RunnerConfig{BatchSize: 2, IndependentBatch: true},
-		).Run(ctx)
-	}()
-
-	select {
-	case <-slowStarted:
-	case <-time.After(time.Second):
-		t.Fatal("slow delivery did not start")
-	}
-	select {
-	case err := <-runDone:
-		t.Fatalf("Run() returned before all deliveries completed: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(releaseSlow)
-	if err := <-runDone; err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if got := actions.Load(); got != 2 {
-		t.Fatalf("actions = %d, want 2", got)
-	}
-}
-
-func TestRunnerIndependentBatchAggregatesActionErrors(t *testing.T) {
+func TestRunnerConcurrentAggregatesActionErrors(t *testing.T) {
 	firstErr := errors.New("first ack failed")
 	secondErr := errors.New("second ack failed")
 	var attempts atomic.Int32
@@ -821,7 +771,7 @@ func TestRunnerIndependentBatchAggregatesActionErrors(t *testing.T) {
 		DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
 			return HandlerResult{Decision: ACK}
 		}),
-		RunnerConfig{BatchSize: 2, IndependentBatch: true},
+		RunnerConfig{BatchSize: 2, Concurrent: true},
 	).Run(context.Background())
 	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
 		t.Fatalf("Run() error = %v, want both action errors", err)
@@ -859,3 +809,99 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// 慢的投递不能拖住后一次拉取到的投递：第一条阻塞期间，第二批的投递应当照常被拉取并处理完。
+func TestRunnerConcurrentDoesNotBlockLaterFetchOnSlowDelivery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	releaseSlow := make(chan struct{})
+	slowStarted := make(chan struct{})
+	fastDone := make(chan struct{})
+	slow := &Delivery{ackFn: func(context.Context) error { return nil }}
+	fast := &Delivery{ackFn: func(context.Context) error { close(fastDone); return nil }}
+	handler := DeliveryHandlerFunc(func(_ context.Context, delivery *Delivery) HandlerResult {
+		if delivery == slow {
+			close(slowStarted)
+			<-releaseSlow
+		}
+		return HandlerResult{Decision: ACK}
+	})
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- NewRunner(
+			&runnerFakeConsumer{batches: [][]*Delivery{{slow}, {fast}}},
+			handler,
+			RunnerConfig{BatchSize: 4, Concurrent: true},
+		).Run(ctx)
+	}()
+
+	<-slowStarted
+	select {
+	case <-fastDone:
+	case <-time.After(time.Second):
+		t.Fatal("后到的投递被慢投递拖住了")
+	}
+	close(releaseSlow)
+	cancel()
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+// 在途投递数不能超过 BatchSize。
+func TestRunnerConcurrentBoundsInFlight(t *testing.T) {
+	const limit = 2
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var inFlight, peak, done atomic.Int32
+	newDelivery := func() *Delivery {
+		return &Delivery{ackFn: func(context.Context) error {
+			if done.Add(1) == 5 {
+				cancel()
+			}
+			return nil
+		}}
+	}
+	handler := DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
+		now := inFlight.Add(1)
+		for {
+			old := peak.Load()
+			if now <= old || peak.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		inFlight.Add(-1)
+		return HandlerResult{Decision: ACK}
+	})
+	pending := []*Delivery{newDelivery(), newDelivery(), newDelivery(), newDelivery(), newDelivery()}
+	consumer := &limitedFakeConsumer{pending: pending}
+	if err := NewRunner(consumer, handler, RunnerConfig{BatchSize: limit, Concurrent: true}).Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := peak.Load(); got > limit {
+		t.Fatalf("在途峰值 = %d，超过上限 %d", got, limit)
+	}
+}
+
+// limitedFakeConsumer 像真实消费者一样，每次最多返回请求的条数。
+type limitedFakeConsumer struct {
+	mu      sync.Mutex
+	pending []*Delivery
+}
+
+func (f *limitedFakeConsumer) Fetch(_ context.Context, n int) ([]*Delivery, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.pending) == 0 {
+		return nil, nats.ErrTimeout
+	}
+	if n > len(f.pending) {
+		n = len(f.pending)
+	}
+	out := f.pending[:n]
+	f.pending = f.pending[n:]
+	return out, nil
+}
+
+func (f *limitedFakeConsumer) Close() error { return nil }

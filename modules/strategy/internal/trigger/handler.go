@@ -144,6 +144,15 @@ type period struct {
 	boundary   input.PeriodBoundaries
 	validUntil time.Time
 	input      store.InputRecord
+	timing     periodTiming
+}
+
+// periodTiming 是一期处理的分段耗时，成功提交时写入一行日志，用来定位“数据就绪到结果落库”的时间花在哪。
+type periodTiming struct {
+	start  time.Time
+	load   time.Duration // 读取输入（View 元数据与行数据）
+	eval   time.Duration // 读取上期状态并求值
+	commit time.Duration // 结果提交
 }
 
 func (h *Handler) process(ctx context.Context, loader Loader, instance store.Instance, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {
@@ -186,7 +195,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return nil
 	}
-	p := &period{loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
+	p := &period{timing: periodTiming{start: h.now()}, loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
 	p.input = store.InputRecord{ViewID: payload.GetViewId(), Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, EventID: message.GetEventId()}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
@@ -242,10 +251,13 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		if err != nil {
 			return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 		}
+		commitStart := h.now()
 		_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Items: items, ExpectedLatestResultID: &expected, Now: h.now()})
+		p.timing.commit = h.now().Sub(commitStart)
 		switch {
 		case err == nil:
 			if created {
+				h.logTiming(p, payload, decision.Status)
 				h.observe(instance, bar, boundary.BarEnd, decision.Status, decision.SkipReason)
 				h.updateHealth(ctx, instance.InstanceID, rt.sessionID, decision.Status, decision.SkipReason)
 			}
@@ -302,7 +314,9 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	var loaded input.Loaded
 	for reread := 0; ; reread++ {
 		var err error
+		loadStart := h.now()
 		loaded, err = p.loader.LoadBar(ctx, p.instance.SpaceID, rt.resolved, rt.program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: eventUniverse(payload), Readiness: ready})
+		p.timing.load = h.now().Sub(loadStart)
 		if err == nil {
 			break
 		}
@@ -331,6 +345,8 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 		}
 		return nil, input.Loaded{}, fmt.Errorf("读取输入（第 %d 次）：%w", h.attempts[key], err)
 	}
+	evalStart := h.now()
+	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
 	previous := engine.State{}
 	if last, ok, err := h.Store.LatestOk(ctx, p.instance.InstanceID, rt.sessionID); err != nil {
 		return nil, input.Loaded{}, err
@@ -459,6 +475,21 @@ func (h *Handler) observe(instance store.Instance, bar string, barEnd time.Time,
 	if h.Observer != nil {
 		h.Observer.ObservePeriod(instance, bar, barEnd, result, reason)
 	}
+}
+
+// logTiming 记录一期的分段耗时。“就绪等待”是 View 数据就绪到本实例开始处理（含排队与事件投递），
+// “K 线至就绪”是 K 线结束到 View 数据就绪（上游因子计算、写入与 View 刷新）。
+func (h *Handler) logTiming(p *period, payload *storagepb.ViewDataReady, status string) {
+	var wait, upstream time.Duration
+	if ready := payload.GetReadyAt(); ready != nil {
+		wait = p.timing.start.Sub(ready.AsTime())
+		upstream = ready.AsTime().Sub(p.boundary.BarEnd)
+	}
+	h.logf("实例 %s 周期 %s %s 耗时：K线至就绪=%s 就绪等待=%s 读取=%s 求值=%s 提交=%s 本期处理=%s 总计=%s",
+		p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), status,
+		upstream.Round(time.Millisecond), wait.Round(time.Millisecond), p.timing.load.Round(time.Millisecond),
+		p.timing.eval.Round(time.Millisecond), p.timing.commit.Round(time.Millisecond),
+		h.now().Sub(p.timing.start).Round(time.Millisecond), h.now().Sub(p.boundary.BarEnd).Round(time.Millisecond))
 }
 
 func (h *Handler) now() time.Time {
