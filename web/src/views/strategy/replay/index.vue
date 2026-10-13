@@ -9,17 +9,19 @@
         <a-space
           ><a-button :loading="listLoading" aria-label="刷新回放" @click="loadReplays"
             ><template #icon><icon-refresh /></template>刷新</a-button
+          ><a-button type="primary" @click="openCreate"
+            ><template #icon><icon-plus /></template>发起回放</a-button
           ></a-space
         >
       </div>
-      <a-alert v-for="message in errorMessages" :key="message" type="error" show-icon class="top-alert">{{ message }}</a-alert>
       <a-alert v-if="pollFailures >= 3" type="warning" show-icon class="top-alert"
         >后台暂时无法访问，页面上的回放状态可能不是最新；恢复后会自动刷新。</a-alert
       >
       <a-grid :cols="{ xs: 1, md: 3 }" :col-gap="20" :row-gap="16">
         <a-grid-item>
-          <div class="section-title">发起回放</div>
-          <ReplayCreateForm v-model="form" :strategies="strategyStore.strategyCatalog" :views="views" :views-loading="viewsLoading" :starting="starting" @start="start" />
+          <a-alert v-if="errors.list" type="error" show-icon class="top-alert"
+            >{{ errors.list }}<template #action><a-button size="small" @click="loadReplays">重试</a-button></template></a-alert
+          >
           <ReplayRecordList
             :replays="replays"
             :strategies="strategyStore.strategyCatalog"
@@ -33,6 +35,12 @@
           />
         </a-grid-item>
         <a-grid-item :span="{ xs: 1, md: 2 }">
+          <a-alert v-if="errors.detail" type="error" show-icon class="top-alert"
+            >{{ errors.detail
+            }}<template #action
+              ><a-button size="small" :disabled="!selectedId" @click="retryDetail">重试</a-button></template
+            ></a-alert
+          >
           <div v-if="detailLoading" class="detail-loading"><a-spin tip="正在加载回放详情" /></div>
           <a-empty v-else-if="!selected" description="选择或发起一个回放" />
           <template v-else>
@@ -131,6 +139,9 @@
                 <pre class="dsl">{{ selected.dsl_yaml }}</pre>
               </a-collapse-item>
             </a-collapse>
+            <a-alert v-if="errors.table" type="error" show-icon class="top-alert"
+              >{{ errors.table }}<template #action><a-button size="small" @click="retryTable">重试</a-button></template></a-alert
+            >
             <a-table
               row-key="bar_end_time"
               size="small"
@@ -223,6 +234,19 @@
           </template>
         </a-grid-item>
       </a-grid>
+      <ReplayCreateDrawer
+        v-model="form"
+        :visible="parsed.create"
+        :strategies="strategyStore.strategyCatalog"
+        :views="views"
+        :views-loading="viewsLoading"
+        :starting="starting"
+        :errors="{ strategies: errors.strategies, views: errors.views, start: errors.start }"
+        @close="closeCreate"
+        @start="start"
+        @retry-strategies="loadStrategies"
+        @retry-views="loadViews"
+      />
     </div>
   </div>
 </template>
@@ -232,7 +256,7 @@ import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { default as VChart } from "@visactor/vchart";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
 import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
@@ -242,8 +266,10 @@ import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
-import ReplayCreateForm from "@/views/strategy/replay/replay-create-form.vue";
-import type { ReplayFormState } from "@/views/strategy/replay/replay-form-model";
+import { sameQuery } from "@/views/strategy/query";
+import ReplayCreateDrawer from "@/views/strategy/replay/replay-create-drawer.vue";
+import { type ReplayFormState, replaySourceOf, validateReplayForm } from "@/views/strategy/replay/replay-form-model";
+import { buildReplayQuery, hasPrefill, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
 import {
   equitySeries,
@@ -261,7 +287,12 @@ import {
 } from "@/views/strategy/replay/model";
 
 defineOptions({ name: "StrategyReplay" });
+const ROUTE_NAME = "strategy-replay";
 const route = useRoute();
+const router = useRouter();
+// URL 保存分析对象、两处分页、创建抽屉及其预填；表单草稿与请求状态仍在页面内。
+// 用户操作先写 URL 再读取，外部变化（深链接、前进后退）由下面的监听转成读取，二者用“与当前状态相同则不动”避免循环。
+const parsed = computed(() => parseReplayQuery(route.query));
 const spaceStore = useSpaceStore();
 const strategyStore = useStrategyStore();
 const replayPageSize = 20;
@@ -269,7 +300,7 @@ const tablePageSize = 50;
 const seriesPageSize = 2000;
 const replays = ref<Replay[]>([]);
 const replayTotal = ref(0);
-const replayPage = ref(1);
+const replayPage = ref(parseReplayQuery(route.query).page);
 const views = ref<View[]>([]);
 // series 是 brief 周期记录（只有曲线与摘要字段），tableRows 是表格当前页的完整记录。
 const series = ref<ReplayBar[]>([]);
@@ -293,7 +324,6 @@ const errors = reactive<Record<"strategies" | "views" | "list" | "detail" | "tab
   table: "",
   start: ""
 });
-const errorMessages = computed(() => Object.values(errors).filter(Boolean));
 // pollFailures 是后台轮询连续失败的次数：轮询请求不弹全局错误，连续失败 3 次后页面给出一条提示。
 const pollFailures = ref(0);
 // awaitingMetrics 是刚取消、执行器还没写入部分指标的回放：继续轮询直到指标出现或超时。
@@ -332,6 +362,24 @@ let userPicks = 0;
 let tableRefreshPending = "";
 // tableLoadedPage 是表格当前显示的数据所属的页（0 表示还没有读到）：手动翻页失败时页码回到它。
 let tableLoadedPage = 0;
+
+// pending 是刚发出、路由还没生效的导航目标：连续两次写入（如先 push 再由 select 补写）以它为基准，
+// 避免读到滞后的 route.query 而把 push 误变成 replace，或用旧的对象写回。
+let pending: { state: ReplayQueryState; query: Record<string, string> } | null = null;
+
+/** 把状态补丁写入 URL：只在回放页自己的路由上写，且与当前（或待生效）query 语义相同时不导航。 */
+function writeQuery(patch: Partial<ReplayQueryState>, mode: "push" | "replace" = "replace") {
+  if (route.name !== ROUTE_NAME) return;
+  const state = { ...(pending?.state ?? parsed.value), ...patch };
+  const query = buildReplayQuery(state);
+  if (sameQuery(query, pending?.query ?? route.query)) return;
+  const mine = { state, query };
+  pending = mine;
+  const done = mode === "push" ? router.push({ name: ROUTE_NAME, query }) : router.replace({ name: ROUTE_NAME, query });
+  void Promise.resolve(done).finally(() => {
+    if (pending === mine) pending = null;
+  });
+}
 
 const metrics = computed(() => parseMetrics(selected.value?.metrics_json));
 const partialMetrics = computed(() => selected.value?.status === "cancelled" || selected.value?.status === "failed");
@@ -391,7 +439,7 @@ function applyReplayList(gen: number, seq: number, page: number, result: PageRes
   replays.value = result.items;
   replayTotal.value = result.page.total;
   errors.list = "";
-  if (!selectedId.value && result.items.length) void select(result.items[0].replay_id);
+  if (!selectedId.value && !parsed.value.replayId && result.items.length) void select(result.items[0].replay_id);
   return true;
 }
 
@@ -414,6 +462,7 @@ async function loadReplays() {
 
 function changeReplayPage(page: number) {
   replayPage.value = page;
+  writeQuery({ page });
   loadReplays();
 }
 
@@ -484,6 +533,7 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
     // 手动翻页失败：页码回到上一次成功显示的页。Arco 的分页只在页码变化时触发翻页，页码停在失败的那一页就点不动了。
     // 还没有成功显示过任何页（首次加载失败）时回到第 1 页。
     tablePage.value = tableLoadedPage || 1;
+    writeQuery({ barPage: tablePage.value });
     // 表格停在旧快照：记为待刷新，结尾补一次静默刷新，之后由轮询继续重试（回放已是终态时也一样）。
     tableRefreshPending = replayId;
     errors.table = `周期记录加载失败：${err instanceof Error ? err.message : "未知错误"}`;
@@ -524,6 +574,7 @@ function maybeAwaitMetrics(replay: Replay, observedCancel: boolean) {
 /** 用户在列表里选择一个回放。 */
 function pick(replayId: string) {
   userPicks += 1;
+  writeQuery({ replayId, barPage: 1 }, "push");
   void select(replayId);
 }
 
@@ -531,11 +582,13 @@ function pick(replayId: string) {
  * 选择并加载一个回放。observedCancel 见 maybeAwaitMetrics；keepTablePage 为 true 且重读的是同一个回放时，表格停在
  * 当前页（取消后的整体重读）。
  */
-async function select(replayId: string, options: { observedCancel?: boolean; keepTablePage?: boolean } = {}) {
+async function select(replayId: string, options: { observedCancel?: boolean; keepTablePage?: boolean; tablePage?: number } = {}) {
   const requestId = ++selectRequest;
   const gen = generation;
   const isCurrent = () => requestId === selectRequest && gen === generation;
-  const page = options.keepTablePage && selectedId.value === replayId ? tablePage.value : 1;
+  const page = options.tablePage ?? (options.keepTablePage && selectedId.value === replayId ? tablePage.value : 1);
+  // 自动选择、发起后选择等没有经过 pick 的入口也要让 URL 指向当前对象（已指向时不动）。
+  writeQuery({ replayId, barPage: page });
   // 立即清掉上一个回放的详情与错误：加载期间不能显示旧回放，取消等操作也不能作用在旧回放上。
   tableLoadedPage = 0;
   selectedId.value = replayId;
@@ -570,10 +623,22 @@ async function select(replayId: string, options: { observedCancel?: boolean; kee
 
 function changeTablePage(page: number) {
   tablePage.value = page;
+  writeQuery({ barPage: page });
   const replayId = selectedId.value;
   const requestId = selectRequest;
   const gen = generation;
   void loadTablePage(replayId, () => requestId === selectRequest && gen === generation && selectedId.value === replayId);
+}
+
+function retryDetail() {
+  if (selectedId.value) void select(selectedId.value, { tablePage: tablePage.value });
+}
+
+function retryTable() {
+  const replayId = selectedId.value;
+  const requestId = selectRequest;
+  const gen = generation;
+  if (replayId) void loadTablePage(replayId, () => requestId === selectRequest && gen === generation && selectedId.value === replayId);
 }
 
 /** 所选回放是否还需要轮询：排队或运行中，或刚取消、部分指标尚未写入（最多等 2 分钟），或表格落后、待刷新。 */
@@ -662,26 +727,12 @@ function utcLabel(time: unknown): string {
   return Number.isFinite(value) ? formatUtcTime(new Date(value).toISOString()) : "";
 }
 
-/** 回放对象三选一：实例会话固化的版本、已保存的定义，或未保存的 DSL 文本。 */
-function replaySource(): { instance_id: string } | { strategy_id: string } | { dsl_yaml: string } | null {
-  if (form.instance_id) return { instance_id: form.instance_id };
-  if (form.source === "dsl") return form.dsl_yaml.trim() ? { dsl_yaml: form.dsl_yaml } : null;
-  return form.strategy_id ? { strategy_id: form.strategy_id } : null;
-}
-
 async function start() {
-  errors.start = "";
+  errors.start = validateReplayForm(form, parseUtcInput);
   const startTime = parseUtcInput(form.start);
   const endTime = parseUtcInput(form.end);
-  const source = replaySource();
-  if (!form.view_id || !source) {
-    errors.start = "请选择 View，并选择定义、粘贴 DSL 文本或从实例详情进入";
-    return;
-  }
-  if (!startTime || !endTime) {
-    errors.start = "时间格式应为 YYYY-MM-DD HH:mm（UTC），例如 2026-09-01 00:00";
-    return;
-  }
+  const source = replaySourceOf(form);
+  if (errors.start || !source || !startTime || !endTime) return;
   const gen = generation;
   const picks = userPicks;
   starting.value = true;
@@ -697,7 +748,9 @@ async function start() {
     Message.success(
       `回放已排队：共 ${started.bar_count} 根，首根 ${formatUtcTime(started.first_bar_end)}，末根 ${formatUtcTime(started.last_bar_end)}`
     );
+    closeCreate();
     replayPage.value = 1;
+    writeQuery({ page: 1 });
     await loadReplays();
     // 等待期间用户在列表里另选了回放：尊重用户的选择，不再切到新回放。
     if (gen !== generation || userPicks !== picks) return;
@@ -731,6 +784,30 @@ async function cancel() {
   }
 }
 
+function openCreate() {
+  if (!parsed.value.create) writeQuery({ create: true }, "push");
+}
+/** 关闭创建抽屉：预填一并从 URL 清除（它们只表示创建来源，不表示分析对象）。 */
+function closeCreate() {
+  writeQuery({ create: false });
+}
+/** 建立创建上下文时应用入口预填；之后的翻页、选择、轮询都不会覆盖正在编辑的草稿。 */
+function applyPrefill() {
+  const { strategyId, instanceId, viewId } = parsed.value.prefill;
+  if (instanceId) form.instance_id = instanceId;
+  else if (strategyId) {
+    form.instance_id = "";
+    form.strategy_id = strategyId;
+    form.source = "definition";
+  }
+  if (viewId) form.view_id = viewId;
+}
+/** URL 里有显式 replay_id 时直接读取它（即使不在当前列表页），失败也不回退到第一条。 */
+function applyRouteSelection() {
+  const { replayId, barPage } = parsed.value;
+  if (replayId && replayId !== selectedId.value) void select(replayId, { tablePage: barPage });
+}
+
 function startPolling() {
   poll = setInterval(async () => {
     clock.value = Date.now();
@@ -760,14 +837,45 @@ function startPolling() {
 
 onMounted(() => {
   // 策略定义按空间授权：空间尚未初始化时请求会被拒绝，由下面的空间监听在就绪后补载。
-  if (spaceStore.selectedSpaceId) loadStrategies();
+  if (spaceStore.selectedSpaceId) {
+    loadStrategies();
+    applyRouteSelection();
+  }
   loadViews();
   loadReplays();
   startPolling();
+  normalizeEntry();
 });
+/** 旧入口只带来源预填、没有 create=1：规范化为打开创建抽屉。 */
+function normalizeEntry() {
+  if (!parsed.value.create && hasPrefill(parsed.value.prefill)) writeQuery({ create: true });
+}
+watch(
+  () => parsed.value.create,
+  open => {
+    if (open) applyPrefill();
+  },
+  { immediate: true }
+);
+// URL 的外部变化：预填入口、前进后退、深链接。
+watch(
+  () => [parsed.value.replayId, parsed.value.barPage, parsed.value.page, hasPrefill(parsed.value.prefill) && !parsed.value.create] as const,
+  ([replayId, barPage, page, legacy]) => {
+    if (route.name !== ROUTE_NAME) return;
+    if (legacy) normalizeEntry();
+    if (page !== replayPage.value) {
+      replayPage.value = page;
+      void loadReplays();
+    }
+    if (!replayId || !spaceStore.selectedSpaceId) return;
+    if (replayId !== selectedId.value) void select(replayId, { tablePage: barPage });
+    else if (barPage !== tablePage.value) changeTablePage(barPage);
+  }
+);
+
 watch(
   () => spaceStore.selectedSpaceId,
-  next => {
+  (next, previous) => {
     generation += 1;
     selectRequest += 1;
     tableRequest += 1;
@@ -784,9 +892,13 @@ watch(
     tableRows.value = [];
     tableTotal.value = 0;
     views.value = [];
-    form.view_id = "";
-    form.instance_id = "";
-    replayPage.value = 1;
+    // 空间初始化（无 → 有）只是首次加载，保留深链接与预填；真正的 A → B 切换才清空对象、分页、创建上下文。
+    if (previous) {
+      form.view_id = "";
+      form.instance_id = "";
+      replayPage.value = 1;
+      writeQuery({ replayId: "", page: 1, barPage: 1, create: false });
+    }
     listLoading.value = false;
     viewsLoading.value = false;
     tableLoading.value = false;
@@ -795,6 +907,7 @@ watch(
     chart = null;
     loadViews();
     loadReplays();
+    if (next) applyRouteSelection();
   }
 );
 onBeforeUnmount(() => {

@@ -56,7 +56,7 @@ const emit = defineEmits<{ select: [string]; pageChange: [number] }>();
   font-weight: 600;
 }
 .list-title {
-  margin-top: 20px;
+  margin-top: 0;
 }
 .replay-row {
   display: grid;

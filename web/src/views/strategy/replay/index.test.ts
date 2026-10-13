@@ -27,7 +27,23 @@ vi.mock("@/api/strategy", () => ({
 vi.mock("@/api/storage/metadata", () => ({ listViews: api.listViews }));
 vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() } }));
-vi.mock("vue-router", () => ({ useRoute: () => ({ query: {} }) }));
+// 假路由：push/replace 同步更新响应式 query，并记录导航，页面据此读写 URL 状态。
+const nav = vi.hoisted(() => ({ route: null as any, history: [] as { mode: string; query: Record<string, string> }[] }));
+vi.mock("vue-router", () => ({
+  useRoute: () => nav.route,
+  useRouter: () => ({
+    push: (target: any) => {
+      nav.history.push({ mode: "push", query: target.query });
+      nav.route.query = { ...target.query };
+      return Promise.resolve();
+    },
+    replace: (target: any) => {
+      nav.history.push({ mode: "replace", query: target.query });
+      nav.route.query = { ...target.query };
+      return Promise.resolve();
+    }
+  })
+}));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({
   useStrategyStore: () =>
@@ -124,7 +140,9 @@ const stubs = {
       '<div class="table" :data-loading="loading ? \'true\' : \'false\'"><div v-for="row in data || []" :key="row.bar_end_time || row.id" class="expanded"><slot name="expand-row" :record="row" /></div></div>'
   },
   "a-spin": { props: ["tip"], template: '<div class="spin">{{ tip }}</div>' },
-  "a-alert": { template: '<div class="alert"><slot /></div>' }
+  "a-alert": { template: '<div class="alert"><slot /><slot name="action" /></div>' },
+  // 抽屉内容始终渲染（含页脚），便于直接操作表单；是否打开由 visible 属性体现。
+  "a-drawer": { props: ["visible"], template: '<div class="drawer" :data-visible="visible"><slot /><slot name="footer" /></div>' }
 };
 
 // 其余 Arco 组件只透传默认插槽，避免未注册组件的警告淹没测试输出。
@@ -147,7 +165,8 @@ const passthrough = [
   "a-radio",
   "a-space",
   "a-textarea",
-  "icon-refresh"
+  "icon-refresh",
+  "icon-plus"
 ];
 
 function mountPage() {
@@ -175,6 +194,8 @@ describe("strategy replay page", () => {
     api.chartSpecs.length = 0;
     api.charts.length = 0;
     api.space = reactive({ selectedSpaceId: "crypto" });
+    nav.route = reactive({ name: "strategy-replay", query: {} });
+    nav.history.length = 0;
     for (const fn of [
       api.getReplay,
       api.listReplays,
@@ -1208,5 +1229,174 @@ describe("strategy replay page", () => {
     expect(api.charts).toHaveLength(1);
     wrapper.unmount();
     expect(api.charts[0].release).toHaveBeenCalled();
+  });
+});
+
+describe("strategy replay page URL state and create drawer", () => {
+  const started = (id: string) => ({ replay: replay(id, "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+  const click = async (wrapper: ReturnType<typeof mountPage>, text: string) => {
+    await wrapper.findAll("button").find(button => button.text() === text)!.trigger("click");
+    await flushPromises();
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    api.chartSpecs.length = 0;
+    api.charts.length = 0;
+    api.space = reactive({ selectedSpaceId: "crypto" });
+    nav.route = reactive({ name: "strategy-replay", query: {} });
+    nav.history.length = 0;
+    for (const fn of [api.getReplay, api.listReplays, api.listReplayBars, api.startReplay, api.cancelReplay, api.listViews, api.loadAllStrategies])
+      fn.mockReset();
+    api.serverNow = null;
+    api.loadAllStrategies.mockResolvedValue(undefined);
+    api.listViews.mockResolvedValue({ views: [], page_result: { has_more: false } });
+    api.listReplayBars.mockResolvedValue(bars);
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens an explicit replay_id even when it is not on the list page, with its bar page", async () => {
+    nav.route.query = { replay_id: "r9", bar_page: "2" };
+    mountPage();
+    await flushPromises();
+    expect(api.getReplay.mock.calls.map(call => call[0])).toEqual(["r9"]);
+    const fullPages = api.listReplayBars.mock.calls.filter(call => !call[1].brief).map(call => call[1].page);
+    expect(fullPages).toEqual([2]);
+  });
+
+  it("does not fall back to the first record when the explicit replay cannot be read", async () => {
+    nav.route.query = { replay_id: "r9" };
+    api.getReplay.mockRejectedValue(new Error("找不到回放"));
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(api.getReplay.mock.calls.map(call => call[0])).toEqual(["r9"]);
+    expect(wrapper.text()).toContain("回放详情加载失败：找不到回放");
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
+    await click(wrapper, "重试");
+    expect(api.getReplay.mock.calls.at(-1)?.[0]).toBe("r9");
+    expect(wrapper.text()).not.toContain("回放详情加载失败");
+  });
+
+  it("writes the auto selection with replace and a user pick with push", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(nav.history[0]).toEqual({ mode: "replace", query: { replay_id: "r1" } });
+    await wrapper.findAll("button.replay-row")[1].trigger("click");
+    await flushPromises();
+    expect(nav.history.filter(item => item.mode === "push")).toEqual([{ mode: "push", query: { replay_id: "r2" } }]);
+    expect(nav.route.query).toEqual({ replay_id: "r2" });
+  });
+
+  it("follows back/forward navigation to another replay", async () => {
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    nav.route.query = { replay_id: "r2" };
+    await flushPromises();
+    expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
+  });
+
+  it("normalizes a legacy prefill entry into an open create drawer with the form prefilled", async () => {
+    nav.route.query = { instance_id: "i1", view_id: "view_a" };
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(nav.route.query).toMatchObject({ create: "1", instance_id: "i1", view_id: "view_a" });
+    expect(wrapper.find(".drawer").attributes("data-visible")).toBe("true");
+    const vm = wrapper.vm as any;
+    expect(vm.form.instance_id).toBe("i1");
+    expect(vm.form.view_id).toBe("view_a");
+  });
+
+  it("prefills a definition and clears the prefill from the URL when the drawer closes", async () => {
+    nav.route.query = { create: "1", strategy_id: "s1" };
+    const wrapper = mountPage();
+    await flushPromises();
+    expect((wrapper.vm as any).form.strategy_id).toBe("s1");
+    await click(wrapper, "关闭");
+    expect(nav.route.query.create).toBeUndefined();
+    expect(nav.route.query.strategy_id).toBeUndefined();
+    expect(wrapper.find(".drawer").attributes("data-visible")).toBe("false");
+  });
+
+  it("opens the create drawer with a push entry", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    nav.history.length = 0;
+    await click(wrapper, "发起回放");
+    expect(nav.history).toEqual([{ mode: "push", query: { create: "1", replay_id: "r1" } }]);
+  });
+
+  it("keeps the draft while the drawer is closed and reopened", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.view_id = "view_a";
+    vm.form.fee_bps = 25;
+    await click(wrapper, "发起回放");
+    await click(wrapper, "关闭");
+    await click(wrapper, "发起回放");
+    expect(vm.form.view_id).toBe("view_a");
+    expect(vm.form.fee_bps).toBe(25);
+  });
+
+  it("rejects an end time that is not after the start without calling the API", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.view_id = "view_a";
+    vm.form.strategy_id = "s1";
+    vm.form.start = "2026-09-02 00:00";
+    vm.form.end = "2026-09-01 00:00";
+    await click(wrapper, "开始回放");
+    expect(api.startReplay).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("结束时间必须晚于开始时间");
+  });
+
+  it("closes the drawer and points the URL at the new replay after a successful start", async () => {
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.startReplay.mockResolvedValue(started("r5"));
+    api.getReplay.mockResolvedValue(replay("r5", "pending"));
+    nav.route.query = { create: "1" };
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.view_id = "view_a";
+    vm.form.strategy_id = "s1";
+    await click(wrapper, "开始回放");
+    expect(api.startReplay).toHaveBeenCalledTimes(1);
+    expect(nav.route.query).toEqual({ replay_id: "r5" });
+    expect(wrapper.find(".drawer").attributes("data-visible")).toBe("false");
+  });
+
+  it("keeps a deep link when the space initializes but clears the context on a real switch", async () => {
+    api.space.selectedSpaceId = "";
+    nav.route.query = { replay_id: "r9", page: "2" };
+    mountPage();
+    await flushPromises();
+    api.getReplay.mockClear();
+    api.space.selectedSpaceId = "crypto";
+    await nextTick();
+    await flushPromises();
+    expect(api.getReplay.mock.calls.map(call => call[0])).toEqual(["r9"]);
+    expect(nav.route.query).toMatchObject({ replay_id: "r9", page: "2" });
+    api.space.selectedSpaceId = "hk";
+    await nextTick();
+    await flushPromises();
+    expect(nav.route.query.replay_id).not.toBe("r9");
+    expect(nav.route.query.page).toBeUndefined();
+  });
+
+  it("shows list errors beside the list with a retry", async () => {
+    api.listReplays.mockRejectedValueOnce(new Error("列表失败")).mockResolvedValue({ items: [], page: { total: 0 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain("回放列表加载失败：列表失败");
+    await click(wrapper, "重试");
+    expect(wrapper.text()).not.toContain("回放列表加载失败");
   });
 });

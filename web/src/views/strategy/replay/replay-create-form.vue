@@ -54,8 +54,7 @@
     <a-form-item label="单边手续费（bps）"
       ><a-input-number v-model="form.fee_bps" :min="0" :max="1000" :step="1"
     /></a-form-item>
-    <a-button type="primary" long :loading="starting" @click="emit('start')">开始回放</a-button>
-  </a-form>
+    </a-form>
 </template>
 
 <script setup lang="ts">
@@ -66,8 +65,7 @@ import { recentUtcRange } from "@/views/strategy/replay/model";
 
 // 表单状态由页面持有（提交与预填都在页面里），这里直接编辑同一个响应式对象。
 const form = defineModel<ReplayFormState>({ required: true });
-defineProps<{ strategies: Strategy[]; views: View[]; viewsLoading: boolean; starting: boolean }>();
-const emit = defineEmits<{ start: [] }>();
+defineProps<{ strategies: Strategy[]; views: View[]; viewsLoading: boolean }>();
 
 function applyPreset(days: number) {
   [form.value.start, form.value.end] = recentUtcRange(days);
