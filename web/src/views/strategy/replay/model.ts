@@ -121,6 +121,13 @@ function shanghaiDate(value: string): string {
   return new Date(timestamp + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
+/** 回放对象的说明：定义名称（或 ID），或未保存的 DSL 文本。 */
+export function replaySourceLabel(replay: { strategy_id: string }, catalog: { strategy_id: string; name: string }[]): string {
+  if (!replay.strategy_id) return "DSL 文本（草稿）";
+  const definition = catalog.find(item => item.strategy_id === replay.strategy_id);
+  return definition ? `${definition.name}（${replay.strategy_id}）` : replay.strategy_id;
+}
+
 /** 回放区间的写法：A 股日线按上海日期（含起始日、不含结束日），其余按 UTC 时间。 */
 export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }): string {
   if (replay.calendar === "cn_stock" && replay.start_time && replay.end_time) {

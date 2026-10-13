@@ -19,95 +19,17 @@
       <a-grid :cols="{ xs: 1, md: 3 }" :col-gap="20" :row-gap="16">
         <a-grid-item>
           <div class="section-title">发起回放</div>
-          <a-form layout="vertical">
-            <a-form-item v-if="form.instance_id" label="回放对象">
-              <a-alert type="info" class="instance-alert"
-                >按实例 <span class="mono">{{ form.instance_id }}</span>
-                当前会话（停用时为最近一次会话）固化的 DSL 版本回放；重新启用实例会按定义的当前版本重新解析。
-                <template #action
-                  ><a-button size="mini" type="text" @click="form.instance_id = ''">改为选择定义</a-button></template
-                ></a-alert
-              >
-            </a-form-item>
-            <template v-else>
-              <a-form-item label="回放对象">
-                <a-radio-group v-model="form.source" type="button" size="small">
-                  <a-radio value="definition">已保存的定义</a-radio>
-                  <a-radio value="dsl">DSL 文本（草稿）</a-radio>
-                </a-radio-group>
-              </a-form-item>
-              <a-form-item v-if="form.source === 'definition'" label="策略定义" required>
-                <a-select v-model="form.strategy_id" allow-search placeholder="选择定义">
-                  <a-option v-for="item in strategyStore.strategyCatalog" :key="item.strategy_id" :value="item.strategy_id"
-                    >{{ item.name }}（{{ item.strategy_id }}）</a-option
-                  >
-                </a-select>
-              </a-form-item>
-              <a-form-item v-else label="DSL 文本" required>
-                <a-textarea
-                  v-model="form.dsl_yaml"
-                  aria-label="回放用的 DSL 文本"
-                  :auto-size="{ minRows: 6, maxRows: 16 }"
-                  placeholder="粘贴未保存的策略 DSL，直接回放"
-                />
-              </a-form-item>
-            </template>
-            <a-form-item label="View" required>
-              <a-select v-model="form.view_id" allow-search :loading="viewsLoading" placeholder="选择 View（第一版只支持现货）">
-                <a-option v-for="view in views" :key="view.view_id" :value="view.view_id"
-                  >{{ view.name || view.view_id }}（{{ view.view_id }} · {{ view.freq || "无周期" }}）</a-option
-                >
-              </a-select>
-            </a-form-item>
-            <a-form-item label="区间（UTC，左闭右开，格式 YYYY-MM-DD HH:mm）" required>
-              <div class="range-inputs">
-                <a-input v-model="form.start" aria-label="开始时间（UTC）" placeholder="开始，例如 2026-09-01 00:00" />
-                <a-input v-model="form.end" aria-label="结束时间（UTC）" placeholder="结束，例如 2026-10-01 00:00" />
-              </div>
-              <div class="muted range-hint">A 股日线 View 按上海日期回放：起止各取所在的上海日期，含起始日期、不含结束日期。</div>
-              <a-space class="presets" :size="4">
-                <a-button size="mini" @click="applyPreset(1)">近 1 天</a-button>
-                <a-button size="mini" @click="applyPreset(7)">近 7 天</a-button>
-                <a-button size="mini" @click="applyPreset(30)">近 30 天</a-button>
-              </a-space>
-            </a-form-item>
-            <a-form-item label="单边手续费（bps）"
-              ><a-input-number v-model="form.fee_bps" :min="0" :max="1000" :step="1"
-            /></a-form-item>
-            <a-button type="primary" long :loading="starting" @click="start">开始回放</a-button>
-          </a-form>
-          <div class="section-title list-title">回放记录</div>
-          <a-list :data="replays" :loading="listLoading" :bordered="false" size="small">
-            <template #item="{ item }">
-              <a-list-item :class="{ active: item.replay_id === selectedId }">
-                <button
-                  type="button"
-                  class="replay-row"
-                  :aria-current="item.replay_id === selectedId ? 'true' : undefined"
-                  @click="pick(item.replay_id)"
-                >
-                  <span class="replay-line">
-                    <a-tag size="small" :color="replayStatusColor(item.status)">{{ replayStatusLabel(item.status) }}</a-tag>
-                    <span>{{ sourceLabel(item) }}</span>
-                  </span>
-                  <span class="replay-line muted mono">{{ item.view_id }}</span>
-                  <span class="replay-line muted">{{ replayRangeLabel(item) }}</span>
-                  <span v-if="item.status === 'running' && item.progress_time" class="replay-line muted">
-                    进度 {{ formatUtcTime(item.progress_time) }}
-                  </span>
-                </button>
-              </a-list-item>
-            </template>
-          </a-list>
-          <a-pagination
-            v-if="replayTotal > replayPageSize"
-            class="replay-pager"
-            size="small"
-            simple
-            :current="replayPage"
+          <ReplayCreateForm v-model="form" :strategies="strategyStore.strategyCatalog" :views="views" :views-loading="viewsLoading" :starting="starting" @start="start" />
+          <ReplayRecordList
+            :replays="replays"
+            :strategies="strategyStore.strategyCatalog"
+            :selected-id="selectedId"
+            :loading="listLoading"
+            :page="replayPage"
             :page-size="replayPageSize"
             :total="replayTotal"
-            @change="changeReplayPage"
+            @select="pick"
+            @page-change="changeReplayPage"
           />
         </a-grid-item>
         <a-grid-item :span="{ xs: 1, md: 2 }">
@@ -313,13 +235,16 @@ import { default as VChart } from "@visactor/vchart";
 import { useRoute } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
-import type { InstrumentTarget, Replay, ReplayBar, Strategy } from "@/api/strategy-types";
+import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportControlError, serverNow } from "@/api/admin/http";
 import { listViews } from "@/api/storage/metadata";
 import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
+import ReplayCreateForm from "@/views/strategy/replay/replay-create-form.vue";
+import type { ReplayFormState } from "@/views/strategy/replay/replay-form-model";
+import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
 import {
   equitySeries,
   equitySummary,
@@ -330,6 +255,7 @@ import {
   parseUtcInput,
   recentUtcRange,
   replayRangeLabel,
+  replaySourceLabel,
   replayStatusColor,
   replayStatusLabel
 } from "@/views/strategy/replay/model";
@@ -376,16 +302,7 @@ const awaitingMetrics = ref<{ replayId: string; until: number } | null>(null);
 const clock = ref(Date.now());
 const chartContainer = ref<HTMLElement>();
 const [presetStart, presetEnd] = recentUtcRange(30);
-const form = reactive<{
-  source: "definition" | "dsl";
-  strategy_id: string;
-  dsl_yaml: string;
-  instance_id: string;
-  view_id: string;
-  start: string;
-  end: string;
-  fee_bps: number;
-}>({
+const form = reactive<ReplayFormState>({
   source: "definition",
   strategy_id: String(route.query.strategy_id || ""),
   dsl_yaml: "",
@@ -446,18 +363,12 @@ function barDetail(bar: ReplayBar) {
 
 /** 回放对象的说明：定义名称（或 ID），或未保存的 DSL 文本。 */
 function sourceLabel(replay: Replay): string {
-  if (!replay.strategy_id) return "DSL 文本（草稿）";
-  const definition = strategyStore.strategyCatalog.find((item: Strategy) => item.strategy_id === replay.strategy_id);
-  return definition ? `${definition.name}（${replay.strategy_id}）` : replay.strategy_id;
+  return replaySourceLabel(replay, strategyStore.strategyCatalog);
 }
 const tablePagination = computed(() => ({ current: tablePage.value, pageSize: tablePageSize, total: tableTotal.value }));
 
 function pct(value: number | null) {
   return value !== null && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
-}
-
-function applyPreset(days: number) {
-  [form.start, form.end] = recentUtcRange(days);
 }
 
 async function loadStrategies() {
@@ -916,52 +827,9 @@ onBeforeUnmount(() => {
 .top-alert {
   margin-bottom: var(--moox-space-2);
 }
-.instance-alert {
-  width: 100%;
-}
 .section-title {
   margin-bottom: 8px;
   font-weight: 600;
-}
-.list-title {
-  margin-top: 20px;
-}
-.range-inputs {
-  display: grid;
-  gap: 6px;
-  width: 100%;
-}
-.range-hint {
-  margin-top: 6px;
-  font-size: 12px;
-}
-.presets {
-  margin-top: 6px;
-}
-.replay-row {
-  display: grid;
-  gap: 2px;
-  width: 100%;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.replay-row:focus-visible {
-  outline: 2px solid rgb(var(--arcoblue-6));
-  outline-offset: 2px;
-}
-.replay-line {
-  display: block;
-}
-.replay-pager {
-  margin-top: 8px;
-}
-.active {
-  background: var(--color-fill-2);
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
