@@ -454,11 +454,15 @@ func (s *Service) writeIndex(ctx context.Context, indexID string, engine viewind
 	if engine == nil {
 		return errors.New("view index engine is unavailable")
 	}
+	gateStart := time.Now()
 	release, err := s.indexWriteGate(indexID).lock(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
+	if wait := time.Since(gateStart); wait >= 100*time.Millisecond {
+		log.Printf("storage view 索引写入闸门等待较久 index=%s 等待=%s", indexID, wait.Round(time.Millisecond))
+	}
 	if err := engine.Write(ctx, indexID, batch); err != nil {
 		return err
 	}

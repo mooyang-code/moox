@@ -120,8 +120,19 @@ func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliverie
 	}
 	retryCount := 0
 	for ctx.Err() == nil {
+		applyStart := time.Now()
 		err := apply(ctx)
 		if err == nil {
+			// 行事件批次的分段耗时：排队 = 最早一条入流到开始处理（含拉取与前面批次的处理）；处理 = apply 本身。
+			var oldest time.Time
+			for _, delivery := range deliveries {
+				if delivery != nil && !delivery.StoredAt.IsZero() && (oldest.IsZero() || delivery.StoredAt.Before(oldest)) {
+					oldest = delivery.StoredAt
+				}
+			}
+			if wait, took := applyStart.Sub(oldest), time.Since(applyStart); !oldest.IsZero() && (wait >= time.Second || took >= 200*time.Millisecond) {
+				log.Printf("storage view 行事件批次 事件=%d 最早入流至开始处理=%s 处理=%s", len(deliveries), wait.Round(time.Millisecond), took.Round(time.Millisecond))
+			}
 			settled = true
 			acked := make([]bool, len(deliveries))
 			for ctx.Err() == nil {

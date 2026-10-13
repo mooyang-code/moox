@@ -111,18 +111,30 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	if len(rows) == 0 {
 		return eventconsumer.Permanent(errors.New("数据集行事件批次没有任何行"))
 	}
+	batchStart := time.Now()
 	if err := s.applyDatasetEvent(ctx, spaceID, datasetID, rows); err != nil {
 		return err
 	}
+	applied := time.Since(batchStart)
 	for _, item := range items {
 		s.noteAppliedFromPayload(spaceID, item.Payload)
 	}
+	fenceStart := time.Now()
 	if err := s.makeAppliedDurableBeforeAck(); err != nil {
 		return fmt.Errorf("View 写入围栏落盘失败，行事件稍后重投：%w", err)
 	}
+	flushStart := time.Now()
 	s.flushReadyAfterRows(ctx, spaceID)
+	if total := time.Since(batchStart); total >= slowIndexApplyLog {
+		log.Printf("storage view 行事件批次较慢 dataset=%s 事件=%d 行=%d 写索引=%s 围栏落盘=%s 刷新就绪=%s 合计=%s",
+			datasetID, len(items), len(rows), applied.Round(time.Millisecond), flushStart.Sub(fenceStart).Round(time.Millisecond),
+			time.Since(flushStart).Round(time.Millisecond), total.Round(time.Millisecond))
+	}
 	return nil
 }
+
+// slowIndexApplyLog 是行写入分段耗时日志的阈值：只记录达到该耗时的写入，避免高频小写入刷屏。
+const slowIndexApplyLog = 200 * time.Millisecond
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
 	s.mu.RLock()
@@ -361,6 +373,7 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if id == "" {
 		return nil, nil
 	}
+	applyStart := time.Now()
 	writeCtx, cancel, err := liveIndexWriteContext(ctx)
 	if err != nil {
 		return nil, err
@@ -387,6 +400,7 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 		return nil, nil
 	}
 	complete, incomplete := partitionCompleteWrites(schema, writes)
+	recoverStart := time.Now()
 	if len(incomplete) > 0 {
 		recovered, err := s.recoverMissingRows(ctx, schema, rows, incomplete)
 		if err != nil {
@@ -397,8 +411,15 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if len(complete) == 0 {
 		return nil, nil
 	}
+	writeStart := time.Now()
 	if err := s.writeIndex(ctx, id, engine, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
 		return nil, err
+	}
+	if total := time.Since(applyStart); total >= slowIndexApplyLog {
+		// 分段耗时：准备 = 校验与构造写入；补读 = 从 Primary 补全缺列的行；写入 = 索引写入闸门与 DuckDB 事务。
+		log.Printf("storage view 行写入索引较慢 index=%s dataset=%s 行=%d 写入行=%d 补读行=%d 准备=%s 补读=%s 写入=%s 合计=%s",
+			id, datasetID, len(rows), len(complete), len(incomplete), recoverStart.Sub(applyStart).Round(time.Millisecond),
+			writeStart.Sub(recoverStart).Round(time.Millisecond), time.Since(writeStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
 	return rowsWrittenByIndexKeys(rows, complete, schema.PrimaryDatasetID), nil
 }

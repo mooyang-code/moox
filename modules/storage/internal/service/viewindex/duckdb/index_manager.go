@@ -341,6 +341,8 @@ func matchesAppendOnlyPhysicalPrefix(physical map[string]pb.FieldValueType, targ
 }
 
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
+	writeStart := time.Now()
+	var seriesTook, upsertTook, beginTook time.Duration
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return err
@@ -353,10 +355,12 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if err != nil {
 		return err
 	}
+	beginStart := time.Now()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	beginTook = time.Since(beginStart)
 	defer func() { _ = tx.Rollback() }()
 	var revision uint64
 	var schemaHash string
@@ -369,10 +373,13 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if schemaHash != batch.ViewSchemaHash {
 		return errors.New("view schema hash conflict")
 	}
+	groupsStart := time.Now()
 	for _, group := range groupRowWrites(batch.RowWrites) {
+		seriesStart := time.Now()
 		if err := ensureSeriesRowsAndCounts(ctx, tx, group.writes); err != nil {
 			return err
 		}
+		seriesTook += time.Since(seriesStart)
 		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
 		names = append(names, internalAttributesColumn)
 		for start := 0; start < len(group.writes); start += maxWriteRowsPerStatement {
@@ -410,6 +417,7 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 			}
 		}
 	}
+	upsertTook = time.Since(groupsStart) - seriesTook
 	if from, to, ok := batchCoverage(batch.RowWrites); ok {
 		var currentFrom, currentTo string
 		if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
@@ -428,7 +436,17 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	commitStart := time.Now()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if total := time.Since(writeStart); total >= 200*time.Millisecond {
+		// 分段耗时：开事务 = 取连接与 BeginTx；序列行 = view_rows/计数的去重插入；写入 = 行数据 UPSERT；提交 = 事务提交落盘。
+		log.Printf("storage view DuckDB 写入较慢 index=%s 行=%d 开事务=%s 序列行=%s 写入=%s 提交=%s 合计=%s",
+			id, len(batch.RowWrites), beginTook.Round(time.Millisecond), seriesTook.Round(time.Millisecond),
+			upsertTook.Round(time.Millisecond), time.Since(commitStart).Round(time.Millisecond), total.Round(time.Millisecond))
+	}
+	return nil
 }
 
 func ensureSeriesRowsAndCounts(ctx context.Context, tx *sql.Tx, writes []viewindex.RowWrite) error {
