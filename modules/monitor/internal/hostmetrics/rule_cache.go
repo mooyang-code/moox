@@ -20,8 +20,6 @@ const (
 	HostMetricCPU                = "cpu"
 	HostMetricMemory             = "memory"
 	HostMetricFilesystemUsage    = "filesystem_usage"
-	HostMetricDiskUtilization    = "disk_utilization"
-	HostMetricNetworkErrors      = "network_errors"
 	hostRuleIndex                = "host_rule_key"
 	hostRuleIDIndex              = "rule_id"
 	defaultHostRuleRefreshPeriod = 30 * time.Second
@@ -46,7 +44,7 @@ func ParseHostRuleKey(key string) (agentID, metric string, ok bool) {
 
 func isHostMetric(metric string) bool {
 	switch metric {
-	case HostMetricCPU, HostMetricMemory, HostMetricFilesystemUsage, HostMetricDiskUtilization, HostMetricNetworkErrors:
+	case HostMetricCPU, HostMetricMemory, HostMetricFilesystemUsage:
 		return true
 	default:
 		return false

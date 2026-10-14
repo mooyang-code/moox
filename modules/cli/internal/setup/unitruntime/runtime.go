@@ -435,6 +435,9 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 	} else if err != nil && !os.IsNotExist(err) {
 		return status, err
 	}
+	if err := rotateRuntimeLog(s.logs, logName, runtimeLogMaxBytes, runtimeLogBackups); err != nil {
+		return status, errors.New("runtime output log could not be rotated")
+	}
 	logFile, err := s.logs.OpenFile(logName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return status, err

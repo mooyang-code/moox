@@ -931,3 +931,83 @@ func seedBusinessTopology(t *testing.T, repositories *store.Repositories, hostID
 	_, err = repositories.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Placements: []domain.TopologyPlacement{{HostID: hostID, ComponentID: componentID, Status: status}}}, nil)
 	require.NoError(t, err)
 }
+
+// K 线新鲜度已覆盖的结果视图，不再重复生成 dataset 新鲜度检查（同一条数据链路只告警一次）；
+// 同一主数据集上独立的视图不受影响，覆盖解除后恢复兜底。
+func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	now := time.Now().UTC().Truncate(time.Second)
+	viewLabels := func(view string) string {
+		return `{"freq":"1m","space_id":"crypto","view_id":"` + view + `","dataset_id":"dataset_binance_kline_1m"}`
+	}
+	klineLabels := `{"space_id":"crypto","view_id":"view_binance_kline_1m","dataset_id":"dataset_binance_kline_1m","freq":"1m"}`
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		series := []struct {
+			id, name, labels string
+			value            float64
+		}{
+			{"watermark-a", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("view_binance_kline_1m"), float64(now.Add(-time.Minute).Unix())},
+			{"watermark-b", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("view_other_1m"), float64(now.Add(-time.Minute).Unix())},
+			{"latest", monmetrics.ViewOutputLatestMetric, klineLabels, float64(now.Add(-time.Minute).Unix())},
+			{"subjects", monmetrics.ViewOutputSubjectsMetric, klineLabels, 1},
+		}
+		for _, item := range series {
+			require.NoError(t, db.Create(&monmetrics.MetricSeries{ServiceName: "storage-view", InstanceID: "storage-view@control", SeriesID: item.id, MetricName: item.name, MetricType: "gauge", LabelsJSON: item.labels, LastSeenAt: now}).Error)
+			require.NoError(t, db.Create(&monmetrics.MetricLatest{SeriesID: item.id, ServiceName: "storage-view", InstanceID: "storage-view@control", MetricName: item.name, MetricType: "gauge", LabelsJSON: item.labels, Value: item.value, ObservedAt: now}).Error)
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+	repositories := manager.Repositories()
+	clock := now
+	build := func(withKline bool) func(context.Context) error {
+		var evaluators []*monmetrics.KlineFreshnessEvaluator
+		if withKline {
+			rule := monmetrics.KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", ViewID: "view_binance_kline_1m", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute}
+			evaluators = append(evaluators, monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{rule}, 20))
+		}
+		// K 线评估间隔 1 小时：同一个 reporter 的后续轮次不重新评估，验证覆盖集合会沿用。
+		return buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+			Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return clock },
+		}, repositories, nil, time.Hour, evaluators...)
+	}
+	enabled := func(checkID string) bool {
+		check, err := repositories.Checks.Get(t.Context(), "crypto", checkID)
+		require.NoError(t, err, checkID)
+		return check.Enabled
+	}
+	const viewA, viewB = "dataset:storage_view:view_binance_kline_1m:1m", "dataset:storage_view:view_other_1m:1m"
+
+	// 没有 K 线新鲜度时，两个视图的 dataset 检查是唯一的新鲜度信号。
+	require.NoError(t, build(false)(t.Context()))
+	require.True(t, enabled(viewA))
+	require.True(t, enabled(viewB))
+
+	// K 线新鲜度覆盖视图 A 后：A 的检查被停用，同一主数据集上独立的视图 B 不受影响。
+	covered := build(true)
+	require.NoError(t, covered(t.Context()))
+	require.False(t, enabled(viewA), "被 K 线新鲜度覆盖的视图检查必须停用")
+	require.True(t, enabled(viewB), "同一主数据集上的独立视图仍要自己的检查")
+	_, err = repositories.Checks.Get(t.Context(), "crypto", "kline_freshness:crypto:view_binance_kline_1m:1m")
+	require.NoError(t, err)
+
+	// 没到下次 K 线评估的轮次沿用覆盖集合，不会把 A 的检查重新生成。
+	clock = clock.Add(30 * time.Second)
+	require.NoError(t, covered(t.Context()))
+	require.False(t, enabled(viewA))
+
+	// 覆盖解除（这里用没有 K 线评估器的 reporter 代表评估关闭/失败）：兜底的 dataset 检查恢复启用。
+	require.NoError(t, build(false)(t.Context()))
+	require.True(t, enabled(viewA), "覆盖解除后必须恢复 dataset 检查兜底")
+}
+
+func TestKlineReportCoversDatasets(t *testing.T) {
+	require.True(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: "kline_freshness:crypto:v:1m", Success: true}))
+	require.True(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: "kline_freshness:stockcn:v:1m", Skipped: true, Reason: "market closed"}),
+		"休市等正常跳过仍然覆盖，否则开闭市会让 dataset 检查反复生成又删除")
+	require.False(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: "kline_freshness:crypto:v:1m", Skipped: true, Reason: "disabled"}))
+	require.False(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: monmetrics.TaskResultInventoryCheckID}))
+}

@@ -123,9 +123,12 @@ func TestHostHelpers(t *testing.T) {
 	first := deterministicEventID("msg-1", "rule-1", domain.AlertEventTriggered)
 	assert.Equal(t, first, deterministicEventID("msg-1", "rule-1", domain.AlertEventTriggered))
 	assert.NotEqual(t, first, deterministicEventID("msg-2", "rule-1", domain.AlertEventTriggered))
-	threshold, recovery := hostThresholds(domain.AlertRule{CheckID: HostMetricNetworkErrors}, HostMetricNetworkErrors)
-	assert.Equal(t, 1.0, threshold)
-	assert.Equal(t, 1.0, recovery)
+	threshold, recovery := hostThresholds(domain.AlertRule{})
+	assert.Equal(t, 80.0, threshold)
+	assert.Equal(t, 80.0, recovery)
+	threshold, recovery = hostThresholds(domain.AlertRule{Description: `{"threshold":90,"recovery_threshold":85}`})
+	assert.Equal(t, 90.0, threshold)
+	assert.Equal(t, 85.0, recovery)
 }
 
 func validCPUMetric() *hostmetricpb.CpuMetric {

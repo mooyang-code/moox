@@ -54,5 +54,14 @@ plugins:
       client_validate_err_code: 100102
   log:
     default:
-      - writer: console
+      - writer: file
         level: info
+        writer_config:
+          # 框架日志按大小轮转，单个文件 10MB、保留 5 份、最多 7 天；标准输出/错误主要是崩溃信息和数据库（GORM）日志，由 moox-runtime 启动前按大小轮转，持续报错时仍可能增长。
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false

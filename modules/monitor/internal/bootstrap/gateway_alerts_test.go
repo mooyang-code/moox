@@ -32,7 +32,7 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 	runtime := &Runtime{Repositories: repos}
 	run := buildBusinessFreshnessReporter(builder, repos, monitorResultHook(runtime))
 	require.NoError(t, run(t.Context()))
-	id := "gateway:control:instance_conflict"
+	id := "gateway:control:status" // 三项网关信号合并成一条检查
 	state, err := repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id, id)
 	require.NoError(t, err)
 	require.Equal(t, domain.AlertStatusFiring, state.Status)
@@ -59,7 +59,7 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 	_, err = repos.Alerts.GetRule(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
-	row.StatusJSON = `{"instance_id":"replacement","previous_instance_id":"old"}`
+	row.StatusJSON = `{"instance_id":"replacement","previous_instance_id":"old","last_seen_at":"` + now.Format(time.RFC3339Nano) + `"}`
 	require.NoError(t, repos.Gateways.Reconcile(t.Context(), []domain.GatewayObservation{row}, now))
 	require.NoError(t, run(t.Context()))
 	check, err = repos.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, id)
@@ -68,4 +68,46 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 	state, err = repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id, id)
 	require.NoError(t, err)
 	require.NotEqual(t, domain.AlertStatusFiring, state.Status, "normal replacement is not a conflict")
+}
+
+// 旧版本每台主机三条网关检查（心跳、实例冲突、路由同步）合并成一条后，旧检查及其规则必须被停用并删除。
+func TestGatewayAlertsMigrateLegacyPerSignalChecks(t *testing.T) {
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	now := time.Now().UTC()
+	for _, kind := range []string{"heartbeat", "instance_conflict", "route_sync"} {
+		id := "gateway:control:" + kind
+		require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{SpaceID: monmetrics.InternalMetricSpaceID, CheckID: id, Name: id, GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}))
+		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{SpaceID: monmetrics.InternalMetricSpaceID, RuleID: "default:" + id, CheckID: id, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true}))
+	}
+	// 心跳从未上报且路由已同步：合并后的检查按"有异常"处理，原因里带出异常的那一项。
+	raw, err := json.Marshal(&adminpb.HostGatewayRuntimeStatus{InstanceId: "new"})
+	require.NoError(t, err)
+	row := domain.GatewayObservation{HostID: "control", StatusJSON: string(raw), ExpectedHash: "expected", AppliedHash: "expected", HostEnabledAt: now.Add(-time.Hour)}
+	require.NoError(t, repos.Gateways.Reconcile(t.Context(), []domain.GatewayObservation{row}, now))
+	builder := &observability.Builder{Checks: repos.Checks, Results: repos.Results, Gateways: repos.Gateways, Now: func() time.Time { return now }}
+	run := buildBusinessFreshnessReporter(builder, repos, monitorResultHook(&Runtime{Repositories: repos}))
+	require.NoError(t, run(t.Context()))
+
+	for _, kind := range []string{"heartbeat", "instance_conflict", "route_sync"} {
+		id := "gateway:control:" + kind
+		check, err := repos.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, id)
+		require.NoError(t, err)
+		require.False(t, check.Enabled, id)
+		_, err = repos.Alerts.GetRule(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id)
+		require.ErrorIs(t, err, gorm.ErrRecordNotFound, id)
+	}
+	merged := "gateway:control:status"
+	state, err := repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+merged, merged)
+	require.NoError(t, err)
+	require.Equal(t, domain.AlertStatusFiring, state.Status)
+	results, err := repos.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, merged, 1)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.False(t, results[0].Success)
+	require.Contains(t, results[0].ErrorMessage, "心跳")
 }

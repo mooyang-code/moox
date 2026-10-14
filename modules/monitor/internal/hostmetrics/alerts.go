@@ -44,7 +44,7 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, hostname, messag
 			if e.isSeen(messageID, rule.RuleID) {
 				continue
 			}
-			threshold, recovery := hostThresholds(rule, metric)
+			threshold, recovery := hostThresholds(rule)
 			if !value.available {
 				continue
 			}
@@ -105,31 +105,11 @@ func hostValues(s *hostmetricpb.HostSnapshot) map[string]hostValue {
 			values[HostMetricFilesystemUsage] = hostValue{fs.GetUsagePercent(), true}
 		}
 	}
-	for _, disk := range s.GetDisks() {
-		if disk.GetRateAvailable() {
-			current := values[HostMetricDiskUtilization]
-			if !current.available || disk.GetUtilizationPercent() > current.value {
-				values[HostMetricDiskUtilization] = hostValue{disk.GetUtilizationPercent(), true}
-			}
-		}
-	}
-	for _, network := range s.GetNetworks() {
-		if network.GetErrorRateAvailable() {
-			current := values[HostMetricNetworkErrors]
-			values[HostMetricNetworkErrors] = hostValue{
-				current.value + network.GetReceiveErrorsPerSecond() + network.GetTransmitErrorsPerSecond(),
-				true,
-			}
-		}
-	}
 	return values
 }
 
-func hostThresholds(rule domain.AlertRule, metric string) (float64, float64) {
+func hostThresholds(rule domain.AlertRule) (float64, float64) {
 	threshold := 80.0
-	if metric == HostMetricNetworkErrors {
-		threshold = 1
-	}
 	recovery := threshold
 	var definition struct {
 		Threshold         float64 `json:"threshold"`
@@ -274,8 +254,6 @@ var hostMetricLabels = map[string]string{
 	HostMetricCPU:             "CPU 使用率",
 	HostMetricMemory:          "内存使用率",
 	HostMetricFilesystemUsage: "磁盘空间使用率",
-	HostMetricDiskUtilization: "磁盘繁忙度",
-	HostMetricNetworkErrors:   "网络错误包",
 }
 
 // hostAlertText renders a host threshold alert for people: the host and
@@ -289,12 +267,7 @@ func hostAlertText(sample hostSample, eventType string, now time.Time) (string, 
 	if label == "" {
 		label = sample.metric
 	}
-	value := func(v float64) string {
-		if sample.metric == HostMetricNetworkErrors {
-			return fmt.Sprintf("每秒 %.1f 个", v)
-		}
-		return fmt.Sprintf("%.1f%%", v)
-	}
+	value := func(v float64) string { return fmt.Sprintf("%.1f%%", v) }
 	var lines []string
 	switch eventType {
 	case domain.AlertEventResolved:

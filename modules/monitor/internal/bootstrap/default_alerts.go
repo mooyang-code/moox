@@ -115,8 +115,15 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 		// warning before the disk is full and evaluate it quickly enough to leave
 		// room for cleanup or an operator intervention.
 		hostmetrics.HostMetricFilesystemUsage: `{"threshold":85,"recovery_threshold":80}`,
-		hostmetrics.HostMetricDiskUtilization: `{"threshold":90,"recovery_threshold":85}`,
-		hostmetrics.HostMetricNetworkErrors:   `{"threshold":1,"recovery_threshold":0.1}`,
+	}
+	// 磁盘繁忙度、网络错误包两类告警已精简掉（个人系统噪声大、价值低）：删除存量规则。
+	for _, retired := range []string{"disk_utilization", "network_errors"} {
+		for _, agent := range agents {
+			checkID := hostmetrics.HostRulePrefix + agent.AgentID + ":" + retired
+			if err := repositories.Alerts.DeleteRule(ctx, hostmetrics.SpaceID, "default:"+checkID); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
 	}
 	for _, agent := range agents {
 		for metric, definition := range definitions {

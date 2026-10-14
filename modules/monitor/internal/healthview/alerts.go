@@ -71,7 +71,7 @@ func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, fact
 		if identity == "" {
 			identity = object.AgentId
 		}
-		metric := map[string]string{"cpu": "CPU 使用率", "memory": "内存使用率", "filesystem_usage": "磁盘占用率", "disk_utilization": "磁盘利用率", "network_errors": "网络错误", "presence": "在线状态", "heartbeat": "网关心跳", "route_sync": "网关路由同步", "instance_conflict": "网关实例冲突"}[object.Kind]
+		metric := map[string]string{"cpu": "CPU 使用率", "memory": "内存使用率", "filesystem_usage": "磁盘占用率", "presence": "在线状态", "status": "网关状态"}[object.Kind]
 		if metric == "" {
 			metric = object.Kind
 		}

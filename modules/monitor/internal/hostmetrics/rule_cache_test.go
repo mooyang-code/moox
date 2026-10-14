@@ -45,11 +45,11 @@ func TestParseHostRuleKey(t *testing.T) {
 	if got := HostRuleKey("agent-1", HostMetricCPU); got != "host:agent-1:cpu" {
 		t.Fatalf("key = %q", got)
 	}
-	agent, metric, ok := ParseHostRuleKey("host:agent-1:network_errors")
-	if !ok || agent != "agent-1" || metric != HostMetricNetworkErrors {
+	agent, metric, ok := ParseHostRuleKey("host:agent-1:filesystem_usage")
+	if !ok || agent != "agent-1" || metric != HostMetricFilesystemUsage {
 		t.Fatalf("parse = (%q, %q, %v)", agent, metric, ok)
 	}
-	for _, key := range []string{"", "host::cpu", "host:agent:unknown", "service:agent:cpu", "host:agent:cpu:extra"} {
+	for _, key := range []string{"", "host::cpu", "host:agent:unknown", "host:agent:disk_utilization", "host:agent:network_errors", "service:agent:cpu", "host:agent:cpu:extra"} {
 		if _, _, ok := ParseHostRuleKey(key); ok {
 			t.Errorf("invalid key %q accepted", key)
 		}
