@@ -421,33 +421,44 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-// withWarmup adds each enabled set's warm-up state to its lane. A set no live
-// period has reached since the engine started has nothing loaded yet, so it is
-// warming.
+// withWarmup 给每个启用因子集的 lane 补上预热状态。只上报目录里启用的因子集：
+// 消费者订阅的是整个采集周期事件族，任何数据集（例如还没有建因子集的 1h K 线）的事件都会让处理器按
+// “数据集+频率”建一条 lane，再去查有没有启用的因子集；没有因子集的 lane 不是计算任务，不能上报，
+// 否则它们会被标成 warming，永远等不到首个周期。
+// 目录里的因子集自引擎启动以来还没有周期到达，说明还没有载入任何数据，同样是 warming。
 func withWarmup(lanes []domain.LaneStatus, setIDs []string, warmups []pipeline.WarmupStatus) []domain.LaneStatus {
 	bySet := make(map[string]pipeline.WarmupStatus, len(warmups))
 	for _, warmup := range warmups {
 		bySet[warmup.SetID] = warmup
 	}
-	index := make(map[string]int, len(lanes))
-	for i, lane := range lanes {
-		index[lane.SetID] = i
+	enabled := make(map[string]struct{}, len(setIDs))
+	for _, setID := range setIDs {
+		enabled[setID] = struct{}{}
+	}
+	kept := make([]domain.LaneStatus, 0, len(enabled))
+	index := make(map[string]int, len(enabled))
+	for _, lane := range lanes {
+		if _, ok := enabled[lane.SetID]; !ok {
+			continue
+		}
+		index[lane.SetID] = len(kept)
+		kept = append(kept, lane)
 	}
 	for _, setID := range setIDs {
 		if _, ok := index[setID]; !ok {
-			index[setID] = len(lanes)
-			lanes = append(lanes, domain.LaneStatus{SetID: setID})
+			index[setID] = len(kept)
+			kept = append(kept, domain.LaneStatus{SetID: setID})
 		}
 	}
 	for setID, i := range index {
 		warmup, ok := bySet[setID]
 		if !ok {
-			lanes[i].WarmupState = pipeline.WarmupWarming
+			kept[i].WarmupState = pipeline.WarmupWarming
 			continue
 		}
-		lanes[i].WarmupState = warmup.State
-		lanes[i].WarmSubjects = int32(warmup.WarmSubjects)
-		lanes[i].ExpectedSubjects = int32(warmup.ExpectedSubjects)
+		kept[i].WarmupState = warmup.State
+		kept[i].WarmSubjects = int32(warmup.WarmSubjects)
+		kept[i].ExpectedSubjects = int32(warmup.ExpectedSubjects)
 	}
-	return lanes
+	return kept
 }
