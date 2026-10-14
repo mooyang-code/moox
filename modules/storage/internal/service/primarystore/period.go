@@ -107,16 +107,21 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 			return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row dataset identity does not match period expectation"))}, nil
 		}
 	}
+	// 周期提交是 Collector 每个周期写入行情的主路径：数据集的最近运行、最近成功与输出水位都要在这里记录，
+	// 否则 Monitor 只能看到旧的 UpsertFields（补采、导入）留下的指标，把数据误判成“入库落后”。
 	node, err := s.resolve(ctx, exp.GetSpaceId(), exp.GetDatasetId())
 	if err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	periodNode, ok := node.(periodDataNodeClient)
 	if !ok {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode period RPC is unavailable"))}, nil
 	}
 	auth, err := s.signAuth(req.GetAuthInfo())
 	if err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	items := make([]*pb.TimeSeriesBatchRow, 0, len(rows))
@@ -128,11 +133,14 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		AllowedLatenessSeconds: datasetAllowedLateness(ctx, exp),
 	})
 	if err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	if rsp == nil || rsp.GetRetInfo() == nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
 	}
+	s.observePeriodCommit(ctx, rows, rsp)
 	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: rsp.GetRetInfo(), Keys: rsp.GetKeys(), PeriodStatus: rsp.GetPeriodStatus(), AcceptedSeriesIndexes: rsp.GetAcceptedSeriesIndexes()}, nil
 }
 
@@ -191,4 +199,17 @@ func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectatio
 		return 0
 	}
 	return seconds
+}
+
+// observePeriodCommit 按 DataNode 的提交结果记录数据集观测：提交了行记为 success 并推进输出水位；
+// 没有行被接受（全部重复或被拒）记为 empty，只更新最近运行；DataNode 返回失败记为 error。
+func (s *Service) observePeriodCommit(ctx context.Context, rows []*pb.RowFieldUpsert, rsp *pb.CommitTimeSeriesBatchRsp) {
+	switch {
+	case rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS:
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+	case len(rsp.GetKeys()) > 0:
+		s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
+	default:
+		s.observeTimeSeriesRows(ctx, rows, "empty", false, false)
+	}
 }
