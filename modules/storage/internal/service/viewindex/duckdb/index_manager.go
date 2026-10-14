@@ -56,11 +56,13 @@ func duckDBContext(ctx context.Context) (context.Context, error) {
 var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
 
+// logMemoryLimitOnce 让进程只在第一次打开索引时记录一次生效的内存上限，而不是每个索引各记一次。
+var logMemoryLimitOnce sync.Once
+
 const (
 	duckDBMemoryLimitEnv  = "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT"
 	duckDBThreadsEnv      = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
 	duckDBMaxOpenConnsEnv = "MOOX_STORAGE_VIEW_DUCKDB_MAX_OPEN_CONNS"
-	defaultDuckDBMemory   = "256MB"
 	defaultDuckDBThreads  = 1
 	defaultMaxOpenConns   = 4
 	defaultMaxIdleConns   = 1
@@ -1448,10 +1450,7 @@ func open(path string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(maxOpenConns)
 	db.SetMaxIdleConns(defaultMaxIdleConns)
-	memoryLimit := strings.TrimSpace(os.Getenv(duckDBMemoryLimitEnv))
-	if memoryLimit == "" {
-		memoryLimit = defaultDuckDBMemory
-	}
+	memoryLimit, memorySource := resolveMemoryLimit()
 	if !duckDBMemoryLimitRE.MatchString(memoryLimit) {
 		_ = db.Close()
 		return nil, fmt.Errorf("invalid %s %q", duckDBMemoryLimitEnv, memoryLimit)
@@ -1481,6 +1480,9 @@ func open(path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("configure duckdb resource limits: %w", err)
 	}
+	logMemoryLimitOnce.Do(func() {
+		log.Printf("storage view DuckDB 单个索引内存上限 %s（%s）", memoryLimit, memorySource)
+	})
 	return db, nil
 }
 

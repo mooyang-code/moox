@@ -207,7 +207,7 @@ fi
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
-assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB\}' "${DEPLOY_DIR}/start.sh"
+assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-\}' "${DEPLOY_DIR}/start.sh"
 if grep -q 'MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS' "${DEPLOY_DIR}/start.sh"; then
   echo "legacy Storage View lookback environment remains in package" >&2
   exit 1

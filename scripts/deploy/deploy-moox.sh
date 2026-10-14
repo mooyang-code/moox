@@ -2322,7 +2322,7 @@ start_storage_view() {
       "MOOX_STORAGE_ROLE=view" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
       "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]+"${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}"}" \
-      "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}" \
+      "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
       "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
@@ -3743,7 +3743,8 @@ EOF
 }
 
 prepare_stage() {
-  local storage_view_duckdb_memory_limit="${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}"
+  # 留空表示由 moox-storage-view 启动时按主机内存推算（见 docs/模块/存储.md）；只有需要固定某个值时才配置。
+  local storage_view_duckdb_memory_limit="${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-}"
   local storage_policy_b64="${MOOX_STORAGE_POLICY_B64:-}"
   local local_log_max_size_mb="${MOOX_LOCAL_LOG_MAX_SIZE_MB:-50}"
   local local_log_backup_count="${MOOX_LOCAL_LOG_BACKUP_COUNT:-5}"
@@ -3752,8 +3753,8 @@ prepare_stage() {
   # Storage root; in that layout its generated start.sh must not disable the
   # already-active local Storage routes on the next Admin restart.
   local preserve_storage_routes="${MOOX_PRESERVE_STORAGE_ROUTES:-0}"
-  [[ "${storage_view_duckdb_memory_limit}" =~ ^[1-9][0-9]*(KB|MB|GB|TB)$ ]] || \
-    fail "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT must be a positive KB/MB/GB/TB value"
+  [[ -z "${storage_view_duckdb_memory_limit}" || "${storage_view_duckdb_memory_limit}" =~ ^[1-9][0-9]*(KB|MB|GB|TB)$ ]] || \
+    fail "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT must be empty (auto) or a positive KB/MB/GB/TB value"
   [[ "${local_log_max_size_mb}" =~ ^[1-9][0-9]*$ && "${local_log_max_size_mb}" -le 10240 ]] || \
     fail "MOOX_LOCAL_LOG_MAX_SIZE_MB must be between 1 and 10240"
   [[ "${local_log_backup_count}" =~ ^[1-9][0-9]*$ && "${local_log_backup_count}" -le 100 ]] || \
