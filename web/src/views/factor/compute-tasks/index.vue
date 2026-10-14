@@ -69,7 +69,7 @@
             <a-table-column title="最近周期" :width="190">
               <template #cell="{ record }">
                 <span>{{ record.lastPeriod }}</span>
-                <div v-if="record.lag" class="cell-sub">滞后 {{ record.lag }}</div>
+                <div v-if="record.lag" class="cell-sub">{{ record.lag }}</div>
               </template>
             </a-table-column>
             <a-table-column title="操作" :width="230" align="center" fixed="right">
@@ -166,7 +166,7 @@ import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { createFactorSet, deleteFactorSet, setFactorSetStatus, updateFactorSet } from "@/api/factor";
 import type { FactorSet, FactorSetInfo, SubjectMode } from "@/api/factor/types";
-import { formatLag, formatPeriod } from "@/views/factor/shared/health";
+import { barLagText, formatPeriod } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { setStatusTag } from "@/views/factor/shared/status";
@@ -215,7 +215,7 @@ const rows = computed(() =>
     action: setActionKind(info.factor_set),
     remove: deleteState(info),
     lastPeriod: info.last_run?.last_period_time ? formatPeriod(info.last_run.last_period_time) : "-",
-    lag: info.last_run?.last_period_time ? formatLag(info.last_run.lag_seconds) : ""
+    lag: barLagText(info.factor_set.freq, info.last_run)
   }))
 );
 

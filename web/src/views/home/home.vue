@@ -149,7 +149,7 @@
             <div class="tile-body">
               <p v-if="!factors.length" class="tile-empty">{{ factorLoaded ? "当前空间没有计算任务" : "读取中…" }}</p>
               <template v-else>
-                <div class="line line-head factor-cols"><span>任务</span><span>最近周期</span><span>滞后</span></div>
+                <div class="line line-head factor-cols"><span>任务</span><span>最近周期</span><span>进度</span></div>
                 <button
                   v-for="row in foldedFactors.shown"
                   :key="row.setId"
@@ -337,7 +337,7 @@ const liveLoadGate = new RequestGate();
 
 const factors = computed(() => factorRows(factorSets.value, selectedSpaceId.value || "", names, nowMs.value));
 const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value));
-const freshness = computed(() => freshnessRows(overview.value, names));
+const freshness = computed(() => freshnessRows(overview.value, names, nowMs.value));
 const hosts = computed(() => hostRows(overview.value?.hosts || []));
 const foldedFreshness = computed(() => fold(freshness.value, TILE_LIMITS.freshness));
 const foldedFactors = computed(() => fold(factors.value, TILE_LIMITS.factors));
@@ -1069,7 +1069,7 @@ button.line:hover {
 }
 
 .factor-cols {
-  grid-template-columns: minmax(0, 1fr) 64px 56px;
+  grid-template-columns: minmax(0, 1fr) 64px 84px;
 }
 
 .fresh-cols {

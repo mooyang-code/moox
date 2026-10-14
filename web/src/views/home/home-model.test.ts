@@ -111,10 +111,11 @@ describe("home data rows", () => {
       ]
     };
     const rows = freshnessRows(overview, names);
+    // 正常的写“已追平”；异常的写落后时长（这里没有水位时间，退回服务端给的延迟）。
     expect(rows.map(row => [row.stage, row.name, row.freq, row.lag, row.status])).toEqual([
       ["入库", "现货K线", "1m", "14 小时 10 分", "需关注"],
-      ["视图", "因子宽表", "1m", "1 小时 15 分", "正常"],
-      ["入库", "现货K线", "1h", "1 分钟", "正常"]
+      ["入库", "现货K线", "1h", "已追平", "正常"],
+      ["视图", "因子宽表", "1m", "已追平", "正常"]
     ]);
   });
 
@@ -143,7 +144,9 @@ describe("home data rows", () => {
       ["a", "现货K线 · 1m", 2, "正常", "ok"]
     ]);
     expect(rows[1].lastPeriod).toBe("09:59");
-    expect(rows[1].lag).toBe("8 秒");
+    expect(rows[1].lag).toBe("已追平");
+    expect(rows[1].behindSeconds).toBe(0);
+    expect(rows[0].behindSeconds).toBeGreaterThan(0);
   });
 
   it("shows what each strategy wants to hold, largest weights first", () => {
@@ -322,8 +325,8 @@ describe("home tiles", () => {
     const facts = bannerFacts({ strategies, factors, freshness, nowMs: NOW });
     expect(facts.map(fact => [fact.key, fact.value, fact.tone])).toEqual([
       ["strategy", "2 分钟前", "ok"],
-      ["factor", "8 秒", "ok"],
-      ["data", "14 小时 10 分", "warn"]
+      ["factor", "已追平", "ok"],
+      ["data", "落后 14 小时 10 分", "warn"]
     ]);
     expect(bannerFacts({ strategies: [], factors: [], freshness: [], nowMs: NOW }).map(fact => fact.value)).toEqual([
       "—",
@@ -402,11 +405,11 @@ describe("home tiles", () => {
     );
     expect(rows.map(row => [row.freq, row.lag, row.tone])).toEqual([
       ["1h", "15 分钟", "warn"],
-      ["1m", "5 秒", "ok"],
+      ["1m", "已追平", "ok"],
       ["1h", "—", "idle"]
     ]);
     const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW });
-    expect(facts[2].value).toBe("15 分钟");
+    expect(facts[2].value).toBe("落后 15 分钟");
   });
 
   it("counts stale data as something to handle, without repeating what a monitor alert already covers", () => {
@@ -469,5 +472,61 @@ describe("home tiles", () => {
       NOW
     );
     expect(rows.map(row => row.title)).toEqual(["现货K线 1h：新增 1 个、移除 0 个标的，10-13 09:00 生效"]);
+  });
+
+  it("measures data lag against the latest closed bar, so a caught-up dataset never shows a delay", () => {
+    const at = (secondsBefore: number) => new Date(NOW - secondsBefore * 1000).toISOString();
+    const rows = freshnessRows(
+      {
+        generated_at: new Date(NOW).toISOString(),
+        pipeline: [
+          {
+            name: "存储",
+            datasets: [
+              // 10:00:00 时最近一根已收盘的 1m K 线是 09:58 开盘的那根；09:58 的水位就是已追平，尽管“现在 − 水位”是 2 分钟。
+              {
+                producer: "storage",
+                dataset_id: "dataset_abc",
+                freq: "1m",
+                status: "healthy",
+                output_watermark_at: at(120),
+                lag_seconds: 120
+              },
+              // 水位停在 09:55：落后 09:56、09:57、09:58 三根已收盘的 K 线，而不是“5 分钟”。
+              {
+                producer: "storage",
+                dataset_id: "view_xyz",
+                freq: "1m",
+                status: "degraded",
+                output_watermark_at: at(300),
+                lag_seconds: 300
+              }
+            ]
+          }
+        ]
+      },
+      names
+    );
+    expect(rows.map(row => [row.name, row.lag, row.seconds])).toEqual([
+      ["因子宽表", "3 分钟", 180],
+      ["现货K线", "已追平", 0]
+    ]);
+    const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW });
+    expect(facts[2]).toMatchObject({ value: "落后 3 分钟", tone: "warn" });
+  });
+
+  it('reads "caught up" for factors whose last period was computed on time', () => {
+    const sets = (lagSeconds: string) =>
+      [
+        {
+          factor_set: { set_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
+          members: [],
+          last_run: { set_id: "a", last_period_time: "1791900000", last_status: "ok", lag_seconds: lagSeconds }
+        }
+      ] as unknown as FactorSetInfo[];
+    // 上一期开盘后 70 秒、125 秒仍是同一期：1m K 线收盘后才产出，这两个时刻都不是“滞后 1～2 分钟”。
+    for (const lag of ["70", "125"])
+      expect(factorRows(sets(lag), "crypto", names, NOW)[0]).toMatchObject({ lag: "已追平", tone: "ok" });
+    expect(factorRows(sets("400"), "crypto", names, NOW)[0]).toMatchObject({ lag: "落后 5 分钟", tone: "warn" });
   });
 });

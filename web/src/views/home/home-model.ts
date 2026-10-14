@@ -2,7 +2,7 @@ import type { ActivityLogItem } from "@/api/admin/activity";
 import type { FactorSetInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
-import { setHealth } from "@/views/factor/shared/health";
+import { closedBarLag, freqSeconds, runBarLag, setHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
 import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
@@ -108,35 +108,45 @@ const TONE_RANK: Record<Tone, number> = { bad: 0, warn: 1, idle: 2, ok: 3 };
 /** 数据新鲜度的排序：没有观测的放最后，不挡在正常项前面。 */
 const FRESHNESS_RANK: Record<Tone, number> = { bad: 0, warn: 1, ok: 2, idle: 3 };
 
-/** 数据新鲜度：每个数据集在各环节的延迟，异常的排前面，其次延迟大的。 */
-export function freshnessRows(overview: HealthOverview | undefined, names: NameBook): FreshnessRow[] {
+/**
+ * 数据新鲜度：每个数据集在各环节落后了多少，异常的排前面，其次落后多的。
+ * 落后量以“最近一根已收盘的 K 线”为基准，不是 现在 − 水位时间：水位是 K 线的开盘时间，
+ * 用当前时间去减，一个完全追平的 1m 数据集也会常年显示 1～2 分钟。时钟取监控概览的生成时间，避免浏览器时钟偏差。
+ */
+export function freshnessRows(overview: HealthOverview | undefined, names: NameBook, nowMs: number = Date.now()): FreshnessRow[] {
+  const clockSeconds = (toMillis(overview?.generated_at) ?? nowMs) / 1000;
   const entries = (overview?.pipeline || []).flatMap(stage =>
     (stage.datasets || []).map(item => {
       const id = item.dataset_id || "";
       const producer = item.producer || "";
-      const seconds = toSeconds(item.lag_seconds);
+      const tone = toneOf(item.status);
+      const watermark = toMillis(item.output_watermark_at);
+      const rawSeconds = toSeconds(item.lag_seconds);
+      const barLag =
+        watermark !== null && freqSeconds(item.freq || "") > 0
+          ? closedBarLag(item.freq || "", watermark / 1000, clockSeconds).seconds
+          : null;
+      // 状态未知时服务端给的 0 不代表“已追平”，不显示；正常即已追平；异常时优先写落后的 K 线时长，没有水位时退回原始延迟。
+      const behind = tone === "idle" ? null : tone === "ok" ? 0 : barLag || rawSeconds;
       const row: FreshnessRow = {
         key: `${producer}/${item.space_id}/${id}/${item.freq}`,
         datasetId: id,
         stage: STAGE_LABELS[producer] || stage.name || producer,
         name: names.datasets[id] || names.views[id] || id,
         freq: item.freq || "",
-        // 状态未知时服务端给的 0 不代表“0 秒延迟”，不显示。
-        lag: toneOf(item.status) === "idle" ? "—" : humanizeDuration(seconds),
-        tone: toneOf(item.status),
+        lag: behind === null ? "—" : behind === 0 ? "已追平" : humanizeDuration(behind),
+        tone,
         status: statusLabel(item.status),
         reason: item.reason || "",
         path: producer === "factor" ? "/factor/tasks?tab=results" : "/collector/tasks?tab=results",
-        seconds: toneOf(item.status) === "idle" ? null : seconds
+        seconds: behind
       };
-      return { row, seconds: seconds ?? -1 };
+      return { row, seconds: behind ?? -1 };
     })
   );
+  // 同为已追平时不再比较，保持管线顺序（入库 → 视图 → 因子），Array.sort 是稳定排序。
   return entries
-    .sort(
-      (a, b) =>
-        FRESHNESS_RANK[a.row.tone] - FRESHNESS_RANK[b.row.tone] || b.seconds - a.seconds || a.row.key.localeCompare(b.row.key)
-    )
+    .sort((a, b) => FRESHNESS_RANK[a.row.tone] - FRESHNESS_RANK[b.row.tone] || b.seconds - a.seconds)
     .map(entry => entry.row);
 }
 
@@ -148,8 +158,8 @@ export interface FactorRow {
   tone: Tone;
   lastPeriod: string;
   lag: string;
-  /** 滞后秒数；没有周期为 null。 */
-  lagSeconds: number | null;
+  /** 落后的已收盘 K 线时长（秒）；没有周期为 null，0 表示已追平。 */
+  behindSeconds: number | null;
   path: string;
 }
 
@@ -162,6 +172,7 @@ export function factorRows(sets: FactorSetInfo[], spaceId: string, names: NameBo
     .map(info => {
       const set = info.factor_set;
       const health = setHealth(set, info.last_run);
+      const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
       return {
         setId: set.set_id,
         label: `${names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`,
@@ -169,8 +180,8 @@ export function factorRows(sets: FactorSetInfo[], spaceId: string, names: NameBo
         health,
         tone: FACTOR_TONE[health.key] || "idle",
         lastPeriod: info.last_run?.last_period_time ? shortTime(info.last_run.last_period_time, nowMs) : "—",
-        lag: humanizeDuration(toSeconds(info.last_run?.lag_seconds)),
-        lagSeconds: toSeconds(info.last_run?.lag_seconds),
+        lag: behindSeconds === null ? "—" : behindText(behindSeconds),
+        behindSeconds,
         path: `/factor/tasks?tab=results&set=${encodeURIComponent(set.set_id)}`
       };
     })
@@ -317,7 +328,7 @@ export function attentionItems(input: {
       tone: row.tone,
       source: "因子",
       title: row.label,
-      detail: `计算${row.health.label}，最近周期 ${row.lastPeriod}，滞后 ${row.lag}`,
+      detail: `计算${row.health.label}，最近周期 ${row.lastPeriod}，${row.lag}`,
       when: "",
       target: row.path
     });
@@ -439,7 +450,12 @@ export interface BannerFact {
   tone: Tone;
 }
 
-/** Banner 里的三项：策略最近一期、因子最大滞后、数据最大延迟；没有观测时写“—”。 */
+/** 落后量的写法：0 为“已追平”，否则“落后 X”。 */
+function behindText(seconds: number): string {
+  return seconds === 0 ? "已追平" : `落后 ${humanizeDuration(seconds)}`;
+}
+
+/** Banner 里的三项：策略最近一期、因子计算、数据新鲜度（后两项是相对最近一根已收盘 K 线的落后量）；没有观测时写“—”。 */
 export function bannerFacts(input: {
   strategies: StrategyRow[];
   factors: FactorRow[];
@@ -447,13 +463,10 @@ export function bannerFacts(input: {
   nowMs: number;
 }): BannerFact[] {
   const bars = input.strategies.filter(row => row.enabled && row.lastBarMs !== null).map(row => row.lastBarMs as number);
-  const factorLags = input.factors.map(row => row.lagSeconds).filter((value): value is number => value !== null);
-  const dataLags = input.freshness.filter(row => row.tone !== "idle" && row.seconds !== null);
-  const factorWorst = input.factors.filter(row => row.lagSeconds !== null);
-  const dataWorst = dataLags.reduce<FreshnessRow | null>(
-    (acc, row) => (!acc || (row.seconds as number) > (acc.seconds as number) ? row : acc),
-    null
-  );
+  const factorRowsWithRun = input.factors.filter(row => row.behindSeconds !== null);
+  const dataRows = input.freshness.filter(row => row.tone !== "idle" && row.seconds !== null);
+  const factorBehind = Math.max(0, ...factorRowsWithRun.map(row => row.behindSeconds as number));
+  const dataBehind = Math.max(0, ...dataRows.map(row => row.seconds as number));
   return [
     {
       key: "strategy",
@@ -463,15 +476,15 @@ export function bannerFacts(input: {
     },
     {
       key: "factor",
-      label: "因子最大滞后",
-      value: factorLags.length ? humanizeDuration(Math.max(...factorLags)) : "—",
-      tone: factorWorst.length ? worst(factorWorst.map(row => row.tone)) : "idle"
+      label: "因子计算",
+      value: factorRowsWithRun.length ? behindText(factorBehind) : "—",
+      tone: factorRowsWithRun.length ? worst(factorRowsWithRun.map(row => row.tone)) : "idle"
     },
     {
       key: "data",
-      label: "数据最大延迟",
-      value: dataWorst ? dataWorst.lag : "—",
-      tone: dataWorst ? dataWorst.tone : "idle"
+      label: "数据新鲜度",
+      value: dataRows.length ? behindText(dataBehind) : "—",
+      tone: dataRows.length ? worst(dataRows.map(row => row.tone)) : "idle"
     }
   ];
 }
