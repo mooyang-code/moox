@@ -114,6 +114,9 @@ func runSetupInit(
 	// read-only preflight: collector publication later consumes the same plan
 	// and applies private routing only to SCF functions in Storage's Tencent
 	// region.
+	if err := snapshot.Manifest.RequireNotification(); err != nil {
+		return setupInitSummary{}, err
+	}
 	var scfRoutes *privatenet.SCFRoutePlan
 	if snapshot.Manifest.SCFPlan.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost().Provider), "tencent") {
 		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")

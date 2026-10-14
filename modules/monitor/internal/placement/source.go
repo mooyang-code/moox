@@ -28,6 +28,8 @@ type Snapshot struct {
 	Catalog    servicecatalog.Catalog
 	Hosts      []*adminpb.DeploymentHost
 	Placements []*adminpb.ComponentPlacement
+	// LocalHostID 由同步器填入（Monitor 所在主机），不来自 Admin。
+	LocalHostID string
 }
 
 type Source interface {

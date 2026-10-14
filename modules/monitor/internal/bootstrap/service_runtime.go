@@ -66,6 +66,7 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 		return nil
 	}
 	syncer := monitorplacement.NewSyncer(runtime.Repositories.Topology, monitorplacement.NewClientSource(runtime.Gateway), cfg.Placement.HTTPS, runtime.Repositories.Gateways)
+	syncer.SetLocalHost(cfg.Placement.LocalHostID)
 	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
 		count, err := syncer.Sync(syncCtx)
 		if err != nil {

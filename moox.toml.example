@@ -95,7 +95,8 @@ maintenance_offset = "35s"
 maintenance_timeout = "20s"
 max_rows_per_pass = 50000
 
-# 留空时仍采集和展示监控数据，但不发送站外告警。
+# 告警推送渠道，初始化前必填：没有推送地址时监控只展示不通知，等于没有告警。
+# channel_type 为 wecom 或 feishu，webhook_url 是对应群机器人的地址；Monitor 首次建库时据此写入。
 [notification]
 channel_type = "wecom"
 webhook_url = ""

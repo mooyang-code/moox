@@ -21,11 +21,16 @@ type Syncer struct {
 	https    map[string]domain.HTTPSConfig
 	gateways *store.GatewayRepository
 	now      func() time.Time
+	// localHostID 是 Monitor 自己所在的主机 ID，见 SetLocalHost。
+	localHostID string
 }
 
 func NewSyncer(topology *store.TopologyRepository, source Source, https map[string]domain.HTTPSConfig, gateways *store.GatewayRepository) *Syncer {
 	return &Syncer{topology: topology, source: source, https: https, gateways: gateways, now: time.Now}
 }
+
+// SetLocalHost 指定 Monitor 所在的部署主机；该主机上的组件健康检查连 127.0.0.1。
+func (s *Syncer) SetLocalHost(hostID string) { s.localHostID = hostID }
 
 func CheckID(hostID, componentID string) string { return "placement:" + hostID + ":" + componentID }
 
@@ -37,6 +42,7 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	snapshot.LocalHostID = s.localHostID
 	checks, err := Checks(snapshot, s.https)
 	if err != nil {
 		return 0, err
@@ -107,7 +113,7 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 			if address == "" {
 				address = host.GetAddress()
 			}
-			if component.Health.Loopback {
+			if component.Health.Loopback || (snapshot.LocalHostID != "" && host.GetHostId() == snapshot.LocalHostID) {
 				address = "127.0.0.1"
 			}
 			check.URL = (&url.URL{Scheme: "http", Host: net.JoinHostPort(address, strconv.Itoa(component.Health.Port)), Path: "/readyz"}).String()

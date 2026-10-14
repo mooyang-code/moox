@@ -28,6 +28,8 @@ scheduler:
 
 placement:
   enabled: true
+  # Monitor 所在的部署主机 ID，由部署工具生成；该主机上的组件健康检查直接连 127.0.0.1。
+  local_host_id: ""
   # 部署工具按实际入口生成 console-proxy 的 HTTPS 页面探测配置。
   # internal 同时提供 ca_file 与经过部署核验的 ca_baseline；public 使用系统信任。
   https: {}

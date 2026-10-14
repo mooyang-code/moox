@@ -66,6 +66,14 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 				values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
 			}
 		}
+		if id == "monitor" {
+			// 告警推送渠道来自 moox.toml 的 [notification]（初始化时必填）；Monitor 首次建库时据此写入全局渠道。
+			if err := manifest.RequireNotification(); err != nil {
+				return nil, err
+			}
+			values["MOOX_NOTIFICATION_CHANNEL_TYPE"] = manifest.Notification.ChannelType
+			values["MOOX_NOTIFICATION_WEBHOOK_URL"] = manifest.Notification.WebhookURL
+		}
 		if id == "collector" {
 			// Collector 的行情调度必须有目标空间；与旧部署脚本一致，默认 crypto。
 			values["MOOX_SPACE_ID"] = defaultSpaceID

@@ -56,7 +56,8 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 			Status:  "unknown", Reason: "health not checked", ProbeStatus: "unknown",
 		}
 		reporterRows := byPlacement[key]
-		if component.Doctor.Transport == "reporter" || len(reporterRows) > 0 {
+		// 功能指标不适用（not_applicable）的组件不要求上报指标，与 doctor 诊断的豁免一致；它们没有上报行时不产生"缺失上报"告警。
+		if (component.Doctor.Transport == "reporter" && component.Doctor.FunctionalObservability != "not_applicable") || len(reporterRows) > 0 {
 			item = withReporters(item, reporterRows)
 		}
 

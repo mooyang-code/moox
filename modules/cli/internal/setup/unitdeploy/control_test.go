@@ -74,8 +74,16 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 
 func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.T) {
 	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32), StorageNodeSecret: strings.Repeat("n", 32)}
-	env, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"})
+	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"}
+	// 部署 Monitor 前告警推送地址必须已配置，否则监控只展示不推送。
+	_, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", components)
+	require.ErrorContains(t, err, "notification.webhook_url is required")
+	manifest := setupconfig.Manifest{Notification: setupconfig.Notification{ChannelType: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"}}
+	env, err := unitEnvironment(manifest, identity, "control", components)
 	require.NoError(t, err)
+	require.Equal(t, "wecom", env["monitor"]["MOOX_NOTIFICATION_CHANNEL_TYPE"])
+	require.Equal(t, manifest.Notification.WebhookURL, env["monitor"]["MOOX_NOTIFICATION_WEBHOOK_URL"])
+	require.NotContains(t, env["admin"], "MOOX_NOTIFICATION_WEBHOOK_URL")
 	for _, id := range []string{"eventbus", "console-proxy"} {
 		require.NotContains(t, env[id], "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	}

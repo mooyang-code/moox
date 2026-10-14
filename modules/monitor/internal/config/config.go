@@ -62,6 +62,9 @@ type SchedulerConfig struct {
 type PlacementConfig struct {
 	Enabled bool                          `yaml:"enabled"`
 	HTTPS   map[string]domain.HTTPSConfig `yaml:"https"`
+	// LocalHostID 是 Monitor 自己所在的部署主机 ID；该主机上的组件健康检查直接连 127.0.0.1。
+	// 主机没有私网地址时对外地址从本机访问常常不通（云厂商不回环公网 IP），会把健康的服务误报为超时。
+	LocalHostID string `yaml:"local_host_id"`
 }
 
 type AlertConfig struct {

@@ -136,7 +136,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_alert_states (
     c_resolved_at DATETIME,
     c_last_reminder_at DATETIME,
     c_dedupe_key TEXT NOT NULL DEFAULT '',
-    c_last_message_id TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

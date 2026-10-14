@@ -154,3 +154,27 @@ func TestSyncRollsBackAllDefinitionsOnOwnershipCollision(t *testing.T) {
 	_, err = repos.Checks.Get(t.Context(), "", CheckID("control", "console-proxy"))
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "earlier upserts must roll back")
 }
+
+func TestChecksProbeLocalHostThroughLoopback(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.Placements = append(snapshot.Placements, &adminpb.ComponentPlacement{HostId: "control", ComponentId: "admin", Status: "enabled"})
+	addressOf := func(checks []domain.Check, checkID string) string {
+		for _, check := range checks {
+			if check.CheckID == checkID {
+				return check.URL
+			}
+		}
+		t.Fatalf("check %s not found", checkID)
+		return ""
+	}
+
+	checks, err := Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Contains(t, addressOf(checks, "placement:control:admin"), "control.example.test", "没有指定本机时按对外地址探测")
+
+	snapshot.LocalHostID = "control"
+	checks, err = Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Contains(t, addressOf(checks, "placement:control:admin"), "127.0.0.1:", "Monitor 所在主机上的组件连回环地址")
+	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "2001:db8::2", "其他主机仍按私网/对外地址探测")
+}

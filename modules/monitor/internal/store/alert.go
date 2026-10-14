@@ -168,7 +168,6 @@ func (r *AlertRepository) UpsertState(ctx context.Context, state *domain.AlertSt
 			"c_resolved_at",
 			"c_last_reminder_at",
 			"c_dedupe_key",
-			"c_last_message_id",
 			"c_mtime",
 		}),
 	}).Create(state).Error

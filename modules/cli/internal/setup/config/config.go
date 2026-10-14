@@ -197,6 +197,14 @@ type CollectorRetention struct {
 	MaxRowsPerPass      int    `toml:"max_rows_per_pass" json:"max_rows_per_pass"`
 }
 
+// RequireNotification 要求告警推送地址已配置：监控只在页面展示而不推送，等于没有告警，所以初始化和部署 Monitor 前必须填好。
+func (m Manifest) RequireNotification() error {
+	if strings.TrimSpace(m.Notification.WebhookURL) == "" {
+		return fmt.Errorf("config_invalid: notification.webhook_url is required: 请在 moox.toml 的 [notification] 配置 %s 群机器人 webhook，用于告警推送", m.Notification.ChannelType)
+	}
+	return nil
+}
+
 type Notification struct {
 	ChannelType string `toml:"channel_type"`
 	WebhookURL  string `toml:"webhook_url"`
