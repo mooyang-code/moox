@@ -34,6 +34,9 @@ type IndexManager struct {
 	dataset    map[string]string
 	space      map[string]string
 	coverageMu sync.Mutex
+	// stop 通知后台的用量日志协程退出，由 Close 关闭。
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // duckDBContext checks cancellation before entering DuckDB, then detaches it
@@ -97,7 +100,9 @@ func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 			_ = os.Remove(filepath.Join(opts.Root, entry.Name()+".wal"))
 		}
 	}
-	return &IndexManager{root: opts.Root, dbs: make(map[string]*sql.DB), schema: make(map[string]map[string]pb.FieldValueType), dataset: make(map[string]string), space: make(map[string]string)}, nil
+	m := &IndexManager{root: opts.Root, dbs: make(map[string]*sql.DB), schema: make(map[string]map[string]pb.FieldValueType), dataset: make(map[string]string), space: make(map[string]string), stop: make(chan struct{})}
+	go m.logUsageLoop(m.stop, resourceUsageFirstDelay, resourceUsageInterval)
+	return m, nil
 }
 
 func (m *IndexManager) Engine() string { return "duckdb" }
@@ -1245,6 +1250,11 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 }
 
 func (m *IndexManager) Close() error {
+	m.stopOnce.Do(func() {
+		if m.stop != nil {
+			close(m.stop)
+		}
+	})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var result error
