@@ -5,10 +5,9 @@
 ## 前置条件
 
 - `moox-cli`、`moox-factor-mgr-cli` 和 `moox-storage-cli` 必须来自同一版本发布包。
-- 操作主机需要能访问本机或配置的 EventBus，并能读取 EventBus internal-admin 凭据。
-- 不要把凭据写进命令、脚本、日志或 Skill。优先使用环境变量：
-  `MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE`，也可以使用命令的
-  `--credential-file`。
+- Storage 维护命令（`repair-view`、`force-rebuild-view`、`reconcile-view-consumers`、`reset-view-consumers`、`purge-dataset-events`）不需要任何 EventBus 凭据：
+  它们用 `--storage-conf` 指向的 storage-view 配置里的网关身份调用 Admin，由 Admin 代为连接 EventBus 执行；Storage 主机上不要放 EventBus 管理员凭据，也没有 `--credential-file`、`--eventbus-url` 参数。
+- 不要把任何 token、HMAC 写进命令、脚本、日志或 Skill。
 - `--yes` 才会执行修改；没有 `--yes` 的命令只能用于查看帮助或失败退出。
 - 所有命令输出 sanitized JSON；应保留 `backup_path`、`pending_before` 和 `deleted` 等字段用于运维记录。
 
@@ -44,13 +43,11 @@ moox-cli storage repair-view \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
-  --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --eventbus-url tls://<EventBus公网IP>:4222 \
+  --consumer <View 消费者名> \
   --yes
 ```
 
-独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。控制机上的 `internal-admin.yaml` 默认 `tls://127.0.0.1:4222`，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。三个 crypto kline View 共用 `storage_view_kline`：只在第一个 View 删除 durable，其余 `--reset-consumer=false`。因子 View 用 `--consumer storage_view_factor`。
+独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：固定的 `storage_view_factor`、`storage_view_metrics`、`storage_view_misc`，以及按数据集动态创建的 `storage_view_misc_<12 位十六进制>`、`storage_view_factor_<12 位十六进制>`（其他名称在发出请求前就会被拒绝）。多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`。
 
 默认流程：
 
@@ -70,9 +67,7 @@ moox-cli storage repair-view \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
-  --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --eventbus-url tls://<EventBus公网IP>:4222 \
+  --consumer <View 消费者名> \
   --dry-run
 ```
 
@@ -85,10 +80,8 @@ moox-cli storage repair-view \
 | `--storage-conf` | `MOOX_STORAGE_CONFIG` 或 `config/storage.yaml` | Storage 配置 |
 | `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | `start.sh`/`stop.sh` 所在根目录 |
 | `--stream` | `MOOX_STORAGE` | JetStream stream |
-| `--consumer` | `storage_view_kline` | 分区 durable；kline 三个行情 View 共用，因子 View 用 `storage_view_factor` |
+| `--consumer` | 无，必填 | View 的 durable 消费者名（见上文允许的名称） |
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
-| `--credential-file` | Storage/EventBus admin 环境变量 | NATS admin 凭据 |
-| `--eventbus-url` | 凭据文件/环境配置 | 覆盖 EventBus 地址 |
 | `--timeout` | `2m` | 总操作超时 |
 | `--reset-consumer` | `true` | 删除 durable consumer |
 | `--force-rebuild` | `true` | 递增 desired revision |
@@ -118,7 +111,7 @@ moox-cli storage repair-view ... \
 /home/<user>/moox/storage/bin/moox-storage-cli purge-dataset-events \
   --space mooxsys \
   --dataset dataset_mooxsys_service_metrics \
-  --credential-file /home/<user>/.config/moox/eventbus/internal-admin.yaml \
+  --storage-conf /home/<user>/moox/storage/config/storage.yaml \
   --dry-run
 ```
 

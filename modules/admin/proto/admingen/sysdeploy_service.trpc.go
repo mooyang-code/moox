@@ -36,6 +36,12 @@ type SysDeployService interface {
 	SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq) (*SyncHostPlacementsRsp, error)
 
 	DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq) (*DeleteDeploymentHostRsp, error)
+
+	InspectEventBus(ctx context.Context, req *InspectEventBusReq) (*InspectEventBusRsp, error)
+
+	DeleteEventBusConsumers(ctx context.Context, req *DeleteEventBusConsumersReq) (*DeleteEventBusConsumersRsp, error)
+
+	PurgeEventBusSubjects(ctx context.Context, req *PurgeEventBusSubjectsReq) (*PurgeEventBusSubjectsRsp, error)
 }
 
 func SysDeployService_GetCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -200,6 +206,60 @@ func SysDeployService_DeleteHost_Handler(svr interface{}, ctx context.Context, f
 	return rsp, nil
 }
 
+func SysDeployService_InspectEventBus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &InspectEventBusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).InspectEventBus(ctx, reqbody.(*InspectEventBusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SysDeployService_DeleteEventBusConsumers_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteEventBusConsumersReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).DeleteEventBusConsumers(ctx, reqbody.(*DeleteEventBusConsumersReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SysDeployService_PurgeEventBusSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PurgeEventBusSubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SysDeployService).PurgeEventBusSubjects(ctx, reqbody.(*PurgeEventBusSubjectsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // SysDeployServer_ServiceDesc descriptor for server.RegisterService.
 var SysDeployServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.ops.SysDeploy",
@@ -240,6 +300,18 @@ var SysDeployServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.ops.SysDeploy/DeleteHost",
 			Func: SysDeployService_DeleteHost_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/InspectEventBus",
+			Func: SysDeployService_InspectEventBus_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/DeleteEventBusConsumers",
+			Func: SysDeployService_DeleteEventBusConsumers_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SysDeploy/PurgeEventBusSubjects",
+			Func: SysDeployService_PurgeEventBusSubjects_Handler,
 		},
 	},
 }
@@ -282,6 +354,15 @@ func (s *UnimplementedSysDeploy) SyncHostPlacements(ctx context.Context, req *Sy
 func (s *UnimplementedSysDeploy) DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq) (*DeleteDeploymentHostRsp, error) {
 	return nil, errors.New("rpc DeleteHost of service SysDeploy is not implemented")
 }
+func (s *UnimplementedSysDeploy) InspectEventBus(ctx context.Context, req *InspectEventBusReq) (*InspectEventBusRsp, error) {
+	return nil, errors.New("rpc InspectEventBus of service SysDeploy is not implemented")
+}
+func (s *UnimplementedSysDeploy) DeleteEventBusConsumers(ctx context.Context, req *DeleteEventBusConsumersReq) (*DeleteEventBusConsumersRsp, error) {
+	return nil, errors.New("rpc DeleteEventBusConsumers of service SysDeploy is not implemented")
+}
+func (s *UnimplementedSysDeploy) PurgeEventBusSubjects(ctx context.Context, req *PurgeEventBusSubjectsReq) (*PurgeEventBusSubjectsRsp, error) {
+	return nil, errors.New("rpc PurgeEventBusSubjects of service SysDeploy is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -308,6 +389,12 @@ type SysDeployClientProxy interface {
 	SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq, opts ...client.Option) (rsp *SyncHostPlacementsRsp, err error)
 
 	DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq, opts ...client.Option) (rsp *DeleteDeploymentHostRsp, err error)
+
+	InspectEventBus(ctx context.Context, req *InspectEventBusReq, opts ...client.Option) (rsp *InspectEventBusRsp, err error)
+
+	DeleteEventBusConsumers(ctx context.Context, req *DeleteEventBusConsumersReq, opts ...client.Option) (rsp *DeleteEventBusConsumersRsp, err error)
+
+	PurgeEventBusSubjects(ctx context.Context, req *PurgeEventBusSubjectsReq, opts ...client.Option) (rsp *PurgeEventBusSubjectsRsp, err error)
 }
 
 type SysDeployClientProxyImpl struct {
@@ -493,6 +580,66 @@ func (c *SysDeployClientProxyImpl) DeleteHost(ctx context.Context, req *DeleteDe
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &DeleteDeploymentHostRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) InspectEventBus(ctx context.Context, req *InspectEventBusReq, opts ...client.Option) (*InspectEventBusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/InspectEventBus")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("InspectEventBus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &InspectEventBusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) DeleteEventBusConsumers(ctx context.Context, req *DeleteEventBusConsumersReq, opts ...client.Option) (*DeleteEventBusConsumersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/DeleteEventBusConsumers")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("DeleteEventBusConsumers")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteEventBusConsumersRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SysDeployClientProxyImpl) PurgeEventBusSubjects(ctx context.Context, req *PurgeEventBusSubjectsReq, opts ...client.Option) (*PurgeEventBusSubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/PurgeEventBusSubjects")
+	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SysDeploy")
+	msg.WithCalleeMethod("PurgeEventBusSubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PurgeEventBusSubjectsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

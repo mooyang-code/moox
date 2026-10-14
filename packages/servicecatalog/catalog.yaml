@@ -298,6 +298,12 @@ components:
         port: 11109
         console_name: sysdeploy
         timeout_ms: 5000
+        # EventBus 维护由 Admin 代为连接 EventBus：连接最多等 15 秒，繁忙的流上清除、删除消费者单次最多 2 分钟，
+        # 服务端（Admin 的 trpc_go.yaml）的超时要不小于这里。
+        method_timeouts_ms:
+          InspectEventBus: 60000
+          DeleteEventBusConsumers: 180000
+          PurgeEventBusSubjects: 300000
         max_body_bytes: 4194304
         methods:
           - GetCatalog
@@ -309,12 +315,16 @@ components:
           - SetPlacementStatus
           - SyncHostPlacements
           - DeleteHost
+          - InspectEventBus
+          - DeleteEventBusConsumers
+          - PurgeEventBusSubjects
         read_only_methods:
           - GetCatalog
           - ListHosts
           - ListPlacements
           - GetHostRoutes
           - GetDirectory
+          - InspectEventBus
         acl:
           - methods:
               - GetCatalog
@@ -339,6 +349,12 @@ components:
               - GetHostRoutes
             callers:
               - monitor
+          - methods:
+              - InspectEventBus
+              - DeleteEventBusConsumers
+              - PurgeEventBusSubjects
+            callers:
+              - storage-view
       - path: trpc.moox.admin.Setup
         port: 11110
         console_name: setup

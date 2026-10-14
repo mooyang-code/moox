@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -22,8 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -36,24 +33,22 @@ const (
 )
 
 type repairViewOptions struct {
-	action         string
-	spaceID        string
-	viewID         string
-	storageConf    string
-	packageRoot    string
-	stream         string
-	consumer       string
-	credentialFile string
-	eventBusURL    string
-	deliverPolicy  string
-	timeout        time.Duration
-	yes            bool
-	dryRun         bool
-	resetConsumer  bool
-	forceRebuild   bool
-	restart        bool
-	purgeInactive  bool
-	resetView      bool
+	action        string
+	spaceID       string
+	viewID        string
+	storageConf   string
+	packageRoot   string
+	stream        string
+	consumer      string
+	deliverPolicy string
+	timeout       time.Duration
+	yes           bool
+	dryRun        bool
+	resetConsumer bool
+	forceRebuild  bool
+	restart       bool
+	purgeInactive bool
+	resetView     bool
 }
 
 type repairViewSummary struct {
@@ -110,18 +105,16 @@ func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 type forceRebuildViewOptions struct {
-	spaceID        string
-	viewID         string
-	storageConf    string
-	packageRoot    string
-	stream         string
-	consumer       string
-	credentialFile string
-	eventBusURL    string
-	timeout        time.Duration
-	yes            bool
-	dryRun         bool
-	restart        bool
+	spaceID     string
+	viewID      string
+	storageConf string
+	packageRoot string
+	stream      string
+	consumer    string
+	timeout     time.Duration
+	yes         bool
+	dryRun      bool
+	restart     bool
 }
 
 func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -134,8 +127,6 @@ func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) erro
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream")
 	fs.StringVar(&opts.consumer, "consumer", opts.consumer, "durable storage View consumer")
-	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
-	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent View/index/consumer deletion")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the View without changing state")
@@ -156,22 +147,20 @@ func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) erro
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	return runRepairViewOperation(ctx, repairViewOptions{
-		action:         "force-rebuild-view",
-		spaceID:        opts.spaceID,
-		viewID:         opts.viewID,
-		storageConf:    opts.storageConf,
-		packageRoot:    opts.packageRoot,
-		stream:         opts.stream,
-		consumer:       opts.consumer,
-		credentialFile: opts.credentialFile,
-		eventBusURL:    opts.eventBusURL,
-		deliverPolicy:  "all",
-		timeout:        opts.timeout,
-		yes:            opts.yes,
-		dryRun:         opts.dryRun,
-		resetConsumer:  true,
-		restart:        opts.restart,
-		resetView:      true,
+		action:        "force-rebuild-view",
+		spaceID:       opts.spaceID,
+		viewID:        opts.viewID,
+		storageConf:   opts.storageConf,
+		packageRoot:   opts.packageRoot,
+		stream:        opts.stream,
+		consumer:      opts.consumer,
+		deliverPolicy: "all",
+		timeout:       opts.timeout,
+		yes:           opts.yes,
+		dryRun:        opts.dryRun,
+		resetConsumer: true,
+		restart:       opts.restart,
+		resetView:     true,
 	}, stdout, stderr)
 }
 
@@ -184,6 +173,9 @@ func validateForceRebuildViewOptions(opts forceRebuildViewOptions) error {
 	}
 	if strings.TrimSpace(opts.stream) == "" || strings.TrimSpace(opts.consumer) == "" {
 		return errors.New("--stream and --consumer must not be empty")
+	}
+	if err := checkViewConsumers(opts.consumer); err != nil {
+		return fmt.Errorf("--consumer: %w", err)
 	}
 	if !opts.yes && !opts.dryRun {
 		return errors.New("force-rebuild-view permanently deletes the View indexes and consumer; re-run with --yes, or use --dry-run")
@@ -235,6 +227,13 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	if opts.resetView {
 		summary.Warnings = append(summary.Warnings, "reset-view-indexes deletes both physical slots and requires replayable source events")
 	}
+	// 要删消费者时，在停止任何服务之前先确认网关、Admin 与 EventBus 都可用、流存在：
+	// 否则可能 View 已被停止才发现连不上。dry-run 也走这一步，让它真正成为预检。
+	if opts.resetConsumer {
+		if err := preflightRepairConsumer(ctx, opts.storageConf, packageRoot, opts.stream, opts.consumer); err != nil {
+			return fmt.Errorf("preflight EventBus: %w", err)
+		}
+	}
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: opts.action, Status: "dry_run", Summary: summary})
 	}
@@ -259,12 +258,7 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	}
 	summary.BackupPath = backupPath
 	if opts.resetConsumer {
-		deleted, err := deleteRepairConsumer(ctx, repairConsumerOptions{
-			Stream:         opts.stream,
-			Consumer:       opts.consumer,
-			CredentialFile: opts.credentialFile,
-			EventBusURL:    opts.eventBusURL,
-		})
+		deleted, err := deleteRepairConsumer(ctx, opts.storageConf, packageRoot, opts.stream, opts.consumer)
 		if err != nil {
 			return fmt.Errorf("reset storage view consumer: %w", err)
 		}
@@ -325,8 +319,6 @@ func bindRepairViewFlags(fs *flag.FlagSet, opts *repairViewOptions) {
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", defaultRepairJSName, "JetStream stream")
 	fs.StringVar(&opts.consumer, "consumer", defaultRepairConsumer, "durable storage View consumer")
-	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
-	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
 	fs.StringVar(&opts.deliverPolicy, "deliver-policy", "new", "consumer policy after reset: new or all")
 	fs.DurationVar(&opts.timeout, "timeout", defaultRepairTimeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm the maintenance operation")
@@ -372,6 +364,11 @@ func validateRepairViewOptions(opts *repairViewOptions) error {
 	}
 	if strings.TrimSpace(opts.stream) == "" || strings.TrimSpace(opts.consumer) == "" {
 		return errors.New("--stream and --consumer must not be empty")
+	}
+	if opts.resetConsumer {
+		if err := checkViewConsumers(opts.consumer); err != nil {
+			return fmt.Errorf("--consumer: %w", err)
+		}
 	}
 	policy := strings.ToLower(strings.TrimSpace(opts.deliverPolicy))
 	if policy != "new" && policy != "all" {
@@ -775,85 +772,32 @@ func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, 
 	return removed, nil
 }
 
-type repairConsumerOptions struct {
-	Stream, Consumer, CredentialFile, EventBusURL string
-}
-
-func deleteJetStreamConsumer(ctx context.Context, opts repairConsumerOptions) (bool, error) {
-	credentialPath := resolveRepairCredentialFile(opts.CredentialFile)
-	if credentialPath == "" {
-		return false, errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
+// preflightRepairConsumer 不改动任何状态，确认能经 Admin 访问 EventBus 且流存在。
+var preflightRepairConsumer = func(ctx context.Context, storageConf, packageRoot, stream, consumer string) error {
+	if err := checkViewConsumers(consumer); err != nil {
+		return err
 	}
-	cred, err := jetstream.LoadCredentialFile(credentialPath)
-	if err != nil {
-		return false, err
-	}
-	urls := cred.URLs
-	if strings.TrimSpace(opts.EventBusURL) != "" {
-		urls = []string{strings.TrimSpace(opts.EventBusURL)}
-	}
-	if len(urls) == 0 {
-		urls = []string{"tls://127.0.0.1:4222"}
-	}
-	natsOpts := []nats.Option{nats.Name("moox-storage-cli-repair-view"), nats.UserInfo(cred.Username, cred.Password)}
-	if cred.CAFile != "" {
-		caPath := jetstream.ExpandCredentialPath(cred.CAFile)
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
-		}
-		if err := appendNATSTLSOptions(&natsOpts, caPath); err != nil {
-			return false, err
-		}
-	}
-	// nats.Connect has its own dial timeout; keep consumer reset from consuming
-	// the entire maintenance deadline when the local broker is unavailable.
-	natsOpts = append(natsOpts, nats.Timeout(15*time.Second))
-	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
-	if err != nil {
-		return false, err
-	}
-	defer nc.Close()
-	js, err := nc.JetStream()
-	if err != nil {
-		return false, err
-	}
-	err = js.DeleteConsumer(opts.Stream, opts.Consumer)
-	if errors.Is(err, nats.ErrConsumerNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func appendNATSTLSOptions(opts *[]nats.Option, caPath string) error {
-	caPath = jetstream.ExpandCredentialPath(caPath)
-	ca, err := os.ReadFile(caPath)
+	admin, err := openEventBusAdmin(storageConf, packageRoot)
 	if err != nil {
 		return err
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(ca) {
-		return errors.New("NATS CA file contains no certificates")
-	}
-	*opts = append(*opts, nats.RootCAs(caPath), nats.Secure(), nats.TLSHandshakeFirst())
-	return nil
+	defer admin.Close()
+	_, err = admin.Inspect(ctx, stream, []string{consumer})
+	return err
 }
 
-func resolveRepairCredentialFile(configured string) string {
-	for _, value := range []string{
-		configured,
-		os.Getenv("MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE"),
-		os.Getenv("MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE"),
-		os.Getenv("MOOX_EVENTBUS_INTERNAL_CREDENTIAL_FILE"),
-		"~/.config/moox/eventbus/internal-admin.yaml",
-	} {
-		if value = strings.TrimSpace(value); value != "" {
-			return jetstream.ExpandCredentialPath(value)
-		}
+// deleteJetStreamConsumer 经 Admin 删除 View 消费者；消费者本来就不存在时返回 false。
+func deleteJetStreamConsumer(ctx context.Context, storageConf, packageRoot, stream, consumer string) (bool, error) {
+	if err := checkViewConsumers(consumer); err != nil {
+		return false, err
 	}
-	return ""
+	admin, err := openEventBusAdmin(storageConf, packageRoot)
+	if err != nil {
+		return false, err
+	}
+	defer admin.Close()
+	deleted, err := admin.DeleteConsumers(ctx, stream, []string{consumer})
+	return len(deleted) > 0, err
 }
 
 // lifecycleScriptArgs 是传给 start.sh / stop.sh 的参数。原生部署的脚本转给 moox-runtime，它不接受位置参数：

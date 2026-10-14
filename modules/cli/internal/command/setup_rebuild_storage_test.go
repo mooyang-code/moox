@@ -99,6 +99,15 @@ func TestStorageRebuildDoesNotRequireEmptyViewReadiness(t *testing.T) {
 	assert.NotContains(t, storageRebuildRemoteScript, "/readyz")
 }
 
+func TestStorageRebuildScriptsNeedNoEventBusAdminCredential(t *testing.T) {
+	for name, script := range map[string]string{"remote": storageRebuildRemoteScript, "finalize": storageRebuildFinalizeViewsScript} {
+		assert.NotContains(t, script, "internal-admin.yaml", name)
+		assert.NotContains(t, script, "--credential-file", name)
+		assert.NotContains(t, script, "--eventbus-url", name)
+		assert.NotContains(t, script, "eventbus_url", name)
+	}
+}
+
 func TestStorageRebuildFinalViewResetPreservesPrimaryData(t *testing.T) {
 	assert.Contains(t, storageRebuildFinalizeViewsScript, "--restart=false --yes")
 	assert.NotContains(t, storageRebuildFinalizeViewsScript, "--reset-all-storage-data")

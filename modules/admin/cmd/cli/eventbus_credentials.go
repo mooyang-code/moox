@@ -20,11 +20,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -163,48 +160,10 @@ func parseCredentialToken(raw string) string {
 	return ""
 }
 
-// The EventBus address follows the active component placement, which may be
-// on a different host from Admin. Credential issuance does not mutate topology.
+// EventBus 的地址跟随组件放置（可能在与 Admin 不同的主机上）；签发凭据不改动拓扑。
 func eventBusNATSURL(db *gorm.DB, controlHostID string) (string, error) {
-	dao, err := sysdeploy.NewTopologyDAO(db, controlHostID)
-	if err != nil {
-		return "", err
-	}
-	hosts, placements, err := dao.Read(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("query EventBus placement: %w", err)
-	}
-	hostByID := make(map[string]sysdeploy.HostRecord, len(hosts))
-	for _, host := range hosts {
-		hostByID[host.HostID] = host
-	}
-	var address string
-	for _, placement := range placements {
-		host, exists := hostByID[placement.HostID]
-		if placement.ComponentID != "eventbus" || placement.Status != servicecatalog.Enabled || !exists || host.Status != servicecatalog.Enabled {
-			continue
-		}
-		if address != "" {
-			return "", errors.New("EventBus must have exactly one active placement")
-		}
-		address = host.Address
-	}
-	if address == "" {
-		return "", errors.New("active EventBus placement not found")
-	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return "", err
-	}
-	component, ok := catalog.Component("eventbus")
-	if !ok || len(component.Ports) != 1 {
-		return "", errors.New("invalid EventBus catalog port")
-	}
-	raw := "tls://" + net.JoinHostPort(address, strconv.Itoa(component.Ports[0]))
-	if _, err := validateEventBusNATSURL(raw); err != nil {
-		return "", err
-	}
-	return raw, nil
+	endpoint, err := sysdeploy.ResolveEventBusEndpoint(context.Background(), db, controlHostID)
+	return endpoint.URL, err
 }
 
 func openAdminCLIDB(path string) (*gorm.DB, error) {
@@ -560,19 +519,5 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 }
 
 func validateEventBusNATSURL(raw string) (*url.URL, error) {
-	if raw == "" || raw != strings.TrimSpace(raw) {
-		return nil, errors.New("--eventbus-nats-url is required and must not contain surrounding whitespace")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "tls" || parsed.Hostname() == "" || parsed.Port() == "" {
-		return nil, errors.New("--eventbus-nats-url must be a tls URL with host and port")
-	}
-	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, errors.New("--eventbus-nats-url must contain only scheme, host, and port")
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil || port < 1 || port > 65535 {
-		return nil, errors.New("--eventbus-nats-url port must be between 1 and 65535")
-	}
-	return parsed, nil
+	return sysdeploy.ValidateEventBusNATSURL(raw)
 }

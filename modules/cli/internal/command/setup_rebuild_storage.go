@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -172,11 +170,7 @@ func defaultSetupRebuildStorageViewsRemote(ctx context.Context, snapshot *setupc
 	}
 	defer transport.Close()
 	root := snapshot.Manifest.Paths.Resolved().StorageRoot
-	eventBusURL, err := storageRebuildEventBusURL(snapshot)
-	if err != nil {
-		return storageRebuildResetSummary{}, err
-	}
-	result, err := transport.Run(ctx, []string{"sh", "-lc", storageRebuildFinalizeViewsScript, "moox-rebuild-storage-views", root, eventBusURL}, nil)
+	result, err := transport.Run(ctx, []string{"sh", "-lc", storageRebuildFinalizeViewsScript, "moox-rebuild-storage-views", root}, nil)
 	if err != nil {
 		detail := strings.TrimSpace(result.Stderr)
 		if detail == "" {
@@ -211,15 +205,11 @@ func defaultSetupRebuildStorageRemote(ctx context.Context, snapshot *setupconfig
 	}
 	defer transport.Close()
 	root := snapshot.Manifest.Paths.Resolved().StorageRoot
-	eventBusURL, err := storageRebuildEventBusURL(snapshot)
-	if err != nil {
-		return storageRebuildResetSummary{}, err
-	}
 	mode := "--dry-run"
 	if apply {
 		mode = "--yes"
 	}
-	result, err := transport.Run(ctx, []string{"sh", "-lc", storageRebuildRemoteScript, "moox-rebuild-storage", root, mode, eventBusURL}, nil)
+	result, err := transport.Run(ctx, []string{"sh", "-lc", storageRebuildRemoteScript, "moox-rebuild-storage", root, mode}, nil)
 	if err != nil {
 		detail := strings.TrimSpace(result.Stderr)
 		if detail == "" {
@@ -244,22 +234,6 @@ func defaultSetupRebuildStorageRemote(ctx context.Context, snapshot *setupconfig
 		return storageRebuildResetSummary{}, fmt.Errorf("storage_rebuild_remote_incomplete")
 	}
 	return parsed.Summary, nil
-}
-
-func storageRebuildEventBusURL(snapshot *setupconfig.Snapshot) (string, error) {
-	if snapshot == nil {
-		return "", errors.New("storage_rebuild_eventbus_invalid")
-	}
-	address := strings.TrimSpace(snapshot.Manifest.EventBus.PublicAddress)
-	port := snapshot.Manifest.EventBus.Port
-	if address == "" || port <= 0 {
-		return "", errors.New("storage_rebuild_eventbus_endpoint_missing")
-	}
-	scheme := "nats"
-	if snapshot.Manifest.EventBus.TLSEnabled {
-		scheme = "tls"
-	}
-	return scheme + "://" + net.JoinHostPort(address, strconv.Itoa(port)), nil
 }
 
 func parseStorageResetOperationResult(raw string) (storageResetOperationResult, error) {
@@ -373,7 +347,6 @@ done
 const storageRebuildRemoteScript = `set -eu
 root="$1"
 mode="$2"
-eventbus_url="$3"
 case "$root" in
   /*) ;;
   *) echo storage_rebuild_root_invalid >&2; exit 1 ;;
@@ -386,14 +359,10 @@ test -x "$root/bin/moox-storage-cli"
 test -x "$root/start.sh"
 test -x "$root/stop.sh"
 test -f "$root/storage/config/storage.yaml"
-test -r "$HOME/.config/moox/eventbus/internal-admin.yaml"
-test -n "$eventbus_url"
 if [ "$mode" = "--dry-run" ]; then
   "$root/bin/moox-storage-cli" reset-view-consumers \
     --storage-conf "$root/storage/config/storage.yaml" \
     --package-root "$root" \
-    --credential-file "$HOME/.config/moox/eventbus/internal-admin.yaml" \
-    --eventbus-url "$eventbus_url" \
     --timeout 30m --restart=false --reset-all-storage-data --dry-run
   exit 0
 fi
@@ -423,8 +392,6 @@ fi
 "$root/bin/moox-storage-cli" reset-view-consumers \
   --storage-conf "$root/storage/config/storage.yaml" \
   --package-root "$root" \
-  --credential-file "$HOME/.config/moox/eventbus/internal-admin.yaml" \
-  --eventbus-url "$eventbus_url" \
   --timeout 30m --restart=false --reset-all-storage-data --yes
 for path in "$root/data/storage" "$root/data/storage-node"; do
   case "$path" in
@@ -453,7 +420,6 @@ fi
 
 const storageRebuildFinalizeViewsScript = `set -eu
 root="$1"
-eventbus_url="$2"
 case "$root" in
   /*) ;;
   *) echo storage_rebuild_root_invalid >&2; exit 1 ;;
@@ -462,8 +428,6 @@ test -x "$root/bin/moox-storage-cli"
 test -x "$root/start.sh"
 test -x "$root/stop.sh"
 test -f "$root/storage/config/storage.yaml"
-test -r "$HOME/.config/moox/eventbus/internal-admin.yaml"
-test -n "$eventbus_url"
 umask 077
 healthcheck_state="$root/run/storage-rebuild-view-healthchecks.crontab"
 mkdir -p "$root/run"
@@ -490,8 +454,6 @@ fi
 "$root/bin/moox-storage-cli" reset-view-consumers \
   --storage-conf "$root/storage/config/storage.yaml" \
   --package-root "$root" \
-  --credential-file "$HOME/.config/moox/eventbus/internal-admin.yaml" \
-  --eventbus-url "$eventbus_url" \
   --timeout 30m --restart=false --yes
 "$root/start.sh" storage
 ready=0

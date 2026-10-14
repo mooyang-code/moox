@@ -39,7 +39,7 @@
 
 - 对行情 / 交易 / 因子 Dataset 执行 `purge-dataset-events`
 - 不 dry-run 就 `--yes`；不带 `--yes` 的修改命令
-- 把 EventBus token、HMAC、`internal-admin.yaml` 打进命令行、日志或聊天
+- 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
 - 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是 Collector 周期完成事件，源数据从 Storage PrimaryStore 读取；重建窗口漏掉的周期使用显式 Recalc
@@ -65,17 +65,16 @@ moox-cli storage repair-view \
   --package-root /data/moox/storage \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
-  --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --eventbus-url tls://<EventBus公网IP>:4222 \
+  --consumer <View 消费者名> \
   --dry-run
 ```
 
 执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_bars`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
 
-### EventBus admin 地址
+### EventBus 管理权限
 
-控制机上的 `internal-admin.yaml` 的 `urls` 是 `tls://127.0.0.1:4222`。拷到 Storage 后若不覆盖地址，删除 consumer 会 `nats: no servers available for connection`，而 View 可能已被 stop。必须加 `--eventbus-url tls://<EventBus公网IP>:4222`，CA 用 Storage 上已有的 `ca.pem`。凭据 mode `0600`，只打印字节数和权限。
+删除 consumer 等 EventBus 管理操作由 Admin 代为执行：`moox-cli storage ...` 用 storage-view 的网关身份调用 Admin，Storage 主机上不需要 EventBus 管理员凭据，也就没有“凭据里的地址是控制机回环”这类陷阱。
+命令在停止 View 之前就会通过 `InspectEventBus` 确认网关、Admin 与 EventBus 都可用（`--dry-run` 同样会走一遍），不会出现 View 已被停止才发现连不上。
 
 ## Factor 周期诊断
 
@@ -92,7 +91,6 @@ redelivery，再按 `set` 查看 `factor_period_lag_seconds`、`factor_last_peri
 | `factor_failures_total` 增长 | 因子或标的数据失败 | 检查对应因子错误、输入列和上游缺失 subject；基础设施错误会重试，业务失败会进入周期终态 |
 | 实时已追平但历史值需修正 | 历史补算 | 提交有界 Recalc 范围；已完成分块不会回滚 |
 
-控制面连本机 EventBus，一般不必 `--eventbus-url`。
 
 ## 验收
 

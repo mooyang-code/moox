@@ -7,20 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
 )
 
 type purgeDatasetEventsOptions struct {
-	stream, spaceID, datasetID, credentialFile, eventBusURL string
-	yes, dryRun                                             bool
+	stream, spaceID, datasetID, storageConf, packageRoot string
+	yes, dryRun                                          bool
 }
 
 var purgeDatasetEventSubjects = purgeDatasetEventSubjectsFromJetStream
@@ -32,8 +26,8 @@ func runPurgeDatasetEvents(ctx context.Context, args []string, stdout io.Writer)
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream")
 	fs.StringVar(&opts.spaceID, "space", "", "exact space ID")
 	fs.StringVar(&opts.datasetID, "dataset", "", "exact Dataset ID")
-	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential YAML")
-	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "override EventBus URL")
+	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage-view 的 storage.yaml 路径（用其中的网关身份访问 Admin）")
+	fs.StringVar(&opts.packageRoot, "package-root", "", "storage 包根目录")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent subject purge")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print exact subjects without purging")
 	if err := fs.Parse(args); err != nil {
@@ -71,14 +65,8 @@ func datasetEventSubjects(spaceID, datasetID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	eventTypes := []events.Event{
-		events.DatasetRowsUpserted,
-		events.CollectorPeriodCompleted,
-		events.FactorPeriodComputed,
-		events.DatasetSyncPoint,
-	}
-	subjects := make([]string, 0, len(eventTypes))
-	for _, eventType := range eventTypes {
+	subjects := make([]string, 0, len(events.StorageDatasetEvents))
+	for _, eventType := range events.StorageDatasetEvents {
 		subject, renderErr := registry.RenderSubject(eventType, strings.TrimSpace(spaceID), strings.TrimSpace(datasetID))
 		if renderErr != nil {
 			return nil, renderErr
@@ -89,78 +77,13 @@ func datasetEventSubjects(spaceID, datasetID string) ([]string, error) {
 }
 
 func purgeDatasetEventSubjectsFromJetStream(ctx context.Context, opts purgeDatasetEventsOptions, subjects []string) error {
-	credentialPath := resolveRepairCredentialFile(opts.credentialFile)
-	if credentialPath == "" {
-		return errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
-	}
-	cred, err := jetstream.LoadCredentialFile(credentialPath)
+	admin, err := openEventBusAdmin(opts.storageConf, resolveRepairPackageRoot(opts.packageRoot, opts.storageConf))
 	if err != nil {
 		return err
 	}
-	urls := cred.URLs
-	if strings.TrimSpace(opts.eventBusURL) != "" {
-		urls = []string{strings.TrimSpace(opts.eventBusURL)}
-	}
-	if err := validatePurgeEventBusURLs(urls, cred.CAFile); err != nil {
-		return err
-	}
-	natsOpts := []nats.Option{nats.Name("moox-storage-cli-purge-dataset-events"), nats.UserInfo(cred.Username, cred.Password), nats.Timeout(15 * time.Second)}
-	if cred.CAFile != "" {
-		caPath := jetstream.ExpandCredentialPath(cred.CAFile)
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
-		}
-		if err := appendNATSTLSOptions(&natsOpts, caPath); err != nil {
-			return err
-		}
-	}
-	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
-	if err != nil {
-		return err
-	}
-	defer nc.Close()
-	js, err := nc.JetStream()
-	if err != nil {
-		return err
-	}
-	for _, subject := range subjects {
-		if err := js.PurgeStream(opts.stream, &nats.StreamPurgeRequest{Subject: subject}, nats.Context(ctx)); err != nil {
-			return fmt.Errorf("purge subject %s: %w", subject, err)
-		}
-	}
-	return nil
-}
-
-// connectAdminEventBus 用管理员凭据连接 EventBus；失败时说明用的是哪份凭据文件和哪些地址。
-// 管理员凭据里的地址通常是控制机回环地址（tls://127.0.0.1:4222），在 Storage 等其他主机上用必须用 --eventbus-url 指向 EventBus
-// 的实际地址；默认路径（~/.config/moox/eventbus/internal-admin.yaml）上留着旧环境的凭据时也会得到同样的“连不上”，
-// 光看 nats 的原始报错分辨不出是哪一种。
-func connectAdminEventBus(urls []string, credentialPath string, opts ...nats.Option) (*nats.Conn, error) {
-	nc, err := nats.Connect(strings.Join(urls, ","), opts...)
-	if err != nil {
-		return nil, fmt.Errorf("连接 EventBus %s 失败（凭据文件 %s）：%w；管理员凭据里的地址通常是控制机回环地址，在其他主机上要用 --eventbus-url 指定 EventBus 的实际地址", strings.Join(urls, ","), credentialPath, err)
-	}
-	return nc, nil
-}
-
-func validatePurgeEventBusURLs(urls []string, caFile string) error {
-	if len(urls) == 0 {
-		return errors.New("EventBus URL is required")
-	}
-	for _, raw := range urls {
-		parsed, err := url.Parse(strings.TrimSpace(raw))
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return fmt.Errorf("invalid EventBus URL %q", raw)
-		}
-		host := parsed.Hostname()
-		ip := net.ParseIP(host)
-		loopback := strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())
-		if !loopback && parsed.Scheme != "tls" {
-			return fmt.Errorf("non-loopback EventBus URL %q must use tls", raw)
-		}
-		if !loopback && strings.TrimSpace(caFile) == "" {
-			return fmt.Errorf("non-loopback EventBus URL %q requires a CA file", raw)
-		}
+	defer admin.Close()
+	if err := admin.PurgeSubjects(ctx, opts.stream, subjects); err != nil {
+		return fmt.Errorf("purge subjects: %w", err)
 	}
 	return nil
 }

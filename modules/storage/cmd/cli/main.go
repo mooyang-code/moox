@@ -589,15 +589,9 @@ func registerCommonFlags(fs *flag.FlagSet, opts *commandOptions) {
 }
 
 func loadStorage(configPath string) (storageconfig.StorageConfig, error) {
-	var cfg storageconfig.RuntimeConfig
-	if configPath != "" {
-		dir := filepath.Dir(configPath)
-		file := filepath.Base(configPath)
-		if err := storageconfig.NewConfigLoader(dir).LoadConfigWithDefaults(file, &cfg, cfg.ApplyDefaults); err != nil {
-			return cfg.Storage, fmt.Errorf("load storage config %s: %w", configPath, err)
-		}
-	} else {
-		cfg.ApplyDefaults()
+	cfg, err := loadRuntimeConfig(configPath)
+	if err != nil {
+		return cfg.Storage, err
 	}
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
 		cfg.Storage.ApplyHomeRoot(root)

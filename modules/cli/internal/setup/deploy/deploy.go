@@ -1502,22 +1502,11 @@ install_storage() {
     return 1
   }
   if [ "$reset_view_data" = "1" ]; then
-		# Reset needs JetStream management permissions (consumer delete and
-		# subject purge); the storage consumer credential is intentionally scoped
-		# to data delivery and cannot publish to $JS.API.STREAM.INFO.*.
-    credential="$HOME/.config/moox/eventbus/internal-admin.yaml"
-    [ -r "$credential" ] || { echo storage_view_reset_credential_missing >&2; rollback_failed_install; return 1; }
-    reset_eventbus_url="${MOOX_STORAGE_EVENTBUS_URL:-}"
-    if [ -z "$reset_eventbus_url" ]; then
-      echo storage_view_reset_eventbus_url_missing >&2
-      rollback_failed_install
-      return 1
-    fi
+    # EventBus 的删除消费者与清除主题由 moox-storage-cli 经网关交给 Admin 执行，
+    # Storage 主机上不需要（也不放）EventBus 管理员凭据。
     if ! "$deploy/bin/moox-storage-cli" reset-view-consumers \
       --storage-conf "$deploy/storage/config/storage.yaml" \
       --package-root "$deploy" \
-      --credential-file "$credential" \
-      --eventbus-url "$reset_eventbus_url" \
       --timeout 15m \
       --restart=false --maintenance-lock-held --yes; then
       echo storage_view_reset_failed >&2

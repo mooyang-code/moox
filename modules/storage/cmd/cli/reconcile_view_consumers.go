@@ -6,15 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
 )
 
 const reconcileViewConsumersTimeout = 2 * time.Minute
@@ -26,9 +23,9 @@ type viewConsumerFilterState struct {
 }
 
 type reconcileViewConsumersOptions struct {
-	storageConf, packageRoot, stream, credentialFile, eventBusURL string
-	timeout                                                       time.Duration
-	yes, dryRun, restart                                          bool
+	storageConf, packageRoot, stream string
+	timeout                          time.Duration
+	yes, dryRun, restart             bool
 }
 
 type viewConsumerReconcileEntry struct {
@@ -60,8 +57,6 @@ func runReconcileViewConsumers(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&opts.storageConf, "storage-conf", opts.storageConf, "storage business config path")
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream")
-	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
-	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm deleting only consumers with filter drift")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect consumer drift without changing state")
@@ -97,7 +92,12 @@ func reconcileViewConsumers(ctx context.Context, opts reconcileViewConsumersOpti
 	if err != nil {
 		return err
 	}
-	actual, err := inspectViewConsumerFilters(ctx, opts)
+	admin, err := openEventBusAdmin(opts.storageConf, resolveRepairPackageRoot(opts.packageRoot, opts.storageConf))
+	if err != nil {
+		return err
+	}
+	defer admin.Close()
+	actual, err := inspectViewConsumerFilters(ctx, admin, opts.stream)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func reconcileViewConsumers(ctx context.Context, opts reconcileViewConsumersOpti
 		}
 	}()
 	for _, consumer := range sortedConsumerNames(drift) {
-		if _, err := deleteJetStreamConsumer(ctx, repairConsumerOptions{Stream: opts.stream, Consumer: consumer, CredentialFile: opts.credentialFile, EventBusURL: opts.eventBusURL}); err != nil {
+		if _, err := admin.DeleteConsumers(ctx, opts.stream, []string{consumer}); err != nil {
 			return fmt.Errorf("reset View consumer %s: %w", consumer, err)
 		}
 		summary.ResetConsumers = append(summary.ResetConsumers, consumer)
@@ -159,7 +159,6 @@ func desiredStaticViewConsumerFilters(storage storageconfig.StorageConfig) (map[
 		events.StorageViewFactorConsumer:  true,
 		events.StorageViewMetricsConsumer: true,
 	}
-	eventFamilies := []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint}
 	desired := make(map[string][]string)
 	for _, partition := range storage.View.ConsumerPartitions {
 		if !static[partition.Durable] {
@@ -169,7 +168,7 @@ func desiredStaticViewConsumerFilters(storage storageconfig.StorageConfig) (map[
 			if dataset.DatasetID == "*" {
 				return nil, fmt.Errorf("static View consumer %q must not use wildcard Dataset routes", partition.Durable)
 			}
-			for _, event := range eventFamilies {
+			for _, event := range events.StorageDatasetEvents {
 				filter, err := registry.RenderSubject(event, dataset.SpaceID, dataset.DatasetID)
 				if err != nil {
 					return nil, fmt.Errorf("render View consumer %q filter: %w", partition.Durable, err)
@@ -181,52 +180,12 @@ func desiredStaticViewConsumerFilters(storage storageconfig.StorageConfig) (map[
 	return desired, nil
 }
 
-func inspectViewConsumerFilters(ctx context.Context, opts reconcileViewConsumersOptions) (map[string]viewConsumerFilterState, error) {
-	credentialPath := resolveRepairCredentialFile(opts.credentialFile)
-	if credentialPath == "" {
-		return nil, errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
-	}
-	cred, err := jetstream.LoadCredentialFile(credentialPath)
+// inspectViewConsumerFilters 读取两个静态 View 消费者当前的过滤主题。
+func inspectViewConsumerFilters(ctx context.Context, admin eventBusAdmin, stream string) (map[string]viewConsumerFilterState, error) {
+	durables := []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer}
+	result, err := admin.Inspect(ctx, stream, durables)
 	if err != nil {
-		return nil, err
-	}
-	urls := cred.URLs
-	if strings.TrimSpace(opts.eventBusURL) != "" {
-		urls = []string{strings.TrimSpace(opts.eventBusURL)}
-	}
-	if len(urls) == 0 {
-		urls = []string{"tls://127.0.0.1:4222"}
-	}
-	natsOpts := []nats.Option{nats.Name("moox-storage-cli-reconcile-view-consumers"), nats.UserInfo(cred.Username, cred.Password), nats.Timeout(15 * time.Second)}
-	if cred.CAFile != "" {
-		caPath := jetstream.ExpandCredentialPath(cred.CAFile)
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
-		}
-		if err := appendNATSTLSOptions(&natsOpts, caPath); err != nil {
-			return nil, err
-		}
-	}
-	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
-	if err != nil {
-		return nil, err
-	}
-	defer nc.Close()
-	js, err := nc.JetStream()
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]viewConsumerFilterState)
-	for _, consumer := range []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer} {
-		info, err := js.ConsumerInfo(opts.stream, consumer, nats.Context(ctx))
-		if errors.Is(err, nats.ErrConsumerNotFound) {
-			result[consumer] = viewConsumerFilterState{}
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect View consumer %s: %w", consumer, err)
-		}
-		result[consumer] = viewConsumerFilterState{Exists: true, Filters: append([]string(nil), info.Config.FilterSubjects...), SingleFilter: info.Config.FilterSubject}
+		return nil, fmt.Errorf("inspect View consumers: %w", err)
 	}
 	return result, nil
 }

@@ -1,6 +1,7 @@
 package sysdeploy
 
 import (
+	"context"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
@@ -14,6 +15,8 @@ type ServiceImpl struct {
 	pb.UnimplementedSysDeploy
 	db          *gorm.DB
 	adminNodeID string
+	// openEventBus 为空时按库里的管理员令牌连接真实的 EventBus；测试里替换成替身。
+	openEventBus func(context.Context) (eventBusSession, error)
 }
 
 func NewService(dbManager *database.Manager, adminNodeID string) *ServiceImpl {

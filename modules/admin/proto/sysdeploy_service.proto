@@ -134,6 +134,40 @@ message DeleteDeploymentHostRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
+// EventBus 维护：由 Admin 持管理员令牌代为执行，调用方不需要在本机放管理员凭据文件。
+// 只允许 Storage View 的流、消费者和数据事件主题（服务端另有白名单校验）。
+message EventBusConsumerState {
+  string durable = 1;
+  bool exists = 2;
+  // 多主题过滤；旧式单主题过滤放在 filter_subject。
+  repeated string filter_subjects = 3;
+  string filter_subject = 4;
+}
+message InspectEventBusReq {
+  string stream = 1;
+  repeated string durables = 2;
+}
+message InspectEventBusRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated EventBusConsumerState consumers = 2;
+}
+message DeleteEventBusConsumersReq {
+  string stream = 1;
+  repeated string durables = 2;
+}
+message DeleteEventBusConsumersRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  // 实际删除的消费者；本来就不存在的不计入。
+  repeated string deleted = 2;
+}
+message PurgeEventBusSubjectsReq {
+  string stream = 1;
+  repeated string subjects = 2;
+}
+message PurgeEventBusSubjectsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+
 service SysDeploy {
   rpc GetCatalog(GetCatalogReq) returns (GetCatalogRsp);
   rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
@@ -144,4 +178,7 @@ service SysDeploy {
   rpc SetPlacementStatus(SetPlacementStatusReq) returns (SetPlacementStatusRsp);
   rpc SyncHostPlacements(SyncHostPlacementsReq) returns (SyncHostPlacementsRsp);
   rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
+  rpc InspectEventBus(InspectEventBusReq) returns (InspectEventBusRsp);
+  rpc DeleteEventBusConsumers(DeleteEventBusConsumersReq) returns (DeleteEventBusConsumersRsp);
+  rpc PurgeEventBusSubjects(PurgeEventBusSubjectsReq) returns (PurgeEventBusSubjectsRsp);
 }
