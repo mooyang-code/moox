@@ -59,6 +59,8 @@ type Request struct {
 	Deep      bool
 	// AssumeMissing 不读取行，把范围内全部应有的 K 线都当作缺失（强制重拉）。
 	AssumeMissing bool
+	// BeforeFirstPlan 让范围可以早于每个数据集最早的采集计划生效点（见 extendEarliestSegments）；默认只检查计划覆盖的时间。
+	BeforeFirstPlan bool
 }
 
 // Gap 是一段连续缺失的 K 线：[From, To) 内按频率共缺 Missing 根。
@@ -106,6 +108,9 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 	timeline, err := BuildTimeline(records)
 	if err != nil {
 		return nil, err
+	}
+	if request.BeforeFirstPlan {
+		extendEarliestSegments(timeline, request.From)
 	}
 	type job struct {
 		key      string
@@ -207,6 +212,18 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 		return a.From.Before(b.From)
 	})
 	return result, nil
+}
+
+// extendEarliestSegments 把每个数据集最早一段的起点前移到 from，让强制重拉（及其复查）能覆盖早于采集计划生效点的数据。
+// 计划只记录“从哪个周期起实时采集”，更早的数据可能来自旧的采集方式或历史导入，其中的孔洞按计划时间线看不到，
+// 只能由操作员指定范围重拉。更早时间的标的集合已无记录，沿用最早一段的标的。
+func extendEarliestSegments(timeline Timeline, from time.Time) {
+	at := from.UTC().Unix()
+	for _, segments := range timeline {
+		if len(segments) > 0 && segments[0].From > at {
+			segments[0].From = at
+		}
+	}
 }
 
 // expectedBars 返回区间内已过截止时间、应当存在的 K 线开始时间。

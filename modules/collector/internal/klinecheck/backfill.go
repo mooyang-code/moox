@@ -176,7 +176,7 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	if b == nil || b.Checker == nil || b.Store == nil {
 		return "", 0, fmt.Errorf("backfiller is not initialized")
 	}
-	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force})
+	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force, BeforeFirstPlan: request.Force})
 	if err != nil {
 		return "", 0, err
 	}
@@ -502,7 +502,8 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(fmt.Errorf("function reported failure: code=%d message=%q result=%v", result.Code, result.Message, result.Result))
 		return
 	}
-	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, From: chunk.From, To: chunk.To})
+	// 复查带上 BeforeFirstPlan：强制重拉早于计划生效点的分块要真的读回来确认；范围在计划内的分块不受影响。
+	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, From: chunk.From, To: chunk.To, BeforeFirstPlan: true})
 	if err != nil {
 		fail(fmt.Errorf("verify chunk: %w", err))
 		return

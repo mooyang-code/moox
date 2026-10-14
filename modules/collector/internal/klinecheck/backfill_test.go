@@ -71,7 +71,11 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
 
-	base := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	// 分块名额的有效期由存储层按真实时钟判断，夹具的“当前时间”不能早于真实时间，否则运行中的名额立即过期。
+	// 取下一个 5 分钟槽内、已过 2 分 30 秒偏移的时刻，计划生效点在它之前 48 小时。
+	const slot = 5 * time.Minute
+	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
+	base := now.Add(-48*time.Hour - 3*time.Minute)
 	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
 	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
 		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
@@ -91,7 +95,6 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 		rows.missing["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
 	rows.missing["ETH-USDT"][base.Add(10*time.Minute).Unix()] = true
-	now := base.Add(48*time.Hour + 3*time.Minute) // 已过扫描槽的偏移
 	checker := &Checker{Plans: db.FetchPlans(), Rows: rows, Now: func() time.Time { return now }}
 	invoker := &healingInvoker{rows: rows}
 	backfiller := &Backfiller{
@@ -148,6 +151,63 @@ func TestBackfillForceSplitsLongRangesAndRespectsInFlightLimit(t *testing.T) {
 	require.NoError(t, backfiller.Tick(ctx, "crypto"))
 	status, _ := backfiller.Status(ctx, jobID)
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+}
+
+// 强制重拉可以补采早于采集计划生效点的缺口（数据来自旧的采集方式，计划时间线之外），分块完成后读回确认；
+// 不强制时同一范围没有缺口可补。
+func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
+	backfiller, invoker, rows, base := newBackfillFixture(t)
+	ctx := context.Background()
+	gapAt := base.Add(-30 * time.Minute)
+	rows.mu.Lock()
+	rows.missing["BTC-USDT"][gapAt.Unix()] = true
+	rows.mu.Unlock()
+
+	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(time.Minute)}, "manual")
+	require.NoError(t, err)
+	require.Empty(t, jobID)
+	require.Zero(t, chunks, "不强制时生效点之前不在检查范围内")
+
+	jobID, chunks, err = backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(time.Minute), Force: true}, "manual")
+	require.NoError(t, err)
+	require.NotEmpty(t, jobID)
+	require.Equal(t, 1, chunks)
+
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	require.Len(t, invoker.events, 1)
+	rows.mu.Lock()
+	defer rows.mu.Unlock()
+	require.False(t, rows.missing["BTC-USDT"][gapAt.Unix()], "函数写入后复查已读到这根 K 线")
+}
+
+// 早于计划生效点的分块完成后同样读回确认：函数“成功”却没有写入时，多根分块按失败处理，不会被当成已补齐。
+func TestBackfillBeforeTheFirstPlanIsVerifiedByReadingBack(t *testing.T) {
+	backfiller, invoker, rows, base := newBackfillFixture(t)
+	ctx := context.Background()
+	gapAt := base.Add(-30 * time.Minute)
+	rows.mu.Lock()
+	for minute := 0; minute < 3; minute++ {
+		rows.missing["BTC-USDT"][gapAt.Add(time.Duration(minute)*time.Minute).Unix()] = true
+	}
+	rows.mu.Unlock()
+	invoker.noWrite = true
+
+	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(3 * time.Minute), Force: true}, "manual")
+	require.NoError(t, err)
+	require.Equal(t, 1, chunks)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillFailed, status.Job.Status)
+	require.Len(t, status.Failed, 1)
+	require.Contains(t, status.Failed[0].LastError, "3 bars are still missing")
 }
 
 func TestBackfillUnknownOutcomeKeepsSlotAndFailureIsReported(t *testing.T) {

@@ -97,6 +97,35 @@ func TestCheckFindsMergedGapsAcrossSubjectChanges(t *testing.T) {
 	require.Equal(t, 10, one.Expected)
 }
 
+// 采集计划只覆盖生效点之后：默认检查不看更早的时间；显式要求时把最早一段前移，更早的范围按最早一段的标的计算。
+func TestCheckReachesBeforeTheFirstPlanOnlyWhenAsked(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	rows := &fakeRows{missing: map[string]map[int64]bool{"BTC-USDT": {}, "ETH-USDT": {}}}
+	checker := &Checker{Plans: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT", "ETH-USDT")}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
+	from, to := base.Add(-10*time.Minute), base.Add(5*time.Minute)
+
+	plain, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, AssumeMissing: true})
+	require.NoError(t, err)
+	require.Equal(t, 2*5, plain.Expected, "不带 BeforeFirstPlan 时只算生效点之后的 5 根")
+
+	reach, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, AssumeMissing: true, BeforeFirstPlan: true})
+	require.NoError(t, err)
+	require.Equal(t, 2*15, reach.Expected)
+	require.Len(t, reach.Gaps, 2)
+	require.Equal(t, from, reach.Gaps[0].From, "缺口从范围起点开始，不被生效点截断")
+	require.Equal(t, 15, reach.Gaps[0].Missing)
+
+	// 读行的检查同样：生效点之前读到的缺失才会报出来。
+	rows.missing["BTC-USDT"][base.Add(-3*time.Minute).Unix()] = true
+	read, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, BeforeFirstPlan: true})
+	require.NoError(t, err)
+	require.Len(t, read.Gaps, 1)
+	require.Equal(t, base.Add(-3*time.Minute), read.Gaps[0].From)
+	hidden, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to})
+	require.NoError(t, err)
+	require.Empty(t, hidden.Gaps, "默认检查看不到生效点之前的缺口")
+}
+
 func TestCheckReadsManySubjectsInBatches(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	subjects := make([]string, 0, subjectsPerRead+20)

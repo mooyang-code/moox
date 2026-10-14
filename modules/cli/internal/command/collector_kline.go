@@ -98,7 +98,7 @@ func init() {
 	bindRange(collectorKlineCheckCmd, &klineCheckFlags, true)
 	collectorKlineCheckCmd.Flags().BoolVar(&klineCheckFlags.Deep, "deep", false, "校验每根 K 线的字段齐全")
 	bindRange(collectorKlineBackfillCmd, &klineBackfillFlags, true)
-	collectorKlineBackfillCmd.Flags().BoolVar(&klineBackfillFlags.Force, "force", false, "不检查缺口，范围内应有的 K 线全部重拉")
+	collectorKlineBackfillCmd.Flags().BoolVar(&klineBackfillFlags.Force, "force", false, "不检查缺口，范围内应有的 K 线全部重拉；范围可以早于采集计划的生效点（沿用最早一段的标的）")
 	bindRange(collectorKlineBackfillStatusCmd, &klineBackfillStatusFlags, false)
 	collectorKlineBackfillStatusCmd.Flags().StringVar(&klineBackfillStatusFlags.JobID, "job-id", "", "补采作业 ID")
 	bindRange(collectorKlineBackfillCancelCmd, &klineBackfillCancelFlags, false)
