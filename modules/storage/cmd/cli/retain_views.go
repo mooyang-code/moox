@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -107,19 +108,42 @@ func ensureStorageViewStopped(packageRoot string) error {
 	if _, err := exec.LookPath(statusPath); err != nil {
 		return fmt.Errorf("storage status script is unavailable: %w", err)
 	}
-	// status.sh is generated as a Bash script (it uses arrays and pipefail),
-	// so invoke its shebang rather than forcing the POSIX sh interpreter.
-	output, err := exec.Command(statusPath, "storage-view").CombinedOutput()
+	// status.sh 转给 moox-runtime：不接受位置参数，用 --components 选择组件，输出是 JSON。
+	output, err := exec.Command(statusPath, "--components", "storage-view").Output()
 	if err != nil {
 		return fmt.Errorf("check storage-view status: %w", err)
 	}
-	if strings.Contains(string(output), "storage-view: running") {
+	state, err := storageViewState(output)
+	if err != nil {
+		return fmt.Errorf("storage-view status is indeterminate; refusing retain-views: %w", err)
+	}
+	switch state {
+	case "stopped":
+		return nil
+	case "running":
 		return errors.New("storage-view must be stopped before retain-views")
+	default:
+		return fmt.Errorf("storage-view state is %q; refusing retain-views", state)
 	}
-	if !strings.Contains(string(output), "storage-view: stopped") {
-		return errors.New("storage-view status is indeterminate; refusing retain-views")
+}
+
+// storageViewState 从 status.sh 的 JSON 输出里取出 storage-view 的状态。
+func storageViewState(output []byte) (string, error) {
+	var status struct {
+		Components []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"components"`
 	}
-	return nil
+	if err := json.Unmarshal(output, &status); err != nil {
+		return "", fmt.Errorf("decode status output: %w", err)
+	}
+	for _, component := range status.Components {
+		if component.ID == "storage-view" {
+			return component.State, nil
+		}
+	}
+	return "", errors.New("status output has no storage-view component")
 }
 
 func retainViews(ctx context.Context, opts retainViewsOptions) (retainViewsSummary, error) {

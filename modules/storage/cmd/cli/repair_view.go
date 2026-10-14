@@ -419,7 +419,45 @@ func findLifecycleRoot(candidate string) string {
 	}
 }
 
+// nativeComponentDirs 返回原生部署里 storage-primary、storage-node、storage-view 三个组件的目录（都存在才算原生布局）。
+func nativeComponentDirs(packageRoot string) (primary, node, view string, ok bool) {
+	root := strings.TrimSpace(packageRoot)
+	if root == "" {
+		return "", "", "", false
+	}
+	dirs := [3]string{filepath.Join(root, "storage-primary"), filepath.Join(root, "storage-node"), filepath.Join(root, "storage-view")}
+	for _, dir := range dirs {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return "", "", "", false
+		}
+	}
+	return dirs[0], dirs[1], dirs[2], true
+}
+
+// resolveRepairStoragePaths 把配置里的相对数据路径解析成绝对路径。
+//
+// 原生部署里三个角色各有目录与配置（<包根>/<组件>/config/storage.yaml），配置里的数据路径（./var/storage/...）
+// 相对于所属组件的目录，而不是相对于被读取的那一份配置：元数据库在 storage-primary，Pebble 在 storage-node，
+// View 索引在 storage-view。只按被读取配置所在的组件目录解析，会把 Pebble、索引指到不存在的目录，
+// “重置全部数据”删不到真正的数据却照样清空事件流。没有这三个组件目录时（单目录布局）按配置所在目录解析。
 func resolveRepairStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
+	if primary, node, view, ok := nativeComponentDirs(packageRoot); ok {
+		join := func(dir, path string) string {
+			if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
+				return path
+			}
+			return filepath.Clean(filepath.Join(dir, path))
+		}
+		storage.Root = join(primary, storage.Root)
+		storage.Metadata.Path = join(primary, storage.Metadata.Path)
+		storage.Devices.PebblePath = join(node, storage.Devices.PebblePath)
+		storage.Devices.ViewIndexRoot = join(view, storage.Devices.ViewIndexRoot)
+		return storage
+	}
+	return resolveSingleDirStoragePaths(storage, packageRoot, configPath)
+}
+
+func resolveSingleDirStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
 	// Runtime configs use paths relative to their component directory while
 	// lifecycle scripts live at the deployment root. Keep those bases separate:
 	// <deploy>/storage/config/storage.yaml with root ../data/storage resolves to
@@ -818,6 +856,16 @@ func resolveRepairCredentialFile(configured string) string {
 	return ""
 }
 
+// lifecycleScriptArgs 是传给 start.sh / stop.sh 的参数。原生部署的脚本转给 moox-runtime，它不接受位置参数：
+// 整个 Storage 单元（serviceName 为 "storage"）不带参数，单个组件用 --components 选择。
+func lifecycleScriptArgs(serviceName string) []string {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" || serviceName == "storage" {
+		return nil
+	}
+	return []string{"--components", serviceName}
+}
+
 func runStorageViewLifecycle(ctx context.Context, packageRoot, action, deliverPolicy string, stderr io.Writer) error {
 	return runStorageComponentLifecycle(ctx, packageRoot, action, "storage-view", stderr)
 }
@@ -835,7 +883,7 @@ func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, a
 	if info, err := os.Stat(script); err != nil || info.IsDir() {
 		return fmt.Errorf("storage package %s is unavailable", packageRoot)
 	}
-	cmd := exec.CommandContext(ctx, script, serviceName)
+	cmd := exec.CommandContext(ctx, script, lifecycleScriptArgs(serviceName)...)
 	cmd.Dir = packageRoot
 	cmd.Stderr = stderr
 	cmd.Stdout = stderr

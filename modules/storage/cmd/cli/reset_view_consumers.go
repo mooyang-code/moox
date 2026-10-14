@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -423,6 +425,32 @@ func validateResetPrimaryPath(path, packageRoot string) (string, error) {
 
 // waitResetViewReady waits for storage-view to be ready and, when
 // requireActive is set, for every active View to have an active index.
+// nativeStorageViewReady 用原生部署的 healthcheck.sh 判断 storage-view 是否就绪：健康检查需要认证，凭据由运行助手持有，
+// 自己拼 HTTP 请求在原生部署里只会一直得到 401。脚本不存在（非原生布局）时 available 为 false。
+func nativeStorageViewReady(ctx context.Context, packageRoot string) (ready, available bool) {
+	script := filepath.Join(strings.TrimSpace(packageRoot), "healthcheck.sh")
+	if info, err := os.Stat(script); err != nil || info.IsDir() {
+		return false, false
+	}
+	// 就绪与否看输出里的 ready 字段；未就绪时脚本可能以非零退出，不能把退出码当成“不可用”。
+	output, _ := exec.CommandContext(ctx, script, "--components", "storage-view").Output()
+	var status struct {
+		Components []struct {
+			ID    string `json:"id"`
+			Ready bool   `json:"ready"`
+		} `json:"components"`
+	}
+	if json.Unmarshal(output, &status) != nil {
+		return false, true
+	}
+	for _, component := range status.Components {
+		if component.ID == "storage-view" {
+			return component.Ready, true
+		}
+	}
+	return false, true
+}
+
 func waitResetViewReady(ctx context.Context, dbPath string, requireActive bool, packageRoot string) error {
 	url := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_HEALTH_URL"))
 	if url == "" {
@@ -432,26 +460,31 @@ func waitResetViewReady(ctx context.Context, dbPath string, requireActive bool, 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
+		healthy := false
+		if native, available := nativeStorageViewReady(ctx, packageRoot); available {
+			healthy = native
+		} else {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+			if header, authErr := resetHealthAuthHeader(req.URL, packageRoot); authErr == nil && header != "" {
+				req.Header.Set("X-Moox-Health-Auth", header)
+			} else if authErr != nil {
+				return fmt.Errorf("build health authentication: %w", authErr)
+			}
+			if resp, requestErr := client.Do(req); requestErr == nil {
+				_ = resp.Body.Close()
+				healthy = resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
+			}
 		}
-		if header, authErr := resetHealthAuthHeader(req.URL, packageRoot); authErr == nil && header != "" {
-			req.Header.Set("X-Moox-Health-Auth", header)
-		} else if authErr != nil {
-			return fmt.Errorf("build health authentication: %w", authErr)
-		}
-		resp, requestErr := client.Do(req)
-		if requestErr == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-				if !requireActive {
-					return nil
-				}
-				ready, err := resetViewsActive(ctx, dbPath)
-				if err == nil && ready {
-					return nil
-				}
+		if healthy {
+			if !requireActive {
+				return nil
+			}
+			ready, err := resetViewsActive(ctx, dbPath)
+			if err == nil && ready {
+				return nil
 			}
 		}
 		select {
