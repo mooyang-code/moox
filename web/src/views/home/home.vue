@@ -1,571 +1,478 @@
 <template>
-  <div class="moox-home dashboard-shell">
-    <!-- 无空间：引导 -->
-    <section v-if="!selectedSpaceId" class="onboard">
-      <div class="onboard-copy">
-        <h1>从这里开始你的量化数据栈</h1>
-        <p>
-          MOOX 把行情采集、时序存储、因子计算与宽表查询串成一条链路。
-          先创建一个<strong>空间</strong>，所有采集配置与计算资源都在空间内隔离管理。
-        </p>
-        <a-button type="primary" status="success" size="large" @click="go('/settings/spaces')"> 创建第一个空间 </a-button>
-      </div>
-      <ol class="onboard-steps">
-        <li v-for="(step, i) in setupSteps" :key="step.title">
-          <span class="step-idx">{{ i + 1 }}</span>
-          <div>
-            <strong>{{ step.title }}</strong>
-            <p>{{ step.description }}</p>
-          </div>
-        </li>
-      </ol>
-    </section>
-
-    <template v-else>
-      <section class="dash-command">
-        <div class="dash-command-main">
-          <div class="dash-kicker">
-            <span>{{ greeting }}，{{ displayUserName }}</span>
-            <transition name="banner-slogan" mode="out-in">
-              <b :key="activeSlogan.headline">{{ activeSlogan.headline }}</b>
-            </transition>
-          </div>
-          <h1>量化系统驾驶舱</h1>
-          <transition name="banner-slogan" mode="out-in">
-            <p :key="activeSlogan.subtitle">{{ activeSlogan.subtitle }}</p>
-          </transition>
-        </div>
-
-        <div class="health-score-card" :class="`tone-${serviceSummary.tone}`">
-          <span class="score-label">组件健康率</span>
-          <strong>{{ fmt(healthScore) }}</strong>
-          <small>% · {{ serviceSummary.note }}</small>
-          <div class="score-bar">
-            <span :style="{ width: `${healthScore || 0}%` }"></span>
-          </div>
-        </div>
+  <div class="moox-page home-page">
+    <div class="moox-inner home">
+      <section v-if="!selectedSpaceId" class="home-empty">
+        <h2>还没有可用的空间</h2>
+        <p>空间是采集、因子、策略与交易的隔离边界。先创建一个空间，再配置数据源和采集任务。</p>
+        <a-button type="primary" status="success" @click="go('/settings/spaces')">新建空间</a-button>
       </section>
 
-      <section class="kpi-grid">
-        <button
-          v-for="item in dashboardKpis"
-          :key="item.key"
-          class="kpi-card"
-          :class="`tone-${item.tone}`"
-          @click="go(item.path)"
-        >
-          <span class="kpi-label">{{ item.label }}</span>
-          <strong>
-            {{ item.value }}
-            <small v-if="item.unit">{{ item.unit }}</small>
-          </strong>
-          <span class="kpi-note">{{ item.note }}</span>
-          <span class="kpi-delta">{{ item.delta }}</span>
-        </button>
-      </section>
-
-      <div class="dashboard-grid">
-        <section class="dash-card health-breakdown-card">
-          <div class="dash-card-head">
-            <div>
-              <h2>组件健康统计</h2>
-              <p>按主机与组件的实际健康观测统计。</p>
+      <template v-else>
+        <section class="banner" :class="`is-${status.tone}`">
+          <div class="banner-main">
+            <div class="banner-meta">
+              {{ greeting }}，{{ userName }} · {{ todayText }}<template v-if="spaceName"> · {{ spaceName }}</template>
             </div>
-            <span class="dash-chip">Monitor</span>
-          </div>
-          <div class="score-breakdown">
-            <div v-for="item in healthBreakdown" :key="item.key" class="score-line" :class="`tone-${item.tone}`">
-              <div class="score-line-meta">
-                <strong>{{ item.label }}</strong>
-                <span>{{ item.note }}</span>
-              </div>
-              <div class="score-line-meter">
-                <span :style="{ width: `${Math.round((item.max ? item.score / item.max : 0) * 100)}%` }"></span>
-              </div>
-              <b>{{ item.score }}/{{ item.max }}</b>
+            <div class="banner-status">
+              <span class="status-icon" :class="`is-${status.tone}`"><component :is="statusIcon" /></span>
+              <h2>{{ status.text }}</h2>
             </div>
+            <div class="banner-facts">
+              <span v-for="fact in facts" :key="fact.key"
+                >{{ fact.label }} <b :class="`is-${fact.tone}`">{{ fact.value }}</b></span
+              >
+            </div>
+            <nav class="banner-links" aria-label="常用入口">
+              <button v-for="link in quickLinks" :key="link.label" type="button" class="quick" @click="go(link.target)">
+                <component :is="link.icon" />{{ link.label }}
+              </button>
+            </nav>
           </div>
+          <aside class="health-card" aria-label="系统健康">
+            <span class="health-card__label">系统健康</span>
+            <div class="health-card__value">
+              <strong>{{ services.percent === undefined ? "—" : `${services.percent}%` }}</strong>
+              <span v-if="services.available">{{ services.healthy }}/{{ services.total }} 组件</span>
+            </div>
+            <div class="meter"><i :class="`is-${services.tone}`" :style="{ width: `${services.percent || 0}%` }" /></div>
+            <span class="health-card__foot">{{ hosts.length }} 台主机 · {{ alertCount }} 告警</span>
+            <span class="health-card__foot health-card__time"
+              >更新于 {{ updatedAt || "—" }}
+              <a class="refresh" :class="{ 'is-busy': refreshing }" @click="manualRefresh">刷新</a></span
+            >
+          </aside>
         </section>
 
-        <section class="dash-card freshness-card">
-          <div class="dash-card-head compact">
-            <div>
-              <h2>数据新鲜度</h2>
-              <p>最近入库与延迟监控</p>
-            </div>
-            <span class="dash-chip">链路观测</span>
-          </div>
-          <p v-if="!stalenessItems.length" class="muted">暂无数据链路观测</p>
-          <div class="freshness-list">
-            <button
-              v-for="item in stalenessItems"
-              :key="item.name"
-              class="freshness-row"
-              :class="`tone-${item.tone}`"
-              @click="go('/collector/tasks?tab=results')"
+        <section class="kpis" aria-label="关键指标">
+          <button v-for="card in kpis" :key="card.key" type="button" class="kpi" @click="go(card.target)">
+            <span class="kpi-label"><component :is="card.icon" :class="`is-${card.tone}`" />{{ card.label }}</span>
+            <span class="kpi-value"
+              >{{ card.value }}<small>{{ card.unit }}</small></span
             >
-              <span>
-                <strong>{{ item.name }}</strong>
-                <small>{{ item.dataset }}</small>
+            <span class="kpi-note" :class="`is-${card.tone}`">{{ card.note }}</span>
+          </button>
+        </section>
+
+        <div class="tiles">
+          <section class="tile tile-strategy" aria-label="策略持仓">
+            <header class="tile-head">
+              <h3>
+                策略持仓<small>{{ strategies.length }}</small>
+              </h3>
+              <span class="tile-head__side">
+                <template v-if="strategies.length > 1">
+                  <a aria-label="上一个实例" @click="stepStrategy(-1)"><icon-left /></a>
+                  <span>{{ Math.min(strategyIndex, strategies.length - 1) + 1 }} / {{ strategies.length }}</span>
+                  <a aria-label="下一个实例" @click="stepStrategy(1)"><icon-right /></a>
+                </template>
+                <a @click="go(resultsLink())">运行结果 →</a>
               </span>
-              <b>{{ item.delay }}</b>
-              <em>{{ healthStatusLabel(item.status) }}</em>
-            </button>
-          </div>
-        </section>
+            </header>
+            <div class="tile-body">
+              <p v-if="!currentStrategy" class="tile-empty">
+                {{ strategyLoaded ? "还没有策略实例" : "读取中…" }}
+                <a v-if="strategyLoaded" @click="go(instancesLink({ create: true }))">新建实例</a>
+              </p>
+              <template v-else>
+                <button type="button" class="strategy-head" @click="go(currentStrategy.link)">
+                  <span class="dot" :class="`is-${currentStrategy.tone}`" />
+                  <b class="ellipsis">{{ currentStrategy.name }}</b>
+                  <span class="strategy-state" :class="`is-${currentStrategy.tone}`">{{ currentStrategy.state.label }}</span>
+                  <span class="strategy-when">最近一期 {{ currentStrategy.lastBar }}</span>
+                </button>
+                <p v-if="!currentStrategy.holdings.length" class="tile-empty">
+                  {{ currentStrategy.enabled ? "暂无目标" : "已停用，不再产出目标" }}
+                </p>
+                <div v-else class="weights">
+                  <template v-for="item in currentStrategy.holdings" :key="item.id">
+                    <span class="ellipsis" :title="item.id">{{ item.id }}</span>
+                    <div class="meter">
+                      <i :class="item.short ? 'is-bad' : 'is-ok'" :style="{ width: `${item.ratio * 100}%` }" />
+                    </div>
+                    <span class="num">{{ item.weight }}</span>
+                  </template>
+                  <template v-if="currentStrategy.cash">
+                    <span class="muted">现金</span>
+                    <div class="meter"><i class="is-idle" :style="{ width: `${currentStrategy.cash.ratio * 100}%` }" /></div>
+                    <span class="num muted">{{ currentStrategy.cash.text }}</span>
+                  </template>
+                </div>
+              </template>
+            </div>
+            <footer class="tile-foot">
+              <a v-if="currentStrategy && currentStrategy.more" @click="go(currentStrategy.link)"
+                >另有 {{ currentStrategy.more }} 个标的</a
+              >
+            </footer>
+          </section>
 
-        <section class="dash-card incident-card span-2">
-          <div class="dash-card-head">
-            <div>
-              <h2>待处理事项</h2>
-              <p>把会影响日常量化运行的问题放到首页。</p>
+          <section class="tile tile-attention" aria-label="需要处理">
+            <header class="tile-head">
+              <h3>
+                需要处理<small v-if="attention.length" class="is-warn">{{ attention.length }}</small>
+              </h3>
+              <a @click="go('/ops/monitor')">监控 →</a>
+            </header>
+            <div class="tile-body">
+              <div v-if="!attention.length" class="all-clear">
+                <component :is="statusIcon" :class="`is-${status.tone}`" />
+                <span>{{ overview || monitorError ? (monitorError ? "监控数据暂不可用" : "一切正常") : "读取中…" }}</span>
+                <small v-if="updatedAt">最近检查 {{ updatedAt }}</small>
+              </div>
+              <button
+                v-for="item in foldedAttention.shown"
+                :key="item.key"
+                type="button"
+                class="line attention-line"
+                :title="item.detail"
+                @click="go(item.target)"
+              >
+                <span class="dot" :class="`is-${item.tone}`" />
+                <span class="ellipsis"
+                  >{{ item.title }}<em v-if="item.detail"> · {{ item.detail }}</em></span
+                >
+                <span class="muted">{{ item.when || item.source }}</span>
+              </button>
             </div>
-            <span class="dash-chip danger">{{ incidentItems.length }} 项</span>
-          </div>
-          <p v-if="!incidentItems.length" class="muted">暂无可展示告警</p>
-          <div class="incident-table">
-            <button
-              v-for="item in incidentItems"
-              :key="item.title"
-              class="incident-row"
-              :class="`tone-${item.tone}`"
-              @click="go(item.path)"
-            >
-              <span class="incident-level">{{ item.level }}</span>
-              <strong>{{ item.title }}</strong>
-              <span>{{ item.meta }}</span>
-              <b>{{ item.action }}</b>
-            </button>
-          </div>
-        </section>
+            <footer class="tile-foot">
+              <a v-if="foldedAttention.hidden" @click="go('/ops/monitor')">另有 {{ foldedAttention.hidden }} 项</a>
+            </footer>
+          </section>
 
-        <section class="dash-card pipeline-card">
-          <div class="dash-card-head compact">
-            <div>
-              <h2>数据链路</h2>
-              <p>资产到视图的完整度</p>
+          <section class="tile tile-third" aria-label="因子计算">
+            <header class="tile-head">
+              <h3>
+                因子计算<small>{{ factors.length }}</small>
+              </h3>
+              <a @click="go('/factor/tasks?tab=results')">计算结果 →</a>
+            </header>
+            <div class="tile-body">
+              <p v-if="!factors.length" class="tile-empty">{{ factorLoaded ? "当前空间没有计算任务" : "读取中…" }}</p>
+              <template v-else>
+                <div class="line line-head factor-cols"><span>任务</span><span>最近周期</span><span>滞后</span></div>
+                <button
+                  v-for="row in foldedFactors.shown"
+                  :key="row.setId"
+                  type="button"
+                  class="line factor-cols"
+                  :title="`${row.label}：${row.factors} 个因子`"
+                  @click="go(row.path)"
+                >
+                  <span class="ellipsis"><span class="dot" :class="`is-${row.tone}`" />{{ row.label }}</span>
+                  <span>{{ row.lastPeriod }}</span>
+                  <span :class="{ 'is-warn': row.tone !== 'ok' }">{{ row.lag }}</span>
+                </button>
+              </template>
             </div>
-          </div>
-          <div class="pipeline-compact">
-            <button v-for="node in pipeline" :key="node.key" class="pipeline-step" @click="go(node.path)">
-              <span>{{ node.label }}</span>
-              <strong>{{ fmt(counts[node.key]) }}</strong>
-            </button>
-          </div>
-        </section>
+            <footer class="tile-foot">
+              <a v-if="foldedFactors.hidden" @click="go('/factor/tasks')">另有 {{ foldedFactors.hidden }} 项</a>
+            </footer>
+          </section>
 
-        <section class="dash-card trade-card">
-          <div class="dash-card-head compact">
-            <div>
-              <h2>执行账户摘要</h2>
-              <p>已登记账户；实时状态请查看账户页面</p>
+          <section class="tile tile-third" aria-label="数据新鲜度">
+            <header class="tile-head">
+              <h3>
+                数据新鲜度<small>{{ freshness.length }}</small>
+              </h3>
+              <a @click="go('/collector/tasks?tab=results')">采集结果 →</a>
+            </header>
+            <div class="tile-body">
+              <p v-if="!freshness.length" class="tile-empty">
+                {{ monitorError ? "监控数据暂不可用" : overview ? "暂无数据链路观测" : "读取中…" }}
+              </p>
+              <button
+                v-for="row in foldedFreshness.shown"
+                :key="row.key"
+                type="button"
+                class="line fresh-cols"
+                :title="row.reason || `${row.stage} · ${row.name} ${row.freq}`"
+                @click="go(row.path)"
+              >
+                <span class="ellipsis"
+                  ><span class="dot" :class="`is-${row.tone}`" /><span class="muted">{{ row.stage }} · </span>{{ row.name
+                  }}<em v-if="row.freq"> · {{ row.freq }}</em></span
+                >
+                <span :class="{ 'is-warn': row.tone === 'warn', 'is-bad': row.tone === 'bad' }">{{ row.lag }}</span>
+              </button>
             </div>
-            <span class="dash-chip">{{ fmt(tradeSummary.total) }} 个账户</span>
-          </div>
-          <div class="trade-metrics">
-            <div v-for="item in tradeMetrics" :key="item.label">
-              <span>{{ item.label }}</span>
-              <strong>{{ item.value }}</strong>
-            </div>
-          </div>
-          <a-button type="text" @click="go('/trading/accounts')">查看账户</a-button>
-        </section>
+            <footer class="tile-foot">
+              <a v-if="foldedFreshness.hidden" @click="go('/ops/monitor')">另有 {{ foldedFreshness.hidden }} 项</a>
+            </footer>
+          </section>
 
-        <section class="dash-card ops-card">
-          <div class="dash-card-head compact">
-            <div>
-              <h2>服务与资源</h2>
-              <p>网关、服务、主机资源</p>
+          <section class="tile tile-third" aria-label="主机资源">
+            <header class="tile-head">
+              <h3>
+                主机资源<small>{{ hosts.length }}</small>
+              </h3>
+              <a @click="go('/ops/monitor')">服务 {{ services.available ? `${services.healthy}/${services.total}` : "—" }} →</a>
+            </header>
+            <div class="tile-body">
+              <p v-if="!hosts.length" class="tile-empty">
+                {{ monitorError ? "监控数据暂不可用" : overview ? "没有上报的主机" : "读取中…" }}
+              </p>
+              <template v-else>
+                <div class="line line-head host-cols"><span>主机</span><span>CPU</span><span>内存</span><span>磁盘</span></div>
+                <button
+                  v-for="row in foldedHosts.shown"
+                  :key="row.key"
+                  type="button"
+                  class="line host-cols"
+                  @click="go(row.path)"
+                >
+                  <span class="ellipsis" :title="row.name"><span class="dot" :class="`is-${row.tone}`" />{{ row.name }}</span>
+                  <span :class="{ 'is-warn': row.hot.cpu }">{{ row.cpu }}</span>
+                  <span :class="{ 'is-warn': row.hot.memory }">{{ row.memory }}</span>
+                  <span :class="{ 'is-warn': row.hot.disk }">{{ row.disk }}</span>
+                </button>
+              </template>
             </div>
-          </div>
-          <p v-if="healthError" class="muted">{{ healthError }}</p>
-          <p v-else-if="!healthOverview" class="muted">健康数据加载中</p>
-          <div class="service-lines">
-            <button
-              v-for="dep in visibleDeployments"
-              :key="dep.key"
-              class="service-line"
-              :class="`tone-${dep.tone}`"
-              @click="go(dep.path)"
-            >
-              <span>{{ dep.name }}</span>
-              <b>{{ healthStatusLabel(dep.status) }}</b>
-              <em>{{ dep.addr }}</em>
-            </button>
-          </div>
-          <div class="resource-lines">
-            <span class="resource-caption">资源负载</span>
-            <button
-              v-for="host in visibleHosts"
-              :key="host.key"
-              class="resource-line"
-              :class="`tone-${host.tone}`"
-              @click="go(host.path)"
-            >
-              <span>{{ host.name }}</span>
-              <b>CPU {{ host.cpu }}</b>
-              <em>MEM {{ host.memory }}</em>
-            </button>
-          </div>
-        </section>
+            <footer class="tile-foot">
+              <a v-if="foldedHosts.hidden" @click="go('/ops/hosts')">另有 {{ foldedHosts.hidden }} 台</a>
+            </footer>
+          </section>
 
-        <section class="dash-card actions-card">
-          <div class="dash-card-head compact">
-            <div>
-              <h2>高频操作</h2>
-              <p>日常检查入口</p>
+          <section class="tile tile-wide" aria-label="最近动态">
+            <header class="tile-head">
+              <h3>最近动态</h3>
+              <a @click="go('/ops/activity')">活动日志 →</a>
+            </header>
+            <div class="tile-body activity-body">
+              <p v-if="!activity.length" class="tile-empty">{{ activityLoaded ? "暂无动态" : "读取中…" }}</p>
+              <div v-for="row in activity" :key="row.key" class="line activity-line" :title="row.title">
+                <span class="muted">{{ row.when }}</span>
+                <span class="ellipsis">{{ row.title }}</span>
+              </div>
             </div>
-          </div>
-          <div class="action-grid">
-            <button v-for="item in workflowLinks" :key="item.path" class="action-tile" @click="go(item.path)">
-              <b>{{ item.icon }}</b>
-              <span>{{ item.title }}</span>
-              <small>{{ item.description }}</small>
-            </button>
-          </div>
-        </section>
-      </div>
-    </template>
+          </section>
+        </div>
+
+        <footer class="inventory" aria-label="资产">
+          <a v-for="item in inventory" :key="item.label" @click="go(item.path)"
+            >{{ item.label }} <b>{{ fmt(item.value) }}</b></a
+          >
+        </footer>
+      </template>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts" name="Home">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { storeToRefs } from "pinia";
+import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
+import { callControl } from "@/api/admin/http";
+import { getNodeList } from "@/api/cloud-node";
+import { listFactorSets } from "@/api/factor";
+import type { FactorSetInfo } from "@/api/factor/types";
+import { monitorApi, type HealthOverview } from "@/api/monitor";
+import { listDataSources, listDatasets, listViews } from "@/api/storage/metadata";
+import type { Dataset, View } from "@/api/storage/types";
+import { listInstances, listStrategies, listStrategyTargets } from "@/api/strategy";
+import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
+import { listTradingAccounts } from "@/api/trade";
+import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
-import { listFactorSets } from "@/api/factor";
-import { listDataSources, listDatasets, listSubjects, listViews } from "@/api/storage/metadata";
-import type { Dataset, PageResult, View } from "@/api/storage/types";
-import { pageResultTotal } from "@/views/data/shared/metadata-utils";
-import {
-  datasetMatchesAttribution,
-  isLikelyFactorResultDataset,
-  isLikelyFactorResultDatasetId,
-  viewMatchesAttribution
-} from "@/views/data/shared/module-attribution";
-import { getFetchPlans } from "@/api/collector/fetch-plan";
-import { callControl } from "@/api/admin/http";
-import { monitorApi, type HealthOverview } from "@/api/monitor";
-import { alertHref } from "@/views/ops/monitor/health-display";
-import { statusLabel as healthStatusLabel } from "@/views/ops/monitor/health-display";
-import { serviceHealth } from "./service-health";
-import { listTradingAccounts } from "@/api/trade";
-
-import { getNodeList } from "@/api/cloud-node";
 import { RequestGate } from "@/utils/request-gate";
+import { datasetMatchesAttribution, isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
+import { alertHref } from "@/views/ops/monitor/health-display";
+import { instancesLink, replayLink, resultsLink } from "@/views/strategy/links";
+import {
+  TILE_LIMITS,
+  activityRows,
+  attentionItems,
+  bannerFacts,
+  factorRows,
+  fold,
+  freshnessRows,
+  hostRows,
+  kpiCards,
+  statusLine,
+  strategyRows,
+  toneIcon,
+  type HomeTarget,
+  type NameBook
+} from "./home-model";
+import { serviceHealth } from "./service-health";
+
+const TARGET_FETCH_LIMIT = 12;
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
-const userInfoStore = useUserInfoStore();
-const { selectedSpaceId } = storeToRefs(spaceStore);
-const { account } = storeToRefs(userInfoStore);
-const displayUserName = computed(() => account.value.user?.userName || account.value.user?.nickName || "Trader");
+const userStore = useUserInfoStore();
+const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
+const spaceName = computed(() => spaceStore.selectedSpace?.name || "");
 
-const currentHour = new Date().getHours();
-const greeting = computed(() => {
-  const h = currentHour;
-  if (h < 6) return "凌晨好";
-  if (h < 12) return "早上好";
-  if (h < 18) return "下午好";
-  return "晚上好";
-});
+const nowMs = ref(Date.now());
+const updatedAt = ref("");
+const refreshing = ref(false);
 
-const bannerSlogans = [
-  { headline: "Quant. Trade. Win.", subtitle: "数字背后是逻辑，逻辑背后是优势" },
-  { headline: "Code. Backtest. Deploy.", subtitle: "每一行策略代码，都是对市场的一次深刻理解" },
-  { headline: "Signal. Edge. Alpha.", subtitle: "在噪声中寻找信号，在混沌中建立优势" },
-  { headline: "Think. Model. Execute.", subtitle: "用系统的力量，对抗市场的随机性" },
-  { headline: "Data. Strategy. Freedom.", subtitle: "让算法替你工作，让数据为你决策" },
-  { headline: "Logic. Risk. Reward.", subtitle: "控制好每一次回撤，才能守住每一分收益" },
-  { headline: "Predict. Position. Profit.", subtitle: "预测不是玄学，是概率与模型的艺术" },
-  { headline: "Noise. Filter. Clarity.", subtitle: "过滤市场的喧嚣，只追踪真正有效的信号" },
-  { headline: "Pattern. Probability. Edge.", subtitle: "重复出现的规律，就是可以被利用的优势" },
-  { headline: "Market. Math. Mastery.", subtitle: "用数学丈量市场，用逻辑掌控交易" },
-  { headline: "Build. Test. Evolve.", subtitle: "策略不是一成不变的，进化才是长期生存之道" },
-  { headline: "Price. Volume. Truth.", subtitle: "价格和成交量，是市场留下的唯一真相" },
-  { headline: "Entropy. Order. Profit.", subtitle: "在市场的混沌中，寻找短暂却真实的秩序" },
-  { headline: "Asymmetry. Leverage. Compound.", subtitle: "寻找不对称的赔率，是量化交易最迷人的地方" },
-  { headline: "Flow. Trend. Ride.", subtitle: "顺势而为不是妥协，是对市场规律最深的尊重" }
-];
-
-function pickRandomSloganIndex(currentIndex?: number) {
-  if (bannerSlogans.length <= 1) {
-    return 0;
-  }
-
-  if (currentIndex === undefined) {
-    return Math.floor(Math.random() * bannerSlogans.length);
-  }
-
-  const nextIndex = Math.floor(Math.random() * (bannerSlogans.length - 1));
-  return nextIndex >= currentIndex ? nextIndex + 1 : nextIndex;
-}
-
-const activeSloganIndex = ref(pickRandomSloganIndex());
-const activeSlogan = computed(() => bannerSlogans[activeSloganIndex.value]);
-let bannerTimer: ReturnType<typeof setInterval> | null = null;
-
+// 空间范围的名称与资产数量：切空间时整体重读，旧空间晚到的响应由 spaceLoadGate 丢弃。
+const names = reactive<NameBook>({ datasets: {}, views: {} });
 const counts = reactive<Record<string, number | null>>({
   sources: null,
   rules: null,
   datasets: null,
-  views: null,
-  factors: null,
   factorSets: null,
+  factors: null,
+  instances: null,
   accounts: null,
-  subjects: null,
-  tasks: null
+  nodes: null
 });
-const taskCountLabel = ref<string | null>(null);
 const spaceLoadGate = new RequestGate();
 
-const pipeline = [
-  { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
-  { key: "rules", stage: "02", label: "采集任务", color: "#0d9488", path: "/collector/tasks" },
-  { key: "datasets", stage: "03", label: "采集结果", color: "#059669", path: "/collector/tasks?tab=results" },
-  { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
-  { key: "factorSets", stage: "05", label: "计算任务", color: "#ea580c", path: "/factor/tasks" },
-  { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
-];
+// 实时部分：监控概览、因子任务、策略实例与目标、最近动态，定时刷新。
+const overview = ref<HealthOverview>();
+const monitorError = ref("");
+const factorSets = ref<FactorSetInfo[]>([]);
+const factorLoaded = ref(false);
+const instances = ref<StrategyInstance[]>([]);
+const targets = ref<Record<string, StrategyTargetSnapshot>>({});
+const catalog = ref<Strategy[]>([]);
+const strategyLoaded = ref(false);
+const activityItems = ref<ActivityLogItem[]>([]);
+const activityLoaded = ref(false);
+const liveLoadGate = new RequestGate();
 
-const workflowLinks = [
-  {
-    title: "K 线浏览",
-    description: "检查最新 bar 是否入库",
-    path: "/collector/tasks?tab=results",
-    icon: "K",
-    tint: "rgba(59, 111, 217, 12%)"
-  },
-  {
-    title: "索引查询",
-    description: "查看采集结果上的索引",
-    path: "/collector/tasks?tab=results",
-    icon: "Q",
-    tint: "rgba(234, 88, 12, 12%)"
-  },
-  {
-    title: "采集实例",
-    description: "函数分配、标的变更与补采作业",
-    path: "/collector/tasks?tab=instances",
-    icon: "T",
-    tint: "rgba(13, 148, 136, 12%)"
-  },
-  {
-    title: "采集结果",
-    description: "查看采集任务产生的真实数据",
-    path: "/collector/tasks?tab=results",
-    icon: "D",
-    tint: "rgba(5, 150, 105, 12%)"
-  },
-  {
-    title: "因子结果",
-    description: "查看因子计算写回结果",
-    path: "/factor/tasks?tab=results",
-    icon: "F",
-    tint: "rgba(192, 38, 211, 12%)"
-  },
-  { title: "执行账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
-];
+const factors = computed(() => factorRows(factorSets.value, selectedSpaceId.value || "", names, nowMs.value));
+const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value));
+const freshness = computed(() => freshnessRows(overview.value, names));
+const hosts = computed(() => hostRows(overview.value?.hosts || []));
+const foldedFreshness = computed(() => fold(freshness.value, TILE_LIMITS.freshness));
+const foldedFactors = computed(() => fold(factors.value, TILE_LIMITS.factors));
+const foldedHosts = computed(() => fold(hosts.value, TILE_LIMITS.hosts));
+const foldedAttention = computed(() => fold(attention.value, TILE_LIMITS.attention));
+const activity = computed(() => activityRows(activityItems.value, names, nowMs.value).slice(0, TILE_LIMITS.activity));
+const attention = computed(() =>
+  attentionItems({
+    alerts: monitorError.value ? [] : overview.value?.alerts || [],
+    strategy: { instances: instances.value, targets: targets.value, catalog: catalog.value },
+    factors: factors.value,
+    freshness: freshness.value,
+    names,
+    nowMs: nowMs.value,
+    alertTarget: alert => alertHref(alert).replace(/^#/, "")
+  })
+);
+const status = computed(() =>
+  statusLine({ attention: attention.value, overview: overview.value, monitorError: monitorError.value })
+);
+const alertCount = computed(() => (monitorError.value ? "—" : String(overview.value?.summary?.alert_count ?? 0)));
+const statusIcon = computed(() => toneIcon(status.value.tone));
+const services = computed(() => serviceHealth(overview.value, monitorError.value));
+const facts = computed(() =>
+  bannerFacts({ strategies: strategies.value, factors: factors.value, freshness: freshness.value, nowMs: nowMs.value })
+);
+const kpis = computed(() =>
+  kpiCards({
+    strategies: strategies.value,
+    strategyLoaded: strategyLoaded.value,
+    factors: factors.value,
+    factorLoaded: factorLoaded.value,
+    freshness: freshness.value,
+    alertCount: monitorError.value ? undefined : overview.value?.summary?.alert_count,
+    monitorError: monitorError.value
+  })
+);
 
-const setupSteps = [
-  { title: "创建空间", description: "空间是采集、计算与交易的隔离边界，管理台所有请求都带空间上下文。" },
-  { title: "创建采集任务", description: "在数据采集中配置数据源、采集对象、基础字段和任务结果。" },
-  { title: "启动采集链路", description: "collector 按采集任务展开执行，经 cloudnode 下发到云节点写入结果。" },
-  { title: "查询与因子", description: "用采集结果索引浏览 K 线；因子输出写入结果数据集和结果索引。" }
-];
+// 策略磁贴一次只显示一个实例，多个实例左右切换，磁贴高度不变。
+const strategyIndex = ref(0);
+const currentStrategy = computed(() => strategies.value[Math.min(strategyIndex.value, Math.max(0, strategies.value.length - 1))]);
+function stepStrategy(delta: number) {
+  const total = strategies.value.length;
+  if (total > 1) strategyIndex.value = (strategyIndex.value + delta + total) % total;
+}
 
-const nodesTotal = ref<number | null>(null);
-const healthOverview = ref<HealthOverview>();
-const healthError = ref("");
-const globalLoadGate = new RequestGate();
-const serviceSummary = computed(() => serviceHealth(healthOverview.value, healthError.value));
-
-const nodesNote = computed(() => {
-  if (nodesTotal.value === null) return "加载中";
-  if (nodesTotal.value === 0) return "尚未注册节点";
-  return "已登记云函数节点";
+const userName = computed(() => userStore.account.user?.userName || userStore.account.user?.nickName || "Trader");
+const greeting = computed(() => {
+  const hour = new Date(nowMs.value).getHours();
+  return hour < 6 ? "凌晨好" : hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";
 });
 
-const healthBreakdown = computed(() => {
-  const summary = serviceSummary.value;
-  const counts = summary.counts;
-  if (!counts) return [];
-  const total = summary.total + (counts.disabled_count || 0);
-  return [
-    { key: "healthy", label: "正常组件", score: counts.healthy_count || 0, max: total, tone: "ok", note: "主动探测与上报观测" },
-    { key: "attention", label: "需要关注", score: counts.attention_count || 0, max: total, tone: "danger", note: "异常或降级" },
-    { key: "unknown", label: "未知组件", score: counts.unknown_count || 0, max: total, tone: "neutral", note: "尚无可靠观测" },
-    {
-      key: "unchecked",
-      label: "不探测",
-      score: counts.unchecked_count || 0,
-      max: total,
-      tone: "neutral",
-      note: "目录未配置主动探测"
-    },
-    {
-      key: "disabled",
-      label: "已停用",
-      score: counts.disabled_count || 0,
-      max: total,
-      tone: "neutral",
-      note: "不计入已启用组件的健康率"
-    }
-  ];
+const todayText = computed(() => {
+  const date = new Date(nowMs.value);
+  const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getDay()];
+  return `${date.getMonth() + 1} 月 ${date.getDate()} 日 星期${weekday}`;
 });
-const healthScore = computed(() => serviceSummary.value.percent);
-const dashboardKpis = computed(() => [
-  {
-    key: "health",
-    label: "组件健康率",
-    value: fmt(healthScore.value),
-    unit: "%",
-    note: serviceSummary.value.note,
-    delta: "Monitor 观测",
-    tone: serviceSummary.value.tone,
-    path: "/ops/monitor"
-  },
-  {
-    key: "tasks",
-    label: "采集函数",
-    value: fmt(taskCountLabel.value ?? counts.tasks),
-    unit: "",
-    note: "定时采集函数数",
-    delta: "查看分配",
-    tone: "neutral",
-    path: "/collector/tasks?tab=instances"
-  },
-  {
-    key: "incidents",
-    label: "当前告警",
-    value: fmt(healthError.value ? undefined : healthOverview.value?.summary?.alert_count),
-    unit: "",
-    note: "组件、业务与主机",
-    delta: "查看告警",
-    tone: healthOverview.value?.summary?.alert_count && !healthError.value ? "danger" : "neutral",
-    path: "/ops/monitor"
-  },
-  {
-    key: "nodes",
-    label: "云节点",
-    value: fmt(nodesTotal.value),
-    unit: "",
-    note: nodesNote.value,
-    delta: "已登记",
-    tone: "neutral",
-    path: "/collector/tasks?tab=executors"
-  },
-  {
-    key: "services",
-    label: "服务在线",
-    value: fmt(serviceSummary.value.healthy),
-    unit: "",
-    note: serviceSummary.value.note,
-    delta: "组件健康统计",
-    tone: serviceSummary.value.tone,
-    path: "/ops/monitor"
-  }
+
+const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
+  { label: "K 线浏览", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
+  { label: "因子结果", icon: "icon-experiment", target: "/factor/tasks?tab=results" },
+  { label: "策略结果", icon: "icon-compass", target: resultsLink() },
+  { label: "策略回放", icon: "icon-history", target: replayLink() },
+  { label: "交易账户", icon: "icon-safe", target: "/trading/accounts" },
+  { label: "监控告警", icon: "icon-notification", target: "/ops/monitor" }
+];
+
+const inventory = computed(() => [
+  { label: "数据源", value: counts.sources, path: "/data/sources" },
+  { label: "采集任务", value: counts.rules, path: "/collector/tasks" },
+  { label: "采集结果", value: counts.datasets, path: "/collector/tasks?tab=results" },
+  { label: "因子", value: counts.factors, path: "/factor/definitions" },
+  { label: "计算任务", value: counts.factorSets, path: "/factor/tasks" },
+  { label: "策略实例", value: counts.instances, path: "/strategy/tasks" },
+  { label: "执行账户", value: counts.accounts, path: "/trading/accounts" },
+  { label: "云节点", value: counts.nodes, path: "/collector/tasks?tab=executors" }
 ]);
 
-const stalenessItems = computed(() =>
-  healthError.value
-    ? []
-    : (healthOverview.value?.pipeline || []).flatMap(stage =>
-        (stage.datasets || []).map(item => ({
-          name: `${item.producer}/${item.space_id}/${item.dataset_id}/${item.freq}`,
-          dataset: `${stage.name} · ${item.dataset_id} · ${item.freq || ""}`,
-          delay: item.lag_seconds === undefined ? "暂无" : `${item.lag_seconds}s`,
-          status: item.status,
-          tone: item.status === "healthy" ? "ok" : item.status === "down" || item.status === "degraded" ? "warn" : "neutral"
-        }))
-      )
-);
-const incidentItems = computed(() =>
-  healthError.value
-    ? []
-    : (healthOverview.value?.alerts || []).map(item => ({
-        level: item.severity || "告警",
-        title: item.title || item.id || "",
-        meta: item.reason || "",
-        action: "定位",
-        path: alertHref(item).replace(/^#/, ""),
-        tone: "danger"
-      }))
-);
-const tradeSummary = computed(() => ({ total: counts.accounts }));
-const tradeMetrics = computed(() => [{ label: "已登记账户", value: fmt(tradeSummary.value.total) }]);
-const visibleDeployments = computed(() =>
-  (healthOverview.value?.components || []).slice(0, 5).map(item => ({
-    key: `${item.host_id}/${item.component_id}`,
-    name: item.name || item.component_id,
-    status: healthError.value ? "unknown" : item.status,
-    addr: item.host_id,
-    path: `/ops/deployments?tab=services&host_id=${encodeURIComponent(item.host_id || "")}&component_id=${encodeURIComponent(item.component_id || "")}`,
-    tone: healthError.value
-      ? "neutral"
-      : item.status === "healthy"
-        ? "ok"
-        : item.status === "down" || item.status === "degraded"
-          ? "warn"
-          : "neutral"
-  }))
-);
-const visibleHosts = computed(() =>
-  (healthOverview.value?.hosts || []).slice(0, 3).map(host => ({
-    key: host.host_id || host.agent_id,
-    name: host.hostname || host.host_id || host.agent_id,
-    cpu: !healthError.value && host.cpu_available ? formatPercent(host.cpu_percent) : "暂无",
-    memory: !healthError.value && host.memory_available ? formatPercent(host.memory_percent) : "暂无",
-    tone: !healthError.value && host.status === "healthy" ? "ok" : "neutral",
-    path: `/ops/hosts?tab=monitor&host_id=${encodeURIComponent(host.host_id || "")}&agent_id=${encodeURIComponent(host.agent_id || "")}`
-  }))
-);
-
-function fmt(v: number | string | null | undefined): string {
-  return v === null || v === undefined ? "—" : String(v);
+function fmt(value: number | null | undefined) {
+  return value === null || value === undefined ? "—" : String(value);
 }
 
-function formatPercent(v?: number): string {
-  return typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(0)}%` : "—";
+function go(target: HomeTarget) {
+  void router.push(target);
 }
 
-function countFrom(page?: PageResult, fallbackLength = 0): number {
-  return page ? pageResultTotal(page) : fallbackLength;
+function stamp() {
+  nowMs.value = Date.now();
+  updatedAt.value = new Date(nowMs.value).toLocaleTimeString("zh-CN", { hour12: false });
 }
 
-const go = (path: string) => {
-  router.push(path);
-};
+async function listAllDatasets(spaceId: string) {
+  const items: Dataset[] = [];
+  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size: 500 } });
+    items.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
+  }
+  return items;
+}
 
+async function listAllViews(spaceId: string) {
+  const items: View[] = [];
+  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
+    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size: 500 } });
+    items.push(...(rsp.views || []));
+    if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
+  }
+  return items;
+}
+
+/** 空间范围：数据集 / View 名称、资产数量与策略定义名称。单项失败不影响其它项。 */
 async function loadSpaceScoped() {
   const token = spaceLoadGate.next();
   const spaceId = selectedSpaceId.value;
   if (!spaceId) return;
-  const page = { page: 1, size: 1 };
   const isCurrent = () => spaceLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
-
-  const jobs: Array<Promise<void>> = [
+  const page = { page: 1, size: 1 };
+  await Promise.allSettled([
+    Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]).then(([datasets, views]) => {
+      if (!isCurrent()) return;
+      names.datasets = Object.fromEntries(datasets.map(item => [item.dataset_id, item.name || item.dataset_id]));
+      names.views = Object.fromEntries(views.map(item => [item.view_id, item.name || item.view_id]));
+      counts.datasets = datasets.filter(
+        item =>
+          !isLikelyFactorResultDataset(item) &&
+          datasetMatchesAttribution(item, {
+            ownerModules: ["collector"],
+            datasetRoles: ["raw_collection", "import"],
+            includeUnowned: true
+          })
+      ).length;
+    }),
     listDataSources({ space_id: spaceId, page }).then(rsp => {
-      if (isCurrent()) counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
-    }),
-    loadCollectorAssetCounts(spaceId).then(result => {
-      if (!isCurrent()) return;
-      counts.datasets = result.datasets;
-      counts.views = result.views;
-    }),
-    listFactorSets({ page: { page: 1, size: 500 } }).then(rsp => {
-      if (!isCurrent()) return;
-      const sets = (rsp.factor_sets ?? []).filter(item => item.factor_set.space_id === spaceId);
-      counts.factorSets = sets.length;
-      counts.factors = sets.reduce(
-        (total, item) => total + (item.members ?? []).filter(member => member.status === "enabled").length,
-        0
-      );
-    }),
-    listSubjects({ space_id: spaceId, page }).then(rsp => {
-      if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
+      if (isCurrent()) counts.sources = Number(rsp.page_result?.total ?? rsp.data_sources?.length ?? 0);
     }),
     callControl<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page?: { total?: number } }>(
       "collector",
@@ -574,1767 +481,676 @@ async function loadSpaceScoped() {
     ).then(rsp => {
       if (isCurrent()) counts.rules = Number(rsp.page?.total) || rsp.tasks?.length || 0;
     }),
-    getFetchPlans(spaceId).then(rsp => {
-      if (!isCurrent()) return;
-      counts.tasks = rsp.functions?.length ?? 0;
-      taskCountLabel.value = null;
-    }),
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
-      if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
+      if (isCurrent()) counts.accounts = Number(rsp.page_result?.total ?? rsp.accounts?.length ?? 0);
     }),
-    getNodeList({ page: 1, page_size: 200 }).then(({ items, total }) => {
-      if (!isCurrent()) return;
-      nodesTotal.value = total || items.length;
+    getNodeList({ page: 1, page_size: 1 }).then(({ items, total }) => {
+      if (isCurrent()) counts.nodes = total || items.length;
+    }),
+    listStrategies({ page: 1, page_size: 200 }).then(rsp => {
+      if (isCurrent()) catalog.value = rsp.items;
     })
-  ];
-
-  await Promise.allSettled(jobs);
+  ]);
 }
 
-async function loadCollectorAssetCounts(spaceId: string): Promise<{ datasets: number; views: number }> {
-  const [datasetItems, viewItems] = await Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]);
-  const datasetById = new Map(datasetItems.map(item => [item.dataset_id, item]));
-  const datasets = datasetItems.filter(
-    item =>
-      !isLikelyFactorResultDataset(item) &&
-      datasetMatchesAttribution(item, {
-        ownerModules: ["collector"],
-        datasetRoles: ["raw_collection", "import"],
-        includeUnowned: true
+/**
+ * 实时部分：监控概览、因子任务、策略实例与最新目标、最近动态。
+ * 动态多取一些（30 条）：“新增 0、移除 0”的无变化记录会被过滤掉，仍要凑满磁贴的固定条数。
+ */
+async function loadLive() {
+  const token = liveLoadGate.next();
+  const spaceId = selectedSpaceId.value;
+  if (!spaceId) return;
+  const isCurrent = () => liveLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
+  await Promise.allSettled([
+    monitorApi
+      .getOverview({ space_id: spaceId })
+      .then(result => {
+        if (!isCurrent()) return;
+        overview.value = result.overview;
+        monitorError.value = result.overview ? "" : "Monitor 未返回健康概览";
       })
-  ).length;
-  const views = viewItems.filter(
-    item =>
-      !viewUsesLikelyFactorDataset(item, datasetById) &&
-      viewMatchesAttribution(item, {
-        ownerModules: ["collector"],
-        viewRoles: ["collection_browse", "analysis"],
-        includeUnowned: true
-      })
-  ).length;
-  return { datasets, views };
+      .catch(error => {
+        if (isCurrent()) monitorError.value = error instanceof Error ? error.message : String(error);
+      }),
+    listFactorSets({ page: { page: 1, size: 500 } }).then(rsp => {
+      if (!isCurrent()) return;
+      factorSets.value = rsp.factor_sets ?? [];
+      const own = factorSets.value.filter(item => item.factor_set.space_id === spaceId);
+      counts.factorSets = own.length;
+      counts.factors = own.reduce((total, item) => total + (item.members ?? []).filter(m => m.status === "enabled").length, 0);
+      factorLoaded.value = true;
+    }),
+    loadStrategies(isCurrent),
+    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } }).then(rsp => {
+      if (!isCurrent()) return;
+      activityItems.value = rsp.items ?? [];
+      activityLoaded.value = true;
+    })
+  ]);
+  if (isCurrent()) stamp();
 }
 
-async function listAllDatasets(spaceId: string) {
-  const items: Dataset[] = [];
-  const size = 500;
-  for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
-    items.push(...(rsp.datasets || []));
-    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
-      return items;
-    }
-  }
-}
-
-async function listAllViews(spaceId: string) {
-  const items: View[] = [];
-  const size = 500;
-  for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
-    items.push(...(rsp.views || []));
-    if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
-      return items;
-    }
-  }
-}
-
-function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Dataset>) {
-  const dataset = datasetById.get(view.dataset_id);
-  if (dataset) {
-    return isLikelyFactorResultDataset(dataset);
-  }
-  return isLikelyFactorResultDatasetId(view.dataset_id);
-}
-
-async function loadGlobal() {
-  const token = globalLoadGate.next();
-  try {
-    const result = await monitorApi.getOverview({ space_id: selectedSpaceId.value || undefined });
-    if (!globalLoadGate.isCurrent(token)) return;
-    healthOverview.value = result.overview;
-    healthError.value = result.overview ? "" : "Monitor 未返回健康概览";
-  } catch (error) {
-    if (globalLoadGate.isCurrent(token)) healthError.value = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function refreshAll() {
-  await Promise.all([loadSpaceScoped(), loadGlobal()]);
-}
-
-function resetCounts() {
-  Object.keys(counts).forEach(k => {
-    counts[k] = null;
+async function loadStrategies(isCurrent: () => boolean) {
+  const page = await listInstances({ page: 1, page_size: 200 });
+  if (!isCurrent()) return;
+  const enabled = page.items.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
+  const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));
+  if (!isCurrent()) return;
+  const next: Record<string, StrategyTargetSnapshot> = {};
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") next[enabled[index].instance_id] = result.value;
   });
-  taskCountLabel.value = null;
-  nodesTotal.value = null;
+  instances.value = page.items;
+  targets.value = next;
+  counts.instances = page.page.total;
+  strategyLoaded.value = true;
 }
 
-watch(selectedSpaceId, () => {
-  resetCounts();
-  healthOverview.value = undefined;
-  healthError.value = "";
-  void refreshAll();
-});
-
-onMounted(() => {
-  refreshAll();
-  bannerTimer = setInterval(() => {
-    activeSloganIndex.value = pickRandomSloganIndex(activeSloganIndex.value);
-    void loadGlobal();
-  }, 15000);
-});
-
-onBeforeUnmount(() => {
-  spaceLoadGate.next();
-  globalLoadGate.next();
-  if (bannerTimer) {
-    clearInterval(bannerTimer);
-    bannerTimer = null;
+async function manualRefresh() {
+  refreshing.value = true;
+  try {
+    await Promise.all([loadSpaceScoped(), loadLive()]);
+  } finally {
+    refreshing.value = false;
   }
-});
+}
+
+function resetSpace() {
+  Object.keys(counts).forEach(key => (counts[key] = null));
+  names.datasets = {};
+  names.views = {};
+  overview.value = undefined;
+  monitorError.value = "";
+  factorSets.value = [];
+  factorLoaded.value = false;
+  instances.value = [];
+  targets.value = {};
+  catalog.value = [];
+  strategyLoaded.value = false;
+  activityItems.value = [];
+  activityLoaded.value = false;
+  updatedAt.value = "";
+  strategyIndex.value = 0;
+}
+
+usePolling(loadLive, 30_000, () => Boolean(selectedSpaceId.value));
+watch(
+  selectedSpaceId,
+  () => {
+    resetSpace();
+    void loadSpaceScoped();
+    void loadLive();
+  },
+  { immediate: true }
+);
 </script>
 
 <style lang="scss" scoped>
-$mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
-$display: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-
-.moox-home {
-  --home-accent: #0d9488;
-  --home-accent-soft: rgba(13, 148, 136, 10%);
-  --home-ink: var(--color-text-1);
-  --home-muted: var(--color-text-3);
-
-  box-sizing: border-box;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: var(--moox-space-5);
-  width: 100%;
-  max-width: min(1600px, 100%);
-  min-height: 0;
-  margin: 0 auto;
-  padding: var(--moox-space-4) var(--moox-space-6) var(--moox-space-10);
-  overflow-x: hidden;
-  overflow-y: auto;
-  font-family: $display;
+// 状态色：正常绿、需关注橙、异常红、无观测灰；界面不用细线装饰，层次靠底色与留白。
+.is-ok {
+  --tone: rgb(var(--green-6));
+  --tone-bg: rgb(var(--green-1));
 }
 
-/* ---------- 顶栏 ---------- */
-.home-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--moox-space-4);
+.is-warn {
+  --tone: rgb(var(--orange-6));
+  --tone-bg: rgb(var(--orange-1));
 }
 
-.home-top-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.is-bad {
+  --tone: rgb(var(--red-6));
+  --tone-bg: rgb(var(--red-1));
 }
 
-.home-badge {
-  padding: 3px var(--moox-space-2);
-  border-radius: 6px;
-  background: var(--home-accent-soft);
-  color: var(--home-accent);
-  font-family: $mono;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+.is-idle {
+  --tone: var(--color-text-3);
+  --tone-bg: var(--color-fill-2);
 }
 
-.home-top-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--home-muted);
-}
-
-.home-top-right {
-  display: flex;
-  align-items: center;
+.home {
+  display: grid;
   gap: var(--moox-space-3);
-}
-
-.home-clock {
-  font-family: $mono;
-  font-size: 14px;
   font-variant-numeric: tabular-nums;
-  color: var(--home-ink);
 }
 
-.home-clock-sub {
-  font-family: $mono;
-  font-size: 11px;
-  color: var(--home-muted);
-}
-
-/* ---------- 无空间引导 ---------- */
-.onboard {
-  display: grid;
-  grid-template-columns: 1.1fr 1fr;
-  gap: var(--moox-space-6);
-  padding: var(--moox-space-7);
-  border: 1px solid var(--color-border-2);
-  border-radius: 16px;
-  background: radial-gradient(ellipse 80% 60% at 100% 0%, rgba(13, 148, 136, 8%), transparent 55%), var(--color-bg-2);
-}
-
-.onboard-copy h1 {
-  margin: 0 0 var(--moox-space-3);
-  font-size: clamp(22px, 3vw, 30px);
-  font-weight: 700;
-  line-height: 1.25;
-  color: var(--home-ink);
-}
-
-.onboard-copy p {
-  margin: 0 0 var(--moox-space-6);
-  max-width: 480px;
-  font-size: 14px;
-  line-height: 1.75;
-  color: var(--home-muted);
-
-  strong {
-    color: var(--home-accent);
-    font-weight: 600;
-  }
-}
-
-.onboard-steps {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moox-space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-
-  li {
-    display: flex;
-    gap: 14px;
-    padding: 14px var(--moox-space-4);
-    border: 1px solid var(--color-border-2);
-    border-radius: 12px;
-    background: var(--color-fill-1);
-  }
-
-  strong {
-    display: block;
-    font-size: 14px;
-    color: var(--home-ink);
-  }
-
-  p {
-    margin: 6px 0 0;
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--home-muted);
-  }
-}
-
-.step-idx {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--home-accent-soft);
-  color: var(--home-accent);
-  font-family: $mono;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 28px;
-  text-align: center;
-}
-
-/* ---------- 欢迎区 ---------- */
-.welcome {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 28px;
-  align-items: center;
-  padding: 28px var(--moox-space-7);
-  border: 1px solid var(--color-border-2);
-  border-radius: 16px;
-  background: linear-gradient(135deg, var(--color-bg-2) 0%, var(--color-fill-1) 100%);
-  box-shadow: 0 1px 0 rgba(15, 23, 42, 4%);
-}
-
-.welcome-greet {
-  margin: 0 0 6px;
-  font-size: 14px;
-  color: var(--home-muted);
-}
-
-.welcome-headline {
-  margin: 0;
-  font-size: clamp(20px, 2.5vw, 26px);
-  font-weight: 700;
-  line-height: 1.3;
-  color: var(--home-ink);
-}
-
-.welcome-desc {
-  margin: 10px 0 0;
-  max-width: 520px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--home-muted);
-}
-
-.welcome-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: var(--moox-space-5);
-}
-
-.welcome-readiness {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  min-width: 200px;
-}
-
-.readiness-ring {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 108px;
-  height: 108px;
-  border-radius: 50%;
-  background: conic-gradient(var(--home-accent) calc(var(--ring-pct) * 1%), var(--color-fill-3) 0);
-
-  &::before {
-    content: "";
-    position: absolute;
-    inset: 8px;
-    border-radius: 50%;
-    background: var(--color-bg-2);
-  }
-}
-
-.readiness-pct {
-  position: relative;
-  z-index: 1;
-  font-family: $mono;
-  font-size: 26px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--home-accent);
-}
-
-.readiness-label {
-  position: relative;
-  z-index: 1;
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--home-muted);
-}
-
-.readiness-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  width: 100%;
-
-  li {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: var(--moox-space-1) 0;
-    font-size: 12px;
-    color: var(--home-muted);
-
-    &.ok {
-      color: #00b42a;
-    }
-
-    :deep(svg) {
-      flex-shrink: 0;
-      font-size: 14px;
-    }
-  }
-}
-
-/* ---------- 数据链路 ---------- */
-.flow-section {
-  padding: var(--moox-space-5) var(--moox-space-6);
-  border: 1px solid var(--color-border-2);
-  border-radius: 14px;
-  background: var(--color-bg-2);
-}
-
-.section-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: var(--moox-space-4);
-
-  h2 {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--home-ink);
-  }
-
-  span {
-    font-size: 12px;
-    color: var(--home-muted);
-  }
-}
-
-.flow-track {
-  display: flex;
-  gap: var(--moox-space-1);
-  overflow-x: auto;
-  padding-bottom: var(--moox-space-1);
-}
-
-.flow-node {
-  position: relative;
-  flex: 1;
-  min-width: 120px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 14px var(--moox-space-4);
-  border: 1px solid var(--color-border-2);
-  border-radius: 12px;
-  border-top: 3px solid var(--node-color);
-  background: var(--color-fill-1);
+a {
+  color: rgb(var(--primary-6));
   cursor: pointer;
-  text-align: left;
-  animation: fade-up 0.45s both;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s,
-    transform 0.15s;
-
-  &:hover {
-    border-color: var(--node-color);
-    box-shadow: 0 6px 20px rgba(15, 23, 42, 6%);
-    transform: translateY(-1px);
-  }
 }
 
-.flow-stage {
-  font-family: $mono;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  color: var(--node-color);
-  opacity: 0.85;
+.muted {
+  color: var(--color-text-3);
 }
 
-.flow-count {
-  font-family: $mono;
-  font-size: 28px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-  color: var(--home-ink);
-}
-
-.flow-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-2);
-}
-
-.flow-arrow {
-  position: absolute;
-  right: -14px;
-  top: 50%;
-  z-index: 1;
-  transform: translateY(-50%);
-  font-size: 18px;
-  color: var(--color-text-4);
-  pointer-events: none;
-}
-
-@keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* ---------- Bento ---------- */
-.bento {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  grid-template-rows: auto auto;
-  gap: var(--moox-space-4);
-}
-
-.bento-card {
-  padding: var(--moox-space-5) 22px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 14px;
-  background: var(--color-bg-2);
-}
-
-.bento-workflow {
-  grid-row: span 2;
-}
-
-.workflow-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.workflow-item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 12px;
-  background: var(--color-fill-1);
-  cursor: pointer;
-  text-align: left;
-  transition:
-    border-color 0.15s,
-    background 0.15s;
-
-  &:hover {
-    border-color: rgb(var(--primary-5));
-    background: var(--color-bg-2);
-  }
-}
-
-.workflow-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  font-family: $mono;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--home-accent);
-}
-
-.workflow-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--home-ink);
-}
-
-.workflow-desc {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--home-muted);
-}
-
-.ops-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.ops-metric {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moox-space-1);
-  padding: 14px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 12px;
-  background: var(--color-fill-1);
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s;
-
-  &:hover {
-    border-color: rgb(var(--primary-5));
-  }
-
-  strong {
-    font-family: $mono;
-    font-size: 24px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: var(--home-ink);
-
-    small {
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--home-muted);
-    }
-  }
-}
-
-.ops-label {
-  font-size: 12px;
-  color: var(--home-muted);
-}
-
-.ops-note {
-  font-size: 11px;
-  color: var(--home-muted);
-
-  &.ok {
-    color: #00b42a;
-  }
-
-  &.warn {
-    color: #ff7d00;
-  }
-}
-
-.asset-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--moox-space-2);
-}
-
-.asset-chip {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--moox-space-3);
-  border: 1px solid var(--color-border-2);
-  border-radius: 10px;
-  background: var(--color-fill-1);
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
-
-  &:hover {
-    background: var(--color-fill-2);
-  }
-}
-
-.asset-val {
-  font-family: $mono;
-  font-size: 20px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--home-ink);
-}
-
-.asset-name {
-  font-size: 12px;
-  color: var(--home-muted);
-}
-
-/* ---------- 基础设施折叠 ---------- */
-.infra-collapse {
-  border: 1px solid var(--color-border-2);
-  border-radius: 14px;
-  background: var(--color-bg-2);
+.ellipsis {
   overflow: hidden;
-
-  :deep(.arco-collapse-item-header) {
-    padding: 14px var(--moox-space-5);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--home-muted);
-    background: transparent;
-  }
-
-  :deep(.arco-collapse-item-content) {
-    background: transparent;
-  }
-}
-
-.infra-body {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--moox-space-4);
-  padding: 0 var(--moox-space-5) var(--moox-space-4);
-}
-
-.infra-panel {
-  padding: 14px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 10px;
-  background: var(--color-fill-1);
-}
-
-.infra-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-
-  h3 {
-    margin: 0;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--home-ink);
-  }
-}
-
-.infra-empty {
-  margin: 0;
-  padding: var(--moox-space-3) 0;
-  font-size: 12px;
-  color: var(--home-muted);
-  text-align: center;
-}
-
-.svc-line,
-.host-line {
-  display: grid;
-  grid-template-columns: 8px 1fr auto;
-  gap: var(--moox-space-2);
-  align-items: center;
-  padding: 6px var(--moox-space-1);
-  font-size: 12px;
-  border-radius: 6px;
-
-  &:hover {
-    background: var(--color-fill-2);
-  }
-}
-
-.host-line {
-  grid-template-columns: 8px 1fr 80px 52px 52px;
-}
-
-.svc-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-
-  &.ok {
-    background: #00b42a;
-  }
-
-  &.warn {
-    background: #ff7d00;
-  }
-}
-
-.svc-name,
-.host-name {
-  overflow: hidden;
-  font-weight: 600;
-  color: var(--home-ink);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.svc-kind {
-  color: var(--home-muted);
-}
-
-.svc-addr {
-  font-family: $mono;
-  font-size: 11px;
-  color: var(--color-text-2);
-}
-
-.host-bar {
-  height: 5px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--color-fill-3);
-}
-
-.host-bar-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.35s;
-}
-
-.host-pct {
-  font-family: $mono;
-  font-size: 10px;
-  color: var(--home-muted);
+.num {
   text-align: right;
 }
 
-/* ---------- 响应式 ---------- */
-@media (max-width: 1024px) {
-  .onboard {
-    grid-template-columns: 1fr;
-  }
-
-  .welcome {
-    grid-template-columns: 1fr;
-  }
-
-  .welcome-readiness {
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    align-items: flex-start;
-  }
-
-  .bento {
-    grid-template-columns: 1fr;
-  }
-
-  .bento-workflow {
-    grid-row: auto;
-  }
-
-  .infra-body {
-    grid-template-columns: 1fr;
-  }
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--tone, var(--color-text-4));
+  vertical-align: 1px;
 }
 
-@media (max-width: 640px) {
-  .moox-home {
-    padding: var(--moox-space-3) var(--moox-space-3) var(--moox-space-8);
-  }
-
-  .home-top {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .flow-track {
-    flex-direction: column;
-  }
-
-  .flow-node {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .flow-arrow {
-    display: none;
-  }
-
-  .workflow-grid,
-  .ops-metrics,
-  .asset-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.dashboard-shell {
-  --dash-bg: #f8fafc;
-  --dash-surface: #ffffff;
-  --dash-surface-soft: #f1f5f9;
-  --dash-ink: #1e293b;
-  --dash-muted: #64748b;
-  --dash-faint: #94a3b8;
-  --dash-blue: #1e40af;
-  --dash-blue-soft: #dbeafe;
-  --dash-cyan: #0284c7;
-  --dash-cyan-soft: #e0f2fe;
-  --dash-amber: #d97706;
-  --dash-amber-soft: #fef3c7;
-  --dash-green: #059669;
-  --dash-green-soft: #d1fae5;
-  --dash-red: #dc2626;
-  --dash-red-soft: #fee2e2;
-  --dash-border: #dbeafe;
-  --dash-border-strong: #bfdbfe;
-  --dash-shadow: 0 1px 3px rgba(30, 58, 138, 7%), 0 1px 2px rgba(30, 58, 138, 5%);
-  --dash-shadow-strong: 0 10px 30px rgba(30, 58, 138, 11%), 0 2px 8px rgba(30, 64, 175, 7%);
-  --home-accent: var(--dash-blue);
-  --home-accent-soft: var(--dash-blue-soft);
-  --home-ink: var(--dash-ink);
-  --home-muted: var(--dash-muted);
-
-  gap: 14px;
-  max-width: min(1680px, 100%);
-  background: var(--dash-bg);
-  color: var(--dash-ink);
-  font-family: "Fira Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-}
-
-.dashboard-shell :where(button) {
-  font: inherit;
-  touch-action: manipulation;
-}
-
-.dashboard-shell :where(button, .arco-btn) {
-  min-height: 36px;
-}
-
-.dashboard-shell :where(button:focus-visible, .arco-btn:focus-visible) {
-  outline: 2px solid var(--dash-blue);
-  outline-offset: 2px;
-}
-
-.dashboard-shell .home-top {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: var(--moox-space-2) 0 2px;
-  background: linear-gradient(180deg, var(--dash-bg) 75%, rgba(248, 250, 252, 0));
-}
-
-.dashboard-shell .home-badge {
-  border: 1px solid var(--dash-border);
-  background: var(--dash-surface);
-  color: var(--dash-blue);
-  font-family: $mono;
-  letter-spacing: 0;
-}
-
-.dashboard-shell .home-top-title,
-.dashboard-shell .home-clock-sub {
-  color: var(--dash-muted);
-}
-
-.dashboard-shell .home-clock {
-  color: var(--dash-ink);
-}
-
-.dashboard-shell .onboard {
-  border-color: var(--dash-border);
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(219, 234, 254, 70%), rgba(255, 255, 255, 92%)), var(--dash-surface);
-  box-shadow: var(--dash-shadow);
-}
-
-.dash-command {
-  position: relative;
-  isolation: isolate;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px;
-  gap: var(--moox-space-4);
-  align-items: stretch;
-  min-height: 132px;
-  padding: 18px;
-  overflow: visible;
-  border: 1px solid rgba(147, 197, 253, 65%);
-  border-radius: 8px;
-  background: linear-gradient(
-    135deg,
-    rgba(239, 246, 255, 98%) 0%,
-    rgba(219, 234, 254, 90%) 42%,
-    rgba(224, 242, 254, 86%) 72%,
-    rgba(191, 219, 254, 74%) 100%
-  );
-  box-shadow: var(--dash-shadow-strong);
-}
-
-.dash-command::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='176' viewBox='0 0 520 176'%3E%3Cg id='volume-bars' fill='%230f172a' fill-opacity='.08'%3E%3Crect x='300' y='148' width='8' height='10' rx='2'/%3E%3Crect x='312' y='145' width='8' height='13' rx='2'/%3E%3Crect x='324' y='150' width='8' height='8' rx='2'/%3E%3Crect x='336' y='142' width='8' height='16' rx='2'/%3E%3Crect x='348' y='136' width='8' height='22' rx='2'/%3E%3Crect x='360' y='144' width='8' height='14' rx='2'/%3E%3Crect x='372' y='130' width='8' height='28' rx='2'/%3E%3Crect x='384' y='126' width='8' height='32' rx='2'/%3E%3Crect x='396' y='118' width='8' height='40' rx='2'/%3E%3Crect x='408' y='122' width='8' height='36' rx='2'/%3E%3Crect x='420' y='110' width='8' height='48' rx='2'/%3E%3Crect x='432' y='116' width='8' height='42' rx='2'/%3E%3C/g%3E%3Cg id='candlestick-45-layer' stroke='%230f172a' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath id='angle-45-guide' d='M304 150 L434 20' fill='none' stroke='%230f172a' stroke-width='1' stroke-opacity='.16' stroke-dasharray='4 8'/%3E%3Cpath d='M304 154V116 M316 144V104 M328 148V96 M340 134V84 M352 120V72 M364 126V62 M376 108V52 M388 100V44 M400 92V36 M412 82V28 M424 72V20 M436 64V14' stroke-width='1' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='300' y='128' width='8' height='18' rx='2' fill='%23059669' fill-opacity='.14' stroke='%230f172a' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='312' y='112' width='8' height='24' rx='2' fill='%230f172a' fill-opacity='.13' stroke='%230f172a' stroke-opacity='.23'/%3E%3Crect class='candle-body' x='324' y='104' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.12' stroke='%230f172a' stroke-opacity='.24'/%3E%3Crect class='candle-body' x='336' y='92' width='8' height='30' rx='2' fill='%23059669' fill-opacity='.14' stroke='%230f172a' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='348' y='78' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.26'/%3E%3Crect class='candle-body' x='360' y='76' width='8' height='40' rx='2' fill='%23d97706' fill-opacity='.10' stroke='%230f172a' stroke-opacity='.22'/%3E%3Crect class='candle-body' x='372' y='62' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.27'/%3E%3Crect class='candle-body' x='384' y='54' width='8' height='34' rx='2' fill='%23059669' fill-opacity='.14' stroke='%230f172a' stroke-opacity='.25'/%3E%3Crect class='candle-body' x='396' y='46' width='8' height='30' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.26'/%3E%3Crect class='candle-body' x='408' y='40' width='8' height='32' rx='2' fill='%23d97706' fill-opacity='.10' stroke='%230f172a' stroke-opacity='.22'/%3E%3Crect class='candle-body' x='420' y='30' width='8' height='28' rx='2' fill='%23059669' fill-opacity='.16' stroke='%230f172a' stroke-opacity='.28'/%3E%3Crect class='candle-body' x='432' y='22' width='8' height='28' rx='2' fill='%23059669' fill-opacity='.15' stroke='%230f172a' stroke-opacity='.27'/%3E%3C/g%3E%3C/svg%3E"),
-    repeating-linear-gradient(118deg, transparent 0 11px, rgba(15, 23, 42, 7%) 12px 13px, transparent 14px 27px),
-    linear-gradient(90deg, rgba(30, 64, 175, 8%) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(30, 64, 175, 7%) 1px, transparent 1px);
-  background-position:
-    right clamp(128px, 12vw, 180px) center,
-    0 0,
-    0 0,
-    0 0;
-  background-repeat: no-repeat, repeat, repeat, repeat;
-  background-size:
-    min(58vw, 620px) auto,
-    36px 36px,
-    34px 34px,
-    34px 34px;
-  clip-path: inset(0 round 8px);
-  mix-blend-mode: multiply;
-  opacity: 0.72;
-  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 52%), rgba(0, 0, 0, 34%) 58%, rgba(0, 0, 0, 12%) 88%, transparent);
-}
-
-.dash-command::after {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  border-radius: 8px 0 0 8px;
-  background: linear-gradient(180deg, var(--dash-blue), var(--dash-cyan), var(--dash-green));
-}
-
-.dash-command-main {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  align-content: center;
-  min-width: 0;
-}
-
-.dash-kicker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--moox-space-2);
-  align-items: center;
-  margin-bottom: var(--moox-space-2);
-  color: var(--dash-muted);
-  font-size: 13px;
-}
-
-.dash-kicker b {
-  padding: 3px 7px;
-  border: 1px solid rgba(2, 132, 199, 24%);
-  border-radius: 999px;
-  background: rgba(224, 242, 254, 72%);
-  color: var(--dash-cyan);
-  font-family: $mono;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.banner-slogan-enter-active,
-.banner-slogan-leave-active {
-  transition:
-    opacity 0.24s ease,
-    transform 0.24s ease;
-}
-
-.banner-slogan-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-
-.banner-slogan-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
-
-.dash-command h1 {
-  margin: 0;
-  color: var(--dash-ink);
-  font-size: 30px;
-  font-weight: 750;
-  line-height: 1.18;
-}
-
-.dash-command p {
-  max-width: 760px;
-  margin: 10px 0 0;
-  color: var(--dash-muted);
-  font-size: 14px;
-  line-height: 1.65;
-}
-
-.health-score-card {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: var(--moox-space-2) var(--moox-space-3);
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid rgba(30, 64, 175, 18%);
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 88%), rgba(248, 250, 252, 76%));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 82%);
-}
-
-.score-label {
-  grid-column: 1 / -1;
-  color: var(--dash-muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.health-score-card strong {
-  color: var(--dash-blue);
-  font-family: $mono;
-  font-size: 38px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 0.92;
-}
-
-.health-score-card small {
-  align-self: end;
+.meter {
+  height: 6px;
   overflow: hidden;
-  padding-bottom: 3px;
-  color: var(--dash-muted);
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border-radius: 3px;
+  background: var(--color-fill-2);
 }
 
-.score-bar {
-  grid-column: 1 / -1;
-  height: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(191, 219, 254, 68%);
-}
-
-.score-bar span {
+.meter i {
   display: block;
   height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--dash-blue), var(--dash-cyan), var(--dash-green));
-  box-shadow: 0 0 12px rgba(2, 132, 199, 24%);
+  border-radius: 3px;
+  background: var(--tone, var(--color-text-4));
 }
 
-.kpi-grid {
+.home-empty {
+  max-width: 560px;
+  padding: var(--moox-space-6) 0;
+}
+
+.home-empty h2 {
+  margin: 0 0 var(--moox-space-2);
+  font-size: 18px;
+}
+
+.home-empty p {
+  margin: 0 0 var(--moox-space-4);
+  color: var(--color-text-2);
+}
+
+/* Banner：浅底色整块，状态用图标与文字颜色表达，不画边框与色条 */
+.banner {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: var(--moox-space-4);
+  padding: var(--moox-space-4);
+  border-radius: 8px;
+  background: var(--color-fill-1);
+}
+
+.banner-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--moox-space-2);
+}
+
+.banner-meta {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.banner-status {
+  display: flex;
+  align-items: center;
   gap: 10px;
 }
 
-.kpi-card {
-  position: relative;
-  isolation: isolate;
-  display: grid;
-  min-width: 0;
-  min-height: 116px;
-  padding: 13px 14px;
-  overflow: hidden;
-  border: 1px solid rgba(191, 219, 254, 86%);
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 92%));
-  box-shadow: var(--dash-shadow);
-  color: inherit;
+.banner-status h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.status-icon {
+  display: inline-flex;
+  font-size: 26px;
+  color: var(--tone);
+}
+
+.banner-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  color: var(--color-text-2);
+  font-size: 13px;
+}
+
+.banner-facts b {
+  color: var(--tone, var(--color-text-1));
+  font-weight: 600;
+}
+
+.banner-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.quick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-bg-2);
+  color: var(--color-text-2);
+  font-size: 12px;
   cursor: pointer;
+}
+
+.quick:hover {
+  color: rgb(var(--primary-6));
+}
+
+.health-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+
+.health-card__label,
+.health-card__foot {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.health-card__value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.health-card__value strong {
+  font-size: 26px;
+  font-weight: 600;
+}
+
+.health-card__value span {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.health-card__time {
+  display: flex;
+  justify-content: space-between;
+}
+
+.refresh.is-busy {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* 指标卡：固定高度，图标只做小号线条，状态色只落在图标与说明文字 */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--moox-space-3);
+}
+
+.kpi {
+  display: flex;
+  height: 84px;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-bg-2);
+  box-shadow: 0 0 0 1px var(--color-neutral-3);
+  color: inherit;
   text-align: left;
-  transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease,
-    transform 0.18s ease;
+  cursor: pointer;
 }
 
-.kpi-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 3px;
-  background: var(--tone, var(--dash-blue));
-}
-
-.kpi-card::after {
-  content: "";
-  position: absolute;
-  right: -26px;
-  bottom: -38px;
-  z-index: -1;
-  width: 96px;
-  height: 96px;
-  border: 1px solid var(--tone, var(--dash-blue));
-  border-radius: 50%;
-  opacity: 0.08;
-}
-
-.kpi-card > * {
-  position: relative;
-  z-index: 1;
-}
-
-.kpi-card:hover {
-  border-color: var(--tone, var(--dash-blue));
-  box-shadow: var(--dash-shadow-strong);
-  transform: translateY(-1px);
-}
-
-.kpi-label,
-.kpi-note,
-.kpi-delta {
-  display: block;
-  min-width: 0;
+.kpi:hover {
+  background: var(--color-fill-1);
 }
 
 .kpi-label {
-  color: var(--dash-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-2);
   font-size: 12px;
+}
+
+.kpi-label svg {
+  font-size: 16px;
+  color: var(--tone);
+}
+
+.kpi-value {
+  font-size: 22px;
   font-weight: 600;
+  line-height: 1.1;
 }
 
-.kpi-card strong {
-  align-self: center;
-  color: var(--dash-ink);
-  font-family: $mono;
-  font-size: 32px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
+.kpi-value small {
+  color: var(--color-text-3);
+  font-size: 12px;
+  font-weight: 400;
 }
 
-.kpi-card strong small {
-  color: var(--dash-muted);
+.kpi-note {
+  overflow: hidden;
+  color: var(--color-text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-note.is-warn,
+.kpi-note.is-bad {
+  color: var(--tone);
+}
+
+/* 磁贴：12 栅格，每个磁贴固定高度；超出内容折叠成“另有 N 项”，不撑高 */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--moox-space-3);
+}
+
+.tile {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--color-bg-2);
+  box-shadow: 0 0 0 1px var(--color-neutral-3);
+}
+
+.tile-strategy {
+  grid-column: span 7;
+  height: 232px;
+}
+
+.tile-attention {
+  grid-column: span 5;
+  height: 232px;
+}
+
+.tile-third {
+  grid-column: span 4;
+  height: 188px;
+}
+
+.tile-wide {
+  grid-column: span 12;
+  height: 136px;
+}
+
+.tile-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 12px 14px 4px;
+  font-size: 12px;
+}
+
+.tile-head h3 {
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
 }
 
-.kpi-note {
-  color: var(--dash-muted);
+.tile-head h3 small {
+  margin-left: 6px;
+  color: var(--color-text-3);
   font-size: 12px;
-  line-height: 1.35;
+  font-weight: 400;
 }
 
-.kpi-delta {
-  justify-self: start;
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: rgba(30, 64, 175, 7%);
-  color: var(--tone, var(--dash-blue));
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.tone-ok {
-  --tone: var(--dash-green);
-  --tone-soft: var(--dash-green-soft);
-}
-
-.tone-warn {
-  --tone: var(--dash-amber);
-  --tone-soft: var(--dash-amber-soft);
-}
-
-.tone-danger {
-  --tone: var(--dash-red);
-  --tone-soft: var(--dash-red-soft);
-}
-
-.tone-neutral {
-  --tone: var(--dash-blue);
-  --tone-soft: var(--dash-blue-soft);
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--moox-space-3);
-  align-items: start;
-}
-
-.dash-card {
-  position: relative;
-  min-width: 0;
-  padding: 15px;
-  border: 1px solid var(--dash-border);
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 100%), rgba(248, 250, 252, 70%));
-  box-shadow: var(--dash-shadow);
-  transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-
-.dash-card:hover {
-  border-color: rgba(147, 197, 253, 88%);
-  box-shadow: var(--dash-shadow-strong);
-}
-
-.dash-card.span-2 {
-  grid-column: span 2;
-}
-
-.dash-card-head {
-  display: flex;
-  gap: var(--moox-space-3);
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: var(--moox-space-3);
-}
-
-.dash-card-head.compact {
-  margin-bottom: 10px;
-}
-
-.dash-card-head h2 {
-  display: flex;
-  gap: var(--moox-space-2);
-  align-items: center;
-  margin: 0;
-  color: var(--dash-ink);
-  font-size: 15px;
-  font-weight: 750;
-  line-height: 1.35;
-}
-
-.dash-card-head h2::before {
-  content: "";
-  width: 4px;
-  height: 14px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, var(--dash-blue), var(--dash-cyan));
-}
-
-.dash-card-head p {
-  margin: var(--moox-space-1) 0 0;
-  color: var(--dash-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.dash-chip {
-  flex: none;
-  padding: var(--moox-space-1) 7px;
-  border: 1px solid var(--dash-border-strong);
-  border-radius: 999px;
-  background: var(--dash-blue-soft);
-  color: var(--dash-blue);
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.dash-chip.ok {
-  border-color: rgba(5, 150, 105, 28%);
-  background: var(--dash-green-soft);
-  color: var(--dash-green);
-}
-
-.dash-chip.warn {
-  border-color: rgba(217, 119, 6, 28%);
-  background: var(--dash-amber-soft);
-  color: var(--dash-amber);
-}
-
-.dash-chip.danger {
-  border-color: rgba(220, 38, 38, 24%);
-  background: var(--dash-red-soft);
-  color: var(--dash-red);
-}
-
-.score-breakdown,
-.freshness-list,
-.incident-table,
-.service-lines,
-.resource-lines {
-  display: grid;
-  gap: var(--moox-space-2);
-}
-
-.score-line {
-  display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(86px, 0.8fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 42px;
-  padding: var(--moox-space-2) 0;
-  border-bottom: 1px solid rgba(219, 234, 254, 65%);
-}
-
-.score-line:last-child {
-  border-bottom: 0;
-}
-
-.score-line-meta {
-  min-width: 0;
-}
-
-.score-line-meta strong,
-.freshness-row strong,
-.incident-row strong {
-  display: block;
-  overflow: hidden;
-  color: var(--dash-ink);
-  font-size: 13px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.score-line-meta span,
-.freshness-row small {
-  display: block;
-  overflow: hidden;
-  margin-top: 3px;
-  color: var(--dash-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.score-line-meter {
-  height: 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--dash-surface-soft);
-}
-
-.score-line-meter span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--tone, var(--dash-blue));
-}
-
-.score-line b {
-  color: var(--tone, var(--dash-blue));
-  font-family: $mono;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.freshness-row,
-.incident-row,
-.service-line,
-.resource-line {
-  display: grid;
-  gap: var(--moox-space-2);
-  align-items: center;
-  min-width: 0;
-  min-height: 44px;
-  padding: 9px 10px;
-  border: 1px solid rgba(219, 234, 254, 70%);
-  border-radius: 7px;
-  background: linear-gradient(180deg, rgba(248, 250, 252, 70%), rgba(255, 255, 255, 100%));
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-  transition:
-    border-color 0.18s ease,
-    background 0.18s ease;
-}
-
-.freshness-row {
-  grid-template-columns: minmax(0, 1fr) 46px 54px;
-}
-
-.freshness-row:hover,
-.incident-row:hover,
-.service-line:hover,
-.resource-line:hover,
-.action-tile:hover,
-.pipeline-step:hover {
-  border-color: var(--tone, var(--dash-blue));
-  background: var(--tone-soft, var(--dash-blue-soft));
-}
-
-.freshness-row b,
-.incident-row b,
-.service-line b,
-.resource-line b {
-  color: var(--tone, var(--dash-blue));
-  font-family: $mono;
-  font-size: 12px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.freshness-row em,
-.service-line em,
-.resource-line em {
-  overflow: hidden;
-  color: var(--dash-muted);
-  font-size: 11px;
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.incident-row {
-  grid-template-columns: 44px minmax(160px, 1fr) minmax(140px, 0.8fr) 74px;
-}
-
-.incident-level {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  min-height: 24px;
-  border-radius: 6px;
-  background: var(--tone-soft, var(--dash-blue-soft));
-  color: var(--tone, var(--dash-blue));
-  font-family: $mono;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.incident-row > span:not(.incident-level) {
-  overflow: hidden;
-  color: var(--dash-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pipeline-compact {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--moox-space-2);
-}
-
-.pipeline-step,
-.action-tile {
-  min-width: 0;
-  border: 1px solid rgba(219, 234, 254, 75%);
-  border-radius: 7px;
-  background: var(--dash-surface);
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-  transition:
-    border-color 0.18s ease,
-    background 0.18s ease;
-}
-
-.pipeline-step {
-  display: grid;
-  gap: 5px;
-  min-height: 68px;
-  padding: 10px;
-}
-
-.pipeline-step span {
-  color: var(--dash-muted);
-  font-size: 12px;
+.tile-head h3 small.is-warn {
+  color: var(--tone);
   font-weight: 600;
 }
 
-.pipeline-step strong {
-  color: var(--dash-ink);
-  font-family: $mono;
-  font-size: 24px;
-  font-variant-numeric: tabular-nums;
-}
-
-.trade-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.trade-metrics div {
-  display: grid;
-  gap: var(--moox-space-1);
-  min-width: 0;
-  padding: var(--moox-space-2);
-  border: 1px solid rgba(219, 234, 254, 72%);
-  border-radius: 7px;
-  background: var(--dash-surface-soft);
-}
-
-.trade-metrics span {
-  overflow: hidden;
-  color: var(--dash-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.trade-metrics strong {
-  color: var(--dash-ink);
-  font-family: $mono;
-  font-size: 17px;
-  font-variant-numeric: tabular-nums;
-}
-
-.service-line,
-.resource-line {
-  grid-template-columns: minmax(0, 1fr) 58px minmax(0, 1fr);
-}
-
-.service-line span,
-.resource-line span {
-  overflow: hidden;
-  color: var(--dash-ink);
-  font-size: 12px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.resource-lines {
-  margin-top: var(--moox-space-3);
-  padding-top: var(--moox-space-3);
-  border-top: 1px solid rgba(219, 234, 254, 72%);
-}
-
-.resource-caption {
-  color: var(--dash-muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.action-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--moox-space-2);
-}
-
-.action-tile {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 2px var(--moox-space-2);
-  min-height: 64px;
-  padding: 10px;
-}
-
-.action-tile b {
-  grid-row: span 2;
+.tile-head__side {
   display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--color-text-3);
+}
+
+.tile-body {
+  flex: 1;
+  min-height: 0;
+  padding: 2px 14px;
+  overflow: hidden;
+}
+
+.tile-foot {
+  height: 28px;
+  padding: 6px 14px 0;
+  font-size: 12px;
+}
+
+.tile-empty {
+  margin: 8px 0;
+  color: var(--color-text-3);
+  font-size: 13px;
+}
+
+/* 行：固定行高，整行可点；悬停只换底色 */
+.line {
+  display: grid;
+  width: calc(100% + 12px);
+  height: 28px;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+button.line {
+  cursor: pointer;
+}
+
+button.line:hover {
+  background: var(--color-fill-1);
+}
+
+.line em {
+  color: var(--color-text-3);
+  font-style: normal;
+}
+
+.line-head {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.is-warn.num,
+.line .is-warn {
+  color: var(--tone);
+}
+
+.line .is-bad {
+  color: var(--tone);
+}
+
+.strategy-head {
+  display: flex;
+  width: calc(100% + 12px);
+  height: 28px;
+  align-items: center;
+  gap: 4px;
+  margin: 0 -6px 6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.strategy-head:hover {
+  background: var(--color-fill-1);
+}
+
+.strategy-head b {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.strategy-state {
+  margin-left: 6px;
+  color: var(--tone);
+  font-size: 12px;
+}
+
+.strategy-when {
+  margin-left: auto;
+  color: var(--color-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.weights {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.attention-line {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.attention-line > .dot {
+  display: none;
+}
+
+.all-clear {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: var(--dash-blue-soft);
-  color: var(--dash-blue);
-  font-family: $mono;
-  font-size: 12px;
+  gap: 6px;
+  color: var(--color-text-2);
+  font-size: 13px;
 }
 
-.action-tile span,
-.action-tile small {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.all-clear svg {
+  font-size: 28px;
+  color: var(--tone);
+}
+
+.all-clear small {
+  color: var(--color-text-3);
+}
+
+.factor-cols {
+  grid-template-columns: minmax(0, 1fr) 64px 56px;
+}
+
+.fresh-cols {
+  grid-template-columns: minmax(0, 1fr) 92px;
   white-space: nowrap;
 }
 
-.action-tile span {
-  color: var(--dash-ink);
+.fresh-cols > :last-child {
+  text-align: right;
+}
+
+.host-cols {
+  grid-template-columns: minmax(0, 1fr) 38px 38px 38px;
+}
+
+.activity-body {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, 28px);
+  gap: 0 32px;
+  align-content: start;
+}
+
+.activity-line {
+  grid-template-columns: 84px minmax(0, 1fr);
   font-size: 12px;
-  font-weight: 700;
+  white-space: nowrap;
 }
 
-.action-tile small {
-  color: var(--dash-muted);
-  font-size: 11px;
+.inventory {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  font-size: 12px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .kpi-card,
-  .freshness-row,
-  .incident-row,
-  .service-line,
-  .resource-line,
-  .pipeline-step,
-  .action-tile {
-    transition: none;
+.inventory a {
+  color: var(--color-text-3);
+}
+
+.inventory a:hover {
+  color: rgb(var(--primary-6));
+}
+
+.inventory b {
+  margin-left: 2px;
+  color: var(--color-text-1);
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .banner {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .banner-slogan-enter-active,
-  .banner-slogan-leave-active {
-    transition: none;
-  }
-}
-
-@media (max-width: 1280px) {
-  .dashboard-grid {
+  .kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .kpi-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .dash-command {
-    grid-template-columns: 1fr;
+  .tile-strategy,
+  .tile-attention,
+  .tile-third {
+    grid-column: span 12;
   }
 
-  .health-score-card {
-    grid-template-columns: minmax(0, 1fr) auto;
+  .activity-body {
+    grid-auto-flow: row;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
   }
 
-  .health-score-card strong {
-    grid-column: auto;
-  }
-
-  .score-bar {
-    grid-column: 1 / -1;
-  }
-
-  .dashboard-grid,
-  .kpi-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .dash-card.span-2 {
-    grid-column: auto;
-  }
-
-  .incident-row {
-    grid-template-columns: 44px minmax(0, 1fr);
-  }
-
-  .incident-row > span:not(.incident-level),
-  .incident-row b {
-    grid-column: 2;
+  .tile-wide {
+    height: auto;
+    min-height: 136px;
   }
 }
 
 @media (max-width: 640px) {
-  .dashboard-shell {
-    gap: var(--moox-space-3);
-    padding: 10px 10px var(--moox-space-7);
+  .kpis {
+    grid-template-columns: minmax(0, 1fr);
   }
-
-  .dashboard-shell .home-top {
-    gap: var(--moox-space-2);
-    padding-top: var(--moox-space-1);
-  }
-
-  .dashboard-shell .home-top-right {
-    flex-wrap: wrap;
-    gap: var(--moox-space-2);
-    width: 100%;
-  }
-
-  .dash-command,
-  .dash-card {
-    padding: var(--moox-space-3);
-  }
-
-  .dash-command h1 {
-    font-size: 24px;
-  }
-
-  .health-score-card {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .health-score-card strong {
-    grid-column: auto;
-    font-size: 36px;
-  }
-
-  .freshness-row,
-  .service-line,
-  .resource-line {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .freshness-row em,
-  .service-line em,
-  .resource-line em {
-    grid-column: 1 / -1;
-  }
-
-  .score-line {
-    grid-template-columns: 1fr auto;
-  }
-
-  .score-line-meter {
-    grid-column: 1 / -1;
-  }
-
-  .trade-metrics,
-  .pipeline-compact,
-  .action-grid {
-    grid-template-columns: 1fr;
-  }
-}
-.health-score-card.tone-neutral {
-  background: var(--color-fill-2);
-  border-color: var(--color-border-2);
-}
-.health-score-card.tone-neutral .score-bar span {
-  background: var(--color-text-3);
-}
-.health-score-card.tone-danger {
-  border-color: rgb(var(--danger-6));
-}
-.health-score-card.tone-danger .score-bar span {
-  background: rgb(var(--danger-6));
 }
 </style>
