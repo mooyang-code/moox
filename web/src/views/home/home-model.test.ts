@@ -7,6 +7,7 @@ import {
   activityRows,
   attentionItems,
   bannerFacts,
+  clockTime,
   factorRows,
   fold,
   freshnessRows,
@@ -301,7 +302,12 @@ describe("home tiles", () => {
         {
           factor_set: { set_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
           members: [],
-          last_run: { set_id: "a", last_period_time: "1791900000", last_status: "ok", lag_seconds: "8" }
+          last_run: {
+            set_id: "a",
+            last_period_time: String(Math.floor((NOW - 120_000) / 1000)),
+            last_status: "ok",
+            lag_seconds: "8"
+          }
         }
       ] as unknown as FactorSetInfo[],
       "crypto",
@@ -324,8 +330,8 @@ describe("home tiles", () => {
     );
     const facts = bannerFacts({ strategies, factors, freshness, nowMs: NOW });
     expect(facts.map(fact => [fact.key, fact.value, fact.tone])).toEqual([
-      ["strategy", "2 分钟前", "ok"],
-      ["factor", "已追平", "ok"],
+      ["strategy", "09:58:00", "ok"],
+      ["factor", "09:59:00", "ok"],
       ["data", "落后 14 小时 10 分", "warn"]
     ]);
     expect(bannerFacts({ strategies: [], factors: [], freshness: [], nowMs: NOW }).map(fact => fact.value)).toEqual([
@@ -333,6 +339,56 @@ describe("home tiles", () => {
       "—",
       "—"
     ]);
+  });
+
+  it("writes the exact close time to the second and adds the date for older bars", () => {
+    const today = new Date(NOW - 125_000);
+    expect(clockTime(today.toISOString(), NOW)).toBe("09:57:55");
+    expect(clockTime(String(Math.floor((NOW - 86_400_000 - 3_600_000) / 1000)), NOW)).toBe("10-12 09:00:00");
+    expect(clockTime(null, NOW)).toBe("—");
+    expect(clockTime("bad", NOW)).toBe("—");
+  });
+
+  it("marks an expired strategy and shows its bar even when another instance is fresher", () => {
+    const valid = new Date(NOW + 60_000).toISOString();
+    const expired = new Date(NOW - 60_000).toISOString();
+    const fresh = { ...snapshot(valid, { "BTC-USDT": "0.2" }), bar_end_time: new Date(NOW - 60_000).toISOString() };
+    const stale = { ...snapshot(expired, { "BTC-USDT": "0.2" }), bar_end_time: new Date(NOW - 3_600_000).toISOString() };
+    const strategies = strategyRows([instance("a"), instance("b")], { a: fresh, b: stale }, catalog, NOW);
+    const facts = bannerFacts({ strategies, factors: [], freshness: [], nowMs: NOW });
+    expect(facts[0]).toMatchObject({ key: "strategy", value: "09:00:00", tone: "warn" });
+    const healthy = strategyRows([instance("a")], { a: fresh }, catalog, NOW);
+    expect(bannerFacts({ strategies: healthy, factors: [], freshness: [], nowMs: NOW })[0]).toMatchObject({
+      value: "09:59:00",
+      tone: "ok"
+    });
+  });
+
+  it("shows the factor task that is furthest behind, otherwise the freshest close time", () => {
+    const set = (id: string, freq: string, openedSecondsAgo: number, status = "ok") => ({
+      factor_set: { set_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", freq, status: "enabled" },
+      members: [],
+      last_run: {
+        set_id: id,
+        last_period_time: String(Math.floor((NOW - openedSecondsAgo * 1000) / 1000)),
+        last_status: status,
+        // 汇总的“现在”是 上一期时间 + lag_seconds：这里就是服务端读取时距上一期开盘过了多久。
+        lag_seconds: String(openedSecondsAgo)
+      }
+    });
+    const facts = (sets: unknown[]) =>
+      bannerFacts({
+        strategies: [],
+        factors: factorRows(sets as FactorSetInfo[], "crypto", names, NOW),
+        freshness: [],
+        nowMs: NOW
+      })[1];
+    // 1m 刚追平（09:58 开盘，09:59:00 收盘）；1h 的上一期是 08:00 开盘、09:00:00 收盘，也已追平：都正常时取最新的收盘时间。
+    expect(facts([set("a", "1m", 120), set("h", "1h", 7200)])).toMatchObject({ value: "09:59:00", tone: "ok" });
+    // 1m 已经 30 分钟没有产出：滞后的那个任务优先，时间是它自己的收盘时间。
+    expect(facts([set("a", "1m", 120), set("b", "1m", 1860)])).toMatchObject({ value: "09:30:00", tone: "warn" });
+    // 失败的任务比滞后的更靠前，并标红。
+    expect(facts([set("a", "1m", 1860), set("f", "1m", 300, "failed")])).toMatchObject({ value: "09:56:00", tone: "bad" });
   });
 
   it("builds four stable KPI cards", () => {

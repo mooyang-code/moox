@@ -82,6 +82,18 @@ export function shortTime(value: string | number | null | undefined, nowMs: numb
   return date.toDateString() === now.toDateString() ? time : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
 }
 
+/** 精确到秒的时间：当天只写时分秒，其他日期写月-日 时分秒（本地时区）。 */
+export function clockTime(value: string | number | null | undefined, nowMs: number): string {
+  const at = toMillis(value);
+  if (at === null) return "—";
+  const date = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return date.toDateString() === new Date(nowMs).toDateString()
+    ? time
+    : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
+}
+
 /** 把文本里的数据集 / View 内部 ID 换成名称（名称未知时保留原 ID）。 */
 export function prettifyIds(text: string, names: NameBook): string {
   return text.replace(/\b(dataset|view)_[a-z0-9_]+\b/gi, id => names.datasets[id] || names.views[id] || id);
@@ -160,6 +172,8 @@ export interface FactorRow {
   lag: string;
   /** 落后的已收盘 K 线时长（秒）；没有周期为 null，0 表示已追平。 */
   behindSeconds: number | null;
+  /** 最近一个已计算周期的收盘时刻（毫秒）；没有周期为 null。 */
+  periodEndMs: number | null;
   path: string;
 }
 
@@ -173,6 +187,8 @@ export function factorRows(sets: FactorSetInfo[], spaceId: string, names: NameBo
       const set = info.factor_set;
       const health = setHealth(set, info.last_run);
       const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
+      const periodOpenMs = toMillis(info.last_run?.last_period_time);
+      const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
       return {
         setId: set.set_id,
         label: `${names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`,
@@ -182,6 +198,7 @@ export function factorRows(sets: FactorSetInfo[], spaceId: string, names: NameBo
         lastPeriod: info.last_run?.last_period_time ? shortTime(info.last_run.last_period_time, nowMs) : "—",
         lag: behindSeconds === null ? "—" : behindText(behindSeconds),
         behindSeconds,
+        periodEndMs,
         path: `/factor/tasks?tab=results&set=${encodeURIComponent(set.set_id)}`
       };
     })
@@ -448,6 +465,8 @@ export interface BannerFact {
   label: string;
   value: string;
   tone: Tone;
+  /** 鼠标悬停时说明这个数字的口径。 */
+  hint?: string;
 }
 
 /** 落后量的写法：0 为“已追平”，否则“落后 X”。 */
@@ -455,30 +474,56 @@ function behindText(seconds: number): string {
   return seconds === 0 ? "已追平" : `落后 ${humanizeDuration(seconds)}`;
 }
 
-/** Banner 里的三项：策略最近一期、因子计算、数据新鲜度（后两项是相对最近一根已收盘 K 线的落后量）；没有观测时写“—”。 */
+interface FactCandidate {
+  tone: Tone;
+  atMs: number;
+  /** 落后的已收盘 K 线时长（秒），没有这个概念的写 0。 */
+  behind: number;
+}
+
+/** 选出 Banner 要展示的那一行：状态最差的优先，同样差时落后最多的优先；都正常则取时间最新的。 */
+function pickFact(candidates: FactCandidate[]): FactCandidate | undefined {
+  return [...candidates].sort(
+    (a, b) => FRESHNESS_RANK[a.tone] - FRESHNESS_RANK[b.tone] || b.behind - a.behind || b.atMs - a.atMs
+  )[0];
+}
+
+/**
+ * Banner 里的三项：策略最近一期、因子计算写具体的收盘时间（精确到秒，由人对照当前时间判断是否异常，异常的换色），
+ * 数据新鲜度写相对最近一根已收盘 K 线的落后量；没有观测时写“—”。
+ */
 export function bannerFacts(input: {
   strategies: StrategyRow[];
   factors: FactorRow[];
   freshness: FreshnessRow[];
   nowMs: number;
 }): BannerFact[] {
-  const bars = input.strategies.filter(row => row.enabled && row.lastBarMs !== null).map(row => row.lastBarMs as number);
-  const factorRowsWithRun = input.factors.filter(row => row.behindSeconds !== null);
+  const strategy = pickFact(
+    input.strategies
+      .filter(row => row.enabled && row.lastBarMs !== null)
+      .map(row => ({ tone: row.tone, atMs: row.lastBarMs as number, behind: 0 }))
+  );
+  const factor = pickFact(
+    input.factors
+      .filter(row => row.behindSeconds !== null && row.periodEndMs !== null)
+      .map(row => ({ tone: row.tone, atMs: row.periodEndMs as number, behind: row.behindSeconds as number }))
+  );
   const dataRows = input.freshness.filter(row => row.tone !== "idle" && row.seconds !== null);
-  const factorBehind = Math.max(0, ...factorRowsWithRun.map(row => row.behindSeconds as number));
   const dataBehind = Math.max(0, ...dataRows.map(row => row.seconds as number));
   return [
     {
       key: "strategy",
       label: "策略最近一期",
-      value: bars.length ? relativeTime(Math.max(...bars) / 1000, input.nowMs) : "—",
-      tone: "ok"
+      value: strategy ? clockTime(strategy.atMs / 1000, input.nowMs) : "—",
+      tone: strategy ? strategy.tone : "idle",
+      hint: "已启用实例最近一份目标所属 K 线的收盘时间；有异常实例时显示异常的那一个"
     },
     {
       key: "factor",
       label: "因子计算",
-      value: factorRowsWithRun.length ? behindText(factorBehind) : "—",
-      tone: factorRowsWithRun.length ? worst(factorRowsWithRun.map(row => row.tone)) : "idle"
+      value: factor ? clockTime(factor.atMs / 1000, input.nowMs) : "—",
+      tone: factor ? factor.tone : "idle",
+      hint: "因子任务最近一个已计算周期的收盘时间；有滞后的任务时显示落后最多的那一个"
     },
     {
       key: "data",

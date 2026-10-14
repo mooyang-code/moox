@@ -18,7 +18,7 @@
               <h2>{{ status.text }}</h2>
             </div>
             <div class="banner-facts">
-              <span v-for="fact in facts" :key="fact.key"
+              <span v-for="fact in facts" :key="fact.key" :title="fact.hint"
                 >{{ fact.label }} <b :class="`is-${fact.tone}`">{{ fact.value }}</b></span
               >
             </div>
