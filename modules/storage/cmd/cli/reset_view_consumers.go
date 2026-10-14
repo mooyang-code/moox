@@ -250,11 +250,34 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		// A full Primary reset recreates metadata from an empty store; there
 		// are no Views to wait for yet.
 		if err := waitResetViewReady(ctx, dbPath, !opts.resetAllStorageData, packageRoot); err != nil {
-			return fmt.Errorf("wait storage-view ready: %w", err)
+			return resetReadyWaitError(err, !opts.resetAllStorageData, opts.timeout)
 		}
 	}
 	stopped = false
 	return writeOperationResult(stdout, operationResult{Module: "storage", Action: "reset-view-consumers", Status: "ok", Summary: summary})
+}
+
+// recommendedResetTimeout 是 View 有历史数据时建议给 reset-view-consumers 的 --timeout：
+// 重建要从 Primary 回溯每个序列最近的 K 线并写入 DuckDB，线上 19 个 View 实测约 26 分钟，留出一倍余量。
+const recommendedResetTimeout = "60m"
+
+// resetReadyWaitError 说明等待 storage-view 就绪失败的原因。走到这里时重置已经提交：View 元数据与索引、消费者、事件都已清除，
+// Storage 也已重启，所以等待超时只表示 View 还在后台重建，不是重置失败，不能重复执行。
+func resetReadyWaitError(err error, waitedForViews bool, timeout time.Duration) error {
+	deadline := errors.Is(err, context.DeadlineExceeded)
+	if !deadline && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("wait storage-view ready: %w", err)
+	}
+	reason := "等待被中断"
+	if deadline {
+		reason = fmt.Sprintf("在 --timeout（%s）内没有等到", timeout)
+	}
+	if waitedForViews {
+		return fmt.Errorf("重置已完成（View 元数据与索引、消费者、事件都已清除，Storage 已重启），但%s全部 View 重建出活动索引：View 仍在后台从 Primary 回溯重建，"+
+			"不需要也不应该重新执行重置；可用包根目录的 healthcheck.sh 和元数据库 t_views 的 c_active_index_id 观察进度。"+
+			"有历史数据时重建通常要 30 分钟以上，下次请把 --timeout 设为 %s 或更长", reason, recommendedResetTimeout)
+	}
+	return fmt.Errorf("重置已完成（元数据与索引、消费者、事件、Primary 数据都已清除，Storage 已重启），但%s storage-view 就绪：请检查 storage-view 的日志和包根目录的 healthcheck.sh，不要重复执行重置", reason)
 }
 
 func resetViewIndexPaths(root, engine, id string) []string {
