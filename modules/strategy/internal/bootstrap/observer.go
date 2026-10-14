@@ -335,7 +335,9 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 	case result == store.StatusOK:
 		_ = o.module.ObserveRun(moduleStage, "success", moduleHealthCheck, finishedAt)
 	case accumulating:
-		// 数据积累中：不是模块故障，也不计成功。
+		// 数据积累中：策略模块在正常处理事件，只是数据还没攒够无需求值，不是模块故障；记一次成功，模块健康检查
+		// 才不会因为长时间没有“成功”而报过期。
+		_ = o.module.ObserveRun(moduleStage, "success", moduleHealthCheck, finishedAt)
 	case failureReasons[reason]:
 		_ = o.module.ObserveRun(moduleStage, "error", moduleHealthCheck, finishedAt)
 	case reason == readiness.ReasonFactorChanged:

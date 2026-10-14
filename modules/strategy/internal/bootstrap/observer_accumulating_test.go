@@ -59,6 +59,7 @@ func TestObserverTreatsHistoryAccumulationAsPartialWithinTheLimit(t *testing.T) 
 	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"))
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"))
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_runs_total", "error"), "积累中不计模块失败")
+	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_runs_total", "success"), "积累中模块在正常处理事件，记成功，健康检查才不会因长时间没有成功而过期")
 
 	now = now.Add(minAccumulationLimit)
 	observer.ObservePeriod(instance, "1h", barEnd.Add(2*time.Hour), store.StatusSkipped, "history_insufficient")
