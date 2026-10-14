@@ -564,11 +564,13 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 	if err != nil {
 		return domain.SetMember{}, "", fmt.Errorf("prepare factor backfill: %w", err)
 	}
-	if _, err := s.db.EnableMemberWithRecalcJob(ctx, setID, factorID, member.Status, job); err != nil {
+	// 同一因子集排队中的回填任务会把新成员并进去，真正入库的任务号可能不是刚生成的那个，所以返回入库后的任务号。
+	stored, err := s.db.EnableMemberWithRecalcJob(ctx, setID, factorID, member.Status, job)
+	if err != nil {
 		return domain.SetMember{}, "", err
 	}
 	updated, _, err := s.reloadMember(ctx, setID, factorID, factor)
-	return updated, job.JobID, err
+	return updated, stored.JobID, err
 }
 
 func (s *Service) reloadMember(ctx context.Context, setID, factorID string, factor domain.FactorDef) (domain.SetMember, string, error) {

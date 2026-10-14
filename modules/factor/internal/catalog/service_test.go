@@ -954,13 +954,15 @@ func (f *sourceCheckerFake) CheckSource(context.Context, domain.FactorDef, strin
 }
 
 type recalcFake struct {
-	db      *store.Store
-	set     domain.FactorSet
-	factors []domain.FactorDef
-	start   time.Time
-	end     time.Time
-	order   []string
-	err     error
+	// requestPrefix 是回填任务请求号的前缀，默认 "enable-"；设成 "factor-enable-" 才会与真实环境一样被并入排队中的任务。
+	requestPrefix string
+	db            *store.Store
+	set           domain.FactorSet
+	factors       []domain.FactorDef
+	start         time.Time
+	end           time.Time
+	order         []string
+	err           error
 }
 
 type earliestPeriodFake struct {
@@ -985,8 +987,12 @@ func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.Facto
 	if f.err != nil {
 		return store.RecalcJob{}, f.err
 	}
+	prefix := f.requestPrefix
+	if prefix == "" {
+		prefix = "enable-"
+	}
 	return store.RecalcJob{
-		JobID: "enable-" + factor.FactorID, RequestID: "enable-" + factor.FactorID,
+		JobID: prefix + factor.FactorID, RequestID: prefix + factor.FactorID,
 		SetID: set.SetID, FactorIDs: []string{factor.FactorID}, Subjects: []string{"BTC-USDT"},
 		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
 	}, nil
@@ -1095,4 +1101,27 @@ func TestBackfillWindowIsCappedToTheMostRecentPeriods(t *testing.T) {
 	start, _, err = svc.backfillWindow(context.Background(), set)
 	require.NoError(t, err)
 	require.Equal(t, recent, start)
+}
+
+// 连续启用同一因子集的多个成员：后面的成员并进第一个回填任务，返回的任务号必须是入库后的那个，
+// 否则 RPC 层按它回读任务会得到 record not found（上线时 BiasQ 的启用因此报错，成员状态却已经改了）。
+func TestEnableMemberReturnsTheStoredJobWhenMergedIntoAQueuedBackfill(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	svc.now = func() time.Time { return time.Date(2026, 10, 4, 10, 3, 37, 0, time.UTC) }
+	svc.recalc = &recalcFake{db: db, requestPrefix: "factor-enable-"}
+	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusDisabled)
+	addMember(t, svc, testSetID(), "bias", domain.MemberStatusDisabled)
+
+	_, first, err := svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusEnabled)
+	require.NoError(t, err)
+	_, second, err := svc.SetFactorMemberStatus(context.Background(), testSetID(), "bias", domain.MemberStatusEnabled)
+	require.NoError(t, err)
+	require.Equal(t, "factor-enable-momentum", first)
+	require.Equal(t, first, second, "第二个成员并入第一个任务，返回的是已入库的任务号")
+
+	job, err := db.GetRecalcJob(context.Background(), second)
+	require.NoError(t, err, "返回的任务号必须能读到")
+	require.ElementsMatch(t, []string{"momentum", "bias"}, job.FactorIDs)
 }
