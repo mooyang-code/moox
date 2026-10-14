@@ -207,7 +207,7 @@ func inspectViewConsumerFilters(ctx context.Context, opts reconcileViewConsumers
 			return nil, err
 		}
 	}
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
+	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
 	if err != nil {
 		return nil, err
 	}

@@ -114,7 +114,7 @@ func purgeDatasetEventSubjectsFromJetStream(ctx context.Context, opts purgeDatas
 			return err
 		}
 	}
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
+	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
 	if err != nil {
 		return err
 	}
@@ -129,6 +129,18 @@ func purgeDatasetEventSubjectsFromJetStream(ctx context.Context, opts purgeDatas
 		}
 	}
 	return nil
+}
+
+// connectAdminEventBus 用管理员凭据连接 EventBus；失败时说明用的是哪份凭据文件和哪些地址。
+// 管理员凭据里的地址通常是控制机回环地址（tls://127.0.0.1:4222），在 Storage 等其他主机上用必须用 --eventbus-url 指向 EventBus
+// 的实际地址；默认路径（~/.config/moox/eventbus/internal-admin.yaml）上留着旧环境的凭据时也会得到同样的“连不上”，
+// 光看 nats 的原始报错分辨不出是哪一种。
+func connectAdminEventBus(urls []string, credentialPath string, opts ...nats.Option) (*nats.Conn, error) {
+	nc, err := nats.Connect(strings.Join(urls, ","), opts...)
+	if err != nil {
+		return nil, fmt.Errorf("连接 EventBus %s 失败（凭据文件 %s）：%w；管理员凭据里的地址通常是控制机回环地址，在其他主机上要用 --eventbus-url 指定 EventBus 的实际地址", strings.Join(urls, ","), credentialPath, err)
+	}
+	return nc, nil
 }
 
 func validatePurgeEventBusURLs(urls []string, caFile string) error {

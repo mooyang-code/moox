@@ -613,7 +613,7 @@ func preflightResetEventBus(ctx context.Context, opts resetViewConsumersOptions,
 			return err
 		}
 	}
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
+	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
 	if err != nil {
 		return err
 	}
@@ -661,7 +661,7 @@ func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptio
 			return false, err
 		}
 	}
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
+	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
 	if err != nil {
 		return false, err
 	}

@@ -808,7 +808,7 @@ func deleteJetStreamConsumer(ctx context.Context, opts repairConsumerOptions) (b
 	// nats.Connect has its own dial timeout; keep consumer reset from consuming
 	// the entire maintenance deadline when the local broker is unavailable.
 	natsOpts = append(natsOpts, nats.Timeout(15*time.Second))
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
+	nc, err := connectAdminEventBus(urls, credentialPath, natsOpts...)
 	if err != nil {
 		return false, err
 	}
