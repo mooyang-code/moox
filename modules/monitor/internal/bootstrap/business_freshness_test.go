@@ -1011,3 +1011,17 @@ func TestKlineReportCoversDatasets(t *testing.T) {
 	require.False(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: "kline_freshness:crypto:v:1m", Skipped: true, Reason: "disabled"}))
 	require.False(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: monmetrics.TaskResultInventoryCheckID}))
 }
+
+// 数据积累中的数据集检查按通过记录（不告警），其余非健康状态仍然失败。
+func TestDatasetCheckPassesTreatsWarmingAsPassing(t *testing.T) {
+	status := func(status, reason string) monitorobservability.DatasetFrequencyStatus {
+		return monitorobservability.DatasetFrequencyStatus{Status: status, Reason: reason}
+	}
+	require.True(t, datasetCheckPasses(status("healthy", "normal")))
+	require.True(t, datasetCheckPasses(status("degraded", monitorobservability.DatasetReasonWarming)))
+	require.False(t, datasetCheckPasses(status("degraded", "尚无成功运行")))
+	require.False(t, datasetCheckPasses(status("degraded", "success stale")))
+	require.False(t, datasetCheckPasses(status("stale", "run stale")))
+	require.False(t, datasetCheckPasses(status("unknown", "尚未上报")))
+	require.Contains(t, datasetReasonText(status("degraded", monitorobservability.DatasetReasonWarming), time.Now()), "数据积累中")
+}

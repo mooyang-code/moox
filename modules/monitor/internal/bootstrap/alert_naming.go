@@ -118,6 +118,8 @@ func datasetReasonText(dataset monitorobservability.DatasetFrequencyStatus, now 
 		return "数据生产服务超过 10 分钟没有更新数据集清单，可能已停止"
 	case dataset.Reason == "尚未上报":
 		return "还没有收到任何运行记录"
+	case dataset.Reason == monitorobservability.DatasetReasonWarming:
+		return "数据积累中：结果暂不完整（窗口空洞保护或历史不足），数据攒够后自动恢复"
 	case dataset.Reason == "尚无成功运行":
 		return "已在运行，但还没有成功过"
 	case dataset.Status == "stale" && !dataset.OutputWatermarkAt.IsZero():

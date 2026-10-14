@@ -11,7 +11,9 @@ import (
 
 const MaxDatasetMetricSeries = 1000
 
-var allowedDatasetResults = stringSet("success", "error", "empty", "rejected", "incomplete")
+// partial 是按设计只产出部分结果的运行（窗口空洞保护、历史不足、预热中）：生产者在正常工作，只是数据还在积累，
+// Monitor 据此显示“积累中”而不告警；incomplete 才是意外的不完整，仍按失败处理。
+var allowedDatasetResults = stringSet("success", "error", "empty", "rejected", "incomplete", "partial")
 
 type DatasetKey struct {
 	SpaceID   string
@@ -41,6 +43,7 @@ type DatasetMetrics struct {
 	runs                     *prometheus.CounterVec
 	lastRun                  *prometheus.GaugeVec
 	lastSuccess              *prometheus.GaugeVec
+	lastPartial              *prometheus.GaugeVec
 	inputWatermark           *prometheus.GaugeVec
 	outputWatermark          *prometheus.GaugeVec
 	rows                     *prometheus.CounterVec
@@ -68,6 +71,7 @@ func NewDatasetMetrics(registerer prometheus.Registerer, module string) (*Datase
 		runs:                     prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "runs_total", Help: "Completed realtime dataset runs."}, append(labels, "result")),
 		lastRun:                  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "last_run_timestamp_seconds", Help: "Unix timestamp of the last completed realtime dataset run."}, labels),
 		lastSuccess:              prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "last_success_timestamp_seconds", Help: "Unix timestamp of the last successful realtime dataset run."}, labels),
+		lastPartial:              prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "last_partial_timestamp_seconds", Help: "Unix timestamp of the last realtime dataset run that produced only partial results by design (data still accumulating)."}, labels),
 		inputWatermark:           prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "input_watermark_timestamp_seconds", Help: "Latest observed input business watermark."}, labels),
 		outputWatermark:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "output_watermark_timestamp_seconds", Help: "Latest observed output business watermark."}, labels),
 		rows:                     prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "rows_total", Help: "Rows produced by realtime dataset runs."}, append(labels, "result")),
@@ -78,7 +82,7 @@ func NewDatasetMetrics(registerer prometheus.Registerer, module string) (*Datase
 	}
 	collectors := []prometheus.Collector{
 		m.enabled, m.expectedInterval, m.inventoryRefreshErrors, m.inventoryLastSuccess,
-		m.runs, m.lastRun, m.lastSuccess, m.inputWatermark, m.outputWatermark, m.rows,
+		m.runs, m.lastRun, m.lastSuccess, m.lastPartial, m.inputWatermark, m.outputWatermark, m.rows,
 	}
 	registered := make([]prometheus.Collector, 0, len(collectors))
 	for _, collector := range collectors {
@@ -195,6 +199,9 @@ func (m *DatasetMetrics) observeRun(observation DatasetObservation, requireExpec
 	m.lastRun.WithLabelValues(values...).Set(finishedAt)
 	if observation.Result == "success" || observation.Result == "empty" {
 		m.lastSuccess.WithLabelValues(values...).Set(finishedAt)
+	}
+	if observation.Result == "partial" {
+		m.lastPartial.WithLabelValues(values...).Set(finishedAt)
 	}
 	m.advanceWatermark(m.inputWatermark, m.inputWatermarkByDataset, observation.Key, observation.InputWatermark)
 	m.advanceWatermark(m.outputWatermark, m.outputWatermarkByDataset, observation.Key, observation.OutputWatermark)

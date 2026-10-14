@@ -47,8 +47,10 @@ type DatasetFrequencyStatus struct {
 	// PrimaryDatasetID links an independent Storage View fact back to the
 	// dataset whose Collector produces its input. It is empty for other
 	// producers and keeps DatasetID available as the View identity.
-	PrimaryDatasetID                    string
-	LastRunAt, LastSuccessAt            time.Time
+	PrimaryDatasetID         string
+	LastRunAt, LastSuccessAt time.Time
+	// LastPartialAt 是最近一次“按设计只产出部分结果”的运行（数据积累中），见 DatasetReasonWarming。
+	LastPartialAt                       time.Time
 	InputWatermarkAt, OutputWatermarkAt time.Time
 	LastReportedAt                      time.Time
 	LagSeconds                          int64
@@ -240,9 +242,9 @@ type datasetKey struct {
 }
 
 type datasetValues struct {
-	interval, inventory, lastRun, lastSuccess, input, output float64
-	reporterStale                                            bool
-	reportedAt                                               time.Time
+	interval, inventory, lastRun, lastSuccess, lastPartial, input, output float64
+	reporterStale                                                         bool
+	reportedAt                                                            time.Time
 }
 
 func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Time) ([]DatasetFrequencyStatus, error) {
@@ -438,6 +440,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			current.value.inventory = max(current.value.inventory, value.inventory)
 			current.value.lastRun = max(current.value.lastRun, value.lastRun)
 			current.value.lastSuccess = max(current.value.lastSuccess, value.lastSuccess)
+			current.value.lastPartial = max(current.value.lastPartial, value.lastPartial)
 			current.value.input = max(current.value.input, value.input)
 			current.value.output = max(current.value.output, value.output)
 			current.value.reportedAt = maxTime(current.value.reportedAt, value.reportedAt)
@@ -483,6 +486,7 @@ func (b Builder) populateDatasetValues(
 			"expected_interval_seconds":          &current.interval,
 			"last_run_timestamp_seconds":         &current.lastRun,
 			"last_success_timestamp_seconds":     &current.lastSuccess,
+			"last_partial_timestamp_seconds":     &current.lastPartial,
 			"input_watermark_timestamp_seconds":  &current.input,
 			"output_watermark_timestamp_seconds": &current.output,
 		} {
@@ -585,7 +589,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	item := DatasetFrequencyStatus{
 		Producer: key.producer, SpaceID: key.spaceID, DatasetID: key.datasetID, Freq: key.freq,
 		PrimaryDatasetID: key.primaryDatasetID,
-		LastRunAt:        unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess),
+		LastRunAt:        unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess), LastPartialAt: unixTime(value.lastPartial),
 		InputWatermarkAt: unixTime(value.input), OutputWatermarkAt: unixTime(value.output),
 		LastReportedAt: value.reportedAt,
 	}
@@ -607,6 +611,9 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "unknown", "尚未上报"
 	case runLag > 0 && now.Sub(item.LastRunAt) > runLag:
 		item.Status, item.Reason = "stale", "run stale"
+	case warmingNow(now, item, successLag):
+		// 生产者仍在按设计只产出部分结果（空洞保护、历史不足、预热）：页面显示降级，但不是故障，不告警。
+		item.Status, item.Reason = "degraded", DatasetReasonWarming
 	case item.LastSuccessAt.IsZero():
 		item.Status, item.Reason = "degraded", "尚无成功运行"
 	case successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
@@ -619,6 +626,19 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "healthy", "normal"
 	}
 	return item
+}
+
+// DatasetReasonWarming 是“数据积累中”的原因码：生产者报告最近一次运行只按设计产出了部分结果（窗口空洞保护、
+// 历史不足、预热中），而且此后没有更新的成功。状态仍是 degraded，页面照常展示；告警检查把它当作通过。
+const DatasetReasonWarming = "warming"
+
+// warmingNow 判断数据集是否处在“积累中”：最近一次产出是部分结果（比最近一次成功更新），并且部分结果仍按期出现——
+// 超过成功容忍时间没有新的部分结果（生产者停了或开始真正失败）就不再算积累，回到原来的成功过期判断。
+func warmingNow(now time.Time, item DatasetFrequencyStatus, successLag time.Duration) bool {
+	if item.LastPartialAt.IsZero() || !item.LastPartialAt.After(item.LastSuccessAt) {
+		return false
+	}
+	return successLag <= 0 || now.Sub(item.LastPartialAt) <= successLag
 }
 
 // datasetWatermarkStaleReason keeps the alert useful without requiring an

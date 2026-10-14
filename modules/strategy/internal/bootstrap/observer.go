@@ -25,6 +25,17 @@ const (
 	moduleHealthCheck = "strategy-targets"
 )
 
+// accumulatingReasons 是“数据还没攒够”的跳过原因：View 的历史不足以判断 min_age_bars，或上游因子这期被空洞保护跳过。
+// 数据重置、新建因子集之后必然出现一段，数据攒够自动恢复。只要还在积累期上限之内，这类跳过记为 partial（Monitor 显示“积累中”，
+// 不告警，也不计模块失败）；超过上限仍然不足，说明不是在积累（例如 min_age_bars 超过 View 保留根数），回到失败处理。
+var accumulatingReasons = map[string]bool{
+	input.SkipHistoryInsufficient: true,
+	readiness.ReasonFactorSkipped: true,
+}
+
+// minAccumulationLimit 是积累期上限的下限：上游因子的回看窗口可达两三天（1h 因子集），min_age_bars 对应的时长更短时也要给足。
+const minAccumulationLimit = 72 * time.Hour
+
 // failureReasons 是计入模块健康检查失败的跳过原因；其余跳过是业务上的"本期不能求值"，只通过实例的数据集新鲜度告警。
 var failureReasons = map[string]bool{
 	trigger.SkipInfraRetryExhausted: true,
@@ -53,6 +64,9 @@ type instanceObserver struct {
 	// basesLoaded 记录已经成功从结果库载入过基准的 A 股实例（实例移出启用清单时清除，重新启用后再载入）：处理周期时
 	// 写入的基准只是库里基准的一部分，不能据此认为已载入。
 	basesLoaded map[string]bool
+	// accumulatingSince 是每个实例本轮“数据积累中”的起点（第一次因积累类原因跳过的时刻，出现 ok 即清除）：
+	// 只在进程内记录，重启后重新计时，所以积累期上限最长随重启顺延——上限是兜底，不是精确的计时器。
+	accumulatingSince map[string]time.Time
 }
 
 func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, logf func(string, ...any)) (*instanceObserver, error) {
@@ -84,7 +98,7 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 		cancelled.WithLabelValues(reason).Add(float64(count))
 	})
 	repo.SetSentAfterCancelObserver(sentAfterCancel.Inc)
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}}, nil
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}, accumulatingSince: map[string]time.Time{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。数据集标识只接受小写：实例 ID 区分大小写，
@@ -305,9 +319,14 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 	}
 	finishedAt := o.now().UTC()
 	observation := report.DatasetObservation{Key: expectation.Key, Result: "incomplete", FinishedAt: finishedAt, InputWatermark: barEnd}
+	accumulating := false
 	if result == store.StatusOK {
 		observation.Result = "success"
 		observation.OutputWatermark = barEnd
+		delete(o.accumulatingSince, instance.InstanceID)
+	} else if accumulatingReasons[reason] && o.accumulatingLocked(instance, bar, finishedAt) {
+		observation.Result = "partial"
+		accumulating = true
 	}
 	if err := o.datasets.ObserveRun(observation); err != nil {
 		o.log("上报实例 %s 的周期运行失败：%v", instance.InstanceID, err)
@@ -315,12 +334,31 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 	switch {
 	case result == store.StatusOK:
 		_ = o.module.ObserveRun(moduleStage, "success", moduleHealthCheck, finishedAt)
+	case accumulating:
+		// 数据积累中：不是模块故障，也不计成功。
 	case failureReasons[reason]:
 		_ = o.module.ObserveRun(moduleStage, "error", moduleHealthCheck, finishedAt)
 	case reason == readiness.ReasonFactorChanged:
 		// 因子定义变化需要人工重新启用，计入模块失败以便提醒。
 		_ = o.module.ObserveRun(moduleStage, "error", moduleHealthCheck, finishedAt)
 	}
+}
+
+// accumulatingLocked 记下（首次出现时）实例进入积累期的时刻，并判断是否仍在积累期上限之内。上限取 min_age_bars 根 K 线
+// 对应的时长与 minAccumulationLimit 的较大者再加一小时：数据按时间攒，再久还不够就不是在积累。调用方持有 o.mu。
+func (o *instanceObserver) accumulatingLocked(instance store.Instance, bar string, at time.Time) bool {
+	since, ok := o.accumulatingSince[instance.InstanceID]
+	if !ok {
+		since = at
+		o.accumulatingSince[instance.InstanceID] = since
+	}
+	limit := minAccumulationLimit
+	if expectation, valid := datasetKey(instance, bar); valid {
+		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && resolved.MinAgeBars > 0 {
+			limit = max(limit, time.Duration(resolved.MinAgeBars)*expectation.Interval)
+		}
+	}
+	return at.Sub(since) <= limit+time.Hour
 }
 
 // Alert 记录需要人工处理的实例事件：写告警日志，并把模块健康检查记一次失败。

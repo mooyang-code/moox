@@ -64,6 +64,8 @@ func ChineseReason(raw string) string {
 		return "任务运行结果已过期"
 	case "success stale":
 		return "最近成功结果已过期"
+	case "warming":
+		return "数据积累中，结果暂不完整"
 	case "inventory_stale":
 		return "资源清单已过期"
 	case "check failed":

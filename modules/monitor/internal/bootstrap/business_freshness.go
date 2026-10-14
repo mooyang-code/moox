@@ -255,7 +255,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				spaceID: dataset.SpaceID,
 				checkID: checkID,
 				name:    datasetCheckName(dataset.Producer, datasetSubject(builder.Metrics.DatasetDisplayName(ctx, dataset.SpaceID, nameDatasetID), dataset.DatasetID, dataset.Freq)),
-				success: dataset.Status == "healthy",
+				success: datasetCheckPasses(dataset),
 				reason:  datasetReasonText(dataset, overview.GeneratedAt),
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
@@ -460,6 +460,12 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		return errors.Join(errs...)
 	}
+}
+
+// datasetCheckPasses 决定数据集新鲜度检查按通过还是失败记录。数据积累中（warming）页面显示降级，但生产者在正常工作、
+// 只是数据还没攒够，不是需要有人处理的故障：按通过记录，不触发也不延续告警；其余非健康状态仍按失败记录。
+func datasetCheckPasses(dataset monitorobservability.DatasetFrequencyStatus) bool {
+	return dataset.Status == "healthy" || dataset.Reason == monitorobservability.DatasetReasonWarming
 }
 
 // klineReportCoversDatasets 判断一条 K 线新鲜度报告是否让对应结果的 dataset 新鲜度检查成为重复：

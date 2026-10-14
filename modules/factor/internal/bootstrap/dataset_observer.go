@@ -93,7 +93,31 @@ func datasetResult(run domain.SetRunSummary) string {
 		return "error"
 	case run.LastStatus == "complete" && run.WarmingSubjects == 0:
 		return "success"
+	case partialByDesign(run):
+		return "partial"
 	default:
 		return "incomplete"
 	}
+}
+
+// partialByDesign 判断这一期是否只因“数据还没攒够”而不完整：失败的标的都是回看窗口空洞（窗口里缺 K 线，保护逻辑不出值，
+// 见 FactorPeriodState.GapSubjects）或预热中（结果不正式、列在失败标的里），没有别的失败。数据重置、新建因子集、重启后
+// 的第一期都是这种情况，生产者在正常工作；Monitor 据此显示“积累中”而不告警。有任何空洞与预热之外的失败就是意外的不完整。
+func partialByDesign(run domain.SetRunSummary) bool {
+	gap := map[string]struct{}{}
+	for _, factor := range run.Factors {
+		for _, subject := range factor.GapSubjects {
+			gap[subject] = struct{}{}
+		}
+	}
+	if len(gap) == 0 && run.WarmingSubjects == 0 {
+		return false
+	}
+	other := 0
+	for _, subject := range run.FailedSubjects {
+		if _, ok := gap[subject]; !ok {
+			other++
+		}
+	}
+	return other <= int(run.WarmingSubjects)
 }

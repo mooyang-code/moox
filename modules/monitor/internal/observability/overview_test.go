@@ -913,3 +913,43 @@ func seedServiceTopology(t *testing.T, repositories *store.Repositories, hostID,
 	_, err = repositories.Topology.Reconcile(t.Context(), snapshot, checks)
 	require.NoError(t, err)
 }
+
+// 生产者按设计只产出部分结果（空洞保护、历史不足、预热）时，数据集显示降级与“积累中”，而不是“尚无成功运行 / 成功过期”；
+// 只有部分结果仍按期出现才算积累，部分结果也断了就回到原来的判断，停掉的生产者不会被误当成积累。
+func TestDatasetStatusReportsWarmingWhilePartialRunsKeepArriving(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	key := datasetKey{producer: "factor", spaceID: "crypto", datasetID: "dataset_factor_1m", freq: "1m"}
+	policy := testRealtimePolicy()
+	at := func(ago time.Duration) float64 { return float64(now.Add(-ago).Unix()) }
+	base := datasetValues{interval: 60, inventory: float64(now.Unix()), lastRun: at(10 * time.Second)}
+
+	never := base
+	never.lastPartial = at(10 * time.Second)
+	got := datasetStatus(now, key, never, policy)
+	require.Equal(t, "degraded", got.Status)
+	require.Equal(t, DatasetReasonWarming, got.Reason, "从未成功过但部分结果在持续产出")
+	require.Equal(t, now.Add(-10*time.Second), got.LastPartialAt)
+
+	afterSuccess := base
+	afterSuccess.lastSuccess, afterSuccess.lastPartial = at(2*time.Hour), at(10*time.Second)
+	got = datasetStatus(now, key, afterSuccess, policy)
+	require.Equal(t, DatasetReasonWarming, got.Reason, "原来成功过、数据重置后重新积累")
+
+	recovered := base
+	recovered.lastSuccess, recovered.lastPartial = at(10*time.Second), at(5*time.Minute)
+	got = datasetStatus(now, key, recovered, policy)
+	require.Equal(t, "healthy", got.Status, "最近一次是成功就恢复健康")
+
+	partialStopped := base
+	partialStopped.lastSuccess, partialStopped.lastPartial = at(3*time.Hour), at(30*time.Minute)
+	got = datasetStatus(now, key, partialStopped, policy)
+	require.Equal(t, "success stale", got.Reason, "部分结果也断了，回到成功过期")
+
+	producerStopped := datasetValues{interval: 60, inventory: float64(now.Unix()), lastRun: at(10 * time.Minute), lastPartial: at(10 * time.Minute)}
+	got = datasetStatus(now, key, producerStopped, policy)
+	require.Equal(t, "run stale", got.Reason, "生产者停了仍然是 stale，不会被当成积累")
+
+	noPartial := base
+	got = datasetStatus(now, key, noPartial, policy)
+	require.Equal(t, "尚无成功运行", got.Reason, "没有部分结果上报时保持原样")
+}

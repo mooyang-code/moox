@@ -81,3 +81,30 @@ func requireDatasetValue(t *testing.T, registry *prometheus.Registry, name, data
 	require.True(t, found, "%s for %s", name, datasetID)
 	require.Equal(t, want, got, "%s for %s", name, datasetID)
 }
+
+// 失败只来自回看窗口空洞或预热中的运行记为 partial（数据积累中，Monitor 不告警）；
+// 有空洞与预热之外的失败是意外的不完整，仍记 incomplete；失败与完整照旧。
+func TestDatasetResultClassifiesRunsThatAreIncompleteOnlyBecauseDataIsAccumulating(t *testing.T) {
+	gapOnly := domain.SetRunSummary{
+		LastStatus: "degraded", FailedSubjects: []string{"A", "B"},
+		Factors: []domain.FactorPeriodState{{FactorID: "f1", FailedSubjects: []string{"A", "B"}, GapSubjects: []string{"A", "B"}}},
+	}
+	require.Equal(t, "partial", datasetResult(gapOnly))
+
+	warmingOnly := domain.SetRunSummary{LastStatus: "degraded", WarmingSubjects: 507, FailedSubjects: []string{"A", "B", "C"}}
+	require.Equal(t, "partial", datasetResult(warmingOnly), "预热中的标的也列在失败标的里")
+
+	mixed := domain.SetRunSummary{
+		LastStatus: "degraded", WarmingSubjects: 1, FailedSubjects: []string{"A", "B"},
+		Factors: []domain.FactorPeriodState{{FactorID: "f1", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
+	}
+	require.Equal(t, "partial", datasetResult(mixed), "A 是空洞，B 是预热中的标的（预热标的也列在失败标的里）")
+	mixed.FailedSubjects = []string{"A", "B", "C"}
+	require.Equal(t, "incomplete", datasetResult(mixed), "C 既不是空洞也不是预热：意外的失败")
+
+	realFailure := domain.SetRunSummary{LastStatus: "degraded", FailedSubjects: []string{"A"}, Factors: []domain.FactorPeriodState{{FactorID: "f1", FailedSubjects: []string{"A"}}}}
+	require.Equal(t, "incomplete", datasetResult(realFailure), "没有空洞也没有预热的降级是意外的")
+
+	require.Equal(t, "error", datasetResult(domain.SetRunSummary{LastStatus: "failed", WarmingSubjects: 3}))
+	require.Equal(t, "success", datasetResult(domain.SetRunSummary{LastStatus: "complete"}))
+}
