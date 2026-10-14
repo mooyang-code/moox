@@ -87,7 +87,8 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	}
 	pipelineConfig := pipeline.Config{
 		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
-		ReadTimeout:         cfg.Pipeline.ReadTimeout,
+		ReadTimeout:     cfg.Pipeline.ReadTimeout,
+		BulkReadWorkers: cfg.Pipeline.BulkReadWorkers, ReadRetryBackoff: cfg.Pipeline.ReadRetryBackoff, ReadBreakerFailures: cfg.Pipeline.ReadBreakerFailures,
 		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
 		PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
 	}

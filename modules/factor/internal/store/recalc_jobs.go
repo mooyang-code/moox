@@ -134,14 +134,24 @@ func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, 
 	}
 	var stored RecalcJob
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 同一个因子集连续启用多个成员时，只保留一个还没开始跑的回填任务，把新成员并进去：
+		// 每个成员各建一个全量回填任务，会让同一个窗口被重复读 N 遍（11 个因子就是 11 遍）。
+		merged, mergeErr := mergeQueuedEnableBackfill(tx, job, factorID)
+		if mergeErr != nil {
+			return mergeErr
+		}
 		var created bool
 		var insertErr error
-		stored, created, insertErr = insertRecalcJob(tx, job, factorIDsJSON, subjectsJSON)
-		if insertErr != nil {
-			return insertErr
-		}
-		if !created && !sameRecalcRequest(stored, job) {
-			return fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
+		if merged != nil {
+			stored, created = *merged, true
+		} else {
+			stored, created, insertErr = insertRecalcJob(tx, job, factorIDsJSON, subjectsJSON)
+			if insertErr != nil {
+				return insertErr
+			}
+			if !created && !sameRecalcRequest(stored, job) {
+				return fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
+			}
 		}
 		result := tx.Exec(`
 			UPDATE t_factor_set_members SET c_status = ?, c_mtime = ?
@@ -172,6 +182,57 @@ func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, 
 		return RecalcJob{}, err
 	}
 	return stored, nil
+}
+
+// enableBackfillRequestPrefix 是启用成员时生成的回填任务的请求号前缀，只有这类任务才会被合并。
+const enableBackfillRequestPrefix = "factor-enable-"
+
+// mergeQueuedEnableBackfill 把新启用的成员并进同一因子集里排队中、尚未被引擎领取的回填任务，窗口取两者的并集；
+// 没有可合并的任务时返回 nil，由调用方新建。手工补算（请求号不是 factor-enable- 开头）、已领取或已结束的任务不合并。
+func mergeQueuedEnableBackfill(tx *gorm.DB, job RecalcJob, factorID string) (*RecalcJob, error) {
+	var row recalcJobRow
+	lookup := tx.Raw(`
+		SELECT `+recalcJobColumns+`
+		FROM t_factor_recalc_jobs
+		WHERE c_set_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = '' AND c_request_id LIKE ?
+		  AND c_subjects_omitted = 0 AND c_factors_omitted = 0
+		ORDER BY c_ctime, c_job_id LIMIT 1
+	`, job.SetID, RecalcStatusAccepted, enableBackfillRequestPrefix+"%").Scan(&row)
+	if lookup.Error != nil {
+		return nil, lookup.Error
+	}
+	if lookup.RowsAffected == 0 {
+		return nil, nil
+	}
+	existing, err := row.job()
+	if err != nil {
+		return nil, err
+	}
+	if len(existing.Subjects) != len(job.Subjects) {
+		return nil, nil
+	}
+	factors := append([]string(nil), existing.FactorIDs...)
+	if !containsString(factors, factorID) {
+		factors = append(factors, factorID)
+	}
+	sort.Strings(factors)
+	factorsJSON, err := marshalStringSlice(factors)
+	if err != nil {
+		return nil, err
+	}
+	start, end := min(existing.StartTime, job.StartTime), max(existing.EndTime, job.EndTime)
+	result := tx.Exec(`
+		UPDATE t_factor_recalc_jobs SET c_factor_ids_json = ?, c_start_time = ?, c_end_time = ?, c_mtime = ?
+		WHERE c_job_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = ''
+	`, factorsJSON, start, end, time.Now().UTC(), existing.JobID, RecalcStatusAccepted)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	existing.FactorIDs, existing.StartTime, existing.EndTime = factors, start, end
+	return &existing, nil
 }
 
 func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {

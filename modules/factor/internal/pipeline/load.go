@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
@@ -99,6 +101,10 @@ func (r *Runner) readSubjects(ctx context.Context, plan Plan, reads map[string]s
 	if batchSize < 1 {
 		batchSize = 100
 	}
+	// 补算和预热整窗口读取：并发再按 BulkReadWorkers 收敛，实时读取不受影响。
+	if pageDeadline && r.cfg.BulkReadWorkers > 0 {
+		workerLimit = min(workerLimit, r.cfg.BulkReadWorkers)
+	}
 	groups := make(map[time.Time][]string)
 	var starts []time.Time
 	for _, subject := range uniqueSorted(keysOf(reads)) {
@@ -122,6 +128,11 @@ func (r *Runner) readSubjects(ctx context.Context, plan Plan, reads map[string]s
 		return frames, failed, nil
 	}
 	workers := max(1, min(workerLimit, len(jobs)))
+	// 只有批量读取才用断路：实时读取的批次少、要快速失败，连续失败也不能拖累下一期。
+	breaker := &readBreaker{limit: 0}
+	if pageDeadline {
+		breaker.limit = int32(r.cfg.ReadBreakerFailures)
+	}
 	type batchResult struct {
 		subjects []string
 		frames   map[string]*storageio.Frame
@@ -135,7 +146,14 @@ func (r *Runner) readSubjects(ctx context.Context, plan Plan, reads map[string]s
 		go func() {
 			defer workersDone.Done()
 			for job := range queue {
-				batch, err := r.readBatch(ctx, plan, job.start, job.subjects, pageDeadline)
+				var batch map[string]*storageio.Frame
+				var err error
+				if breaker.open() {
+					err = fmt.Errorf("%w: read circuit open after %d consecutive failed batches", storageio.ErrInfra, breaker.failures.Load())
+				} else {
+					batch, err = r.readBatch(ctx, plan, job.start, job.subjects, pageDeadline)
+					breaker.record(err)
+				}
 				results <- batchResult{subjects: job.subjects, frames: batch, err: err}
 				if pause > 0 {
 					select {
@@ -231,8 +249,63 @@ func (r *Runner) readBatch(ctx context.Context, plan Plan, start time.Time, subj
 		// log each attempt so the cause (timeout, Storage error) is visible.
 		log.Warnf("factor_read_batch_failed set_id=%s subjects=%d first=%s attempt=%d/%d after=%s timeout=%s error=%v",
 			plan.Set.SetID, len(subjects), subjects[0], attempt+1, retries+1, time.Since(attemptStart).Round(time.Millisecond), timeout, err)
+		// 批量读取失败后先退避再重试：Storage 已经读不动时，立即重试只会让它更慢。实时读取不等待。
+		if pageDeadline && attempt < retries {
+			if waitErr := sleepContext(ctx, retryDelay(r.cfg.ReadRetryBackoff, attempt)); waitErr != nil {
+				return nil, waitErr
+			}
+		}
 	}
 	return nil, lastErr
+}
+
+// maxReadRetryDelay 是两次重试之间等待的上限。
+const maxReadRetryDelay = 30 * time.Second
+
+// retryDelay 返回第 attempt（从 0 开始）次失败之后的等待：base 按 2 的幂递增，加减 20% 的抖动，不超过 maxReadRetryDelay。
+func retryDelay(base time.Duration, attempt int) time.Duration {
+	delay := base
+	for i := 0; i < attempt && delay < maxReadRetryDelay; i++ {
+		delay *= 2
+	}
+	delay = min(delay, maxReadRetryDelay)
+	if jitter := int64(delay / 5); jitter > 0 {
+		delay += time.Duration(rand.Int64N(2*jitter+1) - jitter)
+	}
+	return delay
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// readBreaker 统计一次批量读取里连续失败的批次数；达到 limit 后 open 为真，其余批次不再发请求。
+type readBreaker struct {
+	limit    int32
+	failures atomic.Int32
+}
+
+func (b *readBreaker) open() bool { return b.limit > 0 && b.failures.Load() >= b.limit }
+
+func (b *readBreaker) record(err error) {
+	if b.limit <= 0 {
+		return
+	}
+	if err != nil {
+		b.failures.Add(1)
+		return
+	}
+	b.failures.Store(0)
 }
 
 // RunWarmup loads the lookback window of the subjects live periods left out as

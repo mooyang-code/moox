@@ -110,14 +110,24 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 			hostRules++
 			_, metric, _ := hostmetrics.ParseHostRuleKey(rule.CheckID)
 			wantFailureThreshold := 20
-			if metric == hostmetrics.HostMetricFilesystemUsage {
+			switch metric {
+			case hostmetrics.HostMetricFilesystemUsage:
 				wantFailureThreshold = 3
+			case hostmetrics.HostMetricCPU:
+				wantFailureThreshold = 12
 			}
 			if rule.FailureThreshold != wantFailureThreshold {
 				t.Fatalf("host %s failure threshold = %d, want %d", metric, rule.FailureThreshold, wantFailureThreshold)
 			}
 			if metric == hostmetrics.HostMetricFilesystemUsage && rule.Description != `{"threshold":85,"recovery_threshold":80}` {
 				t.Fatalf("filesystem alert definition = %s", rule.Description)
+			}
+			// CPU 的阈值要能抓住“某个进程把几核主机吃到八九成”这种持续高负载：80%、约 3 分钟。
+			if metric == hostmetrics.HostMetricCPU && rule.Description != `{"threshold":80,"recovery_threshold":70}` {
+				t.Fatalf("cpu alert definition = %s", rule.Description)
+			}
+			if metric == hostmetrics.HostMetricMemory && rule.Description != `{"threshold":90,"recovery_threshold":80}` {
+				t.Fatalf("memory alert definition = %s", rule.Description)
 			}
 		}
 	}

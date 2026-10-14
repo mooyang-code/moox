@@ -208,3 +208,42 @@ func TestReportStopsJobWhenMemberOrSetDisabledBetweenChunks(t *testing.T) {
 		})
 	}
 }
+
+// 同时只跑一个补算任务：补算整窗口读取源数据，并发的回填会让 DataNode 读不动在线计算。
+func TestPullRunsOneRecalcJobAtATimeByDefault(t *testing.T) {
+	hub, db, clock := newTestHub(t)
+	for _, setID := range []string{"set_a", "set_b"} {
+		seedSet(t, db, setID, map[string]string{"bias": domain.MemberStatusEnabled})
+		hub.SetResultReady(setID, true)
+		seedJob(t, db, "job-"+setID, setID)
+	}
+	leaseEngineA(t, hub)
+	require.Equal(t, DefaultMaxRunningJobs, hub.maxRunningJobs)
+
+	first, _, found, err := hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "job-set_a", first.JobID)
+
+	_, _, found, err = hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	require.False(t, found, "第一个任务还在运行，不再发出第二个")
+
+	// 第一个任务结束后才轮到下一个。
+	_, err = hub.Report(context.Background(), engineA, first.JobID, first.LeaseToken, time.Unix(600, 0), store.RecalcStatusSucceeded, "")
+	require.NoError(t, err)
+	second, _, found, err := hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "job-set_b", second.JobID)
+
+	// 显式放开上限后可以并行。
+	hub.maxRunningJobs = 0
+	seedSet(t, db, "set_c", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("set_c", true)
+	seedJob(t, db, "job-set_c", "set_c")
+	clock.Advance(time.Second)
+	_, _, found, err = hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	require.True(t, found)
+}

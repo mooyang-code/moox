@@ -22,7 +22,7 @@ type Store interface {
 	ListSets(ctx context.Context) ([]domain.FactorSet, error)
 	GetSet(ctx context.Context, setID string) (domain.FactorSet, error)
 	ListMembers(ctx context.Context, setID, status string) ([]domain.SetMember, error)
-	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool) (store.RecalcJob, bool, error)
+	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool, maxRunning int) (store.RecalcJob, bool, error)
 	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, now time.Time, ttl time.Duration) (store.RecalcJob, error)
 	GetRecalcJob(ctx context.Context, jobID string) (store.RecalcJob, error)
 }
@@ -30,6 +30,9 @@ type Store interface {
 const (
 	DefaultEngineLeaseTTL = 45 * time.Second
 	DefaultJobLeaseTTL    = 15 * time.Minute
+	// DefaultMaxRunningJobs 同时只跑一个补算任务：补算整窗口读取源数据，DataNode 通常只有几个核，
+	// 并发的回填会让在线计算也读不动（2026-10-14 两个 1h 因子集同时回填把 storage-node 打到 330% CPU）。
+	DefaultMaxRunningJobs = 1
 )
 
 type Option func(*Hub)
@@ -42,11 +45,16 @@ func WithEngineLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.engi
 // progress report; it must exceed the duration of one recalc chunk.
 func WithJobLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.jobTTL = ttl } }
 
+// WithMaxRunningJobs 设置同时运行的补算任务上限（所有引擎合计），0 表示不限制。
+func WithMaxRunningJobs(n int) Option { return func(h *Hub) { h.maxRunningJobs = n } }
+
 type Hub struct {
 	store     Store
 	engineTTL time.Duration
 	jobTTL    time.Duration
 	now       func() time.Time
+	// maxRunningJobs 是同时运行的补算任务上限。补算按整窗口读取源数据，同时跑的任务多了会把 Storage 打满。
+	maxRunningJobs int
 
 	mu     sync.Mutex
 	ready  map[string]bool
@@ -60,7 +68,7 @@ type engineState struct {
 }
 
 func New(db Store, options ...Option) *Hub {
-	h := &Hub{store: db, engineTTL: DefaultEngineLeaseTTL, jobTTL: DefaultJobLeaseTTL, now: time.Now, ready: make(map[string]bool)}
+	h := &Hub{store: db, engineTTL: DefaultEngineLeaseTTL, jobTTL: DefaultJobLeaseTTL, maxRunningJobs: DefaultMaxRunningJobs, now: time.Now, ready: make(map[string]bool)}
 	for _, option := range options {
 		if option != nil {
 			option(h)

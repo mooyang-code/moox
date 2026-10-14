@@ -355,6 +355,7 @@ func TestEnableMemberRevalidatesThenAddsColumnsThenSubmitsRecalc(t *testing.T) {
 	svc := newReadyService(t, db, meta)
 	now := time.Date(2026, 10, 4, 10, 3, 37, 0, time.UTC)
 	svc.now = func() time.Time { return now }
+	svc.maxBackfillPeriods = 0 // 本用例验证窗口取结果数据集的保留期；期数上限见 TestBackfillWindowIsCappedToTheMostRecentPeriods
 	recalc := &recalcFake{db: db}
 	svc.recalc = recalc
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusDisabled)
@@ -389,6 +390,7 @@ func TestUnlimitedRetentionBackfillStartsAtEarliestSourcePeriod(t *testing.T) {
 	svc := newReadyService(t, db, meta)
 	now := time.Date(2026, 10, 4, 10, 3, 37, 0, time.UTC)
 	svc.now = func() time.Time { return now }
+	svc.maxBackfillPeriods = 0
 	set, err := db.GetSet(context.Background(), domain.SetID("dataset_prices", "1m"))
 	require.NoError(t, err)
 	result := meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)]
@@ -1052,4 +1054,45 @@ func TestResultDatasetNameIsDerivedFromItsSource(t *testing.T) {
 	require.Equal(t, "一二三四五六七八因子", long)
 	require.LessOrEqual(t, len([]rune(long)), maxResultDatasetNameRunes)
 	require.Equal(t, "因子结果", resultDatasetName(" "))
+}
+
+// 回填默认只取最近 maxBackfillPeriods 期：更早的因子结果没有读取方，却要把整段源数据窗口读一遍
+// （2026-10-14 两个 1h 因子集按结果数据集的保留期回填一整年，把 storage-node 打到 330% CPU）。
+func TestBackfillWindowIsCappedToTheMostRecentPeriods(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	now := time.Date(2026, 10, 4, 10, 3, 37, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	set, err := db.GetSet(context.Background(), domain.SetID("dataset_prices", "1m"))
+	require.NoError(t, err)
+	end := time.Date(2026, 10, 4, 10, 3, 0, 0, time.UTC)
+
+	// 默认上限：结果数据集的保留期是 30 天（43200 期），只回填最近 5000 期。
+	require.Equal(t, DefaultMaxBackfillPeriods, svc.maxBackfillPeriods)
+	start, gotEnd, err := svc.backfillWindow(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, end, gotEnd)
+	require.Equal(t, end.Add(-5000*time.Minute), start)
+
+	// 保留期比上限短时按保留期。
+	svc.maxBackfillPeriods = 100000
+	start, _, err = svc.backfillWindow(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 9, 4, 10, 3, 0, 0, time.UTC), start)
+
+	// 保留期无限、源数据最早的一期更早：同样受上限约束；最早的一期比上限更近时取最早的一期。
+	svc.maxBackfillPeriods = 5000
+	result := meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)]
+	result.Retention = "forever"
+	meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)] = result
+	svc.earliestPeriod = &earliestPeriodFake{period: time.Date(2025, 1, 2, 3, 4, 25, 0, time.UTC), found: true}
+	start, _, err = svc.backfillWindow(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, end.Add(-5000*time.Minute), start)
+	recent := end.Add(-90 * time.Minute)
+	svc.earliestPeriod = &earliestPeriodFake{period: recent, found: true}
+	start, _, err = svc.backfillWindow(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, recent, start)
 }

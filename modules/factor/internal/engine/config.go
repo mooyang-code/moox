@@ -76,6 +76,10 @@ type PipelineConfig struct {
 	ReadBatchSubjects int           `yaml:"read_batch_subjects"`
 	ReadWorkers       int           `yaml:"read_workers"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
+	// 补算与预热读窗口的并发上限、失败后重试前的退避基数、连续失败多少个批次后断路（负数关闭）。
+	BulkReadWorkers     int           `yaml:"bulk_read_workers"`
+	ReadRetryBackoff    time.Duration `yaml:"read_retry_backoff"`
+	ReadBreakerFailures int           `yaml:"read_breaker_failures"`
 	// 预热读取节流（默认 10 个标的一批、1 个并发、批间停顿 500ms）。
 	WarmupBatchSubjects int           `yaml:"warmup_batch_subjects"`
 	WarmupWorkers       int           `yaml:"warmup_workers"`
@@ -162,6 +166,7 @@ func Default() *Config {
 		},
 		Pipeline: PipelineConfig{
 			ReadBatchSubjects: 100, ReadWorkers: autoReadWorkers(runtime.NumCPU()), ReadTimeout: 60 * time.Second,
+			BulkReadWorkers: 4, ReadRetryBackoff: 2 * time.Second, ReadBreakerFailures: 3,
 			WarmupBatchSubjects: 10, WarmupWorkers: 1, WarmupBatchPause: 500 * time.Millisecond,
 			WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute,
 		},
@@ -189,6 +194,9 @@ func (c *Config) applyDefaults() {
 	setInt(&c.Pipeline.ReadBatchSubjects, d.Pipeline.ReadBatchSubjects)
 	setInt(&c.Pipeline.ReadWorkers, d.Pipeline.ReadWorkers)
 	setDuration(&c.Pipeline.ReadTimeout, d.Pipeline.ReadTimeout)
+	setInt(&c.Pipeline.BulkReadWorkers, d.Pipeline.BulkReadWorkers)
+	setDuration(&c.Pipeline.ReadRetryBackoff, d.Pipeline.ReadRetryBackoff)
+	setInt(&c.Pipeline.ReadBreakerFailures, d.Pipeline.ReadBreakerFailures)
 	setInt(&c.Pipeline.WarmupBatchSubjects, d.Pipeline.WarmupBatchSubjects)
 	setInt(&c.Pipeline.WarmupWorkers, d.Pipeline.WarmupWorkers)
 	setDuration(&c.Pipeline.WarmupBatchPause, d.Pipeline.WarmupBatchPause)

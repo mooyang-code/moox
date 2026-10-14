@@ -27,7 +27,7 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 		return store.RecalcJob{}, domain.EngineSet{}, false, err
 	}
 	for attempt := 0; attempt < maxPullAttempts; attempt++ {
-		job, found, err := h.store.PullRecalcJob(ctx, id.EngineID, now, h.jobTTL, skip)
+		job, found, err := h.store.PullRecalcJob(ctx, id.EngineID, now, h.jobTTL, skip, h.maxRunningJobs)
 		if err != nil || !found {
 			return store.RecalcJob{}, domain.EngineSet{}, false, err
 		}

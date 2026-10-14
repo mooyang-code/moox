@@ -55,6 +55,9 @@ type Window struct {
 
 const defaultChunkPeriods = 2000
 
+// maxChunkRetryBackoff 是同一个补算分块两次重试之间等待的上限。
+const maxChunkRetryBackoff = 2 * time.Minute
+
 type config struct {
 	chunkPeriods int
 	chunkRetries int
@@ -207,7 +210,8 @@ func (e *Executor) runChunkWithRetry(ctx context.Context, source SelectionSource
 		if !errors.Is(err, storageio.ErrInfra) || attempt == e.chunkRetries {
 			break
 		}
-		timer := time.NewTimer(time.Duration(attempt) * e.retryBackoff)
+		// 指数退避（5s、10s、20s…，最长 2 分钟）：Storage 读不动时，线性的短等待只会让重试堆在一起。
+		timer := time.NewTimer(min(e.retryBackoff<<(attempt-1), maxChunkRetryBackoff))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

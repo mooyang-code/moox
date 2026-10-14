@@ -52,6 +52,15 @@ type Config struct {
 	ReadBatchSubjects int
 	ReadWorkers       int
 	ReadRetries       int
+	// BulkReadWorkers 是补算与预热读取窗口的并发上限。ReadWorkers 按引擎所在机器的核数取值，
+	// 而 DataNode 往往只有几个核；补算整窗口读取时，十几路并发读取会把它打满，所以批量读取再按这个上限收敛。
+	BulkReadWorkers int
+	// ReadRetryBackoff 是批量读取失败后、重试之前等待的基数，按 2 的幂递增并有上限，避免对已经吃紧的 Storage 立即重试。
+	// 实时读取要快速失败，不等待。
+	ReadRetryBackoff time.Duration
+	// ReadBreakerFailures 是一次批量读取中连续失败多少个批次后，其余批次不再发请求、直接失败；
+	// 防止每个批次各自耗尽超时和重试，把读不动的 Storage 压得更久。0 表示关闭。
+	ReadBreakerFailures int
 	// 后台预热的读取节流：批量更小、并发更低、每批之后停顿，预热时间可以长一些。
 	WarmupBatchSubjects int
 	WarmupWorkers       int
@@ -102,6 +111,15 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 	}
 	if cfg.ReadRetries <= 0 {
 		cfg.ReadRetries = 2
+	}
+	if cfg.BulkReadWorkers <= 0 {
+		cfg.BulkReadWorkers = 4
+	}
+	if cfg.ReadRetryBackoff <= 0 {
+		cfg.ReadRetryBackoff = 2 * time.Second
+	}
+	if cfg.ReadBreakerFailures == 0 {
+		cfg.ReadBreakerFailures = 3
 	}
 	if cfg.ReadTimeout <= 0 {
 		cfg.ReadTimeout = 60 * time.Second

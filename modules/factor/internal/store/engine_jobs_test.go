@@ -15,7 +15,10 @@ func seedPullJob(t *testing.T, s *Store, jobID, setID string) RecalcJob {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := s.GetSet(ctx, setID); err != nil {
-		require.NoError(t, s.CreateSet(ctx, testSet(setID, domain.SetStatusEnabled)))
+		// 每个因子集的数据源和结果数据集必须各不相同（数据库对 空间+数据源+频率 有唯一约束）。
+		set := testSet(setID, domain.SetStatusEnabled)
+		set.SourceDatasetID, set.ResultDatasetID = "dataset_"+setID, "dataset_factor_"+setID
+		require.NoError(t, s.CreateSet(ctx, set))
 	}
 	job, err := s.CreateRecalcJob(ctx, RecalcJob{
 		JobID: jobID, RequestID: jobID, SetID: setID, StartTime: 100, EndTime: 400,
@@ -37,7 +40,7 @@ func TestPullRecalcJobIsAtomic(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, ok, err := s.PullRecalcJob(context.Background(), fmt.Sprintf("engine-%d", i), pullNow, time.Minute, nil)
+			_, ok, err := s.PullRecalcJob(context.Background(), fmt.Sprintf("engine-%d", i), pullNow, time.Minute, nil, 0)
 			require.NoError(t, err)
 			if ok {
 				mu.Lock()
@@ -54,7 +57,7 @@ func TestPullMarksJobRunningWithLease(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
 
-	job, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -71,7 +74,7 @@ func TestPullPrefersOldestAccepted(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	seedPullJob(t, s, "job-new", "set_a")
 
-	job, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -81,11 +84,11 @@ func TestPullPrefersOldestAccepted(t *testing.T) {
 func TestPullSkipsLiveLease(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	_, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	_, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	_, ok, err = s.PullRecalcJob(context.Background(), "engine-b", pullNow.Add(30*time.Second), time.Minute, nil)
+	_, ok, err = s.PullRecalcJob(context.Background(), "engine-b", pullNow.Add(30*time.Second), time.Minute, nil, 0)
 
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -94,13 +97,13 @@ func TestPullSkipsLiveLease(t *testing.T) {
 func TestPullReclaimsExpiredRunningLease(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	first, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	first, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
 	_, err = s.ReportRecalcProgress(context.Background(), first.JobID, first.LeaseToken, 200, RecalcStatusRunning, "", pullNow, time.Minute)
 	require.NoError(t, err)
 
-	second, ok, err := s.PullRecalcJob(context.Background(), "engine-b", pullNow.Add(2*time.Minute), time.Minute, nil)
+	second, ok, err := s.PullRecalcJob(context.Background(), "engine-b", pullNow.Add(2*time.Minute), time.Minute, nil, 0)
 
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -114,7 +117,7 @@ func TestPullSkipsExcludedSets(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
 
-	_, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, map[string]bool{"set_a": true})
+	_, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, map[string]bool{"set_a": true}, 0)
 
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -123,7 +126,7 @@ func TestPullSkipsExcludedSets(t *testing.T) {
 func TestReportProgressRejectsWrongToken(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
 	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, "stale-token", 200, RecalcStatusRunning, "", pullNow, time.Minute)
@@ -134,7 +137,7 @@ func TestReportProgressRejectsWrongToken(t *testing.T) {
 func TestReportProgressExtendsLease(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	later := pullNow.Add(50 * time.Second)
 
@@ -148,7 +151,7 @@ func TestReportProgressExtendsLease(t *testing.T) {
 func TestReportProgressCompletesJob(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
 	done, err := s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 400, RecalcStatusSucceeded, "degraded: failed_subjects=1", pullNow, time.Minute)
@@ -156,7 +159,7 @@ func TestReportProgressCompletesJob(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, RecalcStatusSucceeded, done.Status)
 	require.Equal(t, "degraded: failed_subjects=1", done.Error)
-	_, ok, err := s.PullRecalcJob(context.Background(), "engine-b", pullNow.Add(time.Hour), time.Minute, nil)
+	_, ok, err := s.PullRecalcJob(context.Background(), "engine-b", pullNow.Add(time.Hour), time.Minute, nil, 0)
 	require.NoError(t, err)
 	require.False(t, ok, "a finished job is never pulled again")
 }
@@ -164,7 +167,7 @@ func TestReportProgressCompletesJob(t *testing.T) {
 func TestReportProgressReturnsCancelled(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	_, err = s.UpdateRecalcJob(context.Background(), job.JobID, func(current *RecalcJob) error {
 		current.Status = RecalcStatusCancelled
@@ -182,7 +185,7 @@ func TestReportProgressReturnsCancelled(t *testing.T) {
 func TestReportProgressRejectsRegression(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 300, RecalcStatusRunning, "", pullNow, time.Minute)
 	require.NoError(t, err)
@@ -195,10 +198,37 @@ func TestReportProgressRejectsRegression(t *testing.T) {
 func TestReportProgressRejectsUnknownStatus(t *testing.T) {
 	s := openTestStore(t)
 	seedPullJob(t, s, "job-1", "set_a")
-	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil)
+	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
 	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusCancelled, "", pullNow, time.Minute)
 
 	require.Error(t, err)
+}
+
+// 补算按整窗口读取源数据，同时跑的任务有上限；上限在领取的同一个事务里判断。
+func TestPullRecalcJobHonorsTheRunningLimit(t *testing.T) {
+	s := openTestStore(t)
+	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-2", "set_b")
+	ctx := context.Background()
+
+	first, ok, err := s.PullRecalcJob(ctx, "engine-a", pullNow, time.Minute, nil, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "job-1", first.JobID)
+
+	_, ok, err = s.PullRecalcJob(ctx, "engine-b", pullNow.Add(10*time.Second), time.Minute, nil, 1)
+	require.NoError(t, err)
+	require.False(t, ok, "已有一个任务在运行（租约未过期），上限为 1 时不再发出新任务")
+
+	second, ok, err := s.PullRecalcJob(ctx, "engine-b", pullNow.Add(10*time.Second), time.Minute, nil, 2)
+	require.NoError(t, err)
+	require.True(t, ok, "上限为 2 时可以再领一个")
+	require.Equal(t, "job-2", second.JobID)
+
+	// 租约过期的运行中任务不占名额：上限为 1 时，过期之后可以领取。
+	_, ok, err = s.PullRecalcJob(ctx, "engine-c", pullNow.Add(time.Hour), time.Minute, nil, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
 }

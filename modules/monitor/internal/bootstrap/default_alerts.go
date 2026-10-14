@@ -97,6 +97,9 @@ func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories)
 	return nil, fmt.Errorf("default alert checks exceed %d pages", maxDefaultCheckPages)
 }
 
+// hostCPUFailureThreshold 是 CPU 告警需要连续超过阈值的采样次数。HostAgent 每 15 秒采样一次，12 次约 3 分钟。
+const hostCPUFailureThreshold = 12
+
 func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Repositories, registry *hostmetrics.Registry) error {
 	if repositories == nil || registry == nil {
 		return fmt.Errorf("default host alerts require repositories and registry")
@@ -109,7 +112,9 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 		return err
 	}
 	definitions := map[string]string{
-		hostmetrics.HostMetricCPU:    `{"threshold":90,"recovery_threshold":80}`,
+		// CPU 阈值取 80%、连续 12 次采样（约 3 分钟）：2026-10-14 两个 1h 因子集回填，storage-node 吃掉 4 核主机的
+		// 330%–380% CPU（整机 82%–95%），读窗口一再超时，却没有一次连续 20 次（5 分钟）都不低于 90%，原来的规则一条告警也没出。
+		hostmetrics.HostMetricCPU:    `{"threshold":80,"recovery_threshold":70}`,
 		hostmetrics.HostMetricMemory: `{"threshold":90,"recovery_threshold":80}`,
 		// Filesystem pressure is the leading cause of Storage/View outages. Start
 		// warning before the disk is full and evaluate it quickly enough to leave
@@ -128,6 +133,9 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 	for _, agent := range agents {
 		for metric, definition := range definitions {
 			failureThreshold := 20
+			if metric == hostmetrics.HostMetricCPU {
+				failureThreshold = hostCPUFailureThreshold
+			}
 			if metric == hostmetrics.HostMetricFilesystemUsage {
 				// HostAgent samples every 15 seconds. Three consecutive samples
 				// provide a short, debounced disk alert without paging on one

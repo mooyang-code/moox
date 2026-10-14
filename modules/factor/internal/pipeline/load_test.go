@@ -323,3 +323,116 @@ func TestLoadLiveWarmsUpInBackground(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC", "ETH"}, loaded.WarmingSubjects, "a subject too far behind warms up again")
 }
+
+func recalcLoadPlan(subjects ...string) Plan {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	plan := computePlan(target, []domain.FactorDef{testPipelineFactor("momentum", domain.FactorTypeTimeSeries, 2, false)}, subjects)
+	plan.Mode = ModeRecalc
+	return plan
+}
+
+func manySubjects(n int) []string {
+	subjects := make([]string, n)
+	for i := range subjects {
+		subjects[i] = fmt.Sprintf("S%02d", i)
+	}
+	return subjects
+}
+
+// 补算整窗口读取时，并发读取按 BulkReadWorkers 收敛：ReadWorkers 随引擎机器的核数增长，DataNode 却没有那么多核。
+func TestBulkReadsAreCappedByBulkReadWorkers(t *testing.T) {
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
+	store := &fakeStore{read: func(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+		mu.Lock()
+		inFlight++
+		peak = max(peak, inFlight)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return emptyFrames(req), nil
+	}}
+	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadBatchSubjects: 1, ReadWorkers: 16, BulkReadWorkers: 3})
+	_, err := runner.Load(context.Background(), recalcLoadPlan(manySubjects(24)...))
+	require.NoError(t, err)
+	require.Equal(t, 3, peak, "补算读取的并发不超过 BulkReadWorkers")
+
+	// 实时读取不受这个上限影响。
+	peak = 0
+	live := loadPlan(manySubjects(24))
+	_, err = runner.Load(context.Background(), live)
+	require.NoError(t, err)
+	require.Greater(t, peak, 3)
+}
+
+// 连续失败的批次达到上限后，其余批次不再发请求：每个批次各自耗尽超时和重试，只会把已经读不动的 Storage 压得更久。
+func TestBulkReadCircuitOpensAfterConsecutiveFailedBatches(t *testing.T) {
+	var calls atomic.Int32
+	store := &fakeStore{read: func(context.Context, storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+		calls.Add(1)
+		return nil, errors.New("i/o timeout")
+	}}
+	config := Config{ReadBatchSubjects: 1, ReadWorkers: 1, BulkReadWorkers: 1, ReadRetries: 1, ReadRetryBackoff: time.Millisecond, ReadBreakerFailures: 2}
+	_, err := NewRunner(store, nil, periodclock.Continuous{}, config).Load(context.Background(), recalcLoadPlan(manySubjects(10)...))
+	require.ErrorIs(t, err, storageio.ErrInfra)
+	require.Equal(t, int32(4), calls.Load(), "2 个批次各读 2 次（1 次重试）后断路，其余 8 个批次不再请求")
+
+	// 实时读取没有断路：每个批次都要读，失败也不影响下一期。
+	calls.Store(0)
+	live := config
+	live.ReadWorkers = 1
+	_, err = NewRunner(store, nil, periodclock.Continuous{}, live).Load(context.Background(), loadPlan(manySubjects(10)))
+	require.ErrorIs(t, err, storageio.ErrInfra)
+	require.Equal(t, int32(20), calls.Load())
+
+	// 成功的批次会清零计数：失败、成功交替时不会断路。
+	calls.Store(0)
+	flaky := &fakeStore{read: func(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+		if calls.Add(1)%3 != 0 {
+			return nil, errors.New("i/o timeout")
+		}
+		return emptyFrames(req), nil
+	}}
+	flakyConfig := config
+	flakyConfig.ReadRetries = 2
+	_, err = NewRunner(flaky, nil, periodclock.Continuous{}, flakyConfig).Load(context.Background(), recalcLoadPlan(manySubjects(6)...))
+	require.NoError(t, err)
+	require.Equal(t, int32(18), calls.Load(), "每个批次读 3 次，第 3 次成功，断路计数始终归零")
+}
+
+func TestBulkReadRetriesBackOffButLiveReadsDoNot(t *testing.T) {
+	gaps := func(plan Plan, backoff time.Duration) time.Duration {
+		var first, second time.Time
+		var calls atomic.Int32
+		store := &fakeStore{read: func(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+			switch calls.Add(1) {
+			case 1:
+				first = time.Now()
+				return nil, errors.New("i/o timeout")
+			default:
+				second = time.Now()
+				return emptyFrames(req), nil
+			}
+		}}
+		runner := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadBatchSubjects: 10, ReadWorkers: 1, ReadRetries: 1, ReadRetryBackoff: backoff})
+		_, err := runner.Load(context.Background(), plan)
+		require.NoError(t, err)
+		return second.Sub(first)
+	}
+	require.GreaterOrEqual(t, gaps(recalcLoadPlan("A"), 100*time.Millisecond), 80*time.Millisecond, "补算读取失败后先退避再重试（含 20% 抖动）")
+	require.Less(t, gaps(loadPlan([]string{"A"}), 100*time.Millisecond), 50*time.Millisecond, "实时读取立即重试")
+}
+
+func TestRetryDelayDoublesWithJitterAndIsCapped(t *testing.T) {
+	within := func(got, want time.Duration) bool { return got >= want*8/10 && got <= want*12/10 }
+	for attempt, want := range []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second} {
+		for i := 0; i < 50; i++ {
+			require.True(t, within(retryDelay(2*time.Second, attempt), want), "attempt %d", attempt)
+		}
+	}
+	for i := 0; i < 50; i++ {
+		require.LessOrEqual(t, retryDelay(2*time.Second, 20), maxReadRetryDelay*12/10)
+	}
+}

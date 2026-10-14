@@ -46,6 +46,15 @@ func WithEarliestPeriodProvider(provider EarliestPeriodProvider) Option {
 	return func(s *Service) { s.earliestPeriod = provider }
 }
 
+// DefaultMaxBackfillPeriods 是启用成员时默认回填的最大期数。
+// 时序 View 只保留最近 view_bars（默认 5000）根，更早的因子结果没有读取方；
+// 回填一整年（结果数据集的保留期）会让 DataNode 把大量早已无人读取的窗口读一遍，2026-10-14 的 1h 因子集回填就因此打满了 storage-node。
+// 需要更长的历史时，用手工补算（recalc）指定范围。
+const DefaultMaxBackfillPeriods = 5000
+
+// WithMaxBackfillPeriods 设置启用成员时默认回填的最大期数；0 表示不限制（只受结果数据集的保留期约束）。
+func WithMaxBackfillPeriods(n int) Option { return func(s *Service) { s.maxBackfillPeriods = n } }
+
 // WithReadyRecorder receives whether each set's result dataset accepted its
 // columns; the compute engine only writes to ready sets.
 func WithReadyRecorder(record func(setID string, ready bool)) Option {
@@ -62,10 +71,12 @@ type Service struct {
 	recordReady    func(setID string, ready bool)
 	locks          *setlock.Locks
 	now            func() time.Time
+	// maxBackfillPeriods 是启用成员时回填的最大期数，见 DefaultMaxBackfillPeriods。
+	maxBackfillPeriods int
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
-	s := &Service{db: db, metadata: metadata, now: time.Now, locks: setlock.New("")}
+	s := &Service{db: db, metadata: metadata, now: time.Now, locks: setlock.New(""), maxBackfillPeriods: DefaultMaxBackfillPeriods}
 	for _, option := range options {
 		if option != nil {
 			option(s)
@@ -699,6 +710,12 @@ func (s *Service) backfillWindow(ctx context.Context, set domain.FactorSet) (tim
 		}
 	} else {
 		start = floorPeriod(now.Add(-retention.Duration), periodSeconds)
+	}
+	// 回填最多取最近 maxBackfillPeriods 期：更早的因子结果没有读取方，却要把整段源数据窗口读一遍。
+	if s.maxBackfillPeriods > 0 {
+		if earliest := end.Add(-time.Duration(s.maxBackfillPeriods) * duration); start.Before(earliest) {
+			start = earliest
+		}
 	}
 	if _, err := clock.Align(start, set.Freq); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("align factor backfill start: %w", err)

@@ -18,7 +18,9 @@ const pullableCondition = `(c_status = 'accepted' OR (c_status = 'running' AND c
 // PullRecalcJob atomically leases the oldest pullable job to engineID. Jobs of
 // sets in skipSets are left for a later pull. The returned job carries the new
 // lease token; found is false when no job is pullable.
-func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool) (RecalcJob, bool, error) {
+// maxRunning 是同时运行（租约未过期）的补算任务上限，达到上限时不再发出新任务；0 表示不限制。
+// 补算和回填会整窗口读取源数据，并发多了会打满 Storage（2026-10-14 的 1h 因子集回填），上限与领取在同一个事务里判断。
+func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool, maxRunning int) (RecalcJob, bool, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, false, fmt.Errorf("factor database is not open")
 	}
@@ -34,6 +36,15 @@ func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Tim
 	var pulled RecalcJob
 	found := false
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if maxRunning > 0 {
+			var running int64
+			if err := tx.Raw(`SELECT COUNT(*) FROM t_factor_recalc_jobs WHERE c_status = 'running' AND c_lease_expires_at > ?`, nowUnix).Scan(&running).Error; err != nil {
+				return err
+			}
+			if running >= int64(maxRunning) {
+				return nil
+			}
+		}
 		var rows []recalcJobRow
 		if err := tx.Raw(`SELECT `+recalcJobColumns+` FROM t_factor_recalc_jobs WHERE `+pullableCondition+`
 			ORDER BY c_ctime, c_job_id`, nowUnix).Scan(&rows).Error; err != nil {
