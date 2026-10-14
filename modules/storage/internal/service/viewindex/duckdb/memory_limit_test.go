@@ -15,12 +15,13 @@ func TestAutoMemoryLimitScalesWithHostMemory(t *testing.T) {
 		total int64
 		want  string
 	}{
-		{"16GB 主机约等于原来的 256MB", 16 * gib, "256MB"},
-		{"线上 Storage 主机 15480MB", 15480 << 20, "241MB"},
-		{"32GB 主机", 32 * gib, "512MB"},
-		{"4GB 小内存主机取下限", 4 * gib, "128MB"},
-		{"1GB 更小的主机仍取下限", gib, "128MB"},
-		{"128GB 大内存主机取上限", 128 * gib, "1024MB"},
+		{"线上 Storage 主机 15480MB", 15480 << 20, "967MB"},
+		{"16GB 主机", 16 * gib, "1024MB"},
+		{"8GB 主机", 8 * gib, "512MB"},
+		{"4GB 主机", 4 * gib, "256MB"},
+		{"1GB 更小的主机取下限", gib, "128MB"},
+		{"32GB 主机刚好到上限", 32 * gib, "2048MB"},
+		{"128GB 大内存主机仍取上限", 128 * gib, "2048MB"},
 	}
 	for _, tc := range cases {
 		if got := autoMemoryLimit(tc.total); got != tc.want {
@@ -42,7 +43,7 @@ func TestResolveMemoryLimitPrefersTheEnvironment(t *testing.T) {
 		t.Fatalf("显式配置应优先：got %q（%s）", got, source)
 	}
 	t.Setenv(duckDBMemoryLimitEnv, "  ")
-	if got, _ := resolveMemoryLimit(); got != "1024MB" {
+	if got, _ := resolveMemoryLimit(); got != "2048MB" {
 		t.Fatalf("空白按未配置处理，应按主机内存推算：got %q", got)
 	}
 }

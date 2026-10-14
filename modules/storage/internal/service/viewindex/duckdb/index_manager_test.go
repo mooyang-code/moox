@@ -273,10 +273,10 @@ func TestOpenAppliesResourceLimits(t *testing.T) {
 }
 
 func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
-	// 未配置时按主机内存推算：16GB 主机上约 256MB；这里固定主机内存，不依赖运行测试的机器规格。
+	// 未配置时按主机内存推算：4GB 主机上是 256MB；这里固定主机内存，不依赖运行测试的机器规格。
 	restore := hostMemoryBytes
 	defer func() { hostMemoryBytes = restore }()
-	hostMemoryBytes = func() int64 { return 16 << 30 }
+	hostMemoryBytes = func() int64 { return 4 << 30 }
 	t.Setenv(duckDBMemoryLimitEnv, "")
 	t.Setenv(duckDBMaxOpenConnsEnv, "")
 	db, err := open(filepath.Join(t.TempDir(), "view.duckdb"))

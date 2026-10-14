@@ -11,15 +11,18 @@ import (
 
 // 单个 DuckDB 索引的内存上限（memory_limit）。
 //
-// 每个 View 索引是一个独立的 DuckDB 实例，各自有一份上限，所以主机上的总占用最多是“索引个数 × 上限”。
-// 上限因此只能取主机内存的一小部分：除以 64，在 16GB 的主机上约 256MB（即原来写死的默认值），
-// 约 17 个索引全部用满时占主机内存的四分之一左右。
+// 每个 View 索引是一个独立的 DuckDB 实例，各自有一份上限。上限是天花板，不是预留：
+// 只有几 MB 的索引不会涨到天花板，主机上的实际占用约等于各索引文件大小之和再加重建时的峰值。
+// 所以上限应当按“能装下最大的那个索引在重建时的工作集”来定，而不是按“索引个数 × 上限”。
+//
+// 线上出现过一次：256MB 的上限在重建一个 211MB 的索引（历史回填、激活探测）时被顶满，
+// 报 Out of Memory Error: failed to pin block。索引文件超过 max_view_file_bytes（默认 1GiB）才会触发容量重建，
+// 一个索引正常可以长到 1GiB，重建它需要的内存约为文件大小的 1 到 1.5 倍，所以上限放到 2GB。
 const (
-	memoryLimitDivisor = 64
-	// DuckDB 在每线程 125MB 以下难以完成检查点和较大的写入批次，所以小内存主机也不低于 128MB；
-	// 索引文件通常在几百 MB，超过 1GB 对查询没有帮助，只会挤占其他服务。
+	memoryLimitDivisor = 16
+	// DuckDB 在每线程 125MB 以下难以完成检查点和较大的写入批次，所以小内存主机也不低于 128MB。
 	minAutoMemoryLimitMB = 128
-	maxAutoMemoryLimitMB = 1024
+	maxAutoMemoryLimitMB = 2048
 	// 读不到主机内存（非 Linux 开发机、/proc 不可读）时的保底值。
 	fallbackMemoryLimit = "256MB"
 )
