@@ -114,6 +114,8 @@ export interface FreshnessRow {
   path: string;
   /** 延迟秒数；没有观测为 null。 */
   seconds: number | null;
+  /** 数据已写到的最近一根 K 线的收盘时刻（毫秒）；没有观测为 null。 */
+  closeMs: number | null;
 }
 
 const TONE_RANK: Record<Tone, number> = { bad: 0, warn: 1, idle: 2, ok: 3 };
@@ -140,6 +142,10 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
           : null;
       // 状态未知时服务端给的 0 不代表“已追平”，不显示；正常即已追平；异常时优先写落后的 K 线时长，没有水位时退回原始延迟。
       const behind = tone === "idle" ? null : tone === "ok" ? 0 : barLag || rawSeconds;
+      // 水位是最近一根 K 线的开盘时间；没有水位时由“服务端时钟 − 延迟”推出。收盘时刻不会晚于服务端时钟。
+      const openMs = watermark ?? (rawSeconds === null ? null : clockSeconds * 1000 - rawSeconds * 1000);
+      const closeMs =
+        tone === "idle" || openMs === null ? null : Math.min(openMs + freqSeconds(item.freq || "") * 1000, clockSeconds * 1000);
       const row: FreshnessRow = {
         key: `${producer}/${item.space_id}/${id}/${item.freq}`,
         datasetId: id,
@@ -151,7 +157,8 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
         status: statusLabel(item.status),
         reason: item.reason || "",
         path: producer === "factor" ? "/factor/tasks?tab=results" : "/collector/tasks?tab=results",
-        seconds: behind
+        seconds: behind,
+        closeMs
       };
       return { row, seconds: behind ?? -1 };
     })
@@ -456,10 +463,6 @@ export function toneIcon(tone: Tone): string {
   return TONE_ICON[tone];
 }
 
-function worst(tones: Tone[]): Tone {
-  return tones.reduce<Tone>((acc, tone) => (TONE_RANK[tone] < TONE_RANK[acc] ? tone : acc), "ok");
-}
-
 export interface BannerFact {
   key: string;
   label: string;
@@ -488,10 +491,28 @@ function pickFact(candidates: FactCandidate[]): FactCandidate | undefined {
   )[0];
 }
 
-/**
- * Banner 里的三项：策略最近一期、因子计算写具体的收盘时间（精确到秒，由人对照当前时间判断是否异常，异常的换色），
- * 数据新鲜度写相对最近一根已收盘 K 线的落后量；没有观测时写“—”。
- */
+function factorFact(factors: FactorRow[]): FactCandidate | undefined {
+  return pickFact(
+    factors
+      .filter(row => row.behindSeconds !== null && row.periodEndMs !== null)
+      .map(row => ({ tone: row.tone, atMs: row.periodEndMs as number, behind: row.behindSeconds as number }))
+  );
+}
+
+function dataFact(freshness: FreshnessRow[]): FactCandidate | undefined {
+  return pickFact(
+    freshness
+      .filter(row => row.tone !== "idle" && row.closeMs !== null)
+      .map(row => ({ tone: row.tone, atMs: row.closeMs as number, behind: row.seconds ?? 0 }))
+  );
+}
+
+/** Banner 与指标卡里的时间：写最近一根已收盘 K 线的收盘时间，精确到秒；由人对照当前时间判断是否异常，异常的换色。 */
+function closeClock(fact: FactCandidate | undefined, nowMs: number): string {
+  return fact ? clockTime(fact.atMs / 1000, nowMs) : "—";
+}
+
+/** Banner 里的三项：策略最近一期、因子计算、数据新鲜度都写具体的收盘时间；没有观测时写“—”。 */
 export function bannerFacts(input: {
   strategies: StrategyRow[];
   factors: FactorRow[];
@@ -503,33 +524,29 @@ export function bannerFacts(input: {
       .filter(row => row.enabled && row.lastBarMs !== null)
       .map(row => ({ tone: row.tone, atMs: row.lastBarMs as number, behind: 0 }))
   );
-  const factor = pickFact(
-    input.factors
-      .filter(row => row.behindSeconds !== null && row.periodEndMs !== null)
-      .map(row => ({ tone: row.tone, atMs: row.periodEndMs as number, behind: row.behindSeconds as number }))
-  );
-  const dataRows = input.freshness.filter(row => row.tone !== "idle" && row.seconds !== null);
-  const dataBehind = Math.max(0, ...dataRows.map(row => row.seconds as number));
+  const factor = factorFact(input.factors);
+  const data = dataFact(input.freshness);
   return [
     {
       key: "strategy",
       label: "策略最近一期",
-      value: strategy ? clockTime(strategy.atMs / 1000, input.nowMs) : "—",
+      value: closeClock(strategy, input.nowMs),
       tone: strategy ? strategy.tone : "idle",
       hint: "已启用实例最近一份目标所属 K 线的收盘时间；有异常实例时显示异常的那一个"
     },
     {
       key: "factor",
       label: "因子计算",
-      value: factor ? clockTime(factor.atMs / 1000, input.nowMs) : "—",
+      value: closeClock(factor, input.nowMs),
       tone: factor ? factor.tone : "idle",
       hint: "因子任务最近一个已计算周期的收盘时间；有滞后的任务时显示落后最多的那一个"
     },
     {
       key: "data",
       label: "数据新鲜度",
-      value: dataRows.length ? behindText(dataBehind) : "—",
-      tone: dataRows.length ? worst(dataRows.map(row => row.tone)) : "idle"
+      value: closeClock(data, input.nowMs),
+      tone: data ? data.tone : "idle",
+      hint: "数据链路已写到的最近一根 K 线的收盘时间；有落后的数据集时显示落后最多的那一个"
     }
   ];
 }
@@ -542,6 +559,8 @@ export interface KpiCard {
   value: string;
   unit: string;
   note: string;
+  /** 鼠标悬停时说明说明文字里时间的口径。 */
+  hint?: string;
   target: HomeTarget;
 }
 
@@ -554,6 +573,7 @@ export function kpiCards(input: {
   freshness: FreshnessRow[];
   alertCount: number | undefined;
   monitorError: string;
+  nowMs: number;
 }): KpiCard[] {
   const enabled = input.strategies.filter(row => row.enabled);
   const valid = enabled.filter(row => row.tone === "ok").length;
@@ -565,6 +585,8 @@ export function kpiCards(input: {
   const fresh = observed.filter(row => row.tone === "ok").length;
   const stale = observed.filter(row => row.tone === "warn" || row.tone === "bad").length;
   const monitorDown = Boolean(input.monitorError);
+  const factorTime = closeClock(factorFact(input.factors), input.nowMs);
+  const dataTime = closeClock(dataFact(input.freshness), input.nowMs);
   return [
     {
       key: "strategy",
@@ -587,7 +609,12 @@ export function kpiCards(input: {
       tone: !input.factorLoaded || !input.factors.length ? "idle" : factorBad ? "warn" : "ok",
       value: input.factorLoaded ? String(input.factors.length) : "—",
       unit: input.factorLoaded ? " 个任务" : "",
-      note: !input.factorLoaded ? "读取中" : factorBad ? `${factorBad} 个异常` : `${factorCount} 个因子 · 全部正常`,
+      note: !input.factorLoaded
+        ? "读取中"
+        : factorBad
+          ? `${factorBad} 个异常 · 收盘 ${factorTime}`
+          : `${factorCount} 个因子 · 收盘 ${factorTime}`,
+      hint: "因子任务最近一个已计算周期的收盘时间；有异常的任务时是异常最重的那一个",
       target: "/factor/tasks?tab=results"
     },
     {
@@ -597,7 +624,14 @@ export function kpiCards(input: {
       tone: monitorDown || !observed.length ? "idle" : stale ? "warn" : "ok",
       value: monitorDown || !observed.length ? "—" : String(fresh),
       unit: monitorDown || !observed.length ? "" : ` / ${observed.length} 正常`,
-      note: monitorDown ? "监控数据暂不可用" : !observed.length ? "暂无数据链路观测" : stale ? `${stale} 条落后` : "全部及时",
+      note: monitorDown
+        ? "监控数据暂不可用"
+        : !observed.length
+          ? "暂无数据链路观测"
+          : stale
+            ? `${stale} 条落后 · 收盘 ${dataTime}`
+            : `收盘 ${dataTime}`,
+      hint: "数据链路已写到的最近一根 K 线的收盘时间；有落后的数据集时是落后最多的那一个",
       target: "/collector/tasks?tab=results"
     },
     {

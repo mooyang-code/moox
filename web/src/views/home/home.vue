@@ -44,7 +44,7 @@
         </section>
 
         <section class="kpis" aria-label="关键指标">
-          <button v-for="card in kpis" :key="card.key" type="button" class="kpi" @click="go(card.target)">
+          <button v-for="card in kpis" :key="card.key" type="button" class="kpi" :title="card.hint" @click="go(card.target)">
             <span class="kpi-label"><component :is="card.icon" :class="`is-${card.tone}`" />{{ card.label }}</span>
             <span class="kpi-value"
               >{{ card.value }}<small>{{ card.unit }}</small></span
@@ -372,7 +372,8 @@ const kpis = computed(() =>
     factorLoaded: factorLoaded.value,
     freshness: freshness.value,
     alertCount: monitorError.value ? undefined : overview.value?.summary?.alert_count,
-    monitorError: monitorError.value
+    monitorError: monitorError.value,
+    nowMs: nowMs.value
   })
 );
 

@@ -229,6 +229,10 @@ describe("home page", () => {
     expect(wrapper.text()).toContain("1 项需要处理");
     expect(wrapper.text()).not.toContain("运行正常");
     expect(wrapper.find(".tile-attention .attention-line").text()).toContain("入库 · 现货K线 · 1m");
-    expect(wrapper.find(".banner-facts").text()).toContain("14 小时 42 分");
+    expect(wrapper.find(".tile-attention .attention-line").text()).toContain("14 小时 42 分");
+    // 横幅写具体的收盘时间（精确到秒），落后的换成警示色，由人对照当前时间判断。
+    const dataFact = wrapper.findAll(".banner-facts span").find(item => item.text().startsWith("数据新鲜度"));
+    expect(dataFact?.text()).toMatch(/^数据新鲜度 (\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}$/);
+    expect(dataFact?.find("b").classes()).toContain("is-warn");
   });
 });
