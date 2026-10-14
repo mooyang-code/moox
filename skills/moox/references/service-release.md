@@ -1,5 +1,7 @@
 # 服务包发布
 
+> **切换前的旧流程，仅作历史参考。** 线上现在是原生部署，发布请读 [`native-release.md`](native-release.md)，用 `skills/moox/scripts/native-release.sh`。
+
 MooX 的发布单元是服务包，而不是裸二进制。服务包使用 ZIP 格式，包含服务二进制、配置
 以及启动、停止、健康检查脚本。使用 `moox-cli setup deploy-service` 发布到远端，避免在
 Agent 或 shell 中拼接 SSH 密码。

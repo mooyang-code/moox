@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
+description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -30,7 +30,13 @@ Host Agent deployment:
 
 ## Deployment Status
 
-The gateway refactor (host gateway, Access, egress proxy, embedded-Caddy console proxy) is merged in code but **not yet cut over in production**. The deploy tooling referenced below (`scripts/deploy/deploy-moox.sh`, external Caddy on `11001`, node-gateway keys) is the pre-cutover tooling and has not been migrated to the new configuration; do not use it to release the current branch. The cutover, pause and rollback procedure is in `docs/计划/网关与服务部署重构执行计划.md` (section 13). Do not deploy or cut over unless the user explicitly asks.
+线上运行的是**原生部署**（`/data/moox/<单元>/current`，`moox-runtime` 管理进程；控制机 `prod`、Storage 主机 `storage`、每台主机 `host`）。
+**发布、更新线上二进制时读 [`references/native-release.md`](references/native-release.md)**，并用 `skills/moox/scripts/native-release.sh`
+（构建、安装、回滚、状态、台账、服务目录变更检测）；服务目录（`catalog.yaml`）变化必须整体发布，配置文件不随二进制更新，文档里有顺序和陷阱。
+只有用户明确要求“发布/上线”时才发布，并且只发布他点名的组件。
+
+下面提到的 `scripts/deploy/deploy-moox.sh`、`moox-cli setup deploy-service`、外置 Caddy `11001` 等是切换前的旧部署工具，不要用来发布当前线上；
+切换、暂停和回滚的过程见 `docs/计划/网关与服务部署重构执行计划.md`（第 13 节）。
 
 ## Repository Layout
 
@@ -60,8 +66,8 @@ make release
 make deploy
 ```
 
-单独发布或替换已部署的二进制服务时，使用
-[`references/service-release.md`](references/service-release.md) 中的服务包发布流程；先用
+发布或替换线上已部署的二进制时，用上面“Deployment Status”里的原生发布流程（[`references/native-release.md`](references/native-release.md)）。
+下面是切换前的旧服务包流程，仅作历史参考：[`references/service-release.md`](references/service-release.md)；先用
 `scripts/build/package-service.sh` 生成 ZIP，再通过通用入口 `moox-cli setup deploy-service` 发布。
 服务包包含二进制、配置和生命周期脚本，由 CLI 通过已核验的 SSH 主机指纹完成上传、解压、
 回滚和健康检查；不要在命令行中拼接密码。

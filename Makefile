@@ -150,6 +150,7 @@ test-skill-contracts:
 	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-hostagent-deploy.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
+	bash skills/moox/scripts/test-native-release.sh
 
 test-script-e2e:
 	@set -e; for script in scripts/test/e2e/*.sh; do bash "$$script"; done

@@ -1,5 +1,7 @@
 # Release And Deploy
 
+> **切换前的旧流程，仅作历史参考。** 线上现在是原生部署，发布请读 [`native-release.md`](native-release.md)，用 `skills/moox/scripts/native-release.sh`。
+
 Create a release package:
 
 ```bash
