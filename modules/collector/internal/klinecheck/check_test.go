@@ -59,15 +59,19 @@ func (f *fakeRows) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTime
 
 func record(t *testing.T, id int64, status string, p int64, subjects ...string) *store.FetchPlanRecord {
 	t.Helper()
-	series := make([]marketfetchSeries, 0)
-	_ = series
+	return recordFor(t, id, "ds", status, p, subjects...)
+}
+
+// recordFor 构造只含一个“数据集|1m”变更的计划记录。
+func recordFor(t *testing.T, id int64, dataset, status string, p int64, subjects ...string) *store.FetchPlanRecord {
+	t.Helper()
 	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
 	change := &marketfetch.PlanDatasetChange{Changed: true, HashChanged: true, P: p}
-	change.DatasetID, change.Frequency, change.LatenessS = "ds", "1m", 15
+	change.DatasetID, change.Frequency, change.LatenessS = dataset, "1m", 15
 	for _, subject := range subjects {
 		change.Series = append(change.Series, seriesOf(subject))
 	}
-	content.Datasets["ds|1m"] = change
+	content.Datasets[dataset+"|1m"] = change
 	return &store.FetchPlanRecord{ID: id, SpaceID: "crypto", Status: status, Plan: mustJSON(content), Progress: "{}"}
 }
 
@@ -173,8 +177,6 @@ func TestDeepCheckRequiresFields(t *testing.T) {
 	require.Equal(t, 1, deep.Missing)
 	require.Equal(t, fmt.Sprint(base.Add(2*time.Minute)), fmt.Sprint(deep.Gaps[0].From))
 }
-
-type marketfetchSeries = struct{}
 
 func seriesOf(subject string) seriesset.Series {
 	return seriesset.Series{Provider: "binance", SourceID: "binance", MarketType: "spot", SubjectID: subject, SeriesTag: "t"}

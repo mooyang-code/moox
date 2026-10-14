@@ -124,6 +124,10 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				if err := backfiller.AutoScan(scanCtx, spaceID); err != nil {
 					log.WarnContextf(scanCtx, "collector auto backfill scan failed space=%s: %v", spaceID, err)
 				}
+				// 早于数据集最早生效点的历史缺口，检查与自动补采都看不到：定期读回并写日志，不补采。
+				if _, err := backfiller.ScanHistory(scanCtx, spaceID); err != nil {
+					log.WarnContextf(scanCtx, "collector history scan failed space=%s: %v", spaceID, err)
+				}
 			}) {
 				autoScans.Delete(spaceID)
 			}

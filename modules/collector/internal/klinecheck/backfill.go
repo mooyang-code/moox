@@ -110,8 +110,11 @@ type Backfiller struct {
 	lastScan map[string]time.Time
 	// absent 记录“补采成功后行情源仍然没有”的 K 线（例如冷门标的某分钟没有成交）。
 	// 它们不再被自动补采重复提交；只存在于内存，到期或重启后会重新尝试一次。
-	absent  map[absentKey]time.Time
-	workers sync.WaitGroup
+	absent map[absentKey]time.Time
+	// lastHistoryRun 是每个空间最近一次历史缺口扫描的时间，lastHistory 是每个（空间|数据集|频率）最近一次的时间（见 ScanHistory）。
+	lastHistoryRun map[string]time.Time
+	lastHistory    map[string]time.Time
+	workers        sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
 }
