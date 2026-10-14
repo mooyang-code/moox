@@ -347,6 +347,47 @@ func TestEventBusOpsBoundEveryRequestIndependentlyOfTheRPCDeadline(t *testing.T)
 	}
 }
 
+// nats.go 的 PurgeStream 不转发 Context：RPC 被取消后如果循环不检查，还会继续清除剩余主题。
+func TestPurgeEventBusSubjectsStopsOnceTheRPCIsCancelled(t *testing.T) {
+	subjects := datasetSubjects(t, "mooxsys", "kline.1m")
+	ctx, cancel := context.WithCancel(t.Context())
+	session := &cancellingSession{fakeEventBusSession: &fakeEventBusSession{}, cancelAfter: 2, cancel: cancel}
+	service := &ServiceImpl{openEventBus: func(context.Context) (eventBusSession, error) { return session, nil }}
+
+	rsp, err := service.PurgeEventBusSubjects(ctx, &pb.PurgeEventBusSubjectsReq{Stream: events.StorageViewConsumerStream, Subjects: subjects})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "已清除 2 个")
+	require.True(t, rsp.GetAttempted())
+	require.Equal(t, subjects[:2], session.purged, "取消之后不能再清除剩余主题")
+
+	// 一开始就已取消：什么都没做，也不算尝试过。
+	done, cancelDone := context.WithCancel(t.Context())
+	cancelDone()
+	fresh := &fakeEventBusSession{}
+	service = &ServiceImpl{openEventBus: func(context.Context) (eventBusSession, error) { return fresh, nil }}
+	rsp, err = service.PurgeEventBusSubjects(done, &pb.PurgeEventBusSubjectsReq{Stream: events.StorageViewConsumerStream, Subjects: subjects})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.False(t, rsp.GetAttempted())
+	require.Empty(t, fresh.purged)
+}
+
+// cancellingSession 在第 cancelAfter 次清除之后取消 RPC 的 Context，模拟调用方等不及了。
+type cancellingSession struct {
+	*fakeEventBusSession
+	cancelAfter int
+	cancel      context.CancelFunc
+}
+
+func (c *cancellingSession) PurgeStream(stream string, opts ...nats.JSOpt) error {
+	err := c.fakeEventBusSession.PurgeStream(stream, opts...)
+	if len(c.purged) == c.cancelAfter {
+		c.cancel()
+	}
+	return err
+}
+
 func TestEventBusOpsReportConnectionFailureWithoutLeakingCredentials(t *testing.T) {
 	service := &ServiceImpl{openEventBus: func(context.Context) (eventBusSession, error) {
 		return nil, errors.New("连接 EventBus tls://127.0.0.1:4222 失败: refused")

@@ -282,6 +282,13 @@ func (s *ServiceImpl) PurgeEventBusSubjects(ctx context.Context, req *pb.PurgeEv
 	defer session.Close()
 	purged := 0
 	for _, subject := range subjects {
+		// nats.go 的 PurgeStream 不会把 Context 传给底层请求（只用 JetStream 的 MaxWait 限制单次等待），
+		// 所以 RPC 超时或被取消后循环不会自己停下：这里在每个主题之前检查，已经没人在等结果时不再继续清除，
+		// 否则调用方超时后重试并重启 Storage，旧请求还会清掉新产生的事件。
+		if err := ctx.Err(); err != nil {
+			log.ErrorContextf(ctx, "eventbus ops 清除中断 stream=%s purged=%d: %v", req.GetStream(), purged, err)
+			return &pb.PurgeEventBusSubjectsRsp{RetInfo: eventBusRet(pb.ErrorCode_INNER_ERR, "请求已超时或被取消，停止清除（已清除 %d 个）: %v", purged, err), Attempted: purged > 0}, nil
+		}
 		purgeCtx, cancelPurge := eventBusRequest(ctx)
 		err := session.PurgeStream(req.GetStream(), &nats.StreamPurgeRequest{Subject: subject}, nats.Context(purgeCtx))
 		cancelPurge()
